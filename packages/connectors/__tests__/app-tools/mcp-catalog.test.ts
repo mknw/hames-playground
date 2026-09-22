@@ -11,7 +11,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { mcpNamespace, MCP_TOOL_CATALOG } from '../../mcp-catalog'
-import { ToolsFrom, registerToolNamespaces } from '@hames/harness-patterns/tools.server'
+import { ToolsFrom, registerToolNamespaces } from '@hames-ai/harness-patterns/tools.server'
 
 // The catalog registered on core's resolver seam — the same registration the
 // HOST's composition root performs at boot. `inferServer` (and therefore

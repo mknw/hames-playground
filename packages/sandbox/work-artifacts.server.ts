@@ -25,7 +25,7 @@
  * the host owns storage and content classification.
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { getWorkspaceStore, type WorkspaceCallTool } from './workspace-store'
 import type { McpTransport } from './types'
 import {

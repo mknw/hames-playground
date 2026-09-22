@@ -15,9 +15,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { ActiveInjectionGuard } from '@hames/harness-patterns/injection-guard'
+import type { ActiveInjectionGuard } from '@hames-ai/harness-patterns/injection-guard'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -52,15 +52,15 @@ const C7_CATALOG = ['resolve-library-id', 'get-library-docs']
 
 async function load() {
   await armNamespaceCatalog()
-  const { callTool, closeMcpClient } = await import('@hames/harness-patterns/mcp-client.server')
+  const { callTool, closeMcpClient } = await import('@hames-ai/harness-patterns/mcp-client.server')
   const { createInjectionGuard } =
-    await import('@hames/harness-patterns/patterns/withInjectionGuard.server')
+    await import('@hames-ai/harness-patterns/patterns/withInjectionGuard.server')
   // The guard is a SLOT of the run frame since #374; the per-store opener it
   // used to have is gone. Bound here so every assertion below — including the
   // UNION nesting pins — stays byte-identical: what changed is where the guard
   // is put, not what the chokepoint does with it.
   const { withRunFrame, amendRunFrame, currentRunFrame } =
-    await import('@hames/harness-patterns/run-frame.server')
+    await import('@hames-ai/harness-patterns/run-frame.server')
   const runWithInjectionGuard = <T>(
     guard: ActiveInjectionGuard,
     fn: () => Promise<T>,

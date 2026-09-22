@@ -56,7 +56,7 @@ import {
   loadDirectoryRoster,
   type DirectoryRosterRow,
 } from '../../../lib/org-graph/roster-source.server'
-import { configureNeo4j, resetDriver } from '@hames/connectors/neo4j/client'
+import { configureNeo4j, resetDriver } from '@hames-ai/connectors/neo4j/client'
 import { getEndpoints } from '../../../lib/config/endpoints'
 
 /** Build a Graph-shaped `tool_result` payload out of three real people:

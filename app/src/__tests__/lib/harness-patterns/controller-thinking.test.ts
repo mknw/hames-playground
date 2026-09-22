@@ -17,10 +17,10 @@ process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'offline-render
 
 type Body = { thinking?: { type?: string }; model?: string }
 
-let b: typeof import('@hames/harness-baml/baml_client').b
+let b: typeof import('@hames-ai/harness-baml/baml_client').b
 
 beforeAll(async () => {
-  b = (await import('@hames/harness-baml/baml_client')).b
+  b = (await import('@hames-ai/harness-baml/baml_client')).b
 })
 
 const TOOLS = [{ name: 'search', description: 'Search', args_schema: '{"query":"string"}' }]

@@ -3,8 +3,8 @@ import { For, Show, Switch, Match, createEffect, createSignal, type JSX } from '
 import type { ToolCallInfo } from './types'
 import { ToolCallDisplay } from './ToolCallDisplay'
 import { marked } from 'marked'
-import type { RetrievalReference } from '@hames/harness-patterns'
-import type { OpenReferenceTarget } from '@hames/agents'
+import type { RetrievalReference } from '@hames-ai/harness-patterns'
+import type { OpenReferenceTarget } from '@hames-ai/agents'
 import { escapeHtmlAttribute, sanitizeMarkdownHtml } from '~/lib/sanitize-html'
 
 // Rendering options only — marked passes raw HTML in the source through

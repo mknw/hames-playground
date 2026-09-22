@@ -27,13 +27,13 @@ import {
   compactExecution,
   Tools,
   type ConfiguredPattern,
-} from '@hames/harness-patterns'
-import { bamlPatterns, createLoopControllerAdapter } from '@hames/harness-baml'
+} from '@hames-ai/harness-patterns'
+import { bamlPatterns, createLoopControllerAdapter } from '@hames-ai/harness-baml'
 import type { AgentData, AgentDefinition, AgentDeps } from '../types'
 
 import { getGraphSchema } from './graph-schema.server'
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 
 // The 'use server' directive this file carried before the move was the only
 // thing keeping its exports off the client; this is the real guard, and the

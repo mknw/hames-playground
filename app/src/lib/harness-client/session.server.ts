@@ -11,16 +11,16 @@
  * but every function now takes a `userId` and is async.
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import type { ConfiguredPattern } from '@hames/harness-patterns'
-import { deserializeContext, serializeContext } from '@hames/harness-patterns'
-import type { UnifiedContext } from '@hames/harness-patterns'
-import type { AgentData, AgentDeps } from '@hames/agents'
-import { mcpNamespace } from '@hames/connectors/mcp-catalog'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import type { ConfiguredPattern } from '@hames-ai/harness-patterns'
+import { deserializeContext, serializeContext } from '@hames-ai/harness-patterns'
+import type { UnifiedContext } from '@hames-ai/harness-patterns'
+import type { AgentData, AgentDeps } from '@hames-ai/agents'
+import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import { enrichNeo4jResult } from './neo4j-enricher.server'
-import { createRedisBackend } from '@hames/harness-patterns/retriever'
-import { withSandbox, type WithSandboxConfig } from '@hames/sandbox'
-import { clientOverrideFor, type BamlRole } from '@hames/harness-baml/clients.server'
+import { createRedisBackend } from '@hames-ai/harness-patterns/retriever'
+import { withSandbox, type WithSandboxConfig } from '@hames-ai/sandbox'
+import { clientOverrideFor, type BamlRole } from '@hames-ai/harness-baml/clients.server'
 import { canonicalAgentId, getAgent } from './registry.server'
 import { getRequestUserId } from './request-user.server'
 import {
@@ -42,8 +42,8 @@ assertServerOnImport()
 /**
  * The app's session data shape is the package's `AgentData`, aliased — every
  * app-side pattern still speaks the same composite the moved definitions
- * build (#225 @hames/agents PR-2). The composite itself lives in the package
- * (`@hames/agents` `types.ts`), beside the `AgentDefinition`/`AgentDeps`
+ * build (#225 @hames-ai/agents PR-2). The composite itself lives in the package
+ * (`@hames-ai/agents` `types.ts`), beside the `AgentDefinition`/`AgentDeps`
  * surface the composition root supplies.
  */
 export type SessionData = AgentData

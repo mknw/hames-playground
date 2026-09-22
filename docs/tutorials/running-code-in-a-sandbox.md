@@ -50,9 +50,9 @@ inverted by a value or an import order.
 ## 2. Wrap a pattern
 
 ```typescript
-import { withSandbox } from "@hames/sandbox";
-import type { ConfiguredPattern } from "@hames/harness-patterns";
-import type { AgentData } from "@hames/agents";
+import { withSandbox } from "@hames-ai/sandbox";
+import type { ConfiguredPattern } from "@hames-ai/harness-patterns";
+import type { AgentData } from "@hames-ai/agents";
 
 declare const loop: ConfiguredPattern<AgentData>;
 declare const sessionId: string;
@@ -145,8 +145,8 @@ import {
   router,
   routes,
   type ConfiguredPattern,
-} from "@hames/harness-patterns";
-import type { AgentData, AgentDeps } from "@hames/agents";
+} from "@hames-ai/harness-patterns";
+import type { AgentData, AgentDeps } from "@hames-ai/agents";
 
 declare const deps: AgentDeps;
 declare const sessionId: string;
@@ -173,7 +173,7 @@ const flavoured = (rootfs: string): ConfiguredPattern<AgentData> =>
 
 // `router` takes the route DESCRIPTIONS first and its config second; the
 // `route` callable itself is injected (`bamlPatterns().router` supplies it).
-declare const route: import("@hames/harness-patterns").RouteFn;
+declare const route: import("@hames-ai/harness-patterns").RouteFn;
 
 const chain = [
   router<AgentData>(
@@ -255,7 +255,7 @@ only implemented one.
   the `/work` protocol and the tenant seam.
 - [Wiring a host](./wiring-a-host.md) — where `deps.withSandbox` comes from, and why
   `tenantId` must be a resolver.
-- [`@hames/sandbox` README](../../packages/sandbox/README.md) — the subpath table, the
+- [`@hames-ai/sandbox` README](../../packages/sandbox/README.md) — the subpath table, the
   client-safe entries, and the three guards.
 - [`docs/sandbox-flavours.md`](../sandbox-flavours.md) — the flavour design note.
 - [`docs/plan/sandbox.md`](../plan/sandbox.md) — the compute design, the multi-user

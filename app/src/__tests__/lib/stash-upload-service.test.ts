@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi } from 'vitest'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
@@ -185,7 +185,9 @@ describe('upload-service (Issue #6)', () => {
       expect(isTextMime('application/json')).toBe(true)
       expect(isTextMime('application/ld+json')).toBe(true)
       expect(isTextMime('application/pdf')).toBe(false)
-      expect(isTextMime('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')).toBe(false)
+      expect(isTextMime('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')).toBe(
+        false,
+      )
       expect(isTextMime('image/png')).toBe(false)
     })
 

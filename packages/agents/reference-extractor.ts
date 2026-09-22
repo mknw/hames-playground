@@ -14,12 +14,12 @@ import type {
   ToolResultEventData,
   RetrievalReference,
   RetrieverResult,
-} from '@hames/harness-patterns'
+} from '@hames-ai/harness-patterns'
 // Value import: the turn boundary is shared with the Data Stash partition, so
 // both derive "this turn" from one definition (see SA-H7). The helper is a core
 // export — an event-stream boundary helper beside the other event lenses — so
 // the package and its host read it from one place.
-import { findLastUserMessageIndex } from '@hames/harness-patterns/content-transforms'
+import { findLastUserMessageIndex } from '@hames-ai/harness-patterns/content-transforms'
 
 /**
  * The payload a chat citation passes across panes to open the inline viewer.

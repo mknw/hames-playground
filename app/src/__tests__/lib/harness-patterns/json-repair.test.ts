@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { repairJson } from '@hames/harness-patterns/json-repair'
+import { repairJson } from '@hames-ai/harness-patterns/json-repair'
 
 describe('repairJson', () => {
   describe('valid JSON passthrough', () => {

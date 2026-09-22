@@ -1,5 +1,5 @@
 /**
- * @hames/connectors — the connectors companion (#225 PR-3).
+ * @hames-ai/connectors — the connectors companion (#225 PR-3).
  *
  * Microsoft Graph app-side tools, the Neo4j non-agentic layer, and the
  * MCP-gateway namespace catalog — moved out of the host app behind injected
@@ -13,14 +13,14 @@
  * Everything else is server-only and reached through its subpath, resolved by
  * the `./*` wildcard export:
  *
- *   - `@hames/connectors/neo4j` and `@hames/connectors/neo4j/client` — the
+ *   - `@hames-ai/connectors/neo4j` and `@hames-ai/connectors/neo4j/client` — the
  *     explicit-config driver factory (`configureNeo4j`, no env fallback);
- *   - `@hames/connectors/neo4j/queries` / `neo4j/graph-edit.server` — the
+ *   - `@hames-ai/connectors/neo4j/queries` / `neo4j/graph-edit.server` — the
  *     identity-free ops the host's `'use server'` wrappers gate and delegate
  *     to;
- *   - `@hames/connectors/app-tools/registry` — the generic in-process tool
+ *   - `@hames-ai/connectors/app-tools/registry` — the generic in-process tool
  *     registry (`createAppToolRegistry`);
- *   - `@hames/connectors/graph/graph-tools.server` —
+ *   - `@hames-ai/connectors/graph/graph-tools.server` —
  *     `registerGraphConnectorTools(deps)` and its REQUIRED supplier bag.
  *
  * The app that hosted these modules composes them in its

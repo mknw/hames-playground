@@ -303,7 +303,7 @@ function refuseUnmatchableNamespaces(namespaces: Set<string>, catalog: string[])
           `catalog (${catalog.length} names). NOTHING would be sanitized for it — ` +
           `most likely the tool→namespace resolver was never registered: call ` +
           `\`registerToolNamespaces(mcpNamespace)\` once at boot (the resolver ships ` +
-          `in \`@hames/connectors/mcp-catalog\`). If the gateway is down instead, the ` +
+          `in \`@hames-ai/connectors/mcp-catalog\`). If the gateway is down instead, the ` +
           `degraded-surface provenance (#278 F1) suppresses this refusal. (#242 item 4)`,
       )
     }

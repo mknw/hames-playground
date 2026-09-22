@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock server-only imports
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -15,13 +15,13 @@ describe('judge', () => {
   })
 
   it('should export judge function', async () => {
-    const { judge } = await import('@hames/harness-patterns/patterns/judge.server')
+    const { judge } = await import('@hames-ai/harness-patterns/patterns/judge.server')
     expect(judge).toBeDefined()
     expect(typeof judge).toBe('function')
   })
 
   it('should create a ConfiguredPattern', async () => {
-    const { judge } = await import('@hames/harness-patterns/patterns/judge.server')
+    const { judge } = await import('@hames-ai/harness-patterns/patterns/judge.server')
 
     const evaluator = vi.fn()
     const pattern = judge(evaluator, { patternId: 'quality-judge' })
@@ -32,7 +32,7 @@ describe('judge', () => {
   })
 
   it('should use default name when patternId not provided', async () => {
-    const { judge } = await import('@hames/harness-patterns/patterns/judge.server')
+    const { judge } = await import('@hames-ai/harness-patterns/patterns/judge.server')
 
     const evaluator = vi.fn()
     const pattern = judge(evaluator)
@@ -41,9 +41,10 @@ describe('judge', () => {
   })
 
   it('should track error when no candidates exist', async () => {
-    const { judge } = await import('@hames/harness-patterns/patterns/judge.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { judge } = await import('@hames-ai/harness-patterns/patterns/judge.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const evaluator = vi.fn()
     const ctx = createContext('test query')
@@ -61,9 +62,10 @@ describe('judge', () => {
   })
 
   it('should call evaluator with candidates', async () => {
-    const { judge } = await import('@hames/harness-patterns/patterns/judge.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { judge } = await import('@hames-ai/harness-patterns/patterns/judge.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const evaluator = vi.fn().mockResolvedValue({
       reasoning: 'Test reasoning',
@@ -94,9 +96,10 @@ describe('judge', () => {
   })
 
   it('should set best result as response', async () => {
-    const { judge } = await import('@hames/harness-patterns/patterns/judge.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { judge } = await import('@hames-ai/harness-patterns/patterns/judge.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const evaluator = vi.fn().mockResolvedValue({
       reasoning: 'Test reasoning',
@@ -129,9 +132,10 @@ describe('judge', () => {
   })
 
   it('should limit candidates when maxCandidates is set', async () => {
-    const { judge } = await import('@hames/harness-patterns/patterns/judge.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { judge } = await import('@hames-ai/harness-patterns/patterns/judge.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const evaluator = vi.fn().mockResolvedValue({
       reasoning: 'Test',
@@ -158,9 +162,10 @@ describe('judge', () => {
   })
 
   it('should track controller_action event with evaluation', async () => {
-    const { judge } = await import('@hames/harness-patterns/patterns/judge.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { judge } = await import('@hames-ai/harness-patterns/patterns/judge.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const evaluator = vi.fn().mockResolvedValue({
       reasoning: 'Detailed reasoning',
@@ -190,9 +195,10 @@ describe('judge', () => {
   })
 
   it('should handle evaluator errors', async () => {
-    const { judge } = await import('@hames/harness-patterns/patterns/judge.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { judge } = await import('@hames-ai/harness-patterns/patterns/judge.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const evaluator = vi.fn().mockRejectedValue(new Error('Evaluator failed'))
 
@@ -219,9 +225,10 @@ describe('judge', () => {
   })
 
   it('should handle null best result', async () => {
-    const { judge } = await import('@hames/harness-patterns/patterns/judge.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { judge } = await import('@hames-ai/harness-patterns/patterns/judge.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const evaluator = vi.fn().mockResolvedValue({
       reasoning: 'No good results',

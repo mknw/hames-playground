@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 
 /**
  * #374: a pattern run needs a run frame, and these tests drive patterns
@@ -15,7 +15,7 @@ import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
 const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 // Mock server-only imports
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -25,14 +25,14 @@ describe('runChain (internal executor)', () => {
   })
 
   it('should export runChain function', async () => {
-    const { runChain } = await import('@hames/harness-patterns/patterns/chain.server')
+    const { runChain } = await import('@hames-ai/harness-patterns/patterns/chain.server')
     expect(runChain).toBeDefined()
     expect(typeof runChain).toBe('function')
   })
 
   it('should return context unchanged when no patterns provided', async () => {
-    const { runChain } = await import('@hames/harness-patterns/patterns/chain.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
+    const { runChain } = await import('@hames-ai/harness-patterns/patterns/chain.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
 
     const ctx = createContext('test message')
     const result = await runInFrame(() => runChain(ctx, []))
@@ -43,8 +43,8 @@ describe('runChain (internal executor)', () => {
 
   it('should execute patterns in sequence', async () => {
     const { runChain, configurePattern } =
-      await import('@hames/harness-patterns/patterns/chain.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
+      await import('@hames-ai/harness-patterns/patterns/chain.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
 
     const executionOrder: string[] = []
 
@@ -77,8 +77,8 @@ describe('runChain (internal executor)', () => {
 
   it('should stop execution when status changes from running', async () => {
     const { runChain, configurePattern } =
-      await import('@hames/harness-patterns/patterns/chain.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
+      await import('@hames-ai/harness-patterns/patterns/chain.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
 
     const executionOrder: string[] = []
 
@@ -118,8 +118,8 @@ describe('runChain (internal executor)', () => {
 
   it('should add pattern_enter and pattern_exit events', async () => {
     const { runChain, configurePattern } =
-      await import('@hames/harness-patterns/patterns/chain.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
+      await import('@hames-ai/harness-patterns/patterns/chain.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
 
     const pattern = configurePattern('test-pattern', async (scope) => scope, { patternId: 'test' })
 
@@ -135,8 +135,8 @@ describe('runChain (internal executor)', () => {
 
   it('should pass data between patterns', async () => {
     const { runChain, configurePattern } =
-      await import('@hames/harness-patterns/patterns/chain.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
+      await import('@hames-ai/harness-patterns/patterns/chain.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
 
     const pattern1 = configurePattern(
       'producer',
@@ -166,8 +166,8 @@ describe('runChain (internal executor)', () => {
 
   it('should handle errors in patterns', async () => {
     const { runChain, configurePattern } =
-      await import('@hames/harness-patterns/patterns/chain.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
+      await import('@hames-ai/harness-patterns/patterns/chain.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
 
     const errorPattern = configurePattern(
       'error',
@@ -191,14 +191,14 @@ describe('chain (pattern factory)', () => {
   })
 
   it('should export chain function', async () => {
-    const { chain } = await import('@hames/harness-patterns/patterns/chain.server')
+    const { chain } = await import('@hames-ai/harness-patterns/patterns/chain.server')
     expect(chain).toBeDefined()
     expect(typeof chain).toBe('function')
   })
 
   it('should return a ConfiguredPattern', async () => {
     const { chain, configurePattern } =
-      await import('@hames/harness-patterns/patterns/chain.server')
+      await import('@hames-ai/harness-patterns/patterns/chain.server')
 
     const p1 = configurePattern('a', async (scope) => scope, { patternId: 'a' })
     const p2 = configurePattern('b', async (scope) => scope, { patternId: 'b' })
@@ -211,9 +211,10 @@ describe('chain (pattern factory)', () => {
 
   it('should execute sub-patterns in sequence within scope', async () => {
     const { chain, configurePattern } =
-      await import('@hames/harness-patterns/patterns/chain.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+      await import('@hames-ai/harness-patterns/patterns/chain.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const order: string[] = []
 
@@ -251,9 +252,10 @@ describe('chain (pattern factory)', () => {
 
   it('should add pattern_enter and pattern_exit events for each sub-pattern', async () => {
     const { chain, configurePattern } =
-      await import('@hames/harness-patterns/patterns/chain.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+      await import('@hames-ai/harness-patterns/patterns/chain.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const p = configurePattern('sub', async (scope) => scope, { patternId: 'sub' })
     const composed = chain(p)
@@ -277,7 +279,7 @@ describe('configurePattern', () => {
   })
 
   it('should create a ConfiguredPattern with name and config', async () => {
-    const { configurePattern } = await import('@hames/harness-patterns/patterns/chain.server')
+    const { configurePattern } = await import('@hames-ai/harness-patterns/patterns/chain.server')
 
     const pattern = configurePattern('test-pattern', async (scope) => scope, {
       patternId: 'custom-id',
@@ -289,7 +291,7 @@ describe('configurePattern', () => {
   })
 
   it('should generate patternId if not provided', async () => {
-    const { configurePattern } = await import('@hames/harness-patterns/patterns/chain.server')
+    const { configurePattern } = await import('@hames-ai/harness-patterns/patterns/chain.server')
 
     const pattern = configurePattern('my-pattern', async (scope) => scope)
 

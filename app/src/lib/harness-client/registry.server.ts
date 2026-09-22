@@ -16,10 +16,10 @@
  * `actions.server.ts`'s gated `getAgentList`, and the API routes import it
  * server-side. Same reasoning as `action-runner.server.ts` / `turn.server.ts`.
  */
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import type { ConfiguredPattern } from '@hames/harness-patterns'
-import { harnessHasRedisRetriever, harnessUsesSyncWorkspace } from '@hames/harness-patterns'
-import type { AgentDefinition } from '@hames/agents'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import type { ConfiguredPattern } from '@hames-ai/harness-patterns'
+import { harnessHasRedisRetriever, harnessUsesSyncWorkspace } from '@hames-ai/harness-patterns'
+import type { AgentDefinition } from '@hames-ai/agents'
 import type { SessionData } from './session.server'
 import type { AgentAccent } from '../agent-palette'
 
@@ -246,12 +246,12 @@ export async function agentUsesSyncWorkspace(agentId: string, sessionId: string)
  * `content.filesystem` glob covers this file, so UnoCSS extracts them. The
  * marker is load-bearing (see the uno.config comment).
  */
-import { searchAgent } from '@hames/agents/agents/search.server'
-import { generalAgent } from '@hames/agents/agents/general.server'
-import { sandboxSessionAgent } from '@hames/agents/agents/sandbox-session.server'
-import { flavouredSandboxAgent } from '@hames/agents/agents/flavoured-sandbox.server'
-import { retrieverAgent } from '@hames/agents/agents/retriever-agent.server'
-import { microsoft365Agent } from '@hames/agents/agents/microsoft-365.server'
+import { searchAgent } from '@hames-ai/agents/agents/search.server'
+import { generalAgent } from '@hames-ai/agents/agents/general.server'
+import { sandboxSessionAgent } from '@hames-ai/agents/agents/sandbox-session.server'
+import { flavouredSandboxAgent } from '@hames-ai/agents/agents/flavoured-sandbox.server'
+import { retrieverAgent } from '@hames-ai/agents/agents/retriever-agent.server'
+import { microsoft365Agent } from '@hames-ai/agents/agents/microsoft-365.server'
 import { agentDeps } from './session.server'
 
 /** Wrap a package definition with this app's presentation + deps supply. */

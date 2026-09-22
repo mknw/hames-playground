@@ -11,7 +11,7 @@
 | [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) | Live planning board (Status / Priority / MSCW per issue)                                                                                                                                                                                                                                       |
 | [plan/ROADMAP.md](plan/ROADMAP.md)                                                      | The roadmap _shape_: target multi-user architecture, phases 0–4 with MoSCoW ratings + dependency spine (Entra SSO #119 as the gate)                                                                                                                                                            |
 | [reviewing.md](reviewing.md)                                                            | **Review map** for the global `/reviewing-changes` skill: pointers to where conventions, spec resolution, gates and the review protocol live — facts stated here directly only when stated nowhere else                                                                                        |
-| [tutorials/README.md](tutorials/README.md)                                              | **Developer tutorials** — task-shaped "how do I use X in my app" pages for consumers of the `@hames` packages: hosting the harness, wiring a host, guarding an agent, sandboxes and workspaces, bringing your own model. Every TypeScript snippet is compile-pinned against the live packages  |
+| [tutorials/README.md](tutorials/README.md)                                              | **Developer tutorials** — task-shaped "how do I use X in my app" pages for consumers of the `@hames-ai` packages: hosting the harness, wiring a host, guarding an agent, sandboxes and workspaces, bringing your own model. Every TypeScript snippet is compile-pinned against the live packages  |
 
 ---
 
@@ -254,7 +254,7 @@ kg-agent/
 │   │   └── plan.md              # Data protection findings + plan
 │   ├── user-guides/
 │   │   └── microsoft-graph.md   # Microsoft 365 agent: what you can ask
-│   ├── tutorials/               # Task-shaped pages for consumers of the `@hames` packages
+│   ├── tutorials/               # Task-shaped pages for consumers of the `@hames-ai` packages
 │   │   └── README.md            # The index + the six tutorial pages
 │   └── harness-patterns/        # Harness patterns documentation
 │       ├── README.md            # Overview

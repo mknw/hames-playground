@@ -9,7 +9,7 @@ import {
   formatParamValue,
   parsePromptBody,
   type ParsedMessage,
-} from '@hames/harness-patterns/observability/prompt-parse'
+} from '@hames-ai/harness-patterns/observability/prompt-parse'
 
 // ============================================================================
 // Shared Components

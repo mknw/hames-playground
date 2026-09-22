@@ -108,7 +108,7 @@ describe('one BAML corpus', () => {
       const text = stripComments(readFileSync(path.join(ROOT, file), 'utf8'))
       // Quoted specifiers in CODE — a specifier named in prose is not an import.
       for (const [, spec] of text.matchAll(/['"`]([^'"`\n]*baml_client[^'"`\n]*)['"`]/g)) {
-        if (spec.startsWith('@hames/harness-baml/baml_client')) viaPackage += 1
+        if (spec.startsWith('@hames-ai/harness-baml/baml_client')) viaPackage += 1
         else if (spec.startsWith('.') || spec.startsWith('/')) relative.push(`${file}: ${spec}`)
       }
     }

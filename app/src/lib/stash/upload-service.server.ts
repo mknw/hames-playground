@@ -17,8 +17,8 @@
  * (for RAG/search) is still left to the caller.
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import type { StoreDocumentInput } from '@hames/harness-patterns/stash/document-store.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import type { StoreDocumentInput } from '@hames-ai/harness-patterns/stash/document-store.server'
 
 assertServerOnImport()
 

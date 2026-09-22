@@ -1,5 +1,5 @@
 /**
- * @hames/agents — the agent definitions.
+ * @hames-ai/agents — the agent definitions.
  *
  * The nine moved definitions (6 registered `AgentDefinition`s + 3 shared
  * helpers: the graph-schema fetch, the Neo4j few-shots, and the title
@@ -10,7 +10,7 @@
  *
  * These are `.server.ts` modules: importing this barrel is a server-side
  * operation (`assertServerOnImport` guards every definition). Client code
- * imports `@hames/agents` (the root barrel) instead.
+ * imports `@hames-ai/agents` (the root barrel) instead.
  */
 export { searchAgent } from './search.server'
 export { generalAgent } from './general.server'

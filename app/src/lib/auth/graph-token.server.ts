@@ -31,8 +31,8 @@ import {
   InteractionRequiredAuthError,
   type AccountInfo,
 } from '@azure/msal-node'
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import { GraphAuthRequiredError } from '@hames/connectors/graph/graph-auth'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import { GraphAuthRequiredError } from '@hames-ai/connectors/graph/graph-auth'
 import { buildEntraConfig, msalConfiguration } from './entra-config.server'
 import { loadUserTokenCache, saveUserTokenCache } from './user-tokens.server'
 
@@ -49,7 +49,7 @@ export const GRAPH_BASE = 'https://graph.microsoft.com/v1.0'
  */
 export const DEFAULT_GRAPH_SCOPES = ['User.Read'] as const
 
-// `GraphAuthRequiredError` moved INTO `@hames/connectors` verbatim (#225
+// `GraphAuthRequiredError` moved INTO `@hames-ai/connectors` verbatim (#225
 // PR-C2, design S1) so `instanceof` keeps working across the seam: this
 // module keeps throwing it (re-exported below for every existing importer),
 // and the package's Graph tools check it without either side importing the

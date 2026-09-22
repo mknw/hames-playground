@@ -1,5 +1,5 @@
 /**
- * The 'use server' strip pin for @hames/connectors (#225 PR-C2; the PR-2
+ * The 'use server' strip pin for @hames-ai/connectors (#225 PR-C2; the PR-2
  * template, applied to this package).
  *
  * The modules that moved in from the host app carried `'use server'`
@@ -47,7 +47,7 @@ async function walk(dir: string): Promise<string[]> {
   return files
 }
 
-describe("the 'use server' strip (PR-2 template, @hames/connectors)", () => {
+describe("the 'use server' strip (PR-2 template, @hames-ai/connectors)", () => {
   it('no directive survives in any package source file', async () => {
     const files = await walk(PKG)
     expect(files.length).toBeGreaterThan(0)

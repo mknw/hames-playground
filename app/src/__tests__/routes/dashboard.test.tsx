@@ -7,8 +7,11 @@
  * and the empty state when nothing has been run yet.
  */
 import { describe, it, expect, vi } from 'vitest'
-import { buildDashboard, type ConversationEvents } from '@hames/harness-patterns/metrics/aggregate'
-import type { ContextEvent } from '@hames/harness-patterns/types'
+import {
+  buildDashboard,
+  type ConversationEvents,
+} from '@hames-ai/harness-patterns/metrics/aggregate'
+import type { ContextEvent } from '@hames-ai/harness-patterns/types'
 
 const getMetricsDashboard = vi.fn()
 

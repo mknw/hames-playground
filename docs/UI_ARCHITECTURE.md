@@ -483,7 +483,7 @@ Displays the full agent event timeline:
 - **LLM call detail** (events with `llmCall`): two-tab layout — **Prompt** | **Output**. The Prompt tab uses an Ark UI Accordion with three sections: _Template_ (Jinja source with `{{ vars }}` and `{% if %}` / `{% for %}` blocks, sourced from `packages/harness-baml/baml_src/`), _Variables_ (function inputs), _Rendered messages_ (HTTP body parsed into role/content bubbles via `ParsedPromptView`). Sourced from `LLMCallData` in `baml-adapters.server.ts` — `httpRequest.body` is read via `body.text()` because BAML returns an `HttpBody` class instance, not a plain object.
 - **Save button** (floating, bottom-right): calls `showSaveFilePicker()` to save the full `UnifiedContext` as a named JSON file; falls back to `<a download>` on browsers without File System Access API
 - Requires `context?: UnifiedContext` prop threaded down from `index.tsx` → `SupportPanel` → `ObservabilityPanel`
-- **Split across files** (#226 B5): `ObservabilityPanel.tsx` is the composition root and the only public export. The pure projections live in `@hames/harness-patterns` since the core-absorb move — `observability/projection.ts` (`buildTimelineItems()`, `getEventPreview()`, `getEventLane()`), `observability/prompt-parse.ts` (`parsePromptBody()`, `flattenContent()`, `formatParamValue()`), `observability/token-totals.ts` (`foldTokenTotals()`, `fmtTok()`, `fmtEur()` — the app's one price formatter) — while `app/src/lib/observability/event-styles.ts` stays app-side (it reads the app-root `pattern-colors.json`), and the rendering in `components/ark-ui/observability/` (`SummaryBar`, `TimelineRows`, `EventDetail`, `LLMCallTabs`, `PromptView`)
+- **Split across files** (#226 B5): `ObservabilityPanel.tsx` is the composition root and the only public export. The pure projections live in `@hames-ai/harness-patterns` since the core-absorb move — `observability/projection.ts` (`buildTimelineItems()`, `getEventPreview()`, `getEventLane()`), `observability/prompt-parse.ts` (`parsePromptBody()`, `flattenContent()`, `formatParamValue()`), `observability/token-totals.ts` (`foldTokenTotals()`, `fmtTok()`, `fmtEur()` — the app's one price formatter) — while `app/src/lib/observability/event-styles.ts` stays app-side (it reads the app-root `pattern-colors.json`), and the rendering in `components/ark-ui/observability/` (`SummaryBar`, `TimelineRows`, `EventDetail`, `LLMCallTabs`, `PromptView`)
 
 ### Theme System
 
@@ -616,7 +616,7 @@ token, cache and cost aggregates across everything the signed-in user has run.
 
 | Layer  | File                                        | Role                                                                                                                                                                                        |
 | ------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Fold   | `@hames/harness-patterns/metrics/aggregate` | Pure, client-safe folds over `ContextEvent[]`: `getEventMetrics` (the single accessor for step accounting), `foldEvents`, `aggregateByPattern`, `aggregateByConversation`, `buildDashboard` |
+| Fold   | `@hames-ai/harness-patterns/metrics/aggregate` | Pure, client-safe folds over `ContextEvent[]`: `getEventMetrics` (the single accessor for step accounting), `foldEvents`, `aggregateByPattern`, `aggregateByConversation`, `buildDashboard` |
 | Action | `lib/metrics/dashboard.server.ts`           | `getMetricsDashboard(topN)` — `requireUser()`, load, fold, return aggregates only (raw events never cross the wire)                                                                         |
 | Query  | `lib/db/conversations.server.ts`            | `listConversationEvents(userId)` projects `context -> 'events'` in SQL (same 200-row ceiling as the sidebar list)                                                                           |
 | Page   | `routes/dashboard.tsx`                      | Global cards + input-composition bar, per-pattern table, top-N conversations. No chart library — bars are divs                                                                              |
@@ -768,7 +768,7 @@ mid-run cancellation is #105 PR 3, unbuilt.
    graph) AND a literal `@unocss-include` comment in the globbed file —
    filesystem-globbed files still pass through the pipeline filter, which
    rejects `.ts` paths unless that marker appears in the code. Since the
-   `@hames/agents` extraction (#225) those literals all live in ONE file —
+   `@hames-ai/agents` extraction (#225) those literals all live in ONE file —
    the overlay in `lib/harness-client/registry.server.ts`, one literal per
    `registerAgent` call — and the glob names exactly that file. Adding an
    agent: use an `i-material-symbols-*` class at its `overlay(...)` site and
@@ -795,7 +795,7 @@ Once the first user turn completes, a minimal harness agent generates a 3–5 wo
 
 ### Why a harness agent for one BAML call?
 
-The `harness-patterns/` library was the testbed for an eventual standalone npm package, and has since been extracted into one: `@hames/harness-patterns`, an independently versioned workspace package at `packages/harness-patterns/` with its own manifest and MIT licence — publish-ready, but not published to npm. Its example catalog (now the `@hames/agents` package, `packages/agents/agents/`) ranges from `simpleLoop` through `actorCritic`, `parallel`, and a full ontology-builder pipeline — but had no _minimum-rung_ example showing the library handles one-shot LLM jobs too. The title generator fills that gap with what is genuinely the smallest legal composition:
+The `harness-patterns/` library was the testbed for an eventual standalone npm package, and has since been extracted into one: `@hames-ai/harness-patterns`, an independently versioned workspace package at `packages/harness-patterns/` with its own manifest and MIT licence — publish-ready, but not published to npm. Its example catalog (now the `@hames-ai/agents` package, `packages/agents/agents/`) ranges from `simpleLoop` through `actorCritic`, `parallel`, and a full ontology-builder pipeline — but had no _minimum-rung_ example showing the library handles one-shot LLM jobs too. The title generator fills that gap with what is genuinely the smallest legal composition:
 
 ```ts
 // packages/agents/agents/title-generator.server.ts
@@ -1006,7 +1006,7 @@ app/
 │       ├── settings-store.ts      # Client-side reactive store (localStorage persistence)
 │       ├── turn-utils.ts           # findLastUserMessageIndex() — the turn boundary
 │       ├── observability/         # event-styles.ts (icon/colour tables); the pure
-│       │   │                     # projections moved to @hames/harness-patterns/observability
+│       │   │                     # projections moved to @hames-ai/harness-patterns/observability
 │       │   └── event-styles.ts   # getPatternColor(), eventColors, eventIconClasses
 │       ├── neo4j/
 │       │   ├── queries.ts         # runManualCypher() (read-only), getNodeProperties()

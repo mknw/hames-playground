@@ -29,7 +29,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest'
-import type { ActiveInjectionGuard } from '@hames/harness-patterns/injection-guard'
+import type { ActiveInjectionGuard } from '@hames-ai/harness-patterns/injection-guard'
 
 // Lane B2 (#225 L5): the catalog left core, so namespace matching against
 // gateway tool names ('search' → 'web') needs the same registration the boot
@@ -46,7 +46,7 @@ import {
   type InjectionRule,
   type SanitizeReport,
   type SpotlightMode,
-} from '@hames/harness-patterns/injection-guard'
+} from '@hames-ai/harness-patterns/injection-guard'
 
 // `createInjectionGuard` is the guard object the ALS readers consult, and its
 // `sanitize()` is where the screen gate lives — the gate is NOT in
@@ -54,13 +54,13 @@ import {
 // exported for exactly this reason (see its docblock), so no `callTool` and no
 // gateway mock is needed here; `injection-guard-chokepoint.test.ts` covers the
 // transport.
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
 async function loadGuard() {
   const { createInjectionGuard } =
-    await import('@hames/harness-patterns/patterns/withInjectionGuard.server')
+    await import('@hames-ai/harness-patterns/patterns/withInjectionGuard.server')
   return createInjectionGuard
 }
 
@@ -668,7 +668,7 @@ describe('spotlight modes: what actually reaches the controller', () => {
    */
   async function loadGuardScope() {
     const { withRunFrame, amendRunFrame, currentRunFrame } =
-      await import('@hames/harness-patterns/run-frame.server')
+      await import('@hames-ai/harness-patterns/run-frame.server')
     const runWithInjectionGuard = <T>(
       guard: ActiveInjectionGuard,
       fn: () => Promise<T>,

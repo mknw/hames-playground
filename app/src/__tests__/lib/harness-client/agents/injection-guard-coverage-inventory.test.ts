@@ -21,7 +21,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
-// The definitions moved into @hames/agents (#225 PR-2); the inventory walks
+// The definitions moved into @hames-ai/agents (#225 PR-2); the inventory walks
 // them from the package. `testAgentDeps` supplies the injected app-side bag
 // the factories now take — the fake sandbox wrapper mirrors the real one's
 // introspection shape, so the pinned inventory rows are unchanged.
@@ -47,19 +47,19 @@ toolSets.all = [
   ...toolSets.memory,
 ]
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   callTool: mockCallTool({ responses: {} }),
   listTools: mockListTools(toolSets.all),
 }))
 
-vi.mock('@hames/harness-patterns/tools.server', async (importOriginal) => {
+vi.mock('@hames-ai/harness-patterns/tools.server', async (importOriginal) => {
   // `inferServer` stays REAL — the guard resolves declared namespaces through
   // it, so stubbing it would make the inventory meaningless.
-  const actual = await importOriginal<typeof import('@hames/harness-patterns/tools.server')>()
+  const actual = await importOriginal<typeof import('@hames-ai/harness-patterns/tools.server')>()
   return { ...actual, Tools: vi.fn(async () => toolSets) }
 })
 
@@ -133,12 +133,12 @@ const AGENT_MODULES = [
 /** Static import map — `import()` of a template literal cannot be analysed by
  *  Vite, so the modules are named explicitly. */
 const LOADERS: Record<string, () => Promise<Record<string, unknown>>> = {
-  'search.server.ts': () => import('@hames/agents/agents/search.server'),
-  'general.server.ts': () => import('@hames/agents/agents/general.server'),
-  'sandbox-session.server.ts': () => import('@hames/agents/agents/sandbox-session.server'),
-  'flavoured-sandbox.server.ts': () => import('@hames/agents/agents/flavoured-sandbox.server'),
-  'retriever-agent.server.ts': () => import('@hames/agents/agents/retriever-agent.server'),
-  'microsoft-365.server.ts': () => import('@hames/agents/agents/microsoft-365.server'),
+  'search.server.ts': () => import('@hames-ai/agents/agents/search.server'),
+  'general.server.ts': () => import('@hames-ai/agents/agents/general.server'),
+  'sandbox-session.server.ts': () => import('@hames-ai/agents/agents/sandbox-session.server'),
+  'flavoured-sandbox.server.ts': () => import('@hames-ai/agents/agents/flavoured-sandbox.server'),
+  'retriever-agent.server.ts': () => import('@hames-ai/agents/agents/retriever-agent.server'),
+  'microsoft-365.server.ts': () => import('@hames-ai/agents/agents/microsoft-365.server'),
 }
 
 async function patternsOf(file: string, exportName: string): Promise<Pattern[]> {

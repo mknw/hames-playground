@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { extractGraphElements, isEdgeElement, isNodeElement } from '@hames/agents'
+import { extractGraphElements, isEdgeElement, isNodeElement } from '@hames-ai/agents'
 
 import schemaFixture from './fixtures/neo4j-schema.json'
 import singleNodeFixture from './fixtures/cypher-single-node.json'

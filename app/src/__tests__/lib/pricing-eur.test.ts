@@ -42,7 +42,7 @@ import {
   estimateLlmCostEur,
 } from '../../lib/settings'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -320,7 +320,7 @@ describe('the conversion rate is named for the direction it multiplies in', () =
 
 describe('fmtEur — the one formatter', () => {
   it('is euro, with cents above €0.10 and four places below', async () => {
-    const { fmtEur } = await import('@hames/harness-patterns/observability/token-totals')
+    const { fmtEur } = await import('@hames-ai/harness-patterns/observability/token-totals')
     expect(fmtEur(0)).toBe('€0.0000')
     expect(fmtEur(0.000_3)).toBe('€0.0003')
     expect(fmtEur(0.099_9)).toBe('€0.0999')

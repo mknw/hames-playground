@@ -35,7 +35,7 @@ import type {
   ToolCallRequest as GeneratedToolCallRequest,
   ToolDescription as GeneratedToolDescription,
   ToolResult as GeneratedToolResult,
-} from '@hames/harness-baml/baml_client/types'
+} from '@hames-ai/harness-baml/baml_client/types'
 import type {
   Attempt,
   ControllerAction,
@@ -49,7 +49,7 @@ import type {
   ToolCallRequest,
   ToolDescription,
   ToolResult,
-} from '@hames/harness-patterns/types'
+} from '@hames-ai/harness-patterns/types'
 
 // `process.cwd()` is `app/` under vitest (same anchor the other source-scan
 // pins use); `import.meta.url` is not a file URL in this jsdom environment.

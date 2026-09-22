@@ -4,7 +4,7 @@
  * Answers questions about the signed-in user's own Microsoft 365 data by
  * calling Graph **as that user**: the app-side `graph` tools resolve a
  * delegated per-user token server-side (the Graph connector tools in
- * `@hames/connectors`, composed app-side),
+ * `@hames-ai/connectors`, composed app-side),
  * so Entra enforces the scope and no credential ever reaches the model.
  *
  * Profile, today's calendar and recent inbox mail — enough for a "what does my
@@ -23,11 +23,11 @@ import {
   withInjectionGuard,
   Tools,
   type ConfiguredPattern,
-} from '@hames/harness-patterns'
-import { bamlPatterns, createLoopControllerAdapter } from '@hames/harness-baml'
+} from '@hames-ai/harness-patterns'
+import { bamlPatterns, createLoopControllerAdapter } from '@hames-ai/harness-baml'
 import type { AgentData, AgentDefinition, AgentDeps } from '../types'
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 
 // The 'use server' directive this file carried before the move was the only
 // thing keeping its exports off the client; this is the real guard, and the

@@ -8,7 +8,7 @@
  * import order, and all are why callers import this barrel rather than the
  * modules beneath it.
  *
- * Since #225 PR-C2, the modules beneath it live in `@hames/connectors` and
+ * Since #225 PR-C2, the modules beneath it live in `@hames-ai/connectors` and
  * this barrel is where they are COMPOSED with the app's own implementations:
  * it creates the registry with the app's identity resolver (design S3), and
  * it calls `registerGraphConnectorTools` with the app's own `graphFetch`,
@@ -21,7 +21,7 @@
  * exactly that reason. Core no longer imports it from `mcp-client.server.ts`:
  * dispatch asks the seam, and the app is what puts something on it. The
  * namespace catalog moved out of core for the same reason (#225 L5): which
- * tool names exist is the deployment's fact, and `@hames/connectors`
+ * tool names exist is the deployment's fact, and `@hames-ai/connectors`
  * `mcp-catalog` is where it now lives.
  *
  * Add new app-side tool modules to the factory-call list in
@@ -31,18 +31,21 @@
 import {
   registerTransport,
   type ToolTransport,
-} from '@hames/harness-patterns/tool-transport.server'
-import { registerToolNamespaces } from '@hames/harness-patterns/tools.server'
+} from '@hames-ai/harness-patterns/tool-transport.server'
+import { registerToolNamespaces } from '@hames-ai/harness-patterns/tools.server'
 import { getRequestUserId, getRequestSessionId } from '../harness-client/request-user.server'
 import { graphFetch } from '../auth/graph-token.server'
-import { conversionEnabled, isConvertible } from '@hames/harness-patterns/stash/doc-convert.server'
+import {
+  conversionEnabled,
+  isConvertible,
+} from '@hames-ai/harness-patterns/stash/doc-convert.server'
 import { guessMimeType, isTextMime } from '../stash/upload-service.server'
-import { createAppToolRegistry } from '@hames/connectors/app-tools/registry'
+import { createAppToolRegistry } from '@hames-ai/connectors/app-tools/registry'
 import {
   registerGraphConnectorTools,
   type GraphStashStore,
-} from '@hames/connectors/graph/graph-tools.server'
-import { mcpNamespace } from '@hames/connectors/mcp-catalog'
+} from '@hames-ai/connectors/graph/graph-tools.server'
+import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 
 // The registry, with the app's identity resolution injected (design S3): the
 // app passes its own getRequestUserId/getRequestSessionId pair, so the
@@ -71,11 +74,11 @@ registerGraphConnectorTools({
   stash: {
     loadStore: async (): Promise<GraphStashStore> => {
       const { storeDocument, MAX_CONTENT_BYTES } =
-        await import('@hames/harness-patterns/stash/document-store.server')
+        await import('@hames-ai/harness-patterns/stash/document-store.server')
       return { storeDocument, maxContentBytes: MAX_CONTENT_BYTES }
     },
     ingest: (sessionId, documentId) =>
-      import('@hames/harness-patterns/stash/document-ingest.server').then((m) =>
+      import('@hames-ai/harness-patterns/stash/document-ingest.server').then((m) =>
         m.ingestStashDocument(sessionId, documentId),
       ),
   },
@@ -129,4 +132,4 @@ export type {
   AppToolContext,
   AppToolResolveContext,
   AppToolRegistry,
-} from '@hames/connectors/app-tools/registry'
+} from '@hames-ai/connectors/app-tools/registry'

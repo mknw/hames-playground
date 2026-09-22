@@ -21,7 +21,7 @@
  */
 
 import { Collector } from '@boundaryml/baml'
-import type { DescribeTarget } from '@hames/harness-baml/baml_client/types'
+import type { DescribeTarget } from '@hames-ai/harness-baml/baml_client/types'
 import { check, type Check, type Scenario } from '../harness'
 
 const ITEMS: DescribeTarget[] = [
@@ -56,11 +56,11 @@ export const describeBatchScenario: Scenario = {
   title: 'ResultDescribeBatch — one summary per item, ids echoed verbatim',
   what: 'the id-keyed batch contract compactBulkData depends on: drop an id and the caller silently falls back to N+1 calls',
   run: async (ctx) => {
-    const { b } = await import('@hames/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
     const { expectedClientFor } = await import('../client')
     const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../src/lib/settings')
     const { maxBatchItems, MAX_BATCH_ITEMS } =
-      await import('@hames/harness-patterns/compactBulkData.server')
+      await import('@hames-ai/harness-patterns/compactBulkData.server')
     const describeClient = expectedClientFor(ctx.routing, 'describe')
     const collector = new Collector('eval-describe-batch')
     const batch = await b.ResultDescribeBatch(ITEMS, ctx.opts('describe', collector))

@@ -23,9 +23,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { mockAction, mockCriticResult, mockBAMLClient } from '../../mocks/baml'
-import type { ControllerFn } from '@hames/harness-patterns/types'
+import type { ControllerFn } from '@hames-ai/harness-patterns/types'
 import { mockCallTool, mockListTools } from '../../mocks/mcp'
 
 /**
@@ -37,7 +37,7 @@ import { mockCallTool, mockListTools } from '../../mocks/mcp'
  */
 const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -49,12 +49,12 @@ const callToolMock = mockCallTool({
   },
 })
 
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   callTool: callToolMock,
   listTools: mockListTools(['read_neo4j_cypher', 'code-mode', 'Return']),
 }))
 
-vi.mock('@hames/harness-baml/baml_client', () => ({
+vi.mock('@hames-ai/harness-baml/baml_client', () => ({
   b: mockBAMLClient({
     loopActions: [mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{}' })],
     actorActions: [mockAction({ tool_name: 'code-mode', tool_args: '{}' })],
@@ -141,8 +141,8 @@ describe('resolveTurnBudget', () => {
   })
 
   it('is the rule estimateTurns uses, so the progress bar cannot disagree', async () => {
-    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
     const { DEFAULT_SETTINGS, SETTINGS_BOUNDS } = await import('../../../lib/settings')
 
     expect(
@@ -187,9 +187,9 @@ describe('exhaustion is recorded as a truncation, not as a failure', () => {
   })
 
   it('simpleLoop: marks the event, carries the budget, and spends exactly it', async () => {
-    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     const controller = neverFinishingController()
     const pattern = simpleLoop(controller, ['read_neo4j_cypher', 'Return'], {
@@ -228,9 +228,9 @@ describe('exhaustion is recorded as a truncation, not as a failure', () => {
   })
 
   it('simpleLoop: the hint names the lever that actually bound', async () => {
-    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     const run = async (maxTurns?: number) => {
       const pattern = simpleLoop(
@@ -263,9 +263,9 @@ describe('exhaustion is recorded as a truncation, not as a failure', () => {
   })
 
   it('actorCritic: stamps the identical marker when its attempts run out', async () => {
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     const actor = vi.fn().mockResolvedValue({
       action: {
@@ -306,9 +306,9 @@ describe('exhaustion is recorded as a truncation, not as a failure', () => {
   })
 
   it('the BODY spends the clamped budget, not the declared literal', async () => {
-    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
     const { SETTINGS_BOUNDS } = await import('../../../lib/settings')
     const ceiling = SETTINGS_BOUNDS.maxToolTurns[1]
 
@@ -328,9 +328,9 @@ describe('exhaustion is recorded as a truncation, not as a failure', () => {
   })
 
   it('a declared 0 still runs a round and RECORDS its exhaustion', async () => {
-    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     const controller = neverFinishingController()
     const result = await runInFrame(() =>

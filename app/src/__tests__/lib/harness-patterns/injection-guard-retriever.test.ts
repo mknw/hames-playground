@@ -15,9 +15,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 // Type-only: erased at compile time, so it does not defeat the vi.mock below.
-import type { RetrieverData } from '@hames/harness-patterns/patterns/retriever.server'
+import type { RetrieverData } from '@hames-ai/harness-patterns/patterns/retriever.server'
 
 /**
  * #374: a pattern run needs a run frame, and these tests drive patterns
@@ -32,11 +32,11 @@ const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
  *  and what the real agents get from `SessionData`. */
 type TestData = RetrieverData & { [key: string]: unknown }
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   callTool: vi.fn(),
   listTools: vi.fn(async () => []),
 }))
@@ -89,11 +89,11 @@ async function runRetriever(
     | { namespaces?: string[]; catalog?: string[]; spotlight?: 'on-detection' | 'always' | 'off' }
     | { tools?: string[]; spotlight?: 'on-detection' | 'always' | 'off' },
 ) {
-  const { retriever } = await import('@hames/harness-patterns/patterns/retriever.server')
-  const { runChain } = await import('@hames/harness-patterns/patterns/chain.server')
-  const { createContext } = await import('@hames/harness-patterns/context.server')
+  const { retriever } = await import('@hames-ai/harness-patterns/patterns/retriever.server')
+  const { runChain } = await import('@hames-ai/harness-patterns/patterns/chain.server')
+  const { createContext } = await import('@hames-ai/harness-patterns/context.server')
   const { withInjectionGuard } =
-    await import('@hames/harness-patterns/patterns/withInjectionGuard.server')
+    await import('@hames-ai/harness-patterns/patterns/withInjectionGuard.server')
 
   const backend = stubBackend(hits)
   const pattern = retriever<TestData>({
@@ -145,7 +145,8 @@ describe('retriever hits — guarded', () => {
 
   it('neutralizes BEFORE any LLM-facing serialization exists', async () => {
     const { ctx } = await runRetriever([hit(POISONED_CHUNK)], { tools: ['retriever'] })
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
     const view = createEventView(ctx, undefined)
 
     // `compactExecution` reads the retriever's tool_result through exactly these.
@@ -161,12 +162,13 @@ describe('retriever hits — guarded', () => {
   it('also sanitizes scope.data.matches (not just the event)', async () => {
     // `scope.data.matches` travels to the next pattern and to the UI, so a
     // read-time view transform would have missed it.
-    const { retriever } = await import('@hames/harness-patterns/patterns/retriever.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { retriever } = await import('@hames-ai/harness-patterns/patterns/retriever.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
     const { withInjectionGuard } =
-      await import('@hames/harness-patterns/patterns/withInjectionGuard.server')
+      await import('@hames-ai/harness-patterns/patterns/withInjectionGuard.server')
 
     const ctx = createContext<TestData>('what does the board pack say?')
     const pattern = withInjectionGuard({ tools: ['retriever'] })(

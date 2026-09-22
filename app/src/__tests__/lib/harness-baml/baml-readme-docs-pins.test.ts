@@ -1,10 +1,10 @@
 /**
- * The @hames/harness-baml README's code samples are compiled, not trusted —
+ * The @hames-ai/harness-baml README's code samples are compiled, not trusted —
  * the same guide-docs pin discipline as harness-patterns' (precedent:
  * guide-docs-pins.test.ts). Every `typescript` fence in the README is
  * extracted and compiled against the package's real TypeScript source (the
- * same tree `pnpm typecheck` covers), with `@hames/harness-baml` and
- * `@hames/harness-patterns` specifiers resolved onto the two packages' source
+ * same tree `pnpm typecheck` covers), with `@hames-ai/harness-baml` and
+ * `@hames-ai/harness-patterns` specifiers resolved onto the two packages' source
  * files, mirroring their exports maps. Diagnostics inside the package sources
  * themselves are IGNORED — the fences are what this test judges.
  */
@@ -47,8 +47,8 @@ function extractFences(content: string): Fence[] {
  *  their exports maps. */
 function resolvePackageModule(specifier: string): string | undefined {
   const roots: Array<[string, string]> = [
-    ['@hames/harness-baml', PKG_ROOT],
-    ['@hames/harness-patterns', PATTERNS_ROOT],
+    ['@hames-ai/harness-baml', PKG_ROOT],
+    ['@hames-ai/harness-patterns', PATTERNS_ROOT],
   ]
   for (const [name, root] of roots) {
     if (specifier !== name && !specifier.startsWith(name + '/')) continue

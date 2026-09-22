@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Pack + install-from-tarball smoke for the workspace packages:
-#   - @hames/harness-patterns (#225 Step 1d; docs/plan/harness-npm-lib.md §3.3/§4.3)
-#   - @hames/harness-baml    (#225 PR-1b)
-#   - @hames/agents          (#225 PR-2 — REQUIRED by the PR-2 amendment: all
+#   - @hames-ai/harness-patterns (#225 Step 1d; docs/plan/harness-npm-lib.md §3.3/§4.3)
+#   - @hames-ai/harness-baml    (#225 PR-1b)
+#   - @hames-ai/agents          (#225 PR-2 — REQUIRED by the PR-2 amendment: all
 #     published packages pass the tarball smoke; a red is a regression). Its
 #     scratch install adds BOTH peer tarballs alongside it, for the
 #     unpublished-version reason under "Why the scratch consumers install the
 #     peers" below.
-#   - @hames/connectors      (#225 PR-C2)
-#   - @hames/sandbox         (the sandbox extraction) — the containment
+#   - @hames-ai/connectors      (#225 PR-C2)
+#   - @hames-ai/sandbox         (the sandbox extraction) — the containment
 #     companion. Its probe is the one that matters most for the
 #     zero-app-imports story, because the module it evaluates
 #     (`with-sandbox.server`) is the one that used to reach into the app's
@@ -24,9 +24,9 @@
 #
 # ## Why the scratch consumers install the peers themselves
 #
-# Since the 2026-09-22 owner ruling, each companion declares its @hames edges
+# Since the 2026-09-22 owner ruling, each companion declares its @hames-ai edges
 # as `peerDependencies` (+ devDependencies), so a consumer owns the single
-# copy of @hames/harness-patterns rather than letting its tree resolve a
+# copy of @hames-ai/harness-patterns rather than letting its tree resolve a
 # second one behind the module-level AsyncLocalStorage scopes. The scratch
 # projects below therefore `pnpm add` the peer tarballs ALONGSIDE the package
 # under test — which is precisely the contract a peer creates, and is a
@@ -37,7 +37,7 @@
 # It replaces a `pnpm.overrides` map because that map no longer works and
 # would have failed OPEN: overrides are not applied to a peer that
 # `auto-install-peers` resolves, so pnpm went to the registry for
-# @hames/harness-patterns and died with ERR_PNPM_FETCH_404. Declaring the peer
+# @hames-ai/harness-patterns and died with ERR_PNPM_FETCH_404. Declaring the peer
 # is also what a real consumer's package.json does, so nothing here is a
 # workaround for the test.
 #
@@ -57,7 +57,7 @@
 #      package below.
 #   4. The DERIVED entry sets — the same two assertions for all five packages,
 #      in `scripts/pack-smoke-derived.mjs`:
-#        (c) every `@hames/<pkg>/…` subpath the APP imports resolves from the
+#        (c) every `@hames-ai/<pkg>/…` subpath the APP imports resolves from the
 #            tarball, by the installed manifest's own exports algorithm, onto a
 #            file the tarball ships;
 #        (d) every entry the package DECLARES — each explicit `exports` key,
@@ -69,7 +69,7 @@
 #
 # Nothing in step 4 is typed out. The probe used to carry a hand-written
 # `appEntries` array per package, and a typed list is a pin that goes stale
-# silently: the app grew imports of `@hames/harness-patterns/runtime-config`
+# silently: the app grew imports of `@hames-ai/harness-patterns/runtime-config`
 # and `.../runtime-config.server` and the list never learned about either, so
 # the one check that says "a consumer can load what we ship" quietly stopped
 # covering two modules. The app side now comes from ONE scan of app/
@@ -96,10 +96,10 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-# ONE scan of app/ for every `@hames/*` specifier the app names, shared by all
+# ONE scan of app/ for every `@hames-ai/*` specifier the app names, shared by all
 # five probes. Cheap (a few hundred files, read once) and the reason no probe
 # carries a typed list any more.
-echo "== scan app/ for @hames imports =="
+echo "== scan app/ for @hames-ai imports =="
 node "$root/scripts/pack-smoke-entries.mjs" scan-app "$tmp/app-imports.json"
 
 # Hands one scratch project everything the derived check needs: the shared
@@ -117,7 +117,7 @@ prepare_scratch() {
 
 echo "== pnpm pack (harness-patterns) =="
 (cd "$root/packages/harness-patterns" && pnpm pack --pack-destination "$tmp")
-patterns_tarball="$(ls "$tmp"/hames-harness-patterns-*.tgz)"
+patterns_tarball="$(ls "$tmp"/hames-ai-harness-patterns-*.tgz)"
 echo "tarball: $patterns_tarball"
 
 echo "== pnpm pack (harness-baml) =="
@@ -127,9 +127,9 @@ echo "== pnpm pack (harness-baml) =="
 # against the tarball, never the workspace symlink). This filtered install
 # materialises just enough of the graph for pack to rewrite the protocol; the
 # probe below still runs inside the scratch project.
-(cd "$root" && pnpm install --frozen-lockfile --filter @hames/harness-baml)
+(cd "$root" && pnpm install --frozen-lockfile --filter @hames-ai/harness-baml)
 (cd "$root/packages/harness-baml" && pnpm pack --pack-destination "$tmp")
-baml_tarball="$(ls "$tmp"/hames-harness-baml-*.tgz)"
+baml_tarball="$(ls "$tmp"/hames-ai-harness-baml-*.tgz)"
 echo "tarball: $baml_tarball"
 
 echo "== install into scratch project =="
@@ -137,7 +137,7 @@ mkdir -p "$tmp/scratch"
 cd "$tmp/scratch"
 printf '{"name":"pack-smoke-scratch","private":true,"type":"module"}\n' > package.json
 pnpm add "$patterns_tarball"
-prepare_scratch "$tmp/scratch" '@hames/harness-patterns' "$patterns_tarball"
+prepare_scratch "$tmp/scratch" '@hames-ai/harness-patterns' "$patterns_tarball"
 
 # The probe lives INSIDE the scratch project on purpose: imports in a file
 # under the repo would resolve the repo's node_modules — the workspace
@@ -148,10 +148,10 @@ import { fileURLToPath } from 'node:url'
 // @ts-expect-error - copied in beside this probe by pack-smoke.sh; plain JS, no types
 import { assertDerivedEntries } from './pack-smoke-derived.mjs'
 
-const pkgDir = fileURLToPath(new URL('./node_modules/@hames/harness-patterns/', import.meta.url))
+const pkgDir = fileURLToPath(new URL('./node_modules/@hames-ai/harness-patterns/', import.meta.url))
 
 // 1. the ./guard companion subpath imports and behaves
-const guard = await import('@hames/harness-patterns/guard')
+const guard = await import('@hames-ai/harness-patterns/guard')
 assert.equal(typeof guard.sanitizeUntrusted, 'function', 'sanitizeUntrusted missing from ./guard')
 assert.ok(guard.INJECTION_RULES.length > 0, 'INJECTION_RULES empty')
 const clean = guard.sanitizeUntrusted('ordinary tool output', { tool: 'web_search', namespace: 'web' })
@@ -163,7 +163,7 @@ assert.ok(dirty.report.findings.length > 0, 'no findings recorded for a hidden-c
 // 2. the `./guard` alias and its `./*` target are the same function — a
 //    behavioural pin the derived eval below cannot make, since importing both
 //    proves only that both load.
-const direct = await import('@hames/harness-patterns/injection-guard')
+const direct = await import('@hames-ai/harness-patterns/injection-guard')
 assert.equal(direct.sanitizeUntrusted, guard.sanitizeUntrusted, './guard and ./injection-guard disagree')
 
 // 3. the DERIVED sets: every app-imported subpath resolves, every declared
@@ -188,8 +188,8 @@ echo "== run probe =="
 pnpm dlx tsx probe.mts
 
 # ===========================================================================
-# @hames/harness-baml — same four checks, on the second package's tarball.
-# The scratch install adds the @hames/harness-patterns tarball as its own
+# @hames-ai/harness-baml — same four checks, on the second package's tarball.
+# The scratch install adds the @hames-ai/harness-patterns tarball as its own
 # direct dependency: that package is harness-baml's PEER (see header), so the
 # consumer is the one that owns the copy, and its version has to satisfy the
 # packed peer range.
@@ -200,7 +200,7 @@ mkdir -p "$tmp/scratch-baml"
 cd "$tmp/scratch-baml"
 printf '{"name":"pack-smoke-scratch-baml","private":true,"type":"module"}\n' > package.json
 pnpm add "$patterns_tarball" "$baml_tarball"
-prepare_scratch "$tmp/scratch-baml" '@hames/harness-baml' "$baml_tarball"
+prepare_scratch "$tmp/scratch-baml" '@hames-ai/harness-baml' "$baml_tarball"
 
 cat > probe.mts <<'PROBE'
 import { strict as assert } from 'node:assert'
@@ -208,12 +208,12 @@ import { fileURLToPath } from 'node:url'
 // @ts-expect-error - copied in beside this probe by pack-smoke.sh; plain JS, no types
 import { assertDerivedEntries } from './pack-smoke-derived.mjs'
 
-const pkgDir = fileURLToPath(new URL('./node_modules/@hames/harness-baml/', import.meta.url))
+const pkgDir = fileURLToPath(new URL('./node_modules/@hames-ai/harness-baml/', import.meta.url))
 
 // 1. the pre-generated client shipped: the whole point of PR-1b's "consumer
 //    never runs baml-generate" — and it declares every function in the one
 //    corpus (the heavy roles, the screen, and the describe set + title).
-const pkg = await import('@hames/harness-baml/baml_client')
+const pkg = await import('@hames-ai/harness-baml/baml_client')
 for (const fn of ['LoopController', 'ActorController', 'Critic', 'Planner', 'Router',
   'Synthesize', 'ScreenUntrustedContent', 'ResultDescribe', 'ResultDescribeBatch',
   'GenerateConversationTitle', 'CompactIntent', 'RetrieveQuery', 'ReferenceSelector']) {
@@ -223,7 +223,7 @@ for (const fn of ['LoopController', 'ActorController', 'Critic', 'Planner', 'Rou
 // 2. the resolution seam evaluates and defaults to no override (the host's
 //    composition root is app configuration; a bare consumer gets the safe
 //    package-side defaults)
-const clients = await import('@hames/harness-baml/clients.server')
+const clients = await import('@hames-ai/harness-baml/clients.server')
 assert.equal(typeof clients.clientOverrideFor, 'function')
 assert.equal(clients.clientOverrideFor('controller'), undefined, 'unregistered default tier must be anthropic')
 
@@ -232,7 +232,7 @@ assert.equal(clients.clientOverrideFor('controller'), undefined, 'unregistered d
 //    unmapped role yields undefined (so a bare consumer's calls stay on the
 //    declared chain), and the seam stays clean while the layer is not
 //    registered.
-const consumer = await import('@hames/harness-baml/consumer-clients.server')
+const consumer = await import('@hames-ai/harness-baml/consumer-clients.server')
 assert.equal(typeof consumer.defineInferenceClients, 'function')
 assert.throws(
   () =>
@@ -254,11 +254,11 @@ assert.equal(plug('controller'), undefined, 'an unmapped role must yield undefin
 assert.equal(clients.activeConsumerClients(), undefined, 'a bare consumer registers no layer')
 
 // 4. the adapters + barrel expose their seams (this transitively loads
-//    @boundaryml/baml and the @hames/harness-patterns PEER installed beside
+//    @boundaryml/baml and the @hames-ai/harness-patterns PEER installed beside
 //    this scratch project — the single copy the consumer owns)
-const adapters = await import('@hames/harness-baml/baml-adapters.server')
+const adapters = await import('@hames-ai/harness-baml/baml-adapters.server')
 assert.equal(typeof adapters.createLoopControllerAdapter, 'function')
-const barrel = await import('@hames/harness-baml')
+const barrel = await import('@hames-ai/harness-baml')
 assert.equal(typeof barrel.bamlPatterns, 'function')
 
 // 5. the DERIVED sets (see scripts/pack-smoke-derived.mjs): the app's imports
@@ -279,23 +279,23 @@ pnpm dlx tsx probe.mts
 
 
 # ===========================================================================
-# @hames/agents — same checks on the third package's tarball. It peers on
+# @hames-ai/agents — same checks on the third package's tarball. It peers on
 # BOTH patterns and harness-baml, so the scratch adds both tarballs beside it:
 # each peer range packs to an unpublished "^0.1.0", and a registry fetch must
 # not be the thing under test.
 # ===========================================================================
 
-echo "== install @hames/agents into scratch project =="
-(cd "$root" && pnpm install --frozen-lockfile --filter @hames/agents)
+echo "== install @hames-ai/agents into scratch project =="
+(cd "$root" && pnpm install --frozen-lockfile --filter @hames-ai/agents)
 (cd "$root/packages/agents" && pnpm pack --pack-destination "$tmp")
-agents_tarball="$(ls "$tmp"/hames-agents-*.tgz)"
+agents_tarball="$(ls "$tmp"/hames-ai-agents-*.tgz)"
 echo "tarball: $agents_tarball"
 
 mkdir -p "$tmp/scratch-agents"
 cd "$tmp/scratch-agents"
 printf '{"name":"pack-smoke-scratch-agents","private":true,"type":"module"}\n' > package.json
 pnpm add "$patterns_tarball" "$baml_tarball" "$agents_tarball"
-prepare_scratch "$tmp/scratch-agents" '@hames/agents' "$agents_tarball"
+prepare_scratch "$tmp/scratch-agents" '@hames-ai/agents' "$agents_tarball"
 
 cat > probe.mts <<'PROBE'
 import { strict as assert } from 'node:assert'
@@ -303,11 +303,11 @@ import { fileURLToPath } from 'node:url'
 // @ts-expect-error - copied in beside this probe by pack-smoke.sh; plain JS, no types
 import { assertDerivedEntries } from './pack-smoke-derived.mjs'
 
-const pkgDir = fileURLToPath(new URL('./node_modules/@hames/agents/', import.meta.url))
+const pkgDir = fileURLToPath(new URL('./node_modules/@hames-ai/agents/', import.meta.url))
 
 // 1. the root barrel is client-safe and evaluates: extractors, replay and
 //    the agent-surface types resolve through it
-const root = await import('@hames/agents')
+const root = await import('@hames-ai/agents')
 for (const fn of ['extractGraphElements', 'extractGraphFromResult', 'isEdgeElement',
   'isNodeElement', 'isNeo4jGraphResult', 'isMemoryGraphResult', 'extractReferences',
   'referencesForDoc', 'errorBubble', 'replayMessages']) {
@@ -317,7 +317,7 @@ for (const fn of ['extractGraphElements', 'extractGraphFromResult', 'isEdgeEleme
 // 2. the definitions barrel evaluates — the nine moved modules, through the
 //    tarball (which transitively loads the two overridden dependency
 //    tarballs and @boundaryml/baml)
-const agents = await import('@hames/agents/agents')
+const agents = await import('@hames-ai/agents/agents')
 for (const name of ['searchAgent', 'generalAgent', 'sandboxSessionAgent',
   'flavouredSandboxAgent', 'retrieverAgent', 'microsoft365Agent']) {
   const def = (agents as Record<string, { id?: string }>)[name]
@@ -344,25 +344,25 @@ PROBE
 echo "== run agents probe =="
 pnpm dlx tsx probe.mts
 # ===========================================================================
-# @hames/connectors — the same four checks, on the connectors package's
-# tarball (#225 PR-C2). Its scratch install adds the @hames/harness-patterns
+# @hames-ai/connectors — the same four checks, on the connectors package's
+# tarball (#225 PR-C2). Its scratch install adds the @hames-ai/harness-patterns
 # tarball beside it (the connectors package PEERS on it, and the packed peer
 # range resolves to an unpublished ^0.1.0 — the same reason the baml scratch
 # installs its peer).
 # ===========================================================================
 
-echo "== pack @hames/connectors =="
-(cd "$root" && pnpm install --frozen-lockfile --filter @hames/connectors)
+echo "== pack @hames-ai/connectors =="
+(cd "$root" && pnpm install --frozen-lockfile --filter @hames-ai/connectors)
 (cd "$root/packages/connectors" && pnpm pack --pack-destination "$tmp")
-connectors_tarball="$(ls "$tmp"/hames-connectors-*.tgz)"
+connectors_tarball="$(ls "$tmp"/hames-ai-connectors-*.tgz)"
 echo "tarball: $connectors_tarball"
 
-echo "== install @hames/connectors into scratch project =="
+echo "== install @hames-ai/connectors into scratch project =="
 mkdir -p "$tmp/scratch-connectors"
 cd "$tmp/scratch-connectors"
 printf '{"name":"pack-smoke-scratch-connectors","private":true,"type":"module"}\n' > package.json
 pnpm add "$patterns_tarball" "$connectors_tarball"
-prepare_scratch "$tmp/scratch-connectors" '@hames/connectors' "$connectors_tarball"
+prepare_scratch "$tmp/scratch-connectors" '@hames-ai/connectors' "$connectors_tarball"
 
 cat > probe.mts <<'PROBE'
 import { strict as assert } from 'node:assert'
@@ -371,7 +371,7 @@ import { fileURLToPath } from 'node:url'
 // @ts-expect-error - copied in beside this probe by pack-smoke.sh; plain JS, no types
 import { assertDerivedEntries } from './pack-smoke-derived.mjs'
 
-const pkgDir = fileURLToPath(new URL('./node_modules/@hames/connectors/', import.meta.url))
+const pkgDir = fileURLToPath(new URL('./node_modules/@hames-ai/connectors/', import.meta.url))
 
 // 1. the tarball carries NO tests: the co-located suite is excluded from
 //    `files` by design, and a test file riding along would both bloat the
@@ -380,7 +380,7 @@ assert.ok(!existsSync(pkgDir + '__tests__'), 'the __tests__/ dir must not ship i
 
 // 2. the client is explicit-config-only (design S5): the named unset error,
 //    never an env fallback.
-const client = await import('@hames/connectors/neo4j/client')
+const client = await import('@hames-ai/connectors/neo4j/client')
 assert.equal(typeof client.configureNeo4j, 'function', 'configureNeo4j missing')
 assert.throws(() => client.getNeo4jDriver(), client.Neo4jNotConfiguredError, 'unset config must be the NAMED error at first use')
 
@@ -389,26 +389,26 @@ client.configureNeo4j({ url: 'bolt://x:7687', user: 'u', password: 'p' })
 assert.doesNotThrow(() => client.getNeo4jDriver(), 'configured client must build a driver')
 
 // 4. the catalog data and the pure transforms (the client-safe root barrel)
-const catalog = await import('@hames/connectors/mcp-catalog')
+const catalog = await import('@hames-ai/connectors/mcp-catalog')
 assert.equal(catalog.mcpNamespace('search'), 'web', 'catalog data must resolve after tarball install')
 assert.equal(Object.keys(catalog.MCP_TOOL_CATALOG).length, 86, 'catalog must hold 86 names')
-const root = await import('@hames/connectors')
+const root = await import('@hames-ai/connectors')
 assert.equal(typeof root.transformNeo4jToCytoscape, 'function', 'root barrel must export the transform')
 
 // 5. the query ops and the graph-edit ops evaluate (server-only modules; they
 //    import the package's own client + neo4j-driver via the declared deps)
-const queries = await import('@hames/connectors/neo4j/queries')
+const queries = await import('@hames-ai/connectors/neo4j/queries')
 assert.equal(typeof queries.runManualCypher, 'function', 'runManualCypher missing')
-const edit = await import('@hames/connectors/neo4j/graph-edit.server')
+const edit = await import('@hames-ai/connectors/neo4j/graph-edit.server')
 assert.equal(typeof edit.createGraphNode, 'function', 'createGraphNode missing')
-const graphAuth = await import('@hames/connectors/graph/graph-auth')
+const graphAuth = await import('@hames-ai/connectors/graph/graph-auth')
 assert.equal(graphAuth.GraphAuthRequiredError.name, 'GraphAuthRequiredError', 'the error class must be one identity both sides can instanceof')
 
 // 6. the Graph tools + registry compose from the tarball with injected
 //    suppliers (the seam the host uses) — including the F1 alignment: a
 //    non-function supplier throws AT FACTORY CALL, not at first tool use.
-const registryMod = await import('@hames/connectors/app-tools/registry')
-const graphTools = await import('@hames/connectors/graph/graph-tools.server')
+const registryMod = await import('@hames-ai/connectors/app-tools/registry')
+const graphTools = await import('@hames-ai/connectors/graph/graph-tools.server')
 const registry = registryMod.createAppToolRegistry({
   resolveContext: { userId: () => 'u1', sessionId: () => 's1' },
 })
@@ -435,26 +435,26 @@ echo "== run connectors probe =="
 pnpm dlx tsx probe.mts
 
 # ===========================================================================
-# @hames/sandbox — same checks on the containment companion's tarball. Its
-# scratch install adds the @hames/harness-patterns tarball beside it (its
+# @hames-ai/sandbox — same checks on the containment companion's tarball. Its
+# scratch install adds the @hames-ai/harness-patterns tarball beside it (its
 # PEER, whose packed range is an unpublished "^0.1.0", same reason as every
-# scratch above). @hames/harness-baml is a devDependency here — the smoke
+# scratch above). @hames-ai/harness-baml is a devDependency here — the smoke
 # scripts and the end-to-end test use it — so it is neither a peer nor
 # installed: a consumer of the tarball never sees it.
 # ===========================================================================
 
-echo "== pack @hames/sandbox =="
-(cd "$root" && pnpm install --frozen-lockfile --filter @hames/sandbox)
+echo "== pack @hames-ai/sandbox =="
+(cd "$root" && pnpm install --frozen-lockfile --filter @hames-ai/sandbox)
 (cd "$root/packages/sandbox" && pnpm pack --pack-destination "$tmp")
-sandbox_tarball="$(ls "$tmp"/hames-sandbox-*.tgz)"
+sandbox_tarball="$(ls "$tmp"/hames-ai-sandbox-*.tgz)"
 echo "tarball: $sandbox_tarball"
 
-echo "== install @hames/sandbox into scratch project =="
+echo "== install @hames-ai/sandbox into scratch project =="
 mkdir -p "$tmp/scratch-sandbox"
 cd "$tmp/scratch-sandbox"
 printf '{"name":"pack-smoke-scratch-sandbox","private":true,"type":"module"}\n' > package.json
 pnpm add "$patterns_tarball" "$sandbox_tarball"
-prepare_scratch "$tmp/scratch-sandbox" '@hames/sandbox' "$sandbox_tarball"
+prepare_scratch "$tmp/scratch-sandbox" '@hames-ai/sandbox' "$sandbox_tarball"
 
 cat > probe.mts <<'PROBE'
 import { strict as assert } from 'node:assert'
@@ -463,7 +463,7 @@ import { fileURLToPath } from 'node:url'
 // @ts-expect-error - copied in beside this probe by pack-smoke.sh; plain JS, no types
 import { assertDerivedEntries } from './pack-smoke-derived.mjs'
 
-const pkgDir = fileURLToPath(new URL('./node_modules/@hames/sandbox/', import.meta.url))
+const pkgDir = fileURLToPath(new URL('./node_modules/@hames-ai/sandbox/', import.meta.url))
 const manifest = JSON.parse((await import('node:fs')).readFileSync(pkgDir + 'package.json', 'utf8'))
 
 // 1. neither the co-located suite nor the live smoke scripts ship: both are
@@ -498,7 +498,7 @@ assert.equal(typeof manifest.dependencies?.['node-pty'], 'string',
 
 const fs = await import('node:fs')
 // pnpm layout: the package's own deps are siblings under one node_modules —
-// .pnpm/@hames+sandbox@<hash>/node_modules/{@hames/sandbox,node-pty} — so from
+// .pnpm/@hames-ai+sandbox@<hash>/node_modules/{@hames-ai/sandbox,node-pty} — so from
 // the REALPATH of the package dir, node-pty is two levels up.
 const ptyLink = fileURLToPath(new URL('../../node-pty', `file://${fs.realpathSync(pkgDir)}/`))
 assert.ok(existsSync(ptyLink),
@@ -513,8 +513,8 @@ const ptyDir = fs.realpathSync(ptyLink)
 const ptyStash = ptyDir + '.stashed'
 fs.renameSync(ptyDir, ptyStash)
 try {
-  await import('@hames/sandbox/pty-manager.server')
-  console.log('  lazy ok:   @hames/sandbox/pty-manager.server imports with node-pty absent')
+  await import('@hames-ai/sandbox/pty-manager.server')
+  console.log('  lazy ok:   @hames-ai/sandbox/pty-manager.server imports with node-pty absent')
 } catch (err) {
   const message = (err as Error)?.message ?? String(err)
   // The stash above makes exactly ONE specifier unresolvable, so only a
@@ -530,7 +530,7 @@ try {
     const code = (err as { code?: string })?.code
     if (code !== 'ERR_MODULE_NOT_FOUND') throw err
     throw new Error(
-      '@hames/sandbox/pty-manager.server could not RESOLVE a module that is not node-pty — an ' +
+      '@hames-ai/sandbox/pty-manager.server could not RESOLVE a module that is not node-pty — an ' +
         'edge escaping the package (a tarball consumer has no app/ to resolve, which is the ' +
         `derived eval loop's ERR_MODULE_NOT_FOUND arriving early). Got: ${message}`,
     )
@@ -547,17 +547,17 @@ try {
 //    what the host's browser bundle and its own settings module import, so a
 //    `node:` import or a server assertion sneaking into either is a bug a
 //    consumer only discovers in a browser build.
-const types = await import('@hames/sandbox/types')
+const types = await import('@hames-ai/sandbox/types')
 assert.equal(types.SANDBOX_TOOL_PREFIX, 'sandbox_', 'the tool prefix must resolve from ./types')
 assert.ok(Array.isArray(types.V0_IN_VM_SERVERS), 'V0_IN_VM_SERVERS missing from ./types')
-const settings = await import('@hames/sandbox/settings')
+const settings = await import('@hames-ai/sandbox/settings')
 assert.equal(settings.DEFAULT_SANDBOX_SETTINGS.defaultEgress, 'mcp-only')
 assert.equal(typeof settings.DEFAULT_SANDBOX_SETTINGS.globalCap, 'number')
 
 // 4. the durable-workspace seam is explicit-config-only: the NAMED error at
 //    first use, never a silent no-op, and a half-built supplier is refused at
 //    configuration rather than on the turn that produces a deliverable.
-const store = await import('@hames/sandbox/workspace-store')
+const store = await import('@hames-ai/sandbox/workspace-store')
 assert.equal(store.isWorkspaceStoreConfigured(), false, 'a fresh package must have no store')
 assert.throws(() => store.getWorkspaceStore(), store.WorkspaceStoreNotConfiguredError,
   'an unset store must be the NAMED error at first use')
@@ -585,14 +585,14 @@ await assertDerivedEntries({
 
 // 6. the ./guard companion subpath imports and behaves (the bash guard is the
 //    containment half a consumer composes directly).
-const guard = await import('@hames/sandbox/guard')
+const guard = await import('@hames-ai/sandbox/guard')
 assert.equal(typeof guard.screenBashCommand, 'function', 'screenBashCommand missing from ./guard')
-const direct = await import('@hames/sandbox/bash-guard')
+const direct = await import('@hames-ai/sandbox/bash-guard')
 assert.equal(direct.screenBashCommand, guard.screenBashCommand, './guard and ./bash-guard disagree')
 
 // 7. the harness surface composes: withSandbox wraps a pattern without a
 //    docker daemon in sight (the wrap is pure; the boot is not).
-const sandbox = await import('@hames/sandbox')
+const sandbox = await import('@hames-ai/sandbox')
 assert.equal(typeof sandbox.withSandbox, 'function', 'withSandbox missing from the barrel')
 const wrapped = sandbox.withSandbox({ id: 'probe' })({
   name: 'probe', config: {}, fn: async (scope: unknown) => scope,

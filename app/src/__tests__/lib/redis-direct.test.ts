@@ -11,18 +11,18 @@
 
 import { describe, it, expect, vi } from 'vitest'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
 // redis-direct imports the gateway callTool for `stashCallTool`'s off-branch;
 // stub it so no real gateway is touched on import.
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   callTool: vi.fn(async () => ({ success: false, data: null, error: 'no gateway' })),
 }))
 
 import { makeDirectCallTool } from '../../lib/redis-direct.server'
-import { createVectorStore, encodeMeta } from '@hames/harness-patterns/stash/vector-store.server'
+import { createVectorStore, encodeMeta } from '@hames-ai/harness-patterns/stash/vector-store.server'
 import type { Redis } from 'ioredis'
 
 // ----------------------------------------------------------------------------

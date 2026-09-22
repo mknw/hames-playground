@@ -30,7 +30,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { EventEmitter } from 'node:events'
 import { mockAction, mockCriticResult } from './fixtures/baml'
 
@@ -43,7 +43,7 @@ import { mockAction, mockCriticResult } from './fixtures/baml'
  */
 const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -187,7 +187,7 @@ vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
 const mockActorController = vi.fn()
 const mockCritic = vi.fn()
 
-vi.mock('@hames/harness-baml/baml_client', () => ({
+vi.mock('@hames-ai/harness-baml/baml_client', () => ({
   b: {
     ActorController: mockActorController,
     Critic: mockCritic,
@@ -200,15 +200,15 @@ vi.mock('@hames/harness-baml/baml_client', () => ({
   },
 }))
 
-vi.mock('@hames/harness-baml/baml_client/inlinedbaml', () => ({
+vi.mock('@hames-ai/harness-baml/baml_client/inlinedbaml', () => ({
   getBamlFiles: () => ({}),
 }))
 
 // ---- Mock host-gateway listTools ----------------------------------------
 // The adapter's gateway-side `filterToolDescriptions` calls `mcpListTools()`.
 // In a sandbox-only test the gateway returns nothing (no host tools needed).
-vi.mock('@hames/harness-patterns/mcp-client.server', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@hames/harness-patterns/mcp-client.server')>()
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@hames-ai/harness-patterns/mcp-client.server')>()
   return {
     ...actual,
     listTools: vi.fn().mockResolvedValue([]),
@@ -228,11 +228,11 @@ beforeEach(() => {
 
 describe('withSandbox(actorCritic) end-to-end — word count', () => {
   it('writes a script, runs it, and returns the count via the critic-accepted result', async () => {
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
     const { createActorControllerAdapter, createCriticAdapter } =
-      await import('@hames/harness-baml/baml-adapters.server')
+      await import('@hames-ai/harness-baml/baml-adapters.server')
     const { withSandbox } = await import('../with-sandbox.server')
 
     const script =

@@ -220,7 +220,7 @@ const MANIFESTS: Record<string, Manifest> = Object.fromEntries(
   PACKAGE_NAMES.map((name) => {
     const root = path.join(PACKAGES, name)
     const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf-8'))
-    return [`@hames/${name}`, { root, exports: pkg.exports ?? {}, files: pkg.files ?? [] }]
+    return [`@hames-ai/${name}`, { root, exports: pkg.exports ?? {}, files: pkg.files ?? [] }]
   }),
 )
 
@@ -315,7 +315,7 @@ function compileExamples(files: string[]): Map<string, string[]> {
   }
 
   const host = ts.createCompilerHost(options, /* setParentNodes */ true)
-  const dir = MANIFESTS['@hames/harness-patterns'].root
+  const dir = MANIFESTS['@hames-ai/harness-patterns'].root
   const virtual = new Map<string, string>(
     files.map((f) => [path.join(dir, `__tutorial-example-${f}`), readExample(f)]),
   )
@@ -328,7 +328,7 @@ function compileExamples(files: string[]): Map<string, string[]> {
   }
   host.resolveModuleNames = (moduleNames, containingFile) =>
     moduleNames.map((specifier) => {
-      if (specifier.startsWith('@hames/')) {
+      if (specifier.startsWith('@hames-ai/')) {
         // NO fall-through to node_modules: inside this workspace the symlink
         // would resolve a subpath the published package does not expose, which
         // is the whole failure this resolver exists to catch.

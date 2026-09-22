@@ -1,7 +1,7 @@
 /**
  * Intent-shaped graph edit WRAPPER tests (#226 C2 / #225 PR-C2).
  *
- * The op bodies moved into `@hames/connectors`; this module's tests pin the
+ * The op bodies moved into `@hames-ai/connectors`; this module's tests pin the
  * RETAINED `'use server'` wrapper's own contract — every operation requires
  * an authenticated user (or the gated dev bypass) before the package op is
  * touched. The ops' identifier validation and Cypher ownership are pinned
@@ -15,7 +15,7 @@ const ops = vi.hoisted(() => ({
   linkGraphNodes: vi.fn(async () => undefined),
   setGraphNodeProperty: vi.fn(async () => undefined),
 }))
-vi.mock('@hames/connectors/neo4j/graph-edit.server', () => ops)
+vi.mock('@hames-ai/connectors/neo4j/graph-edit.server', () => ops)
 
 const getAuthenticatedUser = vi.fn(async () => ({ id: 'user-a' }))
 vi.mock('../../../lib/auth/server', () => ({

@@ -44,8 +44,8 @@
  * absolute GitHub URL, and it does that using `repository` (plus its `directory`
  * subfield, which is what makes a monorepo member point at its own subtree). With
  * no `repository`, npm renders the relative href verbatim, it resolves against
- * `https://www.npmjs.com/package/<name>`, and it 404s — so `@hames/connectors`,
- * `@hames/harness-baml`, `@hames/harness-patterns` and `@hames/sandbox` would each
+ * `https://www.npmjs.com/package/<name>`, and it 404s — so `@hames-ai/connectors`,
+ * `@hames-ai/harness-baml`, `@hames-ai/harness-patterns` and `@hames-ai/sandbox` would each
  * have shipped a front page of dead links, invisibly, because nothing in the repo
  * renders a README the way the registry does. A wrong `directory` is the same
  * defect with a plausible-looking field in place of a missing one.
@@ -194,7 +194,7 @@ const NODE_ENGINE = '>=22'
  * rule is that a match needs a WORD CHARACTER immediately before the `@` — not
  * that a quote precedes it, which is only true in the `dependencies` keys: in a
  * `description` the same specifier follows a SPACE (`… the BAML companion for
- * @hames/harness-patterns …`), and it is the space, the quote and the line
+ * @hames-ai/harness-patterns …`), and it is the space, the quote and the line
  * start alike that fail the local part, because none of them is a word
  * character.
  *

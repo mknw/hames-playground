@@ -1,6 +1,6 @@
-# @hames/harness-baml
+# @hames-ai/harness-baml
 
-The BAML companion for [@hames/harness-patterns](../harness-patterns/README.md) — the LLM seam's reference
+The BAML companion for [@hames-ai/harness-patterns](../harness-patterns/README.md) — the LLM seam's reference
 implementation. Patterns in core take their LLM functions as injected config; this package supplies
 them, backed by [BAML](https://boundaryml.com) prompts it declares in its own `baml_src/` and ships
 **pre-generated** in `baml_client/` — a consumer never runs `baml-generate`.
@@ -15,8 +15,8 @@ injected functions (`synthesize`, `selector`, `route`, `describe`, `describeBatc
 them in one line through `bamlPatterns()`:
 
 ```typescript
-import { bamlPatterns, createLoopControllerAdapter } from '@hames/harness-baml'
-import { simpleLoop } from '@hames/harness-patterns/patterns/simpleLoop.server'
+import { bamlPatterns, createLoopControllerAdapter } from '@hames-ai/harness-baml'
+import { simpleLoop } from '@hames-ai/harness-patterns/patterns/simpleLoop.server'
 
 const patterns = bamlPatterns()
 const controller = createLoopControllerAdapter()
@@ -34,7 +34,7 @@ The factories adapt the raw generated BAML functions to the pattern contracts (c
 collectors, usage accounting, cap-hit detection with one corrective retry):
 
 ```typescript
-import { createActorControllerAdapter, createCriticAdapter } from '@hames/harness-baml'
+import { createActorControllerAdapter, createCriticAdapter } from '@hames-ai/harness-baml'
 
 declare const tools: string[]
 
@@ -52,18 +52,18 @@ This package owns the role → client resolution: `clientOverrideFor(role)` buil
 options bag a call site spreads into its BAML options; `resolveClientForRole(role)` names the
 client a call takes (or is budgeted against); `limitsFor(role)` returns the resolved model's
 context window and output cap so patterns trim and batch against the right model. All three read
-the active tier from the RUN FRAME core opens — `@hames/harness-patterns`'s `inference` slot,
+the active tier from the RUN FRAME core opens — `@hames-ai/harness-patterns`'s `inference` slot,
 whose `tier` is an opaque string core never interprets. Provider vocabulary lives here, in the
 companion, which is why the narrowing and the fail-closed reachability check
 (`assertInferenceTier`, called by the host before it puts a tier in a frame) are this package's:
 
 ```typescript
-import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import {
   assertInferenceTier,
   clientOverrideFor,
   limitsFor,
-} from '@hames/harness-baml/clients.server'
+} from '@hames-ai/harness-baml/clients.server'
 
 assertInferenceTier('anthropic')
 await withRunFrame({ inference: { tier: 'anthropic' } }, async () => {
@@ -116,7 +116,7 @@ both wiring paths:
 import {
   defineInferenceClients,
   activateConsumerClients,
-} from '@hames/harness-baml/consumer-clients.server'
+} from '@hames-ai/harness-baml/consumer-clients.server'
 
 const plug = defineInferenceClients({
   clients: [
@@ -144,7 +144,7 @@ what happens to unmapped roles and to prompt budgeting:
 
 ## No build step
 
-Like every `@hames` package, this one **ships TypeScript source**: `main` and every code target in
+Like every `@hames-ai` package, this one **ships TypeScript source**: `main` and every code target in
 `exports` is a `.ts` file — `baml_client/` included, it is committed, generated TypeScript
 (`./package.json` is the one non-code entry) — there is no `dist/`, and `pnpm pack` is the whole
 publish pipeline. Consumers are **TS-bundler consumers** — a project whose bundler or runtime

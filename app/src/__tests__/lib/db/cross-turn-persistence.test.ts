@@ -20,7 +20,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 
 // Bypass server-only guard in jsdom test env
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
   ServerOnlyError: class ServerOnlyError extends Error {},
@@ -31,8 +31,8 @@ import {
   serializeContext,
   deserializeContext,
   createEventView,
-} from '@hames/harness-patterns'
-import type { ContextEvent } from '@hames/harness-patterns'
+} from '@hames-ai/harness-patterns'
+import type { ContextEvent } from '@hames-ai/harness-patterns'
 import { saveSession, loadSession } from '../../../lib/harness-client/session.server'
 import { closePool, query } from '../../../lib/db/client.server'
 

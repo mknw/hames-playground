@@ -17,9 +17,9 @@
 // way of standing up a value a compiler can see and a test cannot build — and a
 // real run needs a container engine plus the rootfs images (page §6).
 
-import { withSandbox } from "@hames/sandbox";
-import type { ConfiguredPattern } from "@hames/harness-patterns";
-import type { AgentData } from "@hames/agents";
+import { withSandbox } from "@hames-ai/sandbox";
+import type { ConfiguredPattern } from "@hames-ai/harness-patterns";
+import type { AgentData } from "@hames-ai/agents";
 
 declare const loop: ConfiguredPattern<AgentData>;
 declare const sessionId: string;

@@ -16,7 +16,7 @@ import { describe, it, expect, vi } from 'vitest'
 // server-only `harness-client` module. The transitive import chain
 // (`harness-patterns` → `assert.server.ts`) self-asserts at import time
 // and throws under jsdom. Stub both before pulling in the SUT.
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 vi.mock('../../../lib/harness-client', () => ({

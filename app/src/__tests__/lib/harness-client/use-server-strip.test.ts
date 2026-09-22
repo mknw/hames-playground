@@ -1,5 +1,5 @@
 /**
- * The 'use server' strip (the @hames/agents move, #225 PR-2).
+ * The 'use server' strip (the @hames-ai/agents move, #225 PR-2).
  *
  * Seven of the nine agent definition files used to carry a top-level
  * `'use server'` directive while exporting only data consts and factories —
@@ -117,7 +117,7 @@ describe('no client-reachable module imports a definition module (direct-import 
   /** Import specifiers that would drag a definition (or the definitions
    *  barrel) into a client module graph. The package ROOT barrel is
    *  client-safe and allowed; `./agents` (the definitions) is not. */
-  const FORBIDDEN = ['@hames/agents/agents', '@hames/agents/agents/index']
+  const FORBIDDEN = ['@hames-ai/agents/agents', '@hames-ai/agents/agents/index']
 
   it('client trees never import the definitions barrel or a definition module', () => {
     const offenders: string[] = []

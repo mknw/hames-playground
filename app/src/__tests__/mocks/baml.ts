@@ -5,7 +5,7 @@
  */
 
 import { vi } from 'vitest'
-import type { ControllerAction, CriticResult } from '@hames/harness-baml/baml_client/types'
+import type { ControllerAction, CriticResult } from '@hames-ai/harness-baml/baml_client/types'
 
 // ============================================================================
 // Mock Action Factories

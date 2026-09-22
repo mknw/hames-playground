@@ -15,9 +15,9 @@
  *  5. write · bulk UNWIND upsert      (parameterized batch with ON CREATE / ON MATCH)
  */
 
-import type { FewShot } from '@hames/harness-patterns'
+import type { FewShot } from '@hames-ai/harness-patterns'
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 
 // The 'use server' directive this file carried before the move was the only
 // thing keeping its exports off the client; this is the real guard, and the

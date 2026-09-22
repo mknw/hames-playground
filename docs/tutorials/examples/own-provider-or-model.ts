@@ -21,11 +21,11 @@
 import {
   defineInferenceClients,
   activateConsumerClients,
-} from "@hames/harness-baml/consumer-clients.server";
-import { bamlPatterns, createLoopControllerAdapter } from "@hames/harness-baml";
-import { simpleLoop } from "@hames/harness-patterns/patterns/simpleLoop.server";
-import { searchAgent } from "@hames/agents/agents";
-import type { AgentDeps } from "@hames/agents/types";
+} from "@hames-ai/harness-baml/consumer-clients.server";
+import { bamlPatterns, createLoopControllerAdapter } from "@hames-ai/harness-baml";
+import { simpleLoop } from "@hames-ai/harness-patterns/patterns/simpleLoop.server";
+import { searchAgent } from "@hames-ai/agents/agents";
+import type { AgentDeps } from "@hames-ai/agents/types";
 
 const plug = defineInferenceClients({
   clients: [

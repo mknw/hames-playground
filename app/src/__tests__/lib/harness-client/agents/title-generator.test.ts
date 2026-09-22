@@ -13,19 +13,19 @@ import { testAgentDeps } from './test-deps'
 // `agents/title-generator.server.ts` imports `harness-patterns` (which
 // asserts server-only on import) and `db/conversations.server` (which
 // needs a pg pool). Mock both before dynamic-importing the SUT.
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 vi.mock('../../../../lib/db/conversations.server', () => ({
   updateConversationTitle: vi.fn(async () => undefined),
 }))
-vi.mock('@hames/harness-baml/baml_client', () => ({
+vi.mock('@hames-ai/harness-baml/baml_client', () => ({
   b: {
     GenerateConversationTitle: vi.fn(async (msg: string) => `Title For ${msg.slice(0, 8)}`),
   },
 }))
-vi.mock('@hames/harness-patterns', async () => {
-  const actual = await vi.importActual<Record<string, unknown>>('@hames/harness-patterns')
+vi.mock('@hames-ai/harness-patterns', async () => {
+  const actual = await vi.importActual<Record<string, unknown>>('@hames-ai/harness-patterns')
   // Keep the real exports but stub out the `harness()` factory — the agent
   // would otherwise pull in MCP tools, settings-context, etc.
   return {
@@ -43,7 +43,7 @@ vi.mock('@hames/harness-patterns', async () => {
 
 const { updateConversationTitle } = await import('../../../../lib/db/conversations.server')
 const persistDeps = { ...testAgentDeps, persistTitle: updateConversationTitle }
-const sut = await import('@hames/agents/agents/title-generator.server')
+const sut = await import('@hames-ai/agents/agents/title-generator.server')
 
 describe('sanitizeTitle', () => {
   it('returns the input verbatim when already clean', () => {

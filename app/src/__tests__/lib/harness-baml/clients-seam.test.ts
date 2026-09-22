@@ -23,7 +23,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -35,7 +35,7 @@ vi.mock('../../../lib/inference/cold-start.server', () => ({
   noteVerdaCallStarting: (...args: unknown[]) => noteVerdaCallStarting(...args),
 }))
 
-const CLIENTS = '@hames/harness-baml/clients.server'
+const CLIENTS = '@hames-ai/harness-baml/clients.server'
 const CONFIG = '../../../lib/inference/config.server'
 const SETTINGS = '../../../lib/settings'
 
@@ -76,7 +76,7 @@ afterEach(() => {
 async function loadWired() {
   await import(CONFIG)
   const clients = await import(CLIENTS)
-  const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+  const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
   // #374: the tier is a SLOT of the run frame, and the fail-closed reachability
   // check the old opener made on the way in is now the host-called
   // `assertInferenceTier`. Bound together here — both, in that order, is what a
@@ -181,7 +181,7 @@ describe('the configuration the host registers is the configuration the resoluti
     process.env.EUR_PER_USD = '1.25'
     process.env.VERDA_EUR_PER_HOUR = '2.5'
     await loadWired()
-    const bamlAdapters = await import('@hames/harness-baml/baml-adapters.server')
+    const bamlAdapters = await import('@hames-ai/harness-baml/baml-adapters.server')
     // computeEventMetrics reads the rates through the seam per step; reading
     // the same store here proves which one is live.
     const { activeCostRates } = await import(CLIENTS)

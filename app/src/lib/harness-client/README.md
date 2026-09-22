@@ -8,9 +8,9 @@ Server-side module that bridges the UI with the `harness-patterns` framework. Ha
 harness-client/
 ├── actions.server.ts          # processMessage(), processMessageStreaming(), approveAction(), rejectAction(), listConversations(), loadConversation()
 ├── session.server.ts          # In-process pattern cache + Postgres-backed serialized context (per-user, scoped via userId); owns the AgentDeps bag (agentDeps())
-├── registry.server.ts         # The composition-root overlay: registers the @hames/agents definitions with this app's icon/accent, exports getAgentMetadata()
+├── registry.server.ts         # The composition-root overlay: registers the @hames-ai/agents definitions with this app's icon/accent, exports getAgentMetadata()
 ├── neo4j-enricher.server.ts   # `onToolResult` recipe — fetches 1-hop neighborhood for touched nodes
-├── index.ts                   # Public exports (re-exports the client-safe @hames/agents helpers)
+├── index.ts                   # Public exports (re-exports the client-safe @hames-ai/agents helpers)
 └── (moved to packages/agents, #225 PR-2: the 9 agent definitions, graph-extractor, reference-extractor, replay, types)
 ```
 

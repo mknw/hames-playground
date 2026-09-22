@@ -33,8 +33,8 @@ worked example.
 ## Run one from your own project
 
 ```bash
-pnpm add @hames/harness-patterns                                               # always
-pnpm add @hames/harness-baml @hames/agents @hames/connectors @hames/sandbox    # for the others
+pnpm add @hames-ai/harness-patterns                                               # always
+pnpm add @hames-ai/harness-baml @hames-ai/agents @hames-ai/connectors @hames-ai/sandbox    # for the others
 cp hosting-the-harness.ts my-host.ts
 pnpm dlx tsx my-host.ts
 ```
@@ -44,9 +44,9 @@ Node refuses to strip types under `node_modules`
 (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`). Vite, vinxi, esbuild and Bun are equally
 fine — see the [tutorials index](../README.md#install) on being a TS-bundler consumer.
 
-`guarding-an-agent.ts` also imports `@hames/connectors` (for `mcpNamespace`), and
-`own-provider-or-model.ts` imports `@hames/harness-baml` and `@hames/agents`. The two
-sandbox examples import `@hames/sandbox` — which is why the second line installs all four,
+`guarding-an-agent.ts` also imports `@hames-ai/connectors` (for `mcpNamespace`), and
+`own-provider-or-model.ts` imports `@hames-ai/harness-baml` and `@hames-ai/agents`. The two
+sandbox examples import `@hames-ai/sandbox` — which is why the second line installs all four,
 even though the first example you copy may need none of them.
 
 **If you reformat one of these files, reformat its page too.** `docs/` resolves no Prettier

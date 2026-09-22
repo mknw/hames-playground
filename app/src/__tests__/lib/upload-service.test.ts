@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
@@ -30,9 +30,12 @@ describe('parseUploadRequest — agentId', () => {
   })
 
   it('JSON: omits agentId when absent or blank', async () => {
-    expect((await parseUploadRequest(jsonReq({ sessionId: 's1', content: 'hi' }))).agentId).toBeUndefined()
     expect(
-      (await parseUploadRequest(jsonReq({ sessionId: 's1', content: 'hi', agentId: '  ' }))).agentId,
+      (await parseUploadRequest(jsonReq({ sessionId: 's1', content: 'hi' }))).agentId,
+    ).toBeUndefined()
+    expect(
+      (await parseUploadRequest(jsonReq({ sessionId: 's1', content: 'hi', agentId: '  ' })))
+        .agentId,
     ).toBeUndefined()
   })
 
@@ -41,7 +44,9 @@ describe('parseUploadRequest — agentId', () => {
     form.set('sessionId', 's1')
     form.set('agentId', 'retriever')
     form.set('file', new Blob(['# Doc\n\nbody'], { type: 'text/markdown' }), 'a.md')
-    const out = await parseUploadRequest(new Request('http://x/api/stash/upload', { method: 'POST', body: form }))
+    const out = await parseUploadRequest(
+      new Request('http://x/api/stash/upload', { method: 'POST', body: form }),
+    )
     expect(out.agentId).toBe('retriever')
     expect(out.sessionId).toBe('s1')
     expect(out.content).toContain('body')

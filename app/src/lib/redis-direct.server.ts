@@ -25,11 +25,11 @@
  */
 
 import { Redis } from 'ioredis'
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import { callTool as gatewayCallTool } from '@hames/harness-patterns/mcp-client.server'
-import type { CallTool } from '@hames/harness-patterns/stash/document-store.server'
-import { registerStashTransport } from '@hames/harness-patterns/stash-transport.server'
-import type { ToolCallResult } from '@hames/harness-patterns/types'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import { callTool as gatewayCallTool } from '@hames-ai/harness-patterns/mcp-client.server'
+import type { CallTool } from '@hames-ai/harness-patterns/stash/document-store.server'
+import { registerStashTransport } from '@hames-ai/harness-patterns/stash-transport.server'
+import type { ToolCallResult } from '@hames-ai/harness-patterns/types'
 
 assertServerOnImport()
 
@@ -296,7 +296,7 @@ export { gatewayCallTool }
 // Package seam registration
 // ============================================================================
 
-// The stash pipeline moved to @hames/harness-patterns (core-absorb PR-2); its
+// The stash pipeline moved to @hames-ai/harness-patterns (core-absorb PR-2); its
 // default `CallTool` resolves through the package's transport seam. Register
 // THIS module as the host's transport at import: `stashCallTool()` reads
 // `STASH_DIRECT_REDIS` per call (gateway by default, this direct adapter when

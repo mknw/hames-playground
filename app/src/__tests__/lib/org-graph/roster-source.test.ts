@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
   ServerOnlyError: class ServerOnlyError extends Error {},
@@ -21,7 +21,7 @@ const sessionRun = vi.fn(async (..._args: unknown[]) => ({
 }))
 const sessionClose = vi.fn(async () => undefined)
 const driverSession = vi.fn((_opts?: unknown) => ({ run: sessionRun, close: sessionClose }))
-vi.mock('@hames/connectors/neo4j/client', () => ({
+vi.mock('@hames-ai/connectors/neo4j/client', () => ({
   getNeo4jDriver: () => ({ session: driverSession }),
 }))
 

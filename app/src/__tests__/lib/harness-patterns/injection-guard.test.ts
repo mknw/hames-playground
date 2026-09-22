@@ -21,7 +21,7 @@ import {
   sanitizeUntrusted,
   spotlight,
   type ScreenVerdict,
-} from '@hames/harness-patterns/injection-guard'
+} from '@hames-ai/harness-patterns/injection-guard'
 
 const ctx = { tool: 'search', namespace: 'web' }
 

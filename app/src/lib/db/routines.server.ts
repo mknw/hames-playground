@@ -21,7 +21,7 @@
  * content in its config would need its own entry in `ENCRYPTED_TABLES`.
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { query } from './client.server'
 import {
   DataDecryptionError,

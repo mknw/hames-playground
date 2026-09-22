@@ -6,7 +6,7 @@
  * This module carries BOTH halves of the package's type surface:
  *   - the client-safe graph element types below (consumed by UI components),
  *   - the agent-definition surface the composition root overlays
- *     (`AgentDefinition` / `AgentData` / `AgentDeps` — the @hames/agents
+ *     (`AgentDefinition` / `AgentData` / `AgentDeps` — the @hames-ai/agents
  *     extraction, #225). The definitions are data-only: the app keeps the
  *     composition root and narrows on top (`AgentConfig` adds the UI fields,
  *     `SessionData` aliases `AgentData`).
@@ -31,17 +31,17 @@ export interface ElementDefinition {
   classes?: string
 }
 
-import type { ClientOverride } from '@hames/harness-baml/consumer-clients.server'
+import type { ClientOverride } from '@hames-ai/harness-baml/consumer-clients.server'
 import type {
   ConfiguredPattern,
   RetrieverBackend,
   WithApproval,
   RetrieverData,
-} from '@hames/harness-patterns'
-import type { OnToolResult } from '@hames/harness-patterns/types'
-import type { HarnessData } from '@hames/harness-patterns/harness.server'
-import type { RouterData } from '@hames/harness-patterns/patterns/router.server'
-import type { SimpleLoopData } from '@hames/harness-patterns/patterns'
+} from '@hames-ai/harness-patterns'
+import type { OnToolResult } from '@hames-ai/harness-patterns/types'
+import type { HarnessData } from '@hames-ai/harness-patterns/harness.server'
+import type { RouterData } from '@hames-ai/harness-patterns/patterns/router.server'
+import type { SimpleLoopData } from '@hames-ai/harness-patterns/patterns'
 
 /**
  * Graph element with source tracking for tab filtering.
@@ -52,7 +52,7 @@ export interface GraphElement extends ElementDefinition {
 }
 
 // ============================================================================
-// Agent definition surface (#225 — the @hames/agents extraction)
+// Agent definition surface (#225 — the @hames-ai/agents extraction)
 // ============================================================================
 
 /**
@@ -81,7 +81,7 @@ export interface SandboxAttach {
 
 /**
  * What the app's composition root supplies per agent — ONLY app-side things
- * (#225 decision (a): the BAML pieces are imported from @hames/harness-baml
+ * (#225 decision (a): the BAML pieces are imported from @hames-ai/harness-baml
  * directly, not injected).
  *
  * One object, passed once at registration (the app's `agentDeps()`), closed

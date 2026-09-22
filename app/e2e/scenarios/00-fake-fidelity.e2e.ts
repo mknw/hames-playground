@@ -83,7 +83,7 @@ beforeAll(async () => {
   // ONE corpus: this is the client the package's adapters, defaults, routing
   // and the title agent all import, so the wire shape tested here is the one
   // production sends.
-  const { b } = await import('@hames/harness-baml/baml_client')
+  const { b } = await import('@hames-ai/harness-baml/baml_client')
   const req = b.request as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>
   declared = generatedFunctionNames(b.request)
   declaredInSource = bamlSourceFunctionNames()

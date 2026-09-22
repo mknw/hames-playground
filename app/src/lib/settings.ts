@@ -12,13 +12,13 @@ import {
   RUNTIME_CONFIG_BOUNDS,
   resolveTurnBudget,
   type HarnessRuntimeConfig,
-} from '@hames/harness-patterns/runtime-config'
-import type { CostBasis } from '@hames/harness-patterns'
-import { DEFAULT_EUR_PER_USD } from '@hames/harness-patterns/types'
-// Same client-safety rule as the package subpath above: `@hames/sandbox/settings`
+} from '@hames-ai/harness-patterns/runtime-config'
+import type { CostBasis } from '@hames-ai/harness-patterns'
+import { DEFAULT_EUR_PER_USD } from '@hames-ai/harness-patterns/types'
+// Same client-safety rule as the package subpath above: `@hames-ai/sandbox/settings`
 // is types + plain constants, so importing it here never drags the Docker
 // backend (or any `node:` module) into the browser bundle.
-import { DEFAULT_SANDBOX_SETTINGS, type SandboxSettings } from '@hames/sandbox/settings'
+import { DEFAULT_SANDBOX_SETTINGS, type SandboxSettings } from '@hames-ai/sandbox/settings'
 
 // Re-exported so the app's settings API is unchanged: the loop-budget resolver
 // now lives in the library beside the config it clamps against.
@@ -27,9 +27,9 @@ export type { HarnessRuntimeConfig }
 
 /**
  * Sandbox compute settings — the type and the values both moved to
- * `@hames/sandbox/settings` at the sandbox extraction, beside the code that
+ * `@hames-ai/sandbox/settings` at the sandbox extraction, beside the code that
  * dereferences them. Re-exported here so the app's settings API is unchanged
- * (the same move `DEFAULT_RUNTIME_CONFIG` made to `@hames/harness-patterns`).
+ * (the same move `DEFAULT_RUNTIME_CONFIG` made to `@hames-ai/harness-patterns`).
  * The settings panel UI does not surface these — they are programmatic for v0,
  * which is why `resolveSettings` below assigns the package defaults verbatim
  * rather than clamping anything.
@@ -331,11 +331,11 @@ export const CACHE_READ_MULT = 0.1
  * `EUR_PER_USD` (see `cost-rates.server.ts`) so an operator can put the rate
  * their finance team uses in without a rebuild.
  *
- * The constant itself lives in `@hames/harness-patterns` (`types.ts`) since the
+ * The constant itself lives in `@hames-ai/harness-patterns` (`types.ts`) since the
  * core-absorb move: the event-metrics fold moved with it, and one definition is
  * re-exported here so existing importers are unchanged.
  */
-export { DEFAULT_EUR_PER_USD } from '@hames/harness-patterns/types'
+export { DEFAULT_EUR_PER_USD } from '@hames-ai/harness-patterns/types'
 
 /**
  * EUR per hour the self-hosted GPU is awake — the owner's figure for the Verda

@@ -17,7 +17,7 @@ import { createRoot } from 'solid-js'
 import { createSessionRegistry, type SessionRegistry } from '~/lib/session-registry'
 import { COMPLETION_FLASH_MS } from '~/lib/run-registry'
 import type { Message } from '~/components/ark-ui/ChatMessages'
-import type { ContextEvent, UnifiedContext } from '@hames/harness-patterns'
+import type { ContextEvent, UnifiedContext } from '@hames-ai/harness-patterns'
 
 const make = () => createRoot(() => createSessionRegistry())
 

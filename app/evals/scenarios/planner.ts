@@ -48,7 +48,7 @@
  */
 
 import { Collector } from '@boundaryml/baml'
-import type { ToolDescription } from '@hames/harness-baml/baml_client/types'
+import type { ToolDescription } from '@hames-ai/harness-baml/baml_client/types'
 import { CLIENT_MAX_OUTPUT_TOKENS, MODEL_CONTEXT_WINDOWS } from '../../src/lib/settings'
 import { check, usageOf, type Check, type Observation, type Scenario } from '../harness'
 
@@ -162,7 +162,7 @@ export const plannerScenario: Scenario = {
   title: 'Planner — non-empty plan, honest n_steps, only real tools, under the output cap',
   what: 'the four ways a plan degrades quietly rather than loudly, including the halved output ceiling on the self-hosted route',
   run: async (ctx) => {
-    const { b } = await import('@hames/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
     const { expectedClientFor } = await import('../client')
     const collector = new Collector('eval-planner')
     const client = expectedClientFor(ctx.routing, 'planner')

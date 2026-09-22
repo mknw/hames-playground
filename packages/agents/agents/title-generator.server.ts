@@ -18,8 +18,8 @@
  *   That's exactly the shape of "give the LLM the user's first message,
  *   get a title string." No loops, no tools, no router.
  *
- * Library boundary: imports only from `@hames/harness-patterns`,
- * `@hames/harness-baml` and its pre-generated client. No imports from
+ * Library boundary: imports only from `@hames-ai/harness-patterns`,
+ * `@hames-ai/harness-baml` and its pre-generated client. No imports from
  * the host's components or other consumers —
  * keeps the agent extractable as a standalone npm package example.
  *
@@ -31,11 +31,11 @@
  * `actions.server.ts`'s gated `regenerateConversationTitle`) resolve the user
  * themselves and pass it in, so nothing needed the directive.
  */
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import { harness, compactExecution } from '@hames/harness-patterns'
-import { withUsageAccounting } from '@hames/harness-baml'
-import type { HarnessData, UnifiedContext, UserMessageEventData } from '@hames/harness-patterns'
-import { b } from '@hames/harness-baml/baml_client'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import { harness, compactExecution } from '@hames-ai/harness-patterns'
+import { withUsageAccounting } from '@hames-ai/harness-baml'
+import type { HarnessData, UnifiedContext, UserMessageEventData } from '@hames-ai/harness-patterns'
+import { b } from '@hames-ai/harness-baml/baml_client'
 import type { AgentDeps } from '../types'
 
 // The directive is gone, so nothing else keeps this module off the client. The

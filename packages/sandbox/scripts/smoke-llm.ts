@@ -24,13 +24,13 @@
  */
 
 import { withSandbox } from '../with-sandbox.server'
-import { actorCritic } from '@hames/harness-patterns/patterns/actorCritic.server'
+import { actorCritic } from '@hames-ai/harness-patterns/patterns/actorCritic.server'
 import {
   createActorControllerAdapter,
   createCriticAdapter,
-} from '@hames/harness-baml/baml-adapters.server'
-import { createScope } from '@hames/harness-patterns/context.server'
-import { createEventView } from '@hames/harness-patterns/patterns'
+} from '@hames-ai/harness-baml/baml-adapters.server'
+import { createScope } from '@hames-ai/harness-patterns/context.server'
+import { createEventView } from '@hames-ai/harness-patterns/patterns'
 import { printEventSummary, checkRootfsImage } from './_shared'
 // The composition root registers the seam (tier policy, model tables, cost
 // pricing) — without it the adapters' default tier is the seam's safe

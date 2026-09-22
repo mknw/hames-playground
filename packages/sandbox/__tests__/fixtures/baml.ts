@@ -3,17 +3,17 @@
  * and critic with.
  *
  * Copied (not imported) from the app's `src/__tests__/mocks/baml.ts` at the
- * @hames/sandbox extraction: a package whose suite reaches back into the host's
+ * @hames-ai/sandbox extraction: a package whose suite reaches back into the host's
  * test tree is not independently shippable, which is the whole point of
  * co-locating the tests here. Only the two builders that file actually uses
  * came across — the mock BAML client and collector stayed app-side with the
  * suites that use them.
  *
- * The types come from `@hames/harness-patterns`, which re-exports the generated
+ * The types come from `@hames-ai/harness-patterns`, which re-exports the generated
  * BAML shapes, rather than from a `baml_client` path this package has no
  * business naming.
  */
-import type { ControllerAction, CriticResult } from '@hames/harness-patterns/types'
+import type { ControllerAction, CriticResult } from '@hames-ai/harness-patterns/types'
 
 /** A `ControllerAction` with every required field filled in. */
 export function mockAction(overrides?: Partial<ControllerAction>): ControllerAction {

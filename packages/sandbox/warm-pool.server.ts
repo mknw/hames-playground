@@ -21,7 +21,7 @@
  * sets this up in build-order step 5 wiring, alongside `SandboxScheduler`).
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ComputeBackend, RootfsId, RuntimeConfig, VMHandle } from './types'
 
 assertServerOnImport()

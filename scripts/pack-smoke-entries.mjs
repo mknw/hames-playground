@@ -4,7 +4,7 @@
  *
  * The probe used to carry a hand-typed `appEntries` array per package. A typed
  * list is a pin that goes stale silently: the app grew imports of
- * `@hames/harness-patterns/runtime-config` and `.../runtime-config.server` and
+ * `@hames-ai/harness-patterns/runtime-config` and `.../runtime-config.server` and
  * the list never learned about either, so the one check that says "a consumer
  * can load what we ship" stopped covering two modules without anything going
  * red. This script produces the facts the probe derives its sets from instead:
@@ -12,7 +12,7 @@
  *   scan-app <out.json>
  *     ONE walk of app/ (the whole tree, minus build output and node_modules —
  *     an allowlist of subdirectories is the same staleness one level up) for
- *     every `@hames/*` specifier the app actually names. Written once per run
+ *     every `@hames-ai/*` specifier the app actually names. Written once per run
  *     and read by all five package probes.
  *
  *   derive <tarball> <package> <app-imports.json> <out.json>
@@ -23,7 +23,7 @@
  *     what a consumer actually resolves against.
  *
  * Comments are deliberately NOT stripped before matching. A commented-out
- * `from '@hames/x/y'` would enter the set as a phantom, and the probe would go
+ * `from '@hames-ai/x/y'` would enter the set as a phantom, and the probe would go
  * red naming it — loud and wrong, which is recoverable. Stripping comments with
  * a regex risks eating a real specifier off a line that also holds a `//` (a
  * URL, a regex literal), and that failure is silent, which is the exact failure
@@ -56,7 +56,7 @@ const SOURCE_EXT = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs'
  * resolver has to answer.
  */
 const SPECIFIER_RE =
-  /(?:\bfrom|\bimport|\brequire|\bvi\.(?:mock|doMock|unmock|importActual|importMock))\s*\(?\s*['"](@hames\/[^'"]+)['"]/g
+  /(?:\bfrom|\bimport|\brequire|\bvi\.(?:mock|doMock|unmock|importActual|importMock))\s*\(?\s*['"](@hames-ai\/[^'"]+)['"]/g
 
 function walk(dir, out) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -70,7 +70,7 @@ function walk(dir, out) {
   return out
 }
 
-/** `@hames/agents/agents/search.server` -> ['@hames/agents', './agents/search.server'] */
+/** `@hames-ai/agents/agents/search.server` -> ['@hames-ai/agents', './agents/search.server'] */
 function splitSpecifier(specifier) {
   const parts = specifier.split('/')
   const pkg = parts.slice(0, 2).join('/')
@@ -84,7 +84,7 @@ function scanApp(appDir) {
   const packages = {}
   for (const file of files) {
     const source = readFileSync(file, 'utf8')
-    if (!source.includes('@hames/')) continue
+    if (!source.includes('@hames-ai/')) continue
     for (const match of source.matchAll(SPECIFIER_RE)) {
       const [pkg, subpath] = splitSpecifier(match[1])
       ;(packages[pkg] ??= new Set()).add(subpath)

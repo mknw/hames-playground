@@ -17,7 +17,7 @@
  * complete ControllerAction, and the legacy prose labels must not come back.
  */
 import { describe, it, expect, beforeAll } from 'vitest'
-import { normalizeControllerAction } from '@hames/harness-patterns/controller-action'
+import { normalizeControllerAction } from '@hames-ai/harness-patterns/controller-action'
 
 // b.request builds the HTTP body without sending; it still resolves the client,
 // which needs the env var to exist.
@@ -27,10 +27,10 @@ type Block = { type: string; text?: string }
 type Msg = { role: string; content: Block[] | string }
 type Body = { system?: unknown; messages: Msg[] }
 
-let b: typeof import('@hames/harness-baml/baml_client').b
+let b: typeof import('@hames-ai/harness-baml/baml_client').b
 
 beforeAll(async () => {
-  b = (await import('@hames/harness-baml/baml_client')).b
+  b = (await import('@hames-ai/harness-baml/baml_client')).b
 })
 
 const TOOLS = [{ name: 'search', description: 'Search files', args_schema: '{"query":"string"}' }]

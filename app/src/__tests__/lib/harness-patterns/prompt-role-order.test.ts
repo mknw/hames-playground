@@ -82,10 +82,10 @@ import type {
   PriorResult,
   RouteOption,
   ToolDescription,
-} from '@hames/harness-baml/baml_client/types'
+} from '@hames-ai/harness-baml/baml_client/types'
 // Leaf-file classes (describe-batch / with-references) moved to the package
 // tree — their generated types live there now.
-import type { DescribeTarget, ReferenceCandidate } from '@hames/harness-baml/baml_client/types'
+import type { DescribeTarget, ReferenceCandidate } from '@hames-ai/harness-baml/baml_client/types'
 // ONE corpus: `packages/harness-baml/baml_src` and the committed client it
 // generates. The app's duplicate tree is gone, so the every-function audit
 // below renders every function through the single client production itself
@@ -103,7 +103,7 @@ const ENV = {
 const OPENAI = { client: 'VerdaQwen', env: ENV }
 const ANTHROPIC = { client: 'AnthropicSonnet5', env: ENV }
 
-type BamlRequest = (typeof import('@hames/harness-baml/baml_client').b)['request']
+type BamlRequest = (typeof import('@hames-ai/harness-baml/baml_client').b)['request']
 let b: { request: BamlRequest }
 
 beforeAll(async () => {
@@ -111,7 +111,7 @@ beforeAll(async () => {
   // `runtime` / `ctxManager` state off `this`, so `const { Router } = b.request`
   // dies with "Cannot read properties of undefined (reading 'runtime')". Every
   // render below therefore goes through the client object itself.
-  const client = await import('@hames/harness-baml/baml_client')
+  const client = await import('@hames-ai/harness-baml/baml_client')
   b = { request: client.b.request }
 })
 // ---------------------------------------------------------------------------

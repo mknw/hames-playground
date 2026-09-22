@@ -12,13 +12,13 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
 
 const gatewayCallTool = vi.fn(async () => ({ success: true, data: 'gateway' }))
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   callTool: (...args: unknown[]) => gatewayCallTool(...(args as [])),
 }))
 

@@ -4,8 +4,12 @@
  */
 
 import { Show, createMemo } from 'solid-js'
-import type { ContextEvent, ToolResultEventData } from '@hames/harness-patterns'
-import { fmtEur, fmtTok, foldTokenTotals } from '@hames/harness-patterns/observability/token-totals'
+import type { ContextEvent, ToolResultEventData } from '@hames-ai/harness-patterns'
+import {
+  fmtEur,
+  fmtTok,
+  foldTokenTotals,
+} from '@hames-ai/harness-patterns/observability/token-totals'
 
 export const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void }) => {
   const metrics = createMemo(() => {

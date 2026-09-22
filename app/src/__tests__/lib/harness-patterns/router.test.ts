@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 
 /**
  * #374: a pattern run needs a run frame, and these tests drive patterns
@@ -15,7 +15,7 @@ import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
 const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 // Mock server-only imports
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -36,13 +36,13 @@ describe('router', () => {
   })
 
   it('should export router function', async () => {
-    const { router } = await import('@hames/harness-patterns/patterns/router.server')
+    const { router } = await import('@hames-ai/harness-patterns/patterns/router.server')
     expect(router).toBeDefined()
     expect(typeof router).toBe('function')
   })
 
   it('should create a ConfiguredPattern', async () => {
-    const { router } = await import('@hames/harness-patterns/patterns/router.server')
+    const { router } = await import('@hames-ai/harness-patterns/patterns/router.server')
 
     const routeDescriptions = {
       neo4j: 'Database queries',
@@ -56,9 +56,10 @@ describe('router', () => {
   })
 
   it('should set scope.data.route when tool is needed', async () => {
-    const { router } = await import('@hames/harness-patterns/patterns/router.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { router } = await import('@hames-ai/harness-patterns/patterns/router.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     mockRouteMessageOp.mockResolvedValue({
       intent: 'Query database',
@@ -89,9 +90,10 @@ describe('router', () => {
   })
 
   it('should return conversational response when no tool needed', async () => {
-    const { router } = await import('@hames/harness-patterns/patterns/router.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { router } = await import('@hames-ai/harness-patterns/patterns/router.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     mockRouteMessageOp.mockResolvedValue({
       intent: 'Greeting',
@@ -121,9 +123,10 @@ describe('router', () => {
   })
 
   it('should track error when tool_call_needed but no tool_name', async () => {
-    const { router } = await import('@hames/harness-patterns/patterns/router.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { router } = await import('@hames-ai/harness-patterns/patterns/router.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     mockRouteMessageOp.mockResolvedValue({
       intent: 'Ambiguous',
@@ -152,9 +155,10 @@ describe('router', () => {
   })
 
   it('should handle errors gracefully', async () => {
-    const { router } = await import('@hames/harness-patterns/patterns/router.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { router } = await import('@hames-ai/harness-patterns/patterns/router.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     mockRouteMessageOp.mockRejectedValue(new Error('Routing failed'))
 
@@ -178,9 +182,10 @@ describe('router', () => {
   })
 
   it('should update scope data with routing info', async () => {
-    const { router } = await import('@hames/harness-patterns/patterns/router.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { router } = await import('@hames-ai/harness-patterns/patterns/router.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     mockRouteMessageOp.mockResolvedValue({
       intent: 'Database query intent',
@@ -215,13 +220,13 @@ describe('routes', () => {
   })
 
   it('should export routes function', async () => {
-    const { routes } = await import('@hames/harness-patterns/patterns/router.server')
+    const { routes } = await import('@hames-ai/harness-patterns/patterns/router.server')
     expect(routes).toBeDefined()
     expect(typeof routes).toBe('function')
   })
 
   it('should create a ConfiguredPattern with route names in name', async () => {
-    const { routes } = await import('@hames/harness-patterns/patterns/router.server')
+    const { routes } = await import('@hames-ai/harness-patterns/patterns/router.server')
 
     const neo4jFn = vi.fn(async (scope: any) => scope)
     const webFn = vi.fn(async (scope: any) => scope)
@@ -237,9 +242,10 @@ describe('routes', () => {
   })
 
   it('should dispatch to correct pattern based on scope.data.route', async () => {
-    const { routes } = await import('@hames/harness-patterns/patterns/router.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { routes } = await import('@hames-ai/harness-patterns/patterns/router.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const neo4jFn = vi.fn(async (scope: any) => {
       scope.data = { ...scope.data, response: 'Neo4j result' }
@@ -267,9 +273,10 @@ describe('routes', () => {
   })
 
   it('should throw when routes is called without router (route is undefined)', async () => {
-    const { routes } = await import('@hames/harness-patterns/patterns/router.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { routes } = await import('@hames-ai/harness-patterns/patterns/router.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const neo4jFn = vi.fn(async (scope: any) => scope)
 
@@ -287,9 +294,10 @@ describe('routes', () => {
   })
 
   it('should pass through for direct-response route (user)', async () => {
-    const { routes } = await import('@hames/harness-patterns/patterns/router.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { routes } = await import('@hames-ai/harness-patterns/patterns/router.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const neo4jFn = vi.fn(async (scope: any) => scope)
 
@@ -313,9 +321,10 @@ describe('routes', () => {
   })
 
   it('should track error when route not found in patternMap', async () => {
-    const { routes } = await import('@hames/harness-patterns/patterns/router.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { routes } = await import('@hames-ai/harness-patterns/patterns/router.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const neo4jFn = vi.fn(async (scope: any) => scope)
 
@@ -344,9 +353,10 @@ describe('routes', () => {
   })
 
   it('should keep pattern response after dispatch', async () => {
-    const { routes } = await import('@hames/harness-patterns/patterns/router.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { routes } = await import('@hames-ai/harness-patterns/patterns/router.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const neo4jFn = vi.fn(async (scope: any) => {
       scope.data = { ...scope.data, response: 'Pattern response' }
@@ -371,9 +381,10 @@ describe('routes', () => {
   })
 
   it('should merge events from executed pattern', async () => {
-    const { routes } = await import('@hames/harness-patterns/patterns/router.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { routes } = await import('@hames-ai/harness-patterns/patterns/router.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const neo4jFn = vi.fn(async (scope: any) => {
       scope.events.push({
@@ -404,9 +415,10 @@ describe('routes', () => {
   })
 
   it('should add pattern_enter and pattern_exit events on dispatch', async () => {
-    const { routes } = await import('@hames/harness-patterns/patterns/router.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { routes } = await import('@hames-ai/harness-patterns/patterns/router.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const neo4jFn = vi.fn(async (scope: any) => scope)
 

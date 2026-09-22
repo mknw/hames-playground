@@ -82,22 +82,22 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Collector } from '@boundaryml/baml'
-import type { Attempt, ToolDescription } from '@hames/harness-patterns/types'
+import type { Attempt, ToolDescription } from '@hames-ai/harness-patterns/types'
 import {
   createCriticAdapter,
   createInjectionScreen,
   describeToolResultOp,
   describeToolResultsBatchOp,
   extractLLMCallData,
-} from '@hames/harness-baml/baml-adapters.server'
+} from '@hames-ai/harness-baml/baml-adapters.server'
 // The composition root registers the seam (model tables, tier policy, cost
 // rates) — importing it for its side effect keeps the smoke run on the same
 // wiring a turn takes.
 import '../config.server'
 import { assertVerdaConfigured, verdaInferenceEnabled } from '../config.server'
-import { clientOverrideFor } from '@hames/harness-baml/clients.server'
-import { observeLlmUsage } from '@hames/harness-patterns/llm-usage-observer.server'
-import { routeMessageOp } from '@hames/harness-baml/routing.server'
+import { clientOverrideFor } from '@hames-ai/harness-baml/clients.server'
+import { observeLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
+import { routeMessageOp } from '@hames-ai/harness-baml/routing.server'
 
 const EXPECTED_CLIENT = 'VerdaQwen'
 
@@ -286,7 +286,7 @@ async function critic(): Promise<void> {
 
 async function controller(): Promise<void> {
   console.log('\n▶ 2/5 LoopController — the action envelope')
-  const { b } = await import('@hames/harness-baml/baml_client')
+  const { b } = await import('@hames-ai/harness-baml/baml_client')
   const collector = new Collector('smoke-verda-controller')
   const opts = { collector, ...clientOverrideFor('controller') }
   const t0 = Date.now()
@@ -346,7 +346,7 @@ async function controller(): Promise<void> {
  */
 async function actorRetry(): Promise<void> {
   console.log('\n▶ 3/6 ActorController — retry shape (attempt log + context)')
-  const { b } = await import('@hames/harness-baml/baml_client')
+  const { b } = await import('@hames-ai/harness-baml/baml_client')
   const collector = new Collector('smoke-verda-actor-retry')
   // 'controller' — the one role covers BOTH loop patterns' controllers, which
   // is exactly why the actor's 400 rode in on the same map entry that the

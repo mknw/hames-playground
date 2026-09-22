@@ -64,7 +64,7 @@ stand-in for a registry, what an external developer does today) is re-homed →
 [`packages/harness-patterns/GUIDE.md`](../../packages/harness-patterns/GUIDE.md)
 §5. What stays here is the repo's own workflow, which is not package material:
 
-`app/package.json` declares `"@hames/harness-patterns": "workspace:*"` (the
+`app/package.json` declares `"@hames-ai/harness-patterns": "workspace:*"` (the
 symlink/HMR mechanics and the Docker half are the package guide's, not
 repeated here). Two command facts are repo-local and stay:
 
@@ -92,4 +92,4 @@ so nobody mistakes kg-agent's own wiring for part of the package contract:
   configuration a consumer replaces with their own.
 - The mixed-provider BAML fallback chains (Groq/OpenRouter/OpenAI) — removed
   from the repo entirely on 2026-08-24 (ADR-0001), and never part of
-  `@hames/harness-baml`.
+  `@hames-ai/harness-baml`.

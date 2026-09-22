@@ -44,16 +44,19 @@
  * scales to zero and only its traffic is evidence the GPU is up. A 4B describe
  * call proves nothing about the box (`inference/verda-activity.server.ts`).
  */
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   observeLlmUsage,
   type LlmUsageSample,
-} from '@hames/harness-patterns/llm-usage-observer.server'
+} from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import { noteVerdaCallCompleted, VERDA_CLIENT_NAME } from '../inference/verda-activity.server'
 import { settleColdStart } from '../inference/cold-start.server'
 import { addUsage, type UsageDelta } from './preview-counters.server'
 import { noteCallLatency } from './call-latency.server'
-import { TIER_SWITCHED_FUNCTIONS, VERDA_CLIENT_BY_ROLE } from '@hames/harness-baml/clients.server'
+import {
+  TIER_SWITCHED_FUNCTIONS,
+  VERDA_CLIENT_BY_ROLE,
+} from '@hames-ai/harness-baml/clients.server'
 import type { InferenceTier } from '../inference/config.server'
 
 assertServerOnImport()

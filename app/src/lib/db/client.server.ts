@@ -6,7 +6,7 @@
  * if Postgres is briefly unreachable.
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   EncryptionBootError,
   ensureEncryptionReady,

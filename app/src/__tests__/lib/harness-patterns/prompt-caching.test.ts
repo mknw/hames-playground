@@ -46,10 +46,10 @@ type Msg = { role: string; content: Block[] | string }
 type Body = { system?: unknown; messages: Msg[] }
 type RoledBlock = Block & { role: string }
 
-let b: typeof import('@hames/harness-baml/baml_client').b
+let b: typeof import('@hames-ai/harness-baml/baml_client').b
 
 beforeAll(async () => {
-  b = (await import('@hames/harness-baml/baml_client')).b
+  b = (await import('@hames-ai/harness-baml/baml_client')).b
 })
 
 const TOOLS = [

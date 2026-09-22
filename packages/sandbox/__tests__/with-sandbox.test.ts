@@ -7,9 +7,9 @@
  * visibility guarantee that the inner pattern sees the transport via ALS.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -34,7 +34,7 @@ import {
   getDefaultAttachments,
   __resetSandboxDefaultsForTests,
 } from '../with-sandbox.server'
-import { activeTransports } from '@hames/harness-patterns/tool-transport.server'
+import { activeTransports } from '@hames-ai/harness-patterns/tool-transport.server'
 import { WarmPool } from '../warm-pool.server'
 import { SandboxScheduler } from '../scheduler.server'
 import { AttachmentTable } from '../attachment-table.server'
@@ -42,7 +42,7 @@ import { DockerBackend } from '../docker-backend.server'
 import {
   declaresWorkspaceSync,
   harnessUsesSyncWorkspace,
-} from '@hames/harness-patterns/pattern-capabilities'
+} from '@hames-ai/harness-patterns/pattern-capabilities'
 import type {
   ComputeBackend,
   HealthStatus,
@@ -51,7 +51,7 @@ import type {
   RuntimeConfig,
   VMHandle,
 } from '../types'
-import type { ConfiguredPattern, PatternScope, EventView } from '@hames/harness-patterns/types'
+import type { ConfiguredPattern, PatternScope, EventView } from '@hames-ai/harness-patterns/types'
 
 /**
  * #374: a pattern run needs a run frame, and these tests drive patterns

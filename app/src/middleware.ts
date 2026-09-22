@@ -15,8 +15,8 @@
  * all; see below.
  *
  * It is also where the two PACKAGE seams are handed their host suppliers —
- * `configureNeo4j` (@hames/connectors) and `configureWorkspaceStore`
- * (@hames/sandbox) — for the same reason: both are explicit-config-only, so the
+ * `configureNeo4j` (@hames-ai/connectors) and `configureWorkspaceStore`
+ * (@hames-ai/sandbox) — for the same reason: both are explicit-config-only, so the
  * one place that runs before any request is the one place that can guarantee
  * they are set before a turn asks.
  */
@@ -29,13 +29,13 @@ import {
   installDevFakeInference,
 } from './lib/inference/dev-fake-inference.server'
 import { getEndpoints } from './lib/config/endpoints'
-import { configureNeo4j } from '@hames/connectors/neo4j/client'
-import { configureWorkspaceStore } from '@hames/sandbox/workspace-store'
+import { configureNeo4j } from '@hames-ai/connectors/neo4j/client'
+import { configureWorkspaceStore } from '@hames-ai/sandbox/workspace-store'
 import {
   listDocuments,
   getDocument,
   storeDocument,
-} from '@hames/harness-patterns/stash/document-store.server'
+} from '@hames-ai/harness-patterns/stash/document-store.server'
 import { guessMimeType, isTextMime } from './lib/stash/upload-service.server'
 // Side effect only: registers the app-side tools AND the process transport that
 // makes `callTool` dispatch to them. `harness-patterns` deliberately does not
@@ -47,7 +47,7 @@ import { guessMimeType, isTextMime } from './lib/stash/upload-service.server'
 import './lib/app-tools/index.server'
 
 // Stash transport seam (core-absorb PR-2): the Data Stash pipeline moved to
-// `@hames/harness-patterns`, and its default `CallTool` resolves through the
+// `@hames-ai/harness-patterns`, and its default `CallTool` resolves through the
 // package's `stash-transport.server` seam — the gateway by default, the app's
 // direct-ioredis adapter when `STASH_DIRECT_REDIS=1` (the gateway's serial
 // stdio pipe makes a large ingest O(chunks)×2 round-trips; see
@@ -71,7 +71,7 @@ configureNeo4j({
   password: process.env.NEO4J_PASSWORD || 'password',
 })
 
-// Durable-workspace seam (@hames/sandbox): the package owns the `/work`
+// Durable-workspace seam (@hames-ai/sandbox): the package owns the `/work`
 // protocol — what is hydrated into `/work/in`, what is promoted out of
 // `/work/out`, and the diffs that make both idempotent — while storage and
 // content classification stay the host's. Wired here, not lazily at first use,
@@ -126,7 +126,7 @@ installUsageRecorder()
  *
  * ## Why the PACKAGE client, and not a relative one
  *
- * There is ONE generated client — `@hames/harness-baml/baml_client` — and it is
+ * There is ONE generated client — `@hames-ai/harness-baml/baml_client` — and it is
  * the `b` every production call runs through: the package's adapters, its
  * defaults and routing modules, and the title agent all import that exact
  * module. The redirect works by patching `bamlOptions` on the singleton, so it
@@ -156,7 +156,7 @@ let fakeInferenceReady: Promise<unknown> | null = null
 export default createMiddleware({
   onRequest: devFakeInferenceUrl()
     ? async () => {
-        fakeInferenceReady ??= import('@hames/harness-baml/baml_client').then(({ b }) =>
+        fakeInferenceReady ??= import('@hames-ai/harness-baml/baml_client').then(({ b }) =>
           installDevFakeInference(b),
         )
         await fakeInferenceReady

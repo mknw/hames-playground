@@ -40,8 +40,8 @@ The package owns the protocol; the host owns storage and content classification.
 suppliers, all required, wired once at the composition root:
 
 ```typescript
-import { configureWorkspaceStore } from "@hames/sandbox/workspace-store";
-import type { WorkspaceStore } from "@hames/sandbox";
+import { configureWorkspaceStore } from "@hames-ai/sandbox/workspace-store";
+import type { WorkspaceStore } from "@hames-ai/sandbox";
 
 declare const store: WorkspaceStore;
 
@@ -77,14 +77,14 @@ deliverable.
 A half-built bag throws **at the `configureWorkspaceStore` call**, naming the supplier:
 
 ```text
-@hames/sandbox: configureWorkspaceStore requires a function for "store" (got undefined)
+@hames-ai/sandbox: configureWorkspaceStore requires a function for "store" (got undefined)
 ```
 
 And asking for durable sync with no store at all raises a named error rather than doing
 nothing:
 
 ```text
-@hames/sandbox: durable workspace sync needs a WorkspaceStore. Call
+@hames-ai/sandbox: durable workspace sync needs a WorkspaceStore. Call
 configureWorkspaceStore({ list, get, store, guessMimeType, isTextMime }) from the host
 composition root before any withSandbox({ syncWorkspace: true }) turn runs.
 ```
@@ -92,7 +92,7 @@ composition root before any withSandbox({ syncWorkspace: true }) turn runs.
 It has its own class so you can match it without matching a message:
 
 ```typescript
-import { WorkspaceStoreNotConfiguredError } from "@hames/sandbox";
+import { WorkspaceStoreNotConfiguredError } from "@hames-ai/sandbox";
 
 declare const err: unknown;
 
@@ -116,9 +116,9 @@ exactly as before.
 Two fields, and the first is not optional:
 
 ```typescript
-import { withSandbox } from "@hames/sandbox";
-import type { ConfiguredPattern } from "@hames/harness-patterns";
-import type { AgentData } from "@hames/agents";
+import { withSandbox } from "@hames-ai/sandbox";
+import type { ConfiguredPattern } from "@hames-ai/harness-patterns";
+import type { AgentData } from "@hames-ai/agents";
 
 declare const loop: ConfiguredPattern<AgentData>;
 declare const sessionId: string;
@@ -194,8 +194,8 @@ lifetime: the `/cache` volume that networked boots mount for package downloads. 
 is keyed by **tenant**, and the tenant is supplied at the composition root:
 
 ```typescript
-import { withSandbox, type WithSandboxConfig } from "@hames/sandbox";
-import type { AgentDeps } from "@hames/agents";
+import { withSandbox, type WithSandboxConfig } from "@hames-ai/sandbox";
+import type { AgentDeps } from "@hames-ai/agents";
 
 declare function getRequestUserId(): string | null;
 
@@ -238,7 +238,7 @@ sanitize onto one name and put two tenants on one writable volume.
   profiles, flavours.
 - [Wiring a host](./wiring-a-host.md) — where `configureWorkspaceStore` and the
   `withSandbox` supplier are registered.
-- [`@hames/sandbox` README](../../packages/sandbox/README.md) — the injected-vs-imported
+- [`@hames-ai/sandbox` README](../../packages/sandbox/README.md) — the injected-vs-imported
   table and the subpath map.
 - [`docs/DATA_STASH.md`](../DATA_STASH.md) — the document store this app supplies, and its
   ingest pipeline.

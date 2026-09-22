@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config'
 
 // The package's OWN suite: the co-located tests that moved with the code
-// (the @hames/sandbox extraction). Plain node environment — no jsdom, no app
+// (the @hames-ai/sandbox extraction). Plain node environment — no jsdom, no app
 // test database, no `~` alias — because everything they import is either this
 // package, its declared dependencies, or their own fixtures. A test that needs
 // app code (the composition root, the request scope) belongs in the app's

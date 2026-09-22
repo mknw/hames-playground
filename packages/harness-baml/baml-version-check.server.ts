@@ -46,7 +46,7 @@
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 
 assertServerOnImport()
 

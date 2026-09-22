@@ -22,7 +22,7 @@ import {
   loadConversation,
   updateConversationContextIfUnchanged,
 } from '../../lib/db/conversations.server'
-import { deserializeContext, enrichToolResult, serializeContext } from '@hames/harness-patterns'
+import { deserializeContext, enrichToolResult, serializeContext } from '@hames-ai/harness-patterns'
 import { getAuthenticatedUser } from '../../lib/auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../../lib/auth/dev-bypass'
 

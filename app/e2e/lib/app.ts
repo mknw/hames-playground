@@ -205,12 +205,12 @@ async function boot(): Promise<AppHandles> {
   delete process.env.USE_VERDA_INFERENCE
 
   // ---- Routing -----------------------------------------------------------
-  // ONE corpus: `@hames/harness-baml/baml_client` is the generated singleton
+  // ONE corpus: `@hames-ai/harness-baml/baml_client` is the generated singleton
   // every production call runs through (the package's adapters, defaults,
   // routing and the title agent all import this exact module), so installing
   // the fake registry on it covers the whole app. The preflight below proves
   // that by observation rather than by trusting the property descriptor.
-  const { b } = await import('@hames/harness-baml/baml_client')
+  const { b } = await import('@hames-ai/harness-baml/baml_client')
   if (IS_HERMETIC) {
     installHermeticRouting(b, fakeLlm.baseUrl)
     await assertHermeticRouting(

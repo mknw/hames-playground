@@ -13,19 +13,19 @@ import type {
   EventType,
   UnifiedContext,
   ToolResultEventData,
-} from '@hames/harness-patterns'
+} from '@hames-ai/harness-patterns'
 import type {
   RetrieverBackend,
   RetrievalHit,
-} from '@hames/harness-patterns/patterns/retriever.server'
+} from '@hames-ai/harness-patterns/patterns/retriever.server'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
 
 // Mock the BAML client (the retriever dynamically imports it for RetrieveQuery).
-vi.mock('@hames/harness-baml/baml_client', () => ({
+vi.mock('@hames-ai/harness-baml/baml_client', () => ({
   b: { RetrieveQuery: vi.fn(async () => 'rewritten search query') },
 }))
 
@@ -66,14 +66,14 @@ function ctxOf(events: Ev[]): UnifiedContext<Record<string, unknown>> {
 const PATTERN_ID = 'retriever'
 
 async function load() {
-  const { retriever } = await import('@hames/harness-patterns/patterns/retriever.server')
-  const { createScope } = await import('@hames/harness-patterns/context.server')
-  const { createEventView } = await import('@hames/harness-patterns/patterns')
-  const { b } = await import('@hames/harness-baml/baml_client')
+  const { retriever } = await import('@hames-ai/harness-patterns/patterns/retriever.server')
+  const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+  const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
+  const { b } = await import('@hames-ai/harness-baml/baml_client')
   // Lane A6: the rewrite seam is REQUIRED config — the real adapter (which
   // hits the mocked `b.RetrieveQuery`), what `bamlPatterns().retrieveQuery`
   // hands an agent.
-  const { createRetrieveQueryAdapter } = await import('@hames/harness-baml/baml-patterns.server')
+  const { createRetrieveQueryAdapter } = await import('@hames-ai/harness-baml/baml-patterns.server')
   const rewrite = createRetrieveQueryAdapter()
   return { retriever, rewrite, createScope, createEventView, b }
 }

@@ -31,7 +31,7 @@ import '../../../lib/inference/config.server'
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -58,8 +58,8 @@ import {
   assertInferenceTier,
   clientOverrideFor,
   resolveClientForRole,
-} from '@hames/harness-baml/clients.server'
-import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+} from '@hames-ai/harness-baml/clients.server'
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 
 /**
  * #374: the tier is a SLOT of the run frame, and the fail-closed reachability

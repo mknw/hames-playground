@@ -15,7 +15,7 @@
  */
 
 import { Collector } from '@boundaryml/baml'
-import type { LoopTurn } from '@hames/harness-baml/baml_client/types'
+import type { LoopTurn } from '@hames-ai/harness-baml/baml_client/types'
 import { check, type Check, type Scenario } from '../harness'
 
 const TURNS: LoopTurn[] = [
@@ -58,7 +58,7 @@ export const synthesizerGroundedScenario: Scenario = {
   title: 'Synthesize — grounded summary over a partial tool log',
   what: 'reports the counts that are in the log, does not invent the one that is missing, and admits the failed call',
   run: async (ctx) => {
-    const { b } = await import('@hames/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
     const collector = new Collector('eval-synthesize-grounded')
     const answer = await b.Synthesize(
       'How big is the graph?',

@@ -13,7 +13,7 @@ import { ObservabilityPanel } from './ObservabilityPanel'
 import { DataStashPanel, type StashAction } from './DataStashPanel'
 import { TerminalPanel } from './TerminalPanel'
 import type { ElementDefinition, StylesheetJsonBlock } from 'cytoscape'
-import type { ContextEvent, UnifiedContext } from '@hames/harness-patterns'
+import type { ContextEvent, UnifiedContext } from '@hames-ai/harness-patterns'
 
 /** Highlight nodes the agent's query actually touched (vs. surrounding context).
  *  The extractor sets `data.touched = true` on these — see `graph-extractor.ts`. */
@@ -35,9 +35,9 @@ const TOUCHED_NODE_STYLES: StylesheetJsonBlock[] = [
 // ============================================================================
 
 // Re-export GraphElement from shared types
-export type { GraphElement } from '@hames/agents'
-import type { GraphElement } from '@hames/agents'
-import { isEdgeElement, isNodeElement } from '@hames/agents'
+export type { GraphElement } from '@hames-ai/agents'
+import type { GraphElement } from '@hames-ai/agents'
+import { isEdgeElement, isNodeElement } from '@hames-ai/agents'
 
 export interface SupportPanelProps {
   graphElements: GraphElement[]

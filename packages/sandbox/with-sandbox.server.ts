@@ -16,9 +16,9 @@
  * All four go through the scheduler first (`scheduler.allocate(sessionId)`)
  * and release the slot in the outer finally regardless of branch.
  */
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import { trackEvent } from '@hames/harness-patterns/context.server'
-import { amendRunFrame } from '@hames/harness-patterns/run-frame.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import { trackEvent } from '@hames-ai/harness-patterns/context.server'
+import { amendRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { DEFAULT_SANDBOX_SETTINGS } from './settings'
 import { AttachmentTable } from './attachment-table.server'
 import { DockerBackend } from './docker-backend.server'
@@ -32,7 +32,7 @@ import type {
   PatternCapabilities,
   PatternScope,
   EventView,
-} from '@hames/harness-patterns/types'
+} from '@hames-ai/harness-patterns/types'
 
 assertServerOnImport()
 

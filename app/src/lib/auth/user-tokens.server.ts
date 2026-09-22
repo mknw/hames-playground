@@ -17,18 +17,18 @@
  * Written on every sign-in and re-written after each silent acquisition
  * (Entra rotates refresh tokens, so the fresh cache must replace the old one).
  */
-import { assertServerOnImport } from "@hames/harness-patterns/assert.server";
-import { query } from "../db/client.server";
-import { encryptSecret, decryptSecret } from "./secret-crypto.server";
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import { query } from '../db/client.server'
+import { encryptSecret, decryptSecret } from './secret-crypto.server'
 
-assertServerOnImport();
+assertServerOnImport()
 
 export interface UserTokenCache {
   /** MSAL account key, for `getAccountByHomeId()` during silent acquisition. */
-  homeAccountId: string | null;
+  homeAccountId: string | null
   /** Decrypted, serialized MSAL token cache. */
-  tokenCache: string;
-  updatedAt: Date;
+  tokenCache: string
+  updatedAt: Date
 }
 
 const SCHEMA_SQL = `
@@ -48,19 +48,19 @@ const SCHEMA_SQL = `
   -- code is deployed from main, and main's createSession still INSERTs that
   -- column — dropping it from a feature branch breaks sign-in for main.
   -- Dropping the column is post-merge cleanup, tracked in the PR description.
-`;
+`
 
-let _schemaReady: Promise<void> | null = null;
+let _schemaReady: Promise<void> | null = null
 function ensureSchema(): Promise<void> {
   if (!_schemaReady) {
     _schemaReady = query(SCHEMA_SQL)
       .then(() => undefined)
       .catch((err) => {
-        _schemaReady = null; // allow retry on next call
-        throw err;
-      });
+        _schemaReady = null // allow retry on next call
+        throw err
+      })
   }
-  return _schemaReady;
+  return _schemaReady
 }
 
 /**
@@ -72,7 +72,7 @@ export async function saveUserTokenCache(
   tokenCache: string,
   homeAccountId: string | null,
 ): Promise<void> {
-  await ensureSchema();
+  await ensureSchema()
   await query(
     `INSERT INTO user_tokens (user_id, home_account_id, token_cache)
      VALUES ($1, $2, $3)
@@ -81,7 +81,7 @@ export async function saveUserTokenCache(
        token_cache     = EXCLUDED.token_cache,
        updated_at      = NOW()`,
     [userId, homeAccountId, encryptSecret(tokenCache)],
-  );
+  )
 }
 
 /**
@@ -89,45 +89,43 @@ export async function saveUserTokenCache(
  * decryption fails** (rotated/incorrect key, tampered row) — the caller treats
  * that as "this user must sign in again" rather than crashing.
  */
-export async function loadUserTokenCache(
-  userId: string,
-): Promise<UserTokenCache | null> {
-  await ensureSchema();
+export async function loadUserTokenCache(userId: string): Promise<UserTokenCache | null> {
+  await ensureSchema()
   const { rows } = await query<{
-    home_account_id: string | null;
-    token_cache: string;
-    updated_at: Date;
+    home_account_id: string | null
+    token_cache: string
+    updated_at: Date
   }>(
     `SELECT home_account_id, token_cache, updated_at
        FROM user_tokens WHERE user_id = $1`,
     [userId],
-  );
-  const row = rows[0];
-  if (!row) return null;
+  )
+  const row = rows[0]
+  if (!row) return null
 
-  const tokenCache = decryptSecret(row.token_cache);
+  const tokenCache = decryptSecret(row.token_cache)
   if (!tokenCache) {
     console.warn(
       `[user-tokens] could not decrypt token cache for user ${userId} — ` +
-        "treating as absent (re-authentication required).",
-    );
-    return null;
+        'treating as absent (re-authentication required).',
+    )
+    return null
   }
   return {
     homeAccountId: row.home_account_id,
     tokenCache,
     updatedAt: row.updated_at,
-  };
+  }
 }
 
 /** True when the user has a usable cache (cheap existence check, no decrypt). */
 export async function hasUserTokenCache(userId: string): Promise<boolean> {
-  await ensureSchema();
+  await ensureSchema()
   const { rows } = await query<{ one: number }>(
     `SELECT 1 AS one FROM user_tokens WHERE user_id = $1`,
     [userId],
-  );
-  return rows.length > 0;
+  )
+  return rows.length > 0
 }
 
 /**
@@ -139,6 +137,6 @@ export async function hasUserTokenCache(userId: string): Promise<boolean> {
  * acting for the user afterwards.
  */
 export async function deleteUserTokenCache(userId: string): Promise<void> {
-  await ensureSchema();
-  await query(`DELETE FROM user_tokens WHERE user_id = $1`, [userId]);
+  await ensureSchema()
+  await query(`DELETE FROM user_tokens WHERE user_id = $1`, [userId])
 }

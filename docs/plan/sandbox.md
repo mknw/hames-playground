@@ -160,7 +160,7 @@ Notably *not* in this interface (vs. an earlier sketch): explicit `exec()`, `mou
 | `DockerBackend` | container + bind mount | 1–3s | fresh container | v0 dev + initial prod. Works on macOS dev hosts. |
 | `FirecrackerBackend` | microVM + virtio-fs | ~125ms | snapshot/restore | Production swap once the abstraction proves out. Linux + KVM only. |
 
-The harness drives the backend directly from `@hames/sandbox` (`packages/sandbox/`). There is no separate pool-manager process.
+The harness drives the backend directly from `@hames-ai/sandbox` (`packages/sandbox/`). There is no separate pool-manager process.
 
 ---
 
@@ -536,7 +536,7 @@ Verified from source ([`warm-pool.server.ts`](../../packages/sandbox/warm-pool.s
 
 ### Tenant identity seam
 
-> **Agent path: WIRED** (the @hames/sandbox extraction). Lane A shipped
+> **Agent path: WIRED** (the @hames-ai/sandbox extraction). Lane A shipped
 > `WithSandboxConfig.tenantId` and left the agent-path producer unsupplied, so
 > every agent-path boot still ran on the `'default'` tenant. The composition
 > root (`agentDeps()`, `app/src/lib/harness-client/session.server.ts`) now
@@ -570,7 +570,7 @@ Verified from source ([`warm-pool.server.ts`](../../packages/sandbox/warm-pool.s
 
 ### Implementation slicing (dispatched only after owner approval)
 
-0. **Packaging (landed with the @hames/sandbox extraction).** The sandbox moved
+0. **Packaging (landed with the @hames-ai/sandbox extraction).** The sandbox moved
    out of `app/src/lib/sandbox/` into its own workspace package,
    [`packages/sandbox/`](../../packages/sandbox/README.md), behind injected
    seams: the durable-workspace document store

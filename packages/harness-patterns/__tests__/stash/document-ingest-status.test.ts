@@ -9,11 +9,11 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   callTool: vi.fn(async () => ({ success: false, data: null, error: 'no gateway' })),
 }))
 

@@ -21,7 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // The unit suite runs in jsdom, where `window` exists and the server-only
 // guard would refuse the import. Same mock, same reason, as its neighbours in
 // this directory.
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 

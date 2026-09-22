@@ -15,12 +15,12 @@
 import { getAuthenticatedUser } from '../auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
 import { CONVERSATION_EVENTS_SCAN_LIMIT, listConversationEvents } from '../db/conversations.server'
-import type { ContextEvent } from '@hames/harness-patterns/types'
+import type { ContextEvent } from '@hames-ai/harness-patterns/types'
 import {
   buildDashboard,
   type ConversationEvents,
   type DashboardData,
-} from '@hames/harness-patterns/metrics/aggregate'
+} from '@hames-ai/harness-patterns/metrics/aggregate'
 
 // ============================================================================
 // Auth helper (mirrors harness-client/actions.server.ts)

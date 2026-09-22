@@ -13,9 +13,9 @@
 
 import { For, Show, createSignal, createMemo } from 'solid-js'
 import { Tooltip } from '@ark-ui/solid/tooltip'
-import type { ContextEvent, UnifiedContext } from '@hames/harness-patterns'
+import type { ContextEvent, UnifiedContext } from '@hames-ai/harness-patterns'
 import { getPatternColor } from '~/lib/observability/event-styles'
-import { buildTimelineItems } from '@hames/harness-patterns/observability/projection'
+import { buildTimelineItems } from '@hames-ai/harness-patterns/observability/projection'
 import { SummaryBar } from './observability/SummaryBar'
 import {
   EmptyState,

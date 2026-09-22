@@ -1,7 +1,7 @@
 /**
  * Tests for the RETAINED `'use server'` Neo4j wrappers (#225 PR-C2).
  *
- * The op bodies moved into `@hames/connectors`; this module is the thin gated
+ * The op bodies moved into `@hames-ai/connectors`; this module is the thin gated
  * wrapper at the path its clients already import. These tests therefore pin
  * the WRAPPER's contract — every export refuses an unauthenticated caller
  * before the package op is touched, and delegates to it when the gate passes
@@ -29,7 +29,7 @@ const ops = vi.hoisted(() => ({
   resetNeo4jConnection: vi.fn(async () => ({ success: true })),
   testNeo4jConnection: vi.fn(async () => ({ success: true })),
 }))
-vi.mock('@hames/connectors/neo4j/queries', () => ops)
+vi.mock('@hames-ai/connectors/neo4j/queries', () => ops)
 
 const getAuthenticatedUser = vi.fn(async () => ({ id: 'user-a', email: 'a@example.com' }))
 vi.mock('../../../lib/auth/server', () => ({

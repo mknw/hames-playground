@@ -1,5 +1,5 @@
 {
-  "name": "@hames/harness-patterns",
+  "name": "@hames-ai/harness-patterns",
   "version": "0.1.0",
   "description": "Functional, composable framework for agentic tool execution — patterns, event views, the injection guard, and tool transport.",
   "keywords": [

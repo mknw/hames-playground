@@ -24,21 +24,21 @@ const toolSets = {
 }
 toolSets.all = [...toolSets.neo4j, ...toolSets.web, ...toolSets.context7]
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   callTool: mockCallTool({
     responses: { get_neo4j_schema: { nodes: ['Person'], relationships: [] } },
   }),
   listTools: mockListTools(toolSets.all),
 }))
 
-vi.mock('@hames/harness-patterns/tools.server', async (importOriginal) => {
+vi.mock('@hames-ai/harness-patterns/tools.server', async (importOriginal) => {
   // `inferServer` is REAL — the guard resolves namespaces through it, so a
   // stubbed version would make these assertions meaningless.
-  const actual = await importOriginal<typeof import('@hames/harness-patterns/tools.server')>()
+  const actual = await importOriginal<typeof import('@hames-ai/harness-patterns/tools.server')>()
   return { ...actual, Tools: vi.fn(async () => toolSets) }
 })
 
@@ -65,7 +65,7 @@ beforeEach(() => vi.clearAllMocks())
 
 describe('agents that consume untrusted content are guarded', () => {
   it('search: the web route is guarded, the neo4j route is not', async () => {
-    const { searchAgent } = await import('@hames/agents/agents/search.server')
+    const { searchAgent } = await import('@hames-ai/agents/agents/search.server')
     const patterns = (await searchAgent.createPatterns('s', testAgentDeps)) as Pattern[]
 
     // The guard sits INSIDE routes, on the web route only — the chain itself is
@@ -83,7 +83,7 @@ describe('agents that consume untrusted content are guarded', () => {
   })
 
   it('microsoft-365: the graph loop is guarded', async () => {
-    const { microsoft365Agent } = await import('@hames/agents/agents/microsoft-365.server')
+    const { microsoft365Agent } = await import('@hames-ai/agents/agents/microsoft-365.server')
     const patterns = (await microsoft365Agent.createPatterns('s', testAgentDeps)) as Pattern[]
     const guard = guardOf(patterns)
     expect(guard).toBeDefined()
@@ -92,7 +92,7 @@ describe('agents that consume untrusted content are guarded', () => {
   })
 
   it('retriever: routes is guarded, covering web by namespace and the stash by exact name', async () => {
-    const { retrieverAgent } = await import('@hames/agents/agents/retriever-agent.server')
+    const { retrieverAgent } = await import('@hames-ai/agents/agents/retriever-agent.server')
     const patterns = (await retrieverAgent.createPatterns('s', testAgentDeps)) as Pattern[]
     const guard = guardOf(patterns)
     expect(guard).toBeDefined()
@@ -111,7 +111,7 @@ describe('agents that consume untrusted content are guarded', () => {
 
 describe('agents deliberately NOT guarded (yet)', () => {
   it('general: left to the sibling general-agent lane (#206) to wire at its seam', async () => {
-    const { generalAgent } = await import('@hames/agents/agents/general.server')
+    const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
     const patterns = (await generalAgent.createPatterns('s', testAgentDeps)) as Pattern[]
     expect(guardOf(patterns)).toBeUndefined()
   })

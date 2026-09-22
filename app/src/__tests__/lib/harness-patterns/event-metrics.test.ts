@@ -18,10 +18,10 @@ import '../../../lib/inference/config.server'
  */
 import { describe, it, expect, vi } from 'vitest'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   callTool: vi.fn(),
   listTools: vi.fn().mockResolvedValue([]),
 }))
@@ -81,7 +81,7 @@ describe('estimateLlmCostEur (token basis)', () => {
 
 describe('computeEventMetrics', () => {
   it('sums the true bill across a truncated attempt and its retry', async () => {
-    const { computeEventMetrics } = await import('@hames/harness-baml/baml-adapters.server')
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     // Log 1: the truncated call — full input billed, 32k output burned.
     // Log 2: the corrective retry that produced the visible action.
     const collector = fakeCollector([
@@ -124,7 +124,7 @@ describe('computeEventMetrics', () => {
   })
 
   it('sums multiple attempts WITHIN one log (client fallback)', async () => {
-    const { computeEventMetrics } = await import('@hames/harness-baml/baml-adapters.server')
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const collector = fakeCollector([
       {
         calls: [
@@ -143,7 +143,7 @@ describe('computeEventMetrics', () => {
   })
 
   it('omits cost (not zero) when any token-bearing attempt is unpriced', async () => {
-    const { computeEventMetrics } = await import('@hames/harness-baml/baml-adapters.server')
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const collector = fakeCollector([
       { calls: [apiCall('AClientWithNoPricingEntry', { input_tokens: 400, output_tokens: 200 })] },
       { calls: [apiCall('AnthropicSonnet5', { input_tokens: 100, output_tokens: 50 })] },
@@ -157,7 +157,7 @@ describe('computeEventMetrics', () => {
   })
 
   it('prices a self-hosted attempt by its OWN measured duration, not by tokens', async () => {
-    const { computeEventMetrics } = await import('@hames/harness-baml/baml-adapters.server')
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const { DEFAULT_VERDA_EUR_PER_HOUR, TIME_PRICED_CLIENT } = await import('../../../lib/settings')
     const collector = fakeCollector([
       {
@@ -187,7 +187,7 @@ describe('computeEventMetrics', () => {
     // box and retried on Anthropic pays wall-clock for the first attempt and
     // tokens for the second. Pricing the whole step by the run's intended tier
     // would bill one of the two wrong.
-    const { computeEventMetrics } = await import('@hames/harness-baml/baml-adapters.server')
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const { DEFAULT_EUR_PER_USD, DEFAULT_VERDA_EUR_PER_HOUR, TIME_PRICED_CLIENT } =
       await import('../../../lib/settings')
     const collector = fakeCollector([
@@ -218,7 +218,7 @@ describe('computeEventMetrics', () => {
     // pinned the panel, the summary bar and the dashboard all dropping the `≥`
     // for a figure that was 99.9% wall-clock.
     expect(m.timePricedAttempts).toBe(1)
-    const { isTimePricedStep } = await import('@hames/harness-patterns/metrics/aggregate')
+    const { isTimePricedStep } = await import('@hames-ai/harness-patterns/metrics/aggregate')
     expect(isTimePricedStep(m)).toBe(true)
     // Both audit fields survive the mix rather than only the last basis'.
     expect(m.timeRate).toEqual({
@@ -233,7 +233,7 @@ describe('computeEventMetrics', () => {
     // awake either way. Dropping such an attempt rendered a 15-minute cold start
     // plus a 6.3s call as €0.003 — with a `≥` in front of it, which reads as
     // accounted for.
-    const { computeEventMetrics } = await import('@hames/harness-baml/baml-adapters.server')
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const { DEFAULT_VERDA_EUR_PER_HOUR, TIME_PRICED_CLIENT } = await import('../../../lib/settings')
     const collector = fakeCollector([
       {
@@ -270,7 +270,7 @@ describe('computeEventMetrics', () => {
   it('a usage-less time-priced attempt with no duration makes the step unknown', async () => {
     // Counting the attempt must not invent a price for it: a time bill with no
     // time is not a free call, so the whole step reads as cost-unknown.
-    const { computeEventMetrics } = await import('@hames/harness-baml/baml-adapters.server')
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const { TIME_PRICED_CLIENT } = await import('../../../lib/settings')
     const collector = fakeCollector([
       {
@@ -293,7 +293,7 @@ describe('computeEventMetrics', () => {
     // The other half of the gate: the fallback is for the time basis only, so a
     // pre-flight failure on Anthropic still contributes nothing and does not
     // count as an attempt.
-    const { computeEventMetrics } = await import('@hames/harness-baml/baml-adapters.server')
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const collector = fakeCollector([
       {
         calls: [
@@ -308,8 +308,8 @@ describe('computeEventMetrics', () => {
   })
 
   it('a purely token-priced step carries no floor marker at all', async () => {
-    const { computeEventMetrics } = await import('@hames/harness-baml/baml-adapters.server')
-    const { isTimePricedStep } = await import('@hames/harness-patterns/metrics/aggregate')
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { isTimePricedStep } = await import('@hames-ai/harness-patterns/metrics/aggregate')
     const collector = fakeCollector([
       { calls: [apiCall('AnthropicSonnet5', { input_tokens: 100, output_tokens: 50 })] },
     ])
@@ -321,7 +321,7 @@ describe('computeEventMetrics', () => {
   it('omits the whole step cost when a self-hosted attempt was not measured', async () => {
     // A time bill with no time is not a free call, and the step's other attempts
     // cannot stand in for it: the honest reading is unknown.
-    const { computeEventMetrics } = await import('@hames/harness-baml/baml-adapters.server')
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const { TIME_PRICED_CLIENT } = await import('../../../lib/settings')
     const collector = fakeCollector([
       { calls: [apiCall(TIME_PRICED_CLIENT, { input_tokens: 5_000, output_tokens: 100 })] },
@@ -334,7 +334,7 @@ describe('computeEventMetrics', () => {
   })
 
   it('honours the env rates when pricing a step', async () => {
-    const { computeEventMetrics } = await import('@hames/harness-baml/baml-adapters.server')
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const { TIME_PRICED_CLIENT } = await import('../../../lib/settings')
     const saved = process.env.VERDA_EUR_PER_HOUR
     process.env.VERDA_EUR_PER_HOUR = '3.5'
@@ -357,7 +357,7 @@ describe('computeEventMetrics', () => {
   })
 
   it('falls back to Collector usage when a call has no readable response body', async () => {
-    const { computeEventMetrics } = await import('@hames/harness-baml/baml-adapters.server')
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const collector = fakeCollector([
       {
         calls: [
@@ -377,7 +377,7 @@ describe('computeEventMetrics', () => {
   })
 
   it('returns undefined when no attempt produced usage (pre-flight failure)', async () => {
-    const { computeEventMetrics } = await import('@hames/harness-baml/baml-adapters.server')
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     expect(
       computeEventMetrics(
         fakeCollector([{ calls: [{ clientName: 'AnthropicSonnet5' }] }]) as never,
@@ -389,7 +389,7 @@ describe('computeEventMetrics', () => {
 
 describe('createEvent lifts metrics onto the event', () => {
   it('event.metrics mirrors llmCall.metrics; absent when the call has none', async () => {
-    const { createEvent } = await import('@hames/harness-patterns/context.server')
+    const { createEvent } = await import('@hames-ai/harness-patterns/context.server')
     const metrics = {
       inputUncachedTokens: 100,
       inputCacheReadTokens: 5000,

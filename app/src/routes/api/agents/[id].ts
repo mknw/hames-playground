@@ -25,7 +25,7 @@ import {
   runAgentInBackground,
   type ActionTrigger,
 } from '../../../lib/harness-client/action-runner.server'
-import { storeDocument } from '@hames/harness-patterns/stash/document-store.server'
+import { storeDocument } from '@hames-ai/harness-patterns/stash/document-store.server'
 import { guessMimeType } from '../../../lib/stash/upload-service.server'
 import { newSessionId } from '../../../lib/session-id'
 

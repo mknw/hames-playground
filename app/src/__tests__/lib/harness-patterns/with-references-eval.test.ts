@@ -25,17 +25,17 @@ import type {
   SelectorFn,
   ToolResultEventData,
   ConfiguredPattern,
-} from '@hames/harness-patterns/types'
+} from '@hames-ai/harness-patterns/types'
 
 // Mock server-only imports
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
 // Stub the BAML client — these eval tests use custom `selector` configs,
 // so the default selector is never actually called. Mocking it just keeps
 // the import graph happy under vi.
-vi.mock('@hames/harness-baml/baml_client', () => ({
+vi.mock('@hames-ai/harness-baml/baml_client', () => ({
   b: {
     ReferenceSelector: vi.fn(async () => ({ reasoning: 'mocked', selected: [] })),
   },
@@ -108,15 +108,16 @@ describe('withReferences — canonical eval cases', () => {
   beforeEach(async () => {
     vi.clearAllMocks()
     const { __clearReferenceCache } =
-      await import('@hames/harness-patterns/patterns/with-references.server')
+      await import('@hames-ai/harness-patterns/patterns/with-references.server')
     __clearReferenceCache()
   })
 
   it('postgres-18 (must select): "add this info to the graph" after web-search', async () => {
     const { withReferences } =
-      await import('@hames/harness-patterns/patterns/with-references.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+      await import('@hames-ai/harness-patterns/patterns/with-references.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const ctx = createContext<Record<string, unknown>>('add this info to the graph')
     ctx.events.push(userMessageEvent('search the web for postgres 18 release info', 1))
@@ -167,9 +168,10 @@ describe('withReferences — canonical eval cases', () => {
 
   it('conversational-unrelated: "thanks!" yields empty selection', async () => {
     const { withReferences } =
-      await import('@hames/harness-patterns/patterns/with-references.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+      await import('@hames-ai/harness-patterns/patterns/with-references.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const ctx = createContext<Record<string, unknown>>('thanks!')
     ctx.events.push(
@@ -226,9 +228,10 @@ describe('withReferences — canonical eval cases', () => {
 
   it('multiple-relevant: "summarize what we found" selects all 3 within budget', async () => {
     const { withReferences } =
-      await import('@hames/harness-patterns/patterns/with-references.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+      await import('@hames-ai/harness-patterns/patterns/with-references.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const ctx = createContext<Record<string, unknown>>('summarize what we found')
     ctx.events.push(
@@ -290,9 +293,10 @@ describe('withReferences — canonical eval cases', () => {
 
   it('scope=self: only own-pattern refs reach the selector regardless of relevance', async () => {
     const { withReferences } =
-      await import('@hames/harness-patterns/patterns/with-references.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+      await import('@hames-ai/harness-patterns/patterns/with-references.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const ctx = createContext<Record<string, unknown>>('list all Person nodes')
     ctx.events.push(
@@ -359,9 +363,10 @@ describe('withReferences — canonical eval cases', () => {
 
   it('stale-on-topic: prefers more-recent items when relevance is similar', async () => {
     const { withReferences } =
-      await import('@hames/harness-patterns/patterns/with-references.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+      await import('@hames-ai/harness-patterns/patterns/with-references.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const now = Date.now()
     const ctx = createContext<Record<string, unknown>>('list all Person nodes')

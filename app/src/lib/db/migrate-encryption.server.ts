@@ -41,7 +41,7 @@
  * deadlock the pool on itself. `client.server.ts` hands in a direct
  * `pool.query` binding.
  */
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   DATA_KEY_ENV,
   DataDecryptionError,

@@ -21,7 +21,7 @@
  * Faked at three seams, so no Docker and no Redis: `docker-backend.server`
  * (a fake backend whose every container carries its own in-memory filesystem — that
  * per-container isolation is what makes the cross-flavour bug reproducible),
- * the @hames/sandbox WORKSPACE STORE (one stored document, registered through
+ * the @hames-ai/sandbox WORKSPACE STORE (one stored document, registered through
  * `configureWorkspaceStore` the way the app's boot hook registers the real one
  * — since the extraction the package takes the store as a supplier rather than
  * importing the app's module), and BAML (a scripted router + actor + critic).
@@ -30,7 +30,7 @@
  * and `actorCritic` — is the real code.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import type { AgentDeps } from '@hames/agents'
+import type { AgentDeps } from '@hames-ai/agents'
 
 /**
  * The REAL `withSandbox` — this test drives the real sandbox path (fake
@@ -45,7 +45,7 @@ import type { AgentDeps } from '@hames/agents'
  * import would keep wrapping the stale one across tests.
  */
 async function realSandboxDeps(): Promise<AgentDeps> {
-  const sandbox = await import('@hames/sandbox')
+  const sandbox = await import('@hames-ai/sandbox')
   await installWorkspaceStore()
   return {
     toolNamespaces: () => undefined,
@@ -54,7 +54,7 @@ async function realSandboxDeps(): Promise<AgentDeps> {
 }
 import { mockAction, mockCriticResult } from '../../../mocks/baml'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -145,7 +145,7 @@ const vms: Array<{ id: string; rootfs: string; fs: FakeVmFs }> = []
 
 const backendMock = vi.hoisted(() => ({ nextId: 0 }))
 
-vi.mock('@hames/sandbox/docker-backend.server', () => {
+vi.mock('@hames-ai/sandbox/docker-backend.server', () => {
   class FakeDockerBackend {
     kind = 'docker' as const
 
@@ -236,7 +236,7 @@ const docs = vi.hoisted(() => ({
  * `hydrateWorkspace`'s named refusal exists to make loud.
  */
 async function installWorkspaceStore(): Promise<void> {
-  const { configureWorkspaceStore } = await import('@hames/sandbox/workspace-store')
+  const { configureWorkspaceStore } = await import('@hames-ai/sandbox/workspace-store')
   configureWorkspaceStore({
     list: async () =>
       docs.store.map((d, i) => ({
@@ -265,7 +265,7 @@ const listWorkIn = mockAction({
   is_final: true,
 })
 
-vi.mock('@hames/harness-baml/baml_client', () => ({
+vi.mock('@hames-ai/harness-baml/baml_client', () => ({
   b: {
     Router: vi.fn(async () => ({
       intent: 'inspect the workspace',
@@ -318,14 +318,15 @@ describe('flavoured-sandbox — one session workspace across flavours (#243 foll
   })
 
   afterEach(async () => {
-    const { __resetSandboxDefaultsForTests } = await import('@hames/sandbox/with-sandbox.server')
+    const { __resetSandboxDefaultsForTests } = await import('@hames-ai/sandbox/with-sandbox.server')
     __resetSandboxDefaultsForTests()
     vi.resetModules()
   })
 
   it('sees an ingested file on turn 2 after the router switches flavour (data → basic)', async () => {
-    const { flavouredSandboxAgent } = await import('@hames/agents/agents/flavoured-sandbox.server')
-    const { harness, continueSession } = await import('@hames/harness-patterns')
+    const { flavouredSandboxAgent } =
+      await import('@hames-ai/agents/agents/flavoured-sandbox.server')
+    const { harness, continueSession } = await import('@hames-ai/harness-patterns')
     const patterns = await flavouredSandboxAgent.createPatterns('sess-243', await realSandboxDeps())
 
     // Turn 1 — routed to `data`, where the ingested file is hydrated.
@@ -362,8 +363,9 @@ describe('flavoured-sandbox — one session workspace across flavours (#243 foll
     docs.store = []
     routerRoutes.queue = ['basic']
 
-    const { flavouredSandboxAgent } = await import('@hames/agents/agents/flavoured-sandbox.server')
-    const { harness } = await import('@hames/harness-patterns')
+    const { flavouredSandboxAgent } =
+      await import('@hames-ai/agents/agents/flavoured-sandbox.server')
+    const { harness } = await import('@hames-ai/harness-patterns')
     const patterns = await flavouredSandboxAgent.createPatterns('sess-243', await realSandboxDeps())
 
     const turn = await harness(...patterns)('list the files in /work/in', 'sess-243')

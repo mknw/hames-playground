@@ -11,14 +11,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { AgentConfig } from '../../../lib/harness-client/registry.server'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
 
 const harnessHasRedisRetriever = vi.fn(() => false)
 const harnessUsesSyncWorkspace = vi.fn(() => false)
-vi.mock('@hames/harness-patterns', () => ({
+vi.mock('@hames-ai/harness-patterns', () => ({
   harnessHasRedisRetriever,
   harnessUsesSyncWorkspace,
 }))
@@ -44,22 +44,22 @@ function stubAgent(id: string): AgentConfig {
     createPatterns: async () => [],
   }
 }
-vi.mock('@hames/agents/agents/search.server', () => ({
+vi.mock('@hames-ai/agents/agents/search.server', () => ({
   searchAgent: stubAgent('search'),
 }))
-vi.mock('@hames/agents/agents/general.server', () => ({
+vi.mock('@hames-ai/agents/agents/general.server', () => ({
   generalAgent: stubAgent('general'),
 }))
-vi.mock('@hames/agents/agents/sandbox-session.server', () => ({
+vi.mock('@hames-ai/agents/agents/sandbox-session.server', () => ({
   sandboxSessionAgent: stubAgent('sandbox-session'),
 }))
-vi.mock('@hames/agents/agents/flavoured-sandbox.server', () => ({
+vi.mock('@hames-ai/agents/agents/flavoured-sandbox.server', () => ({
   flavouredSandboxAgent: stubAgent('flavoured-sandbox'),
 }))
-vi.mock('@hames/agents/agents/retriever-agent.server', () => ({
+vi.mock('@hames-ai/agents/agents/retriever-agent.server', () => ({
   retrieverAgent: stubAgent('retriever'),
 }))
-vi.mock('@hames/agents/agents/microsoft-365.server', () => ({
+vi.mock('@hames-ai/agents/agents/microsoft-365.server', () => ({
   microsoft365Agent: stubAgent('microsoft-365'),
 }))
 

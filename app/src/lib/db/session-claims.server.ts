@@ -21,7 +21,7 @@
  * `lib/stash/ownership.server.ts` for how the two are combined.
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { query } from './client.server'
 
 assertServerOnImport()

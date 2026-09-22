@@ -5,7 +5,7 @@
  *
  * The defect: the guard's efficacy hangs on `registerToolNamespaces(mcpNamespace)`
  * — a process-level registration that ships in a THIRD package
- * (`@hames/connectors`). A consumer of `@hames/agents` + `@hames/harness-patterns`
+ * (`@hames-ai/connectors`). A consumer of `@hames-ai/agents` + `@hames-ai/harness-patterns`
  * who never installs/registers it gets a guard that is present, reports green,
  * emits one deduped console warning, and neutralizes nothing. Since #242 item 4
  * the guard REFUSES that configuration at construction instead — these tests
@@ -14,7 +14,7 @@
  *
  * The consumer here declares its own tool→namespace map through the REAL seam
  * (`registerToolNamespaces` — a consumer writes their own resolver; the
- * deployment catalog in `@hames/connectors` is one such map, not the only
+ * deployment catalog in `@hames-ai/connectors` is one such map, not the only
  * shape). What is pinned is the registration, not the catalog's contents.
  *
  * Verified by mutation (SD-2): with the refusal call in
@@ -26,7 +26,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import type { ActiveInjectionGuard } from '../injection-guard'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 

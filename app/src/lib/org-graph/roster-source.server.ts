@@ -28,8 +28,8 @@
  * of function that must not be browser-reachable.
  */
 import neo4j from 'neo4j-driver'
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import { getNeo4jDriver } from '@hames/connectors/neo4j/client'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import { getNeo4jDriver } from '@hames-ai/connectors/neo4j/client'
 
 assertServerOnImport()
 

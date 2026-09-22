@@ -13,7 +13,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { testAgentDeps } from './test-deps'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
   ServerOnlyError: class ServerOnlyError extends Error {},
@@ -63,7 +63,7 @@ const injectionGuard = vi.fn((config: unknown) => <T extends object>(pattern: T)
   guardConfig: config,
 }))
 
-vi.mock('@hames/harness-patterns', () => ({
+vi.mock('@hames-ai/harness-patterns', () => ({
   simpleLoop: (c: unknown, t: string[], cfg: unknown) => simpleLoop(c, t, cfg),
   compactExecution: (config: unknown) => ({
     name: 'compactExecution',
@@ -76,14 +76,17 @@ vi.mock('@hames/harness-patterns', () => ({
 
 // Lane A6: the adapter factories moved to `harness-baml` — the fake records
 // the factory args so the tests below can inspect them.
-vi.mock('@hames/harness-baml', () => ({
+vi.mock('@hames-ai/harness-baml', () => ({
   createLoopControllerAdapter: (...args: unknown[]) => ({ adapterArgs: args }),
   // The compactExecution's synthesize is REQUIRED config now — the agent wires
   // it from `bamlPatterns()` at the composition root; a stub suffices here.
   bamlPatterns: () => ({ synthesize: async () => ({ value: '' }) }),
 }))
 
-import { microsoft365Agent, MICROSOFT_365_TOOLS } from '@hames/agents/agents/microsoft-365.server'
+import {
+  microsoft365Agent,
+  MICROSOFT_365_TOOLS,
+} from '@hames-ai/agents/agents/microsoft-365.server'
 import { appToolNamespace, hasAppTool } from '../../../../lib/app-tools/index.server'
 
 /** The last `simpleLoop(controller, tools, config)` call the agent made. */

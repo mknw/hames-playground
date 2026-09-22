@@ -71,9 +71,9 @@ it lands:
 
 ## Where to go next
 
-- [`@hames/agents` README](../../packages/agents/README.md) — the injected / imported /
+- [`@hames-ai/agents` README](../../packages/agents/README.md) — the injected / imported /
   overlaid table, which is the seam this page will illustrate.
-- [`@hames/connectors` README](../../packages/connectors/README.md) — the other
+- [`@hames-ai/connectors` README](../../packages/connectors/README.md) — the other
   explicit-config-only seam and its injected suppliers.
-- [`@hames/harness-patterns` GUIDE](../../packages/harness-patterns/GUIDE.md) — the
+- [`@hames-ai/harness-patterns` GUIDE](../../packages/harness-patterns/GUIDE.md) — the
   composition model underneath all of it.

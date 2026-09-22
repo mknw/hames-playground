@@ -31,7 +31,7 @@
  * library can be extracted as a standalone npm package without UI deps.
  */
 import { createSignal } from 'solid-js'
-import type { ContextEvent } from '@hames/harness-patterns'
+import type { ContextEvent } from '@hames-ai/harness-patterns'
 
 export interface ChainProgressSnapshot {
   currentTurn: number

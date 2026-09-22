@@ -75,12 +75,12 @@ function extractFences(): Fence[] {
   return fences
 }
 
-/** Resolve `@hames/harness-patterns` subpaths onto the package's source files,
+/** Resolve `@hames-ai/harness-patterns` subpaths onto the package's source files,
  *  mirroring the exports map (`.` → index.ts; `./patterns`; `./guard`; `./*`). */
 function resolvePackageModule(specifier: string): string | undefined {
-  if (specifier === '@hames/harness-patterns') return path.join(PKG_ROOT, 'index.ts')
-  if (!specifier.startsWith('@hames/harness-patterns/')) return undefined
-  const rest = specifier.slice('@hames/harness-patterns/'.length)
+  if (specifier === '@hames-ai/harness-patterns') return path.join(PKG_ROOT, 'index.ts')
+  if (!specifier.startsWith('@hames-ai/harness-patterns/')) return undefined
+  const rest = specifier.slice('@hames-ai/harness-patterns/'.length)
   const candidates = [path.join(PKG_ROOT, rest, 'index.ts'), path.join(PKG_ROOT, `${rest}.ts`)]
   return candidates.find((c) => exists(c))
 }

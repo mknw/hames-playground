@@ -19,8 +19,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, fireEvent } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
-import type { ContextEvent, LLMCallData } from '@hames/harness-patterns'
-import type { EventMetrics } from '@hames/harness-patterns/types'
+import type { ContextEvent, LLMCallData } from '@hames-ai/harness-patterns'
+import type { EventMetrics } from '@hames-ai/harness-patterns/types'
 
 const { ObservabilityPanel } = await import('../../../components/ark-ui/ObservabilityPanel')
 

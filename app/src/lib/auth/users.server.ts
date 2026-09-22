@@ -16,7 +16,7 @@
  * it, and `tid` because a tenant id identifies the organisation, not a person.
  * Nothing queries this table by email, so encrypting it costs no lookup.
  */
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { query } from '../db/client.server'
 import {
   decryptField,

@@ -7,7 +7,7 @@
  * since the baseline.
  *
  * The store used to be a `vi.mock` of the app's `document-store.server`. At the
- * @hames/sandbox extraction it became an injected supplier
+ * @hames-ai/sandbox extraction it became an injected supplier
  * (`configureWorkspaceStore`), so the double is now registered rather than
  * mocked — which is a stronger test of the same behaviour: it exercises the
  * seam a real host goes through instead of module-graph interception.
@@ -16,12 +16,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createHash } from 'node:crypto'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
 import type { McpTransport } from '../types'
-import type { ToolCallResult } from '@hames/harness-patterns/types'
+import type { ToolCallResult } from '@hames-ai/harness-patterns/types'
 import {
   configureWorkspaceStore,
   WorkspaceStoreNotConfiguredError,

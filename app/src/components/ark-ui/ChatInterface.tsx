@@ -42,7 +42,7 @@ import {
 import { getSettings } from '~/lib/settings-store'
 import { applyApprovalResult, runTurn, type TurnSink } from '~/lib/turn-stream'
 import type { GraphElement } from './SupportPanel'
-import type { UnifiedContext } from '@hames/harness-patterns'
+import type { UnifiedContext } from '@hames-ai/harness-patterns'
 import {
   capReachedMessage,
   isAtConcurrencyCap,

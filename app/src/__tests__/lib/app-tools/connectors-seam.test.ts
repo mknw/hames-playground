@@ -18,7 +18,7 @@
 
 import { describe, it, expect, vi } from 'vitest'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
   ServerOnlyError: class ServerOnlyError extends Error {},
@@ -64,7 +64,7 @@ describe('the connectors seam: one registry, composed once (PR-C2)', () => {
 
     // …and through core's dispatch (the transport), which must find them
     // IN-PROCESS rather than falling through to the gateway.
-    const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
+    const { callTool } = await import('@hames-ai/harness-patterns/mcp-client.server')
     const res = await callTool('graph_me', {})
     expect(res.success).toBe(true)
     expect((res.data as { userPrincipalName: string }).userPrincipalName).toBe('oid-1')
@@ -82,7 +82,7 @@ describe('the connectors seam: one registry, composed once (PR-C2)', () => {
       execute: async () => 'sentinel-ok',
     })
 
-    const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
+    const { callTool } = await import('@hames-ai/harness-patterns/mcp-client.server')
     const res = await callTool('seam_sentinel', {})
     expect(res.success).toBe(true)
     expect(res.data).toBe('sentinel-ok')
@@ -90,7 +90,7 @@ describe('the connectors seam: one registry, composed once (PR-C2)', () => {
 
   it('the composition composes the PACKAGE factories (not local copies)', async () => {
     // The barrel imports `createAppToolRegistry` / `registerGraphConnector`
-    // `Tools` from @hames/connectors — asserted mechanically so a future edit
+    // `Tools` from @hames-ai/connectors — asserted mechanically so a future edit
     // that re-points one of them at a local copy (the quiet way to fork the
     // registry) reddens here rather than passing by accident.
     const { readFileSync } = await import('node:fs')
@@ -99,9 +99,9 @@ describe('the connectors seam: one registry, composed once (PR-C2)', () => {
       path.resolve(process.cwd(), 'src/lib/app-tools/index.server.ts'),
       'utf8',
     )
-    expect(source).toContain("from '@hames/connectors/app-tools/registry'")
-    expect(source).toContain("from '@hames/connectors/graph/graph-tools.server'")
-    expect(source).toContain("from '@hames/connectors/mcp-catalog'")
+    expect(source).toContain("from '@hames-ai/connectors/app-tools/registry'")
+    expect(source).toContain("from '@hames-ai/connectors/graph/graph-tools.server'")
+    expect(source).toContain("from '@hames-ai/connectors/mcp-catalog'")
     // And the dual-instance shape itself: exactly ONE createAppToolRegistry
     // call and exactly ONE registerGraphConnectorTools call in the composition.
     expect(source.match(/createAppToolRegistry\(/g)).toHaveLength(1)

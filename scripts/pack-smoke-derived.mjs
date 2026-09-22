@@ -1,14 +1,14 @@
 /**
  * The pack smoke's derived entry check. COPIED into each scratch project by
  * scripts/pack-smoke.sh and imported by that project's probe — never imported
- * from the repo, because a dynamic `import('@hames/…')` resolves relative to
+ * from the repo, because a dynamic `import('@hames-ai/…')` resolves relative to
  * the file doing the importing, and from inside the repo that is the workspace
  * symlink, which is the one resolution this whole smoke exists to rule out.
  *
  * It replaces the probe's hand-typed `appEntries` array and its
  * "every explicit export target exists" loop with two DERIVED sets:
  *
- *   appImported — every `@hames/<pkg>/…` subpath the app names, from one scan
+ *   appImported — every `@hames-ai/<pkg>/…` subpath the app names, from one scan
  *                 of app/ (scripts/pack-smoke-entries.mjs `scan-app`).
  *   declared    — the INSTALLED manifest's `exports` map, with each `*` pattern
  *                 expanded against the files the TARBALL actually contains.

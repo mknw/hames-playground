@@ -17,7 +17,7 @@
  */
 
 import { Collector } from '@boundaryml/baml'
-import type { Attempt, ToolDescription } from '@hames/harness-baml/baml_client/types'
+import type { Attempt, ToolDescription } from '@hames-ai/harness-baml/baml_client/types'
 import { check, type Check, type Scenario } from '../harness'
 
 const TOOLS: ToolDescription[] = [
@@ -71,7 +71,7 @@ export const criticAcceptScenario: Scenario = {
   title: 'actorCritic — critic accepts a sufficient attempt',
   what: 'an attempt that answers the intent is passed, so the pattern is not an expensive simpleLoop',
   run: async (ctx) => {
-    const { b } = await import('@hames/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
     const collector = new Collector('eval-critic-accept')
     const result = await b.Critic(INTENT, [GOOD_ATTEMPT], ctx.opts('critic', collector))
     return {
@@ -98,7 +98,7 @@ export const criticRejectAndReviseScenario: Scenario = {
   title: 'actorCritic — critic rejects, actor revises',
   what: 'a wrong-but-successful attempt is rejected, and the rejection reaches the actor as feedback that changes the next proposal (SA-C1)',
   run: async (ctx) => {
-    const { b } = await import('@hames/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
     const checks: Check[] = []
     const collectors: Collector[] = []
 

@@ -1,5 +1,5 @@
 /**
- * `@hames/sandbox` — server-only barrel + backend selection.
+ * `@hames-ai/sandbox` — server-only barrel + backend selection.
  *
  * `withSandbox` and the (future) sandbox manager import `getComputeBackend()`
  * here rather than constructing a backend directly, so substrate choice stays
@@ -16,10 +16,10 @@
  * consumers that must not drag it in, and both are free of `node:` imports and
  * of the server assertion:
  *
- *   - `@hames/sandbox/types` — the compute types plus `SANDBOX_TOOL_PREFIX`
+ *   - `@hames-ai/sandbox/types` — the compute types plus `SANDBOX_TOOL_PREFIX`
  *     and `V0_IN_VM_SERVERS`. This is what a browser component imports (the
  *     app's `TerminalPanel` does).
- *   - `@hames/sandbox/settings` — `SandboxSettings` + `DEFAULT_SANDBOX_SETTINGS`,
+ *   - `@hames-ai/sandbox/settings` — `SandboxSettings` + `DEFAULT_SANDBOX_SETTINGS`,
  *     imported by the app's own client-safe settings module.
  *
  * Two more are host-facing and server-side: `./workspace-store` (the durable
@@ -28,7 +28,7 @@
  * harness surface and would otherwise put node-pty in every consumer's graph).
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { DockerBackend } from './docker-backend.server'
 import type { ComputeBackend } from './types'
 

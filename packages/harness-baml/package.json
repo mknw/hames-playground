@@ -1,7 +1,7 @@
 {
-  "name": "@hames/harness-baml",
+  "name": "@hames-ai/harness-baml",
   "version": "0.1.0",
-  "description": "The BAML companion for @hames/harness-patterns — the role→client resolution seam, the adapter factories, and a pre-generated baml_client shipped beside its baml_src so a consumer never runs baml-generate.",
+  "description": "The BAML companion for @hames-ai/harness-patterns — the role→client resolution seam, the adapter factories, and a pre-generated baml_client shipped beside its baml_src so a consumer never runs baml-generate.",
   "keywords": [
     "baml",
     "llm",
@@ -58,9 +58,9 @@
     "@boundaryml/baml": "0.224.0"
   },
   "peerDependencies": {
-    "@hames/harness-patterns": "workspace:^"
+    "@hames-ai/harness-patterns": "workspace:^"
   },
   "devDependencies": {
-    "@hames/harness-patterns": "workspace:^"
+    "@hames-ai/harness-patterns": "workspace:^"
   }
 }

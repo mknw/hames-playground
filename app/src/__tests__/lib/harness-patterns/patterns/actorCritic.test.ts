@@ -3,11 +3,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { mockAction, mockFinalAction, mockCriticResult, mockBAMLClient } from '../../../mocks/baml'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
-import type { CriticFnWithLLMData } from '@hames/harness-baml/baml-adapters.server'
-import type { ActorFn, ActorInput } from '@hames/harness-patterns/types'
+import type { CriticFnWithLLMData } from '@hames-ai/harness-baml/baml-adapters.server'
+import type { ActorFn, ActorInput } from '@hames-ai/harness-patterns/types'
 
 /**
  * #374: a pattern run needs a run frame, and these tests drive patterns
@@ -19,7 +19,7 @@ import type { ActorFn, ActorInput } from '@hames/harness-patterns/types'
 const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 // Mock server-only imports
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -33,13 +33,13 @@ const callToolMock = mockCallTool({
 
 const listToolsMock = mockListTools(['code-mode', 'Return'])
 
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   callTool: callToolMock,
   listTools: listToolsMock,
 }))
 
 // Mock BAML client
-vi.mock('@hames/harness-baml/baml_client', () => ({
+vi.mock('@hames-ai/harness-baml/baml_client', () => ({
   b: mockBAMLClient({
     actorActions: [
       mockAction({ tool_name: 'code-mode', tool_args: '{"script":"console.log(1)"}' }),
@@ -55,15 +55,15 @@ describe('actorCritic', () => {
   })
 
   it('should export actorCritic function', async () => {
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
     expect(actorCritic).toBeDefined()
     expect(typeof actorCritic).toBe('function')
   })
 
   it('should create a ConfiguredPattern with name and config', async () => {
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
     const { createActorControllerAdapter, createCriticAdapter } =
-      await import('@hames/harness-baml/baml-adapters.server')
+      await import('@hames-ai/harness-baml/baml-adapters.server')
 
     const actor = createActorControllerAdapter(['code-mode', 'Return'])
     const critic = createCriticAdapter()
@@ -81,10 +81,10 @@ describe('actorCritic', () => {
   // `DEFAULT_SETTINGS`, and is read here through the pattern rather than
   // restated as a literal (#269).
   it('should take its default maxRetries from the request settings', async () => {
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
     const { DEFAULT_SETTINGS } = await import('../../../../lib/settings')
     const { createActorControllerAdapter, createCriticAdapter } =
-      await import('@hames/harness-baml/baml-adapters.server')
+      await import('@hames-ai/harness-baml/baml-adapters.server')
 
     const actor = createActorControllerAdapter(['Return'])
     const critic = createCriticAdapter()
@@ -96,9 +96,9 @@ describe('actorCritic', () => {
   })
 
   it('should handle custom maxRetries config', async () => {
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
     const { createActorControllerAdapter, createCriticAdapter } =
-      await import('@hames/harness-baml/baml-adapters.server')
+      await import('@hames-ai/harness-baml/baml-adapters.server')
 
     const actor = createActorControllerAdapter(['Return'])
     const critic = createCriticAdapter()
@@ -129,9 +129,9 @@ describe('actorCritic execution', () => {
     // content quotes were escaped one level instead of two. Shape-for-shape
     // repro; the 19 KB original is pinned in
     // json-repair-unescaped-content.test.ts.
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     const mockActor = vi.fn().mockResolvedValue({
       action: mockAction({
@@ -174,9 +174,9 @@ describe('actorCritic execution', () => {
   it('pins the repaired marker to the right sub-call when a batch member is precheck-declined', async () => {
     // Review F1, actorCritic half — the pattern the incident actually ran on.
     // See the simpleLoop twin for the desync this catches.
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     const mockActor = vi.fn().mockResolvedValue({
       action: mockAction({
@@ -223,9 +223,9 @@ describe('actorCritic execution', () => {
   })
 
   it('should track controller_action and critic_result events', async () => {
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     // Create mock actor and critic
     const mockActor = vi.fn().mockResolvedValue({
@@ -272,9 +272,9 @@ describe('actorCritic execution', () => {
   })
 
   it('should retry when tool is not allowed', async () => {
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     const mockActor = vi
       .fn()
@@ -323,9 +323,9 @@ describe('actorCritic execution', () => {
   })
 
   it('should retry when tool_args JSON is invalid', async () => {
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     const mockActor = vi
       .fn()
@@ -374,9 +374,9 @@ describe('actorCritic execution', () => {
   })
 
   it('should retry when tool execution fails', async () => {
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     // First call fails, second succeeds
     callToolMock
@@ -423,9 +423,9 @@ describe('actorCritic execution', () => {
   })
 
   it('should retry when critic says not sufficient', async () => {
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     callToolMock.mockResolvedValue({ success: true, data: { result: 'ok' } })
 
@@ -481,9 +481,9 @@ describe('actorCritic execution', () => {
   })
 
   it('should track error when max retries exceeded', async () => {
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     callToolMock.mockResolvedValue({ success: true, data: { result: 'ok' } })
 
@@ -533,9 +533,9 @@ describe('actorCritic execution', () => {
   })
 
   it('should handle actor errors gracefully', async () => {
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     const mockActor = vi.fn().mockRejectedValue(new Error('Actor crashed'))
 
@@ -586,9 +586,9 @@ describe('actorCritic criticCadence', () => {
     mockCritic: CriticFnWithLLMData,
     config: Record<string, unknown>,
   ) {
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     const pattern = actorCritic(mockActor, mockCritic, ['code-mode'], {
       patternId: 'cadence',
@@ -769,9 +769,9 @@ describe('actorCritic critic feedback reaches the next attempt', () => {
     critic: CriticFnWithLLMData,
     config: Record<string, unknown> = {},
   ) {
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     const pattern = actorCritic(actor, critic, ['code-mode'], {
       patternId: 'feedback',

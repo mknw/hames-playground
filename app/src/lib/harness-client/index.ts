@@ -34,7 +34,7 @@ export {
 // Use: import { getAgentMetadata } from '~/lib/harness-client/registry.server'
 export type { AgentConfig } from './registry.server'
 
-// Graph Extraction (client-safe) — moved to @hames/agents (#225 PR-2);
+// Graph Extraction (client-safe) — moved to @hames-ai/agents (#225 PR-2);
 // re-exported here so client components keep one import site.
 export {
   extractGraphElements,
@@ -48,4 +48,4 @@ export {
   type OpenReferenceTarget,
   type ReplayedMessage,
   type GraphElement,
-} from '@hames/agents'
+} from '@hames-ai/agents'

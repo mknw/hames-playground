@@ -1,6 +1,6 @@
 # hames — developer guide
 
-How to build a harness out of `@hames/harness-patterns`: the composition model,
+How to build a harness out of `@hames-ai/harness-patterns`: the composition model,
 how to write your own pattern, the tool-transport seam, what the error surface
 guarantees, and how to consume the package. For the complete per-pattern
 reference — signatures, configuration, semantics — read
@@ -12,7 +12,7 @@ extracts each snippet from this file and compiles it against the package's real
 exports (`guide-docs-pins.test.ts`), so a sample that drifts from the exported
 surface fails CI instead of rotting quietly.
 
-Every snippet imports only from `@hames/harness-patterns` — the package ships
+Every snippet imports only from `@hames-ai/harness-patterns` — the package ships
 TypeScript source and no build step; any bundler or runner that carries TS
 (Vite, vinxi, tsx) runs it as-is.
 
@@ -30,8 +30,8 @@ store, no second state machine.
 Patterns are values of one shape:
 
 ```typescript
-import { configurePattern } from '@hames/harness-patterns'
-import type { ConfiguredPattern, ScopedPattern, PatternScope } from '@hames/harness-patterns'
+import { configurePattern } from '@hames-ai/harness-patterns'
+import type { ConfiguredPattern, ScopedPattern, PatternScope } from '@hames-ai/harness-patterns'
 
 const myPattern: ScopedPattern<Record<string, unknown>> = async (scope, view) => {
   // read the log through `view`, append events through `scope.events`
@@ -98,8 +98,8 @@ next turn of a conversation.
 A leaf pattern is the type above plus events. Concretely:
 
 ```typescript
-import { trackEvent, harness, configurePattern } from '@hames/harness-patterns'
-import type { PatternScope, EventView } from '@hames/harness-patterns'
+import { trackEvent, harness, configurePattern } from '@hames-ai/harness-patterns'
+import type { PatternScope, EventView } from '@hames-ai/harness-patterns'
 
 async function announce(scope: PatternScope, view: EventView): Promise<PatternScope> {
   const turns = view.ofType('user_message').get().length
@@ -137,8 +137,8 @@ in-tree wrappers, of which `patterns/with-references.server.ts` is the
 reference:
 
 ```typescript
-import { createScope, createEvent } from '@hames/harness-patterns'
-import type { ConfiguredPattern, PatternScope, EventView } from '@hames/harness-patterns'
+import { createScope, createEvent } from '@hames-ai/harness-patterns'
+import type { ConfiguredPattern, PatternScope, EventView } from '@hames-ai/harness-patterns'
 
 function wrapChild(child: ConfiguredPattern<Record<string, unknown>>) {
   return async (scope: PatternScope, view: EventView): Promise<PatternScope> => {
@@ -191,8 +191,8 @@ A **transport** is anything that owns some tool names and can run them. The
 seam has four members and no rank:
 
 ```typescript
-import { registerTransport, amendRunFrame, activeTransports } from '@hames/harness-patterns'
-import type { ToolTransport } from '@hames/harness-patterns'
+import { registerTransport, amendRunFrame, activeTransports } from '@hames-ai/harness-patterns'
+import type { ToolTransport } from '@hames-ai/harness-patterns'
 
 const myBackend = {
   run: async (name: string, args: Record<string, unknown>) => ({
@@ -243,9 +243,9 @@ Two properties are the design, not accidents:
 everything):
 
 ```typescript
-import { Tools, simpleLoop, harness } from '@hames/harness-patterns'
-import type { ControllerFn, SimpleLoopData } from '@hames/harness-patterns'
-import type { HarnessData } from '@hames/harness-patterns/harness.server'
+import { Tools, simpleLoop, harness } from '@hames-ai/harness-patterns'
+import type { ControllerFn, SimpleLoopData } from '@hames-ai/harness-patterns'
+import type { HarnessData } from '@hames-ai/harness-patterns/harness.server'
 
 interface WebData extends HarnessData, SimpleLoopData {
   [key: string]: unknown
@@ -312,7 +312,7 @@ stops when one is irrecoverable.
   so a failed call still counts.
 
 ```typescript
-import { LLMCallError } from '@hames/harness-patterns'
+import { LLMCallError } from '@hames-ai/harness-patterns'
 
 function explain(err: unknown): string {
   if (err instanceof LLMCallError) {
@@ -331,8 +331,8 @@ messages onto your own UI copy rather than matching exception text.
 
 ## 5. Consuming the package
 
-`@hames/harness-patterns` is a workspace package: the app (or any member of the
-same pnpm workspace) declares `"@hames/harness-patterns": "workspace:*"` and
+`@hames-ai/harness-patterns` is a workspace package: the app (or any member of the
+same pnpm workspace) declares `"@hames-ai/harness-patterns": "workspace:*"` and
 pnpm resolves it to the live TypeScript source — editing a file in the package
 is indistinguishable from editing app code; HMR picks it up with no build step
 and no publish loop.
@@ -344,7 +344,7 @@ The exports map:
 | `.`          | the barrel: patterns, combinators, the context/context-event API, `Tools()`, transports, `LLMCallError` |
 | `./patterns` | the pattern factories on their own (`router`, `simpleLoop`, `actorCritic`, …)                           |
 | `./guard`    | the injection guard's deterministic sanitizer, import-free on its own                                   |
-| `./*`        | any package file by path (deep imports, e.g. `@hames/harness-patterns/tool-transport.server`)           |
+| `./*`        | any package file by path (deep imports, e.g. `@hames-ai/harness-patterns/tool-transport.server`)           |
 
 The package publishes to npm (`pnpm publish`, which rewrites `workspace:`
 specifiers at pack time); inside this workspace the app and the Docker image

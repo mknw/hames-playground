@@ -263,7 +263,7 @@ describe('the dev-only inference redirect cannot be enabled in production', () =
     expect(ENTRY_CLOSURE).toContain('src/lib/inference/dev-fake-inference.server.ts')
     expect(ENTRY_CLOSURE).toContain('src/lib/metrics/usage-recorder.server.ts')
     // The harness-baml landmark was removed by the extraction (PR-1b):
-    // clients.server.ts now lives in @hames/harness-baml and resolveLocal()
+    // clients.server.ts now lives in @hames-ai/harness-baml and resolveLocal()
     // stops at package specifiers by policy — a package's own graph is nitro's
     // problem. The Collector-acquiring modules moved with it; the closure
     // still walks every app-side module on the path TO the package edges.
@@ -272,7 +272,7 @@ describe('the dev-only inference redirect cannot be enabled in production', () =
     // effect drags the Graph auth stack, doc-convert and the stash behind it.
     // If that subtree ever acquires a module-scope `Collector` the assertion
     // below is what catches it, so the edge is named here to keep it walked.
-    // The graph.server.ts landmark moved into @hames/connectors (PR-C2) and
+    // The graph.server.ts landmark moved into @hames-ai/connectors (PR-C2) and
     // the walk stops at package specifiers by policy — same story as the
     // harness-baml landmark above; the Graph auth stack the barrel drags in
     // is the deepest app-side module on that path now.

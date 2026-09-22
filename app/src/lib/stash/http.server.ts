@@ -12,7 +12,7 @@
  * surfaces cannot disagree about who a session belongs to.
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { getAuthenticatedUser } from '../auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
 import { claimSessionOwnership, userOwnsSession } from './ownership.server'

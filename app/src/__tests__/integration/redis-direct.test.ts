@@ -12,13 +12,13 @@
 
 import { describe, it, expect, afterAll, vi } from 'vitest'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
 
 import { directCallTool, getRedis, closeRedisDirect } from '../../lib/redis-direct.server'
-import { createVectorStore } from '@hames/harness-patterns/stash/vector-store.server'
+import { createVectorStore } from '@hames-ai/harness-patterns/stash/vector-store.server'
 
 const RUN = process.env.REDIS_DIRECT_IT === '1'
 

@@ -29,7 +29,7 @@ import {
   WIPE_CONFIRMATION,
 } from '../schema.server'
 import { CONSTRAINT_NAMES } from '../ontology'
-import { configureNeo4j, resetDriver } from '@hames/connectors/neo4j/client'
+import { configureNeo4j, resetDriver } from '@hames-ai/connectors/neo4j/client'
 import { getEndpoints } from '../../config/endpoints'
 
 async function report(stage: string): Promise<void> {

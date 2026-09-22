@@ -4,7 +4,7 @@
  * Every export here is a `'use server'` RPC — browser-reachable — so every
  * one of them takes an authenticated (allow-listed) user or the gated dev
  * bypass first (#230), and then delegates to the identity-free op in
- * `@hames/connectors` (#225 PR-C2: the op bodies moved into the package;
+ * `@hames-ai/connectors` (#225 PR-C2: the op bodies moved into the package;
  * this module is the thin gated wrapper that keeps the import path its
  * clients already use). The ops open every session in READ access mode —
  * the driver enforces read-only, not this module (SD-14: the wrappers open
@@ -23,7 +23,7 @@ import type {
   CypherResult,
   ConnectionResult,
   NodePropertiesResult,
-} from '@hames/connectors/neo4j/queries'
+} from '@hames-ai/connectors/neo4j/queries'
 import {
   getSchema as getSchemaOp,
   getSchemaForAgent as getSchemaForAgentOp,
@@ -32,7 +32,7 @@ import {
   runManualCypher as runManualCypherOp,
   resetNeo4jConnection as resetNeo4jConnectionOp,
   testNeo4jConnection as testNeo4jConnectionOp,
-} from '@hames/connectors/neo4j/queries'
+} from '@hames-ai/connectors/neo4j/queries'
 import { getAuthenticatedUser } from '../auth/server'
 import { isBypassEnabled } from '../auth/dev-bypass'
 

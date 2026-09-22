@@ -49,13 +49,13 @@
  */
 
 import { Collector } from '@boundaryml/baml'
-import type { LoopTurn, ToolDescription } from '@hames/harness-patterns/types'
+import type { LoopTurn, ToolDescription } from '@hames-ai/harness-patterns/types'
 // The composition root registers the seam (model tables, tier policy, cost
 // rates) — importing it for its side effect keeps the smoke run on the same
 // wiring a turn takes.
 import '../config.server'
 import { assertVerdaConfigured, verdaInferenceEnabled } from '../config.server'
-import { clientOverrideFor } from '@hames/harness-baml/clients.server'
+import { clientOverrideFor } from '@hames-ai/harness-baml/clients.server'
 
 const EXPECTED_CLIENT = 'VerdaQwen'
 
@@ -253,7 +253,7 @@ interface CallResult {
 }
 
 async function oneCall(i: number): Promise<CallResult> {
-  const { b } = await import('@hames/harness-baml/baml_client')
+  const { b } = await import('@hames-ai/harness-baml/baml_client')
   const collector = new Collector(`load-${i}`)
   const opts = { collector, ...clientOverrideFor('controller') }
   const t0 = Date.now()

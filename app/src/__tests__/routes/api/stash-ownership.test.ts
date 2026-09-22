@@ -17,7 +17,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
@@ -114,7 +114,7 @@ const setDocumentFlags = vi.fn(
     return doc
   },
 )
-vi.mock('@hames/harness-patterns/stash/document-store.server', () => ({
+vi.mock('@hames-ai/harness-patterns/stash/document-store.server', () => ({
   DEFAULT_TTL_SECONDS: 7 * 24 * 60 * 60,
   storeDocument: (...args: unknown[]) => storeDocument(...(args as [never])),
   getDocument: (...args: unknown[]) => getDocument(...(args as [never, never])),
@@ -131,7 +131,7 @@ vi.mock('@hames/harness-patterns/stash/document-store.server', () => ({
 const ingestDocument = vi.fn(async () => ({ chunks: 3 }))
 const searchDocuments = vi.fn(async () => [{ docId: 'doc-1', score: 0.9 }])
 const ingestStashDocument = vi.fn(async () => {})
-vi.mock('@hames/harness-patterns/stash/document-ingest.server', () => ({
+vi.mock('@hames-ai/harness-patterns/stash/document-ingest.server', () => ({
   ingestDocument: () => ingestDocument(),
   searchDocuments: () => searchDocuments(),
   ingestStashDocument: () => ingestStashDocument(),
@@ -144,7 +144,7 @@ vi.mock('../../../lib/harness-client/registry.server', () => ({
 vi.mock('../../../lib/harness-client/session.server', () => ({
   loadSession: async () => null,
 }))
-vi.mock('@hames/harness-patterns/stash/doc-convert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/stash/doc-convert.server', () => ({
   conversionEnabled: () => false,
   isConvertible: () => false,
 }))

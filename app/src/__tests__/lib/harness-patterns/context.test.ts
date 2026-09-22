@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock server-only imports
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -18,7 +18,7 @@ describe('context', () => {
 
   describe('createContext', () => {
     it('should create a context with default values', async () => {
-      const { createContext } = await import('@hames/harness-patterns/context.server')
+      const { createContext } = await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test message')
 
@@ -32,7 +32,7 @@ describe('context', () => {
     })
 
     it('should accept custom session ID', async () => {
-      const { createContext } = await import('@hames/harness-patterns/context.server')
+      const { createContext } = await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test', {}, 'custom-session-id')
 
@@ -40,7 +40,7 @@ describe('context', () => {
     })
 
     it('should accept initial data', async () => {
-      const { createContext } = await import('@hames/harness-patterns/context.server')
+      const { createContext } = await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test', { foo: 'bar' })
 
@@ -50,7 +50,7 @@ describe('context', () => {
 
   describe('createScope', () => {
     it('should create an isolated pattern scope', async () => {
-      const { createScope } = await import('@hames/harness-patterns/context.server')
+      const { createScope } = await import('@hames-ai/harness-patterns/context.server')
 
       const scope = createScope('test-pattern', { value: 42 })
 
@@ -63,7 +63,7 @@ describe('context', () => {
 
   describe('createEvent', () => {
     it('should create an event with timestamp', async () => {
-      const { createEvent } = await import('@hames/harness-patterns/context.server')
+      const { createEvent } = await import('@hames-ai/harness-patterns/context.server')
 
       const event = createEvent('tool_call', 'pattern-1', { tool: 'test' })
 
@@ -74,7 +74,7 @@ describe('context', () => {
     })
 
     it('should include llmCall data when provided', async () => {
-      const { createEvent } = await import('@hames/harness-patterns/context.server')
+      const { createEvent } = await import('@hames-ai/harness-patterns/context.server')
 
       const llmCall = {
         functionName: 'LoopController',
@@ -90,27 +90,27 @@ describe('context', () => {
 
   describe('shouldTrack', () => {
     it('should return true when trackHistory is true', async () => {
-      const { shouldTrack } = await import('@hames/harness-patterns/context.server')
+      const { shouldTrack } = await import('@hames-ai/harness-patterns/context.server')
 
       expect(shouldTrack('tool_call', true)).toBe(true)
       expect(shouldTrack('tool_result', true)).toBe(true)
     })
 
     it('should return false when trackHistory is false', async () => {
-      const { shouldTrack } = await import('@hames/harness-patterns/context.server')
+      const { shouldTrack } = await import('@hames-ai/harness-patterns/context.server')
 
       expect(shouldTrack('tool_call', false)).toBe(false)
     })
 
     it('should match single event type', async () => {
-      const { shouldTrack } = await import('@hames/harness-patterns/context.server')
+      const { shouldTrack } = await import('@hames-ai/harness-patterns/context.server')
 
       expect(shouldTrack('tool_call', 'tool_call')).toBe(true)
       expect(shouldTrack('tool_result', 'tool_call')).toBe(false)
     })
 
     it('should match array of event types', async () => {
-      const { shouldTrack } = await import('@hames/harness-patterns/context.server')
+      const { shouldTrack } = await import('@hames-ai/harness-patterns/context.server')
 
       expect(shouldTrack('tool_call', ['tool_call', 'tool_result'])).toBe(true)
       expect(shouldTrack('tool_result', ['tool_call', 'tool_result'])).toBe(true)
@@ -120,7 +120,7 @@ describe('context', () => {
 
   describe('trackEvent', () => {
     it('should add event to scope when should track', async () => {
-      const { trackEvent, createScope } = await import('@hames/harness-patterns/context.server')
+      const { trackEvent, createScope } = await import('@hames-ai/harness-patterns/context.server')
 
       const scope = createScope('test', {})
       trackEvent(scope, 'tool_call', { tool: 'test' }, true)
@@ -130,7 +130,7 @@ describe('context', () => {
     })
 
     it('should not add event when should not track', async () => {
-      const { trackEvent, createScope } = await import('@hames/harness-patterns/context.server')
+      const { trackEvent, createScope } = await import('@hames-ai/harness-patterns/context.server')
 
       const scope = createScope('test', {})
       trackEvent(scope, 'tool_call', { tool: 'test' }, false)
@@ -139,7 +139,7 @@ describe('context', () => {
     })
 
     it('should include llmCall in tracked event', async () => {
-      const { trackEvent, createScope } = await import('@hames/harness-patterns/context.server')
+      const { trackEvent, createScope } = await import('@hames-ai/harness-patterns/context.server')
 
       const scope = createScope('test', {})
       const llmCall = {
@@ -158,7 +158,7 @@ describe('context', () => {
   describe('commitEvents', () => {
     it('should commit all events with "always" strategy', async () => {
       const { commitEvents, createContext, createScope } =
-        await import('@hames/harness-patterns/context.server')
+        await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test')
       const initialEventCount = ctx.events.length
@@ -176,7 +176,7 @@ describe('context', () => {
 
     it('should commit events on success with "on-success" strategy', async () => {
       const { commitEvents, createContext, createScope } =
-        await import('@hames/harness-patterns/context.server')
+        await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test')
       ctx.status = 'done'
@@ -192,7 +192,7 @@ describe('context', () => {
 
     it('should not commit events on error with "on-success" strategy', async () => {
       const { commitEvents, createContext, createScope } =
-        await import('@hames/harness-patterns/context.server')
+        await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test')
       ctx.status = 'error'
@@ -208,7 +208,7 @@ describe('context', () => {
 
     it('should commit only last event with "last" strategy', async () => {
       const { commitEvents, createContext, createScope } =
-        await import('@hames/harness-patterns/context.server')
+        await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test')
       const initialEventCount = ctx.events.length
@@ -227,7 +227,7 @@ describe('context', () => {
 
     it('should not commit content events with "never" strategy but still commit lifecycle', async () => {
       const { commitEvents, createContext, createScope } =
-        await import('@hames/harness-patterns/context.server')
+        await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test')
       const initialEventCount = ctx.events.length
@@ -254,7 +254,7 @@ describe('context', () => {
 
     it('should always commit lifecycle events regardless of strategy', async () => {
       const { commitEvents, createContext, createScope } =
-        await import('@hames/harness-patterns/context.server')
+        await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test')
       const initialEventCount = ctx.events.length
@@ -281,7 +281,7 @@ describe('context', () => {
   describe('serialization', () => {
     it('should serialize and deserialize context', async () => {
       const { createContext, serializeContext, deserializeContext } =
-        await import('@hames/harness-patterns/context.server')
+        await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test message', { foo: 'bar' })
       const serialized = serializeContext(ctx)
@@ -295,7 +295,7 @@ describe('context', () => {
 
     it('should preserve hidden/archived/summary fields through round-trip', async () => {
       const { createContext, serializeContext, deserializeContext, enrichToolResult } =
-        await import('@hames/harness-patterns/context.server')
+        await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test message')
       ctx.events.push({
@@ -326,7 +326,7 @@ describe('context', () => {
 
     it('should preserve archived state through round-trip', async () => {
       const { createContext, serializeContext, deserializeContext, enrichToolResult } =
-        await import('@hames/harness-patterns/context.server')
+        await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test')
       ctx.events.push({
@@ -350,7 +350,7 @@ describe('context', () => {
   describe('enrichToolResult', () => {
     it('should add summary to a tool_result event', async () => {
       const { createContext, enrichToolResult } =
-        await import('@hames/harness-patterns/context.server')
+        await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test')
       ctx.events.push({
@@ -370,7 +370,7 @@ describe('context', () => {
 
     it('should set hidden flag on a tool_result event', async () => {
       const { createContext, enrichToolResult } =
-        await import('@hames/harness-patterns/context.server')
+        await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test')
       ctx.events.push({
@@ -390,7 +390,7 @@ describe('context', () => {
 
     it('should set archived flag on a tool_result event', async () => {
       const { createContext, enrichToolResult } =
-        await import('@hames/harness-patterns/context.server')
+        await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test')
       ctx.events.push({
@@ -410,7 +410,7 @@ describe('context', () => {
 
     it('should apply multiple fields at once', async () => {
       const { createContext, enrichToolResult } =
-        await import('@hames/harness-patterns/context.server')
+        await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test')
       ctx.events.push({
@@ -430,7 +430,7 @@ describe('context', () => {
 
     it('should return false when event not found', async () => {
       const { createContext, enrichToolResult } =
-        await import('@hames/harness-patterns/context.server')
+        await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test')
 
@@ -441,7 +441,7 @@ describe('context', () => {
 
     it('should not modify non-tool_result events with matching id', async () => {
       const { createContext, enrichToolResult } =
-        await import('@hames/harness-patterns/context.server')
+        await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test')
       ctx.events.push({
@@ -459,7 +459,7 @@ describe('context', () => {
 
     it('should mutate event in-place (not clone)', async () => {
       const { createContext, enrichToolResult } =
-        await import('@hames/harness-patterns/context.server')
+        await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test')
       const eventData = { tool: 'search', result: 'data', success: true }
@@ -480,7 +480,7 @@ describe('context', () => {
 
   describe('status helpers', () => {
     it('should set error status', async () => {
-      const { createContext, setError } = await import('@hames/harness-patterns/context.server')
+      const { createContext, setError } = await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test')
       setError(ctx, 'Something went wrong')
@@ -490,7 +490,7 @@ describe('context', () => {
     })
 
     it('should set done status', async () => {
-      const { createContext, setDone } = await import('@hames/harness-patterns/context.server')
+      const { createContext, setDone } = await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test')
       setDone(ctx)
@@ -499,7 +499,7 @@ describe('context', () => {
     })
 
     it('should set paused status', async () => {
-      const { createContext, setPaused } = await import('@hames/harness-patterns/context.server')
+      const { createContext, setPaused } = await import('@hames-ai/harness-patterns/context.server')
 
       const ctx = createContext('test')
       setPaused(ctx)

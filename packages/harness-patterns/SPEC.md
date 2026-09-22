@@ -12,12 +12,12 @@ is and why it is shaped this way, start at the front page —
 > PolyForm Noncommercial 1.0.0; see the repository root `LICENSE`.
 >
 > **Status:** the extraction happened. This directory IS the package —
-> `@hames/harness-patterns`, version 0.1.0, independently versioned, with its
+> `@hames-ai/harness-patterns`, version 0.1.0, independently versioned, with its
 > own `package.json`, `exports` map and `files` allowlist. It is unpublished as
 > of this writing: `pnpm publish` is the remaining step, not a remaining
 > refactor. It lives inside the hames playground monorepo, which stays both its
 > consumer and its proving ground — the app and the ready-made agents take it
-> as a workspace dependency (`"@hames/harness-patterns": "workspace:*"`), so
+> as a workspace dependency (`"@hames-ai/harness-patterns": "workspace:*"`), so
 > the tree this spec describes is the tree they run against, with no build step
 > between.
 >
@@ -28,12 +28,12 @@ is and why it is shaped this way, start at the front page —
 >    no `app/src`, no `~/` alias, no relative climb into `app/`. Pinned by
 >    `app/src/__tests__/lib/harness-patterns/zero-app-imports.test.ts`, which
 >    scans raw source text (a type-only import is erased before a tarball
->    exists, so only a text scan sees it) across this package, `@hames/agents`,
->    `@hames/connectors` and `@hames/sandbox`, co-located tests included.
+>    exists, so only a text scan sees it) across this package, `@hames-ai/agents`,
+>    `@hames-ai/connectors` and `@hames-ai/sandbox`, co-located tests included.
 > 2. Pattern primitives are framework-neutral — no SolidJS, no UI types — and
 >    core owns its own wire types: no `baml_client` import may come back here,
 >    pinned by `core-types-source-scan.test.ts`. The BAML leaf lives in the
->    companion package `@hames/harness-baml`.
+>    companion package `@hames-ai/harness-baml`.
 > 3. Anything that depends on runtime settings goes through the run frame's
 >    `config` slot (`run-frame.server.ts`, read by `runtimeConfig()`), not
 >    function parameters.
@@ -88,12 +88,12 @@ BAML Functions ──┐
 MCP Tools ───────┘
 ```
 
-**Key Principle**: patterns take adapter factories (`createLoopControllerAdapter` and friends, from the `@hames/harness-baml` companion package), which wrap the generated BAML functions and adapt their positional call order. A raw BAML function does not satisfy a pattern's controller contract. Since Lane A6 (#225) the six non-controller LLM calls (`Planner`, `Router`, `CompactIntent`, `RetrieveQuery`, `ResultDescribe(+Batch)`) are REQUIRED config on their patterns, supplied by one `bamlPatterns()` factory — see "The LLM seam" below.
+**Key Principle**: patterns take adapter factories (`createLoopControllerAdapter` and friends, from the `@hames-ai/harness-baml` companion package), which wrap the generated BAML functions and adapt their positional call order. A raw BAML function does not satisfy a pattern's controller contract. Since Lane A6 (#225) the six non-controller LLM calls (`Planner`, `Router`, `CompactIntent`, `RetrieveQuery`, `ResultDescribe(+Batch)`) are REQUIRED config on their patterns, supplied by one `bamlPatterns()` factory — see "The LLM seam" below.
 
 ## Core Concepts
 
 ```typescript
-// Adapter factories from `@hames/harness-baml` — the only thing you pass to
+// Adapter factories from `@hames-ai/harness-baml` — the only thing you pass to
 // a pattern's controller/actor/critic slots. They adapt the BAML call order
 // and return { action, llmCall }; a raw bound BAML function
 // (e.g. b.LoopController.bind(b)) does NOT satisfy the contract and fails
@@ -1913,7 +1913,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 │                           # (the guard's ALS scope was its own module until #374; it is now the run frame's `guard` slot, and `ActiveInjectionGuard` lives in injection-guard.ts beside the sanitizer it describes. Opposite nesting rule to transports — it UNIONS, see SD-5; read by callTool + retriever)
 ├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values)
 ├── assert.server.ts        # Server-only guards
-└── patterns/               # The pattern factories — a directory OF THIS package, exported as @hames/harness-patterns/patterns
+└── patterns/               # The pattern factories — a directory OF THIS package, exported as @hames-ai/harness-patterns/patterns
     ├── index.ts
     ├── router.server.ts        # router() + routes() — intent classification + dispatch
     ├── simpleLoop.server.ts    # ReAct loop; emits callId (+ batchId on multi-call turns) on tool_call/tool_result; resolveRefs(); config-driven cross-turn memory

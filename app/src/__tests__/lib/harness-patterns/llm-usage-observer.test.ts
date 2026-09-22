@@ -22,7 +22,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Collector } from '@boundaryml/baml'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -31,8 +31,8 @@ import {
   observeLlmUsage,
   resetLlmUsageObservers,
   type LlmUsageSample,
-} from '@hames/harness-patterns/llm-usage-observer.server'
-import { accountBamlCall, withUsageAccounting } from '@hames/harness-baml/baml-adapters.server'
+} from '@hames-ai/harness-patterns/llm-usage-observer.server'
+import { accountBamlCall, withUsageAccounting } from '@hames-ai/harness-baml/baml-adapters.server'
 
 /** A collector as `accountBamlCall` reads it: one log, one selected call with
  *  usage. Enough for `computeEventMetrics` to count one attempt. */

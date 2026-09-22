@@ -16,7 +16,7 @@
  * - CriticFn(intent, previous_attempts)
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type {
   ControllerAction,
   CriticResult,
@@ -29,7 +29,7 @@ import type {
   PlannerFn,
   PlanCallResult,
   DescribeBatchItem,
-} from '@hames/harness-patterns/types'
+} from '@hames-ai/harness-patterns/types'
 import type {
   ToolDescription,
   LoopTurn,
@@ -38,11 +38,11 @@ import type {
   FewShot,
   PlanResult,
   CostBasis,
-} from '@hames/harness-patterns/types'
-import type { InjectionScreen } from '@hames/harness-patterns/injection-guard'
-import { listTools as mcpListTools } from '@hames/harness-patterns/mcp-client.server'
-import { gatewayDegradation } from '@hames/harness-patterns/gateway-health.server'
-import { activeTransports } from '@hames/harness-patterns/tool-transport.server'
+} from '@hames-ai/harness-patterns/types'
+import type { InjectionScreen } from '@hames-ai/harness-patterns/injection-guard'
+import { listTools as mcpListTools } from '@hames-ai/harness-patterns/mcp-client.server'
+import { gatewayDegradation } from '@hames-ai/harness-patterns/gateway-health.server'
+import { activeTransports } from '@hames-ai/harness-patterns/tool-transport.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from './baml_client/inlinedbaml'
 import {
@@ -52,18 +52,18 @@ import {
   limitsFor,
   maxOutputTokensFor,
 } from './clients.server'
-import { notifyLlmUsage } from '@hames/harness-patterns/llm-usage-observer.server'
+import { notifyLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
 import type {
   LLMCallRecord,
   ControllerFn,
   ActorFn,
   ControllerCallResult,
-} from '@hames/harness-patterns/types'
+} from '@hames-ai/harness-patterns/types'
 // The throw contract is the seam's, not this module's: the class lives in
 // core (`types.ts`, Lane A3) and is re-exported here because the acceptance
 // tests (raw-llm-visibility, truncation-retry) import it from this path.
-import { LLMCallError } from '@hames/harness-patterns/types'
+import { LLMCallError } from '@hames-ai/harness-patterns/types'
 export { LLMCallError }
 
 assertServerOnImport()
@@ -80,19 +80,19 @@ runBamlClientCheckOnce()
 // `ControllerCallResult` moved to core `types.ts` in Lane A4 — it is the
 // controller/actor seam's return type. Re-exported here for existing import
 // paths (tests import it from this module).
-export type { ControllerCallResult } from '@hames/harness-patterns/types'
+export type { ControllerCallResult } from '@hames-ai/harness-patterns/types'
 
 /** Result from a critic call with optional LLM observability data — moved to
  *  core `types.ts` with the critic seam (same rule as
  *  `ControllerCallResult`). Re-exported for existing import paths; the local
  *  uses import it from core below. */
-export type { CriticCallResult } from '@hames/harness-patterns/types'
-import type { CriticCallResult } from '@hames/harness-patterns/types'
+export type { CriticCallResult } from '@hames-ai/harness-patterns/types'
+import type { CriticCallResult } from '@hames-ai/harness-patterns/types'
 
 /** `PlanCallResult` moved to core `types.ts` at Lane A6 — it is the planner
  *  seam's return type and `planner()` (core) declares it. Re-exported here for
  *  existing import paths (tests import it from this module). */
-export type { PlanCallResult } from '@hames/harness-patterns/types'
+export type { PlanCallResult } from '@hames-ai/harness-patterns/types'
 
 /** The controller seam (#225 Lane A4): one named {@link ControllerInput} —
  *  declared in core `types.ts` — whose `turns` are a typed `LoopTurn[]`,
@@ -129,7 +129,7 @@ export type LegacyControllerFn = (
  *  `CriticFnWithLLMData` is what `actorCritic` (core) declares, and a
  *  type-only import from app code is still an import (#225 L3). Re-exported
  *  for existing import paths. */
-export type { CriticFnWithLLMData } from '@hames/harness-patterns/types'
+export type { CriticFnWithLLMData } from '@hames-ai/harness-patterns/types'
 
 /** The adapter's own, wider shape: same seam plus the optional collector the
  *  implementation accepts when a caller (a test) brings one. Assignable to
@@ -1527,7 +1527,7 @@ export async function describeToolResultOp(
 /** `DescribeBatchItem` moved to core `types.ts` at Lane A6 — it rides the
  *  batch seam's contract, which `compactBulkData` (core) declares.
  *  Re-exported here for existing import paths. */
-export type { DescribeBatchItem } from '@hames/harness-patterns/types'
+export type { DescribeBatchItem } from '@hames-ai/harness-patterns/types'
 
 /**
  * Summarize several tool results in ONE describe-tier call (#83 Part E).

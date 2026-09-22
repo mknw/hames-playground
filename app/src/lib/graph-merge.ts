@@ -10,7 +10,7 @@
  *     user asks a follow-up about a different concept.
  */
 
-import type { GraphElement } from '@hames/agents'
+import type { GraphElement } from '@hames-ai/agents'
 
 export function mergeGraphElements(
   prev: readonly GraphElement[],

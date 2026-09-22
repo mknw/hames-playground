@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { repairJson, repairJsonTracked } from '@hames/harness-patterns/json-repair'
+import { repairJson, repairJsonTracked } from '@hames-ai/harness-patterns/json-repair'
 import incident from './fixtures/sandbox-edit-unescaped-quotes.json'
 
 describe('repairJson — string content that was not escaped', () => {

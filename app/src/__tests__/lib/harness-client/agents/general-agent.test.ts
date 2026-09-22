@@ -13,11 +13,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { testAgentDeps } from './test-deps'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
-import type { ContextEvent, EventType, UnifiedContext } from '@hames/harness-patterns'
+import type { ContextEvent, EventType, UnifiedContext } from '@hames-ai/harness-patterns'
 
 const TOOLS = ['read_neo4j_cypher', 'get_neo4j_schema', 'search', 'Return']
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -34,7 +34,7 @@ const schemaOk = mockCallTool({ responses: { get_neo4j_schema: { Concept: ['name
 const schemaFails = mockCallTool({ errors: { get_neo4j_schema: 'connection refused' } })
 const currentCallTool = { fn: schemaOk }
 
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   callTool: (...args: [string, Record<string, unknown>?]) => currentCallTool.fn(...args),
   listTools: mockListTools(TOOLS),
 }))
@@ -45,7 +45,7 @@ interface Pattern {
 }
 
 async function buildPatterns(sessionId = 'sess-1'): Promise<Pattern[]> {
-  const { generalAgent } = await import('@hames/agents/agents/general.server')
+  const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
   return (await generalAgent.createPatterns(sessionId, degradedDeps)) as unknown as Pattern[]
 }
 
@@ -99,7 +99,7 @@ describe('general agent — compactExecution view scope', () => {
   async function synthView(events: Ev[]) {
     const patterns = await buildPatterns()
     const synth = patterns.find((p) => p.name === 'compactExecution')!
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
     return createEventView(ctxOf(events), synth.config.viewConfig as never, synth.config.patternId)
   }
 

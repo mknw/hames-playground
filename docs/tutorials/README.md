@@ -1,6 +1,6 @@
 # Tutorials
 
-Task-shaped pages for developers building **on** the `@hames` packages: pick the one that
+Task-shaped pages for developers building **on** the `@hames-ai` packages: pick the one that
 names what you are trying to do, follow it start to finish, have it working in ten
 minutes.
 
@@ -41,24 +41,24 @@ example file, because it is still a stub: there is nothing to assemble yet.
 ## Install
 
 Five packages, and only the first is mandatory. Each companion declares
-`@hames/harness-patterns` as a **peer**, so you add it yourself — the companions hold
+`@hames-ai/harness-patterns` as a **peer**, so you add it yourself — the companions hold
 module-level `AsyncLocalStorage` scopes, and two resolved copies of the core package would
 be two scopes that never see each other.
 
 | Package                   | Bring it in when                                                                       |
 | ------------------------- | -------------------------------------------------------------------------------------- |
-| `@hames/harness-patterns` | always — patterns, event views, the guard, the tool transport                          |
-| `@hames/harness-baml`     | you want the shipped prompts and model adapters                                        |
-| `@hames/agents`           | you want the six ready-made agent definitions                                          |
-| `@hames/sandbox`          | you want to run code in a container                                                    |
-| `@hames/connectors`       | you want this deployment's MCP catalog, the Neo4j non-agentic layer or the Graph tools |
+| `@hames-ai/harness-patterns` | always — patterns, event views, the guard, the tool transport                          |
+| `@hames-ai/harness-baml`     | you want the shipped prompts and model adapters                                        |
+| `@hames-ai/agents`           | you want the six ready-made agent definitions                                          |
+| `@hames-ai/sandbox`          | you want to run code in a container                                                    |
+| `@hames-ai/connectors`       | you want this deployment's MCP catalog, the Neo4j non-agentic layer or the Graph tools |
 
 ```bash
-pnpm add @hames/harness-patterns
-pnpm add @hames/harness-baml @hames/agents @hames/sandbox @hames/connectors
+pnpm add @hames-ai/harness-patterns
+pnpm add @hames-ai/harness-baml @hames-ai/agents @hames-ai/sandbox @hames-ai/connectors
 ```
 
-`@hames/connectors` is the one easy to skip and then need two pages later: `mcpNamespace`
+`@hames-ai/connectors` is the one easy to skip and then need two pages later: `mcpNamespace`
 lives there (the registration the injection guard's refusal tells you to make), and so does
 `configureNeo4j`.
 

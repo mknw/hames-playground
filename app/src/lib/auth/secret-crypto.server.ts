@@ -15,21 +15,16 @@
  * Ciphertext format (versioned so the scheme can be rotated):
  *   `v1.<iv>.<authTag>.<ciphertext>`   — all parts base64url
  */
-import {
-  createCipheriv,
-  createDecipheriv,
-  randomBytes,
-  hkdfSync,
-} from "node:crypto";
-import { assertServerOnImport } from "@hames/harness-patterns/assert.server";
+import { createCipheriv, createDecipheriv, randomBytes, hkdfSync } from 'node:crypto'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 
-assertServerOnImport();
+assertServerOnImport()
 
-const VERSION = "v1";
-const ALGO = "aes-256-gcm";
-const IV_BYTES = 12; // GCM standard nonce length
-const KEY_BYTES = 32;
-const HKDF_INFO = "kg-agent:secret-crypto:v1";
+const VERSION = 'v1'
+const ALGO = 'aes-256-gcm'
+const IV_BYTES = 12 // GCM standard nonce length
+const KEY_BYTES = 32
+const HKDF_INFO = 'kg-agent:secret-crypto:v1'
 
 /**
  * Resolve the 32-byte encryption key. Throws when neither
@@ -37,38 +32,38 @@ const HKDF_INFO = "kg-agent:secret-crypto:v1";
  * closed is deliberate: we must never silently fall back to storing plaintext.
  */
 function encryptionKey(): Buffer {
-  const dedicated = process.env.TOKEN_ENCRYPTION_KEY?.trim();
+  const dedicated = process.env.TOKEN_ENCRYPTION_KEY?.trim()
   if (dedicated) {
     // Accept base64 / base64url / hex / raw; normalize to exactly 32 bytes by
     // HKDF so a short or long value can still be used safely.
     return Buffer.from(
-      hkdfSync("sha256", Buffer.from(dedicated), Buffer.alloc(0), HKDF_INFO, KEY_BYTES),
-    );
+      hkdfSync('sha256', Buffer.from(dedicated), Buffer.alloc(0), HKDF_INFO, KEY_BYTES),
+    )
   }
-  const fallback = process.env.AUTH_SESSION_SECRET?.trim();
+  const fallback = process.env.AUTH_SESSION_SECRET?.trim()
   if (fallback) {
     return Buffer.from(
-      hkdfSync("sha256", Buffer.from(fallback), Buffer.alloc(0), HKDF_INFO, KEY_BYTES),
-    );
+      hkdfSync('sha256', Buffer.from(fallback), Buffer.alloc(0), HKDF_INFO, KEY_BYTES),
+    )
   }
   throw new Error(
-    "[secret-crypto] no encryption key: set TOKEN_ENCRYPTION_KEY (preferred) " +
-      "or AUTH_SESSION_SECRET. Refusing to store secrets unencrypted.",
-  );
+    '[secret-crypto] no encryption key: set TOKEN_ENCRYPTION_KEY (preferred) ' +
+      'or AUTH_SESSION_SECRET. Refusing to store secrets unencrypted.',
+  )
 }
 
 /** Encrypt a UTF-8 plaintext into the versioned envelope. */
 export function encryptSecret(plaintext: string, key: Buffer = encryptionKey()): string {
-  const iv = randomBytes(IV_BYTES);
-  const cipher = createCipheriv(ALGO, key, iv);
-  const ct = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
-  const tag = cipher.getAuthTag();
+  const iv = randomBytes(IV_BYTES)
+  const cipher = createCipheriv(ALGO, key, iv)
+  const ct = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
+  const tag = cipher.getAuthTag()
   return [
     VERSION,
-    iv.toString("base64url"),
-    tag.toString("base64url"),
-    ct.toString("base64url"),
-  ].join(".");
+    iv.toString('base64url'),
+    tag.toString('base64url'),
+    ct.toString('base64url'),
+  ].join('.')
 }
 
 /**
@@ -81,24 +76,24 @@ export function decryptSecret(
   envelope: string | null | undefined,
   key: Buffer = encryptionKey(),
 ): string | null {
-  if (!envelope) return null;
-  const parts = envelope.split(".");
-  if (parts.length !== 4 || parts[0] !== VERSION) return null;
+  if (!envelope) return null
+  const parts = envelope.split('.')
+  if (parts.length !== 4 || parts[0] !== VERSION) return null
   try {
-    const iv = Buffer.from(parts[1], "base64url");
-    const tag = Buffer.from(parts[2], "base64url");
-    const ct = Buffer.from(parts[3], "base64url");
-    if (iv.length !== IV_BYTES || tag.length !== 16) return null;
-    const decipher = createDecipheriv(ALGO, key, iv);
-    decipher.setAuthTag(tag);
-    return Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
+    const iv = Buffer.from(parts[1], 'base64url')
+    const tag = Buffer.from(parts[2], 'base64url')
+    const ct = Buffer.from(parts[3], 'base64url')
+    if (iv.length !== IV_BYTES || tag.length !== 16) return null
+    const decipher = createDecipheriv(ALGO, key, iv)
+    decipher.setAuthTag(tag)
+    return Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8')
   } catch {
     // Wrong key or tampered ciphertext — GCM auth failure lands here.
-    return null;
+    return null
   }
 }
 
 /** Test/ops helper: generate a fresh key suitable for `TOKEN_ENCRYPTION_KEY`. */
 export function generateEncryptionKey(): string {
-  return randomBytes(KEY_BYTES).toString("base64");
+  return randomBytes(KEY_BYTES).toString('base64')
 }

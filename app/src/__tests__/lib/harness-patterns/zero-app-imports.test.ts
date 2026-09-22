@@ -19,10 +19,10 @@
  *
  * Like `core-types-source-scan.test.ts`, this scans the RAW TEXT of every
  * `.ts`/`.tsx` file under `packages/harness-patterns/`, `packages/agents/`
- * (extended at the @hames/agents extraction, #225 PR-2) and
+ * (extended at the @hames-ai/agents extraction, #225 PR-2) and
  * `packages/connectors/` (extended at the connectors move, #225 PR-C2 — same
  * pin shape, one scan over the published packages) and `packages/sandbox/`
- * (extended at the @hames/sandbox extraction — the package the app leans on
+ * (extended at the @hames-ai/sandbox extraction — the package the app leans on
  * hardest, since the composition root, three PTY routes and a browser
  * component all import it) — import lines and inline `import()`
  * positions alike, comments included, because a static import cannot hide
@@ -31,7 +31,7 @@
  * **Including each package's own co-located `__tests__/` tree** (#365
  * post-merge review, D2). The skip that used to sit in `walk()` dates from
  * when every test lived app-side, where climbing into `app/` is not an
- * escape; since #225 PR-C2 and the @hames/sandbox extraction the tests moved
+ * escape; since #225 PR-C2 and the @hames-ai/sandbox extraction the tests moved
  * INTO `packages/connectors/` and `packages/sandbox/`, and nothing else can
  * see them: the tarball does not ship tests, so the pack smoke is blind to
  * them, and CI runs each package's suite from inside the full workspace

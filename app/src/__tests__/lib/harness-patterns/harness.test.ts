@@ -7,15 +7,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock server-only imports
-vi.mock('@hames/harness-patterns/assert.server', () => ({
-  assertServerOnImport: vi.fn()
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
+  assertServerOnImport: vi.fn(),
 }))
 
 // Mock runChain to track calls
 const mockChain = vi.fn()
-vi.mock('@hames/harness-patterns/patterns/chain.server', () => ({
+vi.mock('@hames-ai/harness-patterns/patterns/chain.server', () => ({
   runChain: mockChain,
-  chain: vi.fn()
+  chain: vi.fn(),
 }))
 
 describe('harness', () => {
@@ -29,18 +29,18 @@ describe('harness', () => {
   })
 
   it('should export harness function', async () => {
-    const { harness } = await import('@hames/harness-patterns/harness.server')
+    const { harness } = await import('@hames-ai/harness-patterns/harness.server')
     expect(harness).toBeDefined()
     expect(typeof harness).toBe('function')
   })
 
   it('should create a callable agent function', async () => {
-    const { harness } = await import('@hames/harness-patterns/harness.server')
+    const { harness } = await import('@hames-ai/harness-patterns/harness.server')
 
     const mockPattern = {
       name: 'test',
       fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' }
+      config: { patternId: 'test' },
     }
 
     const agent = harness(mockPattern)
@@ -48,12 +48,12 @@ describe('harness', () => {
   })
 
   it('should execute patterns via chain', async () => {
-    const { harness } = await import('@hames/harness-patterns/harness.server')
+    const { harness } = await import('@hames-ai/harness-patterns/harness.server')
 
     const mockPattern = {
       name: 'test',
       fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' }
+      config: { patternId: 'test' },
     }
 
     const agent = harness(mockPattern)
@@ -63,7 +63,7 @@ describe('harness', () => {
   })
 
   it('should return response from context data', async () => {
-    const { harness } = await import('@hames/harness-patterns/harness.server')
+    const { harness } = await import('@hames-ai/harness-patterns/harness.server')
 
     mockChain.mockImplementation(async (ctx) => {
       ctx.data.response = 'Hello world!'
@@ -74,7 +74,7 @@ describe('harness', () => {
     const mockPattern = {
       name: 'test',
       fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' }
+      config: { patternId: 'test' },
     }
 
     const agent = harness(mockPattern)
@@ -85,12 +85,12 @@ describe('harness', () => {
   })
 
   it('should include duration_ms in result', async () => {
-    const { harness } = await import('@hames/harness-patterns/harness.server')
+    const { harness } = await import('@hames-ai/harness-patterns/harness.server')
 
     const mockPattern = {
       name: 'test',
       fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' }
+      config: { patternId: 'test' },
     }
 
     const agent = harness(mockPattern)
@@ -102,12 +102,12 @@ describe('harness', () => {
   })
 
   it('should include serialized context', async () => {
-    const { harness } = await import('@hames/harness-patterns/harness.server')
+    const { harness } = await import('@hames-ai/harness-patterns/harness.server')
 
     const mockPattern = {
       name: 'test',
       fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' }
+      config: { patternId: 'test' },
     }
 
     const agent = harness(mockPattern)
@@ -122,7 +122,7 @@ describe('harness', () => {
   })
 
   it('should add assistant_message event when done with response', async () => {
-    const { harness } = await import('@hames/harness-patterns/harness.server')
+    const { harness } = await import('@hames-ai/harness-patterns/harness.server')
 
     mockChain.mockImplementation(async (ctx) => {
       ctx.data.response = 'Final response'
@@ -133,26 +133,26 @@ describe('harness', () => {
     const mockPattern = {
       name: 'test',
       fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' }
+      config: { patternId: 'test' },
     }
 
     const agent = harness(mockPattern)
     const result = await agent('test input')
 
-    const assistantMessages = result.context.events.filter(e => e.type === 'assistant_message')
+    const assistantMessages = result.context.events.filter((e) => e.type === 'assistant_message')
     expect(assistantMessages.length).toBeGreaterThan(0)
     expect((assistantMessages[0].data as { content: string }).content).toBe('Final response')
   })
 
   it('should handle errors gracefully', async () => {
-    const { harness } = await import('@hames/harness-patterns/harness.server')
+    const { harness } = await import('@hames-ai/harness-patterns/harness.server')
 
     mockChain.mockRejectedValue(new Error('Test error'))
 
     const mockPattern = {
       name: 'test',
       fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' }
+      config: { patternId: 'test' },
     }
 
     const agent = harness(mockPattern)
@@ -164,12 +164,12 @@ describe('harness', () => {
   })
 
   it('should accept sessionId parameter', async () => {
-    const { harness } = await import('@hames/harness-patterns/harness.server')
+    const { harness } = await import('@hames-ai/harness-patterns/harness.server')
 
     const mockPattern = {
       name: 'test',
       fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' }
+      config: { patternId: 'test' },
     }
 
     const agent = harness(mockPattern)
@@ -179,12 +179,12 @@ describe('harness', () => {
   })
 
   it('should accept initialData parameter', async () => {
-    const { harness } = await import('@hames/harness-patterns/harness.server')
+    const { harness } = await import('@hames-ai/harness-patterns/harness.server')
 
     const mockPattern = {
       name: 'test',
       fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' }
+      config: { patternId: 'test' },
     }
 
     const agent = harness<{ response?: string; customField: string }>(mockPattern)
@@ -204,14 +204,15 @@ describe('resumeHarness', () => {
   })
 
   it('should export resumeHarness function', async () => {
-    const { resumeHarness } = await import('@hames/harness-patterns/harness.server')
+    const { resumeHarness } = await import('@hames-ai/harness-patterns/harness.server')
     expect(resumeHarness).toBeDefined()
     expect(typeof resumeHarness).toBe('function')
   })
 
   it('should throw if context is not paused', async () => {
-    const { resumeHarness } = await import('@hames/harness-patterns/harness.server')
-    const { serializeContext, createContext } = await import('@hames/harness-patterns/context.server')
+    const { resumeHarness } = await import('@hames-ai/harness-patterns/harness.server')
+    const { serializeContext, createContext } =
+      await import('@hames-ai/harness-patterns/context.server')
 
     // Create a running context
     const ctx = createContext('test')
@@ -221,17 +222,18 @@ describe('resumeHarness', () => {
     const mockPattern = {
       name: 'test',
       fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' }
+      config: { patternId: 'test' },
     }
 
     await expect(resumeHarness(serialized, [mockPattern], true)).rejects.toThrow(
-      'Cannot resume: context is not paused'
+      'Cannot resume: context is not paused',
     )
   })
 
   it('should resume paused context with approval', async () => {
-    const { resumeHarness } = await import('@hames/harness-patterns/harness.server')
-    const { serializeContext, createContext } = await import('@hames/harness-patterns/context.server')
+    const { resumeHarness } = await import('@hames-ai/harness-patterns/harness.server')
+    const { serializeContext, createContext } =
+      await import('@hames-ai/harness-patterns/context.server')
 
     // Create a paused context
     const ctx = createContext<{ approved?: boolean; response?: string }>('test')
@@ -241,7 +243,7 @@ describe('resumeHarness', () => {
     const mockPattern = {
       name: 'test',
       fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' }
+      config: { patternId: 'test' },
     }
 
     const result = await resumeHarness(serialized, [mockPattern], true)
@@ -251,8 +253,9 @@ describe('resumeHarness', () => {
   })
 
   it('should add approval_response event', async () => {
-    const { resumeHarness } = await import('@hames/harness-patterns/harness.server')
-    const { serializeContext, createContext } = await import('@hames/harness-patterns/context.server')
+    const { resumeHarness } = await import('@hames-ai/harness-patterns/harness.server')
+    const { serializeContext, createContext } =
+      await import('@hames-ai/harness-patterns/context.server')
 
     const ctx = createContext<{ approved?: boolean; response?: string }>('test')
     ctx.status = 'paused'
@@ -261,19 +264,20 @@ describe('resumeHarness', () => {
     const mockPattern = {
       name: 'test',
       fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' }
+      config: { patternId: 'test' },
     }
 
     const result = await resumeHarness(serialized, [mockPattern], false)
 
-    const approvalEvents = result.context.events.filter(e => e.type === 'approval_response')
+    const approvalEvents = result.context.events.filter((e) => e.type === 'approval_response')
     expect(approvalEvents.length).toBeGreaterThan(0)
     expect((approvalEvents[0].data as { approved: boolean }).approved).toBe(false)
   })
 
   it('should handle errors during resume', async () => {
-    const { resumeHarness } = await import('@hames/harness-patterns/harness.server')
-    const { serializeContext, createContext } = await import('@hames/harness-patterns/context.server')
+    const { resumeHarness } = await import('@hames-ai/harness-patterns/harness.server')
+    const { serializeContext, createContext } =
+      await import('@hames-ai/harness-patterns/context.server')
 
     mockChain.mockRejectedValue(new Error('Resume error'))
 
@@ -284,7 +288,7 @@ describe('resumeHarness', () => {
     const mockPattern = {
       name: 'test',
       fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' }
+      config: { patternId: 'test' },
     }
 
     const result = await resumeHarness(serialized, [mockPattern], true)
@@ -304,14 +308,15 @@ describe('continueSession', () => {
   })
 
   it('should export continueSession function', async () => {
-    const { continueSession } = await import('@hames/harness-patterns/harness.server')
+    const { continueSession } = await import('@hames-ai/harness-patterns/harness.server')
     expect(continueSession).toBeDefined()
     expect(typeof continueSession).toBe('function')
   })
 
   it('should continue session with new input', async () => {
-    const { continueSession } = await import('@hames/harness-patterns/harness.server')
-    const { serializeContext, createContext } = await import('@hames/harness-patterns/context.server')
+    const { continueSession } = await import('@hames-ai/harness-patterns/harness.server')
+    const { serializeContext, createContext } =
+      await import('@hames-ai/harness-patterns/context.server')
 
     const ctx = createContext<{ response?: string }>('first message')
     ctx.status = 'done'
@@ -320,7 +325,7 @@ describe('continueSession', () => {
     const mockPattern = {
       name: 'test',
       fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' }
+      config: { patternId: 'test' },
     }
 
     const result = await continueSession(serialized, [mockPattern], 'second message')
@@ -330,8 +335,9 @@ describe('continueSession', () => {
   })
 
   it('should add user_message event for new input', async () => {
-    const { continueSession } = await import('@hames/harness-patterns/harness.server')
-    const { serializeContext, createContext } = await import('@hames/harness-patterns/context.server')
+    const { continueSession } = await import('@hames-ai/harness-patterns/harness.server')
+    const { serializeContext, createContext } =
+      await import('@hames-ai/harness-patterns/context.server')
 
     const ctx = createContext<{ response?: string }>('first message')
     ctx.status = 'done'
@@ -340,21 +346,22 @@ describe('continueSession', () => {
     const mockPattern = {
       name: 'test',
       fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' }
+      config: { patternId: 'test' },
     }
 
     const result = await continueSession(serialized, [mockPattern], 'follow up')
 
-    const userMessages = result.context.events.filter(e => e.type === 'user_message')
+    const userMessages = result.context.events.filter((e) => e.type === 'user_message')
     const followUpMessage = userMessages.find(
-      e => (e.data as { content: string }).content === 'follow up'
+      (e) => (e.data as { content: string }).content === 'follow up',
     )
     expect(followUpMessage).toBeDefined()
   })
 
   it('should handle errors during continue', async () => {
-    const { continueSession } = await import('@hames/harness-patterns/harness.server')
-    const { serializeContext, createContext } = await import('@hames/harness-patterns/context.server')
+    const { continueSession } = await import('@hames-ai/harness-patterns/harness.server')
+    const { serializeContext, createContext } =
+      await import('@hames-ai/harness-patterns/context.server')
 
     mockChain.mockRejectedValue(new Error('Continue error'))
 
@@ -365,7 +372,7 @@ describe('continueSession', () => {
     const mockPattern = {
       name: 'test',
       fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' }
+      config: { patternId: 'test' },
     }
 
     const result = await continueSession(serialized, [mockPattern], 'second message')
@@ -375,8 +382,9 @@ describe('continueSession', () => {
   })
 
   it('should reset status to running before executing', async () => {
-    const { continueSession } = await import('@hames/harness-patterns/harness.server')
-    const { serializeContext, createContext } = await import('@hames/harness-patterns/context.server')
+    const { continueSession } = await import('@hames-ai/harness-patterns/harness.server')
+    const { serializeContext, createContext } =
+      await import('@hames-ai/harness-patterns/context.server')
 
     // Track the status when chain is called
     let statusWhenChainCalled: string | undefined
@@ -394,7 +402,7 @@ describe('continueSession', () => {
     const mockPattern = {
       name: 'test',
       fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' }
+      config: { patternId: 'test' },
     }
 
     await continueSession(serialized, [mockPattern], 'second message')

@@ -36,7 +36,7 @@
  * `action-runner.server.ts` — callers authenticate and pass the result in.
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   harness,
   continueSession,
@@ -47,7 +47,7 @@ import {
   type ConfiguredPattern,
   type ContextEvent,
   type HarnessResultScoped,
-} from '@hames/harness-patterns'
+} from '@hames-ai/harness-patterns'
 import {
   getOrBuildPatterns,
   loadSession,
@@ -57,10 +57,10 @@ import {
   type SessionData,
 } from './session.server'
 import { runWithRequestContext } from './request-user.server'
-import { amendRunFrame, withRunFrame } from '@hames/harness-patterns/run-frame.server'
-import { activeInferenceTier, assertInferenceTier } from '@hames/harness-baml/clients.server'
+import { amendRunFrame, withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
+import { activeInferenceTier, assertInferenceTier } from '@hames-ai/harness-baml/clients.server'
 import { DEFAULT_SETTINGS } from '../settings'
-import { bamlPatterns } from '@hames/harness-baml'
+import { bamlPatterns } from '@hames-ai/harness-baml'
 import type { InferenceTier } from '../inference/config.server'
 import { resolveConversationTier } from '../inference/tier.server'
 import { beginVerdaTurn, endVerdaTurn } from '../inference/verda-activity.server'
@@ -68,7 +68,7 @@ import { runWithColdStartWatch, type ColdStartEstimate } from '../inference/cold
 import { ensureVerdaAwake } from '../inference/wake.server'
 import { recordTurn } from '../metrics/usage-recorder.server'
 import type { HarnessSettings } from '../settings'
-import { runFirstTurnTitleGen } from '@hames/agents/agents/title-generator.server'
+import { runFirstTurnTitleGen } from '@hames-ai/agents/agents/title-generator.server'
 import {
   saveConversation as dbSaveConversation,
   setConversationStatus as dbSetConversationStatus,
@@ -201,7 +201,7 @@ export async function runTurnAndPersist(
   // the row below records it. This is the check `runWithInferenceTier` used to
   // make on the way into its scope; the scope is now core's generic run frame,
   // which cannot know what 'verda' means, so the fail-closed gate stayed in
-  // `@hames/harness-baml` and the host calls it (issue #374, D1).
+  // `@hames-ai/harness-baml` and the host calls it (issue #374, D1).
   assertInferenceTier(tier)
 
   // Establish the request scope so pattern closures and app-side tools that

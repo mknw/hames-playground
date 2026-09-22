@@ -17,8 +17,8 @@ import {
   type TurnState,
 } from '~/lib/turn-stream'
 import type { Message } from '~/components/ark-ui/ChatMessages'
-import type { ContextEvent, UnifiedContext } from '@hames/harness-patterns'
-import type { GraphElement } from '@hames/agents'
+import type { ContextEvent, UnifiedContext } from '@hames-ai/harness-patterns'
+import type { GraphElement } from '@hames-ai/agents'
 import type { WarmingEventData } from '~/lib/sse-client'
 import type { HarnessSettings } from '~/lib/settings'
 import singleNodeFixture from './harness-client/fixtures/cypher-single-node.json'

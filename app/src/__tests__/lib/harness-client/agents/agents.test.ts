@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import type { AgentDeps } from '@hames/agents'
+import type { AgentDeps } from '@hames-ai/agents'
 import { testAgentDeps } from './test-deps'
 import { mockFinalAction, mockCriticResult } from '../../../mocks/baml'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
@@ -66,7 +66,7 @@ mockToolSets.all = [
 ]
 
 // Mock assert.server for all harness files
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -83,13 +83,13 @@ const callToolMock = mockCallTool({
 })
 
 // Mock MCP client
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   callTool: callToolMock,
   listTools: mockListTools(mockToolSets.all),
 }))
 
 // Mock BAML client
-vi.mock('@hames/harness-baml/baml_client', () => ({
+vi.mock('@hames-ai/harness-baml/baml_client', () => ({
   b: {
     LoopController: vi.fn(async () => mockFinalAction()),
     ActorController: vi.fn(async () => mockFinalAction()),
@@ -118,7 +118,7 @@ vi.mock('@boundaryml/baml', () => {
 })
 
 // Mock Tools function
-vi.mock('@hames/harness-patterns/tools.server', () => ({
+vi.mock('@hames-ai/harness-patterns/tools.server', () => ({
   Tools: vi.fn(async () => mockToolSets),
   ToolsFrom: vi.fn(async () => mockToolSets),
 }))
@@ -205,14 +205,14 @@ describe('Agent Harnesses', () => {
 
   describe('searchAgent', () => {
     it('should have valid config', async () => {
-      const { searchAgent } = await import('@hames/agents/agents/search.server')
+      const { searchAgent } = await import('@hames-ai/agents/agents/search.server')
       validateAgentConfig(searchAgent)
       expect(searchAgent.id).toBe('search')
       expect(searchAgent.servers).toContain('neo4j-cypher')
     })
 
     it('should create valid patterns', async () => {
-      const { searchAgent } = await import('@hames/agents/agents/search.server')
+      const { searchAgent } = await import('@hames-ai/agents/agents/search.server')
       const patterns = await validatePatterns(searchAgent)
 
       // Should have router and compactExecution
@@ -222,7 +222,7 @@ describe('Agent Harnesses', () => {
     })
 
     it('should have unique pattern IDs', async () => {
-      const { searchAgent } = await import('@hames/agents/agents/search.server')
+      const { searchAgent } = await import('@hames-ai/agents/agents/search.server')
       const patterns = (await searchAgent.createPatterns(
         'test-session',
         testAgentDeps,
@@ -235,14 +235,14 @@ describe('Agent Harnesses', () => {
 
   describe('generalAgent', () => {
     it('should have valid config', async () => {
-      const { generalAgent } = await import('@hames/agents/agents/general.server')
+      const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
       validateAgentConfig(generalAgent)
       expect(generalAgent.id).toBe('general')
       expect(generalAgent.servers).toContain('neo4j-cypher')
     })
 
     it('should create a planner → simpleLoop → compactExecution chain', async () => {
-      const { generalAgent } = await import('@hames/agents/agents/general.server')
+      const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
       const patterns = await validatePatterns(generalAgent)
 
       expect(patterns.map((p) => p.name)).toEqual(['planner', 'simpleLoop', 'compactExecution'])
@@ -251,13 +251,13 @@ describe('Agent Harnesses', () => {
 
   describe('sandboxSessionAgent', () => {
     it('should have valid config', async () => {
-      const { sandboxSessionAgent } = await import('@hames/agents/agents/sandbox-session.server')
+      const { sandboxSessionAgent } = await import('@hames-ai/agents/agents/sandbox-session.server')
       validateAgentConfig(sandboxSessionAgent)
       expect(sandboxSessionAgent.id).toBe('sandbox-session')
     })
 
     it('should create patterns: compactIntent → withSandbox(actorCritic) → compactExecution', async () => {
-      const { sandboxSessionAgent } = await import('@hames/agents/agents/sandbox-session.server')
+      const { sandboxSessionAgent } = await import('@hames-ai/agents/agents/sandbox-session.server')
       const patterns = await validatePatterns(sandboxSessionAgent)
 
       const names = patterns.map((p) => p.name)
@@ -275,14 +275,14 @@ describe('Agent Harnesses', () => {
   describe('flavouredSandboxAgent', () => {
     it('should have valid config', async () => {
       const { flavouredSandboxAgent } =
-        await import('@hames/agents/agents/flavoured-sandbox.server')
+        await import('@hames-ai/agents/agents/flavoured-sandbox.server')
       validateAgentConfig(flavouredSandboxAgent)
       expect(flavouredSandboxAgent.id).toBe('flavoured-sandbox')
     })
 
     it('should create patterns: router + routes(flavoured sandboxes) + compactExecution', async () => {
       const { flavouredSandboxAgent } =
-        await import('@hames/agents/agents/flavoured-sandbox.server')
+        await import('@hames-ai/agents/agents/flavoured-sandbox.server')
       const patterns = await validatePatterns(flavouredSandboxAgent)
 
       const names = patterns.map((p) => p.name)
@@ -299,8 +299,8 @@ describe('Agent Harnesses', () => {
 
     it('exposes the durable-workspace capability (persistent flavours use syncWorkspace)', async () => {
       const { flavouredSandboxAgent } =
-        await import('@hames/agents/agents/flavoured-sandbox.server')
-      const { harnessUsesSyncWorkspace } = await import('@hames/harness-patterns')
+        await import('@hames-ai/agents/agents/flavoured-sandbox.server')
+      const { harnessUsesSyncWorkspace } = await import('@hames-ai/harness-patterns')
       const patterns = await flavouredSandboxAgent.createPatterns('test-session', testAgentDeps)
       expect(
         harnessUsesSyncWorkspace(patterns as Parameters<typeof harnessUsesSyncWorkspace>[0]),
@@ -315,7 +315,7 @@ describe('Agent Harnesses', () => {
     // EVERY flavour shares the session workspace.
     it('gives EVERY flavour route the durable session workspace, not just some', async () => {
       const { flavouredSandboxAgent } =
-        await import('@hames/agents/agents/flavoured-sandbox.server')
+        await import('@hames-ai/agents/agents/flavoured-sandbox.server')
       const patterns = await flavouredSandboxAgent.createPatterns('test-session', testAgentDeps)
 
       const routesPattern = patterns.find((p) => p.name.startsWith('routes('))!
@@ -338,9 +338,9 @@ describe('Agent Harnesses', () => {
 describe('Agent Consistency', () => {
   it('all agents should have unique IDs', async () => {
     // Import all agents statically
-    const { searchAgent } = await import('@hames/agents/agents/search.server')
-    const { sandboxSessionAgent } = await import('@hames/agents/agents/sandbox-session.server')
-    const { generalAgent } = await import('@hames/agents/agents/general.server')
+    const { searchAgent } = await import('@hames-ai/agents/agents/search.server')
+    const { sandboxSessionAgent } = await import('@hames-ai/agents/agents/sandbox-session.server')
+    const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
 
     const ids = [searchAgent.id, sandboxSessionAgent.id, generalAgent.id]
 
@@ -349,8 +349,8 @@ describe('Agent Consistency', () => {
   })
 
   it('all agents should contain compactExecution pattern', async () => {
-    const { searchAgent } = await import('@hames/agents/agents/search.server')
-    const { generalAgent } = await import('@hames/agents/agents/general.server')
+    const { searchAgent } = await import('@hames-ai/agents/agents/search.server')
+    const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
 
     const agents = [searchAgent, generalAgent]
 
@@ -392,7 +392,8 @@ describe('compactExecution view scope — the user message must survive', () => 
 
   async function synthOf(agentId: 'sandbox-session'): Promise<Node> {
     // Static import: a template-literal specifier defeats Vite's analysis.
-    const agent = (await import('@hames/agents/agents/sandbox-session.server')).sandboxSessionAgent
+    const agent = (await import('@hames-ai/agents/agents/sandbox-session.server'))
+      .sandboxSessionAgent
     const patterns = (await agent.createPatterns(
       'test-session',
       testAgentDeps,
@@ -425,7 +426,7 @@ describe('compactExecution view scope — the user message must survive', () => 
 
   it('sandbox-session: the synth still sees the question', async () => {
     const loopId = 'sandbox-session-loop'
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
     const synth = await synthOf('sandbox-session')
 
     // Mirrors compactExecution's own read: `view.fromAll().ofType('user_message')`.

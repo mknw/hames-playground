@@ -10,12 +10,12 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
 import type { McpTransport } from '../types'
-import type { ToolCallResult } from '@hames/harness-patterns/types'
+import type { ToolCallResult } from '@hames-ai/harness-patterns/types'
 import { writeWorkFile, readWorkFile, listWorkFiles, diffWorkFiles } from '../work-sync.server'
 
 /** Strip the single-quoting `shq()` applies. */

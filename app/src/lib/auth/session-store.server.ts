@@ -18,7 +18,7 @@
  * random rather than personal data. `user_id` (the Entra `oid`) and
  * `home_account_id` stay plaintext too; see the PR inventory for why.
  */
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { query } from '../db/client.server'
 import {
   decryptField,

@@ -12,7 +12,7 @@
  * Binding ground rule from the packaging programme: a snippet must work for
  * someone who installed the TARBALL. "A snippet that works in this monorepo and
  * fails for a consumer is the failure class the whole packaging programme
- * exists to prevent." A resolver that maps `@hames/x/anything` straight onto
+ * exists to prevent." A resolver that maps `@hames-ai/x/anything` straight onto
  * `packages/x/anything.ts` cannot see that failure: it happily resolves a path
  * the `exports` map does not expose, or a file the `files` allowlist does not
  * ship. So {@link resolvePackageModule} below models the published surface —
@@ -132,7 +132,7 @@ const MANIFESTS: Record<string, Manifest> = Object.fromEntries(
   PACKAGE_NAMES.map((name) => {
     const root = path.join(PACKAGES, name)
     const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf-8'))
-    return [`@hames/${name}`, { root, exports: pkg.exports ?? {}, files: pkg.files ?? [] }]
+    return [`@hames-ai/${name}`, { root, exports: pkg.exports ?? {}, files: pkg.files ?? [] }]
   }),
 )
 
@@ -163,7 +163,7 @@ function matchesFilesEntry(pattern: string, relative: string): boolean {
 }
 
 /**
- * Resolve an `@hames/*` specifier the way a consumer's bundler does: through
+ * Resolve an `@hames-ai/*` specifier the way a consumer's bundler does: through
  * the package's `exports` map only, then check the target actually ships.
  * Returns undefined when the specifier is not exposed — which is a FAILURE the
  * fence should see, not a reason to fall through to the source tree.
@@ -232,7 +232,7 @@ function compileFences(fences: Fence[]): Map<Fence, string[]> {
   }
 
   const host = ts.createCompilerHost(options, /* setParentNodes */ true)
-  const fenceDir = MANIFESTS['@hames/harness-patterns'].root
+  const fenceDir = MANIFESTS['@hames-ai/harness-patterns'].root
   const fenceByPath = new Map<string, string>(
     fences.map((f, i) => [path.join(fenceDir, `__tutorial-fence-${i}.ts`), f.code]),
   )
@@ -245,7 +245,7 @@ function compileFences(fences: Fence[]): Map<Fence, string[]> {
   }
   host.resolveModuleNames = (moduleNames, containingFile) =>
     moduleNames.map((specifier) => {
-      if (specifier.startsWith('@hames/')) {
+      if (specifier.startsWith('@hames-ai/')) {
         // NO fall-through to node_modules: inside this workspace the symlink
         // would resolve a subpath the published package does not expose, which
         // is the whole failure this resolver exists to catch.

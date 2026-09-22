@@ -21,7 +21,7 @@
  * load-time guard that replaces it.
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { getNeo4jDriver } from './client'
 
 assertServerOnImport()

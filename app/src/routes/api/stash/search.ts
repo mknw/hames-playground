@@ -8,7 +8,7 @@
  */
 
 import type { APIEvent } from '@solidjs/start/server'
-import { searchDocuments } from '@hames/harness-patterns/stash/document-ingest.server'
+import { searchDocuments } from '@hames-ai/harness-patterns/stash/document-ingest.server'
 import { json, requireSessionOwner, withUser } from '../../../lib/stash/http.server'
 
 export async function GET(event: APIEvent) {

@@ -107,7 +107,7 @@ describe('workspace package conventions', () => {
   /**
    * ## Why a cross-package edge is a PEER and not a dependency
    *
-   * `@hames/harness-patterns` holds module-level `AsyncLocalStorage`
+   * `@hames-ai/harness-patterns` holds module-level `AsyncLocalStorage`
    * singletons — the inference-tier scope, the settings scope, the cold-start
    * watch. Everything those seams enforce is a property of ONE module
    * instance: a scope opened in one copy is invisible to a read from another.
@@ -127,7 +127,7 @@ describe('workspace package conventions', () => {
    * ecosystem converged on for the same reason.
    *
    * The devDependency half is not bookkeeping. A peer alone installs nothing,
-   * so without it `pnpm install` leaves the package's own `node_modules/@hames`
+   * so without it `pnpm install` leaves the package's own `node_modules/@hames-ai`
    * empty and its tests, its typecheck and its `pnpm pack` all lose the
    * workspace link. Both entries are `workspace:^`; pnpm rewrites that to a
    * real caret range at pack time, which `package-publish.test.ts` asserts on
@@ -154,10 +154,10 @@ describe('workspace package conventions', () => {
     )
     const hames = (field?: Record<string, string>): string[] =>
       Object.keys(field ?? {})
-        .filter((spec) => spec.startsWith('@hames/'))
+        .filter((spec) => spec.startsWith('@hames-ai/'))
         .sort()
 
-    it('no package lists an @hames/* package under dependencies', () => {
+    it('no package lists an @hames-ai/* package under dependencies', () => {
       const offenders = Object.fromEntries(
         [...manifests.entries()]
           .map(([name, m]) => [name, hames(m.dependencies)] as const)
@@ -171,7 +171,7 @@ describe('workspace package conventions', () => {
       ).toEqual({})
     })
 
-    it('every @hames/* peer is also a devDependency, so the workspace link survives', () => {
+    it('every @hames-ai/* peer is also a devDependency, so the workspace link survives', () => {
       const unlinked = Object.fromEntries(
         [...manifests.entries()]
           .map(
@@ -186,13 +186,13 @@ describe('workspace package conventions', () => {
       expect(
         unlinked,
         'a peer installs nothing: without the matching devDependency this package has no ' +
-          'node_modules/@hames link, so its own tests, typecheck and pack all break',
+          'node_modules/@hames-ai link, so its own tests, typecheck and pack all break',
       ).toEqual({})
     })
 
-    it('the companions DO declare @hames peers, so neither scan above passes vacuously', () => {
+    it('the companions DO declare @hames-ai peers, so neither scan above passes vacuously', () => {
       // The four companions of harness-patterns, which is the one package with
-      // no @hames edge of its own. Asserted BY NAME, and deliberately so: a
+      // no @hames-ai edge of its own. Asserted BY NAME, and deliberately so: a
       // bare count, or an "at least one", would not notice `connectors`
       // silently losing its peer — which is the exact revert the two scans
       // above cannot catch by themselves, since both are emptiness assertions.
@@ -211,8 +211,8 @@ describe('workspace package conventions', () => {
       // agents peers on both harness-baml and harness-patterns; the other three
       // on harness-patterns alone.
       expect(hames(manifests.get('agents')?.peerDependencies)).toEqual([
-        '@hames/harness-baml',
-        '@hames/harness-patterns',
+        '@hames-ai/harness-baml',
+        '@hames-ai/harness-patterns',
       ])
     })
   })

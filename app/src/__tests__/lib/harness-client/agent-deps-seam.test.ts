@@ -31,7 +31,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockFinalAction } from '../../mocks/baml'
 import { mockCallTool, mockListTools } from '../../mocks/mcp'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -39,12 +39,12 @@ const callToolMock = mockCallTool({
   responses: { get_neo4j_schema: { Concept: ['name'] } },
 })
 
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   callTool: callToolMock,
   listTools: mockListTools(['read_neo4j_cypher', 'get_neo4j_schema', 'search', 'fetch']),
 }))
 
-vi.mock('@hames/harness-baml/baml_client', () => ({
+vi.mock('@hames-ai/harness-baml/baml_client', () => ({
   b: {
     Router: vi.fn(async () => ({ intent: 'x', needs_tool: false, route: 'user', response: '' })),
     LoopController: vi.fn(async () => mockFinalAction()),
@@ -65,8 +65,8 @@ const createRedisBackend = vi.fn(() => ({
 const withSandbox = vi.fn((_config: { tenantId?: unknown }) => (p: unknown) => p)
 const enrichNeo4jResult = vi.fn()
 
-vi.mock('@hames/harness-patterns/retriever', () => ({ createRedisBackend }))
-vi.mock('@hames/sandbox', () => ({ withSandbox }))
+vi.mock('@hames-ai/harness-patterns/retriever', () => ({ createRedisBackend }))
+vi.mock('@hames-ai/sandbox', () => ({ withSandbox }))
 vi.mock('../../../lib/harness-client/neo4j-enricher.server', () => ({ enrichNeo4jResult }))
 vi.mock('../../../lib/db/conversations.server', () => ({
   loadConversation: vi.fn(),
@@ -78,13 +78,13 @@ vi.mock('../../../lib/db/conversations.server', () => ({
 
 // The REAL Tools, spied so the pin can read the resolver the factory handed
 // it — the app's catalog FUNCTION IDENTITY, not just some resolver.
-const toolsSpy = vi.spyOn(await import('@hames/harness-patterns/tools.server'), 'Tools')
+const toolsSpy = vi.spyOn(await import('@hames-ai/harness-patterns/tools.server'), 'Tools')
 
 // The real overlay path: registry.server.ts registers the moved definitions,
 // each wrapped to supply `agentDeps()`.
 const { getAgent } = await import('../../../lib/harness-client/registry.server')
 const { agentDeps } = await import('../../../lib/harness-client/session.server')
-const { mcpNamespace } = await import('@hames/connectors/mcp-catalog')
+const { mcpNamespace } = await import('@hames-ai/connectors/mcp-catalog')
 
 interface Pattern {
   name: string

@@ -10,14 +10,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 // The store self-asserts server-only on import; stub it out under jsdom.
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
 
 // Stub the MCP client module so importing the store never reaches a real
 // gateway. Tests inject their own fake callTool per-call instead.
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   callTool: vi.fn(async () => ({ success: false, data: null, error: 'no gateway' })),
 }))
 

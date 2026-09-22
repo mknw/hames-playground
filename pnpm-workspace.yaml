@@ -1,6 +1,6 @@
 # Two members (#225 Step 1b, docs/plan/harness-npm-lib.md §2.1): the library
 # moved to packages/ in Step 1a and is now a workspace member, so
-# `@hames/harness-patterns` resolves via workspace:* to live source.
+# `@hames-ai/harness-patterns` resolves via workspace:* to live source.
 packages:
   - app
   - packages/*

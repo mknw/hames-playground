@@ -160,7 +160,7 @@
  * figure, not a per-conversation one — and that is not this module's call to
  * make.
  */
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { verdaProvenWarm, settleColdStart, noteVerdaCallStarting } from './cold-start.server'
 import { VERDA_MODEL_ID, noteVerdaCallCompleted } from './verda-activity.server'
 

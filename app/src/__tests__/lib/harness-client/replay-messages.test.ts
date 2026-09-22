@@ -7,8 +7,8 @@
  * chat bubble. Discriminator: `AssistantMessageEventData.final === true`.
  */
 import { describe, it, expect } from 'vitest'
-import { replayMessages, errorBubble } from '@hames/agents/replay'
-import type { ContextEvent, ErrorEventData } from '@hames/harness-patterns'
+import { replayMessages, errorBubble } from '@hames-ai/agents/replay'
+import type { ContextEvent, ErrorEventData } from '@hames-ai/harness-patterns'
 
 const userMsg = (content: string, ts: number, id: string): ContextEvent => ({
   id,

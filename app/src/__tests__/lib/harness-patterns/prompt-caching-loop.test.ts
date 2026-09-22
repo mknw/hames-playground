@@ -25,7 +25,7 @@
  * regression in either shows up as a diff here rather than on the bill.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { mockCallTool, mockListTools, fixtures } from '../../mocks/mcp'
 
 /**
@@ -39,11 +39,11 @@ const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'offline-render-test'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   callTool: mockCallTool({
     responses: {
       read_neo4j_cypher: fixtures.neo4j.queryResult,
@@ -117,8 +117,8 @@ function tailAfterLastMarker(body: Body): WireBlock[] {
 }
 
 async function loadHarness() {
-  const actual = await vi.importActual<typeof import('@hames/harness-baml/baml_client')>(
-    '@hames/harness-baml/baml_client',
+  const actual = await vi.importActual<typeof import('@hames-ai/harness-baml/baml_client')>(
+    '@hames-ai/harness-baml/baml_client',
   )
 
   // Intercept the two controller calls: render the real HTTP body (never
@@ -172,7 +172,7 @@ async function loadHarness() {
     },
   ]
 
-  vi.doMock('@hames/harness-baml/baml_client', () => ({
+  vi.doMock('@hames-ai/harness-baml/baml_client', () => ({
     b: {
       request: actual.b.request,
       LoopController: async (...args: unknown[]) => {
@@ -202,12 +202,12 @@ async function loadHarness() {
     },
   }))
 
-  const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
-  const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
+  const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
+  const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
   const { createLoopControllerAdapter, createActorControllerAdapter, createCriticAdapter } =
-    await import('@hames/harness-baml/baml-adapters.server')
-  const { createScope } = await import('@hames/harness-patterns/context.server')
-  const { createEventView } = await import('@hames/harness-patterns/patterns')
+    await import('@hames-ai/harness-baml/baml-adapters.server')
+  const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+  const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
   return {
     simpleLoop,
     actorCritic,

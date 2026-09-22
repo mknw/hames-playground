@@ -228,7 +228,7 @@ describe('prompt-cache live bench: V1 vs V2', () => {
     'runs both variants and writes the report',
     async () => {
       const key = apiKey()
-      const { b } = await import('@hames/harness-baml/baml_client')
+      const { b } = await import('@hames-ai/harness-baml/baml_client')
       const salt = `bench-${Date.now()}`
       const userMessage = `[${salt}] Compute the per-label node counts for the Bench subgraph and report the three largest labels with their counts.`
 

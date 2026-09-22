@@ -23,7 +23,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
 import { parse as parseYaml } from 'yaml'
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 
 assertServerOnImport()
 

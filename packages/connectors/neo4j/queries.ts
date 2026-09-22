@@ -22,7 +22,7 @@
  * load-time guard that replaces it.
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import neo4j from 'neo4j-driver'
 import { getNeo4jDriver, resetDriver, verifyConnection } from './client'
 import { transformNeo4jToCytoscape, parseNeo4jResults } from './transform'

@@ -71,7 +71,7 @@ let installed = false
  */
 export function installHermeticRouting(b: unknown, baseUrl: string): void {
   if (installed) return
-  // ONE generated singleton — `@hames/harness-baml/baml_client` — because there
+  // ONE generated singleton — `@hames-ai/harness-baml/baml_client` — because there
   // is one corpus. It took a LIST while the app carried a duplicate tree, and
   // that list was load-bearing then: a registry defined on only one of two `b`
   // objects let the other one's functions bypass the fake and reach a real

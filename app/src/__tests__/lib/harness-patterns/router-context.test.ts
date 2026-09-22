@@ -24,7 +24,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
 
@@ -38,7 +38,7 @@ import path from 'node:path'
 const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 // Mock server-only imports
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -57,9 +57,9 @@ const TRY_AGAIN_TURNS = [
 const SYNTHESIZED = 'search the web for SolidJS resources (retry of the previous turn)'
 
 async function runRouterOver(turns: ReadonlyArray<{ type: string; content: string }>) {
-  const { router } = await import('@hames/harness-patterns/patterns/router.server')
-  const { createContext } = await import('@hames/harness-patterns/context.server')
-  const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+  const { router } = await import('@hames-ai/harness-patterns/patterns/router.server')
+  const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+  const { createEventView } = await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
   // createContext() seeds the opening user_message itself, so the first turn
   // is its input and the rest are appended — same shape as a real session.
@@ -138,9 +138,10 @@ describe('router — cross-turn intent (#53)', () => {
   })
 
   it('hands the synthesized intent to the dispatched pattern, not the bare phrase', async () => {
-    const { routes } = await import('@hames/harness-patterns/patterns/router.server')
-    const { createContext } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
+    const { routes } = await import('@hames-ai/harness-patterns/patterns/router.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
 
     const { scope } = await runRouterOver(TRY_AGAIN_TURNS)
 

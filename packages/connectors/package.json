@@ -1,7 +1,7 @@
 {
-  "name": "@hames/connectors",
+  "name": "@hames-ai/connectors",
   "version": "0.1.0",
-  "description": "The connectors companion for @hames/harness-patterns — Microsoft Graph app-side tools, the Neo4j non-agentic layer, and the MCP-gateway namespace catalog, all behind injected seams.",
+  "description": "The connectors companion for @hames-ai/harness-patterns — Microsoft Graph app-side tools, the Neo4j non-agentic layer, and the MCP-gateway namespace catalog, all behind injected seams.",
   "keywords": [
     "connectors",
     "neo4j",
@@ -57,10 +57,10 @@
     "neo4j-driver": "^6.0.1"
   },
   "peerDependencies": {
-    "@hames/harness-patterns": "workspace:^"
+    "@hames-ai/harness-patterns": "workspace:^"
   },
   "devDependencies": {
-    "@hames/harness-patterns": "workspace:^",
+    "@hames-ai/harness-patterns": "workspace:^",
     "seroval": "~1.5.0",
     "vitest": "^4.1.5"
   }

@@ -1,6 +1,6 @@
 # Hosting the harness: running a turn in your own app
 
-You have `@hames/harness-patterns` installed and some patterns composed. This
+You have `@hames-ai/harness-patterns` installed and some patterns composed. This
 page is the smallest thing you need to know to run a turn from your own
 application: what the **run frame** is, what each of its five slots does for
 you, what happens when you skip it, and one complete host you can copy.
@@ -19,8 +19,8 @@ this page's code assembled into one file you can copy out and run.
 Call an entry point. That is the whole contract:
 
 ```typescript
-import { harness } from "@hames/harness-patterns";
-import type { ConfiguredPattern, HarnessData } from "@hames/harness-patterns";
+import { harness } from "@hames-ai/harness-patterns";
+import type { ConfiguredPattern, HarnessData } from "@hames-ai/harness-patterns";
 
 /** Your turn's data shape. The index signature is what every pattern needs. */
 interface MyData extends HarnessData {
@@ -92,12 +92,12 @@ If you are driving patterns yourself — a script, a cron job, a test — open a
 empty frame:
 
 ```typescript
-import { withRunFrame } from "@hames/harness-patterns";
-import { runChain } from "@hames/harness-patterns/patterns/chain.server";
+import { withRunFrame } from "@hames-ai/harness-patterns";
+import { runChain } from "@hames-ai/harness-patterns/patterns/chain.server";
 import type {
   ConfiguredPattern,
   UnifiedContext,
-} from "@hames/harness-patterns";
+} from "@hames-ai/harness-patterns";
 
 declare const ctx: UnifiedContext<Record<string, unknown>>;
 declare const patterns: ConfiguredPattern<Record<string, unknown>>[];
@@ -118,10 +118,10 @@ Pass a frame to the entry point, as its last argument:
 import type {
   ContextEvent,
   HarnessRuntimeConfig,
-} from "@hames/harness-patterns";
+} from "@hames-ai/harness-patterns";
 
 declare const agent: ReturnType<
-  typeof import("@hames/harness-patterns").harness
+  typeof import("@hames-ai/harness-patterns").harness
 >; // from §1
 declare const input: string;
 declare const sessionId: string;
@@ -148,14 +148,14 @@ import {
   withRunFrame,
   amendRunFrame,
   continueSession,
-} from "@hames/harness-patterns";
+} from "@hames-ai/harness-patterns";
 import type {
   ConfiguredPattern,
   ContextEvent,
   HarnessData,
   HarnessResultScoped,
   HarnessRuntimeConfig,
-} from "@hames/harness-patterns";
+} from "@hames-ai/harness-patterns";
 
 interface MyData extends HarnessData {
   [key: string]: unknown;
@@ -254,7 +254,7 @@ import {
   type HarnessData,
   type RunFrame,
   type SimpleLoopData,
-} from "@hames/harness-patterns";
+} from "@hames-ai/harness-patterns";
 
 // 0. One data shape for the whole chain. Each pattern constrains it (a loop
 //    needs `SimpleLoopData`, the synthesizer `CompactExecutionData`), and the

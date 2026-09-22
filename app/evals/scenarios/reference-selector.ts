@@ -81,7 +81,7 @@ export const referenceSelectorScenario: Scenario = {
   title: 'ReferenceSelector — picks the relevant prior result, and only real ids',
   what: 'the citation picker: an invented ref_id attaches nothing, so a missing citation is the silent failure',
   run: async (ctx) => {
-    const { b } = await import('@hames/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
     const { expectedClientFor } = await import('../client')
     const describeClient = expectedClientFor(ctx.routing, 'describe')
     const collector = new Collector('eval-reference-selector')

@@ -14,7 +14,7 @@
 import { For, Show, createSignal, createMemo, createEffect, on, onCleanup } from 'solid-js'
 import { isServer } from 'solid-js/web'
 import { Tooltip } from '@ark-ui/solid/tooltip'
-import type { ContextEvent, ToolResultEventData } from '@hames/harness-patterns'
+import type { ContextEvent, ToolResultEventData } from '@hames-ai/harness-patterns'
 import {
   deleteStashDocument,
   getStashDocument,
@@ -29,10 +29,10 @@ import {
   refreshDocuments,
   type StashDocumentMeta,
 } from '~/lib/stash-documents'
-import { referencesForDoc, type OpenReferenceTarget } from '@hames/agents'
+import { referencesForDoc, type OpenReferenceTarget } from '@hames-ai/agents'
 // Core event-stream boundary helper — shared with the citation extractor,
 // which reads it from the same core module now (SA-H7).
-import { findLastUserMessageIndex } from '@hames/harness-patterns/content-transforms'
+import { findLastUserMessageIndex } from '@hames-ai/harness-patterns/content-transforms'
 import { SanitizedChip } from './SanitizedChip'
 
 // ============================================================================

@@ -3,7 +3,7 @@
  *
  * Token, cache and cost transparency across everything the signed-in user has
  * run. Numbers come from `event.metrics` (#122 / PR #130) folded server-side —
- * see `@hames/harness-patterns/metrics/aggregate` for the fold and `dashboard.server.ts` for the
+ * see `@hames-ai/harness-patterns/metrics/aggregate` for the fold and `dashboard.server.ts` for the
  * user-scoped load. Auth matches the rest of the app: the page renders behind
  * `AuthProvider`, and the server action independently re-checks the session,
  * so an unauthenticated fetch gets nothing regardless of the client gate.
@@ -13,8 +13,8 @@
 
 import { createResource, createMemo, For, Show } from 'solid-js'
 import { getMetricsDashboard, type MetricsDashboard } from '~/lib/metrics/dashboard.server'
-import type { MetricSummary } from '@hames/harness-patterns/metrics/aggregate'
-import { fmtEur } from '@hames/harness-patterns/observability/token-totals'
+import type { MetricSummary } from '@hames-ai/harness-patterns/metrics/aggregate'
+import { fmtEur } from '@hames-ai/harness-patterns/observability/token-totals'
 
 // ============================================================================
 // Formatting

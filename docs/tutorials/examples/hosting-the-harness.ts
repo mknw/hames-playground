@@ -36,7 +36,7 @@ import {
   type HarnessData,
   type RunFrame,
   type SimpleLoopData,
-} from "@hames/harness-patterns";
+} from "@hames-ai/harness-patterns";
 
 // 0. One data shape for the whole chain. Each pattern constrains it (a loop
 //    needs `SimpleLoopData`, the synthesizer `CompactExecutionData`), and the

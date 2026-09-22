@@ -40,11 +40,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-import type { BamlRole } from '@hames/harness-baml/clients.server'
+import type { BamlRole } from '@hames-ai/harness-baml/clients.server'
 
 const ENV_KEYS = [
   'USE_VERDA_INFERENCE',
@@ -120,7 +120,7 @@ async function load() {
   // every production path takes — including its `rejects` on a flag-on
   // misconfigured endpoint, which these tests rely on.
   await import('../../../lib/inference/config.server')
-  return await import('@hames/harness-baml/clients.server')
+  return await import('@hames-ai/harness-baml/clients.server')
 }
 
 /** The app-policy half (env flag, asserts) — MOVED off `clients.server.ts`
@@ -215,7 +215,7 @@ describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
 
   it('trims Verda-routed prompts against the 131K server window, not 200K', async () => {
     const { resolveClientForRole } = await load()
-    const { getContextWindow } = await import('@hames/harness-baml/clients.server')
+    const { getContextWindow } = await import('@hames-ai/harness-baml/clients.server')
 
     // vLLM ran with `--max-model-len 131072`; a prompt sized for 200K is
     // rejected outright, so this is the difference between "the flag works"
@@ -474,7 +474,7 @@ describe('every routed role has a wired call site', () => {
     for (const entry of readdirSync(dir)) {
       const full = path.join(dir, entry)
       if (statSync(full).isDirectory()) {
-        // node_modules/baml_client/baml_src: the package tree (@hames/
+        // node_modules/baml_client/baml_src: the package tree (@hames-ai/
         // harness-baml, PR-1b) contributes its hand-written .ts only — the
         // generated client names every routed function and would make every
         // per-file check vacuously pass.

@@ -62,7 +62,7 @@ import {
   withInjectionGuard,
   compactExecution,
   harness,
-} from '@hames/harness-patterns'
+} from '@hames-ai/harness-patterns'
 import type {
   ConfiguredPattern,
   ControllerFn,
@@ -71,8 +71,8 @@ import type {
   SimpleLoopData,
   SynthesisFn,
   CompactExecutionData,
-} from '@hames/harness-patterns'
-import type { HarnessData } from '@hames/harness-patterns/harness.server'
+} from '@hames-ai/harness-patterns'
+import type { HarnessData } from '@hames-ai/harness-patterns/harness.server'
 
 // One data type across the composition — extends the pieces it rides and
 // carries an index signature (what `harness()`'s generic requires):
@@ -151,7 +151,7 @@ configuration and per-pattern semantics that belong there rather than here.
 This package **ships TypeScript source**: `main` and every code target in
 `exports` is a `.ts` file (`./package.json` is the one non-code entry), there is
 no `dist/`, and `pnpm pack` is the whole publish pipeline — the same is true of
-every `@hames` package. Consumers are **TS-bundler consumers**: a project whose
+every `@hames-ai` package. Consumers are **TS-bundler consumers**: a project whose
 bundler or runtime compiles TypeScript — Vite/vinxi, esbuild, tsx, Bun. **Not**
 `node --experimental-strip-types`: Node refuses to strip types under
 `node_modules`, which is exactly where an installed package lives
@@ -164,7 +164,7 @@ test in this repo runs against.
 
 This package — and only this package — is [MIT](./LICENSE) (Copyright (c) 2026
 Michael Accetto). It is the `hames` library: a pnpm workspace package, published to npm as
-`@hames/harness-patterns` (see the guide's "Consuming the package" for how
+`@hames-ai/harness-patterns` (see the guide's "Consuming the package" for how
 each consumer — workspace, Docker image, tarball — takes it).
 
 It lives inside the

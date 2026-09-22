@@ -37,7 +37,7 @@
  * module-load crash, not a degraded feature. That is not hypothetical for a
  * tarball consumer: pnpm's dependency build-script allowlist
  * (`onlyBuiltDependencies`) lives in a WORKSPACE ROOT manifest, which a
- * consumer installing `@hames/sandbox` does not inherit, so node-pty arrives
+ * consumer installing `@hames-ai/sandbox` does not inherit, so node-pty arrives
  * with its build scripts ignored and works only where a prebuild happens to
  * match. Deferring the import moves that failure from "this package cannot be
  * imported" to "this package's PTY feature is unavailable on this host", which
@@ -49,7 +49,7 @@
  * THAT it is required.
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { DEFAULT_SANDBOX_SETTINGS } from './settings'
 import { getDefaultAttachments } from './with-sandbox.server'
 import { hydrateWorkspace } from './work-artifacts.server'

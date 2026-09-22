@@ -16,8 +16,8 @@
 
 'use server'
 
-import { getNeo4jDriver } from '@hames/connectors/neo4j/client'
-import type { OnToolResult } from '@hames/harness-patterns/types'
+import { getNeo4jDriver } from '@hames-ai/connectors/neo4j/client'
+import type { OnToolResult } from '@hames-ai/harness-patterns/types'
 
 const ENRICHABLE_TOOLS = new Set(['read_neo4j_cypher', 'write_neo4j_cypher'])
 

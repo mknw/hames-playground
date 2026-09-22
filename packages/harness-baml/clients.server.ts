@@ -39,7 +39,7 @@
  *   one warm box for a session is cheaper than a cold start per stray call.
  *   What changed for the preview (2026-08-25) is the *granularity of the
  *   decision*, not its scope: the tier rides the RUN FRAME's `inference` slot
- *   (`@hames/harness-patterns/run-frame.server`), so one user's turn can run on
+ *   (`@hames-ai/harness-patterns/run-frame.server`), so one user's turn can run on
  *   a different tier than another's while everything inside that turn stays on
  *   one tier. `USE_VERDA_INFERENCE` remains the process default for anything
  *   running outside a frame, or inside one whose slot nobody filled.
@@ -114,9 +114,9 @@
  * core's `run-frame.test.ts` as well.
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import { currentRunFrame } from '@hames/harness-patterns/run-frame.server'
-import type { ModelLimits, CostBasis } from '@hames/harness-patterns/types'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import { currentRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
+import type { ModelLimits, CostBasis } from '@hames-ai/harness-patterns/types'
 // TYPE-ONLY by design: this module owns the routing seam and reads the
 // consumer layer's SHAPE, while `consumer-clients.server.ts` imports the seam
 // itself. A value import here would make the consumer module load whenever the

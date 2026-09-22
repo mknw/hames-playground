@@ -19,7 +19,7 @@ import '../../../lib/inference/config.server'
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
@@ -29,7 +29,7 @@ import {
   getRequestUserId,
   getRequestSessionId,
 } from '../../../lib/harness-client/request-user.server'
-import { runtimeConfig } from '@hames/harness-patterns/runtime-config.server'
+import { runtimeConfig } from '@hames-ai/harness-patterns/runtime-config.server'
 import { DEFAULT_SETTINGS } from '../../../lib/settings'
 
 /** Every run records the ambient scope it saw. */
@@ -78,7 +78,7 @@ const compactBulkData = vi.fn(async (_ctx: unknown, onPersist: () => Promise<voi
   await onPersist()
 })
 
-vi.mock('@hames/harness-patterns', () => ({
+vi.mock('@hames-ai/harness-patterns', () => ({
   harness,
   continueSession,
   resumeHarness,
@@ -101,10 +101,10 @@ type OpenedFrame = {
   live?: unknown
 }
 const openedFrames: OpenedFrame[] = []
-vi.mock('@hames/harness-patterns/run-frame.server', async () => {
-  const actual = await vi.importActual<typeof import('@hames/harness-patterns/run-frame.server')>(
-    '@hames/harness-patterns/run-frame.server',
-  )
+vi.mock('@hames-ai/harness-patterns/run-frame.server', async () => {
+  const actual = await vi.importActual<
+    typeof import('@hames-ai/harness-patterns/run-frame.server')
+  >('@hames-ai/harness-patterns/run-frame.server')
   return {
     ...actual,
     withRunFrame: (frame: never, fn: () => Promise<unknown>) => {
@@ -194,7 +194,7 @@ vi.mock('../../../lib/db/conversations.server', () => ({
 
 // ── title agent ─────────────────────────────────────────────────────────────
 const runFirstTurnTitleGen = vi.fn<() => Promise<string | null>>(async () => null)
-vi.mock('@hames/agents/agents/title-generator.server', () => ({
+vi.mock('@hames-ai/agents/agents/title-generator.server', () => ({
   runFirstTurnTitleGen: (...a: unknown[]) => runFirstTurnTitleGen(...(a as [])),
 }))
 
@@ -386,7 +386,7 @@ describe('interactive turns', () => {
     let sidecarTier: unknown
     let sidecarBudget: unknown
     runFirstTurnTitleGen.mockImplementation(async () => {
-      const { currentRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+      const { currentRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
       const frame = currentRunFrame()
       sidecarLive = frame?.live
       sidecarTier = frame?.inference?.tier
@@ -864,7 +864,7 @@ describe('what the header learns from a turn', () => {
     // what every adapter does and what fires the notice. The private turn is
     // parked in its wake while the Anthropic one runs, so the two scopes are
     // genuinely open at once.
-    const { clientOverrideFor } = await import('@hames/harness-baml/clients.server')
+    const { clientOverrideFor } = await import('@hames-ai/harness-baml/clients.server')
     const privateWarming = vi.fn()
     const anthropicWarming = vi.fn()
     const overrides: Record<string, { client: string } | undefined> = {}

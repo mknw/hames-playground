@@ -1,21 +1,21 @@
-# @hames/agents
+# @hames-ai/agents
 
 Ready-made harness compositions for
-[@hames/harness-patterns](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns):
+[@hames-ai/harness-patterns](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns):
 six agent definitions built on the framework's composable patterns, plus three
 shared helpers and the client-safe extraction/replay helpers the reference UI
 consumes. The BAML backing (prompt templates, role→client resolution, adapter
 factories) lives in the companion package
-[@hames/harness-baml](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml).
+[@hames-ai/harness-baml](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml).
 
 The package owns **definitions**, not composition. It carries no UI framework
 concepts (no SolidJS, no UnoCSS, no Ark UI) and no host policy — everything
-app-side is either imported from `@hames/harness-baml` directly or injected
+app-side is either imported from `@hames-ai/harness-baml` directly or injected
 through one `AgentDeps` bag.
 
 ## Surface
 
-The root barrel (`import from '@hames/agents'`) is **client-safe** — UI
+The root barrel (`import from '@hames-ai/agents'`) is **client-safe** — UI
 consumers import it and drag nothing server-side:
 
 | Export                                                                        | What it is                                                      |
@@ -27,7 +27,7 @@ consumers import it and drag nothing server-side:
 | `GraphElement`, `OpenReferenceTarget`                                         | the shared data types                                           |
 | `AgentDefinition`, `AgentData`, `AgentDeps`                                   | the definition surface (below)                                  |
 
-The definitions barrel (`import from '@hames/agents/agents'`) is
+The definitions barrel (`import from '@hames-ai/agents/agents'`) is
 **server-only** — six registered agents plus three shared helpers
 (`getGraphSchema`, the Neo4j few-shots, the title generator). Every module
 calls core's `assertServerOnImport()` at load.
@@ -59,7 +59,7 @@ interface AgentData
 }
 
 // What the HOST supplies per agent — ONLY app-side things. The BAML pieces
-// (bamlPatterns, the adapter factories) are imported from @hames/harness-baml
+// (bamlPatterns, the adapter factories) are imported from @hames-ai/harness-baml
 // directly, not injected:
 interface AgentDeps {
   toolNamespaces: (toolName: string) => string | undefined
@@ -76,8 +76,8 @@ interface AgentDeps {
 
 | Concern                                             | Where it lives            | How it reaches the agent                                  |
 | --------------------------------------------------- | ------------------------- | --------------------------------------------------------- |
-| Pattern implementations, adapters, prompt templates | `@hames/harness-baml`     | imported directly by the factories                        |
-| Patterns, event views, guard, tool transport        | `@hames/harness-patterns` | imported directly                                         |
+| Pattern implementations, adapters, prompt templates | `@hames-ai/harness-baml`     | imported directly by the factories                        |
+| Patterns, event views, guard, tool transport        | `@hames-ai/harness-patterns` | imported directly                                         |
 | Tool→namespace catalog (this deployment's MCP map)  | host                      | `AgentDeps.toolNamespaces` — required; owner ruling B-iii |
 | Neo4j tool-result enrichment                        | host                      | `AgentDeps.enrichNeo4jResult`                             |
 | Data Stash retrieval backend                        | host                      | `AgentDeps.createRedisBackend`                            |
@@ -95,8 +95,8 @@ docs-pins test, so they cannot drift from the real signatures.
 ```typescript
 // The tool surface, from the injected catalog — required, not defaulted
 // (owner ruling B-iii). Lifted from `search.server.ts`:
-import { Tools } from '@hames/harness-patterns/tools.server'
-import type { AgentDeps } from '@hames/agents'
+import { Tools } from '@hames-ai/harness-patterns/tools.server'
+import type { AgentDeps } from '@hames-ai/agents'
 
 declare const deps: AgentDeps
 const toolSet = await Tools({ namespaces: deps.toolNamespaces })
@@ -105,11 +105,11 @@ const toolSet = await Tools({ namespaces: deps.toolNamespaces })
 ```typescript
 // A tool loop on the controller adapter, with the injected enricher —
 // lifted from `search.server.ts`:
-import { simpleLoop, type ConfiguredPattern } from '@hames/harness-patterns'
-import { bamlPatterns, createLoopControllerAdapter } from '@hames/harness-baml'
-import type { AgentData, AgentDeps } from '@hames/agents'
-import type { ToolSet } from '@hames/harness-patterns'
-import { NEO4J_FEW_SHOTS_DEFAULT } from '@hames/agents/agents/neo4j-fewshots.server'
+import { simpleLoop, type ConfiguredPattern } from '@hames-ai/harness-patterns'
+import { bamlPatterns, createLoopControllerAdapter } from '@hames-ai/harness-baml'
+import type { AgentData, AgentDeps } from '@hames-ai/agents'
+import type { ToolSet } from '@hames-ai/harness-patterns'
+import { NEO4J_FEW_SHOTS_DEFAULT } from '@hames-ai/agents/agents/neo4j-fewshots.server'
 
 function buildNeo4jRoute(
   deps: AgentDeps,
@@ -137,13 +137,13 @@ import {
   withReferences,
   withInjectionGuard,
   type ConfiguredPattern,
-} from '@hames/harness-patterns'
-import type { AgentData } from '@hames/agents'
-import type { ToolSet } from '@hames/harness-patterns'
-import { bamlPatterns } from '@hames/harness-baml'
+} from '@hames-ai/harness-patterns'
+import type { AgentData } from '@hames-ai/agents'
+import type { ToolSet } from '@hames-ai/harness-patterns'
+import { bamlPatterns } from '@hames-ai/harness-baml'
 
-declare const neo4jPattern: import('@hames/harness-patterns').ConfiguredPattern<AgentData>
-declare const webPattern: import('@hames/harness-patterns').ConfiguredPattern<AgentData>
+declare const neo4jPattern: import('@hames-ai/harness-patterns').ConfiguredPattern<AgentData>
+declare const webPattern: import('@hames-ai/harness-patterns').ConfiguredPattern<AgentData>
 
 function buildRoutes(tools: ToolSet): ConfiguredPattern<AgentData> {
   const baml = bamlPatterns()
@@ -173,7 +173,7 @@ function buildRoutes(tools: ToolSet): ConfiguredPattern<AgentData> {
 > **refuses to build** if nothing in it produces the namespace (#242 item 4).
 > The usual cause: the tool→namespace resolver was never registered. Call
 > `registerToolNamespaces(mcpNamespace)` once at boot — the deployment's map
-> ships in `@hames/connectors/mcp-catalog` — or supply your own resolver the
+> ships in `@hames-ai/connectors/mcp-catalog` — or supply your own resolver the
 > same way. An agent with no untrusted namespaces writes `namespaces: []`
 > explicitly.
 
@@ -181,8 +181,8 @@ function buildRoutes(tools: ToolSet): ConfiguredPattern<AgentData> {
 // A session-persistent sandbox loop — the wrapper is INJECTED (SD-19: the
 // containment posture stays app-side and is supplied, not carried). Lifted
 // from `sandbox-session.server.ts`:
-import type { AgentData, AgentDeps } from '@hames/agents'
-import type { ConfiguredPattern } from '@hames/harness-patterns'
+import type { AgentData, AgentDeps } from '@hames-ai/agents'
+import type { ConfiguredPattern } from '@hames-ai/harness-patterns'
 
 declare const loop: ConfiguredPattern<AgentData>
 
@@ -205,9 +205,9 @@ function sandboxIt(deps: AgentDeps, sessionId: string): ConfiguredPattern<AgentD
 ```typescript
 // A retrieval route over the injected Data Stash backend — lifted from
 // `retriever-agent.server.ts`:
-import { retriever, type ConfiguredPattern, type RetrieverBackend } from '@hames/harness-patterns'
-import type { AgentData } from '@hames/agents'
-import { bamlPatterns } from '@hames/harness-baml'
+import { retriever, type ConfiguredPattern, type RetrieverBackend } from '@hames-ai/harness-patterns'
+import type { AgentData } from '@hames-ai/agents'
+import { bamlPatterns } from '@hames-ai/harness-baml'
 
 function buildRetrieverRoute(redisBackend: RetrieverBackend): ConfiguredPattern<AgentData> {
   const baml = bamlPatterns()
@@ -256,10 +256,10 @@ AgentDefinition` with `icon: string` and `accent: AgentAccent`, supplied per
 // The app's overlay, one site per agent (abridged from registry.server.ts) —
 // `AgentConfig` / `AgentAccent` / `agentDeps` / `registerAgent` are the host's;
 // the definition and the icon choice are what a consumer re-makes:
-import type { AgentDefinition } from '@hames/agents'
-import { searchAgent } from '@hames/agents/agents/search.server'
+import type { AgentDefinition } from '@hames-ai/agents'
+import { searchAgent } from '@hames-ai/agents/agents/search.server'
 
-declare function agentDeps(): import('@hames/agents').AgentDeps
+declare function agentDeps(): import('@hames-ai/agents').AgentDeps
 declare function registerAgent(config: AgentDefinition & { icon: string; accent: string }): void
 type AgentAccent = string
 
@@ -279,7 +279,7 @@ way — the definitions carry none.
 
 ## No build step
 
-Like every `@hames` package, this one **ships TypeScript source**: `main` and
+Like every `@hames-ai` package, this one **ships TypeScript source**: `main` and
 every code target in `exports` is a `.ts` file (`./package.json` is the one
 non-code entry), there is no `dist/`, and `pnpm pack` is the whole publish
 pipeline. Consumers are **TS-bundler consumers** — a project whose bundler or

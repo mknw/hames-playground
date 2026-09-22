@@ -21,9 +21,9 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockCallTool, mockListTools, fixtures } from '../../mocks/mcp'
-import { defaultSynthesize } from '@hames/harness-baml/defaults.server'
-import type { SimpleLoopData } from '@hames/harness-patterns/patterns/simpleLoop.server'
-import type { CompactExecutionData } from '@hames/harness-patterns/types'
+import { defaultSynthesize } from '@hames-ai/harness-baml/defaults.server'
+import type { SimpleLoopData } from '@hames-ai/harness-patterns/patterns/simpleLoop.server'
+import type { CompactExecutionData } from '@hames-ai/harness-patterns/types'
 
 /** The session-data shape a real agent uses (see `SessionData`): the union of
  *  what each pattern in the chain reads, plus the index signature `harness()`
@@ -36,11 +36,11 @@ interface TestData extends SimpleLoopData, CompactExecutionData {
 // client, which needs the env var to exist.
 process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'offline-render-test'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   callTool: mockCallTool({
     responses: { read_neo4j_cypher: fixtures.neo4j.queryResult },
   }),
@@ -83,7 +83,7 @@ describe('LoopController prompt — terminal-action guidance (#149)', () => {
    *  the important case: a bare `b.LoopController.bind(b)` controller, or any
    *  caller predating #149, passes nothing and must still get the default. */
   async function render(returnStyle?: string): Promise<Body> {
-    const { b } = await import('@hames/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
     const req = await b.request.LoopController(
       'list the people',
       'list the people',
@@ -149,8 +149,8 @@ const RETURN_PROSE = 'LOOP-PROSE-SENTINEL: three people, all in Brussels.'
 /** Load the real patterns with `b` stubbed: each controller/synth call renders
  *  the real HTTP body (never sent), records it, and returns a scripted value. */
 async function loadHarness() {
-  const actual = await vi.importActual<typeof import('@hames/harness-baml/baml_client')>(
-    '@hames/harness-baml/baml_client',
+  const actual = await vi.importActual<typeof import('@hames-ai/harness-baml/baml_client')>(
+    '@hames-ai/harness-baml/baml_client',
   )
 
   const loopScript = [
@@ -171,7 +171,7 @@ async function loadHarness() {
   ]
   let loopCall = 0
 
-  vi.doMock('@hames/harness-baml/baml_client', () => ({
+  vi.doMock('@hames-ai/harness-baml/baml_client', () => ({
     b: {
       request: actual.b.request,
       LoopController: async (...args: unknown[]) => {
@@ -193,11 +193,12 @@ async function loadHarness() {
     },
   }))
 
-  const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+  const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
   const { compactExecution } =
-    await import('@hames/harness-patterns/patterns/compactExecution.server')
-  const { harness } = await import('@hames/harness-patterns/harness.server')
-  const { createLoopControllerAdapter } = await import('@hames/harness-baml/baml-adapters.server')
+    await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
+  const { harness } = await import('@hames-ai/harness-patterns/harness.server')
+  const { createLoopControllerAdapter } =
+    await import('@hames-ai/harness-baml/baml-adapters.server')
   return { simpleLoop, compactExecution, harness, createLoopControllerAdapter }
 }
 

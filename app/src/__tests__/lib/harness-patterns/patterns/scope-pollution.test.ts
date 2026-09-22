@@ -13,9 +13,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
-import type { ContextEvent, EventType, UnifiedContext } from '@hames/harness-patterns'
-import type { RetrievalHit } from '@hames/harness-patterns/patterns/retriever.server'
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
+import type { ContextEvent, EventType, UnifiedContext } from '@hames-ai/harness-patterns'
+import type { RetrievalHit } from '@hames-ai/harness-patterns/patterns/retriever.server'
 
 /**
  * #374: a pattern run needs a run frame, and these tests drive patterns
@@ -26,7 +26,7 @@ import type { RetrievalHit } from '@hames/harness-patterns/patterns/retriever.se
  */
 const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
@@ -36,7 +36,7 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
 // mock of `routing.server` used to intercept the pattern's deleted import.
 const mockRouteMessageOp = vi.fn()
 
-vi.mock('@hames/harness-baml/baml_client', () => ({
+vi.mock('@hames-ai/harness-baml/baml_client', () => ({
   b: {
     CompactIntent: vi.fn(async () => 'a freshly compacted brief'),
     RetrieveQuery: vi.fn(async () => 'rewritten search query'),
@@ -91,16 +91,16 @@ const assistantMsg = (content: string, ts = 2): Ev => ({
 })
 
 async function load() {
-  const { router, routes } = await import('@hames/harness-patterns/patterns/router.server')
-  const { compactIntent } = await import('@hames/harness-patterns/patterns/compactIntent.server')
-  const { retriever } = await import('@hames/harness-patterns/patterns/retriever.server')
-  const { createScope } = await import('@hames/harness-patterns/context.server')
-  const { createEventView } = await import('@hames/harness-patterns/patterns')
-  const { b } = await import('@hames/harness-baml/baml_client')
+  const { router, routes } = await import('@hames-ai/harness-patterns/patterns/router.server')
+  const { compactIntent } = await import('@hames-ai/harness-patterns/patterns/compactIntent.server')
+  const { retriever } = await import('@hames-ai/harness-patterns/patterns/retriever.server')
+  const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+  const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
+  const { b } = await import('@hames-ai/harness-baml/baml_client')
   // Lane A6: the rewrite/compactIntent seams are REQUIRED config — wire the
   // real adapters (they hit the mocked `b.*`), what `bamlPatterns()` hands.
   const { createCompactIntentAdapter, createRetrieveQueryAdapter } =
-    await import('@hames/harness-baml/baml-patterns.server')
+    await import('@hames-ai/harness-baml/baml-patterns.server')
   return {
     router,
     routes,

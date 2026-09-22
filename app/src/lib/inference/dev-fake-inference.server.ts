@@ -64,7 +64,7 @@
  * attributed to the wrong tier — a green tier-switch scenario proving nothing.
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 
 assertServerOnImport()
 

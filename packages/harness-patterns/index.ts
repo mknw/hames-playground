@@ -316,7 +316,7 @@ export type {
 // Runtime config: the library-owned settings defaults and their reader. The
 // VALUE rides the run frame's `config` slot; import the client-safe pieces
 // (type, bounds, defaults, resolveTurnBudget) from
-// '@hames/harness-patterns/runtime-config'.
+// '@hames-ai/harness-patterns/runtime-config'.
 export {
   DEFAULT_RUNTIME_CONFIG,
   RUNTIME_CONFIG_BOUNDS,

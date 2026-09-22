@@ -23,7 +23,7 @@
  * `lib/stash-documents.ts`, which layers the shared document cache over
  * `listStashDocuments`.
  */
-import type { StashDocumentMeta } from '@hames/harness-patterns/stash/document-store.server'
+import type { StashDocumentMeta } from '@hames-ai/harness-patterns/stash/document-store.server'
 import type { HarnessSettings } from '~/lib/settings'
 
 export type { StashDocumentMeta }

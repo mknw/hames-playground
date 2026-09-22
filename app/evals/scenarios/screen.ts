@@ -47,8 +47,8 @@
  */
 
 import { Collector } from '@boundaryml/baml'
-import { resolveClientForRole } from '@hames/harness-baml/clients.server'
-import { createInjectionScreen } from '@hames/harness-baml/baml-adapters.server'
+import { resolveClientForRole } from '@hames-ai/harness-baml/clients.server'
+import { createInjectionScreen } from '@hames-ai/harness-baml/baml-adapters.server'
 import { expectedClientFor } from '../client'
 import { check, servedBy, type Check, type Observation, type Scenario } from '../harness'
 
@@ -115,7 +115,7 @@ export const screenScenario: Scenario = {
     const checks: Check[] = []
     const observations: Observation[] = []
     const collectors: Collector[] = []
-    const { b } = await import('@hames/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
 
     // WHY THE PROPERTY CHECKS CALL THE RAW FUNCTION, not `createInjectionScreen()`.
     // The adapter resolves its client through PRODUCTION

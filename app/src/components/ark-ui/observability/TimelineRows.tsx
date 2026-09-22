@@ -5,9 +5,13 @@
  */
 
 import { Show } from 'solid-js'
-import type { ContextEvent, ToolCallEventData, ToolResultEventData } from '@hames/harness-patterns'
+import type {
+  ContextEvent,
+  ToolCallEventData,
+  ToolResultEventData,
+} from '@hames-ai/harness-patterns'
 import { eventColors, eventIconClasses, getPatternColor } from '~/lib/observability/event-styles'
-import { getEventLane, getEventPreview } from '@hames/harness-patterns/observability/projection'
+import { getEventLane, getEventPreview } from '@hames-ai/harness-patterns/observability/projection'
 import { SanitizedChip } from '../SanitizedChip'
 
 // ============================================================================

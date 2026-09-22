@@ -16,19 +16,19 @@
  * best-effort wrapper types came to be classified chain-fatal (#273 D-d).
  */
 import { describe, it, expect, vi } from 'vitest'
-import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { readFile, readdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
 
-import { runChain, configurePattern } from '@hames/harness-patterns/patterns/chain.server'
-import { createContext, trackEvent } from '@hames/harness-patterns/context.server'
-import { DEFAULT_ERROR_SEVERITY } from '@hames/harness-patterns/types'
-import type { ErrorEventData, PatternConfig } from '@hames/harness-patterns/types'
+import { runChain, configurePattern } from '@hames-ai/harness-patterns/patterns/chain.server'
+import { createContext, trackEvent } from '@hames-ai/harness-patterns/context.server'
+import { DEFAULT_ERROR_SEVERITY } from '@hames-ai/harness-patterns/types'
+import type { ErrorEventData, PatternConfig } from '@hames-ai/harness-patterns/types'
 
 /**
  * #374: a pattern run needs a run frame, and these tests drive patterns
@@ -221,7 +221,7 @@ describe('a gated turn does not poison the next one', () => {
     // them quietly stops — and the failure mode would be a conversation that is
     // permanently wedged after one irrecoverable error, with every later turn
     // ending before its first pattern.
-    const { continueSession } = await import('@hames/harness-patterns/harness.server')
+    const { continueSession } = await import('@hames-ai/harness-patterns/harness.server')
     const ran: string[] = []
     const ctx = createContext<Data>('q')
 
@@ -234,7 +234,7 @@ describe('a gated turn does not poison the next one', () => {
     expect(ctx.status).toBe('error')
     expect(ran).toEqual([])
 
-    const { serializeContext } = await import('@hames/harness-patterns/context.server')
+    const { serializeContext } = await import('@hames-ai/harness-patterns/context.server')
     const next = await continueSession(
       serializeContext(ctx) as any,
       [marker('synth', ran)] as any,

@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 
 // Bypass server-only guard in jsdom test env
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
   ServerOnlyError: class ServerOnlyError extends Error {},

@@ -9,7 +9,7 @@
 import { describe, it, expect, vi } from 'vitest'
 
 // chunking self-asserts server-only on import; stub it out under jsdom.
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))

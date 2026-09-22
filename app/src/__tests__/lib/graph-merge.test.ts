@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { mergeGraphElements } from '../../lib/graph-merge'
-import type { GraphElement } from '@hames/agents'
+import type { GraphElement } from '@hames-ai/agents'
 
 const node = (id: string, extra: Record<string, unknown> = {}): GraphElement => ({
   data: { id, label: id, ...extra },

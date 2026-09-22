@@ -19,7 +19,7 @@ import { mockCallTool, mockListTools } from '../../../mocks/mcp'
 
 const TOOLS = ['read_neo4j_cypher', 'get_neo4j_schema', 'search', 'fetch_content', 'Return']
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -37,7 +37,7 @@ const schemaOk = mockCallTool({ responses: { get_neo4j_schema: { Concept: ['name
 const schemaFails = mockCallTool({ errors: { get_neo4j_schema: 'connection refused' } })
 const currentCallTool = { fn: schemaOk }
 
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   callTool: (...args: [string, Record<string, unknown>?]) => currentCallTool.fn(...args),
   listTools: mockListTools(TOOLS),
 }))
@@ -49,7 +49,7 @@ beforeEach(() => {
 
 describe('getGraphSchema', () => {
   async function load() {
-    return import('@hames/agents/agents/graph-schema.server')
+    return import('@hames-ai/agents/agents/graph-schema.server')
   }
 
   it('returns the schema as JSON when the tool succeeds', async () => {
@@ -80,8 +80,8 @@ describe('getGraphSchema', () => {
 // `createPatterns`, because the bug was not in a helper — it was in what the
 // agent did with the result.
 describe.each([
-  ['search', () => import('@hames/agents/agents/search.server')],
-  ['retriever-agent', () => import('@hames/agents/agents/retriever-agent.server')],
+  ['search', () => import('@hames-ai/agents/agents/search.server')],
+  ['retriever-agent', () => import('@hames-ai/agents/agents/retriever-agent.server')],
 ])('%s agent — schema failure', (label, importAgent) => {
   async function build(sessionId: string): Promise<{ name: string }[]> {
     const mod = (await importAgent()) as Record<

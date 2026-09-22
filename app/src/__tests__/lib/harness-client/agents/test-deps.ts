@@ -22,8 +22,8 @@ import type {
   ConfiguredPattern,
   PatternCapabilities,
   RetrieverBackend,
-} from '@hames/harness-patterns'
-import type { AgentData, AgentDeps } from '@hames/agents'
+} from '@hames-ai/harness-patterns'
+import type { AgentData, AgentDeps } from '@hames-ai/agents'
 
 /** Fake backend for `retriever({ backends })` — `name: 'redis'` so the
  *  pattern's `capabilities.retrievalBackends` declaration (and therefore

@@ -13,7 +13,7 @@ knowledge graph, run code in isolated containers, and answer from your own
 documents and Microsoft 365 — with every step of every run visible in the UI.
 
 The agents are compositions of **hames**: five MIT-licensed packages under
-[`packages/`](packages/) — `@hames/harness-patterns` and its `harness-baml`,
+[`packages/`](packages/) — `@hames-ai/harness-patterns` and its `harness-baml`,
 `agents`, `connectors` and `sandbox` companions — which this app consumes as
 workspace dependencies. They are typed agent primitives — loops, planners,
 routers, guards — where the run's history is the primary object and each LLM
@@ -146,7 +146,7 @@ for a single-VM deployment.
 
 ## Tutorials
 
-Task-shaped pages for building **on** the `@hames` packages — pick the one that
+Task-shaped pages for building **on** the `@hames-ai` packages — pick the one that
 names what you are trying to do, follow it start to finish, have it working in
 ten minutes. Index, install matrix and suggested reading order:
 [`docs/tutorials/README.md`](docs/tutorials/README.md). Every TypeScript fence in
@@ -279,7 +279,7 @@ differ only in how they compose these:
 
 BAML supplies the typed reasoning at each leaf; an MCP gateway supplies the
 tools. Neither is baked in: the core package is BAML-free and takes its LLM
-functions as injected config — `@hames/harness-baml` is the reference
+functions as injected config — `@hames-ai/harness-baml` is the reference
 implementation of that seam, and a consumer can supply another
 ([`docs/plan/harness-npm-lib.md`](docs/plan/harness-npm-lib.md)).
 
@@ -326,7 +326,7 @@ The ones reached most often:
 
 |                                                                                                   |                                                                                |
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| [`docs/tutorials/README.md`](docs/tutorials/README.md)                                            | Task-shaped tutorials for building on the `@hames` packages                    |
+| [`docs/tutorials/README.md`](docs/tutorials/README.md)                                            | Task-shaped tutorials for building on the `@hames-ai` packages                    |
 | [`packages/harness-patterns/SPEC.md`](packages/harness-patterns/SPEC.md)                          | The hames API reference and design spec                                        |
 | [`GLOSSARY.md`](GLOSSARY.md)                                                                      | House vocabulary — pattern, controller, critic, harness, EventView, Data Stash |
 | [`docs/plan/ROADMAP.md`](docs/plan/ROADMAP.md)                                                    | Roadmap shape: multi-user target architecture, phased MoSCoW plan              |

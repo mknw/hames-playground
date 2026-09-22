@@ -27,7 +27,7 @@
  */
 
 import { Collector } from '@boundaryml/baml'
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type {
   CompactIntentFn,
   DescribeBatchFn,
@@ -37,7 +37,7 @@ import type {
   RetrieveQueryFn,
   SelectorFn,
   SynthesisFn,
-} from '@hames/harness-patterns/types'
+} from '@hames-ai/harness-patterns/types'
 import { defaultSelector, defaultSynthesize } from './defaults.server'
 import {
   createPlannerAdapter,

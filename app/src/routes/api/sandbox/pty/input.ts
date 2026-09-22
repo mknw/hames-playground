@@ -12,7 +12,7 @@
  * claim. A foreign or unknown session gets the same indistinguishable 404.
  */
 import type { APIEvent } from '@solidjs/start/server'
-import { ptyManager } from '@hames/sandbox/pty-manager.server'
+import { ptyManager } from '@hames-ai/sandbox/pty-manager.server'
 import { withUser, requireSessionOwner } from '../../../../lib/stash/http.server'
 
 export async function POST(event: APIEvent) {

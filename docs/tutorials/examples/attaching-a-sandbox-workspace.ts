@@ -17,8 +17,8 @@
 // TYPE-CHECKS ONLY. The store is a `declare const` — supplying it is the host's
 // job, which is what §2 is about — and `withSandbox` needs a container engine.
 
-import { configureWorkspaceStore } from "@hames/sandbox/workspace-store";
-import type { WorkspaceStore } from "@hames/sandbox";
+import { configureWorkspaceStore } from "@hames-ai/sandbox/workspace-store";
+import type { WorkspaceStore } from "@hames-ai/sandbox";
 
 declare const store: WorkspaceStore;
 
@@ -36,7 +36,7 @@ configureWorkspaceStore({
   isTextMime: store.isTextMime,
 });
 
-import { WorkspaceStoreNotConfiguredError } from "@hames/sandbox";
+import { WorkspaceStoreNotConfiguredError } from "@hames-ai/sandbox";
 
 declare const err: unknown;
 
@@ -44,9 +44,9 @@ if (err instanceof WorkspaceStoreNotConfiguredError) {
   // your "this deployment is misconfigured" path
 }
 
-import { withSandbox } from "@hames/sandbox";
-import type { ConfiguredPattern } from "@hames/harness-patterns";
-import type { AgentData } from "@hames/agents";
+import { withSandbox } from "@hames-ai/sandbox";
+import type { ConfiguredPattern } from "@hames-ai/harness-patterns";
+import type { AgentData } from "@hames-ai/agents";
 
 declare const loop: ConfiguredPattern<AgentData>;
 declare const sessionId: string;

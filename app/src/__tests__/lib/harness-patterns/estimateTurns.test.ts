@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest'
-import type { ConfiguredPattern, ControllerFn } from '@hames/harness-patterns/types'
+import type { ConfiguredPattern, ControllerFn } from '@hames-ai/harness-patterns/types'
 
 // Lane A5: ControllerFn is now an object-callable (optional limits()). A bare
 // vi.fn() placeholder doesn't satisfy it, so these never-called stubs cast.
@@ -18,7 +18,7 @@ const stubController = () => vi.fn() as unknown as ControllerFn
 type AnyPattern = ConfiguredPattern<Record<string, unknown>>
 const asAny = <T>(p: ConfiguredPattern<T>) => p as unknown as AnyPattern
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -29,7 +29,7 @@ vi.mock('@boundaryml/baml', () => ({
   },
   BamlValidationError: class extends Error {},
 }))
-vi.mock('@hames/harness-baml/baml_client', () => ({ b: {} }))
+vi.mock('@hames-ai/harness-baml/baml_client', () => ({ b: {} }))
 
 // Construction-only assertions: the REQUIRED injected implementations
 // (`route`, `synthesize` — BAML-companion seam lane) are stubs; the pattern
@@ -41,7 +41,7 @@ const settings = { maxToolTurns: 5, maxRetries: 3 }
 
 describe('estimateTurns', () => {
   it('simpleLoop: uses config.maxTurns when present, else settings.maxToolTurns', async () => {
-    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
 
     const fromSettings = simpleLoop(stubController(), [], { patternId: 'a' })
     expect(fromSettings.estimateTurns?.(settings)).toBe(5)
@@ -51,7 +51,7 @@ describe('estimateTurns', () => {
   })
 
   it('actorCritic: uses config.maxRetries when present, else settings.maxRetries', async () => {
-    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
 
     const fromSettings = actorCritic(vi.fn(), vi.fn(), [], { patternId: 'a' })
     expect(fromSettings.estimateTurns?.(settings)).toBe(3)
@@ -61,9 +61,9 @@ describe('estimateTurns', () => {
   })
 
   it('router and compactExecution contribute 1', async () => {
-    const { router } = await import('@hames/harness-patterns/patterns/router.server')
+    const { router } = await import('@hames-ai/harness-patterns/patterns/router.server')
     const { compactExecution } =
-      await import('@hames/harness-patterns/patterns/compactExecution.server')
+      await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
 
     const r = router({ neo4j: 'db' }, { route: stubRoute })
     const s = compactExecution({ mode: 'thread', synthesize: stubSynthesize })
@@ -72,7 +72,7 @@ describe('estimateTurns', () => {
   })
 
   it('planner contributes 1 (one call per chain invocation, never a loop)', async () => {
-    const { planner } = await import('@hames/harness-patterns/patterns/planner.server')
+    const { planner } = await import('@hames-ai/harness-patterns/patterns/planner.server')
 
     // Lane A6: the plan fn is REQUIRED config; estimateTurns is static, so a
     // never-called stub stands in for it.
@@ -80,8 +80,8 @@ describe('estimateTurns', () => {
   })
 
   it('routes: max over branches', async () => {
-    const { routes } = await import('@hames/harness-patterns/patterns/router.server')
-    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { routes } = await import('@hames-ai/harness-patterns/patterns/router.server')
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
 
     const small = asAny(simpleLoop(stubController(), [], { patternId: 's', maxTurns: 2 }))
     const big = asAny(simpleLoop(stubController(), [], { patternId: 'b', maxTurns: 9 }))
@@ -90,8 +90,8 @@ describe('estimateTurns', () => {
   })
 
   it('parallel: max over branches (longest drives perceived duration)', async () => {
-    const { parallel } = await import('@hames/harness-patterns/patterns/parallel.server')
-    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { parallel } = await import('@hames-ai/harness-patterns/patterns/parallel.server')
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
 
     const a = asAny(simpleLoop(stubController(), [], { patternId: 'a', maxTurns: 4 }))
     const b = asAny(simpleLoop(stubController(), [], { patternId: 'b', maxTurns: 6 }))
@@ -100,11 +100,11 @@ describe('estimateTurns', () => {
   })
 
   it('chain: sums children', async () => {
-    const { chain } = await import('@hames/harness-patterns/patterns/chain.server')
-    const { router, routes } = await import('@hames/harness-patterns/patterns/router.server')
+    const { chain } = await import('@hames-ai/harness-patterns/patterns/chain.server')
+    const { router, routes } = await import('@hames-ai/harness-patterns/patterns/router.server')
     const { compactExecution } =
-      await import('@hames/harness-patterns/patterns/compactExecution.server')
-    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+      await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
 
     const loop = asAny(simpleLoop(stubController(), [], { patternId: 'loop', maxTurns: 5 }))
     // Default agent shape: router(1) + routes-with-5-turn-loop(5) + synth(1) = 7

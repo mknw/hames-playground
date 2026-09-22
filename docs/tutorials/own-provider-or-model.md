@@ -1,6 +1,6 @@
 # Bring your own provider or model
 
-**Audience:** a consumer of `@hames/harness-patterns` + `@hames/harness-baml` who wants the
+**Audience:** a consumer of `@hames-ai/harness-patterns` + `@hames-ai/harness-baml` who wants the
 agents to call a model they supply — a different provider, a self-hosted endpoint — without
 touching prompts.
 
@@ -16,13 +16,13 @@ this page's code assembled into one file you can copy out and run.
 
 ## 1. Define your clients and map the roles
 
-The whole plug lives in one module, `@hames/harness-baml/consumer-clients.server`:
+The whole plug lives in one module, `@hames-ai/harness-baml/consumer-clients.server`:
 
 ```typescript
 import {
   defineInferenceClients,
   activateConsumerClients,
-} from "@hames/harness-baml/consumer-clients.server";
+} from "@hames-ai/harness-baml/consumer-clients.server";
 
 const plug = defineInferenceClients({
   clients: [
@@ -58,8 +58,8 @@ nothing until it is wired in (steps 2–3).
 `AgentDeps.clientOverride` takes exactly this function type — the plug drops in with no cast:
 
 ```typescript
-import type { AgentDeps } from "@hames/agents/types";
-import type { ClientOverride } from "@hames/harness-baml/consumer-clients.server";
+import type { AgentDeps } from "@hames-ai/agents/types";
+import type { ClientOverride } from "@hames-ai/harness-baml/consumer-clients.server";
 
 declare const plug: ClientOverride; // from step 1
 declare const yourOtherDeps: AgentDeps;
@@ -81,7 +81,7 @@ layer is composed **inside that seam**, on top of the built-in tier:
 import {
   activateConsumerClients,
   type ClientOverride,
-} from "@hames/harness-baml/consumer-clients.server";
+} from "@hames-ai/harness-baml/consumer-clients.server";
 
 declare const plug: ClientOverride; // from step 1
 
@@ -125,11 +125,11 @@ keeping the critic on the built-in chain:
 import {
   defineInferenceClients,
   activateConsumerClients,
-} from "@hames/harness-baml/consumer-clients.server";
-import { bamlPatterns, createLoopControllerAdapter } from "@hames/harness-baml";
-import { simpleLoop } from "@hames/harness-patterns/patterns/simpleLoop.server";
-import { searchAgent } from "@hames/agents/agents";
-import type { AgentDeps } from "@hames/agents/types";
+} from "@hames-ai/harness-baml/consumer-clients.server";
+import { bamlPatterns, createLoopControllerAdapter } from "@hames-ai/harness-baml";
+import { simpleLoop } from "@hames-ai/harness-patterns/patterns/simpleLoop.server";
+import { searchAgent } from "@hames-ai/agents/agents";
+import type { AgentDeps } from "@hames-ai/agents/types";
 
 const plug = defineInferenceClients({
   clients: [
@@ -170,14 +170,14 @@ To verify a render offline (no socket), the package ships `b.request.<Fn>(...)`:
 import type {
   RouteOption,
   Message,
-} from "@hames/harness-baml/baml_client/types";
-import type { ClientOverride } from "@hames/harness-baml/consumer-clients.server";
+} from "@hames-ai/harness-baml/baml_client/types";
+import type { ClientOverride } from "@hames-ai/harness-baml/consumer-clients.server";
 
 declare const plug: ClientOverride; // from step 1
 declare const routes: RouteOption[];
 declare const history: Message[];
 
-const { b } = await import("@hames/harness-baml/baml_client");
+const { b } = await import("@hames-ai/harness-baml/baml_client");
 const render = await b.request.Router("q", routes, history, plug("router")!);
 render.body.json().model; // → 'meta-llama/Llama-3.3-27B'
 ```

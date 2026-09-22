@@ -50,7 +50,7 @@ MCP Tools ───────┘
 
 ```typescript
 import { harness, simpleLoop, compactExecution, Tools } from '~/lib/harness-patterns'
-import { b } from '@hames/harness-baml/baml_client'
+import { b } from '@hames-ai/harness-baml/baml_client'
 
 const tools = await Tools()
 

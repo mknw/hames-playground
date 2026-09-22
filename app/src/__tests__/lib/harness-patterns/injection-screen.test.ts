@@ -29,16 +29,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   listTools: vi.fn().mockResolvedValue([]),
 }))
 
 const mockScreen = vi.fn()
-vi.mock('@hames/harness-baml/baml_client', () => ({
+vi.mock('@hames-ai/harness-baml/baml_client', () => ({
   b: { ScreenUntrustedContent: (...args: unknown[]) => mockScreen(...args) },
 }))
 
@@ -46,7 +46,7 @@ vi.mock('@hames/harness-baml/baml_client', () => ({
 const FENCE = '---BEGIN UNTRUSTED CONTENT UNDER REVIEW---'
 
 async function load() {
-  const { createInjectionScreen } = await import('@hames/harness-baml/baml-adapters.server')
+  const { createInjectionScreen } = await import('@hames-ai/harness-baml/baml-adapters.server')
   return createInjectionScreen
 }
 
@@ -274,8 +274,8 @@ describe('createInjectionScreen — client routing', () => {
     // only so the scope opens; it is the model this screen must NOT be sent to,
     // which is what the second assertion below says.
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
-    const { assertInferenceTier } = await import('@hames/harness-baml/clients.server')
-    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+    const { assertInferenceTier } = await import('@hames-ai/harness-baml/clients.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
     const screen = await (await load())()
     // #374: the tier rides the run frame's `inference` slot; the fail-closed
     // reachability check is the host-called `assertInferenceTier`.
@@ -292,7 +292,7 @@ describe('createInjectionScreen — client routing', () => {
   })
 
   it("resolveClientForRole('screen') is DescribeAnthropic, and tracks the .baml declaration (SA-M5)", async () => {
-    const { resolveClientForRole } = await import('@hames/harness-baml/clients.server')
+    const { resolveClientForRole } = await import('@hames-ai/harness-baml/clients.server')
     // The dangerous change is the screen ending up on a cheap model, so pin the
     // value. Do NOT pin it by asserting `screen` and `describe` resolve alike:
     // that fires on the BENIGN change — re-pointing summarization, which is

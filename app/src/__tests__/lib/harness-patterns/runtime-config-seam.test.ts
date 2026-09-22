@@ -5,7 +5,7 @@
  * directly: one module, one AsyncLocalStorage object, so "the user's setting
  * reaches the loop" was true BY CONSTRUCTION and needed no test. The split made
  * it true by RESOLUTION instead — the app writes the scope through
- * `@hames/harness-patterns` (the workspace symlink) and the pattern reads it
+ * `@hames-ai/harness-patterns` (the workspace symlink) and the pattern reads it
  * through a package-relative import. Those are the same module only as long as
  * every bundler on the path resolves the symlink; if one ever doesn't, the
  * request setting silently reverts to the library default and NOTHING errors —
@@ -33,7 +33,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { mockAction, mockBAMLClient } from '../../mocks/baml'
 import { mockCallTool, mockListTools } from '../../mocks/mcp'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -41,12 +41,12 @@ const callToolMock = mockCallTool({
   responses: { read_neo4j_cypher: { rows: [] }, Return: { response: 'Done' } },
 })
 
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   callTool: callToolMock,
   listTools: mockListTools(['read_neo4j_cypher', 'Return']),
 }))
 
-vi.mock('@hames/harness-baml/baml_client', () => ({
+vi.mock('@hames-ai/harness-baml/baml_client', () => ({
   b: mockBAMLClient({
     loopActions: [mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{}' })],
   }),
@@ -79,11 +79,11 @@ const neverFinishingController = () =>
 
 describe('the frame the app opens is the frame the library reads', () => {
   it("the app's settings in the frame's config slot reach a pattern's runtimeConfig() reader", async () => {
-    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
     const { DEFAULT_SETTINGS } = await import('../../../lib/settings')
-    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     const controller = neverFinishingController()
     // No `maxTurns` on the pattern: the budget can ONLY come from the frame,
@@ -111,8 +111,8 @@ describe('the frame the app opens is the frame the library reads', () => {
     // `{ ...DEFAULT_SETTINGS, ...scope }` spread used to buy, and deleting that
     // reader is only safe while this holds — a consumer of an app-only field
     // would otherwise read `undefined` with nothing erroring.
-    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
-    const { runtimeConfig } = await import('@hames/harness-patterns/runtime-config.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+    const { runtimeConfig } = await import('@hames-ai/harness-patterns/runtime-config.server')
     const { DEFAULT_SETTINGS } = await import('../../../lib/settings')
 
     await withRunFrame({ config: DEFAULT_SETTINGS }, async () => {
@@ -125,7 +125,7 @@ describe('the frame the app opens is the frame the library reads', () => {
     // Ruling D3. The fall-back this replaces could not tell "this host wants
     // the defaults" from "this host never opened a frame", and answered the
     // same way for both.
-    const { runtimeConfig } = await import('@hames/harness-patterns/runtime-config.server')
+    const { runtimeConfig } = await import('@hames-ai/harness-patterns/runtime-config.server')
     expect(() => runtimeConfig()).toThrow(/No run frame is open/)
   })
 })

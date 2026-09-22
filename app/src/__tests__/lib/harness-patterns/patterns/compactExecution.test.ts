@@ -7,15 +7,15 @@ import '../../../../lib/inference/config.server'
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { defaultSynthesize } from '@hames/harness-baml/defaults.server'
+import { defaultSynthesize } from '@hames-ai/harness-baml/defaults.server'
 
 // Mock server-only imports
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
 // Mock BAML client
-vi.mock('@hames/harness-baml/baml_client', () => ({
+vi.mock('@hames-ai/harness-baml/baml_client', () => ({
   b: {
     Synthesize: vi.fn(async () => 'Synthesized response from BAML'),
   },
@@ -41,14 +41,14 @@ describe('compactExecution', () => {
 
   it('should export compactExecution function', async () => {
     const { compactExecution } =
-      await import('@hames/harness-patterns/patterns/compactExecution.server')
+      await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
     expect(compactExecution).toBeDefined()
     expect(typeof compactExecution).toBe('function')
   })
 
   it('should create a ConfiguredPattern with name and config', async () => {
     const { compactExecution } =
-      await import('@hames/harness-patterns/patterns/compactExecution.server')
+      await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
 
     const pattern = compactExecution({
       mode: 'message',
@@ -64,7 +64,7 @@ describe('compactExecution', () => {
   describe('modes', () => {
     it('should support message mode', async () => {
       const { compactExecution } =
-        await import('@hames/harness-patterns/patterns/compactExecution.server')
+        await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
 
       const pattern = compactExecution({ mode: 'message', synthesize: defaultSynthesize })
       expect(pattern.name).toBe('compactExecution')
@@ -72,7 +72,7 @@ describe('compactExecution', () => {
 
     it('should support response mode', async () => {
       const { compactExecution } =
-        await import('@hames/harness-patterns/patterns/compactExecution.server')
+        await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
 
       const pattern = compactExecution({ mode: 'response', synthesize: defaultSynthesize })
       expect(pattern.name).toBe('compactExecution')
@@ -80,7 +80,7 @@ describe('compactExecution', () => {
 
     it('should support thread mode', async () => {
       const { compactExecution } =
-        await import('@hames/harness-patterns/patterns/compactExecution.server')
+        await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
 
       const pattern = compactExecution({ mode: 'thread', synthesize: defaultSynthesize })
       expect(pattern.name).toBe('compactExecution')
@@ -90,9 +90,9 @@ describe('compactExecution', () => {
   describe('custom synthesis function', () => {
     it('should use custom synthesis function when provided', async () => {
       const { compactExecution } =
-        await import('@hames/harness-patterns/patterns/compactExecution.server')
-      const { createScope } = await import('@hames/harness-patterns/context.server')
-      const { createEventView } = await import('@hames/harness-patterns/patterns')
+        await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
+      const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+      const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
       const customSynthesize = vi.fn(async () => ({ value: 'Custom synthesized response' }))
 
@@ -129,9 +129,9 @@ describe('compactExecution', () => {
   describe('skipIfHasResponse', () => {
     it('should skip synthesis if response exists and skipIfHasResponse is true', async () => {
       const { compactExecution } =
-        await import('@hames/harness-patterns/patterns/compactExecution.server')
-      const { createScope } = await import('@hames/harness-patterns/context.server')
-      const { createEventView } = await import('@hames/harness-patterns/patterns')
+        await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
+      const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+      const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
       const customSynthesize = vi.fn(async () => ({ value: 'New response' }))
 
@@ -167,9 +167,9 @@ describe('compactExecution execution', () => {
 
   it('should track assistant_message event', async () => {
     const { compactExecution } =
-      await import('@hames/harness-patterns/patterns/compactExecution.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+      await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     const pattern = compactExecution({
       mode: 'message',
@@ -204,9 +204,9 @@ describe('compactExecution execution', () => {
 
   it('should call default synthesis with BAML when no custom function provided', async () => {
     const { compactExecution } =
-      await import('@hames/harness-patterns/patterns/compactExecution.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+      await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     // The default synthesis path: defaultSynthesize arrives as explicit
     // REQUIRED config (the pattern no longer imports it).
@@ -243,9 +243,9 @@ describe('compactExecution execution', () => {
 
   it('should handle response mode', async () => {
     const { compactExecution } =
-      await import('@hames/harness-patterns/patterns/compactExecution.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+      await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     const pattern = compactExecution({
       mode: 'response',
@@ -277,9 +277,9 @@ describe('compactExecution execution', () => {
 
   it('should handle thread mode with loop history from events', async () => {
     const { compactExecution } =
-      await import('@hames/harness-patterns/patterns/compactExecution.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+      await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     const pattern = compactExecution({
       mode: 'thread',
@@ -347,9 +347,9 @@ describe('compactExecution execution', () => {
 
   it('should handle thread mode falling back to response mode when no history', async () => {
     const { compactExecution } =
-      await import('@hames/harness-patterns/patterns/compactExecution.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+      await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     const pattern = compactExecution({
       mode: 'thread',
@@ -382,9 +382,9 @@ describe('compactExecution execution', () => {
 
   it('should handle errors gracefully', async () => {
     const { compactExecution } =
-      await import('@hames/harness-patterns/patterns/compactExecution.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+      await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     const pattern = compactExecution({
       mode: 'message',
@@ -425,11 +425,11 @@ describe('compactExecution execution', () => {
     // dropped → loopHistory had 0 iterations → Synthesize got nothing → the
     // compactExecution answered from nothing ("after the retriever, nothing happens").
     const { compactExecution } =
-      await import('@hames/harness-patterns/patterns/compactExecution.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+      await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
-    let captured: import('@hames/harness-patterns/types').CompactExecutionInput | undefined
+    let captured: import('@hames-ai/harness-patterns/types').CompactExecutionInput | undefined
     const pattern = compactExecution({
       mode: 'thread',
       synthesize: async (input) => {
@@ -500,11 +500,11 @@ describe('compactExecution execution', () => {
     // counter-based pairing, results 2..N fell into the "no preceding action"
     // branch and fabricated zero-reasoning synthetic iterations.
     const { compactExecution } =
-      await import('@hames/harness-patterns/patterns/compactExecution.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+      await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
-    let captured: import('@hames/harness-patterns/types').CompactExecutionInput | undefined
+    let captured: import('@hames-ai/harness-patterns/types').CompactExecutionInput | undefined
     const pattern = compactExecution({
       mode: 'thread',
       synthesize: async (input) => {
@@ -609,9 +609,9 @@ describe('compactExecution execution', () => {
 
   it('should build input from events for thread mode', async () => {
     const { compactExecution } =
-      await import('@hames/harness-patterns/patterns/compactExecution.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+      await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
     const pattern = compactExecution({
       mode: 'thread',
@@ -682,10 +682,10 @@ describe('compactExecution — context-window trimming regression', () => {
 
   it('keeps large multi-turn tool results in the turns passed to Synthesize', async () => {
     const { compactExecution } =
-      await import('@hames/harness-patterns/patterns/compactExecution.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
-    const { b } = await import('@hames/harness-baml/baml_client')
+      await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
 
     // Two large cypher results (>49KB each → would each blow the old 12K-token
     // budget) plus the loop's Return, all under the loop's patternId.
@@ -797,8 +797,8 @@ describe('compactExecution — context-window trimming regression', () => {
   })
 
   it('resolves the trim window from the real client, and every role name is in the map', async () => {
-    const { getContextWindow } = await import('@hames/harness-baml/clients.server')
-    const { resolveClientForRole } = await import('@hames/harness-baml/clients.server')
+    const { getContextWindow } = await import('@hames-ai/harness-baml/clients.server')
+    const { resolveClientForRole } = await import('@hames-ai/harness-baml/clients.server')
 
     // The key that was missing (→ 16K default → over-trim).
     expect(getContextWindow('SynthesizerAnthropic')).toBe(200_000)
@@ -840,9 +840,9 @@ describe('compactExecution synth input fidelity', () => {
 
   async function harness() {
     const { compactExecution } =
-      await import('@hames/harness-patterns/patterns/compactExecution.server')
-    const { createScope } = await import('@hames/harness-patterns/context.server')
-    const { createEventView } = await import('@hames/harness-patterns/patterns')
+      await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
     return { compactExecution, createScope, createEventView }
   }
 
@@ -887,7 +887,7 @@ describe('compactExecution synth input fidelity', () => {
 
   it('does not apologise on turn 2 for an error that belonged to turn 1', async () => {
     const { compactExecution, createScope, createEventView } = await harness()
-    let captured: import('@hames/harness-patterns/types').CompactExecutionInput | undefined
+    let captured: import('@hames-ai/harness-patterns/types').CompactExecutionInput | undefined
     const pattern = compactExecution({
       mode: 'thread',
       patternId: 'synth',
@@ -924,7 +924,7 @@ describe('compactExecution synth input fidelity', () => {
 
   it('still reports an error from the turn it is answering', async () => {
     const { compactExecution, createScope, createEventView } = await harness()
-    let captured: import('@hames/harness-patterns/types').CompactExecutionInput | undefined
+    let captured: import('@hames-ai/harness-patterns/types').CompactExecutionInput | undefined
     const pattern = compactExecution({
       mode: 'thread',
       patternId: 'synth',
@@ -950,7 +950,7 @@ describe('compactExecution synth input fidelity', () => {
 
   it('honours a wider window when the caller asked for one', async () => {
     const { compactExecution, createScope, createEventView } = await harness()
-    let captured: import('@hames/harness-patterns/types').CompactExecutionInput | undefined
+    let captured: import('@hames-ai/harness-patterns/types').CompactExecutionInput | undefined
     const pattern = compactExecution({
       mode: 'thread',
       patternId: 'synth',
@@ -981,7 +981,7 @@ describe('compactExecution synth input fidelity', () => {
 
   it('drops the terminal Return turn instead of passing it off as a success', async () => {
     const { compactExecution, createScope, createEventView } = await harness()
-    const { b } = await import('@hames/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
 
     const events: Ev[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'q' } },
@@ -1030,7 +1030,7 @@ describe('compactExecution synth input fidelity', () => {
 
   it('drops an action whose tool_result never arrived, but keeps a real null result', async () => {
     const { compactExecution, createScope, createEventView } = await harness()
-    let captured: import('@hames/harness-patterns/types').CompactExecutionInput | undefined
+    let captured: import('@hames-ai/harness-patterns/types').CompactExecutionInput | undefined
     const pattern = compactExecution({
       mode: 'thread',
       patternId: 'synth',
@@ -1079,7 +1079,7 @@ describe('compactExecution synth input fidelity', () => {
 
   it('falls back to response mode when nothing real is left to report', async () => {
     const { compactExecution, createScope, createEventView } = await harness()
-    let captured: import('@hames/harness-patterns/types').CompactExecutionInput | undefined
+    let captured: import('@hames-ai/harness-patterns/types').CompactExecutionInput | undefined
     const pattern = compactExecution({
       mode: 'thread',
       patternId: 'synth',

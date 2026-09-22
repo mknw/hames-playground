@@ -5,12 +5,12 @@
  * `work-artifacts.server.ts` used to import the app's `document-store.server`
  * and its `stash/upload-service.server` directly. Those are host services —
  * a Redis-backed store reached over the MCP gateway, and the host's own
- * filename→MIME table — so at the @hames/sandbox extraction they became an
+ * filename→MIME table — so at the @hames-ai/sandbox extraction they became an
  * injected supplier instead of a package dependency. The package owns the
  * `/work` protocol (what is hydrated, what is promoted, the diff rules); the
  * host owns storage and content classification.
  *
- * ## Explicit-config-only, like `@hames/connectors`' Neo4j client
+ * ## Explicit-config-only, like `@hames-ai/connectors`' Neo4j client
  *
  * There is no default and no fallback: an unset store is a NAMED error at
  * first use ({@link WorkspaceStoreNotConfiguredError}), never a silent no-op.
@@ -27,7 +27,7 @@
  * type-checks and runs sandboxes exactly as before.
  */
 
-import type { ToolCallResult } from '@hames/harness-patterns/types'
+import type { ToolCallResult } from '@hames-ai/harness-patterns/types'
 
 /**
  * The host's tool-call escape hatch, threaded through unchanged. The package
@@ -72,7 +72,7 @@ export interface WorkspaceDocumentInput {
  * The host's document store plus its content classification, as one supplier.
  *
  * `guessMimeType` / `isTextMime` ride along rather than being reimplemented
- * here for the same reason `@hames/connectors` takes them on its `content`
+ * here for the same reason `@hames-ai/connectors` takes them on its `content`
  * seam: the extension→MIME table is the HOST's knowledge (it decides what its
  * stash stores verbatim and what it base64s), and a second copy in this
  * package would drift from it silently — in the direction of storing a
@@ -105,7 +105,7 @@ export interface WorkspaceStore {
 export class WorkspaceStoreNotConfiguredError extends Error {
   constructor() {
     super(
-      '@hames/sandbox: durable workspace sync needs a WorkspaceStore. ' +
+      '@hames-ai/sandbox: durable workspace sync needs a WorkspaceStore. ' +
         'Call configureWorkspaceStore({ list, get, store, guessMimeType, isTextMime }) ' +
         'from the host composition root before any withSandbox({ syncWorkspace: true }) ' +
         'turn runs.',
@@ -132,7 +132,7 @@ let store: WorkspaceStore | null = null
  * dev-server module reload re-registering it is harmless.
  *
  * Throws on a missing or non-function supplier AT THIS CALL — the same
- * fail-at-factory rule `@hames/connectors`' tool factories follow (review
+ * fail-at-factory rule `@hames-ai/connectors`' tool factories follow (review
  * finding F1 there): a bag whose `store` is `undefined` must not type-check
  * its way to the one turn that produces a deliverable.
  */
@@ -140,7 +140,7 @@ export function configureWorkspaceStore(supplied: WorkspaceStore): void {
   for (const key of REQUIRED) {
     if (typeof supplied?.[key] !== 'function') {
       throw new Error(
-        `@hames/sandbox: configureWorkspaceStore requires a function for "${key}" ` +
+        `@hames-ai/sandbox: configureWorkspaceStore requires a function for "${key}" ` +
           `(got ${typeof supplied?.[key]})`,
       )
     }

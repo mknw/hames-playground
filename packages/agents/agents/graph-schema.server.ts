@@ -20,8 +20,8 @@
  *     the fetch.
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import { callTool } from '@hames/harness-patterns'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import { callTool } from '@hames-ai/harness-patterns'
 import type { AgentDeps } from '../types'
 
 assertServerOnImport()

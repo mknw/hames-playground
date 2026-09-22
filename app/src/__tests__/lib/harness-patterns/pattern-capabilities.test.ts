@@ -22,12 +22,12 @@ import {
   harnessHasRedisRetriever,
   declaresWorkspaceSync,
   harnessUsesSyncWorkspace,
-} from '@hames/harness-patterns/pattern-capabilities'
+} from '@hames-ai/harness-patterns/pattern-capabilities'
 import type {
   ConfiguredPattern,
   PatternCapabilities,
   PatternConfig,
-} from '@hames/harness-patterns/types'
+} from '@hames-ai/harness-patterns/types'
 
 type AnyPattern = ConfiguredPattern<Record<string, unknown>>
 

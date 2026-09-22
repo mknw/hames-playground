@@ -12,7 +12,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
@@ -48,7 +48,7 @@ const enrichToolResult = vi.fn(
     return true
   },
 )
-vi.mock('@hames/harness-patterns', () => ({
+vi.mock('@hames-ai/harness-patterns', () => ({
   deserializeContext: (blob: string) => JSON.parse(blob) as FakeCtx,
   serializeContext: (ctx: FakeCtx) => JSON.stringify(ctx),
   enrichToolResult: (...a: unknown[]) => enrichToolResult(...(a as [FakeCtx, string, never])),

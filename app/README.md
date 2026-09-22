@@ -2,12 +2,12 @@
 
 The SolidStart application: the chat interface, the server actions, turn
 orchestration, auth and persistence. It composes ready-made agents from
-[`@hames/agents`](../packages/agents/README.md) — themselves built on
-[`@hames/harness-patterns`](../packages/harness-patterns/README.md) with their
+[`@hames-ai/agents`](../packages/agents/README.md) — themselves built on
+[`@hames-ai/harness-patterns`](../packages/harness-patterns/README.md) with their
 prompts and model adapters from
-[`@hames/harness-baml`](../packages/harness-baml/README.md) — reaches its tools
-through [`@hames/connectors`](../packages/connectors/README.md), and runs
-agent-authored code in [`@hames/sandbox`](../packages/sandbox/README.md).
+[`@hames-ai/harness-baml`](../packages/harness-baml/README.md) — reaches its tools
+through [`@hames-ai/connectors`](../packages/connectors/README.md), and runs
+agent-authored code in [`@hames-ai/sandbox`](../packages/sandbox/README.md).
 
 Those are five workspace packages under [`../packages/`](../packages/), consumed
 here through `workspace:*`. **The framework is not in this directory.** This app
@@ -28,8 +28,8 @@ Two things that are not obvious from here:
 
 - **`pnpm install` belongs at the repo root**, not in `app/`. The `workspace:*`
   links this app depends on are created by a root-level install; an install run
-  only inside `app/` leaves `@hames/*` declared, present on disk and unlinked,
-  and Vite reports that as `Cannot find module '@hames/sandbox/settings'` — which
+  only inside `app/` leaves `@hames-ai/*` declared, present on disk and unlinked,
+  and Vite reports that as `Cannot find module '@hames-ai/sandbox/settings'` — which
   reads like a bad import path. The `predev` guard
   ([`scripts/check-workspace-links.mjs`](scripts/check-workspace-links.mjs)) runs
   before the dev server, names the real cause, and repairs it by running
@@ -90,7 +90,7 @@ app/
 │   │       └── PreviewHeaderStrip.tsx · ShareConversationButton.tsx · ThemeSwitcher.tsx · UserMenu.tsx
 │   ├── lib/                             # all 13 subtrees; 11 of its 22 top-level modules
 │   │   ├── harness-client/              # 11 files — the composition root and turn orchestration
-│   │   │   ├── registry.server.ts       # overlays @hames/agents definitions with icon + accent
+│   │   │   ├── registry.server.ts       # overlays @hames-ai/agents definitions with icon + accent
 │   │   │   ├── session.server.ts        # the one AgentDeps bag + Postgres-backed serialized context
 │   │   │   ├── turn.server.ts           # runs a turn: run frame, tier scope, wake, persistence
 │   │   │   ├── action-runner.server.ts  # background runs for triggered actions and routines
@@ -128,13 +128,13 @@ definitions, the sandbox, the MCP/Neo4j connectors and the Data Stash pipeline
 
 ### How the app consumes the five packages
 
-| Package                                                             | What it supplies                                                                                                          | Where it lands here                                                                |
-| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| [`@hames/harness-patterns`](../packages/harness-patterns/README.md) | Patterns, `UnifiedContext` + `EventView`, the injection guard, the tool transport, the run frame, the Data Stash pipeline | `harness-client/turn.server.ts` opens the run frame; every agent composes patterns |
-| [`@hames/harness-baml`](../packages/harness-baml/README.md)         | The BAML corpus + committed client, adapter factories, role→client routing                                                | imported by the agent definitions; tier overrides come from the app                |
-| [`@hames/agents`](../packages/agents/README.md)                     | Six agent definitions plus three shared helpers, graph extraction, replay                                                 | `harness-client/registry.server.ts` overlays each with an icon and accent          |
-| [`@hames/connectors`](../packages/connectors/README.md)             | The MCP-gateway namespace catalog, Microsoft Graph tools, the Neo4j non-agentic layer                                     | registered at boot; `lib/neo4j/` and `lib/app-tools/` build on it                  |
-| [`@hames/sandbox`](../packages/sandbox/README.md)                   | `withSandbox`, the Docker backend, warm pool, egress profiles, `/work` sync                                               | injected into agent definitions through the `AgentDeps` bag                        |
+| Package                                                                | What it supplies                                                                                                          | Where it lands here                                                                |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| [`@hames-ai/harness-patterns`](../packages/harness-patterns/README.md) | Patterns, `UnifiedContext` + `EventView`, the injection guard, the tool transport, the run frame, the Data Stash pipeline | `harness-client/turn.server.ts` opens the run frame; every agent composes patterns |
+| [`@hames-ai/harness-baml`](../packages/harness-baml/README.md)         | The BAML corpus + committed client, adapter factories, role→client routing                                                | imported by the agent definitions; tier overrides come from the app                |
+| [`@hames-ai/agents`](../packages/agents/README.md)                     | Six agent definitions plus three shared helpers, graph extraction, replay                                                 | `harness-client/registry.server.ts` overlays each with an icon and accent          |
+| [`@hames-ai/connectors`](../packages/connectors/README.md)             | The MCP-gateway namespace catalog, Microsoft Graph tools, the Neo4j non-agentic layer                                     | registered at boot; `lib/neo4j/` and `lib/app-tools/` build on it                  |
+| [`@hames-ai/sandbox`](../packages/sandbox/README.md)                   | `withSandbox`, the Docker backend, warm pool, egress profiles, `/work` sync                                               | injected into agent definitions through the `AgentDeps` bag                        |
 
 ## Key Features
 
@@ -161,7 +161,7 @@ Harness parameters (max tool turns, retries, result truncation, etc.) are config
 
 ### Graph Data Extraction
 
-`graph-extractor.ts` — now [`packages/agents/graph-extractor.ts`](../packages/agents/graph-extractor.ts), re-exported client-safe from the `@hames/agents` root barrel — handles two Neo4j result formats:
+`graph-extractor.ts` — now [`packages/agents/graph-extractor.ts`](../packages/agents/graph-extractor.ts), re-exported client-safe from the `@hames-ai/agents` root barrel — handles two Neo4j result formats:
 
 - **MCP format**: Flat record objects where nodes are `{ name, description, ... }` and relationships are `[startNode, "TYPE", endNode]` tuples
 - **Neo4j driver format**: Objects with `identity`/`elementId`, `labels[]`, `properties{}`
@@ -254,7 +254,7 @@ overlaid, and five compile-checked composition examples — is
 | [../packages/harness-patterns/GUIDE.md](../packages/harness-patterns/GUIDE.md) | Developer guide — composition model, writing a pattern, the tool seam          |
 | [../packages/agents/README.md](../packages/agents/README.md)                   | The six agent definitions and three helpers, `AgentDeps`, the host overlay     |
 | [../packages/harness-baml/README.md](../packages/harness-baml/README.md)       | The LLM seam — BAML corpus, adapters, role→client routing                      |
-| [../docs/tutorials/README.md](../docs/tutorials/README.md)                     | Task-shaped tutorials for building on the `@hames` packages                    |
+| [../docs/tutorials/README.md](../docs/tutorials/README.md)                     | Task-shaped tutorials for building on the `@hames-ai` packages                 |
 | [../docs/testing/pyramid.md](../docs/testing/pyramid.md)                       | The four test layers and the one command that runs three of them               |
 | [../docs/UI_ARCHITECTURE.md](../docs/UI_ARCHITECTURE.md)                       | Component structure, data flow, Chat–Graph linking                             |
 | [../docs/DATA_STASH.md](../docs/DATA_STASH.md)                                 | Data Stash upload → chunk → embed → search pipeline (#6/#9/#8)                 |

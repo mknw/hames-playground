@@ -83,8 +83,8 @@ export function omitResultFields(result: unknown, omit: readonly string[] | unde
  * turn.
  *
  * An event-stream boundary helper beside the read-time lenses above. It moved
- * into core from the app's `turn-utils.ts` (the @hames/agents extraction, #225):
- * the citation extractor moved into `@hames/agents` and reads it, and the app's
+ * into core from the app's `turn-utils.ts` (the @hames-ai/agents extraction, #225):
+ * the citation extractor moved into `@hames-ai/agents` and reads it, and the app's
  * Data Stash partition reads it — two consumers, one definition, both from
  * this module now.
  */

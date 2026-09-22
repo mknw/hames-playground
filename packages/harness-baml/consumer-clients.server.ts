@@ -58,7 +58,7 @@
  */
 
 import { ClientRegistry } from '@boundaryml/baml'
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { BamlRole } from './clients.server'
 import { configureConsumerClients } from './clients.server'
 

@@ -10,7 +10,7 @@
  * implementations live in `*.server.ts` files (server-only).
  */
 
-import type { ToolCallResult, MCPToolDescription } from '@hames/harness-patterns/types'
+import type { ToolCallResult, MCPToolDescription } from '@hames-ai/harness-patterns/types'
 
 // ============================================================================
 // Identity & config

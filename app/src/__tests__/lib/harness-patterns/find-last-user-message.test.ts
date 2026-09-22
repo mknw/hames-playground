@@ -3,14 +3,14 @@
  * stream.
  *
  * The helper lives in core now (`packages/harness-patterns/content-transforms`,
- * beside the other event lenses — #225 @hames/agents PR-2): the citation
- * extractor moved into `@hames/agents` and reads it from there, and the app's
+ * beside the other event lenses — #225 @hames-ai/agents PR-2): the citation
+ * extractor moved into `@hames-ai/agents` and reads it from there, and the app's
  * Data Stash partition reads the same core export, so they cannot disagree
  * (SA-H7). This file covers the helper wherever it is imported from.
  */
 import { describe, it, expect } from 'vitest'
-import { findLastUserMessageIndex } from '@hames/harness-patterns/content-transforms'
-import type { ContextEvent } from '@hames/harness-patterns'
+import { findLastUserMessageIndex } from '@hames-ai/harness-patterns/content-transforms'
+import type { ContextEvent } from '@hames-ai/harness-patterns'
 
 const evt = (type: ContextEvent['type']): ContextEvent =>
   ({ type, ts: 1, patternId: 'harness', data: {} }) as unknown as ContextEvent

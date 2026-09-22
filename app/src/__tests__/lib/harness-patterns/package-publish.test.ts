@@ -14,8 +14,8 @@
  *       every consumer's resolution with EUNSUPPORTEDPROTOCOL (audit
  *       finding 1). The companion assertion drives `npm publish --dry-run`
  *       and asserts it REFUSES — the guard is the belt to that brace.
- *   (a3) the cross-package edges ship as PEERS: no `@hames/*` entry survives
- *       in the packed `dependencies`, and every `@hames/*` peer packs as a
+ *   (a3) the cross-package edges ship as PEERS: no `@hames-ai/*` entry survives
+ *       in the packed `dependencies`, and every `@hames-ai/*` peer packs as a
  *       real caret range. That is the rewrite (a) proves happened at all,
  *       read on the field it now has to happen in — `pnpm pack` rewrites
  *       `workspace:^` wherever it appears, but nothing else asserts the
@@ -45,7 +45,7 @@
  * `workspace:*` (reddens (a)), reintroduce the `cytoscape` type-only import
  * (reddens (d)), drop a `prepublishOnly` script (reddens (b) and the
  * npm-refusal assertion). (a3)'s is on the PR that added it: move one
- * companion's `@hames/*` peer back under `dependencies` — the emptiness half
+ * companion's `@hames-ai/*` peer back under `dependencies` — the emptiness half
  * reddens for that package, and deleting the edge outright reddens the
  * non-vacuity half instead.
  */
@@ -159,7 +159,7 @@ describe('packed artifact pin (pnpm pack — the publish path — what a consume
     expect(packages).toContain('harness-patterns')
   })
 
-  it('(a3, non-vacuity) the four companions each pack at least one @hames peer', () => {
+  it('(a3, non-vacuity) the four companions each pack at least one @hames-ai peer', () => {
     // (a3) is a pair of emptiness assertions, so it passes for a package with
     // no cross-package edge at all — including one whose edge was reverted to a
     // `dependency` AND dropped. This is the half that reddens on a revert:
@@ -170,7 +170,7 @@ describe('packed artifact pin (pnpm pack — the publish path — what a consume
     const withPeers = packages.filter(
       (name) =>
         Object.keys(packedByName.get(name)!.manifest.peerDependencies ?? {}).filter((spec) =>
-          spec.startsWith('@hames/'),
+          spec.startsWith('@hames-ai/'),
         ).length > 0,
     )
     expect(withPeers.sort()).toEqual(['agents', 'connectors', 'harness-baml', 'sandbox'])
@@ -203,10 +203,10 @@ describe('packed artifact pin (pnpm pack — the publish path — what a consume
           ['dependencies', 'peerDependencies', 'devDependencies'] as const
         ).flatMap((field) =>
           Object.entries(source[field] ?? {})
-            .filter(([spec]) => spec.startsWith('@hames/'))
+            .filter(([spec]) => spec.startsWith('@hames-ai/'))
             .map(([spec, range]) => [`${field}.${spec}`, range] as const),
         )
-        // Vacuously true for the root package (no @hames deps) — fine.
+        // Vacuously true for the root package (no @hames-ai deps) — fine.
         const offenders = Object.fromEntries(
           crossPackage.filter(([, range]) => range !== 'workspace:^'),
         )
@@ -237,7 +237,7 @@ describe('packed artifact pin (pnpm pack — the publish path — what a consume
 
       it('(a3) cross-package edges pack as peers: none under dependencies, all real ranges', () => {
         const hamesDeps = Object.keys(packed.manifest.dependencies ?? {}).filter((spec) =>
-          spec.startsWith('@hames/'),
+          spec.startsWith('@hames-ai/'),
         )
         expect(
           hamesDeps,
@@ -251,7 +251,7 @@ describe('packed artifact pin (pnpm pack — the publish path — what a consume
         // can actually satisfy, i.e. that the rewrite produced a caret over a
         // released-looking version rather than a pin or an empty string.
         const peers = Object.entries(packed.manifest.peerDependencies ?? {}).filter(([spec]) =>
-          spec.startsWith('@hames/'),
+          spec.startsWith('@hames-ai/'),
         )
         const malformed = peers.filter(([, range]) => !/^\^\d+\.\d+\.\d+(-[\w.]+)?$/.test(range))
         expect(

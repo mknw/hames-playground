@@ -308,7 +308,7 @@ describe('(c) every slot reader reads the frame, not a module global', () => {
     expect(first).toEqual(['e1'])
   })
 
-  // The fifth slot's reader lives in `@hames/harness-baml`, which core must not
+  // The fifth slot's reader lives in `@hames-ai/harness-baml`, which core must not
   // import (the dependency arrow runs the other way, and this package has no
   // test host for it). Its two pins — the frame's tier beating the module-level
   // tier policy, and a per-run `clientOverride` pre-empting the tier map — live

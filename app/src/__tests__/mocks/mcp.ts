@@ -5,7 +5,7 @@
  */
 
 import { vi } from 'vitest'
-import type { ToolCallResult, MCPToolDescription } from '@hames/harness-patterns/types'
+import type { ToolCallResult, MCPToolDescription } from '@hames-ai/harness-patterns/types'
 
 // ============================================================================
 // Mock Tool Results
@@ -17,7 +17,7 @@ import type { ToolCallResult, MCPToolDescription } from '@hames/harness-patterns
 export function mockToolResult(data: unknown = {}): ToolCallResult {
   return {
     success: true,
-    data
+    data,
   }
 }
 
@@ -28,7 +28,7 @@ export function mockToolError(error: string): ToolCallResult {
   return {
     success: false,
     data: null,
-    error
+    error,
   }
 }
 
@@ -64,9 +64,9 @@ export function mockCallTool(options: MockCallToolOptions = {}) {
  */
 export function mockListTools(tools: string[] = []) {
   return vi.fn(async (): Promise<MCPToolDescription[]> => {
-    return tools.map(name => ({
+    return tools.map((name) => ({
       name,
-      description: `Mock ${name} tool`
+      description: `Mock ${name} tool`,
     }))
   })
 }
@@ -77,31 +77,26 @@ export function mockListTools(tools: string[] = []) {
 
 export const fixtures = {
   neo4j: {
-    queryResult: [
-      { n: { name: 'Node1' } },
-      { n: { name: 'Node2' } }
-    ],
+    queryResult: [{ n: { name: 'Node1' } }, { n: { name: 'Node2' } }],
     schemaResult: {
       nodes: ['Person', 'Company'],
-      relationships: ['WORKS_FOR', 'KNOWS']
-    }
+      relationships: ['WORKS_FOR', 'KNOWS'],
+    },
   },
 
   webSearch: {
     searchResult: [
       { title: 'Result 1', url: 'https://example.com/1', snippet: 'First result' },
-      { title: 'Result 2', url: 'https://example.com/2', snippet: 'Second result' }
+      { title: 'Result 2', url: 'https://example.com/2', snippet: 'Second result' },
     ],
-    fetchResult: '<html>Page content</html>'
+    fetchResult: '<html>Page content</html>',
   },
 
   memory: {
-    entities: [
-      { name: 'Entity1', entityType: 'Person', observations: ['Observation 1'] }
-    ],
+    entities: [{ name: 'Entity1', entityType: 'Person', observations: ['Observation 1'] }],
     searchResult: {
       entities: [],
-      relations: []
-    }
-  }
+      relations: [],
+    },
+  },
 }

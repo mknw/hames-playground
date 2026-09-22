@@ -39,7 +39,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { ClientRegistry } from '@boundaryml/baml'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -48,7 +48,7 @@ import {
   activateConsumerClients,
   type ClientOverride,
   type InferenceRole,
-} from '@hames/harness-baml/consumer-clients.server'
+} from '@hames-ai/harness-baml/consumer-clients.server'
 import {
   clientOverrideFor,
   configureConsumerClients,
@@ -56,8 +56,8 @@ import {
   configureInferencePolicy,
   resolveClientForRole,
   type BamlRole,
-} from '@hames/harness-baml/clients.server'
-import type { AgentDeps } from '@hames/agents/types'
+} from '@hames-ai/harness-baml/clients.server'
+import type { AgentDeps } from '@hames-ai/agents/types'
 /** The offline render's shape — what `b.request.<Fn>` resolves to (the same
  *  loose typing `verda-body-shape.test.ts` uses; the generated request types
  *  are not exported, so naming them would invent members). */
@@ -104,7 +104,7 @@ async function renderRouter(bag: Record<string, unknown>): Promise<{ model?: str
   // Import lazily: the jsdom test env only needs the generated client for the
   // offline render, and importing it at module scope drags the whole tree in
   // before the mocks above are in place.
-  const { b } = await import('@hames/harness-baml/baml_client')
+  const { b } = await import('@hames-ai/harness-baml/baml_client')
   const render = await (
     b.request as unknown as Record<string, (...args: unknown[]) => Promise<RenderedRequest>>
   ).Router('q', ROUTES, [...ROUTER_MESSAGES], bag as never)
@@ -112,7 +112,7 @@ async function renderRouter(bag: Record<string, unknown>): Promise<{ model?: str
 }
 
 async function renderScreen(bag: Record<string, unknown>): Promise<{ model?: string }> {
-  const { b } = await import('@hames/harness-baml/baml_client')
+  const { b } = await import('@hames-ai/harness-baml/baml_client')
   const render = await (
     b.request as unknown as Record<string, (...args: unknown[]) => Promise<RenderedRequest>>
   )['ScreenUntrustedContent']('web/fetch', 'fetched page text', bag as never)

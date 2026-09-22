@@ -11,7 +11,7 @@
  * package that is declared, present on disk, and not linked.
  *
  * The failure that produces is actively misleading. Vite reports
- * `Cannot find module '@hames/sandbox/settings'`, which reads like a bad import
+ * `Cannot find module '@hames-ai/sandbox/settings'`, which reads like a bad import
  * path or a missing export, and sends you into the package's `exports` map. The
  * package is fine. The install simply never ran. It has now cost two debugging
  * sessions on two different packages, and the fix both times was one command
@@ -57,7 +57,7 @@ if (missing.length === 0) process.exit(0)
 
 console.warn(
   `\n[workspace] ${missing.length} of ${declared.length} workspace packages are not linked: ${missing.join(', ')}` +
-    '\n[workspace] this is what a "Cannot find module \'@hames/...\'" error at dev-server start really means.' +
+    '\n[workspace] this is what a "Cannot find module \'@hames-ai/...\'" error at dev-server start really means.' +
     '\n[workspace] repairing with `pnpm install --frozen-lockfile` at the repo root...\n',
 )
 

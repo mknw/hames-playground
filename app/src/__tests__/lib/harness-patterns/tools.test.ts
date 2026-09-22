@@ -14,12 +14,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Mock server-only imports
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
 // Mock MCP client
-vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
   listTools: vi.fn().mockResolvedValue([]),
 }))
 
@@ -34,13 +34,13 @@ describe('tools', () => {
 
   describe('ToolsFrom', () => {
     it('should export ToolsFrom function', async () => {
-      const { ToolsFrom } = await import('@hames/harness-patterns/tools.server')
+      const { ToolsFrom } = await import('@hames-ai/harness-patterns/tools.server')
       expect(ToolsFrom).toBeDefined()
       expect(typeof ToolsFrom).toBe('function')
     })
 
     it('should group tools by inferred namespace', async () => {
-      const { ToolsFrom } = await import('@hames/harness-patterns/tools.server')
+      const { ToolsFrom } = await import('@hames-ai/harness-patterns/tools.server')
 
       const mockTools = [
         { name: 'read_neo4j_cypher', description: 'Read from Neo4j', inputSchema: {} },
@@ -59,7 +59,7 @@ describe('tools', () => {
     })
 
     it('should return empty all array for no tools', async () => {
-      const { ToolsFrom } = await import('@hames/harness-patterns/tools.server')
+      const { ToolsFrom } = await import('@hames-ai/harness-patterns/tools.server')
 
       const tools = ToolsFrom([])
 
@@ -69,7 +69,7 @@ describe('tools', () => {
 
   describe('the registered namespace resolver', () => {
     it('is consulted by inferServer before the heuristic, and unregisters', async () => {
-      const mod = await import('@hames/harness-patterns/tools.server')
+      const mod = await import('@hames-ai/harness-patterns/tools.server')
 
       // Without registration, the heuristic alone answers.
       expect(mod.inferServer('search')).toBe('search')
@@ -82,7 +82,7 @@ describe('tools', () => {
     })
 
     it('never consults the heuristic when a resolver claims the name', async () => {
-      const mod = await import('@hames/harness-patterns/tools.server')
+      const mod = await import('@hames-ai/harness-patterns/tools.server')
       const off = mod.registerToolNamespaces((name) =>
         name === 'read_neo4j_cypher' ? 'graph-db' : undefined,
       )
@@ -92,7 +92,7 @@ describe('tools', () => {
     })
 
     it('is idempotent to unregister, like the transport registry', async () => {
-      const mod = await import('@hames/harness-patterns/tools.server')
+      const mod = await import('@hames-ai/harness-patterns/tools.server')
       const off = mod.registerToolNamespaces(() => undefined)
       off()
       off()
@@ -103,7 +103,7 @@ describe('tools', () => {
   describe('inferServer (via ToolsFrom)', () => {
     describe('heuristic (the deployment-independent core)', () => {
       it('groups an unknown hyphenated tool under its first segment', async () => {
-        const { ToolsFrom } = await import('@hames/harness-patterns/tools.server')
+        const { ToolsFrom } = await import('@hames-ai/harness-patterns/tools.server')
 
         const tools = ToolsFrom([
           { name: 'mcp-exec', description: 'gateway meta-tool', inputSchema: {} },
@@ -116,7 +116,7 @@ describe('tools', () => {
       // names fall through to the heuristic. Asserted rather than deleted:
       // re-adding a `github` namespace should be a deliberate act.
       it('has no github namespace — those names fall through to the heuristic', async () => {
-        const { ToolsFrom } = await import('@hames/harness-patterns/tools.server')
+        const { ToolsFrom } = await import('@hames-ai/harness-patterns/tools.server')
 
         const tools = ToolsFrom([
           { name: 'search_code', description: 'Search code', inputSchema: {} },
@@ -129,7 +129,7 @@ describe('tools', () => {
       })
 
       it('should handle read_neo4j_cypher → neo4j namespace', async () => {
-        const { ToolsFrom } = await import('@hames/harness-patterns/tools.server')
+        const { ToolsFrom } = await import('@hames-ai/harness-patterns/tools.server')
 
         const tools = ToolsFrom([
           { name: 'read_neo4j_cypher', description: 'Read', inputSchema: {} },
@@ -139,7 +139,7 @@ describe('tools', () => {
       })
 
       it('should handle web_search → web namespace', async () => {
-        const { ToolsFrom } = await import('@hames/harness-patterns/tools.server')
+        const { ToolsFrom } = await import('@hames-ai/harness-patterns/tools.server')
 
         const tools = ToolsFrom([{ name: 'web_search', description: 'Search', inputSchema: {} }])
 
@@ -147,7 +147,7 @@ describe('tools', () => {
       })
 
       it('should handle unknown_tool_name → uses heuristic', async () => {
-        const { ToolsFrom } = await import('@hames/harness-patterns/tools.server')
+        const { ToolsFrom } = await import('@hames-ai/harness-patterns/tools.server')
 
         const tools = ToolsFrom([
           { name: 'analyze_data_points', description: 'Analyze', inputSchema: {} },
@@ -160,7 +160,7 @@ describe('tools', () => {
 
     describe('MCP gateway format (double underscore)', () => {
       it('strips the prefix and runs the heuristic on the tool name', async () => {
-        const { ToolsFrom } = await import('@hames/harness-patterns/tools.server')
+        const { ToolsFrom } = await import('@hames-ai/harness-patterns/tools.server')
 
         // `mcp-find` is not in any catalog the core tests register, so this is
         // the heuristic end to end: split → 'mcp'. The catalog-routed members
@@ -182,8 +182,8 @@ describe('tools', () => {
        * byte-identical to the list `microsoft-365` composes on purpose.
        */
       it('marks `all` as degraded when the catalog read did not reach the gateway', async () => {
-        const health = await import('@hames/harness-patterns/gateway-health.server')
-        const { ToolsFrom } = await import('@hames/harness-patterns/tools.server')
+        const health = await import('@hames-ai/harness-patterns/gateway-health.server')
+        const { ToolsFrom } = await import('@hames-ai/harness-patterns/tools.server')
         health.__resetGatewayHealth()
         health.markGatewayUnreachable('ECONNREFUSED 127.0.0.1:8811')
 
@@ -195,8 +195,8 @@ describe('tools', () => {
       })
 
       it('leaves `all` unmarked while the gateway is answering', async () => {
-        const health = await import('@hames/harness-patterns/gateway-health.server')
-        const { ToolsFrom } = await import('@hames/harness-patterns/tools.server')
+        const health = await import('@hames-ai/harness-patterns/gateway-health.server')
+        const { ToolsFrom } = await import('@hames-ai/harness-patterns/tools.server')
         health.__resetGatewayHealth()
 
         const tools = ToolsFrom([
@@ -212,8 +212,8 @@ describe('tools', () => {
         // would refuse it for an outage it does not depend on; a GATEWAY
         // namespace has no key at all under an outage, so `tools.neo4j ?? []`
         // still reaches the guard as the empty array it already handles.
-        const health = await import('@hames/harness-patterns/gateway-health.server')
-        const { ToolsFrom } = await import('@hames/harness-patterns/tools.server')
+        const health = await import('@hames-ai/harness-patterns/gateway-health.server')
+        const { ToolsFrom } = await import('@hames-ai/harness-patterns/tools.server')
         health.__resetGatewayHealth()
         health.markGatewayUnreachable('ECONNREFUSED 127.0.0.1:8811')
 

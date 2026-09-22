@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeAll } from 'vitest'
 import { render } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
 import { ChatMessages, type Message } from '~/components/ark-ui/ChatMessages'
-import type { RetrievalReference } from '@hames/harness-patterns'
+import type { RetrievalReference } from '@hames-ai/harness-patterns'
 import { installDomObservers } from '../../mocks/dom-observers'
 
 beforeAll(() => {

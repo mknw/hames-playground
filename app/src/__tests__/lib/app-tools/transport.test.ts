@@ -26,7 +26,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -53,7 +53,7 @@ describe('the app-tool transport', () => {
 
   it('is registered by importing the barrel, and takes graph_me off the gateway', async () => {
     await import('../../../lib/app-tools/index.server')
-    const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
+    const { callTool } = await import('@hames-ai/harness-patterns/mcp-client.server')
 
     // No user is in scope, so the tool refuses — which is `runAppTool`'s own
     // answer (#107: identity is resolved server-side, never from args) and is
@@ -67,15 +67,15 @@ describe('the app-tool transport', () => {
 
   it('advertises its tools through listTools', async () => {
     await import('../../../lib/app-tools/index.server')
-    const { listTools } = await import('@hames/harness-patterns/mcp-client.server')
+    const { listTools } = await import('@hames-ai/harness-patterns/mcp-client.server')
 
     expect((await listTools()).map((t) => t.name)).toContain('graph_me')
   })
 
   it('is registered as a PROCESS transport, so a scoped one of the same name wins', async () => {
     await import('../../../lib/app-tools/index.server')
-    const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
-    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+    const { callTool } = await import('@hames-ai/harness-patterns/mcp-client.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
 
     const inVm = vi.fn().mockResolvedValue({ success: true, data: 'in-vm' })
     const result = await withRunFrame(

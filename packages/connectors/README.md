@@ -1,7 +1,7 @@
-# @hames/connectors
+# @hames-ai/connectors
 
 The **connectors** companion package for
-[`@hames/harness-patterns`](../harness-patterns/README.md): the Microsoft Graph app-side
+[`@hames-ai/harness-patterns`](../harness-patterns/README.md): the Microsoft Graph app-side
 tools, the Neo4j non-agentic layer, and the MCP-gateway namespace catalog —
 moved out of the host app (#225 PR-3) behind injected seams. The package owns
 protocols, query shapes and schemas; the **host owns identity, tokens, content
@@ -38,7 +38,7 @@ supplier throws at factory call, never degrades):**
     tool needs (lazily resolved by the host, so composing the tools never
     loads the storage stack).
 
-**Imported directly:** `@hames/harness-patterns` (types, `assert.server`,
+**Imported directly:** `@hames-ai/harness-patterns` (types, `assert.server`,
 `tools.server`'s `ToolsFrom` in tests) and `neo4j-driver`. Nothing else —
 there are no `app/src` imports, type-only included (pinned by the host's
 `zero-app-imports.test.ts`).
@@ -52,7 +52,7 @@ forbidden by design — see the S4 note in the host's composition root.
 
 ## No build step
 
-Like every `@hames` package, this one **ships TypeScript source**: `main` and
+Like every `@hames-ai` package, this one **ships TypeScript source**: `main` and
 every code target in `exports` is a `.ts` file (`./package.json` is the one
 non-code entry), there is no `dist/`, and `pnpm pack` is the whole publish
 pipeline. Consumers are **TS-bundler consumers** — a project whose bundler or
@@ -72,6 +72,6 @@ tarball via the `files` allowlist. Run it with `pnpm test` from
 host-app code; tests that need the app's request scope or its composition
 root stayed in the app's `src/__tests__/` tree.
 
-The package publishes to npm as `@hames/connectors` with `publishConfig.access:
+The package publishes to npm as `@hames-ai/connectors` with `publishConfig.access:
 public` (set at first publication; the setting travels with every future
 version).

@@ -6,7 +6,7 @@
  * headers + `Set-Cookie` strings to stay consistent with the existing API
  * routes (`routes/api/agents/[id].ts` et al.), no framework cookie API.
  */
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 
 assertServerOnImport()
 

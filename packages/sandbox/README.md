@@ -1,14 +1,14 @@
-# @hames/sandbox
+# @hames-ai/sandbox
 
 The **containment** companion package for
-[`@hames/harness-patterns`](../harness-patterns/README.md): `withSandbox`, the Docker
+[`@hames-ai/harness-patterns`](../harness-patterns/README.md): `withSandbox`, the Docker
 compute backend, the warm pool / scheduler / attachment table, the egress
 profiles, the bash guard and the durable `/work` ⇄ document-store sync — moved
 out of the host app behind injected seams.
 
 It exists as its own package for one reason: **`withSandbox` is a harness
 pattern, but a developer installing the simpler patterns must not pull Docker
-code into their tree.** `@hames/harness-patterns` stays free of it; a host that
+code into their tree.** `@hames-ai/harness-patterns` stays free of it; a host that
 wants containment adds this.
 
 ## Surface
@@ -51,7 +51,7 @@ imports, and neither reaches a `node:` module or the server assertion.
 - Every per-call knob on `WithSandboxConfig`: `backend`, `pool`, `scheduler`,
   `attachments`, `resources`, `egress`.
 
-**Imported directly:** `@hames/harness-patterns` (types, `assert.server`,
+**Imported directly:** `@hames-ai/harness-patterns` (types, `assert.server`,
 `context.server`, `tool-transport.server`), `@modelcontextprotocol/sdk` (the
 in-VM MCP client) and `node-pty` (the Shell path). Nothing else — there are no
 `app/src` imports, type-only included, pinned two ways (see **Guards**).
@@ -85,7 +85,7 @@ anyway.
 
 **Composed host-side:** the `'use server'` route handlers around the PTY
 manager with their per-route auth gates, the document store itself, and the
-`AgentDeps.withSandbox` supplier that `@hames/agents`' ready-made definitions
+`AgentDeps.withSandbox` supplier that `@hames-ai/agents`' ready-made definitions
 receive — the package is what the host wires INTO that supplier, never the
 supplier itself.
 
@@ -125,7 +125,7 @@ Two consequences worth stating rather than discovering:
 
 ## No build step
 
-Like the other `@hames` packages, this one **ships TypeScript source**: `main`
+Like the other `@hames-ai` packages, this one **ships TypeScript source**: `main`
 and every code target in `exports` is a `.ts` file (`./package.json` is the one
 non-code entry), there is no `dist/`, and `pnpm pack` is the whole publish
 pipeline. Consumers are **TS-bundler consumers** — a project whose bundler or

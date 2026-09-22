@@ -12,7 +12,7 @@
  * is intentionally NOT used here; OBO is #110.
  */
 import { ConfidentialClientApplication, CryptoProvider, ResponseMode } from '@azure/msal-node'
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { buildEntraConfig, msalConfiguration, type EntraConfig } from './entra-config.server'
 import { extractIdentity, type EntraIdTokenClaims, type EntraIdentity } from './entra-claims'
 

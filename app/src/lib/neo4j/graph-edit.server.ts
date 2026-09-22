@@ -8,7 +8,7 @@
  *
  * Since #225 PR-C2 this module is the thin gated wrapper: every export runs
  * the per-module auth gate (duplicated, never imported — SD-13) and then
- * delegates to the identity-free op in `@hames/connectors`. The op owns its
+ * delegates to the identity-free op in `@hames-ai/connectors`. The op owns its
  * Cypher — the client sends intent, never query text — passes all values as
  * Cypher parameters, and validates identifiers against a strict charset
  * allowlist before interpolating them backtick-quoted.
@@ -20,7 +20,7 @@ import {
   createGraphNode as createGraphNodeOp,
   linkGraphNodes as linkGraphNodesOp,
   setGraphNodeProperty as setGraphNodePropertyOp,
-} from '@hames/connectors/neo4j/graph-edit.server'
+} from '@hames-ai/connectors/neo4j/graph-edit.server'
 import { getAuthenticatedUser } from '../auth/server'
 import { isBypassEnabled } from '../auth/dev-bypass'
 

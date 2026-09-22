@@ -48,16 +48,16 @@ import {
   compactExecution,
   actorCritic,
   type ConfiguredPattern,
-} from '@hames/harness-patterns'
+} from '@hames-ai/harness-patterns'
 import {
   bamlPatterns,
   createActorControllerAdapter,
   createCriticAdapter,
-} from '@hames/harness-baml'
+} from '@hames-ai/harness-baml'
 import type { AgentData, AgentDefinition, AgentDeps } from '../types'
-import type { FewShot } from '@hames/harness-patterns/types'
+import type { FewShot } from '@hames-ai/harness-patterns/types'
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 
 // The 'use server' directive this file carried before the move was the only
 // thing keeping its exports off the client; this is the real guard, and the

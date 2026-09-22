@@ -15,11 +15,11 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, fireEvent } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
-import type { ContextEvent } from '@hames/harness-patterns'
-import type { GraphElement } from '@hames/agents'
-import type { OpenReferenceTarget } from '@hames/agents'
+import type { ContextEvent } from '@hames-ai/harness-patterns'
+import type { GraphElement } from '@hames-ai/agents'
+import type { OpenReferenceTarget } from '@hames-ai/agents'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 

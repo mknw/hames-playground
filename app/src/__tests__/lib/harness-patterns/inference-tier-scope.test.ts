@@ -23,11 +23,11 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-import type { BamlRole } from '@hames/harness-baml/clients.server'
+import type { BamlRole } from '@hames-ai/harness-baml/clients.server'
 
 const ENV_KEYS = [
   'USE_VERDA_INFERENCE',
@@ -89,9 +89,9 @@ async function load() {
   // rates) and its defaultTier reads USE_VERDA_INFERENCE — the wiring every
   // production path takes.
   await import('../../../lib/inference/config.server')
-  const clients = await import('@hames/harness-baml/clients.server')
+  const clients = await import('@hames-ai/harness-baml/clients.server')
   const { withRunFrame, amendRunFrame, currentRunFrame } =
-    await import('@hames/harness-patterns/run-frame.server')
+    await import('@hames-ai/harness-patterns/run-frame.server')
   // The tier is a SLOT of the run frame since #374, and the fail-closed
   // reachability check that used to guard the way into the scope is now
   // `assertInferenceTier` — called by the HOST before it puts a tier in a
@@ -204,7 +204,7 @@ describe('runWithInferenceTier — both positions reach the right override', () 
 
   it('trims a scoped Verda run against the 131K server window', async () => {
     const { runWithInferenceTier, resolveClientForRole } = await load()
-    const { getContextWindow } = await import('@hames/harness-baml/clients.server')
+    const { getContextWindow } = await import('@hames-ai/harness-baml/clients.server')
 
     await runWithInferenceTier('verda', async () => {
       expect(getContextWindow(resolveClientForRole('controller'))).toBe(131_072)
@@ -406,7 +406,7 @@ describe('activeInferenceTier — what runs outside any scope', () => {
 //
 // The other four slots' "reads the frame, not a module global" pins live in
 // `packages/harness-patterns/__tests__/run-frame.test.ts`. This one cannot: its
-// reader is in `@hames/harness-baml`, which core must not import (the
+// reader is in `@hames-ai/harness-baml`, which core must not import (the
 // dependency arrow runs the other way, and that package has no test host of its
 // own). So it lives here, beside the rest of that module's suite.
 // ============================================================================
@@ -419,7 +419,7 @@ describe("the run frame's inference slot — the reader reads the frame", () => 
     // 'anthropic' inside the frame and this goes red.
     configureEndpointOnly()
     const clients = await load()
-    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
 
     // The module global — the decoy this reader must not prefer.
     expect(clients.activeInferenceTier()).toBe('anthropic')
@@ -438,7 +438,7 @@ describe("the run frame's inference slot — the reader reads the frame", () => 
     // the slot gets the safe tier rather than an unrouted one.
     configureEndpointOnly()
     const clients = await load()
-    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
 
     const seen = await withRunFrame({ inference: { tier: 'verdaa' } }, async () => ({
       tier: clients.activeInferenceTier(),
@@ -461,7 +461,7 @@ describe("the run frame's inference slot — the reader reads the frame", () => 
     // bag unconditionally) → the screen moves and the second assertion reddens.
     configureEndpointOnly()
     const clients = await load()
-    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
 
     const describeOnly = (role: string) =>
       role === 'describe' ? { client: 'SomeCheapModel' } : undefined
@@ -485,7 +485,7 @@ describe("the run frame's inference slot — the reader reads the frame", () => 
     // the top of `clientOverrideFor` and the tier map answers instead.
     configureEndpointOnly()
     const clients = await load()
-    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
 
     const picked = await withRunFrame(
       { inference: { tier: 'verda', clientOverride: () => ({ client: 'ConsumerModel' }) } },

@@ -20,7 +20,7 @@
  * and the resolution must land in the SAME module instance, and the pin goes
  * red when they do not.
  */
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   CLIENT_MAX_OUTPUT_TOKENS,
   MODEL_CONTEXT_WINDOWS,
@@ -35,11 +35,11 @@ import {
   configureCostRates,
   configureInferencePolicy,
   configureModelTables,
-} from '@hames/harness-baml/clients.server'
+} from '@hames-ai/harness-baml/clients.server'
 
 assertServerOnImport()
 
-export type { InferenceTier } from '@hames/harness-baml/clients.server'
+export type { InferenceTier } from '@hames-ai/harness-baml/clients.server'
 
 /** `USE_VERDA_INFERENCE=1` — the DEPLOYMENT default: the tier every run takes
  *  when no per-run scope says otherwise. Read per call rather than cached at

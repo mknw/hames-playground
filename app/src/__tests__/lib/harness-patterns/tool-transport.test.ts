@@ -23,7 +23,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -32,12 +32,12 @@ import {
   activeTransports,
   processTransports,
   type ToolTransport,
-} from '@hames/harness-patterns/tool-transport.server'
+} from '@hames-ai/harness-patterns/tool-transport.server'
 import {
   withRunFrame,
   amendRunFrame,
   currentRunFrame,
-} from '@hames/harness-patterns/run-frame.server'
+} from '@hames-ai/harness-patterns/run-frame.server'
 
 /** Open-or-amend, which is what the two supply paths do in production:
  *  `harness()` opens the run's frame, `withSandbox` amends it. */

@@ -19,7 +19,7 @@ import type {
   AssistantMessageEventData,
   UserMessageEventData,
   ErrorEventData,
-} from '@hames/harness-patterns'
+} from '@hames-ai/harness-patterns'
 
 export interface ReplayedMessage {
   id: string

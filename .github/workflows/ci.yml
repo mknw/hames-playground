@@ -143,19 +143,19 @@ jobs:
       # workspace member. The app suite above covers everything that stayed
       # app-side; this covers what moved (and its own guards — the use-server
       # strip pin, the supplier-throw tests, the package-side read-only scan).
-      - name: Package tests (@hames/connectors)
+      - name: Package tests (@hames-ai/connectors)
         working-directory: packages/connectors
         run: pnpm test
 
-      # Same co-located-suite arrangement for @hames/harness-patterns (the
+      # Same co-located-suite arrangement for @hames-ai/harness-patterns (the
       # core-absorb PR-1): the observability projections + metrics fold moved
       # with their tests into the package's own `__tests__/` tree. Node
       # environment, no app fixtures — see the package's vitest.config.ts.
-      - name: Package tests (@hames/harness-patterns)
+      - name: Package tests (@hames-ai/harness-patterns)
         working-directory: packages/harness-patterns
         run: pnpm test
 
-      # Same story for the sandbox package (the @hames/sandbox extraction): the
+      # Same story for the sandbox package (the @hames-ai/sandbox extraction): the
       # thirteen suites that moved with the code run from their workspace
       # member. They are hermetic — the docker CLI and the MCP SDK are mocked at
       # their lowest seam, as they were app-side — so this needs no daemon.
@@ -167,7 +167,7 @@ jobs:
       # fast while CI runs the floor. The thresholds live in
       # packages/sandbox/vitest.config.ts — without this flag they would be
       # inert, which is the shape the #365 review's O1 was about.
-      - name: Package tests (@hames/sandbox, with coverage floor)
+      - name: Package tests (@hames-ai/sandbox, with coverage floor)
         working-directory: packages/sandbox
         run: pnpm test --coverage
 
@@ -224,7 +224,7 @@ jobs:
       # export target does not exist, the package imports something its own
       # manifest does not declare, or the ./guard companion subpath does not
       # import and behave. The entry sets it checks are DERIVED — from the
-      # app's own `@hames/*` imports and from each package's `exports` map,
+      # app's own `@hames-ai/*` imports and from each package's `exports` map,
       # with `./*` expanded against the packed tarball's file list — never a
       # list typed into the probe, which is how two app imports
       # (`.../runtime-config`, `.../runtime-config.server`) went uncovered in
@@ -286,7 +286,7 @@ jobs:
       # not by CI.
       #
       # Since #225 Step 1c the boot also exercises the WORKSPACE PACKAGE:
-      # /api/stash imports @hames/harness-patterns at module scope (its barrel),
+      # /api/stash imports @hames-ai/harness-patterns at module scope (its barrel),
       # so a 200 there proves the server bundle's inlined package source loads
       # and runs — the runtime half of the workspace-link story the deps stage
       # canary proves at build time.
@@ -311,7 +311,7 @@ jobs:
           exit 1
 
       # The runtime half of the Step 1c proof: /api/stash loads the
-      # @hames/harness-patterns barrel at module scope, so any response at all
+      # @hames-ai/harness-patterns barrel at module scope, so any response at all
       # means the inlined package source parsed and executed (a broken link or
       # a truncated copy would 500 on module load). Assert 200: verified
       # unauthenticated and dependency-free in the same kind of container.

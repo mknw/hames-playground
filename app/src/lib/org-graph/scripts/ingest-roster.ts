@@ -34,7 +34,7 @@ import { ingestRoster } from '../roster-ingest.server'
 import { countNonConforming, listConstraintNames } from '../schema.server'
 import { CONSTRAINT_NAMES } from '../ontology'
 import { loadDirectoryRoster } from '../roster-source.server'
-import { configureNeo4j, resetDriver } from '@hames/connectors/neo4j/client'
+import { configureNeo4j, resetDriver } from '@hames-ai/connectors/neo4j/client'
 import { getEndpoints } from '../../config/endpoints'
 import { formatCounts, maskGraphIds } from './_redact'
 

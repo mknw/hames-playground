@@ -71,8 +71,8 @@ export type LiveEventListener = (event: ContextEvent) => void
  * GENERIC BY CONSTRUCTION. Core neither knows the role names nor interprets the
  * bag that comes back: it is handed to whatever inference layer the host wired
  * up, which is the only thing that knows what a "client" is. The shape is the
- * one `@hames/harness-baml`'s `defineInferenceClients` produces and
- * `@hames/agents`'s `AgentDeps.clientOverride` already carries, so the
+ * one `@hames-ai/harness-baml`'s `defineInferenceClients` produces and
+ * `@hames-ai/agents`'s `AgentDeps.clientOverride` already carries, so the
  * generalisation is proven rather than speculative (issue #374, D1).
  */
 export type RunClientOverride = (role: string) => Record<string, unknown> | undefined
@@ -84,7 +84,7 @@ export type RunClientOverride = (role: string) => Record<string, unknown> | unde
  * `tier` is an OPAQUE STRING and stays one. No provider vocabulary lives in
  * core — not the tier names, not the client names, not the role map. The owner's
  * ruling on D1 is that provider specifics stay in the companion package
- * (`@hames/harness-baml`), which reads this slot, narrows the string to its own
+ * (`@hames-ai/harness-baml`), which reads this slot, narrows the string to its own
  * union and decides what it means. Core's whole contribution is that the value
  * rides the run instead of a module global.
  */

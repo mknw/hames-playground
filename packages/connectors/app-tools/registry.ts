@@ -15,7 +15,7 @@
  * The registry is a generic in-process registry: it resolves the caller's
  * identity through the `resolveContext` supplier the composition root hands to
  * `createAppToolRegistry()`, so this module carries **no host imports** —
- * this IS the `@hames/connectors` module the PR-C1 peel prepared (moved
+ * this IS the `@hames-ai/connectors` module the PR-C1 peel prepared (moved
  * #225 PR-C2). A missing supplier throws at factory call rather than
  * degrading (PR-2 doctrine) — a registry that silently guessed or defaulted
  * an identity would be the one failure this module exists to prevent.
@@ -29,8 +29,8 @@
  * - Errors become `{ success: false, error }` rather than throwing, so one
  *   failing tool degrades a turn instead of killing a run.
  */
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import type { ToolCallResult, MCPToolDescription } from '@hames/harness-patterns/types'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import type { ToolCallResult, MCPToolDescription } from '@hames-ai/harness-patterns/types'
 
 assertServerOnImport()
 

@@ -3,7 +3,7 @@
  * the PTY path read when a caller overrides nothing. See docs/plan/sandbox.md
  * → "Settings".
  *
- * Moved here with the rest of the sandbox at the @hames/sandbox extraction. It
+ * Moved here with the rest of the sandbox at the @hames-ai/sandbox extraction. It
  * was the app's `settings.ts` that carried both the type and the values, and
  * nothing outside the sandbox ever read either: the app's `resolveSettings`
  * assigns `sandbox: DEFAULT_SETTINGS.sandbox` unconditionally, so the block was

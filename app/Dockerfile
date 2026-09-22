@@ -79,7 +79,7 @@ COPY --from=root packages/connectors /ws/packages/connectors
 # resolution as the other two. Nothing here is generated; the package ships
 # source.
 COPY --from=root packages/agents /ws/packages/agents
-# The @hames/sandbox extraction: the fifth workspace member — the containment
+# The @hames-ai/sandbox extraction: the fifth workspace member — the containment
 # layer `withSandbox` and the three PTY routes come from — copied by name,
 # before the frozen install, for the same `workspace:*` resolution reason. Its
 # rootfs/ image definitions are deliberately NOT copied: they are built and
@@ -90,25 +90,25 @@ WORKDIR /ws/app
 RUN pnpm install --frozen-lockfile
 
 # --- #225 Step 1c canary ----------------------------------------------------
-# The workspace link, proven on every build: @hames/harness-patterns must be a
+# The workspace link, proven on every build: @hames-ai/harness-patterns must be a
 # SYMLINK into the copied workspace source, and must RESOLVE there — never to
 # a registry path under node_modules/.pnpm. A registry fetch for the package
 # would be a finding against the whole Step 1 design (§3.1); this turns that
 # property into a build failure instead of an audit question.
-RUN test -L /ws/app/node_modules/@hames/harness-patterns \
+RUN test -L /ws/app/node_modules/@hames-ai/harness-patterns \
  && test -f /ws/packages/harness-patterns/index.ts \
  && test -f /ws/packages/harness-patterns/package.json \
- && test -L /ws/app/node_modules/@hames/harness-baml \
+ && test -L /ws/app/node_modules/@hames-ai/harness-baml \
  && test -f /ws/packages/harness-baml/baml_client/index.ts \
- && test -L /ws/app/node_modules/@hames/connectors \
+ && test -L /ws/app/node_modules/@hames-ai/connectors \
  && test -f /ws/packages/connectors/index.ts \
  && test -f /ws/packages/connectors/package.json \
- && test -L /ws/app/node_modules/@hames/agents \
+ && test -L /ws/app/node_modules/@hames-ai/agents \
  && test -f /ws/packages/agents/agents/index.ts \
  && test -f /ws/packages/sandbox/index.ts \
  && test -f /ws/packages/sandbox/package.json \
  && cd /ws/app \
- && node -e "const r = require.resolve('@hames/harness-patterns'); if (!r.startsWith('/ws/packages/')) { console.error('resolved OUTSIDE the workspace source (registry fetch?): ' + r); process.exit(1); } console.log('workspace link OK: ' + r)"
+ && node -e "const r = require.resolve('@hames-ai/harness-patterns'); if (!r.startsWith('/ws/packages/')) { console.error('resolved OUTSIDE the workspace source (registry fetch?): ' + r); process.exit(1); } console.log('workspace link OK: ' + r)"
 
 # ---------------------------------------------------------------------------
 # build — just the server.

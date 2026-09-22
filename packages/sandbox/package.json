@@ -1,7 +1,7 @@
 {
-  "name": "@hames/sandbox",
+  "name": "@hames-ai/sandbox",
   "version": "0.1.0",
-  "description": "The containment companion for @hames/harness-patterns — withSandbox, the Docker compute backend, the egress profiles and the bash guard, behind injected host seams.",
+  "description": "The containment companion for @hames-ai/harness-patterns — withSandbox, the Docker compute backend, the egress profiles and the bash guard, behind injected host seams.",
   "keywords": [
     "sandbox",
     "docker",
@@ -55,11 +55,11 @@
     "node-pty": "^1.1.0"
   },
   "peerDependencies": {
-    "@hames/harness-patterns": "workspace:^"
+    "@hames-ai/harness-patterns": "workspace:^"
   },
   "devDependencies": {
-    "@hames/harness-baml": "workspace:^",
-    "@hames/harness-patterns": "workspace:^",
+    "@hames-ai/harness-baml": "workspace:^",
+    "@hames-ai/harness-patterns": "workspace:^",
     "@vitest/coverage-v8": "^4.1.5",
     "vitest": "^4.1.5"
   }

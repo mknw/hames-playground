@@ -21,24 +21,50 @@ both. A tutorial never restates a signature the README owns; it links to it.
 
 ## The pages
 
-| Page                                                                            | You will build                                                                                                            |
-| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| [Hosting the harness in your own app](./hosting-the-harness-in-your-own-app.md) | A working agent inside your own process — no model, no gateway — then each stand-in swapped for the real thing            |
-| [Wiring a host](./wiring-a-host.md)                                             | The composition root: boot-time seams, the one `AgentDeps` bag, and the registration overlay                              |
-| [Guarding an agent](./guarding-an-agent.md)                                     | A loop over a hostile tool, wrapped in the injection guard — and the exact event a caught injection produces              |
-| [Running code in a sandbox](./running-code-in-a-sandbox.md)                     | A sandboxed pattern: egress profiles, attachment lifetimes, and per-turn flavour selection                                |
-| [Attaching a sandbox workspace](./attaching-a-sandbox-workspace.md)             | The durable `/work` seam — a workspace store, `syncWorkspace`, and the tenant boundary                                    |
-| [Bring your own provider or model](./own-provider-or-model.md)                  | The shipped agents calling a model you supply — a different provider or a self-hosted endpoint — without touching prompts |
+| Page                                                                | You will build                                                                                                                                    |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Hosting the harness](./hosting-the-harness.md)                     | Running a turn from your own application: the run frame a turn opens, its five slots, what breaks when you skip it, and one complete host to copy |
+| [Wiring a host](./wiring-a-host.md)                                 | The composition root: boot-time seams, the one `AgentDeps` bag, and the registration overlay                                                      |
+| [Guarding an agent](./guarding-an-agent.md)                         | A loop over a hostile tool, wrapped in the injection guard — and the exact event a caught injection produces                                      |
+| [Running code in a sandbox](./running-code-in-a-sandbox.md)         | A sandboxed pattern: egress profiles, attachment lifetimes, and per-turn flavour selection                                                        |
+| [Attaching a sandbox workspace](./attaching-a-sandbox-workspace.md) | The durable `/work` seam — a workspace store, `syncWorkspace`, and the tenant boundary                                                            |
+| [Bring your own provider or model](./own-provider-or-model.md)      | The shipped agents calling a model you supply — a different provider or a self-hosted endpoint — without touching prompts                         |
+
+## Install
+
+Five packages, and only the first is mandatory. Each companion declares
+`@hames/harness-patterns` as a **peer**, so you add it yourself — the companions hold
+module-level `AsyncLocalStorage` scopes, and two resolved copies of the core package would
+be two scopes that never see each other.
+
+| Package                   | Bring it in when                                                                       |
+| ------------------------- | -------------------------------------------------------------------------------------- |
+| `@hames/harness-patterns` | always — patterns, event views, the guard, the tool transport                          |
+| `@hames/harness-baml`     | you want the shipped prompts and model adapters                                        |
+| `@hames/agents`           | you want the six ready-made agent definitions                                          |
+| `@hames/sandbox`          | you want to run code in a container                                                    |
+| `@hames/connectors`       | you want this deployment's MCP catalog, the Neo4j non-agentic layer or the Graph tools |
+
+```bash
+pnpm add @hames/harness-patterns
+pnpm add @hames/harness-baml @hames/agents @hames/sandbox @hames/connectors
+```
+
+`@hames/connectors` is the one easy to skip and then need two pages later: `mcpNamespace`
+lives there (the registration the injection guard's refusal tells you to make), and so does
+`configureNeo4j`.
+
+**You must be a TS-bundler consumer.** These packages ship TypeScript source — `main` and
+every `exports` target is a `.ts` file, there is no `dist/`, and `pnpm pack` is the whole
+publish pipeline. Vite, vinxi, esbuild, tsx and Bun run them as-is; a plain
+`node dist/index.js` consumer is not supported, deliberately.
 
 ## Suggested order
 
 If you are starting cold, the first two pages are the spine:
 
 ```text
-hosting-the-harness-in-your-own-app   →  it runs
-        │
-        ▼
-wiring-a-host                         →  it runs on YOUR catalog, store and policy
+hosting-the-harness                   →  a turn runs
         │
         ├──▶ guarding-an-agent            (before any untrusted tool result reaches a model)
         ├──▶ own-provider-or-model        (before any call leaves for someone else's API)
@@ -46,6 +72,8 @@ wiring-a-host                         →  it runs on YOUR catalog, store and po
                     │
                     ▼
              attaching-a-sandbox-workspace
+
+wiring-a-host                         →  the composition root (STUB — see the page)
 ```
 
 ## Conventions

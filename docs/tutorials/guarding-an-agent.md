@@ -303,8 +303,8 @@ machines, and only an order answers "which machine". The inconsistency is delibe
 
 - [Wiring a host](./wiring-a-host.md) — registering the namespace catalog at boot, and the
   rest of the composition root.
-- [Hosting the harness in your own app](./hosting-the-harness-in-your-own-app.md) — the
-  install and the `AgentDeps` seam.
+- [Hosting the harness](./hosting-the-harness.md) — the run frame a turn opens, and the
+  slot this guard rides in.
 - [`@hames/agents` README](../../packages/agents/README.md) — the per-agent guard coverage
   table for the six shipped agents, including the one known unguarded gap.
 - [`@hames/harness-patterns` GUIDE](../../packages/harness-patterns/GUIDE.md) §3 — the

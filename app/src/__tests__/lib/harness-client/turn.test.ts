@@ -111,8 +111,16 @@ vi.mock('@hames/harness-patterns/run-frame.server', async () => {
       openedFrames.push(frame as OpenedFrame)
       return actual.withRunFrame(frame, fn)
     },
+    amendRunFrame: (frame: never, fn: () => Promise<unknown>) => {
+      amendedFrames.push(frame as OpenedFrame)
+      return actual.amendRunFrame(frame, fn)
+    },
   }
 })
+/** What was amended BELOW the turn frame — today only the live listener, which
+ *  is scoped to the main run so a sidecar cannot inherit the user's wire. */
+const amendedFrames: OpenedFrame[] = []
+
 /** The tier each opened frame named — the successor of `tierScopes`. */
 const tierScopes = {
   get value(): (string | undefined)[] {
@@ -213,6 +221,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   seenScopes.length = 0
   openedFrames.length = 0
+  amendedFrames.length = 0
   // The real `runWithInferenceTier` is used (only the recording is a wrapper),
   // and it refuses the `verda` position unless the endpoint is configured —
   // fail-closed, by design. Fakes: nothing here opens a socket, and the
@@ -349,12 +358,51 @@ describe('interactive turns', () => {
     )
 
     await flush()
-    // The listener rides the frame's `live` slot rather than the entry point's
-    // parameter (#374), so this is where the thread is provable — and the frame
-    // is what the detached compaction below inherits.
-    expect(openedFrames[0].live).toBe(onEvent)
+    // The listener rides the RUN's frame, not the turn's: `runAndSave` amends it
+    // around `run(patterns)` and the turn frame's `live` slot stays empty. This
+    // assertion used to read `expect(openedFrames[0].live).toBe(onEvent)` and
+    // that is exactly what pinned the sidecar leak in — see the dedicated test
+    // below, and `run-frame-sidecar.test.ts` for the mechanism.
+    expect(openedFrames[0].live).toBeUndefined()
+    expect(amendedFrames.map((f) => f.live)).toEqual([onEvent])
     expect(continueSession.mock.calls[0]).toHaveLength(3)
     expect(order).toEqual(['result', 'title', 'settled', 'compact'])
+  })
+
+  // B1, PR #382 review. The turn starts a SECOND harness run inside itself —
+  // the first-turn title agent — between `done` and the stream closing. Its
+  // whole contract is that it fails silently ("all return null … No retry, no
+  // error event"), so it must not be holding the SSE writer: on the first head
+  // of this PR the listener sat in the TURN frame, `enterRun` handed it to the
+  // sidecar, and a failed title generation painted an inline error bubble in
+  // the user's transcript.
+  //
+  // MUTATION: move `live` back into `runTurnAndPersist`'s `withRunFrame` bag →
+  // the sidecar sees the listener and the first assertion reddens. The
+  // mechanism-level twin is `run-frame-sidecar.test.ts` in the package.
+  it('does not hand the SSE listener to the title agent it starts', async () => {
+    const onEvent = vi.fn()
+    let sidecarLive: unknown = 'not-run'
+    let sidecarTier: unknown
+    let sidecarBudget: unknown
+    runFirstTurnTitleGen.mockImplementation(async () => {
+      const { currentRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+      const frame = currentRunFrame()
+      sidecarLive = frame?.live
+      sidecarTier = frame?.inference?.tier
+      sidecarBudget = frame?.config?.maxResultForSummary
+      return 'A title'
+    })
+
+    await runTurnAndPersist(interactive({ onEvent }))
+    await flush()
+
+    // The wire to the user is the main run's, and the sidecar has none.
+    expect(sidecarLive).toBeUndefined()
+    // What it DOES keep is the turn — SA-M13's reason for opening the frame up
+    // here at all. Dropping those would be the opposite overcorrection.
+    expect(sidecarTier).toBe('anthropic')
+    expect(sidecarBudget).toBe(DEFAULT_SETTINGS.maxResultForSummary)
   })
 
   it('emits the generated title, and stays quiet when there is none', async () => {

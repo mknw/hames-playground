@@ -57,7 +57,7 @@ import {
   type SessionData,
 } from './session.server'
 import { runWithRequestContext } from './request-user.server'
-import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+import { amendRunFrame, withRunFrame } from '@hames/harness-patterns/run-frame.server'
 import { activeInferenceTier, assertInferenceTier } from '@hames/harness-baml/clients.server'
 import { DEFAULT_SETTINGS } from '../settings'
 import { bamlPatterns } from '@hames/harness-baml'
@@ -222,21 +222,38 @@ export async function runTurnAndPersist(
   // second one, provided they bring no slots of their own, which is why the
   // three `run` closures in `planTurn` pass neither a frame nor an `onEvent`.
   //
-  // Three of the frame's five slots are filled here and they replace the three
-  // scopes this function used to stack: `config` was `runWithSettings`,
-  // `inference` was `runWithInferenceTier`, and `live` was the listener
-  // `harness()` opened its own scope for. The app's FULL defaults seed `config`
-  // rather than the library's six knobs, because `with-sandbox.server.ts`
-  // dereferences `.sandbox` unguarded and a bare `HarnessRuntimeConfig` has
-  // none. The other two — `guard` and `transports` — stay empty at run level:
-  // `withInjectionGuard` and `withSandbox` amend the frame per pattern, and the
-  // run-level guard manifest is #242's half of this work.
+  // TWO of the frame's five slots are filled here, and they replace the two
+  // scopes this function used to stack: `config` was `runWithSettings` and
+  // `inference` was `runWithInferenceTier`. Both are properties of the TURN, so
+  // both belong at turn level — that is the whole SA-M13 reason above. The
+  // app's FULL settings object seeds `config` rather than the library's six
+  // knobs: that is byte-for-byte what the app's own reader answered before, and
+  // a slot holding a projection would silently drop every app-only field a
+  // pattern might read. (An earlier draft justified it by claiming
+  // `with-sandbox.server.ts` dereferences `.sandbox` unguarded — it does not,
+  // it reads `DEFAULT_SANDBOX_SETTINGS`. The property is still worth keeping;
+  // the reason was wrong.)
+  //
+  // `live` IS NOT ONE OF THEM, and the asymmetry is the point. A listener is a
+  // property of ONE RUN, not of the turn: `enterRun` hands a nested entry the
+  // enclosing frame's listener (which is what lets `continueSession` be called
+  // bare), and this turn starts a SECOND run inside itself — the first-turn
+  // title agent, whose whole contract is that it fails silently. At turn level
+  // the listener followed it, so a failed title generation emitted an `error`
+  // event into the frame, after `done` and before the stream closed, and the
+  // user got an inline error bubble for a failure nobody is meant to see. It is
+  // scoped to the main run in {@link runAndSave} instead. The sidecars keep
+  // `config` and `inference`, which is what SA-M13 needed; what they must not
+  // keep is the wire to the user's transcript.
+  //
+  // `guard` and `transports` stay empty at run level: `withInjectionGuard` and
+  // `withSandbox` amend the frame per pattern, and the run-level guard manifest
+  // is #242's half of this work.
   return runWithRequestContext({ userId, sessionId }, () =>
     withRunFrame(
       {
         config: req.settings ?? DEFAULT_SETTINGS,
         inference: { tier },
-        ...(req.onEvent ? { live: req.onEvent } : {}),
       },
       async () => {
         // The header's warm indicator and the global counters both learn about
@@ -428,7 +445,12 @@ async function runAndSave(
     // the harness a box that is not there — see the SSE route's `catch`, and the
     // `catch` below for the row.
     if (tier === 'verda') await ensureVerdaAwake()
-    const result = await run(await getOrBuildPatterns(sessionId, agentId))
+    // THE LISTENER'S SCOPE IS THIS RUN, not the turn — see the frame opened in
+    // `runTurnAndPersist`. Amending it here rather than filling the turn frame's
+    // slot is what keeps the title agent and the detached compaction, both
+    // started after this returns, off the user's wire.
+    const patterns = await getOrBuildPatterns(sessionId, agentId)
+    const result = await amendRunFrame({ live: req.onEvent }, () => run(patterns))
     // The tier goes with the save so a row that has none yet — an action row
     // `seedActionRow` wrote before any tier was resolved, a legacy row the
     // backfill left alone — records the one it just ran on. `saveConversation`

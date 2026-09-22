@@ -112,7 +112,7 @@ async function renderRouter(bag: Record<string, unknown>): Promise<{ model?: str
 }
 
 async function renderScreen(bag: Record<string, unknown>): Promise<{ model?: string }> {
-  const { b } = await import('../../../../baml_client')
+  const { b } = await import('@hames/harness-baml/baml_client')
   const render = await (
     b.request as unknown as Record<string, (...args: unknown[]) => Promise<RenderedRequest>>
   )['ScreenUntrustedContent']('web/fetch', 'fetched page text', bag as never)

@@ -17,8 +17,16 @@ Call an entry point. That is the whole contract:
 
 ```typescript
 import { harness } from "@hames/harness-patterns";
+import type { ConfiguredPattern, HarnessData } from "@hames/harness-patterns";
 
-const agent = harness(myLoop, mySynthesizer);
+/** Your turn's data shape. The index signature is what every pattern needs. */
+interface MyData extends HarnessData {
+  [key: string]: unknown;
+}
+declare const myLoop: ConfiguredPattern<MyData>;
+declare const mySynthesizer: ConfiguredPattern<MyData>;
+
+const agent = harness<MyData>(myLoop, mySynthesizer);
 const result = await agent("what were the Q3 results?");
 ```
 
@@ -83,6 +91,13 @@ empty frame:
 ```typescript
 import { withRunFrame } from "@hames/harness-patterns";
 import { runChain } from "@hames/harness-patterns/patterns/chain.server";
+import type {
+  ConfiguredPattern,
+  UnifiedContext,
+} from "@hames/harness-patterns";
+
+declare const ctx: UnifiedContext<Record<string, unknown>>;
+declare const patterns: ConfiguredPattern<Record<string, unknown>>[];
 
 await withRunFrame({}, () => runChain(ctx, patterns));
 ```
@@ -97,6 +112,20 @@ transports, the library's `DEFAULT_RUNTIME_CONFIG`, no live listener, no tier.
 Pass a frame to the entry point, as its last argument:
 
 ```typescript
+import type {
+  ContextEvent,
+  HarnessRuntimeConfig,
+} from "@hames/harness-patterns";
+
+declare const agent: ReturnType<
+  typeof import("@hames/harness-patterns").harness
+>; // from §1
+declare const input: string;
+declare const sessionId: string;
+declare const initialData: Record<string, unknown>;
+declare const onEvent: (event: ContextEvent) => void;
+declare const mySettings: HarnessRuntimeConfig;
+
 const result = await agent(input, sessionId, initialData, onEvent, {
   config: mySettings,
   inference: { tier: "my-private-tier" },
@@ -112,25 +141,71 @@ summarization, a background title generation. A nested entry joins the open fram
 instead of opening a second one, provided it brings no slots of its own:
 
 ```typescript
-import { withRunFrame, continueSession } from "@hames/harness-patterns";
+import {
+  withRunFrame,
+  amendRunFrame,
+  continueSession,
+} from "@hames/harness-patterns";
+import type {
+  ConfiguredPattern,
+  ContextEvent,
+  HarnessData,
+  HarnessResultScoped,
+  HarnessRuntimeConfig,
+} from "@hames/harness-patterns";
 
-await withRunFrame(
-  { config: mySettings, inference: { tier }, live: onEvent },
-  async () => {
-    const result = await continueSession(stored, patterns, message);
-    // Started inside the frame, so it keeps every slot for its whole
-    // continuation — including the tier, which is what stops a detached
-    // summarization silently changing provider halfway through a turn.
-    void summarizeInBackground(result);
-    return result;
-  },
-);
+interface MyData extends HarnessData {
+  [key: string]: unknown;
+}
+declare const mySettings: HarnessRuntimeConfig;
+declare const tier: string;
+declare const onEvent: (event: ContextEvent) => void;
+declare const stored: string; // the serialized context from the previous turn
+declare const patterns: ConfiguredPattern<MyData>[];
+declare const message: string;
+declare const summarizeInBackground: (
+  r: HarnessResultScoped<MyData>,
+) => Promise<void>;
+
+await withRunFrame({ config: mySettings, inference: { tier } }, async () => {
+  const result = await amendRunFrame({ live: onEvent }, () =>
+    continueSession<MyData>(stored, patterns, message),
+  );
+  // Started inside the frame, so it keeps `config` and `inference` for its
+  // whole continuation — which is what stops a detached summarization silently
+  // changing provider or budget halfway through a turn.
+  void summarizeInBackground(result);
+  return result;
+});
 ```
 
 Note the entry point is called with **no** `onEvent` and **no** frame. A nested
 entry that supplied either would be refused, by name — because a slot supplied
 there would replace the enclosing run's, and "an inner call quietly replaced the
 run's injection guard" is not a thing that should be possible by accident.
+
+### `live` belongs to a RUN, not to the turn
+
+Notice `live` is **amended around the run** above rather than put in the outer
+frame beside `config` and `inference`. That asymmetry is the one thing on this
+page that was learned the hard way.
+
+A nested entry inherits the enclosing frame's listener — that is the affordance
+that makes calling `continueSession` bare work at all. So if your turn starts a
+**second** run inside the same frame (a title generator, a classifier, a
+background summarizer — anything whose contract is that it fails quietly), that
+run inherits your listener too, and everything it emits goes wherever your
+listener sends it. In this repo's own app that meant a failed title generation —
+documented as "no retry, no error event" — painting an inline error bubble in the
+user's transcript.
+
+The rule that falls out of it:
+
+> Put in the frame what belongs to the **turn** (`config`, `inference`). Amend
+> around the run what belongs to **one run** (`live`).
+
+Sidecars then keep the turn's settings and tier — the whole reason for opening
+the frame that wide — and keep none of the wire to the user.
 
 ### Scoping below a run
 
@@ -158,19 +233,35 @@ budget and a live listener, runs a turn, and runs a second turn on the same
 context.
 
 ```typescript
-// host.ts — run with: node --experimental-strip-types host.ts
+// host.ts — run with: npx tsx host.ts
+//
+// NOT `node --experimental-strip-types`: this package's `main` is `./index.ts`,
+// and Node refuses to strip types under `node_modules`
+// (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING). `tsx` has no such rule.
 import {
   harness,
   continueSession,
-  withRunFrame,
   DEFAULT_RUNTIME_CONFIG,
   simpleLoop,
   compactExecution,
+  type CompactExecutionData,
+  type ConfiguredPattern,
   type ContextEvent,
+  type ControllerFn,
+  type HarnessData,
+  type RunFrame,
+  type SimpleLoopData,
 } from "@hames/harness-patterns";
 
+// 0. One data shape for the whole chain. Each pattern constrains it (a loop
+//    needs `SimpleLoopData`, the synthesizer `CompactExecutionData`), and the
+//    index signature is what `harness` asks for.
+interface HostData extends HarnessData, SimpleLoopData, CompactExecutionData {
+  [key: string]: unknown;
+}
+
 // 1. A controller. Yours will call a model; this one is a stub so the file runs.
-const controller = async () => ({
+const controller: ControllerFn = async () => ({
   action: {
     reasoning: "nothing to look up",
     tool_name: "Return",
@@ -181,12 +272,12 @@ const controller = async () => ({
 });
 
 // 2. Patterns.
-const patterns = [
-  simpleLoop(controller as never, ["Return"], {
+const patterns: ConfiguredPattern<HostData>[] = [
+  simpleLoop<HostData>(controller, ["Return"], {
     patternId: "work",
     liveEvents: true,
   }),
-  compactExecution({
+  compactExecution<HostData>({
     mode: "response",
     patternId: "answer",
     synthesize: async ({ userMessage }) => ({
@@ -197,13 +288,13 @@ const patterns = [
 
 // 3. The frame. `config` is where your own budgets go; the library's defaults
 //    are a complete, valid starting point.
-const frame = {
+const frame: RunFrame = {
   config: { ...DEFAULT_RUNTIME_CONFIG, maxToolTurns: 4 },
   live: (event: ContextEvent) => console.log("[live]", event.type),
 };
 
 // 4. A turn. The runner opens the frame; nothing below needs to know it exists.
-const first = await harness(...patterns)(
+const first = await harness<HostData>(...patterns)(
   "what were the Q3 results?",
   "session-1",
   undefined,
@@ -213,7 +304,7 @@ const first = await harness(...patterns)(
 console.log(first.response);
 
 // 5. A second turn on the same context, with the same frame.
-const second = await continueSession(
+const second = await continueSession<HostData>(
   first.serialized,
   patterns,
   "and Q4?",

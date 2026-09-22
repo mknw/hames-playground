@@ -98,6 +98,45 @@ export SMALL_LLM_BASE_URL=https://your-summarizer.example.com/v1
 > composition root. That is application configuration, not package surface; see the app's
 > `lib/inference/` for the shape.
 
+## Bring your own provider or model
+
+A consumer can supply its own LLM clients — a different provider, a self-hosted endpoint —
+without touching prompts: define runtime clients through a BAML `ClientRegistry`, map the
+roles you want off the built-in chains, and the layer composes **on top of** the built-in
+tier for exactly the mapped roles (`clientOverrideFor`'s seam; unmapped roles change
+nothing, and the `screen` role moves only by its own key — SA-M5). One function type serves
+both wiring paths:
+
+```typescript
+import {
+  defineInferenceClients,
+  activateConsumerClients,
+} from '@hames/harness-baml/consumer-clients.server'
+
+const plug = defineInferenceClients({
+  clients: [
+    {
+      name: 'MyEndpoint',
+      provider: 'openai-generic',
+      options: {
+        model: 'my-model-7b',
+        base_url: 'https://llm.internal.example.com/v1',
+        api_key: '…',
+      },
+    },
+  ],
+  byRole: { router: 'MyEndpoint', describe: 'MyEndpoint' },
+})
+activateConsumerClients(plug) // adapter call sites honour the layer from here on
+```
+
+Hand `plug` to `AgentDeps.clientOverride` as well — the type is the same `ClientOverride` —
+for the package-side call sites outside the adapters (the title generator). Definition-time
+validation throws on a malformed config (empty name/provider, `byRole` naming an undefined
+client), naming the role and the client — never on turn one. Full walkthrough, including
+what happens to unmapped roles and to prompt budgeting:
+**[docs/tutorials/own-provider-or-model.md](../docs/tutorials/own-provider-or-model.md)**.
+
 ## Regenerating the client
 
 `baml_client/` is pre-generated and committed, so neither a consumer nor this repo's own app ever

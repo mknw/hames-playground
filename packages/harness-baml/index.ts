@@ -45,8 +45,19 @@ export {
   runWithInferenceTier,
   activeInferenceTier,
   clientOverrideFor,
+  configureConsumerClients,
+  activeConsumerClients,
   resolveClientForRole,
   limitsFor,
   getContextWindow,
   type BamlRole,
 } from './clients.server'
+export {
+  defineInferenceClients,
+  activateConsumerClients,
+  type InferenceRole,
+  type ClientOverride,
+  type BamlClientOverride,
+  type ConsumerClient,
+  type InferenceClientsConfig,
+} from './consumer-clients.server'

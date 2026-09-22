@@ -31,6 +31,7 @@ export interface ElementDefinition {
   classes?: string
 }
 
+import type { ClientOverride } from '@hames/harness-baml/consumer-clients.server'
 import type {
   ConfiguredPattern,
   RetrieverBackend,
@@ -115,8 +116,16 @@ export interface AgentDeps {
    * the host's client map. Without it, calls run on the client the BAML
    * function declares. Applied as a per-call options-bag spread
    * (`{ client: … }`).
+   *
+   * Typed as the consumer-clients module's `ClientOverride` (issue #374 D1):
+   * the same function type a `defineInferenceClients` plug returns, so a
+   * consumer's plug drops in with no cast. The reference host feeds the
+   * built-in seam here (`clientOverrideFor`), which now COMPOSES the
+   * registered consumer layer on top of the built-in tier inside that one
+   * function — see `consumer-clients.server.ts`'s header for the rule and its
+   * SA-M5 note for why `screen` moves only by its own key.
    */
-  clientOverride?: (role: string) => Record<string, unknown> | undefined
+  clientOverride?: ClientOverride
   /** Title persistence — the app's `updateConversationTitle`. */
   persistTitle?: (sessionId: string, userId: string, title: string) => Promise<void>
   /**

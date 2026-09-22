@@ -256,6 +256,32 @@ const clients = await import('@hames/harness-baml/clients.server')
 assert.equal(typeof clients.clientOverrideFor, 'function')
 assert.equal(clients.clientOverrideFor('controller'), undefined, 'unregistered default tier must be anthropic')
 
+// 3b. the consumer's client layer (issue #374 D1): the plug evaluates, its
+//     definition-time validation throws HERE rather than on turn one, an
+//     unmapped role yields undefined (so a bare consumer's calls stay on the
+//     declared chain), and the seam stays clean while the layer is not
+//     registered.
+const consumer = await import('@hames/harness-baml/consumer-clients.server')
+assert.equal(typeof consumer.defineInferenceClients, 'function')
+assert.throws(
+  () =>
+    consumer.defineInferenceClients({
+      clients: [{ name: 'real', provider: 'openai-generic', options: {} }],
+      byRole: { router: 'Nope' },
+    }),
+  /router.*Nope/,
+  'byRole naming an undefined client must throw at definition, naming role and client',
+)
+const plug = consumer.defineInferenceClients({
+  clients: [{ name: 'byo', provider: 'openai-generic', options: { model: 'm' } }],
+  byRole: { router: 'byo' },
+})
+const mapped = plug('router')
+assert.ok(mapped?.clientRegistry, 'a mapped role must carry the consumer registry')
+assert.equal(mapped.client, 'byo')
+assert.equal(plug('controller'), undefined, 'an unmapped role must yield undefined')
+assert.equal(clients.activeConsumerClients(), undefined, 'a bare consumer registers no layer')
+
 // 4. the adapters + barrel evaluate (this transitively loads @boundaryml/baml
 //    and the declared @hames/harness-patterns dependency via the override)
 const adapters = await import('@hames/harness-baml/baml-adapters.server')

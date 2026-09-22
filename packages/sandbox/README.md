@@ -1,7 +1,7 @@
 # @hames/sandbox
 
 The **containment** companion package for
-[`@hames/harness-patterns`](../harness-patterns): `withSandbox`, the Docker
+[`@hames/harness-patterns`](../harness-patterns/README.md): `withSandbox`, the Docker
 compute backend, the warm pool / scheduler / attachment table, the egress
 profiles, the bash guard and the durable `/work` ⇄ document-store sync — moved
 out of the host app behind injected seams.
@@ -19,7 +19,7 @@ wants containment adds this.
 | `./types`                    | `ComputeBackend` / `VMHandle` / `RuntimeConfig` / …, `SANDBOX_TOOL_PREFIX`, `V0_IN_VM_SERVERS` | yes — types + constants, no `node:` imports    |
 | `./settings`                 | `SandboxSettings` + `DEFAULT_SANDBOX_SETTINGS` (the caps and per-call defaults)                | yes — same rule                                |
 | `./guard` (= `./bash-guard`) | `screenBashCommand` / `bashGuardPolicyFromEnv` — the in-VM command screen                      | yes                                            |
-| `./egress-policy`            | the four egress profiles and the per-boot network/gateway naming                               | yes                                            |
+| `./egress-policy`            | the three selectable egress profiles and the per-boot network/gateway naming                   | yes                                            |
 | `./workspace-store`          | `configureWorkspaceStore(...)` — the durable `/work` seam a host wires                         | server                                         |
 | `./with-sandbox.server`      | the wrapper itself, for a host that skips the barrel                                           | server                                         |
 | `./pty-manager.server`       | the interactive Shell path the host's routes drive (node-pty, loaded lazily — see below)       | server                                         |
@@ -67,7 +67,14 @@ manifest that a consumer of this tarball does not inherit, so node-pty installs
 with its build scripts ignored and works only where a prebuild happens to match.
 Deferring the import turns "this package cannot be imported" into "this
 package's PTY feature is unavailable on this host", which is the truthful scope
-of it.
+of it. Concretely: node-pty ships prebuilt `.node` binaries and its own loader
+falls back to `prebuilds/<platform>-<arch>/` when no `build/` output exists, so
+the shell path works unbuilt on the four platforms it prebuilds for (darwin and
+win32, arm64 and x64 — **not** linux). A consumer on a platform with no prebuild
+needs node-pty's own install script to run, and only pnpm 10 withholds it: under
+npm or yarn that script runs by default and the addon is built. So if opening a
+shell fails with a missing-`.node`-addon error **on pnpm**, run
+`pnpm approve-builds` and reinstall.
 
 It stays a real `dependency` — not `optional`, not `peer` — for the other half:
 a consumer who _does_ open a shell must get it installed without reading a
@@ -82,12 +89,25 @@ manager with their per-route auth gates, the document store itself, and the
 receive — the package is what the host wires INTO that supplier, never the
 supplier itself.
 
+## Egress profiles
+
+**`egress` takes one of three SELECTABLE profiles**, and that is the whole set:
+`mcp-only` (the shipped default — `--network none`, no network at all), `pypi`
+and `github-trusted` (an internal-only docker network plus an allowlist CONNECT
+proxy). The `EgressProfile` type carries a fourth member, `open`, which is
+deliberately absent from `EGRESS_PROFILES`: a caller that asks for it fails
+CLOSED to `mcp-only`, exactly like an unknown name, unless the deployment sets
+`SANDBOX_ENABLE_OPEN_EGRESS=1`. It is a single-operator escape hatch, off by
+default — not a fourth profile. The per-profile table, the default allowlists
+and the residual-DNS caveat are in
+[running code in a sandbox](../../docs/tutorials/running-code-in-a-sandbox.md).
+
 ## The rootfs images are repo infrastructure, not package code
 
 `withSandbox` boots `kg-sandbox:base` and its three flavours
 (`image-processing`, `data`, `office`), plus the allowlist CONNECT proxy behind
 the `pypi` / `github-trusted` egress profiles. Those image definitions live in
-**[`rootfs/`](../../rootfs) at the repository root** and stay there: they are
+**[`rootfs/`](../../rootfs/README.md) at the repository root** and stay there: they are
 built and published by whoever operates a deployment, they version on a
 different clock from this TypeScript, and a consumer of the tarball supplies its
 own (or uses `backend` to supply a different compute substrate entirely). The
@@ -106,12 +126,16 @@ Two consequences worth stating rather than discovering:
 ## No build step
 
 Like the other `@hames` packages, this one **ships TypeScript source**: `main`
-and every `exports` target is a `.ts` file, there is no `dist/`, and `pnpm pack`
-is the whole publish pipeline. Consumers are **TS-bundler consumers** — a
-project whose bundler or runtime compiles TypeScript (Vite/vinxi, esbuild, tsx,
-Bun, `--experimental-strip-types`). A plain `node dist/index.js` consumer is not
-supported, deliberately: a build step would make the published artefact
-different from the source every test in this repo runs against.
+and every code target in `exports` is a `.ts` file (`./package.json` is the one
+non-code entry), there is no `dist/`, and `pnpm pack` is the whole publish
+pipeline. Consumers are **TS-bundler consumers** — a project whose bundler or
+runtime compiles TypeScript: Vite/vinxi, esbuild, tsx, Bun. **Not**
+`node --experimental-strip-types`, which refuses to strip types under
+`node_modules` — exactly where an installed package lives
+(`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`, measured on Node v22.21.1). A
+plain `node dist/index.js` consumer is not supported either, deliberately: a
+build step would make the published artefact different from the source every
+test in this repo runs against.
 
 ## Tests
 

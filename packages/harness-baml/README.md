@@ -1,6 +1,6 @@
 # @hames/harness-baml
 
-The BAML companion for [@hames/harness-patterns](../harness-patterns) — the LLM seam's reference
+The BAML companion for [@hames/harness-patterns](../harness-patterns/README.md) — the LLM seam's reference
 implementation. Patterns in core take their LLM functions as injected config; this package supplies
 them, backed by [BAML](https://boundaryml.com) prompts it declares in its own `baml_src/` and ships
 **pre-generated** in `baml_client/` — a consumer never runs `baml-generate`.
@@ -140,7 +140,19 @@ for the package-side call sites outside the adapters (the title generator). Defi
 validation throws on a malformed config (empty name/provider, `byRole` naming an undefined
 client), naming the role and the client — never on turn one. Full walkthrough, including
 what happens to unmapped roles and to prompt budgeting:
-**[docs/tutorials/own-provider-or-model.md](../docs/tutorials/own-provider-or-model.md)**.
+**[docs/tutorials/own-provider-or-model.md](../../docs/tutorials/own-provider-or-model.md)**.
+
+## No build step
+
+Like every `@hames` package, this one **ships TypeScript source**: `main` and every code target in
+`exports` is a `.ts` file — `baml_client/` included, it is committed, generated TypeScript
+(`./package.json` is the one non-code entry) — there is no `dist/`, and `pnpm pack` is the whole
+publish pipeline. Consumers are **TS-bundler consumers** — a project whose bundler or runtime
+compiles TypeScript: Vite/vinxi, esbuild, tsx, Bun. **Not** `node --experimental-strip-types`, which
+refuses to strip types under `node_modules` — exactly where an installed package lives
+(`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`, measured on Node v22.21.1). A plain
+`node dist/index.js` consumer is not supported either, deliberately: a build step would make the
+published artefact different from the source every test in this repo runs against.
 
 ## Regenerating the client
 

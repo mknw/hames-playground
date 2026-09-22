@@ -10,6 +10,9 @@ back a file it produced — across turns, and across container restarts.
 
 **Prerequisite:** [running code in a sandbox](./running-code-in-a-sandbox.md).
 
+**The runnable version:** [`examples/attaching-a-sandbox-workspace.ts`](./examples/attaching-a-sandbox-workspace.ts) —
+this page's code assembled into one file you can copy out and run.
+
 ---
 
 ## 1. The problem a container cannot solve
@@ -58,7 +61,7 @@ configureWorkspaceStore({
 ```
 
 This app supplies the Data Stash document store plus its own MIME table — see
-[wiring a host §1](./wiring-a-host.md#1-boot-time-seams).
+[wiring a host](./wiring-a-host.md#the-seam-which-is-not-changing).
 
 **Why the MIME pair rides along** instead of being reimplemented in the package: that
 table decides what your stash keeps verbatim and what it base64-encodes. A second copy

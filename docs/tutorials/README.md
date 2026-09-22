@@ -30,6 +30,14 @@ both. A tutorial never restates a signature the README owns; it links to it.
 | [Attaching a sandbox workspace](./attaching-a-sandbox-workspace.md) | The durable `/work` seam — a workspace store, `syncWorkspace`, and the tenant boundary                                                            |
 | [Bring your own provider or model](./own-provider-or-model.md)      | The shipped agents calling a model you supply — a different provider or a self-hosted endpoint — without touching prompts                         |
 
+### The examples directory
+
+Every complete page above also ships its code as one file, under
+[`examples/`](./examples/README.md) — that page's fences assembled into a single runnable
+`.ts` you can copy or clone instead of reassembling it from the prose. The pages stay the
+explanation; the files are the thing you run. [Wiring a host](./wiring-a-host.md) has no
+example file, because it is still a stub: there is nothing to assemble yet.
+
 ## Install
 
 Five packages, and only the first is mandatory. Each companion declares
@@ -55,9 +63,9 @@ lives there (the registration the injection guard's refusal tells you to make), 
 `configureNeo4j`.
 
 **You must be a TS-bundler consumer.** These packages ship TypeScript source — `main` and
-every `exports` target is a `.ts` file, there is no `dist/`, and `pnpm pack` is the whole
-publish pipeline. Vite, vinxi, esbuild, tsx and Bun run them as-is; a plain
-`node dist/index.js` consumer is not supported, deliberately.
+every code target in `exports` is a `.ts` file (`./package.json` is the one non-code entry),
+there is no `dist/`, and `pnpm pack` is the whole publish pipeline. Vite, vinxi, esbuild, tsx
+and Bun run them as-is; a plain `node dist/index.js` consumer is not supported, deliberately.
 
 ## Suggested order
 

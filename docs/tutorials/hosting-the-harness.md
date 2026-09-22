@@ -9,6 +9,9 @@ It assumes you already know what a pattern is. If you don't,
 [`packages/harness-patterns/GUIDE.md`](../../packages/harness-patterns/GUIDE.md)
 is the tour; come back here when you want to run one.
 
+**The runnable version:** [`examples/hosting-the-harness.ts`](./examples/hosting-the-harness.ts) —
+this page's code assembled into one file you can copy out and run.
+
 ---
 
 ## 1. The short version
@@ -327,10 +330,11 @@ Two things to notice, because they are the parts people get wrong:
 
 ## 6. Where to go next
 
-- **Guards** — what the `guard` slot holds and how an agent declares one:
-  `packages/harness-patterns/GUIDE.md` § "The injection guard".
-- **Transports** — supplying your own tool backend: the same guide, § "Tool
-  transports".
+- **Guards** — what the `guard` slot holds, how an agent declares one, and what
+  the guard does to a hostile tool result:
+  [guarding an agent](./guarding-an-agent.md).
+- **Transports** — supplying your own tool backend:
+  [`GUIDE.md` § 3, Tool transports](../../packages/harness-patterns/GUIDE.md#3-tool-transports).
 - **Your own provider or model** — filling the `inference` slot with a client
   override of your own: `packages/harness-baml/README.md` § "The role → client
   seam".

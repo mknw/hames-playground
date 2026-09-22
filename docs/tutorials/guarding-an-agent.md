@@ -9,6 +9,9 @@ ways the guard refuses a declaration it cannot enforce.
 
 **Time:** 10 minutes. Everything here runs offline — no model, no MCP gateway, no Docker.
 
+**The runnable version:** [`examples/guarding-an-agent.ts`](./examples/guarding-an-agent.ts) —
+this page's code assembled into one file you can copy out and run.
+
 ---
 
 ## 1. The unguarded agent

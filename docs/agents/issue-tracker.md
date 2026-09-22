@@ -1,7 +1,7 @@
 # Issue tracker: GitHub
 
 Issues and specs for this repo live as GitHub issues on
-[`mknw/harness-playground`](https://github.com/mknw/harness-playground). Use the
+[`mknw/hames-playground`](https://github.com/mknw/hames-playground). Use the
 `gh` CLI for every operation — it infers the repo from `git remote -v` when run
 inside a clone or a worktree, so no `--repo` flag is needed.
 

@@ -2,10 +2,10 @@
 
 Ready-made harness compositions for
 [@hames/harness-patterns](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns):
-nine agent definitions built on the framework's composable patterns, plus the
-client-safe extraction/replay helpers the reference UI consumes. The BAML
-backing (prompt templates, role→client resolution, adapter factories) lives in
-the companion package
+six agent definitions built on the framework's composable patterns, plus three
+shared helpers and the client-safe extraction/replay helpers the reference UI
+consumes. The BAML backing (prompt templates, role→client resolution, adapter
+factories) lives in the companion package
 [@hames/harness-baml](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml).
 
 The package owns **definitions**, not composition. It carries no UI framework
@@ -276,3 +276,17 @@ registerAgent(overlay(searchAgent, 'i-material-symbols-search', 'indigo'))
 
 A consumer that wants different presentation overlays its own fields the same
 way — the definitions carry none.
+
+## No build step
+
+Like every `@hames` package, this one **ships TypeScript source**: `main` and
+every code target in `exports` is a `.ts` file (`./package.json` is the one
+non-code entry), there is no `dist/`, and `pnpm pack` is the whole publish
+pipeline. Consumers are **TS-bundler consumers** — a project whose bundler or
+runtime compiles TypeScript: Vite/vinxi, esbuild, tsx, Bun. **Not**
+`node --experimental-strip-types`, which refuses to strip types under
+`node_modules` — exactly where an installed package lives
+(`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`, measured on Node v22.21.1). A
+plain `node dist/index.js` consumer is not supported either, deliberately: a
+build step would make the published artefact different from the source every
+test in this repo runs against.

@@ -126,7 +126,7 @@ connections, `listTools()` returned only the app-side tools, so each agent's
 nothing, and the synthesizer answered the question anyway. A `done` row and a
 confident answer no tool contributed to.
 
-What happens now, all of it in `app/src/lib/harness-patterns/`:
+What happens now, items 1–3 in `packages/harness-patterns/` and item 4 in `packages/harness-baml/baml-adapters.server.ts`:
 
 1. **`mcp-client.server.ts` recovers what it owns.** A failed `listTools` is
    retried once per lease (`withReconnect`), and if that fails the WHOLE

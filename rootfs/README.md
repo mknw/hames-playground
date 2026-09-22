@@ -107,7 +107,7 @@ bash rootfs/build.sh
 
 Flavours are opt-in via `withSandbox({ rootfs: 'data' | 'image-processing' })`;
 `base` stays the default. Guardrails/hardening for these flavours are deferred —
-see [#116](https://github.com/mknw/harness-playground/issues/116).
+see [#116](https://github.com/mknw/hames-playground/issues/116).
 
 ### Inside the nix shell
 
@@ -187,6 +187,6 @@ The harness applies a `sandbox_` prefix when registering these (see plan
 - Publishing to a registry (built locally for dev; image-publish is an ops step).
 - Heavier flavors beyond `image-processing` / `data` (spaCy / sentence-transformers,
   an `office`/LibreOffice flavor) — see [`docs/sandbox-flavours.md`](../docs/sandbox-flavours.md)
-  - [#78](https://github.com/mknw/harness-playground/issues/78) /
-    [#116](https://github.com/mknw/harness-playground/issues/116).
+  - [#78](https://github.com/mknw/hames-playground/issues/78) /
+    [#116](https://github.com/mknw/hames-playground/issues/116).
 - A Rust shell-exec server (swaps in for `mcp-shell` only if cold-start is felt).

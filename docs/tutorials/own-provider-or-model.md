@@ -9,6 +9,9 @@ CLIENTS — which model each role's calls go to. You cannot supply prompts, and 
 the generated client ships. The BAML functions, their templates and their output schemas are
 exactly the ones the package declares.
 
+**The runnable version:** [`examples/own-provider-or-model.ts`](./examples/own-provider-or-model.ts) —
+this page's code assembled into one file you can copy out and run.
+
 ---
 
 ## 1. Define your clients and map the roles

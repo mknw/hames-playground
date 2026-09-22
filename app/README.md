@@ -1,4 +1,4 @@
-# The hames app
+# The hames app — `app/`
 
 The SolidStart application: the chat interface, the server actions, turn
 orchestration, auth and persistence. It composes ready-made agents from
@@ -49,9 +49,10 @@ Two things that are not obvious from here:
 
 `doc-convert` is only used when `STASH_CONVERT_DOCS=1`; the app reads
 `DOC_CONVERT_URL` (default `http://localhost:8000`). All six are defined in the
-repo-root `docker-compose.yaml`; the first five come up with a bare
-`docker compose up -d` (the `app` service itself is behind a compose profile —
-see [Commands](#commands)).
+repo-root `docker-compose.yaml`. A bare `docker compose up -d` starts every one
+of them **except `app`** — Neo4j, the MCP gateway, Postgres, redis-stack and
+doc-convert — because the `app` service alone carries a compose profile (see
+[Commands](#commands)).
 
 ## Architecture
 
@@ -87,7 +88,7 @@ app/
 │   │       ├── ObservabilityPanel.tsx   # event timeline + LLM call detail (observability/ holds the tabs)
 │   │       ├── SettingsPanel.tsx        # harness settings FloatingPanel
 │   │       └── PreviewHeaderStrip.tsx · ShareConversationButton.tsx · ThemeSwitcher.tsx · UserMenu.tsx
-│   ├── lib/
+│   ├── lib/                             # all 13 subtrees; 11 of its 22 top-level modules
 │   │   ├── harness-client/              # 11 files — the composition root and turn orchestration
 │   │   │   ├── registry.server.ts       # overlays @hames/agents definitions with icon + accent
 │   │   │   ├── session.server.ts        # the one AgentDeps bag + Postgres-backed serialized context
@@ -131,7 +132,7 @@ definitions, the sandbox, the MCP/Neo4j connectors and the Data Stash pipeline
 | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | [`@hames/harness-patterns`](../packages/harness-patterns/README.md) | Patterns, `UnifiedContext` + `EventView`, the injection guard, the tool transport, the run frame, the Data Stash pipeline | `harness-client/turn.server.ts` opens the run frame; every agent composes patterns |
 | [`@hames/harness-baml`](../packages/harness-baml/README.md)         | The BAML corpus + committed client, adapter factories, role→client routing                                                | imported by the agent definitions; tier overrides come from the app                |
-| [`@hames/agents`](../packages/agents/README.md)                     | Nine agent definitions (six registered + three helpers), graph extraction, replay                                         | `harness-client/registry.server.ts` overlays each with an icon and accent          |
+| [`@hames/agents`](../packages/agents/README.md)                     | Six agent definitions plus three shared helpers, graph extraction, replay                                                 | `harness-client/registry.server.ts` overlays each with an icon and accent          |
 | [`@hames/connectors`](../packages/connectors/README.md)             | The MCP-gateway namespace catalog, Microsoft Graph tools, the Neo4j non-agentic layer                                     | registered at boot; `lib/neo4j/` and `lib/app-tools/` build on it                  |
 | [`@hames/sandbox`](../packages/sandbox/README.md)                   | `withSandbox`, the Docker backend, warm pool, egress profiles, `/work` sync                                               | injected into agent definitions through the `AgentDeps` bag                        |
 
@@ -187,7 +188,7 @@ pnpm test:e2e         # app-path e2e (vitest, e2e/vitest.config.ts)
 pnpm test:e2e:browser # browser e2e (Playwright, e2e-browser/playwright.config.ts)
 pnpm release:check    # the three hermetic layers in order, one go/no-go report
 
-pnpm typecheck        # tsc --noEmit
+pnpm typecheck        # tsc --noEmit --project tsconfig.json
 pnpm lint             # eslint .            (pnpm lint:fix to apply)
 pnpm format:check     # prettier --check .  (pnpm format to write)
 
@@ -251,7 +252,7 @@ overlaid, and five compile-checked composition examples — is
 | [src/lib/harness-client/README.md](src/lib/harness-client/README.md)           | Session lifecycle, the server-action API, graph extraction, the Neo4j enricher |
 | [../packages/harness-patterns/SPEC.md](../packages/harness-patterns/SPEC.md)   | hames API reference and design spec                                            |
 | [../packages/harness-patterns/GUIDE.md](../packages/harness-patterns/GUIDE.md) | Developer guide — composition model, writing a pattern, the tool seam          |
-| [../packages/agents/README.md](../packages/agents/README.md)                   | The nine agent definitions, `AgentDeps`, and the host overlay                  |
+| [../packages/agents/README.md](../packages/agents/README.md)                   | The six agent definitions and three helpers, `AgentDeps`, the host overlay     |
 | [../packages/harness-baml/README.md](../packages/harness-baml/README.md)       | The LLM seam — BAML corpus, adapters, role→client routing                      |
 | [../docs/tutorials/README.md](../docs/tutorials/README.md)                     | Task-shaped tutorials for building on the `@hames` packages                    |
 | [../docs/testing/pyramid.md](../docs/testing/pyramid.md)                       | The four test layers and the one command that runs three of them               |

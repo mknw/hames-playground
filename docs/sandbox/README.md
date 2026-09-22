@@ -195,5 +195,5 @@ jq -r '.events[] | select(.type=="error") | .data.error' "$LOG"
 - [`packages/sandbox/scripts/README.md`](../../packages/sandbox/scripts/README.md)
   — LLM-free and real-LLM live-container smoke scripts (`smoke-scripted.ts`,
   `smoke-llm.ts`).
-- [`app/src/lib/harness-patterns/SPEC.md`](../../app/src/lib/harness-patterns/SPEC.md)
+- [`packages/harness-patterns/SPEC.md`](../../packages/harness-patterns/SPEC.md)
   — harness patterns reference (event types, EventView, trackEvent).

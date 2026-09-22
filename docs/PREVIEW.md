@@ -146,8 +146,8 @@ apply here.
 
 Everything the MCP gateway lists reaches an agent controller: the `general`
 agent passes `tools.all` — literally every listed tool
-(`app/src/lib/harness-patterns/tools.server.ts:41-48`) — into one loop
-(`app/src/lib/harness-client/agents/general.server.ts:37,44,51-52`). An agent's
+(`packages/harness-patterns/tools.server.ts:111,130`) — into one loop
+(`packages/agents/agents/general.server.ts:44,57,63`). An agent's
 declared `servers: [...]` array is display metadata for the agent picker
 (`AgentSelector.tsx:148,161`); **it filters nothing**. So the gateway's enabled
 set _is_ the preview's tool surface, and it has to be chosen rather than

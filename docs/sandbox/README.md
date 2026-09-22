@@ -1,7 +1,7 @@
 # Sandbox debugging
 
 Quick reference for observing what's happening inside the compute sandbox
-([#79](https://github.com/mknw/harness-playground/issues/79)) at runtime:
+([#79](https://github.com/mknw/hames-playground/issues/79)) at runtime:
 what containers exist, what's running inside them, how to peek, and how to
 clean up. Pairs with the design spec at [`docs/plan/sandbox.md`](../plan/sandbox.md).
 
@@ -59,7 +59,7 @@ The `/work` directory is the agent's workspace — files written via
 Inspecting it is the fastest way to confirm "did the agent actually write
 what it claimed to write?".
 
-### Durable workspace (`syncWorkspace`, [#89](https://github.com/mknw/harness-playground/issues/89))
+### Durable workspace (`syncWorkspace`, [#89](https://github.com/mknw/hames-playground/issues/89))
 
 For agents that opt in (e.g. **Sandbox · Session**), `/work` has a convention:
 
@@ -90,7 +90,7 @@ in-memory `AttachmentTable` + `WarmPool` that would have torn the `--rm`
 containers down die with the process, so idle containers keep running and pile
 up against `globalCap`.
 
-**Automatic reap on startup ([#97](https://github.com/mknw/harness-playground/issues/97)
+**Automatic reap on startup ([#97](https://github.com/mknw/hames-playground/issues/97)
 Gap 1):** the next process clears the previous generation itself. The first
 time the default sandbox singletons are built (`getDefaultBackend` in
 [`with-sandbox.server.ts`](../../packages/sandbox/with-sandbox.server.ts)),
@@ -127,9 +127,9 @@ anything else. Same command is in
 After light use you'll typically see **0 or 1 anonymous warm-pool VM** plus
 **one VM per active session id**. The lazy idle sweep destroys parked entries
 ~1 h after last use (the `idleEvictMs` warm-cache horizon; was 5 min before
-[#89](https://github.com/mknw/harness-playground/issues/89)), but only fires on
+[#89](https://github.com/mknw/hames-playground/issues/89)), but only fires on
 the next sandbox action — see issue
-[#82](https://github.com/mknw/harness-playground/issues/82) for the
+[#82](https://github.com/mknw/hames-playground/issues/82) for the
 timer-driven follow-up if dormant accumulation becomes an issue.
 
 Losing the VM no longer loses the work: agents that opt into durable workspaces

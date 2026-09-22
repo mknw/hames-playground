@@ -2,7 +2,7 @@
 
 > **Status: core shipped; forward-looking sections remain the plan.** `withSandbox` + DockerBackend shipped in PR #81 (#79); durable `/work` ⇄ DataStash workspaces in PR #95 (#89); lifecycle hardening (startup reaper, health-check on reuse, Shell-hydrate) in PRs #103/#104 (#97); rootfs flavours (`image-processing`/`data`/`office`) + the router-over-flavours recipe in PR #117 (#78). The durable API lives in [`packages/harness-patterns/SPEC.md`](../../packages/harness-patterns/SPEC.md); operational debugging in [`../sandbox/README.md`](../sandbox/README.md); flavours in [`../sandbox-flavours.md`](../sandbox-flavours.md). Still plan-only: **Swarm** (parallel strategies), **Firecracker substrate** (#78), **ephemeral one-shot mode**, timer-driven sweep + LRU cap (#82), the "Deferred / v1+" section — and **multi-user tenant isolation** ([below](#multi-user-tenant-isolation-348--the-network-twin); design stage — implementation gated on the owner's approval).
 
-Reference design for `withSandbox` — a harness wrapper that attaches a stateful, isolated microVM to a controller pattern, exposing filesystem / shell / Python tools to the actor via MCP servers running *inside* the VM. See [#79](https://github.com/mknw/harness-playground/issues/79) for the implementation story and [#78](https://github.com/mknw/harness-playground/issues/78) for the capability vision (Polars over user-uploaded files, document extraction, NER pipelines, …).
+Reference design for `withSandbox` — a harness wrapper that attaches a stateful, isolated microVM to a controller pattern, exposing filesystem / shell / Python tools to the actor via MCP servers running *inside* the VM. See [#79](https://github.com/mknw/hames-playground/issues/79) for the implementation story and [#78](https://github.com/mknw/hames-playground/issues/78) for the capability vision (Polars over user-uploaded files, document extraction, NER pipelines, …).
 
 This document is the infrastructure design — wrapper API, attachment model, MCP-in-VM architecture, backend interface, substrate options, lifecycle, failure modes. It does **not** cover:
 - Why we want this (see #78)
@@ -268,7 +268,7 @@ Same shape works for document extraction, format conversion, dataset profiling �
 
 ## Durable workspaces (#89)
 
-A container is disposable; the workspace shouldn't be. The 5-minute-class idle window, warm-pool `reset`, and process restarts all destroy `/work`, so anything written there is lost once the live attachment goes away. [#89](https://github.com/mknw/harness-playground/issues/89) decouples the two: **`/work` stays ephemeral scratch; the DataStash is the durable store.** Opt in per agent with `withSandbox({ id, sessionId, syncWorkspace: true })` (the Sandbox · Session agent does).
+A container is disposable; the workspace shouldn't be. The 5-minute-class idle window, warm-pool `reset`, and process restarts all destroy `/work`, so anything written there is lost once the live attachment goes away. [#89](https://github.com/mknw/hames-playground/issues/89) decouples the two: **`/work` stays ephemeral scratch; the DataStash is the durable store.** Opt in per agent with `withSandbox({ id, sessionId, syncWorkspace: true })` (the Sandbox · Session agent does).
 
 **Workspace layout (the contract the agent is taught):**
 
@@ -599,6 +599,6 @@ A and B are independent; C follows A; D is small and independent. Each lane land
 ## See also
 
 - [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) — where this fits in the broader plan
-- [#79](https://github.com/mknw/harness-playground/issues/79) — implementation story
-- [#78](https://github.com/mknw/harness-playground/issues/78) — capability vision + rootfs flavor catalog
+- [#79](https://github.com/mknw/hames-playground/issues/79) — implementation story
+- [#78](https://github.com/mknw/hames-playground/issues/78) — capability vision + rootfs flavor catalog
 - [`packages/harness-patterns/README.md`](../../packages/harness-patterns/README.md) — pattern framework overview (`withReferences` is the analogous wrapper)

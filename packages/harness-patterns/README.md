@@ -146,6 +146,16 @@ package, in buildable prose with every snippet typecheck-pinned.
 Each of these has a section in the [spec](./SPEC.md), with the signatures,
 configuration and per-pattern semantics that belong there rather than here.
 
+## No build step
+
+This package **ships TypeScript source**: `main` and every `exports` target is a
+`.ts` file, there is no `dist/`, and `pnpm pack` is the whole publish pipeline —
+the same is true of every `@hames` package. Consumers are **TS-bundler
+consumers**: a project whose bundler or runtime compiles TypeScript (Vite/vinxi,
+esbuild, tsx, Bun, `--experimental-strip-types`). A plain `node dist/index.js`
+consumer is not supported, deliberately — a build step would make the published
+artefact different from the source every test in this repo runs against.
+
 ## Status and licence
 
 This package — and only this package — is [MIT](./LICENSE) (Copyright (c) 2026

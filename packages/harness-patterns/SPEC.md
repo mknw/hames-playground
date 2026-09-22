@@ -11,17 +11,29 @@ is and why it is shaped this way, start at the front page —
 > library. The playground that surrounds it is licensed separately, under
 > PolyForm Noncommercial 1.0.0; see the repository root `LICENSE`.
 >
-> **Status:** this directory is the **testbed** for the harness-patterns
-> library. The hames playground serves as both consumer and proving ground —
-> the library is intended to be extracted as a standalone npm package once
-> the core API has been validated across enough use cases (the agents under
-> `harness-client/agents/`).
+> **Status:** the extraction happened. This directory IS the package —
+> `@hames/harness-patterns`, version 0.1.0, independently versioned, with its
+> own `package.json`, `exports` map and `files` allowlist. It is unpublished as
+> of this writing: `pnpm publish` is the remaining step, not a remaining
+> refactor. It lives inside the hames playground monorepo, which stays both its
+> consumer and its proving ground — the app and the ready-made agents take it
+> as a workspace dependency (`"@hames/harness-patterns": "workspace:*"`), so
+> the tree this spec describes is the tree they run against, with no build step
+> between.
 >
-> Library boundary rules — keep them strict so extraction stays cheap:
+> Library boundary rules — they are what keep the package shippable, and each
+> one is pinned:
 >
-> 1. `harness-patterns/` MUST NOT import from `harness-client/`, `components/`,
->    or any other consumer.
-> 2. Pattern primitives are framework-neutral — no SolidJS, no UI types.
+> 1. The package MUST NOT import from its host or from a companion package:
+>    no `app/src`, no `~/` alias, no relative climb into `app/`. Pinned by
+>    `app/src/__tests__/lib/harness-patterns/zero-app-imports.test.ts`, which
+>    scans raw source text (a type-only import is erased before a tarball
+>    exists, so only a text scan sees it) across this package, `@hames/agents`,
+>    `@hames/connectors` and `@hames/sandbox`, co-located tests included.
+> 2. Pattern primitives are framework-neutral — no SolidJS, no UI types — and
+>    core owns its own wire types: no `baml_client` import may come back here,
+>    pinned by `core-types-source-scan.test.ts`. The BAML leaf lives in the
+>    companion package `@hames/harness-baml`.
 > 3. Anything that depends on runtime settings goes through the run frame's
 >    `config` slot (`run-frame.server.ts`, read by `runtimeConfig()`), not
 >    function parameters.
@@ -43,15 +55,17 @@ is and why it is shaped this way, start at the front page —
   - [Tools()](#tools)
   - [simpleLoop()](#simpleloopcontroller-tools-config)
   - [actorCritic()](#actorcriticactor-critic-tools-config)
+  - [parallel()](#parallelpatterns)
   - [withReferences()](#withreferencespattern-config)
   - [compactExecution()](#compactexecutionconfig)
   - [compactIntent()](#compactintentconfig)
-  - [planner()](#plannertools-config)
+  - [planner()](#plannerplanfn-tools-config)
   - [retriever()](#retrieverconfig)
   - [withInjectionGuard()](#withinjectionguardconfigpattern)
   - [router()](#routerroutedescriptions-config)
   - [routes()](#routespatternmap-config)
-  - [chain()](#chainctx-patterns)
+  - [judge()](#judgeevaluator-config)
+  - [chain()](#chainctx-patterns-onevent)
   - [harness()](#harnesspatterns)
   - [resumeHarness()](#resumeharnessserialized-patterns-approved)
   - [continueSession()](#continuesessionserialized-patterns-newinput)
@@ -74,12 +88,12 @@ BAML Functions ──┐
 MCP Tools ───────┘
 ```
 
-**Key Principle**: patterns take adapter factories (`createLoopControllerAdapter` and friends, from the `harness-baml` companion module — `~/lib/harness-baml`), which wrap the generated BAML functions and adapt their positional call order. A raw BAML function does not satisfy a pattern's controller contract. Since Lane A6 (#225) the six non-controller LLM calls (`Planner`, `Router`, `CompactIntent`, `RetrieveQuery`, `ResultDescribe(+Batch)`) are REQUIRED config on their patterns, supplied by one `bamlPatterns()` factory — see "The LLM seam" below.
+**Key Principle**: patterns take adapter factories (`createLoopControllerAdapter` and friends, from the `@hames/harness-baml` companion package), which wrap the generated BAML functions and adapt their positional call order. A raw BAML function does not satisfy a pattern's controller contract. Since Lane A6 (#225) the six non-controller LLM calls (`Planner`, `Router`, `CompactIntent`, `RetrieveQuery`, `ResultDescribe(+Batch)`) are REQUIRED config on their patterns, supplied by one `bamlPatterns()` factory — see "The LLM seam" below.
 
 ## Core Concepts
 
 ```typescript
-// Adapter factories from `harness-baml` (`~/lib/harness-baml`) — the only thing you pass to
+// Adapter factories from `@hames/harness-baml` — the only thing you pass to
 // a pattern's controller/actor/critic slots. They adapt the BAML call order
 // and return { action, llmCall }; a raw bound BAML function
 // (e.g. b.LoopController.bind(b)) does NOT satisfy the contract and fails
@@ -396,7 +410,7 @@ advertised by `listTools()` alongside gateway tools so patterns and agents treat
 them identically. Scoped transports are NOT in that catalog — `Tools()` caches
 once per session, so a per-run transport could never be in it consistently; the
 model sees them through the adapters' per-call tool list. See
-[`docs/MICROSOFT_GRAPH.md`](../../../../docs/MICROSOFT_GRAPH.md).
+[`docs/MICROSOFT_GRAPH.md`](../../docs/MICROSOFT_GRAPH.md).
 
 ### `simpleLoop(controller, tools, config?)`
 
@@ -482,7 +496,7 @@ block into the controller prompt. Best for routes with a narrow tool surface whe
 LLM benefits from seeing the canonical query shape (e.g., parameterized Cypher with
 `MERGE` semantics, bulk `UNWIND` patterns, idiomatic `toLower()` substring search).
 Keep the list short (3-5) — the prompt grows with every shot and is sent on every turn.
-See `app/src/lib/harness-client/agents/neo4j-fewshots.server.ts` for a worked example
+See `packages/agents/agents/neo4j-fewshots.server.ts` for a worked example
 verified against the live Neo4j MCP.
 
 **Hooks: `onToolResult`** (closes #7). Called between `callTool()` and the
@@ -493,7 +507,8 @@ loop logs an `error` event with severity `recoverable` and proceeds with the
 original result.
 
 ```typescript
-import { enrichNeo4jResult } from '../harness-client/neo4j-enricher.server'
+// Host code: `enrichNeo4jResult` is the app's, not the package's.
+import { enrichNeo4jResult } from './neo4j-enricher.server'
 
 simpleLoop(neo4jController, tools.neo4j, {
   patternId: 'neo4j-query',
@@ -703,7 +718,7 @@ document, or a crafted URL that exfiltrates data when the answer is rendered.
 auth, and sandbox network egress (#116).
 
 **Where it hooks — two paths, one guard.** It is an AsyncLocalStorage wrapper in
-the shape of [`withSandbox`](../../../../docs/plan/sandbox.md), not a chain step:
+the shape of [`withSandbox`](../../docs/plan/sandbox.md), not a chain step:
 a chain step runs before or after the loop, so it could only ever see content the
 controller has already read. Enforcement therefore happens where untrusted
 content is produced:
@@ -1133,7 +1148,7 @@ soft hint (steps are not tool calls) — it does not clamp `maxTurns`.
 > one-of-N intent classification; planner is strategic decomposition before
 > execution. `chain(router(...), routes({ x: chain(planner(...), simpleLoop(...)) }))`
 > is valid. The `general` agent
-> (`harness-client/agents/general.server.ts`) demonstrates the flat
+> (`packages/agents/agents/general.server.ts`) demonstrates the flat
 > planner → simpleLoop → compactExecution chain alongside the router-based `search`.
 
 ### `retriever(config)`
@@ -1194,7 +1209,7 @@ pattern's own sanitize key, never a namespace any tool name infers to —
 `chunkIndex` and the offsets stay byte-exact so the inline file viewer still
 opens at the right place.
 
-> See [`docs/DATA_STASH.md → Harness-aware ingest`](../../../../docs/DATA_STASH.md)
+> See [`docs/DATA_STASH.md → Harness-aware ingest`](../../docs/DATA_STASH.md)
 > for the upload-side gate and the `redis` / `supabase` backends.
 
 ### `router(routeDescriptions, config)`
@@ -1882,7 +1897,7 @@ const result = await agent('Show me all Person nodes', 'session-123')
 ## File Structure
 
 ```
-harness-patterns/                        # CORE — zero baml_client / @boundaryml/baml references (Lane A6 pin)
+packages/harness-patterns/               # CORE — zero baml_client / @boundaryml/baml references (Lane A6 pin)
 ├── index.ts                # Public exports (no BAML-side symbols — those moved to harness-baml)
 ├── types.ts                # Core types (UnifiedContext, PatternScope, RouterConfig, DIRECT_RESPONSE_ROUTE, the seam callables ControllerFn/PlannerFn/CompactIntentFn/… )
 ├── context.server.ts       # Context factory, createEvent(), generateId()
@@ -1898,17 +1913,7 @@ harness-patterns/                        # CORE — zero baml_client / @boundary
 │                           # (the guard's ALS scope was its own module until #374; it is now the run frame's `guard` slot, and `ActiveInjectionGuard` lives in injection-guard.ts beside the sanitizer it describes. Opposite nesting rule to transports — it UNIONS, see SD-5; read by callTool + retriever)
 ├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values)
 ├── assert.server.ts        # Server-only guards
-
-harness-baml/                            # The BAML companion module (Lane A6) — EVERYTHING that touches baml_client lives here
-├── index.ts                # Public exports (bamlPatterns, adapter factories, routeMessageOp, client/role maps)
-├── baml-patterns.server.ts # bamlPatterns() — the one factory for the eight REQUIRED injected fns (planner, router, compactIntent, retrieveQuery, describe, describeBatch, synthesize, selector) + adapters
-├── defaults.server.ts      # defaultSynthesize (→ bamlPatterns().synthesize) + defaultSelector (→ bamlPatterns().selector) — the composition-root implementations, not pattern defaults
-├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter (tool list rides ControllerInput.tools — L14), createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, describeToolResultsBatchOp, createInjectionScreen
-├── clients.server.ts       # The role → client maps (CLIENT_BY_ROLE / VERDA_CLIENT_BY_ROLE), clientOverrideFor, limitsFor, the tier (the run frame's `inference` slot) — moved byte-for-byte from core (Lane A6/A-i)
-├── routing.server.ts       # routeMessageOp — the router seam's composition-root implementation (`bamlPatterns().router`) (with limits())
-├── baml-version-check.server.ts # Boot-time staleness warning for baml_client (#154)
-└── scripts/                # smoke-verda.ts + smoke-verda-load.ts — the live Verda endpoint checks
-└── patterns/
+└── patterns/               # The pattern factories — a directory OF THIS package, exported as @hames/harness-patterns/patterns
     ├── index.ts
     ├── router.server.ts        # router() + routes() — intent classification + dispatch
     ├── simpleLoop.server.ts    # ReAct loop; emits callId (+ batchId on multi-call turns) on tool_call/tool_result; resolveRefs(); config-driven cross-turn memory
@@ -1916,12 +1921,31 @@ harness-baml/                            # The BAML companion module (Lane A6) �
     ├── judge.server.ts         # Evaluation pattern for quality gates
     ├── parallel.server.ts      # Concurrent branches; wraps each branch with pattern_enter/exit
     ├── withInjectionGuard.server.ts # ALS wrapper attaching the injection guard; emits content_sanitized
+    ├── with-references.server.ts    # withReferences() — hands a pattern the relevant results of earlier turns
     ├── chain.server.ts         # Sequential composition; accepts onEvent? for SSE streaming
     ├── compactExecution.server.ts   # Final response synthesis; skips BAML for DIRECT_RESPONSE_ROUTE
     ├── compactIntent.server.ts # Rewrites latest message → scope.data.intent for router-less actors; emits intent_compacted
     ├── planner.server.ts       # Upfront decomposition → scope.data.plan (+ formatPlanContext, read by both loop patterns); emits plan_created
+    ├── retriever.server.ts     # retriever() — vector-store search as a pattern
     └── event-view.server.ts    # EventViewImpl (fluent query API, serializeCompact)
+
+packages/harness-baml/                   # The BAML companion PACKAGE (Lane A6) — EVERYTHING that touches baml_client lives here
+├── index.ts                # Public exports (bamlPatterns, adapter factories, routeMessageOp, client/role maps)
+├── baml-patterns.server.ts # bamlPatterns() — the one factory for the eight REQUIRED injected fns (planner, router, compactIntent, retrieveQuery, describe, describeBatch, synthesize, selector) + adapters
+├── defaults.server.ts      # defaultSynthesize (→ bamlPatterns().synthesize) + defaultSelector (→ bamlPatterns().selector) — the composition-root implementations, not pattern defaults
+├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter (tool list rides ControllerInput.tools — L14), createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, describeToolResultsBatchOp, createInjectionScreen
+├── clients.server.ts       # The role → client maps (CLIENT_BY_ROLE / VERDA_CLIENT_BY_ROLE), clientOverrideFor, limitsFor, the tier (the run frame's `inference` slot) — moved byte-for-byte from core (Lane A6/A-i)
+├── routing.server.ts       # routeMessageOp — the router seam's composition-root implementation (`bamlPatterns().router`) (with limits())
+├── baml-version-check.server.ts # Boot-time staleness warning for baml_client (#154)
+├── consumer-clients.server.ts   # defineInferenceClients() / activateConsumerClients() — the bring-your-own-model seam
+├── baml_src/               # THE one BAML corpus in the repo (role chains, leaf clients, prompts)
+└── baml_client/            # Generated from baml_src/ and COMMITTED — never hand-edited, never regenerated implicitly
 ```
+
+Both trees are abridged to the files this spec refers to; `patterns/` is a
+directory of the CORE package, not of the BAML companion. The live self-hosted
+endpoint checks (`smoke-verda.ts`, `smoke-verda-load.ts`) are the HOST's, not
+either package's — they live in `app/src/lib/inference/scripts/`.
 
 ## Design Principles
 

@@ -1,7 +1,7 @@
 # @hames/sandbox
 
 The **containment** companion package for
-[`@hames/harness-patterns`](../harness-patterns): `withSandbox`, the Docker
+[`@hames/harness-patterns`](../harness-patterns/README.md): `withSandbox`, the Docker
 compute backend, the warm pool / scheduler / attachment table, the egress
 profiles, the bash guard and the durable `/work` ⇄ document-store sync — moved
 out of the host app behind injected seams.
@@ -19,7 +19,7 @@ wants containment adds this.
 | `./types`                    | `ComputeBackend` / `VMHandle` / `RuntimeConfig` / …, `SANDBOX_TOOL_PREFIX`, `V0_IN_VM_SERVERS` | yes — types + constants, no `node:` imports    |
 | `./settings`                 | `SandboxSettings` + `DEFAULT_SANDBOX_SETTINGS` (the caps and per-call defaults)                | yes — same rule                                |
 | `./guard` (= `./bash-guard`) | `screenBashCommand` / `bashGuardPolicyFromEnv` — the in-VM command screen                      | yes                                            |
-| `./egress-policy`            | the four egress profiles and the per-boot network/gateway naming                               | yes                                            |
+| `./egress-policy`            | the three selectable egress profiles and the per-boot network/gateway naming                   | yes                                            |
 | `./workspace-store`          | `configureWorkspaceStore(...)` — the durable `/work` seam a host wires                         | server                                         |
 | `./with-sandbox.server`      | the wrapper itself, for a host that skips the barrel                                           | server                                         |
 | `./pty-manager.server`       | the interactive Shell path the host's routes drive (node-pty, loaded lazily — see below)       | server                                         |
@@ -67,7 +67,12 @@ manifest that a consumer of this tarball does not inherit, so node-pty installs
 with its build scripts ignored and works only where a prebuild happens to match.
 Deferring the import turns "this package cannot be imported" into "this
 package's PTY feature is unavailable on this host", which is the truthful scope
-of it.
+of it. Concretely: node-pty ships prebuilt `.node` binaries and its own loader
+falls back to `prebuilds/<platform>-<arch>/` when no `build/` output exists, so
+the shell path works unbuilt on the four platforms it prebuilds for — if opening
+a shell fails with a missing-`.node`-addon error (a Linux consumer, say), run
+`pnpm approve-builds` and reinstall so node-pty's build scripts are allowed to
+run.
 
 It stays a real `dependency` — not `optional`, not `peer` — for the other half:
 a consumer who _does_ open a shell must get it installed without reading a
@@ -82,12 +87,25 @@ manager with their per-route auth gates, the document store itself, and the
 receive — the package is what the host wires INTO that supplier, never the
 supplier itself.
 
+## Egress profiles
+
+**`egress` takes one of three SELECTABLE profiles**, and that is the whole set:
+`mcp-only` (the shipped default — `--network none`, no network at all), `pypi`
+and `github-trusted` (an internal-only docker network plus an allowlist CONNECT
+proxy). The `EgressProfile` type carries a fourth member, `open`, which is
+deliberately absent from `EGRESS_PROFILES`: a caller that asks for it fails
+CLOSED to `mcp-only`, exactly like an unknown name, unless the deployment sets
+`SANDBOX_ENABLE_OPEN_EGRESS=1`. It is a single-operator escape hatch, off by
+default — not a fourth profile. The per-profile table, the default allowlists
+and the residual-DNS caveat are in
+[running code in a sandbox](../../docs/tutorials/running-code-in-a-sandbox.md).
+
 ## The rootfs images are repo infrastructure, not package code
 
 `withSandbox` boots `kg-sandbox:base` and its three flavours
 (`image-processing`, `data`, `office`), plus the allowlist CONNECT proxy behind
 the `pypi` / `github-trusted` egress profiles. Those image definitions live in
-**[`rootfs/`](../../rootfs) at the repository root** and stay there: they are
+**[`rootfs/`](../../rootfs/README.md) at the repository root** and stay there: they are
 built and published by whoever operates a deployment, they version on a
 different clock from this TypeScript, and a consumer of the tarball supplies its
 own (or uses `backend` to supply a different compute substrate entirely). The

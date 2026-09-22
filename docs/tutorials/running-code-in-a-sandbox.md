@@ -11,6 +11,9 @@ turn.
 **Prerequisite:** a container engine on the host (Docker, or colima on macOS), and the
 rootfs images built — see §6.
 
+**The runnable version:** [`examples/running-code-in-a-sandbox.ts`](./examples/running-code-in-a-sandbox.ts) —
+this page's code assembled into one file you can copy out and run.
+
 ---
 
 ## 1. What runs where

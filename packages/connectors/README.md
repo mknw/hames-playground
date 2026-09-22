@@ -1,7 +1,7 @@
 # @hames/connectors
 
 The **connectors** companion package for
-[`@hames/harness-patterns`](../harness-patterns): the Microsoft Graph app-side
+[`@hames/harness-patterns`](../harness-patterns/README.md): the Microsoft Graph app-side
 tools, the Neo4j non-agentic layer, and the MCP-gateway namespace catalog —
 moved out of the host app (#225 PR-3) behind injected seams. The package owns
 protocols, query shapes and schemas; the **host owns identity, tokens, content
@@ -49,6 +49,16 @@ imported), the transport registration on core's seam, the token/MSAL layer,
 and the doc-convert/stash modules behind the content seam. A back-edge from
 this package into the host's stash (`guessMimeType`/`isTextMime`) is
 forbidden by design — see the S4 note in the host's composition root.
+
+## No build step
+
+Like every `@hames` package, this one **ships TypeScript source**: `main` and
+every `exports` target is a `.ts` file, there is no `dist/`, and `pnpm pack` is
+the whole publish pipeline. Consumers are **TS-bundler consumers** — a project
+whose bundler or runtime compiles TypeScript (Vite/vinxi, esbuild, tsx, Bun,
+`--experimental-strip-types`). A plain `node dist/index.js` consumer is not
+supported, deliberately: a build step would make the published artefact
+different from the source every test in this repo runs against.
 
 ## Tests
 

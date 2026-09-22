@@ -223,11 +223,15 @@ jobs:
       # Fails the step if an export is missing from the tarball, a declared
       # export target does not exist, the package imports something its own
       # manifest does not declare, or the ./guard companion subpath does not
-      # import and behave. The module-eval probe (barrel + every app-imported
-      # subpath) was RED on main until the seam lanes removed the app/src
-      # edges; it is GREEN now — a red here is a regression, not
-      # a known blocker (which checks block merges is the CI-before-merge
-      # ruleset's call, not this job's).
+      # import and behave. The entry sets it checks are DERIVED — from the
+      # app's own `@hames/*` imports and from each package's `exports` map,
+      # with `./*` expanded against the packed tarball's file list — never a
+      # list typed into the probe, which is how two app imports
+      # (`.../runtime-config`, `.../runtime-config.server`) went uncovered in
+      # silence. The module-eval half was RED on main until the seam lanes
+      # removed the app/src edges; it is GREEN now — a red here is a
+      # regression, not a known blocker (which checks block merges is the
+      # CI-before-merge ruleset's call, not this job's).
       - name: Run the pack smoke
         id: pack_smoke
         run: scripts/pack-smoke.sh

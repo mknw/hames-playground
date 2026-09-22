@@ -1,8 +1,30 @@
 {
   "name": "@hames/agents",
   "version": "0.1.0",
-  "description": "Ready-made harness compositions — nine agents built on @hames/harness-patterns, plus the client-safe extraction/replay helpers.",
+  "description": "Ready-made harness compositions — six agent definitions and three shared helpers built on @hames/harness-patterns, plus the client-safe extraction/replay helpers.",
+  "keywords": [
+    "agents",
+    "harness",
+    "patterns",
+    "llm",
+    "baml",
+    "mcp",
+    "neo4j"
+  ],
+  "homepage": "https://github.com/mknw/hames-playground/tree/main/packages/agents#readme",
+  "bugs": {
+    "url": "https://github.com/mknw/hames-playground/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mknw/hames-playground.git",
+    "directory": "packages/agents"
+  },
   "license": "MIT",
+  "author": {
+    "name": "Michael Accetto",
+    "url": "https://github.com/mknw"
+  },
   "type": "module",
   "main": "./index.ts",
   "exports": {
@@ -11,6 +33,21 @@
     "./agents": "./agents/index.ts",
     "./*": "./*.ts"
   },
+  "files": [
+    "*.ts",
+    "agents",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "prepublishOnly": "node -e \"const ua=process.env.npm_config_user_agent||'';const ex=process.env.npm_execpath||'';if(ua.startsWith('npm/')||ex.includes('npm-cli'))throw new Error('This package must be published with pnpm publish, not npm: npm does not rewrite workspace: specifiers and ships them literally.')\""
+  },
   "peerDependencies": {
     "@hames/harness-baml": "workspace:^",
     "@hames/harness-patterns": "workspace:^"
@@ -18,17 +55,5 @@
   "devDependencies": {
     "@hames/harness-baml": "workspace:^",
     "@hames/harness-patterns": "workspace:^"
-  },
-  "files": [
-    "*.ts",
-    "agents",
-    "LICENSE",
-    "README.md"
-  ],
-  "publishConfig": {
-    "access": "public"
-  },
-  "scripts": {
-    "prepublishOnly": "node -e \"const ua=process.env.npm_config_user_agent||'';const ex=process.env.npm_execpath||'';if(ua.startsWith('npm/')||ex.includes('npm-cli'))throw new Error('This package must be published with pnpm publish, not npm: npm does not rewrite workspace: specifiers and ships them literally.')\""
   }
 }

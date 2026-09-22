@@ -2,7 +2,29 @@
   "name": "@hames/connectors",
   "version": "0.1.0",
   "description": "The connectors companion for @hames/harness-patterns — Microsoft Graph app-side tools, the Neo4j non-agentic layer, and the MCP-gateway namespace catalog, all behind injected seams.",
+  "keywords": [
+    "connectors",
+    "neo4j",
+    "cypher",
+    "graph",
+    "mcp",
+    "tools",
+    "harness"
+  ],
+  "homepage": "https://github.com/mknw/hames-playground/tree/main/packages/connectors#readme",
+  "bugs": {
+    "url": "https://github.com/mknw/hames-playground/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mknw/hames-playground.git",
+    "directory": "packages/connectors"
+  },
   "license": "MIT",
+  "author": {
+    "name": "Michael Accetto",
+    "url": "https://github.com/mknw"
+  },
   "type": "module",
   "main": "./index.ts",
   "exports": {
@@ -10,6 +32,21 @@
     "./package.json": "./package.json",
     "./neo4j": "./neo4j/index.ts",
     "./*": "./*.ts"
+  },
+  "files": [
+    "*.ts",
+    "!vitest.config.ts",
+    "neo4j",
+    "app-tools",
+    "graph",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "test": "vitest run",
@@ -26,17 +63,5 @@
     "@hames/harness-patterns": "workspace:^",
     "seroval": "~1.5.0",
     "vitest": "^4.1.5"
-  },
-  "files": [
-    "*.ts",
-    "!vitest.config.ts",
-    "neo4j",
-    "app-tools",
-    "graph",
-    "LICENSE",
-    "README.md"
-  ],
-  "publishConfig": {
-    "access": "public"
   }
 }

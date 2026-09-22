@@ -2,7 +2,29 @@
   "name": "@hames/harness-baml",
   "version": "0.1.0",
   "description": "The BAML companion for @hames/harness-patterns — the role→client resolution seam, the adapter factories, and a pre-generated baml_client shipped beside its baml_src so a consumer never runs baml-generate.",
+  "keywords": [
+    "baml",
+    "llm",
+    "prompts",
+    "inference",
+    "harness",
+    "patterns",
+    "agents"
+  ],
+  "homepage": "https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme",
+  "bugs": {
+    "url": "https://github.com/mknw/hames-playground/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mknw/hames-playground.git",
+    "directory": "packages/harness-baml"
+  },
   "license": "MIT",
+  "author": {
+    "name": "Michael Accetto",
+    "url": "https://github.com/mknw"
+  },
   "type": "module",
   "main": "./index.ts",
   "exports": {
@@ -14,6 +36,19 @@
     "./baml_client": "./baml_client/index.ts",
     "./baml_client/*": "./baml_client/*.ts",
     "./*": "./*.ts"
+  },
+  "files": [
+    "*.ts",
+    "baml_src",
+    "baml_client",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "baml-generate": "baml-cli generate",
@@ -27,15 +62,5 @@
   },
   "devDependencies": {
     "@hames/harness-patterns": "workspace:^"
-  },
-  "files": [
-    "*.ts",
-    "baml_src",
-    "baml_client",
-    "LICENSE",
-    "README.md"
-  ],
-  "publishConfig": {
-    "access": "public"
   }
 }

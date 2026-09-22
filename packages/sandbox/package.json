@@ -2,7 +2,29 @@
   "name": "@hames/sandbox",
   "version": "0.1.0",
   "description": "The containment companion for @hames/harness-patterns — withSandbox, the Docker compute backend, the egress profiles and the bash guard, behind injected host seams.",
+  "keywords": [
+    "sandbox",
+    "docker",
+    "containment",
+    "egress",
+    "agents",
+    "harness",
+    "typescript"
+  ],
+  "homepage": "https://github.com/mknw/hames-playground/tree/main/packages/sandbox#readme",
+  "bugs": {
+    "url": "https://github.com/mknw/hames-playground/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mknw/hames-playground.git",
+    "directory": "packages/sandbox"
+  },
   "license": "MIT",
+  "author": {
+    "name": "Michael Accetto",
+    "url": "https://github.com/mknw"
+  },
   "type": "module",
   "main": "./index.ts",
   "exports": {
@@ -10,6 +32,18 @@
     "./package.json": "./package.json",
     "./guard": "./bash-guard.ts",
     "./*": "./*.ts"
+  },
+  "files": [
+    "*.ts",
+    "!vitest.config.ts",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "test": "vitest run",
@@ -28,14 +62,5 @@
     "@hames/harness-patterns": "workspace:^",
     "@vitest/coverage-v8": "^4.1.5",
     "vitest": "^4.1.5"
-  },
-  "files": [
-    "*.ts",
-    "!vitest.config.ts",
-    "LICENSE",
-    "README.md"
-  ],
-  "publishConfig": {
-    "access": "public"
   }
 }

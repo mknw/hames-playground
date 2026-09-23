@@ -72,7 +72,7 @@ Wrap a loop in `withSandbox`, and its tools run inside a container. The model
 calls come from
 [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme).
 
-> **Needs:** Docker, the `kg-sandbox:base` image and `ANTHROPIC_API_KEY` — see [rootfs/README.md](https://github.com/mknw/hames-playground/blob/main/rootfs/README.md) in the hames app.
+> **Needs:** Docker, the `kg-sandbox:base` image ([build it](#build-the-sandbox-image) as [rootfs/README.md](https://github.com/mknw/hames-playground/blob/main/rootfs/README.md) in the hames app describes), and an Anthropic API key in `ANTHROPIC_API_KEY` (get one at [console.anthropic.com](https://console.anthropic.com/)).
 
 ```typescript
 import { actorCritic, compactExecution, harness } from '@hames-ai/harness-patterns'
@@ -89,11 +89,15 @@ interface Data extends HarnessData, ActorCriticData, CompactExecutionData {
   [key: string]: unknown
 }
 
-// A generate-then-check loop. Its tool list is empty because `withSandbox` supplies
-// the container's tools; `{}` means "no options" and is required.
+// A generate-then-check loop. The actor's one argument is its tool list or an options
+// object; `{}` gives it neither, because inside `withSandbox` the container's tools are
+// offered to the model automatically. The loop's own tool list (`[]`) is empty for the
+// same reason.
 const loop = actorCritic<Data>(createActorControllerAdapter({}), createCriticAdapter(), [])
 
 const agent = harness<Data>(
+  // Two calls: `withSandbox()` takes the configuration (none here) and returns a
+  // wrapper; calling that wrapper on `loop` returns the sandboxed loop.
   withSandbox()(loop),
   compactExecution({ mode: 'thread', synthesize: bamlPatterns().synthesize }), // both fields are required
 )
@@ -109,7 +113,7 @@ Build the image first: [Build the sandbox image](#build-the-sandbox-image).
 
 The same agent with its options spelled out:
 
-> **Needs:** Docker, the `kg-sandbox:base` image and `ANTHROPIC_API_KEY` — see [rootfs/README.md](https://github.com/mknw/hames-playground/blob/main/rootfs/README.md) in the hames app.
+> **Needs:** Docker, the `kg-sandbox:base` image ([build it](#build-the-sandbox-image) as [rootfs/README.md](https://github.com/mknw/hames-playground/blob/main/rootfs/README.md) in the hames app describes), and an Anthropic API key in `ANTHROPIC_API_KEY` (get one at [console.anthropic.com](https://console.anthropic.com/)).
 
 ```typescript
 import { actorCritic, compactExecution, harness } from '@hames-ai/harness-patterns'

@@ -69,8 +69,8 @@ something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
 Examples whose **Needs:** line names an MCP server list their tools from one. An
 _MCP server_ exposes tools (web search, a database) to agents over one protocol, the
 Model Context Protocol, and the packages reach it at `MCP_GATEWAY_URL` (default
-`http://localhost:8811/mcp`). Any MCP server that speaks the protocol's
-streamable HTTP transport works, including your own; "gateway" is this
+`http://localhost:8811/mcp`). Any MCP server that speaks the protocol over HTTP
+(its "streamable HTTP" mode) works, including your own; "gateway" is this
 repository's name for the one it ships, which `docker compose up -d` starts in a
 clone of the repository. An MCP server that requires authentication is not
 supported yet.
@@ -139,7 +139,8 @@ const result = await agent('What time is it?')
 console.log(result.response)
 ```
 
-It prints something like `The clock says "2026-09-23T16:37:29.324Z".` To make the
+It prints something like `The clock says "2026-09-23T16:37:29.324Z".`, and nothing
+else: no warnings, because nothing in it asks an MCP server for anything. To make the
 two stand-ins real model calls, use `createLoopControllerAdapter()` and
 `bamlPatterns().synthesize` from
 [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme).
@@ -149,7 +150,7 @@ two stand-ins real model calls, use `createLoopControllerAdapter()` and
 The same shape, with the tool list read from an MCP server by `Tools()` instead
 of registered in this process.
 
-> **Needs:** an MCP server at `MCP_GATEWAY_URL` — see [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app.
+> **Needs:** an MCP server at `MCP_GATEWAY_URL` — `docker compose up -d` with [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app starts one.
 
 ```typescript
 import { Tools, simpleLoop, compactExecution, harness } from '@hames-ai/harness-patterns'
@@ -204,7 +205,7 @@ step's. The example below uses scripted stand-ins in their place only so that it
 needs no model provider or API key (it still lists its tools from an MCP
 gateway, through `Tools()`):
 
-> **Needs:** an MCP server at `MCP_GATEWAY_URL` — see [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app.
+> **Needs:** an MCP server at `MCP_GATEWAY_URL` — `docker compose up -d` with [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app starts one.
 
 ```typescript
 import {
@@ -324,9 +325,9 @@ same mechanism rather than two subsystems.
 
 What that buys you is control over the thing that usually rots first: what each
 model call actually sees. **Views** query the log — by pattern, by event type, by
-the last N user turns — and a pattern's **scope** (on this page, always: the
-slice of the log that pattern is allowed to see) is declared once, up front,
-instead of at every call site. A synthesizer gets the tool results of the
+the last N user turns — and a pattern's **scope**, the slice of the log that
+pattern is allowed to see, is declared once, up front, instead of at every call
+site. A synthesizer gets the tool results of the
 route that just ran; a router gets a few turns of messages and nothing else;
 older results degrade to compact pointers that a controller can expand on demand.
 Context is budgeted by construction, not by remembering to prune.

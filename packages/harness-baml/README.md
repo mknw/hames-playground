@@ -55,8 +55,8 @@ something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
 Examples whose **Needs:** line names an MCP server list their tools from one. An
 _MCP server_ exposes tools (web search, a database) to agents over one protocol, the
 Model Context Protocol, and the packages reach it at `MCP_GATEWAY_URL` (default
-`http://localhost:8811/mcp`). Any MCP server that speaks the protocol's
-streamable HTTP transport works, including your own; "gateway" is this
+`http://localhost:8811/mcp`). Any MCP server that speaks the protocol over HTTP
+(its "streamable HTTP" mode) works, including your own; "gateway" is this
 repository's name for the one it ships, which `docker compose up -d` starts in a
 clone of the repository. An MCP server that requires authentication is not
 supported yet.
@@ -67,10 +67,9 @@ supported yet.
 
 A tool loop that calls one tool, then a step that writes the answer, with this
 package's model calls in both places. The tool is a function in this process, so
-the only thing it needs is an Anthropic API key. With no MCP server running it
-also logs two `listTools failed` warnings, and carries on.
+the only thing it needs is an Anthropic API key.
 
-> **Needs:** `ANTHROPIC_API_KEY` — see [app/.env.example](https://github.com/mknw/hames-playground/blob/main/app/.env.example) in the hames app.
+> **Needs:** an Anthropic API key in `ANTHROPIC_API_KEY` (get one at [console.anthropic.com](https://console.anthropic.com/)).
 
 ```typescript
 import { bamlPatterns, createLoopControllerAdapter } from '@hames-ai/harness-baml'
@@ -104,13 +103,16 @@ const result = await agent('What time is it?')
 console.log(result.response)
 ```
 
+With no MCP server running, it prints two `[mcp-client] listTools failed … fetch failed`
+warnings before the answer: the controller always asks an MCP server for tool
+descriptions too, finds none, and carries on with the in-process tool.
 `mode: 'thread'` hands the answer step the loop's tool calls and their results.
 
 ### With tools from an MCP server
 
 The same shape, with the tool list read from an MCP server by `Tools()`.
 
-> **Needs:** `ANTHROPIC_API_KEY` and an MCP server at `MCP_GATEWAY_URL` — see [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app.
+> **Needs:** an Anthropic API key in `ANTHROPIC_API_KEY` (get one at [console.anthropic.com](https://console.anthropic.com/)), and an MCP server at `MCP_GATEWAY_URL` — `docker compose up -d` with [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app starts one.
 
 ```typescript
 import { bamlPatterns, createLoopControllerAdapter } from '@hames-ai/harness-baml'
@@ -245,7 +247,7 @@ Every call has a _role_ — `controller`, `planner`, `critic`, `compactExecution
 (provider, model, limits, fallbacks).
 
 - A _tier_ is which set of models a run uses: `anthropic` (the default) or the optional
-  self-hosted tier, named `verda` (off unless your application configures it). Your application picks the tier
+  self-hosted tier described below (off unless your application configures it). Your application picks the tier
   per run, for example per conversation; you care because it decides where your prompts are sent.
 - A _run frame_ is the bundle of settings one run carries from start to finish — its tier, its
   budgets, its live-event listener. Your application opens it with `withRunFrame` from
@@ -256,7 +258,7 @@ Three functions answer "which model does this role use right now": `clientOverri
 builds the per-call options a call spreads into its BAML options; `resolveClientForRole(role)`
 names the client; `limitsFor(role)` returns that model's context window and output cap, so
 patterns size their prompts for the right model. `assertInferenceTier(tier)` checks that a tier
-can actually be reached — it throws for the optional self-hosted tier (`verda`) when that tier is not configured —
+can actually be reached — it throws for the optional self-hosted tier when that tier is not configured —
 and your application calls it before putting a tier in a run frame:
 
 ```typescript

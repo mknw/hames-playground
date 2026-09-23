@@ -57,8 +57,8 @@ something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
 Examples whose **Needs:** line names an MCP server list their tools from one. An
 _MCP server_ exposes tools (web search, a database) to agents over one protocol, the
 Model Context Protocol, and the packages reach it at `MCP_GATEWAY_URL` (default
-`http://localhost:8811/mcp`). Any MCP server that speaks the protocol's
-streamable HTTP transport works, including your own; "gateway" is this
+`http://localhost:8811/mcp`). Any MCP server that speaks the protocol over HTTP
+(its "streamable HTTP" mode) works, including your own; "gateway" is this
 repository's name for the one it ships, which `docker compose up -d` starts in a
 clone of the repository. An MCP server that requires authentication is not
 supported yet.
@@ -77,23 +77,21 @@ repository root, loads a small demo graph into it. The web tools
 Build a shipped agent's patterns, compose them into a harness, and ask one
 question.
 
-> **Needs:** `ANTHROPIC_API_KEY`, an MCP server with the Neo4j and web tools, and a Neo4j database — see [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app.
+> **Needs:** an Anthropic API key in `ANTHROPIC_API_KEY` (get one at [console.anthropic.com](https://console.anthropic.com/)), and the MCP server and Neo4j database that `docker compose up -d` starts from [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app, seeded with `./scripts/import-neo4j.sh neo4j_dumps/seed-data.cypher`.
 
 ```typescript
 import { harness } from '@hames-ai/harness-patterns'
 import { registerToolNamespaces } from '@hames-ai/harness-patterns/tools.server'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
 import { searchAgent } from '@hames-ai/agents/agents/search.server'
+import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 
-// Which group ("namespace") each tool belongs to, such as `web` or `neo4j` —
-// for example `mcpNamespace` from @hames-ai/connectors/mcp-catalog.
-declare const toolNamespaces: (toolName: string) => string | undefined
-
+// Which group ("namespace") each MCP tool belongs to, such as `web` or `neo4j`.
 // Required: the agent's injection guard refuses to build without it.
-registerToolNamespaces(toolNamespaces)
+registerToolNamespaces(mcpNamespace)
 
 // `toolNamespaces` is the one required field of AgentDeps.
-const deps: AgentDeps = { toolNamespaces }
+const deps: AgentDeps = { toolNamespaces: mcpNamespace }
 
 const sessionId = 'session-1'
 const patterns = await searchAgent.createPatterns(sessionId, deps)
@@ -116,8 +114,6 @@ These excerpts show how the shipped agents are built. Each definition's `createP
 `AgentDeps`. The excerpts below are lifted from the shipped agents, and a test
 in this repository compiles them against the package source, so they cannot
 drift from the real signatures.
-
-> **Needs:** an MCP server at `MCP_GATEWAY_URL` — see [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app.
 
 ```typescript
 // The agent's tools, grouped by namespace. You pass the grouping in: the
@@ -319,6 +315,18 @@ optional model-based screen, which lets content through if the screen itself
 fails, and a deterministic layer, which does not — and which of the two should
 win is an open decision, not settled by this package.
 
+> **Warning:** `search`, `retriever-agent` and `general` let the model write
+> Cypher and send it through the MCP server's `neo4j-cypher` tool (`general`
+> reaches every tool; none of the three guards its Neo4j route). If that Neo4j
+> has APOC's load procedures enabled — the Neo4j this repository ships installs
+> APOC (`NEO4J_PLUGINS=["apoc", "n10s"]` in [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)) — a query such as
+> `CALL apoc.load.json('http://…')` makes the database fetch that URL. So anyone
+> who can influence what one of these agents reads can try to make your database
+> send requests. See
+> [#241](https://github.com/mknw/hames-playground/issues/241) and the Warning on
+> [running your own Cypher query](https://github.com/mknw/hames-playground/tree/main/packages/connectors#run-your-own-cypher-query)
+> in `@hames-ai/connectors`.
+
 ## Configuration
 
 ### What an agent definition contains
@@ -366,7 +374,7 @@ interface AgentDeps {
 | Concern                                           | Where it lives               | How it reaches the agent                         |
 | ------------------------------------------------- | ---------------------------- | ------------------------------------------------ |
 | Model calls: adapters, prompt templates           | `@hames-ai/harness-baml`     | imported directly by the factories               |
-| Patterns, event views, guard, tool transport      | `@hames-ai/harness-patterns` | imported directly                                |
+| Patterns, event views, guard, tool calling        | `@hames-ai/harness-patterns` | imported directly                                |
 | Tool→namespace catalog (your MCP gateway's map)   | your application             | `AgentDeps.toolNamespaces` — required            |
 | Neo4j tool-result enrichment                      | your application             | `AgentDeps.enrichNeo4jResult`                    |
 | Document search backend (uploaded files)          | your application             | `AgentDeps.createRedisBackend`                   |

@@ -55,7 +55,7 @@ something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
 
 Configure the driver once, then read the database's schema.
 
-> **Needs:** a Neo4j database — see [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app.
+> **Needs:** a Neo4j database — `docker compose up -d` with [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app starts one.
 
 ```typescript
 import { configureNeo4j, resetDriver } from '@hames-ai/connectors/neo4j/client'
@@ -84,13 +84,16 @@ JSON. Until `configureNeo4j` runs, the first query fails with
 > **Warning:** `runManualCypher` runs whatever Cypher you pass it. It refuses
 > write clauses and opens a read-only session, but that does not stop a query
 > from reaching the network: if the database has APOC's load procedures enabled
-> (the default once APOC is installed), a query such as
+> (the default once APOC is installed; the Neo4j this repository ships installs
+> APOC, `NEO4J_PLUGINS=["apoc", "n10s"]` in [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)), a query such as
 > `CALL apoc.load.json('http://…')` makes the database fetch that URL, and a
 > read transaction does not prevent it. Do not pass it text from anyone you
-> would not let make requests from your database's network. See
-> [#241](https://github.com/mknw/hames-playground/issues/241).
+> would not let make requests from your database's network. The same holds
+> wherever a model writes the Cypher, as the ready-made agents in
+> [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)
+> do. See [#241](https://github.com/mknw/hames-playground/issues/241).
 
-> **Needs:** a Neo4j database — see [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app.
+> **Needs:** a Neo4j database — `docker compose up -d` with [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app starts one.
 
 ```typescript
 import { configureNeo4j } from '@hames-ai/connectors/neo4j/client'
@@ -118,7 +121,7 @@ profile, and searching, listing and importing OneDrive/SharePoint files. They
 live in a small in-process tool registry, which you then make visible to every
 pattern:
 
-> **Needs:** a Microsoft Graph access token for the signed-in user — see [app/src/lib/auth/graph-token.server.ts](https://github.com/mknw/hames-playground/blob/main/app/src/lib/auth/graph-token.server.ts) in the hames app.
+> **Needs:** a Microsoft Graph access token for the signed-in user — [docs/deployment/entra-setup.md](https://github.com/mknw/hames-playground/blob/main/docs/deployment/entra-setup.md) in the hames app sets up the Entra app registration and the delegated Graph permissions that issue one.
 
 ```typescript
 import { createAppToolRegistry } from '@hames-ai/connectors/app-tools/registry'

@@ -70,14 +70,14 @@ them as-is; a plain `node dist/index.js` does not. Anything that calls a model t
 
 ## Pages
 
-| Page                                                                | You will build                                                                                                                                                |
-| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [Hosting the harness](./hosting-the-harness.md)                     | Running a turn from your own application: the run frame a turn opens, the five settings it holds, what breaks when you skip it, and one complete host to copy |
-| [Wiring a host](./wiring-a-host.md)                                 | Your startup code: what to register once at boot, the one `AgentDeps` object every agent shares, and adding icons when you register agents                    |
-| [Guarding an agent](./guarding-an-agent.md)                         | A loop over a hostile tool, wrapped in the injection guard — and the exact event a caught injection produces                                                  |
-| [Running code in a sandbox](./running-code-in-a-sandbox.md)         | A sandboxed pattern: network access profiles, how long a container is kept, and picking a specialised image per turn                                          |
-| [Attaching a sandbox workspace](./attaching-a-sandbox-workspace.md) | Keeping `/work` files between sessions — plugging in a workspace store, `syncWorkspace`, and keeping each user's files separate                               |
-| [Bring your own provider or model](./own-provider-or-model.md)      | The shipped agents calling a model you supply — a different provider or a self-hosted endpoint — without touching prompts                                     |
+| Page                                                                | You will build                                                                                                                                                        |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Hosting the harness](./hosting-the-harness.md)                     | Running a turn from your own application: the run frame a turn opens, the five settings it holds, what breaks when you skip it, and one complete host to copy         |
+| [Wiring a host](./wiring-a-host.md)                                 | **Stub, not written yet.** Your startup code: what to register once at boot, the one `AgentDeps` object every agent shares, and adding icons when you register agents |
+| [Guarding an agent](./guarding-an-agent.md)                         | A loop over a hostile tool, wrapped in the injection guard — and the exact event a caught injection produces                                                          |
+| [Running code in a sandbox](./running-code-in-a-sandbox.md)         | A sandboxed pattern: network access profiles, how long a container is kept, and picking a specialised image per turn                                                  |
+| [Attaching a sandbox workspace](./attaching-a-sandbox-workspace.md) | Keeping `/work` files between sessions — plugging in a workspace store, `syncWorkspace`, and keeping each user's files separate                                       |
+| [Bring your own provider or model](./own-provider-or-model.md)      | The shipped agents calling a model you supply — a different provider or a self-hosted endpoint — without touching prompts                                             |
 
 ### Examples directory
 

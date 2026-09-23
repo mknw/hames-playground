@@ -15,18 +15,31 @@ your application (a tool catalog, a document store, a sandbox) you hand it in
 one object, `AgentDeps`. The package also ships browser-safe helpers that turn
 a run's history into graph elements, citations and a chat transcript.
 
+### Install
+
+```bash
+pnpm add @hames-ai/agents @hames-ai/harness-baml @hames-ai/harness-patterns
+```
+
+`@hames-ai/harness-baml` and `@hames-ai/harness-patterns` are peer
+dependencies, so you add them yourself. Running an agent calls Anthropic
+models, so set `ANTHROPIC_API_KEY` in the environment; the model clients in
+`@hames-ai/harness-baml` read it. The agents also reach their tools through an
+MCP gateway (a server that exposes tools over the Model Context Protocol) at
+`MCP_GATEWAY_URL`, which defaults to `http://localhost:8811/mcp`.
+
 ## Which package do you need?
 
 Five packages that work together. The first is the foundation; add the others
 for what they do.
 
-| If you want to…                                                                      | Use                                                                                                                 |
-| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| build an agent out of composable pieces — tool loops, routers, planners              | [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme) |
-| get typed model calls with the prompts already written                               | [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)         |
-| use a ready-made agent                                                               | [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)                     |
-| use Microsoft 365 or Neo4j from an agent, or a ready tool catalog for an MCP gateway | [`@hames-ai/connectors`](https://github.com/mknw/hames-playground/tree/main/packages/connectors#readme)             |
-| run agent-written code in a container                                                | [`@hames-ai/sandbox`](https://github.com/mknw/hames-playground/tree/main/packages/sandbox#readme)                   |
+| If you want to…                                                                                             | Use                                                                                                                 |
+| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| build an agent out of composable pieces — tool loops, routers, planners                                     | [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme) |
+| get typed model calls with the prompts already written, on Anthropic or your own model provider             | [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)         |
+| use a ready-made agent                                                                                      | [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)                     |
+| use Microsoft 365 or the Neo4j graph database from an agent, or sort an MCP gateway's tools into namespaces | [`@hames-ai/connectors`](https://github.com/mknw/hames-playground/tree/main/packages/connectors#readme)             |
+| run agent-written code in a container                                                                       | [`@hames-ai/sandbox`](https://github.com/mknw/hames-playground/tree/main/packages/sandbox#readme)                   |
 
 ## See it running
 
@@ -39,36 +52,74 @@ locally with Docker and pnpm.
 ## Agent catalog
 
 Each agent is a chain of patterns from `@hames-ai/harness-patterns`, listed in
-order under **Composition**. **Guard coverage** says which tool results pass
-through the injection guard (`withInjectionGuard`), which neutralizes
-instructions hidden in untrusted content before a model reads it.
+order under **Composition**; each name is a pattern documented in the
+[harness-patterns README](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme).
+**Injection guard** says which tool results pass through `withInjectionGuard`,
+which neutralizes instructions hidden in untrusted content (a web page, an
+email) before a model reads it.
 
-| Agent               | Composition                                                   | Tools                           | Guard coverage                                                                           |
+| Agent               | Composition                                                   | Tools                           | Injection guard                                                                          |
 | ------------------- | ------------------------------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------- |
 | `search`            | router → routes(neo4j loop, web loop) → compactExecution      | neo4j-cypher, web_search, fetch | web route guarded; neo4j route trusted (a graph you control)                             |
 | `retriever-agent`   | router → routes(retriever, neo4j, web) → compactExecution     | neo4j-cypher, web_search, fetch | web namespace + retriever exact-name guarded together (ingested documents are untrusted) |
 | `microsoft-365`     | explicit graph-tool allowlist loop → compactExecution         | Microsoft Graph, per-user token | whole graph loop guarded (mail/files are attacker-authored)                              |
-| `general`           | planner → simpleLoop(tools.all) → compactExecution            | everything                      | not guarded yet — see guardrail status below                                             |
-| `sandbox-session`   | compactIntent → withSandbox(actorCritic) → compactExecution   | in-VM `sandbox_*`               | not guarded yet — see guardrail status below                                             |
-| `flavoured-sandbox` | router → routes(base, image, data, office) → compactExecution | in-VM `sandbox_*`               | not guarded yet, on any of its four routes — see guardrail status below                  |
+| `general`           | planner → simpleLoop(tools.all) → compactExecution            | everything                      | not guarded yet (below)                                                                  |
+| `sandbox-session`   | compactIntent → withSandbox(actorCritic) → compactExecution   | in-container `sandbox_*`        | not on tool results yet; shell commands are screened (below)                             |
+| `flavoured-sandbox` | router → routes(base, image, data, office) → compactExecution | in-container `sandbox_*`        | not on tool results yet, on any route; shell commands are screened (below)               |
 
-**Guardrail status.** The injection guard is the only guard these agents carry
-today; guardrails beyond it are in active development —
-[status and design](https://github.com/mknw/hames-playground/issues/242).
+**Guardrail status.** Two guards ship today. The injection guard covers the
+tool results marked in the table above, and the two sandbox agents also get
+`@hames-ai/sandbox`'s shell-command screen, which checks every `sandbox_bash`
+command against a denylist before it runs. Guardrails beyond these two are
+designed, not yet built — [design record](https://github.com/mknw/hames-playground/issues/242#issuecomment-5768168881).
 
-This column is pinned by a test in this repository
-(`app/src/__tests__/lib/harness-client/agents/injection-guard-coverage-inventory.test.ts`),
-so a guard added or dropped shows up as a diff a reviewer must look at. The
-guard has two layers with opposite failure policies — the optional LLM screen
-lets content through if the screen itself fails, the deterministic layer does
-not — and which of the two should win is an open decision, not settled by this
-package.
+The injection guard has two layers with opposite failure policies — an
+optional model-based screen, which lets content through if the screen itself
+fails, and a deterministic layer, which does not — and which of the two should
+win is an open decision, not settled by this package.
+
+## Run the search agent once
+
+The shortest complete use of a shipped agent: build its patterns, compose them
+into a harness, and ask one question.
+
+```typescript
+import { harness } from '@hames-ai/harness-patterns'
+import { registerToolNamespaces } from '@hames-ai/harness-patterns/tools.server'
+import type { AgentData, AgentDeps } from '@hames-ai/agents'
+import { searchAgent } from '@hames-ai/agents/agents/search.server'
+
+// Which group ("namespace") each MCP tool belongs to, such as `neo4j` or `web`.
+// `mcpNamespace` from `@hames-ai/connectors/mcp-catalog` is a ready map for the
+// MCP servers this repository's gateway runs; any `(toolName) => string | undefined`
+// function works.
+declare const toolNamespaces: (toolName: string) => string | undefined
+
+// Register it once at startup: the injection guard on the web route refuses to
+// build if it cannot tell which tools are web tools.
+registerToolNamespaces(toolNamespaces)
+
+// The only required field. Everything else in AgentDeps is optional for this agent.
+const deps: AgentDeps = { toolNamespaces }
+
+const sessionId = 'session-1'
+const patterns = await searchAgent.createPatterns(sessionId, deps)
+const result = await harness<AgentData>(...patterns)(
+  'Who maintains the billing service?',
+  sessionId,
+)
+console.log(result.response)
+```
+
+It needs `ANTHROPIC_API_KEY` set, an MCP gateway serving the Neo4j and web
+tools the agent lists in `servers` (`neo4j-cypher`, `web_search`, `fetch`), and
+a Neo4j database behind the first of them.
 
 ## What an agent definition contains
 
-The shape (illustrative — the compiled source is the record; the fences below
-that make API calls are compile-checked against the package by the docs-pins
-test):
+The shape, simplified from `types.ts` (the source is the authority; the
+`typescript` samples further down are compiled against it by a test in this
+repository):
 
 ```
 // What a ready-made agent IS — data only, no presentation:
@@ -76,23 +127,23 @@ interface AgentDefinition {
   id: string
   name: string
   description: string
-  /** The empty-conversation greeting — required, so a new agent's greeting is
-   *  a compile error, not someone else's wrong sentence. */
+  /** The greeting shown in an empty conversation. Required, so a new agent
+   *  without one fails to compile instead of borrowing another's greeting. */
   welcome: string
   servers: string[]
   createPatterns: (sessionId: string, deps: AgentDeps) => Promise<ConfiguredPattern<AgentData>[]>
 }
 
-// The composite the patterns carry through the context:
+// The data every pattern in the agent reads and writes during a run:
 interface AgentData
   extends HarnessData, RouterData, SimpleLoopData, RetrieverData, WithApproval {
   response?: string
   [key: string]: unknown
 }
 
-// What the HOST supplies per agent — ONLY app-side things. The BAML pieces
-// (bamlPatterns, the adapter factories) are imported from @hames-ai/harness-baml
-// directly, not injected:
+// What your application supplies. Only `toolNamespaces` is required; the model
+// calls are not in here, because the agents import them from
+// @hames-ai/harness-baml themselves:
 interface AgentDeps {
   toolNamespaces: (toolName: string) => string | undefined
   enrichNeo4jResult?: OnToolResult
@@ -104,19 +155,19 @@ interface AgentDeps {
 }
 ```
 
-### What is injected vs imported vs overlaid
+### What comes from where
 
-| Concern                                         | Where it lives               | How it reaches the agent                         |
-| ----------------------------------------------- | ---------------------------- | ------------------------------------------------ |
-| Model calls: adapters, prompt templates         | `@hames-ai/harness-baml`     | imported directly by the factories               |
-| Patterns, event views, guard, tool transport    | `@hames-ai/harness-patterns` | imported directly                                |
-| Tool→namespace catalog (your MCP gateway's map) | your application             | `AgentDeps.toolNamespaces` — required            |
-| Neo4j tool-result enrichment                    | your application             | `AgentDeps.enrichNeo4jResult`                    |
-| Document-retrieval backend                      | your application             | `AgentDeps.createRedisBackend`                   |
-| Sandbox wrapper (built on `@hames-ai/sandbox`)  | your application             | `AgentDeps.withSandbox`                          |
-| Which model each role uses (your policy)        | your application             | `AgentDeps.clientOverride`                       |
-| Title persistence, pattern-cache refusal        | your application             | `AgentDeps.persistTitle` / `.doNotCachePatterns` |
-| Icons + accent colours                          | your application             | added when you register the agent (below)        |
+| Concern                                           | Where it lives               | How it reaches the agent                         |
+| ------------------------------------------------- | ---------------------------- | ------------------------------------------------ |
+| Model calls: adapters, prompt templates           | `@hames-ai/harness-baml`     | imported directly by the factories               |
+| Patterns, event views, guard, tool transport      | `@hames-ai/harness-patterns` | imported directly                                |
+| Tool→namespace catalog (your MCP gateway's map)   | your application             | `AgentDeps.toolNamespaces` — required            |
+| Neo4j tool-result enrichment                      | your application             | `AgentDeps.enrichNeo4jResult`                    |
+| Document search backend (uploaded files)          | your application             | `AgentDeps.createRedisBackend`                   |
+| Sandbox wrapper (built on `@hames-ai/sandbox`)    | your application             | `AgentDeps.withSandbox`                          |
+| Which model each role uses (your policy)          | your application             | `AgentDeps.clientOverride`                       |
+| Saving conversation titles; opting out of caching | your application             | `AgentDeps.persistTitle` / `.doNotCachePatterns` |
+| Icons + accent colours                            | your application             | added when you register the agent (below)        |
 
 ## Composing an agent
 
@@ -127,8 +178,9 @@ in this repository compiles them against the package source, so they cannot
 drift from the real signatures.
 
 ```typescript
-// The tool surface, from the injected catalog — required, not defaulted
-// (owner ruling B-iii). Lifted from `search.server.ts`:
+// The agent's tools, grouped by namespace. You pass the grouping in: the
+// package cannot guess which of your MCP tools are web tools. From
+// `search.server.ts`:
 import { Tools } from '@hames-ai/harness-patterns/tools.server'
 import type { AgentDeps } from '@hames-ai/agents'
 
@@ -137,8 +189,8 @@ const toolSet = await Tools({ namespaces: deps.toolNamespaces })
 ```
 
 ```typescript
-// A tool loop on the controller adapter, with the injected enricher —
-// lifted from `search.server.ts`:
+// A Neo4j tool loop: the shipped controller decides each query, and your
+// optional `enrichNeo4jResult` post-processes each result. From `search.server.ts`:
 import { simpleLoop, type ConfiguredPattern } from '@hames-ai/harness-patterns'
 import { bamlPatterns, createLoopControllerAdapter } from '@hames-ai/harness-baml'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
@@ -163,9 +215,11 @@ function buildNeo4jRoute(
 ```
 
 ```typescript
-// Routes dispatched by intent classification, the web route guarded — the
-// guard declaration TRAVELS WITH THE AGENT (it is the agent's threat model,
-// not the transport's). Lifted from `search.server.ts`:
+// Two routes picked by the router. Only the web route is wrapped in the
+// injection guard: the agent itself declares which of its sources it does
+// not trust. `withReferences` hands each route relevant results from earlier
+// turns; `scope: 'global'` lets it pick them from any route, not only its own.
+// From `search.server.ts`:
 import {
   routes,
   withReferences,
@@ -204,26 +258,25 @@ function buildRoutes(tools: ToolSet): ConfiguredPattern<AgentData> {
 
 > **The guard needs the namespace catalog registered.** `withInjectionGuard`
 > verifies every declared namespace against the `catalog` you pass and
-> **refuses to build** if nothing in it produces the namespace (#242 item 4).
+> **refuses to build** if nothing in it produces the namespace.
 > The usual cause: the tool→namespace resolver was never registered. Call
-> `registerToolNamespaces(mcpNamespace)` once at boot — the deployment's map
-> ships in `@hames-ai/connectors/mcp-catalog` — or supply your own resolver the
-> same way. An agent with no untrusted namespaces writes `namespaces: []`
+> `registerToolNamespaces(mcpNamespace)` once at startup — a ready map ships in
+> `@hames-ai/connectors/mcp-catalog` — or register your own resolver the same
+> way. An agent with no untrusted namespaces writes `namespaces: []`
 > explicitly.
 
 ```typescript
-// A session-persistent sandbox loop — the wrapper is INJECTED (SD-19: the
-// containment posture stays app-side and is supplied, not carried). Lifted
-// from `sandbox-session.server.ts`:
+// A code-running loop kept in one container for the whole conversation. The
+// sandbox wrapper comes from your application (built on @hames-ai/sandbox),
+// so you decide how the container is isolated. From `sandbox-session.server.ts`:
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
 import type { ConfiguredPattern } from '@hames-ai/harness-patterns'
 
 declare const loop: ConfiguredPattern<AgentData>
 
 function sandboxIt(deps: AgentDeps, sessionId: string): ConfiguredPattern<AgentData> {
-  // The injected wrapper is required by this agent — a missing one is a
-  // misconfigured bag, so guard-and-throw rather than degrade silently
-  // (exactly what `sandbox-session.server.ts` does):
+  // This agent cannot run without a sandbox, so it fails loudly rather than
+  // run agent-written code on your machine:
   const wrap = deps.withSandbox
   if (!wrap) throw new Error('requires deps.withSandbox (AgentDeps)')
   return wrap({
@@ -237,8 +290,8 @@ function sandboxIt(deps: AgentDeps, sessionId: string): ConfiguredPattern<AgentD
 ```
 
 ```typescript
-// A retrieval route over the injected Data Stash backend — lifted from
-// `retriever-agent.server.ts`:
+// A route that searches your uploaded documents (the retrieval backend you pass
+// as `createRedisBackend`). From `retriever-agent.server.ts`:
 import { retriever, type ConfiguredPattern, type RetrieverBackend } from '@hames-ai/harness-patterns'
 import type { AgentData } from '@hames-ai/agents'
 import { bamlPatterns } from '@hames-ai/harness-baml'
@@ -281,20 +334,18 @@ Your application decides how agents are presented and builds the one
 `AgentDeps` object they share. The hames app, this repository's reference
 host, does that in `app/src/lib/harness-client/`:
 
-- `registry.server.ts` overlays presentation — `AgentConfig extends
-AgentDefinition` with `icon: string` and `accent: AgentAccent`, supplied per
-  registration next to the palette, and wraps each definition's
-  `(sessionId, deps)` factory with THE one `AgentDeps` bag.
-- `session.server.ts` builds that bag (`agentDeps()`) and aliases the app's
-  `SessionData` onto `AgentData`.
-- `turn.server.ts` / `actions.server.ts` run turns (choosing the model tier and,
-  on the self-hosted tier, waking its GPU endpoint first) and hand `agentDeps()` to the
-  title generator's entry points.
+- `registry.server.ts` adds presentation — an `icon` and an `accent` colour —
+  to each definition, and wraps its `(sessionId, deps)` factory so every agent
+  gets the same `AgentDeps` object.
+- `session.server.ts` builds that shared object (`agentDeps()`).
+- `turn.server.ts` / `actions.server.ts` run turns — including choosing which
+  set of models a conversation uses — and hand `agentDeps()` to the title
+  generator.
 
 ```typescript
-// The app's overlay, one site per agent (abridged from registry.server.ts) —
-// `AgentConfig` / `AgentAccent` / `agentDeps` / `registerAgent` are the host's;
-// the definition and the icon choice are what a consumer re-makes:
+// How the hames app registers an agent (simplified from its registry.server.ts).
+// `agentDeps` and `registerAgent` are the app's own functions; you write yours.
+// The definition is spread in, and an icon and accent colour are added on top:
 import type { AgentDefinition } from '@hames-ai/agents'
 import { searchAgent } from '@hames-ai/agents/agents/search.server'
 
@@ -313,19 +364,14 @@ function overlay(def: AgentDefinition, icon: string, accent: AgentAccent) {
 registerAgent(overlay(searchAgent, 'i-material-symbols-search', 'indigo'))
 ```
 
-A consumer that wants different presentation overlays its own fields the same
-way — the definitions carry none.
+To present agents differently, add your own fields the same way; the
+definitions carry no presentation of their own.
 
-## No build step
+## Requirements: a TypeScript bundler
 
-Like every `@hames-ai` package, this one **ships TypeScript source**: `main` and
-every code target in `exports` is a `.ts` file (`./package.json` is the one
-non-code entry), there is no `dist/`, and `pnpm pack` is the whole publish
-pipeline. Consumers are **TS-bundler consumers** — a project whose bundler or
-runtime compiles TypeScript: Vite/vinxi, esbuild, tsx, Bun. **Not**
-`node --experimental-strip-types`, which refuses to strip types under
-`node_modules` — exactly where an installed package lives
-(`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`, measured on Node v22.21.1). A
-plain `node dist/index.js` consumer is not supported either, deliberately: a
-build step would make the published artefact different from the source every
-test in this repo runs against.
+Like every `@hames-ai` package, this one **ships TypeScript source**: `main`
+and every code target in `exports` is a `.ts` file, and there is no
+`dist/`. Run it through something that compiles TypeScript — Vite, esbuild,
+tsx, Bun. **Not** `node --experimental-strip-types`, which refuses to strip
+types under `node_modules` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`), and
+not a plain `node dist/index.js`.

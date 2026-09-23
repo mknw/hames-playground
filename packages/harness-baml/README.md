@@ -6,8 +6,9 @@ The model calls for
 [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme),
 ready to import. The core library's patterns take every model call as a
 function you pass in; this package provides those functions — the _controller_
-that decides which tool a loop calls next, a critic, a router, a planner, a
-synthesizer that writes the final answer, and the rest — each with its prompt
+that decides which tool a loop calls next, a _critic_ that checks a result
+before a loop may finish, a router, a planner, a _synthesizer_ that writes the
+final answer, and the rest — each with its prompt
 already written and its output parsed into a TypeScript type. The prompts are
 written in [BAML](https://docs.boundaryml.com), a language for declaring LLM
 calls as typed functions; the TypeScript client BAML generates from them ships
@@ -15,18 +16,28 @@ pre-built, so you never run BAML's tooling yourself. Calls go to Anthropic
 models by default, and can be pointed at an OpenAI-compatible endpoint of your
 own.
 
+### Install
+
+```bash
+pnpm add @hames-ai/harness-baml @hames-ai/harness-patterns
+export ANTHROPIC_API_KEY=sk-ant-…   # read by every Anthropic client in baml_src/clients.baml
+```
+
+`@hames-ai/harness-patterns` is a peer dependency, so you add it yourself.
+`ANTHROPIC_API_KEY` is the only credential the default setup needs.
+
 ## Which package do you need?
 
 Five packages that work together. The first is the foundation; add the others
 for what they do.
 
-| If you want to…                                                                      | Use                                                                                                                 |
-| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| build an agent out of composable pieces — tool loops, routers, planners              | [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme) |
-| get typed model calls with the prompts already written                               | [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)         |
-| use a ready-made agent                                                               | [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)                     |
-| use Microsoft 365 or Neo4j from an agent, or a ready tool catalog for an MCP gateway | [`@hames-ai/connectors`](https://github.com/mknw/hames-playground/tree/main/packages/connectors#readme)             |
-| run agent-written code in a container                                                | [`@hames-ai/sandbox`](https://github.com/mknw/hames-playground/tree/main/packages/sandbox#readme)                   |
+| If you want to…                                                                                             | Use                                                                                                                 |
+| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| build an agent out of composable pieces — tool loops, routers, planners                                     | [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme) |
+| get typed model calls with the prompts already written, on Anthropic or your own model provider             | [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)         |
+| use a ready-made agent                                                                                      | [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)                     |
+| use Microsoft 365 or the Neo4j graph database from an agent, or sort an MCP gateway's tools into namespaces | [`@hames-ai/connectors`](https://github.com/mknw/hames-playground/tree/main/packages/connectors#readme)             |
+| run agent-written code in a container                                                                       | [`@hames-ai/sandbox`](https://github.com/mknw/hames-playground/tree/main/packages/sandbox#readme)                   |
 
 ## See it running
 
@@ -43,8 +54,11 @@ of the shape `(input) => Promise<LLMResult<T>>`, where `LLMResult` carries the v
 `LLMCallRecord` with usage, timing and the raw output. The two loop patterns take their
 controller (and critic) as the **first argument**; the other functions (`synthesize`,
 `selector`, `route`, `describe`, `describeBatch`, `compactIntent`, `retrieveQuery`) arrive as
-**required config**. The core library has no defaults for any of them — this package is where
-they come from, and one import wires them:
+**required config**. (`selector` picks which earlier results a step carries forward;
+`describe` and `describeBatch` summarize tool results; `compactIntent` rewrites a follow-up
+into a self-contained request; `retrieveQuery` rewrites a question into a search query.) The
+core library has no defaults for any of them — this package is where they come from, and one
+import wires them:
 
 ```typescript
 import { bamlPatterns, createLoopControllerAdapter } from '@hames-ai/harness-baml'
@@ -58,13 +72,15 @@ const loop = simpleLoop(controller, ['search', 'Return'], {
 })
 ```
 
-`createLoopControllerAdapter()` is one of this package's _adapter factories_ — the next section.
+The tool list is the loop's allowlist; `'Return'` is the loop's built-in name for "I have the
+answer, stop". `createLoopControllerAdapter()` is one of this package's _adapter factories_ —
+the next section.
 
 ## Adapter factories
 
 An adapter factory returns a function with exactly the type a pattern expects, wrapping one of
 the generated BAML functions. It handles what the raw generated function does not: argument
-order, usage accounting through BAML's collectors, and detecting an answer cut off at the
+order, recording token usage and timing for each call, and detecting an answer cut off at the
 model's output limit, with one corrective retry:
 
 ```typescript
@@ -76,26 +92,34 @@ const actor = createActorControllerAdapter(tools)
 const critic = createCriticAdapter()
 ```
 
-`bamlPatterns()` returns the functions patterns take as config in one object — `planner`,
-`router`, `synthesize`, `selector`, `describe`, `describeBatch`, `compactIntent` and
-`retrieveQuery` — so the wiring stays one line however many of them a pattern needs. The loop
-controllers and the critic come from their own factories, as above.
+`bamlPatterns()` returns what patterns take as config in one object — `router`, `synthesize`,
+`selector`, `describe`, `describeBatch`, `compactIntent` and `retrieveQuery`, plus `planner`,
+which is a factory you call with the planner's tool list (`baml.planner(tools.all)`) — so the
+wiring stays one line however many of them a pattern needs. The loop controllers and the critic
+come from their own factories, as above.
 
 ## Choosing which model each call uses
 
+You can skip this section if Anthropic is all you need: every call already goes there.
+
 Every call has a _role_ — `controller`, `planner`, `critic`, `compactExecution`, `router`,
 `describe` or `screen` — and each role resolves to a BAML _client_, a named model configuration
-(provider, model, limits, fallbacks). Which client wins depends on the _tier_ the run is on: a
-string naming a set of clients, such as `anthropic`. A run carries its tier in its _run frame_,
-the per-run scope that `withRunFrame` from `@hames-ai/harness-patterns` opens. This package owns
-the role → client resolution: `clientOverrideFor(role)` builds the per-call
-options bag a call site spreads into its BAML options; `resolveClientForRole(role)` names the
-client a call takes (or is budgeted against); `limitsFor(role)` returns the resolved model's
-context window and output cap so patterns trim and batch against the right model. All three read
-the active tier from the RUN FRAME core opens — `@hames-ai/harness-patterns`'s `inference` slot,
-whose `tier` is an opaque string core never interprets. Provider vocabulary lives here, in the
-companion, which is why the narrowing and the fail-closed reachability check
-(`assertInferenceTier`, which your application calls before it puts a tier in a frame) are this package's:
+(provider, model, limits, fallbacks).
+
+- A _tier_ is which set of models a run uses: `anthropic` (the default) or `verda` (an optional
+  self-hosted model, off unless your application configures it). Your application picks the tier
+  per run, for example per conversation; you care because it decides where your prompts are sent.
+- A _run frame_ is the bundle of settings one run carries from start to finish — its tier, its
+  budgets, its live-event listener. Your application opens it with `withRunFrame` from
+  `@hames-ai/harness-patterns` (or `harness()` opens one for you), and every model call made
+  inside that run reads its settings from it.
+
+Three functions answer "which model does this role use right now": `clientOverrideFor(role)`
+builds the per-call options a call spreads into its BAML options; `resolveClientForRole(role)`
+names the client; `limitsFor(role)` returns that model's context window and output cap, so
+patterns size their prompts for the right model. `assertInferenceTier(tier)` checks that a tier
+can actually be reached — it throws for `verda` when no self-hosted endpoint is configured —
+and your application calls it before putting a tier in a run frame:
 
 ```typescript
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
@@ -116,12 +140,13 @@ await withRunFrame({ inference: { tier: 'anthropic' } }, async () => {
 
 The shipped `baml_src/` declares two client families, and nothing else:
 
-- **Anthropic chains** — the default posture. Every function names an Anthropic chain
+- **Anthropic chains** — the default. Every function names an Anthropic chain
   (`ControllerAnthropic`, `ActorAnthropic`, `PlannerAnthropic`, `CriticAnthropic`,
   `SynthesizerAnthropic`, `RouterAnthropic`, `DescribeAnthropic`); the `client X` line on each
   function is what routes a call.
-- **Custom endpoint** — a generic `openai-generic` client (`VerdaQwen`) for a self-hosted model,
-  and a second one (`LocalQwenSmall`) for a small summarizer endpoint.
+- **Custom endpoint** — `VerdaQwen`, the client behind the optional self-hosted `verda` tier
+  (off by default; an `openai-generic` client, so any OpenAI-compatible server works), and
+  `LocalQwenSmall`, a second one for a small summarizer model on that tier.
 
 ### Pointing a custom-endpoint client at your model
 
@@ -134,23 +159,21 @@ the variables and the client reaches your deployment; nothing in the package cha
 export VERDA_INFERENCE_ENDPOINT=https://your-deployment.example.com/v1
 export VERDA_INFERENCE_API_KEY=your-key
 
-# the small summarizer endpoint (the describe-role client on the custom tier)
+# the small summarizer endpoint (the model that summarizes tool results on this tier)
 export SMALL_LLM_BASE_URL=https://your-summarizer.example.com/v1
 ```
 
-> The hames app layers its own policy on top of this — which tier each conversation uses, waking
-> a GPU endpoint that scales to zero, pricing each call — through configuration it registers at
-> startup. That is application code (`app/src/lib/inference/` in this repository), not part of
-> this package.
+> Choosing a tier per conversation, and deciding when the self-hosted tier is reachable, is
+> your application's policy, registered at startup. The hames app's version is in this
+> repository under `app/src/lib/inference/`.
 
 ## Bring your own provider or model
 
 A consumer can supply its own LLM clients — a different provider, a self-hosted endpoint —
 without touching prompts: define runtime clients through a BAML `ClientRegistry`, map the
-roles you want off the built-in chains, and the layer composes **on top of** the built-in
-tier for exactly the mapped roles (`clientOverrideFor`'s seam; unmapped roles change
-nothing, and the injection guard's `screen` role moves only when mapped by its own key). One function type serves
-both wiring paths:
+roles you want off the built-in chains, and your clients take over **exactly the mapped roles**
+on top of the built-in tier (unmapped roles change nothing, and the injection guard's `screen`
+role moves only when you map it by name). One function type serves both wiring paths:
 
 ```typescript
 import {
@@ -182,29 +205,24 @@ client), naming the role and the client — never on turn one. Full walkthrough,
 what happens to unmapped roles and to prompt budgeting:
 **[docs/tutorials/own-provider-or-model.md](../../docs/tutorials/own-provider-or-model.md)**.
 
-## No build step
+## Requirements: a TypeScript bundler
 
-Like every `@hames-ai` package, this one **ships TypeScript source**: `main` and every code target in
-`exports` is a `.ts` file — `baml_client/` included, it is committed, generated TypeScript
-(`./package.json` is the one non-code entry) — there is no `dist/`, and `pnpm pack` is the whole
-publish pipeline. Consumers are **TS-bundler consumers** — a project whose bundler or runtime
-compiles TypeScript: Vite/vinxi, esbuild, tsx, Bun. **Not** `node --experimental-strip-types`, which
-refuses to strip types under `node_modules` — exactly where an installed package lives
-(`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`, measured on Node v22.21.1). A plain
-`node dist/index.js` consumer is not supported either, deliberately: a build step would make the
-published artefact different from the source every test in this repo runs against.
+Like every `@hames-ai` package, this one **ships TypeScript source**: `main`
+and every code target in `exports` is a `.ts` file (`baml_client/` included: it is committed, generated TypeScript), and there is no
+`dist/`. Run it through something that compiles TypeScript — Vite, esbuild,
+tsx, Bun. **Not** `node --experimental-strip-types`, which refuses to strip
+types under `node_modules` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`), and
+not a plain `node dist/index.js`.
 
-## Regenerating the client
+## Regenerating the client (contributors)
 
-`baml_client/` is pre-generated and committed, so neither a consumer nor this repo's own app ever
-runs BAML's CLI — this package's `baml_src/` is the ONE corpus in the repo, and nothing regenerates
-it implicitly (no `predev` hook, no CI step, no docker build step). If you edit a `.baml` file here,
-regenerate and commit the result with the source change:
+`baml_client/` is pre-generated and committed, so as a consumer you never run BAML's CLI. If you
+edit a `.baml` file in this package, regenerate and commit the result with the source change:
 
 ```bash
 pnpm baml-generate   # from packages/harness-baml; requires @boundaryml/baml (a dependency)
 ```
 
-## License
+## Licence
 
 MIT

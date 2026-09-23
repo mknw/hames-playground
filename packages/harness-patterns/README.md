@@ -23,24 +23,37 @@ tool output, a step that writes the final answer. Each piece is called a _patter
 them into — the one that runs a turn of your agent — is a _harness_. Every
 pattern reads from and appends to one shared history of the run, which is how
 they fit together without knowing about one another. The library itself is
-model-agnostic: it contains no prompts, and no pattern calls a language model
-itself. Wherever a pattern needs one it takes a function as an argument, and
-the companion package
+model-agnostic: it contains no prompt templates, and no pattern calls a
+language model itself. Wherever a pattern needs one it takes a function as an
+argument, and the companion package
 [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)
 gives you those functions ready-made, prompts included.
+
+### Install
+
+```bash
+pnpm add @hames-ai/harness-patterns
+pnpm add @hames-ai/harness-baml   # the ready-made model calls; optional
+```
+
+This package has no peer dependencies. It makes no model calls, so it needs no
+API key on its own; with `@hames-ai/harness-baml`'s model calls, set
+`ANTHROPIC_API_KEY`. Tools come from an _MCP gateway_ — a server that exposes
+tools over the Model Context Protocol — which `Tools()` reaches at
+`MCP_GATEWAY_URL` (default `http://localhost:8811/mcp`).
 
 ## Which package do you need?
 
 Five packages that work together. The first is the foundation; add the others
 for what they do.
 
-| If you want to…                                                                      | Use                                                                                                                 |
-| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| build an agent out of composable pieces — tool loops, routers, planners              | [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme) |
-| get typed model calls with the prompts already written                               | [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)         |
-| use a ready-made agent                                                               | [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)                     |
-| use Microsoft 365 or Neo4j from an agent, or a ready tool catalog for an MCP gateway | [`@hames-ai/connectors`](https://github.com/mknw/hames-playground/tree/main/packages/connectors#readme)             |
-| run agent-written code in a container                                                | [`@hames-ai/sandbox`](https://github.com/mknw/hames-playground/tree/main/packages/sandbox#readme)                   |
+| If you want to…                                                                                             | Use                                                                                                                 |
+| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| build an agent out of composable pieces — tool loops, routers, planners                                     | [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme) |
+| get typed model calls with the prompts already written, on Anthropic or your own model provider             | [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)         |
+| use a ready-made agent                                                                                      | [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)                     |
+| use Microsoft 365 or the Neo4j graph database from an agent, or sort an MCP gateway's tools into namespaces | [`@hames-ai/connectors`](https://github.com/mknw/hames-playground/tree/main/packages/connectors#readme)             |
+| run agent-written code in a container                                                                       | [`@hames-ai/sandbox`](https://github.com/mknw/hames-playground/tree/main/packages/sandbox#readme)                   |
 
 ## See it running
 
@@ -144,8 +157,8 @@ Nothing in that chain hands state to the next step by hand: each pattern finds
 what it needs in the log, and leaves its own events there for whatever runs next.
 
 **[The developer guide →](./GUIDE.md)** — the composition model, writing your
-own pattern, tool transports, the error surface, and how to consume the
-package, in buildable prose with every snippet typecheck-pinned.
+own pattern, routing tool calls to your own tool servers, the error surface,
+and how to consume the package. Every snippet in it is compiled by a test.
 
 ## Why patterns over a shared history
 
@@ -154,15 +167,17 @@ per session — the **unified context** — is the only state there is. Every
 primitive here, whether it is a loop, a router, a planner, a guard or a
 synthesizer, reads that log and appends to it, so primitives compose without
 knowing about one another and any one of them can be swapped without disturbing
-the rest. A pattern writes into an isolated scope and commits only when it
-finishes, so a step that throws leaves nothing behind — and because a session
-_is_ its serialized log, continuing a conversation and resuming after an approval
-gate are two arguments to the same mechanism rather than two subsystems.
+the rest. A pattern writes into a private draft of the log and commits it only
+when it finishes, so a step that throws leaves nothing behind — and because a
+session _is_ its serialized log, continuing a conversation and resuming after an
+approval gate (a pause until a person approves a step) are two arguments to the
+same mechanism rather than two subsystems.
 
 What that buys you is control over the thing that usually rots first: what each
 model call actually sees. **Views** query the log — by pattern, by event type, by
-the last N user turns — and a pattern's **scope** declares its slice once, up
-front, instead of at every call site. A synthesizer gets the tool results of the
+the last N user turns — and a pattern's **scope** (on this page, always: the
+slice of the log that pattern is allowed to see) is declared once, up front,
+instead of at every call site. A synthesizer gets the tool results of the
 route that just ran; a router gets a few turns of messages and nothing else;
 older results degrade to compact pointers that a controller can expand on demand.
 Context is budgeted by construction, not by remembering to prune.
@@ -181,34 +196,29 @@ portable.
 
 ## Patterns at a glance
 
-|                       |                                                                                                                                    |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| **Loops**             | `simpleLoop` — ReAct-style tool loop · `actorCritic` — generate, then evaluate before it can finish                                |
-| **Planning, routing** | `planner` decomposes up front · `router` classifies · `routes` dispatches · `parallel` fans out                                    |
-| **Context**           | The unified context is an append-only event log; patterns commit into it from isolated scopes, and a serialized log is a session   |
-| **Views & scopes**    | A view queries the log (by pattern, type, recency); a pattern's scope declares its slice once, so old detail expires by itself     |
-| **Carrying data**     | `withReferences` hands a pattern the relevant results of earlier turns, expandable on demand · `retriever` searches a vector store |
-| **Compaction**        | `compactExecution` turns the accumulated events into the answer · `compactIntent` rewrites the request into a brief                |
-| **Guards**            | `withInjectionGuard` neutralizes untrusted tool output before a controller reads it                                                |
-| **Composition**       | `chain` · `harness` · `continueSession` · `resumeHarness`                                                                          |
-| **Models and tools**  | model calls come in as functions (ready-made in `@hames-ai/harness-baml`) · MCP tools via `Tools()` and `callTool`                 |
+|                       |                                                                                                                                             |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Loops**             | `simpleLoop` — tool loop (reason, call a tool, read the result, repeat) · `actorCritic` — generate, then evaluate before it can finish      |
+| **Planning, routing** | `planner` decomposes up front · `router` classifies · `routes` dispatches · `parallel` fans out                                             |
+| **Context**           | The unified context is an append-only event log; each pattern commits its draft into it when it finishes, and a serialized log is a session |
+| **Views & scopes**    | A view queries the log (by pattern, type, recency); a pattern's scope declares its slice once, so old detail expires by itself              |
+| **Carrying data**     | `withReferences` hands a pattern the relevant results of earlier turns, expandable on demand · `retriever` searches a vector store          |
+| **Compaction**        | `compactExecution` turns the accumulated events into the answer · `compactIntent` rewrites the request into a brief                         |
+| **Guards**            | `withInjectionGuard` neutralizes untrusted tool output before a controller reads it                                                         |
+| **Composition**       | `chain` · `harness` · `continueSession` · `resumeHarness`                                                                                   |
+| **Models and tools**  | model calls come in as functions (ready-made in `@hames-ai/harness-baml`) · MCP tools via `Tools()` and `callTool`                          |
 
 Each of these has a section in the [spec](./SPEC.md), with the signatures,
 configuration and per-pattern semantics that belong there rather than here.
 
-## No build step
+## Requirements: a TypeScript bundler
 
-This package **ships TypeScript source**: `main` and every code target in
-`exports` is a `.ts` file (`./package.json` is the one non-code entry), there is
-no `dist/`, and `pnpm pack` is the whole publish pipeline — the same is true of
-every `@hames-ai` package. Consumers are **TS-bundler consumers**: a project whose
-bundler or runtime compiles TypeScript — Vite/vinxi, esbuild, tsx, Bun. **Not**
-`node --experimental-strip-types`: Node refuses to strip types under
-`node_modules`, which is exactly where an installed package lives
-(`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`, measured on Node v22.21.1). A
-plain `node dist/index.js` consumer is not supported either, deliberately — a
-build step would make the published artefact different from the source every
-test in this repo runs against.
+Like every `@hames-ai` package, this one **ships TypeScript source**: `main`
+and every code target in `exports` is a `.ts` file, and there is no
+`dist/`. Run it through something that compiles TypeScript — Vite, esbuild,
+tsx, Bun. **Not** `node --experimental-strip-types`, which refuses to strip
+types under `node_modules` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`), and
+not a plain `node dist/index.js`.
 
 ## Status and licence
 

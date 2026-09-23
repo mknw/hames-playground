@@ -1,54 +1,83 @@
 # @hames-ai/connectors
 
-The **connectors** companion package for
-[`@hames-ai/harness-patterns`](../harness-patterns/README.md): the Microsoft Graph app-side
-tools, the Neo4j non-agentic layer, and the MCP-gateway namespace catalog —
-moved out of the host app (#225 PR-3) behind injected seams. The package owns
-protocols, query shapes and schemas; the **host owns identity, tokens, content
-classification and storage**, every one of them injected.
+## What this is
 
-## Surface
+Connections from an agent built with
+[`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme)
+to outside systems: nine Microsoft Graph tools for Microsoft 365 (mail,
+calendar, files and the signed-in user's profile), a Neo4j client with read
+queries and graph-editing operations, and a catalog that sorts an MCP
+gateway's tool names into _namespaces_ — named groups of tools, such as `web`
+or `neo4j`, that a pattern or the injection guard can refer to. Everything
+that touches identity stays with your application: the signed-in user,
+their access tokens and where files are stored are passed in, never held by
+the package.
+
+## Which package do you need?
+
+Five packages that work together. The first is the foundation; add the others
+for what they do.
+
+| If you want to…                                                                      | Use                                                                                                                 |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| build an agent out of composable pieces — tool loops, routers, planners              | [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme) |
+| get typed model calls with the prompts already written                               | [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)         |
+| use a ready-made agent                                                               | [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)                     |
+| use Microsoft 365 or Neo4j from an agent, or a ready tool catalog for an MCP gateway | [`@hames-ai/connectors`](https://github.com/mknw/hames-playground/tree/main/packages/connectors#readme)             |
+| run agent-written code in a container                                                | [`@hames-ai/sandbox`](https://github.com/mknw/hames-playground/tree/main/packages/sandbox#readme)                   |
+
+## See it running
+
+The [hames app](https://github.com/mknw/hames-playground) is the reference
+host for all five packages: a self-hosted agent workspace whose agents are
+built from them, with every step of every run visible in its UI. Its
+[Quickstart](https://github.com/mknw/hames-playground#quickstart) runs it
+locally with Docker and pnpm.
+
+## Exports
 
 | Subpath                              | What lives there                                                                                                                                               |
 | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `.` (root barrel)                    | client-safe surface only: `mcpNamespace` / `MCP_TOOL_CATALOG`, the Neo4j→Cytoscape `transformNeo4jToCytoscape` / `parseNeo4jResults`                           |
+| `.` (root entry point)               | browser-safe exports only: `mcpNamespace` / `MCP_TOOL_CATALOG`, the Neo4j→Cytoscape `transformNeo4jToCytoscape` / `parseNeo4jResults`                          |
 | `./neo4j/client`                     | `configureNeo4j({ url, user, password })` + the driver singleton — **explicit-config-only**: unset config is a named error at first use, never an env fallback |
-| `./neo4j/queries`                    | the identity-free read ops (`getSchema`, `runManualCypher`, …) — every session READ-mode (SD-14)                                                               |
+| `./neo4j/queries`                    | the identity-free read ops (`getSchema`, `runManualCypher`, …) — every session opened in READ mode                                                             |
 | `./neo4j/graph-edit.server`          | the intent-shaped write ops (`createGraphNode`, `linkGraphNodes`, `setGraphNodeProperty`)                                                                      |
 | `./neo4j/plain`, `./neo4j/transform` | plain projections of driver values; the Cytoscape projection                                                                                                   |
 | `./app-tools/registry`               | `createAppToolRegistry({ resolveContext })` — the generic in-process tool registry                                                                             |
-| `./mcp-catalog`                      | this deployment's tool→namespace catalog (pure data)                                                                                                           |
+| `./mcp-catalog`                      | the tool→namespace catalog for the MCP gateway this repository configures (pure data)                                                                          |
 | `./graph/graph-tools.server`         | `registerGraphConnectorTools(deps)` — the nine Microsoft Graph tools                                                                                           |
-| `./graph/graph-auth`                 | `GraphAuthRequiredError`, owned by the package so `instanceof` survives across the seam                                                                        |
+| `./graph/graph-auth`                 | `GraphAuthRequiredError`, owned by the package so `instanceof` works on both sides of it                                                                       |
 
-## What is injected vs imported vs composed
+## What your application passes in
+
+Below, the _host_ is your application — the code that imports this package.
 
 **Injected (host → package, every field REQUIRED — a missing or non-function
 supplier throws at factory call, never degrades):**
 
 - `createAppToolRegistry({ resolveContext })`: the `userId` / `sessionId` pair
-  (the app's `getRequestUserId`/`getRequestSessionId`).
+  for the current request.
 - `registerGraphConnectorTools(deps)`:
   - `registerAppTool` — where the tools register;
-  - `graphFetch` (S1) — delegated-token Microsoft Graph fetch; the package
-    never sees a token;
-  - `content` (S4) — `conversionEnabled` / `isConvertible` / `guessMimeType` /
+  - `graphFetch` — a Microsoft Graph fetch made with the signed-in user's
+    delegated token; the package never sees a token;
+  - `content` — `conversionEnabled` / `isConvertible` / `guessMimeType` /
     `isTextMime`, one required supplier;
-  - `stash` — `loadStore` / `ingest`: the Data Stash bridge the file-ingest
+  - `stash` — `loadStore` / `ingest`: the document-store bridge the file-ingest
     tool needs (lazily resolved by the host, so composing the tools never
     loads the storage stack).
 
 **Imported directly:** `@hames-ai/harness-patterns` (types, `assert.server`,
 `tools.server`'s `ToolsFrom` in tests) and `neo4j-driver`. Nothing else —
-there are no `app/src` imports, type-only included (pinned by the host's
-`zero-app-imports.test.ts`).
+it imports no code from the hames app in this repository, type-only included
+(pinned by the app's `zero-app-imports.test.ts`).
 
-**Composed host-side (not this package's business):** the `'use server'` RPC
-wrappers with their per-module auth gates (SD-13: duplicated per module, never
-imported), the transport registration on core's seam, the token/MSAL layer,
-and the doc-convert/stash modules behind the content seam. A back-edge from
-this package into the host's stash (`guessMimeType`/`isTextMime`) is
-forbidden by design — see the S4 note in the host's composition root.
+**Left to your application:** the server endpoints that expose these
+operations, each with its own authorization check; registering the tools as a
+transport with `@hames-ai/harness-patterns`; acquiring and refreshing
+Microsoft tokens; and document conversion and storage behind the `content` and
+`stash` suppliers. The package never reaches into the host's storage code for
+`guessMimeType`/`isTextMime` — that is why `content` is injected.
 
 ## No build step
 
@@ -69,9 +98,8 @@ test in this repo runs against.
 The suite is co-located under `__tests__/` and excluded from the published
 tarball via the `files` allowlist. Run it with `pnpm test` from
 `packages/connectors/`. It runs in a plain node environment and imports no
-host-app code; tests that need the app's request scope or its composition
-root stayed in the app's `src/__tests__/` tree.
+code from the hames app; tests that need the app's request scope stayed in
+the app's own `src/__tests__/` tree.
 
-The package publishes to npm as `@hames-ai/connectors` with `publishConfig.access:
-public` (set at first publication; the setting travels with every future
-version).
+The manifest sets `publishConfig.access: public`, so the package publishes to
+npm as the public `@hames-ai/connectors`.

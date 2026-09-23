@@ -1,25 +1,37 @@
 # Tutorials
 
-Task-shaped pages for developers building **on** the `@hames-ai` packages: pick the one that
-names what you are trying to do, follow it start to finish, have it working in ten
-minutes.
+## What this is
 
-## What these are, and what they are not
+Step-by-step pages for developers building their own application on the
+`@hames-ai` packages. Each page takes one task — running an agent's turn from
+your own code, guarding an agent against untrusted tool output, running
+agent-written code in a container, calling a model you host yourself — and
+walks it from start to finish. Every TypeScript snippet on these pages is
+compiled against the real packages by this repository's test suite, so a
+snippet that stops matching the code fails a test instead of going stale.
 
-Three kinds of document, three different jobs:
+## Which package do you need?
 
-| Document                                                                                                                                                                                                                                                                  | Answers                                      | Read it                         |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------- |
-| **Tutorials** (here)                                                                                                                                                                                                                                                      | "how do I use X in my app?"                  | start to finish, once per task  |
-| **[GUIDE.md](../../packages/harness-patterns/GUIDE.md)**                                                                                                                                                                                                                  | "how does the framework think?"              | once, before the first tutorial |
-| **Package READMEs** ([patterns](../../packages/harness-patterns/README.md) · [baml](../../packages/harness-baml/README.md) · [agents](../../packages/agents/README.md) · [sandbox](../../packages/sandbox/README.md) · [connectors](../../packages/connectors/README.md)) | "what is the surface, and what is injected?" | when you need a signature       |
+Five packages that work together. The first is the foundation; add the others
+for what they do.
 
-The developer guide carries the composition model, how to write your own pattern, the
-tool-transport seam and the error surface — the concepts every page here assumes.
-[SPEC.md](../../packages/harness-patterns/SPEC.md) is the per-pattern reference underneath
-both. A tutorial never restates a signature the README owns; it links to it.
+| If you want to…                                                                      | Use                                                                                                                 |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| build an agent out of composable pieces — tool loops, routers, planners              | [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme) |
+| get typed model calls with the prompts already written                               | [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)         |
+| use a ready-made agent                                                               | [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)                     |
+| use Microsoft 365 or Neo4j from an agent, or a ready tool catalog for an MCP gateway | [`@hames-ai/connectors`](https://github.com/mknw/hames-playground/tree/main/packages/connectors#readme)             |
+| run agent-written code in a container                                                | [`@hames-ai/sandbox`](https://github.com/mknw/hames-playground/tree/main/packages/sandbox#readme)                   |
 
-## The pages
+## See it running
+
+The [hames app](https://github.com/mknw/hames-playground) is the reference
+host for all five packages: a self-hosted agent workspace whose agents are
+built from them, with every step of every run visible in its UI. Its
+[Quickstart](https://github.com/mknw/hames-playground#quickstart) runs it
+locally with Docker and pnpm.
+
+## Pages
 
 | Page                                                                | You will build                                                                                                                                    |
 | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -30,13 +42,30 @@ both. A tutorial never restates a signature the README owns; it links to it.
 | [Attaching a sandbox workspace](./attaching-a-sandbox-workspace.md) | The durable `/work` seam — a workspace store, `syncWorkspace`, and the tenant boundary                                                            |
 | [Bring your own provider or model](./own-provider-or-model.md)      | The shipped agents calling a model you supply — a different provider or a self-hosted endpoint — without touching prompts                         |
 
-### The examples directory
+### Examples directory
 
 Every complete page above also ships its code as one file, under
 [`examples/`](./examples/README.md) — that page's fences assembled into a single runnable
 `.ts` you can copy or clone instead of reassembling it from the prose. The pages stay the
 explanation; the files are the thing you run. [Wiring a host](./wiring-a-host.md) has no
 example file, because it is still a stub: there is nothing to assemble yet.
+
+## Suggested order
+
+If you are starting cold, the first two pages are the spine:
+
+```text
+hosting-the-harness                   →  a turn runs
+        │
+        ├──▶ guarding-an-agent            (before any untrusted tool result reaches a model)
+        ├──▶ own-provider-or-model        (before any call leaves for someone else's API)
+        └──▶ running-code-in-a-sandbox    (before any agent-authored code runs)
+                    │
+                    ▼
+             attaching-a-sandbox-workspace
+
+wiring-a-host                         →  the composition root (STUB — see the page)
+```
 
 ## Install
 
@@ -45,9 +74,9 @@ Five packages, and only the first is mandatory. Each companion declares
 module-level `AsyncLocalStorage` scopes, and two resolved copies of the core package would
 be two scopes that never see each other.
 
-| Package                   | Bring it in when                                                                       |
-| ------------------------- | -------------------------------------------------------------------------------------- |
-| `@hames-ai/harness-patterns` | always — patterns, event views, the guard, the tool transport                          |
+| Package                      | Bring it in when                                                                       |
+| ---------------------------- | -------------------------------------------------------------------------------------- |
+| `@hames-ai/harness-patterns` | always — patterns, event views, the injection guard, the tool transport                |
 | `@hames-ai/harness-baml`     | you want the shipped prompts and model adapters                                        |
 | `@hames-ai/agents`           | you want the six ready-made agent definitions                                          |
 | `@hames-ai/sandbox`          | you want to run code in a container                                                    |
@@ -67,22 +96,20 @@ every code target in `exports` is a `.ts` file (`./package.json` is the one non-
 there is no `dist/`, and `pnpm pack` is the whole publish pipeline. Vite, vinxi, esbuild, tsx
 and Bun run them as-is; a plain `node dist/index.js` consumer is not supported, deliberately.
 
-## Suggested order
+## How these pages relate to the other docs
 
-If you are starting cold, the first two pages are the spine:
+Three kinds of document, three different jobs:
 
-```text
-hosting-the-harness                   →  a turn runs
-        │
-        ├──▶ guarding-an-agent            (before any untrusted tool result reaches a model)
-        ├──▶ own-provider-or-model        (before any call leaves for someone else's API)
-        └──▶ running-code-in-a-sandbox    (before any agent-authored code runs)
-                    │
-                    ▼
-             attaching-a-sandbox-workspace
+| Document                                                                                                                                                                                                                                                                  | Answers                                      | Read it                         |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------- |
+| **Tutorials** (here)                                                                                                                                                                                                                                                      | "how do I use X in my app?"                  | start to finish, once per task  |
+| **[GUIDE.md](../../packages/harness-patterns/GUIDE.md)**                                                                                                                                                                                                                  | "how does the framework think?"              | once, before the first tutorial |
+| **Package READMEs** ([patterns](../../packages/harness-patterns/README.md) · [baml](../../packages/harness-baml/README.md) · [agents](../../packages/agents/README.md) · [sandbox](../../packages/sandbox/README.md) · [connectors](../../packages/connectors/README.md)) | "what is the surface, and what is injected?" | when you need a signature       |
 
-wiring-a-host                         →  the composition root (STUB — see the page)
-```
+The developer guide carries the composition model, how to write your own pattern, the
+tool-transport seam and the error surface — the concepts every page here assumes.
+[SPEC.md](../../packages/harness-patterns/SPEC.md) is the per-pattern reference underneath
+both. A tutorial never restates a signature the README owns; it links to it.
 
 ## Conventions
 

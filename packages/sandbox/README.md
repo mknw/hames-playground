@@ -1,38 +1,63 @@
 # @hames-ai/sandbox
 
-The **containment** companion package for
-[`@hames-ai/harness-patterns`](../harness-patterns/README.md): `withSandbox`, the Docker
-compute backend, the warm pool / scheduler / attachment table, the egress
-profiles, the bash guard and the durable `/work` ⇄ document-store sync — moved
-out of the host app behind injected seams.
+## What this is
 
-It exists as its own package for one reason: **`withSandbox` is a harness
-pattern, but a developer installing the simpler patterns must not pull Docker
-code into their tree.** `@hames-ai/harness-patterns` stays free of it; a host that
-wants containment adds this.
+Lets an agent built with
+[`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme)
+run the code it writes inside a disposable Docker container instead of on
+your machine. `withSandbox` wraps a pattern and attaches a container to it
+while it runs; the pattern's `sandbox_*` tools (shell, file read, write, edit,
+list and search) act inside that container. By default the container has no
+network at all, shell commands are screened before they run, and files the
+agent leaves in `/work/out` can be saved to a document store your application
+supplies. It is its own package so that installing the core library never
+pulls Docker code into your project.
 
-## Surface
+## Which package do you need?
 
-| Subpath                      | What lives there                                                                               | Client-safe?                                   |
+Five packages that work together. The first is the foundation; add the others
+for what they do.
+
+| If you want to…                                                                      | Use                                                                                                                 |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| build an agent out of composable pieces — tool loops, routers, planners              | [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme) |
+| get typed model calls with the prompts already written                               | [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)         |
+| use a ready-made agent                                                               | [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)                     |
+| use Microsoft 365 or Neo4j from an agent, or a ready tool catalog for an MCP gateway | [`@hames-ai/connectors`](https://github.com/mknw/hames-playground/tree/main/packages/connectors#readme)             |
+| run agent-written code in a container                                                | [`@hames-ai/sandbox`](https://github.com/mknw/hames-playground/tree/main/packages/sandbox#readme)                   |
+
+## See it running
+
+The [hames app](https://github.com/mknw/hames-playground) is the reference
+host for all five packages: a self-hosted agent workspace whose agents are
+built from them, with every step of every run visible in its UI. Its
+[Quickstart](https://github.com/mknw/hames-playground#quickstart) runs it
+locally with Docker and pnpm.
+
+## Exports
+
+Below, the _host_ is your application — the code that imports this package.
+
+| Subpath                      | What lives there                                                                               | Browser-safe?                                  |
 | ---------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| `.` (barrel)                 | `withSandbox`, `DockerBackend`, `getComputeBackend`, the compute types, the store seam         | **no** — server-only, pulls the Docker backend |
+| `.` (root entry point)       | `withSandbox`, `DockerBackend`, `getComputeBackend`, the compute types, the store seam         | **no** — server-only, pulls the Docker backend |
 | `./types`                    | `ComputeBackend` / `VMHandle` / `RuntimeConfig` / …, `SANDBOX_TOOL_PREFIX`, `V0_IN_VM_SERVERS` | yes — types + constants, no `node:` imports    |
 | `./settings`                 | `SandboxSettings` + `DEFAULT_SANDBOX_SETTINGS` (the caps and per-call defaults)                | yes — same rule                                |
 | `./guard` (= `./bash-guard`) | `screenBashCommand` / `bashGuardPolicyFromEnv` — the in-VM command screen                      | yes                                            |
 | `./egress-policy`            | the three selectable egress profiles and the per-boot network/gateway naming                   | yes                                            |
 | `./workspace-store`          | `configureWorkspaceStore(...)` — the durable `/work` seam a host wires                         | server                                         |
-| `./with-sandbox.server`      | the wrapper itself, for a host that skips the barrel                                           | server                                         |
+| `./with-sandbox.server`      | the wrapper itself, for a host that skips the root entry point                                 | server                                         |
 | `./pty-manager.server`       | the interactive Shell path the host's routes drive (node-pty, loaded lazily — see below)       | server                                         |
 | `./docker-backend.server`    | the compute backend — an implementation detail; named here because the host's tests mock it    | server                                         |
 
-**The barrel is server-only and it pulls Docker with it.** That is not an
-oversight: `with-sandbox.server.ts` constructs a `DockerBackend` by default, so
-a lazy import in the barrel would move the edge rather than remove it. The two
-client-safe subpaths above are the answer instead — `./types` is what a browser
+**The root entry point is server-only and it pulls Docker with it.** That is
+not an oversight: `with-sandbox.server.ts` constructs a `DockerBackend` by
+default, so a lazy import there would move the dependency rather than remove
+it. The two browser-safe subpaths above are the answer instead — `./types` is what a browser
 component imports, `./settings` is what a host's own client-safe settings module
 imports, and neither reaches a `node:` module or the server assertion.
 
-## What is injected vs imported
+## What your application passes in
 
 **Injected (host → package):**
 
@@ -53,8 +78,9 @@ imports, and neither reaches a `node:` module or the server assertion.
 
 **Imported directly:** `@hames-ai/harness-patterns` (types, `assert.server`,
 `context.server`, `tool-transport.server`), `@modelcontextprotocol/sdk` (the
-in-VM MCP client) and `node-pty` (the Shell path). Nothing else — there are no
-`app/src` imports, type-only included, pinned two ways (see **Guards**).
+in-VM MCP client) and `node-pty` (the Shell path). Nothing else — it imports no code
+from the hames app in this repository, type-only included, pinned two ways (see
+**Guards**).
 
 **`node-pty` is declared but loaded lazily.** It is a NATIVE module, and the
 only thing that needs its `.node` addon is one `spawn` call on the
@@ -102,7 +128,7 @@ default — not a fourth profile. The per-profile table, the default allowlists
 and the residual-DNS caveat are in
 [running code in a sandbox](../../docs/tutorials/running-code-in-a-sandbox.md).
 
-## The rootfs images are repo infrastructure, not package code
+## Container images live outside the package
 
 `withSandbox` boots `kg-sandbox:base` and its three flavours
 (`image-processing`, `data`, `office`), plus the allowlist CONNECT proxy behind
@@ -115,8 +141,8 @@ package names the images; it does not carry them.
 
 Two consequences worth stating rather than discovering:
 
-- `rootfs/egress-proxy/proxy.mjs` has its own test suite, and it stayed with the
-  app (`app/src/__tests__/lib/sandbox/egress-proxy.test.ts`) — a package test
+- `rootfs/egress-proxy/proxy.mjs` has its own test suite, and it lives in
+  the hames app's test tree (`app/src/__tests__/lib/sandbox/egress-proxy.test.ts`) — a package test
   reaching up into the repo root would be exactly the "not independently
   shippable" shape the co-located suite exists to avoid.
 - `scripts/` here (the live-container smoke checks) drives those images, so it

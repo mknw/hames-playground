@@ -21,11 +21,17 @@
  * until it is added to all six files — which is the point of "the same table
  * everywhere". The five known names are asserted separately as a non-vacuity
  * anchor, so a discovery that silently found nothing cannot pass.
+ *
+ * The sandbox and connectors READMEs have no docs-pin test of their own, so
+ * this file also compiles their `typescript` fences against the five packages'
+ * source (specifiers resolved through each package's `exports` map), the same
+ * way `agents-readme-docs-pins.test.ts` does for the agents README.
  */
 import { describe, it, expect } from 'vitest'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..')
 const PACKAGES = path.join(REPO_ROOT, 'packages')
@@ -120,4 +126,90 @@ describe('front-facing README skeleton', () => {
       expect(root, `${file}: "${SKELETON[2]}" does not link ${REPO_URL}`).not.toEqual([])
     })
   })
+})
+
+// ============================================================================
+// The sandbox and connectors usage examples compile against the real packages
+// ============================================================================
+
+const FENCE_READMES = ['packages/sandbox/README.md', 'packages/connectors/README.md']
+
+/** Every ```typescript fence in a README, in order. */
+function typescriptFences(markdown: string): string[] {
+  const lines = markdown.split('\n')
+  const fences: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i]!.trim() !== '```typescript') continue
+    const close = lines.findIndex((l, j) => j > i && l.trim() === '```')
+    if (close === -1) throw new Error(`unterminated typescript fence at line ${i + 1}`)
+    fences.push(lines.slice(i + 1, close).join('\n'))
+    i = close
+  }
+  return fences
+}
+
+/** Resolve `@hames-ai/<dir>[/sub]` through that package's `exports` map onto
+ *  its source file — `.` and exact keys first, then the `./*` pattern. */
+function resolvePackageModule(specifier: string): string | undefined {
+  const m = /^@hames-ai\/([^/]+)(?:\/(.+))?$/.exec(specifier)
+  if (!m || !packageDirs.includes(m[1]!)) return undefined
+  const root = path.join(PACKAGES, m[1]!)
+  const exportsMap = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).exports as
+    Record<string, string> | undefined
+  const key = m[2] ? `./${m[2]}` : '.'
+  const target = exportsMap?.[key] ?? (exportsMap?.['./*'] ? `./${m[2]}.ts` : undefined)
+  if (!target) return undefined
+  const file = path.join(root, target)
+  return existsSync(file) ? file : undefined
+}
+
+describe('sandbox and connectors README fences compile', () => {
+  for (const file of FENCE_READMES) {
+    const fences = typescriptFences(readFileSync(path.join(REPO_ROOT, file), 'utf8'))
+
+    it(`${file} carries at least one usage example (non-vacuity)`, () => {
+      expect(fences.length, `${file} has no typescript fence`).toBeGreaterThan(0)
+    })
+
+    it(`${file}: every typescript fence compiles`, { timeout: 60_000 }, () => {
+      const options: ts.CompilerOptions = {
+        strict: true,
+        target: ts.ScriptTarget.ESNext,
+        module: ts.ModuleKind.ESNext,
+        moduleResolution: ts.ModuleResolutionKind.Bundler,
+        skipLibCheck: true,
+        noEmit: true,
+        esModuleInterop: true,
+        isolatedModules: true,
+      }
+      const pkgRoot = path.join(REPO_ROOT, path.dirname(file))
+      const fenceByPath = new Map(
+        fences.map((code, i) => [path.join(pkgRoot, `__readme-fence-${i}.ts`), code]),
+      )
+      const host = ts.createCompilerHost(options, true)
+      const getSourceFile = host.getSourceFile.bind(host)
+      host.getSourceFile = (fileName, languageVersion, onError, shouldCreate) => {
+        const code = fenceByPath.get(fileName)
+        if (code !== undefined) return ts.createSourceFile(fileName, code, languageVersion, true)
+        return getSourceFile(fileName, languageVersion, onError, shouldCreate)
+      }
+      host.resolveModuleNames = (moduleNames, containingFile) =>
+        moduleNames.map((specifier) => {
+          const resolved = resolvePackageModule(specifier)
+          if (resolved) return { resolvedFileName: resolved, isExternalLibraryImport: false }
+          return ts.resolveModuleName(specifier, containingFile, options, host).resolvedModule
+        })
+      const program = ts.createProgram({ rootNames: [...fenceByPath.keys()], options, host })
+      const failures: string[] = []
+      for (const fenceFile of fenceByPath.keys()) {
+        for (const d of ts.getPreEmitDiagnostics(program, program.getSourceFile(fenceFile))) {
+          failures.push(
+            `${file} fence #${Number(/(\d+)\.ts$/.exec(fenceFile)![1]) + 1}: ` +
+              ts.flattenDiagnosticMessageText(d.messageText, ' '),
+          )
+        }
+      }
+      expect(failures).toEqual([])
+    })
+  }
 })

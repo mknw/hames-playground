@@ -78,6 +78,29 @@ function links(text: string): string[] {
 
 const readmeUrl = (dir: string) => `${REPO_URL}/tree/main/packages/${dir}#readme`
 
+/**
+ * After the three opening sections, the package pages follow one task order
+ * (the Arch-wiki shape): Install, Usage (quick start first), Configuration,
+ * Reference, Troubleshooting, and a final contributors section. A page need not
+ * have every one, and other `##` sections may sit between them, but the ones it
+ * has appear in this order. Install and Usage are required on package pages.
+ */
+const TASK_ORDER: Array<{ name: string; matches: (heading: string) => boolean }> = [
+  { name: 'Install', matches: (h) => h === 'Install' },
+  { name: 'Usage', matches: (h) => h === 'Usage' },
+  { name: 'Configuration', matches: (h) => h === 'Configuration' },
+  { name: 'Reference', matches: (h) => h === 'Reference' },
+  { name: 'Troubleshooting', matches: (h) => h === 'Troubleshooting' },
+  { name: '… (contributors)', matches: (h) => h.endsWith('(contributors)') },
+]
+
+function taskSections(doc: Section[]): Array<{ heading: string; rank: number }> {
+  return doc.slice(SKELETON.length).flatMap((s) => {
+    const rank = TASK_ORDER.findIndex((t) => t.matches(s.heading))
+    return rank === -1 ? [] : [{ heading: s.heading, rank }]
+  })
+}
+
 describe('front-facing README skeleton', () => {
   it('discovers the five packages (non-vacuity)', () => {
     expect(packageDirs).toEqual(
@@ -115,6 +138,25 @@ describe('front-facing README skeleton', () => {
           .map(readmeUrl)
           .join(', ')})`,
       ).toEqual([])
+    })
+
+    it('orders its task sections Install, Usage, Configuration, Reference, Troubleshooting, contributors', () => {
+      const found = taskSections(doc)
+      for (let i = 1; i < found.length; i++) {
+        expect(
+          found[i]!.rank,
+          `${file}: "## ${found[i]!.heading}" comes after "## ${found[i - 1]!.heading}", ` +
+            `but the order is ${TASK_ORDER.map((t) => t.name).join(' → ')}`,
+        ).toBeGreaterThan(found[i - 1]!.rank)
+      }
+      if (file.startsWith('packages/')) {
+        for (const required of ['Install', 'Usage']) {
+          expect(
+            found.map((f) => f.heading),
+            `${file}: has no "## ${required}" section`,
+          ).toContain(required)
+        }
+      }
     })
 
     it('links the repository root from "See it running"', () => {

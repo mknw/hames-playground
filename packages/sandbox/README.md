@@ -13,7 +13,28 @@ agent leaves in `/work/out` can be saved to a document store your application
 supplies. It is its own package so that installing the core library never
 pulls Docker code into your project.
 
-### Install
+## Which package do you need?
+
+Five packages that work together. The first is the foundation; add the others
+for what they do.
+
+| If you want to…                                                                                            | Use                                                                                                                 |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| build an agent out of composable pieces — tool loops, routers, planners                                    | [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme) |
+| get typed model calls with the prompts already written, on Anthropic or your own model provider            | [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)         |
+| use a ready-made agent                                                                                     | [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)                     |
+| use Microsoft 365 or the Neo4j graph database from an agent, or sort an MCP server's tools into namespaces | [`@hames-ai/connectors`](https://github.com/mknw/hames-playground/tree/main/packages/connectors#readme)             |
+| run agent-written code in a container                                                                      | [`@hames-ai/sandbox`](https://github.com/mknw/hames-playground/tree/main/packages/sandbox#readme)                   |
+
+## See it running
+
+The [hames app](https://github.com/mknw/hames-playground) is the reference
+host for all five packages: a self-hosted agent workspace whose agents are
+built from them, with every step of every run visible in its UI. Its
+[Quickstart](https://github.com/mknw/hames-playground#quickstart) runs it
+locally with Docker and pnpm.
+
+## Install
 
 ```bash
 pnpm add @hames-ai/sandbox @hames-ai/harness-patterns
@@ -27,7 +48,7 @@ something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
 `node` cannot import it, because Node refuses to strip types from files under
 `node_modules`.
 
-#### Before you run this
+### Build the sandbox image
 
 `withSandbox` boots a Docker image that this package does not ship. By default
 it expects one tagged `kg-sandbox:base` (set `SANDBOX_IMAGE` to use another).
@@ -43,32 +64,15 @@ docker build -t kg-sandbox:base rootfs/
 [`rootfs/`](https://github.com/mknw/hames-playground/tree/main/rootfs) for what
 each image contains.
 
-## Which package do you need?
-
-Five packages that work together. The first is the foundation; add the others
-for what they do.
-
-| If you want to…                                                                                             | Use                                                                                                                 |
-| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| build an agent out of composable pieces — tool loops, routers, planners                                     | [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme) |
-| get typed model calls with the prompts already written, on Anthropic or your own model provider             | [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)         |
-| use a ready-made agent                                                                                      | [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)                     |
-| use Microsoft 365 or the Neo4j graph database from an agent, or sort an MCP gateway's tools into namespaces | [`@hames-ai/connectors`](https://github.com/mknw/hames-playground/tree/main/packages/connectors#readme)             |
-| run agent-written code in a container                                                                       | [`@hames-ai/sandbox`](https://github.com/mknw/hames-playground/tree/main/packages/sandbox#readme)                   |
-
-## See it running
-
-The [hames app](https://github.com/mknw/hames-playground) is the reference
-host for all five packages: a self-hosted agent workspace whose agents are
-built from them, with every step of every run visible in its UI. Its
-[Quickstart](https://github.com/mknw/hames-playground#quickstart) runs it
-locally with Docker and pnpm.
-
 ## Usage
+
+### Quick start
 
 Wrap a loop in `withSandbox`, and its tools run inside a container. The model
 calls come from
 [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme).
+
+> **Needs:** Docker, the `kg-sandbox:base` image and `ANTHROPIC_API_KEY` — see [rootfs/README.md](https://github.com/mknw/hames-playground/blob/main/rootfs/README.md) in the hames app.
 
 ```typescript
 import { actorCritic, compactExecution, harness } from '@hames-ai/harness-patterns'
@@ -91,20 +95,21 @@ const loop = actorCritic<Data>(createActorControllerAdapter({}), createCriticAda
 
 const agent = harness<Data>(
   withSandbox()(loop),
-  compactExecution({ mode: 'response', synthesize: bamlPatterns().synthesize }), // both fields are required
+  compactExecution({ mode: 'thread', synthesize: bamlPatterns().synthesize }), // both fields are required
 )
 
 const result = await agent('Write a Python script that prints the first ten primes, and run it.')
 console.log(result.response)
 ```
 
-To run it you need Docker, the `kg-sandbox:base` image from
-[Before you run this](#before-you-run-this), and `ANTHROPIC_API_KEY` for the
-model calls.
+Build the image first: [Build the sandbox image](#build-the-sandbox-image).
+`mode: 'thread'` hands the answer step the loop's tool calls and their results.
 
-## Going further: choosing the image, the network and the batching
+### Choosing the image, the network and the batching
 
 The same agent with its options spelled out:
+
+> **Needs:** Docker, the `kg-sandbox:base` image and `ANTHROPIC_API_KEY` — see [rootfs/README.md](https://github.com/mknw/hames-playground/blob/main/rootfs/README.md) in the hames app.
 
 ```typescript
 import { actorCritic, compactExecution, harness } from '@hames-ai/harness-patterns'
@@ -133,7 +138,7 @@ const agent = harness<Data>(
   // No network inside the container ('mcp-only' is also the default).
   withSandbox({ rootfs: 'base', egress: 'mcp-only' })(loop),
   compactExecution<Data>({
-    mode: 'response',
+    mode: 'thread',
     patternId: 'answer',
     synthesize: bamlPatterns().synthesize,
   }),
@@ -146,7 +151,7 @@ console.log(result.response)
 Without an `id`, each run borrows a container from a warm pool; pass `id` (for
 example a conversation id) to keep one container, and its files, across turns.
 
-## What it protects you from, and what it does not
+### What it protects you from, and what it does not
 
 - **Container isolation.** Every container starts with all Linux capabilities
   dropped, a read-only root filesystem, `no-new-privileges`, a process limit,
@@ -169,25 +174,9 @@ The types say "VM" (`VMHandle`, `V0_IN_VM_SERVERS`) because the compute
 backend is pluggable (`backend`); the one this package ships runs Docker
 containers.
 
-## Exports
+## Configuration
 
-| Subpath                      | What lives there                                                                                  | Browser-safe?                                  |
-| ---------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| `.` (root entry point)       | `withSandbox`, `DockerBackend`, `getComputeBackend`, the compute types, `configureWorkspaceStore` | **no** — server-only, pulls the Docker backend |
-| `./types`                    | `ComputeBackend` / `VMHandle` / `RuntimeConfig` / …, `SANDBOX_TOOL_PREFIX`, `V0_IN_VM_SERVERS`    | yes — types + constants, no `node:` imports    |
-| `./settings`                 | `SandboxSettings` + `DEFAULT_SANDBOX_SETTINGS` (the caps and per-call defaults)                   | yes — same rule                                |
-| `./guard` (= `./bash-guard`) | `screenBashCommand` / `bashGuardPolicyFromEnv` — the shell-command screen                         | yes                                            |
-| `./egress-policy`            | the three selectable egress profiles and the per-boot network naming                              | yes                                            |
-| `./workspace-store`          | `configureWorkspaceStore(...)` — where you plug in storage for `/work` files                      | server                                         |
-| `./with-sandbox.server`      | the wrapper itself, for code that skips the root entry point                                      | server                                         |
-| `./pty-manager.server`       | an interactive terminal into a running container (uses `node-pty`, see Troubleshooting)           | server                                         |
-| `./docker-backend.server`    | the Docker compute backend                                                                        | server                                         |
-
-**The root entry point is server-only and it pulls Docker with it**, because
-`withSandbox` constructs a `DockerBackend` by default. Browser code imports
-`./types` or `./settings` instead; neither reaches a `node:` module.
-
-## What your application passes in
+### What your application passes in
 
 Nothing, for the example above. Two things are yours to supply when you need
 them:
@@ -210,7 +199,7 @@ If you use `@hames-ai/agents`, its two sandbox agents do not import this package
 directly: your application builds the wrapper with `withSandbox` and hands it
 to them as `AgentDeps.withSandbox`.
 
-## Egress profiles
+### Egress profiles
 
 **`egress` takes one of three profiles**, and that is the whole set:
 `mcp-only` (the default — `--network none`, no network at all: the container
@@ -222,7 +211,7 @@ name, unless the deployment sets `SANDBOX_ENABLE_OPEN_EGRESS=1`. The
 per-profile table, the default allowlists and the remaining DNS caveat are in
 [running code in a sandbox](../../docs/tutorials/running-code-in-a-sandbox.md).
 
-## Container images live outside the package
+### Container images live outside the package
 
 `withSandbox` boots `kg-sandbox:base` and its three _flavours_ — images with
 extra tools preinstalled: `image-processing`, `data` and `office` — plus the
@@ -233,7 +222,34 @@ deployment, and they version separately from this TypeScript. Set
 `SANDBOX_IMAGE` to boot a different base image, or pass `backend` to run on a
 different compute substrate entirely.
 
-## Troubleshooting: opening an interactive shell
+## Reference
+
+Each egress profile, attachment lifetimes and per-turn image selection, step by
+step: [running code in a sandbox](https://github.com/mknw/hames-playground/blob/main/docs/tutorials/running-code-in-a-sandbox.md)
+and [attaching a sandbox workspace](https://github.com/mknw/hames-playground/blob/main/docs/tutorials/attaching-a-sandbox-workspace.md).
+What each image contains: [rootfs/README.md](https://github.com/mknw/hames-playground/blob/main/rootfs/README.md).
+
+### Exports
+
+| Subpath                      | What lives there                                                                                  | Browser-safe?                                  |
+| ---------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `.` (root entry point)       | `withSandbox`, `DockerBackend`, `getComputeBackend`, the compute types, `configureWorkspaceStore` | **no** — server-only, pulls the Docker backend |
+| `./types`                    | `ComputeBackend` / `VMHandle` / `RuntimeConfig` / …, `SANDBOX_TOOL_PREFIX`, `V0_IN_VM_SERVERS`    | yes — types + constants, no `node:` imports    |
+| `./settings`                 | `SandboxSettings` + `DEFAULT_SANDBOX_SETTINGS` (the caps and per-call defaults)                   | yes — same rule                                |
+| `./guard` (= `./bash-guard`) | `screenBashCommand` / `bashGuardPolicyFromEnv` — the shell-command screen                         | yes                                            |
+| `./egress-policy`            | the three selectable egress profiles and the per-boot network naming                              | yes                                            |
+| `./workspace-store`          | `configureWorkspaceStore(...)` — where you plug in storage for `/work` files                      | server                                         |
+| `./with-sandbox.server`      | the wrapper itself, for code that skips the root entry point                                      | server                                         |
+| `./pty-manager.server`       | an interactive terminal into a running container (uses `node-pty`, see Troubleshooting)           | server                                         |
+| `./docker-backend.server`    | the Docker compute backend                                                                        | server                                         |
+
+**The root entry point is server-only and it pulls Docker with it**, because
+`withSandbox` constructs a `DockerBackend` by default. Browser code imports
+`./types` or `./settings` instead; neither reaches a `node:` module.
+
+## Troubleshooting
+
+### Opening an interactive shell
 
 The interactive terminal (`./pty-manager.server`) uses `node-pty`, a native
 module. It is loaded only when a shell is opened, so importing this package

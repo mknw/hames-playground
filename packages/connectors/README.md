@@ -13,7 +13,28 @@ guard can refer to. Everything that touches identity stays with your
 application: the signed-in user, their access tokens and where files are
 stored are passed in, never held by the package.
 
-### Install
+## Which package do you need?
+
+Five packages that work together. The first is the foundation; add the others
+for what they do.
+
+| If you want to…                                                                                            | Use                                                                                                                 |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| build an agent out of composable pieces — tool loops, routers, planners                                    | [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme) |
+| get typed model calls with the prompts already written, on Anthropic or your own model provider            | [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)         |
+| use a ready-made agent                                                                                     | [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)                     |
+| use Microsoft 365 or the Neo4j graph database from an agent, or sort an MCP server's tools into namespaces | [`@hames-ai/connectors`](https://github.com/mknw/hames-playground/tree/main/packages/connectors#readme)             |
+| run agent-written code in a container                                                                      | [`@hames-ai/sandbox`](https://github.com/mknw/hames-playground/tree/main/packages/sandbox#readme)                   |
+
+## See it running
+
+The [hames app](https://github.com/mknw/hames-playground) is the reference
+host for all five packages: a self-hosted agent workspace whose agents are
+built from them, with every step of every run visible in its UI. Its
+[Quickstart](https://github.com/mknw/hames-playground#quickstart) runs it
+locally with Docker and pnpm.
+
+## Install
 
 ```bash
 pnpm add @hames-ai/connectors @hames-ai/harness-patterns
@@ -28,30 +49,48 @@ something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
 `node` cannot import it, because Node refuses to strip types from files under
 `node_modules`.
 
-## Which package do you need?
+## Usage
 
-Five packages that work together. The first is the foundation; add the others
-for what they do.
+### Quick start: read the Neo4j schema
 
-| If you want to…                                                                                             | Use                                                                                                                 |
-| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| build an agent out of composable pieces — tool loops, routers, planners                                     | [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme) |
-| get typed model calls with the prompts already written, on Anthropic or your own model provider             | [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)         |
-| use a ready-made agent                                                                                      | [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)                     |
-| use Microsoft 365 or the Neo4j graph database from an agent, or sort an MCP gateway's tools into namespaces | [`@hames-ai/connectors`](https://github.com/mknw/hames-playground/tree/main/packages/connectors#readme)             |
-| run agent-written code in a container                                                                       | [`@hames-ai/sandbox`](https://github.com/mknw/hames-playground/tree/main/packages/sandbox#readme)                   |
+Configure the driver once, then read the database's schema.
 
-## See it running
+> **Needs:** a Neo4j database — see [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app.
 
-The [hames app](https://github.com/mknw/hames-playground) is the reference
-host for all five packages: a self-hosted agent workspace whose agents are
-built from them, with every step of every run visible in its UI. Its
-[Quickstart](https://github.com/mknw/hames-playground#quickstart) runs it
-locally with Docker and pnpm.
+```typescript
+import { configureNeo4j, resetDriver } from '@hames-ai/connectors/neo4j/client'
+import { getSchema } from '@hames-ai/connectors/neo4j/queries'
 
-## Usage: query Neo4j
+declare const password: string
 
-Configure the driver once, then run read queries.
+// Required: nothing reads connection settings from the environment for you.
+configureNeo4j({ url: 'bolt://localhost:7687', user: 'neo4j', password })
+
+const result = await getSchema()
+console.log(result.success ? result.schema : result.error)
+
+await resetDriver() // close the connection, so the script can exit
+```
+
+`getSchema()` returns `{ success, schema }`: `schema` is the node labels and
+relationship types the database reports (`CALL db.schema.visualization()`), as
+JSON. Until `configureNeo4j` runs, the first query fails with
+`Neo4jNotConfiguredError`.
+
+### Run your own Cypher query
+
+`runManualCypher` runs a Cypher query you write and returns its rows.
+
+> **Warning:** `runManualCypher` runs whatever Cypher you pass it. It refuses
+> write clauses and opens a read-only session, but that does not stop a query
+> from reaching the network: if the database has APOC's load procedures enabled
+> (the default once APOC is installed), a query such as
+> `CALL apoc.load.json('http://…')` makes the database fetch that URL, and a
+> read transaction does not prevent it. Do not pass it text from anyone you
+> would not let make requests from your database's network. See
+> [#241](https://github.com/mknw/hames-playground/issues/241).
+
+> **Needs:** a Neo4j database — see [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app.
 
 ```typescript
 import { configureNeo4j } from '@hames-ai/connectors/neo4j/client'
@@ -66,22 +105,20 @@ const result = await runManualCypher('MATCH (p:Person) RETURN p.name LIMIT 5')
 console.log(result.raw)
 ```
 
-Until `configureNeo4j` runs, the first query fails with
-`Neo4jNotConfiguredError`. Queries are read-only: one containing a write clause
-is refused (`result.success` is `false`, with the reason in `result.error`),
-and the session itself is opened in READ mode.
-
-`result.graphUpdate` also carries the same rows as nodes and edges for
+A query containing a write clause is refused: `result.success` is `false`, with
+the reason in `result.error`. `result.graphUpdate` also carries the same rows as nodes and edges for
 [Cytoscape.js](https://js.cytoscape.org), a graph-drawing library, in case you
 want to render them.
 
-## Going further: give an agent the Microsoft 365 tools
+### Give an agent the Microsoft 365 tools
 
 `registerGraphConnectorTools` adds nine tools an agent can call as the
 signed-in user: today's calendar, recent mail and attachments, the user's
 profile, and searching, listing and importing OneDrive/SharePoint files. They
 live in a small in-process tool registry, which you then make visible to every
 pattern:
+
+> **Needs:** a Microsoft Graph access token for the signed-in user — see [app/src/lib/auth/graph-token.server.ts](https://github.com/mknw/hames-playground/blob/main/app/src/lib/auth/graph-token.server.ts) in the hames app.
 
 ```typescript
 import { createAppToolRegistry } from '@hames-ai/connectors/app-tools/registry'
@@ -137,7 +174,9 @@ After this, `Tools()` from `@hames-ai/harness-patterns` lists the tools under
 them. The ready-made `microsoft-365` agent in `@hames-ai/agents` calls these
 tools.
 
-## What the four suppliers are, and why you pass them in
+## Configuration
+
+### What the four suppliers are, and why you pass them in
 
 | Supplier         | What it is                                                                                                | Why the package cannot default it                                         | Smallest stub                                   |
 | ---------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ----------------------------------------------- |
@@ -149,19 +188,29 @@ tools.
 Every supplier is **required**: a missing one throws when you call the factory,
 not later on the turn that first needs it. That is why the stubs exist.
 
-## Tool namespaces for an MCP gateway
+### Tool namespaces for an MCP server
 
 A _namespace_ is a named group of tools, such as `web` or `neo4j`, that a
 pattern or the injection guard refers to instead of listing tool names.
 `mcpNamespace(toolName)` is a lookup table from tool names to namespaces for
-the MCP servers (servers that expose tools over the Model Context Protocol)
-that this repository's own gateway runs. It is a good starting point if your
-gateway runs the same servers. If yours differs, write your own
+the tools of the MCP server (a server that exposes tools over the Model Context
+Protocol) this repository ships, whose tool servers are listed in
+[configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml).
+It is a good starting point if your MCP server offers the same tools. If yours differs, write your own
 `(toolName) => string | undefined` function; either way, pass it to
 `registerToolNamespaces` and `Tools({ namespaces })` in
 `@hames-ai/harness-patterns`.
 
-## Exports
+## Reference
+
+How tools reach a pattern, and the injection guard that namespaces feed:
+[GUIDE.md](https://github.com/mknw/hames-playground/blob/main/packages/harness-patterns/GUIDE.md)
+and [SPEC.md](https://github.com/mknw/hames-playground/blob/main/packages/harness-patterns/SPEC.md)
+in `@hames-ai/harness-patterns`. The ready-made agent that uses the Microsoft 365
+tools is `microsoft-365` in
+[`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme).
+
+### Exports
 
 | Subpath                              | What lives there                                                                                                                                               |
 | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |

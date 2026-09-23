@@ -15,7 +15,28 @@ your application (a tool catalog, a document store, a sandbox) you hand it in
 one object, `AgentDeps`. The package also ships browser-safe helpers that turn
 a run's history into graph elements, citations and a chat transcript.
 
-### Install
+## Which package do you need?
+
+Five packages that work together. The first is the foundation; add the others
+for what they do.
+
+| If you want to…                                                                                             | Use                                                                                                                 |
+| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| build an agent out of composable pieces — tool loops, routers, planners                                     | [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme) |
+| get typed model calls with the prompts already written, on Anthropic or your own model provider             | [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)         |
+| use a ready-made agent                                                                                      | [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)                     |
+| use Microsoft 365 or the Neo4j graph database from an agent, or sort an MCP server's tools into namespaces | [`@hames-ai/connectors`](https://github.com/mknw/hames-playground/tree/main/packages/connectors#readme)             |
+| run agent-written code in a container                                                                       | [`@hames-ai/sandbox`](https://github.com/mknw/hames-playground/tree/main/packages/sandbox#readme)                   |
+
+## See it running
+
+The [hames app](https://github.com/mknw/hames-playground) is the reference
+host for all five packages: a self-hosted agent workspace whose agents are
+built from them, with every step of every run visible in its UI. Its
+[Quickstart](https://github.com/mknw/hames-playground#quickstart) runs it
+locally with Docker and pnpm.
+
+## Install
 
 ```bash
 pnpm add @hames-ai/agents @hames-ai/harness-baml @hames-ai/harness-patterns @hames-ai/connectors
@@ -33,77 +54,30 @@ something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
 `node` cannot import it, because Node refuses to strip types from files under
 `node_modules`.
 
-#### Before you run this
-
-`Tools()` lists your agent's tools from an _MCP gateway_: a local server that
-exposes tools (web search, a database) to the agent over one protocol, the Model
-Context Protocol. This repository ships one. In a clone of the repository,
-`docker compose up -d` starts it on port 8811, with the services it depends on,
-and the packages reach it at `MCP_GATEWAY_URL` (default
-`http://localhost:8811/mcp`). The [Quickstart](https://github.com/mknw/hames-playground#quickstart) walks through the
-whole stack.
+Examples whose **Needs:** line names an MCP server list their tools from one. An
+_MCP server_ exposes tools (web search, a database) to agents over one protocol, the
+Model Context Protocol, and the packages reach it at `MCP_GATEWAY_URL` (default
+`http://localhost:8811/mcp`). Any MCP server that speaks the protocol's
+streamable HTTP transport works, including your own; "gateway" is this
+repository's name for the one it ships, which `docker compose up -d` starts in a
+clone of the repository. An MCP server that requires authentication is not
+supported yet.
 
 The search agent in the example below also queries a Neo4j graph database. The
 same `docker compose up -d` starts one (user `neo4j`, password `password`),
-already connected to the gateway's `neo4j-cypher` tool, and
+already connected to the `neo4j-cypher` tool of the MCP server it ships, and
 `./scripts/import-neo4j.sh neo4j_dumps/seed-data.cypher`, run from the
 repository root, loads a small demo graph into it. The web tools
 (`web_search`, `fetch`) need no key.
 
-## Which package do you need?
+## Usage
 
-Five packages that work together. The first is the foundation; add the others
-for what they do.
-
-| If you want to…                                                                                             | Use                                                                                                                 |
-| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| build an agent out of composable pieces — tool loops, routers, planners                                     | [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme) |
-| get typed model calls with the prompts already written, on Anthropic or your own model provider             | [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)         |
-| use a ready-made agent                                                                                      | [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)                     |
-| use Microsoft 365 or the Neo4j graph database from an agent, or sort an MCP gateway's tools into namespaces | [`@hames-ai/connectors`](https://github.com/mknw/hames-playground/tree/main/packages/connectors#readme)             |
-| run agent-written code in a container                                                                       | [`@hames-ai/sandbox`](https://github.com/mknw/hames-playground/tree/main/packages/sandbox#readme)                   |
-
-## See it running
-
-The [hames app](https://github.com/mknw/hames-playground) is the reference
-host for all five packages: a self-hosted agent workspace whose agents are
-built from them, with every step of every run visible in its UI. Its
-[Quickstart](https://github.com/mknw/hames-playground#quickstart) runs it
-locally with Docker and pnpm.
-
-## Agent catalog
-
-Each agent is a chain of patterns from `@hames-ai/harness-patterns`, listed in
-order under **Composition**; each name is a pattern documented in the
-[harness-patterns README](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme).
-**Injection guard** says which tool results pass through `withInjectionGuard`,
-which neutralizes instructions hidden in untrusted content (a web page, an
-email) before a model reads it.
-
-| Agent               | Composition                                                   | Tools                           | Injection guard                                                                          |
-| ------------------- | ------------------------------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------- |
-| `search`            | router → routes(neo4j loop, web loop) → compactExecution      | neo4j-cypher, web_search, fetch | web route guarded; neo4j route trusted (a graph you control)                             |
-| `retriever-agent`   | router → routes(retriever, neo4j, web) → compactExecution     | neo4j-cypher, web_search, fetch | web namespace + retriever exact-name guarded together (ingested documents are untrusted) |
-| `microsoft-365`     | explicit graph-tool allowlist loop → compactExecution         | Microsoft Graph, per-user token | whole graph loop guarded (mail/files are attacker-authored)                              |
-| `general`           | planner → simpleLoop(tools.all) → compactExecution            | everything                      | not guarded yet (below)                                                                  |
-| `sandbox-session`   | compactIntent → withSandbox(actorCritic) → compactExecution   | in-container `sandbox_*`        | not on tool results yet; shell commands are screened (below)                             |
-| `flavoured-sandbox` | router → routes(base, image, data, office) → compactExecution | in-container `sandbox_*`        | not on tool results yet, on any route; shell commands are screened (below)               |
-
-**Guardrail status.** Two guards ship today. The injection guard covers the
-tool results marked in the table above, and the two sandbox agents also get
-`@hames-ai/sandbox`'s shell-command screen, which checks every `sandbox_bash`
-command against a denylist before it runs. Guardrails beyond these two are
-designed, not yet built — [design record](https://github.com/mknw/hames-playground/issues/242#issuecomment-5768168881).
-
-The injection guard has two layers with opposite failure policies — an
-optional model-based screen, which lets content through if the screen itself
-fails, and a deterministic layer, which does not — and which of the two should
-win is an open decision, not settled by this package.
-
-## Usage: run the search agent once
+### Quick start: run the search agent once
 
 Build a shipped agent's patterns, compose them into a harness, and ask one
 question.
+
+> **Needs:** `ANTHROPIC_API_KEY`, an MCP server with the Neo4j and web tools, and a Neo4j database — see [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app.
 
 ```typescript
 import { harness } from '@hames-ai/harness-patterns'
@@ -130,71 +104,20 @@ const result = await harness<AgentData>(...patterns)(
 console.log(result.response)
 ```
 
-It needs `ANTHROPIC_API_KEY` set, and the MCP gateway and Neo4j database from
-[Before you run this](#before-you-run-this), serving the tools the agent lists
-in `servers` (`neo4j-cypher`, `web_search`, `fetch`).
+The MCP server has to serve the tools the agent lists in `servers`
+(`neo4j-cypher`, `web_search`, `fetch`); the one this repository ships does, as
+configured in
+[configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml).
 
-## What an agent definition contains
+### How the shipped agents are composed
 
-The shape, simplified from `types.ts` (the source is the authority; the
-`typescript` samples further down are compiled against it by a test in this
-repository):
-
-```
-// What a ready-made agent IS — data only, no presentation:
-interface AgentDefinition {
-  id: string
-  name: string
-  description: string
-  /** The greeting shown in an empty conversation. Required, so a new agent
-   *  without one fails to compile instead of borrowing another's greeting. */
-  welcome: string
-  servers: string[]
-  createPatterns: (sessionId: string, deps: AgentDeps) => Promise<ConfiguredPattern<AgentData>[]>
-}
-
-// The data every pattern in the agent reads and writes during a run:
-interface AgentData
-  extends HarnessData, RouterData, SimpleLoopData, RetrieverData, WithApproval {
-  response?: string
-  [key: string]: unknown
-}
-
-// What your application supplies. Only `toolNamespaces` is required; the model
-// calls are not in here, because the agents import them from
-// @hames-ai/harness-baml themselves:
-interface AgentDeps {
-  toolNamespaces: (toolName: string) => string | undefined
-  enrichNeo4jResult?: OnToolResult
-  createRedisBackend?: (sessionId: string) => RetrieverBackend
-  withSandbox?: (config: SandboxAttach) => (pattern: ConfiguredPattern<AgentData>) => ConfiguredPattern<AgentData>
-  clientOverride?: (role: string) => Record<string, unknown> | undefined
-  persistTitle?: (sessionId: string, userId: string, title: string) => Promise<void>
-  doNotCachePatterns?: (sessionId: string) => void
-}
-```
-
-### What comes from where
-
-| Concern                                           | Where it lives               | How it reaches the agent                         |
-| ------------------------------------------------- | ---------------------------- | ------------------------------------------------ |
-| Model calls: adapters, prompt templates           | `@hames-ai/harness-baml`     | imported directly by the factories               |
-| Patterns, event views, guard, tool transport      | `@hames-ai/harness-patterns` | imported directly                                |
-| Tool→namespace catalog (your MCP gateway's map)   | your application             | `AgentDeps.toolNamespaces` — required            |
-| Neo4j tool-result enrichment                      | your application             | `AgentDeps.enrichNeo4jResult`                    |
-| Document search backend (uploaded files)          | your application             | `AgentDeps.createRedisBackend`                   |
-| Sandbox wrapper (built on `@hames-ai/sandbox`)    | your application             | `AgentDeps.withSandbox`                          |
-| Which model each role uses (your policy)          | your application             | `AgentDeps.clientOverride`                       |
-| Saving conversation titles; opting out of caching | your application             | `AgentDeps.persistTitle` / `.doNotCachePatterns` |
-| Icons + accent colours                            | your application             | added when you register the agent (below)        |
-
-## Composing an agent
-
-Each definition's `createPatterns` composes patterns from
+These excerpts show how the shipped agents are built. Each definition's `createPatterns` composes patterns from
 `@hames-ai/harness-patterns` with what your application supplies in
 `AgentDeps`. The excerpts below are lifted from the shipped agents, and a test
 in this repository compiles them against the package source, so they cannot
 drift from the real signatures.
+
+> **Needs:** an MCP server at `MCP_GATEWAY_URL` — see [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app.
 
 ```typescript
 // The agent's tools, grouped by namespace. You pass the grouping in: the
@@ -328,26 +251,7 @@ function buildRetrieverRoute(redisBackend: RetrieverBackend): ConfiguredPattern<
 }
 ```
 
-## Exports
-
-The root entry point (`import from '@hames-ai/agents'`) is **browser-safe** —
-front-end code can import it without pulling in anything server-side:
-
-| Export                                                                        | What it is                                                      |
-| ----------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `extractGraphElements`, `extractGraphFromResult`                              | ContextEvent/tool-result → `GraphElement[]` for graph rendering |
-| `isEdgeElement`, `isNodeElement`, `isNeo4jGraphResult`, `isMemoryGraphResult` | shape guards over extracted elements                            |
-| `extractReferences`, `referencesForDoc`                                       | retriever citations out of the event stream                     |
-| `errorBubble`, `replayMessages`, `ReplayedMessage`                            | serialized context → minimal chat transcript                    |
-| `GraphElement`, `OpenReferenceTarget`                                         | the shared data types                                           |
-| `AgentDefinition`, `AgentData`, `AgentDeps`                                   | the definition surface (below)                                  |
-
-The definitions entry point (`import from '@hames-ai/agents/agents'`) is
-**server-only** — six registered agents plus three shared helpers
-(`getGraphSchema`, the Neo4j few-shots, the title generator). Every module
-calls core's `assertServerOnImport()` at load.
-
-## Registering agents in your application
+### Registering agents in your application
 
 Your application decides how agents are presented and builds the one
 `AgentDeps` object they share. The hames app, this repository's reference
@@ -385,3 +289,117 @@ registerAgent(overlay(searchAgent, 'i-material-symbols-search', 'indigo'))
 
 To present agents differently, add your own fields the same way; the
 definitions carry no presentation of their own.
+
+## Agent catalog
+
+Each agent is a chain of patterns from `@hames-ai/harness-patterns`, listed in
+order under **Composition**; each name is a pattern documented in the
+[harness-patterns README](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme).
+**Injection guard** says which tool results pass through `withInjectionGuard`,
+which neutralizes instructions hidden in untrusted content (a web page, an
+email) before a model reads it.
+
+| Agent               | Composition                                                   | Tools                           | Injection guard                                                                          |
+| ------------------- | ------------------------------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------- |
+| `search`            | router → routes(neo4j loop, web loop) → compactExecution      | neo4j-cypher, web_search, fetch | web route guarded; neo4j route trusted (a graph you control)                             |
+| `retriever-agent`   | router → routes(retriever, neo4j, web) → compactExecution     | neo4j-cypher, web_search, fetch | web namespace + retriever exact-name guarded together (ingested documents are untrusted) |
+| `microsoft-365`     | explicit graph-tool allowlist loop → compactExecution         | Microsoft Graph, per-user token | whole graph loop guarded (mail/files are attacker-authored)                              |
+| `general`           | planner → simpleLoop(tools.all) → compactExecution            | everything                      | not guarded yet (below)                                                                  |
+| `sandbox-session`   | compactIntent → withSandbox(actorCritic) → compactExecution   | in-container `sandbox_*`        | not on tool results yet; shell commands are screened (below)                             |
+| `flavoured-sandbox` | router → routes(base, image, data, office) → compactExecution | in-container `sandbox_*`        | not on tool results yet, on any route; shell commands are screened (below)               |
+
+**Guardrail status.** Two guards ship today. The injection guard covers the
+tool results marked in the table above, and the two sandbox agents also get
+`@hames-ai/sandbox`'s shell-command screen, which checks every `sandbox_bash`
+command against a denylist before it runs. Guardrails beyond these two are
+designed, not yet built — [design record](https://github.com/mknw/hames-playground/issues/242#issuecomment-5768168881).
+
+The injection guard has two layers with opposite failure policies — an
+optional model-based screen, which lets content through if the screen itself
+fails, and a deterministic layer, which does not — and which of the two should
+win is an open decision, not settled by this package.
+
+## Configuration
+
+### What an agent definition contains
+
+The shape, simplified from `types.ts` (the source is the authority; the
+`typescript` samples under Usage are compiled against it by a test in this
+repository):
+
+```
+// What a ready-made agent IS — data only, no presentation:
+interface AgentDefinition {
+  id: string
+  name: string
+  description: string
+  /** The greeting shown in an empty conversation. Required, so a new agent
+   *  without one fails to compile instead of borrowing another's greeting. */
+  welcome: string
+  servers: string[]
+  createPatterns: (sessionId: string, deps: AgentDeps) => Promise<ConfiguredPattern<AgentData>[]>
+}
+
+// The data every pattern in the agent reads and writes during a run:
+interface AgentData
+  extends HarnessData, RouterData, SimpleLoopData, RetrieverData, WithApproval {
+  response?: string
+  [key: string]: unknown
+}
+
+// What your application supplies. Only `toolNamespaces` is required; the model
+// calls are not in here, because the agents import them from
+// @hames-ai/harness-baml themselves:
+interface AgentDeps {
+  toolNamespaces: (toolName: string) => string | undefined
+  enrichNeo4jResult?: OnToolResult
+  createRedisBackend?: (sessionId: string) => RetrieverBackend
+  withSandbox?: (config: SandboxAttach) => (pattern: ConfiguredPattern<AgentData>) => ConfiguredPattern<AgentData>
+  clientOverride?: (role: string) => Record<string, unknown> | undefined
+  persistTitle?: (sessionId: string, userId: string, title: string) => Promise<void>
+  doNotCachePatterns?: (sessionId: string) => void
+}
+```
+
+#### What comes from where
+
+| Concern                                           | Where it lives               | How it reaches the agent                         |
+| ------------------------------------------------- | ---------------------------- | ------------------------------------------------ |
+| Model calls: adapters, prompt templates           | `@hames-ai/harness-baml`     | imported directly by the factories               |
+| Patterns, event views, guard, tool transport      | `@hames-ai/harness-patterns` | imported directly                                |
+| Tool→namespace catalog (your MCP gateway's map)   | your application             | `AgentDeps.toolNamespaces` — required            |
+| Neo4j tool-result enrichment                      | your application             | `AgentDeps.enrichNeo4jResult`                    |
+| Document search backend (uploaded files)          | your application             | `AgentDeps.createRedisBackend`                   |
+| Sandbox wrapper (built on `@hames-ai/sandbox`)    | your application             | `AgentDeps.withSandbox`                          |
+| Which model each role uses (your policy)          | your application             | `AgentDeps.clientOverride`                       |
+| Saving conversation titles; opting out of caching | your application             | `AgentDeps.persistTitle` / `.doNotCachePatterns` |
+| Icons + accent colours                            | your application             | added when you register the agent (see Usage)    |
+
+## Reference
+
+The patterns each agent is built from, and their options:
+[GUIDE.md](https://github.com/mknw/hames-playground/blob/main/packages/harness-patterns/GUIDE.md)
+and [SPEC.md](https://github.com/mknw/hames-playground/blob/main/packages/harness-patterns/SPEC.md)
+in `@hames-ai/harness-patterns`. Wiring agents into your own application, step by
+step: the [tutorials](https://github.com/mknw/hames-playground/tree/main/docs/tutorials#readme).
+Each agent's source is in
+[`agents/`](https://github.com/mknw/hames-playground/tree/main/packages/agents/agents).
+
+### Exports
+
+The root entry point (`import from '@hames-ai/agents'`) is **browser-safe** —
+front-end code can import it without pulling in anything server-side:
+
+| Export                                                                        | What it is                                                      |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `extractGraphElements`, `extractGraphFromResult`                              | ContextEvent/tool-result → `GraphElement[]` for graph rendering |
+| `isEdgeElement`, `isNodeElement`, `isNeo4jGraphResult`, `isMemoryGraphResult` | shape guards over extracted elements                            |
+| `extractReferences`, `referencesForDoc`                                       | retriever citations out of the event stream                     |
+| `errorBubble`, `replayMessages`, `ReplayedMessage`                            | serialized context → minimal chat transcript                    |
+| `GraphElement`, `OpenReferenceTarget`                                         | the shared data types                                           |
+| `AgentDefinition`, `AgentData`, `AgentDeps`                                   | the definition types (see Configuration)                        |
+
+The definitions entry point (`import from '@hames-ai/agents/agents'`) is
+**server-only** — six registered agents plus three shared helpers
+(`getGraphSchema`, the Neo4j few-shots, the title generator). Every module
+calls core's `assertServerOnImport()` at load.

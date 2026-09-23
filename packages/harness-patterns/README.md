@@ -63,7 +63,43 @@ built from them, with every step of every run visible in its UI. Its
 [Quickstart](https://github.com/mknw/hames-playground#quickstart) runs it
 locally with Docker and pnpm.
 
-## A harness, end to end
+## Usage
+
+The smallest harness: a tool loop, then a step that writes the answer.
+
+```typescript
+import { Tools, simpleLoop, compactExecution, harness } from '@hames-ai/harness-patterns'
+import type {
+  CompactExecutionData,
+  ControllerFn,
+  HarnessData,
+  SimpleLoopData,
+  SynthesisFn,
+} from '@hames-ai/harness-patterns'
+
+// The data the harness carries between steps. TypeScript needs it spelled out once.
+interface Data extends HarnessData, SimpleLoopData, CompactExecutionData {
+  [key: string]: unknown
+}
+
+// The two model calls. In a real agent both come from @hames-ai/harness-baml:
+// createLoopControllerAdapter() and bamlPatterns().synthesize.
+declare const controller: ControllerFn
+declare const synthesize: SynthesisFn
+
+// `namespaces` is required: it says which group each tool belongs to.
+const tools = await Tools({ namespaces: () => undefined })
+
+const agent = harness<Data>(
+  simpleLoop(controller, tools.all),
+  compactExecution({ mode: 'response', synthesize }), // both fields are required
+)
+
+const result = await agent('What shipped in TypeScript 5.7?')
+console.log(result.response)
+```
+
+## Going further: a routed, guarded agent
 
 Patterns are ordinary values, so composing a harness is ordinary TypeScript.
 This one classifies the message, sends web questions to a tool loop wrapped in

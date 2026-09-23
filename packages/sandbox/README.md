@@ -43,11 +43,48 @@ built from them, with every step of every run visible in its UI. Its
 [Quickstart](https://github.com/mknw/hames-playground#quickstart) runs it
 locally with Docker and pnpm.
 
-## Wrap a pattern in a sandbox
+## Usage
 
-A generate-then-check loop whose tool calls run inside a container, followed by
-a step that writes the answer. The model calls come from
-[`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme):
+Wrap a loop in `withSandbox`, and its tools run inside a container. The model
+calls come from
+[`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme).
+
+```typescript
+import { actorCritic, compactExecution, harness } from '@hames-ai/harness-patterns'
+import type { ActorCriticData, CompactExecutionData, HarnessData } from '@hames-ai/harness-patterns'
+import {
+  bamlPatterns,
+  createActorControllerAdapter,
+  createCriticAdapter,
+} from '@hames-ai/harness-baml'
+import { withSandbox } from '@hames-ai/sandbox'
+
+// The data the harness carries between steps. TypeScript needs it spelled out once.
+interface Data extends HarnessData, ActorCriticData, CompactExecutionData {
+  [key: string]: unknown
+}
+
+// A generate-then-check loop. Its tool list is empty because `withSandbox` supplies
+// the container's tools; `{}` means "no options" and is required.
+const loop = actorCritic<Data>(createActorControllerAdapter({}), createCriticAdapter(), [])
+
+const agent = harness<Data>(
+  withSandbox()(loop),
+  compactExecution({ mode: 'response', synthesize: bamlPatterns().synthesize }), // both fields are required
+)
+
+const result = await agent('Write a Python script that prints the first ten primes, and run it.')
+console.log(result.response)
+```
+
+To run it you need Docker, the sandbox image (`kg-sandbox:base`, built from
+this repository's [`rootfs/`](https://github.com/mknw/hames-playground/tree/main/rootfs)
+— see [Container images](#container-images-live-outside-the-package)), and
+`ANTHROPIC_API_KEY` for the model calls.
+
+## Going further: choosing the image, the network and the batching
+
+The same agent with its options spelled out:
 
 ```typescript
 import { actorCritic, compactExecution, harness } from '@hames-ai/harness-patterns'
@@ -86,12 +123,8 @@ const result = await agent('Write a Python script that prints the first ten prim
 console.log(result.response)
 ```
 
-To run it you need Docker, the sandbox image (`kg-sandbox:base`, built from
-this repository's [`rootfs/`](https://github.com/mknw/hames-playground/tree/main/rootfs)
-— see [Container images](#container-images-live-outside-the-package)), and
-`ANTHROPIC_API_KEY` for the model calls. Without an `id`, each run borrows a
-container from a warm pool; pass `id` (for example a conversation id) to keep
-one container, and its files, across turns.
+Without an `id`, each run borrows a container from a warm pool; pass `id` (for
+example a conversation id) to keep one container, and its files, across turns.
 
 ## What it protects you from, and what it does not
 

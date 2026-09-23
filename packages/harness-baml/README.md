@@ -47,7 +47,33 @@ built from them, with every step of every run visible in its UI. Its
 [Quickstart](https://github.com/mknw/hames-playground#quickstart) runs it
 locally with Docker and pnpm.
 
-## How the model calls plug in
+## Usage
+
+A tool loop and an answer step, with this package's model calls in both places.
+
+```typescript
+import { bamlPatterns, createLoopControllerAdapter } from '@hames-ai/harness-baml'
+import { Tools, simpleLoop, compactExecution, harness } from '@hames-ai/harness-patterns'
+import type { CompactExecutionData, HarnessData, SimpleLoopData } from '@hames-ai/harness-patterns'
+
+// The data the harness carries between steps. TypeScript needs it spelled out once.
+interface Data extends HarnessData, SimpleLoopData, CompactExecutionData {
+  [key: string]: unknown
+}
+
+// `namespaces` is required: it says which group each tool belongs to.
+const tools = await Tools({ namespaces: () => undefined })
+
+const agent = harness<Data>(
+  simpleLoop(createLoopControllerAdapter(), tools.all),
+  compactExecution({ mode: 'response', synthesize: bamlPatterns().synthesize }), // both fields are required
+)
+
+const result = await agent('What shipped in TypeScript 5.7?')
+console.log(result.response)
+```
+
+## Going further: how the model calls plug in
 
 A pattern in `@hames-ai/harness-patterns` never calls a model itself; it is handed a function
 of the shape `(input) => Promise<LLMResult<T>>`, where `LLMResult` carries the value plus an

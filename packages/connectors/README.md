@@ -44,32 +44,33 @@ built from them, with every step of every run visible in its UI. Its
 [Quickstart](https://github.com/mknw/hames-playground#quickstart) runs it
 locally with Docker and pnpm.
 
-## Query Neo4j
+## Usage: query Neo4j
 
-Configure the driver once, then run read queries. Nothing reads connection
-settings from the environment for you: until `configureNeo4j` runs, the first
-query fails with `Neo4jNotConfiguredError`.
+Configure the driver once, then run read queries.
 
 ```typescript
 import { configureNeo4j } from '@hames-ai/connectors/neo4j/client'
 import { runManualCypher } from '@hames-ai/connectors/neo4j/queries'
 
-declare const password: string // from your own secrets store
+declare const password: string
 
+// Required: nothing reads connection settings from the environment for you.
 configureNeo4j({ url: 'bolt://localhost:7687', user: 'neo4j', password })
 
-// Read-only: a query containing a write clause is refused, and the session
-// itself is opened in READ mode.
 const result = await runManualCypher('MATCH (p:Person) RETURN p.name LIMIT 5')
-if (!result.success) throw new Error(result.error)
 console.log(result.raw)
 ```
+
+Until `configureNeo4j` runs, the first query fails with
+`Neo4jNotConfiguredError`. Queries are read-only: one containing a write clause
+is refused (`result.success` is `false`, with the reason in `result.error`),
+and the session itself is opened in READ mode.
 
 `result.graphUpdate` also carries the same rows as nodes and edges for
 [Cytoscape.js](https://js.cytoscape.org), a graph-drawing library, in case you
 want to render them.
 
-## Give an agent the Microsoft 365 tools
+## Going further: give an agent the Microsoft 365 tools
 
 `registerGraphConnectorTools` adds nine tools an agent can call as the
 signed-in user: today's calendar, recent mail and attachments, the user's

@@ -78,10 +78,10 @@ optional model-based screen, which lets content through if the screen itself
 fails, and a deterministic layer, which does not — and which of the two should
 win is an open decision, not settled by this package.
 
-## Run the search agent once
+## Usage: run the search agent once
 
-The shortest complete use of a shipped agent: build its patterns, compose them
-into a harness, and ask one question.
+Build a shipped agent's patterns, compose them into a harness, and ask one
+question.
 
 ```typescript
 import { harness } from '@hames-ai/harness-patterns'
@@ -89,17 +89,14 @@ import { registerToolNamespaces } from '@hames-ai/harness-patterns/tools.server'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
 import { searchAgent } from '@hames-ai/agents/agents/search.server'
 
-// Which group ("namespace") each MCP tool belongs to, such as `neo4j` or `web`.
-// `mcpNamespace` from `@hames-ai/connectors/mcp-catalog` is a ready map for the
-// MCP servers this repository's gateway runs; any `(toolName) => string | undefined`
-// function works.
+// Which group ("namespace") each tool belongs to, such as `web` or `neo4j` —
+// for example `mcpNamespace` from @hames-ai/connectors/mcp-catalog.
 declare const toolNamespaces: (toolName: string) => string | undefined
 
-// Register it once at startup: the injection guard on the web route refuses to
-// build if it cannot tell which tools are web tools.
+// Required: the agent's injection guard refuses to build without it.
 registerToolNamespaces(toolNamespaces)
 
-// The only required field. Everything else in AgentDeps is optional for this agent.
+// `toolNamespaces` is the one required field of AgentDeps.
 const deps: AgentDeps = { toolNamespaces }
 
 const sessionId = 'session-1'

@@ -26,6 +26,21 @@ export ANTHROPIC_API_KEY=sk-ant-…   # read by every Anthropic client in baml_s
 `@hames-ai/harness-patterns` is a peer dependency, so you add it yourself.
 `ANTHROPIC_API_KEY` is the only credential the default setup needs.
 
+This package ships TypeScript source, not compiled JavaScript, so run it through
+something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
+`node` cannot import it, because Node refuses to strip types from files under
+`node_modules`.
+
+#### Before you run this
+
+`Tools()` lists your agent's tools from an _MCP gateway_: a local server that
+exposes tools (web search, a database) to the agent over one protocol, the Model
+Context Protocol. This repository ships one. In a clone of the repository,
+`docker compose up -d` starts it on port 8811, with the services it depends on,
+and the packages reach it at `MCP_GATEWAY_URL` (default
+`http://localhost:8811/mcp`). The [Quickstart](https://github.com/mknw/hames-playground#quickstart) walks through the
+whole stack.
+
 ## Which package do you need?
 
 Five packages that work together. The first is the foundation; add the others
@@ -124,78 +139,15 @@ which is a factory you call with the planner's tool list (`baml.planner(tools.al
 wiring stays one line however many of them a pattern needs. The loop controllers and the critic
 come from their own factories, as above.
 
-## Choosing which model each call uses
-
-You can skip this section if Anthropic is all you need: every call already goes there.
-
-Every call has a _role_ — `controller`, `planner`, `critic`, `compactExecution`, `router`,
-`describe` or `screen` — and each role resolves to a BAML _client_, a named model configuration
-(provider, model, limits, fallbacks).
-
-- A _tier_ is which set of models a run uses: `anthropic` (the default) or `verda` (an optional
-  self-hosted model, off unless your application configures it). Your application picks the tier
-  per run, for example per conversation; you care because it decides where your prompts are sent.
-- A _run frame_ is the bundle of settings one run carries from start to finish — its tier, its
-  budgets, its live-event listener. Your application opens it with `withRunFrame` from
-  `@hames-ai/harness-patterns` (or `harness()` opens one for you), and every model call made
-  inside that run reads its settings from it.
-
-Three functions answer "which model does this role use right now": `clientOverrideFor(role)`
-builds the per-call options a call spreads into its BAML options; `resolveClientForRole(role)`
-names the client; `limitsFor(role)` returns that model's context window and output cap, so
-patterns size their prompts for the right model. `assertInferenceTier(tier)` checks that a tier
-can actually be reached — it throws for `verda` when no self-hosted endpoint is configured —
-and your application calls it before putting a tier in a run frame:
-
-```typescript
-import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
-import {
-  assertInferenceTier,
-  clientOverrideFor,
-  limitsFor,
-} from '@hames-ai/harness-baml/clients.server'
-
-assertInferenceTier('anthropic')
-await withRunFrame({ inference: { tier: 'anthropic' } }, async () => {
-  const opts = { ...clientOverrideFor('controller') } // undefined on the anthropic tier
-  const limits = limitsFor('controller')
-})
-```
-
-## Clients that ship
-
-The shipped `baml_src/` declares two client families, and nothing else:
-
-- **Anthropic chains** — the default. Every function names an Anthropic chain
-  (`ControllerAnthropic`, `ActorAnthropic`, `PlannerAnthropic`, `CriticAnthropic`,
-  `SynthesizerAnthropic`, `RouterAnthropic`, `DescribeAnthropic`); the `client X` line on each
-  function is what routes a call.
-- **Custom endpoint** — `VerdaQwen`, the client behind the optional self-hosted `verda` tier
-  (off by default; an `openai-generic` client, so any OpenAI-compatible server works), and
-  `LocalQwenSmall`, a second one for a small summarizer model on that tier.
-
-### Pointing a custom-endpoint client at your model
-
-The custom-endpoint clients take their endpoint and key from the environment at call time — set
-the variables and the client reaches your deployment; nothing in the package changes:
-
-```bash
-# the OpenAI-compatible base URL, including the /v1 suffix — BAML hands it to
-# openai-generic verbatim, so a root URL 404s every call on <root>/chat/completions
-export VERDA_INFERENCE_ENDPOINT=https://your-deployment.example.com/v1
-export VERDA_INFERENCE_API_KEY=your-key
-
-# the small summarizer endpoint (the model that summarizes tool results on this tier)
-export SMALL_LLM_BASE_URL=https://your-summarizer.example.com/v1
-```
-
-> Choosing a tier per conversation, and deciding when the self-hosted tier is reachable, is
-> your application's policy, registered at startup. The hames app's version is in this
-> repository under `app/src/lib/inference/`.
-
 ## Bring your own provider or model
 
-A consumer can supply its own LLM clients — a different provider, a self-hosted endpoint —
+There are two ways to send calls somewhere other than Anthropic, and they are
+different things. This section is the one for you: it plugs in **your own**
+provider or model. The [optional self-hosted tier](#optional-self-hosted-tier)
+further down is the private model this repository runs for its own deployment,
+and is off by default.
+
+You can supply your own LLM clients — a different provider, or a model you host —
 without touching prompts: define runtime clients through a BAML `ClientRegistry`, map the
 roles you want off the built-in chains, and your clients take over **exactly the mapped roles**
 on top of the built-in tier (unmapped roles change nothing, and the injection guard's `screen`
@@ -231,14 +183,77 @@ client), naming the role and the client — never on turn one. Full walkthrough,
 what happens to unmapped roles and to prompt budgeting:
 **[docs/tutorials/own-provider-or-model.md](../../docs/tutorials/own-provider-or-model.md)**.
 
-## Requirements: a TypeScript bundler
+## Choosing which model each call uses
 
-Like every `@hames-ai` package, this one **ships TypeScript source**: `main`
-and every code target in `exports` is a `.ts` file (`baml_client/` included: it is committed, generated TypeScript), and there is no
-`dist/`. Run it through something that compiles TypeScript — Vite, esbuild,
-tsx, Bun. **Not** `node --experimental-strip-types`, which refuses to strip
-types under `node_modules` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`), and
-not a plain `node dist/index.js`.
+You can skip this section if Anthropic is all you need: every call already goes there.
+The Anthropic clients are the default: every function names an Anthropic chain
+(`ControllerAnthropic`, `ActorAnthropic`, `PlannerAnthropic`, `CriticAnthropic`,
+`SynthesizerAnthropic`, `RouterAnthropic`, `DescribeAnthropic`), and the `client X` line on
+each function is what routes a call.
+
+Every call has a _role_ — `controller`, `planner`, `critic`, `compactExecution`, `router`,
+`describe` or `screen` — and each role resolves to a BAML _client_, a named model configuration
+(provider, model, limits, fallbacks).
+
+- A _tier_ is which set of models a run uses: `anthropic` (the default) or the optional
+  self-hosted tier, named `verda` (off unless your application configures it). Your application picks the tier
+  per run, for example per conversation; you care because it decides where your prompts are sent.
+- A _run frame_ is the bundle of settings one run carries from start to finish — its tier, its
+  budgets, its live-event listener. Your application opens it with `withRunFrame` from
+  `@hames-ai/harness-patterns` (or `harness()` opens one for you), and every model call made
+  inside that run reads its settings from it.
+
+Three functions answer "which model does this role use right now": `clientOverrideFor(role)`
+builds the per-call options a call spreads into its BAML options; `resolveClientForRole(role)`
+names the client; `limitsFor(role)` returns that model's context window and output cap, so
+patterns size their prompts for the right model. `assertInferenceTier(tier)` checks that a tier
+can actually be reached — it throws for the optional self-hosted tier (`verda`) when that tier is not configured —
+and your application calls it before putting a tier in a run frame:
+
+```typescript
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
+import {
+  assertInferenceTier,
+  clientOverrideFor,
+  limitsFor,
+} from '@hames-ai/harness-baml/clients.server'
+
+assertInferenceTier('anthropic')
+await withRunFrame({ inference: { tier: 'anthropic' } }, async () => {
+  const opts = { ...clientOverrideFor('controller') } // undefined on the anthropic tier
+  const limits = limitsFor('controller')
+})
+```
+
+## Optional self-hosted tier
+
+The package also ships the clients for an optional self-hosted tier: the private
+model this repository runs for its own deployment, off by default. To send your
+own calls to your own model, use
+[Bring your own provider or model](#bring-your-own-provider-or-model) instead.
+
+The tier is two `openai-generic` clients, so any OpenAI-compatible server can
+stand behind them: `VerdaQwen` for most roles, and `LocalQwenSmall`, a small
+model that summarizes tool results. A run uses them only when its tier is
+`verda` — set per run in the run frame, or for the whole process with
+`USE_VERDA_INFERENCE=1`. Before putting the tier in a run frame, your
+application registers a policy saying the tier is reachable; without one,
+`assertInferenceTier` throws. The clients read their endpoints from the
+environment:
+
+```bash
+# the OpenAI-compatible base URL, including the /v1 suffix — BAML hands it to
+# openai-generic verbatim, so a root URL 404s every call on <root>/chat/completions
+export VERDA_INFERENCE_ENDPOINT=https://your-deployment.example.com/v1
+export VERDA_INFERENCE_API_KEY=your-key
+
+# the small summarizer endpoint (the model that summarizes tool results on this tier)
+export SMALL_LLM_BASE_URL=https://your-summarizer.example.com/v1
+```
+
+> Choosing a tier per conversation, and deciding when the self-hosted tier is reachable, is
+> your application's policy, registered at startup. The hames app's version is in this
+> repository under `app/src/lib/inference/`.
 
 ## Regenerating the client (contributors)
 

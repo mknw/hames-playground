@@ -38,9 +38,22 @@ pnpm add @hames-ai/harness-baml   # the ready-made model calls; optional
 
 This package has no peer dependencies. It makes no model calls, so it needs no
 API key on its own; with `@hames-ai/harness-baml`'s model calls, set
-`ANTHROPIC_API_KEY`. Tools come from an _MCP gateway_ — a server that exposes
-tools over the Model Context Protocol — which `Tools()` reaches at
-`MCP_GATEWAY_URL` (default `http://localhost:8811/mcp`).
+`ANTHROPIC_API_KEY`.
+
+This package ships TypeScript source, not compiled JavaScript, so run it through
+something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
+`node` cannot import it, because Node refuses to strip types from files under
+`node_modules`.
+
+#### Before you run this
+
+`Tools()` lists your agent's tools from an _MCP gateway_: a local server that
+exposes tools (web search, a database) to the agent over one protocol, the Model
+Context Protocol. This repository ships one. In a clone of the repository,
+`docker compose up -d` starts it on port 8811, with the services it depends on,
+and the packages reach it at `MCP_GATEWAY_URL` (default
+`http://localhost:8811/mcp`). The [Quickstart](https://github.com/mknw/hames-playground#quickstart) walks through the
+whole stack.
 
 ## Which package do you need?
 
@@ -66,6 +79,11 @@ locally with Docker and pnpm.
 ## Usage
 
 The smallest harness: a tool loop, then a step that writes the answer.
+`compactExecution` is that answer step, and its `mode` chooses what it reads:
+`'thread'` gives it the previous pattern's tool calls and their results,
+`'response'` gives it the text the previous pattern returned together with the
+run's data, and `'message'` gives it that text alone. The shipped agents use
+`'thread'` after a tool loop.
 
 ```typescript
 import { Tools, simpleLoop, compactExecution, harness } from '@hames-ai/harness-patterns'
@@ -246,15 +264,6 @@ portable.
 
 Each of these has a section in the [spec](./SPEC.md), with the signatures,
 configuration and per-pattern semantics that belong there rather than here.
-
-## Requirements: a TypeScript bundler
-
-Like every `@hames-ai` package, this one **ships TypeScript source**: `main`
-and every code target in `exports` is a `.ts` file, and there is no
-`dist/`. Run it through something that compiles TypeScript — Vite, esbuild,
-tsx, Bun. **Not** `node --experimental-strip-types`, which refuses to strip
-types under `node_modules` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`), and
-not a plain `node dist/index.js`.
 
 ## Status and licence
 

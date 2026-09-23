@@ -18,15 +18,37 @@ a run's history into graph elements, citations and a chat transcript.
 ### Install
 
 ```bash
-pnpm add @hames-ai/agents @hames-ai/harness-baml @hames-ai/harness-patterns
+pnpm add @hames-ai/agents @hames-ai/harness-baml @hames-ai/harness-patterns @hames-ai/connectors
 ```
 
 `@hames-ai/harness-baml` and `@hames-ai/harness-patterns` are peer
-dependencies, so you add them yourself. Running an agent calls Anthropic
+dependencies, so you add them yourself. `@hames-ai/connectors` is not a
+dependency of this package, but it supplies `mcpNamespace`, the tool-namespace
+map the example below passes in. Running an agent calls Anthropic
 models, so set `ANTHROPIC_API_KEY` in the environment; the model clients in
-`@hames-ai/harness-baml` read it. The agents also reach their tools through an
-MCP gateway (a server that exposes tools over the Model Context Protocol) at
-`MCP_GATEWAY_URL`, which defaults to `http://localhost:8811/mcp`.
+`@hames-ai/harness-baml` read it.
+
+This package ships TypeScript source, not compiled JavaScript, so run it through
+something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
+`node` cannot import it, because Node refuses to strip types from files under
+`node_modules`.
+
+#### Before you run this
+
+`Tools()` lists your agent's tools from an _MCP gateway_: a local server that
+exposes tools (web search, a database) to the agent over one protocol, the Model
+Context Protocol. This repository ships one. In a clone of the repository,
+`docker compose up -d` starts it on port 8811, with the services it depends on,
+and the packages reach it at `MCP_GATEWAY_URL` (default
+`http://localhost:8811/mcp`). The [Quickstart](https://github.com/mknw/hames-playground#quickstart) walks through the
+whole stack.
+
+The search agent in the example below also queries a Neo4j graph database. The
+same `docker compose up -d` starts one (user `neo4j`, password `password`),
+already connected to the gateway's `neo4j-cypher` tool, and
+`./scripts/import-neo4j.sh neo4j_dumps/seed-data.cypher`, run from the
+repository root, loads a small demo graph into it. The web tools
+(`web_search`, `fetch`) need no key.
 
 ## Which package do you need?
 
@@ -108,9 +130,9 @@ const result = await harness<AgentData>(...patterns)(
 console.log(result.response)
 ```
 
-It needs `ANTHROPIC_API_KEY` set, an MCP gateway serving the Neo4j and web
-tools the agent lists in `servers` (`neo4j-cypher`, `web_search`, `fetch`), and
-a Neo4j database behind the first of them.
+It needs `ANTHROPIC_API_KEY` set, and the MCP gateway and Neo4j database from
+[Before you run this](#before-you-run-this), serving the tools the agent lists
+in `servers` (`neo4j-cypher`, `web_search`, `fetch`).
 
 ## What an agent definition contains
 
@@ -363,12 +385,3 @@ registerAgent(overlay(searchAgent, 'i-material-symbols-search', 'indigo'))
 
 To present agents differently, add your own fields the same way; the
 definitions carry no presentation of their own.
-
-## Requirements: a TypeScript bundler
-
-Like every `@hames-ai` package, this one **ships TypeScript source**: `main`
-and every code target in `exports` is a `.ts` file, and there is no
-`dist/`. Run it through something that compiles TypeScript — Vite, esbuild,
-tsx, Bun. **Not** `node --experimental-strip-types`, which refuses to strip
-types under `node_modules` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`), and
-not a plain `node dist/index.js`.

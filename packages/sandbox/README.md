@@ -22,6 +22,27 @@ pnpm add @hames-ai/sandbox @hames-ai/harness-patterns
 `@hames-ai/harness-patterns` is a peer dependency, so you add it yourself. You
 also need Docker on the machine that runs your agent.
 
+This package ships TypeScript source, not compiled JavaScript, so run it through
+something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
+`node` cannot import it, because Node refuses to strip types from files under
+`node_modules`.
+
+#### Before you run this
+
+`withSandbox` boots a Docker image that this package does not ship. By default
+it expects one tagged `kg-sandbox:base` (set `SANDBOX_IMAGE` to use another).
+Build it in a clone of the repository:
+
+```bash
+git clone https://github.com/mknw/hames-playground.git && cd hames-playground
+docker build -t kg-sandbox:base rootfs/
+```
+
+`bash rootfs/build.sh` builds the base image plus its three flavours
+(`image-processing`, `data`, `office`). See
+[`rootfs/`](https://github.com/mknw/hames-playground/tree/main/rootfs) for what
+each image contains.
+
 ## Which package do you need?
 
 Five packages that work together. The first is the foundation; add the others
@@ -77,10 +98,9 @@ const result = await agent('Write a Python script that prints the first ten prim
 console.log(result.response)
 ```
 
-To run it you need Docker, the sandbox image (`kg-sandbox:base`, built from
-this repository's [`rootfs/`](https://github.com/mknw/hames-playground/tree/main/rootfs)
-— see [Container images](#container-images-live-outside-the-package)), and
-`ANTHROPIC_API_KEY` for the model calls.
+To run it you need Docker, the `kg-sandbox:base` image from
+[Before you run this](#before-you-run-this), and `ANTHROPIC_API_KEY` for the
+model calls.
 
 ## Going further: choosing the image, the network and the batching
 
@@ -136,7 +156,8 @@ example a conversation id) to keep one container, and its files, across turns.
   allow only an allowlist of hosts through a proxy (see
   [Egress profiles](#egress-profiles)).
 - **Shell-command screen.** Every `sandbox_bash` command the model sends is
-  checked against a denylist before it runs (for example `docker`, the Docker
+  checked against a denylist before it runs, by the default Docker backend (a
+  `backend` you supply yourself does not get it) (for example `docker`, the Docker
   socket, `mount`, raw disk writes); a denied command comes back to the model
   as a tool error. The screen is _advisory_: it reads the command text and
   cannot parse shell, so it catches the obvious and does not stop a determined
@@ -192,7 +213,8 @@ to them as `AgentDeps.withSandbox`.
 ## Egress profiles
 
 **`egress` takes one of three profiles**, and that is the whole set:
-`mcp-only` (the default — `--network none`, no network at all), `pypi` and
+`mcp-only` (the default — `--network none`, no network at all: the container
+reaches only its own tools, which it serves over MCP without a network), `pypi` and
 `github-trusted` (an internal-only Docker network plus an allowlist proxy).
 The `EgressProfile` type also has an `open` member, which is deliberately not
 selectable: asking for it falls back to `mcp-only`, exactly like an unknown
@@ -210,15 +232,6 @@ root**, not in this package: you build (or replace) them for your own
 deployment, and they version separately from this TypeScript. Set
 `SANDBOX_IMAGE` to boot a different base image, or pass `backend` to run on a
 different compute substrate entirely.
-
-## Requirements: a TypeScript bundler
-
-Like every `@hames-ai` package, this one **ships TypeScript source**: `main`
-and every code target in `exports` is a `.ts` file, and there is no `dist/`.
-Run it through something that compiles TypeScript — Vite, esbuild, tsx, Bun.
-**Not** `node --experimental-strip-types`, which refuses to strip types under
-`node_modules` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`), and not a
-plain `node dist/index.js`.
 
 ## Troubleshooting: opening an interactive shell
 

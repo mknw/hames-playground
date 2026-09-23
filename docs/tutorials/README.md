@@ -89,7 +89,9 @@ example file, because it is still a stub: there is nothing to assemble yet.
 
 ## Suggested order
 
-If you are starting cold, begin with hosting-the-harness; everything else hangs off it:
+If you are starting cold, begin with hosting-the-harness, because it gets a turn running
+before any theory; read [GUIDE.md](../../packages/harness-patterns/GUIDE.md) second, for the
+model behind what you just ran. Everything else hangs off hosting-the-harness:
 
 ```text
 hosting-the-harness                   →  a turn runs
@@ -108,11 +110,11 @@ wiring-a-host                         →  your startup code (STUB — see the p
 
 Three kinds of document, three different jobs:
 
-| Document                                                                                                                                                                                                                                                                  | Answers                                     | Read it                         |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ------------------------------- |
-| **Tutorials** (here)                                                                                                                                                                                                                                                      | "how do I use X in my app?"                 | start to finish, once per task  |
-| **[GUIDE.md](../../packages/harness-patterns/GUIDE.md)**                                                                                                                                                                                                                  | "how does the framework think?"             | once, before the first tutorial |
-| **Package READMEs** ([patterns](../../packages/harness-patterns/README.md) · [baml](../../packages/harness-baml/README.md) · [agents](../../packages/agents/README.md) · [sandbox](../../packages/sandbox/README.md) · [connectors](../../packages/connectors/README.md)) | "what can I import, and what do I pass in?" | when you need a signature       |
+| Document                                                                                                                                                                                                                                                                  | Answers                                     | Read it                           |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | --------------------------------- |
+| **Tutorials** (here)                                                                                                                                                                                                                                                      | "how do I use X in my app?"                 | start to finish, once per task    |
+| **[GUIDE.md](../../packages/harness-patterns/GUIDE.md)**                                                                                                                                                                                                                  | "how does the framework think?"             | second, after your first tutorial |
+| **Package READMEs** ([patterns](../../packages/harness-patterns/README.md) · [baml](../../packages/harness-baml/README.md) · [agents](../../packages/agents/README.md) · [sandbox](../../packages/sandbox/README.md) · [connectors](../../packages/connectors/README.md)) | "what can I import, and what do I pass in?" | when you need a signature         |
 
 The developer guide carries the composition model, how to write your own pattern, how tool
 calls are routed to your own tool servers, and the error surface — the concepts every page

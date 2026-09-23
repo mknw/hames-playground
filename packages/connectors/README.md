@@ -23,6 +23,11 @@ pnpm add @hames-ai/connectors @hames-ai/harness-patterns
 `neo4j-driver` comes with this package. Nothing here calls a language model,
 so no API key is needed.
 
+This package ships TypeScript source, not compiled JavaScript, so run it through
+something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
+`node` cannot import it, because Node refuses to strip types from files under
+`node_modules`.
+
 ## Which package do you need?
 
 Five packages that work together. The first is the foundation; add the others
@@ -101,8 +106,8 @@ registerGraphConnectorTools({
   registerAppTool: registry.registerAppTool,
   graphFetch,
   // 3 and 4 are used only by the file-import tool (`graph_file_ingest`), which
-  // copies a file into your document store. These stubs turn that one tool off
-  // and leave the other eight working.
+  // copies a file into your document store. With these stubs that one tool fails
+  // with a clear error, and the other eight work normally.
   content: {
     conversionEnabled: () => false,
     isConvertible: () => false,
@@ -169,15 +174,6 @@ gateway runs the same servers. If yours differs, write your own
 | `./mcp-catalog`                      | `mcpNamespace`: a tool-name → namespace lookup for the MCP servers this repository's gateway runs (pure data)                                                  |
 | `./graph/graph-tools.server`         | `registerGraphConnectorTools(deps)` — the nine Microsoft Graph tools                                                                                           |
 | `./graph/graph-auth`                 | `GraphAuthRequiredError`, owned by the package so `instanceof` works on both sides of it                                                                       |
-
-## Requirements: a TypeScript bundler
-
-Like every `@hames-ai` package, this one **ships TypeScript source**: `main`
-and every code target in `exports` is a `.ts` file, and there is no `dist/`.
-Run it through something that compiles TypeScript — Vite, esbuild, tsx, Bun.
-**Not** `node --experimental-strip-types`, which refuses to strip types under
-`node_modules` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`), and not a
-plain `node dist/index.js`.
 
 ## How this package is tested (contributors)
 

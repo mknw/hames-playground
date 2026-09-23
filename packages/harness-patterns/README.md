@@ -64,7 +64,8 @@ API key on its own; with `@hames-ai/harness-baml`'s model calls, set
 This package ships TypeScript source, not compiled JavaScript, so run it through
 something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
 `node` cannot import it, because Node refuses to strip types from files under
-`node_modules`.
+`node_modules`. The examples use top-level `await`, so run them as ES modules (`"type": "module"` in your
+`package.json`, or a `.mts` file).
 
 Examples whose **Needs:** line names an MCP server list their tools from one. An
 _MCP server_ exposes tools (web search, a database) to agents over one protocol, the
@@ -82,7 +83,8 @@ supported yet.
 A tool loop that calls one tool, then a step that writes the answer. It runs
 offline, seconds after `pnpm add`: the tool is a function in this process, and
 the two model calls are stand-ins, so there is no MCP server, no Docker and no
-API key.
+API key. A _transport_ is where an agent's tools come from: an MCP server over HTTP, or an
+object you register in your own process with `registerTransport`, as here.
 
 `compactExecution` is that answer step, and its `mode` chooses what it reads:
 `'thread'` gives it the previous pattern's tool calls and their results,
@@ -145,12 +147,13 @@ two stand-ins real model calls, use `createLoopControllerAdapter()` and
 `bamlPatterns().synthesize` from
 [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme).
 
-### With tools from an MCP server
+### With tools from an MCP server (excerpt)
 
 The same shape, with the tool list read from an MCP server by `Tools()` instead
-of registered in this process.
-
-> **Needs:** an MCP server at `MCP_GATEWAY_URL` — `docker compose up -d` with [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app starts one.
+of registered in this process. This is an excerpt, not a script: the two model
+calls are only declared (in a real agent they come from
+[`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)),
+and `Tools()` needs an MCP server to list from.
 
 ```typescript
 import { Tools, simpleLoop, compactExecution, harness } from '@hames-ai/harness-patterns'
@@ -205,7 +208,7 @@ step's. The example below uses scripted stand-ins in their place only so that it
 needs no model provider or API key (it still lists its tools from an MCP
 gateway, through `Tools()`):
 
-> **Needs:** an MCP server at `MCP_GATEWAY_URL` — `docker compose up -d` with [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app starts one.
+> **Needs:** an MCP server at `MCP_GATEWAY_URL` — clone [the repository](https://github.com/mknw/hames-playground), then run `docker compose up -d` ([docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)) in it to start one.
 
 ```typescript
 import {

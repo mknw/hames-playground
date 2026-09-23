@@ -47,7 +47,8 @@ so no API key is needed.
 This package ships TypeScript source, not compiled JavaScript, so run it through
 something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
 `node` cannot import it, because Node refuses to strip types from files under
-`node_modules`.
+`node_modules`. The examples use top-level `await`, so run them as ES modules (`"type": "module"` in your
+`package.json`, or a `.mts` file).
 
 ## Usage
 
@@ -55,13 +56,14 @@ something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
 
 Configure the driver once, then read the database's schema.
 
-> **Needs:** a Neo4j database — `docker compose up -d` with [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app starts one.
+> **Needs:** a Neo4j database — clone [the repository](https://github.com/mknw/hames-playground), then run `docker compose up -d` ([docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)) in it to start one, with user `neo4j` and password `password`.
 
 ```typescript
 import { configureNeo4j, resetDriver } from '@hames-ai/connectors/neo4j/client'
 import { getSchema } from '@hames-ai/connectors/neo4j/queries'
 
-declare const password: string
+// The default matches NEO4J_AUTH in the repository's docker-compose.yaml.
+const password = process.env.NEO4J_PASSWORD ?? 'password'
 
 // Required: nothing reads connection settings from the environment for you.
 configureNeo4j({ url: 'bolt://localhost:7687', user: 'neo4j', password })
@@ -88,24 +90,29 @@ JSON. Until `configureNeo4j` runs, the first query fails with
 > APOC, `NEO4J_PLUGINS=["apoc", "n10s"]` in [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)), a query such as
 > `CALL apoc.load.json('http://…')` makes the database fetch that URL, and a
 > read transaction does not prevent it. Do not pass it text from anyone you
-> would not let make requests from your database's network. The same holds
-> wherever a model writes the Cypher, as the ready-made agents in
-> [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)
-> do. See [#241](https://github.com/mknw/hames-playground/issues/241).
+> would not let make requests from your database's network. The ready-made
+> agents in `@hames-ai/agents` do not go through `runManualCypher`: they reach
+> Neo4j through the MCP server's Cypher tools, which have neither of its two
+> protections (no write refusal, no read-only session). See the
+> [Warning in @hames-ai/agents](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)
+> and [#241](https://github.com/mknw/hames-playground/issues/241).
 
-> **Needs:** a Neo4j database — `docker compose up -d` with [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app starts one.
+> **Needs:** a Neo4j database — clone [the repository](https://github.com/mknw/hames-playground), then run `docker compose up -d` ([docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)) in it to start one, with user `neo4j` and password `password`.
 
 ```typescript
-import { configureNeo4j } from '@hames-ai/connectors/neo4j/client'
+import { configureNeo4j, resetDriver } from '@hames-ai/connectors/neo4j/client'
 import { runManualCypher } from '@hames-ai/connectors/neo4j/queries'
 
-declare const password: string
+// The default matches NEO4J_AUTH in the repository's docker-compose.yaml.
+const password = process.env.NEO4J_PASSWORD ?? 'password'
 
 // Required: nothing reads connection settings from the environment for you.
 configureNeo4j({ url: 'bolt://localhost:7687', user: 'neo4j', password })
 
-const result = await runManualCypher('MATCH (p:Person) RETURN p.name LIMIT 5')
+const result = await runManualCypher('MATCH (t:Technology) RETURN t.name LIMIT 5')
 console.log(result.raw)
+
+await resetDriver() // close the connection, so the script can exit
 ```
 
 A query containing a write clause is refused: `result.success` is `false`, with
@@ -113,15 +120,20 @@ the reason in `result.error`. `result.graphUpdate` also carries the same rows as
 [Cytoscape.js](https://js.cytoscape.org), a graph-drawing library, in case you
 want to render them.
 
-### Give an agent the Microsoft 365 tools
+### Give an agent the Microsoft 365 tools (excerpt)
+
+This is an excerpt: the two `declare`d values are yours to write, from your own
+sign-in. [docs/deployment/entra-setup.md](https://github.com/mknw/hames-playground/blob/main/docs/deployment/entra-setup.md)
+in the hames app sets up the Entra app registration and the delegated Microsoft
+Graph (the Microsoft 365 API) permissions that issue the user's token.
+A _transport_ is where an agent's tools come from: an MCP server over HTTP, or an
+object you register in your own process with `registerTransport`; the last call below does the second.
 
 `registerGraphConnectorTools` adds nine tools an agent can call as the
 signed-in user: today's calendar, recent mail and attachments, the user's
 profile, and searching, listing and importing OneDrive/SharePoint files. They
 live in a small in-process tool registry, which you then make visible to every
 pattern:
-
-> **Needs:** a Microsoft Graph access token for the signed-in user — [docs/deployment/entra-setup.md](https://github.com/mknw/hames-playground/blob/main/docs/deployment/entra-setup.md) in the hames app sets up the Entra app registration and the delegated Graph permissions that issue one.
 
 ```typescript
 import { createAppToolRegistry } from '@hames-ai/connectors/app-tools/registry'

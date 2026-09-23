@@ -46,7 +46,8 @@ also need Docker on the machine that runs your agent.
 This package ships TypeScript source, not compiled JavaScript, so run it through
 something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
 `node` cannot import it, because Node refuses to strip types from files under
-`node_modules`.
+`node_modules`. The examples use top-level `await`, so run them as ES modules (`"type": "module"` in your
+`package.json`, or a `.mts` file).
 
 ### Build the sandbox image
 
@@ -211,16 +212,19 @@ reaches only its own tools, which it serves over MCP without a network), `pypi` 
 `github-trusted` (an internal-only Docker network plus an allowlist proxy).
 The `EgressProfile` type also has an `open` member, which is deliberately not
 selectable: asking for it falls back to `mcp-only`, exactly like an unknown
-name, unless the deployment sets `SANDBOX_ENABLE_OPEN_EGRESS=1`. The
-per-profile table, the default allowlists and the remaining DNS caveat are in
-[running code in a sandbox](../../docs/tutorials/running-code-in-a-sandbox.md).
+name, unless the deployment sets `SANDBOX_ENABLE_OPEN_EGRESS=1`. One leak
+remains under the two proxied profiles: depending on the host's Docker DNS
+setup, the container may still be able to resolve hostnames, though it cannot
+connect to them, so at most it learns that a hostname exists. The per-profile
+table and the default allowlists are in
+[running code in a sandbox](https://github.com/mknw/hames-playground/blob/main/docs/tutorials/running-code-in-a-sandbox.md).
 
 ### Container images live outside the package
 
 `withSandbox` boots `kg-sandbox:base` and its three _flavours_ — images with
 extra tools preinstalled: `image-processing`, `data` and `office` — plus the
 allowlist proxy behind the `pypi` / `github-trusted` profiles. Their
-definitions live in **[`rootfs/`](../../rootfs/README.md) at the repository
+definitions live in **[`rootfs/`](https://github.com/mknw/hames-playground/blob/main/rootfs/README.md) at the repository
 root**, not in this package: you build (or replace) them for your own
 deployment, and they version separately from this TypeScript. Set
 `SANDBOX_IMAGE` to boot a different base image, or pass `backend` to run on a

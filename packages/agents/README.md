@@ -52,7 +52,8 @@ models, so set `ANTHROPIC_API_KEY` in the environment; the model clients in
 This package ships TypeScript source, not compiled JavaScript, so run it through
 something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
 `node` cannot import it, because Node refuses to strip types from files under
-`node_modules`.
+`node_modules`. The examples use top-level `await`, so run them as ES modules (`"type": "module"` in your
+`package.json`, or a `.mts` file).
 
 Examples whose **Needs:** line names an MCP server list their tools from one. An
 _MCP server_ exposes tools (web search, a database) to agents over one protocol, the
@@ -63,12 +64,17 @@ repository's name for the one it ships, which `docker compose up -d` starts in a
 clone of the repository. An MCP server that requires authentication is not
 supported yet.
 
-The search agent in the example below also queries a Neo4j graph database. The
-same `docker compose up -d` starts one (user `neo4j`, password `password`),
-already connected to the `neo4j-cypher` tool of the MCP server it ships, and
-`./scripts/import-neo4j.sh neo4j_dumps/seed-data.cypher`, run from the
-repository root, loads a small demo graph into it. The web tools
-(`web_search`, `fetch`) need no key.
+The quick start below also needs a Neo4j graph database with data in it. These
+three commands start the MCP server and Neo4j (user `neo4j`, password `password`,
+already connected to each other) and load a small demo graph:
+
+```bash
+git clone https://github.com/mknw/hames-playground.git && cd hames-playground
+docker compose up -d
+./scripts/import-neo4j.sh neo4j_dumps/seed-data.cypher
+```
+
+The web tools (`web_search`, `fetch`) need no key.
 
 ## Usage
 
@@ -77,7 +83,7 @@ repository root, loads a small demo graph into it. The web tools
 Build a shipped agent's patterns, compose them into a harness, and ask one
 question.
 
-> **Needs:** an Anthropic API key in `ANTHROPIC_API_KEY` (get one at [console.anthropic.com](https://console.anthropic.com/)), and the MCP server and Neo4j database that `docker compose up -d` starts from [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) in the hames app, seeded with `./scripts/import-neo4j.sh neo4j_dumps/seed-data.cypher`.
+> **Needs:** an Anthropic API key in `ANTHROPIC_API_KEY` (get one at [console.anthropic.com](https://console.anthropic.com/)), and the MCP server and seeded Neo4j from the [three commands under Install](#install).
 
 ```typescript
 import { harness } from '@hames-ai/harness-patterns'
@@ -87,16 +93,18 @@ import { searchAgent } from '@hames-ai/agents/agents/search.server'
 import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 
 // Which group ("namespace") each MCP tool belongs to, such as `web` or `neo4j`.
-// Required: the agent's injection guard refuses to build without it.
+// Registered once for the whole process: the agent's injection guard (which
+// neutralizes instructions hidden in web content) refuses to build without it.
 registerToolNamespaces(mcpNamespace)
 
-// `toolNamespaces` is the one required field of AgentDeps.
+// The same map again, for grouping this agent's tools. It is the one required
+// field of AgentDeps.
 const deps: AgentDeps = { toolNamespaces: mcpNamespace }
 
 const sessionId = 'session-1'
 const patterns = await searchAgent.createPatterns(sessionId, deps)
 const result = await harness<AgentData>(...patterns)(
-  'Who maintains the billing service?',
+  'Which technologies in the knowledge graph are frameworks?',
   sessionId,
 )
 console.log(result.response)
@@ -297,9 +305,9 @@ email) before a model reads it.
 
 | Agent               | Composition                                                   | Tools                           | Injection guard                                                                          |
 | ------------------- | ------------------------------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------- |
-| `search`            | router → routes(neo4j loop, web loop) → compactExecution      | neo4j-cypher, web_search, fetch | web route guarded; neo4j route trusted (a graph you control)                             |
+| `search`            | router → routes(neo4j loop, web loop) → compactExecution      | neo4j-cypher, web_search, fetch | web route guarded; neo4j route not guarded (see the Warning below)                       |
 | `retriever-agent`   | router → routes(retriever, neo4j, web) → compactExecution     | neo4j-cypher, web_search, fetch | web namespace + retriever exact-name guarded together (ingested documents are untrusted) |
-| `microsoft-365`     | explicit graph-tool allowlist loop → compactExecution         | Microsoft Graph, per-user token | whole graph loop guarded (mail/files are attacker-authored)                              |
+| `microsoft-365`     | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token | whole Microsoft Graph loop guarded (mail and files can be written by anyone)             |
 | `general`           | planner → simpleLoop(tools.all) → compactExecution            | everything                      | not guarded yet (below)                                                                  |
 | `sandbox-session`   | compactIntent → withSandbox(actorCritic) → compactExecution   | in-container `sandbox_*`        | not on tool results yet; shell commands are screened (below)                             |
 | `flavoured-sandbox` | router → routes(base, image, data, office) → compactExecution | in-container `sandbox_*`        | not on tool results yet, on any route; shell commands are screened (below)               |
@@ -310,22 +318,25 @@ tool results marked in the table above, and the two sandbox agents also get
 command against a denylist before it runs. Guardrails beyond these two are
 designed, not yet built — [design record](https://github.com/mknw/hames-playground/issues/242#issuecomment-5768168881).
 
-The injection guard has two layers with opposite failure policies — an
-optional model-based screen, which lets content through if the screen itself
-fails, and a deterministic layer, which does not — and which of the two should
-win is an open decision, not settled by this package.
-
 > **Warning:** `search`, `retriever-agent` and `general` let the model write
-> Cypher and send it through the MCP server's `neo4j-cypher` tool (`general`
-> reaches every tool; none of the three guards its Neo4j route). If that Neo4j
-> has APOC's load procedures enabled — the Neo4j this repository ships installs
-> APOC (`NEO4J_PLUGINS=["apoc", "n10s"]` in [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)) — a query such as
-> `CALL apoc.load.json('http://…')` makes the database fetch that URL. So anyone
-> who can influence what one of these agents reads can try to make your database
-> send requests. See
-> [#241](https://github.com/mknw/hames-playground/issues/241) and the Warning on
+> Cypher and run it through the MCP server's `neo4j-cypher` tools, and the one
+> this repository ships is read-write
+> ([configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml): `read_only: false`).
+> Their Neo4j loops may call `write_neo4j_cypher`, and the agents' own examples
+> teach it; `general` reaches every tool. None of the three guards its Neo4j
+> route, and nothing asks for approval before a write. So anyone who can
+> influence what one of these agents reads can try to make it change or delete
+> your graph (`DETACH DELETE` included). They can also try to make the database
+> fetch URLs: the Neo4j this repository ships installs APOC
+> (`NEO4J_PLUGINS=["apoc", "n10s"]` in [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)),
+> and with APOC's load procedures enabled (the default once APOC is installed) a
+> query such as `CALL apoc.load.json('http://…')` makes the database fetch that
+> URL. See [#241](https://github.com/mknw/hames-playground/issues/241) and the
+> Warning on
 > [running your own Cypher query](https://github.com/mknw/hames-playground/tree/main/packages/connectors#run-your-own-cypher-query)
-> in `@hames-ai/connectors`.
+> in `@hames-ai/connectors`. Until guardrails for these routes exist, run these
+> three agents only against a Neo4j you are willing to let them change, and only
+> on input from people you trust.
 
 ## Configuration
 

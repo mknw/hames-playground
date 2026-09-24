@@ -20,12 +20,20 @@
  * the moment to lift the resolver into a shared helper; until then a copy is
  * one file fewer than an abstraction with two callers.
  *
+ * Two further guards keep the compile honest. Every fence label must be on an
+ * allowlist (`typescript`, compiled, or a named language nothing here compiles),
+ * and each page's count of `typescript` fences is pinned exactly, so a fence
+ * that stops being `typescript` reddens instead of quietly leaving the compile.
+ * And every relative link must resolve, including its `#anchor`: most of
+ * `api.md` is anchors into SPEC.md, whose slugs are built from function
+ * signatures, so a signature change would otherwise break those links silently.
+ *
  * Diagnostics inside the package sources themselves are IGNORED; this test
  * judges the fences. It does not execute them: fences whose heading says
  * "(excerpt)" stand their host values up with `declare const`.
  */
 import { describe, it, expect } from 'vitest'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
@@ -241,14 +249,118 @@ function compileFences(fences: Fence[]): Map<Fence, string[]> {
   return results
 }
 
+// ============================================================================
+// Fence labels, and links with their anchors
+// ============================================================================
+
+/**
+ * The only fence labels these pages may use. `typescript` is compiled above;
+ * the rest are languages no compiler here can judge. The list is an ALLOWLIST
+ * on purpose: a denylist of `ts`/`tsx`/`js` let `TypeScript`, `mts` and
+ * `typescript title="x"` through, and each of those renders as code while
+ * silently leaving the compile. A bare opener fails too, since it can hide
+ * anything.
+ */
+const COMPILED_LABEL = 'typescript'
+const UNCOMPILED_LABELS = new Set([
+  'bash',
+  'sh',
+  'yaml',
+  'json',
+  'jsonc',
+  'text',
+  'mermaid',
+  'baml',
+  'cypher',
+])
+
+/**
+ * Exactly how many `typescript` fences each page carries. An exact count, not a
+ * floor: a floor absorbs the loss of one fence, which is how a relabelled fence
+ * slipped out of the compile green. Adding or removing a fence means editing
+ * this map, which is the point.
+ */
+const TYPESCRIPT_FENCES: Record<string, number> = {
+  'README.md': 0,
+  'api.md': 0,
+  'examples.md': 0,
+  'frontend.md': 0,
+  'parallel.md': 2,
+  'prompt-caching.md': 0,
+  'with-references.md': 2,
+  'withReferences-tutorial.md': 1,
+}
+
+interface Line {
+  n: number
+  text: string
+}
+
+/** Each fence opener's line and info string; closers are skipped by state. */
+function fenceOpeners(file: string): Array<Line & { label: string }> {
+  const out: Array<Line & { label: string }> = []
+  let open = false
+  readFileSync(path.join(DOCS, file), 'utf-8')
+    .split('\n')
+    .forEach((text, i) => {
+      const m = text.match(/^\s{0,3}(```|~~~)(.*)$/)
+      if (!m) return
+      if (open) {
+        if (m[2].trim() === '') open = false
+        return
+      }
+      open = true
+      out.push({ n: i + 1, text, label: `${m[1] === '~~~' ? '~~~' : ''}${m[2].trim()}` })
+    })
+  return out
+}
+
+/** The page's lines outside code fences (links and headings in a fence are code). */
+function proseLines(file: string): Line[] {
+  const out: Line[] = []
+  let open = false
+  readFileSync(file, 'utf-8')
+    .split('\n')
+    .forEach((text, i) => {
+      if (/^\s{0,3}(```|~~~)/.test(text)) {
+        open = !open
+        return
+      }
+      if (!open) out.push({ n: i + 1, text })
+    })
+  return out
+}
+
+/**
+ * GitHub's heading anchor: lowercase; drop every character that is not a
+ * letter, digit, space, hyphen or underscore; each space becomes a hyphen.
+ * Consecutive spaces are NOT collapsed, so a stripped `→` or `—` between two
+ * words leaves a double hyphen (`event--baml-type-mapping`). A repeated slug
+ * gets `-1`, `-2`, … in document order.
+ */
+function anchorsOf(file: string): Set<string> {
+  const seen = new Map<string, number>()
+  const out = new Set<string>()
+  for (const { text } of proseLines(file)) {
+    const h = text.match(/^#{1,6}\s+(.*?)\s*#*\s*$/)
+    if (!h) continue
+    const base = h[1]
+      .toLowerCase()
+      .replace(/<[^>]+>/g, '')
+      .replace(/[^\p{L}\p{N} _-]/gu, '')
+      .replace(/ /g, '-')
+    const n = seen.get(base) ?? 0
+    seen.set(base, n + 1)
+    out.add(n === 0 ? base : `${base}-${n}`)
+  }
+  return out
+}
+
 describe('docs/harness-patterns docs pins', () => {
   // Same generous timeout as the tutorials pin: one tsc Program over five
   // packages' real source is sub-second warm and several seconds cold.
   it('every typescript fence compiles against the packages AS PUBLISHED', () => {
     const fences = extractFences()
-    // A non-vacuity floor, not a target: a rename or a bulk edit that drops
-    // the fences must not pass green having compiled nothing.
-    expect(fences.length).toBeGreaterThanOrEqual(4)
     const failures: string[] = []
     for (const [fence, diags] of compileFences(fences)) {
       if (diags.length > 0) {
@@ -261,32 +373,56 @@ describe('docs/harness-patterns docs pins', () => {
     expect(failures).toEqual([])
   }, 120_000)
 
-  it('no code fence is labelled ts/tsx/js, which would render the same and skip the compile', () => {
-    const dodges: string[] = []
-    for (const file of docPages()) {
-      readFileSync(path.join(DOCS, file), 'utf-8')
-        .split('\n')
-        .forEach((l, i) => {
-          if (/^\s*```(ts|tsx|js|javascript)\s*$/.test(l)) dodges.push(`${file}:${i + 1}`)
-        })
-    }
-    expect(dodges).toEqual([])
+  it('each page carries exactly the typescript fences it is pinned to', () => {
+    const counts: Record<string, number> = {}
+    for (const file of docPages()) counts[file] = 0
+    for (const fence of extractFences()) counts[fence.doc]++
+    expect(counts).toEqual(TYPESCRIPT_FENCES)
   })
 
-  it('every relative markdown link resolves', () => {
-    const broken: string[] = []
-    let checked = 0
+  it('every fence label is `typescript` or an allowed uncompiled language', () => {
+    const bad: string[] = []
     for (const file of docPages()) {
-      const content = readFileSync(path.join(DOCS, file), 'utf-8')
-      for (const m of content.matchAll(/\]\((\.[^)\s]+)\)/g)) {
-        const target = m[1].split('#')[0]
-        if (!target) continue
-        checked++
-        if (!existsSync(path.resolve(DOCS, target))) broken.push(`${file} → ${m[1]}`)
+      for (const { n, label } of fenceOpeners(file)) {
+        if (label === COMPILED_LABEL || UNCOMPILED_LABELS.has(label)) continue
+        bad.push(`${file}:${n} fence label "${label}"`)
       }
     }
-    // Same non-vacuity floor: a regex that stopped matching would pass green.
-    expect(checked).toBeGreaterThanOrEqual(20)
+    expect(bad).toEqual([])
+  })
+
+  it('every relative link resolves, and every #anchor names a heading in its target', () => {
+    const broken: string[] = []
+    let paths = 0
+    let anchors = 0
+    for (const file of docPages()) {
+      const abs = path.join(DOCS, file)
+      for (const { n, text } of proseLines(abs)) {
+        // Inline code is not a link, even when it looks like one.
+        const prose = text.replace(/`[^`]*`/g, '')
+        for (const m of prose.matchAll(/\]\(\s*<?([^\s)>]+)>?(?:\s+"[^"]*")?\s*\)/g)) {
+          const target = m[1]
+          if (/^[a-z][a-z0-9+.-]*:/i.test(target)) continue // https:, mailto:, …
+          const hash = target.indexOf('#')
+          const filePart = hash === -1 ? target : target.slice(0, hash)
+          const fragment = hash === -1 ? '' : decodeURIComponent(target.slice(hash + 1))
+          const resolved = filePart === '' ? abs : path.resolve(DOCS, filePart)
+          paths++
+          if (!existsSync(resolved)) {
+            broken.push(`${file}:${n} → ${target} (no such file)`)
+            continue
+          }
+          if (!fragment || !resolved.endsWith('.md') || !statSync(resolved).isFile()) continue
+          anchors++
+          if (!anchorsOf(resolved).has(fragment))
+            broken.push(`${file}:${n} → ${target} (no heading with anchor #${fragment})`)
+        }
+      }
+    }
+    // Non-vacuity floors: a regex that stopped matching would otherwise pass
+    // green having checked nothing.
+    expect(paths).toBeGreaterThanOrEqual(60)
+    expect(anchors).toBeGreaterThanOrEqual(30)
     expect(broken).toEqual([])
   })
 })

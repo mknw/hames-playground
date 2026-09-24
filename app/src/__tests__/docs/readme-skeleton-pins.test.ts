@@ -159,6 +159,38 @@ describe('front-facing README skeleton', () => {
       }
     })
 
+    if (file.startsWith('packages/')) {
+      it('installs every package its quick start imports', () => {
+        const markdown = readFileSync(path.join(REPO_ROOT, file), 'utf8')
+        const install = doc.find((s) => s.heading === 'Install')?.body ?? ''
+        const installed = new Set(
+          [...install.matchAll(/^pnpm add (.*)$/gm)].flatMap((m) =>
+            [...m[1]!.matchAll(/@hames-ai\/[a-z-]+/g)].map((p) => p[0]),
+          ),
+        )
+        const lines = markdown.split('\n')
+        const quick = lines.findIndex((l) => l.startsWith('### Quick start'))
+        expect(quick, `${file}: no "### Quick start" heading`).toBeGreaterThan(-1)
+        const open = lines.findIndex((l, i) => i > quick && l.trim() === '```typescript')
+        const close = lines.findIndex((l, i) => i > open && l.trim() === '```')
+        const fence = lines.slice(open + 1, close).join('\n')
+        const imported = [...fence.matchAll(/from '(@hames-ai\/[a-z-]+)/g)].map((m) => m[1]!)
+        expect(
+          imported.length,
+          `${file}: the quick start imports no @hames-ai package`,
+        ).toBeGreaterThan(0)
+        const missing = [...new Set(imported)].filter((p) => !installed.has(p))
+        expect(
+          missing,
+          `${file}: the quick start imports ${missing.join(', ')}, which the Install section's pnpm add line does not install`,
+        ).toEqual([])
+        expect(
+          /^\s*declare /m.test(fence),
+          `${file}: the quick start uses \`declare\`, so it cannot run as pasted`,
+        ).toBe(false)
+      })
+    }
+
     it('links the repository root from "See it running"', () => {
       const running = doc.find((s) => s.heading === SKELETON[2])
       expect(running, `${file}: no "## ${SKELETON[2]}" section`).toBeDefined()

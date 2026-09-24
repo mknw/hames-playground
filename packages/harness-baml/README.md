@@ -7,8 +7,9 @@ The model calls for
 ready to import. The core library's patterns take every model call as a
 function you pass in; this package provides those functions — the _controller_
 that decides which tool a loop calls next, a _critic_ that checks a result
-before a loop may finish, a router, a planner, a _synthesizer_ that writes the
-final answer, and the rest — each with its prompt
+before a loop may finish, a router, a planner, the answer step's model call (the
+_answer step_ is `compactExecution`, which calls the `synthesize` function this
+package supplies), and the rest — each with its prompt
 already written and its output parsed into a TypeScript type. The prompts are
 written in [BAML](https://docs.boundaryml.com), a language for declaring LLM
 calls as typed functions; the TypeScript client BAML generates from them ships
@@ -194,9 +195,10 @@ come from their own factories, as above.
 ## Configuration
 
 Three words run through this section. A _role_ is the job a model call does:
-`controller`, `planner`, `critic`, `compactExecution` (writing the answer), `router`,
-`describe` (summarizing tool results) or `screen` (the injection guard's check of
-untrusted content). A _chain_ is the ordered list of Anthropic models one role tries
+`controller` (both the tool loop's controller and the actor of a generate-then-check
+loop run under it, the actor on the `ActorAnthropic` chain), `planner`, `critic`,
+`compactExecution` (the answer step), `router`, `describe` (summarizing tool
+results) or `screen` (the injection guard's check of untrusted content). A _chain_ is the ordered list of Anthropic models one role tries
 in turn, falling back to the next if a call fails, declared in the package's `.baml`
 files. A _tier_ is which set of models a whole run uses: `anthropic` by default, or
 the optional self-hosted tier at the end of this section.

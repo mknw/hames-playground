@@ -20,13 +20,13 @@ a run's history into graph elements, citations and a chat transcript.
 Five packages that work together. The first is the foundation; add the others
 for what they do.
 
-| If you want to…                                                                                             | Use                                                                                                                 |
-| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| build an agent out of composable pieces — tool loops, routers, planners                                     | [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme) |
-| get typed model calls with the prompts already written, on Anthropic or your own model provider             | [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)         |
-| use a ready-made agent                                                                                      | [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)                     |
+| If you want to…                                                                                            | Use                                                                                                                 |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| build an agent out of composable pieces — tool loops, routers, planners                                    | [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme) |
+| get typed model calls with the prompts already written, on Anthropic or your own model provider            | [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)         |
+| use a ready-made agent                                                                                     | [`@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#readme)                     |
 | use Microsoft 365 or the Neo4j graph database from an agent, or sort an MCP server's tools into namespaces | [`@hames-ai/connectors`](https://github.com/mknw/hames-playground/tree/main/packages/connectors#readme)             |
-| run agent-written code in a container                                                                       | [`@hames-ai/sandbox`](https://github.com/mknw/hames-playground/tree/main/packages/sandbox#readme)                   |
+| run agent-written code in a container                                                                      | [`@hames-ai/sandbox`](https://github.com/mknw/hames-playground/tree/main/packages/sandbox#readme)                   |
 
 ## See it running
 
@@ -81,7 +81,9 @@ The web tools (`web_search`, `fetch`) need no key.
 ### Quick start: run the search agent once
 
 Build a shipped agent's patterns, compose them into a harness, and ask one
-question.
+question. It runs `search`, one of the three agents the
+[Warning under Agent catalog](#agent-catalog) is about: it can write to the Neo4j
+you give it.
 
 > **Needs:** an Anthropic API key in `ANTHROPIC_API_KEY` (get one at [console.anthropic.com](https://console.anthropic.com/)), and the MCP server and seeded Neo4j from the [three commands under Install](#install).
 
@@ -93,12 +95,13 @@ import { searchAgent } from '@hames-ai/agents/agents/search.server'
 import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 
 // Which group ("namespace") each MCP tool belongs to, such as `web` or `neo4j`.
-// Registered once for the whole process: the agent's injection guard (which
-// neutralizes instructions hidden in web content) refuses to build without it.
+// The map is used twice, for two different readers. Registered here, it is what
+// the agent's injection guard (which neutralizes instructions hidden in web
+// content) uses to find the `web` tools; without it the guard refuses to build.
 registerToolNamespaces(mcpNamespace)
 
-// The same map again, for grouping this agent's tools. It is the one required
-// field of AgentDeps.
+// In AgentDeps it is what the agent's own `Tools()` call uses to sort its tools
+// into `tools.web` and `tools.neo4j`. It is the one required field of AgentDeps.
 const deps: AgentDeps = { toolNamespaces: mcpNamespace }
 
 const sessionId = 'session-1'
@@ -202,14 +205,19 @@ function buildRoutes(tools: ToolSet): ConfiguredPattern<AgentData> {
 }
 ```
 
-> **The guard needs the namespace catalog registered.** `withInjectionGuard`
-> verifies every declared namespace against the `catalog` you pass and
-> **refuses to build** if nothing in it produces the namespace.
-> The usual cause: the tool→namespace resolver was never registered. Call
-> `registerToolNamespaces(mcpNamespace)` once at startup — a ready map ships in
-> `@hames-ai/connectors/mcp-catalog` — or register your own resolver the same
-> way. An agent with no untrusted namespaces writes `namespaces: []`
-> explicitly.
+> **Note.** The injection guard checks, when it is built, that every namespace it is told to
+> guard is produced by at least one tool in the `catalog` you pass, and refuses to
+> build if one is not (while the MCP server is unreachable it warns instead). It
+> works out a tool's namespace in this order: the
+> `namespaceFor` of a transport registered with `registerTransport`, then any map
+> registered with `registerToolNamespaces`, then the tool's name (`web_search`
+> becomes `web`). So
+> `registerToolNamespaces` is needed only when neither the transport nor the name
+> gives the namespace, as with the MCP server this repository ships, whose web tools
+> are named `search` and `fetch`. `Tools({ namespaces })` is a separate step: it sorts
+> the listed tools into the `tools.web`, `tools.neo4j` groups that you hand to
+> patterns, and the guard does not read it.
+> An agent with no untrusted namespaces writes `namespaces: []` explicitly.
 
 ```typescript
 // A code-running loop kept in one container for the whole conversation. The
@@ -258,16 +266,8 @@ function buildRetrieverRoute(redisBackend: RetrieverBackend): ConfiguredPattern<
 ### Registering agents in your application
 
 Your application decides how agents are presented and builds the one
-`AgentDeps` object they share. The hames app, this repository's reference
-host, does that in `app/src/lib/harness-client/`:
-
-- `registry.server.ts` adds presentation — an `icon` and an `accent` colour —
-  to each definition, and wraps its `(sessionId, deps)` factory so every agent
-  gets the same `AgentDeps` object.
-- `session.server.ts` builds that shared object (`agentDeps()`).
-- `turn.server.ts` / `actions.server.ts` run turns — including choosing which
-  set of models a conversation uses — and hand `agentDeps()` to the title
-  generator.
+`AgentDeps` object they share. The hames app's version of this is described in
+its [harness-client README](https://github.com/mknw/hames-playground/blob/main/app/src/lib/harness-client/README.md).
 
 ```typescript
 // How the hames app registers an agent (simplified from its registry.server.ts).
@@ -303,14 +303,14 @@ order under **Composition**; each name is a pattern documented in the
 which neutralizes instructions hidden in untrusted content (a web page, an
 email) before a model reads it.
 
-| Agent               | Composition                                                   | Tools                           | Injection guard                                                                          |
-| ------------------- | ------------------------------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------- |
-| `search`            | router → routes(neo4j loop, web loop) → compactExecution      | neo4j-cypher, web_search, fetch | web route guarded; neo4j route not guarded (see the Warning below)                       |
-| `retriever-agent`   | router → routes(retriever, neo4j, web) → compactExecution     | neo4j-cypher, web_search, fetch | web namespace + retriever exact-name guarded together (ingested documents are untrusted) |
+| Agent               | Composition                                                      | Tools                                                   | Injection guard                                                                          |
+| ------------------- | ---------------------------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `search`            | router → routes(neo4j loop, web loop) → compactExecution         | neo4j-cypher, web_search, fetch                         | web route guarded; neo4j route not guarded (see the Warning below)                       |
+| `retriever-agent`   | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                         | web namespace + retriever exact-name guarded together (ingested documents are untrusted) |
 | `microsoft-365`     | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token | whole Microsoft Graph loop guarded (mail and files can be written by anyone)             |
-| `general`           | planner → simpleLoop(tools.all) → compactExecution            | everything                      | not guarded yet (below)                                                                  |
-| `sandbox-session`   | compactIntent → withSandbox(actorCritic) → compactExecution   | in-container `sandbox_*`        | not on tool results yet; shell commands are screened (below)                             |
-| `flavoured-sandbox` | router → routes(base, image, data, office) → compactExecution | in-container `sandbox_*`        | not on tool results yet, on any route; shell commands are screened (below)               |
+| `general`           | planner → simpleLoop(tools.all) → compactExecution               | everything                                              | not guarded yet (below)                                                                  |
+| `sandbox-session`   | compactIntent → withSandbox(actorCritic) → compactExecution      | in-container `sandbox_*`                                | not on tool results yet; shell commands are screened (below)                             |
+| `flavoured-sandbox` | router → routes(base, image, data, office) → compactExecution    | in-container `sandbox_*`                                | not on tool results yet, on any route; shell commands are screened (below)               |
 
 **Guardrail status.** Two guards ship today. The injection guard covers the
 tool results marked in the table above, and the two sandbox agents also get
@@ -334,9 +334,17 @@ designed, not yet built — [design record](https://github.com/mknw/hames-playgr
 > URL. See [#241](https://github.com/mknw/hames-playground/issues/241) and the
 > Warning on
 > [running your own Cypher query](https://github.com/mknw/hames-playground/tree/main/packages/connectors#run-your-own-cypher-query)
-> in `@hames-ai/connectors`. Until guardrails for these routes exist, run these
-> three agents only against a Neo4j you are willing to let them change, and only
-> on input from people you trust.
+> in `@hames-ai/connectors`.
+>
+> The setting behind the write exposure is `read_only: false` for `neo4j-cypher` in
+> the MCP server's `configs/mcp-config.yaml`, passed to the server as
+> `NEO4J_READ_ONLY`. Setting it to `true` turns the write tool off, at a cost: the
+> agents can then no longer write into the graph, such as adding web results they
+> found earlier, which is what `withReferences` was built for
+> ([design doc](https://github.com/mknw/hames-playground/blob/main/docs/harness-patterns/with-references.md)).
+> Until guardrails for these routes exist, run these three agents only against a
+> Neo4j you are willing to let them change, and only where you trust everything
+> they read: what a person types, and what `general` and the web route fetch.
 
 ## Configuration
 
@@ -399,8 +407,11 @@ interface AgentDeps {
 The patterns each agent is built from, and their options:
 [GUIDE.md](https://github.com/mknw/hames-playground/blob/main/packages/harness-patterns/GUIDE.md)
 and [SPEC.md](https://github.com/mknw/hames-playground/blob/main/packages/harness-patterns/SPEC.md)
-in `@hames-ai/harness-patterns`. Wiring agents into your own application, step by
-step: the [tutorials](https://github.com/mknw/hames-playground/tree/main/docs/tutorials#readme).
+in `@hames-ai/harness-patterns`. The tutorial on wiring agents into your own
+application, [Wiring a host](https://github.com/mknw/hames-playground/blob/main/docs/tutorials/wiring-a-host.md), is still a
+stub; until it is written,
+[Hosting the harness](https://github.com/mknw/hames-playground/blob/main/docs/tutorials/hosting-the-harness.md) shows how to
+run a turn from your own code.
 Each agent's source is in
 [`agents/`](https://github.com/mknw/hames-playground/tree/main/packages/agents/agents).
 

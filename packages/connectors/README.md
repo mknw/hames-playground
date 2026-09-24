@@ -74,10 +74,20 @@ console.log(result.success ? result.schema : result.error)
 await resetDriver() // close the connection, so the script can exit
 ```
 
-`getSchema()` returns `{ success, schema }`: `schema` is the node labels and
+Without cloning, the same database runs on its own:
+
+```bash
+docker run -d --name neo4j -p 7474:7474 -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/password -e 'NEO4J_PLUGINS=["apoc", "n10s"]' neo4j:5.26
+```
+
+That is the `neo4j` service from `docker-compose.yaml`, APOC included (see the
+Warning below). `getSchema()` returns `{ success, schema }`: `schema` is the node labels and
 relationship types the database reports (`CALL db.schema.visualization()`), as
 JSON. Until `configureNeo4j` runs, the first query fails with
-`Neo4jNotConfiguredError`.
+`Neo4jNotConfiguredError`. If the database cannot be reached, `getSchema` also
+logs the driver's error, with its stack trace, before returning it in
+`result.error`.
 
 ### Run your own Cypher query
 
@@ -92,8 +102,11 @@ JSON. Until `configureNeo4j` runs, the first query fails with
 > read transaction does not prevent it. Do not pass it text from anyone you
 > would not let make requests from your database's network. The ready-made
 > agents in `@hames-ai/agents` do not go through `runManualCypher`: they reach
-> Neo4j through the MCP server's Cypher tools, which have neither of its two
-> protections (no write refusal, no read-only session). See the
+> Neo4j through the MCP server's Cypher tools. That server's read tool refuses
+> writes, but with `read_only: false` in
+> [configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml),
+> as this repository ships it, the server also offers a write tool, and the
+> agents may call it. See the
 > [Warning in @hames-ai/agents](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)
 > and [#241](https://github.com/mknw/hames-playground/issues/241).
 
@@ -109,7 +122,7 @@ const password = process.env.NEO4J_PASSWORD ?? 'password'
 // Required: nothing reads connection settings from the environment for you.
 configureNeo4j({ url: 'bolt://localhost:7687', user: 'neo4j', password })
 
-const result = await runManualCypher('MATCH (t:Technology) RETURN t.name LIMIT 5')
+const result = await runManualCypher('MATCH (n) RETURN labels(n) AS labels, count(*) AS count')
 console.log(result.raw)
 
 await resetDriver() // close the connection, so the script can exit

@@ -67,8 +67,8 @@ something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
 `node_modules`. The examples use top-level `await`, so run them as ES modules (`"type": "module"` in your
 `package.json`, or a `.mts` file).
 
-Examples whose **Needs:** line names an MCP server list their tools from one. An
-_MCP server_ exposes tools (web search, a database) to agents over one protocol, the
+Examples that call `Tools()` list their tools from an MCP server. An _MCP
+server_ exposes tools (web search, a database) to agents over one protocol, the
 Model Context Protocol, and the packages reach it at `MCP_GATEWAY_URL` (default
 `http://localhost:8811/mcp`). Any MCP server that speaks the protocol over HTTP
 (its "streamable HTTP" mode) works, including your own; "gateway" is this
@@ -188,7 +188,7 @@ const result = await agent('What shipped in TypeScript 5.7?')
 console.log(result.response)
 ```
 
-### A routed, guarded agent
+### A routed, guarded agent (excerpt)
 
 Patterns are ordinary values, so composing a harness is ordinary TypeScript.
 This one classifies the message, sends web questions to a tool loop wrapped in
@@ -204,11 +204,30 @@ do not write these functions: you import them from
 [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme),
 prompts included — `createLoopControllerAdapter()` returns a ready
 `ControllerFn`, and `bamlPatterns()` returns the router's and the answer
-step's. The example below uses scripted stand-ins in their place only so that it
-needs no model provider or API key (it still lists its tools from an MCP
-gateway, through `Tools()`):
+step's. This is an excerpt, to read rather than run: the stand-ins answer
+without looking at anything, so it only shows the wiring, and `Tools()` needs an
+MCP server to list from. The guard here makes no model call of its own: its
+optional model-based check (`screen`) is not configured, so only its
+deterministic layer runs.
 
-> **Needs:** an MCP server at `MCP_GATEWAY_URL` — clone [the repository](https://github.com/mknw/hames-playground), then run `docker compose up -d` ([docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)) in it to start one.
+The injection guard checks, when it is built, that every namespace it is told to
+guard is produced by at least one tool in the `catalog` you pass, and refuses to
+build if one is not (while the MCP server is unreachable it warns instead). It
+works out a tool's namespace in this order: the
+`namespaceFor` of a transport registered with `registerTransport`, then any map
+registered with `registerToolNamespaces`, then the tool's name (`web_search`
+becomes `web`). So
+`registerToolNamespaces` is needed only when neither the transport nor the name
+gives the namespace, as with the MCP server this repository ships, whose web tools
+are named `search` and `fetch`. `Tools({ namespaces })` is a separate step: it sorts
+the listed tools into the `tools.web`, `tools.neo4j` groups that you hand to
+patterns, and the guard does not read it.
+
+This excerpt assumes an MCP server whose web tools are named `web_…`, so the name
+alone gives `web` and no registration is needed. Against the MCP server this
+repository ships, whose web tools are `search` and `fetch`, pass `mcpNamespace`
+from `@hames-ai/connectors/mcp-catalog` both to `Tools({ namespaces })` and to
+`registerToolNamespaces`.
 
 ```typescript
 import {
@@ -278,6 +297,7 @@ const patterns: ConfiguredPattern<AgentData>[] = [
 const agent = harness(...patterns)
 
 const result = await agent('What shipped in TypeScript 5.7?', 'session-123')
+console.log(result.response)
 ```
 
 Nothing in that chain hands state to the next step by hand: each pattern finds
@@ -317,8 +337,8 @@ configuration and per-pattern semantics that belong there rather than here.
 
 An agent is its history. `hames` makes that literal: one append-only event log
 per session — the **unified context** — is the only state there is. Every
-primitive here, whether it is a loop, a router, a planner, a guard or a
-synthesizer, reads that log and appends to it, so primitives compose without
+primitive here, whether it is a loop, a router, a planner, a guard or the
+answer step, reads that log and appends to it, so primitives compose without
 knowing about one another and any one of them can be swapped without disturbing
 the rest. A pattern writes into a private draft of the log and commits it only
 when it finishes, so a step that throws leaves nothing behind — and because a
@@ -330,7 +350,7 @@ What that buys you is control over the thing that usually rots first: what each
 model call actually sees. **Views** query the log — by pattern, by event type, by
 the last N user turns — and a pattern's **scope**, the slice of the log that
 pattern is allowed to see, is declared once, up front, instead of at every call
-site. A synthesizer gets the tool results of the
+site. The answer step gets the tool results of the
 route that just ran; a router gets a few turns of messages and nothing else;
 older results degrade to compact pointers that a controller can expand on demand.
 Context is budgeted by construction, not by remembering to prune.

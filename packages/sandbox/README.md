@@ -37,11 +37,13 @@ locally with Docker and pnpm.
 ## Install
 
 ```bash
-pnpm add @hames-ai/sandbox @hames-ai/harness-patterns
+pnpm add @hames-ai/sandbox @hames-ai/harness-patterns @hames-ai/harness-baml
 ```
 
-`@hames-ai/harness-patterns` is a peer dependency, so you add it yourself. You
-also need Docker on the machine that runs your agent.
+`@hames-ai/harness-patterns` is a peer dependency, so you add it yourself.
+`@hames-ai/harness-baml` is not a dependency of this package, but the quick start
+below uses its model calls. You also need Docker on the machine that runs your
+agent.
 
 This package ships TypeScript source, not compiled JavaScript, so run it through
 something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
@@ -73,7 +75,7 @@ Wrap a loop in `withSandbox`, and its tools run inside a container. The model
 calls come from
 [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme).
 
-> **Needs:** Docker, the `kg-sandbox:base` image ([build it](#build-the-sandbox-image) as [rootfs/README.md](https://github.com/mknw/hames-playground/blob/main/rootfs/README.md) in the hames app describes), and an Anthropic API key in `ANTHROPIC_API_KEY` (get one at [console.anthropic.com](https://console.anthropic.com/)).
+> **Needs:** Docker, the `kg-sandbox:base` image ([build it](#build-the-sandbox-image) as [rootfs/README.md](https://github.com/mknw/hames-playground/blob/main/rootfs/README.md) in this repository describes), and an Anthropic API key in `ANTHROPIC_API_KEY` (get one at [console.anthropic.com](https://console.anthropic.com/)).
 
 ```typescript
 import { actorCritic, compactExecution, harness } from '@hames-ai/harness-patterns'
@@ -107,14 +109,13 @@ const result = await agent('Write a Python script that prints the first ten prim
 console.log(result.response)
 ```
 
-Build the image first: [Build the sandbox image](#build-the-sandbox-image).
 `mode: 'thread'` hands the answer step the loop's tool calls and their results.
 
 ### Choosing the image, the network and the batching
 
 The same agent with its options spelled out:
 
-> **Needs:** Docker, the `kg-sandbox:base` image ([build it](#build-the-sandbox-image) as [rootfs/README.md](https://github.com/mknw/hames-playground/blob/main/rootfs/README.md) in the hames app describes), and an Anthropic API key in `ANTHROPIC_API_KEY` (get one at [console.anthropic.com](https://console.anthropic.com/)).
+> **Needs:** Docker, the `kg-sandbox:base` image ([build it](#build-the-sandbox-image) as [rootfs/README.md](https://github.com/mknw/hames-playground/blob/main/rootfs/README.md) in this repository describes), and an Anthropic API key in `ANTHROPIC_API_KEY` (get one at [console.anthropic.com](https://console.anthropic.com/)).
 
 ```typescript
 import { actorCritic, compactExecution, harness } from '@hames-ai/harness-patterns'

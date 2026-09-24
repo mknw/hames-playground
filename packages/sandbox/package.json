@@ -1,6 +1,6 @@
 {
   "name": "@hames-ai/sandbox",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The containment companion for @hames-ai/harness-patterns — withSandbox, the Docker compute backend, the egress profiles and the bash guard, behind injected host seams.",
   "keywords": [
     "sandbox",

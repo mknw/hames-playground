@@ -13,6 +13,10 @@ agent leaves in `/work/out` can be saved to a document store your application
 supplies. It is its own package so that installing the core library never
 pulls Docker code into your project.
 
+> **Note:** These packages are at 0.1: guardrails beyond the injection guard are in
+> active development and a release is coming, so until then run them against data
+> you can afford to lose ([details](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)).
+
 ## Which package do you need?
 
 Five packages that work together. The first is the foundation; add the others

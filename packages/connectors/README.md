@@ -13,6 +13,10 @@ guard can refer to. Everything that touches identity stays with your
 application: the signed-in user, their access tokens and where files are
 stored are passed in, never held by the package.
 
+> **Note:** These packages are at 0.1: guardrails beyond the injection guard are in
+> active development and a release is coming, so until then run them against data
+> you can afford to lose ([details](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)).
+
 ## Which package do you need?
 
 Five packages that work together. The first is the foundation; add the others
@@ -93,22 +97,27 @@ logs the driver's error, with its stack trace, before returning it in
 
 `runManualCypher` runs a Cypher query you write and returns its rows.
 
-> **Warning:** `runManualCypher` runs whatever Cypher you pass it. It refuses
-> write clauses and opens a read-only session, but that does not stop a query
-> from reaching the network: if the database has APOC's load procedures enabled
-> (the default once APOC is installed; the Neo4j this repository ships installs
-> APOC, `NEO4J_PLUGINS=["apoc", "n10s"]` in [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)), a query such as
-> `CALL apoc.load.json('http://…')` makes the database fetch that URL, and a
-> read transaction does not prevent it. Do not pass it text from anyone you
-> would not let make requests from your database's network. The ready-made
-> agents in `@hames-ai/agents` do not go through `runManualCypher`: they reach
-> Neo4j through the MCP server's Cypher tools. That server's read tool refuses
-> writes, but with `read_only: false` in
-> [configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml),
-> as this repository ships it, the server also offers a write tool, and the
-> agents may call it. See the
-> [Warning in @hames-ai/agents](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)
-> and [#241](https://github.com/mknw/hames-playground/issues/241).
+> **Warning:** Guardrails for the Cypher path are in active development, and a
+> release is coming ([design record](https://github.com/mknw/hames-playground/issues/242#issuecomment-5768168881)). Until it ships, `runManualCypher`
+> and the ready-made agents that write Cypher are not meant for production use. The
+> easy way to try them safely today is throwaway data: a fresh Neo4j (the
+> `docker run` above, or the repository's [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)), loaded with the demo graph
+> `neo4j_dumps/seed-data.cypher` if you want something to query. For the agents you
+> can also turn writes off; the
+> [Warning in @hames-ai/agents](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog) says how.
+>
+> Why: `runManualCypher` runs whatever Cypher you pass it. It refuses write clauses
+> and opens a read-only session, but that does not stop a query from reaching the
+> network: if the database has APOC's load procedures enabled (the default once
+> APOC is installed; the Neo4j this repository ships installs APOC,
+> `NEO4J_PLUGINS=["apoc", "n10s"]` in [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)), a query such as
+> `CALL apoc.load.json('http://…')` makes the database fetch that URL, and a read
+> transaction does not prevent it. So pass it only text from people you would let
+> make requests from your database's network. The ready-made agents do not go
+> through `runManualCypher`: they reach Neo4j through the MCP server's Cypher
+> tools. That server's read tool refuses writes, but with `read_only: false` in
+> [configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml), as this repository ships it, the server also offers a write tool, and
+> the agents may call it. See also [#241](https://github.com/mknw/hames-playground/issues/241).
 
 > **Needs:** a Neo4j database — clone [the repository](https://github.com/mknw/hames-playground), then run `docker compose up -d` ([docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)) in it to start one, with user `neo4j` and password `password`.
 

@@ -15,6 +15,10 @@ your application (a tool catalog, a document store, a sandbox) you hand it in
 one object, `AgentDeps`. The package also ships browser-safe helpers that turn
 a run's history into graph elements, citations and a chat transcript.
 
+> **Note:** These packages are at 0.1: guardrails beyond the injection guard are in
+> active development and a release is coming, so until then run them against data
+> you can afford to lose ([details](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)).
+
 ## Which package do you need?
 
 Five packages that work together. The first is the foundation; add the others
@@ -315,36 +319,38 @@ email) before a model reads it.
 **Guardrail status.** Two guards ship today. The injection guard covers the
 tool results marked in the table above, and the two sandbox agents also get
 `@hames-ai/sandbox`'s shell-command screen, which checks every `sandbox_bash`
-command against a denylist before it runs. Guardrails beyond these two are
-designed, not yet built — [design record](https://github.com/mknw/hames-playground/issues/242#issuecomment-5768168881).
+command against a denylist before it runs. Guardrails beyond these two are in
+active development; the Warning below has the status and what to do meanwhile.
 
-> **Warning:** `search`, `retriever-agent` and `general` let the model write
-> Cypher and run it through the MCP server's `neo4j-cypher` tools, and the one
-> this repository ships is read-write
-> ([configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml): `read_only: false`).
-> Their Neo4j loops may call `write_neo4j_cypher`, and the agents' own examples
-> teach it; `general` reaches every tool. None of the three guards its Neo4j
-> route, and nothing asks for approval before a write. So anyone who can
-> influence what one of these agents reads can try to make it change or delete
-> your graph (`DETACH DELETE` included). They can also try to make the database
-> fetch URLs: the Neo4j this repository ships installs APOC
-> (`NEO4J_PLUGINS=["apoc", "n10s"]` in [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)),
+> **Warning:** Guardrails for these routes are in active development, and a
+> release is coming ([design record](https://github.com/mknw/hames-playground/issues/242#issuecomment-5768168881)). Until it ships, `search`,
+> `retriever-agent` and `general` are not meant for production use. Two easy ways
+> to try them safely today:
+>
+> - **Use throwaway data.** Point them at a fresh Neo4j loaded with the demo graph
+>   (`./scripts/import-neo4j.sh neo4j_dumps/seed-data.cypher`, as under
+>   [Install](#install)), not at data you need.
+> - **Turn writes off.** Set `read_only: true` for `neo4j-cypher` in
+>   [configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml). It is passed to the server as `NEO4J_READ_ONLY`, which, according to
+>   the server's documentation, turns its write tool off. The agents then can no
+>   longer write into the graph, such as adding web results they found earlier,
+>   which is what `withReferences` was built for
+>   ([design doc](https://github.com/mknw/hames-playground/blob/main/docs/harness-patterns/with-references.md)).
+>
+> Why: these three agents let the model write Cypher and run it through the MCP
+> server's `neo4j-cypher` tools, and the one this repository ships is read-write
+> (`read_only: false`). Their Neo4j loops may call `write_neo4j_cypher`, and the
+> agents' own examples teach it; `general` reaches every tool. None of the three
+> guards its Neo4j route, and nothing asks for approval before a write. So what
+> these agents read, whether a person types it or `general` and the web route fetch
+> it, can try to steer them into changing or deleting your graph (`DETACH DELETE`
+> included). It can also try to make the database fetch URLs: the Neo4j this
+> repository ships installs APOC (`NEO4J_PLUGINS=["apoc", "n10s"]` in [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)),
 > and with APOC's load procedures enabled (the default once APOC is installed) a
 > query such as `CALL apoc.load.json('http://…')` makes the database fetch that
-> URL. See [#241](https://github.com/mknw/hames-playground/issues/241) and the
-> Warning on
+> URL. See also [#241](https://github.com/mknw/hames-playground/issues/241) and the Warning on
 > [running your own Cypher query](https://github.com/mknw/hames-playground/tree/main/packages/connectors#run-your-own-cypher-query)
 > in `@hames-ai/connectors`.
->
-> The setting behind the write exposure is `read_only: false` for `neo4j-cypher` in
-> the MCP server's `configs/mcp-config.yaml`, passed to the server as
-> `NEO4J_READ_ONLY`. Setting it to `true` turns the write tool off, at a cost: the
-> agents can then no longer write into the graph, such as adding web results they
-> found earlier, which is what `withReferences` was built for
-> ([design doc](https://github.com/mknw/hames-playground/blob/main/docs/harness-patterns/with-references.md)).
-> Until guardrails for these routes exist, run these three agents only against a
-> Neo4j you are willing to let them change, and only where you trust everything
-> they read: what a person types, and what `general` and the web route fetch.
 
 ## Configuration
 

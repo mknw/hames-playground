@@ -86,8 +86,8 @@ The web tools (`web_search`, `fetch`) need no key.
 
 Build a shipped agent's patterns, compose them into a harness, and ask one
 question. It runs `search`, one of the three agents the
-[Warning under Agent catalog](#agent-catalog) is about: it can write to the Neo4j
-you give it.
+[Warning under Agent catalog](#agent-catalog) is about: with writes enabled it
+can change the Neo4j you give it (they ship off).
 
 > **Needs:** an Anthropic API key in `ANTHROPIC_API_KEY` (get one at [console.anthropic.com](https://console.anthropic.com/)), and the MCP server and seeded Neo4j from the [three commands under Install](#install).
 
@@ -310,7 +310,7 @@ email) before a model reads it.
 | Agent               | Composition                                                      | Tools                                                   | Injection guard                                                                          |
 | ------------------- | ---------------------------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `search`            | router → routes(neo4j loop, web loop) → compactExecution         | neo4j-cypher, web_search, fetch                         | web route guarded; neo4j route not guarded (see the Warning below)                       |
-| `retriever-agent`   | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                         | web namespace + retriever exact-name guarded together (ingested documents are untrusted) |
+| `retriever`         | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                         | web namespace + retriever exact-name guarded together (ingested documents are untrusted) |
 | `microsoft-365`     | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token | whole Microsoft Graph loop guarded (mail and files can be written by anyone)             |
 | `general`           | planner → simpleLoop(tools.all) → compactExecution               | everything                                              | not guarded yet (below)                                                                  |
 | `sandbox-session`   | compactIntent → withSandbox(actorCritic) → compactExecution      | in-container `sandbox_*`                                | not on tool results yet; shell commands are screened (below)                             |
@@ -324,7 +324,7 @@ active development; the Warning below has the status and what to do meanwhile.
 
 > **Warning:** Guardrails for these routes are in active development, and a
 > release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)). Until it ships, `search`,
-> `retriever-agent` and `general` are not meant for production use. Two things
+> `retriever` and `general` are not meant for production use. Two things
 > keep your data safe while you try them:
 >
 > - **Use throwaway data.** Point them at a fresh Neo4j loaded with the demo graph
@@ -336,7 +336,8 @@ active development; the Warning below has the status and what to do meanwhile.
 >   `NEO4J_READ_ONLY` and then does not register its write tool,
 >   `write_neo4j_cypher`; any value other than `true` or `false` stops it from
 >   starting. To let the agents write, set it to `false` and recreate the gateway
->   (`docker compose up -d`). The trade-off: only then can they write into the
+>   (`docker compose up -d --force-recreate mcp-gateway`; a plain `up -d` leaves
+>   it running on the old file). The trade-off: only then can they write into the
 >   graph, such as adding web results they found earlier, which is what
 >   `withReferences` was built for
 >   ([design doc](https://github.com/mknw/hames-playground/blob/main/docs/harness-patterns/with-references.md)).

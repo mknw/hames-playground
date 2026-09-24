@@ -85,14 +85,14 @@ Each layer's own README stays the authority on its coverage: [`app/e2e/README.md
 
 | Document                                                                                   | Description                                                                                                    |
 | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| [harness-patterns/README.md](harness-patterns/README.md)                                   | Overview, core concepts, quick start                                                                           |
-| [harness-patterns/api.md](harness-patterns/api.md)                                         | Complete API reference                                                                                         |
-| [harness-patterns/frontend.md](harness-patterns/frontend.md)                               | SolidStart integration, server actions, sessions                                                               |
-| [harness-patterns/examples.md](harness-patterns/examples.md)                               | Example agent catalog (6 agents)                                                                               |
-| [harness-patterns/parallel.md](harness-patterns/parallel.md)                               | Parallel pattern design notes                                                                                  |
-| [harness-patterns/prompt-caching.md](harness-patterns/prompt-caching.md)                   | The #122 prompt-caching bench, worktree `prompt-caching-122` — three `ActorController` variants, ~47% saved    |
-| [harness-patterns/with-references.md](harness-patterns/with-references.md)                 | `withReferences` meta-pattern + `expandPreviousResult` synthetic tool design (#30, #19)                        |
-| [harness-patterns/withReferences-tutorial.md](harness-patterns/withReferences-tutorial.md) | Hands-on walkthrough — search the web, attach refs at ingress, write to Neo4j                                  |
+| [harness-patterns/README.md](harness-patterns/README.md) | What this directory holds now: design records behind the packages, plus pointers to where the old overview went |
+| [harness-patterns/api.md](harness-patterns/api.md) | Pointer: the old API reference, mapped section by section onto `packages/harness-patterns/SPEC.md`, and what changed since |
+| [harness-patterns/frontend.md](harness-patterns/frontend.md) | Pointer: the old SolidStart integration page; hosting a turn is now `tutorials/hosting-the-harness.md`, and a short account of how the hames app runs turns today |
+| [harness-patterns/examples.md](harness-patterns/examples.md) | Pointer: the old agent catalog is now `packages/agents/README.md`; which shipped agent to read for which pattern |
+| [harness-patterns/parallel.md](harness-patterns/parallel.md) | Design notes on `parallel`: how it merges branches and handles failures, two options not built, and composing it with `judge` |
+| [harness-patterns/prompt-caching.md](harness-patterns/prompt-caching.md) | Record of one 2026-07-26 run of the prompt-caching bench (#122): three `ActorController` variants, ~47% saved; where the cache markers live now |
+| [harness-patterns/with-references.md](harness-patterns/with-references.md) | Design record for `withReferences` and the `expandPreviousResult` tool (#30, #19), with what shipped differently |
+| [harness-patterns/withReferences-tutorial.md](harness-patterns/withReferences-tutorial.md) | Walkthrough in the hames app: search the web, attach the results on the next turn, write them to Neo4j |
 | [tutorials/own-provider-or-model.md](tutorials/own-provider-or-model.md)                   | Bring your own provider or model — define runtime clients, map roles, compose over the built-in tier (#374 D1) |
 
 Authoritative source-level docs (closer to the code):

@@ -1,102 +1,31 @@
-# Harness Patterns
+# Harness patterns: design records
 
-A functional, composable framework for building agentic tool execution pipelines.
+This page used to be the overview of the harness-patterns framework, written before
+the framework moved into its own packages under [`packages/`](../../packages/) and
+was published as the `@hames-ai/*` npm packages. Its overview, pattern catalog and
+example now live with the packages:
 
-> **Full Documentation:** See [`app/src/lib/harness-patterns/SPEC.md`](../../app/src/lib/harness-patterns/SPEC.md) for complete API documentation, type definitions, and implementation details.
+| You want                                                       | Read                                                                               |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| What the framework is, how to install it, a first example      | [`packages/harness-patterns/README.md`](../../packages/harness-patterns/README.md) |
+| The concepts: context, scopes, views, combinators, errors      | [`packages/harness-patterns/GUIDE.md`](../../packages/harness-patterns/GUIDE.md)   |
+| Every pattern's signature and configuration                    | [`packages/harness-patterns/SPEC.md`](../../packages/harness-patterns/SPEC.md)     |
+| The model adapters and prompts                                 | [`packages/harness-baml/README.md`](../../packages/harness-baml/README.md)         |
+| The ready-made agents and how each is composed                 | [`packages/agents/README.md`](../../packages/agents/README.md)                     |
+| Task walkthroughs: hosting a turn, guarding, sandboxes, models | [`docs/tutorials/`](../tutorials/README.md)                                        |
 
-## Quick Navigation
+What this directory still holds is the record behind some of those designs, kept
+because the package docs describe what the code does and not why it came out that
+way:
 
-| Document | Purpose |
-|----------|---------|
-| [API Reference](./api.md) | Types, patterns, tools, configuration |
-| [Examples](./examples.md) | 6 agent implementations |
-| [Frontend Integration](./frontend.md) | SolidStart server actions, components |
+| Page                                                                                 | What it records                                                                                                                                       |
+| ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`with-references.md`](./with-references.md)                                         | The design of `withReferences`, which attaches relevant results of earlier turns when a pattern starts, and where the shipped wrapper departs from it |
+| [`withReferences-tutorial.md`](./withReferences-tutorial.md)                         | A two-turn walkthrough of that wrapper in the hames app, this repository's reference host                                                             |
+| [`parallel.md`](./parallel.md)                                                       | What `parallel` does, and two options for it that were considered and not built                                                                       |
+| [`prompt-caching.md`](./prompt-caching.md)                                           | One live run of the prompt-caching bench, and where the cache markers live now                                                                        |
+| [`api.md`](./api.md), [`examples.md`](./examples.md), [`frontend.md`](./frontend.md) | Former reference pages, now short pointers to where their content moved                                                                               |
 
----
-
-## Architecture Overview
-
-```
-BAML Functions ──┐
-                 ├──► Patterns ──► Router ──► Harness ──► Agent
-MCP Tools ───────┘
-```
-
-**Key Principle:** BAML functions are passed directly to patterns. No intermediate wrappers needed.
-
----
-
-## Pattern Catalog
-
-| Pattern | Purpose | Example Use |
-|---------|---------|-------------|
-| `simpleLoop` | ReAct decide-execute loop (turns may batch multiple tool calls — `multiToolCalls`) | Neo4j queries, web search |
-| `actorCritic` | Generate-evaluate with retry (attempts may batch calls too) | Code generation, file editing |
-| `router` | Intent-based dispatch | Multi-capability agents |
-| `compactExecution` | Response generation | Human-readable output |
-| `compactIntent` | Rewrite latest message → self-contained `data.intent` | Router-less multi-turn agents ([#83](https://github.com/mknw/harness-playground/issues/83)) |
-| `withReferences` | LLM-curated prior-result attachment at pattern ingress | Cross-pattern data flow ([#30](with-references.md)) |
-| `parallel` | Concurrent execution | Multi-source search |
-| `judge` | Quality ranking | Best-of-N selection |
-| `chain` | Sequential composition | Multi-stage pipelines |
-
-> **Synthetic tool:** when prior results are present, simpleLoop's `LoopController` prompt also exposes `expandPreviousResult` — a virtual tool that loads the full data behind a `ref:<id>` and records it as a normal turn so subsequent iterations see it inline. See [`with-references.md`](with-references.md) for the full ingress/expansion taxonomy. (Singular-only: it cannot appear inside a multi-call turn's `additional_calls`.)
-
-> **Multi-call turns:** both loop patterns accept `multiToolCalls: 'parallel' | 'sequential' | 'off'` (default `'parallel'`) — the controller can batch several tool calls into one turn via `ControllerAction.additional_calls`, saving one controller LLM round-trip per batched call. See the spec (`app/src/lib/harness-patterns/SPEC.md`) for the mode semantics and failure rules.
-
----
-
-## Minimal Example
-
-```typescript
-import { harness, simpleLoop, compactExecution, Tools } from '~/lib/harness-patterns'
-import { b } from '@hames-ai/harness-baml/baml_client'
-
-const tools = await Tools()
-
-const agent = harness(
-  simpleLoop(b.Neo4jController.bind(b), tools.neo4j ?? [], {
-    patternId: 'neo4j-query'
-  }),
-  compactExecution({ mode: 'thread', patternId: 'response-synth' })
-)
-
-const result = await agent('Show me all Person nodes', 'session-123')
-```
-
----
-
-## Core Concepts
-
-### UnifiedContext
-
-Single source of truth for session state. Contains events, data, and status.
-
-### PatternScope
-
-Isolated workspace for pattern execution. Events are committed on completion.
-
-### EventView
-
-Fluent API for querying events from context:
-
-```typescript
-view.fromLastPattern().tools().last(3).get()
-```
-
----
-
-## Available Agents
-
-4 pre-built agents in the registry:
-
-1. **Default** - Router with Neo4j and Web
-4. **Conversational Memory** - Scratchpad + KB distillation
-5. **KG Builder** - Research → Extract → Persist
-6. **Sandbox · Session** - Persistent VM workspace + xterm
-
-See [examples.md](./examples.md) for details.
-
----
-
-**Last Updated:** 2026-06-15
+The three `hames_*.png` files beside these pages are the project logo. The root
+README displays the two on a transparent background; the third, on a light
+background, is referenced nowhere in the repository.

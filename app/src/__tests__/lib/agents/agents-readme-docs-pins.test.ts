@@ -17,6 +17,8 @@ const APP_ROOT = path.resolve(process.cwd())
 const AGENTS_ROOT = path.join(APP_ROOT, '../packages/agents')
 const BAML_ROOT = path.join(APP_ROOT, '../packages/harness-baml')
 const PATTERNS_ROOT = path.join(APP_ROOT, '../packages/harness-patterns')
+// The agents README's quick start imports `mcpNamespace` from connectors.
+const CONNECTORS_ROOT = path.join(APP_ROOT, '../packages/connectors')
 const README = readFileSync(path.join(AGENTS_ROOT, 'README.md'), 'utf-8')
 
 interface Fence {
@@ -43,7 +45,7 @@ function extractFences(content: string): Fence[] {
   return fences
 }
 
-/** Resolve package specifiers onto the three packages' source files, mirroring
+/** Resolve package specifiers onto the four packages' source files, mirroring
  *  their exports maps (`.` → root index, `./agents` → the definitions barrel,
  *  `./*` wildcard → `<root>/<rest>.ts`). */
 function resolvePackageModule(specifier: string): string | undefined {
@@ -51,6 +53,7 @@ function resolvePackageModule(specifier: string): string | undefined {
     ['@hames-ai/agents', AGENTS_ROOT],
     ['@hames-ai/harness-baml', BAML_ROOT],
     ['@hames-ai/harness-patterns', PATTERNS_ROOT],
+    ['@hames-ai/connectors', CONNECTORS_ROOT],
   ]
   for (const [name, root] of roots) {
     if (specifier !== name && !specifier.startsWith(name + '/')) continue

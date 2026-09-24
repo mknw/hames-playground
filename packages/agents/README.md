@@ -324,18 +324,21 @@ active development; the Warning below has the status and what to do meanwhile.
 
 > **Warning:** Guardrails for these routes are in active development, and a
 > release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)). Until it ships, `search`,
-> `retriever-agent` and `general` are not meant for production use. Two easy ways
-> to keep your data safe while you try them:
+> `retriever-agent` and `general` are not meant for production use. Two things
+> keep your data safe while you try them:
 >
 > - **Use throwaway data.** Point them at a fresh Neo4j loaded with the demo graph
 >   (`./scripts/import-neo4j.sh neo4j_dumps/seed-data.cypher`, as under
 >   [Install](#install)), not at data you need.
-> - **Turn writes off.** Set `read_only: true` for `neo4j-cypher` in
+> - **Writes are off by default.** This repository ships `read_only: true` for
+>   `neo4j-cypher` in
 >   [configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml). The pinned server, `mcp-neo4j-cypher` 0.5.0, reads it as
->   `NEO4J_READ_ONLY` and then does not register its write tool; any value other
->   than `true` or `false` stops it from starting. The agents then can no longer
->   write into the graph, such as adding web results they found earlier, which is
->   what `withReferences` was built for
+>   `NEO4J_READ_ONLY` and then does not register its write tool,
+>   `write_neo4j_cypher`; any value other than `true` or `false` stops it from
+>   starting. To let the agents write, set it to `false` and recreate the gateway
+>   (`docker compose up -d`). The trade-off: only then can they write into the
+>   graph, such as adding web results they found earlier, which is what
+>   `withReferences` was built for
 >   ([design doc](https://github.com/mknw/hames-playground/blob/main/docs/harness-patterns/with-references.md)).
 >
 > Both protect the graph, not the network. A query can still make the database
@@ -344,16 +347,19 @@ active development; the Warning below has the status and what to do meanwhile.
 > To close that too, run them against a Neo4j without APOC, or one whose network
 > reaches nothing you care about. The demo graph needs no APOC
 > (`neo4j_dumps/seed-data.cypher` is plain Cypher), but these agents read the
-> schema through the MCP server's `get_neo4j_schema` tool, so check that it still
-> answers on a Neo4j without APOC. On `docker compose`, the Neo4j shares a network
+> schema through the MCP server's `get_neo4j_schema` tool, which runs
+> `CALL apoc.meta.schema(...)` and fails on a Neo4j without APOC. The agents then
+> log `graph schema unavailable` and run without the schema
+> ([graph-schema.server.ts](https://github.com/mknw/hames-playground/blob/main/packages/agents/agents/graph-schema.server.ts)). On `docker compose`, the Neo4j shares a network
 > with the MCP server, Postgres and Redis.
 >
 > Why: these three agents let the model write Cypher and run it through the MCP
-> server's `neo4j-cypher` tools, and the one this repository ships is read-write
-> (`read_only: false`). Their Neo4j loops may call `write_neo4j_cypher`, and the
-> agents' own examples teach it; `general` reaches every tool. None of the three
-> guards its Neo4j route, and nothing asks for approval before a write. So what
-> these agents read, whether a person types it or `general` and the web route fetch
+> server's `neo4j-cypher` tools. The one this repository ships is read-only by
+> default (`read_only: true`), but a deployer can set it to `false`, and then
+> their Neo4j loops may call `write_neo4j_cypher`, which the agents' own examples
+> teach; `general` reaches every tool. None of the three
+> guards its Neo4j route, and nothing asks for approval before a write. So, with
+> writes on, what these agents read, whether a person types it or `general` and the web route fetch
 > it, can try to steer them into changing or deleting your graph (`DETACH DELETE`
 > included). It can also try to make the database fetch URLs: the Neo4j this
 > repository ships installs APOC (`NEO4J_PLUGINS=["apoc", "n10s"]` in [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)),

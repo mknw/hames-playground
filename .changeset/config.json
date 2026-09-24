@@ -1,0 +1,29 @@
+{
+  "$schema": "https://unpkg.com/@changesets/config@4.0.1/schema.json",
+  "baseBranch": "main",
+  "access": "public",
+  "format": false,
+  "changelog": "@changesets/cli/changelog",
+  "commit": false,
+  "ignore": ["seederis-ai-kg-ui"],
+  "fixed": [
+    [
+      "@hames-ai/harness-patterns",
+      "@hames-ai/harness-baml",
+      "@hames-ai/agents",
+      "@hames-ai/connectors",
+      "@hames-ai/sandbox"
+    ]
+  ],
+  "linked": [],
+  "updateInternalDependencies": "patch",
+  "changedFilePatterns": [
+    "**",
+    "!__tests__/**",
+    "!**/*.test.ts",
+    "!vitest.config.ts",
+    "!.prettierrc.json",
+    "!.prettierignore",
+    "!scripts/**"
+  ]
+}

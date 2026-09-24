@@ -92,3 +92,6 @@ app/playwright-report/
 # Orca per-session task output (background command logs). Untracked runtime
 # state; meaningless outside the session that wrote it.
 .pi/tasks/
+
+# The front-facing prose standards are kept local and unpublished.
+.claude/agents/public-copywriter.md

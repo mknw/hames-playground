@@ -41,7 +41,9 @@ const research = parallel<Data>(
   `pattern_enter` and a `pattern_exit` event, and its data merged into the
   parent's. The merge is shallow and runs in branch order, so where two branches
   set the same key, the later branch in the list wins.
-- A branch that rejects adds one `error` event naming the branch. That error is
+- A branch that rejects adds one `error` event, `Branch <name> failed: <reason>`.
+  The name is the pattern's type (`simpleLoop`), not its `patternId`, so two
+  loops that both reject read the same. That error is
   recoverable, so the rest of the chain still runs on the branches that survived.
   If every branch rejects, the errors are marked irrecoverable and the chain stops
   there, rather than handing an empty result to the answer-writing step.
@@ -144,8 +146,10 @@ const patterns: ConfiguredPattern<Data>[] = [
 
 `judge` hands the evaluator every `tool_result` event its view can see, each as
 `{ source: <patternId>, content: <the event's data as JSON> }`, optionally capped
-by `maxCandidates`. It records the evaluator's reasoning and rankings as a
-`controller_action` event, and sets `data.response` to the best candidate's
-content, with `data.judgeReasoning` and `data.rankings` beside it. With no
+by `maxCandidates`. It sets `data.response` to the best candidate's content,
+with `data.judgeReasoning` and `data.rankings` beside it. It also describes the
+evaluation in a `controller_action` event, but `judge` has no default
+`trackHistory` entry, so that event is not committed unless you pass one, for
+example `trackHistory: 'controller_action'`. With no
 `tool_result` to rank, it records a recoverable `error` event
 ("No candidates to evaluate") and changes nothing.

@@ -1,6 +1,6 @@
 # withReferences: design record
 
-> **Status.** Design record written 2026-04-30 and implemented in [PR #34](https://github.com/mknw/hames-playground/pull/34) ([issue #30](https://github.com/mknw/hames-playground/issues/30)); the implementation now lives in [`packages/harness-patterns/`](../../packages/harness-patterns/), and [§14](#14-what-shipped-differently) lists where it departs from this design.
+> **Status.** Design record written 2026-04-30 and implemented in [PR #34](https://github.com/mknw/hames-playground/pull/34) ([issue #30](https://github.com/mknw/hames-playground/issues/30)); the implementation now lives in [`packages/harness-patterns/`](../../packages/harness-patterns/), and [§14](#14-what-shipped-differently) lists where it departs from this design. The motivating case writes fetched data into Neo4j, which works only when writes are enabled for the Neo4j tool server (`read_only: false` under `neo4j-cypher` in [`configs/mcp-config.yaml`](../../configs/mcp-config.yaml)).
 
 This page records why `withReferences` exists and how it was meant to work. The
 reference for the shipped wrapper is the
@@ -67,7 +67,7 @@ These are three policies for the same question: **which prior data should this p
 
 Two kinds of cross-pattern data flow:
 
-```
+```text
                             ╭─────────────────────────────────╮
                             │  pattern (e.g. simpleLoop)      │
                             │                                 │
@@ -89,7 +89,7 @@ The two compose: `withReferences` attaches **summaries**; the loop optionally ex
 
 On pattern entry, the wrapper:
 
-```
+```text
 1. Read tool_result events visible per scope/source filter
    (excluding hidden / archived per existing data-stash semantics)
 2. Build candidate list: [{ ref_id, tool, summary, tool_args, ts }, ...]

@@ -1,6 +1,6 @@
 # Walkthrough: carrying data across turns with `withReferences`
 
-> **Status.** Hands-on walkthrough in the hames app, first written with the `withReferences` design (2026-04-30) and brought up to date 2026-09-24; the wrapper and the agent it uses live in [`packages/`](../../packages/).
+> **Status.** Hands-on walkthrough in the hames app, first written with the `withReferences` design (2026-04-30) and brought up to date 2026-09-24; the wrapper and the agent it uses live in [`packages/`](../../packages/). Turn 2 writes to Neo4j, which works only when writes are enabled for the Neo4j tool server, as set out under **Before you start** below.
 
 **What you will see:** the `search` agent fetching information about a topic on one
 turn, then writing that data to Neo4j on the next, without fetching it again and
@@ -13,6 +13,13 @@ the MCP gateway (the Docker service that serves the web-search and Neo4j tools)
 with `docker compose up -d`, and needs an Anthropic API key in `app/.env`, which
 you get at [console.anthropic.com](https://console.anthropic.com). The hames app then
 serves on <http://localhost:3444>.
+
+Turn 2 writes to Neo4j, so the Neo4j tool server must accept writes. Check that
+`neo4j-cypher` has `read_only: false` in
+[`configs/mcp-config.yaml`](../../configs/mcp-config.yaml); if you change it,
+restart the gateway with `docker compose restart mcp-gateway`. With
+`read_only: true` the Neo4j tools can only read, and turn 2 cannot create the
+nodes.
 
 This page is the hands-on counterpart to the design record,
 [`with-references.md`](./with-references.md). Two terms it uses:
@@ -42,7 +49,7 @@ route starts with the turn-1 results attached.
 
 ## Step 1: start a fresh chat
 
-Pick **Search Agent** in the agent selector and press **New chat** in the sidebar.
+Pick **Search Agent** in the agent selector and press **+ New Chat** in the sidebar.
 
 The side panel's **Context manager** tab holds the event timeline; it fills as
 the agent runs. The agent's composition, abridged from
@@ -94,9 +101,10 @@ model chooses the relevant ones, up to five. The attached summaries reach the
 
 ## Step 4: inspect what the controller received
 
-In the timeline, open the first `controller_action` event under `neo4j-query` and
-select its **Variables** tab. It shows the arguments the loop passed to the BAML
-`LoopController` function. The attached results are in `turns_previous_runs`:
+In the timeline, open the first `controller_action` event under `neo4j-query`,
+and in its **Prompt** tab expand the **Variables** section. It shows the
+arguments the loop passed to the BAML `LoopController` function. The attached
+results are in `turns_previous_runs`:
 
 ```jsonc
 "turns_previous_runs": [

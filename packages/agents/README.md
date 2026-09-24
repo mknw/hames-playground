@@ -15,9 +15,9 @@ your application (a tool catalog, a document store, a sandbox) you hand it in
 one object, `AgentDeps`. The package also ships browser-safe helpers that turn
 a run's history into graph elements, citations and a chat transcript.
 
-> **Note:** These packages are at 0.1: guardrails beyond the injection guard are in
-> active development and a release is coming, so until then run them against data
-> you can afford to lose ([details](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)).
+> **Note:** These packages are at 0.1: further guardrails are in active development
+> and a release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)), so until then run them
+> against data you can afford to lose ([details](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)).
 
 ## Which package do you need?
 
@@ -117,7 +117,7 @@ const result = await harness<AgentData>(...patterns)(
 console.log(result.response)
 ```
 
-The MCP server has to serve the tools the agent lists in `servers`
+The MCP server has to run the MCP servers the agent lists in `servers`
 (`neo4j-cypher`, `web_search`, `fetch`); the one this repository ships does, as
 configured in
 [configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml).
@@ -323,19 +323,30 @@ command against a denylist before it runs. Guardrails beyond these two are in
 active development; the Warning below has the status and what to do meanwhile.
 
 > **Warning:** Guardrails for these routes are in active development, and a
-> release is coming ([design record](https://github.com/mknw/hames-playground/issues/242#issuecomment-5768168881)). Until it ships, `search`,
+> release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)). Until it ships, `search`,
 > `retriever-agent` and `general` are not meant for production use. Two easy ways
-> to try them safely today:
+> to keep your data safe while you try them:
 >
 > - **Use throwaway data.** Point them at a fresh Neo4j loaded with the demo graph
 >   (`./scripts/import-neo4j.sh neo4j_dumps/seed-data.cypher`, as under
 >   [Install](#install)), not at data you need.
 > - **Turn writes off.** Set `read_only: true` for `neo4j-cypher` in
->   [configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml). It is passed to the server as `NEO4J_READ_ONLY`, which, according to
->   the server's documentation, turns its write tool off. The agents then can no
->   longer write into the graph, such as adding web results they found earlier,
->   which is what `withReferences` was built for
+>   [configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml). The pinned server, `mcp-neo4j-cypher` 0.5.0, reads it as
+>   `NEO4J_READ_ONLY` and then does not register its write tool; any value other
+>   than `true` or `false` stops it from starting. The agents then can no longer
+>   write into the graph, such as adding web results they found earlier, which is
+>   what `withReferences` was built for
 >   ([design doc](https://github.com/mknw/hames-playground/blob/main/docs/harness-patterns/with-references.md)).
+>
+> Both protect the graph, not the network. A query can still make the database
+> fetch URLs through APOC's load procedures: the server's read tool refuses only
+> queries that look like writes, and `CALL apoc.load.json('http://…')` does not.
+> To close that too, run them against a Neo4j without APOC, or one whose network
+> reaches nothing you care about. The demo graph needs no APOC
+> (`neo4j_dumps/seed-data.cypher` is plain Cypher), but these agents read the
+> schema through the MCP server's `get_neo4j_schema` tool, so check that it still
+> answers on a Neo4j without APOC. On `docker compose`, the Neo4j shares a network
+> with the MCP server, Postgres and Redis.
 >
 > Why: these three agents let the model write Cypher and run it through the MCP
 > server's `neo4j-cypher` tools, and the one this repository ships is read-write

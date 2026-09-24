@@ -13,9 +13,9 @@ guard can refer to. Everything that touches identity stays with your
 application: the signed-in user, their access tokens and where files are
 stored are passed in, never held by the package.
 
-> **Note:** These packages are at 0.1: guardrails beyond the injection guard are in
-> active development and a release is coming, so until then run them against data
-> you can afford to lose ([details](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)).
+> **Note:** These packages are at 0.1: further guardrails are in active development
+> and a release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)), so until then run them
+> against data you can afford to lose ([details](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)).
 
 ## Which package do you need?
 
@@ -82,11 +82,13 @@ Without cloning, the same database runs on its own:
 
 ```bash
 docker run -d --name neo4j -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/password -e 'NEO4J_PLUGINS=["apoc", "n10s"]' neo4j:5.26
+  -e NEO4J_AUTH=neo4j/password neo4j:5.26
 ```
 
-That is the `neo4j` service from `docker-compose.yaml`, APOC included (see the
-Warning below). `getSchema()` returns `{ success, schema }`: `schema` is the node labels and
+That is the `neo4j` service from `docker-compose.yaml` without its APOC and n10s
+plugins. Nothing on this page needs them: `getSchema` uses the built-in
+`db.schema.visualization()`, and leaving APOC out closes the URL-fetch risk in the
+Warning below. `getSchema()` returns `{ success, schema }`: `schema` is the node labels and
 relationship types the database reports (`CALL db.schema.visualization()`), as
 JSON. Until `configureNeo4j` runs, the first query fails with
 `Neo4jNotConfiguredError`. If the database cannot be reached, `getSchema` also
@@ -98,26 +100,28 @@ logs the driver's error, with its stack trace, before returning it in
 `runManualCypher` runs a Cypher query you write and returns its rows.
 
 > **Warning:** Guardrails for the Cypher path are in active development, and a
-> release is coming ([design record](https://github.com/mknw/hames-playground/issues/242#issuecomment-5768168881)). Until it ships, `runManualCypher`
+> release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)). Until it ships, `runManualCypher`
 > and the ready-made agents that write Cypher are not meant for production use. The
-> easy way to try them safely today is throwaway data: a fresh Neo4j (the
-> `docker run` above, or the repository's [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)), loaded with the demo graph
-> `neo4j_dumps/seed-data.cypher` if you want something to query. For the agents you
-> can also turn writes off; the
-> [Warning in @hames-ai/agents](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog) says how.
+> easy way to try them without the risk below is a Neo4j without APOC, such as the
+> `docker run` above: nothing on this page needs APOC, and without it a query
+> cannot make the database fetch URLs. Throwaway data (a fresh Neo4j, loaded with
+> the demo graph `neo4j_dumps/seed-data.cypher` if you want something to query)
+> keeps your data safe too, but not the network. For the agents you can also turn
+> writes off; the [Warning in @hames-ai/agents](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog) says how.
 >
 > Why: `runManualCypher` runs whatever Cypher you pass it. It refuses write clauses
 > and opens a read-only session, but that does not stop a query from reaching the
 > network: if the database has APOC's load procedures enabled (the default once
-> APOC is installed; the Neo4j this repository ships installs APOC,
-> `NEO4J_PLUGINS=["apoc", "n10s"]` in [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)), a query such as
+> APOC is installed; the Neo4j this repository's [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) runs installs APOC,
+> `NEO4J_PLUGINS=["apoc", "n10s"]`), a query such as
 > `CALL apoc.load.json('http://…')` makes the database fetch that URL, and a read
-> transaction does not prevent it. So pass it only text from people you would let
-> make requests from your database's network. The ready-made agents do not go
-> through `runManualCypher`: they reach Neo4j through the MCP server's Cypher
-> tools. That server's read tool refuses writes, but with `read_only: false` in
-> [configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml), as this repository ships it, the server also offers a write tool, and
-> the agents may call it. See also [#241](https://github.com/mknw/hames-playground/issues/241).
+> transaction does not prevent it. So on a Neo4j with APOC, pass it only text from
+> people you would let make requests from your database's network. The ready-made
+> agents do not go through `runManualCypher`: they reach Neo4j through the MCP
+> server's Cypher tools. That server's read tool refuses writes, but with
+> `read_only: false` in [configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml), as this repository ships it, the server also
+> offers a write tool, and the agents may call it. See also
+> [#241](https://github.com/mknw/hames-playground/issues/241).
 
 > **Needs:** a Neo4j database — clone [the repository](https://github.com/mknw/hames-playground), then run `docker compose up -d` ([docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)) in it to start one, with user `neo4j` and password `password`.
 
@@ -138,9 +142,10 @@ await resetDriver() // close the connection, so the script can exit
 ```
 
 A query containing a write clause is refused: `result.success` is `false`, with
-the reason in `result.error`. `result.graphUpdate` also carries the same rows as nodes and edges for
+the reason in `result.error`. When a query returns nodes and relationships,
+`result.graphUpdate` also carries them as nodes and edges for
 [Cytoscape.js](https://js.cytoscape.org), a graph-drawing library, in case you
-want to render them.
+want to render them; for the counts above it is empty.
 
 ### Give an agent the Microsoft 365 tools (excerpt)
 

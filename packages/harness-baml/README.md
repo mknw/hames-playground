@@ -17,9 +17,9 @@ pre-built, so you never run BAML's tooling yourself. Calls go to Anthropic
 models by default, and can be pointed at an OpenAI-compatible endpoint of your
 own.
 
-> **Note:** These packages are at 0.1: guardrails beyond the injection guard are in
-> active development and a release is coming, so until then run them against data
-> you can afford to lose ([details](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)).
+> **Note:** These packages are at 0.1: further guardrails are in active development
+> and a release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)), so until then run them
+> against data you can afford to lose ([details](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)).
 
 ## Which package do you need?
 

@@ -1,77 +1,33 @@
-# Harness Pattern Examples
+# Example agents: moved to the agents package
 
-Catalog of 6 pre-built agents demonstrating pattern compositions.
+This page used to catalog the example agents and show how to create one, from
+before the agents moved into [`packages/agents/`](../../packages/agents/) and were
+published as `@hames-ai/agents`. The catalog, the definition an agent exports and
+how a host registers it are now in the package's README:
+[`packages/agents/README.md`](../../packages/agents/README.md).
 
-> **Full Code:** See [`app/src/lib/harness-client/agents/`](../../app/src/lib/harness-client/agents/) for complete implementations.
+## Which agent to read for which pattern
 
----
+Each agent is one source file, and each is a working composition of the patterns in
+`@hames-ai/harness-patterns`. To see a pattern used in context, open the agent that
+uses it:
 
-## Agent Registry
+| To see                                                        | Read                                                                                                                 |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `router` and `routes`, `withReferences`, `withInjectionGuard` | [`search.server.ts`](../../packages/agents/agents/search.server.ts), agent `search`                                  |
+| `retriever` routed beside tool loops                          | [`retriever-agent.server.ts`](../../packages/agents/agents/retriever-agent.server.ts), agent `retriever`             |
+| `planner` ahead of a loop over every tool                     | [`general.server.ts`](../../packages/agents/agents/general.server.ts), agent `general`                               |
+| A loop over an explicit tool list, fully guarded              | [`microsoft-365.server.ts`](../../packages/agents/agents/microsoft-365.server.ts), agent `microsoft-365`             |
+| `compactIntent` and `actorCritic` inside a sandbox            | [`sandbox-session.server.ts`](../../packages/agents/agents/sandbox-session.server.ts), agent `sandbox-session`       |
+| `router` choosing between sandbox flavours                    | [`flavoured-sandbox.server.ts`](../../packages/agents/agents/flavoured-sandbox.server.ts), agent `flavoured-sandbox` |
 
-All agents are registered in `registry.server.ts` and available via `getAgentList()`.
+Every one of them ends with `compactExecution`, the pattern that writes the answer
+the user sees. None composes `parallel` or `judge`; [`parallel.md`](./parallel.md)
+shows those two together.
 
-| ID | Name | Patterns | Servers |
-|----|------|----------|---------|
-| `search` | Search Agent | router → compactExecution | neo4j, web_search, fetch |
-| `sandbox-session` | Sandbox · Session | compactIntent → withSandbox(actorCritic) → compactExecution | none (in-VM sandbox tools) |
-| `retriever` | Retriever Agent | router → { retriever \| neo4j \| web_search } → compactExecution | neo4j, web_search, fetch (+ Data Stash via Redis retriever) |
-| `flavoured-sandbox` | Sandbox · Flavoured (router) | router → withSandbox(actorCritic) per flavour (base / image-processing / data) → compactExecution | none (in-VM sandbox tools per flavour) |
-
----
-
-## Search Agent
-
-**File:** `search.server.ts`
-
-> Registered id `search`; it was `default` until PR #234.
-
-Router-based agent with Neo4j and Web Search routes. Each route is wrapped with `withReferences` so the inner pattern receives an LLM-curated set of relevant prior `tool_result` events from any earlier turn (subsumes #26 / #29 — see [`with-references.md`](with-references.md)).
-
-```typescript
-router({ neo4j: '...', web_search: '...' }, { route: baml.router })
-→ routes({
-    neo4j:      withReferences(neo4jPattern, { scope: 'global', selector: baml.selector }),
-    web_search: withReferences(webPattern,   { scope: 'global', selector: baml.selector })
-  })
-→ compactExecution({ mode: 'thread', synthesize: baml.synthesize })
-```
-
-- Neo4j queries (`read_neo4j_cypher`, `write_neo4j_cypher`, `get_neo4j_schema`)
-- Web search via DuckDuckGo (`search`, `fetch`, `fetch_content`)
-- Cross-turn data flow: `withReferences` selector attaches relevant prior refs at each route's ingress; the controller can use `expandPreviousResult` or pass `ref:<id>` in tool args to inline-expand the full data
-
----
-
-## Creating Custom Agents
-
-```typescript
-// 1. Define pattern factory
-async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
-  const tools = await Tools()
-
-  const myPattern = simpleLoop(
-    createNeo4jController(tools.neo4j ?? []),
-    tools.neo4j ?? [],
-    { patternId: 'my-pattern' }
-  )
-
-  return [myPattern, compactExecution({ mode: 'thread' })]
-}
-
-// 2. Register agent
-export const myAgent: AgentConfig = {
-  id: 'my-agent',
-  name: 'My Agent',
-  description: 'Does something useful',
-  icon: '🤖',
-  servers: ['neo4j-cypher'],
-  createPatterns
-}
-
-// 3. Add to registry.server.ts
-registerAgent(myAgent)
-```
-
----
-
-**Last Updated:** 2026-07-23
+Two things this page taught have changed. A new agent exports an `AgentDefinition`
+(id, name, description, welcome text, servers and a `createPatterns(sessionId, deps)`
+factory), with no icon: presentation is added by the host when it registers the
+agent. And a loop's controller comes from `createLoopControllerAdapter()` in
+`@hames-ai/harness-baml`; the per-domain factories this page used, such as
+`createNeo4jController`, no longer exist.

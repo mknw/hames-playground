@@ -60,7 +60,7 @@ something that compiles TypeScript: Vite (or vinxi), esbuild, tsx or Bun. Plain
 
 Configure the driver once, then read the database's schema.
 
-> **Needs:** a Neo4j database — clone [the repository](https://github.com/mknw/hames-playground), then run `docker compose up -d` ([docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)) in it to start one, with user `neo4j` and password `password`.
+> **Needs:** a Neo4j database with user `neo4j` and password `password` — the `docker run` line under the quick start starts one without APOC; or clone [the repository](https://github.com/mknw/hames-playground) and run `docker compose up -d` ([docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)), which installs APOC.
 
 ```typescript
 import { configureNeo4j, resetDriver } from '@hames-ai/connectors/neo4j/client'
@@ -123,7 +123,7 @@ logs the driver's error, with its stack trace, before returning it in
 > offers a write tool, and the agents may call it. See also
 > [#241](https://github.com/mknw/hames-playground/issues/241).
 
-> **Needs:** a Neo4j database — clone [the repository](https://github.com/mknw/hames-playground), then run `docker compose up -d` ([docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)) in it to start one, with user `neo4j` and password `password`.
+> **Needs:** a Neo4j database with user `neo4j` and password `password` — the `docker run` line under the quick start starts one without APOC; or clone [the repository](https://github.com/mknw/hames-playground) and run `docker compose up -d` ([docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)), which installs APOC.
 
 ```typescript
 import { configureNeo4j, resetDriver } from '@hames-ai/connectors/neo4j/client'

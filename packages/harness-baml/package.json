@@ -1,6 +1,6 @@
 {
   "name": "@hames-ai/harness-baml",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The BAML companion for @hames-ai/harness-patterns — the role→client resolution seam, the adapter factories, and a pre-generated baml_client shipped beside its baml_src so a consumer never runs baml-generate.",
   "keywords": [
     "baml",

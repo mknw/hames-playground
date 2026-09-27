@@ -1,6 +1,6 @@
 {
   "name": "@hames-ai/connectors",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The connectors companion for @hames-ai/harness-patterns — Microsoft Graph app-side tools, the Neo4j non-agentic layer, and the MCP-gateway namespace catalog, all behind injected seams.",
   "keywords": [
     "connectors",

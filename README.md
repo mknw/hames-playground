@@ -20,6 +20,8 @@ routers, guards — where the run's history is the primary object and each LLM
 call sees only a slice chosen on purpose.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/mknw/hames-playground/ci.yml?branch=main&style=flat&label=CI)](https://github.com/mknw/hames-playground/actions/workflows/ci.yml)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/mknw/hames-playground/github-code-scanning%2Fcodeql?branch=main&style=flat&label=CodeQL)](https://github.com/mknw/hames-playground/actions/workflows/github-code-scanning/codeql)
+[![npm: @hames-ai/harness-patterns](https://img.shields.io/npm/v/@hames-ai/harness-patterns?style=flat&label=npm)](https://www.npmjs.com/package/@hames-ai/harness-patterns)
 [![last commit](https://img.shields.io/github/last-commit/mknw/hames-playground/main?style=flat&label=last%20commit)](https://github.com/mknw/hames-playground/commits/main)
 [![stage](https://img.shields.io/badge/stage-MVP-orange?style=flat)](#the-idea)
 [![app licence: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/app-PolyForm%20NC%201.0.0-blue?style=flat)](LICENSE)

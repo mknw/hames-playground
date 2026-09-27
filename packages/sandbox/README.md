@@ -1,5 +1,11 @@
 # @hames-ai/sandbox
 
+[![npm](https://img.shields.io/npm/v/@hames-ai/sandbox?style=flat)](https://www.npmjs.com/package/@hames-ai/sandbox)
+[![CI](https://img.shields.io/github/actions/workflow/status/mknw/hames-playground/ci.yml?branch=main&style=flat&label=CI)](https://github.com/mknw/hames-playground/actions/workflows/ci.yml)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/mknw/hames-playground/github-code-scanning%2Fcodeql?branch=main&style=flat&label=CodeQL)](https://github.com/mknw/hames-playground/actions/workflows/github-code-scanning/codeql)
+[![node](https://img.shields.io/node/v/@hames-ai/sandbox?style=flat)](https://nodejs.org)
+[![licence: MIT](https://img.shields.io/badge/licence-MIT-blue?style=flat)](./LICENSE)
+
 ## What this is
 
 Lets an agent built with

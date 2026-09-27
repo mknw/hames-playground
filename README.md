@@ -24,8 +24,8 @@ call sees only a slice chosen on purpose.
 [![npm: @hames-ai/harness-patterns](https://img.shields.io/npm/v/@hames-ai/harness-patterns?style=flat&label=npm)](https://www.npmjs.com/package/@hames-ai/harness-patterns)
 [![last commit](https://img.shields.io/github/last-commit/mknw/hames-playground/main?style=flat&label=last%20commit)](https://github.com/mknw/hames-playground/commits/main)
 [![stage](https://img.shields.io/badge/stage-MVP-orange?style=flat)](#the-idea)
-[![app licence: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/app-PolyForm%20NC%201.0.0-blue?style=flat)](LICENSE)
-[![hames licence: MIT](https://img.shields.io/badge/hames-MIT-blue?style=flat)](packages/harness-patterns/LICENSE)
+[![Hames app licence: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/Hames%20app-PolyForm%20NC%201.0.0-blue?style=flat)](LICENSE)
+[![@hames-ai packages licence: MIT](https://img.shields.io/badge/%40hames--ai%20packages-MIT-blue?style=flat)](packages/)
 
 [![SolidStart](https://img.shields.io/badge/SolidStart-1.x-2c4f7c?style=flat&logo=solid&logoColor=white)](https://start.solidjs.com)
 [![BAML](https://img.shields.io/badge/BAML-typed%20LLM%20calls-8b5cf6?style=flat)](https://docs.boundaryml.com)
@@ -37,10 +37,22 @@ call sees only a slice chosen on purpose.
 
 </div>
 
-> **⚠️ MVP stage — use at your own discretion.** These agents hold real tool
-> access, and nothing here has been hardened for a deployment you do not control.
-> Run it on localhost, against data you can afford to lose, with keys you can
-> rotate — and read the [License](#license) before you do anything else with it.
+> **Note.** This project is at MVP stage: interfaces and defaults can still change
+> between releases, and the agents act with real tool access and your
+> credentials. Protection in place today: content fetched by the search,
+> Microsoft 365 and retriever agents passes through an injection guard that
+> neutralises instruction-like text before a model reads it; sandboxed code runs
+> as a non-root user in a container with no Linux capabilities, a read-only root
+> filesystem and no network unless the call selects an allow-listed egress
+> profile; conversations and personal data are encrypted at rest in Postgres;
+> and a conversation can be read or changed only by its signed-in owner, or
+> read through a share link the owner created. CodeQL scans every pull request and
+> every push to `main`. Still to take care over: the `general` agent does not
+> use the injection guard yet
+> ([#206](https://github.com/mknw/hames-playground/issues/206)), and known
+> security issues remain open, among them
+> [#241](https://github.com/mknw/hames-playground/issues/241). Deploy it on a
+> host you control, and read the [License](#license) before you do.
 
 ---
 
@@ -328,7 +340,7 @@ The ones reached most often:
 
 |                                                                                                   |                                                                                |
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| [`docs/tutorials/README.md`](docs/tutorials/README.md)                                            | Task-shaped tutorials for building on the `@hames-ai` packages                    |
+| [`docs/tutorials/README.md`](docs/tutorials/README.md)                                            | Task-shaped tutorials for building on the `@hames-ai` packages                 |
 | [`packages/harness-patterns/SPEC.md`](packages/harness-patterns/SPEC.md)                          | The hames API reference and design spec                                        |
 | [`GLOSSARY.md`](GLOSSARY.md)                                                                      | House vocabulary — pattern, controller, critic, harness, EventView, Data Stash |
 | [`docs/plan/ROADMAP.md`](docs/plan/ROADMAP.md)                                                    | Roadmap shape: multi-user target architecture, phased MoSCoW plan              |

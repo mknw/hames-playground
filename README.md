@@ -378,8 +378,10 @@ injected `AgentDeps` bag, and what the host overlays on top — is
 The hames half is already extracted: five MIT packages under
 [`packages/`](packages/), each versioned and licensed on its own, consumed here
 through `workspace:*` and usable anywhere
-([`docs/plan/harness-npm-lib.md`](docs/plan/harness-npm-lib.md)). They are at
-`0.1.0` and not yet published to npm.
+([`docs/plan/harness-npm-lib.md`](docs/plan/harness-npm-lib.md)). All five are
+published on npm under the `@hames-ai` scope; the current version of each is on
+its npm page, starting with
+[`@hames-ai/harness-patterns`](https://www.npmjs.com/package/@hames-ai/harness-patterns).
 
 ## Security
 

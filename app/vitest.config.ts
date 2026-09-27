@@ -14,7 +14,18 @@ export default defineConfig({
     globalSetup: ['./src/__tests__/global-setup.ts'],
     coverage: {
       provider: 'v8',
-      reporter: ['text-summary', 'json-summary'],
+      // `lcovonly` is for Codecov: CI uploads coverage/lcov.info after this
+      // suite runs. It only adds an output file; the floors below decide
+      // pass/fail on their own, with or without the upload.
+      // `projectRoot` is the REPO root, so each path in the file is
+      // repo-relative. The default (this package's own root) writes bare
+      // names like `index.ts` and `settings.ts`, which several packages
+      // share, and Codecov would have to guess which file each one is.
+      reporter: [
+        'text-summary',
+        'json-summary',
+        ['lcovonly', { projectRoot: fileURLToPath(new URL('..', import.meta.url)) }],
+      ],
       // Still emit the report when a test fails, so a red run tells you both
       // what broke and where coverage stands.
       reportOnFailure: true,

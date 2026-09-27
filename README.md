@@ -20,6 +20,7 @@ routers, guards — where the run's history is the primary object and each LLM
 call sees only a slice chosen on purpose.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/mknw/hames-playground/ci.yml?branch=main&style=flat&label=CI)](https://github.com/mknw/hames-playground/actions/workflows/ci.yml)
+[![coverage](https://img.shields.io/codecov/c/github/mknw/hames-playground/main?style=flat&label=coverage)](https://app.codecov.io/gh/mknw/hames-playground)
 [![CodeQL](https://img.shields.io/github/actions/workflow/status/mknw/hames-playground/github-code-scanning%2Fcodeql?branch=main&style=flat&label=CodeQL)](https://github.com/mknw/hames-playground/actions/workflows/github-code-scanning/codeql)
 [![npm: @hames-ai/harness-patterns](https://img.shields.io/npm/v/@hames-ai/harness-patterns?style=flat&label=npm)](https://www.npmjs.com/package/@hames-ai/harness-patterns)
 [![last commit](https://img.shields.io/github/last-commit/mknw/hames-playground/main?style=flat&label=last%20commit)](https://github.com/mknw/hames-playground/commits/main)
@@ -328,7 +329,7 @@ The ones reached most often:
 
 |                                                                                                   |                                                                                |
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| [`docs/tutorials/README.md`](docs/tutorials/README.md)                                            | Task-shaped tutorials for building on the `@hames-ai` packages                    |
+| [`docs/tutorials/README.md`](docs/tutorials/README.md)                                            | Task-shaped tutorials for building on the `@hames-ai` packages                 |
 | [`packages/harness-patterns/SPEC.md`](packages/harness-patterns/SPEC.md)                          | The hames API reference and design spec                                        |
 | [`GLOSSARY.md`](GLOSSARY.md)                                                                      | House vocabulary — pattern, controller, critic, harness, EventView, Data Stash |
 | [`docs/plan/ROADMAP.md`](docs/plan/ROADMAP.md)                                                    | Roadmap shape: multi-user target architecture, phased MoSCoW plan              |

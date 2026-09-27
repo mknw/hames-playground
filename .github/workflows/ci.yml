@@ -189,8 +189,9 @@ jobs:
       #   Codecov outage, a missing CODECOV_TOKEN, or a Dependabot PR (which
       #   cannot read repository secrets) block every merge. Coverage on a PR
       #   is already enforced by the floors.
-      # Consequence: until CODECOV_TOKEN is added as a repository secret, every
-      # push to main goes red here. That red is the signal to add it.
+      # Consequence: without a CODECOV_TOKEN repository secret, pushes to main
+      # go red here whenever Codecov refuses a tokenless upload. That red is
+      # the signal to add the secret.
       #
       # `disable_search` because both suites write coverage/lcov.info. Without
       # it, each upload would also pick up the other suite's file under the

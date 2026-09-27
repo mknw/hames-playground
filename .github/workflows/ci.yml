@@ -189,6 +189,13 @@ jobs:
       #   Codecov outage, a missing CODECOV_TOKEN, or a Dependabot PR (which
       #   cannot read repository secrets) block every merge. Coverage on a PR
       #   is already enforced by the floors.
+      # A HANG is bounded the same way. `fail_ci_if_error` only covers errors,
+      # and the uploader's curls have no overall time limit, so a stalled
+      # Codecov would hold `check` pending until the job's 15-minute limit
+      # and then fail it. `timeout-minutes: 3` ends a stalled upload (a
+      # normal one takes seconds). `continue-on-error` off main makes that
+      # timeout, and any failure in the action's own setup steps, non-fatal
+      # on a PR. On a push to main both stay fatal.
       # Consequence: without a CODECOV_TOKEN repository secret, pushes to main
       # go red here whenever Codecov refuses a tokenless upload. That red is
       # the signal to add the secret.
@@ -198,6 +205,8 @@ jobs:
       # wrong flag. The paths inside each file are repo-relative (the
       # `projectRoot` on each config's lcovonly reporter).
       - name: Upload coverage to Codecov (app)
+        timeout-minutes: 3
+        continue-on-error: ${{ github.event_name != 'push' }}
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -207,6 +216,8 @@ jobs:
           fail_ci_if_error: ${{ github.event_name == 'push' }}
 
       - name: Upload coverage to Codecov (sandbox)
+        timeout-minutes: 3
+        continue-on-error: ${{ github.event_name != 'push' }}
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}

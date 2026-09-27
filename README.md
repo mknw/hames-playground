@@ -37,19 +37,19 @@ call sees only a slice chosen on purpose.
 
 </div>
 
-> **Note.** This project is at MVP stage: interfaces and defaults can still change
-> between releases, and the agents act with real tool access and your
+> **Note.** This project is at MVP stage: interfaces and defaults can still
+> change between releases, and the agents act with real tool access and your
 > credentials. Protection in place today: content fetched by the search,
 > Microsoft 365 and retriever agents passes through an injection guard that
-> neutralises instruction-like text before a model reads it; sandboxed code runs
-> as a non-root user in a container with no Linux capabilities, a read-only root
-> filesystem and no network unless the call selects an allow-listed egress
-> profile; conversations and personal data are encrypted at rest in Postgres;
-> and a conversation can be read or changed only by its signed-in owner, or
-> read through a share link the owner created. CodeQL scans every pull request and
-> every push to `main`. Still to take care over: the `general` agent does not
-> use the injection guard yet
-> ([#206](https://github.com/mknw/hames-playground/issues/206)), and known
+> rewrites the instruction-like text it recognises before a model reads it;
+> sandboxed code runs as a non-root user in a container with no Linux
+> capabilities, a read-only root filesystem and no network unless the call
+> selects an allow-listed egress profile; conversation content and users' names
+> and email addresses are encrypted at rest in Postgres; and a conversation can
+> be read or changed only by its signed-in owner, or read through a share link
+> the owner created. CodeQL scans every pull request and every push to `main`.
+> Still to take care over: the `general` agent does not use the injection guard
+> yet ([#206](https://github.com/mknw/hames-playground/issues/206)), and known
 > security issues remain open, among them
 > [#241](https://github.com/mknw/hames-playground/issues/241). Deploy it on a
 > host you control, and read the [License](#license) before you do.

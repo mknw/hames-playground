@@ -1,0 +1,117 @@
+name: Release
+
+# Version intent → Version Packages PR → git tags. It does NOT publish.
+#
+# Publishing the five @hames-ai packages stays a human step
+# (`pnpm -r publish` on a tagged main; CONTRIBUTING.md has the runbook), so
+# there is deliberately no publish-script below, no NPM_TOKEN anywhere, and no
+# id-token permission. Each package's prepublishOnly guard refuses npm because
+# npm ships `workspace:^` literally; pnpm rewrites it at pack time.
+#
+# On every push to main:
+#   - changesets pending  → open or update the "Version Packages" PR
+#                           (`pnpm changeset version`: bumps, CHANGELOGs,
+#                           deletes the consumed .changeset/*.md files);
+#   - none pending        → tag whatever version main now carries, if it is
+#                           not tagged yet: one `@hames-ai/<pkg>@<v>` per
+#                           package plus one repo-level `v<v>` for the fixed
+#                           group. On an ordinary merge every tag already
+#                           exists and the step is a no-op; right after the
+#                           Version PR merges, it is the release tag.
+on:
+  push:
+    branches: [main]
+
+# Two quick merges must not race each other over the same PR branch or tags;
+# queue them instead of cancelling (a cancelled run can leave a half-pushed
+# tag set).
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+# GITHUB_TOKEN only. contents: write — the action pushes the
+# changeset-release/main branch and this job pushes tags; pull-requests: write —
+# the action opens and edits the Version Packages PR. The repository setting
+# "Allow GitHub Actions to create and approve pull requests"
+# (Settings → Actions → General) must be ON, or the PR creation is refused.
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    name: version PR · tags
+    if: github.repository == 'mknw/hames-playground'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history and every tag: `changeset git-tag` skips versions that
+          # are already tagged, which it can only know if the tags are here.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      # Pinned by SHA: this step holds a write token. v2 is the line that
+      # pairs with @changesets/cli v3.
+      - id: changesets
+        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        with:
+          version-script: pnpm changeset version
+          commit-message: 'chore: version packages'
+          pr-title: 'chore: version packages'
+
+      - name: Tag the released version
+        if: steps.changesets.outputs.has-changesets == 'false'
+        run: |
+          set -euo pipefail
+          # `changeset git-tag` writes annotated tags, which need an identity.
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          # The fixed group shares one version; refuse to tag if it does not.
+          versions=$(for m in packages/*/package.json; do
+            node -p "const p=require('./$m'); p.private ? '' : p.version"
+          done | sort -u | sed '/^$/d')
+          if [ "$(printf '%s\n' "$versions" | wc -l)" -ne 1 ]; then
+            echo "::error::the fixed group disagrees on its version: $(tr "\n" " " <<<"$versions")"
+            exit 1
+          fi
+          version=$versions
+
+          pnpm changeset git-tag
+
+          # git-tag ignores `git tag`'s exit status, so a tag it reports as
+          # created may not exist. Verify every one before pushing anything.
+          tags=()
+          for m in packages/*/package.json; do
+            name=$(node -p "const p=require('./$m'); p.private ? '' : p.name")
+            [ -n "$name" ] || continue
+            git rev-parse -q --verify "refs/tags/$name@$version" >/dev/null || {
+              echo "::error::expected tag $name@$version was not created"
+              exit 1
+            }
+            tags+=("$name@$version")
+          done
+          if ! git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            git tag -a "v$version" -m "v$version"
+          fi
+          tags+=("v$version")
+
+          # Explicit refs, not --tags: push the release and nothing else, and
+          # --atomic so the remote never holds half a tag set.
+          # Re-pushing a tag the remote already has at the same object is a
+          # no-op, which keeps a re-run harmless.
+          git push --atomic origin "${tags[@]/#/refs/tags/}"
+          echo "### Tagged v$version" >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- %s\n' "${tags[@]}" >> "$GITHUB_STEP_SUMMARY"

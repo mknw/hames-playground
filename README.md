@@ -348,6 +348,8 @@ does not cover it, open a [GitHub issue](https://github.com/mknw/hames-playgroun
 Issues and pull requests are welcome. For larger changes, open an issue first to
 discuss the approach.
 
+Versioning, changesets and the release process: [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 Adding an agent touches three places: a definition module under
 [`packages/agents/agents/`](packages/agents/agents/) exporting an
 `AgentDefinition`, one `registerAgent(overlay(...))` line in the app's

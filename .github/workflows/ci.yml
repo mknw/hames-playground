@@ -236,6 +236,58 @@ jobs:
         id: pack_smoke
         run: scripts/pack-smoke.sh
 
+  changeset:
+    name: changeset · version intent
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # PRs only: on main there is no base to diff against, and pending
+    # changesets there are the release workflow's business. The Version
+    # Packages PR (head `changeset-release/main`, opened by release.yml) is
+    # exempt by construction — it CONSUMES the changesets, so it changes every
+    # package and adds none.
+    if: github.event_name == 'pull_request' && github.head_ref != 'changeset-release/main'
+    defaults:
+      run:
+        working-directory: .
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `changeset status --since` diffs against the base ref and reads
+          # which .changeset/*.md files the branch added; both need history
+          # and the base branch as a remote-tracking ref.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      # Fails when a public package under packages/ changed in a file that
+      # ships and the branch adds no .changeset/*.md. "Ships" is
+      # .changeset/config.json's changedFilePatterns: everything except tests,
+      # vitest config, prettier config and packages/sandbox/scripts. README
+      # changes COUNT — README.md is in every tarball and is the npm page. A
+      # change that ships but deserves no release takes
+      # `pnpm changeset --empty`. The base is the PR's own base branch, so a
+      # stacked PR is judged against its parent rather than main.
+      - name: Require a changeset for shipped package changes
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: pnpm changeset status --since="origin/$BASE_REF"
+
+      # The negated changedFilePatterns above are a hand-typed claim about what
+      # does NOT ship; this packs every public package (dry run) and fails if
+      # any tarball file is excluded by one, so widening a `files` allowlist
+      # cannot silently exempt the new files from the check above.
+      - name: Patterns agree with the tarballs
+        run: node scripts/check-changeset-patterns.mjs
+
   image:
     name: docker image · build · boot
     runs-on: ubuntu-latest

@@ -174,6 +174,46 @@ jobs:
       # Catches SSR/vinxi breakage the unit tests cannot see.
       - run: pnpm build
 
+      # Sends the lcov reports the two coverage steps wrote to Codecov, which
+      # is what the README's coverage badge reads. The floors in the two
+      # vitest configs stay the gate. Codecov only reports. These run last so
+      # a failed upload can never skip a test or the build.
+      #
+      # When a failed upload fails the job, and why:
+      # - On a push to main, it FAILS. The badge is computed from main's
+      #   uploads, and a silent failure there leaves a stale badge that nobody
+      #   notices. A push to main is not a merge gate, so a red run there
+      #   blocks no one but is still visible on the commit and in Actions.
+      # - On a pull request, it only logs. This job is `check`, the one the
+      #   CI-before-merge ruleset requires, so a loud failure would let a
+      #   Codecov outage, a missing CODECOV_TOKEN, or a Dependabot PR (which
+      #   cannot read repository secrets) block every merge. Coverage on a PR
+      #   is already enforced by the floors.
+      # Consequence: until CODECOV_TOKEN is added as a repository secret, every
+      # push to main goes red here. That red is the signal to add it.
+      #
+      # `disable_search` because both suites write coverage/lcov.info. Without
+      # it, each upload would also pick up the other suite's file under the
+      # wrong flag. The paths inside each file are repo-relative (the
+      # `projectRoot` on each config's lcovonly reporter).
+      - name: Upload coverage to Codecov (app)
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: app/coverage/lcov.info
+          disable_search: true
+          flags: app
+          fail_ci_if_error: ${{ github.event_name == 'push' }}
+
+      - name: Upload coverage to Codecov (sandbox)
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: packages/sandbox/coverage/lcov.info
+          disable_search: true
+          flags: sandbox
+          fail_ci_if_error: ${{ github.event_name == 'push' }}
+
   packages:
     name: pack · tarball install · exports probe
     runs-on: ubuntu-latest

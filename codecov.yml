@@ -1,0 +1,22 @@
+# Codecov reports coverage here. It does not gate merges: the floors in
+# app/vitest.config.ts and packages/sandbox/vitest.config.ts do, inside CI's
+# `check` job. Each key below exists to stop Codecov's defaults from acting
+# as a second gate that disagrees with the first.
+coverage:
+  status:
+    # By default Codecov posts `codecov/project` and `codecov/patch` commit
+    # statuses that go red on any drop, including a v8 rounding wobble on a
+    # PR that touches no code. `informational: true` keeps both statuses and
+    # their numbers, but they never fail.
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+comment:
+  # Codecov's default posts a comment on every PR. With `require_changes`
+  # it comments only when coverage actually changed, so docs-only and
+  # CI-only PRs get no comment.
+  require_changes: true

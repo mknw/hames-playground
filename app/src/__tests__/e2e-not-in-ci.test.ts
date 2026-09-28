@@ -1,3 +1,6 @@
+// @vitest-environment node
+// (node, not jsdom: importing a vitest config loads esbuild, whose TextEncoder
+// invariant fails under jsdom.)
 /**
  * The app-path e2e suite must never run in CI. This is the pin that says so.
  *
@@ -26,6 +29,8 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import appConfig from '../../vitest.config'
+import pkgConfig from '../../../packages/harness-patterns/vitest.config'
 
 const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const REPO = path.resolve(APP, '..')
@@ -64,23 +69,40 @@ describe('the e2e suite is not reachable from CI', () => {
     }
   })
 
-  // The one runner-level escape (#407): the config's `projects` list may add
+  // The runner-level escape (#407): the config's `projects` list may add
   // @hames-ai/harness-patterns' own suite so coverage counts its tests, and
-  // nothing else. A `'../e2e'` or `'./e2e/vitest.config.ts'` entry there
-  // would run the e2e suite in CI without touching any include glob above.
-  it('the only extra project is the harness-patterns package suite, rooted at its __tests__/', () => {
-    const config = readFileSync(path.join(APP, 'vitest.config.ts'), 'utf8')
-    const projects = /projects:\s*\[([\s\S]*?)\]\s*,\s*\n/.exec(config)?.[1]
-    expect(projects, 'vitest.config.ts has no projects array').toBeTruthy()
-    // Every string literal in the array except an inline project's `name`.
-    const bare = (projects as string).replace(/name:\s*'[^']*'/g, '')
-    const paths = [...bare.matchAll(/'([^']+)'/g)].map((m) => m[1])
-    expect(paths).toEqual(['../packages/harness-patterns'])
-    const pkg = readFileSync(path.join(REPO, 'packages/harness-patterns/vitest.config.ts'), 'utf8')
-    const include = /include:\s*\[([^\]]*)\]/.exec(pkg)?.[1]
-    const patterns = [...(include ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1])
-    expect(patterns.length).toBeGreaterThan(0)
-    for (const pattern of patterns) {
+  // nothing else. A project entry naming e2e/ would run that suite in CI
+  // without touching any include glob. Read from the IMPORTED config, not
+  // its source text, so no spelling of the entry (backticks, a variable, an
+  // inline object with its own include) can slip past a pattern.
+  it('no vitest project reaches e2e/', () => {
+    const projects = appConfig.test?.projects
+    expect(Array.isArray(projects), 'vitest.config.ts has no projects array').toBe(true)
+    for (const project of projects as unknown[]) {
+      if (typeof project === 'string') {
+        expect(project, `the project ${project} could collect the e2e suite`).toBe(
+          '../packages/harness-patterns',
+        )
+        continue
+      }
+      // An inline project may only extend the root options and name itself —
+      // an include, root or dir of its own is a way out of src/.
+      const inline = project as { extends?: unknown; test?: Record<string, unknown> }
+      expect(Object.keys(inline).sort(), 'an inline project overrides more than its name').toEqual([
+        'extends',
+        'test',
+      ])
+      expect(inline.extends).toBe(true)
+      expect(Object.keys(inline.test ?? {})).toEqual(['name'])
+    }
+  })
+
+  // The package project itself is only safe while its own include stays
+  // inside its `__tests__/`.
+  it("the harness-patterns project's include stays rooted at its __tests__/", () => {
+    const include = pkgConfig.test?.include ?? []
+    expect(include.length).toBeGreaterThan(0)
+    for (const pattern of include) {
       expect(pattern, `the package include pattern ${pattern} escapes __tests__/`).toMatch(
         /^__tests__\//,
       )

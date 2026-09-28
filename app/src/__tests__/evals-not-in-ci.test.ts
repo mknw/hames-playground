@@ -1,3 +1,6 @@
+// @vitest-environment node
+// (node, not jsdom: importing a vitest config loads esbuild, whose TextEncoder
+// invariant fails under jsdom.)
 /**
  * The evals must never run in CI. This is the pin that says so.
  *
@@ -20,6 +23,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import appConfig from '../../vitest.config'
 
 const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const REPO = path.resolve(APP, '..')
@@ -56,6 +60,34 @@ describe('the eval suite is not reachable from CI', () => {
     // collecting eval modules, and both are one careless edit away.
     for (const pattern of patterns) {
       expect(pattern, `test.include pattern ${pattern} escapes src/`).toMatch(/^src\//)
+    }
+  })
+
+  // The runner-level escape (#407): the config's `projects` list may add
+  // @hames-ai/harness-patterns' own suite so coverage counts its tests, and
+  // nothing else. A project entry naming evals/ would run that suite in CI
+  // without touching any include glob. Read from the IMPORTED config, not
+  // its source text, so no spelling of the entry (backticks, a variable, an
+  // inline object with its own include) can slip past a pattern.
+  it('no vitest project reaches evals/', () => {
+    const projects = appConfig.test?.projects
+    expect(Array.isArray(projects), 'vitest.config.ts has no projects array').toBe(true)
+    for (const project of projects as unknown[]) {
+      if (typeof project === 'string') {
+        expect(project, `the project ${project} could collect the eval suite`).toBe(
+          '../packages/harness-patterns',
+        )
+        continue
+      }
+      // An inline project may only extend the root options and name itself —
+      // an include, root or dir of its own is a way out of src/.
+      const inline = project as { extends?: unknown; test?: Record<string, unknown> }
+      expect(Object.keys(inline).sort(), 'an inline project overrides more than its name').toEqual([
+        'extends',
+        'test',
+      ])
+      expect(inline.extends).toBe(true)
+      expect(Object.keys(inline.test ?? {})).toEqual(['name'])
     }
   })
 

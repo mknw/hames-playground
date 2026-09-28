@@ -93,7 +93,9 @@ services:
     # Adding an agent that needs another server means adding it here as well.
     command: !override
       - --servers=neo4j-cypher,fetch,web_search,context7,memory
-      - --config=/mcp/config.yaml
+      # The rendered config the base file's `mcp-config` service writes — it
+      # fills ${NEO4J_PASSWORD} / ${POSTGRES_PASSWORD} from this host's .env.
+      - --config=/mcp/rendered/config.yaml
       - --catalog=/mcp/custom-catalog.yaml
       - --transport=streaming
       - --port=8811

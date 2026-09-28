@@ -13,19 +13,19 @@ import {
   type QueryRunner,
 } from './migrate-encryption.server'
 import pg from 'pg'
+import { localDatabaseUrl } from '../config/compose-credentials.server'
 
 assertServerOnImport()
 
 const { Pool } = pg
-
-const DEFAULT_DATABASE_URL = 'postgresql://postgres:password@localhost:5432/kgagent'
 
 let _pool: pg.Pool | null = null
 let _initPromise: Promise<void> | null = null
 
 function getPool(): pg.Pool {
   if (!_pool) {
-    const connectionString = process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL
+    // Unset: the compose Postgres on localhost, with the repo-root .env password.
+    const connectionString = process.env.DATABASE_URL ?? localDatabaseUrl('kgagent')
     _pool = new Pool({ connectionString })
     _pool.on('error', (err) => {
       console.error('[db] idle client error:', err)

@@ -42,19 +42,43 @@ services:
       timeout: 5s
       retries: 10
 
+  mcp-config:
+    # One-shot: renders configs/mcp-config.yaml's ${NEO4J_PASSWORD} /
+    # ${POSTGRES_PASSWORD} placeholders from the same root-.env values the
+    # databases are created with, into the volume the gateway reads. That makes
+    # the root .env the gateway's source too; before this the gateway config
+    # carried literals that silently disagreed with any other password.
+    # Re-runs on every `docker compose up`; after changing a password,
+    # `docker compose up -d --force-recreate mcp-gateway` so the gateway
+    # re-reads it. postgres:16-alpine only because the stack already pulls it
+    # and it has a POSIX sh + awk; it runs no database here.
+    image: postgres:16-alpine
+    entrypoint:
+      ["/bin/sh", "/render.sh", "/in/mcp-config.yaml", "/out/config.yaml"]
+    environment:
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?set NEO4J_PASSWORD in the repo-root .env — see .env.example}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the repo-root .env — see .env.example}
+    volumes:
+      - ./scripts/render-mcp-config.sh:/render.sh:ro
+      - ./configs/mcp-config.yaml:/in/mcp-config.yaml:ro
+      - mcp_config:/out
+    network_mode: none
+    restart: "no"
+
   mcp-gateway:
     image: docker/mcp-gateway
     restart: unless-stopped
     command:
       - --enable-all-servers
-      - --config=/mcp/config.yaml
+      # The RENDERED config (see `mcp-config` above), not the tracked file.
+      - --config=/mcp/rendered/config.yaml
       - --catalog=/mcp/custom-catalog.yaml
       - --transport=streaming
       - --port=8811
       - --verbose
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./configs/mcp-config.yaml:/mcp/config.yaml:ro
+      - mcp_config:/mcp/rendered:ro
       - ./configs/custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
       - ./configs/catalog.yaml:/mcp/catalog.yaml:ro
       - ./docker-config.json:/root/.docker/config.json:ro
@@ -65,6 +89,8 @@ services:
     depends_on:
       neo4j:
         condition: service_healthy
+      mcp-config:
+        condition: service_completed_successfully
 
   postgres:
     image: postgres:16-alpine
@@ -217,3 +243,5 @@ volumes:
   neo4j_data:
   postgres_data:
   redis_data:
+  # The gateway's rendered config (derived, rewritten on every `up`).
+  mcp_config:

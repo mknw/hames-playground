@@ -46,9 +46,15 @@ import { fileURLToPath } from 'node:url'
 const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const read = (relative: string): string => readFileSync(path.join(APP_DIR, relative), 'utf8')
 
-/** The database name out of a `postgresql://…/name` default in a source file. */
+/** The database name out of a default in a source file: a literal
+ *  `postgresql://…/name`, or `localDatabaseUrl('name')` — the compose-credential
+ *  helper every suite's default now goes through. */
 function declaredDatabases(source: string): string[] {
-  return [...source.matchAll(/postgresql:\/\/[^'"\s]*?\/([A-Za-z0-9_]+)/g)].map((m) => m[1])
+  return [
+    ...source.matchAll(
+      /postgresql:\/\/[^'"\s]*?\/([A-Za-z0-9_]+)|localDatabaseUrl\(\s*'([A-Za-z0-9_]+)'\s*\)/g,
+    ),
+  ].map((m) => m[1] ?? m[2])
 }
 
 interface Suite {

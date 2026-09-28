@@ -37,6 +37,7 @@ import { loadDirectoryRoster } from '../roster-source.server'
 import { configureNeo4j, resetDriver } from '@hames-ai/connectors/neo4j/client'
 import { getEndpoints } from '../../config/endpoints'
 import { formatCounts, maskGraphIds } from './_redact'
+import { composeSecret } from '../../config/compose-credentials.server'
 
 function requireEnv(): void {
   const missing = ['AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET'].filter(
@@ -58,7 +59,7 @@ async function main(): Promise<void> {
   configureNeo4j({
     url: getEndpoints().neo4j.bolt,
     user: process.env.NEO4J_USER || 'neo4j',
-    password: process.env.NEO4J_PASSWORD || 'password',
+    password: composeSecret('NEO4J_PASSWORD') ?? '',
   })
 
   console.log('👥 org-graph roster ingest (app-only Graph credential)')

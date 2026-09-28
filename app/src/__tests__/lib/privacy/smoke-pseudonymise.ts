@@ -58,6 +58,7 @@ import {
 } from '../../../lib/org-graph/roster-source.server'
 import { configureNeo4j, resetDriver } from '@hames-ai/connectors/neo4j/client'
 import { getEndpoints } from '../../../lib/config/endpoints'
+import { composeSecret } from '../../../lib/config/compose-credentials.server'
 
 /** Build a Graph-shaped `tool_result` payload out of three real people:
  *  two declared in labelled fields, one named only in the body prose. */
@@ -101,7 +102,7 @@ async function main(): Promise<void> {
   configureNeo4j({
     url: getEndpoints().neo4j.bolt,
     user: process.env.NEO4J_USER || 'neo4j',
-    password: process.env.NEO4J_PASSWORD || 'password',
+    password: composeSecret('NEO4J_PASSWORD') ?? '',
   })
   const roster = await loadDirectoryRoster()
   console.log(`🔒 pseudonymisation smoke — directory roster: ${roster.length} members`)

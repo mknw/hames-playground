@@ -75,9 +75,9 @@ cd hames-playground
 # 1. Backing services — Postgres, Neo4j, redis-stack, the MCP gateway and
 #    doc-convert. The app itself runs on the host (step 5). Compose reads the
 #    two database passwords from a ROOT .env (not app/.env), and refuses to
-#    start without them. Already have a stack from before this file existed?
-#    Its volumes kept their first password — set that here, see below.
-cp .env.example .env              # then set NEO4J_PASSWORD / POSTGRES_PASSWORD
+#    start without them. A new stack works with the shipped values; an
+#    existing one kept its first password (`password`) — set that, see below.
+cp .env.example .env
 docker compose up -d
 docker compose ps                 # all five services should be Up
 
@@ -101,12 +101,12 @@ encrypted at rest, and with the key left empty the app boots but cannot save a
 single conversation. Back the encryption key up separately from the database: a
 dump without it is unreadable.
 
-> **Passwords live in more than one place.** The root `.env` reaches the
-> containers only. `configs/mcp-config.yaml` (the gateway), `app/.env`'s
-> `NEO4J_PASSWORD` / `DATABASE_URL` and the test suites all default to the old
-> compose value `password`, so any other value has to be written there too.
-> An existing stack's volumes were created with `password` and keep it until
-> you rotate it in place — never delete a volume to change it.
+> **The root `.env` is the only place the two passwords live.** The
+> databases, the MCP gateway's config, `pnpm dev` and the test suites all read
+> them from there, so on a new stack any values work as long as they are set.
+> An existing stack's volumes were created with the old default `password` and
+> keep it until you rotate it in place — put `password` in the root `.env`, and
+> never delete a volume to change it.
 > [`docs/DOCKER_COMPOSE.md`](docs/DOCKER_COMPOSE.md#credentials-and-existing-volumes)
 > has both paths with the exact commands.
 

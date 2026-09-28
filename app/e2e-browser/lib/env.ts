@@ -10,6 +10,7 @@
  */
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { localDatabaseUrl } from '../../src/lib/config/compose-credentials.server'
 
 /** `app/` — the working directory the dev server is spawned in. */
 export const APP_DIR = fileURLToPath(new URL('../..', import.meta.url))
@@ -54,8 +55,7 @@ export const APP_URL = `http://127.0.0.1:${APP_PORT}`
  * separation — see it for why both exist.
  */
 export const TEST_DATABASE_URL =
-  process.env.TEST_DATABASE_URL ??
-  'postgresql://postgres:password@localhost:5432/kgagent_test_browser'
+  process.env.TEST_DATABASE_URL ?? localDatabaseUrl('kgagent_test_browser')
 
 /** The same key the unit suite and `app/e2e/` use. The databases are separate
  *  now, so this is no longer forced — but a second key would be a second thing

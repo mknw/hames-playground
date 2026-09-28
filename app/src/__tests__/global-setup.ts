@@ -22,17 +22,37 @@
  * docker on this machine" into a failed run.
  */
 import pg from 'pg'
+import { localDatabaseUrl } from '../lib/config/compose-credentials.server'
 
 /** The database the UNIT suite talks to. Override with `TEST_DATABASE_URL`.
  *
  *  One of three, since #280: `app/e2e/` and `app/e2e-browser/` each provision
  *  their OWN database through {@link provisionDatabase}, so two suites running
  *  at once cannot delete each other's rows. See `docs/testing/pyramid.md`. */
-export const TEST_DATABASE_URL =
-  process.env.TEST_DATABASE_URL ?? 'postgresql://postgres:password@localhost:5432/kgagent_test'
+export const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL ?? localDatabaseUrl('kgagent_test')
 
 /** `duplicate_database` — someone (or a previous run) got there first. */
 const DUPLICATE_DATABASE = '42P04'
+
+/**
+ * A Postgres that ANSWERED and refused our credentials. Distinct from "no
+ * Postgres here": that one is swallowed so a machine without docker still gets
+ * a green run with the DB suites skipped, but this one means a database is
+ * running and every DB-backed suite would skip against it — a green run that
+ * tested nothing. That is exactly how a password mismatch between the repo-root
+ * `.env` and these URLs once passed unnoticed, so it fails the run instead.
+ *
+ * SQLSTATE class 28 is `invalid_authorization_specification` (28P01 is a wrong
+ * password, 28000 a missing role or pg_hba rejection). The message check covers
+ * node-postgres's own client-side error when the server asks for SCRAM and the
+ * URL carries no password at all — it has no SQLSTATE.
+ */
+export function isAuthFailure(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code
+  if (typeof code === 'string' && code.startsWith('28')) return true
+  const message = err instanceof Error ? err.message : String(err)
+  return /client password must be a string/i.test(message)
+}
 
 /**
  * Vitest's globalSetup entry point for the unit suite.
@@ -71,6 +91,16 @@ export async function provisionDatabase(connectionString: string): Promise<void>
     console.log(`[test-db] created ${database}`)
   } catch (err) {
     const code = (err as { code?: string }).code
+    if (isAuthFailure(err)) {
+      throw new Error(
+        `[test-db] Postgres at ${url.host} rejected the credentials for ${database} ` +
+          `(${code ?? 'no code'}): ${err instanceof Error ? err.message : String(err)}. ` +
+          'The test URLs take POSTGRES_PASSWORD from the environment or the repo-root .env ' +
+          '(see .env.example), and that value does not match the running database. ' +
+          'Failing the run: every DB-backed suite would otherwise skip and report green.',
+        { cause: err },
+      )
+    }
     if (code !== DUPLICATE_DATABASE) {
       console.warn(
         `[test-db] could not provision ${database} (${code ?? 'no code'}): ` +

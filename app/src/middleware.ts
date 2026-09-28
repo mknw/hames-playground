@@ -58,6 +58,7 @@ import './lib/app-tools/index.server'
 // runs when the stash path is actually reached, exactly where the
 // gateway-vs-direct choice always used to be made.
 import './lib/redis-direct.server'
+import { composeSecret } from './lib/config/compose-credentials.server'
 
 // Neo4j config seam (design S5, #225 PR-3): the driver's connection is handed
 // over explicitly at app boot — `getEndpoints().neo4j.bolt` plus the same env
@@ -68,7 +69,8 @@ import './lib/redis-direct.server'
 configureNeo4j({
   url: getEndpoints().neo4j.bolt,
   user: process.env.NEO4J_USER || 'neo4j',
-  password: process.env.NEO4J_PASSWORD || 'password',
+  // Env first, else the repo-root .env compose reads — one source, no literal.
+  password: composeSecret('NEO4J_PASSWORD') ?? '',
 })
 
 // Durable-workspace seam (@hames-ai/sandbox): the package owns the `/work`

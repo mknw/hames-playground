@@ -22,6 +22,7 @@
  */
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
+import { localDatabaseUrl } from '../src/lib/config/compose-credentials.server'
 
 /**
  * This suite's OWN throwaway database, and its own dev-bypass identity.
@@ -47,9 +48,7 @@ import { defineConfig } from 'vitest/config'
  * `src/__tests__/suite-isolation.test.ts` pins that the three declared triples
  * stay distinct.
  */
-const TEST_DATABASE_URL =
-  process.env.TEST_DATABASE_URL ??
-  'postgresql://postgres:password@localhost:5432/kgagent_test_apppath'
+const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL ?? localDatabaseUrl('kgagent_test_apppath')
 
 /** This suite's dev-bypass user. See {@link TEST_DATABASE_URL}. */
 const BYPASS_USER_ID = 'e2e-app-path-user'

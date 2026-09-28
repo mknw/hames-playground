@@ -5,9 +5,10 @@ set -e
 
 CONTAINER_NAME="neo4j-mldsgraph"
 NEO4J_USER="neo4j"
-# Matches NEO4J_PASSWORD in the repo-root .env (export it, or prefix the call);
-# `password` is the pre-.env compose default an older volume still carries.
-NEO4J_PASSWORD="${NEO4J_PASSWORD:-password}"
+# One source: $NEO4J_PASSWORD if exported, else the repo-root .env Compose reads.
+# shellcheck source=lib/compose-env.sh
+. "$(dirname "$0")/lib/compose-env.sh"
+NEO4J_PASSWORD="$(compose_secret NEO4J_PASSWORD)"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_FILE="neo4j_dumps/export-${TIMESTAMP}.cypher"
 

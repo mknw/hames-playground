@@ -10,9 +10,10 @@ set -e
 # NEO4J_CONTAINER=<name> when your compose project uses a different name.
 CONTAINER_NAME="${NEO4J_CONTAINER:-neo4j-mldsgraph}"
 NEO4J_USER="neo4j"
-# Matches NEO4J_PASSWORD in the repo-root .env (export it, or prefix the call);
-# `password` is the pre-.env compose default an older volume still carries.
-NEO4J_PASSWORD="${NEO4J_PASSWORD:-password}"
+# One source: $NEO4J_PASSWORD if exported, else the repo-root .env Compose reads.
+# shellcheck source=lib/compose-env.sh
+. "$(dirname "$0")/lib/compose-env.sh"
+NEO4J_PASSWORD="$(compose_secret NEO4J_PASSWORD)"
 
 # The import DELETES ALL DATA in the target graph first. Refuse to do that to a
 # non-empty graph unless the caller passes --wipe explicitly.
@@ -93,4 +94,4 @@ echo ""
 echo "Import completed successfully!"
 echo ""
 echo "Verify with:"
-echo "  docker exec ${CONTAINER_NAME} cypher-shell -u ${NEO4J_USER} -p ${NEO4J_PASSWORD} 'MATCH (n) RETURN count(n);'"
+echo "  docker exec ${CONTAINER_NAME} cypher-shell -u ${NEO4J_USER} -p \"\$NEO4J_PASSWORD\" 'MATCH (n) RETURN count(n);'"

@@ -60,11 +60,11 @@ The gateway supports two mechanisms for providing credentials to MCP servers:
 
 **This project's approach**: hardcode credentials for infrastructure we control (neo4j, redis, postgres) in `mcp-config.yaml`, matching the container defaults. A server needing a _user-provided_ credential would use the env template hack instead, so that `mcp-config-set` can supply the value at runtime without a `--secrets` provider; the GitHub server was the only one that did, and it was removed in #226 E3 (no agent used it, and the `gh` CLI covers this repo's own GitHub work).
 
-| Server          | Credential     | Strategy                                                                                                                        |
-| --------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| neo4j-cypher    | `password`     | Hardcoded in mcp-config.yaml — must equal `NEO4J_PASSWORD` in the repo-root `.env` (compose substitutes nothing into this file) |
-| redis           | `password`     | Hardcoded in mcp-config.yaml (empty, alpine default)                                                                            |
-| database-server | `database_url` | Hardcoded in mcp-config.yaml — its password must equal `POSTGRES_PASSWORD` in the repo-root `.env`                              |
+| Server          | Credential     | Strategy                                                                                                                |
+| --------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| neo4j-cypher    | `password`     | `${NEO4J_PASSWORD}` placeholder in mcp-config.yaml, filled from the repo-root `.env` by the `mcp-config` render service |
+| redis           | `password`     | Hardcoded in mcp-config.yaml (empty, alpine default)                                                                    |
+| database-server | `database_url` | `${POSTGRES_PASSWORD}` placeholder inside the URL, filled the same way                                                  |
 
 ### Configuration Files (Source of Truth)
 
@@ -84,14 +84,14 @@ mcp-gateway:
   restart: unless-stopped
   command:
     - --enable-all-servers
-    - --config=/mcp/config.yaml
+    - --config=/mcp/rendered/config.yaml # written by the `mcp-config` service
     - --catalog=/mcp/custom-catalog.yaml
     - --transport=streaming
     - --port=8811
     - --verbose
   volumes:
     - /var/run/docker.sock:/var/run/docker.sock
-    - ./configs/mcp-config.yaml:/mcp/config.yaml:ro
+    - mcp_config:/mcp/rendered:ro
     - ./configs/custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
     - ./configs/catalog.yaml:/mcp/catalog.yaml:ro
     - ./docker-config.json:/root/.docker/config.json:ro

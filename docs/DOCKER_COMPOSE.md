@@ -54,7 +54,10 @@ before the first `docker compose up` on a machine that already has the stack.
 - **Ports**: 127.0.0.1:8811:8811
 - **MCP Servers**: neo4j-cypher, fetch, web_search, context7, rust-mcp-filesystem, memory, redis, database-server
 - **Transport**: streaming
-- **Dependencies**: Waits for Neo4j healthcheck
+- **Config**: reads the RENDERED `/mcp/rendered/config.yaml`, written by the
+  one-shot `mcp-config` service from `configs/mcp-config.yaml` with the root
+  `.env` passwords filled in (`scripts/render-mcp-config.sh`)
+- **Dependencies**: Waits for Neo4j healthcheck and for `mcp-config` to exit 0
 
 ### app (the SolidStart app, #197)
 
@@ -188,7 +191,7 @@ All MCP configuration files are located in the `configs/` directory:
    neo4j-cypher:
      uri: bolt://neo4j:7687 # Uses Docker service name
      username: neo4j
-     password: password
+     password: ${NEO4J_PASSWORD} # filled from the root .env by `mcp-config`
      database: neo4j
      read_only: false
    ```
@@ -206,10 +209,13 @@ All MCP configuration files are located in the `configs/` directory:
 
 3. **configs/catalog.yaml**: Full Docker MCP catalog for global mode
 
-4. **docker-compose.yaml**: Mounts all configuration files read-only
+4. **docker-compose.yaml**: the one-shot `mcp-config` service renders
+   `configs/mcp-config.yaml` into the `mcp_config` volume, filling
+   `${NEO4J_PASSWORD}` / `${POSTGRES_PASSWORD}` from the root `.env`; the gateway
+   mounts that volume and the catalogs read-only
    ```yaml
    volumes:
-     - ./configs/mcp-config.yaml:/mcp/config.yaml:ro
+     - mcp_config:/mcp/rendered:ro # --config=/mcp/rendered/config.yaml
      - ./configs/custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
      - ./configs/catalog.yaml:/mcp/catalog.yaml:ro
    ```
@@ -240,12 +246,26 @@ the compose `app` container rather than `pnpm dev:exposed` on the host).
 
 ### Credentials and existing volumes
 
-`docker-compose.yaml` reads `NEO4J_PASSWORD` and `POSTGRES_PASSWORD` from the
-**repo-root `.env`** (Compose's substitution source — not `app/.env`) and fails
-every `docker compose` command, including `exec` and `ps`, until both are set:
+`NEO4J_PASSWORD` and `POSTGRES_PASSWORD` live in ONE place: the **repo-root
+`.env`** (Compose's substitution source — not `app/.env`). Every consumer reads
+them from there:
+
+- the databases themselves and the `app` container, through `${VAR:?}` in
+  `docker-compose.yaml` — every `docker compose` command, including `exec` and
+  `ps`, fails until both are set;
+- the MCP gateway, whose `configs/mcp-config.yaml` carries `${…}` placeholders
+  that the one-shot `mcp-config` service fills in on every `up`;
+- `pnpm dev` on the host, the three test suites' database URLs and the
+  org-graph scripts, through `app/src/lib/config/compose-credentials.server.ts`
+  (an exported variable wins; otherwise the root `.env` is read);
+- the Neo4j helper scripts, through `scripts/lib/compose-env.sh` (same rule).
+
+None of them has a fallback literal. A test run against a Postgres that rejects
+the password **fails** (`src/__tests__/global-setup.ts`) instead of letting the
+DB-backed suites skip themselves green.
 
 ```bash
-cp .env.example .env    # at the repo root, then edit the two values
+cp .env.example .env    # at the repo root; any values work on a NEW stack
 ```
 
 Both databases apply their password **only when the data volume is first
@@ -263,9 +283,8 @@ NEO4J_PASSWORD='password'
 POSTGRES_PASSWORD='password'
 ```
 
-Nothing else changes: `configs/mcp-config.yaml`, the app's defaults and the test
-suites all still assume `password`. Ports move to loopback on the next
-`docker compose up -d`.
+Nothing else needs editing — every other consumer reads the same file. Ports
+move to loopback on the next `docker compose up -d`.
 
 **B. Rotate in place.** Start from state A (the stack up with the OLD password in
 `.env`), then:
@@ -280,32 +299,16 @@ docker compose exec postgres psql -U postgres -c \
   "ALTER USER postgres WITH PASSWORD '<new-postgres-password>'"
 ```
 
-Then write the new values everywhere the old one was assumed:
-
-1. **Root `.env`** — `NEO4J_PASSWORD` / `POSTGRES_PASSWORD`.
-2. **`configs/mcp-config.yaml`** — `neo4j-cypher.password` and the password
-   inside `database-server.database_url`. It is tracked and bind-mounted as-is
-   (no substitution), so stop git from offering your values for commit:
-   `git update-index --skip-worktree configs/mcp-config.yaml`.
-3. **`app/.env`**, for `pnpm dev` on the host — `NEO4J_PASSWORD='<new>'` and
-   `DATABASE_URL='postgresql://postgres:<new>@localhost:5432/kgagent'` (both
-   default to `password` when unset).
-4. **The test suites** default to `password` too. Pass the URL per run, one
-   suite at a time — never export it globally, or all three suites share one
-   database (`docs/testing/pyramid.md`):
-   `TEST_DATABASE_URL='postgresql://postgres:<new>@localhost:5432/kgagent_test' pnpm test:run`
-   (`kgagent_test_apppath` for `test:e2e`, `kgagent_test_browser` for
-   `test:e2e:browser`).
-5. **The Neo4j helper scripts** (`scripts/{import,export,reset}-neo4j*.sh`)
-   read `NEO4J_PASSWORD` from the environment:
-   `NEO4J_PASSWORD='<new>' ./scripts/import-neo4j.sh …`.
-
-Finally recreate what reads the old value, so container env and the gateway's
-config agree with the databases: `docker compose up -d --force-recreate
-mcp-gateway neo4j postgres` (and `app`, if you run it). Use URL-safe characters
-(`openssl rand -hex 24`): the Postgres value is spliced into a `postgresql://`
-URL, where `/`, `@`, `:` or `#` break it. Neo4j 5 rejects passwords under 8
-characters.
+Then write the two new values into the root `.env` — the only place they
+live — and recreate what read the old ones: `docker compose up -d
+--force-recreate mcp-gateway neo4j postgres` (and `app`, if you run it; the
+`mcp-config` renderer re-runs on its own), then restart `pnpm dev`. If you
+have `DATABASE_URL`, `NEO4J_PASSWORD` or `TEST_DATABASE_URL` set explicitly in
+`app/.env` or your shell, those still win and must change too — nothing in the
+repo sets them. Use URL-safe characters (`openssl rand -hex 24`): the Postgres
+value is spliced into `postgresql://` URLs, and the gateway renderer refuses
+`& \ / @ : # ? %` and spaces rather than write a broken one. Neo4j 5 rejects
+passwords under 8 characters.
 
 **Locked out after failed logins?** Neo4j locks an account briefly after
 repeated authentication failures (`dbms.security.auth_lock_time`). Wait, then

@@ -114,6 +114,11 @@ jobs:
       # is near-free here — under a second of extra wall clock locally). The
       # thresholds live in app/vitest.config.ts and are backstop floors: the job
       # goes red if coverage regresses below the recorded baseline.
+      # This step also runs @hames-ai/harness-patterns' own co-located suite
+      # (`packages/harness-patterns/__tests__/`, its own node-environment
+      # config) as a second vitest project, so its tests count toward the
+      # floors and the `app` upload below (#407). It used to be a separate
+      # `pnpm test` step here, which ran that suite without coverage.
       - name: Test (with coverage floor)
         run: pnpm test:run --coverage
 
@@ -145,14 +150,6 @@ jobs:
       # strip pin, the supplier-throw tests, the package-side read-only scan).
       - name: Package tests (@hames-ai/connectors)
         working-directory: packages/connectors
-        run: pnpm test
-
-      # Same co-located-suite arrangement for @hames-ai/harness-patterns (the
-      # core-absorb PR-1): the observability projections + metrics fold moved
-      # with their tests into the package's own `__tests__/` tree. Node
-      # environment, no app fixtures — see the package's vitest.config.ts.
-      - name: Package tests (@hames-ai/harness-patterns)
-        working-directory: packages/harness-patterns
         run: pnpm test
 
       # Same story for the sandbox package (the @hames-ai/sandbox extraction): the

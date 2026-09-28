@@ -64,6 +64,29 @@ describe('the e2e suite is not reachable from CI', () => {
     }
   })
 
+  // The one runner-level escape (#407): the config's `projects` list may add
+  // @hames-ai/harness-patterns' own suite so coverage counts its tests, and
+  // nothing else. A `'../e2e'` or `'./e2e/vitest.config.ts'` entry there
+  // would run the e2e suite in CI without touching any include glob above.
+  it('the only extra project is the harness-patterns package suite, rooted at its __tests__/', () => {
+    const config = readFileSync(path.join(APP, 'vitest.config.ts'), 'utf8')
+    const projects = /projects:\s*\[([\s\S]*?)\]\s*,\s*\n/.exec(config)?.[1]
+    expect(projects, 'vitest.config.ts has no projects array').toBeTruthy()
+    // Every string literal in the array except an inline project's `name`.
+    const bare = (projects as string).replace(/name:\s*'[^']*'/g, '')
+    const paths = [...bare.matchAll(/'([^']+)'/g)].map((m) => m[1])
+    expect(paths).toEqual(['../packages/harness-patterns'])
+    const pkg = readFileSync(path.join(REPO, 'packages/harness-patterns/vitest.config.ts'), 'utf8')
+    const include = /include:\s*\[([^\]]*)\]/.exec(pkg)?.[1]
+    const patterns = [...(include ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1])
+    expect(patterns.length).toBeGreaterThan(0)
+    for (const pattern of patterns) {
+      expect(pattern, `the package include pattern ${pattern} escapes __tests__/`).toMatch(
+        /^__tests__\//,
+      )
+    }
+  })
+
   it('no e2e file is named like a test, so a widened glob still would not match', () => {
     const testLike = E2E_FILES.filter((f) => /\.(test|spec)\.(ts|tsx)$/.test(f))
     expect(testLike).toEqual([])
@@ -88,10 +111,12 @@ describe('the e2e suite is not reachable from CI', () => {
     const include = /include:\s*\[([^\]]*)\]/.exec(coverage)?.[1]
     const patterns = [...(include ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1])
     expect(patterns.length).toBeGreaterThan(0)
-    // src/** plus exactly ONE sanctioned escape: the library moved to
-    // packages/ (#225 Step 1a) and stays measured — anything else outside
-    // src/ (e2e/, evals/) is still a red.
-    const ALLOWED_ESCAPES = ['../packages/harness-patterns/**', '../packages/agents/**']
+    // src/** plus the two sanctioned escapes: the library and the agents
+    // moved to packages/ (#225) and stay measured — anything else outside
+    // src/ (e2e/, evals/) is still a red. They start `**/` because coverage
+    // globs match absolute paths; the `../packages/…` spelling this list
+    // used to allow matched nothing (#407).
+    const ALLOWED_ESCAPES = ['**/packages/harness-patterns/**', '**/packages/agents/**']
     for (const pattern of patterns) {
       if (ALLOWED_ESCAPES.some((e) => pattern.startsWith(e))) continue
       expect(pattern, `coverage.include pattern ${pattern} escapes src/`).toMatch(/^src\//)

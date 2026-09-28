@@ -1,5 +1,11 @@
-# Committed default gateway config — matches the docker-compose.yaml defaults
-# (laptop-only credentials; see .gitignore for the deployment story). A fresh
+# Committed default gateway config. It holds NO credential: the two password
+# placeholders below are filled from the repo-root `.env` by the one-shot
+# `mcp-config` service in docker-compose.yaml (scripts/render-mcp-config.sh),
+# which is also what the databases themselves are created from — one source,
+# so the gateway cannot disagree with them. The gateway reads the rendered copy,
+# never this file directly. A deployment may still write literals here instead
+# (see .gitignore for that story); a file with no placeholder renders unchanged.
+# A fresh
 # clone needs this file to exist BEFORE `docker compose up -d`: compose
 # bind-mounts it into the mcp-gateway, and a missing file becomes an empty
 # directory inside the container, which the gateway refuses to start on.
@@ -9,7 +15,7 @@ neo4j-cypher:
   enabled: true
   uri: bolt://neo4j:7687
   username: neo4j
-  password: password
+  password: ${NEO4J_PASSWORD}
   database: neo4j
   read_only: false
 
@@ -42,7 +48,7 @@ redis:
 
 database-server:
   enabled: true
-  database_url: postgresql://postgres:password@postgres:5432/kgagent
+  database_url: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/kgagent
 
 playwright:
   enabled: true

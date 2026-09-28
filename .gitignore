@@ -4,14 +4,15 @@
 # Harness debug logs
 .harness-logs/
 
-# MCP config: configs/mcp-config.yaml is COMMITTED with the compose-default
-# credentials (the same laptop-only defaults docker-compose.yaml already ships).
-# A deployment overrides it in place (docs/deployment/azure-vm.md: fill in real
-# values, then `git update-index --skip-worktree` it — gitignore does not affect
-# a tracked file). Until it existed, a fresh clone could not start the
-# mcp-gateway at all:
-# compose bind-mounts the file, Docker created an empty directory in its place,
-# and the gateway crash-looped on "read /mcp/config.yaml: is a directory".
+# MCP config: configs/mcp-config.yaml is COMMITTED and holds no credential —
+# its `${NEO4J_PASSWORD}` / `${POSTGRES_PASSWORD}` placeholders are filled from
+# the root .env by the `mcp-config` compose service. A deployment that trims
+# the server list edits it in place (docs/deployment/azure-vm.md, then
+# `git update-index --skip-worktree` it — gitignore does not affect a tracked
+# file). Until it existed, a fresh clone could not start the mcp-gateway at all:
+# compose bind-mounted the file, Docker created an empty directory in its
+# place, and the gateway crash-looped on "read /mcp/config.yaml: is a
+# directory" (today the renderer fails instead, and the gateway never starts).
 # configs/template.mcp-config.yaml stays as the documented field reference.
 
 # Action API tokens (contains secrets — use template.action-tokens.yaml as reference)

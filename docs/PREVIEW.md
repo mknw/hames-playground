@@ -179,7 +179,7 @@ neo4j-cypher:
   enabled: true
   uri: bolt://neo4j:7687
   username: neo4j
-  password: <the NEO4J_PASSWORD you set in .env>
+  password: ${NEO4J_PASSWORD} # filled from .env by the `mcp-config` render service
   database: neo4j
   read_only: false
 

@@ -39,9 +39,15 @@ case "$cmd" in
     exec)
         interactive=0
         args=()
+        next_is_pw=0
         for a in "$@"; do
+            if [ "$next_is_pw" = "1" ]; then
+                echo "pw:$a" >> "$SHIM_LOG"
+                next_is_pw=0
+            fi
             case "$a" in
                 -i) interactive=1 ;;
+                -p) next_is_pw=1; args+=("$a") ;;
                 *) args+=("$a") ;;
             esac
         done
@@ -92,15 +98,20 @@ chmod +x "$tmproot/bin/docker"
 
 # ------------------------------------------------------------------- harness
 # run_case <name> <expected-exit> <shim-count|""=count-fails> [--wipe]
-#            [SHIM_DELETE_FAIL=n]
+#            [SHIM_DELETE_FAIL=n] [PW=<value>|PW=-unset-] [ENVFILE=<path>]
+# PW defaults to shim-password; ENVFILE (the repo-root .env stand-in) defaults
+# to a path that does not exist, so no case reads the developer's real .env.
 # Asserts the exit code and which calls landed in the shim log.
 run_case() {
     local name="$1" expected_exit="$2"; shift 2
     local wipe="" count="" delete_fail="${SHIM_DELETE_FAIL:-0}"
+    local pw="shim-password" envfile="$tmproot/no-such.env"
     while [ $# -gt 0 ]; do
         case "$1" in
             --wipe) wipe="--wipe" ;;
             SHIM_DELETE_FAIL=*) delete_fail="${1#*=}" ;;
+            PW=*) pw="${1#*=}" ;;
+            ENVFILE=*) envfile="${1#*=}" ;;
             *) count="$1" ;;
         esac
         shift
@@ -113,7 +124,11 @@ run_case() {
     local log="$dir/shim.log"
     : > "$log"
     local out code
+    local pw_env=(NEO4J_PASSWORD="$pw")
+    [ "$pw" = "-unset-" ] && pw_env=(-u NEO4J_PASSWORD)
     out=$(cd "$dir" && \
+        env "${pw_env[@]}" \
+        COMPOSE_ENV_FILE="$envfile" \
         SHIM_LOG="$log" SHIM_COUNT="$count" SHIM_DELETE_FAIL="$delete_fail" \
         PATH="$tmproot/bin:$PATH" \
         bash "$SCRIPT_UNDER_TEST" $wipe dump.cypher 2>&1)
@@ -157,6 +172,25 @@ run_case() {
             assert_log "$name" "$log" "delete"
             assert_log "$name" "$log" "import"
             ;;
+        password-from-dotenv)
+            # One source: with nothing exported, the repo-root .env's value is
+            # what every cypher-shell call authenticates with.
+            assert_log "$name" "$log" "pw:from-dotenv"
+            assert_no_call "$name" "$log" "pw:password"
+            assert_log "$name" "$log" "import"
+            ;;
+        password-env-wins)
+            assert_log "$name" "$log" "pw:from-env"
+            assert_no_call "$name" "$log" "pw:from-dotenv"
+            ;;
+        refuse-no-password)
+            # No literal fallback: nothing resolved means no docker call at all.
+            assert_no_call "$name" "$log" "count:OK(0)"
+            assert_no_call "$name" "$log" "pw:password"
+            [ -s "$log" ] && { echo "FAIL $name: docker was called without a password"; failures=$((failures + 1)); }
+            printf '%s\n' "$out" | grep -q "NEO4J_PASSWORD is not set" \
+                || { echo "FAIL $name: missing-password message missing"; failures=$((failures + 1)); }
+            ;;
         failed-delete-fails-script)
             assert_log "$name" "$log" "delete"
             assert_no_call "$name" "$log" "import"
@@ -196,6 +230,12 @@ run_case refuse-unreadable-count-with-wipe 1 "" --wipe
 run_case proceed-empty-graph 0 0
 # 6. M1: a failed DETACH DELETE must fail the script, not read as success.
 run_case failed-delete-fails-script 1 50 --wipe SHIM_DELETE_FAIL=1
+# 7-9. The password has one source (scripts/lib/compose-env.sh): the exported
+#    variable, else the repo-root .env — never a literal fallback.
+printf "POSTGRES_PASSWORD='x'\nNEO4J_PASSWORD='from-dotenv'\n" > "$tmproot/fixture.env"
+run_case password-from-dotenv 0 0 PW=-unset- ENVFILE="$tmproot/fixture.env"
+run_case password-env-wins 0 0 PW=from-env ENVFILE="$tmproot/fixture.env"
+run_case refuse-no-password 1 0 PW=-unset-
 
 # ------------------------------------------------------------------- verdict
 if [ "$failures" -gt 0 ]; then

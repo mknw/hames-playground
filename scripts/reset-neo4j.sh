@@ -5,7 +5,10 @@ set -e
 
 CONTAINER_NAME="neo4j-mldsgraph"
 NEO4J_USER="neo4j"
-NEO4J_PASSWORD="password"
+# One source: $NEO4J_PASSWORD if exported, else the repo-root .env Compose reads.
+# shellcheck source=lib/compose-env.sh
+. "$(dirname "$0")/lib/compose-env.sh"
+NEO4J_PASSWORD="$(compose_secret NEO4J_PASSWORD)"
 SEED_FILE="neo4j_dumps/seed-data.cypher"
 
 echo "Resetting Neo4j database..."

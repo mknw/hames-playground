@@ -216,9 +216,12 @@ Against that:
   the `users` and `auth_sessions` profile columns and the `routines` prompt are
   AES-256-GCM encrypted under `DATA_ENCRYPTION_KEY`, so a dump yields
   ciphertext. Redis and Neo4j are unchanged.
-- The committed compose publishes Postgres, Redis and Neo4j on `0.0.0.0` with
-  password `password`. Fine on a laptop, unacceptable on a VM — which is why
-  `docs/deployment/azure-vm.md` overrides it. That override is now load-bearing.
+- The committed compose published Postgres, Redis and Neo4j on `0.0.0.0` with
+  password `password`. It now binds every port to `127.0.0.1` and reads both
+  database passwords from the root `.env` (`${VAR:?}`) — but an existing laptop
+  volume keeps `password`, and the gateway config still carries it as a literal,
+  so the production overlay (`docker-compose.prod.yaml`) remains load-bearing
+  and does not rely on the base.
 - **No Postgres backups exist.** This is an Art. 32(1)(c) obligation ("ability
   to restore availability and access to personal data in a timely manner"), not
   merely ops hygiene.

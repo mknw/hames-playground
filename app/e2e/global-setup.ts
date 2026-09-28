@@ -13,10 +13,8 @@
  * `TEST_DATABASE_URL` block is the full rationale.
  */
 import { provisionDatabase } from '../src/__tests__/global-setup'
+import { localDatabaseUrl } from '../src/lib/config/compose-credentials.server'
 
 export default async function setup(): Promise<void> {
-  await provisionDatabase(
-    process.env.TEST_DATABASE_URL ??
-      'postgresql://postgres:password@localhost:5432/kgagent_test_apppath',
-  )
+  await provisionDatabase(process.env.TEST_DATABASE_URL ?? localDatabaseUrl('kgagent_test_apppath'))
 }

@@ -17,9 +17,14 @@
 #
 # `!override` (Compose >= 2.24) replaces the base value rather than merging into
 # it. Used on every `ports:` list because Compose merges port lists additively:
-# a merged `3444:3444` would keep the base's 0.0.0.0 bind alongside the loopback
-# one, which is the exact exposure this file exists to close. Verify any edit
-# with `docker compose config` before deploying — that renders the merged result.
+# a base entry without a host IP would keep a 0.0.0.0 bind alongside the
+# loopback one, which is the exact exposure this file exists to close. The base
+# file is loopback-bound too now, so today the `!override`s render the same
+# result — they stay anyway, deliberately: this file must close the exposure ON
+# ITS OWN, and must not depend on the laptop file staying hardened. The same
+# goes for the password entries below, which restate the base's substitutions
+# with deployment-specific error messages. Verify any edit with
+# `docker compose config` before deploying — that renders the merged result.
 #
 # What this file does NOT do, deliberately:
 #   * it does not hold a single secret — every credential is a `${VAR:?}`
@@ -36,16 +41,17 @@ services:
   # internet: Docker's iptables rules only bypass `ufw` for 0.0.0.0 publishes.
   # ---------------------------------------------------------------------------
   postgres:
-    ports: !override ['127.0.0.1:5432:5432']
+    ports: !override ["127.0.0.1:5432:5432"]
     environment:
-      # Overrides the base file's literal `password`. That default is fine on a
-      # laptop and unacceptable on a host; the override is therefore
-      # load-bearing, not advisory — a compose change has to be read against
-      # this file, not against the base alone.
+      # Restates the base file's substitution, pointed at this deployment's
+      # env template. The base used to carry a literal `password` here, and
+      # this override was what kept it off the host; it stays load-bearing
+      # rather than advisory — a compose change has to be read against this
+      # file, not against the base alone.
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env — see .env.production.example}
 
   neo4j:
-    ports: !override ['127.0.0.1:7474:7474', '127.0.0.1:7687:7687']
+    ports: !override ["127.0.0.1:7474:7474", "127.0.0.1:7687:7687"]
     environment:
       - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD in .env — see .env.production.example}
 
@@ -54,10 +60,10 @@ services:
     # `docker-compose.override.yml` works around is a colima/Apple-Silicon
     # defect; on an x86 VM the native image is correct and emulation would only
     # cost throughput.
-    ports: !override ['127.0.0.1:6379:6379']
+    ports: !override ["127.0.0.1:6379:6379"]
 
   mcp-gateway:
-    ports: !override ['127.0.0.1:8811:8811']
+    ports: !override ["127.0.0.1:8811:8811"]
 
     # The agent-reachable tool surface, and the ONLY place it can be narrowed.
     #
@@ -87,14 +93,16 @@ services:
     # Adding an agent that needs another server means adding it here as well.
     command: !override
       - --servers=neo4j-cypher,fetch,web_search,context7,memory
-      - --config=/mcp/config.yaml
+      # The rendered config the base file's `mcp-config` service writes — it
+      # fills ${NEO4J_PASSWORD} / ${POSTGRES_PASSWORD} from this host's .env.
+      - --config=/mcp/rendered/config.yaml
       - --catalog=/mcp/custom-catalog.yaml
       - --transport=streaming
       - --port=8811
       - --verbose
 
   doc-convert:
-    ports: !override ['127.0.0.1:8000:8000']
+    ports: !override ["127.0.0.1:8000:8000"]
 
   # ---------------------------------------------------------------------------
   # App
@@ -104,7 +112,7 @@ services:
     # here needs to be published at all. The loopback publish survives only so
     # `curl 127.0.0.1:3444/api/health` works on the box while diagnosing a TLS
     # or DNS problem — i.e. exactly when going through Caddy is not an option.
-    ports: !override ['127.0.0.1:3444:3444']
+    ports: !override ["127.0.0.1:3444:3444"]
 
     # `!override` rather than the additive default: on this host the single
     # source of runtime config is the repo-root `.env`, and a leftover
@@ -143,11 +151,11 @@ services:
     restart: unless-stopped
     # Same profile as `app`: the proxy has nothing to proxy without it, and one
     # `COMPOSE_PROFILES=app` then covers the whole public-facing pair.
-    profiles: ['app']
+    profiles: ["app"]
     ports:
-      - '80:80' # ACME HTTP-01 challenge + the redirect to 443
-      - '443:443'
-      - '443:443/udp' # HTTP/3
+      - "80:80" # ACME HTTP-01 challenge + the redirect to 443
+      - "443:443"
+      - "443:443/udp" # HTTP/3
     environment:
       # Substituted into configs/Caddyfile at startup, so the domain and the
       # ACME contact live in `.env` with everything else and the Caddyfile

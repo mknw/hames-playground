@@ -3,16 +3,30 @@
 # (Postgres, Neo4j, Redis) and bring the stack up against empty new ones.
 name: kg-agent
 
+# Laptop hardening, same standard as docker-compose.prod.yaml:
+#
+#   * Every `ports:` entry is bound to 127.0.0.1. A bare `5432:5432` publishes
+#     on 0.0.0.0, i.e. to the LAN/café Wi-Fi, and on Linux Docker's iptables
+#     rules bypass `ufw` for those publishes. Containers are unaffected: they
+#     reach each other by service name over `app-network`, never through a
+#     published port.
+#   * The two database passwords are `${VAR:?}` substitutions read from the
+#     repo-ROOT `.env` (Compose's substitution source — not `app/.env`). A
+#     missing value fails the bring-up loudly. Template: `.env.example`.
+#     They are applied only when a data volume is FIRST created — an existing
+#     volume keeps the password it was born with. Upgrade path:
+#     docs/DOCKER_COMPOSE.md "Credentials and existing volumes".
+
 services:
   neo4j:
     image: neo4j:5.26
     container_name: neo4j-mldsgraph
     restart: unless-stopped
     ports:
-      - "7474:7474"
-      - "7687:7687"
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
     environment:
-      - NEO4J_AUTH=neo4j/password
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD in the repo-root .env — see .env.example}
       - NEO4J_PLUGINS=["apoc", "n10s"]
     volumes:
       - neo4j_data:/data
@@ -28,39 +42,65 @@ services:
       timeout: 5s
       retries: 10
 
+  mcp-config:
+    # One-shot: renders configs/mcp-config.yaml's ${NEO4J_PASSWORD} /
+    # ${POSTGRES_PASSWORD} placeholders from the same root-.env values the
+    # databases are created with, into the volume the gateway reads. That makes
+    # the root .env the gateway's source too; before this the gateway config
+    # carried literals that silently disagreed with any other password.
+    # Re-runs on every `docker compose up`; after changing a password,
+    # `docker compose up -d --force-recreate mcp-gateway` so the gateway
+    # re-reads it. postgres:16-alpine only because the stack already pulls it
+    # and it has a POSIX sh + awk; it runs no database here.
+    image: postgres:16-alpine
+    entrypoint:
+      ["/bin/sh", "/render.sh", "/in/mcp-config.yaml", "/out/config.yaml"]
+    environment:
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?set NEO4J_PASSWORD in the repo-root .env — see .env.example}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the repo-root .env — see .env.example}
+    volumes:
+      - ./scripts/render-mcp-config.sh:/render.sh:ro
+      - ./configs/mcp-config.yaml:/in/mcp-config.yaml:ro
+      - mcp_config:/out
+    network_mode: none
+    restart: "no"
+
   mcp-gateway:
     image: docker/mcp-gateway
     restart: unless-stopped
     command:
       - --enable-all-servers
-      - --config=/mcp/config.yaml
+      # The RENDERED config (see `mcp-config` above), not the tracked file.
+      - --config=/mcp/rendered/config.yaml
       - --catalog=/mcp/custom-catalog.yaml
       - --transport=streaming
       - --port=8811
       - --verbose
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./configs/mcp-config.yaml:/mcp/config.yaml:ro
+      - mcp_config:/mcp/rendered:ro
       - ./configs/custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
       - ./configs/catalog.yaml:/mcp/catalog.yaml:ro
       - ./docker-config.json:/root/.docker/config.json:ro
     ports:
-      - "8811:8811"
+      - "127.0.0.1:8811:8811"
     networks:
       - app-network
     depends_on:
       neo4j:
         condition: service_healthy
+      mcp-config:
+        condition: service_completed_successfully
 
   postgres:
     image: postgres:16-alpine
     container_name: postgres-seederis
     restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=password
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the repo-root .env — see .env.example}
       - POSTGRES_DB=kgagent
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -85,7 +125,7 @@ services:
     container_name: redis-seederis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     networks:
@@ -111,7 +151,7 @@ services:
     container_name: doc-convert-seederis
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     networks:
       - app-network
 
@@ -137,7 +177,7 @@ services:
     container_name: kg-agent-app
     restart: unless-stopped
     ports:
-      - "3444:3444"
+      - "127.0.0.1:3444:3444"
     env_file:
       # Secrets and per-tenant config (ANTHROPIC_API_KEY, AZURE_*, allow-list).
       # Optional so a fresh clone without an app/.env can still bring the rest
@@ -146,10 +186,14 @@ services:
         required: false
     environment:
       # `environment` wins over `env_file`, which is what makes these the
-      # in-network rewrites of app/.env's host-facing defaults. Neo4j needs no
-      # entry: config/endpoints.ts resolves bolt://neo4j:7687 in a production
-      # build (the localhost form is the `import.meta.env.DEV` branch).
-      - DATABASE_URL=postgresql://postgres:password@postgres:5432/kgagent
+      # in-network rewrites of app/.env's host-facing defaults, with the
+      # passwords folded in from the same root-.env variables the databases
+      # read. The Neo4j URL needs no entry: config/endpoints.ts resolves
+      # bolt://neo4j:7687 in a production build (the localhost form is the
+      # `import.meta.env.DEV` branch) — only the credential is supplied here.
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the repo-root .env — see .env.example}@postgres:5432/kgagent
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?set NEO4J_PASSWORD in the repo-root .env — see .env.example}
       - MCP_GATEWAY_URL=http://mcp-gateway:8811/mcp
       - REDIS_HOST_DIRECT=redis
       - DOC_CONVERT_URL=http://doc-convert:8000
@@ -199,3 +243,5 @@ volumes:
   neo4j_data:
   postgres_data:
   redis_data:
+  # The gateway's rendered config (derived, rewritten on every `up`).
+  mcp_config:

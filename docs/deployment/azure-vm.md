@@ -68,12 +68,11 @@ platform. Everything else in this guide (§4 `.env`, §6 secrets, §8 Caddy) app
 either way; the difference is that steps 6–7's `pnpm build` + `systemd` unit become
 `docker compose build app && docker compose up -d app`, with Caddy proxying to the
 same `127.0.0.1:3444`. See [`docs/DOCKER_COMPOSE.md`](../DOCKER_COMPOSE.md#app-the-solidstart-app-197).
-Note the gap with the rest of this VM's shape: the compose `app` service
-publishes `3444:3444`, which Docker binds to `0.0.0.0` and — because Docker
-writes its own iptables rules — reaches the host regardless of `ufw`, unlike
-every other port pinned to `127.0.0.1` in the diagram above; the container
-route should rewrite that mapping to `127.0.0.1:3444:3444` or otherwise rely
-on the NSG to keep 3444 off the public interface.
+The compose `app` service publishes `127.0.0.1:3444:3444` in the base file and
+again (via `!override`) in `docker-compose.prod.yaml`. That binding is the point:
+a bare `3444:3444` would be bound to `0.0.0.0` and — because Docker writes its
+own iptables rules — reach the host regardless of `ufw`, unlike every other port
+pinned to `127.0.0.1` in the diagram above.
 
 ---
 
@@ -145,8 +144,11 @@ Create the config files with **real** values (`docker-config.json` and
 
 ## 4. Harden the compose stack for a public host ⚠️
 
-The committed `docker-compose.yaml` publishes Postgres, Redis, Neo4j, and the
-gateway on `0.0.0.0`. **On a public VM that is an internet-exposed database.**
+The committed `docker-compose.yaml` now binds every published port to
+`127.0.0.1` and reads both database passwords from the root `.env`, but it is
+still the laptop file: **a hand-edited or older copy that publishes on `0.0.0.0`
+is, on a public VM, an internet-exposed database.** The overlay below closes
+that on its own rather than relying on the base staying hardened.
 
 > The tracked `docker-compose.prod.yaml` now does this, and does it better than
 > the git-ignored override below: an untracked file on the server cannot be

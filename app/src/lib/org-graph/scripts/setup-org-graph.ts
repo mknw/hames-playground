@@ -31,6 +31,7 @@ import {
 import { CONSTRAINT_NAMES } from '../ontology'
 import { configureNeo4j, resetDriver } from '@hames-ai/connectors/neo4j/client'
 import { getEndpoints } from '../../config/endpoints'
+import { composeSecret } from '../../config/compose-credentials.server'
 
 async function report(stage: string): Promise<void> {
   const [constraints, drift] = await Promise.all([listConstraintNames(), countNonConforming()])
@@ -74,7 +75,7 @@ async function main(): Promise<void> {
   configureNeo4j({
     url: getEndpoints().neo4j.bolt,
     user: process.env.NEO4J_USER || 'neo4j',
-    password: process.env.NEO4J_PASSWORD || 'password',
+    password: composeSecret('NEO4J_PASSWORD') ?? '',
   })
 
   const preapproved = process.argv.includes('--yes')

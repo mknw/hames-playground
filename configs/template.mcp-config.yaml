@@ -2,7 +2,7 @@ neo4j-cypher:
   enabled: true
   uri: bolt://neo4j:7687
   username: neo4j
-  password: <NEO4J_PASSWORD>
+  password: ${NEO4J_PASSWORD}
   database: neo4j
   read_only: false
 
@@ -35,7 +35,7 @@ redis:
 
 database-server:
   enabled: true
-  database_url: <DATABASE_URL>
+  database_url: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/kgagent
 
 playwright:
   enabled: true

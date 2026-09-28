@@ -14,6 +14,11 @@ scripts:
 
     # 1. gitignored config a worktree cannot inherit from git
     cp "$ORCA_ROOT_PATH/app/.env"                "$ORCA_WORKTREE_PATH/app/.env"
+    # The repo-root .env is the ONE source of the stack's database passwords:
+    # compose, `pnpm dev` and the test suites' DB URLs all read it
+    # (app/src/lib/config/compose-credentials.server.ts). Without it a
+    # worktree's `pnpm test:run` fails at global setup whenever Postgres is up.
+    [ -f "$ORCA_ROOT_PATH/.env" ] && cp "$ORCA_ROOT_PATH/.env" "$ORCA_WORKTREE_PATH/.env" || true
     cp "$ORCA_ROOT_PATH/configs/mcp-config.yaml" "$ORCA_WORKTREE_PATH/configs/mcp-config.yaml"
     [ -f "$ORCA_ROOT_PATH/docker-compose.override.yml" ] && \
       cp "$ORCA_ROOT_PATH/docker-compose.override.yml" "$ORCA_WORKTREE_PATH/" || true

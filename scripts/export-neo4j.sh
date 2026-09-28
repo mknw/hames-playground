@@ -5,7 +5,10 @@ set -e
 
 CONTAINER_NAME="neo4j-mldsgraph"
 NEO4J_USER="neo4j"
-NEO4J_PASSWORD="password"
+# One source: $NEO4J_PASSWORD if exported, else the repo-root .env Compose reads.
+# shellcheck source=lib/compose-env.sh
+. "$(dirname "$0")/lib/compose-env.sh"
+NEO4J_PASSWORD="$(compose_secret NEO4J_PASSWORD)"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_FILE="neo4j_dumps/export-${TIMESTAMP}.cypher"
 
@@ -25,7 +28,7 @@ cat > "${OUTPUT_FILE}" << 'EOF'
 // To import: Run this file with cypher-shell or Neo4j Browser
 //
 // Usage:
-//   docker exec neo4j-mldsgraph cypher-shell -u neo4j -p password < neo4j_dumps/export-YYYYMMDD_HHMMSS.cypher
+//   ./scripts/import-neo4j.sh neo4j_dumps/export-YYYYMMDD_HHMMSS.cypher
 
 // Clear existing data (CAUTION: This deletes everything!)
 // MATCH (n) DETACH DELETE n;
@@ -100,4 +103,4 @@ echo ""
 echo "Export completed: ${OUTPUT_FILE}"
 echo ""
 echo "To import this data:"
-echo "  cat ${OUTPUT_FILE} | docker exec -i ${CONTAINER_NAME} cypher-shell -u ${NEO4J_USER} -p ${NEO4J_PASSWORD}"
+echo "  cat ${OUTPUT_FILE} | docker exec -i ${CONTAINER_NAME} cypher-shell -u ${NEO4J_USER} -p \"\$NEO4J_PASSWORD\""

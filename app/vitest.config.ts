@@ -12,6 +12,19 @@ export default defineConfig({
     // Provisions the throwaway test database once per run; see the file header
     // for why the suite must not share the dev database any more.
     globalSetup: ['./src/__tests__/global-setup.ts'],
+    // Two projects, ONE coverage report (#407). `app` is this file's own
+    // suite: `extends: true` makes the options above its settings, and they
+    // no longer apply to anything else. The second is
+    // @hames-ai/harness-patterns' OWN co-located suite, run with its own
+    // config (node environment, no app setup), because that is where the
+    // tests of its stash, retriever, observability and metrics modules live.
+    // It runs here so the coverage below counts them. Measuring the package
+    // from this run alone would score those modules as untested. A separate
+    // floor for the package would not work either, because most of its
+    // patterns are tested from this app's `src/__tests__/`. Only a run that
+    // holds both suites measures the package truthfully.
+    // `packages/agents` has no suite of its own; the app project tests it.
+    projects: [{ extends: true, test: { name: 'app' } }, '../packages/harness-patterns'],
     coverage: {
       provider: 'v8',
       // `lcovonly` is for Codecov: CI uploads coverage/lcov.info after this
@@ -32,21 +45,31 @@ export default defineConfig({
       // Extension-filtered: a bare `src/**` makes v8 try to instrument the
       // markdown under src/, which fails to parse and spills a rollup stack
       // trace into the very log the gate is meant to make legible.
-      // The library moved to packages/ (#225 Step 1a); it stays measured —
-      // the floors below would otherwise silently cover a smaller surface.
-      // Same for the agents package (#225 PR-2): the moved definitions and
-      // extractors stay measured from their new home.
+      // The library moved to packages/ (#225 Step 1a) and the agents to
+      // packages/agents (#225 PR-2). Both are measured here, so the floors
+      // below cover them too.
+      // Until #407 they were not measured at all, and three settings make it
+      // work. A file outside this config's root (`app/`) is dropped before
+      // any glob is read unless `allowExternal` is on. The globs are matched
+      // against ABSOLUTE paths, so a `../packages/…` pattern never matches;
+      // they must start with `**/`. And `allowExternal` would also admit
+      // every dependency, so `**/node_modules/**` is excluded. The
+      // `packages/*/__tests__` exclude is this file's tests-are-not-source
+      // rule, applied to the package project above.
       // NOT here: `packages/connectors` and `packages/sandbox`. Both moved
       // their tests out with their code, so this run never exercises them —
       // including them would measure instrumented-but-unexercised source and
       // drag the floors down for a reason that has nothing to do with app
-      // coverage. Each runs its own suite (CI's two `Package tests` steps).
+      // coverage. Each runs its own suite (CI's `Package tests` steps).
       include: [
         'src/**/*.{ts,tsx,js,jsx}',
-        '../packages/harness-patterns/**/*.{ts,tsx,js,jsx}',
-        '../packages/agents/**/*.{ts,tsx,js,jsx}',
+        '**/packages/harness-patterns/**/*.{ts,tsx,js,jsx}',
+        '**/packages/agents/**/*.{ts,tsx,js,jsx}',
       ],
+      allowExternal: true,
       exclude: [
+        '**/node_modules/**',
+        '**/packages/*/__tests__/**',
         // Dead but kept deliberately — see PR #376 §11 and the eslint ignore.
         'baml_client/**',
         '.output/**',
@@ -90,6 +113,9 @@ export default defineConfig({
       // 85%-coverage programme (PRs #182-#189), which raised repo-wide
       // coverage from ~52% to:
       //   statements 95.26  branches 84.87  functions 94.58  lines 96.57
+      // #407 (2026-09-28) widened the scope to the two packages (146 app/src
+      // files + 51 harness-patterns + 13 agents), and the floors stayed put:
+      //   statements 95.27  branches 86.56  functions 95.46  lines 96.47
       // The job fails if coverage drops below these. Raise them by hand as
       // coverage grows; never lower them to make a red run green.
       thresholds: {

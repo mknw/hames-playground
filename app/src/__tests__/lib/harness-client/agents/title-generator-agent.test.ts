@@ -1,0 +1,108 @@
+/**
+ * Title Generator — the agent itself, through the REAL harness.
+ *
+ * `title-generator.test.ts` stubs `harness()` to test the gates; this file
+ * keeps it real and fakes only the BAML call, so the `synthesize` body — the
+ * describe-role client override and the sanitizer on the model's raw output —
+ * and `runTitleAgent`'s three exits are exercised (#407).
+ *
+ * Each test names the source mutation that reddens it; every one was run.
+ */
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { testAgentDeps } from './test-deps'
+
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
+  assertServerOnImport: vi.fn(),
+}))
+const generate = vi.fn<(msg: string, opts?: Record<string, unknown>) => Promise<string>>()
+vi.mock('@hames-ai/harness-baml/baml_client', () => ({
+  b: {
+    GenerateConversationTitle: (msg: string, opts?: Record<string, unknown>) => generate(msg, opts),
+  },
+}))
+
+const sut = await import('@hames-ai/agents/agents/title-generator.server')
+
+afterEach(() => {
+  generate.mockReset()
+  vi.restoreAllMocks()
+})
+
+describe('createTitleAgent', () => {
+  // Mutation: drop `...(deps.clientOverride?.('describe') ?? {})` from the
+  // BAML call → the override never reaches the options bag, so a private-tier
+  // title would be generated off the box.
+  // Mutation: ask for a different role (`clientOverride?.('synthesizer')`) →
+  // the recorded role changes.
+  it("spreads the describe role's client override into the BAML call", async () => {
+    generate.mockResolvedValue('Box Title')
+    const clientOverride = vi.fn(() => ({ client: 'LocalQwenSmall' }))
+    await sut.createTitleAgent({ ...testAgentDeps, clientOverride })('hello', 's')
+    expect(clientOverride).toHaveBeenCalledWith('describe')
+    expect(generate).toHaveBeenCalledWith(
+      'hello',
+      expect.objectContaining({ client: 'LocalQwenSmall' }),
+    )
+  })
+
+  // Mutation: return `{ value: raw }` instead of `sanitizeTitle(raw) ?? ''` →
+  // the quotes and trailing punctuation reach the response.
+  it("sanitizes the model's raw output into the response", async () => {
+    generate.mockResolvedValue('"Graph Styling Tips."')
+    const result = await sut.createTitleAgent(testAgentDeps)('hello', 's')
+    expect(result.response).toBe('Graph Styling Tips')
+  })
+
+  // #409: the quote and punctuation strips run on the ends of the WHOLE reply
+  // before the first line is taken, so a quoted first line followed by more
+  // text keeps its closing quote. Current output, recorded 2026-09-28:
+  //   '"Graph Styling Tips."\nextra line' → 'Graph Styling Tips."'
+  // Un-skip when #409 is fixed.
+  it.skip('BUG #409: a multi-line reply is sanitized on its first line', () => {
+    expect(sut.sanitizeTitle('"Graph Styling Tips."\nextra line')).toBe('Graph Styling Tips')
+  })
+})
+
+describe('runRegenerateTitle through the real agent', () => {
+  const ctx = (content: string) => ({
+    sessionId: 's',
+    createdAt: 0,
+    events: [{ id: 'u', type: 'user_message' as const, ts: 1, patternId: 'h', data: { content } }],
+    status: 'done' as const,
+    input: content,
+    data: {},
+  })
+
+  // Mutation: delete `if (!title) return null` → an empty title is persisted.
+  it('returns null and persists nothing when the model output sanitizes to nothing', async () => {
+    generate.mockResolvedValue('   ')
+    const persistTitle = vi.fn(async () => undefined)
+    expect(
+      await sut.runRegenerateTitle(ctx('m'), 's', 'u', { ...testAgentDeps, persistTitle }),
+    ).toBeNull()
+    expect(persistTitle).not.toHaveBeenCalled()
+  })
+
+  // Mutation: delete the `console.warn` in the no-`persistTitle` branch → the
+  // unpersisted title is silent.
+  it('still returns the title without a persistence channel, and says so', async () => {
+    generate.mockResolvedValue('Unsaved Title')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await sut.runRegenerateTitle(ctx('m'), 's', 'u', testAgentDeps)).toBe('Unsaved Title')
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('no persistTitle'))
+  })
+
+  // Mutation: re-throw from the catch (`throw err`) → the regenerate action
+  // rejects instead of leaving the heuristic title in place.
+  it('returns null and logs when persistence throws', async () => {
+    generate.mockResolvedValue('Good Title')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const persistTitle = vi.fn(async () => {
+      throw new Error('db down')
+    })
+    expect(
+      await sut.runRegenerateTitle(ctx('m'), 's', 'u', { ...testAgentDeps, persistTitle }),
+    ).toBeNull()
+    expect(error).toHaveBeenCalledWith('[title-gen] failed:', expect.any(Error))
+  })
+})

@@ -1,3 +1,6 @@
+// @vitest-environment node
+// (node, not jsdom: importing a vitest config loads esbuild, whose TextEncoder
+// invariant fails under jsdom.)
 /**
  * The BROWSER e2e suite must never run in CI. This is the pin that says so.
  *
@@ -26,6 +29,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import appConfig from '../../vitest.config'
 
 const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const REPO = path.resolve(APP, '..')
@@ -149,6 +153,34 @@ describe('the browser e2e suite is not reachable from CI', () => {
     expect(TS.length).toBeGreaterThan(5)
     expect(TS).toContain(`${SUITE}/playwright.config.ts`)
     expect(TS.filter((f) => f.startsWith(`${SUITE}/scenarios/`)).length).toBeGreaterThan(3)
+  })
+
+  // The runner-level escape (#407): the config's `projects` list may add
+  // @hames-ai/harness-patterns' own suite so coverage counts its tests, and
+  // nothing else. A project entry naming e2e-browser/ would run that suite in CI
+  // without touching any include glob. Read from the IMPORTED config, not
+  // its source text, so no spelling of the entry (backticks, a variable, an
+  // inline object with its own include) can slip past a pattern.
+  it('no vitest project reaches e2e-browser/', () => {
+    const projects = appConfig.test?.projects
+    expect(Array.isArray(projects), 'vitest.config.ts has no projects array').toBe(true)
+    for (const project of projects as unknown[]) {
+      if (typeof project === 'string') {
+        expect(project, `the project ${project} could collect the browser suite`).toBe(
+          '../packages/harness-patterns',
+        )
+        continue
+      }
+      // An inline project may only extend the root options and name itself —
+      // an include, root or dir of its own is a way out of src/.
+      const inline = project as { extends?: unknown; test?: Record<string, unknown> }
+      expect(Object.keys(inline).sort(), 'an inline project overrides more than its name').toEqual([
+        'extends',
+        'test',
+      ])
+      expect(inline.extends).toBe(true)
+      expect(Object.keys(inline.test ?? {})).toEqual(['name'])
+    }
   })
 
   it('no file here is named like a test, so a widened vitest glob still would not match', () => {

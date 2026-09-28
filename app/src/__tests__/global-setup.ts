@@ -1,7 +1,12 @@
 /**
  * Vitest global setup — provision the throwaway test database.
  *
- * Runs once per `vitest` invocation (not per file), unlike `setup.ts`.
+ * Runs per vitest PROJECT, not per file (unlike `setup.ts`): the `app`
+ * project inherits it through `extends: true` while the root options declare
+ * it too, so one `vitest` invocation provisions twice (#407). That is harmless
+ * by construction — the second `CREATE DATABASE` hits the swallowed duplicate
+ * error below — and it is why "could not provision" prints twice without a
+ * Postgres.
  *
  * ## Why this exists
  *

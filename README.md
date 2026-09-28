@@ -73,7 +73,11 @@ git clone https://github.com/mknw/hames-playground.git
 cd hames-playground
 
 # 1. Backing services — Postgres, Neo4j, redis-stack, the MCP gateway and
-#    doc-convert. The app itself runs on the host (step 5).
+#    doc-convert. The app itself runs on the host (step 5). Compose reads the
+#    two database passwords from a ROOT .env (not app/.env), and refuses to
+#    start without them. Already have a stack from before this file existed?
+#    Its volumes kept their first password — set that here, see below.
+cp .env.example .env              # then set NEO4J_PASSWORD / POSTGRES_PASSWORD
 docker compose up -d
 docker compose ps                 # all five services should be Up
 
@@ -96,6 +100,15 @@ needs) and **`DATA_ENCRYPTION_KEY`** (generated above) — conversations are
 encrypted at rest, and with the key left empty the app boots but cannot save a
 single conversation. Back the encryption key up separately from the database: a
 dump without it is unreadable.
+
+> **Passwords live in more than one place.** The root `.env` reaches the
+> containers only. `configs/mcp-config.yaml` (the gateway), `app/.env`'s
+> `NEO4J_PASSWORD` / `DATABASE_URL` and the test suites all default to the old
+> compose value `password`, so any other value has to be written there too.
+> An existing stack's volumes were created with `password` and keep it until
+> you rotate it in place — never delete a volume to change it.
+> [`docs/DOCKER_COMPOSE.md`](docs/DOCKER_COMPOSE.md#credentials-and-existing-volumes)
+> has both paths with the exact commands.
 
 > **Already running another copy of this app on this machine?** The compose file
 > pins a project name and fixed container names, and the app's defaults point at
@@ -128,21 +141,21 @@ beside it, so nothing needs generating to run the app; after editing a `.baml`
 file, re-run `pnpm baml-generate` **from `packages/harness-baml/`** and commit
 the regenerated client.
 
-|               |                                                          |
-| ------------- | -------------------------------------------------------- |
-| App           | <http://localhost:3444>                                  |
-| Neo4j Browser | <http://localhost:7474> — `neo4j` / `password`           |
-| MCP Gateway   | <http://localhost:8811/mcp>                              |
-| Postgres      | `localhost:5432` — `postgres` / `password`, db `kgagent` |
+|               |                                                                   |
+| ------------- | ----------------------------------------------------------------- |
+| App           | <http://localhost:3444>                                           |
+| Neo4j Browser | <http://localhost:7474> — `neo4j` / `NEO4J_PASSWORD`              |
+| MCP Gateway   | <http://localhost:8811/mcp>                                       |
+| Postgres      | `localhost:5432` — `postgres` / `POSTGRES_PASSWORD`, db `kgagent` |
 
 App-specific detail — the dev scripts, what actually lives under `app/src/`, and
 how the app consumes the five packages — is in
 [`app/README.md`](app/README.md).
 
 Auth is bypassed for development (`VITE_DEV_BYPASS_AUTH='true'` in
-`app/.env.example`), the compose stack publishes its databases on `0.0.0.0` with
-laptop-default passwords, and both need attention before this runs anywhere but
-your own machine — [`docs/deployment/azure-vm.md`](docs/deployment/azure-vm.md)
+`app/.env.example`), and the compose stack — loopback-bound, with passwords
+from the root `.env` — is still a laptop stack; both need attention before this
+runs anywhere but your own machine — [`docs/deployment/azure-vm.md`](docs/deployment/azure-vm.md)
 and [`docs/deployment/entra-setup.md`](docs/deployment/entra-setup.md) cover the
 hardening, and [`docs/PREVIEW.md`](docs/PREVIEW.md) is the step-by-step runbook
 for a single-VM deployment.

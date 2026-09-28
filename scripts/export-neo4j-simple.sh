@@ -5,7 +5,9 @@ set -e
 
 CONTAINER_NAME="neo4j-mldsgraph"
 NEO4J_USER="neo4j"
-NEO4J_PASSWORD="password"
+# Matches NEO4J_PASSWORD in the repo-root .env (export it, or prefix the call);
+# `password` is the pre-.env compose default an older volume still carries.
+NEO4J_PASSWORD="${NEO4J_PASSWORD:-password}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_FILE="neo4j_dumps/export-${TIMESTAMP}.cypher"
 

@@ -10,7 +10,9 @@ set -e
 # NEO4J_CONTAINER=<name> when your compose project uses a different name.
 CONTAINER_NAME="${NEO4J_CONTAINER:-neo4j-mldsgraph}"
 NEO4J_USER="neo4j"
-NEO4J_PASSWORD="password"
+# Matches NEO4J_PASSWORD in the repo-root .env (export it, or prefix the call);
+# `password` is the pre-.env compose default an older volume still carries.
+NEO4J_PASSWORD="${NEO4J_PASSWORD:-password}"
 
 # The import DELETES ALL DATA in the target graph first. Refuse to do that to a
 # non-empty graph unless the caller passes --wipe explicitly.

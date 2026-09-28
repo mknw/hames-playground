@@ -38,41 +38,41 @@ The MCP Gateway is Docker's tool for managing and running MCP (Model Context Pro
 
 ### Registered Servers
 
-| Server | Title | Tools | Auth | Backend |
-|--------|-------|-------|------|---------|
-| `neo4j-cypher` | Neo4j Cypher | `get_neo4j_schema`, `read_neo4j_cypher`, `write_neo4j_cypher` | Password (hardcoded) | neo4j container |
-| `fetch` | Fetch | `fetch` | None | - |
-| `web_search` | DuckDuckGo | `search`, `fetch_content` | None | - |
-| `context7` | Context7 | `resolve-library-id`, `get-library-docs` | None | - |
-| `rust-mcp-filesystem` | Rust Filesystem | `read_text_file`, `write_file`, `edit_file`, `search_files`, +10 more | None (volume mounts) | - |
-| `memory` | Memory | `create_entities`, `create_relations`, `search_nodes`, `read_graph`, +5 more | None (volume) | - |
-| `redis` | Redis | `get`, `set`, `delete`, `hget`, `hset`, `lpush`, `sadd`, `zadd`, +24 more | Password (hardcoded) | redis container |
-| `database-server` | MCP Database Server | `query_database`, `list_tables`, `describe_table`, `connect_to_database`, +2 more | URL (hardcoded) | postgres container |
+| Server                | Title               | Tools                                                                             | Auth                 | Backend            |
+| --------------------- | ------------------- | --------------------------------------------------------------------------------- | -------------------- | ------------------ |
+| `neo4j-cypher`        | Neo4j Cypher        | `get_neo4j_schema`, `read_neo4j_cypher`, `write_neo4j_cypher`                     | Password (hardcoded) | neo4j container    |
+| `fetch`               | Fetch               | `fetch`                                                                           | None                 | -                  |
+| `web_search`          | DuckDuckGo          | `search`, `fetch_content`                                                         | None                 | -                  |
+| `context7`            | Context7            | `resolve-library-id`, `get-library-docs`                                          | None                 | -                  |
+| `rust-mcp-filesystem` | Rust Filesystem     | `read_text_file`, `write_file`, `edit_file`, `search_files`, +10 more             | None (volume mounts) | -                  |
+| `memory`              | Memory              | `create_entities`, `create_relations`, `search_nodes`, `read_graph`, +5 more      | None (volume)        | -                  |
+| `redis`               | Redis               | `get`, `set`, `delete`, `hget`, `hset`, `lpush`, `sadd`, `zadd`, +24 more         | Password (hardcoded) | redis container    |
+| `database-server`     | MCP Database Server | `query_database`, `list_tables`, `describe_table`, `connect_to_database`, +2 more | URL (hardcoded)      | postgres container |
 
 ### Configuration Strategy
 
 The gateway supports two mechanisms for providing credentials to MCP servers:
 
-| Mechanism | Set via | Requires |
-|-----------|---------|----------|
-| `env:` templates (`{{server.key}}`) | `mcp-config.yaml` or `mcp-config-set` tool | Config values in mcp-config.yaml |
-| `secrets:` entries | `--secrets` flag (Docker Desktop or .env file) | Secrets provider on gateway |
+| Mechanism                           | Set via                                        | Requires                         |
+| ----------------------------------- | ---------------------------------------------- | -------------------------------- |
+| `env:` templates (`{{server.key}}`) | `mcp-config.yaml` or `mcp-config-set` tool     | Config values in mcp-config.yaml |
+| `secrets:` entries                  | `--secrets` flag (Docker Desktop or .env file) | Secrets provider on gateway      |
 
-**This project's approach**: hardcode credentials for infrastructure we control (neo4j, redis, postgres) in `mcp-config.yaml`, matching the container defaults. A server needing a *user-provided* credential would use the env template hack instead, so that `mcp-config-set` can supply the value at runtime without a `--secrets` provider; the GitHub server was the only one that did, and it was removed in #226 E3 (no agent used it, and the `gh` CLI covers this repo's own GitHub work).
+**This project's approach**: hardcode credentials for infrastructure we control (neo4j, redis, postgres) in `mcp-config.yaml`, matching the container defaults. A server needing a _user-provided_ credential would use the env template hack instead, so that `mcp-config-set` can supply the value at runtime without a `--secrets` provider; the GitHub server was the only one that did, and it was removed in #226 E3 (no agent used it, and the `gh` CLI covers this repo's own GitHub work).
 
-| Server | Credential | Strategy |
-|--------|-----------|----------|
-| neo4j-cypher | `password` | Hardcoded in mcp-config.yaml (matches `NEO4J_AUTH=neo4j/password`) |
-| redis | `password` | Hardcoded in mcp-config.yaml (empty, alpine default) |
-| database-server | `database_url` | Hardcoded in mcp-config.yaml (matches postgres container) |
+| Server          | Credential     | Strategy                                                                                                                        |
+| --------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| neo4j-cypher    | `password`     | Hardcoded in mcp-config.yaml — must equal `NEO4J_PASSWORD` in the repo-root `.env` (compose substitutes nothing into this file) |
+| redis           | `password`     | Hardcoded in mcp-config.yaml (empty, alpine default)                                                                            |
+| database-server | `database_url` | Hardcoded in mcp-config.yaml — its password must equal `POSTGRES_PASSWORD` in the repo-root `.env`                              |
 
 ### Configuration Files (Source of Truth)
 
-| File | Purpose | Verify |
-|------|---------|--------|
-| `docker-compose.yaml:37-56` | Gateway service definition | Port 8811, servers list |
-| `custom-catalog.yaml` | MCP server definitions with env mappings | All 9 servers |
-| `mcp-config.yaml` | Server connection parameters and defaults | Neo4j, Redis, Postgres credentials |
+| File                        | Purpose                                   | Verify                             |
+| --------------------------- | ----------------------------------------- | ---------------------------------- |
+| `docker-compose.yaml:37-56` | Gateway service definition                | Port 8811, servers list            |
+| `custom-catalog.yaml`       | MCP server definitions with env mappings  | All 9 servers                      |
+| `mcp-config.yaml`           | Server connection parameters and defaults | Neo4j, Redis, Postgres credentials |
 
 ### Current Docker Compose Configuration
 
@@ -194,6 +194,7 @@ make docker-mcp
 ```
 
 After installation:
+
 ```bash
 docker mcp --help
 ```
@@ -225,57 +226,66 @@ docker mcp gateway run --verbose --dry-run
 ## Command Line Flags
 
 ### Server Selection
-| Flag | Description |
-|------|-------------|
-| `--servers` | Comma-separated list of server names to enable |
-| `--enable-all-servers` | Enable all servers from loaded catalogs |
-| `--working-set` | Use a named working set (requires feature flag) |
-| `--tools` | Filter specific tools (format: `server:tool` or `server:*`) |
+
+| Flag                   | Description                                                 |
+| ---------------------- | ----------------------------------------------------------- |
+| `--servers`            | Comma-separated list of server names to enable              |
+| `--enable-all-servers` | Enable all servers from loaded catalogs                     |
+| `--working-set`        | Use a named working set (requires feature flag)             |
+| `--tools`              | Filter specific tools (format: `server:tool` or `server:*`) |
 
 ### Configuration
-| Flag | Description |
-|------|-------------|
-| `--catalog` | Path to catalog file(s) |
-| `--config` | Path to config file(s) |
-| `--registry` | Path to registry file(s) |
-| `--secrets` | Secret provider path(s), e.g., `docker-desktop:./.env` |
+
+| Flag         | Description                                            |
+| ------------ | ------------------------------------------------------ |
+| `--catalog`  | Path to catalog file(s)                                |
+| `--config`   | Path to config file(s)                                 |
+| `--registry` | Path to registry file(s)                               |
+| `--secrets`  | Secret provider path(s), e.g., `docker-desktop:./.env` |
 
 ### Transport
-| Flag | Description |
-|------|-------------|
+
+| Flag          | Description                                     |
+| ------------- | ----------------------------------------------- |
 | `--transport` | `stdio`, `sse`, or `streaming` (default: stdio) |
-| `--port` | TCP port for sse/streaming transport |
+| `--port`      | TCP port for sse/streaming transport            |
 
 ### Resources
-| Flag | Description |
-|------|-------------|
-| `--cpus` | CPUs per MCP server (default: 1) |
+
+| Flag       | Description                          |
+| ---------- | ------------------------------------ |
+| `--cpus`   | CPUs per MCP server (default: 1)     |
 | `--memory` | Memory per MCP server (default: 2Gb) |
 
 ### Debugging
-| Flag | Description |
-|------|-------------|
-| `--verbose` | Enable verbose output |
-| `--log-calls` | Log tool calls (default: true) |
-| `--dry-run` | Test configuration without listening |
-| `--watch` | Auto-reload on config changes (default: true) |
+
+| Flag          | Description                                   |
+| ------------- | --------------------------------------------- |
+| `--verbose`   | Enable verbose output                         |
+| `--log-calls` | Log tool calls (default: true)                |
+| `--dry-run`   | Test configuration without listening          |
+| `--watch`     | Auto-reload on config changes (default: true) |
 
 ### Security
-| Flag | Description |
-|------|-------------|
-| `--block-secrets` | Block secrets in tool communications (default: true) |
-| `--block-network` | Block forbidden network resources |
-| `--verify-signatures` | Verify server image signatures |
+
+| Flag                  | Description                                          |
+| --------------------- | ---------------------------------------------------- |
+| `--block-secrets`     | Block secrets in tool communications (default: true) |
+| `--block-network`     | Block forbidden network resources                    |
+| `--verify-signatures` | Verify server image signatures                       |
 
 ## Auto-Discovery and Dynamic Tools
 
 ### Enable All Servers
+
 Use `--enable-all-servers` to enable every server in your loaded catalogs:
+
 ```bash
 docker mcp gateway run --enable-all-servers --transport streaming --port 3000
 ```
 
 ### Dynamic Tools Feature
+
 The `dynamic-tools` feature (enabled by default) exposes internal MCP tools that AI agents can use:
 
 - **mcp-find**: Search for available MCP servers in the catalog
@@ -287,12 +297,15 @@ This allows AI agents to dynamically discover and enable new MCP servers during 
 **Note**: Dynamic tools are automatically disabled when using explicit `--servers` flag.
 
 ### Self-Describing Images
+
 Docker images can include their own catalog metadata via labels:
+
 ```bash
 docker mcp gateway run --server docker://namespace/image:latest
 ```
 
 The image must have:
+
 ```dockerfile
 LABEL io.docker.server.metadata="{... server metadata JSON ...}"
 ```
@@ -300,28 +313,34 @@ LABEL io.docker.server.metadata="{... server metadata JSON ...}"
 ## Catalog Management
 
 ### Default Catalog
+
 The gateway uses Docker's online catalog by default:
+
 - v2: `http://desktop.docker.com/mcp/catalog/v2/catalog.yaml`
 - v3: `http://desktop.docker.com/mcp/catalog/v3/catalog.yaml` (with OAuth DCR)
 
 ### Custom Catalogs
 
 #### Create a Catalog
+
 ```bash
 docker mcp catalog create my-catalog
 ```
 
 #### Bootstrap from Docker's Catalog
+
 ```bash
 docker mcp catalog bootstrap ./starter-catalog.yaml
 ```
 
 #### Add Servers to Catalog
+
 ```bash
 docker mcp catalog add my-catalog server-name ./source.yaml
 ```
 
 #### Import from MCP Registry
+
 ```bash
 docker mcp catalog import my-catalog \
   --mcp-registry https://registry.modelcontextprotocol.io/v0/servers/{id}
@@ -342,7 +361,7 @@ registry:
       - name: tool_name
     env:
       - name: ENV_VAR
-        value: '{{server-name.config_key}}'
+        value: "{{server-name.config_key}}"
     secrets:
       - name: server-name.secret
         env: SECRET_ENV
@@ -359,7 +378,9 @@ registry:
 ## Configuration Files
 
 ### mcp-config.yaml
+
 Server-specific configuration:
+
 ```yaml
 server-name:
   config_key: value
@@ -367,7 +388,9 @@ server-name:
 ```
 
 ### registry.yaml
+
 List of enabled servers:
+
 ```yaml
 servers:
   - neo4j-cypher
@@ -375,7 +398,9 @@ servers:
 ```
 
 ### tools.yaml
+
 Tool filtering per server:
+
 ```yaml
 neo4j-cypher:
   - read_neo4j_cypher
@@ -399,35 +424,39 @@ docker mcp feature disable <feature-name>
 
 ### Available Features
 
-| Feature | Default | Description |
-|---------|---------|-------------|
-| `dynamic-tools` | enabled | Internal MCP tools (mcp-find, mcp-add, mcp-remove) |
-| `mcp-oauth-dcr` | enabled | Dynamic Client Registration for OAuth |
-| `oauth-interceptor` | disabled | GitHub OAuth flow interception |
-| `working-sets` | disabled | Working set management |
-| `tool-name-prefix` | disabled | Prefix tool names with server name |
+| Feature             | Default  | Description                                        |
+| ------------------- | -------- | -------------------------------------------------- |
+| `dynamic-tools`     | enabled  | Internal MCP tools (mcp-find, mcp-add, mcp-remove) |
+| `mcp-oauth-dcr`     | enabled  | Dynamic Client Registration for OAuth              |
+| `oauth-interceptor` | disabled | GitHub OAuth flow interception                     |
+| `working-sets`      | disabled | Working set management                             |
+| `tool-name-prefix`  | disabled | Prefix tool names with server name                 |
 
 ## Working Sets
 
 Working sets organize collections of MCP servers for different contexts.
 
 ### Enable Feature
+
 ```bash
 docker mcp feature enable working-sets
 ```
 
 ### Create Working Set
+
 ```bash
 docker mcp workingset create --name dev-tools \
   --server docker://mcp/filesystem:latest
 ```
 
 ### Use Working Set
+
 ```bash
 docker mcp gateway run --working-set dev-tools
 ```
 
 ### Share via OCI Registry
+
 ```bash
 # Push
 docker mcp workingset push my-set docker.io/org/my-set:v1.0
@@ -439,6 +468,7 @@ docker mcp workingset pull docker.io/org/my-set:v1.0
 ## Connecting Clients
 
 ### Claude Desktop
+
 ```json
 {
   "mcpServers": {
@@ -451,6 +481,7 @@ docker mcp workingset pull docker.io/org/my-set:v1.0
 ```
 
 ### Python Client
+
 ```python
 # Use streaming transport
 endpoint = "http://localhost:8811/mcp"
@@ -459,27 +490,32 @@ endpoint = "http://localhost:8811/mcp"
 ## Troubleshooting
 
 ### Debug Startup
+
 ```bash
 docker mcp gateway run --verbose --dry-run
 ```
 
 ### Check Specific Server
+
 ```bash
 docker mcp gateway run --verbose --dry-run --servers=server-name
 ```
 
 ### List Available Tools
+
 ```bash
 docker mcp tools ls
 docker mcp tools ls --verbose
 ```
 
 ### Call a Tool Directly
+
 ```bash
 docker mcp tools call tool-name param=value
 ```
 
 ### View Gateway Logs (Docker Compose)
+
 ```bash
 docker logs <gateway-container-name>
 ```
@@ -487,19 +523,23 @@ docker logs <gateway-container-name>
 ### Common Issues
 
 #### Server Not Found
+
 - Check server name spelling
 - Verify catalog contains the server
 - Use `docker mcp catalog show` to list available servers
 
 #### Image Pull Errors
+
 - Use SHA256 digests, not `:latest` tags in custom catalogs
 - Verify image exists: `docker pull mcp/server-name`
 
 #### Network Issues
+
 - Ensure Docker socket is mounted: `/var/run/docker.sock:/var/run/docker.sock`
 - Use Docker service names for inter-container communication
 
 #### Environment Variable Mapping
+
 - Check catalog `env` section maps correctly to server expectations
 - Some servers expect different env var names than the catalog default
 
@@ -538,10 +578,12 @@ docker mcp config reset
 ## Security
 
 ### Secrets Management
+
 - Use Docker Desktop's secrets API (default)
 - Or provide `.env` file: `--secrets=docker-desktop:./.env`
 
 ### OAuth
+
 ```bash
 docker mcp oauth --help
 docker mcp oauth ls
@@ -549,6 +591,7 @@ docker mcp oauth revoke <server>
 ```
 
 ### Policies
+
 ```bash
 docker mcp policy --help
 ```

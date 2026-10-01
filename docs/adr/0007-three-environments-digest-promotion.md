@@ -10,7 +10,7 @@ rolls back by checking out an older commit and rebuilding
 job, which tags npm package versions and deploys nothing
 (`.github/workflows/release.yml:3-20`). The owner decided on three environments
 — **dev**, a release candidate called **staging**, and **prod** — on two Azure
-VMs in DTSC's tenancy, released trunk-based. Prod runs **the same image digest
+VMs in the company's tenancy, released trunk-based. Prod runs **the same image digest
 staging ran**, never a rebuild, because that is the only way the thing being
 approved is the thing being shipped.
 
@@ -38,12 +38,12 @@ approved is the thing being shipped.
   `@hames-ai/<pkg>@<version>` tags that `release.yml` pushes
   (`release.yml:15-20`, `:92-115`). A tag ruleset restricts who can create
   `app-v*` tags.
-- **Registry.** Azure Container Registry in DTSC's tenancy. GitHub Actions
+- **Registry.** Azure Container Registry in the company's tenancy. GitHub Actions
   pushes through OIDC workload-identity federation, and the VMs pull with their
   managed identity, so no registry secret is stored anywhere. Images are
   private because they can carry org data.
-- **Hostnames.** The placeholders are `dev.` and `staging.` under a DTSC
-  subdomain that IT provides (for example `*.hames.dtsc.be`). Until DNS exists,
+- **Hostnames.** The placeholders are `dev.` and `staging.` under a company
+  subdomain that IT provides (for example `*.hames.contoso.com`). Until DNS exists,
   the stopgap is Azure's `<label>.<region>.cloudapp.azure.com` names. That
   label belongs to a public IP, so the shared VM needs **two public IPs** to
   get two names.
@@ -123,7 +123,7 @@ approved is the thing being shipped.
   digest promotion makes the prod artifact byte-identical to the one approved
   on staging.
 - **GitHub Container Registry.** Rejected. Images that can carry org data would
-  live outside DTSC's tenancy, and pulling a private GHCR image from a VM needs
+  live outside the company's tenancy, and pulling a private GHCR image from a VM needs
   a token stored on that VM. ACR with OIDC push and a managed-identity pull
   needs no stored registry secret at all.
 - **Rebuilding for prod from the release tag.** Rejected for the same reason as
@@ -133,7 +133,7 @@ approved is the thing being shipped.
 
 - **The staging name.** "staging" is a placeholder the owner may change in
   review.
-- **The domain.** IT has to provide the DTSC subdomain. The prod hostname is
+- **The domain.** IT has to provide the company subdomain. The prod hostname is
   also to be decided.
 - **The RC user subset.** Which users staging's `VITE_ALLOWED_EMAILS` lists.
 - **Not decided here, and left to the work that builds it:** how a workflow

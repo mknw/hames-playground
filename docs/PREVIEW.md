@@ -815,15 +815,15 @@ proxies each hostname to its own app. `configs/Caddyfile` has one site block
 (`{$APP_DOMAIN}`, line 18), so it needs a second. The prod VM keeps today's
 one-site shape.
 
-**Hostnames, and the stopgap.** IT provides the DTSC subdomain (the placeholder
-is `*.hames.dtsc.be`). The prod hostname is still to be decided. Until DNS
+**Hostnames, and the stopgap.** IT provides the company subdomain (the placeholder
+is `*.hames.contoso.com`). The prod hostname is still to be decided. Until DNS
 exists, use Azure's `<label>.<region>.cloudapp.azure.com` name in place of §4's
 A record. The label belongs to a **public IP**, so the shared VM needs **two
 public IPs** to get two names. Either way, Entra needs one redirect URI per
 environment hostname (§5a). An app registration accepts several.
 
 **ACR, OIDC and the managed identity replace `--build`.** CI builds each image
-once and pushes it to a private Azure Container Registry in DTSC's tenancy.
+once and pushes it to a private Azure Container Registry in the company's tenancy.
 GitHub Actions authenticates with OIDC workload-identity federation, so GitHub
 stores no registry password. Each VM pulls with its own managed identity, which
 needs pull rights on the registry. The VM logs in as itself immediately before

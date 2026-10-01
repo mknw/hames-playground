@@ -795,14 +795,30 @@ load the same org graph into their own Neo4j, and conversation databases are
 never shared.
 
 **Changes to compose and code have to land before the VM can be shared.** The
-committed files assume one stack per Docker daemon. ADR-0007 §Consequences
-lists, with file and line, the five places that assumption sits:
+committed files assume one stack per Docker daemon, in five places:
 
-- fixed `container_name`s and the `name: kg-agent` project name;
-- the same loopback ports, plus Caddy's `80`/`443`, in each project;
-- the sandbox reaper, which removes every sandbox container on the host;
-- the gateway's `memory` volume, which is not scoped to a project;
-- 16 GiB, which was sized for one stack.
+1. **Container names.** Every service except `mcp-config` and `mcp-gateway`
+   pins a `container_name` (`docker-compose.yaml:23,97,125,151,177`;
+   `docker-compose.prod.yaml:150`). Those names are global to the daemon. The
+   top-level `name: kg-agent` (`docker-compose.yaml:4`) also has to differ per
+   project.
+2. **Ports.** Each project publishes the same loopback ports
+   (`docker-compose.yaml:26-180`), and the overlay gives Caddy `80`/`443` in each
+   project (`docker-compose.prod.yaml:155-158`). Only one process can bind each
+   port.
+3. **The sandbox reaper.** It force-removes every `kg-sandbox=1` container on
+   the host when a process starts
+   (`packages/sandbox/docker-backend.server.ts:394-408`, called from
+   `packages/sandbox/with-sandbox.server.ts:160`; the #97 caveat). A staging
+   restart kills dev's in-flight sandboxes, and the reverse.
+4. **Volumes the gateway creates.** The `memory` server's `claude-memory` volume
+   (`configs/custom-catalog.yaml:103-104`) is created by the gateway, not by
+   compose, so it is not scoped to a project and both environments would share
+   one memory graph. The sandbox cache volume has the same shape
+   (`docker-backend.server.ts:142`), but `SANDBOX_CACHE_VOLUME` overrides it per
+   environment.
+5. **Memory.** §1 sizes one stack at 16 GiB and calls that "not generous". Two
+   stacks have not been measured.
 
 Until those are fixed, a second project on the same VM collides at
 `docker compose up`. Worse, it may come up and share state. The overlay stays
@@ -812,8 +828,10 @@ runbook, not against the compose file alone.
 **One Caddy, two hostnames.** On the shared VM, a single Caddy outside both
 projects terminates TLS for `dev.<subdomain>` and `staging.<subdomain>` and
 proxies each hostname to its own app. `configs/Caddyfile` has one site block
-(`{$APP_DOMAIN}`, line 18), so it needs a second. The prod VM keeps today's
-one-site shape.
+(`{$APP_DOMAIN}`, line 18), so it needs a second. It also needs distinct
+upstreams. Line 21 proxies to `app:3444` by compose service name, both projects
+call their app service `app`, and the loopback alternative collides on
+`127.0.0.1:3444` (item 2). The prod VM keeps today's one-site shape.
 
 **Hostnames, and the stopgap.** IT provides the company subdomain (the placeholder
 is `*.hames.contoso.com`). The prod hostname is still to be decided. Until DNS
@@ -844,9 +862,13 @@ the lists later and is not designed here.
 **One GPU box for all three.** Every environment points `VERDA_INFERENCE_*` at
 the same scale-to-zero deployment, so a turn in one environment can queue behind
 a turn in another. Each app process keeps its own cold-start estimate and its
-own wake poll (`app/src/lib/inference/cold-start.server.ts:71-77`). So the
-"starting GPU" countdown in one environment does not know about a wake that
-another environment just paid for.
+own wake poll (`app/src/lib/inference/cold-start.server.ts:71-77`;
+`app/src/lib/inference/wake.server.ts:117,293-303`). So the "starting GPU"
+countdown in one environment does not know about a wake that another
+environment just paid for. An environment that joins partway through another
+environment's cold start can also record the rest of that wait as a cold start
+of its own. That lowers its estimate, and ADR-0007 accepts it as a consequence
+of sharing the box.
 
 **Where the live layer runs.** The coordinated burst, `pnpm eval:harness` and
 `smoke-verda.ts` run against dev or staging rather than the laptop. The laptop

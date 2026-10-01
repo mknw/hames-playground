@@ -19,6 +19,14 @@ prerequisites.
 **What was and was not proved before this was written** is at the bottom
 (§"State of this runbook"). Read it before you rely on a step.
 
+**Three environments, one runbook.** [ADR-0007](adr/0007-three-environments-digest-promotion.md)
+decided on dev, staging and prod, on two VMs. Dev and staging share one VM and
+prod has its own. §§0–11 still describe **one environment on one VM** that
+builds its own image, and that is still how to execute this runbook today. §12
+lists what the Azure session adds for three environments, including what must
+change before two of them can share a box. §13 describes how a deploy and a
+promotion will work once the workflows exist.
+
 ---
 
 ## 0. Before you start
@@ -772,6 +780,103 @@ diagnosis, and nothing is reachable from outside.
   on the same box as the data it protects — the escrow copy is what makes that
   survivable — and changing it needs a re-encryption pass nobody has written.
   Treat `DATA_ENCRYPTION_KEY` as set once for the life of this preview.
+
+## 12. Three environments: what changes for the Azure session
+
+[ADR-0007](adr/0007-three-environments-digest-promotion.md) holds the decisions
+and the reasons for them. What follows is what they add to §§0–11. None of it is
+built yet.
+
+**Two VMs, not one.** One VM runs dev and staging, and the other runs prod.
+Each environment is a complete copy of §§3–7: its own compose project, `.env`,
+Postgres, Neo4j and Redis volumes, and three keys. That means **three separate
+escrows in §7**, with no key reused across environments. Dev and staging each
+load the same org graph into their own Neo4j, and conversation databases are
+never shared.
+
+**Changes to compose and code have to land before the VM can be shared.** The
+committed files assume one stack per Docker daemon. ADR-0007 §Consequences
+lists, with file and line, the five places that assumption sits:
+
+- fixed `container_name`s and the `name: kg-agent` project name;
+- the same loopback ports, plus Caddy's `80`/`443`, in each project;
+- the sandbox reaper, which removes every sandbox container on the host;
+- the gateway's `memory` volume, which is not scoped to a project;
+- 16 GiB, which was sized for one stack.
+
+Until those are fixed, a second project on the same VM collides at
+`docker compose up`. Worse, it may come up and share state. The overlay stays
+load-bearing as it is today (§2), so read any of those changes against this
+runbook, not against the compose file alone.
+
+**One Caddy, two hostnames.** On the shared VM, a single Caddy outside both
+projects terminates TLS for `dev.<subdomain>` and `staging.<subdomain>` and
+proxies each hostname to its own app. `configs/Caddyfile` has one site block
+(`{$APP_DOMAIN}`, line 18), so it needs a second. The prod VM keeps today's
+one-site shape.
+
+**Hostnames, and the stopgap.** IT provides the DTSC subdomain (the placeholder
+is `*.hames.dtsc.be`). The prod hostname is still to be decided. Until DNS
+exists, use Azure's `<label>.<region>.cloudapp.azure.com` name in place of §4's
+A record. The label belongs to a **public IP**, so the shared VM needs **two
+public IPs** to get two names. Either way, Entra needs one redirect URI per
+environment hostname (§5a). An app registration accepts several.
+
+**ACR, OIDC and the managed identity replace `--build`.** CI builds each image
+once and pushes it to a private Azure Container Registry in DTSC's tenancy.
+GitHub Actions authenticates with OIDC workload-identity federation, so GitHub
+stores no registry password. Each VM pulls with its own managed identity, which
+needs pull rights on the registry. The VM logs in as itself immediately before
+each pull, so this is the first step in the runbook that needs Azure tooling on
+the box (the intro says "no Azure CLI"). The app service then runs
+`image: <registry>/<repo>@sha256:<digest>` instead of building
+`kg-agent-app:local` (`docker-compose.yaml:164-176`). That compose change comes
+with the workflows, not before them.
+
+**Each environment has its own allow-list.** Staging's `VITE_ALLOWED_EMAILS`
+lists only a subset of users, and ADR-0007 leaves which users as an open item.
+One image can serve different lists only because the runtime value wins over
+the build-time one (`app/src/lib/auth/allowList.ts:24-28`), so **the CI build
+must not set `VITE_ALLOWED_EMAILS`**. §8 step 5 is still the test of each gate,
+so run it once per environment. An Entra group or app-role check will replace
+the lists later and is not designed here.
+
+**One GPU box for all three.** Every environment points `VERDA_INFERENCE_*` at
+the same scale-to-zero deployment, so a turn in one environment can queue behind
+a turn in another. Each app process keeps its own cold-start estimate and its
+own wake poll (`app/src/lib/inference/cold-start.server.ts:71-77`). So the
+"starting GPU" countdown in one environment does not know about a wake that
+another environment just paid for.
+
+**Where the live layer runs.** The coordinated burst, `pnpm eval:harness` and
+`smoke-verda.ts` run against dev or staging rather than the laptop. The laptop
+is aarch64 on colima and the VMs are linux/amd64, and #412 shows what that
+difference hides. The hermetic layers do not move
+([`testing/pyramid.md`](testing/pyramid.md)).
+
+## 13. Deploy and promotion, once the workflows exist
+
+None of these workflows exist yet. This is the shape they will implement. If
+the two ever disagree, ADR-0007 is the authority.
+
+| Trigger                                           | What happens                                                                      | Gate                                                                                      |
+| ------------------------------------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Merge to `main`                                   | CI builds the image once, pushes it to ACR and deploys that digest to **dev**     | CI green                                                                                  |
+| Push of a protected tag such as `app-v0.2.0-rc.1` | The digest built for that commit deploys to **staging**                           | a tag ruleset restricts who can create `app-v*` tags                                      |
+| Promotion of a staging release                    | The **same digest** that staging is running deploys to **prod**. Nothing rebuilds | GitHub Environment `prod`: the owner is the only reviewer, and prevent self-review is off |
+
+Three rules carry the design:
+
+- **Deploy by digest, never by a mutable tag.** A tag is how a person names a
+  release, and the digest is what a VM runs. Promotion reads the digest that
+  staging deployed and hands that same value to prod.
+- **`app-v` tags are kept apart from the npm release tags.** `release.yml`
+  pushes `v<version>` and `@hames-ai/<pkg>@<version>` for the packages
+  (`.github/workflows/release.yml:15-20`). An app tag never takes either form.
+- **On a VM that pulls, rollback means redeploying the previous digest.** §10's
+  `git checkout` and rebuild stays the procedure for a VM that builds its own
+  image. Its #260 warning still applies to any digest built from a commit
+  before `56ac2b4`.
 
 ## What is not true of this deployment
 

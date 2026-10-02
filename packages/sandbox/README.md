@@ -171,7 +171,8 @@ example a conversation id) to keep one container, and its files, across turns.
 
 - **Container isolation.** Every container starts with all Linux capabilities
   dropped, a read-only root filesystem, `no-new-privileges`, a process limit,
-  size-capped scratch space for `/work` and `/tmp`, and a non-root user.
+  size-capped scratch space for `/work` and `/tmp` (and a small, non-executable
+  one for `/skills`), and a non-root user.
 - **Network.** The default egress profile, `mcp-only`, starts the container
   with no network at all. Two narrower profiles, `pypi` and `github-trusted`,
   allow only an allowlist of hosts through a proxy (see
@@ -207,9 +208,19 @@ them:
 - **Whose container it is** — `WithSandboxConfig.tenantId`, the id of the user who
   owns the conversation, as a string or as a function called per run (useful when
   you build your patterns once but the signed-in user changes per request).
+- **Skills** — `WithSandboxConfig.skills`, a function called per run that returns
+  the [Agent Skills](https://agentskills.io/specification) to mount (`SandboxSkill[]`:
+  a name, a description and the whole `SKILL.md` text). Each is written into the
+  container as `/skills/<name>/SKILL.md`, and the description of `sandbox_bash`
+  gains a one-line-per-skill index (name and description only), so the model reads a
+  file only when its description fits the task. Names follow the specification's
+  rule, a file is at most 64 KiB, and at most 20 skills mount per run; a skill
+  that cannot be mounted is reported as a run event rather than dropped silently.
+  Which skills a run gets — and whose they are — is yours to decide, server-side.
 
 Every other option on `WithSandboxConfig` (`backend`, `pool`, `scheduler`,
-`attachments`, `resources`, `egress`) has a default.
+`attachments`, `resources`, `egress`) has a default, and `skills` is off unless you
+pass it.
 
 If you use `@hames-ai/agents`, its two sandbox agents do not import this package
 directly: your application builds the wrapper with `withSandbox` and hands it
@@ -257,6 +268,7 @@ What each image contains: [rootfs/README.md](https://github.com/mknw/hames-playg
 | `./settings`                 | `SandboxSettings` + `DEFAULT_SANDBOX_SETTINGS` (the caps and per-call defaults)                   | yes — same rule                                |
 | `./guard` (= `./bash-guard`) | `screenBashCommand` / `bashGuardPolicyFromEnv` — the shell-command screen                         | yes                                            |
 | `./egress-policy`            | the three selectable egress profiles and the per-boot network naming                              | yes                                            |
+| `./skills`                   | `SandboxSkill`, the skill limits (`SKILL_FILE_MAX_BYTES`, `MAX_MOUNTED_SKILLS`) and `isSkillName` | yes                                            |
 | `./workspace-store`          | `configureWorkspaceStore(...)` — where you plug in storage for `/work` files                      | server                                         |
 | `./with-sandbox.server`      | the wrapper itself, for code that skips the root entry point                                      | server                                         |
 | `./pty-manager.server`       | an interactive terminal into a running container (uses `node-pty`, see Troubleshooting)           | server                                         |

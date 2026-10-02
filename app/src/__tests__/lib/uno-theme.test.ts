@@ -162,3 +162,47 @@ describe('the icon collections', () => {
     expect(await cssFor('i-mdi-home')).not.toContain('i-mdi-home{')
   })
 })
+
+describe('the Sandbox tab blink (#415)', () => {
+  /** The balanced `{ … }` body starting at the first `{` after `from`. */
+  const blockAfter = (css: string, from: number): string => {
+    const open = css.indexOf('{', from)
+    let depth = 0
+    for (let i = open; i < css.length; i++) {
+      if (css[i] === '{') depth++
+      else if (css[i] === '}' && --depth === 0) return css.slice(open + 1, i)
+    }
+    throw new Error('unbalanced CSS')
+  }
+
+  // The class is applied from TS for SANDBOX_BLINK_MS; the keyframes run in
+  // CSS. Two numbers in two files, so one pins the other: a longer animation
+  // would be cut off mid-pulse, a shorter one would leave the class on idle.
+  it('runs ONE pass of two pulses, as long as SupportPanel keeps the class on', async () => {
+    const { SANDBOX_BLINK_MS } = await import('../../lib/sandbox-blink')
+    const css = await cssFor('')
+    const rule =
+      /\.sandbox-tab-blink\s*\{\s*animation:\s*sandbox-tab-blink\s+([\d.]+)s\s+[\w-]+\s+1;/.exec(
+        css,
+      )
+    expect(rule, 'no .sandbox-tab-blink animation rule').not.toBeNull()
+    expect(Number(rule![1]) * 1000).toBe(SANDBOX_BLINK_MS)
+    const frames = blockAfter(css, css.indexOf('@keyframes sandbox-tab-blink'))
+    // Two lit frames (25%, 75%) between dark ones: a blink, twice.
+    expect(frames).toMatch(/0%,\s*50%,\s*100%\s*\{\s*background-color:\s*transparent/)
+    expect(frames).toMatch(/25%,\s*75%\s*\{/)
+  })
+
+  it('drops the motion under prefers-reduced-motion and keeps a steady signal', async () => {
+    const css = await cssFor('')
+    const blocks: string[] = []
+    for (let at = css.indexOf('@media (prefers-reduced-motion: reduce)'); at !== -1;) {
+      blocks.push(blockAfter(css, at))
+      at = css.indexOf('@media (prefers-reduced-motion: reduce)', at + 1)
+    }
+    const reduced = blocks.find((b) => b.includes('.sandbox-tab-blink'))
+    expect(reduced, 'no reduced-motion rule for .sandbox-tab-blink').toBeDefined()
+    expect(reduced).toMatch(/\.sandbox-tab-blink\s*\{[^}]*animation:\s*none/)
+    expect(reduced).toMatch(/\.sandbox-tab-blink\s*\{[^}]*box-shadow:\s*inset/)
+  })
+})

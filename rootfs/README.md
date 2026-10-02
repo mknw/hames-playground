@@ -6,14 +6,15 @@ project root" the sandbox needs — there is no separate pool-manager daemon.
 
 ## Contents
 
-| Path (in image)                   | What                                       | Notes                                                                                                                                       |
-| --------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/opt/mcp/rust-mcp-filesystem`    | Filesystem MCP server                      | Lifted from the pinned `mcp/rust-mcp-filesystem` image (same digest as `configs/custom-catalog.yaml`); statically linked, runs on debian.   |
-| `/opt/mcp/mcp-shell/`             | JS shell-exec MCP server (one `bash` tool) | Authored here (`mcp-shell/`); deps installed in-image. Covers Python via `python3 -c …`.                                                    |
-| `python3`, `pip`, `venv`, `uv`    | Python runtime                             | Invoked through `mcp-shell` in v0; `uv` (same pin as the data/office flavours) backs live installs on the networked egress profiles.        |
-| `/work`                           | Agent working directory                    | The filesystem MCP is scoped to this; shell `cwd` defaults here. RAM-backed tmpfs at runtime (mode 1777, size via `SANDBOX_WORK_TMPFS_MB`). |
-| `/opt/mcp/init.sh`                | Entry/launcher                             | Idle-host entrypoint + `serve <name>` launch path for `docker exec`.                                                                        |
-| `/opt/mcp/egress-proxy/proxy.mjs` | Allowlist CONNECT proxy (egress profiles)  | Run by the backend as a gateway container beside `pypi`/`github-trusted` sandboxes; its stdout is the outbound audit log.                   |
+| Path (in image)                   | What                                       | Notes                                                                                                                                                                                              |
+| --------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/opt/mcp/rust-mcp-filesystem`    | Filesystem MCP server                      | Lifted from the pinned `mcp/rust-mcp-filesystem` image (same digest as `configs/custom-catalog.yaml`); statically linked, runs on debian.                                                          |
+| `/opt/mcp/mcp-shell/`             | JS shell-exec MCP server (one `bash` tool) | Authored here (`mcp-shell/`); deps installed in-image. Covers Python via `python3 -c …`.                                                                                                           |
+| `python3`, `pip`, `venv`, `uv`    | Python runtime                             | Invoked through `mcp-shell` in v0; `uv` (same pin as the data/office flavours) backs live installs on the networked egress profiles.                                                               |
+| `/work`                           | Agent working directory                    | The filesystem MCP is scoped to this; shell `cwd` defaults here. RAM-backed tmpfs at runtime (mode 1777, size via `SANDBOX_WORK_TMPFS_MB`).                                                        |
+| `/skills`                         | Mounted skills (`<name>/SKILL.md`)         | Not in the image: the backend mounts a 4 MiB `noexec` tmpfs here, and `withSandbox({ skills })` writes it each run. Outside the filesystem MCP's scope, so it is read with `sandbox_bash` (`cat`). |
+| `/opt/mcp/init.sh`                | Entry/launcher                             | Idle-host entrypoint + `serve <name>` launch path for `docker exec`.                                                                                                                               |
+| `/opt/mcp/egress-proxy/proxy.mjs` | Allowlist CONNECT proxy (egress profiles)  | Run by the backend as a gateway container beside `pypi`/`github-trusted` sandboxes; its stdout is the outbound audit log.                                                                          |
 
 ### PYTHONSAFEPATH
 

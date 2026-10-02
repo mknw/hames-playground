@@ -427,6 +427,26 @@ export default defineConfig({
           .thread-flash-done, .thread-flash-error { animation: none; }
         }
 
+        /* Sandbox tab (#415): blinks TWICE when a sandbox is entered — two
+           pulses of the success tint inside one 1.2s run, then nothing.
+           Applied by SupportPanel for SANDBOX_BLINK_MS, which mirrors the
+           duration. */
+        @keyframes sandbox-tab-blink {
+          0%, 50%, 100% { background-color: transparent; }
+          25%, 75%      { background-color: color-mix(in srgb, var(--ui-success) 28%, transparent); }
+        }
+        .sandbox-tab-blink {
+          animation: sandbox-tab-blink 1.2s ease-in-out 1;
+        }
+        /* Motionless fallback: no flashing, but the same signal — the tab
+           carries a steady success underline for the same 1.2s. */
+        @media (prefers-reduced-motion: reduce) {
+          .sandbox-tab-blink {
+            animation: none;
+            box-shadow: inset 0 -2px 0 var(--ui-success);
+          }
+        }
+
         /* Agent accent glyph in expanded sidebar rows. Muted at rest so the
            title stays the row's anchor; the agent's family colour appears on
            row hover and stays lit while the row is selected. The colour is

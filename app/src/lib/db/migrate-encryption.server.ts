@@ -112,6 +112,12 @@ export const ENCRYPTED_TABLES: readonly TableSpec[] = [
   { table: 'auth_sessions', pk: 'id', textColumns: ['email', 'display_name'], jsonbColumns: [] },
   { table: 'users', pk: 'id', textColumns: ['email', 'display_name'], jsonbColumns: [] },
   { table: 'routines', pk: 'id', textColumns: ['input', 'label'], jsonbColumns: [] },
+  {
+    table: 'skills',
+    pk: 'id',
+    textColumns: ['name', 'description', 'content'],
+    jsonbColumns: [],
+  },
 ]
 
 /** Per-table outcome. `absent` tables were skipped, not counted. */

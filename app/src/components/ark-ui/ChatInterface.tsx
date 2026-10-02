@@ -165,7 +165,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   // Report the selected agent up to the parent (initial 'search', then on load
   // and on every change) so agent-aware UI can react. Consumers today are the
   // SupportPanel's Data tab (uploads carry agentId, which gates auto-ingest) and
-  // its Terminal tab (the Shell needs it to hydrate /work/in). The Tools panel
+  // its Sandbox tab (the Shell needs it to hydrate /work/in). The Tools panel
   // this comment used to name was removed in #234.
   createEffect(() => props.onSelectedAgentChange?.(selectedAgent()))
   // Cursor into ctx.events — tracks how many events were sent last turn so we

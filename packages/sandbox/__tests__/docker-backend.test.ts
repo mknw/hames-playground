@@ -656,6 +656,18 @@ describe('DockerBackend — container hardening argv (#116)', () => {
     expect(args.join(' ')).toContain('--tmpfs /work:rw,nosuid,size=512m,mode=1777')
   })
 
+  it('gives /skills its own small, non-executable tmpfs (#415: the rootfs is read-only)', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    await backend.boot('base', {})
+    const mounts = sandboxRunArgs().flatMap((a, i, all) => (a === '--tmpfs' ? [all[i + 1]] : []))
+    const skills = mounts.find((m) => m.startsWith('/skills:'))
+    expect(skills, '/skills must be mounted — a read-only rootfs cannot hold it').toBeDefined()
+    const opts = skills!.slice('/skills:'.length).split(',')
+    // noexec: skills are instructions in v1; nosuid/nodev as for /work.
+    expect(opts).toEqual(expect.arrayContaining(['rw', 'nosuid', 'nodev', 'noexec', 'size=4m']))
+  })
+
   it('reads the pid ceiling and /work size from env knobs (no rebuild to retune)', async () => {
     process.env.SANDBOX_PIDS_LIMIT = '64'
     process.env.SANDBOX_WORK_TMPFS_MB = '128'

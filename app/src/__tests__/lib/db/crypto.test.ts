@@ -518,6 +518,7 @@ describe('inventory', () => {
       'auth_sessions',
       'conversations',
       'routines',
+      'skills',
       'users',
     ])
   })
@@ -530,6 +531,14 @@ describe('inventory', () => {
     for (const column of ['trigger_kind', 'enabled', 'expires_at', 'created_at', 'updated_at']) {
       expect(encrypted).not.toContain(column)
     }
+    // #415: skills are owner-scoped and filtered on these in SQL.
+    expect(encrypted).not.toContain('is_global')
+    expect(encrypted).not.toContain('skill_id')
+  })
+
+  it('encrypts every user-written skills column (#415)', () => {
+    const skills = ENCRYPTED_TABLES.find((t) => t.table === 'skills')!
+    expect([...skills.textColumns].sort()).toEqual(['content', 'description', 'name'])
   })
 })
 

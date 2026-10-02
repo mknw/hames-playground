@@ -62,8 +62,12 @@ const createRedisBackend = vi.fn(() => ({
 }))
 // The config parameter is declared so `mock.calls[0][0]` is typed: the tenant
 // assertion below reads the bag the adapter built, not just that it was called.
-const withSandbox = vi.fn((_config: { tenantId?: unknown }) => (p: unknown) => p)
+const withSandbox = vi.fn((_config: { tenantId?: unknown; skills?: unknown }) => (p: unknown) => p)
 const enrichNeo4jResult = vi.fn()
+// The skills resolver (#415) is observed at its seam: what matters here is
+// WHO it is asked for, not what the database holds.
+const resolveSandboxSkills = vi.fn(async (_userId: string | null) => [])
+vi.mock('../../../lib/skills/sandbox-skills.server', () => ({ resolveSandboxSkills }))
 
 vi.mock('@hames-ai/harness-patterns/retriever', () => ({ createRedisBackend }))
 vi.mock('@hames-ai/sandbox', () => ({ withSandbox }))
@@ -170,5 +174,29 @@ describe('the bag the composition root supplies is the bag the moved factories r
     await runWithRequestContext({ userId: 'owner-2', sessionId: 's' }, async () => {
       expect(resolve()).toBe('owner-2')
     })
+  })
+
+  // #415: the same rule as the tenant, for the same reason — a cached chain
+  // must mount the skills of whoever's turn it is, and nobody's outside one.
+  it('supplies the skills as a RESOLVER, owned by the request scope’s user', async () => {
+    const { runWithRequestContext } =
+      await import('../../../lib/harness-client/request-user.server')
+    const bag = agentDeps()
+    bag.withSandbox!({ id: 'x', sessionId: 's' })(undefined as never)
+    const config = withSandbox.mock.calls[0][0]
+
+    expect(typeof config.skills).toBe('function')
+    const resolve = config.skills as () => Promise<unknown>
+
+    await resolve()
+    expect(resolveSandboxSkills).toHaveBeenLastCalledWith(null)
+    await runWithRequestContext({ userId: 'owner-1', sessionId: 's' }, async () => {
+      await resolve()
+    })
+    expect(resolveSandboxSkills).toHaveBeenLastCalledWith('owner-1')
+    await runWithRequestContext({ userId: 'owner-2', sessionId: 's' }, async () => {
+      await resolve()
+    })
+    expect(resolveSandboxSkills).toHaveBeenLastCalledWith('owner-2')
   })
 })

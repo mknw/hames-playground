@@ -27,16 +27,18 @@ no pseudonymisation anywhere in the stack.
 
 Measured on the live dev database, 2026-08-15.
 
-| Store                     | Contents                                                                                                       | Encrypted at rest          | Retention                           | Rows now |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------- | ----------------------------------- | -------- |
-| Postgres `conversations`  | `context` JSONB — the **full event stream**: `user_message`, `assistant_message`, `tool_call`, `tool_result`   | `title` + `context`        | **none**                            | 28       |
-| Postgres `users`          | Entra `oid`, email, display name, tenant id, first/last login                                                  | `email` + `display_name`   | none                                | 1        |
-| Postgres `auth_sessions`  | oid, email, display name, 8h expiry                                                                            | `email` + `display_name`   | lazy, per-id + hourly sweep         | 22       |
-| Postgres `routines`       | agent id, trigger kind/config, the input prompt, label (#131)                                                  | `input` + `label`          | none                                | —        |
-| Postgres `user_tokens`    | MSAL cache, **AES-256-GCM encrypted**, fails closed                                                            | `token_cache`              | deleted on logout                   | 1        |
-| Postgres `session_claims` | session id -> owner id, for the pre-persistence window                                                         | nothing (holds no content) | `expires_at`, mirrors the stash TTL | —        |
-| Redis Data Stash          | uploaded and Microsoft 365-ingested documents, chunks, embeddings                                              | **no**                     | **7 days** (`DEFAULT_TTL_SECONDS`)  | —        |
-| Neo4j                     | **the staff directory**: per `Member` — `entraId`, `displayName`, `mail`, `department`, `jobTitle`, `syncedAt` | **no**                     | **none**                            | 49       |
+| Store                     | Contents                                                                                                       | Encrypted at rest                  | Retention                           | Rows now |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------- | ---------------------------------- | ----------------------------------- | -------- |
+| Postgres `conversations`  | `context` JSONB — the **full event stream**: `user_message`, `assistant_message`, `tool_call`, `tool_result`   | `title` + `context`                | **none**                            | 28       |
+| Postgres `users`          | Entra `oid`, email, display name, tenant id, first/last login                                                  | `email` + `display_name`           | none                                | 1        |
+| Postgres `auth_sessions`  | oid, email, display name, 8h expiry                                                                            | `email` + `display_name`           | lazy, per-id + hourly sweep         | 22       |
+| Postgres `routines`       | agent id, trigger kind/config, the input prompt, label (#131)                                                  | `input` + `label`                  | none                                | —        |
+| Postgres `skills`         | uploaded `SKILL.md` files: name, description, whole text, author id, global flag (#415)                        | `name` + `description` + `content` | none (until the author deletes)     | —        |
+| Postgres `skill_hides`    | viewer id -> hidden global skill id (#415)                                                                     | nothing (holds no content)         | cascades with the skill             | —        |
+| Postgres `user_tokens`    | MSAL cache, **AES-256-GCM encrypted**, fails closed                                                            | `token_cache`                      | deleted on logout                   | 1        |
+| Postgres `session_claims` | session id -> owner id, for the pre-persistence window                                                         | nothing (holds no content)         | `expires_at`, mirrors the stash TTL | —        |
+| Redis Data Stash          | uploaded and Microsoft 365-ingested documents, chunks, embeddings                                              | **no**                             | **7 days** (`DEFAULT_TTL_SECONDS`)  | —        |
+| Neo4j                     | **the staff directory**: per `Member` — `entraId`, `displayName`, `mail`, `department`, `jobTitle`, `syncedAt` | **no**                             | **none**                            | 49       |
 
 The Postgres column encryption is AES-256-GCM under `DATA_ENCRYPTION_KEY`
 (`app/src/lib/db/crypto.server.ts`), applied in the repository modules on write

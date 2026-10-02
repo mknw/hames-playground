@@ -50,7 +50,9 @@ before the first `docker compose up` on a machine that already has the stack.
 
 ### MCP Gateway
 
-- **Image**: docker/mcp-gateway
+- **Image**: docker/mcp-gateway, pinned by digest to the 2026-01-22 build. Current
+  upstream releases cannot run this stack (#417); the comment on the service in
+  `docker-compose.yaml` says why, and what a bump needs first
 - **Ports**: 127.0.0.1:8811:8811
 - **MCP Servers**: neo4j-cypher, fetch, web_search, context7, rust-mcp-filesystem, memory, redis, database-server
 - **Transport**: streaming
@@ -322,12 +324,27 @@ clean slate: the `hames` project does not adopt the old `kg-agent_*` volumes,
 and the old containers still hold the published ports. On a machine that ran
 the old stack, `docker compose up -d` therefore fails on those ports until the
 old project is gone. Remove it by its old name, so that the command cannot reach
-any other project. `-v` deletes that project's data, so run it only if you mean
-to discard it:
+any other project. Look first:
+
+```bash
+docker compose -p kg-agent --profile app ps -a
+```
+
+`-v` deletes that project's data, so run it only if you mean to discard it:
 
 ```bash
 docker compose -p kg-agent --profile app down -v
 ```
+
+If `ps -a` listed a container of a service this file no longer declares (an
+orphan, such as `n8n` started from an older checkout), add `--remove-orphans`.
+Without it, `down` skips that container, which keeps `kg-agent_app-network` in
+use, so `down` exits non-zero.
+
+The Postgres database was renamed too, from `kgagent` to `hames`. If `app/.env`
+or your shell sets `DATABASE_URL` or `TEST_DATABASE_URL` explicitly, change
+`/kgagent…` to `/hames…` in it. If you go back to a checkout from before the
+rename, undo that edit as well.
 
 ### Configuration Management
 

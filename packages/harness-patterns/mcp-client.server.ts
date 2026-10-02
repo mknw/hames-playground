@@ -485,7 +485,92 @@ async function processToolDescriptions(): Promise<MCPToolDescription[]> {
   return out
 }
 
+/**
+ * The Docker MCP gateway's OWN tools — its `dynamic-tools` feature — which
+ * manage the gateway instead of doing any work: find a catalog server, add or
+ * remove one in the session, set its config, build a `code-mode` script tool,
+ * or run "a tool that exists in the current session" by name (`mcp-exec`).
+ * They are never part of an agent's tool surface (#412, #420).
+ *
+ * Two captured turns were misled by them. #412: `mcp-add` answered
+ * "Successfully added 0 tools … Assume that it is fully configured", and the
+ * controller then guessed `mcp-exec {"name":"list_tables"}`. #420: the planner
+ * read `mcp-exec` as a hidden shell and planned a `libreoffice` conversion
+ * through it. No prompt in this repo mentions them; the idea came from the
+ * gateway's own tool descriptions.
+ *
+ * The deployment turns the feature off at the gateway as well
+ * (`docker-config.json`). This list is the second layer: it holds when that
+ * file is replaced, when a host config omits the key (the gateway's default is
+ * ON), or when a gateway bump changes how the feature is read.
+ *
+ * Names from docker/mcp-gateway at the pinned build (v0.37.0, `cc7998a5`):
+ * `pkg/gateway/reload.go` registers the first six whenever the feature is on,
+ * the two profile tools only with profiles, and `find-tools` only with an
+ * embeddings client. `pkg/gateway/dynamic_mcps.go` defines two more that no
+ * code path registers at that build (`mcp-registry-import`, `mcp-catalog`);
+ * they are listed so a bump that wires them in does not reach an agent. The
+ * set is unchanged on upstream `main` (v0.44.1).
+ *
+ * NOT matched, deliberately: the in-VM sandbox tools (`sandbox_*`, a scoped
+ * transport that never passes through this list), and the gateway's
+ * `rust-mcp-filesystem` server, which is an ordinary catalog server.
+ */
+const GATEWAY_MANAGEMENT_TOOLS: ReadonlySet<string> = new Set([
+  'mcp-find',
+  'mcp-add',
+  'mcp-remove',
+  'mcp-exec',
+  'mcp-config-set',
+  'code-mode',
+  'mcp-create-profile',
+  'mcp-activate-profile',
+  'find-tools',
+  'mcp-registry-import',
+  'mcp-catalog',
+])
+
+/** `code-mode` registers each script tool it builds as `code-mode-<name>`
+ *  (`pkg/gateway/codemode.go`), so those are management tools too. */
+const CODE_MODE_TOOL_PREFIX = 'code-mode-'
+
+function isGatewayManagementTool(name: string): boolean {
+  return GATEWAY_MANAGEMENT_TOOLS.has(name) || name.startsWith(CODE_MODE_TOOL_PREFIX)
+}
+
+/** Warn once per process, not once per catalog read: `listTools` is not
+ *  memoized, and one line is enough to say the gateway-side switch is off. */
+let warnedGatewayManagementTools = false
+
+/**
+ * The gateway's catalog in this package's shape, minus its management tools.
+ *
+ * A drop is LOGGED, once. The filter works either way, but a drop means the
+ * gateway-side switch did not hold, and a second layer that silently hides
+ * the first one failing would leave nobody knowing that only one layer is left.
+ */
+function gatewayToolDescriptions(
+  tools: ReadonlyArray<{ name: string; description?: string; inputSchema?: unknown }>,
+): MCPToolDescription[] {
+  const kept = tools.filter((t) => !isGatewayManagementTool(t.name))
+  if (kept.length < tools.length && !warnedGatewayManagementTools) {
+    warnedGatewayManagementTools = true
+    const dropped = tools.filter((t) => isGatewayManagementTool(t.name)).map((t) => t.name)
+    console.warn(
+      `[mcp-client] the MCP gateway lists its own management tools (${dropped.join(', ')}); ` +
+        'they were left out of the tool catalog. Set "dynamic-tools": "disabled" in the ' +
+        "gateway's docker-config.json to turn them off at the gateway as well.",
+    )
+  }
+  return kept.map(toDescription)
+}
+
 export async function listTools(): Promise<MCPToolDescription[]> {
+  // The gateway's own management tools are dropped from its half of the
+  // catalog (`gatewayToolDescriptions`, #412/#420). This is the one door every
+  // gateway catalog read goes through: `Tools()`, the adapters' description
+  // cache, and so the planner's catalog and every loop's allowlist.
+  //
   // Process-registered tools (#110: the app-side per-user tools) are advertised
   // alongside the gateway's. They do not run on the gateway, so they stay
   // available even when it is unreachable — hence they are appended on both
@@ -508,7 +593,7 @@ export async function listTools(): Promise<MCPToolDescription[]> {
       label: 'listTools',
     })
     markGatewayReachable()
-    return [...tools.map(toDescription), ...appTools]
+    return [...gatewayToolDescriptions(tools), ...appTools]
   } catch (err) {
     // Reconnect already tried once, on the ONE connection the lease held. The
     // other warm connections can be just as dead (a gateway restart drops all
@@ -534,7 +619,7 @@ export async function listTools(): Promise<MCPToolDescription[]> {
       })
       console.log('[mcp-client] listTools recovered after a pool rebuild')
       markGatewayReachable()
-      return [...tools.map(toDescription), ...appTools]
+      return [...gatewayToolDescriptions(tools), ...appTools]
     } catch (retryErr) {
       // The gateway is genuinely not answering. RECORD it (#276): returning
       // the app-side tools alone still degrades gracefully for callers that

@@ -119,8 +119,8 @@ Keep the repo layout intact — **`app/` and `configs/` must stay siblings**: th
 server resolves the MCP catalog via `path.resolve(process.cwd(), '..', 'configs', …)`
 with cwd = `app/` (`server-catalog.server.ts:42`).
 
-Create the config files with **real** values (`docker-config.json` and
-`app/.env` are git-ignored; **`configs/mcp-config.yaml` is tracked**):
+Create the config files with **real** values (`app/.env` is git-ignored;
+**`configs/mcp-config.yaml` and `docker-config.json` are tracked**):
 
 - **`configs/mcp-config.yaml`** — the enabled-servers list + secrets (neo4j
   password, …). The tracked copy ships the compose file's laptop-only
@@ -138,8 +138,12 @@ Create the config files with **real** values (`docker-config.json` and
   publishing a real password to a public repo. Pre-provision statically;
   there is no runtime secret-setting on a Linux host.
 
-- **`docker-config.json`** — Docker registry auth so the gateway can pull MCP
-  server images (mounted read-only into the gateway).
+- **`docker-config.json`** — mounted read-only into the gateway. The tracked
+  copy sets the gateway's `dynamic-tools` feature to `"disabled"`, which keeps
+  the gateway's own management tools (`mcp-find`, `mcp-add`, `mcp-exec`, …)
+  off every agent's tool list (#412, #420). Add registry auth here only if a
+  server image needs it, and keep the `features` block: without it the gateway
+  turns them back on.
 - **`app/.env`** — see the env table in step 9.
 
 ## 4. Harden the compose stack for a public host ⚠️

@@ -117,13 +117,17 @@ those fail with a permission error at the worst possible moment rather than here
 
 Keep the repo layout intact: `app/` and `configs/` must stay siblings.
 
-Three git-ignored files have to exist before first boot:
+Three files have to exist before first boot:
 
 1. **`configs/mcp-config.yaml`** — connection parameters for the MCP servers.
    Write it explicitly, from §3a below. **Do not copy
    `configs/template.mcp-config.yaml`** — that template is the development set.
-2. **`docker-config.json`** — Docker registry auth, mounted read-only into the
-   gateway so it can pull MCP server images.
+2. **`docker-config.json`** — already in the clone: it is tracked, not
+   git-ignored. Mounted read-only into the gateway, it sets the gateway's
+   `dynamic-tools` feature to `"disabled"`, so the gateway's own management
+   tools (`mcp-find`, `mcp-add`, `mcp-exec`, …) never reach an agent (#412,
+   #420). If a server image ever needs registry auth, add it to this file and
+   keep the `features` block: without that block the gateway turns them back on.
 3. **`.env`** — the one below.
 
 ```bash

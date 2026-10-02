@@ -91,6 +91,13 @@ services:
     # config carries (#261 P0-2, verified against a config that still has one).
     #
     # Adding an agent that needs another server means adding it here as well.
+    #
+    # The gateway's own management tools (mcp-find, mcp-add, mcp-exec, …) stay
+    # off here for two independent reasons: the gateway switches its
+    # `dynamic-tools` feature off whenever `--servers=` is given without
+    # `--enable-all-servers`, and this service keeps the base file's
+    # `docker-config.json` mount, which sets that feature to "disabled". Do not
+    # add a `volumes:` override that drops that mount (#412, #420).
     command: !override
       - --servers=neo4j-cypher,fetch,web_search,context7,memory
       # The rendered config the base file's `mcp-config` service writes — it

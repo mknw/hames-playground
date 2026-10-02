@@ -1,5 +1,5 @@
 {
   "features": {
-    "dynamic-tools": "enabled"
+    "dynamic-tools": "disabled"
   }
 }

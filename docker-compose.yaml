@@ -1,6 +1,6 @@
 # Pin the compose project name. Without this it defaults to the directory name,
-# so renaming the checkout would rename everything derived from it. The data
-# volumes derive nothing: they pin their pre-rename names (see `volumes:`).
+# so renaming the checkout would silently orphan the `hames_*` named volumes
+# (Postgres, Neo4j, Redis) and bring the stack up against empty new ones.
 name: hames
 
 # Laptop hardening, same standard as docker-compose.prod.yaml:
@@ -101,7 +101,7 @@ services:
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the repo-root .env — see .env.example}
-      - POSTGRES_DB=kgagent
+      - POSTGRES_DB=hames
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -191,7 +191,7 @@ services:
       # read. The Neo4j URL needs no entry: config/endpoints.ts resolves
       # bolt://neo4j:7687 in a production build (the localhost form is the
       # `import.meta.env.DEV` branch) — only the credential is supplied here.
-      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the repo-root .env — see .env.example}@postgres:5432/kgagent
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the repo-root .env — see .env.example}@postgres:5432/hames
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:?set NEO4J_PASSWORD in the repo-root .env — see .env.example}
       - MCP_GATEWAY_URL=http://mcp-gateway:8811/mcp
@@ -239,27 +239,9 @@ networks:
   app-network:
     driver: bridge
 
-# The three data volumes carry an explicit `name:` because the project was
-# renamed kg-agent → hames. A volume's default name is `<project>_<key>`, so
-# without the pin the rename would bring the stack up against three EMPTY new
-# volumes and leave every existing graph, database and stash orphaned under
-# the old ones. Each pin equals the name the old project derived, so an existing
-# checkout re-attaches its data and a fresh clone creates the same names. The
-# pins are global to the Docker daemon: a second stack on one daemon needs its
-# own names here, not just its own `name:` (docs/PREVIEW.md §12).
-#
-# Compose prints "already exists but was created for project kg-agent" on an
-# existing machine — expected, and harmless. Do NOT add `external: true` (a
-# fresh clone would then refuse to start), and never answer yes to a
-# "Recreate (data will be lost)?" prompt — it means a volume's config here no
-# longer matches the one it was created with, and yes deletes the data.
 volumes:
   neo4j_data:
-    name: kg-agent_neo4j_data
   postgres_data:
-    name: kg-agent_postgres_data
   redis_data:
-    name: kg-agent_redis_data
-  # The gateway's rendered config (derived, rewritten on every `up`), so it
-  # follows the project name: nothing in it survives an `up` anyway.
+  # The gateway's rendered config (derived, rewritten on every `up`).
   mcp_config:

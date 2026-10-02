@@ -39,7 +39,7 @@ describe('the MCP namespace catalog (composition root wiring)', () => {
     // Only the registered catalog makes it 'web'.
     expect(inferServer('search')).toBe('web')
     expect(inferServer('vector_search_hash')).toBe('redis')
-    expect(inferServer('mcp__kg-agent-mcp-gateway__search')).toBe('web')
+    expect(inferServer('mcp__hames-mcp-gateway__search')).toBe('web')
   })
 
   it('the app tools keep their own grouping, ahead of the catalog', async () => {

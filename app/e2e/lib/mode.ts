@@ -4,7 +4,7 @@
  * HERMETIC is the default and the one anybody can run: no credential, no
  * network, no bill. Both the inference endpoint and the MCP gateway are fakes
  * started in-process, and the only real infrastructure is the throwaway
- * Postgres this suite provisions for itself (`kgagent_test_apppath` — its own since
+ * Postgres this suite provisions for itself (`hames_test_apppath` — its own since
  * #280; see `docs/testing/pyramid.md`).
  *
  * LIVE (`E2E_LIVE=verda`) points the same scenarios at the real self-hosted

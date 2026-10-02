@@ -34,7 +34,7 @@ describe('render-mcp-config.sh against the tracked config', () => {
     const r = render(CONFIG, { NEO4J_PASSWORD: 'neo-x1', POSTGRES_PASSWORD: 'pg-y2' })
     expect(r.status, r.stderr).toBe(0)
     expect(r.rendered).toMatch(/^\s+password: neo-x1$/m)
-    expect(r.rendered).toContain('database_url: postgresql://postgres:pg-y2@postgres:5432/kgagent')
+    expect(r.rendered).toContain('database_url: postgresql://postgres:pg-y2@postgres:5432/hames')
     expect(r.rendered).not.toMatch(/^[^#]*\$\{/m)
   })
 

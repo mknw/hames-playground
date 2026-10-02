@@ -88,14 +88,14 @@ describe('composeSecret', () => {
 
 describe('localDatabaseUrl', () => {
   it('carries the compose password, URL-encoded', () => {
-    expect(localDatabaseUrl('kgagent_test', () => 'a/b@c')).toBe(
-      'postgresql://postgres:a%2Fb%40c@localhost:5432/kgagent_test',
+    expect(localDatabaseUrl('hames_test', () => 'a/b@c')).toBe(
+      'postgresql://postgres:a%2Fb%40c@localhost:5432/hames_test',
     )
   })
 
   it('carries no password at all when none resolved', () => {
-    expect(localDatabaseUrl('kgagent', () => undefined)).toBe(
-      'postgresql://postgres@localhost:5432/kgagent',
+    expect(localDatabaseUrl('hames', () => undefined)).toBe(
+      'postgresql://postgres@localhost:5432/hames',
     )
   })
 })
@@ -111,7 +111,7 @@ describe('the shipped laptop template', () => {
 })
 
 describe('provisionDatabase: a credential mismatch fails the run', () => {
-  const url = 'postgresql://postgres:wrong@localhost:5432/kgagent_test'
+  const url = 'postgresql://postgres:wrong@localhost:5432/hames_test'
 
   it('throws on a wrong password (28P01) instead of warning', async () => {
     pgState.connectError = Object.assign(

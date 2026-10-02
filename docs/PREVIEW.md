@@ -801,11 +801,7 @@ committed files assume one stack per Docker daemon, in five places:
    pins a `container_name` (`docker-compose.yaml:23,97,125,151,177`;
    `docker-compose.prod.yaml:150`). Those names are global to the daemon. The
    top-level `name: hames` (`docker-compose.yaml:4`) also has to differ per
-   project. **So do the data volumes' names**, and changing `name:` no longer
-   separates them. Since the project was renamed, the five data volumes pin
-   their pre-rename names (`kg-agent_*`, the `volumes:` blocks of both compose
-   files). A second project that changes only `name:` would mount the first
-   one's Postgres and Neo4j data directories.
+   project.
 2. **Ports.** Each project publishes the same loopback ports
    (`docker-compose.yaml:26-180`), and the overlay gives Caddy `80`/`443` in each
    project (`docker-compose.prod.yaml:155-158`). Only one process can bind each

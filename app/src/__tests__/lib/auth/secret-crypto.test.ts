@@ -72,9 +72,7 @@ describe('key handling', () => {
 
   it('derives the same key from the same env secret (HKDF is deterministic)', () => {
     const derive = (s: string) =>
-      Buffer.from(
-        hkdfSync('sha256', Buffer.from(s), Buffer.alloc(0), 'kg-agent:secret-crypto:v1', 32),
-      )
+      Buffer.from(hkdfSync('sha256', Buffer.from(s), Buffer.alloc(0), 'hames:secret-crypto:v1', 32))
     const a = derive('secret-a')
     const b = derive('secret-a')
     expect(a.equals(b)).toBe(true)
@@ -87,12 +85,26 @@ describe('key handling', () => {
 
 describe('key derivation is pinned', () => {
   // A known answer: produced once, outside this module, from the env secret
-  // below under the HKDF label `kg-agent:secret-crypto:v1`. Every cached token
+  // below under the HKDF label `hames:secret-crypto:v1`. Every cached token
   // was written under that derivation, so a changed label must fail here — it
   // would otherwise turn every stored token cache into "no usable cache".
   it('still decrypts an envelope written under the shipped derivation', () => {
-    const envelope = 'v1.DA0ODxAREhMUFRYX.E7YFXq91z_meuVJyPJVLOA.zWbFHuEXsRNwrARj'
+    const envelope = 'v1.DA0ODxAREhMUFRYX.Lz7sfgyvXurDRGOOvmpXhQ.77zQQnB_aJJ0zD40'
     vi.stubEnv('TOKEN_ENCRYPTION_KEY', 'known-answer-token-key')
+    try {
+      expect(decryptSecret(envelope)).toBe('known answer')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  // The fallback branch derives from AUTH_SESSION_SECRET in its own HKDF call,
+  // so the dedicated-key case above cannot see a label changed only there. This
+  // is the escrow path: a deployment that never set TOKEN_ENCRYPTION_KEY.
+  it('still decrypts under the AUTH_SESSION_SECRET fallback derivation', () => {
+    const envelope = 'v1.GBkaGxwdHh8gISIj.7R17fAvmt26hFH5JaY4sCw.fqeuonZTaakcvZls'
+    vi.stubEnv('TOKEN_ENCRYPTION_KEY', '')
+    vi.stubEnv('AUTH_SESSION_SECRET', 'known-answer-session-secret')
     try {
       expect(decryptSecret(envelope)).toBe('known answer')
     } finally {

@@ -272,7 +272,7 @@ Every var the server reads (`grep process.env src/`), with its localhost default
 | ------------------------------------------------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `ANTHROPIC_API_KEY`                                                       | **Required** — every BAML chain, and the only LLM key                  | —                                                                                                                                       |
 | `OPENROUTER_API_KEY`                                                      | the `openrouter` embedding provider only                               | needed iff `EMBEDDINGS_PROVIDER=openrouter`                                                                                             |
-| `DATABASE_URL`                                                            | Postgres (conversations)                                               | `postgresql://postgres:password@localhost:5432/kgagent` — **override the password**                                                     |
+| `DATABASE_URL`                                                            | Postgres (conversations)                                               | `postgresql://postgres:password@localhost:5432/hames` — **override the password**                                                       |
 | `MCP_GATEWAY_URL`                                                         | MCP gateway endpoint                                                   | `http://localhost:8811/mcp`                                                                                                             |
 | `MCP_GATEWAY_POOL_SIZE`                                                   | warm gateway connections kept in the client pool (#120)                | `4` — leases isolate reconnects; extra concurrent calls open a short-lived overflow connection rather than queueing                     |
 | `NEO4J_USER` / `NEO4J_PASSWORD`                                           | direct Neo4j driver                                                    | resolves to `bolt://localhost:7687` on host (`config/endpoints.ts:37`)                                                                  |
@@ -318,7 +318,7 @@ hames-app` therefore says `active` on a deploy that serves nothing: verify by
 > revert the rows; it produces a build that cannot read them. So:
 >
 > ```bash
-> docker compose exec -T postgres pg_dump -U postgres kgagent > ~/kgagent-preencrypt.sql
+> docker compose exec -T postgres pg_dump -U postgres hames > ~/hames-preencrypt.sql
 > ```
 >
 > Keep that dump until you are satisfied, and keep the key somewhere else — a

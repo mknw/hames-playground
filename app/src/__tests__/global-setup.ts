@@ -34,7 +34,7 @@ import { localDatabaseUrl } from '../lib/config/compose-credentials.server'
  *  One of three, since #280: `app/e2e/` and `app/e2e-browser/` each provision
  *  their OWN database through {@link provisionDatabase}, so two suites running
  *  at once cannot delete each other's rows. See `docs/testing/pyramid.md`. */
-export const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL ?? localDatabaseUrl('kgagent_test')
+export const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL ?? localDatabaseUrl('hames_test')
 
 /** `duplicate_database` — someone (or a previous run) got there first. */
 const DUPLICATE_DATABASE = '42P04'

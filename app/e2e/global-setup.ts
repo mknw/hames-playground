@@ -16,5 +16,5 @@ import { provisionDatabase } from '../src/__tests__/global-setup'
 import { localDatabaseUrl } from '../src/lib/config/compose-credentials.server'
 
 export default async function setup(): Promise<void> {
-  await provisionDatabase(process.env.TEST_DATABASE_URL ?? localDatabaseUrl('kgagent_test_apppath'))
+  await provisionDatabase(process.env.TEST_DATABASE_URL ?? localDatabaseUrl('hames_test_apppath'))
 }

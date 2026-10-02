@@ -18,4 +18,4 @@ process.env.DATA_ENCRYPTION_KEY ||= 'unit-test-data-encryption-key'
 // point is that a developer's own DATABASE_URL cannot leak in, because
 // `initSchema()`'s encryption backfill would rewrite their real rows with the
 // unit-test key above. `global-setup.ts` provisions this database.
-process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? localDatabaseUrl('kgagent_test')
+process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? localDatabaseUrl('hames_test')

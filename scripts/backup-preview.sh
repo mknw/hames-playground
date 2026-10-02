@@ -63,14 +63,13 @@ cd "$REPO_ROOT"
 
 BACKUP_DIR="${BACKUP_DIR:-$REPO_ROOT/backups}"
 RETENTION_DAYS="${RETENTION_DAYS:-7}"
-POSTGRES_DB="${POSTGRES_DB:-kgagent}"
+POSTGRES_DB="${POSTGRES_DB:-hames}"
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
 # Must match the neo4j service's image in docker-compose.yaml: the dump runs in
 # a throwaway container against the stopped store, and a newer Neo4j would try
 # to upgrade the store format rather than read it.
 NEO4J_IMAGE="${NEO4J_IMAGE:-neo4j:5.26}"
-# The volume's pinned name in docker-compose.yaml (it predates the hames rename).
-NEO4J_DATA_VOLUME="${NEO4J_DATA_VOLUME:-kg-agent_neo4j_data}"
+NEO4J_DATA_VOLUME="${NEO4J_DATA_VOLUME:-hames_neo4j_data}"
 # How many times to poll Neo4j's healthcheck after the dump before declaring
 # the graph down. Iterations, not seconds: each one is a `docker compose ps`
 # call plus a one-second sleep, so 180 is nearer 4-5 minutes of wall clock.

@@ -25,7 +25,7 @@ let _initPromise: Promise<void> | null = null
 function getPool(): pg.Pool {
   if (!_pool) {
     // Unset: the compose Postgres on localhost, with the repo-root .env password.
-    const connectionString = process.env.DATABASE_URL ?? localDatabaseUrl('kgagent')
+    const connectionString = process.env.DATABASE_URL ?? localDatabaseUrl('hames')
     _pool = new Pool({ connectionString })
     _pool.on('error', (err) => {
       console.error('[db] idle client error:', err)

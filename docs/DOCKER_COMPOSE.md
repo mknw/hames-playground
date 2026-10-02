@@ -26,7 +26,7 @@ before the first `docker compose up` on a machine that already has the stack.
   - 127.0.0.1:7687 (Bolt protocol)
 - **Authentication**: `neo4j` / `NEO4J_PASSWORD` from the repo-root `.env`
 - **Plugins**: APOC, n10s
-- **Data**: Persisted in the `neo4j_data` named volume (`kg-agent_neo4j_data` on disk — see [the project rename](#existing-machines-the-project-rename))
+- **Data**: Persisted in the `neo4j_data` named volume
 - **Healthcheck**: Validates HTTP endpoint on port 7474
 
 ### PostgreSQL
@@ -35,8 +35,8 @@ before the first `docker compose up` on a machine that already has the stack.
 - **Image**: postgres:16-alpine
 - **Ports**: 127.0.0.1:5432:5432
 - **Authentication**: `postgres` / `POSTGRES_PASSWORD` from the repo-root `.env`
-- **Default Database**: kgagent
-- **Data**: Persisted in the `postgres_data` named volume (`kg-agent_postgres_data` on disk)
+- **Default Database**: hames
+- **Data**: Persisted in `postgres_data` named volume
 - **Healthcheck**: `pg_isready -U postgres`
 
 ### Redis
@@ -45,7 +45,7 @@ before the first `docker compose up` on a machine that already has the stack.
 - **Image**: redis/redis-stack:7.4.0-v8 (bundles RedisJSON + RediSearch, required by the Data Stash pipeline; plain redis:7-alpine has no modules)
 - **Ports**: 127.0.0.1:6379:6379
 - **Authentication**: None (alpine default)
-- **Data**: Persisted in the `redis_data` named volume (`kg-agent_redis_data` on disk)
+- **Data**: Persisted in `redis_data` named volume
 - **Healthcheck**: `redis-cli ping`
 
 ### MCP Gateway
@@ -104,14 +104,14 @@ be the wrong platform; the staged copies come from the in-image install.
 
 **Endpoint rewrites** (`environment:` beats `env_file:`):
 
-| Var                             | Container value                                                    | Why                                                            |
-| ------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------- |
-| `DATABASE_URL`                  | `postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/kgagent` | service name, not localhost; password from the root `.env`     |
-| `NEO4J_USER` / `NEO4J_PASSWORD` | `neo4j` / `${NEO4J_PASSWORD}`                                      | the direct driver's credential, from the root `.env`           |
-| `MCP_GATEWAY_URL`               | `http://mcp-gateway:8811/mcp`                                      | same                                                           |
-| `REDIS_HOST_DIRECT`             | `redis`                                                            | Data Stash direct client (`STASH_DIRECT_REDIS=1`)              |
-| `DOC_CONVERT_URL`               | `http://doc-convert:8000`                                          | conversion sidecar                                             |
-| `EMBEDDINGS_LOCAL_URL`          | `http://host.docker.internal:8090/v1`                              | the embedder is a **host** llama-server, not a compose service |
+| Var                             | Container value                                                  | Why                                                            |
+| ------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------- |
+| `DATABASE_URL`                  | `postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/hames` | service name, not localhost; password from the root `.env`     |
+| `NEO4J_USER` / `NEO4J_PASSWORD` | `neo4j` / `${NEO4J_PASSWORD}`                                    | the direct driver's credential, from the root `.env`           |
+| `MCP_GATEWAY_URL`               | `http://mcp-gateway:8811/mcp`                                    | same                                                           |
+| `REDIS_HOST_DIRECT`             | `redis`                                                          | Data Stash direct client (`STASH_DIRECT_REDIS=1`)              |
+| `DOC_CONVERT_URL`               | `http://doc-convert:8000`                                        | conversion sidecar                                             |
+| `EMBEDDINGS_LOCAL_URL`          | `http://host.docker.internal:8090/v1`                            | the embedder is a **host** llama-server, not a compose service |
 
 The Neo4j URL needs no entry: `config/endpoints.ts` picks `bolt://neo4j:7687`
 in a production build (the `localhost` form is its `import.meta.env.DEV`
@@ -315,37 +315,19 @@ repeated authentication failures (`dbms.security.auth_lock_time`). Wait, then
 retry with the password the volume was created with — the data never needs
 deleting.
 
-### Existing machines: the project rename
+### A stack from before the hames rename
 
-The compose project was renamed from `kg-agent` to `hames`. That renames the
-containers (`hames-neo4j`, `hames-postgres`, `hames-redis`, `hames-doc-convert`,
-`hames-app`, and `hames-caddy` in the prod overlay), the network, and the
-gateway's rendered-config volume, which is rewritten on every `up` anyway. The
-data volumes keep their old names: `docker-compose.yaml` pins
-`kg-agent_neo4j_data`, `kg-agent_postgres_data` and `kg-agent_redis_data`, and
-the prod overlay pins `kg-agent_caddy_data` and `kg-agent_caddy_config`. A stack
-started before the rename therefore re-attaches its data. It needs one switch:
+The project was called `kg-agent` until 2026-10-02 (#416). It was renamed on a
+clean slate: the `hames` project does not adopt the old `kg-agent_*` volumes,
+and the old containers still hold the published ports. On a machine that ran
+the old stack, `docker compose up -d` therefore fails on those ports until the
+old project is gone. Remove it by its old name, so that the command cannot reach
+any other project. `-v` deletes that project's data, so run it only if you mean
+to discard it:
 
 ```bash
-# On the pre-rename checkout: remove the old project's containers and network.
-# Never add -v here. It deletes the volumes, which hold the graph and every
-# conversation.
-docker compose --profile app down
-git pull                          # brings in the rename
-docker compose up -d              # new containers on the same volumes
+docker compose -p kg-agent --profile app down -v
 ```
-
-If you pull first, `up` fails because the old containers still hold the
-published ports. Nothing is lost. Run `docker compose -p kg-agent --profile app
-down` (again without `-v`), then run `up` again.
-
-Each `up` then prints `volume "kg-agent_…" already exists but was created for
-project "kg-agent"`. That warning is the pin working. A prompt asking
-**`Recreate (data will be lost)?`** is not. It means a volume's definition no
-longer matches the one it was created with. Answer `N` (the default) and stop.
-
-To go back, run `docker compose down`, check out the pre-rename commit, and run
-`docker compose up -d`. Both project names point at the same volumes.
 
 ### Configuration Management
 

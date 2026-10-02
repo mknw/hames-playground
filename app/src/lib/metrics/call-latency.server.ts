@@ -85,7 +85,7 @@ export const LATENCY_WINDOW = 32
 /** Process-local samples per tier, on a `globalThis` symbol for the reason the
  *  warm clock is: a dev-server HMR reload re-evaluates this module, and a fresh
  *  module scope would silently empty the window. */
-const STATE_KEY = Symbol.for('kg-agent.call-latency')
+const STATE_KEY = Symbol.for('hames-app.call-latency')
 type LatencyState = Record<InferenceTier, number[]>
 type LatencyGlobal = typeof globalThis & { [STATE_KEY]?: LatencyState }
 const state: LatencyState = ((globalThis as LatencyGlobal)[STATE_KEY] ??= {

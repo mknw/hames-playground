@@ -63,10 +63,10 @@ of red, because the first thing anyone does with it is re-run and hope.
 
 Two mechanisms now, and both are deliberate:
 
-|                 | unit              | app-path               | browser                |
-| --------------- | ----------------- | ---------------------- | ---------------------- |
-| database        | `kgagent_test`    | `kgagent_test_apppath` | `kgagent_test_browser` |
-| dev-bypass user | `dev-bypass-user` | `e2e-app-path-user`    | `e2e-browser-user`     |
+|                 | unit              | app-path             | browser              |
+| --------------- | ----------------- | -------------------- | -------------------- |
+| database        | `hames_test`      | `hames_test_apppath` | `hames_test_browser` |
+| dev-bypass user | `dev-bypass-user` | `e2e-app-path-user`  | `e2e-browser-user`   |
 
 - **The database is the real fix**: separate rows, separate schema, separate
   `initSchema()` backfill. `provisionDatabase()`

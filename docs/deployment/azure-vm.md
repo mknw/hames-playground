@@ -112,7 +112,7 @@ sudo apt-get install -y caddy
 ## 3. Code + configs
 
 ```bash
-sudo git clone <repo> /opt/kg-agent && cd /opt/kg-agent
+sudo git clone <repo> /opt/hames && cd /opt/hames
 ```
 
 Keep the repo layout intact — **`app/` and `configs/` must stay siblings**: the
@@ -161,7 +161,7 @@ Add a server-side `docker-compose.override.yml` (git-ignored) binding every
 published port to loopback, and change the default passwords:
 
 ```yaml
-# /opt/kg-agent/docker-compose.override.yml  (production)
+# /opt/hames/docker-compose.override.yml  (production)
 services:
   postgres:
     ports: ["127.0.0.1:5432:5432"]
@@ -182,7 +182,7 @@ to the app and closes the exposure.
 ## 5. Bring up the backing tier
 
 ```bash
-cd /opt/kg-agent
+cd /opt/hames
 docker compose up -d                 # neo4j, postgres, redis-stack, mcp-gateway, doc-convert
 docker compose ps                    # all healthy?
 
@@ -193,24 +193,24 @@ docker build -t kg-sandbox:base rootfs/     # matches SANDBOX_IMAGE default
 ## 6. Build + run the UI (systemd)
 
 ```bash
-cd /opt/kg-agent/app
+cd /opt/hames/app
 pnpm install --frozen-lockfile      # builds node-pty natively for node 22
 pnpm build                          # vinxi build → .output/
 ```
 
-`/etc/systemd/system/kg-agent.service`:
+`/etc/systemd/system/hames-app.service`:
 
 ```ini
 [Unit]
-Description=kg-agent UI (SolidStart)
+Description=hames-app UI (SolidStart)
 After=network-online.target docker.service
 Requires=docker.service
 
 [Service]
 Type=simple
-User=kgagent                        # a user in the `docker` group
-WorkingDirectory=/opt/kg-agent/app   # cwd must be app/ so ../configs resolves
-EnvironmentFile=/opt/kg-agent/app/.env
+User=hames                          # a user in the `docker` group
+WorkingDirectory=/opt/hames/app     # cwd must be app/ so ../configs resolves
+EnvironmentFile=/opt/hames/app/.env
 Environment=PORT=3444
 Environment=HOST=127.0.0.1
 Environment=NODE_ENV=production     # `vinxi start` does NOT set it — see below
@@ -232,8 +232,8 @@ production", so set it here. The `app` compose service gets it from the image
 (`app/Dockerfile`) and needs nothing.
 
 ```bash
-sudo systemctl daemon-reload && sudo systemctl enable --now kg-agent
-journalctl -u kg-agent -f
+sudo systemctl daemon-reload && sudo systemctl enable --now hames-app
+journalctl -u hames-app -f
 ```
 
 ## 7. Embeddings backend (only if you use DataStash / retriever search)
@@ -272,7 +272,7 @@ Every var the server reads (`grep process.env src/`), with its localhost default
 | ------------------------------------------------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `ANTHROPIC_API_KEY`                                                       | **Required** — every BAML chain, and the only LLM key                  | —                                                                                                                                       |
 | `OPENROUTER_API_KEY`                                                      | the `openrouter` embedding provider only                               | needed iff `EMBEDDINGS_PROVIDER=openrouter`                                                                                             |
-| `DATABASE_URL`                                                            | Postgres (conversations)                                               | `postgresql://postgres:password@localhost:5432/kgagent` — **override the password**                                                     |
+| `DATABASE_URL`                                                            | Postgres (conversations)                                               | `postgresql://postgres:password@localhost:5432/hames` — **override the password**                                                       |
 | `MCP_GATEWAY_URL`                                                         | MCP gateway endpoint                                                   | `http://localhost:8811/mcp`                                                                                                             |
 | `MCP_GATEWAY_POOL_SIZE`                                                   | warm gateway connections kept in the client pool (#120)                | `4` — leases isolate reconnects; extra concurrent calls open a short-lived overflow connection rather than queueing                     |
 | `NEO4J_USER` / `NEO4J_PASSWORD`                                           | direct Neo4j driver                                                    | resolves to `bolt://localhost:7687` on host (`config/endpoints.ts:37`)                                                                  |
@@ -306,7 +306,7 @@ Every var the server reads (`grep process.env src/`), with its localhost default
 > `active`. The key check runs on the first database query, logs
 > `[db] DATA_ENCRYPTION_KEY …` at error level, and is **not retried** — every
 > request from then on fails with it until you restart. `systemctl is-active
-kg-agent` therefore says `active` on a deploy that serves nothing: verify by
+hames-app` therefore says `active` on a deploy that serves nothing: verify by
 > the log, never by the unit state.
 
 > **Snapshot the database before the first boot with `DATA_ENCRYPTION_KEY`
@@ -318,7 +318,7 @@ kg-agent` therefore says `active` on a deploy that serves nothing: verify by
 > revert the rows; it produces a build that cannot read them. So:
 >
 > ```bash
-> docker compose exec -T postgres pg_dump -U postgres kgagent > ~/kgagent-preencrypt.sql
+> docker compose exec -T postgres pg_dump -U postgres hames > ~/hames-preencrypt.sql
 > ```
 >
 > Keep that dump until you are satisfied, and keep the key somewhere else — a
@@ -336,7 +336,10 @@ kg-agent` therefore says `active` on a deploy that serves nothing: verify by
 
 **One-time `ui/` → `app/` rename migration** (only if this VM was deployed before
 the #193 rename): the systemd unit above already assumes `app/`, but an existing
-install still has the old dir, `.env` and unit paths.
+install still has the old dir, `.env` and unit paths. A VM that old also
+predates the hames rename, so this block keeps that install's own names
+(`/opt/kg-agent`, `kg-agent.service`) — read them for `/opt/hames` and
+`hames-app` in the recipes that follow.
 
 ```bash
 cd /opt/kg-agent && git pull
@@ -369,13 +372,13 @@ rm -rf /opt/kg-agent/ui
 **Update / redeploy:**
 
 ```bash
-cd /opt/kg-agent && git pull
+cd /opt/hames && git pull
 cd app && pnpm install --frozen-lockfile && pnpm build
-sudo systemctl restart kg-agent
+sudo systemctl restart hames-app
 docker compose pull && docker compose up -d   # only if the gateway image moved
 ```
 
-**Logs:** `journalctl -u kg-agent` (UI) · `docker compose logs -f mcp-gateway` (gateway).
+**Logs:** `journalctl -u hames-app` (UI) · `docker compose logs -f mcp-gateway` (gateway).
 
 **Backups:** `scripts/backup-preview.sh` does this — `pg_dump` + `neo4j-admin
 dump` + a forced Redis RDB into `backups/<timestamp>/`, verified, with 7-day

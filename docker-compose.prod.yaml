@@ -126,7 +126,7 @@ services:
       # `environment` beats `env_file`, so these are the in-network rewrites of
       # the host-facing defaults, with the password folded in from the same
       # variable Postgres itself reads.
-      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:?}@postgres:5432/kgagent
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:?}@postgres:5432/hames
       # The direct Neo4j driver. `config/endpoints.ts` already resolves
       # bolt://neo4j:7687 in a production build; only the credential is missing.
       - NEO4J_USER=neo4j
@@ -147,7 +147,7 @@ services:
   # ---------------------------------------------------------------------------
   caddy:
     image: caddy:2.10-alpine
-    container_name: kg-agent-caddy
+    container_name: hames-caddy
     restart: unless-stopped
     # Same profile as `app`: the proxy has nothing to proxy without it, and one
     # `COMPOSE_PROFILES=app` then covers the whole public-facing pair.

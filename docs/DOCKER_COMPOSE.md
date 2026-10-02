@@ -2,7 +2,7 @@
 
 ## Overview
 
-The kg-agent project uses Docker Compose to orchestrate the stack:
+The stack runs as one Docker Compose project, `hames`:
 
 - **neo4j**: Graph database (Community Edition v5.26)
 - **postgres**: Relational database (PostgreSQL 16)
@@ -20,7 +20,7 @@ before the first `docker compose up` on a machine that already has the stack.
 
 ### Neo4j
 
-- **Container**: neo4j-mldsgraph
+- **Container**: hames-neo4j
 - **Ports** (loopback only):
   - 127.0.0.1:7474 (HTTP browser interface)
   - 127.0.0.1:7687 (Bolt protocol)
@@ -31,17 +31,17 @@ before the first `docker compose up` on a machine that already has the stack.
 
 ### PostgreSQL
 
-- **Container**: postgres-seederis
+- **Container**: hames-postgres
 - **Image**: postgres:16-alpine
 - **Ports**: 127.0.0.1:5432:5432
 - **Authentication**: `postgres` / `POSTGRES_PASSWORD` from the repo-root `.env`
-- **Default Database**: kgagent
+- **Default Database**: hames
 - **Data**: Persisted in `postgres_data` named volume
 - **Healthcheck**: `pg_isready -U postgres`
 
 ### Redis
 
-- **Container**: redis-seederis
+- **Container**: hames-redis
 - **Image**: redis/redis-stack:7.4.0-v8 (bundles RedisJSON + RediSearch, required by the Data Stash pipeline; plain redis:7-alpine has no modules)
 - **Ports**: 127.0.0.1:6379:6379
 - **Authentication**: None (alpine default)
@@ -61,7 +61,7 @@ before the first `docker compose up` on a machine that already has the stack.
 
 ### app (the SolidStart app, #197)
 
-- **Container**: kg-agent-app · **Image**: built from `app/Dockerfile` (tagged `kg-agent-app:local`)
+- **Container**: hames-app · **Image**: built from `app/Dockerfile` (tagged `hames-app:local`)
 - **Ports**: 127.0.0.1:3444:3444 · **Healthcheck**: `GET /api/health` (liveness only — see below)
 - **Profile**: `app` — a bare `docker compose up -d` leaves it out; naming it
   (`docker compose up -d app`) or `--profile app` brings it in
@@ -104,14 +104,14 @@ be the wrong platform; the staged copies come from the in-image install.
 
 **Endpoint rewrites** (`environment:` beats `env_file:`):
 
-| Var                             | Container value                                                    | Why                                                            |
-| ------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------- |
-| `DATABASE_URL`                  | `postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/kgagent` | service name, not localhost; password from the root `.env`     |
-| `NEO4J_USER` / `NEO4J_PASSWORD` | `neo4j` / `${NEO4J_PASSWORD}`                                      | the direct driver's credential, from the root `.env`           |
-| `MCP_GATEWAY_URL`               | `http://mcp-gateway:8811/mcp`                                      | same                                                           |
-| `REDIS_HOST_DIRECT`             | `redis`                                                            | Data Stash direct client (`STASH_DIRECT_REDIS=1`)              |
-| `DOC_CONVERT_URL`               | `http://doc-convert:8000`                                          | conversion sidecar                                             |
-| `EMBEDDINGS_LOCAL_URL`          | `http://host.docker.internal:8090/v1`                              | the embedder is a **host** llama-server, not a compose service |
+| Var                             | Container value                                                  | Why                                                            |
+| ------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------- |
+| `DATABASE_URL`                  | `postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/hames` | service name, not localhost; password from the root `.env`     |
+| `NEO4J_USER` / `NEO4J_PASSWORD` | `neo4j` / `${NEO4J_PASSWORD}`                                    | the direct driver's credential, from the root `.env`           |
+| `MCP_GATEWAY_URL`               | `http://mcp-gateway:8811/mcp`                                    | same                                                           |
+| `REDIS_HOST_DIRECT`             | `redis`                                                          | Data Stash direct client (`STASH_DIRECT_REDIS=1`)              |
+| `DOC_CONVERT_URL`               | `http://doc-convert:8000`                                        | conversion sidecar                                             |
+| `EMBEDDINGS_LOCAL_URL`          | `http://host.docker.internal:8090/v1`                            | the embedder is a **host** llama-server, not a compose service |
 
 The Neo4j URL needs no entry: `config/endpoints.ts` picks `bolt://neo4j:7687`
 in a production build (the `localhost` form is its `import.meta.env.DEV`
@@ -314,6 +314,20 @@ passwords under 8 characters.
 repeated authentication failures (`dbms.security.auth_lock_time`). Wait, then
 retry with the password the volume was created with — the data never needs
 deleting.
+
+### A stack from before the hames rename
+
+The project was called `kg-agent` until 2026-10-02 (#416). It was renamed on a
+clean slate: the `hames` project does not adopt the old `kg-agent_*` volumes,
+and the old containers still hold the published ports. On a machine that ran
+the old stack, `docker compose up -d` therefore fails on those ports until the
+old project is gone. Remove it by its old name, so that the command cannot reach
+any other project. `-v` deletes that project's data, so run it only if you mean
+to discard it:
+
+```bash
+docker compose -p kg-agent --profile app down -v
+```
 
 ### Configuration Management
 

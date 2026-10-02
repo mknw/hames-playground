@@ -3,7 +3,7 @@
 
 set -e
 
-CONTAINER_NAME="neo4j-mldsgraph"
+CONTAINER_NAME="hames-neo4j"
 NEO4J_USER="neo4j"
 # One source: $NEO4J_PASSWORD if exported, else the repo-root .env Compose reads.
 # shellcheck source=lib/compose-env.sh

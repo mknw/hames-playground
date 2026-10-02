@@ -445,4 +445,4 @@ export function estimateLlmCostEur(
   }
 }
 
-export const SETTINGS_STORAGE_KEY = 'kg_agent_settings'
+export const SETTINGS_STORAGE_KEY = 'hames_app_settings'

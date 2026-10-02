@@ -141,12 +141,12 @@ beside it, so nothing needs generating to run the app; after editing a `.baml`
 file, re-run `pnpm baml-generate` **from `packages/harness-baml/`** and commit
 the regenerated client.
 
-|               |                                                                   |
-| ------------- | ----------------------------------------------------------------- |
-| App           | <http://localhost:3444>                                           |
-| Neo4j Browser | <http://localhost:7474> — `neo4j` / `NEO4J_PASSWORD`              |
-| MCP Gateway   | <http://localhost:8811/mcp>                                       |
-| Postgres      | `localhost:5432` — `postgres` / `POSTGRES_PASSWORD`, db `kgagent` |
+|               |                                                                 |
+| ------------- | --------------------------------------------------------------- |
+| App           | <http://localhost:3444>                                         |
+| Neo4j Browser | <http://localhost:7474> — `neo4j` / `NEO4J_PASSWORD`            |
+| MCP Gateway   | <http://localhost:8811/mcp>                                     |
+| Postgres      | `localhost:5432` — `postgres` / `POSTGRES_PASSWORD`, db `hames` |
 
 App-specific detail — the dev scripts, what actually lives under `app/src/`, and
 how the app consumes the five packages — is in

@@ -446,7 +446,7 @@ async function dispatchTool(name: string, args: Record<string, unknown>): Promis
  *
  *  Two offending shapes:
  *    - `"<ToolName> Error: ..."` — e.g. `mcp-neo4j-cypher`'s `"Neo4j Error:"`.
- *    - bare `"Error: ..."`        — the kg-agent gateway's meta-tools
+ *    - bare `"Error: ..."`        — the Docker MCP gateway's meta-tools
  *      (`mcp-add`, `mcp-exec`) emit `"Error: Cannot add server ..."` /
  *      `"Error: Server '...' not found ..."`. Before this they were stamped
  *      success:true, so the actor/critic treated a failed `mcp-add` as a

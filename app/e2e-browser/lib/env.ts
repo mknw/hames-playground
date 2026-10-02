@@ -41,7 +41,7 @@ export const APP_URL = `http://127.0.0.1:${APP_PORT}`
 /**
  * This suite's OWN throwaway database.
  *
- * It was `kgagent_test`, shared with the unit suite and `app/e2e/`, until #280.
+ * It was `hames_test`, shared with the unit suite and `app/e2e/`, until #280.
  * Sharing was survivable while nothing ran concurrently and became a source of
  * false reds the moment something did: all three drive real turns, two of them
  * wipe "their" rows by dev-bypass user id, and the id was one literal — so a
@@ -55,7 +55,7 @@ export const APP_URL = `http://127.0.0.1:${APP_PORT}`
  * separation — see it for why both exist.
  */
 export const TEST_DATABASE_URL =
-  process.env.TEST_DATABASE_URL ?? localDatabaseUrl('kgagent_test_browser')
+  process.env.TEST_DATABASE_URL ?? localDatabaseUrl('hames_test_browser')
 
 /** The same key the unit suite and `app/e2e/` use. The databases are separate
  *  now, so this is no longer forced — but a second key would be a second thing

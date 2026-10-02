@@ -228,7 +228,7 @@ function sendGraphRequest(token: string, path: string, init: GraphRequestInit): 
   // Decorated traffic is prioritized under Graph throttling; undecorated
   // traffic is first to be shed. NONISV|<company>|<app>/<version> is the
   // documented shape for internal (non-ISV) apps.
-  headers.set('User-Agent', 'NONISV|DTSC|kg-agent/1.0')
+  headers.set('User-Agent', 'NONISV|DTSC|hames-app/1.0')
   if (init.body) headers.set('Content-Type', 'application/json')
   return fetch(url, {
     method: init.method ?? 'GET',

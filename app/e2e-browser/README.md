@@ -67,7 +67,7 @@ to it — so it cannot rot into unbuildable code unnoticed. Same arrangement as
 
 - **Postgres** on `localhost:5432` (`docker compose up -d postgres` from the
   repo root). The suite provisions and uses its OWN throwaway database,
-  `kgagent_test_browser`, through the same `provisionDatabase()` the unit suite
+  `hames_test_browser`, through the same `provisionDatabase()` the unit suite
   calls — shared code, its own target. It also runs as its own dev-bypass user,
   `e2e-browser-user`. Both were shared literals until #280, and both are why a
   concurrent app-path run used to delete this suite's rows mid-scenario; see
@@ -95,7 +95,7 @@ Playwright runner ──── control plane (HTTP) ────┐
                     │  VERDA_INFERENCE_ENDPOINT → fake
                     │  E2E_FAKE_INFERENCE_URL   → fake
                     │  MCP_GATEWAY_URL          → fake
-                    │  DATABASE_URL             → kgagent_test_browser
+                    │  DATABASE_URL             → hames_test_browser
                     └── Chromium ── http://127.0.0.1:3446
 ```
 
@@ -192,15 +192,15 @@ two steps later, blaming the redirect for a stale vinxi.
 
 ## Knobs
 
-| Env var                       | Default                  | What it does                                                                                                        |
-| ----------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `E2E_BROWSER_PORT`            | `3446`                   | The dev server's port. Deliberately not 3444 — a developer's own `pnpm dev` must not be driven by this suite.       |
-| `E2E_BROWSER_COLD_MS`         | `8000`                   | How long scenario 2's fake box withholds its first self-hosted answer.                                              |
-| `E2E_BROWSER_TURN_TIMEOUT_MS` | `90000`                  | How long a scenario waits for a turn to land in the transcript.                                                     |
-| `E2E_BROWSER_BOOT_TIMEOUT_MS` | `180000`                 | How long global setup waits for `/api/health`. A cold vite start is not fast.                                       |
-| `E2E_BROWSER_SERVER_LOG`      | unset                    | Stream the dev server's stdout/stderr into the run. The first thing to reach for when a scenario fails oddly.       |
-| `TEST_DATABASE_URL`           | `…/kgagent_test_browser` | This suite's OWN throwaway database. Point two suites at one and their dev-bypass identities still keep them apart. |
-| `BAML_LOG`                    | `warn`                   | Passed through to the dev server.                                                                                   |
+| Env var                       | Default                | What it does                                                                                                        |
+| ----------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `E2E_BROWSER_PORT`            | `3446`                 | The dev server's port. Deliberately not 3444 — a developer's own `pnpm dev` must not be driven by this suite.       |
+| `E2E_BROWSER_COLD_MS`         | `8000`                 | How long scenario 2's fake box withholds its first self-hosted answer.                                              |
+| `E2E_BROWSER_TURN_TIMEOUT_MS` | `90000`                | How long a scenario waits for a turn to land in the transcript.                                                     |
+| `E2E_BROWSER_BOOT_TIMEOUT_MS` | `180000`               | How long global setup waits for `/api/health`. A cold vite start is not fast.                                       |
+| `E2E_BROWSER_SERVER_LOG`      | unset                  | Stream the dev server's stdout/stderr into the run. The first thing to reach for when a scenario fails oddly.       |
+| `TEST_DATABASE_URL`           | `…/hames_test_browser` | This suite's OWN throwaway database. Point two suites at one and their dev-bypass identities still keep them apart. |
+| `BAML_LOG`                    | `warn`                 | Passed through to the dev server.                                                                                   |
 
 Two values are **not** knobs and are set unconditionally on the server under
 test, both in `global-setup.ts`:

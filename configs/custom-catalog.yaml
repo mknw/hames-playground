@@ -1,5 +1,5 @@
 name: custom-catalog
-displayName: Seederis KG Catalog
+displayName: hames MCP catalog
 registry:
   neo4j-cypher:
     description: Interact with Neo4j using Cypher graph queries (fixed URI mapping)

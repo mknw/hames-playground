@@ -1,6 +1,6 @@
 # Documentation Index
 
-> **kg-agent**: Knowledge Graph Agent System — Neo4j, BAML, harness-patterns, SolidStart UI
+> **hames**: Knowledge Graph Agent System — Neo4j, BAML, harness-patterns, SolidStart UI
 
 ## Quick Links
 
@@ -211,7 +211,7 @@ Scripts: `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/rese
 ## File Structure
 
 ```
-kg-agent/
+hames-playground/
 ├── GLOSSARY.md                  # House vocabulary (terms only, no implementation)
 ├── docs/
 │   ├── INDEX.md                 # You are here

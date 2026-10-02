@@ -188,7 +188,7 @@ export function verdaProvenWarm(now: number = Date.now()): boolean {
   return PROVEN_WARM.has(verdaWarmth(now).state)
 }
 
-const HISTORY_KEY = Symbol.for('kg-agent.cold-start-history')
+const HISTORY_KEY = Symbol.for('hames-app.cold-start-history')
 type HistoryGlobal = typeof globalThis & { [HISTORY_KEY]?: number[] }
 const history: number[] = ((globalThis as HistoryGlobal)[HISTORY_KEY] ??= [])
 

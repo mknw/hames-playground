@@ -43,7 +43,7 @@ Two things that are not obvious from here:
 | App         | <http://localhost:3444>                            | `pnpm dev` (vinxi)     |
 | Neo4j       | <http://localhost:7474> (browser) · `7687` (bolt)  | `docker compose up -d` |
 | MCP Gateway | <http://localhost:8811/mcp>                        | `docker compose up -d` |
-| Postgres    | `localhost:5432` — db `kgagent`                    | `docker compose up -d` |
+| Postgres    | `localhost:5432` — db `hames`                      | `docker compose up -d` |
 | redis-stack | `localhost:6379` — Data Stash                      | `docker compose up -d` |
 | doc-convert | <http://localhost:8000> — binary upload → markdown | `docker compose up -d` |
 

@@ -532,3 +532,17 @@ describe('inventory', () => {
     }
   })
 })
+
+describe('key derivation is pinned', () => {
+  // A known answer: this envelope was produced once, outside this module, from
+  // the key below under the HKDF label `hames:db-crypto:v1`. Every stored
+  // row was written under that same derivation, so a change to the label (a
+  // rename sweep is the likely one) must fail here rather than at the first
+  // boot against a real database, where it reads as a lost key.
+  it('still decrypts an envelope written under the shipped derivation', async () => {
+    const envelope = 'v1.AAECAwQFBgcICQoL.Gp6uH6f2pdhiPYT70BCcpA.Wz3t7uxh71ghNfOs'
+    await withKey('known-answer-data-key', () => {
+      expect(decryptField(envelope, 'test.known_answer')).toBe('known answer')
+    })
+  })
+})

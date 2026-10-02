@@ -104,9 +104,9 @@ curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker "$USER"     # then log out and back in
 docker compose version              # must be >= 2.24
 
-sudo git clone https://github.com/mknw/hames-playground /opt/kg-agent
-sudo chown -R "$USER":"$USER" /opt/kg-agent      # NOT optional — see below
-cd /opt/kg-agent
+sudo git clone https://github.com/mknw/hames-playground /opt/hames
+sudo chown -R "$USER":"$USER" /opt/hames      # NOT optional — see below
+cd /opt/hames
 ```
 
 **The `chown` is load-bearing.** `sudo git clone` leaves the tree `root:root`,
@@ -181,7 +181,7 @@ Write `configs/mcp-config.yaml` with exactly the five, so the file and the
 allow-list say the same thing and nobody has to reconcile them later:
 
 ```yaml
-# /opt/kg-agent/configs/mcp-config.yaml — preview. Deliberately NOT a copy of
+# /opt/hames/configs/mcp-config.yaml — preview. Deliberately NOT a copy of
 # configs/template.mcp-config.yaml (that is the development set).
 neo4j-cypher:
   enabled: true
@@ -383,7 +383,7 @@ grep -E "^(VERDA_INFERENCE_ENDPOINT|SMALL_LLM_BASE_URL)=" .env
 an endpoint that does check a key 401s loudly on its own.
 
 ```bash
-cd /opt/kg-agent
+cd /opt/hames
 
 # The sandbox base image. Not optional if anyone will use a sandbox agent —
 # without it every sandbox run fails, and the failure is at run time, not boot.
@@ -523,7 +523,7 @@ is a hypothesis.
 > "alpha"; until then a lost VM means a lost preview, and that is an accepted
 > outcome rather than an oversight.
 >
-> **What this script is not.** It writes to `/opt/kg-agent/backups`, on the same
+> **What this script is not.** It writes to `/opt/hames/backups`, on the same
 > disk as the data it copies, and **nothing moves it off the box**. It protects
 > against a bad migration, a wrong `DELETE`, or a corrupted volume. It does not
 > protect against losing the VM — which is the threat §1 and §7 are about, and
@@ -565,15 +565,15 @@ Install the cron entry as the user in the `docker` group:
 
 ```cron
 MAILTO=you@contoso.com
-# /opt/kg-agent — nightly at 03:30 local time.
+# /opt/hames — nightly at 03:30 local time.
 # stdout to the log; stderr deliberately NOT redirected, so cron mails you the
 # failure and only the failure.
-30 3 * * * cd /opt/kg-agent && ./scripts/backup-preview.sh >> /var/log/kg-agent-backup.log
+30 3 * * * cd /opt/hames && ./scripts/backup-preview.sh >> /var/log/hames-backup.log
 ```
 
 ```bash
 crontab -e                                    # paste the lines above
-sudo touch /var/log/kg-agent-backup.log && sudo chown "$USER" /var/log/kg-agent-backup.log
+sudo touch /var/log/hames-backup.log && sudo chown "$USER" /var/log/hames-backup.log
 ```
 
 > **`>> log 2>&1` is the version that fails silently.** With stderr in the log
@@ -675,7 +675,7 @@ says escrow it before the first sign-in rather than after the first backup.
 **A bad app release** — the data tier is untouched, so this is a rebuild:
 
 ```bash
-cd /opt/kg-agent
+cd /opt/hames
 git log --oneline -5                      # find the last good commit
 git checkout <good-sha>
 docker compose up -d --build app          # Caddy and the data tier keep running
@@ -702,9 +702,9 @@ docker compose logs -f app
 > ([`azure-vm.md` §9](deployment/azure-vm.md) has the `pg_dump` to have taken);
 > there is no down-migration and no decrypt-back script.
 
-Faster, if the previous image is still on the box: `docker images kg-agent-app`,
-then `docker tag <old-id> kg-agent-app:local && docker compose up -d app` — no
-build. Tag a known-good image (`docker tag kg-agent-app:local kg-agent-app:rollback`)
+Faster, if the previous image is still on the box: `docker images hames-app`,
+then `docker tag <old-id> hames-app:local && docker compose up -d app` — no
+build. Tag a known-good image (`docker tag hames-app:local hames-app:rollback`)
 right after a successful deploy and this stays available.
 
 **A bad configuration** — `.env` edits need only a recreate:
@@ -800,7 +800,7 @@ committed files assume one stack per Docker daemon, in five places:
 1. **Container names.** Every service except `mcp-config` and `mcp-gateway`
    pins a `container_name` (`docker-compose.yaml:23,97,125,151,177`;
    `docker-compose.prod.yaml:150`). Those names are global to the daemon. The
-   top-level `name: kg-agent` (`docker-compose.yaml:4`) also has to differ per
+   top-level `name: hames` (`docker-compose.yaml:4`) also has to differ per
    project.
 2. **Ports.** Each project publishes the same loopback ports
    (`docker-compose.yaml:26-180`), and the overlay gives Caddy `80`/`443` in each
@@ -848,7 +848,7 @@ needs pull rights on the registry. The VM logs in as itself immediately before
 each pull, so this is the first step in the runbook that needs Azure tooling on
 the box (the intro says "no Azure CLI"). The app service then runs
 `image: <registry>/<repo>@sha256:<digest>` instead of building
-`kg-agent-app:local` (`docker-compose.yaml:164-176`). That compose change comes
+`hames-app:local` (`docker-compose.yaml:164-176`). That compose change comes
 with the workflows, not before them.
 
 **Each environment has its own allow-list.** Staging's `VITE_ALLOWED_EMAILS`

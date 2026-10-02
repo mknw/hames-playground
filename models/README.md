@@ -49,6 +49,6 @@ pair for whichever you are moving (values go in `app/.env`, documented in
   the file: `make llm-small LLM_SMALL_MODEL=<file>.gguf`.
 - **From a git worktree** this directory is empty (it is gitignored, so it does
   not travel). Point the target at the main checkout:
-  `make embed MODELS_DIR=/Users/you/Code/kg-agent/models`.
+  `make embed MODELS_DIR=/Users/you/Code/hames-playground/models`.
 - A missing file makes the target fail with `model file missing: <path>` before
   llama-server starts, rather than leaving a dead port for the harness to find.

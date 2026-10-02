@@ -1,5 +1,5 @@
 docker run \
-    --name neo4j-mldsgraph \
+    --name hames-neo4j \
     --restart always \
     --publish=7474:7474 --publish=7687:7687 \
     --env NEO4J_AUTH=neo4j/password \

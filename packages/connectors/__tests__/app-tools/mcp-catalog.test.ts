@@ -156,14 +156,14 @@ describe('ToolsFrom with the catalog (the moved grouping cases)', () => {
 
     const tools = ToolsFrom(
       [
-        { name: 'mcp__kg-agent-mcp-gateway__search', description: 'Search', inputSchema: {} },
+        { name: 'mcp__hames-mcp-gateway__search', description: 'Search', inputSchema: {} },
         {
-          name: 'mcp__kg-agent-mcp-gateway__create_entities',
+          name: 'mcp__hames-mcp-gateway__create_entities',
           description: 'Create entities',
           inputSchema: {},
         },
         {
-          name: 'mcp__kg-agent-mcp-gateway__read_neo4j_cypher',
+          name: 'mcp__hames-mcp-gateway__read_neo4j_cypher',
           description: 'Read Neo4j',
           inputSchema: {},
         },
@@ -171,9 +171,9 @@ describe('ToolsFrom with the catalog (the moved grouping cases)', () => {
       { namespaces: mcpNamespace },
     )
 
-    expect(tools.web).toContain('mcp__kg-agent-mcp-gateway__search')
-    expect(tools.memory).toContain('mcp__kg-agent-mcp-gateway__create_entities')
-    expect(tools.neo4j).toContain('mcp__kg-agent-mcp-gateway__read_neo4j_cypher')
+    expect(tools.web).toContain('mcp__hames-mcp-gateway__search')
+    expect(tools.memory).toContain('mcp__hames-mcp-gateway__create_entities')
+    expect(tools.neo4j).toContain('mcp__hames-mcp-gateway__read_neo4j_cypher')
   })
 
   it('correctly groups the full typical gateway tool set', async () => {
@@ -181,35 +181,35 @@ describe('ToolsFrom with the catalog (the moved grouping cases)', () => {
 
     const tools = ToolsFrom(
       [
-        { name: 'mcp__kg-agent-mcp-gateway__search', description: 'Search', inputSchema: {} },
-        { name: 'mcp__kg-agent-mcp-gateway__fetch', description: 'Fetch', inputSchema: {} },
+        { name: 'mcp__hames-mcp-gateway__search', description: 'Search', inputSchema: {} },
+        { name: 'mcp__hames-mcp-gateway__fetch', description: 'Fetch', inputSchema: {} },
         {
-          name: 'mcp__kg-agent-mcp-gateway__fetch_content',
+          name: 'mcp__hames-mcp-gateway__fetch_content',
           description: 'Fetch content',
           inputSchema: {},
         },
         {
-          name: 'mcp__kg-agent-mcp-gateway__read_neo4j_cypher',
+          name: 'mcp__hames-mcp-gateway__read_neo4j_cypher',
           description: 'Read Neo4j',
           inputSchema: {},
         },
         {
-          name: 'mcp__kg-agent-mcp-gateway__write_neo4j_cypher',
+          name: 'mcp__hames-mcp-gateway__write_neo4j_cypher',
           description: 'Write Neo4j',
           inputSchema: {},
         },
         {
-          name: 'mcp__kg-agent-mcp-gateway__get_neo4j_schema',
+          name: 'mcp__hames-mcp-gateway__get_neo4j_schema',
           description: 'Schema',
           inputSchema: {},
         },
         {
-          name: 'mcp__kg-agent-mcp-gateway__create_entities',
+          name: 'mcp__hames-mcp-gateway__create_entities',
           description: 'Create entities',
           inputSchema: {},
         },
         {
-          name: 'mcp__kg-agent-mcp-gateway__search_nodes',
+          name: 'mcp__hames-mcp-gateway__search_nodes',
           description: 'Search nodes',
           inputSchema: {},
         },
@@ -219,20 +219,20 @@ describe('ToolsFrom with the catalog (the moved grouping cases)', () => {
 
     // Web tools grouped under 'web'
     expect(tools.web).toHaveLength(3)
-    expect(tools.web).toContain('mcp__kg-agent-mcp-gateway__search')
-    expect(tools.web).toContain('mcp__kg-agent-mcp-gateway__fetch')
-    expect(tools.web).toContain('mcp__kg-agent-mcp-gateway__fetch_content')
+    expect(tools.web).toContain('mcp__hames-mcp-gateway__search')
+    expect(tools.web).toContain('mcp__hames-mcp-gateway__fetch')
+    expect(tools.web).toContain('mcp__hames-mcp-gateway__fetch_content')
 
     // Neo4j tools grouped under 'neo4j'
     expect(tools.neo4j).toHaveLength(3)
-    expect(tools.neo4j).toContain('mcp__kg-agent-mcp-gateway__read_neo4j_cypher')
-    expect(tools.neo4j).toContain('mcp__kg-agent-mcp-gateway__write_neo4j_cypher')
-    expect(tools.neo4j).toContain('mcp__kg-agent-mcp-gateway__get_neo4j_schema')
+    expect(tools.neo4j).toContain('mcp__hames-mcp-gateway__read_neo4j_cypher')
+    expect(tools.neo4j).toContain('mcp__hames-mcp-gateway__write_neo4j_cypher')
+    expect(tools.neo4j).toContain('mcp__hames-mcp-gateway__get_neo4j_schema')
 
     // Memory tools grouped under 'memory'
     expect(tools.memory).toHaveLength(2)
-    expect(tools.memory).toContain('mcp__kg-agent-mcp-gateway__create_entities')
-    expect(tools.memory).toContain('mcp__kg-agent-mcp-gateway__search_nodes')
+    expect(tools.memory).toContain('mcp__hames-mcp-gateway__create_entities')
+    expect(tools.memory).toContain('mcp__hames-mcp-gateway__search_nodes')
 
     // Should NOT have scattered groups
     expect(tools.mcp).toBeUndefined()

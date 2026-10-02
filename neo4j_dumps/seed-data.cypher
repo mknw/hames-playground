@@ -4,7 +4,7 @@
 // To import: Run this file with cypher-shell or Neo4j Browser
 //
 // Usage:
-//   docker exec neo4j-mldsgraph cypher-shell -u neo4j -p password < neo4j_dumps/export-YYYYMMDD_HHMMSS.cypher
+//   ./scripts/import-neo4j.sh neo4j_dumps/seed-data.cypher
 
 // Clear existing data (CAUTION: This deletes everything!)
 // MATCH (n) DETACH DELETE n;

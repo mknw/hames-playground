@@ -75,7 +75,13 @@ export const DATA_KEY_ENV = 'DATA_ENCRYPTION_KEY'
 /** Current envelope version, including its separator. */
 export const ENVELOPE_PREFIX = 'v1.'
 
-const HKDF_INFO = 'kg-agent:db-crypto:v1'
+// A key-derivation input, not a name. Changing it derives a different key from
+// the same env secret, so every value already encrypted under it stops
+// decrypting. It was renamed from `kg-agent:…` on 2026-10-02, deliberately and
+// against empty stores (the clean-slate reset in #416). A future change needs a
+// new envelope version and a re-encryption pass, not an edit here. Pinned by a
+// known-answer test.
+const HKDF_INFO = 'hames:db-crypto:v1'
 const KEY_BYTES = 32
 const IV_BYTES = 12
 const TAG_BYTES = 16

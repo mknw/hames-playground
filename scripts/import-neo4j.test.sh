@@ -34,7 +34,7 @@ cmd="${1:?}"; shift
 case "$cmd" in
     ps)
         # One running container, the compose default name.
-        echo "neo4j-mldsgraph"
+        echo "hames-neo4j"
         ;;
     exec)
         interactive=0

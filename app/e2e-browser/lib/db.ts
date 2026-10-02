@@ -4,7 +4,7 @@
  * Postgres is not faked here for the same reason `app/e2e/` does not fake it:
  * "the conversation survived a reload" is a claim about persistence, and a
  * suite that faked the store would be asserting against its own fake. The
- * target is the throwaway `kgagent_test_browser` this suite provisions for itself
+ * target is the throwaway `hames_test_browser` this suite provisions for itself
  * (#280), never a
  * developer's dev database — `initSchema()`'s backfill would otherwise rewrite
  * real rows under the unit-test key, after which `pnpm dev` refuses to boot.
@@ -28,7 +28,7 @@ const UNDEFINED_TABLE = '42P01'
  * Called before each scenario file rather than after, so a failed run leaves
  * its rows behind to be looked at. Test database only — the `TEST_DATABASE_URL`
  * default and the dev server's `DATABASE_URL` both point at this suite's own
- * `kgagent_test_browser`.
+ * `hames_test_browser`.
  */
 export async function wipeUserRows(): Promise<void> {
   const client = new pg.Client({ connectionString: TEST_DATABASE_URL })

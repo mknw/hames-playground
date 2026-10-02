@@ -1,7 +1,7 @@
 # Pin the compose project name. Without this it defaults to the directory name,
-# so renaming the checkout would silently orphan the `kg-agent_*` named volumes
+# so renaming the checkout would silently orphan the `hames_*` named volumes
 # (Postgres, Neo4j, Redis) and bring the stack up against empty new ones.
-name: kg-agent
+name: hames
 
 # Laptop hardening, same standard as docker-compose.prod.yaml:
 #
@@ -20,7 +20,7 @@ name: kg-agent
 services:
   neo4j:
     image: neo4j:5.26
-    container_name: neo4j-mldsgraph
+    container_name: hames-neo4j
     restart: unless-stopped
     ports:
       - "127.0.0.1:7474:7474"
@@ -94,14 +94,14 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: postgres-seederis
+    container_name: hames-postgres
     restart: unless-stopped
     ports:
       - "127.0.0.1:5432:5432"
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the repo-root .env — see .env.example}
-      - POSTGRES_DB=kgagent
+      - POSTGRES_DB=hames
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -122,7 +122,7 @@ services:
     # build emulates those instructions. On x86 this is the native image, so
     # the line is a no-op there.
     platform: linux/amd64
-    container_name: redis-seederis
+    container_name: hames-redis
     restart: unless-stopped
     ports:
       - "127.0.0.1:6379:6379"
@@ -148,7 +148,7 @@ services:
     #   image: ghcr.io/xberg-io/xberg:1.0.0-rc.29-core
     # exposes the same /extract contract (currently release-candidate only).
     image: ghcr.io/kreuzberg-dev/kreuzberg-full:latest
-    container_name: doc-convert-seederis
+    container_name: hames-doc-convert
     restart: unless-stopped
     ports:
       - "127.0.0.1:8000:8000"
@@ -173,8 +173,8 @@ services:
       # build.
       additional_contexts:
         root: .
-    image: kg-agent-app:local
-    container_name: kg-agent-app
+    image: hames-app:local
+    container_name: hames-app
     restart: unless-stopped
     ports:
       - "127.0.0.1:3444:3444"
@@ -191,7 +191,7 @@ services:
       # read. The Neo4j URL needs no entry: config/endpoints.ts resolves
       # bolt://neo4j:7687 in a production build (the localhost form is the
       # `import.meta.env.DEV` branch) — only the credential is supplied here.
-      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the repo-root .env — see .env.example}@postgres:5432/kgagent
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the repo-root .env — see .env.example}@postgres:5432/hames
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:?set NEO4J_PASSWORD in the repo-root .env — see .env.example}
       - MCP_GATEWAY_URL=http://mcp-gateway:8811/mcp

@@ -166,10 +166,10 @@ describe('tools', () => {
         // the heuristic end to end: split → 'mcp'. The catalog-routed members
         // of this family live app-side, with the catalog.
         const tools = ToolsFrom([
-          { name: 'mcp__kg-agent-mcp-gateway__mcp-find', description: 'Find MCP', inputSchema: {} },
+          { name: 'mcp__hames-mcp-gateway__mcp-find', description: 'Find MCP', inputSchema: {} },
         ])
 
-        expect(tools.mcp).toContain('mcp__kg-agent-mcp-gateway__mcp-find')
+        expect(tools.mcp).toContain('mcp__hames-mcp-gateway__mcp-find')
       })
     })
 

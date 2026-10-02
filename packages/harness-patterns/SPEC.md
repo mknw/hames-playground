@@ -338,7 +338,7 @@ pre-1.0, strict→lenient later is free, lenient→strict is breaking.
 ```typescript
 const tools = await Tools({ namespaces: mcpNamespace }) // mcpNamespace: the app's catalog
 const tools = ToolsFrom(descriptions, { namespaces: mcpNamespace }) // options optional here
-tools.neo4j // ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema']
+tools.neo4j // ['read_neo4j_cypher', 'get_neo4j_schema'] — the shipped config is read_only: true; set false for 'write_neo4j_cypher'
 tools.web // ['search', 'fetch', 'fetch_content']
 tools.graph // app-side, per-user (see below)
 tools.all // all tool names

@@ -140,6 +140,9 @@ describe('withSkillsIndex', () => {
 // ============================================================================
 
 interface ShellTransport extends McpTransport {
+  /** A temp dir of the test's own; `/skills` is `<base>/skills`, so even a
+   *  traversal (`../x`) lands somewhere the test owns and removes. */
+  base: string
   root: string
   bashCalls: Array<{ command: string; internal?: boolean }>
   /** Make every write-shaped command fail (an unwritable mount). */
@@ -151,9 +154,12 @@ interface ShellTransport extends McpTransport {
 /** A transport whose `sandbox_bash` runs the command in a real shell, with
  *  `/skills` rewritten to a temp directory. */
 function shellTransport(opts: { bash?: boolean } = {}): ShellTransport {
-  const root = mkdtempSync(join(tmpdir(), 'hames-skills-'))
+  const base = mkdtempSync(join(tmpdir(), 'hames-skills-'))
+  const root = join(base, 'skills')
+  mkdirSync(root)
   const hasBash = opts.bash !== false
   const t: ShellTransport = {
+    base,
     root,
     bashCalls: [],
     failWrites: false,
@@ -180,8 +186,11 @@ function shellTransport(opts: { bash?: boolean } = {}): ShellTransport {
       if (t.failRemovals && command.includes('-empty -delete')) {
         return { success: false, data: { stdout: '', stderr: '', exit_code: 1 } }
       }
+      // cwd is the temp dir, so anything a mis-quoted command creates lands
+      // there (and is cleaned up) rather than in the package directory.
       const r = spawnSync('/bin/bash', ['-c', command.split(SKILLS_DIR).join(root)], {
         encoding: 'utf8',
+        cwd: root,
       })
       const exit = r.status ?? 1
       return {
@@ -206,7 +215,7 @@ const tree = (t: ShellTransport) => readdirSync(t.root).sort()
 let transports: ShellTransport[] = []
 const track = (t: ShellTransport) => (transports.push(t), t)
 afterEach(() => {
-  for (const t of transports) rmSync(t.root, { recursive: true, force: true })
+  for (const t of transports) rmSync(t.base, { recursive: true, force: true })
   transports = []
 })
 
@@ -224,7 +233,6 @@ describe('syncSkills — /skills/<name>/SKILL.md, byte for byte', () => {
     expect(mounted.map((m) => m.name)).toEqual(['pdf-processing'])
     expect(read(t, 'pdf-processing/SKILL.md')).toBe(s.content)
     expect(existsSync(join(t.root, 'PWNED'))).toBe(false)
-    expect(existsSync(join(process.cwd(), 'PWNED'))).toBe(false)
   })
 
   it('sends every command as harness plumbing (internal), never as an actor command', async () => {
@@ -279,7 +287,7 @@ describe('syncSkills — /skills/<name>/SKILL.md, byte for byte', () => {
 
   it('replaces a symlink in a skill’s place rather than writing through it', async () => {
     const t = track(shellTransport())
-    const outside = join(t.root, '..', `outside-${Date.now()}.txt`)
+    const outside = join(t.base, 'outside.txt')
     writeFileSync(outside, 'untouched')
     mkdirSync(join(t.root, 'a'))
     symlinkSync(outside, join(t.root, 'a/SKILL.md'))
@@ -313,7 +321,7 @@ describe('syncSkills — /skills/<name>/SKILL.md, byte for byte', () => {
     // First wins, by the host's order.
     expect(read(t, 'ok/SKILL.md')).toBe(skill('ok').content)
     expect(tree(t)).toEqual(['ok'])
-    expect(existsSync(join(t.root, '..', 'escape'))).toBe(false)
+    expect(readdirSync(t.base)).toEqual(['skills'])
   })
 
   it('accepts a file of exactly the cap (the write path carries it in one argument)', async () => {

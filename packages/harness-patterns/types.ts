@@ -702,8 +702,8 @@ export interface SimpleLoopConfig extends PatternConfig {
    *  unchanged. See `omitResultFields` in content-transforms.ts. */
   resultOmit?: Record<string, string[]>
   /** Regex matched against `action.tool_name` after the strict allowlist
-   *  fails. Lets agents accept dynamically-created tools (e.g. the kg-agent
-   *  a backend that registers tools at runtime) without enumerating every
+   *  fails. Lets agents accept dynamically-created tools (e.g. from an MCP
+   *  gateway that registers tools at runtime) without enumerating every
    *  possible name upfront. */
   dynamicToolPattern?: RegExp
   /** Multi-call turns: 'parallel' (default) | 'sequential' | 'off'.
@@ -725,8 +725,8 @@ export interface ActorCriticConfig extends PatternConfig {
    *  committed. See `OnToolResult`. */
   onToolResult?: OnToolResult
   /** Regex matched against `action.tool_name` after the strict allowlist
-   *  fails. Lets agents accept dynamically-created tools (e.g. the kg-agent
-   *  a backend that registers tools at runtime) without enumerating every
+   *  fails. Lets agents accept dynamically-created tools (e.g. from an MCP
+   *  gateway that registers tools at runtime) without enumerating every
    *  possible name upfront. */
   dynamicToolPattern?: RegExp
   /** Async closure resolved per actor invocation. Returns the live allowlist

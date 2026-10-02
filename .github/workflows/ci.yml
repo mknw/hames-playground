@@ -359,7 +359,7 @@ jobs:
       # the allowlist IS the boundary, deliberately not a repo-root context.
       - name: Build the image
         working-directory: .
-        run: docker build --build-context root=. -f app/Dockerfile --tag kg-agent-app:ci app
+        run: docker build --build-context root=. -f app/Dockerfile --tag hames-app:ci app
 
       # Booting proves less than it looks: /api/health touches neither native
       # package, so an image whose traced node_modules lost node-pty's .node
@@ -372,9 +372,9 @@ jobs:
       # to say WHICH file is missing when the require goes red.
       - name: Assert the natives are self-contained
         run: |
-          docker run --rm -w /app/.output/server --entrypoint node kg-agent-app:ci \
+          docker run --rm -w /app/.output/server --entrypoint node hames-app:ci \
             -e "require('node-pty'); require('@boundaryml/baml'); console.log('native OK')" || {
-            docker run --rm --entrypoint ls kg-agent-app:ci \
+            docker run --rm --entrypoint ls hames-app:ci \
               -lR /app/.output/server/node_modules/node-pty /app/.output/server/node_modules/@boundaryml || true
             exit 1
           }
@@ -393,7 +393,7 @@ jobs:
       # canary proves at build time.
       - name: Boot it and hit /api/health
         run: |
-          docker run -d --name app-smoke -p 3444:3444 kg-agent-app:ci
+          docker run -d --name app-smoke -p 3444:3444 hames-app:ci
           served=""
           for i in $(seq 1 30); do
             if [ -z "$served" ] && curl -fsS localhost:3444/api/health; then

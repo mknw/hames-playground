@@ -66,7 +66,7 @@ assertServerOnImport()
  *  that a 12-call turn costs one write, not twelve. */
 export const USAGE_FLUSH_INTERVAL_MS = 5_000
 
-const INSTALLED_KEY = Symbol.for('kg-agent.usage-recorder')
+const INSTALLED_KEY = Symbol.for('hames-app.usage-recorder')
 type RecorderGlobal = typeof globalThis & { [INSTALLED_KEY]?: true }
 
 /** Deltas awaiting a flush, keyed by tier. */

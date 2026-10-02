@@ -1,6 +1,6 @@
 /**
  * graph-extractor tests — driven by real MCP responses captured against the
- * live `kg-agent-mcp-gateway`. Fixtures live in `./fixtures/`.
+ * live MCP gateway (port 8811). Fixtures live in `./fixtures/`.
  *
  * Regression target: bug #14 (relationship types from `get_neo4j_schema`
  * being rendered as nodes), and the new `_neighborhood`/`_touched`

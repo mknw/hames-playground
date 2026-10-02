@@ -308,7 +308,7 @@ describe('flushUsage', () => {
 describe('installUsageRecorder', () => {
   beforeEach(() => {
     resetLlmUsageObservers()
-    delete (globalThis as Record<symbol, unknown>)[Symbol.for('kg-agent.usage-recorder')]
+    delete (globalThis as Record<symbol, unknown>)[Symbol.for('hames-app.usage-recorder')]
   })
 
   it('registers exactly one listener however many times it is called', async () => {

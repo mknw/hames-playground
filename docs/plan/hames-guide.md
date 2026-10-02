@@ -13,7 +13,7 @@ commands — not package material) and §7 (the app-only list). This is the
 final shape.
 
 This guide was app-external by design: it documented the library a consumer
-installs, not kg-agent's own usage of it. That intent now lives in the package
+installs, not this app's own usage of it. That intent now lives in the package
 docs themselves.
 
 ---
@@ -80,7 +80,7 @@ repeated here). Two command facts are repo-local and stay:
 Stays here **by design** — the app-only list has no package home (the
 `agents` package documents its own surface; this list is what the _app_
 adds on top). The explicit list of what a consumer must bring themselves,
-so nobody mistakes kg-agent's own wiring for part of the package contract:
+so nobody mistakes hames-app's own wiring for part of the package contract:
 
 - `typeof window === 'undefined'` / `.server.ts`-suffix guards — this
   repo's own server/client boundary convention, not a `hames` requirement.

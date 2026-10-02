@@ -1243,7 +1243,7 @@ export interface ActorAdapterOptions {
  * The dynamic form is for agents whose backend creates tools at runtime —
  * the actor needs to see them in its prompt to call them, and a fresh
  * listing per call ensures the LLM is aware of tools created in earlier
- * turns of the same session (the kg-agent gateway persists them across turns).
+ * turns of the same session (the Docker MCP gateway persists them across turns).
  */
 export function createActorControllerAdapter(
   toolsOrOptions: string[] | ActorAdapterOptions,

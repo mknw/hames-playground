@@ -24,6 +24,11 @@ const VERSION = 'v1'
 const ALGO = 'aes-256-gcm'
 const IV_BYTES = 12 // GCM standard nonce length
 const KEY_BYTES = 32
+// A key-derivation input, not a name: it keeps the pre-rename `kg-agent` on
+// purpose. Changing it derives a different key from the same env secret, so
+// every value already encrypted under it stops decrypting. A new label means a
+// new envelope version and a re-encryption pass, never an edit here. Pinned by a
+// known-answer test.
 const HKDF_INFO = 'kg-agent:secret-crypto:v1'
 
 /**

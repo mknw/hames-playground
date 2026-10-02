@@ -136,7 +136,7 @@ export function verdaControlPlaneConfigured(): boolean {
   )
 }
 
-const CACHE_KEY = Symbol.for('kg-agent.verda-control-plane')
+const CACHE_KEY = Symbol.for('hames-app.verda-control-plane')
 interface CacheState {
   token: { value: string; expiresAt: number } | null
   probe: { result: VerdaControlPlaneProbe; fetchedAt: number } | null

@@ -290,7 +290,7 @@ export const VERDA_WAKE_FAILED = 'the private inference box did not wake'
  *  fall-back, and the message says it did not happen (SD-12). */
 const NO_FALLBACK = 'The turn was not started; nothing was sent to any other provider.'
 
-const WAKE_KEY = Symbol.for('kg-agent.verda-wake')
+const WAKE_KEY = Symbol.for('hames-app.verda-wake')
 interface WakeState {
   /** The poll currently running — resolving with how long the whole wait took —
    *  shared by every turn that arrived while it was in flight. Cleared when it

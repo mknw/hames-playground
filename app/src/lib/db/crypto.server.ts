@@ -75,6 +75,11 @@ export const DATA_KEY_ENV = 'DATA_ENCRYPTION_KEY'
 /** Current envelope version, including its separator. */
 export const ENVELOPE_PREFIX = 'v1.'
 
+// A key-derivation input, not a name: it keeps the pre-rename `kg-agent` on
+// purpose. Changing it derives a different key from the same env secret, so
+// every value already encrypted under it stops decrypting. A new label means a
+// new envelope version and a re-encryption pass, never an edit here. Pinned by a
+// known-answer test.
 const HKDF_INFO = 'kg-agent:db-crypto:v1'
 const KEY_BYTES = 32
 const IV_BYTES = 12

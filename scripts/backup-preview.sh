@@ -69,6 +69,7 @@ POSTGRES_USER="${POSTGRES_USER:-postgres}"
 # a throwaway container against the stopped store, and a newer Neo4j would try
 # to upgrade the store format rather than read it.
 NEO4J_IMAGE="${NEO4J_IMAGE:-neo4j:5.26}"
+# The volume's pinned name in docker-compose.yaml (it predates the hames rename).
 NEO4J_DATA_VOLUME="${NEO4J_DATA_VOLUME:-kg-agent_neo4j_data}"
 # How many times to poll Neo4j's healthcheck after the dump before declaring
 # the graph down. Iterations, not seconds: each one is a `docker compose ps`
@@ -148,7 +149,7 @@ record() { # name file  ->  append size + sha256 to MANIFEST
 }
 
 {
-  echo "kg-agent preview backup"
+  echo "hames preview backup"
   echo "taken:  $TS (UTC)"
   echo "host:   $(hostname)"
   echo "commit: $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"

@@ -445,4 +445,6 @@ export function estimateLlmCostEur(
   }
 }
 
+// Keeps its pre-rename name on purpose: it is persisted in every user's
+// browser, so renaming it would silently reset everyone's settings panel.
 export const SETTINGS_STORAGE_KEY = 'kg_agent_settings'

@@ -87,7 +87,7 @@ describe('source scan — company-identifying domain', () => {
     // carries the patterns. Two deliberate non-exclusions, stated here so a
     // future pattern does not silently widen the guard over them:
     // - `app/src/lib/auth/graph-token.server.ts` holds the Graph User-Agent
-    //   `NONISV|<company>|kg-agent/1.0`, Microsoft's documented convention, an
+    //   `NONISV|<company>|hames-app/1.0`, Microsoft's documented convention, an
     //   owner-flagged decision (see PR #353). No current pattern matches it —
     //   the literal has no dot-suffix — so it needs no file exclusion; but a
     //   future bare-token pattern would trip it, and that edit should re-read

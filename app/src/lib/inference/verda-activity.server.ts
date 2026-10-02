@@ -98,7 +98,7 @@ export function verdaScaledownSeconds(): number {
 /** Process-local state. Parked on a `globalThis` symbol for the same reason the
  *  routine scheduler is: a dev-server HMR reload re-evaluates this module, and
  *  a fresh module scope would silently reset the clock to "cold". */
-const STATE_KEY = Symbol.for('kg-agent.verda-activity')
+const STATE_KEY = Symbol.for('hames-app.verda-activity')
 interface VerdaState {
   lastCompletedAt: number | null
   inFlight: number

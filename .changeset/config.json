@@ -5,7 +5,7 @@
   "format": false,
   "changelog": "@changesets/cli/changelog",
   "commit": false,
-  "ignore": ["seederis-ai-kg-ui"],
+  "ignore": ["hames-app"],
   "fixed": [
     [
       "@hames-ai/harness-patterns",

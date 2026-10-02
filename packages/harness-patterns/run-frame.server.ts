@@ -139,7 +139,7 @@ const NO_TRANSPORTS: readonly ToolTransport[] = Object.freeze([])
  *
  * `Symbol.for` is the repo's existing idiom for process-wide singletons that
  * must survive both HMR and a duplicated module instance
- * (`Symbol.for('kg-agent.verda-wake')`). The failure it prevents is not
+ * (`Symbol.for('hames-app.verda-wake')`). The failure it prevents is not
  * hypothetical for a published package: `peerDependencies` ASK the installer for
  * one copy, and an installer that gives two produces a silently guardless run
  * rather than an error. Here two copies find the same store, so the frame one

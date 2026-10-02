@@ -84,3 +84,19 @@ describe('key handling', () => {
     expect(decryptSecret(encryptSecret('v', a), b)).toBe('v')
   })
 })
+
+describe('key derivation is pinned', () => {
+  // A known answer: produced once, outside this module, from the env secret
+  // below under the HKDF label `kg-agent:secret-crypto:v1`. Every cached token
+  // was written under that derivation, so a changed label must fail here — it
+  // would otherwise turn every stored token cache into "no usable cache".
+  it('still decrypts an envelope written under the shipped derivation', () => {
+    const envelope = 'v1.DA0ODxAREhMUFRYX.E7YFXq91z_meuVJyPJVLOA.zWbFHuEXsRNwrARj'
+    vi.stubEnv('TOKEN_ENCRYPTION_KEY', 'known-answer-token-key')
+    try {
+      expect(decryptSecret(envelope)).toBe('known answer')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+})

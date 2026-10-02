@@ -4,11 +4,11 @@
 set -e
 
 # Target container. The docker-compose service pins a FIXED container_name
-# (neo4j-mldsgraph), so on a machine that already runs a kg-agent deployment
+# (hames-neo4j), so on a machine that already runs a hames deployment
 # this script would otherwise clear and import into THAT live graph — it did
 # exactly that on 2026-09-14 (install-test incident). Override with
 # NEO4J_CONTAINER=<name> when your compose project uses a different name.
-CONTAINER_NAME="${NEO4J_CONTAINER:-neo4j-mldsgraph}"
+CONTAINER_NAME="${NEO4J_CONTAINER:-hames-neo4j}"
 NEO4J_USER="neo4j"
 # One source: $NEO4J_PASSWORD if exported, else the repo-root .env Compose reads.
 # shellcheck source=lib/compose-env.sh

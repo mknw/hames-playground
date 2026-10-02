@@ -13,7 +13,7 @@
 
 # Where the GGUF files are. Relative to the repo root by default; a git worktree
 # has no models/ of its own, so point it at the main checkout instead:
-#   make embed MODELS_DIR=/Users/you/Code/kg-agent/models
+#   make embed MODELS_DIR=/Users/you/Code/hames-playground/models
 MODELS_DIR ?= models
 
 EMBED_MODEL ?= Qwen3-Embedding-0.6B-Q8_0.gguf

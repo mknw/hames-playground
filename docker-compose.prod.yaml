@@ -147,7 +147,7 @@ services:
   # ---------------------------------------------------------------------------
   caddy:
     image: caddy:2.10-alpine
-    container_name: kg-agent-caddy
+    container_name: hames-caddy
     restart: unless-stopped
     # Same profile as `app`: the proxy has nothing to proxy without it, and one
     # `COMPOSE_PROFILES=app` then covers the whole public-facing pair.
@@ -177,6 +177,12 @@ services:
     networks:
       - app-network
 
+# Pinned to the names the pre-rename `kg-agent` project derived, for the same
+# reason as the data volumes in docker-compose.yaml: caddy_data holds the issued
+# certificates and the ACME account key, and an unpinned rename would re-request
+# them into Let's Encrypt's rate limit.
 volumes:
   caddy_data:
+    name: kg-agent_caddy_data
   caddy_config:
+    name: kg-agent_caddy_config

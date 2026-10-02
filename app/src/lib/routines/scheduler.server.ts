@@ -62,7 +62,7 @@ export const ROUTINE_TICK_INTERVAL_MS = 30_000
  * running — one extra timer per save. A global key survives re-evaluation, so
  * the guard actually guards.
  */
-const ARMED_KEY = Symbol.for('kg-agent.routines.scheduler')
+const ARMED_KEY = Symbol.for('hames-app.routines.scheduler')
 
 interface ArmedTimer {
   timer: ReturnType<typeof setInterval>

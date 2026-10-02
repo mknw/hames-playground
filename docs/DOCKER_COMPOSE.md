@@ -2,7 +2,7 @@
 
 ## Overview
 
-The kg-agent project uses Docker Compose to orchestrate the stack:
+The stack runs as one Docker Compose project, `hames`:
 
 - **neo4j**: Graph database (Community Edition v5.26)
 - **postgres**: Relational database (PostgreSQL 16)
@@ -20,32 +20,32 @@ before the first `docker compose up` on a machine that already has the stack.
 
 ### Neo4j
 
-- **Container**: neo4j-mldsgraph
+- **Container**: hames-neo4j
 - **Ports** (loopback only):
   - 127.0.0.1:7474 (HTTP browser interface)
   - 127.0.0.1:7687 (Bolt protocol)
 - **Authentication**: `neo4j` / `NEO4J_PASSWORD` from the repo-root `.env`
 - **Plugins**: APOC, n10s
-- **Data**: Persisted in the `neo4j_data` named volume
+- **Data**: Persisted in the `neo4j_data` named volume (`kg-agent_neo4j_data` on disk — see [the project rename](#existing-machines-the-project-rename))
 - **Healthcheck**: Validates HTTP endpoint on port 7474
 
 ### PostgreSQL
 
-- **Container**: postgres-seederis
+- **Container**: hames-postgres
 - **Image**: postgres:16-alpine
 - **Ports**: 127.0.0.1:5432:5432
 - **Authentication**: `postgres` / `POSTGRES_PASSWORD` from the repo-root `.env`
 - **Default Database**: kgagent
-- **Data**: Persisted in `postgres_data` named volume
+- **Data**: Persisted in the `postgres_data` named volume (`kg-agent_postgres_data` on disk)
 - **Healthcheck**: `pg_isready -U postgres`
 
 ### Redis
 
-- **Container**: redis-seederis
+- **Container**: hames-redis
 - **Image**: redis/redis-stack:7.4.0-v8 (bundles RedisJSON + RediSearch, required by the Data Stash pipeline; plain redis:7-alpine has no modules)
 - **Ports**: 127.0.0.1:6379:6379
 - **Authentication**: None (alpine default)
-- **Data**: Persisted in `redis_data` named volume
+- **Data**: Persisted in the `redis_data` named volume (`kg-agent_redis_data` on disk)
 - **Healthcheck**: `redis-cli ping`
 
 ### MCP Gateway
@@ -61,7 +61,7 @@ before the first `docker compose up` on a machine that already has the stack.
 
 ### app (the SolidStart app, #197)
 
-- **Container**: kg-agent-app · **Image**: built from `app/Dockerfile` (tagged `kg-agent-app:local`)
+- **Container**: hames-app · **Image**: built from `app/Dockerfile` (tagged `hames-app:local`)
 - **Ports**: 127.0.0.1:3444:3444 · **Healthcheck**: `GET /api/health` (liveness only — see below)
 - **Profile**: `app` — a bare `docker compose up -d` leaves it out; naming it
   (`docker compose up -d app`) or `--profile app` brings it in
@@ -314,6 +314,38 @@ passwords under 8 characters.
 repeated authentication failures (`dbms.security.auth_lock_time`). Wait, then
 retry with the password the volume was created with — the data never needs
 deleting.
+
+### Existing machines: the project rename
+
+The compose project was renamed from `kg-agent` to `hames`. That renames the
+containers (`hames-neo4j`, `hames-postgres`, `hames-redis`, `hames-doc-convert`,
+`hames-app`, and `hames-caddy` in the prod overlay), the network, and the
+gateway's rendered-config volume, which is rewritten on every `up` anyway. The
+data volumes keep their old names: `docker-compose.yaml` pins
+`kg-agent_neo4j_data`, `kg-agent_postgres_data` and `kg-agent_redis_data`, and
+the prod overlay pins `kg-agent_caddy_data` and `kg-agent_caddy_config`. A stack
+started before the rename therefore re-attaches its data. It needs one switch:
+
+```bash
+# On the pre-rename checkout: remove the old project's containers and network.
+# Never add -v here. It deletes the volumes, which hold the graph and every
+# conversation.
+docker compose --profile app down
+git pull                          # brings in the rename
+docker compose up -d              # new containers on the same volumes
+```
+
+If you pull first, `up` fails because the old containers still hold the
+published ports. Nothing is lost. Run `docker compose -p kg-agent --profile app
+down` (again without `-v`), then run `up` again.
+
+Each `up` then prints `volume "kg-agent_…" already exists but was created for
+project "kg-agent"`. That warning is the pin working. A prompt asking
+**`Recreate (data will be lost)?`** is not. It means a volume's definition no
+longer matches the one it was created with. Answer `N` (the default) and stop.
+
+To go back, run `docker compose down`, check out the pre-rename commit, and run
+`docker compose up -d`. Both project names point at the same volumes.
 
 ### Configuration Management
 

@@ -24,6 +24,14 @@ export interface Withholding {
   readonly serverSide: string
 }
 
+/** How a changed gateway config or catalog reaches a running gateway, for both
+ *  warnings below. Not `restart`: the gateway reads a copy the one-shot
+ *  `mcp-config` service renders, and a restart (or a bare `--no-deps`
+ *  recreate) re-reads the old copy. `&&`, so a refused render does not recreate
+ *  the gateway on the stale one (docs/MCP_GATEWAY.md "Neo4j writes"). */
+const RECREATE_GATEWAY =
+  '`docker compose run --rm mcp-config && docker compose up -d --no-deps --force-recreate mcp-gateway`'
+
 /** Owner decision, 2026-10-03 (#403, #206): agents are READ-ONLY against Neo4j,
  *  the `general` agent included. The one writer is the memory hook (#419), and
  *  it writes through the app, not through an agent's tool list. The deployment
@@ -33,7 +41,7 @@ const NEO4J_READ_ONLY: Withholding = {
   because: 'agents are read-only against Neo4j (#403)',
   serverSide:
     'To withhold the tool at the server as well, set `read_only: true` for `neo4j-cypher` in ' +
-    'the config the gateway reads, and restart the gateway on it.',
+    `the config the gateway reads, then render and recreate the gateway: ${RECREATE_GATEWAY}.`,
 }
 
 /** Owner decision, 2026-10-03 (#412): running agents get no Postgres access.
@@ -51,7 +59,8 @@ const NO_POSTGRES: Withholding = {
   because: 'agents get no Postgres access (#412)',
   serverSide:
     'To stop the gateway serving them, remove `database-server` from the catalog it is ' +
-    'started with (`--catalog`) and from its config, then recreate the gateway.',
+    `started with (\`--catalog\`) and from its config, then render and recreate the gateway: ` +
+    `${RECREATE_GATEWAY}.`,
 }
 
 /** Every withheld name, with the decision that withholds it. */

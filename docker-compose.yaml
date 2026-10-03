@@ -49,10 +49,11 @@ services:
     # this the gateway config carried literals that silently disagreed with any
     # other password. Re-runs on every `docker compose up`; after changing the
     # config, the catalog or a password, render and recreate:
-    #   docker compose run --rm mcp-config
-    #   docker compose up -d --no-deps --force-recreate mcp-gateway
+    #   docker compose run --rm mcp-config &&
+    #     docker compose up -d --no-deps --force-recreate mcp-gateway
     # (`--no-deps` alone skips this renderer and the gateway re-reads the old
-    # copy: docs/MCP_GATEWAY.md "Neo4j writes"). postgres:16-alpine only
+    # copy; `&&` keeps a refused render from recreating it on the old one:
+    # docs/MCP_GATEWAY.md "Neo4j writes"). postgres:16-alpine only
     # because the stack already pulls it and it has a POSIX sh + awk; it runs
     # no database here, and it is deliberately NOT given POSTGRES_PASSWORD: no
     # gateway server reaches Postgres (no-agent-postgres.test.ts).

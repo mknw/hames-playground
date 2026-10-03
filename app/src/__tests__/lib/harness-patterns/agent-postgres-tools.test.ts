@@ -207,6 +207,10 @@ describe('the database-server tools are withheld from agents', () => {
     for (const name of WITHHELD) expect(drops[0][0]).toContain(name)
     expect(drops[0][0]).toContain('no Postgres access')
     expect(drops[0][0]).toContain('remove `database-server`')
+    expect(drops[0][0]).toContain(
+      'docker compose run --rm mcp-config && docker compose up -d --no-deps --force-recreate mcp-gateway',
+    )
+    expect(drops[0][0]).not.toMatch(/restart/)
     // Its own warning: not folded into the Neo4j one, which names another switch.
     expect(drops[0][0]).not.toContain('read_only')
   })

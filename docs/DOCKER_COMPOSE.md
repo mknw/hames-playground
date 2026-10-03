@@ -309,9 +309,10 @@ live — and recreate what read the old ones: `docker compose up -d
 have `DATABASE_URL`, `NEO4J_PASSWORD` or `TEST_DATABASE_URL` set explicitly in
 `app/.env` or your shell, those still win and must change too — nothing in the
 repo sets them. Use URL-safe characters (`openssl rand -hex 24`): the Postgres
-value is spliced into `postgresql://` URLs (the app's `DATABASE_URL` and the
-test URLs), and the gateway renderer refuses `&` and `\` in the Neo4j value
-rather than write a broken one. Neo4j 5 rejects passwords under 8 characters.
+value is spliced raw into the `app` container's `DATABASE_URL`, and nothing
+on a laptop checks it (`scripts/bootstrap-vps.sh` refuses one on a preview
+host). The gateway renderer refuses `&` and `\` in the Neo4j value rather than
+write a broken one. Neo4j 5 rejects passwords under 8 characters.
 
 **Locked out after failed logins?** Neo4j locks an account briefly after
 repeated authentication failures (`dbms.security.auth_lock_time`). Wait, then

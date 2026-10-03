@@ -327,6 +327,14 @@ env_problems() {
   if ((n != 0 && n != 3)); then
     printf '%s\n' "private tier: $n of ${VERDA_TRIO[*]} set — all three or none (a partial tier is refused at run time)"
   fi
+  # Spliced raw into the app's DATABASE_URL (both compose files), where these
+  # break the URL. The gateway renderer used to refuse them; since #412 it
+  # never sees this value, so the check lives here. A generated one is hex.
+  case $(env_get POSTGRES_PASSWORD) in
+    *'&'* | *\\* | *'/'* | *'@'* | *':'* | *'#'* | *'?'* | *'%'* | *' '*)
+      printf '%s\n' "POSTGRES_PASSWORD must be URL-safe (no & \\ / @ : # ? % or space): it is spliced into the app's DATABASE_URL"
+      ;;
+  esac
   for k in VERDA_INFERENCE_ENDPOINT SMALL_LLM_BASE_URL; do
     v=$(env_get "$k")
     [[ -z $v || $v == */v1 ]] || printf '%s\n' "$k must end in /v1"

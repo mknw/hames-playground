@@ -412,6 +412,13 @@ once per session, so a per-run transport could never be in it consistently; the
 model sees them through the adapters' per-call tool list. See
 [`docs/MICROSOFT_GRAPH.md`](../../docs/MICROSOFT_GRAPH.md).
 
+The gateway's OWN management tools are never in that catalog: `listTools()`
+drops `mcp-find`, `mcp-add`, `mcp-remove`, `mcp-exec`, `mcp-config-set`,
+`code-mode` and the rest of the gateway's `dynamic-tools` feature, and warns
+once if the gateway lists them (#412, #420). They reconfigure the gateway
+rather than do work, and agents misread them: `mcp-exec` as a shell, `mcp-add`'s
+"added 0 tools" as a success.
+
 ### `simpleLoop(controller, tools, config?)`
 
 ReAct-style decide-execute loop. Calls BAML controller directly. A turn is
@@ -1905,7 +1912,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── run-frame.server.ts     # THE run frame — one ALS scope per run holding all five slots (guard / transports / config / live / inference), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, the rest replace), activeRunFrame() THROWS outside a frame and currentRunFrame() is the soft read
 ├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? and an optional RunFrame; each OPENS the run frame (ruling Q17/D5), or joins the host's
 ├── tool-transport.server.ts # ToolTransport + registerTransport() (process, consulted after every scoped one) / activeTransports() (reads the run frame's `transports` slot); the difference between the two ways to supply one IS the containment invariant — there is no priority field and no argument that could express one
-├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE phases — scoped transports (innermost first) → process transports (registration order) → MCP gateway (terminal fallback, not a transport); leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element
+├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE phases — scoped transports (innermost first) → process transports (registration order) → MCP gateway (terminal fallback, not a transport); leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element; drops the gateway's own management tools (`mcp-find`, `mcp-add`, `mcp-exec`, …) from the catalog (#412, #420)
 ├── compactBulkData.server.ts # compactBulkData(ctx, onPersist, { describe, describeBatch }) — the two describe fns are REQUIRED config (Lane A6)
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)
 ├── token-budget.server.ts  # trimToFit(), estimateTokens() — rolling context window (getContextWindow moved to harness-baml/clients.server with the model tables)

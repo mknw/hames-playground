@@ -99,6 +99,12 @@ services:
       - mcp_config:/mcp/rendered:ro
       - ./configs/custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
       - ./configs/catalog.yaml:/mcp/catalog.yaml:ro
+      # Turns the gateway's `dynamic-tools` feature OFF, so it does not add its
+      # own management tools (mcp-find, mcp-add, mcp-remove, mcp-exec,
+      # mcp-config-set, code-mode) to the tool list (#412, #420). The key must
+      # stay, set to "disabled": the gateway's default when the key or the file
+      # is missing is ON. The app also drops those names from its catalog
+      # (`listTools` in harness-patterns' mcp-client.server.ts).
       - ./docker-config.json:/root/.docker/config.json:ro
     ports:
       - "127.0.0.1:8811:8811"

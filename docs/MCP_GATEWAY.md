@@ -286,15 +286,14 @@ docker mcp gateway run --enable-all-servers --transport streaming --port 3000
 
 ### Dynamic Tools Feature
 
-The `dynamic-tools` feature (enabled by default) exposes internal MCP tools that AI agents can use:
+The `dynamic-tools` feature (enabled by default upstream) adds the gateway's own management tools to the tool list it serves: `mcp-find`, `mcp-add`, `mcp-remove`, `mcp-exec`, `mcp-config-set` and `code-mode` (plus `mcp-create-profile` / `mcp-activate-profile` with profiles, `find-tools` with an embeddings client, and a `code-mode-<name>` tool per script `code-mode` builds).
 
-- **mcp-find**: Search for available MCP servers in the catalog
-- **mcp-add**: Add servers to the registry and reload
-- **mcp-remove**: Remove servers and reload
+**This repo turns it off, in two places** (#412, #420). Agents read `mcp-exec` as a hidden shell and `mcp-add`'s "Successfully added 0 tools" as a success, and none of them needs to reconfigure the gateway.
 
-This allows AI agents to dynamically discover and enable new MCP servers during a session.
+- **At the gateway:** `docker-config.json` sets `"dynamic-tools": "disabled"`. Keep the key: a missing file or key means enabled.
+- **In the app:** `listTools()` in `packages/harness-patterns/mcp-client.server.ts` drops those names from the catalog, and logs once if the gateway lists them anyway.
 
-**Note**: Dynamic tools are automatically disabled when using explicit `--servers` flag.
+**Note**: The gateway also disables dynamic tools by itself when `--servers` is given without `--enable-all-servers`, which is how the production overlay starts it.
 
 ### Self-Describing Images
 

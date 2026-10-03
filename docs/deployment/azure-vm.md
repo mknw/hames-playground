@@ -141,9 +141,16 @@ Create the config files with **real** values (`app/.env` is git-ignored;
 - **`docker-config.json`** — mounted read-only into the gateway. The tracked
   copy sets the gateway's `dynamic-tools` feature to `"disabled"`, which keeps
   the gateway's own management tools (`mcp-find`, `mcp-add`, `mcp-exec`, …)
-  off every agent's tool list (#412, #420). Add registry auth here only if a
-  server image needs it, and keep the `features` block: without it the gateway
-  turns them back on.
+  off every agent's tool list (#412, #420). Keep the `features` block: without
+  it the gateway turns them back on. **Never put registry credentials in this
+  file.** It is tracked in a public repo, and Docker `auths` entries are
+  `user:password` in base64. The pinned gateway does not read them for its
+  pulls anyway: it authenticates only through Docker Desktop's backend
+  (upstream `pkg/docker/token.go`). If a server image is private, run
+  `docker login` and `docker pull <image>` on the host as the deploying user.
+  The credentials then live in that user's `~/.docker/config.json`, outside the
+  repo. The gateway runs catalog servers with `--pull never`, so it uses the
+  image the daemon already has.
 - **`app/.env`** — see the env table in step 9.
 
 ## 4. Harden the compose stack for a public host ⚠️

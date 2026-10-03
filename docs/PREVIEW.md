@@ -126,8 +126,14 @@ Three files have to exist before first boot:
    git-ignored. Mounted read-only into the gateway, it sets the gateway's
    `dynamic-tools` feature to `"disabled"`, so the gateway's own management
    tools (`mcp-find`, `mcp-add`, `mcp-exec`, …) never reach an agent (#412,
-   #420). If a server image ever needs registry auth, add it to this file and
-   keep the `features` block: without that block the gateway turns them back on.
+   #420). Keep the `features` block: without it the gateway turns them back on.
+   **Never put registry credentials in this file**, which is tracked in a
+   public repo. The pinned gateway does not read `auths` from it for its pulls
+   anyway. If a server image is private, run `docker login` and
+   `docker pull <image>` on the host, so the credentials stay in your own
+   `~/.docker/config.json`, outside the repo. The gateway starts catalog
+   servers with `--pull never` and uses the image the daemon already has. See
+   [`deployment/azure-vm.md` §3](deployment/azure-vm.md#3-code--configs).
 3. **`.env`** — the one below.
 
 ```bash

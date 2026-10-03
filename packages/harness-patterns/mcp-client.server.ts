@@ -558,8 +558,9 @@ function gatewayToolDescriptions(
     const dropped = tools.filter((t) => isGatewayManagementTool(t.name)).map((t) => t.name)
     console.warn(
       `[mcp-client] the MCP gateway lists its own management tools (${dropped.join(', ')}); ` +
-        'they were left out of the tool catalog. Set "dynamic-tools": "disabled" in the ' +
-        "gateway's docker-config.json to turn them off at the gateway as well.",
+        'they were left out of the tool catalog. To turn them off at the gateway as well, set ' +
+        '"features": {"dynamic-tools": "disabled"} in the Docker CLI config the gateway ' +
+        'reads (/root/.docker/config.json in its container; a missing key means "enabled").',
     )
   }
   return kept.map(toDescription)

@@ -34,7 +34,8 @@ disposition plus an ADR is a net context saving over a paragraph of prose in
 | [0004](0004-server-only-suffix-boundary.md)          | `.server.ts` + `assertServerOnImport()` is the server/client boundary       | accepted                | 2025-12-18 |
 | [0005](0005-harness-patterns-replaces-baml-agent.md) | harness-patterns replaces `lib/baml-agent/`, which is not to be recreated   | accepted                | 2026-01-18 |
 | [0006](0006-no-rails-runner-for-guards.md)           | Rails-style pre/post checks are the wrong shape for guards                  | accepted                | 2026-09-21 |
-| [0007](0007-three-environments-digest-promotion.md)  | Three environments on two VMs, with prod promoted by image digest           | accepted                | 2026-10-01 |
+| [0007](0007-three-environments-digest-promotion.md)  | Three environments on two VMs, with prod promoted by image digest           | superseded by ADR-0008  | 2026-10-01 |
+| [0008](0008-one-ovh-vps-for-staging.md)              | One OVHcloud VPS runs staging; dev and prod are deferred                    | accepted                | 2026-10-03 |
 
 This table is **the only place statuses are aggregated**. A file whose status
 changes updates both the file and this row in the same commit.

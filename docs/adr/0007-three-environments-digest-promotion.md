@@ -1,12 +1,12 @@
 # ADR-0007: Three environments on two VMs, with prod promoted by image digest
 
 **Date**: 2026-10-01 — the last of the owner's decisions, taken 2026-09-28 to 2026-10-01
-**Status**: accepted
+**Status**: superseded by [ADR-0008](0008-one-ovh-vps-for-staging.md)
 
-Today the app has one deployment: a VM that builds its own image from a git
-checkout (`docker-compose.yaml:164-176`) and rolls back by rebuilding an older
-commit (`docs/PREVIEW.md` §10). The owner decided on three environments: dev, a
-release candidate called **staging**, and prod. Dev and staging share one Azure
+Today the app has no deployment; the runbook (`docs/PREVIEW.md`) describes one
+VM that builds its own image from a git checkout (`docker-compose.yaml:164-176`)
+and rolls back by rebuilding an older commit (§10). The owner decided on three
+environments: dev, a release candidate called **staging**, and prod. Dev and staging share one Azure
 VM in the company's tenancy, as two compose projects behind one Caddy. Prod has
 its own VM. Releases are trunk-based, and prod runs **the same image digest
 staging ran**, never a rebuild, so the artifact that was approved is the

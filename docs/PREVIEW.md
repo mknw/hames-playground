@@ -19,13 +19,15 @@ prerequisites.
 **What was and was not proved before this was written** is at the bottom
 (§"State of this runbook"). Read it before you rely on a step.
 
-**Three environments, one runbook.** [ADR-0007](adr/0007-three-environments-digest-promotion.md)
-decided on dev, staging and prod, on two VMs. Dev and staging share one VM and
-prod has its own. §§0–11 still describe **one environment on one VM** that
-builds its own image, and that is still how to execute this runbook today. §12
-lists what the Azure session adds for three environments, including what must
-change before two of them can share a box. §13 describes how a deploy and a
-promotion will work once the workflows exist.
+**One deployment: staging on an OVHcloud VPS.** [ADR-0008](adr/0008-one-ovh-vps-for-staging.md)
+superseded ADR-0007's three environments on two Azure VMs. The one deployment
+now is staging, on a single OVHcloud VPS that builds its own images, and
+`scripts/bootstrap-staging.sh` hardens that box and runs §§3–8 on it. §14 says
+what the script does and what stays with the owner. §§0–11 still describe one
+environment on one VM. Where they name Azure (the NSG, disk encryption at VM
+creation), §14 gives the VPS counterpart. §12 and §13 describe ADR-0007's
+three-environment shape. ADR-0008 defers that shape, and the sections are kept
+for when dev and prod return.
 
 ---
 
@@ -795,7 +797,9 @@ diagnosis, and nothing is reachable from outside.
 
 [ADR-0007](adr/0007-three-environments-digest-promotion.md) holds the decisions
 and the reasons for them. What follows is what they add to §§0–11. None of it is
-built yet.
+built yet, and [ADR-0008](adr/0008-one-ovh-vps-for-staging.md) defers all of it:
+today there is one environment on one VPS (§14). The section is kept as the
+shape dev and prod would take.
 
 **Two VMs, not one.** One VM runs dev and staging, and the other runs prod.
 Each environment is a complete copy of §§3–7: its own compose project, `.env`,
@@ -808,12 +812,12 @@ never shared.
 committed files assume one stack per Docker daemon, in five places:
 
 1. **Container names.** Every service except `mcp-config` and `mcp-gateway`
-   pins a `container_name` (`docker-compose.yaml:23,97,125,151,177`;
+   pins a `container_name` (`docker-compose.yaml:23,115,143,169,195`;
    `docker-compose.prod.yaml:150`). Those names are global to the daemon. The
    top-level `name: hames` (`docker-compose.yaml:4`) also has to differ per
    project.
 2. **Ports.** Each project publishes the same loopback ports
-   (`docker-compose.yaml:26-180`), and the overlay gives Caddy `80`/`443` in each
+   (`docker-compose.yaml:26-198`), and the overlay gives Caddy `80`/`443` in each
    project (`docker-compose.prod.yaml:155-158`). Only one process can bind each
    port.
 3. **The sandbox reaper.** It force-removes every `kg-sandbox=1` container on
@@ -858,7 +862,7 @@ needs pull rights on the registry. The VM logs in as itself immediately before
 each pull, so this is the first step in the runbook that needs Azure tooling on
 the box (the intro says "no Azure CLI"). The app service then runs
 `image: <registry>/<repo>@sha256:<digest>` instead of building
-`hames-app:local` (`docker-compose.yaml:164-176`). That compose change comes
+`hames-app:local` (`docker-compose.yaml:182-194`). That compose change comes
 with the workflows, not before them.
 
 **Each environment has its own allow-list.** Staging's `VITE_ALLOWED_EMAILS`
@@ -889,7 +893,8 @@ difference hides. The hermetic layers do not move
 ## 13. Deploy and promotion, once the workflows exist
 
 None of these workflows exist yet. This is the shape they will implement. If
-the two ever disagree, ADR-0007 is the authority.
+the two ever disagree, ADR-0007 is the authority. ADR-0008 defers them until a
+registry exists; until then the staging VPS builds its own image (§14).
 
 | Trigger                                           | What happens                                                                      | Gate                                                                                      |
 | ------------------------------------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
@@ -909,6 +914,280 @@ Three rules carry the design:
   `git checkout` and rebuild stays the procedure for a VM that builds its own
   image. Its #260 warning still applies to any digest built from a commit
   before `56ac2b4`.
+
+## 14. The OVHcloud staging VPS — `scripts/bootstrap-staging.sh`
+
+[ADR-0008](adr/0008-one-ovh-vps-for-staging.md) records the decision. Staging
+is the one deployment, and it runs on one OVHcloud VPS: 8 vCPU, 24 GB RAM,
+x86_64, Ubuntu 26.04, login user `ubuntu`. OVHcloud states that securing the
+VPS is the customer's job: "it will be up to you as the administrator to
+implement measures to ensure the security and stability of your system"
+([How to secure a VPS](https://docs.ovhcloud.com/en/guides/bare-metal-cloud/virtual-private-servers/secure-your-vps),
+"the guide" below). `scripts/bootstrap-staging.sh` applies the guide's steps
+on the box and then runs §§3–8 there. The guide's other steps happen in the
+Control Panel and are owner actions, listed below. The script is idempotent:
+each stage checks before it changes anything, so you resume by re-running it.
+Its header and `--help` hold the details.
+
+**Before the first run:**
+
+- The ref you deploy must digest-pin the `mcp-gateway` image (#421, on `main`)
+  and must have the tracked `docker-config.json` set `dynamic-tools` to
+  `"disabled"` (#422). Both are boot gates: the latest upstream gateway release
+  breaks this stack (#417), and with `dynamic-tools` on the gateway adds its
+  own management tools to every agent's tool list. The script never writes
+  that file and never puts a registry credential in it. Every catalog image is
+  public. If one ever needs auth, log in and pull on the host, as §3 says.
+- `~ubuntu/.ssh/authorized_keys` must hold your key, and you must be logged in
+  with it. The script refuses to turn passwords off for an account without a
+  usable key.
+- Open an interactive SSH session and leave it open for the whole first run.
+  See the anti-lockout procedure below.
+
+**Run it.** Do a dry run first. The hostname is a required argument, and it is
+never committed anywhere, because this repo is public:
+
+```bash
+# Piped. It never prompts; it lists what is missing.
+ssh ubuntu@<host> 'bash -s -- --hostname <fqdn> --acme-email <mailbox> --dry-run' \
+  < scripts/bootstrap-staging.sh
+
+# Copied. It prompts for the owner-supplied values, with secrets hidden.
+scp scripts/bootstrap-staging.sh ubuntu@<host>:
+ssh -t ubuntu@<host> 'bash bootstrap-staging.sh --hostname <fqdn> --acme-email <mailbox>'
+```
+
+A first bootstrap takes three runs. Exit code 3 means the run stopped for an
+action, and you re-run with the same arguments once it is done:
+
+1. The first run hardens SSH and the firewall, then stops at the anti-lockout
+   checkpoint.
+2. The second run installs `fail2ban` and Docker, checks out the repo, writes
+   `.env` and builds the images. It then stops before `boot` until the
+   owner-supplied values and the key escrow are in place.
+3. The third run, with `--keys-escrowed`, boots the stack, seeds the graph and
+   runs the smoke checks.
+
+| Stage       | What it changes on the box                                                                                                                                                                                                                                                                                                                                                                    |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `preflight` | Nothing. It refuses anything that is not x86_64 (#412), not Ubuntu, under 4 GiB of RAM or under 20 GiB of free disk, a root login, or a user without passwordless sudo                                                                                                                                                                                                                        |
+| `updates`   | `apt-get upgrade` (the guide's first step), plus `/etc/apt/apt.conf.d/20auto-upgrades`, which turns on daily unattended upgrades from the security origin only. Docker's repo is not in that origin, so the engine is never upgraded under the stack. Reboots are never automatic                                                                                                             |
+| `ssh`       | `/etc/ssh/sshd_config.d/00-hames-hardening.conf`: keys only, no passwords, no keyboard-interactive, no root login, and `Port` lines only if `--ssh-port` is given. The `00-` prefix makes it sort first, because sshd keeps the first value it reads and `50-cloud-init.conf` can turn passwords back on. The stage runs `sshd -t` before any reload and reads the result back with `sshd -T` |
+| `firewall`  | `ufw`: deny incoming, allow outgoing, allow the SSH port(s), 80/tcp, 443/tcp and 443/udp, on IPv4 and IPv6. Each SSH port is allowed and read back before `ufw` is enabled. It prints the edge-firewall rules for the owner                                                                                                                                                                   |
+| `fail2ban`  | Installs `fail2ban` and writes `/etc/fail2ban/jail.local` with the guide's `[sshd]` values: `maxretry = 3`, `findtime = 5m`, `bantime = 30m`, on the SSH port(s). It refuses to overwrite a `jail.local` it did not write                                                                                                                                                                     |
+| `docker`    | Docker Engine and the compose plugin from Docker's apt repository, never the snap. It checks the signing key's fingerprint and refuses if Docker publishes no suite for the release (26.04's `resolute` is published). It writes `/etc/docker/daemon.json` with log rotation if the file is absent, requires Compose 2.24 or later, and adds `ubuntu` to the `docker` group                   |
+| `checkout`  | Clones the repo into `/opt/hames`, detached at `--ref` (default `origin/main`). It refuses a dirty tree and any ref older than #260. It writes §3a's five-server `configs/mcp-config.yaml` and never touches the tracked `docker-config.json`                                                                                                                                                 |
+| `env`       | Creates `.env` (mode 600) from the template. It generates the two database passwords and the three keys on the box, and never regenerates an existing value or one a data volume already depends on. It lists, or prompts for, the owner's values. `--keys-escrowed` records the escrow                                                                                                       |
+| `hostname`  | Writes `APP_DOMAIN`, `ACME_EMAIL` and the two auth URIs into `.env`, checks that DNS points at the box, and prints the Entra steps                                                                                                                                                                                                                                                            |
+| `images`    | `docker compose build` and `pull`, a host pull of the five allow-listed MCP server images (in the gateway a failed pull is only a warning), and `docker build -t kg-sandbox:base rootfs/`. `--sandbox-flavours` also builds the three flavour images the `flavoured-sandbox` agent needs                                                                                                      |
+| `boot`      | Runs every gate first: the gateway pin, `dynamic-tools` disabled, §6's preflight, the escrow, DNS, a GitHub-token scan, and the rendered config (every port but Caddy's on loopback, the gateway allow-listed). Then it runs `docker compose up -d` and waits for every service                                                                                                               |
+| `seed`      | Imports `neo4j_dumps/seed-data.cypher`, or `--seed-file`, through `scripts/import-neo4j.sh`, and only into an empty graph. It never passes `--wipe`                                                                                                                                                                                                                                           |
+| `smoke`     | §8's on-box half: `ss` shows nothing public but the SSH port(s), 80 and 443; the gateway serves exactly the five servers; HTTP redirects to HTTPS; `/api/health` answers over a valid certificate; an unauthenticated `POST /api/events` gets 401; there is no GitHub token; `dynamic-tools` is still disabled; and the graph is not empty                                                    |
+
+**The anti-lockout procedure.** The lockout-capable stages, `ssh` and
+`firewall`, run first. Once either one changes something, the script stops
+before running anything else:
+
+1. Before the first run, open an interactive session (`ssh ubuntu@<host>`) and
+   leave it open. An sshd reload, a socket restart and enabling `ufw` all leave
+   existing sessions alone.
+2. When the run stops at the checkpoint (exit 3), prove that a **new** login
+   works with the key alone. The script prints the exact command, with `-p` if
+   the port moved:
+   `ssh -o PreferredAuthentications=publickey -o PasswordAuthentication=no ubuntu@<host> true`.
+3. If that fails, revert from the session you kept open:
+   `sudo rm -f /etc/ssh/sshd_config.d/00-hames-hardening.conf`, then
+   `sudo systemctl daemon-reload && sudo systemctl restart ssh.socket`, then
+   `sudo ufw allow 22/tcp`.
+4. If no session is left, use the provider's rescue mode
+   ([Rescue mode](https://docs.ovhcloud.com/en/guides/bare-metal-cloud/virtual-private-servers/rescue)).
+   In the Control Panel, on the VPS's `Home` tab, click `...` next to Boot,
+   select `Reboot in rescue mode` and confirm. Log in with the credentials it
+   emails, and mount the VPS disk (the guide's example is
+   `mount /dev/sdb1 /mnt/`). Delete
+   `/mnt/etc/ssh/sshd_config.d/00-hames-hardening.conf`, set `ENABLED=no` in
+   `/mnt/etc/ufw/ufw.conf`, and reboot in normal mode from the Control Panel.
+5. Close the old session only after step 2 passes, then re-run the script.
+
+**The SSH port: off by default, available as `--ssh-port`.** The guide
+recommends a port between 49152 and 65535. The script makes the move only when
+asked, and in two runs, so the box always has a port that is known to work:
+
+1. `--ssh-port <P>` adds `P` to `ufw` first, then has sshd listen on 22 **and**
+   `P`, and points the `fail2ban` jail at both. Then the checkpoint asks for a
+   new key login with `-p <P>`.
+2. Add `--ssh-port-verified` to the same arguments after that login works. sshd
+   then listens on `P` only, and `ufw` closes 22 only once nothing listens on
+   it. Then comes the checkpoint again.
+
+On Ubuntu 24.04 and later sshd is socket-activated, so the listening port
+belongs to `ssh.socket` (`ListenStream`), not to sshd. The guide edits
+`/lib/systemd/system/ssh.socket`. That is the packaged unit, and an upgrade
+overwrites it. The script writes `Port` lines in its sshd drop-in instead.
+Ubuntu's `sshd-socket-generator` turns those into the socket's `ListenStream`
+on `systemctl daemon-reload` (verified on 26.04). The script then restarts
+`ssh.socket`. If the generated socket or the listener does not come up on
+every port, the script puts the previous drop-in back before it stops.
+
+The recommendation is **not to move it by default**. With passwords off,
+key-only login plus `fail2ban` already defeats the brute force that a port move
+hides from. A move also has five places that must agree: sshd, `ssh.socket`,
+`ufw`, the `fail2ban` jail and the edge firewall, and missing any one of them
+locks you out. What a move buys is a quieter auth log. If you want SSH
+narrowed, a better control is to give the edge-firewall SSH rule your source IP
+(below), if your IP is fixed.
+
+**The login account.** The guide recommends a restricted user for work that
+does not need root. Three options were weighed for `ubuntu`:
+
+- **Keep `ubuntu` with passwordless sudo (recommended).** It is the only login,
+  by key only. A piped run of this script, or a coordinator running it, cannot
+  answer a password prompt.
+- **Require a password for sudo.** This protects against a stolen key only if
+  `ubuntu` is also kept out of the `docker` group. The group "grants root-level
+  privileges to the user"
+  ([Docker](https://docs.docker.com/engine/install/linux-postinstall/)), so a
+  stolen key plus the group is root without any password. It also breaks
+  non-interactive runs, and the password has to live somewhere, usually next
+  to the key.
+- **Add a separate deploy user without sudo, which runs docker.** This is
+  restricted in name only. Running docker needs either the `docker` group,
+  which is root-equivalent, or sudo.
+
+So the account stays as it is. The script adds `ubuntu` to the `docker` group,
+which grants nothing that passwordless sudo does not already grant. The
+control is the key: keep it passphrase-protected, and held only by the people
+who run this box. Revisit this when a second person needs a login, or if the
+box moves to rootless Docker.
+
+**Owner action: the edge Network Firewall.** The guide's last line of defence
+is the provider's firewall at the network edge, which drops traffic before it
+reaches the box. On this deployment it is a required owner action, not an
+option. Configure it in the Control Panel: `Network`, then
+`Public IP Addresses`, then the VPS's IPv4, then `Configure Edge Network Firewall`
+([Network Firewall](https://docs.ovhcloud.com/en/guides/bare-metal-cloud/dedicated-servers/firewall-network)).
+It holds up to 20 rules per IP. Priority 0 is applied first, and it covers
+IPv4 only, so `ufw` stays the only filter for IPv6. TCP rules can match
+`established`. UDP rules cannot, so the replies to the box's own DNS and NTP
+queries need rules of their own. The `firewall` stage prints these rules with
+the actual SSH port(s):
+
+| Priority | Action | Protocol | Match                        | Why                                                    |
+| -------- | ------ | -------- | ---------------------------- | ------------------------------------------------------ |
+| 0        | Accept | TCP      | state `established`          | replies to the box's own connections (apt, ACME, APIs) |
+| 1        | Accept | UDP      | source port 53               | DNS replies                                            |
+| 2        | Accept | TCP      | destination port 22 (or `P`) | SSH; add your source IP if it is fixed                 |
+| 3        | Accept | TCP      | destination port 80          | the ACME HTTP-01 challenge, then the redirect to 443   |
+| 4        | Accept | TCP      | destination port 443         | the app                                                |
+| 5        | Accept | UDP      | destination port 443         | HTTP/3                                                 |
+| 6        | Accept | UDP      | source port 123              | NTP replies                                            |
+| 7        | Accept | ICMP     |                              | the guide's example keeps it                           |
+| 19       | Deny   | IPv4     |                              | everything else                                        |
+
+During a port move, keep a rule for 22 next to the one for `P` until the second
+run. Run §2's off-box port scan after you change these rules. It is the only
+check of the network path.
+
+**Owner action: backups.** The guide offers two provider options
+([VPS options](https://www.ovhcloud.com/en-gb/vps/options/)). `Snapshot` takes
+a manual image of the VPS. `Automated Backup` keeps regular backups of the VPS,
+"excluding additional disks". The app-level backup is §9's
+`scripts/backup-preview.sh`, which writes to the same disk and so does not
+survive losing the VPS. The owner's 2026-08-25 decision that backups are
+optional for the alpha (§9) still covers staging's data. The recommended
+minimum for staging is:
+
+1. **The key escrow (§7).** It is required, and `boot` will not run without it.
+2. **One `Snapshot`, taken right after the first successful smoke, and again
+   before any risky change**, such as a ref bump across a migration. For a
+   consistent image, `docker compose stop` first, then `start` after the
+   snapshot. This is what rebuilds the box quickly.
+
+`Automated Backup` and §9's nightly cron are both optional on top. Know what a
+provider snapshot holds: the whole disk, so `.env` and its three keys sit in
+the same image as the data they encrypt. That is the pairing §7 keeps out of
+the app-level backups. Anyone who can restore the snapshot can read
+everything, so protect the OVHcloud account itself, with two-factor sign-in
+and as few people as possible.
+
+**What the owner supplies.** The script generates every secret it can and asks
+for these:
+
+- `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` (the secret
+  **value**), from the Entra app registration (§5).
+- `VITE_ALLOWED_EMAILS`: staging's allow-list. ADR-0007 called it a subset of
+  users, and the template's `*@contoso.com` counts as missing.
+- `ANTHROPIC_API_KEY`.
+- Optionally, the private tier: `VERDA_INFERENCE_ENDPOINT`,
+  `VERDA_INFERENCE_API_KEY` and `SMALL_LLM_BASE_URL` (all three or none, both
+  URLs ending in `/v1`), plus `SMALL_LLM_API_KEY` and `USE_VERDA_INFERENCE`.
+- `--hostname` and `--acme-email` on the command line, and `--ssh-port` if you
+  want the port moved.
+- The Entra redirect URI `https://<fqdn>/api/auth/callback`, admin consent for
+  the Graph scopes, and the client secret's expiry date. The `hostname` stage
+  prints the exact steps (§5).
+- The key escrow (§7): copy the three keys off the box from your own terminal,
+  then re-run with `--keys-escrowed`. The marker stores a hash of the keys, so
+  a changed key needs a new escrow.
+- Which graph staging starts with: the public seed (the default), or an org
+  graph export copied onto the box and passed as `--seed-file`. That export
+  holds personal data, so it must never be committed.
+- In the Control Panel: the edge Network Firewall rules and the backup choice
+  above.
+
+**How the VPS differs from §§1, 2 and 4:**
+
+- **§1, disk encryption.** Nothing here sets up a substitute for disk
+  encryption at VM creation. The app's own key covers the Postgres columns
+  only.
+- **§2, firewall.** There is no NSG. Docker publishes ports through its own NAT
+  rules, which divert packets before `ufw` sees them, so `ufw` does not guard a
+  Docker-published port at all
+  ([Docker: packet filtering and firewalls](https://docs.docker.com/engine/network/packet-filtering-firewalls/)).
+  The overlay's `127.0.0.1` binds keep everything except Caddy private. The
+  script checks that intent before boot and checks the result with `ss`
+  afterwards. The edge Network Firewall above sits in front of both, for IPv4.
+- **§4, the hostname.** A company subdomain is preferable to the provider's
+  default `vps-*.vps.ovh.net` name. Let's Encrypt allows 50 certificates per
+  registered domain per 7 days and takes the registered domain from the Public
+  Suffix List ([rate limits](https://letsencrypt.org/docs/rate-limits/)). The
+  list carries `*.hosting.ovh.net` and `*.webpaas.ovh.net` but not
+  `vps.ovh.net` (checked 2026-10-03, list version 2026-10-01). So every
+  `vps.ovh.net` name shares one limit, `ovh.net`, with every other OVHcloud
+  customer using one.
+
+**What the script was tested against, and what it was not.** It was tested on
+2026-10-03, in throwaway Ubuntu 26.04 containers, never on the VPS.
+`scripts/bootstrap-staging.test.sh` runs in CI. It has no daemon and no root,
+and it pins the gates: the listener check, the gateway pin, `dynamic-tools`,
+secrets that are never printed or regenerated, the boot gate's `.env` checks,
+the escrow marker, the key check, the port move and the jail values. Each pin
+was shown to go red by a mutation. The real stages ran on amd64:
+
+- the SSH hardening, followed by a refused password login;
+- the two-run port move, through Ubuntu's own `sshd-socket-generator`, with a
+  key login on each port;
+- the Docker install from the `resolute` suite (Docker 29.8.2, Compose 5.6.0);
+- the checkout, `.env` and hostname stages, with a re-run that leaves `.env`
+  byte-identical.
+
+`ufw` and the Compose-rendered boot gates ran natively on arm64, because
+neither survives amd64 emulation. Not tested: anything that needs systemd as
+PID 1 or a Docker daemon. That covers the socket restart and `fail2ban` on a
+real host, the image build, `up`, ACME, the smoke checks against a live stack,
+the edge firewall and rescue mode. The first real run is the test of those.
+
+**Follow-ups this deliberately leaves open:**
+
+- CI that builds the image and pushes it to a private registry, replacing the
+  build on the box.
+- Mirroring the pinned gateway image into that registry. No upstream tag names
+  the pinned digest, so today the deploy depends on Docker Hub continuing to
+  serve it.
+- Dev, as a clone of staging over shared data (the owner's intended shape).
+- Prod.
+
+ADR-0008 records all four.
 
 ## What is not true of this deployment
 

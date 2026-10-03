@@ -70,6 +70,18 @@ jobs:
         working-directory: .
         run: scripts/import-neo4j.test.sh
 
+      # Pins what decides whether the staging VPS is safe to boot
+      # (scripts/bootstrap-staging.sh): the public-listener check, the gateway
+      # digest-pin gate, secrets generated but never printed or regenerated,
+      # the boot gate's .env checks, the escrow marker and the anti-lockout key
+      # check. Shims for sudo/docker/uname; no daemon, no root. ShellCheck is
+      # preinstalled on ubuntu-latest.
+      - name: Shell tests (staging bootstrap)
+        working-directory: .
+        run: |
+          shellcheck -x scripts/bootstrap-staging.sh scripts/bootstrap-staging.test.sh
+          scripts/bootstrap-staging.test.sh
+
       - run: pnpm typecheck
 
       - run: pnpm lint

@@ -2,11 +2,12 @@
  * json-repair: the branches the app-side suites (`json-repair.test.ts`,
  * `json-repair-unescaped-content.test.ts`) never reach — escapes and empty
  * containers inside the unescaped-content strategy, where it DECLINES, and
- * the bracketed-literal repair's nested / quoted / refused shapes (#407), and
- * the last-resort single-key handler's refusal of a multi-member object (#408).
+ * the bracketed-literal repair's nested / quoted / refused shapes (#407), the
+ * last-resort single-key handler's refusal of a multi-member object (#408),
+ * and which `, word:` the key-quoting step reads as a key (#453).
  *
  * Each test names the source mutation that reddens it; every one was run
- * (#407 and #408 PR bodies, mutation tables). The colon check in `readObject` has no
+ * (#407, #408 and #453 PR bodies, mutation tables). The colon check in `readObject` has no
  * test: `readString(':')` only closes a key on a `"` followed by `:`, so that
  * check cannot be reached and no input can redden a mutation of it.
  */
@@ -128,8 +129,8 @@ describe('bracketed values in the lenient chain', () => {
 //   {"a": "x "y" z", "b": }   → { a: '"x "y" z", "b":' }
 //   {"a": "x "y" z" "b": 1}   → { a: '"x "y" z" "b": 1' }
 //   {a: [x,,y], b: 1}         → { a: '[x,,y], b: 1' }
-// It now declines, so the call throws: `actorCritic` retries it; `simpleLoop`
-// ends the loop with a recoverable `Invalid tool_args JSON` error.
+// It now declines, so the call throws, and both loops feed that back to the
+// model as a recovery round (#437).
 describe('last-resort single-key handler (#408)', () => {
   // Mutation M1: drop `&& !holdsSiblingMember(value)` from the handler → all
   // three collapse into `a` and return.
@@ -197,15 +198,114 @@ describe('last-resort single-key handler (#408)', () => {
   // The price of declining rather than guessing, pinned so it is visible: a
   // label predicate or label write AFTER a comma is indistinguishable from a
   // sibling key, and so is a quoted word followed by a colon, so values the
-  // old handler got right now throw. That is NOT a retry everywhere:
-  // `actorCritic` retries it; `simpleLoop` ends the loop with a recoverable
-  // `Invalid tool_args JSON` error — and every Cypher-producing agent is a
-  // `simpleLoop`.
+  // old handler got right now throw. Each throw costs a recovery round (#437),
+  // and by default a second unusable answer in a row ends the loop.
   // Mutation: M1 or M2 above → the two Cypher values return one key again;
   // M1, M4 or M6 → the Python one does.
   it('declines `, b:Label`, label writes and `"y":` too — the cost of not guessing', () => {
     expect(() => repairJson(`{query: MATCH (a)-[r]-(b) RETURN a, b:Person}`)).toThrow()
     expect(() => repairJson(`{query: MATCH (a)-[r]->(b) SET a:Customer, b:Vendor}`)).toThrow()
     expect(() => repairJson(`{"code": "if x == "y":\n    print("a", b)"}`)).toThrow()
+  })
+})
+
+// #453: the lenient chain's key-quoting step quoted EVERY `, ident:` as a key,
+// so a `, word:` inside one unquoted value split it into two keys. It runs
+// before the last-resort handler, so #408's decline never saw these. Output
+// before the fix, recorded 2026-10-03 on main (0a61419a):
+//   {query: sites like https://a.com, https://b.com} → { query: 'sites like https://a.com', https: '//b.com' }
+//   {query: MATCH (a) RETURN a, b:Person}            → { query: 'MATCH (a) RETURN a', b: 'Person' }
+// A key after a comma is now quoted only when its colon is followed by
+// whitespace or by the start of a JSON value. A colon glued to a word or a
+// path is content, and the steps below keep the value whole or decline it.
+describe('key-quoting after a comma (#453)', () => {
+  // Mutation K1: restore the old comma branch (no lookahead) → `https` is
+  // quoted as a key and the value splits. Mutation K2: drop `(?!\/\/)` from
+  // MEMBER_START → the last-resort handler declines and the call throws.
+  it('keeps a value holding `, https://` whole', () => {
+    expect(repairJsonTracked(`{query: sites like https://a.com, https://b.com}`)).toEqual({
+      args: { query: 'sites like https://a.com, https://b.com' },
+      repair: { strategy: 'lenient-tokens' },
+    })
+  })
+
+  // K1 → the second URL becomes a key `https` and the call returns three keys.
+  // No step can tell where the URL list ends and `depth` begins, so it throws.
+  it('declines a URL list followed by a genuine sibling rather than splitting it', () => {
+    expect(() => repairJson(`{urls: https://a.com, https://b.com, depth: 2}`)).toThrow()
+  })
+
+  // K1 → both split into `query` + `b` again. #408 declines the same value
+  // when the Cypher holds a relationship pattern; before this fix, the same
+  // value without one came back split.
+  it('declines `, b:Label` whether or not the Cypher holds a relationship pattern', () => {
+    expect(() => repairJson(`{query: MATCH (a) RETURN a, b:Person}`)).toThrow()
+    expect(() => repairJson(`{query: MATCH (a) SET a:Customer, b:Vendor}`)).toThrow()
+  })
+
+  // What key-quoting is FOR still works: a genuinely unquoted key after a
+  // comma. The second row is the one multi-key shape the local `.harness-logs`
+  // corpus holds. Each row pins one branch of the lookahead; its mutation
+  // drops that branch, the key is no longer quoted, and the call throws.
+  it.each([
+    [
+      'K3 `\\s`',
+      `{query: movies in Brussels, limit: 5}`,
+      { query: 'movies in Brussels', limit: 5 },
+    ],
+    [
+      'K3 `\\s`',
+      `{name: graph_web_analyzer, servers: [memory, web_search]}`,
+      { name: 'graph_web_analyzer', servers: ['memory', 'web_search'] },
+    ],
+    ['K4 `"`', `{query:movies,mode:"fast"}`, { query: 'movies', mode: 'fast' }],
+    ['K5 `[`', `{name:x,servers:[a, b]}`, { name: 'x', servers: ['a', 'b'] }],
+    ['K6 `{`', `{query:x,filter:{status: open}}`, { query: 'x', filter: { status: 'open' } }],
+    ['K7 digit', `{query:movies,limit:5}`, { query: 'movies', limit: 5 }],
+    ['K8 `-?`', `{query:movies,offset:-1}`, { query: 'movies', offset: -1 }],
+    ['K9 literal', `{query:x,verbose:true}`, { query: 'x', verbose: true }],
+  ])('still quotes a genuine unquoted key after a comma (%s): %s', (_branch, input, expected) => {
+    expect(repairJson(input)).toEqual(expected)
+  })
+
+  // Mutation K10: drop the `\b` after `true|false|null` → `nullable` reads as
+  // the literal `null`, `b` is quoted as a key and the value splits.
+  it('does not read a word that only starts with a literal as a value', () => {
+    expect(() => repairJson(`{query: MATCH (a) RETURN a, b:nullable}`)).toThrow()
+  })
+
+  // The limit of the fix, pinned so it stays visible: to this step a colon
+  // followed by a space separates a key, because `{query: movies, limit: 5}`
+  // reads exactly the same way. A value whose own text holds `, word: ` still
+  // splits. Mutation K3 (drop `\s`) turns this call into a throw.
+  it('still splits a value at `, word: ` with a space — the residual this fix leaves', () => {
+    expect(repairJson(`{code: lambda a, b: a + b}`)).toEqual({ code: 'lambda a', b: 'a + b' })
+  })
+
+  // Mutation R3: widen MEMBER_START's `(?!\/\/)` to `(?!\/)` → `path` folds
+  // into `a` as 'x, path:/work/in' and the call returns.
+  it('declines a genuine sibling whose colon is glued to a path', () => {
+    expect(() => repairJson(`{a: x, path:/work/in}`)).toThrow()
+  })
+
+  // main: { query: 'SELECT id', created_at: ':date FROM orders' }.
+  // Mutation R5: add `:` to the lookahead's class → it splits again.
+  it('declines a `::` cast after a comma rather than splitting it', () => {
+    expect(() => repairJson(`{query: SELECT id, created_at::date FROM orders}`)).toThrow()
+  })
+
+  // Residual. Mutation K4 (drop `"` from the lookahead) turns it into a throw.
+  it('still splits at a glued colon followed by a value start', () => {
+    expect(repairJson(`{query: site:example.com, intitle:"neo4j"}`)).toEqual({
+      query: 'site:example.com',
+      intitle: 'neo4j',
+    })
+  })
+
+  // The price of the `//` exemption. Mutation K2 turns it into a throw.
+  it('merges a glued sibling whose value starts with `//`', () => {
+    expect(repairJson(`{q: x, src://cdn.example.com/a.js}`)).toEqual({
+      q: 'x, src://cdn.example.com/a.js',
+    })
   })
 })

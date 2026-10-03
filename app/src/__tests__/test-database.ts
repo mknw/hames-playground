@@ -170,8 +170,9 @@ export function skipWithoutDatabase(
   if (available) return
   if (env[REQUIRE_DB]) {
     throw new Error(
-      `[test-db] ${REQUIRE_DB} is set, so a DB-backed test may not skip. ` +
-        "This test's file could not reach Postgres; its warning is above.",
+      `[test-db] ${REQUIRE_DB} is set, so a DB-backed test may not skip. Either this ` +
+        "file's probe could not reach Postgres (its warning is above), or the condition " +
+        'passed to skipWithoutDatabase is wrong.',
     )
   }
   ctx.skip()

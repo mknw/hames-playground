@@ -89,7 +89,10 @@ Every combinator takes patterns and returns a pattern, so they nest freely:
 
 Resume and continue are the same mechanism: `resumeHarness(serialized, patterns, approved)`
 after an approval gate, `continueSession(serialized, patterns, newInput)` for the
-next turn of a conversation.
+next turn of a conversation. An approval lasts for the run it resumes:
+`continueSession` clears `approved`, so a gate reached on a later turn asks
+again. Within that run it is a bare boolean, so every gate the run reaches reads
+the same answer (#433).
 
 ---
 
@@ -344,7 +347,7 @@ The exports map:
 | `.`          | the barrel: patterns, combinators, the context/context-event API, `Tools()`, transports, `LLMCallError` |
 | `./patterns` | the pattern factories on their own (`router`, `simpleLoop`, `actorCritic`, …)                           |
 | `./guard`    | the injection guard's deterministic sanitizer, import-free on its own                                   |
-| `./*`        | any package file by path (deep imports, e.g. `@hames-ai/harness-patterns/tool-transport.server`)           |
+| `./*`        | any package file by path (deep imports, e.g. `@hames-ai/harness-patterns/tool-transport.server`)        |
 
 The package publishes to npm (`pnpm publish`, which rewrites `workspace:`
 specifiers at pack time); inside this workspace the app and the Docker image

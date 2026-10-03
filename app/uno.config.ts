@@ -351,6 +351,19 @@ export default defineConfig({
         .prose-chat h1 { font-size: 1.25em; }
         .prose-chat h2 { font-size: 1.15em; }
         .prose-chat h3 { font-size: 1.05em; }
+        /* An image the chat sanitizer refused to load (lib/sanitize-html.ts):
+           inert text standing where the <img> was. Dashed so it reads as
+           "something was here" rather than as a chip or a control, and
+           break-all because what it shows is usually one long URL. */
+        .prose-chat .blocked-image {
+          display: inline-block;
+          padding: 0.1em 0.5em;
+          border: 1px dashed var(--ui-border-secondary);
+          border-radius: 4px;
+          color: var(--ui-text-secondary);
+          font-size: 0.85em;
+          word-break: break-all;
+        }
 
         /* Thinking/reasoning collapsible */
         .think-root {

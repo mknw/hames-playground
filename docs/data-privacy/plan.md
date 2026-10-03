@@ -216,6 +216,11 @@ Against that:
   the `users` and `auth_sessions` profile columns and the `routines` prompt are
   AES-256-GCM encrypted under `DATA_ENCRYPTION_KEY`, so a dump yields
   ciphertext. Redis and Neo4j are unchanged.
+- ~~**A rendered answer could send conversation data off-site**: any image in
+  it loaded on render, from any host.~~ Addressed (#415 Decision 13): the chat
+  sanitizer loads an image only from a `data:` raster or the Data Stash
+  download route, with `img-src 'self' data: blob:` as the backstop
+  (`app/src/lib/sanitize-html.ts`, `app/src/lib/security-headers.ts`).
 - The committed compose published Postgres, Redis and Neo4j on `0.0.0.0` with
   password `password`. It now binds every port to `127.0.0.1` and reads both
   database passwords from the root `.env` (`${VAR:?}`) — but an existing laptop

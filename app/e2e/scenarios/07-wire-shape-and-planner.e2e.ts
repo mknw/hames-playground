@@ -32,7 +32,7 @@
  * ## Known gap, stated rather than papered over
  *
  * `ActorController` and `Critic` are NOT exercised anywhere in this suite. The
- * only agents that use `actorCritic` are the two sandbox agents, which need a
+ * only agent that uses `actorCritic` is the sandbox agent, which needs a
  * container runtime — so the pattern whose retry path #263 actually broke is
  * still only covered by the template audit and the evals. Closing that needs a
  * sandbox fake, which is a larger piece of work than this suite.

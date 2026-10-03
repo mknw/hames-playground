@@ -43,17 +43,17 @@ const APP_ROOT = resolve(process.cwd())
 const AGENTS_PKG = resolve(APP_ROOT, '../packages/agents')
 const AGENTS_DIR = resolve(AGENTS_PKG, 'agents')
 
-/** The seven files that carried the directive before the move (the two
+/** The files that carried the directive before the move (the two
  *  exceptions — title-generator and graph-schema — deliberately never did;
- *  title-generator's comment records why). */
+ *  title-generator's comment records why). There were seven; the two sandbox
+ *  agents among them became one, `sandbox.server.ts`, on 2026-10-03. */
 const STRIPPED = [
   'search.server.ts',
   'microsoft-365.server.ts',
   'neo4j-fewshots.server.ts',
-  'sandbox-session.server.ts',
   'general.server.ts',
   'retriever-agent.server.ts',
-  'flavoured-sandbox.server.ts',
+  'sandbox.server.ts',
 ]
 
 /** A top-of-module directive, in either quote style. */
@@ -77,15 +77,15 @@ describe('the strip is complete', () => {
     expect(offenders).toEqual([])
   })
 
-  it('the seven files that used to carry one still exist (the strip did not drop them)', () => {
+  it('the files that used to carry one still exist (the strip did not drop them)', () => {
     const present = readdirSync(AGENTS_DIR).filter((f) => f.endsWith('.server.ts'))
     for (const f of STRIPPED) expect(present).toContain(f)
   })
 
   it('the strip is not a load-bearing regression: every moved module still guards itself', () => {
     // The directives were vestigial; the runtime guard that actually keeps a
-    // module off the client is `assertServerOnImport`. All NINE .server.ts in
-    // the package call it at module load: the seven stripped files gained it
+    // module off the client is `assertServerOnImport`. Every .server.ts in
+    // the package calls it at module load: the stripped files gained it
     // (0 → 1 — the directive was their only guard), and `graph-schema` /
     // `title-generator` already had it on main (1 → 1). Line-anchored, so a
     // commented-out call does not pass the pin.

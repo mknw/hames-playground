@@ -252,7 +252,7 @@ overlaid, and five compile-checked composition examples — is
 | [src/lib/harness-client/README.md](src/lib/harness-client/README.md)           | Session lifecycle, the server-action API, graph extraction, the Neo4j enricher |
 | [../packages/harness-patterns/SPEC.md](../packages/harness-patterns/SPEC.md)   | hames API reference and design spec                                            |
 | [../packages/harness-patterns/GUIDE.md](../packages/harness-patterns/GUIDE.md) | Developer guide — composition model, writing a pattern, the tool seam          |
-| [../packages/agents/README.md](../packages/agents/README.md)                   | The six agent definitions and three helpers, `AgentDeps`, the host overlay     |
+| [../packages/agents/README.md](../packages/agents/README.md)                   | The five agent definitions and three helpers, `AgentDeps`, the host overlay    |
 | [../packages/harness-baml/README.md](../packages/harness-baml/README.md)       | The LLM seam — BAML corpus, adapters, role→client routing                      |
 | [../docs/tutorials/README.md](../docs/tutorials/README.md)                     | Task-shaped tutorials for building on the `@hames-ai` packages                 |
 | [../docs/testing/pyramid.md](../docs/testing/pyramid.md)                       | The four test layers and the one command that runs three of them               |

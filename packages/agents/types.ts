@@ -159,6 +159,14 @@ export interface AgentDefinition {
   /** Server namespaces this agent uses */
   servers: string[]
   /**
+   * True when this agent's chain runs in a sandbox (`deps.withSandbox`).
+   * Absent means it does not. A declaration rather than a probe, because the
+   * truth (the built pattern graph) costs a full `createPatterns` to read; the
+   * reference host greys out its Sandbox tab for agents without one, and pins
+   * this flag against the built graph for every agent it registers.
+   */
+  usesSandbox?: boolean
+  /**
    * Factory function that creates the pattern chain. Receives the sessionId
    * so per-conversation context can be loaded inside the pattern closures,
    * plus the host's `AgentDeps` bag — the app-side supplies the composition

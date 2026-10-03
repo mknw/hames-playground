@@ -66,7 +66,9 @@ const withSandbox = vi.fn((_config: { tenantId?: unknown; skills?: unknown }) =>
 const enrichNeo4jResult = vi.fn()
 // The skills resolver (#415) is observed at its seam: what matters here is
 // WHO it is asked for, not what the database holds.
-const resolveSandboxSkills = vi.fn(async (_userId: string | null) => [])
+const resolveSandboxSkills = vi.fn(
+  async (_userId: string | null, _opts: { includeGlobal: boolean }) => [],
+)
 vi.mock('../../../lib/skills/sandbox-skills.server', () => ({ resolveSandboxSkills }))
 
 vi.mock('@hames-ai/harness-patterns/retriever', () => ({ createRedisBackend }))
@@ -189,14 +191,43 @@ describe('the bag the composition root supplies is the bag the moved factories r
     const resolve = config.skills as () => Promise<unknown>
 
     await resolve()
-    expect(resolveSandboxSkills).toHaveBeenLastCalledWith(null)
+    expect(resolveSandboxSkills).toHaveBeenLastCalledWith(null, { includeGlobal: false })
+    await runWithRequestContext({ userId: 'owner-1', sessionId: 's', attended: true }, async () => {
+      await resolve()
+    })
+    expect(resolveSandboxSkills).toHaveBeenLastCalledWith('owner-1', { includeGlobal: true })
+    await runWithRequestContext({ userId: 'owner-2', sessionId: 's', attended: true }, async () => {
+      await resolve()
+    })
+    expect(resolveSandboxSkills).toHaveBeenLastCalledWith('owner-2', { includeGlobal: true })
+  })
+
+  // Owner decision 2026-10-03: "Routines can mount private skills, not global
+  // ones for now." Read per run, from the same scope as the user — the chain is
+  // cached per conversation, and a routine's run reuses nothing an interactive
+  // one decided. A scope that does not SAY it is attended is not: the flag is a
+  // positive claim, so a new entry point that forgets it mounts less, not more.
+  it('asks for global skills only when the run in scope is ATTENDED', async () => {
+    const { runWithRequestContext } =
+      await import('../../../lib/harness-client/request-user.server')
+    const bag = agentDeps()
+    bag.withSandbox!({ id: 'x', sessionId: 's' })(undefined as never)
+    const resolve = withSandbox.mock.calls[0][0].skills as () => Promise<unknown>
+
+    await runWithRequestContext(
+      { userId: 'owner-1', sessionId: 's', attended: false },
+      async () => {
+        await resolve()
+      },
+    )
+    expect(resolveSandboxSkills).toHaveBeenLastCalledWith('owner-1', { includeGlobal: false })
     await runWithRequestContext({ userId: 'owner-1', sessionId: 's' }, async () => {
       await resolve()
     })
-    expect(resolveSandboxSkills).toHaveBeenLastCalledWith('owner-1')
-    await runWithRequestContext({ userId: 'owner-2', sessionId: 's' }, async () => {
+    expect(resolveSandboxSkills).toHaveBeenLastCalledWith('owner-1', { includeGlobal: false })
+    await runWithRequestContext({ userId: 'owner-1', sessionId: 's', attended: true }, async () => {
       await resolve()
     })
-    expect(resolveSandboxSkills).toHaveBeenLastCalledWith('owner-2')
+    expect(resolveSandboxSkills).toHaveBeenLastCalledWith('owner-1', { includeGlobal: true })
   })
 })

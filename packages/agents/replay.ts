@@ -19,6 +19,7 @@ import type {
   AssistantMessageEventData,
   UserMessageEventData,
   ErrorEventData,
+  WarningEventData,
 } from '@hames-ai/harness-patterns'
 
 export interface ReplayedMessage {
@@ -66,6 +67,26 @@ export function errorBubble(data: ErrorEventData): {
   }
 }
 
+/**
+ * The presentation of one `warning` event — a side task that failed while the
+ * turn carried on (#420) — as the same amber bubble a recoverable error and a
+ * Stop use: what did not happen as the content, what the turn did instead as
+ * the hint. Shared by the live stream and replay for {@link errorBubble}'s
+ * reason. No `patternId`: "Warning in compactBulkData" names an internal, and
+ * the sentence already says which task it was.
+ */
+export function warningBubble(data: WarningEventData): {
+  role: 'warning'
+  content: string
+  hint?: string
+} {
+  return {
+    role: 'warning',
+    content: data.message ?? '',
+    ...(data.fallback ? { hint: data.fallback } : {}),
+  }
+}
+
 export function replayMessages(serializedContext: string): ReplayedMessage[] {
   let parsed: { events?: ContextEvent[] }
   try {
@@ -106,6 +127,15 @@ export function replayMessages(serializedContext: string): ReplayedMessage[] {
         timestamp: ev.ts,
         ...(ev.patternId !== undefined ? { patternId: ev.patternId } : {}),
         ...errorBubble(ev.data as ErrorEventData),
+      })
+    } else if (ev.type === 'warning') {
+      // Always committed, like errors — and the only record that a side task
+      // failed. Replayed so a warning written AFTER the stream closed (the
+      // post-turn summaries pass) is still seen: this is where it first shows.
+      out.push({
+        id: ev.id ?? `replay-${out.length}`,
+        timestamp: ev.ts,
+        ...warningBubble(ev.data as WarningEventData),
       })
     }
   }

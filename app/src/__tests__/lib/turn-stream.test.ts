@@ -335,6 +335,39 @@ describe('runTurn — effects', () => {
     expect(rec.messages.at(-1)?.content).toBe('Here is your answer.')
   })
 
+  // #420: a side task's warning arrives as an ordinary message frame and is
+  // painted as the amber bubble; the turn is still `done` and still answered.
+  // Mutation: delete the `evt.type === 'warning'` branch → no bubble.
+  it('paints a warning event inline, and the turn still lands on done', async () => {
+    fetchMock.mockResolvedValue(
+      sseResponse([
+        message({
+          type: 'warning',
+          patternId: 'title-gen',
+          ts: 1,
+          data: {
+            task: 'title',
+            message: 'The conversation title could not be generated.',
+            fallback: 'It is named after the start of your first message.',
+            error: 'connect ECONNREFUSED 127.0.0.1:8095',
+          },
+        }),
+        done(),
+      ]),
+    )
+    const rec = recorder()
+    const result = await runTurn(request(), rec.sink)
+
+    expect(rec.messages[0]).toMatchObject({
+      role: 'warning',
+      content: 'The conversation title could not be generated.',
+      hint: 'It is named after the start of your first message.',
+    })
+    expect(result.outcome).toBe('done')
+    expect(result.state).toEqual({ status: 'done' })
+    expect(rec.messages.at(-1)?.content).toBe('Here is your answer.')
+  })
+
   it('publishes the final context and finishes the progress bar exactly once', async () => {
     const context = { events: [{ type: 'user_message', ts: 1 }] } as unknown as UnifiedContext
     fetchMock.mockResolvedValue(sseResponse([done({ context })]))

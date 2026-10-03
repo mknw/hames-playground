@@ -18,6 +18,7 @@ import type {
   IntentCompactedEventData,
   PlanCreatedEventData,
   ContentSanitizedEventData,
+  WarningEventData,
 } from '../types'
 
 export function getEventPreview(type: EventType, data: unknown): string {
@@ -76,6 +77,10 @@ export function getEventPreview(type: EventType, data: unknown): string {
       const rules = [...new Set(d.findings.map((f) => f.rule))]
       const head = `${d.tool}: ${d.findings.length} neutralized (${rules.join(', ')})`
       return head.length > 50 ? head.slice(0, 50) + '...' : head
+    }
+    case 'warning': {
+      const d = data as WarningEventData
+      return d.message.length > 50 ? d.message.slice(0, 50) + '...' : d.message
     }
     case 'pattern_enter':
     case 'pattern_exit':

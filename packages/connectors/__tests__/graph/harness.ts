@@ -82,7 +82,7 @@ export function buildGraphHarness(): GraphHarness {
   }
   const storeDocument = vi.fn()
   const loadStore = vi.fn(async () => ({ storeDocument, maxContentBytes: MAX_CONTENT_BYTES }))
-  const ingest = vi.fn(async () => null)
+  const ingest = vi.fn(async (): Promise<unknown> => ({ status: 'indexed' }))
 
   const registry = createAppToolRegistry({
     resolveContext: {
@@ -130,7 +130,7 @@ export function buildGraphHarness(): GraphHarness {
       storeDocument,
       maxContentBytes: MAX_CONTENT_BYTES,
     }))
-    ingest.mockResolvedValue(null)
+    ingest.mockResolvedValue({ status: 'indexed' })
   }
 
   return {

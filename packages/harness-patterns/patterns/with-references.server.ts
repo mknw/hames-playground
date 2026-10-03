@@ -24,6 +24,7 @@ import type {
   WithReferencesConfig,
   UserMessageEventData,
   AssistantMessageEventData,
+  WarningEventData,
 } from '../types'
 import type { PriorResult } from '../types'
 import { LLMCallError } from '../types'
@@ -247,17 +248,43 @@ export function withReferences<T>(
           }
         } else {
           const recentMessages = getRecentMessages(view, RECENT_MESSAGE_COUNT)
-          const result = await selector({ intent, recentMessages, candidates })
-          attached = pickCandidatesByIds(candidates, result.selected).slice(0, maxRefs)
-          cacheSet(cacheKey, { selected: result.selected, reasoning: result.reasoning })
+          // The selector gets its OWN catch (#420). It used to share the one
+          // below, which also wraps the inner pattern — so a selector that
+          // threw (a describe-tier call: the summarizer being down is enough)
+          // skipped the wrapped pattern entirely and the route did no work at
+          // all, while `DEFAULT_ERROR_SEVERITY` described exactly the opposite:
+          // "the inner pattern ran without curated prior results". Now it does.
+          // Nothing is attached, nothing is cached (the next turn asks again),
+          // and a `warning` says so.
+          let result: Awaited<ReturnType<typeof selector>> | undefined
+          try {
+            result = await selector({ intent, recentMessages, candidates })
+          } catch (error) {
+            trackEvent(
+              scope,
+              'warning',
+              {
+                task: 'reference_selection',
+                message: 'Earlier results could not be ranked for reuse.',
+                fallback: 'This step ran without earlier results attached.',
+                error: error instanceof Error ? error.message : String(error),
+              } satisfies WarningEventData,
+              true,
+              error instanceof LLMCallError ? error.llmCall : undefined,
+            )
+          }
+          if (result) {
+            attached = pickCandidatesByIds(candidates, result.selected).slice(0, maxRefs)
+            cacheSet(cacheKey, { selected: result.selected, reasoning: result.reasoning })
+          }
           trackPayload = {
             candidates: candidates.map((c) => ({
               ref_id: c.ref_id,
               tool: c.tool,
               summary: c.summary,
             })),
-            selected: result.selected.slice(0, maxRefs),
-            reasoning: result.reasoning,
+            selected: result ? result.selected.slice(0, maxRefs) : [],
+            reasoning: result?.reasoning ?? '',
           }
         }
       }

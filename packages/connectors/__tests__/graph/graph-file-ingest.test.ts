@@ -2,9 +2,10 @@
  * `graph_file_ingest` — the Microsoft Graph → Data Stash bridge (#110).
  *
  * Covers the contract the model and the stash both depend on: metadata before
- * download (so the size guard can refuse first), text vs. binary storage,
- * fire-and-forget ingest, a fail-closed refusal without a conversation in scope,
- * and no credential/session field in the advertised schema.
+ * download (so the size guard can refuse first), text vs. binary storage, an
+ * index outcome that says whether the copy is SEARCHABLE (#420), a fail-closed
+ * refusal without a conversation in scope, and no credential/session field in
+ * the advertised schema.
  *
  * Moved co-located with the module (#225 PR-C2): the stash is now the injected
  * `stash` seam rather than two mocked host modules, and the GraphAuthRequired
@@ -14,7 +15,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { buildGraphHarness, MAX_CONTENT_BYTES } from './harness'
 import { GraphAuthRequiredError } from '../../graph/graph-auth'
-import { driveItemPath, shapeDriveItem } from '../../graph/graph-tools.server'
+import {
+  driveItemPath,
+  INGEST_OUTCOME_WAIT_MS,
+  shapeDriveItem,
+} from '../../graph/graph-tools.server'
 
 const h = buildGraphHarness()
 const { runAppTool, appToolDescriptions } = h
@@ -30,6 +35,8 @@ interface IngestResultShape {
   mimeType: string
   size: number
   ingesting: boolean
+  indexStatus: 'indexed' | 'pending' | 'failed' | 'not_indexed'
+  indexError?: string
   webUrl: string | null
 }
 
@@ -111,7 +118,7 @@ describe('happy path', () => {
     expect(contentCall[2].scopes).toEqual(['Files.Read.All'])
   })
 
-  it('stores text formats as UTF-8 and fires the background ingest', async () => {
+  it('stores text formats as UTF-8 and reports the ingest that indexed it', async () => {
     graphAnswers(FILE_META)
     const res = await runAppTool('graph_file_ingest', { item_id: '01ABC' })
 
@@ -130,6 +137,7 @@ describe('happy path', () => {
       mimeType: 'text/markdown',
       size: 11,
       ingesting: true,
+      indexStatus: 'indexed',
       webUrl: 'https://contoso.sharepoint.com/notes.md',
     })
     // The bytes never travel back to the model.
@@ -151,6 +159,7 @@ describe('happy path', () => {
     // Ingest would only mark it 'failed' (no converter for images).
     expect(ingestStashDocument).not.toHaveBeenCalled()
     expect((res.data as IngestResultShape).ingesting).toBe(false)
+    expect((res.data as IngestResultShape).indexStatus).toBe('not_indexed')
   })
 
   it('ingests a convertible binary (docx) when the converter is enabled', async () => {
@@ -189,6 +198,113 @@ describe('happy path', () => {
     expect((res.data as IngestResultShape).filename).toBe('renamed.csv')
     // No file.mimeType → guessed from the (overridden) filename.
     expect((res.data as IngestResultShape).mimeType).toBe('text/csv')
+  })
+})
+
+// #420: the copy-to-stash path used to answer `ingesting: true` at once and
+// let the index run fail later, where only the server log saw it — an embedder
+// that was not running looked exactly like success to the agent and the person.
+describe('index outcome (#420)', () => {
+  const data = async () =>
+    (await runAppTool('graph_file_ingest', { item_id: '01ABC' })).data as IngestResultShape
+
+  // Mutation: report `indexStatus: 'indexed'` whenever `ingesting` is true
+  // (i.e. ignore the bridge's outcome) → reds here.
+  it('a failed index run is reported as stored-but-not-searchable, with its reason', async () => {
+    graphAnswers(FILE_META)
+    ingestStashDocument.mockResolvedValue({
+      status: 'failed',
+      error: 'Embedding request to local failed: fetch failed',
+    })
+    const res = await runAppTool('graph_file_ingest', { item_id: '01ABC' })
+    // Stored — the tool did its job, so it is not a failed call.
+    expect(res.success).toBe(true)
+    expect(res.data).toMatchObject({
+      documentId: 'doc-1',
+      ingesting: true,
+      indexStatus: 'failed',
+      indexError: 'Embedding request to local failed: fetch failed',
+    })
+  })
+
+  // Mutation: let the rejection propagate (drop the `.then` rejection handler)
+  // → the tool call fails although the file was stored.
+  it('a bridge that rejects is a failed index, not a failed copy', async () => {
+    graphAnswers(FILE_META)
+    ingestStashDocument.mockRejectedValue(new Error('redis went away'))
+    const res = await runAppTool('graph_file_ingest', { item_id: '01ABC' })
+    expect(res.success).toBe(true)
+    expect(res.data).toMatchObject({ indexStatus: 'failed', indexError: 'redis went away' })
+  })
+
+  // Mutation: call `stash.ingest(...)` directly instead of through
+  // `Promise.resolve().then(...)` → the synchronous throw escapes the tool.
+  it('a bridge that throws synchronously is a failed index too', async () => {
+    graphAnswers(FILE_META)
+    ingestStashDocument.mockImplementation(() => {
+      throw new Error('bridge not ready')
+    })
+    const res = await runAppTool('graph_file_ingest', { item_id: '01ABC' })
+    expect(res.success).toBe(true)
+    expect(res.data).toMatchObject({ indexStatus: 'failed', indexError: 'bridge not ready' })
+  })
+
+  // Mutation: a failed outcome with no `error` reported as `failed` with no
+  // `indexError` → the model has nothing to tell the person.
+  it('names a missing reason rather than omitting it', async () => {
+    graphAnswers(FILE_META)
+    ingestStashDocument.mockResolvedValue({ status: 'failed' })
+    expect(await data()).toMatchObject({
+      indexStatus: 'failed',
+      indexError: expect.stringMatching(/no reason/),
+    })
+  })
+
+  // Mutation: drop the timer from the race (await the run alone) → the tool
+  // hangs on a slow run instead of answering `pending`.
+  // Mutation: resolve the bound with 'indexed' → reds on the status.
+  it('a run still going at the bound is reported pending, and keeps going', async () => {
+    vi.useFakeTimers()
+    try {
+      graphAnswers(FILE_META)
+      let finish: (v: unknown) => void = () => {}
+      ingestStashDocument.mockImplementation(() => new Promise((r) => (finish = r)))
+      const call = runAppTool('graph_file_ingest', { item_id: '01ABC' })
+      await vi.advanceTimersByTimeAsync(INGEST_OUTCOME_WAIT_MS)
+      const res = await call
+      expect(res.data).toMatchObject({ ingesting: true, indexStatus: 'pending' })
+      expect(res.data).not.toHaveProperty('indexError')
+      // The run was not cancelled: it is the same promise, still settleable.
+      finish({ status: 'indexed' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // Mutation: `INGEST_OUTCOME_WAIT_MS = 0` → a run that ends just inside the
+  // bound is reported pending.
+  it('a run that ends inside the bound is reported as it ended', async () => {
+    vi.useFakeTimers()
+    try {
+      graphAnswers(FILE_META)
+      ingestStashDocument.mockImplementation(
+        () =>
+          new Promise((r) =>
+            setTimeout(() => r({ status: 'indexed' }), INGEST_OUTCOME_WAIT_MS - 1_000),
+          ),
+      )
+      const call = runAppTool('graph_file_ingest', { item_id: '01ABC' })
+      await vi.advanceTimersByTimeAsync(INGEST_OUTCOME_WAIT_MS)
+      expect((await call).data).toMatchObject({ indexStatus: 'indexed' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('tells the model what each status means, in the advertised description', () => {
+    const def = appToolDescriptions().find((t) => t.name === 'graph_file_ingest')!
+    expect(def.description).toMatch(/indexStatus/)
+    expect(def.description).toMatch(/NOT searchable/)
   })
 })
 

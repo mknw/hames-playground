@@ -24,7 +24,7 @@ import { extractReferences } from '@hames-ai/agents'
 // Imported from the module rather than the barrel: `replay.ts` is deliberately
 // dependency-free (no server-only imports), and the stream handler wants
 // exactly that guarantee.
-import { errorBubble } from '@hames-ai/agents/replay'
+import { errorBubble, warningBubble } from '@hames-ai/agents/replay'
 import { parseChatStream, type DoneEventData, type WarmingEventData } from '~/lib/sse-client'
 import { openChatStream } from '~/lib/api-client'
 import type { Message } from '~/components/ark-ui/ChatMessages'
@@ -34,6 +34,7 @@ import type {
   UnifiedContext,
   ControllerActionEventData,
   ErrorEventData,
+  WarningEventData,
 } from '@hames-ai/harness-patterns'
 import type { HarnessSettings } from '~/lib/settings'
 import type { RunOutcome } from '~/lib/run-registry'
@@ -229,6 +230,14 @@ export async function runTurn(request: TurnRequest, sink: TurnSink): Promise<Tur
           timestamp: new Date(),
           patternId: evt.patternId,
           ...errorBubble(evt.data as ErrorEventData),
+        })
+      } else if (evt.type === 'warning') {
+        // A side task failed and the turn carried on (#420) — same amber
+        // bubble, from the same builder replay uses.
+        sink.appendMessage({
+          id: `warn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          timestamp: new Date(),
+          ...warningBubble(evt.data as WarningEventData),
         })
       }
 

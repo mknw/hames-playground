@@ -262,9 +262,10 @@ describe('compactIntent: cross-turn intent pollution (SA-H3)', () => {
     // The actor must fall back to the raw message ("now delete it"), NOT
     // re-execute the previous brief with real file side-effects.
     expect((result.data as { intent?: string }).intent).toBeUndefined()
-    const errors = result.events.filter((e) => e.type === 'error')
-    expect(errors.length).toBeGreaterThan(0)
-    expect(JSON.stringify(errors[0].data)).toContain('describe model unavailable')
+    // Recorded as a warning since #420 — the failure is a side task's.
+    const warnings = result.events.filter((e) => e.type === 'warning')
+    expect(warnings.length).toBeGreaterThan(0)
+    expect(JSON.stringify(warnings[0].data)).toContain('describe model unavailable')
   })
 
   it('clears the stale intent when the view holds no message to rewrite', async () => {

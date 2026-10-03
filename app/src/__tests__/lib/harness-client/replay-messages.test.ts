@@ -7,8 +7,8 @@
  * chat bubble. Discriminator: `AssistantMessageEventData.final === true`.
  */
 import { describe, it, expect } from 'vitest'
-import { replayMessages, errorBubble } from '@hames-ai/agents/replay'
-import type { ContextEvent, ErrorEventData } from '@hames-ai/harness-patterns'
+import { replayMessages, errorBubble, warningBubble } from '@hames-ai/agents/replay'
+import type { ContextEvent, ErrorEventData, WarningEventData } from '@hames-ai/harness-patterns'
 
 const userMsg = (content: string, ts: number, id: string): ContextEvent => ({
   id,
@@ -232,5 +232,59 @@ describe('error and warning bubbles', () => {
     for (const field of ['hint', 'patternId', 'turnInfo'] as const) {
       expect(bubble[field], `${field} must survive replay`).toBeTruthy()
     }
+  })
+})
+
+/**
+ * #420: a side task that failed while the turn carried on is a `warning`
+ * event, and the post-turn summaries pass writes one AFTER the stream closed —
+ * so replay is the first place that warning can be seen at all.
+ */
+describe('warning events (#420)', () => {
+  const SUMMARIES: WarningEventData = {
+    task: 'result_summaries',
+    message: "None of this turn's 2 tool results could be summarized.",
+    fallback: 'Later turns see their raw output in place of a summary.',
+    error: 'connect ECONNREFUSED 127.0.0.1:8095',
+  }
+  const warningEvt = (data: WarningEventData, ts: number, id: string): ContextEvent => ({
+    id,
+    type: 'warning',
+    ts,
+    patternId: 'compactBulkData',
+    data,
+  })
+
+  // Mutation: delete the `ev.type === 'warning'` branch in `replayMessages` →
+  // the notice vanishes on reload, which for a post-stream warning means it is
+  // never seen.
+  it('replays a warning as the amber bubble, in place', () => {
+    const out = replayMessages(
+      wrap([
+        userMsg('find my file', 1, 'u1'),
+        assistantMsg('Here it is.', 2, 's1', { final: true }),
+        warningEvt(SUMMARIES, 3, 'w1'),
+      ]),
+    )
+    expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'warning'])
+    expect(out[2]).toEqual({
+      id: 'w1',
+      role: 'warning',
+      content: SUMMARIES.message,
+      hint: SUMMARIES.fallback,
+      timestamp: 3,
+    })
+  })
+
+  // Mutation: render `data.error` as the content → the raw failure string,
+  // which can quote a tool result back, lands in a shared transcript.
+  it('shows the sentence and the fallback, never the raw failure', () => {
+    const bubble = warningBubble(SUMMARIES)
+    expect(bubble).toEqual({
+      role: 'warning',
+      content: SUMMARIES.message,
+      hint: SUMMARIES.fallback,
+    })
+    expect(JSON.stringify(bubble)).not.toContain('ECONNREFUSED')
   })
 })

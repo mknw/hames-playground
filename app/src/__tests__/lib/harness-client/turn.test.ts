@@ -78,6 +78,15 @@ const compactBulkData = vi.fn(async (_ctx: unknown, onPersist: () => Promise<voi
   await onPersist()
 })
 
+/** The real one's shape; the id is fixed so a test can find the event it made. */
+const createEvent = vi.fn((type: string, patternId: string, data: unknown) => ({
+  id: 'ev-warning',
+  type,
+  ts: 0,
+  patternId,
+  data,
+}))
+
 vi.mock('@hames-ai/harness-patterns', () => ({
   harness,
   continueSession,
@@ -85,6 +94,7 @@ vi.mock('@hames-ai/harness-patterns', () => ({
   createContext,
   serializeContext,
   compactBulkData,
+  createEvent,
 }))
 
 // ── the run frame: the REAL one, with every frame this runner opens recorded ─
@@ -422,10 +432,15 @@ describe('interactive turns', () => {
     try {
       runFirstTurnTitleGen.mockReturnValue(new Promise(() => {}))
       const onSettled = vi.fn()
-      const turn = runTurnAndPersist(interactive({ onSettled }))
+      const onEvent = vi.fn()
+      const turn = runTurnAndPersist(interactive({ onSettled, onEvent }))
       await vi.advanceTimersByTimeAsync(TITLE_GEN_TIMEOUT_MS)
       await turn
       expect(onSettled).toHaveBeenCalled()
+      // Still running is not failed: it may yet land and be written through,
+      // so nothing is announced. Mutation: treat the cap as a failure (set
+      // `failed = true` in the timer branch) → a warning is sent.
+      expect(onEvent).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
     }
@@ -439,6 +454,75 @@ describe('interactive turns', () => {
       response: 'fresh:hello world, this is long',
     })
     expect(onSettled).toHaveBeenCalled()
+    // A side task: the row is never flipped to 'error' for it.
+    expect(dbSetConversationStatus).not.toHaveBeenCalled()
+  })
+
+  // #420: the title is generated on the describe-tier summarizer, and when that
+  // was down the conversation simply kept its heuristic name — nothing anywhere
+  // but the server log said a call had failed.
+  describe('a title generation that fails (#420)', () => {
+    // Mutation: delete `req.onEvent?.(warning)` → the open stream never
+    // carries it. Mutation: drop the `failed` check (warn on every first turn)
+    // → the success test below reds.
+    it('sends one warning on the still-open stream, BEFORE it closes', async () => {
+      runFirstTurnTitleGen.mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:8095'))
+      const order: string[] = []
+      const onEvent = vi.fn((e: { type: string }) => order.push(`event:${e.type}`))
+      const onSettled = vi.fn(() => order.push('settled'))
+
+      await runTurnAndPersist(interactive({ onEvent, onSettled }))
+
+      expect(onEvent).toHaveBeenCalledTimes(1)
+      expect(onEvent.mock.calls[0][0]).toMatchObject({
+        type: 'warning',
+        patternId: 'title-gen',
+        data: {
+          task: 'title',
+          message: 'The conversation title could not be generated.',
+          error: 'connect ECONNREFUSED 127.0.0.1:8095',
+        },
+      })
+      expect(order).toEqual(['event:warning', 'settled'])
+    })
+
+    // Mutation: delete the `saveSession` after the push → the notice is gone
+    // on reload, which is the only place a post-stream reader could see it.
+    // The turn here has NO tool results, so the trailing compaction persists
+    // nothing (the real `compactBulkData` returns before `onPersist`) — with
+    // tool results its re-save would carry the warning too and hide the gap.
+    it('persists the warning with the conversation, so a reload still shows it', async () => {
+      runFirstTurnTitleGen.mockRejectedValue(new Error('LLM down'))
+      compactBulkData.mockImplementationOnce(async () => {})
+      await runTurnAndPersist(interactive())
+      await flush()
+
+      const withWarning = saveSession.mock.calls.find((call) =>
+        String((call as unknown[])[3]).includes('"type":"warning"'),
+      )
+      expect(withWarning).toBeDefined()
+      expect((withWarning as unknown[]).slice(0, 3)).toEqual(['sess-1', 'user-1', 'search'])
+    })
+
+    it('a failed save of the warning costs the warning, never the turn', async () => {
+      runFirstTurnTitleGen.mockRejectedValue(new Error('LLM down'))
+      saveSession
+        .mockImplementationOnce(async () => {}) // the turn's own save
+        .mockRejectedValueOnce(new Error('db down')) // the warning's
+      const onSettled = vi.fn()
+      await expect(runTurnAndPersist(interactive({ onSettled }))).resolves.toBeDefined()
+      expect(onSettled).toHaveBeenCalled()
+      expect(dbSetConversationStatus).not.toHaveBeenCalled()
+    })
+
+    it('says nothing when a title was generated, or there was nothing to name', async () => {
+      const onEvent = vi.fn()
+      runFirstTurnTitleGen.mockResolvedValue('Quarterly numbers')
+      await runTurnAndPersist(interactive({ onEvent }))
+      runFirstTurnTitleGen.mockResolvedValue(null)
+      await runTurnAndPersist(interactive({ onEvent }))
+      expect(onEvent).not.toHaveBeenCalled()
+    })
   })
 
   // SA-M13. The compaction used to be fired off outside the request handler's

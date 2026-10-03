@@ -416,10 +416,16 @@ describe('compactBulkData', () => {
     expect(onPersist).toHaveBeenCalledOnce()
   })
 
-  it('should survive the batch op itself rejecting', async () => {
+  // Characterised before #420: a REJECTING batch escaped `summarizeBatch` and
+  // `Promise.allSettled` swallowed it, so its items never reached the per-item
+  // fallback — this test pinned both summaries as undefined. A throw now falls
+  // back exactly like a batch that dropped every id.
+  // Mutation: rethrow from the batch catch → both summaries undefined again.
+  it('falls back per item when the batch op itself rejects, and logs the N+1 cost', async () => {
     const { compactBulkData } = await import('@hames-ai/harness-patterns/compactBulkData.server')
 
     mockDescribeBatch.mockRejectedValue(new Error('Model unavailable'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
@@ -438,9 +444,103 @@ describe('compactBulkData', () => {
       }),
     )
 
-    expect((events[1].data as { summary?: string }).summary).toBeUndefined()
-    expect((events[2].data as { summary?: string }).summary).toBeUndefined()
+    expect((events[1].data as { summary?: string }).summary).toBe('Test summary')
+    expect((events[2].data as { summary?: string }).summary).toBe('Test summary')
+    // Every result was recovered, so nothing is missing and nothing is said in
+    // the transcript — the extra cost is a log line.
+    expect(ctx.events.some((e) => e.type === 'warning')).toBe(false)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('falling back per item'))
     expect(onPersist).toHaveBeenCalledOnce()
+    warn.mockRestore()
+  })
+
+  // #420: the summarizer down. The results keep their raw output; what changes
+  // is that the outage is RECORDED, once, before the context is persisted.
+  describe('a summarizer that fails (#420)', () => {
+    const turn = (): ContextEvent[] => [
+      { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
+      toolResult(1),
+      toolResult(2, 'fetch'),
+    ]
+    const compact = async (ctx: UnifiedContext, onPersist = vi.fn(async () => {})) => {
+      const { compactBulkData } = await import('@hames-ai/harness-patterns/compactBulkData.server')
+      await runInFrame(() =>
+        compactBulkData(ctx, onPersist, {
+          describe: mockDescribe,
+          describeBatch: mockDescribeBatch,
+        }),
+      )
+      return onPersist
+    }
+    const warnings = (ctx: UnifiedContext) => ctx.events.filter((e) => e.type === 'warning')
+
+    // Mutation: delete the `ctx.events.push(createEvent('warning', …))` block
+    // → no warning. Mutation: push one per failed CALL → three, not one.
+    it('records ONE warning, persisted with the context, when no result could be summarized', async () => {
+      mockDescribeBatch.mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:8095'))
+      mockDescribe.mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:8095'))
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const ctx = createTestContext(turn())
+      let persistedWithWarning = false
+      await compact(
+        ctx,
+        vi.fn(async () => {
+          persistedWithWarning = warnings(ctx).length === 1
+        }),
+      )
+
+      expect(warnings(ctx)).toHaveLength(1)
+      expect(warnings(ctx)[0]).toMatchObject({
+        patternId: 'compactBulkData',
+        data: {
+          task: 'result_summaries',
+          message: "None of this turn's 2 tool results could be summarized.",
+          fallback: 'Later turns see their raw output in place of a summary.',
+          error: 'connect ECONNREFUSED 127.0.0.1:8095',
+        },
+      })
+      // Mutation: push the warning AFTER `onPersist` → it never reaches storage.
+      expect(persistedWithWarning).toBe(true)
+      // A warning, never an error: nothing here may reach an error reader.
+      expect(ctx.events.some((e) => e.type === 'error')).toBe(false)
+      vi.restoreAllMocks()
+    })
+
+    // Mutation: drop the try/catch in `summarizeOne` → the rejection is
+    // swallowed by allSettled and the warning never fires.
+    it('says so for a lone result on the single-item path', async () => {
+      mockDescribe.mockRejectedValue(new Error('Model unavailable'))
+      const ctx = createTestContext([
+        { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'q' } },
+        toolResult(1),
+      ])
+      await compact(ctx)
+      expect(warnings(ctx)[0]?.data).toMatchObject({
+        message: "This turn's tool result could not be summarized.",
+        error: 'Model unavailable',
+      })
+    })
+
+    // Mutation: compute `missing` as `targets.length` → reads "None of … 2".
+    it('counts only the results that went without', async () => {
+      mockDescribeBatch.mockResolvedValue(summaries({ '1': 'Summary one.' }))
+      mockDescribe.mockRejectedValue(new Error('Model unavailable'))
+      const ctx = createTestContext(turn())
+      await compact(ctx)
+      expect(warnings(ctx)[0]?.data).toMatchObject({
+        message: "1 of this turn's 2 tool results could not be summarized.",
+      })
+    })
+
+    // Mutation: fire the warning on `missing > 0` alone (drop the
+    // `firstFailure` condition) → a blank answer is reported as an outage.
+    it('stays silent when the model answered blank — a thin answer is not an outage', async () => {
+      mockDescribeBatch.mockResolvedValue(new Map())
+      mockDescribe.mockResolvedValue('')
+      const ctx = createTestContext(turn())
+      await compact(ctx)
+      expect(warnings(ctx)).toHaveLength(0)
+    })
   })
 
   it('should split more than MAX_BATCH_ITEMS results across several batches', async () => {

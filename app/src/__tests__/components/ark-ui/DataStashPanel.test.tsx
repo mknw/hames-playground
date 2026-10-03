@@ -448,7 +448,57 @@ describe('DataStashPanel — document chips', () => {
     stubFetch({ documents: [doc({ ingestStatus: 'failed' })] })
     const { container } = await renderPanel()
 
-    expect(container.textContent).toContain('index failed')
+    expect(container.textContent).toContain('not searchable')
+  })
+
+  // #420: the chip used to guess ("is the embedder running?") because the
+  // reason reached only the server log. It is recorded on the document now.
+  // Mutation: render the old fixed tooltip instead of `notSearchable()` → reds.
+  it('says WHY a failed document is not searchable, from the recorded reason', async () => {
+    stubFetch({
+      documents: [
+        doc({
+          ingestStatus: 'failed',
+          ingestError: 'Embedding request to local failed: fetch failed',
+        }),
+      ],
+    })
+    const { container } = await renderPanel()
+
+    const titled = [...container.querySelectorAll('[title]')].map((el) => el.getAttribute('title'))
+    expect(titled).toContain(
+      'Not searchable — indexing failed: Embedding request to local failed: fetch failed',
+    )
+  })
+
+  it('says so when a failed document carries no recorded reason', async () => {
+    stubFetch({ documents: [doc({ ingestStatus: 'failed' })] })
+    const { container } = await renderPanel()
+
+    const titled = [...container.querySelectorAll('[title]')].map((el) => el.getAttribute('title'))
+    expect(titled).toContain('Not searchable — indexing failed: no reason was recorded')
+  })
+
+  // #420: a tool (`graph_file_ingest`) can store a document mid-turn, and an
+  // open panel never re-read its list, so the copy — and a failed index with
+  // it — appeared only after a remount.
+  // Mutation: delete the tool_result `createEffect` → no second list read.
+  it('re-reads the document list when a tool result arrives', async () => {
+    stubFetch({ documents: [] })
+    const [events, setEvents] = createSignal<ContextEvent[]>([])
+    const sessionId = newSession()
+    render(() => (
+      <DataStashPanel events={events()} sessionId={sessionId} onStashAction={noopAction} />
+    ))
+    await settle()
+    const listReads = () =>
+      calls.filter((c) => c.url.startsWith('/api/stash/upload') && !c.init?.method).length
+    const before = listReads()
+
+    setEvents([userMessage(), toolResult('graph_file_ingest')])
+    await settle()
+
+    expect(listReads()).toBe(before + 1)
   })
 
   it('offers download, hide, archive and delete', async () => {

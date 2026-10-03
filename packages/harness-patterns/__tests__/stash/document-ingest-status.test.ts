@@ -138,6 +138,10 @@ describe('ingestStashDocument', () => {
     const res = await ingestStashDocument('s1', 'bin', { callTool: fake.callTool, embedFn })
     expect(res).toBeNull()
     expect((await getDocument('s1', 'bin', fake.callTool))?.ingestStatus).toBe('failed')
+    // #420: the other binary refusal, named as such.
+    expect((await getDocument('s1', 'bin', fake.callTool))?.ingestError).toMatch(
+      /has no text conversion/,
+    )
     expect(fake.hashes.size).toBe(0)
   })
 
@@ -162,6 +166,49 @@ describe('ingestStashDocument', () => {
     // nothing anywhere saying which.
     expect(err).toHaveBeenCalledWith(expect.stringContaining('d2'), 'embedder offline')
     err.mockRestore()
+  })
+
+  // #420: the reason reached the server log and nowhere else, so the panel
+  // guessed ("is the embedder running?") and the tool that stored the file had
+  // already said success. It is recorded on the document now, where both read it.
+  // Mutation: drop `reason` from the failure handler's `markIngestStatus` call
+  // → `ingestError` reads 'unknown error'.
+  it('records WHY it failed on the document, and a later success clears it', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await seed(fake, 'd4', 'some text')
+    const offline = async () => {
+      throw new Error(
+        'Embedding request to local failed: fetch failed (is llama-server --embedding running at http://localhost:8090/v1?)',
+      )
+    }
+    await ingestStashDocument('s1', 'd4', { callTool: fake.callTool, embedFn: offline })
+    const failed = await getDocument('s1', 'd4', fake.callTool)
+    expect(failed).toMatchObject({
+      ingestStatus: 'failed',
+      ingestError: expect.stringContaining('Embedding request to local failed'),
+    })
+
+    // Mutation: make `markIngestStatus` write `ingestError` only on failure
+    // (never `null`) → the stale reason survives the successful retry.
+    const { embedFn } = makeEmbedder('m', 3)
+    await ingestStashDocument('s1', 'd4', { callTool: fake.callTool, embedFn })
+    const indexed = await getDocument('s1', 'd4', fake.callTool)
+    expect(indexed?.ingestStatus).toBe('indexed')
+    expect(indexed).not.toHaveProperty('ingestError')
+    vi.restoreAllMocks()
+  })
+
+  // Mutation: drop the `.slice(0, MAX_INGEST_ERROR_CHARS)` → a 2 000-char
+  // upstream body is stored, tooltipped and handed to a model whole.
+  it('caps a recorded reason, because an upstream error body has no bound', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await seed(fake, 'd5', 'some text')
+    const verbose = async () => {
+      throw new Error('x'.repeat(2_000))
+    }
+    await ingestStashDocument('s1', 'd5', { callTool: fake.callTool, embedFn: verbose })
+    expect((await getDocument('s1', 'd5', fake.callTool))?.ingestError).toHaveLength(500)
+    vi.restoreAllMocks()
   })
 
   // sf-H2: `setDocumentFlags` throws when Redis rejects the write, and it is
@@ -240,6 +287,8 @@ describe('ingestStashDocument — binary conversion', () => {
     const stored = await getDocument('s1', 'pdf2', fake.callTool)
     expect(stored?.ingestStatus).toBe('failed')
     expect(stored?.derivedText).toBeUndefined()
+    // #420: says which of the two binary refusals this is.
+    expect(stored?.ingestError).toMatch(/conversion is not enabled/)
   })
 
   it('marks "failed" (never throws) when conversion errors, stores no derivedText', async () => {

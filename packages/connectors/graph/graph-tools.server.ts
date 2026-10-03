@@ -121,11 +121,34 @@ export interface GraphStashStore {
 export interface GraphStashBridge {
   /** Lazily resolve the stash's storage layer. */
   loadStore(): Promise<GraphStashStore>
-  /** Kick off the background ingest of a stored document — fire-and-forget by
-   *  contract; failures are recorded in the document's ingest status by the
-   *  implementation, not surfaced to the tool result. */
-  ingest(sessionId: string, documentId: string): Promise<unknown>
+  /** Run the chunk→embed→index of a stored document and resolve with how it
+   *  ENDED. The tool waits a bounded time for this ({@link INGEST_OUTCOME_WAIT_MS})
+   *  and reports the outcome; past the bound it leaves the run going and reports
+   *  `pending`. The implementation also records the outcome on the document, so
+   *  the Data Stash panel shows the same thing the tool said (#420). */
+  ingest(sessionId: string, documentId: string): Promise<GraphStashIngestOutcome>
 }
+
+/** How a document's index run ended, as {@link GraphStashBridge.ingest} reports it. */
+export interface GraphStashIngestOutcome {
+  status: 'indexed' | 'failed'
+  /** Why it failed, when it did — the reason recorded on the document. */
+  error?: string
+}
+
+/**
+ * How long `graph_file_ingest` waits for the index run before it answers (#420).
+ *
+ * It used to answer at once with `ingesting: true` and let the run fail later,
+ * in the background, where only the server log saw it — so the agent and the
+ * person both took "copied" to mean "searchable". The failure that prompted the
+ * change, an embedder that was not running, surfaces in milliseconds; a small
+ * document converts and embeds in a few seconds. Fifteen seconds covers both
+ * without letting a slow conversion (the converter allows itself two minutes
+ * for OCR) hold a controller turn hostage: past it the tool says `pending`,
+ * which is true, and the run carries on and records its own outcome.
+ */
+export const INGEST_OUTCOME_WAIT_MS = 15_000
 
 /** Everything the Graph tools close over — supplied by the composition root. */
 export interface GraphConnectorDeps {
@@ -289,8 +312,20 @@ export interface GraphFileIngestResult {
   mimeType: string
   /** Stored size in bytes (original bytes, not the base64 expansion). */
   size: number
-  /** A background chunk→embed→index was started for this document. */
+  /** A chunk→embed→index run was started for this document. Says nothing about
+   *  how it went — read {@link GraphFileIngestResult.indexStatus} for that. */
   ingesting: boolean
+  /**
+   * Whether the stored copy can be SEARCHED, which is a different fact from
+   * whether it was stored (#420):
+   *  - `indexed` — searchable now;
+   *  - `pending` — still indexing in the background, not searchable yet;
+   *  - `failed` — stored, but NOT searchable; `indexError` says why;
+   *  - `not_indexed` — a format with no text to index; stored as-is.
+   */
+  indexStatus: 'indexed' | 'pending' | 'failed' | 'not_indexed'
+  /** Why indexing failed — set only with `indexStatus: 'failed'`. */
+  indexError?: string
   /** Provenance — the file's Microsoft 365 link, for citing back to the person. */
   webUrl: string | null
 }
@@ -329,6 +364,46 @@ export function shapeDriveItem(raw: unknown): DriveItemMeta {
     // The `file` facet is what distinguishes a file from a folder or package —
     // `$select=file` returns it for files only.
     isFile: file != null && typeof file === 'object',
+  }
+}
+
+type IndexReport = { status: GraphFileIngestResult['indexStatus']; error?: string }
+
+const NOT_INDEXED: IndexReport = { status: 'not_indexed' }
+
+/**
+ * Start the index run and wait up to {@link INGEST_OUTCOME_WAIT_MS} for how it
+ * ends. Never throws: a run that rejects is a `failed` outcome with its message
+ * (the store it failed against is not the tool's problem — the copy is already
+ * stored), and a run still going at the bound is `pending` and keeps going.
+ */
+async function awaitIngestOutcome(
+  stash: GraphStashBridge,
+  sessionId: string,
+  documentId: string,
+): Promise<IndexReport> {
+  // Through `Promise.resolve().then` so a bridge that throws synchronously is
+  // a `failed` outcome too, not a tool failure after the copy was stored.
+  const run: Promise<IndexReport> = Promise.resolve()
+    .then(() => stash.ingest(sessionId, documentId))
+    .then(
+      (outcome) =>
+        outcome?.status === 'indexed'
+          ? { status: 'indexed' }
+          : { status: 'failed', error: outcome?.error ?? 'the index run reported no reason' },
+      (err: unknown) => ({
+        status: 'failed',
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const bound = new Promise<IndexReport>((resolve) => {
+    timer = setTimeout(() => resolve({ status: 'pending' }), INGEST_OUTCOME_WAIT_MS)
+  })
+  try {
+    return await Promise.race([run, bound])
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -1338,9 +1413,11 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       "Copy one of the signed-in person's own Microsoft 365 files (OneDrive or " +
       "SharePoint) into this conversation's Data Stash, so later turns can search " +
       'it, read it or hand it to the sandbox. Identify the file by item_id, ' +
-      'optionally with drive_id for a shared/SharePoint drive. Text files become ' +
-      'searchable automatically; other formats are stored as-is. Returns the stash ' +
-      'document id and metadata — never the file contents. Acts as the current ' +
+      'optionally with drive_id for a shared/SharePoint drive. Returns the stash ' +
+      'document id and metadata — never the file contents — and indexStatus, ' +
+      'which says whether the copy can be searched: indexed (yes), pending (still ' +
+      'indexing), failed (stored but NOT searchable; indexError says why — tell ' +
+      'the person) or not_indexed (a format stored as-is). Acts as the current ' +
       'signed-in person.',
     inputSchema: {
       type: 'object',
@@ -1450,13 +1527,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
         ...(ingesting ? { ingestStatus: 'pending' as const } : {}),
       })
 
-      if (ingesting) {
-        // Fire-and-forget, mirroring `POST /api/stash/upload`: embedding is slow
-        // and the tool result must come back inside the turn. Failures are
-        // recorded in the document's `ingestStatus`, which is why the rejection is
-        // swallowed here rather than surfaced.
-        void stash.ingest(sessionId, doc.id).catch(() => {})
-      }
+      const index = ingesting ? await awaitIngestOutcome(stash, sessionId, doc.id) : NOT_INDEXED
 
       return {
         documentId: doc.id,
@@ -1464,6 +1535,8 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
         mimeType,
         size: doc.size,
         ingesting,
+        indexStatus: index.status,
+        ...(index.error ? { indexError: index.error } : {}),
         webUrl: meta.webUrl,
       }
     },

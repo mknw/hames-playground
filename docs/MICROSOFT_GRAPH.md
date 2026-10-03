@@ -430,8 +430,9 @@ graph_file_ingest {item_id, drive_id?, filename?}
   │     └─ size > MAX_CONTENT_BYTES → refuse *before* downloading
   ├─ GET  {base}/content   (responseType: 'base64')
   ├─ storeDocument({sessionId, filename, mimeType, content, encoding?})
-  └─ void ingestStashDocument(sessionId, doc.id)   ← fire-and-forget
-        → {documentId, filename, mimeType, size, ingesting, webUrl}
+  └─ ingestStashDocument(sessionId, doc.id)   ← awaited up to 15 s
+        → {documentId, filename, mimeType, size, ingesting,
+           indexStatus, indexError?, webUrl}
 ```
 
 `{base}` is `/me/drive/items/{id}` or `/drives/{drive}/items/{id}`; both id
@@ -455,6 +456,18 @@ Unlike `POST /api/stash/upload`, it does **not** additionally require the
 session's agent to compose a redis retriever: calling this tool is an explicit
 request to make the file usable, and a retriever added later reads an
 already-indexed corpus.
+
+**Stored is not searchable (#420).** The tool used to fire the index run and
+return `ingesting: true` at once, so an embedder that was not running failed
+in the background where only the server log saw it, and the agent told the
+person the copy had worked. It now waits for the run, up to
+`INGEST_OUTCOME_WAIT_MS` (15 s), and reports `indexStatus`: `indexed`,
+`failed` (stored but not searchable, with the recorded `indexError`),
+`pending` (still running past the bound; it carries on and records its own
+outcome) or `not_indexed` (a format stored as-is). The reason is the one the
+ingest layer writes onto the document as `ingestError`, so the tool result and
+the Data Stash panel's "not searchable" chip report the same thing. A failed
+copy is still a successful tool call: the file is in the stash.
 
 ### The `/content` redirect and the bearer token
 

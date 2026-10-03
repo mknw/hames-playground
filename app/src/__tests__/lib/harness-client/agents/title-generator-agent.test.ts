@@ -103,6 +103,54 @@ describe('runRegenerateTitle through the real agent', () => {
     expect(
       await sut.runRegenerateTitle(ctx('m'), 's', 'u', { ...testAgentDeps, persistTitle }),
     ).toBeNull()
-    expect(error).toHaveBeenCalledWith('[title-gen] failed:', expect.any(Error))
+    expect(error).toHaveBeenCalledWith(
+      '[title-gen] could not persist the title:',
+      expect.any(Error),
+    )
+  })
+
+  // The button's contract survives #420: a failed generation still answers null.
+  // Mutation: delete the `.catch` in `runRegenerateTitle` → it rejects.
+  it('returns null when the generation itself fails', async () => {
+    generate.mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:8095'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const persistTitle = vi.fn(async () => undefined)
+    expect(
+      await sut.runRegenerateTitle(ctx('m'), 's', 'u', { ...testAgentDeps, persistTitle }),
+    ).toBeNull()
+    expect(persistTitle).not.toHaveBeenCalled()
+  })
+})
+
+// #420: the harness never throws for a failed generation — `compactExecution`
+// catches and the run settles as `status: 'error'` with an empty response — and
+// `runTitleAgent` read only the response, so a summarizer outage was the same
+// silent `null` as a blank title. The first-turn entry point now REJECTS, which
+// is what lets the turn say so.
+describe('runFirstTurnTitleGen through the real agent', () => {
+  const firstTurn = {
+    sessionId: 's',
+    createdAt: 0,
+    events: [
+      { id: 'u', type: 'user_message' as const, ts: 1, patternId: 'h', data: { content: 'hi' } },
+    ],
+    status: 'done' as const,
+    input: 'hi',
+    data: {},
+  }
+
+  // Mutation: delete the `result.status === 'error'` throw → resolves null.
+  it('rejects with the failure when the summarizer call fails, and persists nothing', async () => {
+    generate.mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:8095'))
+    const persistTitle = vi.fn(async () => undefined)
+    await expect(
+      sut.runFirstTurnTitleGen(firstTurn, 's', 'u', { ...testAgentDeps, persistTitle }),
+    ).rejects.toThrow('ECONNREFUSED')
+    expect(persistTitle).not.toHaveBeenCalled()
+  })
+
+  it('still answers null — not a rejection — for a blank title', async () => {
+    generate.mockResolvedValue('   ')
+    await expect(sut.runFirstTurnTitleGen(firstTurn, 's', 'u', testAgentDeps)).resolves.toBeNull()
   })
 })

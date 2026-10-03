@@ -72,6 +72,15 @@ export interface StashDocumentMeta {
    */
   ingestStatus?: IngestStatus
   /**
+   * Why the last ingest failed — present only beside `ingestStatus: 'failed'`,
+   * and cleared when a later run starts (#420). The reason used to reach the
+   * server log and nowhere else, so the panel could only guess ("is the
+   * embedder running?") and the tool that stored the file reported success.
+   * Persisted on the document so every reader — the panel's chip, the tool's
+   * result — reports the same recorded outcome.
+   */
+  ingestError?: string
+  /**
    * True when a text derivation exists (see {@link StashDocument.derivedText}) —
    * a binary upload (docx/pdf/pptx/odt) converted to markdown for ingest.
    * Meta-only convenience flag, computed from `derivedText` presence in
@@ -449,6 +458,8 @@ export async function setDocumentFlags(
     hidden?: boolean
     archived?: boolean
     ingestStatus?: IngestStatus
+    /** Why the ingest failed; `null` clears a previous reason. */
+    ingestError?: string | null
     /** Derived markdown for a converted binary (see {@link StashDocument.derivedText}). */
     derivedText?: string
   },
@@ -460,6 +471,8 @@ export async function setDocumentFlags(
   if (patch.hidden !== undefined) doc.hidden = patch.hidden
   if (patch.archived !== undefined) doc.archived = patch.archived
   if (patch.ingestStatus !== undefined) doc.ingestStatus = patch.ingestStatus
+  if (patch.ingestError === null) delete doc.ingestError
+  else if (patch.ingestError !== undefined) doc.ingestError = patch.ingestError
   if (patch.derivedText !== undefined) doc.derivedText = patch.derivedText
 
   // Rewriting via json_set at `$` would clear any existing expiry, so we

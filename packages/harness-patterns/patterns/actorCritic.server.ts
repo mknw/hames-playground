@@ -8,6 +8,7 @@
 
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
+import { isAgentWithheldTool } from '../agent-withheld-tools'
 import { repairJsonTracked, type JsonRepairNote } from '../json-repair'
 import { normalizeControllerAction } from '../controller-action'
 import type {
@@ -27,10 +28,7 @@ import { runBatch, combineOutcomes } from '../parallel-tools.server'
 import type { SubCall } from '../parallel-tools.server'
 import { getErrorHint, budgetHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
-import {
-  resolveTurnBudget,
-  runtimeConfig,
-} from '../runtime-config.server'
+import { resolveTurnBudget, runtimeConfig } from '../runtime-config.server'
 import { activeTransports } from '../tool-transport.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
 import type { ActorFn, CriticFnWithLLMData } from '../types'
@@ -38,6 +36,14 @@ import { LLMCallError } from '../types'
 import { formatPlanContext, type PlannerData } from './planner.server'
 
 assertServerOnImport()
+
+/** The allowlist refusal, naming a tool withheld from every agent (#403) as
+ *  such, so neither the actor nor a reader takes it for a misspelling. */
+function refusal(name: string): string {
+  return (
+    `Tool not allowed: ${name}` + (isAgentWithheldTool(name) ? ' (withheld from every agent)' : '')
+  )
+}
 
 export interface ActorCriticData {
   attempt?: number
@@ -318,16 +324,19 @@ export function actorCritic<T extends ActorCriticData>(
           for (const c of allCalls) {
             const callId = generateId('tc')
             callIds.push(callId)
+            // Withheld from every agent (#403) before any augmentation: no
+            // list, callback or pattern can hand one back.
             const callAllowed =
-              tools.includes(c.tool_name) ||
-              dynamicAllowlist.includes(c.tool_name) ||
-              scopedTransports.some((t) => t.ownsTool(c.tool_name)) ||
-              (config?.dynamicToolPattern?.test(c.tool_name) ?? false)
+              !isAgentWithheldTool(c.tool_name) &&
+              (tools.includes(c.tool_name) ||
+                dynamicAllowlist.includes(c.tool_name) ||
+                scopedTransports.some((t) => t.ownsTool(c.tool_name)) ||
+                (config?.dynamicToolPattern?.test(c.tool_name) ?? false))
             if (!callAllowed) {
               track(c.tool_args)
               subCalls.push({
                 tool: c.tool_name,
-                precheckError: `Tool not allowed: ${c.tool_name}`,
+                precheckError: refusal(c.tool_name),
               })
               continue
             }
@@ -458,14 +467,17 @@ export function actorCritic<T extends ActorCriticData>(
         // this run. Sandbox-owned (`sandbox_*`) names pass without being listed
         // in `tools` or `dynamicToolAllowlist` (see docs/plan/sandbox.md → "How
         // tools reach the controller"). Outside any scope this is a no-op.
+        // A tool withheld from every agent (#403) is refused before any of
+        // the three augmentations is consulted.
         const scopedTransports = activeTransports()
         const allowed =
-          tools.includes(action.tool_name) ||
-          dynamicAllowlist.includes(action.tool_name) ||
-          scopedTransports.some((t) => t.ownsTool(action.tool_name)) ||
-          (config?.dynamicToolPattern?.test(action.tool_name) ?? false)
+          !isAgentWithheldTool(action.tool_name) &&
+          (tools.includes(action.tool_name) ||
+            dynamicAllowlist.includes(action.tool_name) ||
+            scopedTransports.some((t) => t.ownsTool(action.tool_name)) ||
+            (config?.dynamicToolPattern?.test(action.tool_name) ?? false))
         if (!allowed) {
-          const errMsg = `Tool not allowed: ${action.tool_name}`
+          const errMsg = refusal(action.tool_name)
           // Only surface as a visible error event when the allowlist has
           // SOME entries — that's a real actor mistake (proposed wrong tool
           // name). When the combined allowlist is empty, that's almost

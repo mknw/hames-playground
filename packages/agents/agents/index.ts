@@ -19,7 +19,11 @@ export { sandboxAgent } from './sandbox.server'
 export { retrieverAgent } from './retriever-agent.server'
 export { microsoft365Agent, MICROSOFT_365_TOOLS } from './microsoft-365.server'
 export { getGraphSchema } from './graph-schema.server'
-export { NEO4J_FEW_SHOTS, NEO4J_FEW_SHOTS_DEFAULT } from './neo4j-fewshots.server'
+export {
+  NEO4J_FEW_SHOTS,
+  NEO4J_FEW_SHOTS_DEFAULT,
+  NEO4J_READ_ONLY_CONTEXT,
+} from './neo4j-fewshots.server'
 export {
   createTitleAgent,
   sanitizeTitle,

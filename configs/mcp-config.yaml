@@ -17,7 +17,10 @@ neo4j-cypher:
   username: neo4j
   password: ${NEO4J_PASSWORD}
   database: neo4j
-  read_only: false
+  # Agents are read-only against Neo4j (#403): with `true` the server does not
+  # offer write_neo4j_cypher. Keep it `true` — the app withholds that tool
+  # from every agent anyway, so `false` only re-opens the server side.
+  read_only: true
 
 fetch:
   enabled: true

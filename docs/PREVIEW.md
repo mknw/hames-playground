@@ -329,6 +329,22 @@ entry — Entra allows several, and dev still needs it.
 Set the same value in `.env` as `AUTH_REDIRECT_URI`. The app sends whatever is
 in the variable; Entra rejects the sign-in if the registration does not carry it.
 
+> **`AUTH_REDIRECT_URI` is also the app's public origin.** Its scheme, host and
+> port are what every state-changing request is checked against (#455,
+> `app/src/lib/auth/csrf.server.ts`). A `POST`, `PUT`, `PATCH` or `DELETE` whose
+> `Origin` (else `Referer`) names anything else is answered `403`, and that
+> includes every server function and the sign-in button itself. So the value
+> must be the address users' browsers load the app from: the public `https://`
+> name the TLS-terminating reverse proxy serves, never the app's internal
+> address or port. A proxy that rewrites `Host` does not affect it, because the
+> check never reads `Host`. Callers that send no browser headers and no session cookie, such as
+> the bearer-token agent trigger, are not affected
+> ([`AGENT_TRIGGER.md`](AGENT_TRIGGER.md#authentication--configsaction-tokensyaml)).
+> Unset in a production build, the app knows no public origin and refuses every
+> write from a browser: it fails closed, logs a `[csrf]` line at boot, and the
+> `403` names the variable. One app, one public origin: serving the same
+> container under a second hostname means its writes are refused there.
+
 **b. Post-logout URI.** Set `AUTH_POST_LOGOUT_REDIRECT_URI` in `.env` to
 
 ```
@@ -358,11 +374,14 @@ Detail and rationale: [`deployment/entra-setup.md`](deployment/entra-setup.md).
 **Preflight — three greps before the one command.** The env template ships `preview.example.com` and
 `ops@example.com` pre-filled in four places, and two of them —
 `AUTH_REDIRECT_URI` and `AUTH_POST_LOGOUT_REDIRECT_URI` — are the ones an
-operator who edits `APP_DOMAIN` most easily forgets. They do not fail loudly:
-unset, they silently default to `http://localhost:3444/…`
-(`app/src/lib/auth/entra-config.server.ts:39-40,119-121`), and left at the
-placeholder they surface as an opaque Entra error at §8 step 4 rather than as a
-configuration error here.
+operator who edits `APP_DOMAIN` most easily forgets. The post-logout URI does not
+fail loudly: unset, it silently defaults to `http://localhost:3444/…`
+(`app/src/lib/auth/entra-config.server.ts:39-40,119-121`). `AUTH_REDIRECT_URI`
+is no longer silent, because it is also the public origin every write is checked
+against (§5a), but it still fails only at the first click: unset, the boot log
+carries a `[csrf]` line and the sign-in button answers `403`; left at the
+placeholder, the sign-in button answers `403 … only from pages on
+https://preview.example.com`.
 
 ```bash
 grep -n 'example\.com' .env       # must return nothing

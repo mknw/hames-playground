@@ -138,6 +138,17 @@ request (401) with a warning. **Dev:** map a secret to `dev-bypass-user` so
 triggered actions appear in the dev UI (which runs as `BYPASS_USER` when
 `VITE_DEV_BYPASS_AUTH=true`).
 
+**The same-origin check does not apply to a device, by rule rather than by
+route (#455).** Every write to the app passes the middleware's origin check
+(`refuseCrossOriginStateChange`, `app/src/lib/auth/csrf.server.ts`). A request
+that carries no `Origin`, no `Referer`, no `Sec-Fetch-Site` and no `kg_session`
+cookie is let through to the route, because nothing a browser attached is at
+stake: the bearer secret is presented deliberately, never sent ambiently. A
+Shortcut, `curl` or Node's `fetch` sends none of those headers. A caller that
+does send one is judged like a browser: an `Origin` that is not the app's own is
+refused with a `403`, bearer or not. So call this endpoint from a server or a
+device, never from a page on another origin.
+
 ## Recording storage & playback — via the Data Stash
 
 The `original_recording` is stored as a **Data Stash document keyed by `run_id`**

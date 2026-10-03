@@ -140,7 +140,23 @@ OpenID Connect **auth-code flow** — the code→token exchange runs server-side
 | `GET /api/auth/callback` | validate `state` vs the handshake cookie, redeem the code, enforce the allowlist, upsert `users`, create an `auth_sessions` row, set the `kg_session` cookie → `/` |
 | `POST /api/auth/logout`  | delete the session row (server-side revocation), clear the cookie, 303 to Entra sign-out. A `GET` is a `405`                                                       |
 
-**No `GET` changes state (#429).** A state change is a same-origin `POST` (`refuseCrossSite`, `app/src/lib/auth/csrf.server.ts`), and the middleware refuses any non-`POST` call to a `'use server'` function; the `SameSite=Lax` session cookie still rides a cross-site top-level `GET`, so it is not the barrier.
+**No `GET` changes state (#429).** A state change is a `POST` (or `PUT` / `PATCH` / `DELETE`), and the middleware refuses any non-`POST` call to a `'use server'` function; the `SameSite=Lax` session cookie still rides a cross-site top-level `GET`, so it is not the barrier.
+
+**Every write comes from the app's own origin (#455).** One middleware hook, `refuseCrossOriginStateChange` (`app/src/lib/auth/csrf.server.ts`), runs in front of both routers. It answers `403` to any request whose method is not `GET`, `HEAD` or `OPTIONS` and whose provenance is not the app's origin. That covers every API route and every server function under `/_server`, with no per-route line to forget. It closes the gap `SameSite=Lax` leaves: a **sibling origin** under the same registrable domain counts as the "same site", so its form `POST` carries the cookie. Each rule is pinned in `csrf.test.ts` together with the mutation that turns it red:
+
+| Request                                                                                                 | Answer                                                                                                                                       |
+| ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Origin` (else `Referer`) equals the **public origin**, and `Sec-Fetch-Site` is absent or `same-origin` | passes                                                                                                                                       |
+| `Sec-Fetch-Site` is `same-site`, `cross-site` or `none`, or `Origin` / `Referer` names any other origin | `403`                                                                                                                                        |
+| no `Origin`, `Referer` or `Sec-Fetch-Site`, **and** no `kg_session` cookie                              | passes. No browser attached a credential, so it is not CSRF-shaped, and the route's own auth decides. This is the bearer-token agent trigger |
+| a `kg_session` cookie with no `Origin` and no `Referer`                                                 | `403`, fail closed. Every current browser sends `Origin` on a write                                                                          |
+| `Sec-Fetch-Site: same-origin` with no `Origin` or `Referer`                                             | `403`. It never admits a request on its own (see DNS rebinding below)                                                                        |
+
+The **public origin** is the origin of `AUTH_REDIRECT_URI`. The OIDC callback that URI names is what sets `kg_session`, so its origin is the only one whose pages hold a session. A dev build without the variable assumes `http://localhost:3444`. A production build without it knows no origin, refuses every browser write and logs a `[csrf]` line at boot.
+
+The request's own `Host` is never compared. Under DNS rebinding, a page whose name points at the server sends a `Host`, an `Origin` and a `Sec-Fetch-Site` that all agree, and on a dev server the auth bypass authenticates that page with no cookie at all. So reaching the dev server under another name (`127.0.0.1`, the docker host alias, the browser e2e suite's port) means setting `AUTH_REDIRECT_URI` to that address.
+
+Two places also call `refuseCrossSite` directly, against the same origin: the terminal stream's `GET`, which the middleware does not cover, and the three routes #429 hardened (sign-in, sign-out, opening the terminal), as defence in depth.
 
 Config lives in `app/src/lib/auth/entra-config.server.ts` (env: `AZURE_TENANT_ID`,
 `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AUTH_SESSION_SECRET`; see

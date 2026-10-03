@@ -73,10 +73,16 @@ const resizeRoute = await import('../../../routes/api/sandbox/pty/resize')
 const { PTY_TICKET_TTL_MS } = await import('../../../lib/auth/pty-ticket.server')
 
 const STREAM = 'http://x/api/sandbox/pty/stream'
-const SAME_ORIGIN = { 'sec-fetch-site': 'same-origin' }
+/** The configured public origin (`AUTH_REDIRECT_URI`), deliberately not the
+ *  request URLs' host: the origin check never compares against `Host` (#455). */
+const APP_ORIGIN = 'https://app.example'
+// What the app's own page sends: `Origin` on the POST, while the EventSource's
+// same-origin GET carries a `Referer` and no `Origin`.
+const SAME_ORIGIN = { 'sec-fetch-site': 'same-origin', origin: APP_ORIGIN }
+const SAME_ORIGIN_GET = { 'sec-fetch-site': 'same-origin', referer: `${APP_ORIGIN}/sandbox` }
 const CROSS_SITE = { 'sec-fetch-site': 'cross-site' }
 
-function get(url: string, headers: Record<string, string> = SAME_ORIGIN, signal?: AbortSignal) {
+function get(url: string, headers: Record<string, string> = SAME_ORIGIN_GET, signal?: AbortSignal) {
   return { params: {}, request: new Request(url, { headers, signal }) } as never
 }
 
@@ -126,6 +132,7 @@ function expectNothingChanged() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.stubEnv('AUTH_REDIRECT_URI', `${APP_ORIGIN}/api/auth/callback`)
   bypass = false
   getAuthenticatedUser.mockResolvedValue({ id: 'user-1' })
   ensure.mockResolvedValue(undefined)
@@ -139,6 +146,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllEnvs()
 })
 
 describe('a GET to the stream changes no state (#429)', () => {
@@ -332,7 +340,7 @@ describe('GET /api/sandbox/pty/stream — the ticketed stream', () => {
   it('unsubscribes from the PTY when the client disconnects', async () => {
     const ticket = await open()
     const ac = new AbortController()
-    await streamWith(ticket, SAME_ORIGIN, ac.signal)
+    await streamWith(ticket, SAME_ORIGIN_GET, ac.signal)
     expect(unsubscribe).not.toHaveBeenCalled()
 
     ac.abort()

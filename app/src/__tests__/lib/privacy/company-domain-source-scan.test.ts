@@ -22,7 +22,8 @@
  * has no reason to, so an unset variable skips the scan with a warning rather
  * than failing every such run. The cost is that the guard is only as present
  * as the secret: with it unset in the repository, CI scans nothing. A
- * malformed pattern fails closed (the `RegExp` throws).
+ * malformed pattern fails closed, and the error names its line number and
+ * nothing of its content (`company-identifier-patterns.ts`).
  *
  * **Nothing about a pattern is printed.** CI logs on a public repository are
  * public, so an offender is reported as the file and the pattern's line
@@ -53,15 +54,13 @@ import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { readFile, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { loadIdentifierPatterns } from './company-identifier-patterns'
 
 const ROOT = resolve(process.cwd(), '..')
 
-/** One pattern per non-blank line; a malformed one throws here, loudly. */
-const FORBIDDEN: RegExp[] = (process.env.COMPANY_IDENTIFIER_PATTERNS ?? '')
-  .split('\n')
-  .map((line) => line.trim())
-  .filter(Boolean)
-  .map((source) => new RegExp(source, 'i'))
+/** One pattern per non-blank line. A malformed one throws here, loudly, naming
+ *  its line number only (`company-identifier-patterns.ts`). */
+const FORBIDDEN: RegExp[] = loadIdentifierPatterns(process.env.COMPANY_IDENTIFIER_PATTERNS)
 
 if (FORBIDDEN.length === 0) {
   console.warn(

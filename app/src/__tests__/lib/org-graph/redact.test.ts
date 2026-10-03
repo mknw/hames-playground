@@ -98,12 +98,12 @@ describe('maskGraphIds', () => {
     // The shape a Graph failure actually has: the request path is quoted, and
     // on the memberships loop that path names one employee.
     const message =
-      '[graph] GET /users/6f1b3c2a-0d4e-4f77-9a13-2b8c5d0e91af/memberOf failed: 403 Forbidden'
+      '[graph] GET /users/a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d/memberOf failed: 403 Forbidden'
     expect(maskGraphIds(message)).toBe('[graph] GET /users/⟨id⟩/memberOf failed: 403 Forbidden')
   })
 
   it('removes every id, not just the first, and is case-insensitive', () => {
-    const message = '6F1B3C2A-0D4E-4F77-9A13-2B8C5D0E91AF and 00000000-1111-2222-3333-444444444444'
+    const message = 'A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D and 00000000-1111-2222-3333-444444444444'
     expect(maskGraphIds(message)).toBe('⟨id⟩ and ⟨id⟩')
   })
 

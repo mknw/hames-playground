@@ -1,0 +1,5 @@
+---
+"@hames-ai/agents": patch
+---
+
+**`sanitizeTitle`** no longer strips quotes that have no partner (#454). It used to take a leading run and a trailing run of quote characters separately, and only then strip trailing `.!?`. So `Review of "Dune"` lost its closing quote, and `"Title".` kept one, because the `.` hid it from the strip. Now it peels one layer per pass, from the outside in: trailing punctuation first, then a quote pair that wraps the whole title. A quote is removed only together with a matching quote at the other end, and only when that quote closes the title rather than an inner span: `"Dune" and "Arrakis"` is left alone. Punctuation is stripped whether it sits outside the quotes or inside them, so `"Title".` and `"Title."` both become `Title`. **Behaviour change**: a quote with no matching partner at the other end, such as `"Dune Review` or `"Dune Review'`, is now kept where it used to be stripped.

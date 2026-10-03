@@ -63,6 +63,67 @@ describe('sanitizeTitle', () => {
     expect(sut.sanitizeTitle('A Title???')).toBe('A Title')
   })
 
+  // #454: the two ends were stripped separately, so a closing quote that
+  // belongs to the title was taken without its opening partner. Output before
+  // the fix, recorded 2026-10-03: `Review of "Dune"` → `Review of "Dune`.
+  // Mutation: restore the end-wise strip `.replace(/^["'`]+|["'`]+$/g, '')`
+  // in place of the pair loop → `Review of "Dune`.
+  it('keeps a quoted span that ends the title', () => {
+    expect(sut.sanitizeTitle('Review of "Dune"')).toBe('Review of "Dune"')
+  })
+
+  // #454: punctuation is stripped whether it sits outside the wrapping quotes
+  // or inside them. Output before the fix, recorded 2026-10-03:
+  // `"Title".` → `Title"` (the `.` hid the closing quote from the strip).
+  // Mutation: strip punctuation once, AFTER the pair loop, instead of on each
+  // pass → `"Title".` keeps its quotes.
+  // Mutation: strip punctuation once, BEFORE the pair loop → `"Title."` keeps
+  // its `.`.
+  it('strips trailing punctuation outside or inside the wrapping quotes', () => {
+    expect(sut.sanitizeTitle('"Title".')).toBe('Title')
+    expect(sut.sanitizeTitle('"Title."')).toBe('Title')
+  })
+
+  // #454: matching quote characters at both ends are not a pair when each
+  // belongs to its own span; peeling them would leave `Dune" and "Arrakis`.
+  // Mutation: have the pair test answer true once both ends match, without
+  // looking inside → `Dune" and "Arrakis`.
+  it('leaves two quoted spans that open and close the title', () => {
+    expect(sut.sanitizeTitle('"Dune" and "Arrakis"')).toBe('"Dune" and "Arrakis"')
+  })
+
+  // Mutation: refuse the pair whenever the same quote appears inside → the
+  // wrapping quotes stay on.
+  // Mutation: count an inner quote as opening only at the very start (drop
+  // the after-a-space case) → the wrapping quotes stay on.
+  it('strips wrapping quotes around a title that holds a quoted span', () => {
+    expect(sut.sanitizeTitle('"Review of "Dune""')).toBe('Review of "Dune"')
+    expect(sut.sanitizeTitle(`'Review of "Dune"'`)).toBe('Review of "Dune"')
+  })
+
+  // Mutation: drop the apostrophe exemption → the `'` in `Dune's` reads as
+  // closing the leading quote, and the wrapping quotes stay on.
+  it('treats an apostrophe inside a single-quoted title as part of a word', () => {
+    expect(sut.sanitizeTitle("'Dune's Ending'")).toBe("Dune's Ending")
+  })
+
+  // #454: a quote is only removed together with its partner. Output before the
+  // fix, recorded 2026-10-03: both came back `Dune Review`.
+  // Mutation: drop the `title.endsWith(q)` check → the first loses its last
+  // letter (`Dune Revie`).
+  // Mutation: accept any quote at the end (`QUOTES.has(title.at(-1))`) → the
+  // second comes back `Dune Review`.
+  it('keeps a quote that has no partner at the other end', () => {
+    expect(sut.sanitizeTitle('"Dune Review')).toBe('"Dune Review')
+    expect(sut.sanitizeTitle(`"Dune Review'`)).toBe(`"Dune Review'`)
+  })
+
+  // Mutation: drop the `.trim()` after the punctuation strip in the loop →
+  // the padding inside the quotes survives (` Title `).
+  it('trims the padding inside wrapping quotes', () => {
+    expect(sut.sanitizeTitle('" Title "')).toBe('Title')
+  })
+
   it('takes only the first line of a multi-line response', () => {
     expect(sut.sanitizeTitle('First Line\nSecond Line')).toBe('First Line')
     expect(sut.sanitizeTitle('Preamble\n\nReal Title')).toBe('Preamble')
@@ -79,6 +140,9 @@ describe('sanitizeTitle', () => {
     expect(sut.sanitizeTitle('')).toBeNull()
     expect(sut.sanitizeTitle('   ')).toBeNull()
     expect(sut.sanitizeTitle('""')).toBeNull()
+    // Mutation: refuse a "pair" shorter than two characters → a lone quote
+    // comes back as the title `"`.
+    expect(sut.sanitizeTitle('"')).toBeNull()
   })
 })
 

@@ -23,6 +23,14 @@
  * MUTATION: clear `approved` in `resumeHarness` just before its `runChain` (the
  * over-fix) → both tests go red at the resume step: the answer never reaches
  * the gate it was given for (`performed` / `refused` 0, not 1).
+ *
+ * MUTATION: skip the clear in `continueSession` when the restored context was
+ * `paused` → the third test goes red: the answer a paused blob already holds
+ * runs the new message's write without a pause (`performed` 1, not 0).
+ *
+ * MUTATION: move the reset from `continueSession` into `settleTurn` → the
+ * third test goes red (`performed` 1, not 0), and so does the first test's
+ * `resumed.data.approved` assertion (undefined, not true).
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -36,7 +44,7 @@ import {
   type HarnessData,
   type HarnessResultScoped,
 } from '../harness.server'
-import { serializeContext, setPaused } from '../context.server'
+import { createContext, serializeContext, setPaused } from '../context.server'
 import { configurePattern } from '../patterns/chain.server'
 import type { ConfiguredPattern, WithApproval } from '../types'
 
@@ -82,6 +90,7 @@ describe('an approval answers one pause', () => {
 
     // The person approves THAT pause, and the write runs once.
     const resumed = await resumeHarness<GateData>(first.serialized, patterns, true)
+    expect(resumed.data.approved).toBe(true)
     const second = park(resumed)
     expect(log.performed).toBe(1)
     expect(second.paused).toBe(false)
@@ -110,5 +119,18 @@ describe('an approval answers one pause', () => {
     expect(log.refused).toBe(1)
     expect(log.performed).toBe(0)
     expect(third.paused).toBe(true)
+  })
+
+  it('a paused context that already holds an answer does not hand it to a new message', async () => {
+    // Paused AND answered: what a resumed run leaves when it pauses again at a
+    // later gate, and what a blob saved before this fix can hold.
+    const log = { performed: 0, refused: 0 }
+    const ctx = createContext<GateData>('write X', { approved: true } as GateData, 'sess-repaused')
+    setPaused(ctx)
+    const next = park(
+      await continueSession<GateData>(serializeContext(ctx), [gatedWrite(log)], 'write Y'),
+    )
+    expect(log.performed).toBe(0)
+    expect(next.paused).toBe(true)
   })
 })

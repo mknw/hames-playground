@@ -1384,13 +1384,19 @@ Resume a paused harness after approval/rejection.
 const resumed = await resumeHarness(serializedContext, patterns, true)
 ```
 
-**An approval answers one pause.** `approved` is written onto `ctx.data` for
+**An approval lasts for the run it resumes.** `approved` is written onto `ctx.data` for
 the run it resumes, and `continueSession` deletes it at the next turn's start,
 so a gate reached again on a later turn finds no answer and must pause again. A
 "yes" that outlived its pause would let every later gate proceed without asking
 — fail-open, and silent (#456 c′). Within the resumed run the flag is still a
-bare boolean bound to no request, so a second gate in that same run reads the
-same answer; binding an answer to the pause it was issued for is #433's design.
+bare boolean bound to no request, and `resumeHarness` re-runs the chain from its
+first pattern, so every gate that run reaches (a second gate, or the same gate
+reached again) reads the same answer; binding an answer to the pause it was
+issued for is #433's design. Two things stay with the host. `pendingAction` is
+the gate's own field, which core neither writes nor clears, so a gate clears it
+once answered. A host that drives `runChain` over a restored context, or seeds
+`harness()`'s `initialData` from an earlier result's `data`, skips this reset
+and owns it.
 
 ### `continueSession(serialized, patterns, newInput)`
 

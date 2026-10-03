@@ -281,9 +281,10 @@ export function harness<T extends HarnessData & Record<string, unknown>>(
  *
  * @param serializedContext - The serialized UnifiedContext JSON
  * @param patterns - The original patterns
- * @param approved - Whether the action was approved. It answers THIS pause
- *   only: it rides `ctx.data` for the resumed run, and `continueSession`
- *   clears it, so a gate reached on a later turn must ask again.
+ * @param approved - Whether the action was approved. It lasts for THIS
+ *   resumed run only, and every gate that run reaches reads it (#433). It
+ *   rides `ctx.data` for that run, and `continueSession` clears it, so a gate
+ *   reached on a later turn must ask again.
  * @returns The resumed result with updated context
  */
 export async function resumeHarness<

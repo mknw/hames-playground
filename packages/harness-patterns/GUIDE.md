@@ -89,9 +89,10 @@ Every combinator takes patterns and returns a pattern, so they nest freely:
 
 Resume and continue are the same mechanism: `resumeHarness(serialized, patterns, approved)`
 after an approval gate, `continueSession(serialized, patterns, newInput)` for the
-next turn of a conversation. An approval answers the one pause it resumes:
-`continueSession` clears `approved`, so a gate reached again on a later turn has
-to ask again.
+next turn of a conversation. An approval lasts for the run it resumes:
+`continueSession` clears `approved`, so a gate reached on a later turn asks
+again. Within that run it is a bare boolean, so every gate the run reaches reads
+the same answer (#433).
 
 ---
 

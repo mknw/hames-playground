@@ -319,7 +319,7 @@ describe('a loop whose allowlist names the write tool still cannot call it', () 
     expect(sentToGateway()).not.toContain(WRITE)
     // Since #437 a refusal is a recovery the loop feeds back, not an error
     // that ends it: every round names the tool, every round is refused, and
-    // the consecutive-recovery cap (default 2) ends the loop on the second.
+    // the consecutive-recovery cap (default: 1 recovery) ends the loop on the second.
     const refusal = `Tool not allowed: ${WRITE} (withheld from every agent). Allowed: read_neo4j_cypher`
     const recoveries = result.events
       .filter((e) => e.type === 'loop_recovery')

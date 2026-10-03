@@ -907,6 +907,9 @@ describe('actorCritic: the consecutive-recovery cap', () => {
     expect(errors).toHaveLength(1)
     expect(errors[0]).toMatchObject({ kind: 'recovery_exhausted', iteration: 1 })
     expect(errors[0].error).toContain('All 2 calls of the multi-call attempt failed')
+    // Mutation (the round-3 delta review's X2): pass `undefined` instead of
+    // `actorLlmCall` to this `endOnRecoveryCap` call → red.
+    expect(ofType(events, 'error')[0].llmCall).toEqual(ANSWERED)
   })
 
   // Probe P1 of the delta review (finding 2): the dynamic allowlist resolves to
@@ -981,6 +984,22 @@ describe('actorCritic: the consecutive-recovery cap', () => {
     expect(actor).toHaveBeenCalledTimes(2)
     expect(critic).not.toHaveBeenCalled()
     expect(transport.callTool).not.toHaveBeenCalled()
+    expect(errorsOf(events)).toEqual([
+      expect.objectContaining({ kind: 'recovery_exhausted', iteration: 1 }),
+    ])
+  })
+
+  // A `dynamicToolPattern` is a tool surface too: names it matches are allowed,
+  // so a refusal beside one is an answer defect and counts. Mutation (the
+  // round-3 delta review's X1): drop `!config?.dynamicToolPattern` from
+  // `surfaceEmpty` → this runs to its budget, red.
+  it('a dynamicToolPattern is a surface: tools [] with a pattern still counts', async () => {
+    const actor = vi.fn().mockResolvedValue({
+      action: mockAction({ tool_name: 'bash', tool_args: '{}' }),
+      llmCall: ANSWERED,
+    })
+    const { events } = await loop(actor, { dynamicToolPattern: /^sandbox_/ }, [])
+    expect(actor).toHaveBeenCalledTimes(2)
     expect(errorsOf(events)).toEqual([
       expect.objectContaining({ kind: 'recovery_exhausted', iteration: 1 }),
     ])

@@ -141,7 +141,7 @@ export function actorCritic<T extends ActorCriticData>(
     let errorMessage: string | undefined
 
     // The consecutive-recovery cap (#450 review §3), counted in attempts — see
-    // `recoveryStreak`. The cap-th unusable answer in a row ends the loop with
+    // `recoveryStreak`. The unusable answer that follows `maxConsecutiveRecoveries` recoveries in a row ends the loop with
     // the error the outer catch records for an LLM failure, plus the marker.
     // (A refused tool or bad `tool_args` never ended this loop before #437, so
     // for those two the cap is the first fatal path there is.)

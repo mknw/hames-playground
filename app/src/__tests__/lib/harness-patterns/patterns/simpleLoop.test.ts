@@ -418,7 +418,7 @@ describe('simpleLoop execution', () => {
     })
     expect(JSON.stringify(recoveries[0].data)).toContain('Tool not allowed')
     expect(mockController.mock.calls.length).toBeGreaterThan(1)
-    // The same answer every round: the consecutive-recovery cap (default 2)
+    // The same answer every round: the consecutive-recovery cap (default: 1 recovery)
     // ends the loop before the budget does.
     const errorEvents = result.events.filter((e) => e.type === 'error')
     expect(errorEvents.map((e) => (e.data as { kind?: string }).kind)).toEqual([
@@ -464,7 +464,7 @@ describe('simpleLoop execution', () => {
     expect(recoveries[0]?.data).toMatchObject({ failure: 'invalid_tool_args', turn: 0 })
     expect(JSON.stringify(recoveries[0].data)).toContain('Invalid tool_args JSON')
     expect(mockController.mock.calls.length).toBeGreaterThan(1)
-    // The same answer every round: the consecutive-recovery cap (default 2)
+    // The same answer every round: the consecutive-recovery cap (default: 1 recovery)
     // ends the loop before the budget does.
     const errorEvents = result.events.filter((e) => e.type === 'error')
     expect(errorEvents.map((e) => (e.data as { kind?: string }).kind)).toEqual([

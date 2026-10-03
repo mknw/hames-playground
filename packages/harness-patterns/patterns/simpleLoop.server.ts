@@ -242,7 +242,7 @@ export function simpleLoop<T extends SimpleLoopData>(
     // threshold from (`runtime-config.ts`, `resolveTurnBudget`).
     const maxTurns = resolveTurnBudget('maxToolTurns', config?.maxTurns, settings.maxToolTurns)
     // The consecutive-recovery cap (#450 review §3): a run of answers this loop
-    // cannot use is fed back only until the cap-th in a row, which takes the
+    // cannot use is fed back at most `maxConsecutiveRecoveries` times in a row; the next one takes the
     // pre-#437 fatal path below with `recoveryCapHit` set. See `recoveryStreak`.
     const maxConsecutiveRecoveries = resolveMaxConsecutiveRecoveries(
       config?.maxConsecutiveRecoveries,
@@ -445,7 +445,7 @@ export function simpleLoop<T extends SimpleLoopData>(
               )
               continue
             }
-            // The cap-th unusable answer in a row: fatal, by the path below.
+            // One unusable answer past the cap: fatal, by the path below.
             recoveryCapHit = true
           }
           const msg =

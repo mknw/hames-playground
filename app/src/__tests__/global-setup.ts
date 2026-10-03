@@ -23,18 +23,13 @@
  *
  * Postgres has no `CREATE DATABASE IF NOT EXISTS`, so the duplicate error is
  * swallowed. An unreachable Postgres is also swallowed: the DB suites already
- * skip themselves when they cannot connect, and this file must not turn "no
- * docker on this machine" into a failed run.
+ * skip themselves when they cannot connect.
+ *
+ * Nothing here decides WHICH Postgres: every suite resolves its URL through
+ * `test-database.ts` first, which refuses the live default without an opt-in.
  */
 import pg from 'pg'
-import { localDatabaseUrl } from '../lib/config/compose-credentials.server'
-
-/** The database the UNIT suite talks to. Override with `TEST_DATABASE_URL`.
- *
- *  One of three, since #280: `app/e2e/` and `app/e2e-browser/` each provision
- *  their OWN database through {@link provisionDatabase}, so two suites running
- *  at once cannot delete each other's rows. See `docs/testing/pyramid.md`. */
-export const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL ?? localDatabaseUrl('hames_test')
+import { resolveTestDatabase } from './test-database'
 
 /** `duplicate_database` — someone (or a previous run) got there first. */
 const DUPLICATE_DATABASE = '42P04'
@@ -68,7 +63,18 @@ export function isAuthFailure(err: unknown): boolean {
  * right position.
  */
 export default async function setup(): Promise<void> {
-  await provisionDatabase(TEST_DATABASE_URL)
+  // The UNIT suite's database. One of three since #280: `app/e2e/` and
+  // `app/e2e-browser/` each resolve and provision their OWN, so two suites
+  // running at once cannot delete each other's rows.
+  const db = resolveTestDatabase('hames_test', { skipInCi: true })
+  if (db.source === 'none') {
+    console.warn(
+      '[test-db] CI with no TEST_DATABASE_URL: no Postgres is contacted, ' +
+        'and the DB-backed suites will skip themselves.',
+    )
+    return
+  }
+  await provisionDatabase(db.url)
 }
 
 /**

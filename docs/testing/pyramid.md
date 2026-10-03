@@ -6,12 +6,12 @@ merely "more of the same, slower" is not worth its wall clock, and a layer whose
 gaps are unstated is worse than one that is missing, because its green reads as
 a claim it does not make.
 
-| #   | Layer                                                                               | Invoked by                                                   | Needs                                                      | Runs in CI             |
-| --- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------- | ---------------------- |
-| 1   | Unit + integration — modules and components in jsdom, coverage floors enforced      | `pnpm test:run --coverage`                                   | nothing (DB-backed tests skip themselves without Postgres) | **yes**, on every push |
-| 2   | App-path e2e — whole conversations through the real server action and the SSE route | `pnpm test:e2e`                                              | Postgres                                                   | no                     |
-| 3   | Browser e2e — Chromium against a real `vinxi dev`, both themes, screenshots, axe    | `pnpm test:e2e:browser`                                      | Postgres, a browser, a dev-server boot                     | no                     |
-| 4   | Live — real inference, real endpoint, real bill                                     | `pnpm eval:harness`, `smoke-verda.ts`, `smoke-verda-load.ts` | a provider key or a GPU endpoint                           | never                  |
+| #   | Layer                                                                               | Invoked by                                                   | Needs                                                     | Runs in CI             |
+| --- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------- | ---------------------- |
+| 1   | Unit + integration — modules and components in jsdom, coverage floors enforced      | `pnpm test:run --coverage`                                   | a Postgres, or `CI=1` to skip its DB-backed tests (below) | **yes**, on every push |
+| 2   | App-path e2e — whole conversations through the real server action and the SSE route | `pnpm test:e2e`                                              | Postgres                                                  | no                     |
+| 3   | Browser e2e — Chromium against a real `vinxi dev`, both themes, screenshots, axe    | `pnpm test:e2e:browser`                                      | Postgres, a browser, a dev-server boot                    | no                     |
+| 4   | Live — real inference, real endpoint, real bill                                     | `pnpm eval:harness`, `smoke-verda.ts`, `smoke-verda-load.ts` | a provider key or a GPU endpoint                          | never                  |
 
 Layers 1–3 are **hermetic**: no provider key, no GPU, no bill. Layer 4 is not,
 and is coordinated by hand.
@@ -91,6 +91,76 @@ every query are user-scoped, and the users are distinct, so two suites cannot se
 each other's rows to confuse. It is deliberately still one literal — the fake is
 shared code, and giving it a per-suite title would be a second mechanism for a
 problem the first two already close.
+
+## Which Postgres a test run may touch
+
+Three databases keep the suites away from each other. They do not keep a run
+away from the developer's live server. Every suite's default server was
+`localhost:5432`, the compose stack's Postgres. In one session, six agent runs
+started `pnpm test:run` without `TEST_DATABASE_URL` and fell back to it. Each was
+refused only because its worktree had no password. Orca now copies the
+repo-root `.env` into every new worktree, so the next such run could log in,
+create or write the `hames_test*` databases on the live server, and share them
+with any other lane doing the same.
+
+So every suite resolves its database through one guard before anything
+connects: `resolveTestDatabase()` in `app/src/__tests__/test-database.ts`.
+
+| The run has                                          | Unit suite (`pnpm test:run`)                                 | App-path and browser e2e |
+| ---------------------------------------------------- | ------------------------------------------------------------ | ------------------------ |
+| `TEST_DATABASE_URL`                                  | uses it                                                      | uses it                  |
+| `HAMES_TEST_ALLOW_LOCAL_DB` naming **this** checkout | the compose Postgres on `localhost:5432`                     | the same                 |
+| neither, and `CI` is set                             | no database: nothing is contacted, the DB-backed suites skip | **refuses**              |
+| neither, anywhere else                               | **refuses**                                                  | **refuses**              |
+
+The refusal is an error, not a skip. Its message lists the three ways out. The
+opt-in line in it is a placeholder marked owner-only, and the message never
+prints the path of the checkout it ran in: its likeliest reader is an agent in a
+lane, and a line carrying that lane's own path would be accepted if pasted.
+
+**The owner's one-time change.** Add one line to `app/.env` in your own
+checkout. The value is the absolute path of your local checkout directory,
+whatever that directory is named. It is not the repository's name. A relative
+value is refused, because it would resolve against whichever checkout the run
+is in:
+
+```bash
+HAMES_TEST_ALLOW_LOCAL_DB='/absolute/path/to/your/hames-playground-checkout'
+```
+
+It is a path rather than `1` because a flag would travel. Orca copies
+`app/.env` into every new worktree, and a shell export reaches every agent the
+shell starts, so a flag would opt every lane back in. A copied path still names
+your checkout, and the guard compares it with the checkout the run is in (as
+real paths), so in a lane it opts nothing in. The same variable in the
+environment works too, and wins over the file.
+
+**A lane, a worktree or an agent** starts a private, throwaway Postgres on a
+non-default port and points the run at it:
+
+```bash
+docker run --rm -d --name hames-test-pg -p 55439:5432 -e POSTGRES_PASSWORD=test postgres:16
+export TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:55439/hames_test
+pnpm test:run                # the DB-backed suites run against it
+docker stop hames-test-pg    # --rm deletes the container
+```
+
+Two lanes that each start one need different ports and container names.
+`TEST_DATABASE_URL` is one variable for all three suites, so with it set they
+share that one database. Their dev-bypass user ids still keep their rows apart
+(above).
+
+**No database at all**, as CI runs it: `CI=1 pnpm test:run`. The unit suite's
+DB-backed tests skip. Their URL then names a Unix socket in a directory that
+does not exist, so `pg` fails at once with no TCP connection. It is never left
+unset, because `lib/db/client.server.ts` reads an unset `DATABASE_URL` as the
+dev database. `pnpm release:check` sets `CI=1` for every layer. So in a
+checkout with neither of the first two rows, its unit layer skips the DB-backed
+tests and the two e2e layers refuse.
+
+`test-database-guard.test.ts` pins the four rows. `suite-isolation.test.ts` pins
+that every suite's default goes through the guard, because a suite that falls
+back on its own would go round it.
 
 ## Determinism is a property of the suites, not of the machine (#280)
 

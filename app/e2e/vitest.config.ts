@@ -22,7 +22,7 @@
  */
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
-import { localDatabaseUrl } from '../src/lib/config/compose-credentials.server'
+import { resolveTestDatabase } from '../src/__tests__/test-database'
 
 /**
  * This suite's OWN throwaway database, and its own dev-bypass identity.
@@ -47,8 +47,12 @@ import { localDatabaseUrl } from '../src/lib/config/compose-credentials.server'
  *
  * `src/__tests__/suite-isolation.test.ts` pins that the three declared triples
  * stay distinct.
+ *
+ * Resolved through the same guard as the unit suite, so it never falls back to
+ * the Postgres on `localhost:5432` without the opt-in. This suite cannot run
+ * without a database, so in CI too it refuses rather than skips.
  */
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL ?? localDatabaseUrl('hames_test_apppath')
+const TEST_DATABASE_URL = resolveTestDatabase('hames_test_apppath').url
 
 /** This suite's dev-bypass user. See {@link TEST_DATABASE_URL}. */
 const BYPASS_USER_ID = 'e2e-app-path-user'

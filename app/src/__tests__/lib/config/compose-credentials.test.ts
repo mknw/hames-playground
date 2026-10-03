@@ -111,7 +111,9 @@ describe('the shipped laptop template', () => {
 })
 
 describe('provisionDatabase: a credential mismatch fails the run', () => {
-  const url = 'postgresql://postgres:wrong@localhost:5432/hames_test'
+  // A dead port, not localhost:5432: these rely on the `pg` mock above, and if
+  // it ever stops applying, the connection must not reach a live server.
+  const url = 'postgresql://postgres:wrong@127.0.0.1:1/hames_test'
 
   it('throws on a wrong password (28P01) instead of warning', async () => {
     pgState.connectError = Object.assign(

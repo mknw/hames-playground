@@ -60,6 +60,9 @@ interface TitleAgentData extends HarnessData {
 // ============================================================================
 
 const MAX_TITLE_CHARS = 50
+const QUOTES = new Set(['"', "'", '`'])
+const TRAILING_PUNCTUATION = new Set(['.', '!', '?'])
+const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u
 
 /**
  * Best-effort cleanup of model output. The prompt asks for a bare title,
@@ -71,17 +74,47 @@ const MAX_TITLE_CHARS = 50
  * the string they are given, so run on a multi-line reply they cleaned the
  * end of the LAST line and `"Graph Styling Tips"\nHere is why…` kept its
  * closing quote.
+ *
+ * The strips peel one layer per pass, from the outside in (#454): a trailing
+ * punctuation mark, or a quote PAIR that wraps the whole title. So punctuation
+ * is stripped whether it sits outside the quotes (`"Title".`) or inside them
+ * (`"Title."`), and a quote is only ever removed together with its partner —
+ * `Review of "Dune"` keeps its closing quote. The punctuation test is a
+ * character lookup, not `/[.!?]+$/`: that pattern backtracks quadratically on
+ * a long run of `!` that does not end the string (CodeQL js/polynomial-redos).
  */
 export function sanitizeTitle(raw: string): string | null {
-  const stripped = raw
-    .trim()
-    .split('\n')[0] // first line only
-    .trim()
-    .replace(/^["'`]+|["'`]+$/g, '') // surrounding quotes / backticks
-    .replace(/[.!?]+$/, '') // trailing punctuation
-    .trim()
-  if (!stripped) return null
-  return stripped.slice(0, MAX_TITLE_CHARS)
+  let title = raw.trim().split('\n')[0] // first line only
+  for (;;) {
+    title = title.trim()
+    if (TRAILING_PUNCTUATION.has(title.slice(-1))) title = title.slice(0, -1)
+    else if (wrapsWholeTitle(title)) title = title.slice(1, -1)
+    else break
+  }
+  if (!title) return null
+  return title.slice(0, MAX_TITLE_CHARS)
+}
+
+/**
+ * True when the quote opening `title` is closed by the one ending it (#454).
+ * Matching ends are not enough: `"Dune" and "Arrakis"` starts and ends with
+ * `"`, but each end belongs to its own span. The first same-kind quote inside
+ * decides it — one that opens a span (at the start, as in `""Mixed""`, or
+ * after a space, an opening bracket or a dash) leaves the outer pair wrapping;
+ * one that follows a word closes the leading quote early. An apostrophe
+ * between two letters or digits (`Dune's`) is not a quote.
+ */
+function wrapsWholeTitle(title: string): boolean {
+  const q = title.charAt(0)
+  if (!QUOTES.has(q) || !title.endsWith(q)) return false
+  const inner = title.slice(1, -1)
+  for (let i = 0; i < inner.length; i++) {
+    if (inner[i] !== q) continue
+    const before = inner.charAt(i - 1)
+    if (LETTER_OR_DIGIT.test(before) && LETTER_OR_DIGIT.test(inner.charAt(i + 1))) continue
+    return i === 0 || /[\s([{–—]/.test(before)
+  }
+  return true
 }
 
 // ============================================================================

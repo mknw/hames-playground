@@ -522,8 +522,10 @@ const ONE_QUOTED_STRING = /^"(?:[^"\\]|\\[\s\S])*"$/
  * Something shaped like the start of another object member: a key after a
  * separator (`, b:`), or a quoted key, which also catches a member whose
  * separator is missing (`"x" "b": 1`). A colon glued to `//` is a URL scheme,
- * never a key, so `, https://b.com` is content (#453): no member's value
- * starts with `//`.
+ * never a key, so `, https://b.com` is content (#453): this bets that no
+ * member's value starts with `//`. A protocol-relative or UNC value written
+ * straight after its key's colon (`src://cdn…`) is merged into the previous
+ * value.
  */
 const MEMBER_START = /,\s*[a-zA-Z_$][\w$-]*\s*:(?!\/\/)|"[^"]*"\s*:|'[^']*'\s*:/
 
@@ -615,9 +617,12 @@ export function repairJsonTracked(raw: string): RepairedJson {
   // steps below then keep the value whole (`://` cannot start a member, see
   // MEMBER_START) or decline it (#408).
   //
-  // It does NOT close a colon followed by a space. `{query: movies, limit: 5}`
-  // is the input this step exists for, and `{code: lambda a, b: a + b}` reads
-  // exactly the same way, so it still splits. The cost runs the other way too:
+  // It does NOT close a `, word:` whose colon is followed by whitespace or by
+  // the start of a value: `{code: lambda a, b: a + b}` and
+  // `{query: site:example.com, intitle:"neo4j"}` both still split.
+  // `{query: movies, limit: 5}` is the input this step exists for, and
+  // `{code: lambda a, b: a + b}` reads exactly the same way, so it still
+  // splits. The cost runs the other way too:
   // a compact `{a:x,b:y}`, whose second key's colon is glued to a bare word,
   // now throws instead of repairing.
   s = s.replace(/\{\s*([a-zA-Z_$][\w$]*)\s*:/g, '{"$1":')

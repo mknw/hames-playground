@@ -281,4 +281,31 @@ describe('key-quoting after a comma (#453)', () => {
   it('still splits a value at `, word: ` with a space — the residual this fix leaves', () => {
     expect(repairJson(`{code: lambda a, b: a + b}`)).toEqual({ code: 'lambda a', b: 'a + b' })
   })
+
+  // Mutation R3: widen MEMBER_START's `(?!\/\/)` to `(?!\/)` → `path` folds
+  // into `a` as 'x, path:/work/in' and the call returns.
+  it('declines a genuine sibling whose colon is glued to a path', () => {
+    expect(() => repairJson(`{a: x, path:/work/in}`)).toThrow()
+  })
+
+  // main: { query: 'SELECT id', created_at: ':date FROM orders' }.
+  // Mutation R5: add `:` to the lookahead's class → it splits again.
+  it('declines a `::` cast after a comma rather than splitting it', () => {
+    expect(() => repairJson(`{query: SELECT id, created_at::date FROM orders}`)).toThrow()
+  })
+
+  // Residual. Mutation K4 (drop `"` from the lookahead) turns it into a throw.
+  it('still splits at a glued colon followed by a value start', () => {
+    expect(repairJson(`{query: site:example.com, intitle:"neo4j"}`)).toEqual({
+      query: 'site:example.com',
+      intitle: 'neo4j',
+    })
+  })
+
+  // The price of the `//` exemption. Mutation K2 turns it into a throw.
+  it('merges a glued sibling whose value starts with `//`', () => {
+    expect(repairJson(`{q: x, src://cdn.example.com/a.js}`)).toEqual({
+      q: 'x, src://cdn.example.com/a.js',
+    })
+  })
 })

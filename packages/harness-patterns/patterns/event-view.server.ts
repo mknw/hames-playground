@@ -18,6 +18,7 @@ import type {
   ToolCallEventData,
   ToolResultEventData,
   ContentSanitizedEventData,
+  WarningEventData,
 } from '../types'
 
 assertServerOnImport()
@@ -546,6 +547,14 @@ function formatEventData(event: ContextEvent): string {
       const rules = [...new Set(data.findings.map((f) => f.rule))].join(', ')
       const head = `${data.namespace}/${data.tool}: ${data.findings.length} finding(s) neutralized`
       return rules ? `${head} [${rules}]` : head
+    }
+    case 'warning': {
+      // METADATA ONLY — never `data.error`. That is the failed describe call's
+      // message verbatim, and a describe call is handed tool results verbatim:
+      // a parse failure can quote them back, so the default branch below would
+      // re-serve untrusted content to the next prompt by a side door (#420).
+      const data = event.data as WarningEventData
+      return `${data.task}: ${data.message}`
     }
     default:
       return typeof event.data === 'object' ? JSON.stringify(event.data) : String(event.data)

@@ -252,6 +252,31 @@ describe('context', () => {
       expect(ctx.events[initialEventCount + 1].type).toBe('pattern_exit')
     })
 
+    // #420: a `warning` is the only record that a side task failed and the
+    // turn ran on a fallback; a pattern on 'never'/'on-success' must not drop it.
+    // Mutation: remove 'warning' from ALWAYS_COMMIT_TYPES → reds.
+    it('always commits a warning, even under "never"', async () => {
+      const { commitEvents, createContext, createScope } =
+        await import('@hames-ai/harness-patterns/context.server')
+
+      const ctx = createContext('test')
+      const initialEventCount = ctx.events.length
+      const scope = createScope('pattern', {})
+      scope.events.push(
+        { type: 'tool_call', ts: Date.now(), patternId: 'p', data: {} },
+        {
+          type: 'warning',
+          ts: Date.now(),
+          patternId: 'p',
+          data: { task: 'query_rewrite', message: 'm', fallback: 'f' },
+        },
+      )
+
+      commitEvents(ctx, scope, 'never')
+
+      expect(ctx.events.slice(initialEventCount).map((e) => e.type)).toEqual(['warning'])
+    })
+
     it('should always commit lifecycle events regardless of strategy', async () => {
       const { commitEvents, createContext, createScope } =
         await import('@hames-ai/harness-patterns/context.server')

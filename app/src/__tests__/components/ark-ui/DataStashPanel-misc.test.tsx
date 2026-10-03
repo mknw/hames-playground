@@ -409,7 +409,7 @@ describe('DataStashPanel — uploads', () => {
     ))
     await tick()
 
-    expect(container.textContent).toContain('index failed')
+    expect(container.textContent).toContain('not searchable')
   })
 
   it('deletes a document optimistically and calls the route', async () => {

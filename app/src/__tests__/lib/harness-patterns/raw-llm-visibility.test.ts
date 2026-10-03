@@ -349,7 +349,10 @@ describe('router: error events carry the response', () => {
 // ============================================================================
 
 describe('withReferences: a failed selector call carries rawOutput', () => {
-  it('reports the raw response on the error event', async () => {
+  // Since #420 a failed selector is a side task the route runs past, so its
+  // record rides a `warning` rather than an `error` — the call record must
+  // survive the move, or the drill-down loses the only copy of what was said.
+  it('reports the raw response on the warning event', async () => {
     const { withReferences } =
       await import('@hames-ai/harness-patterns/patterns/with-references.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
@@ -400,8 +403,8 @@ describe('withReferences: a failed selector call carries rawOutput', () => {
     })
     const result = await runInFrame(() => pattern.fn(scope as never, view as never))
 
-    const err = errorEvent(result.events)
-    expect(err.data.kind).toBe('llm_call')
-    expect(err.llmCall?.functionName).toBe('ReferenceSelector')
+    const warning = result.events.find((e: ContextEvent) => e.type === 'warning')
+    expect(warning, 'the run emitted no warning event').toBeTruthy()
+    expect(warning!.llmCall?.functionName).toBe('ReferenceSelector')
   })
 })

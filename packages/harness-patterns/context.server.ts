@@ -153,12 +153,16 @@ export function trackEvent(
  *  record of a security control firing. A loop that neutralizes an injection
  *  and THEN fails would, under 'on-success', discard the one event proving the
  *  guard did anything — the failure would look unexplained and the attack
- *  invisible. */
+ *  invisible.
+ *  Includes 'warning' because it is the ONLY record that a side task (a title,
+ *  a summary, an intent rewrite) failed and the turn ran on a fallback (#420):
+ *  dropping it under 'on-success' is the silent degradation it exists to end. */
 const ALWAYS_COMMIT_TYPES: Set<EventType> = new Set([
   'pattern_enter',
   'pattern_exit',
   'error',
   'content_sanitized',
+  'warning',
 ])
 
 /** Commit scope events to context based on strategy.

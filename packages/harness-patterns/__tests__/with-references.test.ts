@@ -150,28 +150,88 @@ describe('source allow-list', () => {
 })
 
 describe('failure path', () => {
-  // Mutation: drop the `LLMCallError` branch (`failedLlmCall = undefined`) →
-  // the error event loses both `kind: 'llm_call'` and the call record.
-  it('a failed selector call becomes an llm_call error event, and the inner pattern does not run', async () => {
+  // #420. Until then the selector shared the catch that wraps the INNER pattern,
+  // so a selector that threw — a describe-tier call, so a summarizer outage was
+  // enough — skipped the wrapped pattern entirely, and the route did no work.
+  // `DEFAULT_ERROR_SEVERITY` described the opposite ("the inner pattern ran
+  // without curated prior results"); this pins the description.
+  // Mutation: put the selector call back under the outer try (delete its own
+  // try/catch) → the inner pattern is skipped and an `error` replaces the
+  // warning.
+  // Mutation: drop the `LLMCallError` branch → the warning loses the record.
+  it('a failed selector call is a warning, and the inner pattern still runs with nothing attached', async () => {
     const llmCall = { functionName: 'ReferenceSelector' } as unknown as LLMCallRecord
     const selector: SelectorFn = async () => {
       throw new LLMCallError('selector down', llmCall)
     }
     const { out, inner: i } = await run([result('a'), result('b')], { selector })
-    const err = out.events.find((e) => e.type === 'error')
-    expect(err?.data).toEqual({ error: 'selector down', kind: 'llm_call' })
-    expect(err?.llmCall).toBe(llmCall)
-    expect(i.fn).not.toHaveBeenCalled()
+    const warning = out.events.find((e) => e.type === 'warning')
+    expect(warning?.data).toMatchObject({ task: 'reference_selection', error: 'selector down' })
+    expect(warning?.llmCall).toBe(llmCall)
+    expect(out.events.some((e) => e.type === 'error')).toBe(false)
+    expect(i.fn).toHaveBeenCalledTimes(1)
+    expect((i.fn.mock.calls[0][0] as PatternScope<Data>).data.attachedRefs).toEqual([])
   })
 
-  // Mutation: spread `kind: 'llm_call'` unconditionally → a plain throw is
-  // misreported as a model-call failure.
-  it('a plain throw is recorded without an llm_call kind', async () => {
+  // Mutation: `cacheSet` the failed decision (an empty selection) → the next
+  // turn reads it from the cache and never asks the selector again.
+  it('does not cache a failed selection — the next run asks again', async () => {
+    let calls = 0
+    const selector: SelectorFn = async ({ candidates }) => {
+      calls += 1
+      if (calls === 1) throw new Error('summarizer down')
+      return { reasoning: 'ok', selected: [{ ref_id: candidates[0].ref_id, reason: 'x' }] }
+    }
+    await run([result('a'), result('b')], { selector })
+    const { inner: i } = await run([result('a'), result('b')], { selector })
+    expect(calls).toBe(2)
+    expect((i.fn.mock.calls[0][0] as PatternScope<Data>).data.attachedRefs).toHaveLength(1)
+  })
+
+  // A non-Error throw is recorded by its text. No mutation claim on this one:
+  // it does NOT pin the `instanceof LLMCallError` guard, because `'boom'.llmCall`
+  // is undefined with or without it (PR #424 review F5 ran that mutation and it
+  // survived). The next test is the one that pins the guard.
+  it('a plain throw is a warning carrying its text', async () => {
     const selector: SelectorFn = async () => {
       throw 'boom'
     }
     const { out } = await run([result('a'), result('b')], { selector })
-    expect(out.events.find((e) => e.type === 'error')?.data).toEqual({ error: 'boom' })
+    const warning = out.events.find((e) => e.type === 'warning')
+    expect(warning?.data).toMatchObject({ task: 'reference_selection', error: 'boom' })
+    expect(warning?.llmCall).toBeUndefined()
+  })
+
+  // Mutation: read `(error as { llmCall?: … }).llmCall` without the
+  // `instanceof LLMCallError` guard → this error's foreign `llmCall` is
+  // attached as though it were the selector's own call record.
+  it('only an LLMCallError contributes a call record', async () => {
+    const foreign = { functionName: 'SomethingElse' }
+    const selector: SelectorFn = async () => {
+      throw Object.assign(new Error('not a model failure'), { llmCall: foreign })
+    }
+    const { out } = await run([result('a'), result('b')], { selector })
+    const warning = out.events.find((e) => e.type === 'warning')
+    expect(warning?.data).toMatchObject({ error: 'not a model failure' })
+    expect(warning?.llmCall).toBeUndefined()
+  })
+
+  // The outer catch still owns the INNER pattern's failures, unchanged.
+  // Mutation: delete the outer catch's `trackEvent(scope, 'error', …)` → reds.
+  it("an inner pattern's throw is still an error event", async () => {
+    const { selector } = recordingSelector()
+    const ctx = createContext<Data>('q')
+    ctx.events.push(result('a'), result('b'))
+    const failing: ConfiguredPattern<Data> = {
+      name: 'inner',
+      fn: async () => {
+        throw new Error('inner broke')
+      },
+      config: { patternId: 'inner' },
+    }
+    const out = await withReferences(failing, { selector }).fn(scope(), createEventView(ctx))
+    expect(out.events.find((e) => e.type === 'error')?.data).toEqual({ error: 'inner broke' })
+    expect(out.events.some((e) => e.type === 'warning')).toBe(false)
   })
 })
 

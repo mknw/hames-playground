@@ -68,9 +68,20 @@ export interface StashDocumentMeta {
    * Vector-ingestion status (chunk→embed→index into the local Data Stash vector
    * store). Set by the harness-aware auto-ingest path: `'pending'` queued/in
    * progress, `'indexed'` searchable, `'failed'` ingest errored (e.g. embedder
-   * offline). Absent → never ingested (no redis-retriever in the harness).
+   * offline), `'not_indexed'` stored by a path that wanted it searchable but
+   * whose format has no text to index (an image; a docx with conversion off —
+   * #420). Absent → never ingested (no redis-retriever in the harness).
    */
   ingestStatus?: IngestStatus
+  /**
+   * Why the last ingest failed — present only beside `ingestStatus: 'failed'`,
+   * and cleared when a later run starts (#420). The reason used to reach the
+   * server log and nowhere else, so the panel could only guess ("is the
+   * embedder running?") and the tool that stored the file reported success.
+   * Persisted on the document so every reader — the panel's chip, the tool's
+   * result — reports the same recorded outcome.
+   */
+  ingestError?: string
   /**
    * True when a text derivation exists (see {@link StashDocument.derivedText}) —
    * a binary upload (docx/pdf/pptx/odt) converted to markdown for ingest.
@@ -81,7 +92,10 @@ export interface StashDocumentMeta {
   converted?: boolean
 }
 
-export type IngestStatus = 'pending' | 'indexed' | 'failed'
+/** `'not_indexed'` is not terminal: the retriever's safety net still picks the
+ *  document up if conversion is switched on later (`ensureSessionIngested`
+ *  decides on the format, not on this status). */
+export type IngestStatus = 'pending' | 'indexed' | 'failed' | 'not_indexed'
 
 /** A stored document: metadata + its (already text-extracted) content. */
 export interface StashDocument extends StashDocumentMeta {
@@ -449,6 +463,8 @@ export async function setDocumentFlags(
     hidden?: boolean
     archived?: boolean
     ingestStatus?: IngestStatus
+    /** Why the ingest failed; `null` clears a previous reason. */
+    ingestError?: string | null
     /** Derived markdown for a converted binary (see {@link StashDocument.derivedText}). */
     derivedText?: string
   },
@@ -460,6 +476,8 @@ export async function setDocumentFlags(
   if (patch.hidden !== undefined) doc.hidden = patch.hidden
   if (patch.archived !== undefined) doc.archived = patch.archived
   if (patch.ingestStatus !== undefined) doc.ingestStatus = patch.ingestStatus
+  if (patch.ingestError === null) delete doc.ingestError
+  else if (patch.ingestError !== undefined) doc.ingestError = patch.ingestError
   if (patch.derivedText !== undefined) doc.derivedText = patch.derivedText
 
   // Rewriting via json_set at `$` would clear any existing expiry, so we

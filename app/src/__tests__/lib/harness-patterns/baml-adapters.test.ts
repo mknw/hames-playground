@@ -770,13 +770,17 @@ describe('describeToolResultOp', () => {
     expect(mockResultDescribe.mock.calls[0][4]).toMatchObject({ client: 'LocalQwenSmall' })
   })
 
-  it('should return empty string on failure', async () => {
+  // #420: a failed call THROWS. It used to resolve `''`, the same value as a
+  // blank answer, so `compactBulkData` could not tell that the summarizer was
+  // down and nothing anywhere said so. The caller catches and records it.
+  // Mutation: restore the `try { … } catch { return '' }` → resolves ''.
+  it('rejects on failure, so a summarizer outage is distinguishable from a blank answer', async () => {
     const { describeToolResultOp } = await import('@hames-ai/harness-baml/baml-adapters.server')
     mockResultDescribe.mockRejectedValue(new Error('Model unavailable'))
 
-    const result = await describeToolResultOp('search', '{}', '', 'data')
-
-    expect(result).toBe('')
+    await expect(describeToolResultOp('search', '{}', '', 'data')).rejects.toThrow(
+      'Model unavailable',
+    )
   })
 })
 
@@ -860,18 +864,16 @@ describe('describeToolResultsBatchOp', () => {
     expect([...byId.keys()]).toEqual(['1'])
   })
 
-  it('returns an empty map on failure so the caller can retry per item', async () => {
+  // #420: same reason as `describeToolResultOp` — the caller retries per item
+  // on a throw exactly as on an empty map, and logs the N+1 cost there
+  // (`compactBulkData.test.ts`), but only a throw tells it a call FAILED.
+  // Mutation: catch and return the empty map → resolves instead of rejecting.
+  it('rejects on failure, so the caller can record it and retry per item', async () => {
     const { describeToolResultsBatchOp } =
       await import('@hames-ai/harness-baml/baml-adapters.server')
     mockResultDescribeBatch.mockRejectedValue(new Error('Model unavailable'))
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const byId = await describeToolResultsBatchOp(items)
-
-    expect(byId.size).toBe(0)
-    // Logged, not swallowed: an always-failing batch is an N+1 cost regression
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('falling back per item'))
-    warn.mockRestore()
+    await expect(describeToolResultsBatchOp(items)).rejects.toThrow('Model unavailable')
   })
 
   it('makes no call at all for an empty batch', async () => {

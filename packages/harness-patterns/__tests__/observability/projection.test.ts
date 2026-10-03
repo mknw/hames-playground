@@ -112,6 +112,15 @@ describe('getEventPreview', () => {
     expect(preview.endsWith('...')).toBe(true)
   })
 
+  // Mutation: delete the `warning` case → the timeline row has no preview.
+  it('previews a warning by its sentence, truncated like the others', () => {
+    expect(getEventPreview('warning', { message: 'Earlier results could not be ranked.' })).toBe(
+      'Earlier results could not be ranked.',
+    )
+    const long = getEventPreview('warning', { message: 'x'.repeat(80) })
+    expect(long).toBe('x'.repeat(50) + '...')
+  })
+
   it('gives pattern boundaries and unknown types no preview', () => {
     expect(getEventPreview('pattern_enter', {})).toBe('')
     expect(getEventPreview('pattern_exit', {})).toBe('')
@@ -141,6 +150,7 @@ describe('getEventLane', () => {
       'critic_result',
       'error',
       'content_sanitized',
+      'warning',
     ] as EventType[]) {
       expect(getEventLane(type)).toBe('tools')
     }

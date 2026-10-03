@@ -131,6 +131,59 @@ describe('what settleTurn must NOT touch', () => {
   })
 })
 
+// #420: a side task (a title, a summary, an intent rewrite — every one a
+// describe-tier call) that fails records a `warning`, and a warning must never
+// do what an error does here. It is a separate event TYPE precisely so no error
+// reader can match it; these pin that `settleTurn` is not one that does.
+describe('a side failure never fails the turn (#420)', () => {
+  function recordWarning(ctx: Ctx) {
+    ctx.events.push({
+      id: `ev-${ctx.events.length}`,
+      type: 'warning',
+      ts: Date.now(),
+      patternId: 'sandbox-session-intent',
+      data: {
+        task: 'intent_compaction',
+        message:
+          'Your message could not be rewritten with the earlier conversation resolved into it.',
+        fallback: 'The agent worked from your message as written.',
+        error: 'connect ECONNREFUSED 127.0.0.1:8095',
+      },
+    })
+  }
+
+  // Mutation: make `lastTurnError` match `event.type === 'warning'` too → a
+  // response-less turn whose only incident was a side failure reads as failed,
+  // with the summarizer's error as its message.
+  it('an empty turn whose only incident is a warning is not reported as failed', async () => {
+    mockChain.mockImplementation(async (ctx: Ctx) => {
+      recordWarning(ctx)
+      return ctx
+    })
+
+    const result = await harness(pattern)('hi')
+
+    expect(result.status).toBe('running')
+    expect(result.response).toBe('')
+    expect(result.context.error).toBeUndefined()
+  })
+
+  it('an answered turn with a warning stays answered, and the warning stays in the record', async () => {
+    mockChain.mockImplementation(async (ctx: Ctx) => {
+      recordWarning(ctx)
+      ctx.data.response = 'Here is the file.'
+      return ctx
+    })
+
+    const result = await harness(pattern)('hi')
+
+    expect(result.status).toBe('running')
+    expect(result.response).toBe('Here is the file.')
+    expect(result.context.events.filter((e) => e.type === 'warning')).toHaveLength(1)
+    expect(errorEvents(result.context as Ctx)).toHaveLength(0)
+  })
+})
+
 describe('the turn boundary on a multi-turn context', () => {
   it('continueSession is not condemned by an error from a PREVIOUS turn', async () => {
     const first = createContext<Record<string, unknown>>('first question', {}, 's1')

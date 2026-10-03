@@ -44,9 +44,11 @@ import {
   createContext,
   serializeContext,
   compactBulkData,
+  createEvent,
   type ConfiguredPattern,
   type ContextEvent,
   type HarnessResultScoped,
+  type WarningEventData,
 } from '@hames-ai/harness-patterns'
 import {
   getOrBuildPatterns,
@@ -238,11 +240,13 @@ export async function runTurnAndPersist(
   // property of ONE RUN, not of the turn: `enterRun` hands a nested entry the
   // enclosing frame's listener (which is what lets `continueSession` be called
   // bare), and this turn starts a SECOND run inside itself — the first-turn
-  // title agent, whose whole contract is that it fails silently. At turn level
-  // the listener followed it, so a failed title generation emitted an `error`
-  // event into the frame, after `done` and before the stream closed, and the
-  // user got an inline error bubble for a failure nobody is meant to see. It is
-  // scoped to the main run in {@link runAndSave} instead. The sidecars keep
+  // title agent, whose own events are its internal detail. At turn level the
+  // listener followed it, so a failed title generation emitted the title
+  // agent's raw `error` event into the frame, after `done` and before the stream
+  // closed, and the user got an inline ERROR bubble for a side task. It is
+  // scoped to the main run in {@link runAndSave} instead. (A failed title IS
+  // shown since #420 — as one deliberate `warning` from `generateTitle`, not by
+  // this leak.) The sidecars keep
   // `config` and `inference`, which is what SA-M13 needed; what they must not
   // keep is the wire to the user's transcript.
   //
@@ -329,13 +333,13 @@ async function runOneTurn(
   const result = await runAndSave(req, agentId, run, tier)
 
   req.onResult?.(result)
-  if (req.mode === 'interactive') await generateTitle(req, result)
+  const titleWarned = req.mode === 'interactive' ? await generateTitle(req, result) : false
   req.onSettled?.()
   // Deliberately not awaited — see `compactAndSave`. Started from inside
   // all three scopes, so it keeps them for its whole continuation (the
   // tier scope included: a detached summarization must not silently
   // change provider halfway through a turn).
-  void compactAndSave(req, agentId, result)
+  void compactAndSave(req, agentId, result, titleWarned)
   return result
 }
 
@@ -474,19 +478,60 @@ async function runAndSave(
  * First-turn title generation. Synchronous w.r.t. the turn so the result can
  * ride out as a `title_updated` frame before the stream closes, with a hard cap
  * so a slow LLM never wedges it. `runFirstTurnTitleGen` is a no-op after the
- * first turn and swallows its own failures; the heuristic title stands whenever
- * this path yields nothing.
+ * first turn; the heuristic title stands whenever this path yields nothing.
+ *
+ * THE CAP IS ALSO HOW LONG THE ANSWER WAITS. `done` has been sent by now, but
+ * the client paints the answer when the stream closes, so this window delays
+ * the visible reply by up to `TITLE_GEN_TIMEOUT_MS`. That cost predates #420 —
+ * it is the price of the title riding the stream — and nothing may be added to
+ * it: the warning below is persisted by the trailing `compactAndSave`, after
+ * the stream has closed, never by a write in here.
+ *
+ * A generation that FAILS is said out loud (#420), and is always logged.
+ *  - Inside the cap: one `warning` event, sent on the still-open stream and
+ *    pushed into the context, which `compactAndSave` then persists (the
+ *    returned `true` is what makes it save a turn that had no tool results).
+ *  - After the cap: the stream is closed, so it is logged and pushed into the
+ *    context in memory only. It reaches the next load if the trailing save has
+ *    not happened yet, and is otherwise only in the log — it never gets a save
+ *    of its own, because a write after the turn has settled races the next
+ *    turn's write to the same row, and losing a turn is worse than losing a
+ *    notice.
+ * Deliberately not the title agent's own `error` event — that one stays inside
+ * its throwaway context and off the user's wire (see the `live` note in
+ * `runTurnAndPersist`); this is one deliberate notice in its place. A
+ * generation still running at the cap says nothing until it ends: it may yet
+ * land, and `persistTitle` writes it through whenever it does.
+ *
+ * @returns whether a warning was sent on the stream (and so must be persisted).
  */
 async function generateTitle(
   req: TurnRequest,
   result: HarnessResultScoped<SessionData>,
-): Promise<void> {
+): Promise<boolean> {
+  let streamOpen = true
+  let warned = false
+  const recordFailure = (err: unknown): void => {
+    console.error('[title-gen] failed:', err)
+    const warning = createEvent('warning', 'title-gen', {
+      task: 'title',
+      message: 'The conversation title could not be generated.',
+      fallback: 'It is named after the start of your first message; ↻ in the sidebar retries.',
+      error: err instanceof Error ? err.message : String(err),
+    } satisfies WarningEventData)
+    result.context.events.push(warning)
+    if (!streamOpen) return
+    warned = true
+    req.onEvent?.(warning)
+  }
   await Promise.race([
     runFirstTurnTitleGen(result.context, req.sessionId, req.userId, agentDeps()).then((title) => {
       if (title) req.onTitle?.(title)
-    }),
+    }, recordFailure),
     new Promise<void>((resolve) => setTimeout(resolve, TITLE_GEN_TIMEOUT_MS)),
-  ]).catch((err) => console.error('[title-gen] failed:', err))
+  ])
+  streamOpen = false
+  return warned
 }
 
 /**
@@ -499,22 +544,36 @@ async function generateTitle(
  * otherwise re-feed every raw payload into the prompt.
  *
  * The turn is already persisted, so a failure here costs summaries, not the
- * turn: logged, never rethrown, and it never flips the row to 'error'.
+ * turn: logged, never rethrown, and it never flips the row to 'error'. A
+ * summarizer that fails is recorded by `compactBulkData` as a `warning` event in
+ * the context this re-saves (#420), which is how it reaches the transcript and
+ * the observability panel on the conversation's next load.
  * `compactBulkData` skips the persist callback entirely when there is nothing
- * to summarize, so a tool-less turn still writes once.
+ * to summarize, so a tool-less turn still writes once — unless `mustPersist`
+ * says this turn's context gained something after its own save: the title
+ * warning (see `generateTitle`), whose only write this is. One save, here,
+ * rather than a second writer racing this one over the same row: a context
+ * serialized before the summaries land would overwrite them.
  */
 async function compactAndSave(
   req: TurnRequest,
   agentId: string,
   result: HarnessResultScoped<SessionData>,
+  mustPersist: boolean,
 ): Promise<void> {
+  let persisted = false
+  const persist = async (): Promise<void> => {
+    persisted = true
+    await saveSession(req.sessionId, req.userId, agentId, serializeContext(result.context))
+  }
   // Lane A6: the two describe implementations are REQUIRED injected config on
   // compactBulkData — `bamlPatterns()` supplies the describe-tier pair.
-  await compactBulkData(
-    result.context,
-    async () => {
-      await saveSession(req.sessionId, req.userId, agentId, serializeContext(result.context))
-    },
-    bamlPatterns(),
-  ).catch((err) => console.error('[summarize] background summarization failed:', err))
+  await compactBulkData(result.context, persist, bamlPatterns()).catch((err) =>
+    console.error('[summarize] background summarization failed:', err),
+  )
+  if (mustPersist && !persisted) {
+    await persist().catch((err: unknown) =>
+      console.error('[title-gen] could not persist the warning:', err),
+    )
+  }
 }

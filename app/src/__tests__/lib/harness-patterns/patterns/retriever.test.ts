@@ -214,7 +214,9 @@ describe('retriever', () => {
     expect(backend.calls[0].text).toBe('what is RAG?')
   })
 
-  it('falls back to the raw message + tracks an error when RetrieveQuery throws', async () => {
+  // #420: the search itself is unaffected, so the failed rewrite is a warning.
+  // Mutation: emit `'error'` again in the rewrite catch → reds.
+  it('falls back to the raw message + records a warning when RetrieveQuery throws', async () => {
     const { retriever, rewrite, createScope, createEventView, b } = await load()
     vi.mocked(b.RetrieveQuery).mockRejectedValueOnce(new Error('describe model down'))
     const backend = mockBackend('redis', [hit('redis', 'a', 0.1)])
@@ -234,9 +236,10 @@ describe('retriever', () => {
     // Degrades to the raw latest message and still searches.
     expect(backend.calls[0].text).toBe('again')
     expect((result.data as { matches: RetrievalHit[] }).matches).toHaveLength(1)
-    const errors = result.events.filter((e) => e.type === 'error')
-    expect(errors.length).toBeGreaterThan(0)
-    expect(JSON.stringify(errors[0].data)).toContain('describe model down')
+    expect(result.events.some((e) => e.type === 'error')).toBe(false)
+    const warnings = result.events.filter((e) => e.type === 'warning')
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0].data).toMatchObject({ task: 'query_rewrite', error: 'describe model down' })
   })
 
   it('fans out to all backends and merges closest-first, capped at k', async () => {

@@ -1497,7 +1497,10 @@ export function createCriticAdapter(): CriticAdapterFn {
 
 /**
  * Summarize a tool result using a lightweight model.
- * Non-fatal: returns empty string on failure.
+ * THROWS on a failed call (#420) — `compactBulkData` catches it, keeps the raw
+ * result and records a `warning`. It used to return `''` on failure, which
+ * made a summarizer outage indistinguishable from a blank answer, so nothing
+ * anywhere said the summarizer was down.
  *
  * The collector exists only for accounting — nothing here reads it, and this
  * call emits no `LLMCallData` event. See {@link withUsageAccounting}: describe
@@ -1511,17 +1514,13 @@ export async function describeToolResultOp(
   reasoning: string,
   result: string,
 ): Promise<string> {
-  try {
-    const { b } = await import('./baml_client')
-    return await withUsageAccounting('ResultDescribe', (opts) =>
-      b.ResultDescribe(tool, toolArgs, reasoning, result, {
-        ...opts,
-        ...clientOverrideFor('describe'),
-      }),
-    )
-  } catch {
-    return ''
-  }
+  const { b } = await import('./baml_client')
+  return withUsageAccounting('ResultDescribe', (opts) =>
+    b.ResultDescribe(tool, toolArgs, reasoning, result, {
+      ...opts,
+      ...clientOverrideFor('describe'),
+    }),
+  )
 }
 
 /** `DescribeBatchItem` moved to core `types.ts` at Lane A6 — it rides the
@@ -1532,9 +1531,10 @@ export type { DescribeBatchItem } from '@hames-ai/harness-patterns/types'
 /**
  * Summarize several tool results in ONE describe-tier call (#83 Part E).
  *
- * Returns a map of item `id` → summary. Non-fatal in three graded ways, all of
- * which leave the caller free to fall back per item:
- *  - the whole call failed → empty map (every item missing)
+ * Returns a map of item `id` → summary, graded three ways, all of which leave
+ * the caller free to fall back per item:
+ *  - the whole call failed → THROWS (#420), so the caller can record that a
+ *    summarizer failed rather than mistake it for a thin answer
  *  - the model dropped an item → that `id` is absent
  *  - the model answered blank for an item → that `id` is absent
  *
@@ -1547,34 +1547,25 @@ export async function describeToolResultsBatchOp(
   const byId = new Map<string, string>()
   if (items.length === 0) return byId
   const wanted = new Set(items.map((i) => i.id))
-  try {
-    const { b } = await import('./baml_client')
-    const targets = items.map((i) => ({
-      id: i.id,
-      tool: i.tool,
-      tool_args: i.toolArgs,
-      reasoning: i.reasoning,
-      result: i.result,
-    }))
-    // Collector for accounting only — see `describeToolResultOp`.
-    const batch = await withUsageAccounting('ResultDescribeBatch', (opts) =>
-      b.ResultDescribeBatch(targets, {
-        ...opts,
-        ...clientOverrideFor('describe'),
-      }),
-    )
-    for (const entry of batch?.summaries ?? []) {
-      const summary = entry?.summary?.trim()
-      if (summary && wanted.has(entry.id)) byId.set(entry.id, summary)
-    }
-  } catch (error) {
-    // Visible on purpose: the caller silently retries each item on its own, so
-    // a chronically failing batch would otherwise look like a cost regression
-    // (N+1 calls) with no explanation in the logs.
-    console.warn(
-      `[compactBulkData] batched describe of ${items.length} results failed, ` +
-        `falling back per item: ${error instanceof Error ? error.message : String(error)}`,
-    )
+  const { b } = await import('./baml_client')
+  const targets = items.map((i) => ({
+    id: i.id,
+    tool: i.tool,
+    tool_args: i.toolArgs,
+    reasoning: i.reasoning,
+    result: i.result,
+  }))
+  // Collector for accounting only — see `describeToolResultOp`. A failed call
+  // throws to the caller, which logs the N+1 fallback it then pays for.
+  const batch = await withUsageAccounting('ResultDescribeBatch', (opts) =>
+    b.ResultDescribeBatch(targets, {
+      ...opts,
+      ...clientOverrideFor('describe'),
+    }),
+  )
+  for (const entry of batch?.summaries ?? []) {
+    const summary = entry?.summary?.trim()
+    if (summary && wanted.has(entry.id)) byId.set(entry.id, summary)
   }
   return byId
 }

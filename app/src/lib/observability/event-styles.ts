@@ -62,6 +62,9 @@ export const eventIconClasses: Record<EventType, string> = {
   plan_created: 'i-material-symbols-map-outline',
   // The same shield SanitizedChip uses for the guard's own chip.
   content_sanitized: 'i-material-symbols-shield-outline',
+  // The chat Warning bubble's glyph, in the outline style the rest of this
+  // table uses, so the two read as one thing.
+  warning: 'i-material-symbols-warning-outline',
 }
 
 export const eventColors: Record<EventType, string> = {
@@ -82,4 +85,7 @@ export const eventColors: Record<EventType, string> = {
   content_sanitized: '#fb923c', // orange-400 — a control firing on hostile input,
   // deliberately distinct from `error` red (nothing failed) and from the cyan
   // tool_result it annotates (this is not a result)
+  warning: '#f59e0b', // amber-500 — the chat Warning bubble's hue: a side task
+  // failed and the turn ran on a fallback (#420), so neither error red nor the
+  // orange of a control firing
 }

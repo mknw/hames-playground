@@ -172,7 +172,12 @@ describe('compactIntent', () => {
     expect((result.data as { intent?: string }).intent).toBe('do the thing')
   })
 
-  it('is backward-safe: leaves intent unset and tracks an error if the BAML call throws', async () => {
+  // #420: a failed rewrite is a WARNING. As an `error` it reached the
+  // synthesizer's `hasErrors()` apology, `settleTurn`'s failed-turn rule and an
+  // inline bubble quoting the raw BAML message — for a step the actor routes
+  // around by working from the raw message.
+  // Mutation: emit `'error'` again in the catch → reds on both expectations.
+  it('is backward-safe: leaves intent unset and records a warning, not an error, if the BAML call throws', async () => {
     const { compactIntent, compactIntentFn, createScope, createEventView, b } = await load()
     vi.mocked(b.CompactIntent).mockRejectedValueOnce(new Error('describe model unavailable'))
     const now = Date.now()
@@ -192,9 +197,16 @@ describe('compactIntent', () => {
     const result = await pattern.fn(scope, view)
 
     expect((result.data as { intent?: string }).intent).toBeUndefined()
-    const errors = result.events.filter((e) => e.type === 'error')
-    expect(errors.length).toBeGreaterThan(0)
-    expect(JSON.stringify(errors[0].data)).toContain('describe model unavailable')
+    expect(result.events.some((e) => e.type === 'error')).toBe(false)
+    const warnings = result.events.filter((e) => e.type === 'warning')
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0].data).toMatchObject({
+      task: 'intent_compaction',
+      error: 'describe model unavailable',
+    })
+    // The bubble's two lines are written for the person, not the log.
+    expect((warnings[0].data as { message: string }).message).not.toContain('unavailable')
+    expect((warnings[0].data as { fallback: string }).fallback).toMatch(/as written/)
   })
 
   it('does nothing when there is no user message in view', async () => {

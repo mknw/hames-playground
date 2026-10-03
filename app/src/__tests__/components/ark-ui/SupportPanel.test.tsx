@@ -53,7 +53,8 @@ vi.mock('../../../components/ark-ui/SkillsPanel', () => ({
   SkillsPanel: () => <div data-testid="skills-panel" />,
 }))
 
-const { SupportPanel } = await import('../../../components/ark-ui/SupportPanel')
+const { SupportPanel, SANDBOX_UNAVAILABLE_REASON } =
+  await import('../../../components/ark-ui/SupportPanel')
 const { sawSandboxEntry, SANDBOX_BLINK_MS, SANDBOX_BLINK_WINDOW_MS } =
   await import('../../../lib/sandbox-blink')
 
@@ -412,5 +413,107 @@ describe('SupportPanel — the Sandbox tab blinks when a sandbox is entered (#41
     expect(sawSandboxEntry([enter('withSandbox(y)', now)], seen, now)).toBe(false)
     // Not a sandbox: a pattern name that merely contains the word.
     expect(sawSandboxEntry([enter('mywithSandbox(z)', now, 'c')], seen, now)).toBe(false)
+  })
+})
+
+// Owner decision 2026-10-03: "the `sandbox` tab is greyed out (inactive) when
+// an agent without sandbox is selected (eg. search agent)". The panel is told
+// by `sandboxAvailable`, which the route fills from the selected agent's
+// registry entry — never from its name.
+describe('SupportPanel — the Sandbox tab follows the selected agent', () => {
+  const sandboxTab = (container: HTMLElement) => tab(container, 'Sandbox')
+  const onSandbox = (container: HTMLElement) => container.textContent?.includes('sandbox command')
+
+  it('is a working tab for an agent that has a sandbox', async () => {
+    const { container } = render(() => <SupportPanel graphElements={[]} sandboxAvailable />)
+
+    expect(sandboxTab(container).hasAttribute('disabled')).toBe(false)
+    expect(sandboxTab(container).hasAttribute('aria-describedby')).toBe(false)
+    await clickTab(container, 'Sandbox')
+    expect(onSandbox(container)).toBe(true)
+  })
+
+  // A slow or failed agent-list read must never take the tab away from an
+  // agent that has a sandbox: only a definite "no" greys it out.
+  //
+  // MUTATION: gate on `!props.sandboxAvailable` instead of `=== false` → red.
+  it('stays usable while the agent is not known yet', async () => {
+    const { container } = render(() => <SupportPanel graphElements={[]} />)
+
+    expect(sandboxTab(container).hasAttribute('disabled')).toBe(false)
+    await clickTab(container, 'Sandbox')
+    expect(onSandbox(container)).toBe(true)
+  })
+
+  // MUTATION: drop `disabled={sandboxDisabled()}` from the trigger → red (the
+  // click opens the tab, and nothing says it is disabled).
+  it('is visible but disabled, unclickable and explained for an agent without one', async () => {
+    const { container } = render(() => <SupportPanel graphElements={[]} sandboxAvailable={false} />)
+    const trigger = sandboxTab(container)
+
+    // Still there — greyed out, not hidden.
+    expect(trigger).toBeTruthy()
+    expect(trigger.getAttribute('op')).toBe('40')
+    // Disabled the way a disabled tab is: native `disabled` (no click, no
+    // focus) and announced as such. Ark's arrow-key navigation selects
+    // `[role=tab]:not([disabled])`, so the attribute is also what keeps the
+    // keyboard off it — not provable here, since jsdom has no `CSS.escape`.
+    expect(trigger.hasAttribute('disabled')).toBe(true)
+    expect(trigger.getAttribute('aria-disabled')).toBe('true')
+    // The reason, both as a tooltip and as the tab's accessible description.
+    expect(trigger.getAttribute('title')).toBe(SANDBOX_UNAVAILABLE_REASON)
+    const describedBy = trigger.getAttribute('aria-describedby')!
+    expect(document.getElementById(describedBy)?.textContent).toBe(SANDBOX_UNAVAILABLE_REASON)
+
+    await clickTab(container, 'Sandbox')
+    expect(onSandbox(container)).toBe(false)
+    expect(container.textContent).toContain('No events yet')
+  })
+
+  // MUTATION: delete the effect that moves the selection → red (the Shell
+  // and the feed stay on screen under an agent with no sandbox).
+  it('leaves the Sandbox tab for Context manager when the agent changes to one without a sandbox', async () => {
+    const [available, setAvailable] = createSignal<boolean | undefined>(true)
+    const { container } = render(() => (
+      <SupportPanel graphElements={[]} sandboxAvailable={available()} />
+    ))
+    await clickTab(container, 'Sandbox')
+    expect(onSandbox(container)).toBe(true)
+
+    setAvailable(false)
+    await tick()
+
+    expect(onSandbox(container)).toBe(false)
+    expect(container.textContent).toContain('No events yet')
+    expect(tab(container, 'Context manager').getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('does not move a panel that is on another tab', async () => {
+    const [available, setAvailable] = createSignal<boolean | undefined>(true)
+    const { container } = render(() => (
+      <SupportPanel graphElements={[]} sessionId="s" sandboxAvailable={available()} />
+    ))
+    await clickTab(container, 'Data')
+
+    setAvailable(false)
+    await tick()
+
+    expect(container.querySelector('[data-testid="data-stash"]')).toBeTruthy()
+  })
+
+  it('comes back when the agent changes to one with a sandbox', async () => {
+    const [available, setAvailable] = createSignal<boolean | undefined>(false)
+    const { container } = render(() => (
+      <SupportPanel graphElements={[]} sandboxAvailable={available()} />
+    ))
+    expect(sandboxTab(container).hasAttribute('disabled')).toBe(true)
+
+    setAvailable(true)
+    await tick()
+
+    expect(sandboxTab(container).hasAttribute('disabled')).toBe(false)
+    expect(sandboxTab(container).hasAttribute('title')).toBe(false)
+    await clickTab(container, 'Sandbox')
+    expect(onSandbox(container)).toBe(true)
   })
 })

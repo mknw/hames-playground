@@ -8,10 +8,11 @@
 
 ## What this is
 
-Six ready-made AI agents to register in your own application: search over the
+Five ready-made AI agents to register in your own application: search over the
 web and a Neo4j knowledge graph, question-answering over documents you have
 uploaded, a Microsoft 365 assistant, a general-purpose agent with every tool,
-and two that run code in a container. Each one is built from
+and one that runs code in a container, picking a plain, data or office
+container for each message. Each one is built from
 [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme)
 and makes its model calls through
 [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme).
@@ -232,7 +233,8 @@ function buildRoutes(tools: ToolSet): ConfiguredPattern<AgentData> {
 ```typescript
 // A code-running loop kept in one container for the whole conversation. The
 // sandbox wrapper comes from your application (built on @hames-ai/sandbox),
-// so you decide how the container is isolated. From `sandbox-session.server.ts`:
+// so you decide how the container is isolated. From the `basic` route of
+// `sandbox.server.ts`:
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
 import type { ConfiguredPattern } from '@hames-ai/harness-patterns'
 
@@ -317,17 +319,16 @@ order under **Composition**; each name is a pattern documented in the
 which neutralizes instructions hidden in untrusted content (a web page, an
 email) before a model reads it.
 
-| Agent               | Composition                                                      | Tools                                                   | Injection guard                                                                          |
-| ------------------- | ---------------------------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `search`            | router → routes(neo4j loop, web loop) → compactExecution         | neo4j-cypher, web_search, fetch                         | web route guarded; neo4j route not guarded (see the Warning below)                       |
-| `retriever-agent`   | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                         | web namespace + retriever exact-name guarded together (ingested documents are untrusted) |
-| `microsoft-365`     | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token | whole Microsoft Graph loop guarded (mail and files can be written by anyone)             |
-| `general`           | planner → simpleLoop(tools.all) → compactExecution               | everything                                              | not guarded yet (below)                                                                  |
-| `sandbox-session`   | compactIntent → withSandbox(actorCritic) → compactExecution      | in-container `sandbox_*`                                | not on tool results yet; shell commands are screened (below)                             |
-| `flavoured-sandbox` | router → routes(base, image, data, office) → compactExecution    | in-container `sandbox_*`                                | not on tool results yet, on any route; shell commands are screened (below)               |
+| Agent             | Composition                                                      | Tools                                                   | Injection guard                                                                          |
+| ----------------- | ---------------------------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `search`          | router → routes(neo4j loop, web loop) → compactExecution         | neo4j-cypher, web_search, fetch                         | web route guarded; neo4j route not guarded (see the Warning below)                       |
+| `retriever-agent` | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                         | web namespace + retriever exact-name guarded together (ingested documents are untrusted) |
+| `microsoft-365`   | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token | whole Microsoft Graph loop guarded (mail and files can be written by anyone)             |
+| `general`         | planner → simpleLoop(tools.all) → compactExecution               | everything                                              | not guarded yet (below)                                                                  |
+| `sandbox`         | router → routes(basic, data, office) → compactExecution          | in-container `sandbox_*`                                | not on tool results yet, on any route; shell commands are screened (below)               |
 
 **Guardrail status.** Two guards ship today. The injection guard covers the
-tool results marked in the table above, and the two sandbox agents also get
+tool results marked in the table above, and the sandbox agent also gets
 `@hames-ai/sandbox`'s shell-command screen, which checks every `sandbox_bash`
 command against a denylist before it runs. Guardrails beyond these two are in
 active development; the Warning below has the status and what to do meanwhile.
@@ -457,6 +458,6 @@ front-end code can import it without pulling in anything server-side:
 | `AgentDefinition`, `AgentData`, `AgentDeps`                                   | the definition types (see Configuration)                        |
 
 The definitions entry point (`import from '@hames-ai/agents/agents'`) is
-**server-only** — six registered agents plus three shared helpers
+**server-only** — five registered agents plus three shared helpers
 (`getGraphSchema`, the Neo4j few-shots, the title generator). Every module
 calls core's `assertServerOnImport()` at load.

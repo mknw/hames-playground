@@ -140,6 +140,16 @@ describe('SkillsPanel — a selected skill', () => {
     expect(statusText(view({ status: 'hidden' }))).toContain('Hidden')
     expect(statusText(view({}))).toContain('/skills/pdf-processing/SKILL.md')
   })
+
+  // Owner decision 2026-10-03: routines and triggered runs mount the owner's
+  // own skills only. The panel says so where it would otherwise claim another
+  // user's skill is simply "mounted".
+  it('says another user’s mounted skill stays out of routines and triggered runs', () => {
+    const shared = statusText(view({ mine: false, isGlobal: true, author: 'Ada' }))
+    expect(shared).toContain('/skills/pdf-processing/SKILL.md')
+    expect(shared).toContain('except in routines and triggered runs')
+    expect(statusText(view({ mine: true, isGlobal: true }))).not.toContain('routines')
+  })
 })
 
 describe('SkillsPanel — actions', () => {

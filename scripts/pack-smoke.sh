@@ -314,12 +314,12 @@ for (const fn of ['extractGraphElements', 'extractGraphFromResult', 'isEdgeEleme
   assert.equal(typeof (root as Record<string, unknown>)[fn], 'function', `${fn} missing from the root barrel`)
 }
 
-// 2. the definitions barrel evaluates — the nine moved modules, through the
-//    tarball (which transitively loads the two overridden dependency
+// 2. the definitions barrel evaluates — the eight definition modules, through
+//    the tarball (which transitively loads the two overridden dependency
 //    tarballs and @boundaryml/baml)
 const agents = await import('@hames-ai/agents/agents')
-for (const name of ['searchAgent', 'generalAgent', 'sandboxSessionAgent',
-  'flavouredSandboxAgent', 'retrieverAgent', 'microsoft365Agent']) {
+for (const name of ['searchAgent', 'generalAgent', 'sandboxAgent',
+  'retrieverAgent', 'microsoft365Agent']) {
   const def = (agents as Record<string, { id?: string }>)[name]
   assert.equal(typeof def?.id, 'string', `${name} missing from the agents barrel`)
   assert.equal(typeof def.createPatterns, 'function', `${name}.createPatterns missing`)

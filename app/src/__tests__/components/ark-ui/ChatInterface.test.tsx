@@ -50,6 +50,7 @@ const AGENTS = [
     welcome: 'I route your question to the graph or the web.',
     icon: 'i-x',
     servers: ['neo4j'],
+    usesSandbox: false,
   },
   {
     id: 'kg',
@@ -58,6 +59,16 @@ const AGENTS = [
     welcome: 'I write what you tell me into the knowledge graph.',
     icon: 'i-y',
     servers: ['neo4j', 'memory'],
+    usesSandbox: false,
+  },
+  {
+    id: 'box',
+    name: 'Sandbox',
+    description: 'Runs code',
+    welcome: 'I have a Linux box for this conversation.',
+    icon: 'i-z',
+    servers: [],
+    usesSandbox: true,
   },
 ]
 const getAgentList = vi.fn(async () => AGENTS)
@@ -322,7 +333,45 @@ describe('ChatInterface — hydration', () => {
     // lands after the user has moved on still files into the thread it belongs to.
     expect(host.registry.events('s1')).toEqual(events)
     expect(onContextUpdate).toHaveBeenCalledWith('s1', { events })
-    expect(onSelectedAgentChange).toHaveBeenLastCalledWith('kg')
+    expect(onSelectedAgentChange).toHaveBeenLastCalledWith(
+      'kg',
+      expect.objectContaining({ usesSandbox: false }),
+    )
+  })
+
+  // The support panel greys its Sandbox tab out on what this reports
+  // (owner decision 2026-10-03). It rides the agent list this component
+  // already fetched for the greeting, so it is the registry's declaration.
+  it('reports whether the selected agent runs in a sandbox, from the registry', async () => {
+    loadConversation.mockResolvedValue({
+      agentId: 'box',
+      kind: 'conversation',
+      serialized: '{}',
+      messages: [],
+    })
+    const onSelectedAgentChange = vi.fn()
+    makeHost().mount(() => (
+      <ChatInterface sessionId="s1" onSelectedAgentChange={onSelectedAgentChange} />
+    ))
+    await settle()
+
+    expect(onSelectedAgentChange).toHaveBeenLastCalledWith(
+      'box',
+      expect.objectContaining({ usesSandbox: true }),
+    )
+  })
+
+  // "Not known yet" must reach the parent as unknown, not as "no sandbox":
+  // only a definite answer greys the tab out.
+  it('reports no capabilities while the agent list has not loaded', async () => {
+    getAgentList.mockReturnValue(new Promise<typeof AGENTS>(() => {}))
+    const onSelectedAgentChange = vi.fn()
+    makeHost().mount(() => (
+      <ChatInterface sessionId="s1" onSelectedAgentChange={onSelectedAgentChange} />
+    ))
+    await settle()
+
+    expect(onSelectedAgentChange).toHaveBeenLastCalledWith('search', undefined)
   })
 
   // Regression for the field-picking bug called out in the source: an error
@@ -1033,6 +1082,9 @@ describe('ChatInterface — agent selection', () => {
     await tick()
 
     expect(onAgentChangeRequestsNewSession).toHaveBeenCalledTimes(1)
-    expect(onSelectedAgentChange).toHaveBeenLastCalledWith('kg')
+    expect(onSelectedAgentChange).toHaveBeenLastCalledWith(
+      'kg',
+      expect.objectContaining({ usesSandbox: false }),
+    )
   })
 })

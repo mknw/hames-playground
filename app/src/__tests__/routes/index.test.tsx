@@ -579,6 +579,34 @@ describe('chat route — run state across threads', () => {
 })
 
 describe('chat route — support panel wiring', () => {
+  // The Sandbox tab is greyed out for an agent without a sandbox (owner
+  // decision 2026-10-03). What decides it is the selected agent's registry
+  // entry, which the chat view reports alongside the id — never the id itself.
+  it('hands the support panel the selected agent and whether it has a sandbox', async () => {
+    await mount()
+    // Before the chat view has reported anything: the default agent, and no
+    // answer yet — which the panel reads as "leave the tab alone".
+    expect(support.agentId).toBe('search')
+    expect(support.sandboxAvailable).toBeUndefined()
+
+    chat.onSelectedAgentChange('search', { usesSandbox: false })
+    await tick()
+    expect(support.agentId).toBe('search')
+    expect(support.sandboxAvailable).toBe(false)
+
+    chat.onSelectedAgentChange('sandbox', { usesSandbox: true })
+    await tick()
+    expect(support.agentId).toBe('sandbox')
+    expect(support.sandboxAvailable).toBe(true)
+
+    // An agent the list does not know (yet): back to "no answer", not to the
+    // previous agent's.
+    chat.onSelectedAgentChange('retriever')
+    await tick()
+    expect(support.agentId).toBe('retriever')
+    expect(support.sandboxAvailable).toBeUndefined()
+  })
+
   it('shows the displayed session’s accumulated graph, and clears it on request', async () => {
     await mount()
     registry.mergeGraph('new-1', [{ data: { id: 'n1', label: 'Alice' } }])

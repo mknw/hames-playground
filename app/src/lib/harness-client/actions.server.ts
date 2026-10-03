@@ -229,6 +229,8 @@ export async function getAgentList(): Promise<
     /** Accent-family token; resolve with `accentColor()` (lib/agent-palette). */
     accent: string
     servers: string[]
+    /** Whether the agent runs in a sandbox — gates the support panel's Sandbox tab. */
+    usesSandbox: boolean
   }>
 > {
   return getAgentMetadata()

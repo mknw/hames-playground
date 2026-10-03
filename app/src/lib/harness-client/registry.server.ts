@@ -22,6 +22,7 @@ import { harnessHasRedisRetriever, harnessUsesSyncWorkspace } from '@hames-ai/ha
 import type { AgentDefinition } from '@hames-ai/agents'
 import type { SessionData } from './session.server'
 import type { AgentAccent } from '../agent-palette'
+import { canonicalAgentId } from './agent-ids'
 
 // The directive is gone, so nothing else keeps this module off the client. The
 // import-time assertion does.
@@ -71,27 +72,9 @@ export function registerAgent(config: AgentConfig): void {
   agentRegistry.set(config.id, config)
 }
 
-/**
- * Ids that agents used to be registered under, mapped to their current id.
- *
- * `conversations.agent_id` stores whatever id the turn ran under, so a rename
- * strands every row written before it: `getOrBuildPatterns` would throw
- * `Unknown agent: default` and the thread would simply fail to open. Rather
- * than a SQL migration, the id is mapped forward on read — `getAgent` for
- * display lookups off raw rows, and `loadSession` for the resume path, which
- * also means the row rewrites itself to the current id on its next save.
- *
- * Only ever add here; an entry is cheap and removing one re-strands old rows.
- */
-const RENAMED_AGENT_IDS: Record<string, string> = {
-  // PR #234 — 'default' named its position in the list, not what it does.
-  default: 'search',
-}
-
-/** Current id for a possibly-legacy agent id. Unknown ids pass through. */
-export function canonicalAgentId(id: string): string {
-  return RENAMED_AGENT_IDS[id] ?? id
-}
+// The legacy-id map lives in its own dependency-free module so the turn
+// runner can canonicalize a requested id without loading every agent.
+export { canonicalAgentId }
 
 /**
  * Get an agent by ID. Accepts an id the agent was previously registered under.
@@ -118,16 +101,24 @@ export function getAgentMetadata(): Array<{
   icon: string
   accent: AgentAccent
   servers: string[]
+  /** Whether the agent runs in a sandbox — the support panel greys its Sandbox
+   *  tab out when this is false. Always a boolean on the wire: the
+   *  definition's absent flag means "no sandbox", and the client must not have
+   *  to know that convention. */
+  usesSandbox: boolean
 }> {
-  return getAllAgents().map(({ id, name, description, welcome, icon, accent, servers }) => ({
-    id,
-    name,
-    description,
-    welcome,
-    icon,
-    accent,
-    servers,
-  }))
+  return getAllAgents().map(
+    ({ id, name, description, welcome, icon, accent, servers, usesSandbox }) => ({
+      id,
+      name,
+      description,
+      welcome,
+      icon,
+      accent,
+      servers,
+      usesSandbox: usesSandbox === true,
+    }),
+  )
 }
 
 // ============================================================================
@@ -248,8 +239,7 @@ export async function agentUsesSyncWorkspace(agentId: string, sessionId: string)
  */
 import { searchAgent } from '@hames-ai/agents/agents/search.server'
 import { generalAgent } from '@hames-ai/agents/agents/general.server'
-import { sandboxSessionAgent } from '@hames-ai/agents/agents/sandbox-session.server'
-import { flavouredSandboxAgent } from '@hames-ai/agents/agents/flavoured-sandbox.server'
+import { sandboxAgent } from '@hames-ai/agents/agents/sandbox.server'
 import { retrieverAgent } from '@hames-ai/agents/agents/retriever-agent.server'
 import { microsoft365Agent } from '@hames-ai/agents/agents/microsoft-365.server'
 import { agentDeps } from './session.server'
@@ -267,7 +257,6 @@ function overlay(def: AgentDefinition, icon: string, accent: AgentAccent): Agent
 // Register all agents — one overlay site per agent, beside the palette.
 registerAgent(overlay(searchAgent, 'i-material-symbols-search', 'indigo'))
 registerAgent(overlay(generalAgent, 'i-material-symbols-robot-2-outline', 'indigo'))
-registerAgent(overlay(sandboxSessionAgent, 'i-material-symbols-castle-outline', 'orange'))
-registerAgent(overlay(flavouredSandboxAgent, 'i-material-symbols-stack-star-outline', 'orange'))
+registerAgent(overlay(sandboxAgent, 'i-material-symbols-castle-outline', 'orange'))
 registerAgent(overlay(retrieverAgent, 'i-material-symbols-document-search-outline', 'violet'))
 registerAgent(overlay(microsoft365Agent, 'i-material-symbols-window-sharp', 'blue'))

@@ -217,7 +217,7 @@ them:
   so it reads a file only when its description fits the task. Names follow the
   specification's rule, a description is 1–1024 characters, a file is at most
   64 KiB, and at most 20 skills mount per run; a skill that cannot be mounted is
-  reported as a run event rather than dropped silently.
+  reported as a `warning` run event rather than dropped silently.
   Which skills a run gets — and whose they are — is yours to decide, server-side.
 
 Every other option on `WithSandboxConfig` (`backend`, `pool`, `scheduler`,

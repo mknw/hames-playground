@@ -179,7 +179,7 @@ type EventType =
   | 'intent_compacted' // compactIntent — rewritten brief (observability)
   | 'plan_created' // planner — upfront plan (observability; the plan itself travels on scope.data)
   | 'content_sanitized' // withInjectionGuard — untrusted content neutralized (observability + audit)
-  | 'warning' // a side task (title, summaries, intent/query rewrite, reference pick) failed; the turn ran on a fallback (#420)
+  | 'warning' // a side task (title, summaries, intent/query rewrite, reference pick, sandbox skills mount) failed; the turn ran on a fallback (#420)
 
 // Isolated workspace for each pattern
 interface PatternScope<T> {

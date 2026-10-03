@@ -25,7 +25,7 @@
  *   - a file over {@link SKILL_FILE_MAX_BYTES};
  *   - anything past {@link MAX_MOUNTED_SKILLS}.
  *
- * Each refusal is RETURNED, never dropped: the caller reports it as a run event.
+ * Each refusal is RETURNED, never dropped: the caller reports it as a `warning` event.
  * The same goes for a write that fails in the container. Only what actually
  * landed is returned as `mounted`, and only that goes into the index, so the
  * model is never told about a file that is not there.

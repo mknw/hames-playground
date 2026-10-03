@@ -36,6 +36,7 @@ import type { ComputeBackend, McpTransport, RootfsId, RuntimeConfig } from './ty
 import type {
   ConfiguredPattern,
   ErrorEventData,
+  WarningEventData,
   PatternCapabilities,
   PatternScope,
   EventView,
@@ -164,7 +165,7 @@ export interface WithSandboxConfig {
    *
    * Absent, nothing about the run changes: no `/skills` traffic, no index.
    * Present, the sync runs on every path (pool, fresh, id), and a failure is
-   * reported as a recoverable run event and the run proceeds without the
+   * reported as a `warning` event (#420) and the run proceeds without the
    * skills it could not mount — fail-open on availability, and never an index
    * line for a file that is not there.
    */
@@ -438,18 +439,21 @@ export function withSandbox(config?: WithSandboxConfig) {
 // ============================================================================
 
 /**
- * Report a skills step that did not go to plan, on both channels — the
- * workspace-failure precedent below (`reportWorkspaceFailure`), for the same
- * reason: a run event is discarded if the pattern later throws, the console
- * copy is not. Recoverable by construction: the run continues without the
- * skills that did not land.
+ * Report a skills step that did not go to plan, on both channels: a `warning`
+ * event (#420's side-failure scheme — the turn ran on a fallback, so no error
+ * reader may treat it as a statement about the turn: not `settleTurn`, not the
+ * synthesizer's `hasErrors()`) and a console copy, which survives a pattern
+ * that later throws and discards the scope's events.
  */
-function reportSkillsFailure<T>(scope: PatternScope<T>, detail: string, hint: string): void {
-  console.error(`[sandbox] skills: ${detail}`)
+function reportSkillsFailure<T>(
+  scope: PatternScope<T>,
+  warning: Omit<WarningEventData, 'task'>,
+): void {
+  console.error(`[sandbox] skills: ${warning.error ?? warning.message}`)
   trackEvent(
     scope,
-    'error',
-    { error: `sandbox skills: ${detail}`, severity: 'recoverable', hint } as ErrorEventData,
+    'warning',
+    { task: 'skills_mount', ...warning } satisfies WarningEventData,
     true,
   )
 }
@@ -475,49 +479,51 @@ async function prepareSkills<T>(
   try {
     skills = await resolver()
   } catch (err) {
-    reportSkillsFailure(
-      scope,
-      `could not resolve this run's skills: ${err instanceof Error ? err.message : String(err)}`,
-      'This turn ran without skills.',
-    )
+    reportSkillsFailure(scope, {
+      message: 'Your skills could not be loaded for this sandbox.',
+      fallback: 'The agent ran without skills.',
+      error: `could not resolve this run's skills: ${err instanceof Error ? err.message : String(err)}`,
+    })
     skills = []
   }
   // Every mount command is a `sandbox_bash` call, and the index tells the actor
   // to read a skill with it: a transport without it can do neither.
   if (!transport.ownsTool(SKILLS_INDEX_TOOL)) {
     if (skills.length > 0) {
-      reportSkillsFailure(
-        scope,
-        `this sandbox has no ${SKILLS_INDEX_TOOL} tool, so ${skills.length} skill(s) were not mounted`,
-        'This turn ran without skills.',
-      )
+      reportSkillsFailure(scope, {
+        message: 'This sandbox cannot mount skills.',
+        fallback: 'The agent ran without skills.',
+        error: `this sandbox has no ${SKILLS_INDEX_TOOL} tool, so ${skills.length} skill(s) were not mounted`,
+      })
     }
     return undefined
   }
   try {
     const { mounted, skipped, removalError } = await syncSkills(transport, skills)
     if (skipped.length > 0) {
-      reportSkillsFailure(
-        scope,
-        `${skipped.length} skill(s) not mounted: ` +
+      reportSkillsFailure(scope, {
+        message: `${skipped.length} skill(s) could not be mounted in the sandbox.`,
+        fallback: 'The agent ran with the skills that did mount.',
+        error:
+          `${skipped.length} skill(s) not mounted: ` +
           skipped.map((s) => `${s.name || '(unnamed)'} (${s.error})`).join(', '),
-        'The skills named here are not in /skills this turn; the rest are.',
-      )
+      })
     }
     if (removalError) {
-      reportSkillsFailure(
-        scope,
-        removalError,
-        'A skill removed or hidden since the last turn may still be readable in this sandbox.',
-      )
+      reportSkillsFailure(scope, {
+        message:
+          'A skill removed or hidden since the last turn could not be cleared from the sandbox.',
+        fallback: 'It may still be readable in this sandbox; the agent is not told about it.',
+        error: removalError,
+      })
     }
     return renderSkillsIndex(mounted)
   } catch (err) {
-    reportSkillsFailure(
-      scope,
-      `mounting failed: ${err instanceof Error ? err.message : String(err)}`,
-      'This turn ran without skills.',
-    )
+    reportSkillsFailure(scope, {
+      message: 'Your skills could not be mounted in the sandbox.',
+      fallback: 'The agent ran without skills.',
+      error: `mounting failed: ${err instanceof Error ? err.message : String(err)}`,
+    })
     return undefined
   }
 }

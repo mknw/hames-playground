@@ -475,8 +475,15 @@ const freshScope = (): PatternScope<Record<string, unknown>> => ({
   startTime: Date.now(),
 })
 
-const errorsOf = (scope: PatternScope<unknown>) =>
-  scope.events.filter((e) => e.type === 'error').map((e) => e.data as Record<string, unknown>)
+/** What a skills failure records: #420's `warning` event (task
+ *  `skills_mount`), and never an `error` — a side failure must not read as a
+ *  failed turn to `settleTurn` or as something the synthesizer apologises for. */
+const warningsOf = (scope: PatternScope<unknown>) => {
+  expect(scope.events.filter((e) => e.type === 'error')).toEqual([])
+  return scope.events
+    .filter((e) => e.type === 'warning')
+    .map((e) => e.data as Record<string, unknown>)
+}
 
 describe('withSandbox({ skills })', () => {
   let errorLog: ReturnType<typeof vi.spyOn>
@@ -543,7 +550,7 @@ describe('withSandbox({ skills })', () => {
     expect(seen.contexts[1]).not.toContain('name="b"')
   })
 
-  it('lists only what landed, and reports what did not as a recoverable run event', async () => {
+  it('lists only what landed, and reports what did not as a warning (#420)', async () => {
     const t = track(shellTransport())
     const { pattern, seen } = probe()
     const scope = freshScope()
@@ -557,9 +564,13 @@ describe('withSandbox({ skills })', () => {
 
     expect(seen.contexts[0]).toContain('name="good"')
     expect(seen.contexts[0]).not.toContain('Bad Name')
-    const errors = errorsOf(out)
+    const errors = warningsOf(out)
     expect(errors).toHaveLength(1)
-    expect(errors[0].severity).toBe('recoverable')
+    expect(errors[0].task).toBe('skills_mount')
+    // The bubble's two lines (#420's warningBubble): what did not happen, and
+    // what the turn did instead; the verbatim detail rides in `error`.
+    expect(errors[0].message).toBe('1 skill(s) could not be mounted in the sandbox.')
+    expect(errors[0].fallback).toBe('The agent ran with the skills that did mount.')
     expect(String(errors[0].error)).toContain('Bad Name (not a valid skill name)')
   })
 
@@ -574,7 +585,7 @@ describe('withSandbox({ skills })', () => {
       ),
     )
     expect(seen.contexts).toEqual([undefined])
-    expect(String(errorsOf(out)[0].error)).toContain('a (read-only file system)')
+    expect(String(warningsOf(out)[0].error)).toContain('a (read-only file system)')
   })
 
   it('a resolver that throws runs the turn without skills, and clears what an earlier turn mounted', async () => {
@@ -599,10 +610,10 @@ describe('withSandbox({ skills })', () => {
     // Unknown set → none: the earlier turn's skill is not left readable.
     expect(tree(t)).toEqual([])
     expect(seen.contexts[1]).toBeUndefined()
-    const errors = errorsOf(out)
+    const errors = warningsOf(out)
     expect(errors).toHaveLength(1)
     expect(String(errors[0].error)).toContain('database unreachable')
-    expect(errors[0].severity).toBe('recoverable')
+    expect(errors[0].task).toBe('skills_mount')
   })
 
   it('reports a withdrawn skill it could not remove, because it may still be readable', async () => {
@@ -616,10 +627,10 @@ describe('withSandbox({ skills })', () => {
     current = [skill('a')]
     t.failRemovals = true
     const out = await runInFrame(() => wrapped.fn(freshScope(), fakeView))
-    const errors = errorsOf(out)
+    const errors = warningsOf(out)
     expect(errors).toHaveLength(1)
     expect(String(errors[0].error)).toContain('could not remove 1 stale file(s)')
-    expect(String(errors[0].hint)).toContain('may still be readable')
+    expect(String(errors[0].fallback)).toContain('may still be readable')
   })
 
   it('a sync that cannot even list /skills is reported, and the turn runs without skills', async () => {
@@ -635,7 +646,7 @@ describe('withSandbox({ skills })', () => {
       ),
     )
     expect(seen.contexts).toEqual([undefined])
-    expect(String(errorsOf(out)[0].error)).toContain('mounting failed: transport closed')
+    expect(String(warningsOf(out)[0].error)).toContain('mounting failed: transport closed')
   })
 
   it('a sandbox without sandbox_bash cannot mount: reported, and no index', async () => {
@@ -648,6 +659,6 @@ describe('withSandbox({ skills })', () => {
       ),
     )
     expect(t.bashCalls).toEqual([])
-    expect(String(errorsOf(out)[0].error)).toContain('no sandbox_bash tool')
+    expect(String(warningsOf(out)[0].error)).toContain('no sandbox_bash tool')
   })
 })

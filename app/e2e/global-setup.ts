@@ -13,8 +13,8 @@
  * `TEST_DATABASE_URL` block is the full rationale.
  */
 import { provisionDatabase } from '../src/__tests__/global-setup'
-import { localDatabaseUrl } from '../src/lib/config/compose-credentials.server'
+import { resolveTestDatabase } from '../src/__tests__/test-database'
 
 export default async function setup(): Promise<void> {
-  await provisionDatabase(process.env.TEST_DATABASE_URL ?? localDatabaseUrl('hames_test_apppath'))
+  await provisionDatabase(resolveTestDatabase('hames_test_apppath').url)
 }

@@ -46,16 +46,18 @@ import { fileURLToPath } from 'node:url'
 const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const read = (relative: string): string => readFileSync(path.join(APP_DIR, relative), 'utf8')
 
-/** The database name out of a default in a source file: a literal
- *  `postgresql://…/name`, or `localDatabaseUrl('name')` — the compose-credential
- *  helper every suite's default now goes through. */
+/** The database name out of a default in a source file:
+ *  `resolveTestDatabase('name'…)`, the guard every suite's default goes through
+ *  (`src/__tests__/global-setup.ts`). */
 function declaredDatabases(source: string): string[] {
-  return [
-    ...source.matchAll(
-      /postgresql:\/\/[^'"\s]*?\/([A-Za-z0-9_]+)|localDatabaseUrl\(\s*'([A-Za-z0-9_]+)'\s*\)/g,
-    ),
-  ].map((m) => m[1] ?? m[2])
+  return [...source.matchAll(/resolveTestDatabase\(\s*'([A-Za-z0-9_]+)'/g)].map((m) => m[1])
 }
+
+/** The shapes a suite default had before the guard, each of which reaches the
+ *  Postgres on `localhost:5432` without asking: `?? localDatabaseUrl('name')`,
+ *  a `TEST_DATABASE_URL ??` fallback, and a literal `?? 'postgresql://…'`. */
+const UNGUARDED_DEFAULT =
+  /localDatabaseUrl\(\s*['"`]|TEST_DATABASE_URL\s*\?\?|\?\?\s*['"`]postgresql:/
 
 interface Suite {
   readonly name: string
@@ -134,6 +136,19 @@ describe('suite isolation: no two test suites share a namespace', () => {
       'two suites share a database, so a concurrent run of both deletes rows out from under ' +
         `the other: ${byName.map((b) => `${b.suite}=${b.database}`).join(', ')}`,
     ).toBe(SUITES.length)
+  })
+
+  it("each suite's default goes through the live-Postgres guard", () => {
+    // The guard only protects a suite whose default reaches it. One file going
+    // back to the old idiom is a run that falls back to the live stack without
+    // asking, while the guard still reads like protection.
+    for (const file of SUITES.flatMap((suite) => suite.databaseDeclaredIn)) {
+      expect(
+        read(file),
+        `${file} builds a database default without resolveTestDatabase(), so it can reach ` +
+          'the Postgres on localhost:5432 without the opt-in',
+      ).not.toMatch(UNGUARDED_DEFAULT)
+    }
   })
 
   it('each suite declares its own dev-bypass user id', () => {

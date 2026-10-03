@@ -94,6 +94,14 @@ describe('isSkillName — the specification’s name rule, which is also the pat
 })
 
 describe('isSkillDescription — the specification’s 1–1024 characters', () => {
+  // Literals, not the exported constant: a bound the test borrows from the
+  // code moves with the code, and would agree with any number (F8).
+  it('is the specification’s number', () => {
+    expect(SKILL_DESCRIPTION_MAX_CHARS).toBe(1024)
+    expect(isSkillDescription('a'.repeat(1024))).toBe(true)
+    expect(isSkillDescription('a'.repeat(1025))).toBe(false)
+  })
+
   it('accepts 1 and exactly 1024 characters, counted as code points', () => {
     expect(isSkillDescription('x')).toBe(true)
     expect(isSkillDescription('é'.repeat(SKILL_DESCRIPTION_MAX_CHARS))).toBe(true) // 2048 bytes

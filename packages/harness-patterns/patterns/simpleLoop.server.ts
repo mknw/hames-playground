@@ -8,7 +8,12 @@
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
 import { isAgentWithheldTool } from '../agent-withheld-tools'
-import { repairJson, repairJsonTracked, type JsonRepairNote } from '../json-repair'
+import {
+  repairJson,
+  repairJsonTracked,
+  TooLongToRepairError,
+  type JsonRepairNote,
+} from '../json-repair'
 import { normalizeControllerAction } from '../controller-action'
 import type { LoopTurn, PriorResult, ExpandedRef } from '../types'
 import type {
@@ -680,13 +685,15 @@ export function simpleLoop<T extends SimpleLoopData>(
               const parsed = repairJsonTracked(c.tool_args)
               callArgs = parsed.args
               callRepair = parsed.repair
-            } catch {
+            } catch (err) {
               track(c.tool_args)
               subCalls.push({
                 tool: c.tool_name,
                 precheckError: controllerLlmCall?.hitOutputCap
                   ? `tool_args for ${c.tool_name} were CUT OFF at the output-token limit — the batch was too large; use fewer calls per turn`
-                  : `Invalid tool_args JSON: ${c.tool_args}`,
+                  : err instanceof TooLongToRepairError
+                    ? `Invalid tool_args JSON for ${c.tool_name}: ${err.message}`
+                    : `Invalid tool_args JSON: ${c.tool_args}`,
               })
               continue
             }
@@ -899,7 +906,7 @@ export function simpleLoop<T extends SimpleLoopData>(
           const parsed = repairJsonTracked(action.tool_args)
           args = parsed.args
           argsRepair = parsed.repair
-        } catch {
+        } catch (err) {
           // Truncation-aware: a response cut off at the client's max_tokens
           // cap is not malformed JSON, and generic "fix your JSON" feedback
           // makes the model regenerate the same oversized payload — so the
@@ -908,6 +915,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             action.tool_name,
             action.tool_args,
             controllerLlmCall?.hitOutputCap ?? false,
+            err,
           )
           if (streak.unusableAnswer()) {
             // The consecutive-recovery cap: these args end the loop as they

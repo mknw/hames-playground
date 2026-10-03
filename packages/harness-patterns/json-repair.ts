@@ -658,6 +658,8 @@ export interface RepairedJson {
 
 const LENIENT: JsonRepairNote = { strategy: 'lenient-tokens' }
 
+export class TooLongToRepairError extends SyntaxError {}
+
 /**
  * The longest input the lenient chain will try to repair, in characters after
  * trimming (#463). Longer input that neither `JSON.parse` nor
@@ -676,9 +678,8 @@ const LENIENT: JsonRepairNote = { strategy: 'lenient-tokens' }
  * It throws rather than truncates, because a prefix is not the document: the
  * module guarantees no partial document (see `parseUnescapedContent`), and a
  * truncated repair is the silent mis-coercion #217(b) is about. The throw is a
- * `SyntaxError`, like every other refusal here. Both loops treat it as unusable
- * `tool_args` and feed the model their own "Invalid tool_args JSON" message,
- * which is the right advice for this case too (#437).
+ * `SyntaxError`, like every other refusal here. Both loops forward this message
+ * to the model (#437).
  */
 const LENIENT_CHAIN_MAX_CHARS = 16_384
 
@@ -757,7 +758,7 @@ export function repairJsonTracked(raw: string): RepairedJson {
 
   // Everything below is the lenient chain, and it runs on short input only.
   if (s.length > LENIENT_CHAIN_MAX_CHARS) {
-    throw new SyntaxError(
+    throw new TooLongToRepairError(
       `Not valid JSON, and too long to repair: ${s.length} characters, where relaxed ` +
         `syntax is only repaired up to ${LENIENT_CHAIN_MAX_CHARS}. Send valid JSON: quote ` +
         'every key and string, and escape quotes and newlines inside strings.',

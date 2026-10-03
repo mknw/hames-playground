@@ -17,17 +17,17 @@ Pattern C of the identity model in #107; issue #110.
 
 Nine registered `graph` tools. All of them only ever **read** from Microsoft 365:
 
-| Tool | Reads | Scope used |
-|------|-------|-----------|
-| `graph_me` | own profile (name, UPN, job title, office) | `User.Read` |
-| `graph_calendar_today` | own calendar for a given day (`day_offset`) | `Calendars.ReadWrite` |
-| `graph_mail_recent` | own inbox, newest first, optional `unread_only` | `Mail.Read` |
-| `graph_mail_attachments` | own sent/received mail carrying attachments, by person/date | `Mail.Read` |
-| `graph_files_search` | files across own OneDrive **and** every reachable SharePoint site | `Files.Read.All` + `Sites.Read.All` |
-| `graph_files_list` | own OneDrive root, or one folder's children | `Files.Read.All` |
-| `graph_files_recent` | own recently used/edited files (Office Graph insights) | `Sites.Read.All` |
-| `graph_files_shared` | what was shared *with* the user, by whom and through which channel (insights) | `Sites.Read.All` |
-| `graph_file_ingest` | one own OneDrive/SharePoint file → the Data Stash | `Files.Read.All` |
+| Tool                     | Reads                                                                         | Scope used                          |
+| ------------------------ | ----------------------------------------------------------------------------- | ----------------------------------- |
+| `graph_me`               | own profile (name, UPN, job title, office)                                    | `User.Read`                         |
+| `graph_calendar_today`   | own calendar for a given day (`day_offset`)                                   | `Calendars.ReadWrite`               |
+| `graph_mail_recent`      | own inbox, newest first, optional `unread_only`                               | `Mail.Read`                         |
+| `graph_mail_attachments` | own sent/received mail carrying attachments, by person/date                   | `Mail.Read`                         |
+| `graph_files_search`     | files across own OneDrive **and** every reachable SharePoint site             | `Files.Read.All` + `Sites.Read.All` |
+| `graph_files_list`       | own OneDrive root, or one folder's children                                   | `Files.Read.All`                    |
+| `graph_files_recent`     | own recently used/edited files (Office Graph insights)                        | `Sites.Read.All`                    |
+| `graph_files_shared`     | what was shared _with_ the user, by whom and through which channel (insights) | `Sites.Read.All`                    |
+| `graph_file_ingest`      | one own OneDrive/SharePoint file → the Data Stash                             | `Files.Read.All`                    |
 
 Enough for "what does my day look like?" — the agent's loop calls several tools
 in one turn and the compactExecution writes the briefing — plus "find last quarter's
@@ -42,7 +42,7 @@ through a **retriever pattern**, and that agent has none. Exposing it would
 advertise a capability whose payoff the agent can't deliver — the model would
 ingest a file, get a document id, and be unable to read a word of it. Search and
 browse are the half of the file story that works without a retriever. An agent
-that *does* compose a retriever should compose the ingest tool too.
+that _does_ compose a retriever should compose the ingest tool too.
 
 **Consented scopes still exceed implemented tools.** The sign-in request also
 carries `Mail.Send` (see the setup doc for why consent is taken up front). No
@@ -88,15 +88,15 @@ graphFetch                               ← auth/graph-token.server.ts
    └─ fetch(GRAPH_BASE + path, Authorization: Bearer …)
 ```
 
-| Module | Sole responsibility |
-|--------|--------------------|
-| `harness-patterns/mcp-client.server.ts` | dispatch: which transport owns this tool name |
-| `lib/harness-client/request-user.server.ts` | the ambient `{userId, sessionId}` of a run |
-| `lib/app-tools/registry.server.ts` | resolve identity, execute, never throw |
-| `lib/app-tools/graph.server.ts` | Graph paths, `$select`, KQL composition, response shaping |
-| `lib/auth/graph-token.server.ts` | token acquisition, rotation, attach credential |
-| `lib/auth/user-tokens.server.ts` | encrypted per-user cache, keyed by `oid` |
-| `lib/auth/secret-crypto.server.ts` | AES-256-GCM envelope for stored secrets |
+| Module                                      | Sole responsibility                                       |
+| ------------------------------------------- | --------------------------------------------------------- |
+| `harness-patterns/mcp-client.server.ts`     | dispatch: which transport owns this tool name             |
+| `lib/harness-client/request-user.server.ts` | the ambient `{userId, sessionId}` of a run                |
+| `lib/app-tools/registry.server.ts`          | resolve identity, execute, never throw                    |
+| `lib/app-tools/graph.server.ts`             | Graph paths, `$select`, KQL composition, response shaping |
+| `lib/auth/graph-token.server.ts`            | token acquisition, rotation, attach credential            |
+| `lib/auth/user-tokens.server.ts`            | encrypted per-user cache, keyed by `oid`                  |
+| `lib/auth/secret-crypto.server.ts`          | AES-256-GCM envelope for stored secrets                   |
 
 ### Why in-process rather than an MCP server
 
@@ -111,7 +111,7 @@ the sandbox branch and before the gateway.
 
 Despite "OBO" in the issue title, the OBO grant is not what this uses. OBO
 serves a **middle-tier API**: a separate client signs in, receives a token
-scoped to *our* API, calls us, and we exchange that user assertion downstream.
+scoped to _our_ API, calls us, and we exchange that user assertion downstream.
 Since #119 this app is itself the confidential OIDC client — the browser holds
 an opaque session cookie, not a token — so there is no assertion to exchange,
 and we already hold the user's refresh token from sign-in. `acquireTokenSilent`
@@ -133,7 +133,7 @@ seam for that.
 - A newly registered graph tool appears in `tools.graph` for **every** consumer
   with no registry change — discovery is automatic.
 - **Composition is not.** The `microsoft-365` agent filters `tools.graph` through
-  `MICROSOFT_365_TOOLS`, so a new tool reaches *that* agent only when its name is
+  `MICROSOFT_365_TOOLS`, so a new tool reaches _that_ agent only when its name is
   added to that list. This was previously automatic, and stopped being so once a
   registered tool existed that the agent shouldn't have (see above). The filter
   runs allowlist-first (`MICROSOFT_365_TOOLS.filter(available)`), so a name that
@@ -153,20 +153,20 @@ Three invariants shape the design:
 2. **The credential is attached inside `graphFetch`** and never returned, so no
    tool body, log line, tool result or event can carry it.
 3. **The destination resolves the same way as the identity.** A tool that
-   *writes* somewhere per-conversation (only `graph_file_ingest` today) takes its
+   _writes_ somewhere per-conversation (only `graph_file_ingest` today) takes its
    `sessionId` from `getRequestSessionId()`, not from args — otherwise the model
    could name another conversation's stash. Same reasoning as (1): anything the
    model can name, it can point elsewhere.
 
 Five mechanisms keep concurrent users apart:
 
-| Layer | Mechanism |
-|-------|-----------|
-| Identity | `getRequestUserId()` reads AsyncLocalStorage — per-request context |
-| Destination | `getRequestSessionId()` from the same store — stash writes can't cross conversations |
-| MSAL client | constructed per call; only that user's cache is deserialized into it |
-| Token store | `user_tokens.user_id` is the primary key; every query is `WHERE user_id = $1` |
-| Provenance | no server action accepts a `userId`; all derive it from `requireUser()` → session cookie |
+| Layer       | Mechanism                                                                                |
+| ----------- | ---------------------------------------------------------------------------------------- |
+| Identity    | `getRequestUserId()` reads AsyncLocalStorage — per-request context                       |
+| Destination | `getRequestSessionId()` from the same store — stash writes can't cross conversations     |
+| MSAL client | constructed per call; only that user's cache is deserialized into it                     |
+| Token store | `user_tokens.user_id` is the primary key; every query is `WHERE user_id = $1`            |
+| Provenance  | no server action accepts a `userId`; all derive it from `requireUser()` → session cookie |
 
 `__tests__/lib/app-tools/{user,token}-isolation.test.ts` assert this under
 deliberately interleaved concurrent calls, and were mutation-checked: hoisting
@@ -177,7 +177,7 @@ guessing an identity, and a stash-writing tool with no `sessionId` in scope is
 refused rather than guessing a conversation. All three entry points establish the
 scope via `runWithRequestContext({userId, sessionId}, …)` — `runTurn` and
 `resolveApproval` (interactive) and `runAgentInBackground` (async, where the
-run id *is* the session id). The older `runWithUserId(userId, …)` survives as a
+run id _is_ the session id). The older `runWithUserId(userId, …)` survives as a
 thin wrapper that sets `sessionId: null`, which is exactly right for callers with
 no conversation: session-dependent tools then refuse instead of picking one.
 
@@ -189,12 +189,12 @@ all of them — which is why the key belongs in a secret store in production.
 
 ## Token lifecycle
 
-| | |
-|---|---|
-| Store | `user_tokens`, keyed by the Entra `oid` |
-| Contents | MSAL's serialized cache — **includes the refresh token** |
-| At rest | AES-256-GCM, versioned envelope (`v1.<iv>.<tag>.<ciphertext>`) |
-| Lifetime | survives logout and session expiry, deliberately |
+|          |                                                                          |
+| -------- | ------------------------------------------------------------------------ |
+| Store    | `user_tokens`, keyed by the Entra `oid`                                  |
+| Contents | MSAL's serialized cache — **includes the refresh token**                 |
+| At rest  | AES-256-GCM, versioned envelope (`v1.<iv>.<tag>.<ciphertext>`)           |
+| Lifetime | survives logout and session expiry, deliberately                         |
 | Rotation | re-written after every silent acquisition (Entra rotates refresh tokens) |
 
 **Why per-user and not per-session:** background runs
@@ -220,13 +220,13 @@ Two read tools stand in front of the Data Stash bridge. Both return the **same
 flattened item shape**, so a file found either way is addressable by
 `graph_file_ingest` with nothing for the model to reformat:
 
-| | `graph_files_search` | `graph_files_list` |
-|---|---|---|
-| Call | `POST /search/query`, `entityTypes: ["driveItem"]` | `GET /me/drive/root/children`, or `…/items/{id}/children` |
-| Reaches | own OneDrive **and** every SharePoint site the person can open | one known drive + folder |
-| Arguments | `query`, and optional `site`, `file_type`, `limit` (1–25, default 10) | optional `folder_item_id`, `drive_id`, `limit` (1–50, default 20) |
-| Adds to the shape | `snippet` — the matched text | `isFolder`, `child_count` |
-| Scopes | `Files.Read.All` + `Sites.Read.All` | `Files.Read.All` |
+|                   | `graph_files_search`                                                  | `graph_files_list`                                                |
+| ----------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Call              | `POST /search/query`, `entityTypes: ["driveItem"]`                    | `GET /me/drive/root/children`, or `…/items/{id}/children`         |
+| Reaches           | own OneDrive **and** every SharePoint site the person can open        | one known drive + folder                                          |
+| Arguments         | `query`, and optional `site`, `file_type`, `limit` (1–25, default 10) | optional `folder_item_id`, `drive_id`, `limit` (1–50, default 20) |
+| Adds to the shape | `snippet` — the matched text                                          | `isFolder`, `child_count`                                         |
+| Scopes            | `Files.Read.All` + `Sites.Read.All`                                   | `Files.Read.All`                                                  |
 
 ```
 { name, path, site, modified, size, drive_id, item_id, webUrl }
@@ -242,19 +242,19 @@ cite where something lives without a second call.
 
 Microsoft Search speaks **KQL**, which has clause grammar (`AND`, `OR`,
 parentheses) and property restrictions (`filetype:pdf`, `path:"…"`, `size>1000`).
-A model writing that string would be authoring the query's *structure* out of
+A model writing that string would be authoring the query's _structure_ out of
 text it doesn't control — one stray `"` in a filename it echoed back and the
 restriction we added is closed and a different one opened. So it never writes
 KQL. `graph_files_search` takes structured arguments and composes every clause:
 
-| Argument | Becomes | Reduction applied |
-|---|---|---|
-| `query` | bare terms | quotes, `(` `)`, `:` `<` `>` `=` and control chars removed; KQL's uppercase-only `AND`/`OR`/`NOT`/`NEAR`/`ONEAR`/`XRANK` lowercased into ordinary words |
-| `file_type` | `filetype:docx` | leading alphanumeric run only, lowercased (`docx" OR filetype:exe` → `filetype:docx`) |
-| `site` | `path:"https://…"` | quotes + control chars removed, then **all** whitespace |
-| `author` | `author:"Jane Smith"` | quotes + control chars removed, whitespace **collapsed** (names keep their spaces) |
+| Argument                             | Becomes                                                                                      | Reduction applied                                                                                                                                                    |
+| ------------------------------------ | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `query`                              | bare terms                                                                                   | quotes, `(` `)`, `:` `<` `>` `=` and control chars removed; KQL's uppercase-only `AND`/`OR`/`NOT`/`NEAR`/`ONEAR`/`XRANK` lowercased into ordinary words              |
+| `file_type`                          | `filetype:docx`                                                                              | leading alphanumeric run only, lowercased (`docx" OR filetype:exe` → `filetype:docx`)                                                                                |
+| `site`                               | `path:"https://…"`                                                                           | quotes + control chars removed, then **all** whitespace                                                                                                              |
+| `author`                             | `author:"Jane Smith"`                                                                        | quotes + control chars removed, whitespace **collapsed** (names keep their spaces)                                                                                   |
 | `modified_after` / `modified_before` | `LastModifiedTime>=2026-07-01`, or the single range clause `LastModifiedTime:a..b` when both | parsed with `Date` and re-emitted as a canonical date — the caller's text never enters the query; an unparseable date throws instead of silently widening the search |
-| `sort: "newest"` | not KQL — `sortProperties` on the request | fixed literal; `isDescending` is the *string* `"true"`, the shape verified live |
+| `sort: "newest"`                     | not KQL — `sortProperties` on the request                                                    | fixed literal; `isDescending` is the _string_ `"true"`, the shape verified live                                                                                      |
 
 **Why strip rather than escape.** KQL publishes no escape sequence for a `"`
 inside a value. An "escaped" quote would be a contract we invented and hoped the
@@ -263,15 +263,15 @@ Control characters go with it — they would split the request line.
 
 **Why no caller whitespace inside a clause.** A stray space in a restriction
 makes Search stop reading it as a restriction and treat the rest as free text — it
-*widens* the search silently instead of erroring. `filetype:` is alphanumeric by
+_widens_ the search silently instead of erroring. `filetype:` is alphanumeric by
 construction and the `path:` URL has its whitespace closed up (a URL has none),
-and the whitespace pass runs *after* the character removal, because removing a
-quote can itself leave a gap behind. Whitespace *inside a quoted phrase* is a
+and the whitespace pass runs _after_ the character removal, because removing a
+quote can itself leave a gap behind. Whitespace _inside a quoted phrase_ is a
 different matter — `author:"Jane Smith"` is valid KQL — so the author value has
 its whitespace collapsed rather than removed; the no-whitespace rule applies to
 the unquoted parts of a clause.
 
-**One live-measured trap:** two space-joined restrictions on the *same*
+**One live-measured trap:** two space-joined restrictions on the _same_
 property (`LastModifiedTime>=a LastModifiedTime<=b`) are **silently ignored**
 by Microsoft Search — the query behaves as if neither were there. Both bounds
 therefore compose as the single range clause `LastModifiedTime:a..b`.
@@ -283,7 +283,7 @@ after: KQL's default operator is AND.
 There is no `site:` operator in Graph KQL (that one is Purview eDiscovery only);
 `path:` is the documented way to scope to a site. `listItem` and `site` are
 freely combinable with `driveItem` in one `entityTypes` request, but they would
-fold list rows and site pages into what is meant to be a *file* search.
+fold list rows and site pages into what is meant to be a _file_ search.
 
 ### Flattening a search hit
 
@@ -295,14 +295,14 @@ decorates it. `shapeSearchHits` unwraps that, and four details are deliberate:
   markup it may well reproduce, so the markers go and the elision becomes `…`.
 - **`snippet` is capped at 300 chars**, the same budget as a mail preview: a page
   of matched text per hit is how a 25-result search blows a turn.
-- **`item_id` is the resource's own `id`.** `parentReference.id` is the *folder*
+- **`item_id` is the resource's own `id`.** `parentReference.id` is the _folder_
   the file sits in — using it would point every downstream call at the wrong
   resource. When a hit arrives without its resource, `hitId` is the fallback
-  (for a driveItem it *is* the item id).
+  (for a driveItem it _is_ the item id).
 - **`total` is Graph's count when it reports one**, and `null` otherwise. Search
   omits it for some result sets, and a fabricated `0` reads as "nothing found".
 
-No `fields` is sent in the search request. Unlike `$select` it *replaces* the
+No `fields` is sent in the search request. Unlike `$select` it _replaces_ the
 returned resource properties, and a hit stripped of `parentReference` has no
 `drive_id` — the very handoff the tool exists to produce. The shaping function is
 the allowlist instead, so no raw Graph payload reaches the model either way.
@@ -331,7 +331,7 @@ on the non-deprecated Office Graph insights surface (`GET /me/insights/used`,
 `Sites.Read.All`). Details that matter:
 
 - Insights mixes non-file rows (sites, whiteboard containers) into the stream
-  and `$top` applies *before* our driveItem filter, so the request is inflated
+  and `$top` applies _before_ our driveItem filter, so the request is inflated
   (`limit × 2`, capped at 50) and the shaped list sliced back down.
 - Each row's `resourceReference.id` is `drives/{driveId}/items/{itemId}` — the
   same handoff pair search hits carry, so recent files feed the other file
@@ -349,12 +349,12 @@ Two tools answer "who sent me what", from opposite surfaces, and both lean
 **inbound** — but neither is inbound-only, and this doc said otherwise until
 2026-08-15:
 
-| | `graph_files_shared` | `graph_mail_attachments` |
-|---|---|---|
-| Call | `GET /me/insights/shared` | `GET /me/messages?$expand=attachments(...)` |
-| Sees | OneDrive/SharePoint links, Teams chat pastes, mail attachments | only files that travelled through email |
-| Scope | `Sites.Read.All` | `Mail.Read` |
-| Direction | what reached **me** | both, via `direction` — but sent mail only shows *attachments*, never Share-dialog grants |
+|           | `graph_files_shared`                                           | `graph_mail_attachments`                                                                  |
+| --------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Call      | `GET /me/insights/shared`                                      | `GET /me/messages?$expand=attachments(...)`                                               |
+| Sees      | OneDrive/SharePoint links, Teams chat pastes, mail attachments | only files that travelled through email                                                   |
+| Scope     | `Sites.Read.All`                                               | `Mail.Read`                                                                               |
+| Direction | what reached **me**                                            | both, via `direction` — but sent mail only shows _attachments_, never Share-dialog grants |
 
 ### The outbound direction is unreliable, not absent
 
@@ -365,8 +365,8 @@ all three carrying a normal `drive_id` + `item_id` pair.
 
 This contradicts an earlier reading of a 50-row sample as "zero shared by the
 signed-in user", which had been repeated in the code, the tests, this doc and the
-user guide, and asserted to the model as *"CANNOT list what the signed-in person
-shared with others"*. The two samples disagree and the reason is not established
+user guide, and asserted to the model as _"CANNOT list what the signed-in person
+shared with others"_. The two samples disagree and the reason is not established
 — so claim neither direction. What holds:
 
 - The feed leans heavily inbound; most rows are someone else sharing with you.
@@ -465,7 +465,7 @@ credential leak to a third party, so this was checked rather than assumed:
 
 > Verified on this runtime (Node 22.21 / undici 6.22): `fetch` follows the
 > redirect and **strips `Authorization` cross-origin**, per the Fetch standard.
-> Same-origin (Graph → Graph) redirects keep it. `Accept` *is* forwarded — hence
+> Same-origin (Graph → Graph) redirects keep it. `Accept` _is_ forwarded — hence
 > `Accept: */*` in binary mode rather than asking a blob endpoint for JSON.
 
 So the default `redirect: 'follow'` is safe and `redirect: 'manual'` plus a bare

@@ -663,8 +663,12 @@ What stays **fatal**, deliberately:
   message, so a transport error, a timeout, an abort, or a plain `Error` from a
   custom controller ends the loop as before — the model never answered, and the
   next call would most likely fail the same way.
-- **A `callTool` that throws**, e.g. the deterministic sanitizer. Its throw
-  policy is an open owner decision (#206 D1) that this does not take.
+- **A `callTool` that throws**, e.g. the deterministic sanitizer — singular,
+  or in a multi-call turn whose calls all failed (the executor marks a thrown
+  sub-call `threw`, and `simpleLoop` keeps the fatal break for such a batch).
+  Its throw policy is an open owner decision (#206 D1) that this does not
+  take, so the batch behaviour is exactly what it was before #437: a batch in
+  which another call succeeded continues past a throw, as it always has.
 - **A critic that throws** (`actorCritic`). The critic is the loop's sole exit
   authority; whether its own parse failure should be survivable is a separate
   decision.
@@ -717,7 +721,10 @@ A failed tool call, a refused tool name, unparseable `tool_args` and — since
 #437 — an actor answer that would not parse all go back to the actor through
 `previousAttempts` and cost one attempt; each records a `loop_recovery`. The
 fatal set is `simpleLoop`'s, plus a critic that throws (see "One failure does
-not end the loop" under `simpleLoop`). A refusal against an empty allowlist is
+not end the loop" under `simpleLoop`), with one difference this does not
+change: a multi-call attempt has always continued when its calls threw, so
+that is still recorded as a `batch_failed` recovery rather than ending the
+loop — only a singular `callTool` throw is fatal here. A refusal against an empty allowlist is
 recorded too: it used to be suppressed because, as an `error`, it flooded the
 synthesizer's view, and a `loop_recovery` reaches no such reader.
 

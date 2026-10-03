@@ -52,6 +52,12 @@ export interface SubCallOutcome {
   error?: string
   /** true when a serial batch stopped before reaching this call */
   skipped?: boolean
+  /** true when `run()` THREW rather than returning a failure — e.g. the
+   *  deterministic sanitizer throwing out of `callTool`. Kept distinct from a
+   *  returned `success: false` because the loops treat the two differently: a
+   *  throw is fatal wherever a singular one is (#206 D1), a returned failure is
+   *  fed back to the model (#437). */
+  threw?: true
   /** Audit trail when `withInjectionGuard` neutralized this sub-call's content.
    *  Carried per sub-call so a batched turn keeps the same per-tool fidelity as
    *  a singular one — the batch's `tool_result` events are per sub-call too. */
@@ -84,7 +90,7 @@ export async function runBatch(calls: SubCall[], mode: MultiCallMode): Promise<S
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      return { index: i + 1, tool: call.tool, success: false, error: msg }
+      return { index: i + 1, tool: call.tool, success: false, error: msg, threw: true }
     }
   }
 

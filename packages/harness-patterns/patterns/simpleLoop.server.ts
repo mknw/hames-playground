@@ -750,6 +750,21 @@ export function simpleLoop<T extends SimpleLoopData>(
           // entries and can retry just those). ALL failed → the same, since
           // #437 slice 1: the turn log above already carries every per-call
           // error, so the next round is the controller's chance to react.
+          //
+          // EXCEPT when a call THREW (`callTool` raised rather than returning
+          // a failure — the deterministic sanitizer's throw is the case that
+          // matters). A singular throw is fatal (the outer catch below), and
+          // the sanitizer's throw policy is #206 D1, an owner decision this
+          // loop does not take. So an all-failed batch holding a throw keeps
+          // the pre-#437 fatal break, exactly as before. (A batch in which
+          // another call SUCCEEDED continued past a throw before #437 too.)
+          if (!anySucceeded && outcomes.some((o) => o.threw)) {
+            hasError = true
+            errorMessage = `All ${allCalls.length} calls of the multi-call turn failed: ${errors.join('; ')}`
+            errorTurn = turn
+            if (controllerLlmCall?.hitOutputCap) errorLlmCall = controllerLlmCall
+            break
+          }
           if (!anySucceeded) {
             trackLoopRecovery(
               scope,

@@ -14,9 +14,11 @@
  *     parsed — {@link isRecoverableLLMFailure}. Everything else stays fatal
  *     exactly as before: the gateway-outage refusal before a loop starts, an LLM
  *     call that never answered (transport, timeout, abort), any error the
- *     implementation did not classify, and a `callTool` that throws (the
- *     deterministic sanitizer's throw policy is #206 D1, an owner decision this
- *     does not touch).
+ *     implementation did not classify, and a `callTool` that throws — singular,
+ *     or in a `simpleLoop` batch whose calls all failed (the deterministic
+ *     sanitizer's throw policy is #206 D1, an owner decision this does not
+ *     touch; the batch cases behave exactly as they did before, including
+ *     `actorCritic`'s, which has always continued).
  *   - **What the model is told.** {@link unparseableOutputFeedback} and
  *     {@link invalidToolArgsFeedback}.
  *   - **What the panel shows.** {@link trackLoopRecovery}: one `loop_recovery`

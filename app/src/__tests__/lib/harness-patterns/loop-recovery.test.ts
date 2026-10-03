@@ -185,7 +185,7 @@ describe('simpleLoop: recoverable failures are fed back', () => {
     expect(callToolMock).not.toHaveBeenCalled()
   })
 
-  // Mutation: restore the `break` after a failed tool call.
+  // Mutation: restore the `break` in the refused-tool branch.
   it('a refused tool name is fed back and never dispatched', async () => {
     const controller = vi
       .fn()
@@ -270,6 +270,65 @@ describe('simpleLoop: fatal failures stay fatal', () => {
     expect(controller).toHaveBeenCalledTimes(1)
     expect(recoveries(events)).toEqual([])
     expect(ofType(events, 'error')[0].data).toMatchObject({ error: 'sanitizer rule threw' })
+  })
+
+  // The same throw inside a multi-call turn. `runBatch` catches a `run()` that
+  // throws and returns it as a failed outcome, so without the `threw` marker
+  // an all-failed batch of throws read as an ordinary failed batch and was fed
+  // back every round until the budget ran out (review of #450). Mutations, each
+  // red here: drop `threw: true` from `runBatch`'s catch; or drop the
+  // `outcomes.some((o) => o.threw)` break in simpleLoop's batch branch.
+  it.each([
+    ['every call threw', () => callToolMock.mockRejectedValue(new Error('sanitizer rule threw'))],
+    [
+      'one threw, one returned a failure',
+      () =>
+        callToolMock
+          .mockRejectedValueOnce(new Error('sanitizer rule threw'))
+          .mockResolvedValueOnce({ success: false, data: null, error: 'row limit' }),
+    ],
+  ])('a batch whose calls all failed and %s ends the loop', async (_label, arrange) => {
+    arrange()
+    const controller = vi.fn().mockResolvedValue({
+      action: mockAction({
+        tool_name: 'read_neo4j_cypher',
+        tool_args: '{"query":"a"}',
+        additional_calls: [{ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"b"}' }],
+      }),
+    })
+
+    const events = await loop(controller)
+
+    expect(controller).toHaveBeenCalledTimes(1)
+    expect(callToolMock).toHaveBeenCalledTimes(2)
+    expect(recoveries(events)).toEqual([])
+    const errors = ofType(events, 'error')
+    expect(errors).toHaveLength(1)
+    expect((errors[0].data as { error: string }).error).toContain('All 2 calls')
+    expect((errors[0].data as { error: string }).error).toContain('sanitizer rule threw')
+  })
+
+  // The other side of the same line, so the fix cannot over-reach: an
+  // all-failed batch with NO throw is still a recovery. Mutation: make every
+  // all-failed batch fatal (drop the `threw` condition) → red.
+  it('a batch whose calls all RETURNED failures is still fed back', async () => {
+    callToolMock.mockResolvedValue({ success: false, data: null, error: 'row limit' })
+    const controller = vi
+      .fn()
+      .mockResolvedValueOnce({
+        action: mockAction({
+          tool_name: 'read_neo4j_cypher',
+          tool_args: '{"query":"a"}',
+          additional_calls: [{ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"b"}' }],
+        }),
+      })
+      .mockResolvedValueOnce({ action: mockFinalAction('done') })
+
+    const events = await loop(controller)
+
+    expect(controller).toHaveBeenCalledTimes(2)
+    expect(recoveries(events).map((r) => r.failure)).toEqual(['batch_failed'])
+    expect(ofType(events, 'error')).toEqual([])
   })
 
   // Mutation: delete the `toolSurfaceOutage` refusal at the top of the loop.
@@ -381,6 +440,68 @@ describe('actorCritic: an unparseable actor answer is fed back (#425 C2)', () =>
       turn: 0,
       maxTurns: 3,
     })
+  })
+
+  // The multi-call attempt always continued here when every call failed;
+  // #437 adds the record. Mutation (the review's O3): delete actorCritic's
+  // `batch_failed` `trackLoopRecovery` → no record, red.
+  it('a multi-call attempt whose calls all failed is recorded as a recovery', async () => {
+    callToolMock
+      .mockResolvedValueOnce({ success: false, data: null, error: 'row limit' })
+      .mockResolvedValueOnce({ success: false, data: null, error: 'timeout' })
+    const actor = vi
+      .fn()
+      .mockResolvedValueOnce({
+        action: mockAction({
+          tool_name: 'read_neo4j_cypher',
+          tool_args: '{"query":"a"}',
+          additional_calls: [{ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"b"}' }],
+        }),
+      })
+      .mockResolvedValue({
+        action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"c"}' }),
+      })
+
+    const events = await loop(actor, accept())
+
+    const [record] = ofType(events, 'loop_recovery')
+    expect(record.data).toEqual({
+      failure: 'batch_failed',
+      error:
+        'All 2 calls of the multi-call attempt failed: ' +
+        '[1] read_neo4j_cypher: row limit; [2] read_neo4j_cypher: timeout',
+      turn: 0,
+      maxTurns: 3,
+    })
+    // Tool-level failures: the actor's answer was fine, so no call record.
+    expect(record.llmCall).toBeUndefined()
+    expect(actor).toHaveBeenCalledTimes(2)
+  })
+
+  // Mutation: drop the `hitOutputCap` ternary on that record (always
+  // `undefined`) → the cut-off answer, the only evidence, is lost.
+  it('a multi-call attempt cut off at the cap carries the response on its record', async () => {
+    const llmCall = { functionName: 'ActorController', variables: {}, hitOutputCap: true }
+    const actor = vi
+      .fn()
+      .mockResolvedValueOnce({
+        action: mockAction({
+          tool_name: 'read_neo4j_cypher',
+          tool_args: '{"query":"a"',
+          additional_calls: [{ tool_name: 'read_neo4j_cypher', tool_args: '{"query": "b' }],
+        }),
+        llmCall,
+      })
+      .mockResolvedValue({
+        action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"c"}' }),
+      })
+
+    const events = await loop(actor, accept())
+
+    const [record] = ofType(events, 'loop_recovery')
+    expect((record.data as LoopRecoveryEventData).failure).toBe('batch_failed')
+    expect(record.llmCall).toEqual(llmCall)
+    expect(callToolMock).toHaveBeenCalledTimes(1) // only the recovery attempt ran
   })
 
   // Behaviour change, pinned: a refusal against an EMPTY allowlist used to be

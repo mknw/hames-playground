@@ -521,9 +521,11 @@ const ONE_QUOTED_STRING = /^"(?:[^"\\]|\\[\s\S])*"$/
 /**
  * Something shaped like the start of another object member: a key after a
  * separator (`, b:`), or a quoted key, which also catches a member whose
- * separator is missing (`"x" "b": 1`).
+ * separator is missing (`"x" "b": 1`). A colon glued to `//` is a URL scheme,
+ * never a key, so `, https://b.com` is content (#453): no member's value
+ * starts with `//`.
  */
-const MEMBER_START = /,\s*[a-zA-Z_$][\w$-]*\s*:|"[^"]*"\s*:|'[^']*'\s*:/
+const MEMBER_START = /,\s*[a-zA-Z_$][\w$-]*\s*:(?!\/\/)|"[^"]*"\s*:|'[^']*'\s*:/
 
 /**
  * Whether the text the last-resort handler would take as ONE value holds a
@@ -536,11 +538,11 @@ const MEMBER_START = /,\s*[a-zA-Z_$][\w$-]*\s*:|"[^"]*"\s*:|'[^']*'\s*:/
  * The answer to a member-shaped run is to DECLINE, not to split there: the
  * text that made every strategy above fail is still in the input, and a guess
  * at where it ends is the same silent mis-coercion #217(b) is about. A declined
- * repair throws: `actorCritic` retries it; `simpleLoop` ends the loop with a
- * recoverable `Invalid tool_args JSON` error (in a multi-call batch it is a
- * per-call error the controller sees only if another call in the batch
- * succeeded). Not a retry there, but it fails CLOSED — the fold ran the tool
- * on wrong arguments, which for a write tool is a wrong write.
+ * repair throws, and both loops treat that as unusable `tool_args`: the error
+ * goes back to the model as a recovery round (#437), and by default the next
+ * unusable answer in a row ends the loop. In a multi-call batch it is that
+ * call's own error. Either way it fails CLOSED — the fold ran the tool on wrong
+ * arguments, which for a write tool is a wrong write.
  *
  * Conservative on purpose, so it costs some inputs the old handler got right:
  * a label predicate or label write after a comma (`RETURN a, b:Person`,
@@ -599,7 +601,27 @@ export function repairJsonTracked(raw: string): RepairedJson {
   s = s.replace(/,\s*([}\]])/g, '$1')
 
   // Quote unquoted keys:  { key: or , key:  →  {"key": or ,"key":
-  s = s.replace(/([{,])\s*([a-zA-Z_$][\w$]*)\s*:/g, '$1"$2":')
+  //
+  // After `{`, an identifier and a colon are always a key. After a comma they
+  // are a key only when the colon is followed by whitespace or by the first
+  // character of a JSON value (`"`, `[`, `{`, a number, `true`/`false`/`null`).
+  // The bare `, ident:` this step used to accept split ONE unquoted value into
+  // two keys wherever the value's own text held a comma and a colon (#453):
+  // `{query: sites like https://a.com, https://b.com}` came back with a key
+  // `https` holding `//b.com`, and `{query: MATCH (a) RETURN a, b:Person}` with
+  // a key `b` holding `Person`. Both were well-formed, tagged `lenient-tokens`,
+  // and wrong. A colon glued to a bare word or a path is how a URL scheme, a
+  // Cypher label or an RDF prefix reads, so this step leaves it alone. The
+  // steps below then keep the value whole (`://` cannot start a member, see
+  // MEMBER_START) or decline it (#408).
+  //
+  // It does NOT close a colon followed by a space. `{query: movies, limit: 5}`
+  // is the input this step exists for, and `{code: lambda a, b: a + b}` reads
+  // exactly the same way, so it still splits. The cost runs the other way too:
+  // a compact `{a:x,b:y}`, whose second key's colon is glued to a bare word,
+  // now throws instead of repairing.
+  s = s.replace(/\{\s*([a-zA-Z_$][\w$]*)\s*:/g, '{"$1":')
+  s = s.replace(/,\s*([a-zA-Z_$][\w$]*)\s*:(?=\s|["[{]|-?\d|(?:true|false|null)\b)/g, ',"$1":')
 
   // Try again — keys are now quoted, values may already be valid
   try {

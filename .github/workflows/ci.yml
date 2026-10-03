@@ -518,6 +518,23 @@ jobs:
           echo "/api/stash -> ${code}"
           [ "$code" = "200" ] || { echo "::error::/api/stash returned ${code} — the workspace package did not load at runtime"; exit 1; }
 
+      # #429 / #451: no server function runs from a GET. The guard keys on the
+      # router (`refuseServerFunctionGet`), and only a real nitro router shows
+      # which paths h3 hands to it: any whose percent-DECODED path starts with
+      # `/_server`, no segment boundary. A path-matching guard passed its unit
+      # tests and still ran the function on every variant but the first two
+      # below. 405 is the guard's answer and nothing else gives it: without the
+      # guard these answer 302 or 500 (the function ran) or 404 (an unknown id).
+      - name: Assert no server function runs from a GET
+        run: |
+          fn='src_lib_harness-client_preview-header_server_ts--igniteVerdaBox_1'
+          for p in /_server /_server/ /_serverx /_server.js /%5Fserver /_server%2F /_server%2Fx; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Referer: http://localhost:3444/' \
+              "localhost:3444${p}?id=${fn}&name=x")
+            echo "GET ${p}?id=… -> ${code}"
+            [ "$code" = "405" ] || { echo "::error::GET ${p}?id=… answered ${code}, not 405: a server function is reachable over GET"; exit 1; }
+          done
+
       - name: Container logs
         if: always()
         run: docker logs app-smoke || true

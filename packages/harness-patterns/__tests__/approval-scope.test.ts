@@ -1,5 +1,5 @@
 /**
- * AN APPROVAL ANSWERS ONE PAUSE, NOT EVERY LATER TURN (#456, finding c′).
+ * AN APPROVAL LASTS FOR ITS RUN, NOT EVERY LATER TURN (#456, finding c′).
  *
  * `resumeHarness(serialized, patterns, approved)` writes `approved` onto
  * `ctx.data` so a gate in the resumed run can read the answer. `ctx.data`
@@ -16,13 +16,15 @@
  * one it keeps ("answers last for the run", decision 11).
  *
  * MUTATION: delete `delete … .approved` from `continueSession`'s per-turn reset
- * → both tests go red at the third turn: the approved write runs again without
- * a pause (`performed` 2, not 1), and the rejected one is refused again without
- * asking (`refused` 2, not 1).
+ * → all three tests go red: the first two at their third turn, where the
+ * approved write runs again without a pause (`performed` 2, not 1) and the
+ * rejected one is refused again without asking (`refused` 2, not 1); the third
+ * at once (`performed` 1, not 0).
  *
  * MUTATION: clear `approved` in `resumeHarness` just before its `runChain` (the
- * over-fix) → both tests go red at the resume step: the answer never reaches
- * the gate it was given for (`performed` / `refused` 0, not 1).
+ * over-fix) → the first two tests go red at the resume step: the answer never
+ * reaches the gate it was given for (`resumed.data.approved` undefined, and
+ * `refused` 0, not 1).
  *
  * MUTATION: skip the clear in `continueSession` when the restored context was
  * `paused` → the third test goes red: the answer a paused blob already holds
@@ -78,7 +80,7 @@ function park(result: HarnessResultScoped<GateData>): { serialized: string; paus
   return { serialized: serializeContext(result.context), paused: true }
 }
 
-describe('an approval answers one pause', () => {
+describe('an approval lasts for its run, not every later turn', () => {
   it('a later turn that reaches the gate pauses again instead of running', async () => {
     const log = { performed: 0, refused: 0 }
     const patterns = [gatedWrite(log)]

@@ -3,7 +3,7 @@
  *
  * Configures the test environment before tests run.
  */
-import { localDatabaseUrl } from '../lib/config/compose-credentials.server'
+import { resolveTestDatabase } from './test-database'
 
 // At-rest encryption key for the Postgres columns holding user content and
 // personal data (`lib/db/crypto.server.ts`). Set here rather than per test file
@@ -17,5 +17,6 @@ process.env.DATA_ENCRYPTION_KEY ||= 'unit-test-data-encryption-key'
 // Never let a test run touch the dev database. Unconditional (not `||=`): the
 // point is that a developer's own DATABASE_URL cannot leak in, because
 // `initSchema()`'s encryption backfill would rewrite their real rows with the
-// unit-test key above. `global-setup.ts` provisions this database.
-process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? localDatabaseUrl('hames_test')
+// unit-test key above. `global-setup.ts` provisions this database, and the
+// same guard decides it there first: no `localhost:5432` without the opt-in.
+process.env.DATABASE_URL = resolveTestDatabase('hames_test', { skipInCi: true }).url

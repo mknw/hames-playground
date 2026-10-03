@@ -65,8 +65,11 @@ to it — so it cannot rot into unbuildable code unnoticed. Same arrangement as
 
 ## What it needs
 
-- **Postgres** on `localhost:5432` (`docker compose up -d postgres` from the
-  repo root). The suite provisions and uses its OWN throwaway database,
+- **Postgres**: a private one named by `TEST_DATABASE_URL`, or the compose one
+  on `localhost:5432` once `HAMES_TEST_ALLOW_LOCAL_DB` names your checkout.
+  Without either the suite refuses to start; see "Which Postgres a test run may
+  touch" in [`docs/testing/pyramid.md`](../../docs/testing/pyramid.md). The
+  suite provisions and uses its OWN throwaway database,
   `hames_test_browser`, through the same `provisionDatabase()` the unit suite
   calls — shared code, its own target. It also runs as its own dev-bypass user,
   `e2e-browser-user`. Both were shared literals until #280, and both are why a
@@ -192,15 +195,15 @@ two steps later, blaming the redirect for a stale vinxi.
 
 ## Knobs
 
-| Env var                       | Default                | What it does                                                                                                        |
-| ----------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `E2E_BROWSER_PORT`            | `3446`                 | The dev server's port. Deliberately not 3444 — a developer's own `pnpm dev` must not be driven by this suite.       |
-| `E2E_BROWSER_COLD_MS`         | `8000`                 | How long scenario 2's fake box withholds its first self-hosted answer.                                              |
-| `E2E_BROWSER_TURN_TIMEOUT_MS` | `90000`                | How long a scenario waits for a turn to land in the transcript.                                                     |
-| `E2E_BROWSER_BOOT_TIMEOUT_MS` | `180000`               | How long global setup waits for `/api/health`. A cold vite start is not fast.                                       |
-| `E2E_BROWSER_SERVER_LOG`      | unset                  | Stream the dev server's stdout/stderr into the run. The first thing to reach for when a scenario fails oddly.       |
-| `TEST_DATABASE_URL`           | `…/hames_test_browser` | This suite's OWN throwaway database. Point two suites at one and their dev-bypass identities still keep them apart. |
-| `BAML_LOG`                    | `warn`                 | Passed through to the dev server.                                                                                   |
+| Env var                       | Default                             | What it does                                                                                                        |
+| ----------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `E2E_BROWSER_PORT`            | `3446`                              | The dev server's port. Deliberately not 3444 — a developer's own `pnpm dev` must not be driven by this suite.       |
+| `E2E_BROWSER_COLD_MS`         | `8000`                              | How long scenario 2's fake box withholds its first self-hosted answer.                                              |
+| `E2E_BROWSER_TURN_TIMEOUT_MS` | `90000`                             | How long a scenario waits for a turn to land in the transcript.                                                     |
+| `E2E_BROWSER_BOOT_TIMEOUT_MS` | `180000`                            | How long global setup waits for `/api/health`. A cold vite start is not fast.                                       |
+| `E2E_BROWSER_SERVER_LOG`      | unset                               | Stream the dev server's stdout/stderr into the run. The first thing to reach for when a scenario fails oddly.       |
+| `TEST_DATABASE_URL`           | opt-in only: `…/hames_test_browser` | This suite's OWN throwaway database. Point two suites at one and their dev-bypass identities still keep them apart. |
+| `BAML_LOG`                    | `warn`                              | Passed through to the dev server.                                                                                   |
 
 Two values are **not** knobs and are set unconditionally on the server under
 test, both in `global-setup.ts`:

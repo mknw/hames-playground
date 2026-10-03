@@ -7,6 +7,7 @@
 
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
+import { isAgentWithheldTool } from '../agent-withheld-tools'
 import { repairJson, repairJsonTracked, type JsonRepairNote } from '../json-repair'
 import { normalizeControllerAction } from '../controller-action'
 import type { LoopTurn, PriorResult, ExpandedRef } from '../types'
@@ -28,10 +29,7 @@ import type { SubCall } from '../parallel-tools.server'
 import { getErrorHint, budgetHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { omitResultFields } from '../content-transforms'
-import {
-  resolveTurnBudget,
-  runtimeConfig,
-} from '../runtime-config.server'
+import { resolveTurnBudget, runtimeConfig } from '../runtime-config.server'
 import { activeTransports } from '../tool-transport.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
 import { trimToFit } from '../token-budget.server'
@@ -300,6 +298,43 @@ export function simpleLoop<T extends SimpleLoopData>(
     // planner ran — the loop then behaves exactly as it did before.
     const planContext = formatPlanContext((scope.data as PlannerData).plan)
 
+    // THE ALLOWLIST, as one predicate. A tool withheld from agents
+    // (`isAgentWithheldTool`, #403) is refused even when `tools` names it — the
+    // catalog never lists one, but a hand-written allowlist can — and so is
+    // never advertised on the seam either. The rest of the static list is
+    // augmented by the tool surface of every transport scoped to this run —
+    // `sandbox_*` names pass without being listed in `tools` (see
+    // docs/plan/sandbox.md → "How tools reach the controller"); outside any
+    // scope `activeTransports()` is empty and this is the list alone. The
+    // singular check, the batch precheck and the few-shot filter below all ask
+    // THIS, so what the loop demonstrates cannot drift from what it accepts.
+    // (`tools` itself stays the outage guard's input above: that check keys on
+    // the array's identity.)
+    const allowlist = tools.filter((name) => !isAgentWithheldTool(name))
+    const isAllowedTool = (name: string): boolean =>
+      !isAgentWithheldTool(name) &&
+      (allowlist.includes(name) || activeTransports().some((t) => t.ownsTool(name)))
+    const refusal = (name: string): string =>
+      `Tool not allowed: ${name}` +
+      (isAgentWithheldTool(name) ? ' (withheld from every agent)' : '') +
+      `. Allowed: ${allowlist.join(', ')}`
+
+    // Few-shots are filtered by that same allowlist, once per run (#401). An
+    // example of a tool the loop will refuse is worse than no example: a model
+    // that copies it names a tool outside the allowlist, and the singular
+    // branch below ends the loop on "Tool not allowed" instead of answering.
+    // The case that made this concrete is a read-only Neo4j (#403): the shipped
+    // Neo4j few-shots include a `write_neo4j_cypher` example, and with the
+    // write tool off the allowlist, copying it turned a write-shaped question
+    // into an error turn. `Return` and `expandPreviousResult` are loop-control
+    // actions this pattern always handles, so examples of them always stay.
+    // Same contract as `tools` on the seam (L14): the controller is shown only
+    // what this loop will run.
+    const fewShots = config?.fewShots?.filter(
+      (shot) =>
+        shot.tool === 'Return' || shot.tool === EXPAND_TOOL_NAME || isAllowedTool(shot.tool),
+    )
+
     try {
       for (let turn = 0; turn < maxTurns; turn++) {
         // Trim oldest turns if they would overflow the controller's context window
@@ -341,12 +376,12 @@ export function simpleLoop<T extends SimpleLoopData>(
             intent,
             // L14 (#225 Lane B3): the loop's allowlist IS the controller's
             // advertised list — one declaration, on the seam.
-            tools,
+            tools: allowlist,
             turns: trimmedTurns,
             turn,
             context: config?.schema,
             priorResults,
-            fewShots: config?.fewShots,
+            fewShots,
             multiCallMode: multiMode === 'off' ? undefined : multiMode,
             planContext,
             returnStyle,
@@ -550,7 +585,6 @@ export function simpleLoop<T extends SimpleLoopData>(
             { tool_name: action.tool_name, tool_args: action.tool_args },
             ...action.additional_calls,
           ]
-          const scopedTransports = activeTransports()
           const MAX_RESULT_CHARS = settings.maxResultChars
           const truncate = (s: string) =>
             s.length > MAX_RESULT_CHARS ? s.slice(0, MAX_RESULT_CHARS) + '…[truncated]' : s
@@ -588,13 +622,11 @@ export function simpleLoop<T extends SimpleLoopData>(
               })
               continue
             }
-            const callAllowed =
-              tools.includes(c.tool_name) || scopedTransports.some((t) => t.ownsTool(c.tool_name))
-            if (!callAllowed) {
+            if (!isAllowedTool(c.tool_name)) {
               track(c.tool_args)
               subCalls.push({
                 tool: c.tool_name,
-                precheckError: `Tool not allowed: ${c.tool_name}. Allowed: ${tools.join(', ')}`,
+                precheckError: refusal(c.tool_name),
               })
               continue
             }
@@ -741,18 +773,10 @@ export function simpleLoop<T extends SimpleLoopData>(
           continue
         }
 
-        // Validate tool. The static allowlist is augmented by the tool surface of
-        // every transport scoped to this run — `sandbox_*` names pass without
-        // being listed in `tools` (see docs/plan/sandbox.md → "How tools reach
-        // the controller"). Outside any scope, `activeTransports()` is empty and
-        // this collapses to the original check.
-        const scopedTransports = activeTransports()
-        const allowed =
-          tools.includes(action.tool_name) ||
-          scopedTransports.some((t) => t.ownsTool(action.tool_name))
-        if (!allowed) {
+        // Validate tool against the allowlist (`isAllowedTool`, above).
+        if (!isAllowedTool(action.tool_name)) {
           hasError = true
-          errorMessage = `Tool not allowed: ${action.tool_name}. Allowed: ${tools.join(', ')}`
+          errorMessage = refusal(action.tool_name)
           errorTurn = turn
           // The BAML call SUCCEEDED and still ended the loop: the tool name the
           // model chose is the defect, so the response that named it is the

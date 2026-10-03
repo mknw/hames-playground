@@ -401,3 +401,65 @@ describe('what the linear scanner kept (#463)', () => {
     expect(value).toBe('x')
   })
 })
+
+// #463: the lenient chain refuses input over 16 384 characters (after trim),
+// as defence in depth. It only guards the chain: the strict parse and the
+// unescaped-content strategy run first and recover large payloads as before.
+describe('the lenient chain refuses input over 16 384 characters (#463)', () => {
+  const LIMIT = 16_384
+  /** A single-key relaxed object exactly `length` characters long. */
+  const relaxed = (length: number): string => `{q: ${'x'.repeat(length - 5)}}`
+
+  // Mutation B1: `>=` for `>` → the input exactly at the limit throws.
+  it('repairs input exactly at the limit', () => {
+    const input = relaxed(LIMIT)
+    expect(input).toHaveLength(LIMIT)
+    expect(repairJsonTracked(input)).toEqual({
+      args: { q: 'x'.repeat(LIMIT - 5) },
+      repair: { strategy: 'lenient-tokens' },
+    })
+  })
+
+  // Mutation B2: delete the bound → the call returns `{ q: 'xxx…' }`.
+  // Mutation B3: truncate to the limit instead of throwing → the last-resort
+  // handler still reads the untruncated input and returns the same value.
+  // Either way the call returns, and a repair this long is what the bound
+  // exists to refuse.
+  it('throws, naming the length and the limit, one character over it', () => {
+    const input = relaxed(LIMIT + 1)
+    expect(() => repairJson(input)).toThrow(SyntaxError)
+    expect(() => repairJson(input)).toThrow(
+      new SyntaxError(
+        'Not valid JSON, and too long to repair: 16385 characters, where relaxed syntax is ' +
+          'only repaired up to 16384. Send valid JSON: quote every key and string, and escape ' +
+          'quotes and newlines inside strings.',
+      ),
+    )
+  })
+
+  // Mutation B4: measure `raw.length` instead of the trimmed input → the
+  // padding pushes it over and the call throws.
+  it('measures the input after trimming it', () => {
+    expect(repairJson(`  ${relaxed(LIMIT)}\n`)).toEqual({ q: 'x'.repeat(LIMIT - 5) })
+  })
+
+  // Mutation B5: move the bound above the strict parse → valid JSON this long
+  // throws instead of parsing.
+  it('never touches valid JSON, however long', () => {
+    const input = JSON.stringify({ q: 'x'.repeat(100_000) })
+    expect(repairJsonTracked(input)).toEqual({ args: { q: 'x'.repeat(100_000) } })
+  })
+
+  // Mutation B6: move the bound above `parseUnescapedContent` → a long payload
+  // with unescaped content quotes, the class of the 19 KB `sandbox_edit`
+  // incident, throws instead of recovering.
+  it('still recovers unescaped content quotes in a payload over the limit', () => {
+    const body = 'y'.repeat(20_000)
+    const r = repairJsonTracked(`{"cmd": "${body} say "hi" now", "p": "/x"}`)
+    expect(r.args).toEqual({ cmd: `${body} say "hi" now`, p: '/x' })
+    expect(r.repair).toEqual({
+      strategy: 'unescaped-content',
+      counts: { quotes: 2, controlChars: 0 },
+    })
+  })
+})

@@ -9,7 +9,8 @@
  * No step is super-linear in its input (#461, #463). The input is the model's
  * `tool_args`, which content the model has read can steer, and the repair runs
  * synchronously on the server's event loop: one super-linear step lets one
- * completion stall every request the process is serving.
+ * completion stall every request the process is serving. As defence in depth,
+ * the regex chain refuses input longer than `LENIENT_CHAIN_MAX_CHARS`.
  */
 
 /** JS whitespace: the set `String.prototype.trim` removes and `\s` matches. */
@@ -656,6 +657,30 @@ export interface RepairedJson {
 
 const LENIENT: JsonRepairNote = { strategy: 'lenient-tokens' }
 
+/**
+ * The longest input the lenient chain will try to repair, in characters after
+ * trimming (#463). Longer input that neither `JSON.parse` nor
+ * `parseUnescapedContent` accepted THROWS.
+ *
+ * Defence in depth, not the fix: every step of the chain is linear, so at this
+ * size the whole chain costs about a millisecond. What the bound buys is a cap
+ * on any step that is not, should one be found or added later. It sits after
+ * the two strategies that recover large payloads, both of them linear, so a
+ * large valid document and the 19 KB `sandbox_edit` recovery described at
+ * `parseUnescapedContent` never meet it. The chain is for short relaxed-syntax
+ * args like `{query: movies}`: on the `.harness-logs` corpus, the longest input
+ * it repaired is 104 characters, the longest it saw at all is 3 021, and the
+ * one `tool_args` over this bound is that 19 KB recovery.
+ *
+ * It throws rather than truncates, because a prefix is not the document: the
+ * module guarantees no partial document (see `parseUnescapedContent`), and a
+ * truncated repair is the silent mis-coercion #217(b) is about. The throw is a
+ * `SyntaxError`, like every other refusal here. Both loops treat it as unusable
+ * `tool_args` and feed the model their own "Invalid tool_args JSON" message,
+ * which is the right advice for this case too (#437).
+ */
+const LENIENT_CHAIN_MAX_CHARS = 16_384
+
 /** A whole value that is ONE double-quoted string: every interior `"` escaped. */
 const ONE_QUOTED_STRING = /^"(?:[^"\\]|\\[\s\S])*"$/
 
@@ -727,6 +752,15 @@ export function repairJsonTracked(raw: string): RepairedJson {
       args: content.value,
       repair: { strategy: 'unescaped-content', counts: content.counts },
     }
+  }
+
+  // Everything below is the lenient chain, and it runs on short input only.
+  if (s.length > LENIENT_CHAIN_MAX_CHARS) {
+    throw new SyntaxError(
+      `Not valid JSON, and too long to repair: ${s.length} characters, where relaxed ` +
+        `syntax is only repaired up to ${LENIENT_CHAIN_MAX_CHARS}. Send valid JSON: quote ` +
+        'every key and string, and escape quotes and newlines inside strings.',
+    )
   }
 
   // Replace single quotes with double quotes (but not inside double-quoted strings)
@@ -855,6 +889,10 @@ export function repairJsonTracked(raw: string): RepairedJson {
  * - Single-quoted strings: {'key': 'val'} → {"key": "val"}
  * - Bracketed values with unquoted contents: {author: [X], limit: 5}
  *   → {"author": ["X"], "limit": 5}
+ *
+ * Everything but the first item applies only to input of at most 16 384
+ * characters (`LENIENT_CHAIN_MAX_CHARS`); longer input must be valid JSON or
+ * fall in the first item's class.
  *
  * @returns Parsed object — throws if still invalid after repair.
  */

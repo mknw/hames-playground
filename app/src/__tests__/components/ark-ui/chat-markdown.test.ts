@@ -394,6 +394,17 @@ describe('renderAssistantMarkdown: annotation cannot turn an attribute back into
     expect(host.querySelector('a')!.getAttribute('title')).toBe(
       `x>Acme report.pdf <img src=//${ATTACKER}/b.png>`,
     )
+    // The pass runs after DOMPurify and the link rule, so nothing re-judges
+    // what it adds. Pin that it adds these attributes and no others.
+    expect(
+      [...host.querySelectorAll('.graph-entity, .doc-ref, .doc-ref-mark')].map(
+        (el) => `${el.nodeName} ${el.getAttributeNames().sort().join(' ')}`,
+      ),
+    ).toEqual([
+      'SPAN class data-entity-ids data-entity-name title',
+      'SPAN class data-doc-id title',
+      'SUP aria-hidden class',
+    ])
   })
 })
 
@@ -419,6 +430,29 @@ describe('renderAssistantMarkdown: annotation reads the text the reader sees (#4
     )
     expect([...host.querySelectorAll('.graph-entity')].map((s) => s.textContent)).toEqual(['lt'])
     expect(host.querySelector('img')).toBeNull()
+  })
+
+  it('inserts a name or filename that spells markup as text, never as markup', () => {
+    // The pass now sees decoded text, so `<` reaches the annotators. They must
+    // put it back as text.
+    const name = '<b onmouseover="window.stolen=1">Acme</b>'
+    const file = `<a href="//${ATTACKER}/f">report</a>.pdf`
+    const host = mount(
+      renderAssistantMarkdown(
+        `x&lt;b onmouseover="window.stolen=1"&gt;Acme&lt;/b&gt;y, ` +
+          `x&lt;a href="//${ATTACKER}/f"&gt;report&lt;/a&gt;.pdf y`,
+        new Map([[name, ['n1']]]),
+        [reference(file)],
+      ),
+    )
+
+    expect(host.querySelector('.graph-entity')?.textContent).toBe(name)
+    expect(host.querySelector('.doc-ref')?.textContent).toBe(file)
+    // Nothing inside either span but the citation's own mark.
+    expect(
+      [...host.querySelectorAll('.graph-entity *, .doc-ref *')].map((el) => el.nodeName),
+    ).toEqual(['SUP'])
+    expect(attributeNames(host)).not.toContain('onmouseover')
   })
 
   it('annotates a name that contains an ampersand', () => {

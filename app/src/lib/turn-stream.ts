@@ -144,6 +144,16 @@ export async function runTurn(request: TurnRequest, sink: TurnSink): Promise<Tur
     sink.onWarming(null)
   }
 
+  // Warnings that arrive AFTER `done` — the title's, sent while the stream is
+  // held open for it (#420). The answer is painted only when the stream ends,
+  // so appending them on arrival put the notice ABOVE the answer, while replay,
+  // which follows event order, puts it below. Held here and appended after the
+  // answer, so the transcript reads the same live and after a reload.
+  const afterAnswer: Message[] = []
+  const flushAfterAnswer = () => {
+    for (const message of afterAnswer.splice(0)) sink.appendMessage(message)
+  }
+
   try {
     const response = await openChatStream(
       {
@@ -234,11 +244,13 @@ export async function runTurn(request: TurnRequest, sink: TurnSink): Promise<Tur
       } else if (evt.type === 'warning') {
         // A side task failed and the turn carried on (#420) — same amber
         // bubble, from the same builder replay uses.
-        sink.appendMessage({
+        const bubble: Message = {
           id: `warn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           timestamp: new Date(),
           ...warningBubble(evt.data as WarningEventData),
-        })
+        }
+        if (finalResult) afterAnswer.push(bubble)
+        else sink.appendMessage(bubble)
       }
 
       sink.pushEvents([evt])
@@ -273,6 +285,7 @@ export async function runTurn(request: TurnRequest, sink: TurnSink): Promise<Tur
           : undefined,
       })
     }
+    flushAfterAnswer()
 
     if (finalResult?.status === 'error') {
       return {
@@ -296,6 +309,7 @@ export async function runTurn(request: TurnRequest, sink: TurnSink): Promise<Tur
   } catch (error) {
     sink.finishProgress()
     clearWarming()
+    flushAfterAnswer()
     // An AbortError is a torn-down stream, not a failed run: the chain keeps
     // going server-side and persists its result.
     if (error instanceof DOMException && error.name === 'AbortError') {

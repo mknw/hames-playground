@@ -391,7 +391,8 @@ describe('compactBulkData', () => {
   it('should fall back per item when the whole batch comes back empty', async () => {
     const { compactBulkData } = await import('@hames-ai/harness-patterns/compactBulkData.server')
 
-    // describeToolResultsBatchOp swallows its own failures and returns an empty map
+    // A batch that answered with nothing for every id. (A FAILED batch throws
+    // since #420 — see 'falls back per item when the batch op itself rejects'.)
     mockDescribeBatch.mockResolvedValue(new Map())
     mockDescribe.mockResolvedValue('per-item summary')
 

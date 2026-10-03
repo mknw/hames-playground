@@ -188,15 +188,31 @@ describe('failure path', () => {
     expect((i.fn.mock.calls[0][0] as PatternScope<Data>).data.attachedRefs).toHaveLength(1)
   })
 
-  // Mutation: pass `error.llmCall` without the `instanceof LLMCallError` guard
-  // → a plain throw reads a property off a string.
-  it('a plain throw is a warning with no call record', async () => {
+  // A non-Error throw is recorded by its text. No mutation claim on this one:
+  // it does NOT pin the `instanceof LLMCallError` guard, because `'boom'.llmCall`
+  // is undefined with or without it (PR #424 review F5 ran that mutation and it
+  // survived). The next test is the one that pins the guard.
+  it('a plain throw is a warning carrying its text', async () => {
     const selector: SelectorFn = async () => {
       throw 'boom'
     }
     const { out } = await run([result('a'), result('b')], { selector })
     const warning = out.events.find((e) => e.type === 'warning')
     expect(warning?.data).toMatchObject({ task: 'reference_selection', error: 'boom' })
+    expect(warning?.llmCall).toBeUndefined()
+  })
+
+  // Mutation: read `(error as { llmCall?: … }).llmCall` without the
+  // `instanceof LLMCallError` guard → this error's foreign `llmCall` is
+  // attached as though it were the selector's own call record.
+  it('only an LLMCallError contributes a call record', async () => {
+    const foreign = { functionName: 'SomethingElse' }
+    const selector: SelectorFn = async () => {
+      throw Object.assign(new Error('not a model failure'), { llmCall: foreign })
+    }
+    const { out } = await run([result('a'), result('b')], { selector })
+    const warning = out.events.find((e) => e.type === 'warning')
+    expect(warning?.data).toMatchObject({ error: 'not a model failure' })
     expect(warning?.llmCall).toBeUndefined()
   })
 

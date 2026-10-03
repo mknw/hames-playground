@@ -479,9 +479,9 @@ async function describe(): Promise<void> {
         )
       }
     }
-    // `describeToolResultOp` swallows its own errors and returns '' — so an
-    // empty summary here means the call FAILED on the box, and the assertion
-    // above would have passed on a sample from a failed attempt.
+    // A failed call throws (#420) and fails this step on its own. An empty
+    // summary is the other bad outcome: the call answered, with nothing — and
+    // the assertion above would still have passed on its usage sample.
     if (single.trim() === '') {
       throw new Error('ResultDescribe returned an empty summary — the call failed on the box')
     }

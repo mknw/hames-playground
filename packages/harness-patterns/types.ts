@@ -1177,9 +1177,11 @@ export interface ErrorEventData {
 }
 
 /**
- * The side tasks a turn can lose without failing (#420) — every one of them a
- * `describe`-role call: a convenience the turn routes around rather than part
- * of the answer the user asked for. A marker, so the UI and the tests key on it
+ * The side tasks a turn can lose without failing (#420): conveniences the turn
+ * routes around rather than part of the answer the user asked for. Today every
+ * one is a `describe`-role call; a task of another kind (a sandbox skill that
+ * could not be mounted, say) joins by getting its own member, deliberately —
+ * never by reusing one of these. A marker, so the UI and the tests key on it
  * rather than on the wording of {@link WarningEventData.message}.
  */
 export type WarningTask =

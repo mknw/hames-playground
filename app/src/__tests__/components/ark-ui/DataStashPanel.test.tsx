@@ -471,6 +471,27 @@ describe('DataStashPanel — document chips', () => {
     )
   })
 
+  // PR #424 review F4: a copy stored in a format with no text to index used to
+  // carry no status and so no marker — indistinguishable from an indexed one.
+  // Mutation: delete the `not_indexed` <Show> → no marker.
+  it('marks a copy that cannot be indexed, neutrally — nothing failed', async () => {
+    stubFetch({ documents: [doc({ ingestStatus: 'not_indexed' })] })
+    const { container } = await renderPanel()
+
+    expect(container.textContent).toContain('not searchable')
+    const titled = [...container.querySelectorAll('[title]')].map((el) => el.getAttribute('title'))
+    expect(titled).toContain('Not searchable — stored as-is: this format has no text to index')
+    // Not the failure badge: there is no reason to report, because nothing went wrong.
+    expect(titled.some((t) => t?.startsWith('Not searchable — indexing failed'))).toBe(false)
+  })
+
+  it('leaves an indexed copy unmarked', async () => {
+    stubFetch({ documents: [doc({ ingestStatus: 'indexed' })] })
+    const { container } = await renderPanel()
+
+    expect(container.textContent).not.toContain('not searchable')
+  })
+
   it('says so when a failed document carries no recorded reason', async () => {
     stubFetch({ documents: [doc({ ingestStatus: 'failed' })] })
     const { container } = await renderPanel()

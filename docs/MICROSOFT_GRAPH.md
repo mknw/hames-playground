@@ -464,7 +464,8 @@ person the copy had worked. It now waits for the run, up to
 `INGEST_OUTCOME_WAIT_MS` (15 s), and reports `indexStatus`: `indexed`,
 `failed` (stored but not searchable, with the recorded `indexError`),
 `pending` (still running past the bound; it carries on and records its own
-outcome) or `not_indexed` (a format stored as-is). The reason is the one the
+outcome) or `not_indexed` (a format stored as-is, recorded on the document as
+`ingestStatus: 'not_indexed'` so the panel marks it too). The reason is the one the
 ingest layer writes onto the document as `ingestError`, so the tool result and
 the Data Stash panel's "not searchable" chip report the same thing. A failed
 copy is still a successful tool call: the file is in the stash.

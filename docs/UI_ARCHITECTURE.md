@@ -614,12 +614,12 @@ A second page — `routes/dashboard.tsx`, reached from the monitoring icon in th
 nav (the old "Home"/"About" text links are gone; the chat _is_ `/`). It shows
 token, cache and cost aggregates across everything the signed-in user has run.
 
-| Layer  | File                                        | Role                                                                                                                                                                                        |
-| ------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Layer  | File                                           | Role                                                                                                                                                                                        |
+| ------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Fold   | `@hames-ai/harness-patterns/metrics/aggregate` | Pure, client-safe folds over `ContextEvent[]`: `getEventMetrics` (the single accessor for step accounting), `foldEvents`, `aggregateByPattern`, `aggregateByConversation`, `buildDashboard` |
-| Action | `lib/metrics/dashboard.server.ts`           | `getMetricsDashboard(topN)` — `requireUser()`, load, fold, return aggregates only (raw events never cross the wire)                                                                         |
-| Query  | `lib/db/conversations.server.ts`            | `listConversationEvents(userId)` projects `context -> 'events'` in SQL (same 200-row ceiling as the sidebar list)                                                                           |
-| Page   | `routes/dashboard.tsx`                      | Global cards + input-composition bar, per-pattern table, top-N conversations. No chart library — bars are divs                                                                              |
+| Action | `lib/metrics/dashboard.server.ts`              | `getMetricsDashboard(topN)` — `requireUser()`, load, fold, return aggregates only (raw events never cross the wire)                                                                         |
+| Query  | `lib/db/conversations.server.ts`               | `listConversationEvents(userId)` projects `context -> 'events'` in SQL (same 200-row ceiling as the sidebar list)                                                                           |
+| Page   | `routes/dashboard.tsx`                         | Global cards + input-composition bar, per-pattern table, top-N conversations. No chart library — bars are divs                                                                              |
 
 Numbers come from `event.metrics` (#122 / PR #130) and **only** from there:
 `llmCall.usage` has no cache-write bucket and no cost, so folding it in would
@@ -862,7 +862,7 @@ Client-side: the typed SSE parser yields `{ event: 'title_updated', data: { sess
 
 ### Failure handling
 
-All failures (LLM throws, returns empty, sanitizer rejects, 3s timeout fires) are caught silently. The heuristic title (`deriveTitle()`) remains in place. No retry, no error event to the user.
+Whatever goes wrong, the heuristic title (`deriveTitle()`) stays in place, and nothing is retried. A blank or rejected title and a generation still running at the 3 s cap say nothing (a late title still lands through `persistTitle`). A generation that FAILS is logged and, since #420, said out loud: inside the cap, one `warning` event rides the still-open stream as the amber Warning bubble (painted below the answer, as replay paints it) and is persisted by the turn's trailing save; after the cap it is logged, and reaches the next load only if that trailing save has not happened yet. The title agent's own `error` event never reaches the user's wire.
 
 ### Sidebar regenerate (`↻` button)
 

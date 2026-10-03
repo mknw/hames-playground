@@ -256,7 +256,11 @@ function sandboxIt(deps: AgentDeps, sessionId: string): ConfiguredPattern<AgentD
 ```typescript
 // A route that searches your uploaded documents (the retrieval backend you pass
 // as `createRedisBackend`). From `retriever-agent.server.ts`:
-import { retriever, type ConfiguredPattern, type RetrieverBackend } from '@hames-ai/harness-patterns'
+import {
+  retriever,
+  type ConfiguredPattern,
+  type RetrieverBackend,
+} from '@hames-ai/harness-patterns'
 import type { AgentData } from '@hames-ai/agents'
 import { bamlPatterns } from '@hames-ai/harness-baml'
 
@@ -448,7 +452,7 @@ front-end code can import it without pulling in anything server-side:
 | `extractGraphElements`, `extractGraphFromResult`                              | ContextEvent/tool-result → `GraphElement[]` for graph rendering |
 | `isEdgeElement`, `isNodeElement`, `isNeo4jGraphResult`, `isMemoryGraphResult` | shape guards over extracted elements                            |
 | `extractReferences`, `referencesForDoc`                                       | retriever citations out of the event stream                     |
-| `errorBubble`, `replayMessages`, `ReplayedMessage`                            | serialized context → minimal chat transcript                    |
+| `errorBubble`, `warningBubble`, `replayMessages`, `ReplayedMessage`           | serialized context → minimal chat transcript                    |
 | `GraphElement`, `OpenReferenceTarget`                                         | the shared data types                                           |
 | `AgentDefinition`, `AgentData`, `AgentDeps`                                   | the definition types (see Configuration)                        |
 

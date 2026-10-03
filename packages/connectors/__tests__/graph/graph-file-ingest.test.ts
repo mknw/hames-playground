@@ -144,7 +144,10 @@ describe('happy path', () => {
     expect(JSON.stringify(res.data)).not.toContain('hello stash')
   })
 
-  it('keeps a non-convertible binary as base64 and does NOT ingest it', async () => {
+  // PR #424 review F4: the copy is stored `not_indexed`, so the panel can tell
+  // it apart from an indexed one — with no status the two looked identical.
+  // Mutation: store no status for a copy that is not ingested → reds.
+  it('keeps a non-convertible binary as base64, does NOT ingest it, and marks it not_indexed', async () => {
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64')
     graphAnswers({ name: 'chart.png', file: { mimeType: 'image/png' }, size: 4 }, png)
 
@@ -155,6 +158,7 @@ describe('happy path', () => {
       mimeType: 'image/png',
       content: png,
       encoding: 'base64',
+      ingestStatus: 'not_indexed',
     })
     // Ingest would only mark it 'failed' (no converter for images).
     expect(ingestStashDocument).not.toHaveBeenCalled()
@@ -301,10 +305,16 @@ describe('index outcome (#420)', () => {
     }
   })
 
-  it('tells the model what each status means, in the advertised description', () => {
+  // F4: `not_indexed` is as unsearchable as `failed`, and the model was told to
+  // pass on only the second. Mutation: drop the "For failed and not_indexed"
+  // sentence → reds.
+  it('tells the model what each status means, and to tell the person for both unsearchable ones', () => {
     const def = appToolDescriptions().find((t) => t.name === 'graph_file_ingest')!
     expect(def.description).toMatch(/indexStatus/)
     expect(def.description).toMatch(/NOT searchable/)
+    expect(def.description).toMatch(/For failed and not_indexed, tell the person/)
+    // It no longer opens by promising search for every copy.
+    expect(def.description).not.toMatch(/so later turns can search it/)
   })
 })
 

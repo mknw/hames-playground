@@ -97,8 +97,10 @@ export interface GraphStashDocumentInput {
   content: string
   encoding?: 'base64'
   /** Persisted in the FIRST write so a status poll never reads a doc with no
-   *  ingest status and flickers (same contract as the upload route). */
-  ingestStatus?: 'pending'
+   *  ingest status and flickers (same contract as the upload route).
+   *  `'not_indexed'` marks a copy whose format has no text to index, so the
+   *  panel can tell it apart from an indexed one (#420). */
+  ingestStatus?: 'pending' | 'not_indexed'
 }
 
 /** The storage layer of the Data Stash, as the ingest tool needs it — resolved
@@ -1411,14 +1413,15 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
     namespace: 'graph',
     description:
       "Copy one of the signed-in person's own Microsoft 365 files (OneDrive or " +
-      "SharePoint) into this conversation's Data Stash, so later turns can search " +
-      'it, read it or hand it to the sandbox. Identify the file by item_id, ' +
+      "SharePoint) into this conversation's Data Stash, so later turns can read it, " +
+      'hand it to the sandbox and — when it can be indexed — search it. Identify the file by item_id, ' +
       'optionally with drive_id for a shared/SharePoint drive. Returns the stash ' +
       'document id and metadata — never the file contents — and indexStatus, ' +
       'which says whether the copy can be searched: indexed (yes), pending (still ' +
-      'indexing), failed (stored but NOT searchable; indexError says why — tell ' +
-      'the person) or not_indexed (a format stored as-is). Acts as the current ' +
-      'signed-in person.',
+      'indexing), failed (stored but NOT searchable; indexError says why) or ' +
+      'not_indexed (a format with no text to index: stored as-is, NOT searchable). ' +
+      'For failed and not_indexed, tell the person the copy cannot be searched. ' +
+      'Acts as the current signed-in person.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1522,9 +1525,11 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
         mimeType,
         content,
         ...(isText ? {} : { encoding: 'base64' as const }),
-        // Persist 'pending' in the FIRST write (as the upload route does) so a
+        // Persist the status in the FIRST write (as the upload route does) so a
         // status poll can never read a doc with no ingest status and flicker.
-        ...(ingesting ? { ingestStatus: 'pending' as const } : {}),
+        // A copy that cannot be indexed says so too: with no status it looked
+        // exactly like an indexed one in the panel (PR #424 review F4).
+        ingestStatus: ingesting ? ('pending' as const) : ('not_indexed' as const),
       })
 
       const index = ingesting ? await awaitIngestOutcome(stash, sessionId, doc.id) : NOT_INDEXED

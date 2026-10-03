@@ -368,6 +368,54 @@ describe('runTurn — effects', () => {
     expect(rec.messages.at(-1)?.content).toBe('Here is your answer.')
   })
 
+  // PR #424 review F1. The title warning is sent AFTER `done` (the stream is
+  // held open for the title), while the answer is painted only once the
+  // stream ends — so appending it on arrival put it ABOVE the answer, and
+  // replay, which follows event order, puts it below.
+  // Mutation: append the bubble on arrival (drop the `if (finalResult)` hold)
+  // → roles come out ['warning', 'assistant'].
+  it('paints a warning that arrives after done BELOW the answer, as replay does', async () => {
+    const titleWarning = message({
+      type: 'warning',
+      patternId: 'title-gen',
+      ts: 2,
+      data: {
+        task: 'title',
+        message: 'The conversation title could not be generated.',
+        fallback: 'It is named after the start of your first message.',
+      },
+    })
+    fetchMock.mockResolvedValue(sseResponse([done(), titleWarning]))
+    const rec = recorder()
+    const result = await runTurn(request(), rec.sink)
+
+    expect(rec.messages.map((m) => m.role)).toEqual(['assistant', 'warning'])
+    expect(result.outcome).toBe('done')
+  })
+
+  // Mutation: delete `flushAfterAnswer()` from the catch → a held warning is
+  // dropped when the stream fails after `done`.
+  it('does not drop a held warning when the stream then fails', async () => {
+    fetchMock.mockResolvedValue(
+      sseResponse([
+        done(),
+        message({
+          type: 'warning',
+          patternId: 'title-gen',
+          ts: 2,
+          data: { task: 'title', message: 'The conversation title could not be generated.' },
+        }),
+        { event: 'error', data: { error: 'stream broke' } },
+      ]),
+    )
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const rec = recorder()
+    await runTurn(request(), rec.sink)
+
+    expect(rec.messages.map((m) => m.role)).toEqual(['warning', 'error'])
+    err.mockRestore()
+  })
+
   it('publishes the final context and finishes the progress bar exactly once', async () => {
     const context = { events: [{ type: 'user_message', ts: 1 }] } as unknown as UnifiedContext
     fetchMock.mockResolvedValue(sseResponse([done({ context })]))

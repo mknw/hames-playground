@@ -68,7 +68,9 @@ export interface StashDocumentMeta {
    * Vector-ingestion status (chunk→embed→index into the local Data Stash vector
    * store). Set by the harness-aware auto-ingest path: `'pending'` queued/in
    * progress, `'indexed'` searchable, `'failed'` ingest errored (e.g. embedder
-   * offline). Absent → never ingested (no redis-retriever in the harness).
+   * offline), `'not_indexed'` stored by a path that wanted it searchable but
+   * whose format has no text to index (an image; a docx with conversion off —
+   * #420). Absent → never ingested (no redis-retriever in the harness).
    */
   ingestStatus?: IngestStatus
   /**
@@ -90,7 +92,10 @@ export interface StashDocumentMeta {
   converted?: boolean
 }
 
-export type IngestStatus = 'pending' | 'indexed' | 'failed'
+/** `'not_indexed'` is not terminal: the retriever's safety net still picks the
+ *  document up if conversion is switched on later (`ensureSessionIngested`
+ *  decides on the format, not on this status). */
+export type IngestStatus = 'pending' | 'indexed' | 'failed' | 'not_indexed'
 
 /** A stored document: metadata + its (already text-extracted) content. */
 export interface StashDocument extends StashDocumentMeta {

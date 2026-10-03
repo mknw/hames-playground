@@ -477,6 +477,9 @@ const DocChip = (props: {
   // → the upload is being chunked/embedded into the local vector store; `failed`
   // → ingest errored (e.g. embedder offline), so the document is stored but
   // NOT searchable, and `ingestError` carries the recorded reason (#420).
+  // `not_indexed` → stored by a path that wanted it searchable, in a format
+  // with no text to index: not a failure, but not searchable either, and with
+  // no marker it read exactly like an indexed copy (PR #424 review F4).
   // Absent → not ingested (the agent has no redis retriever) — show nothing.
   const status = () => d().ingestStatus
   const notSearchable = () =>
@@ -645,6 +648,20 @@ const DocChip = (props: {
           <span
             title={notSearchable()}
             style={{ 'font-size': '8px', color: 'var(--ui-danger)', 'line-height': '1.1' }}
+          >
+            not searchable
+          </span>
+        </Show>
+        {/* Neutral, and no error badge: nothing failed. Same words, because the
+            fact the person needs is the same — this copy cannot be searched. */}
+        <Show when={status() === 'not_indexed'}>
+          <span
+            title="Not searchable — stored as-is: this format has no text to index"
+            style={{
+              'font-size': '8px',
+              color: 'var(--ui-text-tertiary)',
+              'line-height': '1.1',
+            }}
           >
             not searchable
           </span>

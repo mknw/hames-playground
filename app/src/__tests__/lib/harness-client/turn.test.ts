@@ -463,8 +463,7 @@ describe('interactive turns', () => {
   // but the server log said a call had failed.
   describe('a title generation that fails (#420)', () => {
     // Mutation: delete `req.onEvent?.(warning)` → the open stream never
-    // carries it. Mutation: drop the `failed` check (warn on every first turn)
-    // → the success test below reds.
+    // carries it.
     it('sends one warning on the still-open stream, BEFORE it closes', async () => {
       runFirstTurnTitleGen.mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:8095'))
       const order: string[] = []
@@ -486,8 +485,8 @@ describe('interactive turns', () => {
       expect(order).toEqual(['event:warning', 'settled'])
     })
 
-    // Mutation: delete the `saveSession` after the push → the notice is gone
-    // on reload, which is the only place a post-stream reader could see it.
+    // Mutation: delete the `mustPersist` save in `compactAndSave` → the notice
+    // is gone on reload, which is the only place a later reader can see it.
     // The turn here has NO tool results, so the trailing compaction persists
     // nothing (the real `compactBulkData` returns before `onPersist`) — with
     // tool results its re-save would carry the warning too and hide the gap.
@@ -504,17 +503,111 @@ describe('interactive turns', () => {
       expect((withWarning as unknown[]).slice(0, 3)).toEqual(['sess-1', 'user-1', 'search'])
     })
 
+    // PR #424 review F3: the client paints the answer when the stream closes,
+    // so a write between `done` and the close delays the visible answer by a
+    // DB round trip the 3 s cap does not bound. The warning's save is the
+    // trailing compaction's, after the close.
+    // Mutation: `await saveSession(...)` inside `generateTitle` again → the
+    // save lands before `settled`.
+    it('saves the warning only after the stream has closed, never inside the window', async () => {
+      runFirstTurnTitleGen.mockRejectedValue(new Error('LLM down'))
+      compactBulkData.mockImplementationOnce(async () => {})
+      const order: string[] = []
+      const recordSave = async (...args: unknown[]) => {
+        order.push(String(args[3]).includes('"type":"warning"') ? 'save:warning' : 'save:turn')
+      }
+      saveSession.mockImplementationOnce(recordSave).mockImplementationOnce(recordSave)
+      await runTurnAndPersist(interactive({ onSettled: () => order.push('settled') }))
+      await flush()
+
+      expect(order).toEqual(['save:turn', 'settled', 'save:warning'])
+    })
+
+    // Mutation: drop `!persisted` from the `mustPersist` check → the
+    // compaction's own save and a second one race over the same row.
+    it('does not save twice when the compaction already persisted the warning', async () => {
+      runFirstTurnTitleGen.mockRejectedValue(new Error('LLM down'))
+      await runTurnAndPersist(interactive())
+      await flush()
+      // The turn's own save, then the compaction's — which carries the warning.
+      expect(saveSession).toHaveBeenCalledTimes(2)
+      expect(String((saveSession.mock.calls[1] as unknown[])[3])).toContain('"type":"warning"')
+    })
+
     it('a failed save of the warning costs the warning, never the turn', async () => {
       runFirstTurnTitleGen.mockRejectedValue(new Error('LLM down'))
+      compactBulkData.mockImplementationOnce(async () => {})
       saveSession
         .mockImplementationOnce(async () => {}) // the turn's own save
         .mockRejectedValueOnce(new Error('db down')) // the warning's
       const onSettled = vi.fn()
       await expect(runTurnAndPersist(interactive({ onSettled }))).resolves.toBeDefined()
+      await flush()
       expect(onSettled).toHaveBeenCalled()
       expect(dbSetConversationStatus).not.toHaveBeenCalled()
+      expect(logged).toHaveBeenCalledWith(
+        '[title-gen] could not persist the warning:',
+        expect.any(Error),
+      )
     })
 
+    // PR #424 review F2: a failure that lands after the cap used to set two
+    // locals nobody read again — no warning and, since `runTitleAgent` stopped
+    // logging, not even a log line.
+    // Mutation: move `console.error` below the `streamOpen` check → silent.
+    // Mutation: emit regardless of `streamOpen` → a frame into a closed stream.
+    it('logs a failure that lands after the cap, and sends nothing on the closed stream', async () => {
+      vi.useFakeTimers()
+      try {
+        runFirstTurnTitleGen.mockReturnValue(
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('slow 529')), TITLE_GEN_TIMEOUT_MS + 500),
+          ),
+        )
+        const onEvent = vi.fn()
+        const turn = runTurnAndPersist(interactive({ onEvent }))
+        await vi.advanceTimersByTimeAsync(TITLE_GEN_TIMEOUT_MS)
+        await turn
+        await vi.advanceTimersByTimeAsync(1_000)
+
+        expect(onEvent).not.toHaveBeenCalled()
+        expect(logged).toHaveBeenCalledWith('[title-gen] failed:', expect.any(Error))
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    // …and reaches the next load when the turn's trailing save has not
+    // happened yet — the one write it may ride, since a save of its own would
+    // race the next turn's.
+    // Mutation: push into the context only while the stream is open (return
+    // before the push when `!streamOpen`) → the late warning never persists.
+    it('rides the trailing save when a late failure lands before it', async () => {
+      vi.useFakeTimers()
+      try {
+        runFirstTurnTitleGen.mockReturnValue(
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('slow 529')), TITLE_GEN_TIMEOUT_MS + 500),
+          ),
+        )
+        // The summaries are still being written when the title fails.
+        compactBulkData.mockImplementationOnce(async (_ctx, persist) => {
+          await new Promise((r) => setTimeout(r, 2_000))
+          await persist()
+        })
+        const turn = runTurnAndPersist(interactive())
+        await vi.advanceTimersByTimeAsync(TITLE_GEN_TIMEOUT_MS)
+        await turn
+        await vi.advanceTimersByTimeAsync(3_000)
+
+        const persisted = saveSession.mock.calls.map((c) => String((c as unknown[])[3]))
+        expect(persisted.some((ctx) => ctx.includes('"type":"warning"'))).toBe(true)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    // Mutation: call `recordFailure` on success too → a warning per first turn.
     it('says nothing when a title was generated, or there was nothing to name', async () => {
       const onEvent = vi.fn()
       runFirstTurnTitleGen.mockResolvedValue('Quarterly numbers')

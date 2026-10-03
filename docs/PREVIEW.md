@@ -898,8 +898,14 @@ shows what that difference hides. The hermetic layers do not move
 ## 13. Deploy and promotion, once the workflows exist
 
 None of these workflows exist in this repository yet. This is the shape that
-keeps the artifact that was approved the artifact that ships;
-[ADR-0008](adr/0008-deployment-guidance-is-provider-neutral.md) says why.
+keeps the artifact that was approved the artifact that ships: an environment
+that pulls runs the digest the environment before it ran, never a rebuild.
+Environment branches and rebuilding prod from a release tag were rejected for
+exactly that reason, because each ships bytes nobody tested
+([ADR-0007](adr/0007-three-environments-digest-promotion.md), considered
+options). A single box that builds its own image from a pinned commit (§14)
+needs no registry credential, at a cost: nothing can promote "the bytes staging
+ran" until CI builds the images.
 
 | Trigger                                           | What happens                                                                           | Gate                                                 |
 | ------------------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------- |

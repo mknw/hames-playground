@@ -20,7 +20,8 @@
 #      ignoreip (L1), a required full-SHA --ref (C1), one Docker key (C2)
 #  10. the anti-lockout ORCHESTRATION: the ssh and firewall stages and
 #      main's checkpoint, run for real against a fake box, asserting what was
-#      called and in which order; plus the rendered-exposure and volume gates
+#      called and in which order; the fail2ban stage's jail.local ownership
+#      guard, run the same way; plus the rendered-exposure and volume gates
 #
 # Linux only (GNU stat, as on the box and in CI).
 # Run: scripts/bootstrap-vps.test.sh   (no arguments, exits 0 on green)
@@ -811,6 +812,24 @@ box l3
 SHIM_SSHD_TT_FAIL=1 stages --only ssh
 t "L3 sshd -T fails: refused with sshd's own error" grep -q "cannot read the CURRENT configuration.*Bad configuration option" <<<"$out"
 t "L3 ... and no drop-in was written" test ! -e "$(dropin)"
+
+# F2B the jail.local ownership guard: a jail.local this script did not write is
+# an operator's own, refused and left byte for byte; one it wrote is its own,
+# and a re-run proceeds over it rather than refusing every later run.
+jail() { echo "$FAKEROOT/etc/fail2ban/jail.local"; }
+box f2b
+mkdir -p "$FAKEROOT/etc/fail2ban"
+printf '[sshd]\nenabled = true\nmaxretry = 7\n# the operator'"'"'s own tuning\n' >"$(jail)"
+before=$(sha256sum <"$(jail)")
+stages --only fail2ban --no-prompt
+t "F2B a jail.local it did not write: refused (exit 1)" test "$rc" -eq 1
+t "F2B ... and left byte for byte" test "$(sha256sum <"$(jail)")" = "$before"
+box f2b-own
+stages --only fail2ban --no-prompt
+t "F2B a first run writes its own jail.local (exit 0)" test "$rc-$(head -n1 "$(jail)")" = "0-# Managed by scripts/bootstrap-vps.sh, with the hardening baseline's [sshd]"
+stages --only fail2ban --no-prompt
+t "F2B a re-run over its own jail.local proceeds, file unchanged (exit 0)" grep -q "unchanged /etc/fail2ban/jail.local" <<<"$out"
+t "F2B ... and exits 0" test "$rc" -eq 0
 unset FAKEROOT FAKEHOME CALLLOG
 
 # R7 the rendered-exposure gate, and its call in boot.

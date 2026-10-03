@@ -100,9 +100,9 @@ export function sanitizeTitle(raw: string): string | null {
  * Matching ends are not enough: `"Dune" and "Arrakis"` starts and ends with
  * `"`, but each end belongs to its own span. The first same-kind quote inside
  * decides it — one that opens a span (at the start, as in `""Mixed""`, or
- * after a space) leaves the outer pair wrapping; one that follows a word
- * closes the leading quote early. An apostrophe between two letters or digits
- * (`Dune's`) is not a quote.
+ * after a space, an opening bracket or a dash) leaves the outer pair wrapping;
+ * one that follows a word closes the leading quote early. An apostrophe
+ * between two letters or digits (`Dune's`) is not a quote.
  */
 function wrapsWholeTitle(title: string): boolean {
   const q = title.charAt(0)
@@ -112,7 +112,7 @@ function wrapsWholeTitle(title: string): boolean {
     if (inner[i] !== q) continue
     const before = inner.charAt(i - 1)
     if (LETTER_OR_DIGIT.test(before) && LETTER_OR_DIGIT.test(inner.charAt(i + 1))) continue
-    return i === 0 || /\s/.test(before)
+    return i === 0 || /[\s([{–—]/.test(before)
   }
   return true
 }

@@ -101,10 +101,43 @@ describe('sanitizeTitle', () => {
     expect(sut.sanitizeTitle(`'Review of "Dune"'`)).toBe('Review of "Dune"')
   })
 
+  // An inner quote after an opening bracket or a dash opens a span, as one
+  // after a space does; `main` stripped both of these.
+  // Mutation: revert the class to `/\s/` → both keep their wrapping quotes.
+  it('strips wrapping quotes when the inner span opens after a bracket or a dash', () => {
+    expect(sut.sanitizeTitle('"Review ("Dune")"')).toBe('Review ("Dune")')
+    expect(sut.sanitizeTitle('"Notes on—"Dune""')).toBe('Notes on—"Dune"')
+  })
+
+  // An inner quote after punctuation that ends a word still closes the
+  // leading quote.
+  // Mutation: `return i === 0 || !LETTER_OR_DIGIT.test(before)` (an inner quote
+  // opens after any non-word character) → `Dune!" and "Arrakis`.
+  it('leaves two quoted spans when the first ends in punctuation', () => {
+    expect(sut.sanitizeTitle('"Dune!" and "Arrakis"')).toBe('"Dune!" and "Arrakis"')
+    expect(sut.sanitizeTitle('"Dune", "Arrakis"')).toBe('"Dune", "Arrakis"')
+  })
+
   // Mutation: drop the apostrophe exemption → the `'` in `Dune's` reads as
   // closing the leading quote, and the wrapping quotes stay on.
   it('treats an apostrophe inside a single-quoted title as part of a word', () => {
     expect(sut.sanitizeTitle("'Dune's Ending'")).toBe("Dune's Ending")
+  })
+
+  // Mutation: `const LETTER_OR_DIGIT = /[\p{L}]/u` (letters only) → the `'`
+  // after `10` reads as closing the leading quote, and the quotes stay on.
+  it('treats an apostrophe after a digit as part of a word', () => {
+    expect(sut.sanitizeTitle("'Top 10's Picks'")).toBe("Top 10's Picks")
+  })
+
+  // Accepted behaviour change (owner call O1 on #459): a quote that ends a
+  // word inside a single-quoted title looks the same as the one closing
+  // `'Dune'` in `'Dune' and 'Arrakis'`, so the wrapping pair is kept. `main`
+  // stripped it to `The Jones' House`.
+  // Mutation: `if (LETTER_OR_DIGIT.test(before)) continue` (exempt on the
+  // letter before only) → `The Jones' House`.
+  it("keeps the wrapping quotes when an inner quote ends a word ('The Jones' House')", () => {
+    expect(sut.sanitizeTitle("'The Jones' House'")).toBe("'The Jones' House'")
   })
 
   // #454: a quote is only removed together with its partner. Output before the

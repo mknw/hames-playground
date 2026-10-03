@@ -1,5 +1,9 @@
 /**
- * Server middleware — the app's server-boot hook.
+ * Server middleware — the app's server-boot hook, and its one per-request hook.
+ *
+ * Per request: the security headers (`lib/security-headers.ts`), set on every
+ * response before the route runs. That is the only thing this file does on
+ * every request in production; see `onRequest` at the bottom.
  *
  * SolidStart imports this module once when the server handler graph loads,
  * before any request is served, which makes it the natural place to arm
@@ -22,6 +26,7 @@
  */
 
 import { createMiddleware } from '@solidjs/start/middleware'
+import { setSecurityHeaders } from './lib/security-headers'
 import { startRoutineScheduler } from './lib/routines/scheduler.server'
 import { installUsageRecorder } from './lib/metrics/usage-recorder.server'
 import {
@@ -150,18 +155,26 @@ installUsageRecorder()
  * ## Why it costs production nothing
  *
  * `devFakeInferenceUrl()` returns `null` unless `import.meta.env.DEV` — a
- * constant a build replaces with `false` — so `onRequest` is `undefined` and
- * there is no per-request hook at all.
+ * constant a build replaces with `false` — so the hook is never added to
+ * `onRequest` and production's only per-request work is `setSecurityHeaders`.
  */
 let fakeInferenceReady: Promise<unknown> | null = null
 
 export default createMiddleware({
-  onRequest: devFakeInferenceUrl()
-    ? async () => {
-        fakeInferenceReady ??= import('@hames-ai/harness-baml/baml_client').then(({ b }) =>
-          installDevFakeInference(b),
-        )
-        await fakeInferenceReady
-      }
-    : undefined,
+  // `setSecurityHeaders` FIRST and unconditionally: it is the one hook that
+  // must run in every build, and placing it ahead of the dev-only one means a
+  // failure to arm the fake cannot leave a response without its headers.
+  onRequest: [
+    setSecurityHeaders,
+    ...(devFakeInferenceUrl()
+      ? [
+          async () => {
+            fakeInferenceReady ??= import('@hames-ai/harness-baml/baml_client').then(({ b }) =>
+              installDevFakeInference(b),
+            )
+            await fakeInferenceReady
+          },
+        ]
+      : []),
+  ],
 })

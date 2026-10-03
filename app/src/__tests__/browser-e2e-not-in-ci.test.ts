@@ -386,10 +386,14 @@ describe('the dev-only inference redirect cannot be enabled in production', () =
       (m) => m.index,
     )
     expect(callSites, 'installDevFakeInference must be called exactly once').toHaveLength(1)
-    const armStart = middleware.indexOf('onRequest: devFakeInferenceUrl()')
-    const armEnd = middleware.indexOf(': undefined', armStart)
+    // The guarded arm is the conditional spread inside `onRequest: [...]` —
+    // `...(devFakeInferenceUrl() ? [hook] : [])` — since the security headers
+    // (#415 D13) became the array's first, UNconditional hook. It was
+    // `onRequest: devFakeInferenceUrl() ? hook : undefined` before that.
+    const armStart = middleware.indexOf('...(devFakeInferenceUrl()')
+    const armEnd = middleware.indexOf(': [])', armStart)
     expect(armStart, 'the onRequest guard is not in its expected form').toBeGreaterThan(-1)
-    expect(armEnd, 'the guarded ternary has no `: undefined` arm').toBeGreaterThan(armStart)
+    expect(armEnd, 'the guarded spread has no `: []` arm').toBeGreaterThan(armStart)
     expect(
       callSites[0],
       'installDevFakeInference is called outside the guarded arm',

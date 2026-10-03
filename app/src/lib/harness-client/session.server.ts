@@ -22,7 +22,7 @@ import { createRedisBackend } from '@hames-ai/harness-patterns/retriever'
 import { withSandbox, type WithSandboxConfig } from '@hames-ai/sandbox'
 import { clientOverrideFor, type BamlRole } from '@hames-ai/harness-baml/clients.server'
 import { canonicalAgentId, getAgent } from './registry.server'
-import { getRequestUserId } from './request-user.server'
+import { getRequestUserId, isAttendedRequest } from './request-user.server'
 import { resolveSandboxSkills } from '../skills/sandbox-skills.server'
 import {
   loadConversation,
@@ -95,7 +95,10 @@ export function agentDeps(): AgentDeps {
     // THE SKILLS ARE SUPPLIED HERE TOO (#415), by the same rule and for the
     // same reason: a resolver called per run, owned by the request scope's
     // user, so a cached chain mounts the skills of whoever's turn it is.
-    // No user in scope mounts none (`resolveSandboxSkills`).
+    // No user in scope mounts none (`resolveSandboxSkills`). Whether other
+    // users' global skills come too is ALSO read per run, from the same scope:
+    // only an attended run mounts them, so a routine or a triggered action
+    // mounts its owner's own skills alone (owner decision, 2026-10-03).
     withSandbox: (attach) =>
       withSandbox({
         id: attach.id,
@@ -104,7 +107,8 @@ export function agentDeps(): AgentDeps {
         egress: attach.egress as WithSandboxConfig['egress'],
         syncWorkspace: attach.syncWorkspace,
         tenantId: () => getRequestUserId() ?? undefined,
-        skills: () => resolveSandboxSkills(getRequestUserId()),
+        skills: () =>
+          resolveSandboxSkills(getRequestUserId(), { includeGlobal: isAttendedRequest() }),
       }),
     clientOverride: (role) => clientOverrideFor(role as BamlRole),
     persistTitle: updateConversationTitle,

@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import type { AgentDeps } from '@hames-ai/agents'
+import type { AgentDefinition, AgentDeps } from '@hames-ai/agents'
 import { testAgentDeps } from './test-deps'
 import { mockFinalAction, mockCriticResult } from '../../../mocks/baml'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
@@ -249,84 +249,105 @@ describe('Agent Harnesses', () => {
     })
   })
 
-  describe('sandboxSessionAgent', () => {
-    it('should have valid config', async () => {
-      const { sandboxSessionAgent } = await import('@hames-ai/agents/agents/sandbox-session.server')
-      validateAgentConfig(sandboxSessionAgent)
-      expect(sandboxSessionAgent.id).toBe('sandbox-session')
+  // 2026-10-03: ONE sandbox agent (owner decision). `sandbox-session` and
+  // `flavoured-sandbox` were consolidated into it; the registry maps both old
+  // ids here (registry.test.ts).
+  describe('sandboxAgent', () => {
+    it('should have valid config, and declare its sandbox', async () => {
+      const { sandboxAgent } = await import('@hames-ai/agents/agents/sandbox.server')
+      validateAgentConfig(sandboxAgent)
+      expect(sandboxAgent.id).toBe('sandbox')
+      expect(sandboxAgent.usesSandbox).toBe(true)
     })
 
-    it('should create patterns: compactIntent → withSandbox(actorCritic) → compactExecution', async () => {
-      const { sandboxSessionAgent } = await import('@hames-ai/agents/agents/sandbox-session.server')
-      const patterns = await validatePatterns(sandboxSessionAgent)
+    it('routes each message to one of exactly three flavours: basic, data, office', async () => {
+      const { sandboxAgent } = await import('@hames-ai/agents/agents/sandbox.server')
+      const patterns = await validatePatterns(sandboxAgent)
 
-      const names = patterns.map((p) => p.name)
-      expect(patterns.length).toBe(3)
-      // #83: compactIntent runs first so the router-less actor gets a
-      // self-contained brief instead of a bare back-reference.
-      expect(names[0]).toBe('compactIntent')
-      expect(patterns[0].config.patternId).toBe('sandbox-session-intent')
-      expect(names[1]).toContain('withSandbox')
-      expect(names[1]).toContain('actorCritic')
-      expect(names[2]).toBe('compactExecution')
-    })
-  })
-
-  describe('flavouredSandboxAgent', () => {
-    it('should have valid config', async () => {
-      const { flavouredSandboxAgent } =
-        await import('@hames-ai/agents/agents/flavoured-sandbox.server')
-      validateAgentConfig(flavouredSandboxAgent)
-      expect(flavouredSandboxAgent.id).toBe('flavoured-sandbox')
+      expect(patterns.map((p) => p.name)).toEqual([
+        'router',
+        // The routes name embeds the route keys, in order.
+        'routes(basic|data|office)',
+        'compactExecution',
+      ])
     })
 
-    it('should create patterns: router + routes(flavoured sandboxes) + compactExecution', async () => {
-      const { flavouredSandboxAgent } =
-        await import('@hames-ai/agents/agents/flavoured-sandbox.server')
-      const patterns = await validatePatterns(flavouredSandboxAgent)
+    // What each route runs in. `basic` is today's plain session box: the bare
+    // conversation id is the attachment key the PtyManager acquires for the
+    // Shell, so the agent and the Shell share it. The flavours get a box each,
+    // and every route shares the one durable session workspace (#243).
+    it('runs basic in the session’s own box and each flavour in its own, over one workspace', async () => {
+      const { sandboxAgent } = await import('@hames-ai/agents/agents/sandbox.server')
+      const attached: unknown[] = []
+      await sandboxAgent.createPatterns('test-session', {
+        ...testAgentDeps,
+        withSandbox: (config) => {
+          attached.push(config)
+          return testAgentDeps.withSandbox!(config)
+        },
+      })
 
-      const names = patterns.map((p) => p.name)
-      expect(patterns.length).toBe(3)
-      expect(names).toContain('router')
-      // The routes name embeds the route keys (basic|image_processing|data|office).
-      expect(
-        names.some(
-          (n) => n.includes('routes') && n.includes('image_processing') && n.includes('office'),
-        ),
-      ).toBe(true)
-      expect(names[2]).toBe('compactExecution')
+      expect(attached).toEqual([
+        {
+          id: 'test-session',
+          sessionId: 'test-session',
+          rootfs: 'base',
+          egress: 'mcp-only',
+          syncWorkspace: true,
+        },
+        {
+          id: 'test-session:data',
+          sessionId: 'test-session',
+          rootfs: 'data',
+          egress: 'mcp-only',
+          syncWorkspace: true,
+        },
+        {
+          id: 'test-session:office',
+          sessionId: 'test-session',
+          rootfs: 'office',
+          egress: 'mcp-only',
+          syncWorkspace: true,
+        },
+      ])
     })
 
     it('exposes the durable-workspace capability (persistent flavours use syncWorkspace)', async () => {
-      const { flavouredSandboxAgent } =
-        await import('@hames-ai/agents/agents/flavoured-sandbox.server')
+      const { sandboxAgent } = await import('@hames-ai/agents/agents/sandbox.server')
       const { harnessUsesSyncWorkspace } = await import('@hames-ai/harness-patterns')
-      const patterns = await flavouredSandboxAgent.createPatterns('test-session', testAgentDeps)
+      const patterns = await sandboxAgent.createPatterns('test-session', testAgentDeps)
       expect(
         harnessUsesSyncWorkspace(patterns as Parameters<typeof harnessUsesSyncWorkspace>[0]),
       ).toBe(true)
     })
 
     // #243 follow-up. `harnessUsesSyncWorkspace` above is an ANY check, so it
-    // stayed true while `basic` — the one route with no attachment id, hence no
-    // durable workspace at all — silently ran in a container without /work/in.
-    // A turn the router sent there could not see a file ingested on another
-    // flavour's turn (.harness-logs/243.json). The invariant is per-route:
-    // EVERY flavour shares the session workspace.
+    // stayed true while `basic` — then the one route with no attachment id,
+    // hence no durable workspace at all — silently ran in a container without
+    // /work/in. A turn the router sent there could not see a file ingested on
+    // another flavour's turn (.harness-logs/243.json). The invariant is
+    // per-route: EVERY flavour shares the session workspace.
     it('gives EVERY flavour route the durable session workspace, not just some', async () => {
-      const { flavouredSandboxAgent } =
-        await import('@hames-ai/agents/agents/flavoured-sandbox.server')
-      const patterns = await flavouredSandboxAgent.createPatterns('test-session', testAgentDeps)
+      const { sandboxAgent } = await import('@hames-ai/agents/agents/sandbox.server')
+      const patterns = await sandboxAgent.createPatterns('test-session', testAgentDeps)
 
       const routesPattern = patterns.find((p) => p.name.startsWith('routes('))!
       expect(routesPattern.children).toBeDefined()
-      expect(routesPattern.children!.length).toBe(4)
+      expect(routesPattern.children!.length).toBe(3)
       for (const route of routesPattern.children!) {
         expect(route.name).toContain('withSandbox')
         // `withSandbox` declares the capability only when `id` + `syncWorkspace`
         // are BOTH set — i.e. only when hydrate/promote will actually run.
         expect(route.capabilities?.workspaceSync).toBe(true)
       }
+    })
+
+    it('refuses to build without the host’s sandbox wrapper, rather than run on the host', async () => {
+      const { sandboxAgent } = await import('@hames-ai/agents/agents/sandbox.server')
+      const { withSandbox: _omitted, ...noSandbox } = testAgentDeps
+      await expect(sandboxAgent.createPatterns('test-session', noSandbox)).rejects.toThrow(
+        /requires deps\.withSandbox/,
+      )
     })
   })
 })
@@ -335,17 +356,53 @@ describe('Agent Harnesses', () => {
 // Cross-Agent Tests
 // ============================================================================
 
+interface SandboxProbe {
+  name: string
+  children?: SandboxProbe[]
+}
+
+/** Every `AgentDefinition` the package's server barrel exports — the barrel,
+ *  not a hand-kept list, so a new agent is covered the day it is exported. */
+async function allDefinitions(): Promise<AgentDefinition[]> {
+  const barrel = (await import('@hames-ai/agents/agents')) as Record<string, unknown>
+  return Object.values(barrel).filter(
+    (v): v is AgentDefinition =>
+      typeof v === 'object' &&
+      v !== null &&
+      typeof (v as AgentDefinition).id === 'string' &&
+      typeof (v as AgentDefinition).createPatterns === 'function',
+  )
+}
+
 describe('Agent Consistency', () => {
   it('all agents should have unique IDs', async () => {
-    // Import all agents statically
-    const { searchAgent } = await import('@hames-ai/agents/agents/search.server')
-    const { sandboxSessionAgent } = await import('@hames-ai/agents/agents/sandbox-session.server')
-    const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
+    const ids = (await allDefinitions()).map((d) => d.id)
+    expect(ids.length).toBeGreaterThan(0)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
 
-    const ids = [searchAgent.id, sandboxSessionAgent.id, generalAgent.id]
+  // The support panel greys its Sandbox tab out for an agent whose definition
+  // does not declare `usesSandbox` (owner decision 2026-10-03). The flag is a
+  // declaration because the truth — a `withSandbox` somewhere in the built
+  // graph — costs a whole `createPatterns` to read. This is what keeps the two
+  // in step: every definition the package exports is built and walked, so a
+  // new sandbox agent that forgets the flag (a tab greyed out over a working
+  // sandbox) or a flag left on an agent that lost its sandbox fails here.
+  it('declares usesSandbox exactly when its built pattern graph contains a sandbox', async () => {
+    const hasSandbox = (nodes: SandboxProbe[]): boolean =>
+      nodes.some((n) => n.name.startsWith('withSandbox(') || hasSandbox(n.children ?? []))
 
-    const uniqueIds = new Set(ids)
-    expect(uniqueIds.size).toBe(ids.length)
+    const verdicts: Record<string, { declared: boolean; built: boolean }> = {}
+    for (const def of await allDefinitions()) {
+      const built = (await def.createPatterns('test-session', testAgentDeps)) as SandboxProbe[]
+      verdicts[def.id] = { declared: def.usesSandbox === true, built: hasSandbox(built) }
+    }
+
+    for (const [id, v] of Object.entries(verdicts)) {
+      expect(v.declared, `${id}: usesSandbox disagrees with its pattern graph`).toBe(v.built)
+    }
+    // Non-vacuous: the walk does find the one sandbox agent there is.
+    expect(verdicts.sandbox).toEqual({ declared: true, built: true })
   })
 
   it('all agents should contain compactExecution pattern', async () => {
@@ -390,10 +447,9 @@ describe('compactExecution view scope — the user message must survive', () => 
     return undefined
   }
 
-  async function synthOf(agentId: 'sandbox-session'): Promise<Node> {
+  async function synthOf(agentId: 'sandbox'): Promise<Node> {
     // Static import: a template-literal specifier defeats Vite's analysis.
-    const agent = (await import('@hames-ai/agents/agents/sandbox-session.server'))
-      .sandboxSessionAgent
+    const agent = (await import('@hames-ai/agents/agents/sandbox.server')).sandboxAgent
     const patterns = (await agent.createPatterns(
       'test-session',
       testAgentDeps,
@@ -424,19 +480,20 @@ describe('compactExecution view scope — the user message must survive', () => 
     }
   }
 
-  it('sandbox-session: the synth still sees the question', async () => {
-    const loopId = 'sandbox-session-loop'
+  // The consolidated agent's synth declares no viewConfig at all, so it reads
+  // the unscoped default — which is exactly what keeps the harness-level
+  // question in view. A viewConfig added later without 'harness' in its
+  // pattern scope turns this red.
+  it('sandbox: the synth still sees the question', async () => {
+    const loopId = 'flavour-basic-loop'
     const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
-    const synth = await synthOf('sandbox-session')
+    const synth = await synthOf('sandbox')
 
     // Mirrors compactExecution's own read: `view.fromAll().ofType('user_message')`.
     const view = createEventView(ctxWith(loopId), synth.config.viewConfig, synth.config.patternId)
     const msg = view.fromAll().ofType('user_message').last(1).get()[0]
 
     expect((msg?.data as { content?: string })?.content).toBe('why is it slow?')
-    // 'harness' has to be named explicitly — the default scope is what hid it.
-    expect(synth.config.viewConfig?.fromPatterns).toContain('harness')
-    expect(synth.config.viewConfig?.fromPatterns).toContain(loopId)
     // ...and the loop's own events are still in scope, or there is nothing to
     // synthesize from.
     expect(view.fromAll().ofType('tool_result').count()).toBe(1)

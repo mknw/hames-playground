@@ -11,6 +11,7 @@ import {
   createSignal,
   createMemo,
   createEffect,
+  createUniqueId,
   onCleanup,
   untrack,
   Suspense,
@@ -58,8 +59,13 @@ export interface SupportPanelProps {
   /** Session ID for stash API calls */
   sessionId?: string
   /** The conversation's currently-selected agent — forwarded to the Data
-   *  Stash and Terminal panels. */
+   *  Stash and Sandbox panels. */
   agentId?: string
+  /** Whether the selected agent runs in a sandbox, from its registry entry.
+   *  `false` greys the Sandbox tab out; `undefined` (the agent list has not
+   *  loaded, or failed to) leaves it usable, so a slow registry read never
+   *  takes the tab away from an agent that has one. */
+  sandboxAvailable?: boolean
   /** Callback for data stash actions (hide/unhide/archive/unarchive) */
   onStashAction?: (eventId: string, action: StashAction) => Promise<void>
   /** A citation clicked in the chat — switch to the Data Stash tab and open the
@@ -73,8 +79,30 @@ export interface SupportPanelProps {
 // Component
 // ============================================================================
 
+/** The tab the panel opens on, and where it goes when the open tab stops
+ *  applying. */
+const DEFAULT_TAB = 'stats'
+
+/** Why the Sandbox tab is greyed out — its tooltip and its accessible
+ *  description, one string so the two cannot disagree. */
+export const SANDBOX_UNAVAILABLE_REASON =
+  'This agent has no sandbox. Choose the Sandbox agent to use this tab.'
+
 export const SupportPanel = (props: SupportPanelProps) => {
-  const [selectedTab, setSelectedTab] = createSignal('stats')
+  const [selectedTab, setSelectedTab] = createSignal(DEFAULT_TAB)
+
+  // Owner decision 2026-10-03: the Sandbox tab is greyed out for an agent
+  // without a sandbox. Only a definite `false` from the registry does that.
+  const sandboxDisabled = () => props.sandboxAvailable === false
+  const sandboxReasonId = createUniqueId()
+  // Ark keeps a disabled tab out of reach (no click, no focus, skipped by the
+  // arrow keys) but does not move a selection that is already on it. So when
+  // the agent changes under an open Sandbox tab, the panel moves itself — to
+  // the tab it opens on — rather than keep showing a shell for a box this
+  // agent does not have.
+  createEffect(() => {
+    if (sandboxDisabled() && selectedTab() === 'sandbox') setSelectedTab(DEFAULT_TAB)
+  })
 
   // A chat citation was clicked → surface the Data Stash tab so its inline
   // viewer (opened by DataStashPanel from the same `pendingReference`) is visible.
@@ -192,13 +220,17 @@ export const SupportPanel = (props: SupportPanelProps) => {
 
           <Tabs.Trigger
             value="sandbox"
+            disabled={sandboxDisabled()}
+            title={sandboxDisabled() ? SANDBOX_UNAVAILABLE_REASON : undefined}
+            aria-describedby={sandboxDisabled() ? sandboxReasonId : undefined}
             class={blinking() ? 'sandbox-tab-blink' : undefined}
             p="x-3 y-2"
             text="sm ui-text-primary"
             flex="~"
             items="center"
             gap="1"
-            cursor="pointer"
+            cursor={sandboxDisabled() ? 'not-allowed' : 'pointer'}
+            op={sandboxDisabled() ? '40' : '100'}
             border="b-2 transparent"
             transition="all"
             data-state={selectedTab() === 'sandbox' ? 'active' : 'inactive'}
@@ -211,6 +243,14 @@ export const SupportPanel = (props: SupportPanelProps) => {
             Sandbox
           </Tabs.Trigger>
         </Tabs.List>
+        {/* The disabled tab's reason, for assistive technology: a disabled
+            button takes no focus, so a hover-only tooltip is not enough.
+            Outside the tab list, which holds tabs and nothing else. */}
+        <Show when={sandboxDisabled()}>
+          <span id={sandboxReasonId} hidden>
+            {SANDBOX_UNAVAILABLE_REASON}
+          </span>
+        </Show>
 
         {/* Tab Content */}
         <div flex="1" overflow="hidden">

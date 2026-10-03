@@ -105,7 +105,7 @@ flowchart TD
 
 `withSandbox(config)(pattern)` attaches a VM to a controller for its lifetime.
 Every call clears the scheduler cap first, then takes one of four acquire paths
-picked by `id` / `fresh`. The id-addressable path (used by **Sandbox · Session**)
+picked by `id` / `fresh`. The id-addressable path (used by every **Sandbox** route)
 is the interesting one: it reuses one live container across a conversation's
 turns, ref-counted, with a liveness check before reuse.
 

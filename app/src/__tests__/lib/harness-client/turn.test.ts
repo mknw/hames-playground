@@ -28,17 +28,22 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 import {
   getRequestUserId,
   getRequestSessionId,
+  isAttendedRequest,
 } from '../../../lib/harness-client/request-user.server'
 import { runtimeConfig } from '@hames-ai/harness-patterns/runtime-config.server'
 import { DEFAULT_SETTINGS } from '../../../lib/settings'
 
 /** Every run records the ambient scope it saw. */
 const seenScopes: Array<{ userId: string | null; sessionId: string | null }> = []
+/** …and whether that scope said a person is waiting on it (all three entry
+ *  points record here, `resumeHarness` included). */
+const seenAttended: boolean[] = []
 
 type Ctx = { id: string; events: unknown[] }
 const runFresh = vi.fn(
   async (message: string, sessionId: string, _data?: unknown, _onEvent?: unknown) => {
     seenScopes.push({ userId: getRequestUserId(), sessionId: getRequestSessionId() })
+    seenAttended.push(isAttendedRequest())
     return {
       response: `fresh:${message}`,
       serialized: `serialized:${sessionId}`,
@@ -52,6 +57,7 @@ const harness = vi.fn(() => runFresh)
 const continueSession = vi.fn(
   async (serialized: string, _p: unknown, message: string, _onEvent?: unknown) => {
     seenScopes.push({ userId: getRequestUserId(), sessionId: getRequestSessionId() })
+    seenAttended.push(isAttendedRequest())
     return {
       response: `continued:${message}`,
       serialized: `${serialized}+${message}`,
@@ -61,13 +67,16 @@ const continueSession = vi.fn(
     }
   },
 )
-const resumeHarness = vi.fn(async (_s: string, _p: unknown, approved: boolean) => ({
-  response: approved ? 'approved' : 'rejected',
-  serialized: `resumed:${approved}`,
-  data: {},
-  context: { id: 'ctx:resumed', events: [] } as Ctx,
-  status: 'running',
-}))
+const resumeHarness = vi.fn(async (_s: string, _p: unknown, approved: boolean) => {
+  seenAttended.push(isAttendedRequest())
+  return {
+    response: approved ? 'approved' : 'rejected',
+    serialized: `resumed:${approved}`,
+    data: {},
+    context: { id: 'ctx:resumed', events: [] } as Ctx,
+    status: 'running',
+  }
+})
 const createContext = vi.fn((message: string, _data: unknown, sessionId: string) => ({
   sessionId,
   events: [{ type: 'user_message', data: { content: message } }],
@@ -230,6 +239,7 @@ let logged: ReturnType<typeof vi.spyOn>
 beforeEach(() => {
   vi.clearAllMocks()
   seenScopes.length = 0
+  seenAttended.length = 0
   openedFrames.length = 0
   amendedFrames.length = 0
   // The real `runWithInferenceTier` is used (only the recording is a wrapper),
@@ -339,6 +349,33 @@ describe('interactive turns', () => {
       'user-1',
       'general',
       'serialized:sess-3',
+      'anthropic',
+    )
+  })
+
+  // 2026-10-03: the two sandbox agents became one, and `loadSession` maps a
+  // stored legacy id forward. A tab loaded before that deploy still SENDS the
+  // old id, so the requested id has to be mapped the same way: compared raw,
+  // 'sandbox-session' !== 'sandbox' reads as an agent switch, the turn starts
+  // fresh, and its save replaces the conversation with this one message.
+  //
+  // MUTATION: drop `canonicalAgentId` from `planTurn` → `harness` runs fresh
+  // and every assertion below reddens.
+  it('continues a stored conversation when the request names its agent by a legacy id', async () => {
+    loadSession.mockResolvedValue({ ...STORED, agentId: 'sandbox' })
+
+    const result = await runTurnAndPersist(
+      interactive({ sessionId: 'sess-legacy', agentId: 'sandbox-session', message: 'and now?' }),
+    )
+
+    expect(harness).not.toHaveBeenCalled()
+    expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-legacy', 'sandbox')
+    expect(result.response).toBe('continued:and now?')
+    expect(saveSession).toHaveBeenCalledWith(
+      'sess-legacy',
+      'user-1',
+      'sandbox',
+      'ctx-a+and now?',
       'anthropic',
     )
   })
@@ -756,6 +793,22 @@ describe('triggered turns', () => {
     )
   })
 
+  // A routine stores the agent id it was created with, and so does a client
+  // POSTing to `/api/agents/:id` — both may still name a consolidated agent.
+  it('runs and persists a routine that names a legacy agent id under the current one', async () => {
+    await runTurnAndPersist(triggered({ agentId: 'flavoured-sandbox' }))
+
+    expect(getOrBuildPatterns).toHaveBeenCalledWith('run-1', 'sandbox')
+    expect(saveSession).toHaveBeenNthCalledWith(
+      1,
+      'run-1',
+      'user-1',
+      'sandbox',
+      'serialized:run-1',
+      'anthropic',
+    )
+  })
+
   // #226 C5. The background path skipped `compactBulkData` entirely, so a
   // promoted action's next turn re-fed every raw tool payload into the prompt —
   // the exact thing #83 added compaction to prevent.
@@ -967,6 +1020,42 @@ describe("the run frame's inference slot — the per-conversation switch, plumbe
     expect(result.response).toBe('fresh:hello world, this is long')
     expect(tierScopes.value).toEqual(['anthropic']) // the deployment default
     expect(logged).toHaveBeenCalled()
+  })
+})
+
+// Owner decision 2026-10-03: "Routines can mount private skills, not global
+// ones for now." The sandbox's skills resolver reads `isAttendedRequest()` per
+// run (agent-deps-seam.test.ts); this is where each entry point decides it.
+//
+// MUTATION: set `attended: true` for every mode in `runTurnAndPersist` → the
+// triggered case reddens; drop the flag altogether → the two attended ones do.
+describe('the request scope says whether anyone is waiting on the run', () => {
+  it('marks an interactive turn attended', async () => {
+    await runTurnAndPersist(interactive())
+    expect(seenAttended).toEqual([true])
+  })
+
+  it('marks an approval attended — a person pressed the button', async () => {
+    loadSession.mockResolvedValue({ ...STORED, status: 'paused' })
+    await runTurnAndPersist({
+      mode: 'approval',
+      sessionId: 'sess-1',
+      userId: 'user-1',
+      approved: true,
+    })
+    expect(seenAttended).toEqual([true])
+  })
+
+  it('marks a triggered run — a routine, POST /api/agents/:id — unattended', async () => {
+    await runTurnAndPersist({
+      mode: 'triggered',
+      sessionId: 'run-9',
+      userId: 'user-1',
+      agentId: 'sandbox',
+      message: 'nightly report',
+      data: { trigger: TRIGGER },
+    })
+    expect(seenAttended).toEqual([false])
   })
 })
 

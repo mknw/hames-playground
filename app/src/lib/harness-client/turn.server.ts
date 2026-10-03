@@ -16,6 +16,7 @@
  * | continues it (vs. fresh run) | same agent  | never     | resumes  |
  * | pre-seeds a missing row      | yes (#105)  | no        | no       |
  * | `runWithRequestContext`      | yes         | yes       | yes      |
+ * | …`attended` (global skills)  | yes         | no        | yes      |
  * | the run frame (all 5 slots)  | yes         | yes       | yes      |
  * | first-turn title generation  | yes         | no        | no       |
  * | `saveSession`                | yes         | yes       | yes      |
@@ -59,6 +60,7 @@ import {
   type SessionData,
 } from './session.server'
 import { runWithRequestContext } from './request-user.server'
+import { canonicalAgentId } from './agent-ids'
 import { amendRunFrame, withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { activeInferenceTier, assertInferenceTier } from '@hames-ai/harness-baml/clients.server'
 import { DEFAULT_SETTINGS } from '../settings'
@@ -253,7 +255,15 @@ export async function runTurnAndPersist(
   // `guard` and `transports` stay empty at run level: `withInjectionGuard` and
   // `withSandbox` amend the frame per pattern, and the run-level guard manifest
   // is #242's half of this work.
-  return runWithRequestContext({ userId, sessionId }, () =>
+  //
+  // `attended` says whether a person is waiting on this turn, and it is a
+  // positive claim: only the two modes a user drives set it. A routine or a
+  // `POST /api/agents/:id` run acts before anyone reads it, so it mounts the
+  // owner's own skills and never another user's global ones (owner decision,
+  // 2026-10-03: "Routines can mount private skills, not global ones for now").
+  // A mode added later is unattended until someone decides otherwise.
+  const attended = req.mode === 'interactive' || req.mode === 'approval'
+  return runWithRequestContext({ userId, sessionId, attended }, () =>
     withRunFrame(
       {
         config: req.settings ?? DEFAULT_SETTINGS,
@@ -369,7 +379,13 @@ function planTurn(req: TurnRequest, loaded: LoadedSession | null): { agentId: st
     }
   }
 
-  const { agentId, message } = req
+  const { message } = req
+  // The id the REQUEST names is mapped forward the way `loadSession` maps the
+  // stored one. A tab loaded before an agent was renamed keeps sending the old
+  // id, and comparing that raw against the canonical stored id would read as
+  // an agent switch and start the conversation over — replacing its history
+  // with this one message on the next save.
+  const agentId = canonicalAgentId(req.agentId)
   // Continue only when the stored context belongs to the same agent. If the
   // user switched agent within an existing conversation, treat it as a fresh
   // conversation by ignoring the prior context: the UI is expected to mint a

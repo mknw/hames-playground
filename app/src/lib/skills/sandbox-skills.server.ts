@@ -8,9 +8,18 @@
  * — never anything a client, an agent factory or a model could name.
  *
  * No user in scope (a background build, a capability probe) mounts nothing.
- * Every run with a user — an interactive turn, a routine, a triggered action —
- * mounts that user's active skills: their own, then the global ones they have
- * not hidden (`active-skills.ts`).
+ * An ATTENDED run — an interactive turn, an approval — mounts that user's
+ * active skills: their own, then the global ones they have not hidden
+ * (`active-skills.ts`). An UNATTENDED run — a routine, a triggered action —
+ * mounts their own skills only, never another user's global one, whatever
+ * they have chosen to show (owner decision, 2026-10-03: "Routines can mount
+ * private skills, not global ones for now"). Nobody reads an unattended run's
+ * output before it acts, so another author's text has no reader to catch it
+ * (#415 decision 12, SD-16). "Own" means the owner wrote it; a skill the
+ * owner wrote and then made global is still theirs.
+ *
+ * `includeGlobal` is required rather than defaulted, so a new caller has to
+ * say which kind of run it is resolving for.
  *
  * Errors propagate: the sandbox package reports a resolver failure as a run
  * event and mounts nothing, which is the right answer to "the skills could not
@@ -25,9 +34,14 @@ assertServerOnImport()
 
 export async function resolveSandboxSkills(
   userId: string | null | undefined,
+  { includeGlobal }: { includeGlobal: boolean },
 ): Promise<SandboxSkill[]> {
   if (!userId) return []
-  const active = activeSkills(await listSkillsVisibleTo(userId), userId)
+  const visible = await listSkillsVisibleTo(userId)
+  // Filtered BEFORE resolution, so another user's skill is never read, never
+  // counted against the mount ceiling and never shadows anything.
+  const candidates = includeGlobal ? visible : visible.filter((s) => s.userId === userId)
+  const active = activeSkills(candidates, userId)
   const contents = await getSkillContents(
     userId,
     active.map((s) => s.id),

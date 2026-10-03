@@ -73,9 +73,17 @@ title whose cause is in `packages/agents/` is `pkg:agents` until the app side
 changes too. A PR carries the labels of the code it changes, which is usually
 the set on the issue it closes.
 
+A test takes the label of the code it tests, wherever the file lives. Add
+`hames-app:testing` as well when the work is about the tests themselves: a
+flake, a new suite or harness, a visual baseline, the test databases,
+`release:check` or the eval suite.
+
 **`pkg:<name>`** names one published package, after its directory under
-`packages/`. It covers the package's source, tests, README, SPEC and published
-surface. A package's own docs take its `pkg:` label, not `hames-app:docs`.
+`packages/`. It covers the package's source, README, SPEC and published
+surface, and its tests, including those under `app/src/__tests__/lib/<package>/`.
+A package's own docs take its `pkg:` label, not `hames-app:docs`.
+`pkg:sandbox` also covers `rootfs/`, the images the package boots: its README
+has consumers build them, and containment work lands on both sides.
 
 | Label                  | Package                      | Covers                                                                                            |
 | ---------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------- |
@@ -87,26 +95,28 @@ surface. A package's own docs take its `pkg:` label, not `hames-app:docs`.
 
 **`hames-app:<component>`** names a part of everything that is not a package:
 the reference app under `app/`, plus the repo's infrastructure, tests, CI and
-docs. App paths below are relative to `app/src/`.
+docs. App paths below are relative to `app/src/`. A path named in a narrower
+row takes that row's label; a directory entry is the default for everything
+else in it.
 
-| Label                     | Component                     | Where it lives                                                                                                        |
-| ------------------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `hames-app:chat`          | Chat and the turn lifecycle   | `ChatInterface`, `ChatMessages`, `ChatSidebar`, `lib/harness-client/`, `lib/turn-stream.ts`, `routes/api/events.ts`   |
-| `hames-app:ui`            | The app shell                 | Layout, theme, fonts, icons, `Nav`, `SettingsPanel`, `UserMenu`, the `SupportPanel` frame, mobile layout              |
-| `hames-app:graph`         | The Neo4j graph panel         | `GraphVisualization`, `lib/neo4j/`, `lib/org-graph/`, ontology work                                                   |
-| `hames-app:observability` | Observability                 | `ObservabilityPanel` and `observability/`, `lib/metrics/`, `routes/dashboard.tsx`                                     |
-| `hames-app:data-stash`    | The Data Stash                | `DataStashPanel`, `lib/stash/`, `routes/api/stash*`, `lib/redis-direct.server.ts`                                     |
-| `hames-app:sandbox-tab`   | The app side of `pkg:sandbox` | `SandboxPanel`, `InteractiveTerminal`, `routes/api/sandbox/pty/`                                                      |
-| `hames-app:skills`        | User skills                   | `SkillsPanel`, `lib/skills/`, `lib/db/skills.server.ts`                                                               |
-| `hames-app:auth`          | Identity and access           | `lib/auth/`, `routes/auth/`, `routes/api/auth/`, the `'use server'` gates                                             |
-| `hames-app:routines`      | Unattended runs               | `lib/routines/`, `routes/api/routines/`, `routes/api/agents/[id].ts`                                                  |
-| `hames-app:db`            | Postgres                      | `lib/db/`: schema, repositories, encryption at rest, migrations                                                       |
-| `hames-app:inference`     | Inference tiers               | `lib/inference/`, `ConversationTierSwitch`, `lib/cost-rates.server.ts`                                                |
-| `hames-app:mcp-gateway`   | The Docker MCP gateway        | `configs/*.yaml` and the gateway service in compose                                                                   |
-| `hames-app:deployment`    | Build and host tooling        | `app/Dockerfile`, `docker-compose*.yaml`, `configs/Caddyfile`, `scripts/`, `flake.nix`, `Makefile`, env configuration |
-| `hames-app:testing`       | The test pyramid              | Unit test setup, `app/e2e/`, `app/e2e-browser/`, `release:check`, `app/evals/`                                        |
-| `hames-app:ci`            | CI and releases               | `.github/workflows/`, the format and lint gates, `.changeset/`, pack-smoke                                            |
-| `hames-app:docs`          | Repo docs                     | `docs/`, the root `README.md`, `CONTRIBUTING.md`, the agent guides                                                    |
+| Label                     | Component                     | Where it lives                                                                                                                                               |
+| ------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `hames-app:chat`          | Chat and the turn lifecycle   | `ChatInterface`, `ChatMessages`, `ChatSidebar`, `lib/harness-client/`, `lib/turn-stream.ts`, `routes/api/events.ts`                                          |
+| `hames-app:ui`            | The app shell                 | Layout, theme, fonts, icons, `Nav`, `SettingsPanel`, `UserMenu`, the `SupportPanel` frame, mobile layout                                                     |
+| `hames-app:graph`         | The Neo4j graph panel         | `GraphVisualization`, `lib/neo4j/`, `lib/org-graph/`, `scripts/*neo4j*`, ontology work                                                                       |
+| `hames-app:observability` | Observability                 | `ObservabilityPanel` and `observability/`, `lib/metrics/`, `routes/dashboard.tsx`                                                                            |
+| `hames-app:data-stash`    | The Data Stash                | `DataStashPanel`, `lib/stash/`, `routes/api/stash*`, `lib/redis-direct.server.ts`                                                                            |
+| `hames-app:sandbox-tab`   | The app side of `pkg:sandbox` | `SandboxPanel`, `InteractiveTerminal`, `routes/api/sandbox/pty/`                                                                                             |
+| `hames-app:skills`        | User skills                   | `SkillsPanel`, `lib/skills/`, `lib/db/skills.server.ts`                                                                                                      |
+| `hames-app:auth`          | Identity and access           | `lib/auth/`, `routes/auth/`, `routes/api/auth/`, the `'use server'` gates                                                                                    |
+| `hames-app:routines`      | Unattended runs               | `lib/routines/`, `routes/api/routines/`, `routes/api/agents/[id].ts`, `lib/harness-client/action-runner.server.ts`, `configs/template.action-tokens.yaml`    |
+| `hames-app:db`            | Postgres                      | `lib/db/`: schema, repositories, encryption at rest, migrations                                                                                              |
+| `hames-app:inference`     | Inference tiers               | `lib/inference/`, `ConversationTierSwitch`, `lib/cost-rates.server.ts`                                                                                       |
+| `hames-app:mcp-gateway`   | The Docker MCP gateway        | `configs/catalog.yaml`, `custom-catalog.yaml`, `mcp-config.yaml`, `template.mcp-config.yaml`, `scripts/render-mcp-config.sh`, the gateway service in compose |
+| `hames-app:deployment`    | Build and host tooling        | `app/Dockerfile`, `docker-compose*.yaml`, `configs/Caddyfile`, `scripts/` (by default), `flake.nix`, `Makefile`, env configuration                           |
+| `hames-app:testing`       | The test pyramid              | Test setup and the test databases, `app/e2e/`, `app/e2e-browser/`, `release:check`, `app/evals/`                                                             |
+| `hames-app:ci`            | CI and releases               | `.github/workflows/`, the format and lint gates, `.changeset/`, `scripts/pack-smoke*`, `scripts/check-changeset-patterns.mjs`                                |
+| `hames-app:docs`          | Repo docs                     | `docs/`, the root `README.md`, `CONTRIBUTING.md`, the agent guides                                                                                           |
 
 Each family has one colour (`pkg:` blue `1D76DB`, `hames-app:` purple `5319E7`),
 and every label has a one-line description; `gh label list` shows both. When

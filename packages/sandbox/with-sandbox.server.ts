@@ -29,7 +29,6 @@ import { syncSkills } from './skills.server'
 import {
   SKILLS_INDEX_TOOL,
   renderSkillsIndex,
-  withSkillsIndex,
   type SandboxSkill,
   type SandboxSkillsResolver,
 } from './skills'
@@ -67,9 +66,10 @@ assertServerOnImport()
  * adaptation is a narrowing rather than a new capability.
  *
  * `skillsIndex` is the run's skills index (#415), when skills were mounted. It
- * rides the tool list this transport advertises — the one per-run channel into
- * the prompt a wrapper has — appended to `sandbox_bash`'s description by
- * `withSkillsIndex`. Absent, the list is the transport's own, unchanged.
+ * rides the transport as `promptContext`, which the adapters render in the
+ * request's `user`-role CONTEXT block — not in the tool list, which stays the
+ * transport's own byte for byte, and not in the system message (see
+ * `skills.ts` for the two defects the earlier placement had).
  */
 function runWithSandbox<T>(
   transport: McpTransport,
@@ -83,7 +83,8 @@ function runWithSandbox<T>(
           id: `sandbox:${transport.vmId}`,
           ownsTool: (name) => transport.ownsTool(name),
           callTool: (name, args) => transport.callTool(name, args),
-          listTools: async () => withSkillsIndex(await transport.listTools(), skillsIndex),
+          listTools: () => transport.listTools(),
+          ...(skillsIndex ? { promptContext: skillsIndex } : {}),
         },
       ],
     },
@@ -152,7 +153,8 @@ export interface WithSandboxConfig {
   /**
    * Skills to mount for each run (#415): resolved per run, written into the
    * container as `/skills/<name>/SKILL.md`, and indexed (name + description)
-   * on the sandbox's tool surface so the actor reads a file only when its
+   * as the transport's `promptContext` — a delimited `<skills>` block in the
+   * request's `user`-role context — so the actor reads a file only when its
    * description fits the task. See `skills.ts` / `skills.server.ts`.
    *
    * A RESOLVER for `tenantId`'s reason: the patterns are built once per

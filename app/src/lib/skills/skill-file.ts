@@ -41,9 +41,16 @@
  * the upload action calls it, and a browser that skipped it changes nothing.
  */
 import { parseDocument } from 'yaml'
-import { SKILL_FILE_MAX_BYTES, SKILL_NAME_MAX_LENGTH, isSkillName } from '@hames-ai/sandbox/skills'
+import {
+  SKILL_DESCRIPTION_MAX_CHARS,
+  SKILL_FILE_MAX_BYTES,
+  SKILL_NAME_MAX_LENGTH,
+  isSkillName,
+} from '@hames-ai/sandbox/skills'
 
-export const SKILL_DESCRIPTION_MAX_CHARS = 1024
+/** The specification's bound, owned by the sandbox package, which enforces it
+ *  again on what it mounts — one number, so the two checks cannot disagree. */
+export { SKILL_DESCRIPTION_MAX_CHARS }
 export const SKILL_COMPATIBILITY_MAX_CHARS = 500
 
 /** The specification's frontmatter fields — the whole set. */

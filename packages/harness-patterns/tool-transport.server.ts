@@ -69,8 +69,10 @@ assertServerOnImport()
 /**
  * One tool transport.
  *
- * Deliberately four members and no rank. `ownsTool` is asked of every candidate
- * on every dispatch, so it must be synchronous and side-effect-free.
+ * Deliberately four required members and no rank; the two optional ones
+ * (`namespaceFor`, `promptContext`) are vocabulary for the model's view of the
+ * tool surface and are never read by dispatch. `ownsTool` is asked of every
+ * candidate on every dispatch, so it must be synchronous and side-effect-free.
  */
 export interface ToolTransport {
   /** Stable id — diagnostics, and the precedence test's assertion subject. */
@@ -91,6 +93,20 @@ export interface ToolTransport {
    * for the tool surface, never a routing input.
    */
   namespaceFor?(toolName: string): string | undefined
+  /**
+   * Data this transport asks the model to be shown beside the request — today
+   * the sandbox's skills index (#415). Optional, and like `namespaceFor` NOT
+   * read by dispatch: it is never a routing input.
+   *
+   * It exists because the alternative — appending text to a tool's
+   * description — puts it INSIDE the tool catalog, where a line of data reads
+   * as a tool definition, and in the actor's `system` message, where content
+   * another user wrote would sit with the deployment's own instructions. The
+   * adapters render it in the request's `user`-role context block instead
+   * ({@link activeTransportContext}); a transport is responsible for
+   * delimiting and escaping its own text.
+   */
+  readonly promptContext?: string
 }
 
 /** Shared empty result, so `activeTransports()` outside any run allocates
@@ -118,6 +134,19 @@ const processRegistry: ToolTransport[] = []
  */
 export function activeTransports(): readonly ToolTransport[] {
   return currentRunFrame()?.transports ?? NO_TRANSPORTS
+}
+
+/**
+ * The scoped transports' {@link ToolTransport.promptContext}, innermost first,
+ * blank ones dropped, joined by a blank line — or `undefined` when none has
+ * any. What the adapters fold into the `user`-role context block of a
+ * controller or actor prompt. Outside a run, `undefined`.
+ */
+export function activeTransportContext(): string | undefined {
+  const parts = activeTransports()
+    .map((t) => t.promptContext?.trim())
+    .filter((text): text is string => Boolean(text))
+  return parts.length > 0 ? parts.join('\n\n') : undefined
 }
 
 /**

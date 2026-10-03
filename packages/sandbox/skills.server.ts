@@ -20,6 +20,8 @@
  *     a single safe path segment, so there is no traversal to guard separately;
  *   - a second skill of a name already selected (first wins — the host orders
  *     its list by precedence);
+ *   - a description that is not 1–{@link SKILL_DESCRIPTION_MAX_CHARS}
+ *     characters, because it is shown on every model call of the run;
  *   - a file over {@link SKILL_FILE_MAX_BYTES};
  *   - anything past {@link MAX_MOUNTED_SKILLS}.
  *
@@ -52,7 +54,9 @@ import {
   MAX_MOUNTED_SKILLS,
   SKILLS_DIR,
   SKILL_FILE_MAX_BYTES,
+  SKILL_DESCRIPTION_MAX_CHARS,
   SKILL_FILE_NAME,
+  isSkillDescription,
   isSkillName,
   type SandboxSkill,
 } from './skills'
@@ -96,6 +100,11 @@ function select(skills: readonly SandboxSkill[]): {
       skipped.push({ name, error: 'not a valid skill name' })
     } else if (names.has(name)) {
       skipped.push({ name, error: 'another skill with this name is already mounted' })
+    } else if (!isSkillDescription(skill.description)) {
+      skipped.push({
+        name,
+        error: `description is not 1-${SKILL_DESCRIPTION_MAX_CHARS} characters`,
+      })
     } else if (typeof skill.content !== 'string') {
       skipped.push({ name, error: 'no SKILL.md text' })
     } else if (Buffer.byteLength(skill.content, 'utf8') > SKILL_FILE_MAX_BYTES) {

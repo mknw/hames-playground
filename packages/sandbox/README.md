@@ -211,11 +211,13 @@ them:
 - **Skills** — `WithSandboxConfig.skills`, a function called per run that returns
   the [Agent Skills](https://agentskills.io/specification) to mount (`SandboxSkill[]`:
   a name, a description and the whole `SKILL.md` text). Each is written into the
-  container as `/skills/<name>/SKILL.md`, and the description of `sandbox_bash`
-  gains a one-line-per-skill index (name and description only), so the model reads a
-  file only when its description fits the task. Names follow the specification's
-  rule, a file is at most 64 KiB, and at most 20 skills mount per run; a skill
-  that cannot be mounted is reported as a run event rather than dropped silently.
+  container as `/skills/<name>/SKILL.md`, and the model is shown an index of them
+  (name and description only) as a delimited, escaped `<skills>` block in the
+  request's `user`-role context — outside the tool list and the system message —
+  so it reads a file only when its description fits the task. Names follow the
+  specification's rule, a description is 1–1024 characters, a file is at most
+  64 KiB, and at most 20 skills mount per run; a skill that cannot be mounted is
+  reported as a run event rather than dropped silently.
   Which skills a run gets — and whose they are — is yours to decide, server-side.
 
 Every other option on `WithSandboxConfig` (`backend`, `pool`, `scheduler`,
@@ -268,7 +270,7 @@ What each image contains: [rootfs/README.md](https://github.com/mknw/hames-playg
 | `./settings`                 | `SandboxSettings` + `DEFAULT_SANDBOX_SETTINGS` (the caps and per-call defaults)                   | yes — same rule                                |
 | `./guard` (= `./bash-guard`) | `screenBashCommand` / `bashGuardPolicyFromEnv` — the shell-command screen                         | yes                                            |
 | `./egress-policy`            | the three selectable egress profiles and the per-boot network naming                              | yes                                            |
-| `./skills`                   | `SandboxSkill`, the skill limits (`SKILL_FILE_MAX_BYTES`, `MAX_MOUNTED_SKILLS`) and `isSkillName` | yes                                            |
+| `./skills`                   | `SandboxSkill`, the skill limits and checks (`isSkillName`, `isSkillDescription`), the index text | yes                                            |
 | `./workspace-store`          | `configureWorkspaceStore(...)` — where you plug in storage for `/work` files                      | server                                         |
 | `./with-sandbox.server`      | the wrapper itself, for code that skips the root entry point                                      | server                                         |
 | `./pty-manager.server`       | an interactive terminal into a running container (uses `node-pty`, see Troubleshooting)           | server                                         |

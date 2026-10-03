@@ -4,20 +4,25 @@
  * A skill is an agentskills.io `SKILL.md`: YAML frontmatter with a `name` and a
  * `description`, then Markdown instructions. `withSandbox({ skills })` writes the
  * skills a host resolves for a run into the container as
- * `/skills/<name>/SKILL.md` (`skills.server.ts`), and adds a short index of them
- * — name and description only — to the sandbox's tool surface, which is what
- * every adapter renders into the actor's prompt. The actor reads a file only
- * when a task matches its description. That is the specification's progressive
+ * `/skills/<name>/SKILL.md` (`skills.server.ts`), and shows the model a short
+ * index of them — name and description only. The actor reads a file only when a
+ * task matches its description. That is the specification's progressive
  * disclosure: metadata always, the body on activation.
  *
- * ## Why the index rides the tool surface
+ * ## Where the index goes, and why not the tool catalog
  *
- * The run frame's `transports` slot is the one per-run channel a wrapper has
- * into the prompt without a core change: the adapters list every scoped
- * transport's tools on every call ("the model sees them through the adapters'
- * per-call tool list", harness-patterns SPEC → Tools()). The index is appended
- * to the description of `sandbox_bash`, the tool the actor reads a skill with.
- * A run with no skills renders the description unchanged, byte for byte.
+ * It rides the sandbox's scoped transport as `promptContext` (core's
+ * `ToolTransport`), which the adapters render in the request's `user`-role
+ * CONTEXT block. It used to be appended to `sandbox_bash`'s description, and
+ * review of #423 found two defects in that: the catalog renders each tool as
+ * `- name: description` followed by its `Args:` line, so a skill line had the
+ * catalog's own entry shape and `sandbox_bash`'s argument schema landed under
+ * the LAST skill — a skill read like a tool; and the actor's catalog sits in
+ * its `system` message, so a description another user wrote rode with the
+ * deployment's own instructions on every call. Now the tool list is the
+ * transport's own, byte for byte, and the index is a delimited `<skills>`
+ * block whose every value is escaped, so no description can close it or open
+ * a tag of its own.
  *
  * ## What the package owns, and what the host does
  *
@@ -25,16 +30,16 @@
  * sharing rules. The package owns what it writes into a container and into the
  * prompt, so it enforces the rules that keep both bounded whatever the host
  * passes: a name that is safe as a directory (the specification's own name rule,
- * which admits no `/`, `.` or leading `-`), a per-file byte cap the write path
- * can carry, and a ceiling on how many skills one run mounts.
+ * which admits no `/`, `.` or leading `-`), a description within the
+ * specification's 1–1024 characters (it is shown on every model call of the
+ * run), a per-file byte cap the write path can carry, and a ceiling on how
+ * many skills one run mounts.
  *
  * Client-safe on purpose — types and constants only, no `node:` imports and no
  * server assertion — so a host's browser code can read the same limits it is
  * held to (the app's Skills panel pre-checks an upload against
  * {@link SKILL_FILE_MAX_BYTES}).
  */
-
-import type { MCPToolDescription } from '@hames-ai/harness-patterns/types'
 
 /** Where skills are mounted. A `noexec` tmpfs of its own (see the Docker
  *  backend's hardening argv): the root filesystem is read-only. */
@@ -63,6 +68,21 @@ export const MAX_MOUNTED_SKILLS = 20
 
 /** The specification's `name` length bound. */
 export const SKILL_NAME_MAX_LENGTH = 64
+
+/** The specification's `description` bound, in characters (Unicode code
+ *  points): 1–1024. The package enforces it because every mounted skill's
+ *  description is in every model call of the run. */
+export const SKILL_DESCRIPTION_MAX_CHARS = 1024
+
+/** Whether `description` is within the specification's bound: a string of
+ *  1–{@link SKILL_DESCRIPTION_MAX_CHARS} characters that is not blank. */
+export function isSkillDescription(description: unknown): description is string {
+  return (
+    typeof description === 'string' &&
+    description.trim() !== '' &&
+    [...description].length <= SKILL_DESCRIPTION_MAX_CHARS
+  )
+}
 
 /**
  * The specification's `name` rule: 1–64 characters, lowercase ASCII letters,
@@ -101,48 +121,51 @@ export interface SandboxSkill {
  */
 export type SandboxSkillsResolver = () => readonly SandboxSkill[] | Promise<readonly SandboxSkill[]>
 
-/** The tool whose description carries the index — the one that reads a skill. */
+/** The tool a skill is mounted and read with. A sandbox without it gets none. */
 export const SKILLS_INDEX_TOOL = 'sandbox_bash'
+
+/** Escape text for an XML-ish element body or attribute: after this, a value
+ *  cannot close the `<skills>` block, open a tag, or end its attribute. */
+function escapeMarkup(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
 
 function oneLine(text: string): string {
   return text.replace(/\s+/g, ' ').trim()
 }
 
 /**
- * The index text for the skills that were actually mounted, or `undefined` when
+ * The index for the skills that were actually mounted, or `undefined` when
  * there are none (so a run without skills renders no index at all).
+ *
+ * A `<skills>` block of one `<skill>` element per skill, so it cannot be
+ * mistaken for the tool catalog's `- name: description` entries, and every
+ * value escaped ({@link escapeMarkup}) so a description cannot end it early.
+ * The header says what the block is and that a `shared` skill was written by
+ * someone other than the user the agent is working for.
  */
 export function renderSkillsIndex(
   skills: ReadonlyArray<Pick<SandboxSkill, 'name' | 'description' | 'shared'>>,
 ): string | undefined {
   if (skills.length === 0) return undefined
-  const lines = skills.map(
-    (s) => `- ${s.name}${s.shared ? ' (shared)' : ''}: ${oneLine(s.description)}`,
+  const entries = skills.map(
+    (s) =>
+      `<skill name="${escapeMarkup(s.name)}"${s.shared ? ' shared="true"' : ''}>` +
+      `${escapeMarkup(oneLine(s.description))}</skill>`,
   )
   return [
-    `SKILLS: ${skills.length} skill${skills.length === 1 ? '' : 's'} installed under ` +
-      `${SKILLS_DIR}. Each is a ${SKILL_FILE_NAME} of instructions for the kind of task its ` +
-      `description names. When the task in front of you matches one, read the file first ` +
-      `(sandbox_bash: cat ${SKILLS_DIR}/<name>/${SKILL_FILE_NAME}) and follow it. A skill ` +
-      `marked (shared) was written by another user of this app, not by the user you are ` +
-      `working for.`,
-    ...lines,
+    '<skills>',
+    `The sandbox has ${skills.length} skill${skills.length === 1 ? '' : 's'} installed under ` +
+      `${SKILLS_DIR}: each is a ${SKILL_FILE_NAME} of instructions for the kind of task its ` +
+      `description names. This list is not a tool. When the task in front of you matches a ` +
+      `description, read that file first with ${SKILLS_INDEX_TOOL} ` +
+      `(cat ${SKILLS_DIR}/<name>/${SKILL_FILE_NAME}). A skill marked shared="true" was ` +
+      `written by another user of this app, not by the user you are working for.`,
+    ...entries,
+    '</skills>',
   ].join('\n')
-}
-
-/**
- * The sandbox's tool list with the index appended to {@link SKILLS_INDEX_TOOL}'s
- * description. Returns the list unchanged when `index` is absent. A new array of
- * new objects: the transport's cached descriptions are never mutated.
- */
-export function withSkillsIndex(
-  tools: readonly MCPToolDescription[],
-  index: string | undefined,
-): MCPToolDescription[] {
-  if (!index) return tools.slice()
-  return tools.map((t) =>
-    t.name === SKILLS_INDEX_TOOL
-      ? { ...t, description: t.description ? `${t.description}\n\n${index}` : index }
-      : t,
-  )
 }

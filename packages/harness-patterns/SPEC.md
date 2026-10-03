@@ -403,6 +403,15 @@ opposite of `withInjectionGuard`, which unions. Both are right: two nested
 sandboxes both own `sandbox_bash` and a union has no answer, while a nested
 guard is a second reviewer whose strictness must survive.
 
+A transport may also carry `promptContext` — text it asks the model to be shown
+beside the request (today the sandbox's skills index). Like `namespaceFor` it is
+never a routing input. `activeTransportContext()` joins the scoped transports'
+contexts, innermost first, and the BAML adapters render the result in the
+request's `user`-role CONTEXT block: never inside the tool catalog, where a line
+of data would read as a tool definition, and never in the system message, where
+text a different author wrote would sit beside the deployment's own
+instructions. A transport delimits and escapes its own text.
+
 App-side tools exist for calls that carry a per-user credential resolved
 server-side — the gateway executes every user's calls as one shared principal,
 so it cannot express per-user identity. They are declared via `registerAppTool()`

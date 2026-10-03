@@ -728,6 +728,16 @@ export interface SimpleLoopConfig extends PatternConfig {
    *  results, across patterns, including the fields `resultOmit` hides from the
    *  controller), so the default asks the loop for a summary only. */
   returnStyle?: ReturnStyle
+  /** The consecutive-recovery cap (default: 2). How many rounds IN A ROW may
+   *  produce an answer the loop cannot use — one that would not parse,
+   *  `tool_args` that would not parse, a tool off the allowlist — before the
+   *  loop stops: each one short of the cap is fed back as that round's result,
+   *  and the one that reaches it ends the loop exactly as it did before #437,
+   *  marked `kind: 'recovery_exhausted'`. A round that dispatches a tool resets
+   *  the count, whatever the tool returns; a tool that ran and FAILED is never
+   *  counted. `1` restores the pre-#437 behaviour for those three failures,
+   *  `Infinity` leaves only `maxTurns`; values below 1 are clamped to 1. */
+  maxConsecutiveRecoveries?: number
 }
 
 /** Configuration for actorCritic pattern */
@@ -764,6 +774,13 @@ export interface ActorCriticConfig extends PatternConfig {
   /** Multi-call turns: 'parallel' (default) | 'sequential' | 'off'.
    *  See `MultiCallMode`. */
   multiToolCalls?: MultiCallMode
+  /** The consecutive-recovery cap (default: 2), counted in ATTEMPTS — the same
+   *  rule as `SimpleLoopConfig.maxConsecutiveRecoveries`. An actor answer that
+   *  would not parse, unparseable `tool_args` and a refused tool name count; an
+   *  attempt that dispatches a tool resets the count, and a tool that ran and
+   *  failed is never counted, so the fail-fix-fail iteration a sandbox actor
+   *  debugs by is untouched. */
+  maxConsecutiveRecoveries?: number
 }
 
 /** Synthetic tool injected into LoopController's tools list when prior results
@@ -1158,6 +1175,9 @@ export interface ErrorEventData {
    *  `kind: 'budget_exhausted'`, so a reader has BOTH halves of "7 of 8" and
    *  the panel can render the fraction. Absent on every other error. */
   maxTurns?: number
+  /** The consecutive-recovery cap that ended the loop — always set alongside
+   *  `kind: 'recovery_exhausted'`, absent on every other error. */
+  maxConsecutiveRecoveries?: number
   /** Origin of the error.
    *
    *  `llm_call` means the failure is attributable to an LLM call and the event
@@ -1178,8 +1198,18 @@ export interface ErrorEventData {
    *  `maxTurns` beside it for the budget, `turn` / `iteration` for how far it
    *  got.
    *
+   *  `recovery_exhausted` means the loop's consecutive-recovery cap ended it
+   *  (`SimpleLoopConfig.maxConsecutiveRecoveries` /
+   *  `ActorCriticConfig.maxConsecutiveRecoveries`): that many rounds in a row
+   *  produced an answer the loop could not use, and the last of them is fatal
+   *  exactly as it was before #437. The rest of the event is that failure's —
+   *  its verbatim message, the pattern's severity and, as for `llm_call`, the
+   *  failed call on `ContextEvent.llmCall` — so this marker REPLACES `llm_call`
+   *  on that event rather than joining it. Read `maxConsecutiveRecoveries`
+   *  beside it for the cap.
+   *
    *  Absent for non-LLM errors (MCP failures, tool errors, etc.). */
-  kind?: 'llm_call' | 'budget_exhausted'
+  kind?: 'llm_call' | 'budget_exhausted' | 'recovery_exhausted'
 }
 
 /**
@@ -1262,8 +1292,10 @@ export type LoopRecoveryFailure =
  * synthesizer, which then apologises, and the chat paints a red bubble. A
  * failure the loop routed around is none of those (#235), and a separate TYPE
  * is what keeps every error reader from matching it by accident. If the loop
- * never recovers, the budget runs out and THAT records the turn-level error
- * (`kind: 'budget_exhausted'`).
+ * never recovers, the turn-level error comes from whichever bound it reaches
+ * first: the budget (`kind: 'budget_exhausted'`), or — for a run of answers the
+ * loop cannot use — the consecutive-recovery cap (`kind: 'recovery_exhausted'`),
+ * whose final failure is that `error` and not one more `loop_recovery`.
  *
  * Always committed, and rendered metadata-only into LLM-facing serializations:
  * `error` can quote a tool's error text or a parse error that echoes the

@@ -37,6 +37,9 @@ import {
   unparseableOutputFeedback,
   invalidToolArgsFeedback,
   trackLoopRecovery,
+  resolveMaxConsecutiveRecoveries,
+  recoveryStreak,
+  recoveryExhaustedMarker,
 } from '../loop-recovery.server'
 import { trimToFit } from '../token-budget.server'
 import type { ControllerFn } from '../types'
@@ -238,6 +241,13 @@ export function simpleLoop<T extends SimpleLoopData>(
     // setting, clamped to the bound the host's stuck-run reaper derives its
     // threshold from (`runtime-config.ts`, `resolveTurnBudget`).
     const maxTurns = resolveTurnBudget('maxToolTurns', config?.maxTurns, settings.maxToolTurns)
+    // The consecutive-recovery cap (#450 review §3): a run of answers this loop
+    // cannot use is fed back only until the cap-th in a row, which takes the
+    // pre-#437 fatal path below with `recoveryCapHit` set. See `recoveryStreak`.
+    const maxConsecutiveRecoveries = resolveMaxConsecutiveRecoveries(
+      config?.maxConsecutiveRecoveries,
+    )
+    const streak = recoveryStreak(maxConsecutiveRecoveries)
     // Multi-call turns (ControllerAction.additional_calls). 'off' still
     // EXECUTES an un-advertised batch (serially) — it only stops the prompt
     // from inviting one, because the shared output schema means any agent's
@@ -257,6 +267,7 @@ export function simpleLoop<T extends SimpleLoopData>(
     let errorMessage: string | undefined
     let errorTurn: number | undefined
     let errorLlmCall: LLMCallRecord | undefined
+    let recoveryCapHit = false
     let exitedViaReturn = false
 
     // Build structured references to tool results from previous tasks.
@@ -421,23 +432,28 @@ export function simpleLoop<T extends SimpleLoopData>(
           // call, so the log replays an empty action followed by the ERROR,
           // the shape `controller-history-format.test.ts` pins as parseable.
           if (isRecoverableLLMFailure(controllerError)) {
-            const feedback = unparseableOutputFeedback(controllerError)
-            turns.push({
-              n: turn,
-              tool_result: { tool: '', result: '', success: false, error: feedback },
-            })
-            trackLoopRecovery(
-              scope,
-              { failure: 'unparseable_output', error: controllerError.message, turn, maxTurns },
-              controllerError.llmCall,
-            )
-            continue
+            if (!streak.unusableAnswer()) {
+              const feedback = unparseableOutputFeedback(controllerError)
+              turns.push({
+                n: turn,
+                tool_result: { tool: '', result: '', success: false, error: feedback },
+              })
+              trackLoopRecovery(
+                scope,
+                { failure: 'unparseable_output', error: controllerError.message, turn, maxTurns },
+                controllerError.llmCall,
+              )
+              continue
+            }
+            // The cap-th unusable answer in a row: fatal, by the path below.
+            recoveryCapHit = true
           }
           const msg =
             controllerError instanceof Error ? controllerError.message : String(controllerError)
           // Anything else is fatal, as it always was: the model never answered
-          // (transport, timeout, abort) or the failure is unclassified. Exit
-          // gracefully with partial results instead of losing everything.
+          // (transport, timeout, abort) or the failure is unclassified — and so
+          // is an unparseable answer that reached the consecutive-recovery cap.
+          // Exit gracefully with partial results instead of losing everything.
           hasError = true
           errorMessage = msg
           errorTurn = turn
@@ -738,6 +754,10 @@ export function simpleLoop<T extends SimpleLoopData>(
           )
 
           const outcomes = await runBatch(subCalls, multiMode)
+          // A batch breaks a run of unusable answers only if something in it was
+          // DISPATCHED — not one refused or unparseable at the precheck, and not
+          // one a serial batch skipped after an earlier failure.
+          if (subCalls.some((sc, i) => sc.run && !outcomes[i].skipped)) streak.dispatched()
 
           outcomes.forEach((o, i) =>
             trackEvent(
@@ -832,6 +852,16 @@ export function simpleLoop<T extends SimpleLoopData>(
           // names a withheld tool as such, so the model reads "withheld", not
           // "misspelled", and a write-shaped request gets an answer.
           const refused = refusal(action.tool_name)
+          if (streak.unusableAnswer()) {
+            // The consecutive-recovery cap: this refusal ends the loop exactly
+            // as every refusal did before #437.
+            hasError = true
+            errorMessage = refused
+            errorTurn = turn
+            errorLlmCall = controllerLlmCall
+            recoveryCapHit = true
+            break
+          }
           turns.push({
             n: turn,
             reasoning: action.reasoning,
@@ -866,6 +896,16 @@ export function simpleLoop<T extends SimpleLoopData>(
             action.tool_args,
             controllerLlmCall?.hitOutputCap ?? false,
           )
+          if (streak.unusableAnswer()) {
+            // The consecutive-recovery cap: these args end the loop as they
+            // did before #437, with the same message the recovery would carry.
+            hasError = true
+            errorMessage = feedback
+            errorTurn = turn
+            errorLlmCall = controllerLlmCall
+            recoveryCapHit = true
+            break
+          }
           turns.push({
             n: turn,
             reasoning: action.reasoning,
@@ -915,7 +955,9 @@ export function simpleLoop<T extends SimpleLoopData>(
           resolved.trackHistory,
         )
 
-        // Execute tool with resolved args
+        // Execute tool with resolved args. A dispatch ends any run of unusable
+        // answers, whatever the tool then returns.
+        streak.dispatched()
         const result = await callTool(action.tool_name, resolvedArgs)
 
         // onToolResult hook: enrich/transform result before the event is committed.
@@ -1027,6 +1069,12 @@ export function simpleLoop<T extends SimpleLoopData>(
             hint: getErrorHint(errorMessage ?? ''),
             turn: errorTurn,
             ...(errorLlmCall ? { kind: 'llm_call' as const } : {}),
+            // Stopped by the consecutive-recovery cap: the marker, the cap and
+            // a hint naming the lever replace `kind` and the message-keyed hint
+            // above; the failure, severity and llmCall are the pre-#437 ones.
+            ...(recoveryCapHit
+              ? recoveryExhaustedMarker(maxConsecutiveRecoveries, resolved.patternId)
+              : {}),
           } as ErrorEventData,
           true,
           errorLlmCall,

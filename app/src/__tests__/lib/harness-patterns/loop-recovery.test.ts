@@ -10,7 +10,8 @@
  * What stays FATAL is pinned here just as hard, because "recover from more
  * things" drifts into "recover from everything": the gateway-outage refusal, an
  * LLM call that never answered (and any failure the implementation did not
- * classify), a `callTool` that throws, and a critic that throws.
+ * classify), a `callTool` that throws, and a critic that throws — and, since
+ * the #450 review's §3, the answer that reaches the consecutive-recovery cap.
  *
  * Each `it` names the mutation that turns it red.
  */
@@ -19,11 +20,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { mockAction, mockFinalAction, mockCriticResult } from '../../mocks/baml'
 import type {
+  ActorCriticConfig,
   ActorInput,
   ContextEvent,
   ControllerInput,
+  ErrorEventData,
   LLMCallRecord,
   LoopRecoveryEventData,
+  SimpleLoopConfig,
 } from '@hames-ai/harness-patterns/types'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -94,9 +98,15 @@ afterEach(async () => {
 // ============================================================================
 
 describe('simpleLoop: recoverable failures are fed back', () => {
-  async function loop(controller: ReturnType<typeof vi.fn>, maxTurns = 4) {
+  async function loop(
+    controller: ReturnType<typeof vi.fn>,
+    maxTurns = 4,
+    extra: SimpleLoopConfig = {},
+  ) {
     const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
-    return run(simpleLoop(controller as never, TOOLS, { patternId: 'rec', maxTurns }) as never)
+    return run(
+      simpleLoop(controller as never, TOOLS, { patternId: 'rec', maxTurns, ...extra }) as never,
+    )
   }
 
   // Mutation: delete the `isRecoverableLLMFailure` branch in the controller
@@ -121,6 +131,10 @@ describe('simpleLoop: recoverable failures are fed back', () => {
     expect(seen.tool_result).toMatchObject({ tool: '', success: false })
     expect(seen.tool_result?.error).toContain('could not be parsed')
     expect(seen.tool_result?.error).toContain('Missing required field: tool_args')
+    // ...and its own answer, which the turn log cannot replay: no action was
+    // parsed out of it, so the assistant message for that round is empty.
+    // Mutation: drop the raw-output excerpt from `unparseableOutputFeedback`.
+    expect(seen.tool_result?.error).toContain(`as you wrote it:\n${RAW}\n`)
     expect(callToolMock).toHaveBeenCalledTimes(1)
 
     expect(recoveries(events)).toEqual([
@@ -145,6 +159,10 @@ describe('simpleLoop: recoverable failures are fed back', () => {
     const error = (controller.mock.calls[1][0] as ControllerInput).turns[0].tool_result?.error
     expect(error).toContain('CUT OFF at the output-token limit')
     expect(error).toContain('CONTINUE BY APPENDING')
+    // A cut-off is told to be smaller, not shown its own oversized answer.
+    // Mutation: put the raw-output excerpt on this branch too.
+    expect(error).not.toContain(RAW)
+    expect(error).not.toContain('as you wrote it')
   })
 
   // Mutation: drop the empty-output branch → "could not be parsed" with a
@@ -205,11 +223,13 @@ describe('simpleLoop: recoverable failures are fed back', () => {
   })
 
   // Mutation: count recoveries as `turns` without consuming a round → the loop
-  // never ends; or skip the exhaustion marker when the last round failed.
+  // never ends; or skip the exhaustion marker when the last round failed. The
+  // consecutive-recovery cap is switched off here, so the budget is the bound
+  // under test (the cap has its own suite below).
   it('a model that never recovers is stopped by its budget, and says so', async () => {
     const controller = vi.fn().mockRejectedValue(await parseFailure())
 
-    const events = await loop(controller, 3)
+    const events = await loop(controller, 3, { maxConsecutiveRecoveries: Infinity })
 
     expect(controller).toHaveBeenCalledTimes(3)
     expect(recoveries(events).map((r) => r.turn)).toEqual([0, 1, 2])
@@ -384,6 +404,10 @@ describe('actorCritic: an unparseable actor answer is fed back (#425 C2)', () =>
     const [attempt] = (actor.mock.calls[1][0] as ActorInput).previousAttempts
     expect(attempt).toMatchObject({ toolName: '', script: '', output: '' })
     expect(attempt.error).toContain('could not be parsed')
+    // The attempt log replays an empty action for this attempt, so the ERROR
+    // is the only place the actor can see what it wrote. Mutation: drop the
+    // raw-output excerpt from `unparseableOutputFeedback`.
+    expect(attempt.error).toContain(`as you wrote it:\n${RAW}\n`)
     expect(recoveries(events)).toEqual([
       { failure: 'unparseable_output', error: failure.message, turn: 0, maxTurns: 3 },
     ])
@@ -517,9 +541,361 @@ describe('actorCritic: an unparseable actor answer is fed back (#425 C2)', () =>
     const events = await loop(actor, accept(), [])
 
     expect(recoveries(events)[0]).toMatchObject({ failure: 'tool_not_allowed', tool: 'web_search' })
+    // Two refusals in a row: the consecutive-recovery cap ends the loop.
     expect(ofType(events, 'error').map((e) => (e.data as { kind?: string }).kind)).toEqual([
-      'budget_exhausted',
+      'recovery_exhausted',
     ])
+  })
+})
+
+// ============================================================================
+// The consecutive-recovery cap (#450 review §3, owner decision 2026-10-03)
+// ============================================================================
+
+const errorsOf = (events: ContextEvent[]) =>
+  ofType(events, 'error').map((e) => e.data as ErrorEventData)
+
+/** The record a real adapter returns with an answer that parsed. */
+const ANSWERED: LLMCallRecord = { functionName: 'LoopController', variables: {}, rawOutput: '{}' }
+
+/** The three ways a round's ANSWER can be unusable, as a controller/actor mock
+ *  produces each: `[label, arrange the mock, what the cap's error says]`. */
+async function unusableAnswers() {
+  const failure = await parseFailure()
+  return [
+    [
+      'an unparseable answer',
+      (m: ReturnType<typeof vi.fn>) => m.mockRejectedValueOnce(failure),
+      failure.message,
+    ],
+    [
+      'a tool off the allowlist',
+      (m: ReturnType<typeof vi.fn>) =>
+        m.mockResolvedValueOnce({
+          action: mockAction({ tool_name: 'run_command', tool_args: '{}' }),
+          llmCall: ANSWERED,
+        }),
+      'Tool not allowed: run_command',
+    ],
+    [
+      'unparseable tool_args',
+      (m: ReturnType<typeof vi.fn>) =>
+        m.mockResolvedValueOnce({
+          action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: 'not json' }),
+          llmCall: ANSWERED,
+        }),
+      'Invalid tool_args JSON for read_neo4j_cypher: not json',
+    ],
+  ] as const
+}
+
+const dispatch = (tool_args = '{"query":"q"}') => ({
+  action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args }),
+})
+
+describe('simpleLoop: the consecutive-recovery cap', () => {
+  async function loop(controller: ReturnType<typeof vi.fn>, extra: SimpleLoopConfig = {}) {
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
+    return run(
+      simpleLoop(controller as never, TOOLS, { patternId: 'rec', maxTurns: 8, ...extra }) as never,
+    )
+  }
+
+  // Mutations, each red here: the default set to 3 (a third round is played);
+  // the cap check removed from any one of the three sites (the loop runs on to
+  // its budget instead); the marker dropped from the error.
+  it.each([0, 1, 2])('the second unusable answer in a row ends the loop (class %i)', async (i) => {
+    const [, arrange, message] = (await unusableAnswers())[i]
+    const controller = vi.fn()
+    arrange(controller)
+    arrange(controller)
+    controller.mockResolvedValue({ action: mockFinalAction('done') })
+
+    const events = await loop(controller)
+
+    expect(controller).toHaveBeenCalledTimes(2)
+    expect(callToolMock).not.toHaveBeenCalled()
+    // The first is fed back; the second is not one more recovery.
+    expect(recoveries(events).map((r) => r.turn)).toEqual([0])
+    // Fatal exactly as before #437 — the failure's own message, the pattern's
+    // severity, the failed answer's llmCall — and marked as the cap's doing.
+    const errors = errorsOf(events)
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toMatchObject({
+      kind: 'recovery_exhausted',
+      maxConsecutiveRecoveries: 2,
+      severity: 'recoverable',
+      turn: 1,
+    })
+    expect(errors[0].error).toContain(message)
+    expect(errors[0].hint).toContain('consecutive-recovery cap')
+    expect(errors[0].hint).toContain('`maxConsecutiveRecoveries` on the `rec` pattern')
+    expect(ofType(events, 'error')[0].llmCall).toBeDefined()
+  })
+
+  // Mutation: drop `streak.dispatched()` before the singular `callTool` → the
+  // second unparseable answer is counted as the second in a row, red. The tool
+  // FAILS here on purpose: a tool error is never counted, and a dispatch resets
+  // the count whatever the tool returned.
+  it('a round that dispatches a tool resets the count, even when the tool fails', async () => {
+    callToolMock.mockResolvedValue({ success: false, data: null, error: 'row limit' })
+    const controller = vi
+      .fn()
+      .mockRejectedValueOnce(await parseFailure())
+      .mockResolvedValueOnce(dispatch())
+      .mockRejectedValueOnce(await parseFailure())
+      .mockResolvedValueOnce({ action: mockFinalAction('done') })
+
+    const events = await loop(controller)
+
+    expect(controller).toHaveBeenCalledTimes(4)
+    expect(recoveries(events).map((r) => r.failure)).toEqual([
+      'unparseable_output',
+      'tool_error',
+      'unparseable_output',
+    ])
+    expect(errorsOf(events)).toEqual([])
+  })
+
+  // Mutation: count a tool error toward the cap → red. Fail, fix, fail is how a
+  // loop debugs; only an unusable ANSWER is capped. Run at the strictest cap:
+  // at the default, each dispatch resets the count before a tool error could
+  // add to it, so the default alone cannot tell whether tool errors count.
+  it('tool errors in a row never reach the cap, even at its strictest', async () => {
+    callToolMock.mockResolvedValue({ success: false, data: null, error: 'row limit' })
+    const controller = vi
+      .fn()
+      .mockResolvedValueOnce(dispatch())
+      .mockResolvedValueOnce(dispatch())
+      .mockResolvedValueOnce(dispatch())
+      .mockResolvedValueOnce({ action: mockFinalAction('done') })
+
+    const events = await loop(controller, { maxConsecutiveRecoveries: 1 })
+
+    expect(controller).toHaveBeenCalledTimes(4)
+    expect(errorsOf(events)).toEqual([])
+  })
+
+  // Mutation: drop the batch branch's `streak.dispatched()` → red.
+  it('a multi-call turn that dispatched a call resets the count', async () => {
+    callToolMock.mockResolvedValue({ success: false, data: null, error: 'row limit' })
+    const controller = vi
+      .fn()
+      .mockRejectedValueOnce(await parseFailure())
+      .mockResolvedValueOnce({
+        action: mockAction({
+          tool_name: 'read_neo4j_cypher',
+          tool_args: '{"query":"a"}',
+          additional_calls: [{ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"b"}' }],
+        }),
+      })
+      .mockRejectedValueOnce(await parseFailure())
+      .mockResolvedValueOnce({ action: mockFinalAction('done') })
+
+    const events = await loop(controller)
+
+    expect(controller).toHaveBeenCalledTimes(4)
+    expect(errorsOf(events)).toEqual([])
+  })
+
+  // Mutation: reset on every batch, dispatched or not (drop the `some(...)`
+  // condition) → this one plays a fourth round, red.
+  it('a multi-call turn of which nothing was dispatched does not reset it', async () => {
+    const controller = vi
+      .fn()
+      .mockRejectedValueOnce(await parseFailure())
+      .mockResolvedValueOnce({
+        action: mockAction({
+          tool_name: 'run_command',
+          tool_args: '{}',
+          additional_calls: [{ tool_name: 'read_neo4j_cypher', tool_args: 'not json' }],
+        }),
+      })
+      .mockRejectedValueOnce(await parseFailure())
+      .mockResolvedValue({ action: mockFinalAction('done') })
+
+    const events = await loop(controller)
+
+    expect(controller).toHaveBeenCalledTimes(3)
+    expect(callToolMock).not.toHaveBeenCalled()
+    expect(recoveries(events).map((r) => r.failure)).toEqual(['unparseable_output', 'batch_failed'])
+    expect(errorsOf(events)).toEqual([
+      expect.objectContaining({ kind: 'recovery_exhausted', turn: 2 }),
+    ])
+  })
+
+  it('the knob: 1 is the pre-#437 behaviour, Infinity leaves only the budget', async () => {
+    const one = vi.fn().mockRejectedValue(await parseFailure())
+    const first = await loop(one, { maxConsecutiveRecoveries: 1 })
+    expect(one).toHaveBeenCalledTimes(1)
+    expect(recoveries(first)).toEqual([])
+    expect(errorsOf(first)).toEqual([
+      expect.objectContaining({ kind: 'recovery_exhausted', maxConsecutiveRecoveries: 1 }),
+    ])
+
+    const off = vi.fn().mockRejectedValue(await parseFailure())
+    const budget = await loop(off, { maxTurns: 3, maxConsecutiveRecoveries: Infinity })
+    expect(off).toHaveBeenCalledTimes(3)
+    expect(errorsOf(budget).map((e) => e.kind)).toEqual(['budget_exhausted'])
+  })
+})
+
+describe('actorCritic: the consecutive-recovery cap', () => {
+  async function loop(actor: ReturnType<typeof vi.fn>, extra: ActorCriticConfig = {}) {
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+    const critic = vi.fn().mockResolvedValue({ result: mockCriticResult({ is_sufficient: true }) })
+    const events = await run(
+      actorCritic(actor as never, critic as never, TOOLS, {
+        patternId: 'rec',
+        maxRetries: 6,
+        ...extra,
+      }) as never,
+    )
+    return { critic, events }
+  }
+
+  // Mutations, each red here: the default set to 3; the cap check removed from
+  // any one of the three sites. A refused tool and bad `tool_args` never ended
+  // this loop before #437, so for those two the cap is a NEW fatal path.
+  it.each([0, 1, 2])('the second unusable answer in a row ends the loop (class %i)', async (i) => {
+    const [, arrange, message] = (await unusableAnswers())[i]
+    const actor = vi.fn()
+    arrange(actor)
+    arrange(actor)
+    actor.mockResolvedValue(dispatch())
+
+    const { events, critic } = await loop(actor)
+
+    expect(actor).toHaveBeenCalledTimes(2)
+    expect(critic).not.toHaveBeenCalled()
+    expect(recoveries(events).map((r) => r.turn)).toEqual([0])
+    const errors = errorsOf(events)
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toMatchObject({
+      kind: 'recovery_exhausted',
+      maxConsecutiveRecoveries: 2,
+      severity: 'recoverable',
+      iteration: 1,
+    })
+    expect(errors[0].error).toContain(message)
+    expect(ofType(events, 'error')[0].llmCall).toBeDefined()
+  })
+
+  // Mutation: drop actorCritic's singular `streak.dispatched()` → red.
+  it('an attempt that dispatches a tool resets the count, even when the tool fails', async () => {
+    callToolMock
+      .mockResolvedValueOnce({ success: false, data: null, error: 'row limit' })
+      .mockResolvedValue({ success: true, data: { rows: 1 } })
+    const actor = vi
+      .fn()
+      .mockRejectedValueOnce(await parseFailure())
+      .mockResolvedValueOnce(dispatch())
+      .mockRejectedValueOnce(await parseFailure())
+      .mockResolvedValue(dispatch())
+
+    const { events, critic } = await loop(actor)
+
+    expect(actor).toHaveBeenCalledTimes(4)
+    expect(critic).toHaveBeenCalledTimes(1)
+    expect(errorsOf(events)).toEqual([])
+  })
+
+  // Mutation: drop actorCritic's batch `streak.dispatched()` → red.
+  it('a multi-call attempt that dispatched a call resets the count', async () => {
+    callToolMock
+      .mockResolvedValueOnce({ success: false, data: null, error: 'row limit' })
+      .mockResolvedValueOnce({ success: false, data: null, error: 'timeout' })
+      .mockResolvedValue({ success: true, data: { rows: 1 } })
+    const actor = vi
+      .fn()
+      .mockRejectedValueOnce(await parseFailure())
+      .mockResolvedValueOnce({
+        action: mockAction({
+          tool_name: 'read_neo4j_cypher',
+          tool_args: '{"query":"a"}',
+          additional_calls: [{ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"b"}' }],
+        }),
+      })
+      .mockRejectedValueOnce(await parseFailure())
+      .mockResolvedValue(dispatch())
+
+    const { events, critic } = await loop(actor)
+
+    expect(actor).toHaveBeenCalledTimes(4)
+    expect(critic).toHaveBeenCalledTimes(1)
+    expect(errorsOf(events)).toEqual([])
+  })
+
+  it('honours the knob', async () => {
+    const actor = vi.fn().mockRejectedValue(await parseFailure())
+    const { events } = await loop(actor, { maxConsecutiveRecoveries: 3 })
+    expect(actor).toHaveBeenCalledTimes(3)
+    expect(errorsOf(events)).toEqual([
+      expect.objectContaining({ kind: 'recovery_exhausted', maxConsecutiveRecoveries: 3 }),
+    ])
+  })
+})
+
+describe('resolveMaxConsecutiveRecoveries', () => {
+  it.each([
+    [undefined, 2],
+    [Number.NaN, 2],
+    [0, 1],
+    [-3, 1],
+    [2.7, 2],
+    [Infinity, Infinity],
+  ] as const)('%s → %s', async (declared, expected) => {
+    const { resolveMaxConsecutiveRecoveries } =
+      await import('@hames-ai/harness-patterns/loop-recovery.server')
+    expect(resolveMaxConsecutiveRecoveries(declared)).toBe(expected)
+  })
+})
+
+// ============================================================================
+// The model sees its own unparseable answer (owner question, 2026-10-03)
+// ============================================================================
+
+describe('unparseableOutputFeedback: what the model reads back', () => {
+  async function feedback(record: Partial<LLMCallRecord>) {
+    const { unparseableOutputFeedback } =
+      await import('@hames-ai/harness-patterns/loop-recovery.server')
+    return unparseableOutputFeedback(await parseFailure(record))
+  }
+
+  // The documented case: a brace-less `key: value` envelope. The model needs
+  // to see the shape it produced, and the parser's message does not show it.
+  it('quotes the head of its own answer, labelled as its own', async () => {
+    const braceless = 'reasoning: count the rows\ntool_name: read_neo4j_cypher\ntool_args: {}'
+    const text = await feedback({ rawOutput: braceless })
+    expect(text).toContain('Missing required field: tool_args')
+    expect(text).toContain(`This is your previous response, as you wrote it:\n${braceless}\n`)
+    expect(text.endsWith('Respond with exactly one JSON object in the required format.')).toBe(true)
+  })
+
+  // Mutation: drop the bound (quote `raw` whole) → red.
+  it('bounds the quote to a 400-character head', async () => {
+    const long = 'x'.repeat(399) + 'HEAD_END' + 'y'.repeat(2000)
+    const text = await feedback({ rawOutput: long })
+    expect(text).toContain(`${long.slice(0, 400)}…[truncated]`)
+    expect(text).not.toContain(long.slice(0, 401))
+    expect(text).not.toContain('yyyy')
+  })
+
+  it('quotes nothing when no response was captured', async () => {
+    const text = await feedback({ rawOutput: undefined })
+    expect(text).not.toContain('as you wrote it')
+    expect(text).toContain('). Respond with exactly one JSON object')
+  })
+
+  // The other two branches stay exactly as they were. Mutation: put the quote
+  // on the cut-off branch → red.
+  it('a cut-off or an empty answer is not quoted back', async () => {
+    const cut = await feedback({ hitOutputCap: true })
+    expect(cut).not.toContain(RAW)
+    expect(cut).toContain('CUT OFF at the output-token limit')
+    expect(await feedback({ rawOutput: '  \n' })).toBe(
+      'Your previous response was empty. Respond with exactly one JSON action object.',
+    )
   })
 })
 

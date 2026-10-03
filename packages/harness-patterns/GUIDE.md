@@ -307,7 +307,9 @@ stops when one is irrecoverable.
   implementation that knows the model ANSWERED and the answer would not parse
   constructs it with `{ recoverable: true }` (the BAML adapters do, for
   `BamlValidationError`). The tool loops then feed the failure back to the
-  model and continue on their budget, recording a `loop_recovery` event with
+  model — with a bounded head of `rawOutput` itself, labelled as the model's
+  own previous response, unless the answer was cut off at the output cap or
+  empty — and continue on their budget, recording a `loop_recovery` event with
   the record attached; an unflagged `LLMCallError` — or any other throw — still
   ends the loop with an `error` event, because "the model never answered" is
   not something another round fixes. A consumer rendering errors to a user
@@ -317,8 +319,12 @@ stops when one is irrecoverable.
   `actorCritic` survive a failed tool call, a refused tool name and unparseable
   `tool_args` the same way, and record each as a `loop_recovery`, never as an
   `error`: every `error` reader (the turn's outcome, the chain's stop rule,
-  `view.hasErrors()`) reads it as a statement about the turn. See SPEC,
-  "One failure does not end the loop".
+  `view.hasErrors()`) reads it as a statement about the turn. An unusable
+  ANSWER (unparseable, unparseable `tool_args`, a refused tool) is fed back only
+  until `maxConsecutiveRecoveries` of them (default 2) arrive in a row with no
+  tool dispatched between them: the one that reaches the cap ends the loop as an
+  `error` marked `kind: 'recovery_exhausted'`. A tool that ran and failed never
+  counts toward it. See SPEC, "One failure does not end the loop".
 - **Usage rides the same record.** Every injected LLM call may attach its
   `LLMCallRecord` (tokens, timing, cost basis); the error path re-attaches it
   so a failed call still counts.

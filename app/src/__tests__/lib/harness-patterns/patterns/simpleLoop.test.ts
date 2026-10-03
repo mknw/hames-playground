@@ -418,8 +418,12 @@ describe('simpleLoop execution', () => {
     })
     expect(JSON.stringify(recoveries[0].data)).toContain('Tool not allowed')
     expect(mockController.mock.calls.length).toBeGreaterThan(1)
+    // The same answer every round: the consecutive-recovery cap (default 2)
+    // ends the loop before the budget does.
     const errorEvents = result.events.filter((e) => e.type === 'error')
-    expect(errorEvents.map((e) => (e.data as { kind?: string }).kind)).toEqual(['budget_exhausted'])
+    expect(errorEvents.map((e) => (e.data as { kind?: string }).kind)).toEqual([
+      'recovery_exhausted',
+    ])
   })
 
   it('records unparseable tool_args as a recovery and keeps going', async () => {
@@ -460,8 +464,12 @@ describe('simpleLoop execution', () => {
     expect(recoveries[0]?.data).toMatchObject({ failure: 'invalid_tool_args', turn: 0 })
     expect(JSON.stringify(recoveries[0].data)).toContain('Invalid tool_args JSON')
     expect(mockController.mock.calls.length).toBeGreaterThan(1)
+    // The same answer every round: the consecutive-recovery cap (default 2)
+    // ends the loop before the budget does.
     const errorEvents = result.events.filter((e) => e.type === 'error')
-    expect(errorEvents.map((e) => (e.data as { kind?: string }).kind)).toEqual(['budget_exhausted'])
+    expect(errorEvents.map((e) => (e.data as { kind?: string }).kind)).toEqual([
+      'recovery_exhausted',
+    ])
   })
 
   it('dispatches under-escaped tool_args and marks the call as reconstructed', async () => {

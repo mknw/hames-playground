@@ -314,11 +314,17 @@ describe('a loop whose allowlist names a Postgres tool still cannot call it', ()
     const input = (controller.mock.calls[0] as unknown as [ControllerInput])[0]
     expect(input.tools).toEqual(['read_neo4j_cypher'])
     expect(sentToGateway()).not.toContain('execute_sql')
+    // Since #437 the first refusal is fed back as a recovery; the second in a
+    // row reaches the consecutive-recovery cap and ends the loop with it.
+    const refusal =
+      'Tool not allowed: execute_sql (withheld from every agent). Allowed: read_neo4j_cypher'
+    const recoveries = result.events.filter((e) => e.type === 'loop_recovery')
+    expect(recoveries.map((e) => e.data)).toEqual([
+      expect.objectContaining({ failure: 'tool_not_allowed', error: refusal }),
+    ])
     const errors = result.events.filter((e) => e.type === 'error')
     expect(errors).toHaveLength(1)
-    expect(String((errors[0].data as { error: string }).error)).toBe(
-      'Tool not allowed: execute_sql (withheld from every agent). Allowed: read_neo4j_cypher',
-    )
+    expect(errors[0].data).toMatchObject({ kind: 'recovery_exhausted', error: refusal })
   })
 
   it('actorCritic: a dynamicToolPattern that matches everything does not hand one back', async () => {
@@ -335,8 +341,6 @@ describe('a loop whose allowlist names a Postgres tool still cannot call it', ()
       result: { is_sufficient: true, explanation: 'ok' },
       llmCall: undefined,
     }))
-    // A non-empty static list, so the refusal surfaces as an event (an empty
-    // one reads as a gateway outage and is reported only to the actor).
     const pattern = actorCritic(actor, critic, ['read_neo4j_cypher'], {
       patternId: 'dynamic-actor',
       maxRetries: 1,
@@ -348,10 +352,12 @@ describe('a loop whose allowlist names a Postgres tool still cannot call it', ()
     )
 
     expect(sentToGateway()).toEqual([])
-    const errors = result.events
-      .filter((e) => e.type === 'error')
+    // Since #437 the refusal is a `loop_recovery` the actor reads in its
+    // attempt log, not an `error`.
+    const recoveries = result.events
+      .filter((e) => e.type === 'loop_recovery')
       .map((e) => String((e.data as { error: string }).error))
-    expect(errors).toContain(
+    expect(recoveries).toContain(
       'Tool not allowed: mcp__hames-mcp-gateway__query_database (withheld from every agent)',
     )
   })

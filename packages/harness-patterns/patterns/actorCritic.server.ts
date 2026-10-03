@@ -36,8 +36,11 @@ import {
   unparseableOutputFeedback,
   invalidToolArgsFeedback,
   trackLoopRecovery,
+  resolveMaxConsecutiveRecoveries,
+  recoveryStreak,
+  recoveryExhaustedMarker,
 } from '../loop-recovery.server'
-import type { ActorFn, ControllerCallResult, CriticFnWithLLMData } from '../types'
+import type { ActorFn, ControllerCallResult, CriticFnWithLLMData, LLMCallRecord } from '../types'
 import { LLMCallError } from '../types'
 import { formatPlanContext, type PlannerData } from './planner.server'
 
@@ -136,6 +139,36 @@ export function actorCritic<T extends ActorCriticData>(
     let successfulTurns = 0
     const previousAttempts: ScriptExecutionEvent[] = []
     let errorMessage: string | undefined
+
+    // The consecutive-recovery cap (#450 review §3), counted in attempts — see
+    // `recoveryStreak`. The cap-th unusable answer in a row ends the loop with
+    // the error the outer catch records for an LLM failure, plus the marker.
+    // (A refused tool or bad `tool_args` never ended this loop before #437, so
+    // for those two the cap is the first fatal path there is.)
+    const maxConsecutiveRecoveries = resolveMaxConsecutiveRecoveries(
+      config?.maxConsecutiveRecoveries,
+    )
+    const streak = recoveryStreak(maxConsecutiveRecoveries)
+    const endOnRecoveryCap = (
+      scope: PatternScope<T>,
+      error: string,
+      attempt: number,
+      llmCall: LLMCallRecord | undefined,
+    ): PatternScope<T> => {
+      trackEvent(
+        scope,
+        'error',
+        {
+          error,
+          severity: resolved.errorSeverity,
+          iteration: attempt,
+          ...recoveryExhaustedMarker(maxConsecutiveRecoveries, resolved.patternId),
+        } as ErrorEventData,
+        true,
+        llmCall,
+      )
+      return scope
+    }
 
     // Shared post-execution tail for singular AND multi-call attempts.
     //
@@ -276,6 +309,9 @@ export function actorCritic<T extends ActorCriticData>(
           // Anything else — the model never answered, or an unclassified
           // failure — rethrows to the outer catch, fatal as before.
           if (!isRecoverableLLMFailure(actorError)) throw actorError
+          if (streak.unusableAnswer()) {
+            return endOnRecoveryCap(scope, actorError.message, attempt, actorError.llmCall)
+          }
           previousAttempts.push({
             toolName: '',
             script: '',
@@ -447,6 +483,9 @@ export function actorCritic<T extends ActorCriticData>(
           )
 
           const outcomes = await runBatch(subCalls, multiMode)
+          // simpleLoop's twin: only a sub-call that was actually dispatched
+          // breaks a run of unusable answers.
+          if (subCalls.some((sc, i) => sc.run && !outcomes[i].skipped)) streak.dispatched()
 
           outcomes.forEach((o, i) =>
             trackEvent(
@@ -527,6 +566,9 @@ export function actorCritic<T extends ActorCriticData>(
             (config?.dynamicToolPattern?.test(action.tool_name) ?? false))
         if (!allowed) {
           const errMsg = refusal(action.tool_name)
+          if (streak.unusableAnswer()) {
+            return endOnRecoveryCap(scope, errMsg, attempt, actorLlmCall)
+          }
           // The actor sees the rejection via `previousAttempts` (its standard
           // feedback channel) and the loop continues. Recorded as a
           // `loop_recovery`, not an `error` (#437 slice 1): an `error` here
@@ -577,6 +619,9 @@ export function actorCritic<T extends ActorCriticData>(
             action.tool_args,
             actorLlmCall?.hitOutputCap ?? false,
           )
+          if (streak.unusableAnswer()) {
+            return endOnRecoveryCap(scope, errMsg, attempt, actorLlmCall)
+          }
           trackLoopRecovery(
             scope,
             {
@@ -615,7 +660,9 @@ export function actorCritic<T extends ActorCriticData>(
           resolved.trackHistory,
         )
 
-        // Execute tool
+        // Execute tool. A dispatch ends any run of unusable answers, whatever
+        // the tool then returns.
+        streak.dispatched()
         const result = await callTool(action.tool_name, args)
 
         // onToolResult hook: enrich/transform result before commit. See SimpleLoop for full doc.

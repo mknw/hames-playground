@@ -475,6 +475,7 @@ interface SimpleLoopConfig extends PatternConfig {
   resultOmit?: Record<string, string[]> // Per-tool fields hidden from the controller turn log (see below)
   multiToolCalls?: 'parallel' | 'sequential' | 'off' // Multi-call turns (default: 'parallel'; see below)
   returnStyle?: 'summary' | 'answer' // What the terminal `Return` carries (default: 'summary'; see below)
+  maxConsecutiveRecoveries?: number // Unusable answers in a row before the loop stops (default: 2; see "One failure does not end the loop")
 }
 
 interface FewShot {
@@ -670,7 +671,8 @@ cached prompt head (system block + tier 1) at no per-turn cost.
 feed a recoverable failure back to the model as that round's (or attempt's)
 result and continue on their remaining budget. The failure costs the round —
 the budget still bounds the loop — and a model that never recovers is stopped by
-it, with the usual `kind: 'budget_exhausted'` marker.
+it, with the usual `kind: 'budget_exhausted'` marker, or sooner by the
+consecutive-recovery cap below.
 
 | Failure                                                     | Before             | Now, both loops                                                         |
 | ----------------------------------------------------------- | ------------------ | ----------------------------------------------------------------------- |
@@ -679,6 +681,20 @@ it, with the usual `kind: 'budget_exhausted'` marker.
 | a tool name off the allowlist                               | ended `simpleLoop` | a turn with the refusal as its ERROR; never dispatched; continue        |
 | `tool_args` that do not parse (or were cut off)             | ended `simpleLoop` | a turn with the error — cut-off-aware, with the append advice; continue |
 | the controller/actor ANSWER would not parse (`recoverable`) | ended both loops   | a turn with no tool call and the feedback as its ERROR; continue        |
+
+What the model is told about an answer that would not parse depends on why
+(`unparseableOutputFeedback`). A cut-off at the output cap is told to answer
+SMALLER, with the append advice, and is not shown its own oversized text; an
+empty completion is told it was empty. Any other parse failure gets a bounded
+excerpt of the parser's message (≤ 300 characters, which field was missing) and
+a bounded HEAD of its own previous response (≤ 400 characters), labelled as its
+own. The turn log cannot show that response: no action was ever parsed out of
+it, so the round's assistant message replays an empty action, and before this
+the model read a diagnosis of an answer it could not see — a brace-less
+`key: value` envelope, the documented case, is visible only in the raw text.
+Nothing from outside the run enters the prompt this way: the excerpt is the
+model's own output from the round before, and any tool content it quotes was
+already in that round's prompt, in the form the turn log carried it.
 
 What stays **fatal**, deliberately:
 
@@ -700,6 +716,38 @@ What stays **fatal**, deliberately:
 - **A critic that throws** (`actorCritic`). The critic is the loop's sole exit
   authority; whether its own parse failure should be survivable is a separate
   decision.
+
+**The consecutive-recovery cap** (`maxConsecutiveRecoveries`, default `2`, on
+both loops' configs; #450 review §3, owner decision 2026-10-03). The budget
+alone let a model that keeps producing unusable answers spend every round on
+them, and on the self-hosted tier a cut-off round is two full-cap generations
+(the answer and the adapter's corrective retry, up to ~5 min). So:
+
+- **What counts**: a round (attempt) whose ANSWER the loop cannot use — it would
+  not parse (`unparseable_output`), its `tool_args` would not parse
+  (`invalid_tool_args`), or it named a tool off the allowlist
+  (`tool_not_allowed`).
+- **What resets it**: any round that dispatches a tool, whatever the tool then
+  returns. A tool that ran and failed is never counted — fail, fix, fail is how
+  a sandbox actor debugs. Rounds that do neither leave the count where it was:
+  an `expandPreviousResult`, and a multi-call turn of which no call was
+  dispatched (every call refused or unparseable at the precheck, recorded as
+  `batch_failed`).
+- **What happens at the cap**: the round that reaches it is not fed back. It is
+  fatal exactly as that failure was before #437 — an `error` with the failure's
+  own message, the pattern's `errorSeverity` (`recoverable` for both loops, so
+  the synthesizer still answers from the completed rounds, #83) and the failed
+  answer's `llmCall` — marked `kind: 'recovery_exhausted'` (in place of
+  `llm_call`) with `maxConsecutiveRecoveries` beside it and a hint naming the
+  lever. So the default stops a loop on its second unusable answer in a row,
+  after one recovery.
+- **The knob**: `1` makes the first unusable answer fatal (`simpleLoop`'s
+  pre-#437 behaviour); `Infinity` leaves only the budget; values below `1` are
+  clamped to `1`.
+- **`actorCritic` difference**: a refused tool and unparseable `tool_args` never
+  ended that loop before #437 (they always went back through
+  `previousAttempts`), so for those two the cap is the first fatal path that
+  loop has — two in a row now end it.
 
 Each recovery records one **`loop_recovery`** event (`LoopRecoveryEventData`:
 `failure`, the verbatim `error`, `tool?`, `turn`, `maxTurns`), carrying the
@@ -734,6 +782,8 @@ interface ActorCriticConfig extends PatternConfig {
   multiToolCalls?: 'parallel' | 'sequential' | 'off' // Same semantics as simpleLoop's (see above);
   // a batch records as ONE Attempt whose result is the combined map
   // the critic evaluates. Sandbox agents use 'sequential'.
+  maxConsecutiveRecoveries?: number // Default: 2. simpleLoop's cap, counted in attempts
+  // (see "One failure does not end the loop" under simpleLoop).
 }
 ```
 
@@ -747,7 +797,8 @@ interface ActorCriticConfig extends PatternConfig {
 
 A failed tool call, a refused tool name, unparseable `tool_args` and — since
 #437 — an actor answer that would not parse all go back to the actor through
-`previousAttempts` and cost one attempt; each records a `loop_recovery`. The
+`previousAttempts` and cost one attempt; each records a `loop_recovery`, and the
+last three are subject to the consecutive-recovery cap. The
 fatal set is `simpleLoop`'s, plus a critic that throws (see "One failure does
 not end the loop" under `simpleLoop`), with one difference this does not
 change: a multi-call attempt has always continued when its calls threw, so
@@ -1814,8 +1865,10 @@ BAML Return → string (assistant response text)
 
 > **Raw LLM output on a failed call**: an `error` event whose failure is
 > attributable to an LLM call carries `ErrorEventData.kind: 'llm_call'` (the
-> field's other value, `budget_exhausted`, marks a loop truncated by its round
-> budget — nothing failed there, so no call data is attached) and the
+> field's other values: `budget_exhausted` marks a loop truncated by its round
+> budget — nothing failed there, so no call data is attached — and
+> `recovery_exhausted` marks a loop ended by its consecutive-recovery cap, which
+> carries the failed call exactly as `llm_call` does) and the
 > full `ContextEvent.llmCall` — crucially `rawOutput`, the only record of what
 > the model actually said. Two families qualify and both must attach it:
 >
@@ -2023,7 +2076,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── agent-withheld-tools.ts # AGENT_WITHHELD_TOOLS + isAgentWithheldTool() — the tools no agent may hold (#403: `write_neo4j_cypher`; #412: the `database-server` tools), each with the decision and server-side switch its drop warning names (withholdingFor()), seen through a gateway or server-namespace prefix; read by listTools() (the catalog) and by simpleLoop/actorCritic (every allowlist check), never by callTool
 ├── compactBulkData.server.ts # compactBulkData(ctx, onPersist, { describe, describeBatch }) — the two describe fns are REQUIRED config (Lane A6)
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)
-├── loop-recovery.server.ts # The two loops' shared recovery rule (#437): isRecoverableLLMFailure(), the feedback texts, trackLoopRecovery()
+├── loop-recovery.server.ts # The two loops' shared recovery rule (#437): isRecoverableLLMFailure(), the feedback texts, the consecutive-recovery cap (recoveryStreak()), trackLoopRecovery()
 ├── token-budget.server.ts  # trimToFit(), estimateTokens() — rolling context window (getContextWindow moved to harness-baml/clients.server with the model tables)
 ├── injection-guard.ts      # Deterministic prompt-injection sanitizer (pure): rule corpus, neutralization, spotlight fence, LLM-screen folding
 │                           # (the guard's ALS scope was its own module until #374; it is now the run frame's `guard` slot, and `ActiveInjectionGuard` lives in injection-guard.ts beside the sanitizer it describes. Opposite nesting rule to transports — it UNIONS, see SD-5; read by callTool + retriever)

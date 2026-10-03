@@ -87,7 +87,7 @@ afterAll(async () => {
 })
 
 describe('conversations', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
   it('round-trips title and context, and stores both as ciphertext', async () => {
     const id = `enc-conv-${SUFFIX}`
@@ -180,7 +180,7 @@ describe('conversations', () => {
 })
 
 describe('auth_sessions', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
   it('round-trips email and display name, and stores both as ciphertext', async () => {
     const id = await createSession({
@@ -205,7 +205,7 @@ describe('auth_sessions', () => {
 })
 
 describe('users', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
   it('round-trips email and display name, and stores both as ciphertext', async () => {
     await upsertUser({
@@ -229,7 +229,7 @@ describe('users', () => {
 })
 
 describe('routines', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
   it('round-trips input and label, and stores both as ciphertext', async () => {
     const id = `enc-routine-${SUFFIX}`
@@ -277,7 +277,7 @@ describe('routines', () => {
 })
 
 describe('boot probes, against real SQL', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
   // The unit tests drive these through a fake runner, which cannot catch a
   // wrong operator. `context #>> '{}'` in particular is the only way to pull a
@@ -298,7 +298,7 @@ describe('boot probes, against real SQL', () => {
 })
 
 describe('a wrong key, through query() itself', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
   it('logs it, and does not re-run the whole init on every later call', async () => {
     // The measured symptom before this: the boot gate threw, `query()` cleared
@@ -333,7 +333,7 @@ describe('a wrong key, through query() itself', () => {
 })
 
 describe('backfill migration', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
   /** Write a row the way the pre-encryption build did: straight plaintext. */
   async function seedLegacyRows(id: string): Promise<void> {

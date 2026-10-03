@@ -135,7 +135,7 @@ function makeConvoWithWebSearch(sessionId: string) {
 }
 
 describe('cross-turn persistence after conversation switch', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
   it('tool_result events round-trip byte-identical (event ids, callIds, payloads)', async () => {
     const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`
@@ -252,7 +252,7 @@ describe('cross-turn persistence after conversation switch', () => {
 })
 
 describe('status lifting on save (agent-trigger status column)', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
   // The harness leaves a *successful* run as ctx.status='running' (runChain
   // never calls setDone). saveSession is only ever called after the harness

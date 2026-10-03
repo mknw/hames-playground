@@ -96,7 +96,7 @@ async function seed(userId: string, content: string, id = conversationId()): Pro
 }
 
 describe('share tokens', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
   it('mints a token that is not the conversation id, and is long enough to be one', async () => {
     const id = await seed(OWNER, 'hello')
@@ -144,7 +144,7 @@ describe('share tokens', () => {
 })
 
 describe('the public read path', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
   it('returns the decrypted transcript to whoever holds the token', async () => {
     const id = await seed(OWNER, 'the secret question')
@@ -225,7 +225,7 @@ describe('the public read path', () => {
 })
 
 describe('owner scoping', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
   it('will not let another user share a conversation', async () => {
     const id = await seed(OWNER, 'hello')

@@ -2089,7 +2089,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── token-budget.server.ts  # trimToFit(), estimateTokens() — rolling context window (getContextWindow moved to harness-baml/clients.server with the model tables)
 ├── injection-guard.ts      # Deterministic prompt-injection sanitizer (pure): rule corpus, neutralization, spotlight fence, LLM-screen folding
 │                           # (the guard's ALS scope was its own module until #374; it is now the run frame's `guard` slot, and `ActiveInjectionGuard` lives in injection-guard.ts beside the sanitizer it describes. Opposite nesting rule to transports — it UNIONS, see SD-5; read by callTool + retriever)
-├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values)
+├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values). No step is super-linear (#461, #463), and the lenient regex chain refuses input over 16 384 chars: it throws, never truncates
 ├── assert.server.ts        # Server-only guards
 └── patterns/               # The pattern factories — a directory OF THIS package, exported as @hames-ai/harness-patterns/patterns
     ├── index.ts

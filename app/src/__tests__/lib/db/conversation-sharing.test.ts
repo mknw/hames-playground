@@ -14,20 +14,10 @@
  *     user cannot expose, revoke or inspect a conversation that is not theirs;
  *   - the content that comes back through the token path is DECRYPTED, which is
  *     the whole point and also the reason every other assertion here matters.
- *
- * ## Why the guard is `ctx.skip()` and not an early `return`
- *
- * CI provisions no Postgres, so every case here is unreachable there. An early
- * `return` makes each one report as PASSED while asserting nothing — including
- * *"will not let another user revoke a share"* — and a merge that rests on a
- * green total is then resting on fifteen no-ops. `ctx.skip()` reports them as
- * skipped, which is `kg-test-pyramid` rule 3 and the difference between "this
- * boundary holds" and "this boundary was not tested here". The sibling DB
- * suites still use the early `return`; this file diverges deliberately,
- * because this one is an auth boundary.
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
+import { skipWithoutDatabase } from '../../test-database'
 
 // Bypass the server-only guard in the jsdom test env, as the sibling DB tests do.
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -106,8 +96,9 @@ async function seed(userId: string, content: string, id = conversationId()): Pro
 }
 
 describe('share tokens', () => {
-  it('mints a token that is not the conversation id, and is long enough to be one', async (ctx) => {
-    if (!dbAvailable) ctx.skip()
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
+  it('mints a token that is not the conversation id, and is long enough to be one', async () => {
     const id = await seed(OWNER, 'hello')
     const token = await shareConversation(id, OWNER)
 
@@ -120,8 +111,7 @@ describe('share tokens', () => {
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/)
   })
 
-  it('returns the SAME token when the owner shares again', async (ctx) => {
-    if (!dbAvailable) ctx.skip()
+  it('returns the SAME token when the owner shares again', async () => {
     const id = await seed(OWNER, 'hello')
     const first = await shareConversation(id, OWNER)
     const second = await shareConversation(id, OWNER)
@@ -129,16 +119,14 @@ describe('share tokens', () => {
     expect(second).toBe(first)
   })
 
-  it('reports the current token to its owner, and null before there is one', async (ctx) => {
-    if (!dbAvailable) ctx.skip()
+  it('reports the current token to its owner, and null before there is one', async () => {
     const id = await seed(OWNER, 'hello')
     expect(await getShareToken(id, OWNER)).toBeNull()
     const token = await shareConversation(id, OWNER)
     expect(await getShareToken(id, OWNER)).toBe(token)
   })
 
-  it('does not bump updated_at — sharing is not chat activity', async (ctx) => {
-    if (!dbAvailable) ctx.skip()
+  it('does not bump updated_at — sharing is not chat activity', async () => {
     const id = await seed(OWNER, 'hello')
     const before = await query<{ updated_at: Date }>(
       'SELECT updated_at FROM conversations WHERE id = $1',
@@ -156,8 +144,9 @@ describe('share tokens', () => {
 })
 
 describe('the public read path', () => {
-  it('returns the decrypted transcript to whoever holds the token', async (ctx) => {
-    if (!dbAvailable) ctx.skip()
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
+  it('returns the decrypted transcript to whoever holds the token', async () => {
     const id = await seed(OWNER, 'the secret question')
     const token = (await shareConversation(id, OWNER))!
 
@@ -170,22 +159,19 @@ describe('the public read path', () => {
     expect(shared!.sharedAt).toBeInstanceOf(Date)
   })
 
-  it('answers nothing for an unknown token', async (ctx) => {
-    if (!dbAvailable) ctx.skip()
+  it('answers nothing for an unknown token', async () => {
     // Well-formed, just never minted.
     expect(await loadSharedConversation('a'.repeat(43))).toBeNull()
   })
 
-  it('answers nothing for a malformed token, without asking the database', async (ctx) => {
-    if (!dbAvailable) ctx.skip()
+  it('answers nothing for a malformed token, without asking the database', async () => {
     expect(await loadSharedConversation('')).toBeNull()
     expect(await loadSharedConversation('short')).toBeNull()
     expect(await loadSharedConversation('!'.repeat(43))).toBeNull()
     expect(await loadSharedConversation("' OR 1=1 --")).toBeNull()
   })
 
-  it('answers nothing for a CONVERSATION ID — ids never authorize a read', async (ctx) => {
-    if (!dbAvailable) ctx.skip()
+  it('answers nothing for a CONVERSATION ID — ids never authorize a read', async () => {
     const id = await seed(OWNER, 'hello')
     await shareConversation(id, OWNER)
     // The kind of string a bookmark of `/?c=<id>` carries. This one is turned
@@ -204,15 +190,13 @@ describe('the public read path', () => {
     expect(await loadSharedConversation(shapedLikeAToken)).toBeNull()
   })
 
-  it('answers nothing for a conversation that was never shared', async (ctx) => {
-    if (!dbAvailable) ctx.skip()
+  it('answers nothing for a conversation that was never shared', async () => {
     const id = await seed(OWNER, 'private')
     expect(await getShareToken(id, OWNER)).toBeNull()
     expect(await loadSharedConversation(id)).toBeNull()
   })
 
-  it('answers the same nothing after revocation as for a token that never existed', async (ctx) => {
-    if (!dbAvailable) ctx.skip()
+  it('answers the same nothing after revocation as for a token that never existed', async () => {
     const id = await seed(OWNER, 'hello')
     const token = (await shareConversation(id, OWNER))!
     expect(await loadSharedConversation(token)).not.toBeNull()
@@ -227,8 +211,7 @@ describe('the public read path', () => {
     expect(revoked).toEqual(neverExisted)
   })
 
-  it('mints an unrelated token when a revoked conversation is shared again', async (ctx) => {
-    if (!dbAvailable) ctx.skip()
+  it('mints an unrelated token when a revoked conversation is shared again', async () => {
     const id = await seed(OWNER, 'hello')
     const first = (await shareConversation(id, OWNER))!
     await unshareConversation(id, OWNER)
@@ -242,8 +225,9 @@ describe('the public read path', () => {
 })
 
 describe('owner scoping', () => {
-  it('will not let another user share a conversation', async (ctx) => {
-    if (!dbAvailable) ctx.skip()
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
+  it('will not let another user share a conversation', async () => {
     const id = await seed(OWNER, 'hello')
 
     expect(await shareConversation(id, STRANGER)).toBeNull()
@@ -251,8 +235,7 @@ describe('owner scoping', () => {
     expect(await getShareToken(id, OWNER)).toBeNull()
   })
 
-  it('will not let another user revoke a share', async (ctx) => {
-    if (!dbAvailable) ctx.skip()
+  it('will not let another user revoke a share', async () => {
     const id = await seed(OWNER, 'hello')
     const token = (await shareConversation(id, OWNER))!
 
@@ -262,16 +245,14 @@ describe('owner scoping', () => {
     expect(await loadSharedConversation(token)).not.toBeNull()
   })
 
-  it('will not tell another user what a conversation’s token is', async (ctx) => {
-    if (!dbAvailable) ctx.skip()
+  it('will not tell another user what a conversation’s token is', async () => {
     const id = await seed(OWNER, 'hello')
     await shareConversation(id, OWNER)
 
     expect(await getShareToken(id, STRANGER)).toBeNull()
   })
 
-  it('will not let a share ride in on a save', async (ctx) => {
-    if (!dbAvailable) ctx.skip()
+  it('will not let a share ride in on a save', async () => {
     const id = await seed(OWNER, 'hello')
     const token = (await shareConversation(id, OWNER))!
     // A later turn's save goes through the upsert, which does not name

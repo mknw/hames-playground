@@ -6,7 +6,8 @@
  * so this works on machines without docker.
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
+import { skipWithoutDatabase } from '../../test-database'
 
 // Bypass server-only guard in jsdom test env
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -61,8 +62,9 @@ afterAll(async () => {
 })
 
 describe('routines CRUD', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('round-trips a routine, rehydrating the trigger union', async () => {
-    if (!dbAvailable) return
     const created = await seed({ label: 'Hourly digest' })
 
     expect(created.trigger).toEqual({ kind: 'interval', intervalSeconds: 3600 })
@@ -78,20 +80,17 @@ describe('routines CRUD', () => {
   })
 
   it('stores event-kind triggers with an empty config', async () => {
-    if (!dbAvailable) return
     const created = await seed({ trigger: { kind: 'session_start' } })
     const loaded = await getRoutine(created.id, TEST_USER)
     expect(loaded!.trigger).toEqual({ kind: 'session_start' })
   })
 
   it('scopes reads to the owner', async () => {
-    if (!dbAvailable) return
     const created = await seed()
     expect(await getRoutine(created.id, OTHER_USER)).toBeNull()
   })
 
   it('lists a user’s routines newest-created first', async () => {
-    if (!dbAvailable) return
     const ids: string[] = []
     for (let n = 0; n < 3; n++) {
       ids.push((await seed({ label: `r${n}` })).id)
@@ -103,7 +102,6 @@ describe('routines CRUD', () => {
   })
 
   it('patches only the provided fields', async () => {
-    if (!dbAvailable) return
     const created = await seed({ label: 'before', input: 'old input' })
 
     const disabled = await updateRoutine(created.id, TEST_USER, { enabled: false })
@@ -118,7 +116,6 @@ describe('routines CRUD', () => {
   })
 
   it('resets last_run_at when the schedule changes', async () => {
-    if (!dbAvailable) return
     const created = await seed()
     await claimRoutineRun(created.id, null)
     expect((await getRoutine(created.id, TEST_USER))!.lastRunAt).not.toBeNull()
@@ -131,7 +128,6 @@ describe('routines CRUD', () => {
   })
 
   it('refuses to patch or delete another user’s routine', async () => {
-    if (!dbAvailable) return
     const created = await seed()
     expect(await updateRoutine(created.id, OTHER_USER, { enabled: false })).toBeNull()
     expect(await deleteRoutine(created.id, OTHER_USER)).toBe(false)
@@ -140,7 +136,6 @@ describe('routines CRUD', () => {
   })
 
   it('deletes', async () => {
-    if (!dbAvailable) return
     const created = await seed()
     expect(await deleteRoutine(created.id, TEST_USER)).toBe(true)
     expect(await getRoutine(created.id, TEST_USER)).toBeNull()
@@ -149,8 +144,9 @@ describe('routines CRUD', () => {
 })
 
 describe('trigger-evaluation queries', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('lists only enabled routines, optionally narrowed by kind', async () => {
-    if (!dbAvailable) return
     const on = await seed({ trigger: { kind: 'session_start' } })
     const off = await seed({ trigger: { kind: 'session_start' }, enabled: false })
     const other = await seed({ trigger: { kind: 'session_end' } })
@@ -166,7 +162,6 @@ describe('trigger-evaluation queries', () => {
   })
 
   it('narrows an event lookup to one user', async () => {
-    if (!dbAvailable) return
     const mine = await seed({ trigger: { kind: 'session_end' } })
     const theirs = await seed({ userId: OTHER_USER, trigger: { kind: 'session_end' } })
 
@@ -177,8 +172,9 @@ describe('trigger-evaluation queries', () => {
 })
 
 describe('claimRoutineRun', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('claims once, then loses the compare-and-set', async () => {
-    if (!dbAvailable) return
     const created = await seed()
 
     expect(await claimRoutineRun(created.id, null)).toBe(true)
@@ -193,7 +189,6 @@ describe('claimRoutineRun', () => {
   })
 
   it('never claims a disabled routine', async () => {
-    if (!dbAvailable) return
     const created = await seed({ enabled: false })
     expect(await claimRoutineRun(created.id, null)).toBe(false)
   })

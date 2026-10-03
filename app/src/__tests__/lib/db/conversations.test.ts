@@ -5,7 +5,8 @@
  * when Postgres isn't reachable so this works on machines without docker.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
+import { skipWithoutDatabase } from '../../test-database'
 
 // Bypass server-only guard in jsdom test env
 import { vi } from 'vitest'
@@ -76,8 +77,9 @@ describe('deriveTitle', () => {
 })
 
 describe('conversations CRUD', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('round-trips a serialized context unchanged', async () => {
-    if (!dbAvailable) return
     const id = `conv-${Math.random().toString(36).slice(2, 10)}`
     const ctx = {
       sessionId: id,
@@ -116,7 +118,6 @@ describe('conversations CRUD', () => {
   })
 
   it('upserts (second save overwrites context, preserves title)', async () => {
-    if (!dbAvailable) return
     const id = `conv-${Math.random().toString(36).slice(2, 10)}`
 
     await saveConversation({
@@ -142,7 +143,6 @@ describe('conversations CRUD', () => {
   })
 
   it("a save against another user's conversation id mutates nothing", async () => {
-    if (!dbAvailable) return
     const id = `conv-${Math.random().toString(36).slice(2, 10)}`
     await saveConversation({
       id,
@@ -188,7 +188,6 @@ describe('conversations CRUD', () => {
   })
 
   it('only returns rows for the requesting user', async () => {
-    if (!dbAvailable) return
     const id = `conv-${Math.random().toString(36).slice(2, 10)}`
     await saveConversation({
       id,
@@ -210,7 +209,6 @@ describe('conversations CRUD', () => {
   // this route loaded before it.
   describe('updateConversationContextIfUnchanged', () => {
     it('writes at the version it read, and refuses once the row has moved on', async () => {
-      if (!dbAvailable) return
       const id = `conv-cas-${Math.random().toString(36).slice(2, 10)}`
       await saveConversation({
         id,
@@ -246,7 +244,6 @@ describe('conversations CRUD', () => {
     })
 
     it('refuses a stale write after a concurrent turn, leaving the turn intact', async () => {
-      if (!dbAvailable) return
       const id = `conv-cas-${Math.random().toString(36).slice(2, 10)}`
       await saveConversation({
         id,
@@ -280,7 +277,6 @@ describe('conversations CRUD', () => {
     })
 
     it('refuses a write from someone who is not the owner', async () => {
-      if (!dbAvailable) return
       const id = `conv-cas-${Math.random().toString(36).slice(2, 10)}`
       await saveConversation({
         id,
@@ -307,7 +303,6 @@ describe('conversations CRUD', () => {
   })
 
   it('getConversationOwner answers who a row belongs to, and null for an unknown id', async () => {
-    if (!dbAvailable) return
     const id = `conv-${Math.random().toString(36).slice(2, 10)}`
     await saveConversation({
       id,
@@ -321,7 +316,6 @@ describe('conversations CRUD', () => {
   })
 
   it('lists newest-created first, scoped to user', async () => {
-    if (!dbAvailable) return
     // Serialize inserts so created_at ordering is deterministic (#105 sorts
     // by creation, not update). Promise.all would race them, and Postgres
     // NOW() can return identical values for sub-millisecond inserts.
@@ -349,7 +343,6 @@ describe('conversations CRUD', () => {
   // must NOT reshuffle the sidebar (the exact churn users saw with several
   // concurrent runs saving turns).
   it('an updated_at bump does not reorder the list', async () => {
-    if (!dbAvailable) return
     const older = `conv-order-a-${Math.random().toString(36).slice(2, 8)}`
     const newer = `conv-order-b-${Math.random().toString(36).slice(2, 8)}`
     for (const id of [older, newer]) {
@@ -377,7 +370,6 @@ describe('conversations CRUD', () => {
   })
 
   it('deleteConversation only deletes when user matches', async () => {
-    if (!dbAvailable) return
     const id = `conv-${Math.random().toString(36).slice(2, 10)}`
     await saveConversation({
       id,
@@ -396,7 +388,6 @@ describe('conversations CRUD', () => {
 
   // #71 bulk delete: one round trip, user-scoped, returns ground truth.
   it("deleteConversations removes only the caller's own rows and reports them", async () => {
-    if (!dbAvailable) return
     const mk = () => `conv-bulk-${Math.random().toString(36).slice(2, 10)}`
     const own1 = mk()
     const own2 = mk()
@@ -429,14 +420,14 @@ describe('conversations CRUD', () => {
   })
 
   it('deleteConversations no-ops on an empty id list', async () => {
-    if (!dbAvailable) return
     expect(await deleteConversations([], TEST_USER)).toEqual([])
   })
 })
 
 describe('action kind/source/status (agent trigger endpoint)', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('defaults to conversation/chat for the normal save path', async () => {
-    if (!dbAvailable) return
     const id = `conv-${Math.random().toString(36).slice(2, 10)}`
     await saveConversation({
       id,
@@ -451,7 +442,6 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
   })
 
   it('inserts an action with source=post and refreshes status, keeping kind/source immutable on update', async () => {
-    if (!dbAvailable) return
     const id = `act-${Math.random().toString(36).slice(2, 10)}`
     // Route's seed insert.
     await saveConversation({
@@ -487,7 +477,6 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
   })
 
   it('promoteConversation flips action → conversation, scoped to user + idempotent', async () => {
-    if (!dbAvailable) return
     const id = `act-${Math.random().toString(36).slice(2, 10)}`
     await saveConversation({
       id,
@@ -514,7 +503,6 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
   })
 
   it('setConversationStatus updates status without touching context (scoped to user)', async () => {
-    if (!dbAvailable) return
     const id = `act-${Math.random().toString(36).slice(2, 10)}`
     const ctx = JSON.stringify({ events: [], status: 'running' })
     await saveConversation({
@@ -539,7 +527,6 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
   })
 
   it('listConversations surfaces kind/source/status', async () => {
-    if (!dbAvailable) return
     const id = `act-${Math.random().toString(36).slice(2, 10)}`
     await saveConversation({
       id,
@@ -572,8 +559,9 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
  * suite's abandoned row may legitimately ride along.
  */
 describe('inference_tier (the per-conversation switch)', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('is absent until something records one — NULL is not a tier', async () => {
-    if (!dbAvailable) return
     const id = `tier-${Math.random().toString(36).slice(2, 10)}`
     await saveConversation({
       id,
@@ -590,7 +578,6 @@ describe('inference_tier (the per-conversation switch)', () => {
   })
 
   it('is recorded by the save that creates the row, and STICKS across later saves', async () => {
-    if (!dbAvailable) return
     const id = `tier-${Math.random().toString(36).slice(2, 10)}`
     await saveConversation({
       id,
@@ -617,7 +604,6 @@ describe('inference_tier (the per-conversation switch)', () => {
   })
 
   it('is FILLED by a later save when the row was created without one', async () => {
-    if (!dbAvailable) return
     // The action-row shape: `seedActionRow` writes the row before any tier is
     // resolved, so the run's own save is what records where it ran.
     const id = `act-${Math.random().toString(36).slice(2, 10)}`
@@ -644,7 +630,6 @@ describe('inference_tier (the per-conversation switch)', () => {
   })
 
   it('setConversationInferenceTier is scoped to the owner and reads back on the list', async () => {
-    if (!dbAvailable) return
     const id = `tier-${Math.random().toString(36).slice(2, 10)}`
     await saveConversation({
       id,
@@ -668,7 +653,6 @@ describe('inference_tier (the per-conversation switch)', () => {
   })
 
   it('does NOT bump updated_at — choosing a tier is not chat activity', async () => {
-    if (!dbAvailable) return
     // `updated_at` is what the sidebar renders as "x ago" and what
     // `countActiveUsers` reads as "this user did something". A flip is neither.
     const id = `tier-${Math.random().toString(36).slice(2, 10)}`
@@ -686,8 +670,9 @@ describe('inference_tier (the per-conversation switch)', () => {
 })
 
 describe('backfillConversationInferenceTier', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('copies a RECORDED preference onto that user’s untiered rows, and nothing else', async () => {
-    if (!dbAvailable) return
     const withPref = `${TEST_USER}-pref`
     const noPref = `${TEST_USER}-nopref`
     const untiered = `bf-${Math.random().toString(36).slice(2, 10)}`
@@ -729,7 +714,6 @@ describe('backfillConversationInferenceTier', () => {
   })
 
   it('copies nothing from a stored value this build does not recognise', async () => {
-    if (!dbAvailable) return
     // The backfill's own rule is "copy a recorded fact, never a guess", and a
     // `user_prefs` value outside the union is not a fact about anything — it is
     // a row written by a build that knew a tier this one does not, or by hand.
@@ -774,6 +758,8 @@ describe('backfillConversationInferenceTier', () => {
 })
 
 describe('reapStuckConversations', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   /** Seed one row, then age its `updated_at` by `ageMinutes`. */
   async function seed(id: string, status: 'running' | 'paused' | 'done', age: number) {
     await saveConversation({
@@ -802,7 +788,6 @@ describe('reapStuckConversations', () => {
   const past = STUCK_RUN_TIMEOUT_MINUTES + 5
 
   it('reaps an abandoned run and leaves every other row alone', async () => {
-    if (!dbAvailable) return
     const tag = Math.random().toString(36).slice(2, 8)
     const stale = `reap-stale-${tag}`
     const fresh = `reap-fresh-${tag}`
@@ -828,7 +813,6 @@ describe('reapStuckConversations', () => {
   })
 
   it('reaps one minute over the threshold and not one minute under', async () => {
-    if (!dbAvailable) return
     // The boundary itself, driven rather than argued — the derivation is only
     // worth what the statement does at its edges. Re-driven at the post-#279
     // threshold of 90 minutes (it was 300 when these cases were first run).
@@ -856,7 +840,6 @@ describe('reapStuckConversations', () => {
   })
 
   it('is idempotent — a second sweep finds nothing to do', async () => {
-    if (!dbAvailable) return
     const id = `reap-twice-${Math.random().toString(36).slice(2, 8)}`
     await seed(id, 'running', past)
 
@@ -865,7 +848,6 @@ describe('reapStuckConversations', () => {
   })
 
   it('reports a row to exactly one of two concurrent sweepers', async () => {
-    if (!dbAvailable) return
     const id = `reap-race-${Math.random().toString(36).slice(2, 8)}`
     await seed(id, 'running', past)
 
@@ -878,7 +860,6 @@ describe('reapStuckConversations', () => {
   })
 
   it('does not make a reaped row look like recent user activity', async () => {
-    if (!dbAvailable) return
     const id = `reap-activity-${Math.random().toString(36).slice(2, 8)}`
     await seed(id, 'running', past)
 
@@ -896,6 +877,16 @@ describe('reapStuckConversations', () => {
   })
 })
 
+// Every test in 'conversation pinning' reads the cap off the constant, so they
+// all pass at any value — mutation-checked, and this is what that check bought.
+// Three is the owner's product decision (2026-08-27), not a derived number. Its
+// own block because it needs no database, so that block's skip must not take it.
+describe('conversation pinning: the cap', () => {
+  it('caps pinning at three conversations', () => {
+    expect(CONVERSATION_PIN_LIMIT).toBe(3)
+  })
+})
+
 /**
  * Pinned conversations.
  *
@@ -905,6 +896,8 @@ describe('reapStuckConversations', () => {
  * name the wrong rule.
  */
 describe('conversation pinning', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   const users: string[] = []
   /** A fresh owner, registered for cleanup in this block's afterAll. */
   const freshUser = () => {
@@ -936,15 +929,7 @@ describe('conversation pinning', () => {
     for (const u of users) await query('DELETE FROM conversations WHERE user_id = $1', [u])
   })
 
-  // Every other test in this block reads the cap off the constant, so they all
-  // pass at any value — mutation-checked, and this is what that check bought.
-  // Three is the owner's product decision (2026-08-27), not a derived number.
-  it('caps pinning at three conversations', () => {
-    expect(CONVERSATION_PIN_LIMIT).toBe(3)
-  })
-
   it('puts a pinned conversation above newer unpinned ones', async () => {
-    if (!dbAvailable) return
     const user = freshUser()
     const oldest = await seed(user, '2020-01-01T00:00:00Z')
     const middle = await seed(user, '2021-01-01T00:00:00Z')
@@ -958,7 +943,6 @@ describe('conversation pinning', () => {
   })
 
   it('orders several pins by most recently pinned', async () => {
-    if (!dbAvailable) return
     const user = freshUser()
     const a = await seed(user, '2020-01-01T00:00:00Z')
     const b = await seed(user, '2021-01-01T00:00:00Z')
@@ -972,7 +956,6 @@ describe('conversation pinning', () => {
   })
 
   it(`refuses the pin past ${CONVERSATION_PIN_LIMIT} and leaves that row unpinned`, async () => {
-    if (!dbAvailable) return
     const user = freshUser()
     const ids: string[] = []
     for (let i = 0; i <= CONVERSATION_PIN_LIMIT; i++) {
@@ -990,7 +973,6 @@ describe('conversation pinning', () => {
   })
 
   it('frees a slot on unpin, so the refused row can then be pinned', async () => {
-    if (!dbAvailable) return
     const user = freshUser()
     const ids: string[] = []
     for (let i = 0; i <= CONVERSATION_PIN_LIMIT; i++) {
@@ -1012,7 +994,6 @@ describe('conversation pinning', () => {
   })
 
   it('counts the cap per owner, not globally', async () => {
-    if (!dbAvailable) return
     const owner = freshUser()
     const other = freshUser()
     for (let i = 0; i < CONVERSATION_PIN_LIMIT; i++) {
@@ -1025,7 +1006,6 @@ describe('conversation pinning', () => {
   })
 
   it("will not pin someone else's conversation", async () => {
-    if (!dbAvailable) return
     const owner = freshUser()
     const stranger = freshUser()
     const theirs = await seed(owner, '2020-01-01T00:00:00Z')
@@ -1038,7 +1018,6 @@ describe('conversation pinning', () => {
   })
 
   it("will not unpin someone else's conversation", async () => {
-    if (!dbAvailable) return
     const owner = freshUser()
     const stranger = freshUser()
     const theirs = await seed(owner, '2020-01-01T00:00:00Z')
@@ -1049,14 +1028,12 @@ describe('conversation pinning', () => {
   })
 
   it('reports an unknown id as not_found for both directions', async () => {
-    if (!dbAvailable) return
     const user = freshUser()
     expect(await setConversationPinned('no-such-conversation', user, true)).toBe('not_found')
     expect(await setConversationPinned('no-such-conversation', user, false)).toBe('not_found')
   })
 
   it('is idempotent, and a repeat pin does not reorder the pinned block', async () => {
-    if (!dbAvailable) return
     const user = freshUser()
     const a = await seed(user, '2020-01-01T00:00:00Z')
     const b = await seed(user, '2021-01-01T00:00:00Z')
@@ -1077,7 +1054,6 @@ describe('conversation pinning', () => {
   })
 
   it('does not bump updated_at — a pin is not conversation activity', async () => {
-    if (!dbAvailable) return
     const user = freshUser()
     const id = await seed(user, '2020-01-01T00:00:00Z')
     await query("UPDATE conversations SET updated_at = '2020-06-01T00:00:00Z' WHERE id = $1", [id])
@@ -1091,7 +1067,6 @@ describe('conversation pinning', () => {
   })
 
   it('survives a turn-save: the upsert does not clear a pin', async () => {
-    if (!dbAvailable) return
     const user = freshUser()
     const id = await seed(user, '2020-01-01T00:00:00Z')
     await setConversationPinned(id, user, true)

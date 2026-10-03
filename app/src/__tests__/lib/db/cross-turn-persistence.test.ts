@@ -17,7 +17,8 @@
  * channel) rely on.
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
+import { skipWithoutDatabase } from '../../test-database'
 
 // Bypass server-only guard in jsdom test env
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -134,8 +135,9 @@ function makeConvoWithWebSearch(sessionId: string) {
 }
 
 describe('cross-turn persistence after conversation switch', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('tool_result events round-trip byte-identical (event ids, callIds, payloads)', async () => {
-    if (!dbAvailable) return
     const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`
     const ctx = makeConvoWithWebSearch(sessionId)
     const originalEvents = JSON.parse(JSON.stringify(ctx.events))
@@ -152,7 +154,6 @@ describe('cross-turn persistence after conversation switch', () => {
   })
 
   it('EventView on a loaded context exposes prior tool_results to withReferences-style queries', async () => {
-    if (!dbAvailable) return
     const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`
     const ctx = makeConvoWithWebSearch(sessionId)
     await saveSession(sessionId, TEST_USER, 'search', serializeContext(ctx))
@@ -174,13 +175,11 @@ describe('cross-turn persistence after conversation switch', () => {
   })
 
   it('simulated next turn sees prior events when continueSession-style append happens', async () => {
-    if (!dbAvailable) return
     // This validates the shape of `runTurn` after switching back to a conversation:
     //   loaded = loadSession(...) → deserializeContext → continueSession(serialized, ...)
     // continueSession internally appends a new user_message to the existing events
     // before running patterns. We mimic that here and verify the LoopController-style
     // EventView still sees the prior tool_result alongside the new user_message.
-    if (!dbAvailable) return
     const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`
     const ctx = makeConvoWithWebSearch(sessionId)
     await saveSession(sessionId, TEST_USER, 'search', serializeContext(ctx))
@@ -212,7 +211,6 @@ describe('cross-turn persistence after conversation switch', () => {
   })
 
   it('agent mismatch on resume falls through to a fresh start (no cross-agent leak)', async () => {
-    if (!dbAvailable) return
     // Stored as search; if a request comes in claiming agentId="retriever",
     // runTurn ignores the loaded context. We assert the persistence layer
     // surfaces the stored agentId so the dispatch decision is unambiguous.
@@ -226,7 +224,6 @@ describe('cross-turn persistence after conversation switch', () => {
   })
 
   it('saving twice keeps the same row (no duplicate conversations on resume)', async () => {
-    if (!dbAvailable) return
     const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`
     const ctx = makeConvoWithWebSearch(sessionId)
     await saveSession(sessionId, TEST_USER, 'search', serializeContext(ctx))
@@ -255,6 +252,8 @@ describe('cross-turn persistence after conversation switch', () => {
 })
 
 describe('status lifting on save (agent-trigger status column)', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   // The harness leaves a *successful* run as ctx.status='running' (runChain
   // never calls setDone). saveSession is only ever called after the harness
   // returns, so a persisted 'running' means "completed" → it must lift to
@@ -267,14 +266,12 @@ describe('status lifting on save (agent-trigger status column)', () => {
   }
 
   it("lifts a completed run's 'running' status to 'done'", async () => {
-    if (!dbAvailable) return
     expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'running')).toBe(
       'done',
     )
   })
 
   it("preserves 'paused' (awaiting approval) and 'error'", async () => {
-    if (!dbAvailable) return
     expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'paused')).toBe(
       'paused',
     )
@@ -284,7 +281,6 @@ describe('status lifting on save (agent-trigger status column)', () => {
   })
 
   it("maps an explicit 'done' through unchanged", async () => {
-    if (!dbAvailable) return
     expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'done')).toBe('done')
   })
 })

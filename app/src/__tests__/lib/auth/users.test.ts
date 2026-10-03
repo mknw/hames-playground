@@ -4,7 +4,8 @@
  * Hits the live Postgres container (mirrors session-store.test.ts). Skips
  * gracefully when Postgres isn't reachable.
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
+import { skipWithoutDatabase } from '../../test-database'
 
 // Bypass server-only guard in the jsdom test env.
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -35,8 +36,9 @@ afterAll(async () => {
 })
 
 describe('users repository', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('creates on first sign-in with first_login == last_login', async () => {
-    if (!dbAvailable) return
     await upsertUser({
       id: TEST_OID,
       email: 'u@contoso.com',
@@ -52,7 +54,6 @@ describe('users repository', () => {
   })
 
   it('re-sign-in refreshes profile + last_login but preserves first_login', async () => {
-    if (!dbAvailable) return
     const before = await getUser(TEST_OID)
     // Ensure NOW() differs measurably from the insert timestamp.
     await new Promise((r) => setTimeout(r, 25))
@@ -70,7 +71,6 @@ describe('users repository', () => {
   })
 
   it('getUser returns null for unknown ids; listUsers includes the row', async () => {
-    if (!dbAvailable) return
     expect(await getUser('never-signed-in')).toBeNull()
     const all = await listUsers()
     expect(all.some((u) => u.id === TEST_OID)).toBe(true)

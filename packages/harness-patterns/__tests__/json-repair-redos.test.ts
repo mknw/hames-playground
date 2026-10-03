@@ -1,5 +1,6 @@
 /**
- * json-repair costs time linear in its input (#461).
+ * The two regexes #461 found in json-repair cost time linear in their input.
+ * The function as a whole does not yet: the scanners in #463 are still super-linear.
  *
  * `repairJsonTracked` parses the model's `tool_args`, and model output can be
  * steered by content the model has read. The repair runs synchronously on the
@@ -112,7 +113,7 @@ const CASES: Array<{
   },
 ]
 
-describe('json-repair: linear on adversarial input (#461)', () => {
+describe('json-repair: the #461 regex shapes are linear', () => {
   // The timeout covers a regression, not a pass: a quadratic step fails the
   // 12.5k or 50k budget in a few seconds of CPU at most, and this keeps that a
   // named failure on a slow runner instead of a bare timeout.

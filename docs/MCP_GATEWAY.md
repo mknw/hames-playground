@@ -27,27 +27,27 @@ The MCP Gateway is Docker's tool for managing and running MCP (Model Context Pro
 │neo4j-  ││fetch ││web_   ││cont- │    │ neo4j  │ :7687
 │cypher  ││      ││search ││ext7  │    │        │ :7474
 └────────┘└──────┘└───────┘└──────┘    └────────┘
-┌───────┐┌──────┐┌──────┐             ┌──────────┐
-│rust-  ││mem-  ││data- │             │ postgres │ :5432
-│mcp-fs ││ory   ││base  │             │          │
-└───────┘└──────┘└──────┘             └──────────┘
-                   ┌──────┐            ┌────────┐
-                   │redis │            │ redis  │ :6379
-                   └──────┘            └────────┘
+┌───────┐┌──────┐┌──────┐              ┌────────┐
+│rust-  ││mem-  ││redis │              │ redis  │ :6379
+│mcp-fs ││ory   ││      │              │        │
+└───────┘└──────┘└──────┘              └────────┘
 ```
+
+No MCP server reaches the app's Postgres: agents get no database access (see
+[Postgres](#postgres) below). The app reads and writes Postgres itself, through
+its repositories, never through the gateway.
 
 ### Registered Servers
 
-| Server                | Title               | Tools                                                                             | Auth                 | Backend            |
-| --------------------- | ------------------- | --------------------------------------------------------------------------------- | -------------------- | ------------------ |
-| `neo4j-cypher`        | Neo4j Cypher        | `get_neo4j_schema`, `read_neo4j_cypher` (writes off, see below)                   | Password (hardcoded) | neo4j container    |
-| `fetch`               | Fetch               | `fetch`                                                                           | None                 | -                  |
-| `web_search`          | DuckDuckGo          | `search`, `fetch_content`                                                         | None                 | -                  |
-| `context7`            | Context7            | `resolve-library-id`, `get-library-docs`                                          | None                 | -                  |
-| `rust-mcp-filesystem` | Rust Filesystem     | `read_text_file`, `write_file`, `edit_file`, `search_files`, +10 more             | None (volume mounts) | -                  |
-| `memory`              | Memory              | `create_entities`, `create_relations`, `search_nodes`, `read_graph`, +5 more      | None (volume)        | -                  |
-| `redis`               | Redis               | `get`, `set`, `delete`, `hget`, `hset`, `lpush`, `sadd`, `zadd`, +24 more         | Password (hardcoded) | redis container    |
-| `database-server`     | MCP Database Server | `query_database`, `list_tables`, `describe_table`, `connect_to_database`, +2 more | URL (hardcoded)      | postgres container |
+| Server                | Title           | Tools                                                                        | Auth                 | Backend         |
+| --------------------- | --------------- | ---------------------------------------------------------------------------- | -------------------- | --------------- |
+| `neo4j-cypher`        | Neo4j Cypher    | `get_neo4j_schema`, `read_neo4j_cypher` (writes off, see below)              | Password (hardcoded) | neo4j container |
+| `fetch`               | Fetch           | `fetch`                                                                      | None                 | -               |
+| `web_search`          | DuckDuckGo      | `search`, `fetch_content`                                                    | None                 | -               |
+| `context7`            | Context7        | `resolve-library-id`, `get-library-docs`                                     | None                 | -               |
+| `rust-mcp-filesystem` | Rust Filesystem | `read_text_file`, `write_file`, `edit_file`, `search_files`, +10 more        | None (volume mounts) | -               |
+| `memory`              | Memory          | `create_entities`, `create_relations`, `search_nodes`, `read_graph`, +5 more | None (volume)        | -               |
+| `redis`               | Redis           | `get`, `set`, `delete`, `hget`, `hset`, `lpush`, `sadd`, `zadd`, +24 more    | Password (hardcoded) | redis container |
 
 ### Configuration Strategy
 
@@ -58,21 +58,20 @@ The gateway supports two mechanisms for providing credentials to MCP servers:
 | `env:` templates (`{{server.key}}`) | `mcp-config.yaml` or `mcp-config-set` tool     | Config values in mcp-config.yaml |
 | `secrets:` entries                  | `--secrets` flag (Docker Desktop or .env file) | Secrets provider on gateway      |
 
-**This project's approach**: hardcode credentials for infrastructure we control (neo4j, redis, postgres) in `mcp-config.yaml`, matching the container defaults. A server needing a _user-provided_ credential would use the env template hack instead, so that `mcp-config-set` can supply the value at runtime without a `--secrets` provider; the GitHub server was the only one that did, and it was removed in #226 E3 (no agent used it, and the `gh` CLI covers this repo's own GitHub work).
+**This project's approach**: hardcode credentials for infrastructure we control (neo4j, redis) in `mcp-config.yaml`, matching the container defaults. A server needing a _user-provided_ credential would use the env template hack instead, so that `mcp-config-set` can supply the value at runtime without a `--secrets` provider; the GitHub server was the only one that did, and it was removed in #226 E3 (no agent used it, and the `gh` CLI covers this repo's own GitHub work).
 
-| Server          | Credential     | Strategy                                                                                                                |
-| --------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| neo4j-cypher    | `password`     | `${NEO4J_PASSWORD}` placeholder in mcp-config.yaml, filled from the repo-root `.env` by the `mcp-config` render service |
-| redis           | `password`     | Hardcoded in mcp-config.yaml (empty, alpine default)                                                                    |
-| database-server | `database_url` | `${POSTGRES_PASSWORD}` placeholder inside the URL, filled the same way                                                  |
+| Server       | Credential | Strategy                                                                                                                |
+| ------------ | ---------- | ----------------------------------------------------------------------------------------------------------------------- |
+| neo4j-cypher | `password` | `${NEO4J_PASSWORD}` placeholder in mcp-config.yaml, filled from the repo-root `.env` by the `mcp-config` render service |
+| redis        | `password` | Hardcoded in mcp-config.yaml (empty, alpine default)                                                                    |
 
 ### Configuration Files (Source of Truth)
 
-| File                        | Purpose                                   | Verify                             |
-| --------------------------- | ----------------------------------------- | ---------------------------------- |
-| `docker-compose.yaml:37-56` | Gateway service definition                | Port 8811, servers list            |
-| `custom-catalog.yaml`       | MCP server definitions with env mappings  | All 9 servers                      |
-| `mcp-config.yaml`           | Server connection parameters and defaults | Neo4j, Redis, Postgres credentials |
+| File                        | Purpose                                   | Verify                   |
+| --------------------------- | ----------------------------------------- | ------------------------ |
+| `docker-compose.yaml:37-56` | Gateway service definition                | Port 8811, servers list  |
+| `custom-catalog.yaml`       | MCP server definitions with env mappings  | All 8 servers            |
+| `mcp-config.yaml`           | Server connection parameters and defaults | Neo4j, Redis credentials |
 
 ### Current Docker Compose Configuration
 
@@ -113,8 +112,9 @@ docker compose up -d
 # View gateway logs
 docker compose logs -f mcp-gateway
 
-# Apply a changed configs/mcp-config.yaml: render it again, then recreate the
-# gateway. A plain restart re-reads the OLD render (see "Neo4j writes" below).
+# Apply a changed configs/mcp-config.yaml or catalog: render it again, then
+# recreate the gateway. A plain restart re-reads the OLD render (see "Neo4j
+# writes" below).
 docker compose run --rm mcp-config
 docker compose up -d --no-deps --force-recreate mcp-gateway
 ```
@@ -305,6 +305,15 @@ Agents are read-only against Neo4j (#403), and the same two-place shape holds it
 - **In the app:** `listTools()` leaves `write_neo4j_cypher` out of the catalog every agent's tool list is built from, and logs once if the gateway lists it. Every loop's allowlist check refuses it too, so an allowlist written by hand cannot hand it back.
 
 A changed config reaches a running gateway only when it is rendered again and the gateway is recreated: `docker compose run --rm mcp-config && docker compose up -d --no-deps --force-recreate mcp-gateway`. The gateway reads the copy the one-shot `mcp-config` service renders into a volume, so three near-misses leave it on the old config: `docker compose restart mcp-gateway` and a plain `up -d` both keep the config it read at start, and `--no-deps --force-recreate mcp-gateway` on its own recreates it without re-rendering. `docker compose up -d --force-recreate mcp-gateway` without `--no-deps` also works, because the renderer re-runs as the gateway's dependency, but it recreates any dependency whose definition has drifted, `neo4j` included; the two-step form cannot touch `neo4j`.
+
+### Postgres
+
+No agent reaches Postgres (#412). Running agents were never meant to query the app's own database, and `general` hands every tool the gateway lists to its loop, so the two-place shape holds it here too:
+
+- **At the gateway:** the `database-server` MCP server is gone from `configs/custom-catalog.yaml` and from the gateway config, and the `mcp-config` render service is no longer given `POSTGRES_PASSWORD`. A host config that still carries the `${POSTGRES_PASSWORD}` placeholder is refused at render, by name, rather than filled into a database URL; delete its `database-server` block.
+- **In the app:** `listTools()` leaves the server's tools (`query_database`, `execute_sql`, `list_tables`, `describe_table`, `connect_to_database`, `get_connection_examples`, `get_current_database_info`) out of the catalog every agent's tool list is built from, through the same list as `write_neo4j_cypher`, and logs once if the gateway lists them. Every loop's allowlist check refuses them too.
+
+To drop the server from a running gateway, render and recreate it the way the section above says: `docker compose run --rm mcp-config && docker compose up -d --no-deps --force-recreate mcp-gateway`. Recreating is what picks up the changed catalog too. Then `docker compose logs mcp-gateway | grep -E 'Those servers are enabled|tools listed'` should name no `database-server`.
 
 ### Self-Describing Images
 

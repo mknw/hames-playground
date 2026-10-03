@@ -327,6 +327,14 @@ env_problems() {
   if ((n != 0 && n != 3)); then
     printf '%s\n' "private tier: $n of ${VERDA_TRIO[*]} set — all three or none (a partial tier is refused at run time)"
   fi
+  # Spliced raw into the app's DATABASE_URL (both compose files), where these
+  # break the URL. The gateway renderer used to refuse them; since #412 it
+  # never sees this value, so the check lives here. A generated one is hex.
+  case $(env_get POSTGRES_PASSWORD) in
+    *'&'* | *\\* | *'/'* | *'@'* | *':'* | *'#'* | *'?'* | *'%'* | *' '*)
+      printf '%s\n' "POSTGRES_PASSWORD must be URL-safe (no & \\ / @ : # ? % or space): it is spliced into the app's DATABASE_URL"
+      ;;
+  esac
   for k in VERDA_INFERENCE_ENDPOINT SMALL_LLM_BASE_URL; do
     v=$(env_get "$k")
     [[ -z $v || $v == */v1 ]] || printf '%s\n' "$k must end in /v1"
@@ -1132,10 +1140,10 @@ stage_checkout() {
   ok "deploying $(git -C "$APP_DIR" log -1 --format='%h %s' "$sha")"
 
   # docs/PREVIEW.md §3a, verbatim: exactly the overlay's five servers. The
-  # tracked file is the DEVELOPMENT set (redis, database-server, filesystem,
-  # playwright) — harmless behind the overlay's --servers allow-list, but the
-  # file and the allow-list should say the same thing. No literal password:
-  # the `mcp-config` service fills the placeholder from .env.
+  # tracked file is the DEVELOPMENT set (redis, filesystem, playwright) —
+  # harmless behind the overlay's --servers allow-list, but the file and the
+  # allow-list should say the same thing. No literal password: the
+  # `mcp-config` service fills the placeholder from .env.
   if put_file "$APP_DIR/configs/mcp-config.yaml" 0644 "$user:$user" <<'EOF'; then :; fi
 # /opt/hames/configs/mcp-config.yaml — written by scripts/bootstrap-vps.sh
 # from docs/PREVIEW.md §3a. Deliberately NOT the tracked development set: these

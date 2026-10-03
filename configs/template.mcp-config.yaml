@@ -36,9 +36,5 @@ redis:
   password: <REDIS_PASSWORD>
   ssl: false
 
-database-server:
-  enabled: true
-  database_url: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/hames
-
 playwright:
   enabled: true

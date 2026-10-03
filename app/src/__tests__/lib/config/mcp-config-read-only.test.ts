@@ -51,12 +51,8 @@ describe('neo4j-cypher ships read_only: true', () => {
         out,
       ],
       {
-        // Only PATH and the two passwords: nothing from the developer's shell leaks in.
-        env: {
-          PATH: process.env.PATH,
-          NEO4J_PASSWORD: 'n',
-          POSTGRES_PASSWORD: 'p',
-        } as unknown as NodeJS.ProcessEnv,
+        // Only PATH and the password: nothing from the developer's shell leaks in.
+        env: { PATH: process.env.PATH, NEO4J_PASSWORD: 'n' } as unknown as NodeJS.ProcessEnv,
         encoding: 'utf8',
       },
     )

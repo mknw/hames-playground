@@ -120,6 +120,46 @@ function pack(name: string): Packed {
   }
 }
 
+interface NpmPublish {
+  /** npm EXITED non-zero. A child killed by the timeout below is not a refusal. */
+  refused: boolean
+  stderr: string
+  /** How npm ended — the exit code, or the signal that killed it — for the failure message. */
+  ended: string
+}
+
+/** `npm publish --dry-run` in the package directory: the path the
+ * `prepublishOnly` guard exists to refuse. Safe to run: the guard aborts before
+ * npm packs or contacts the registry, and even with the guard gone a --dry-run
+ * uploads nothing. `--offline` makes "contacts no registry" a property npm
+ * enforces rather than an ordering inside npm this test happens to rely on. */
+function npmPublishDryRun(pkgDir: string): NpmPublish {
+  try {
+    execFileSync(NPM, ['publish', '--dry-run', '--offline'], {
+      cwd: pkgDir,
+      encoding: 'utf8',
+      timeout: 120_000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    return { refused: false, stderr: '', ended: 'exit 0' }
+  } catch (err) {
+    const { status, signal, stderr } = err as {
+      status?: number | null
+      signal?: string | null
+      stderr?: string
+    }
+    return {
+      refused: typeof status === 'number' && status !== 0,
+      stderr: String(stderr ?? err),
+      ended: signal
+        ? `killed by ${signal}`
+        : typeof status === 'number'
+          ? `exit ${status}`
+          : String(err),
+    }
+  }
+}
+
 /** Bare import specifiers (no `node:`, relative, absolute, `data:`, `bun:`)
  * declared by a `.ts` source. Parsed with the TypeScript AST, not a regex —
  * the same specifiers appear in doc-comment prose and error strings
@@ -153,6 +193,14 @@ describe('packed artifact pin (pnpm pack — the publish path — what a consume
   // One pack per package for the whole suite. `pnpm pack` is by far the
   // slowest thing here, and every assertion below reads the same artifact.
   const packedByName = new Map(packages.map((name) => [name, pack(name)]))
+  // `npm publish` runs out here too, outside every test budget (#435). The
+  // first `npm` of a CI job pays npm's own cold start — 0.7–2.3s on green
+  // runs, 5.3s on the red one, against 0.3–0.6s for each call after it. Inside
+  // the `it`, that cost was charged to vitest's 5s default, which the child's
+  // own 120s bound never reached. Out here the child's bound is the only one.
+  const npmPublishByName = new Map(
+    packages.map((name) => [name, npmPublishDryRun(join(PACKAGES, name))]),
+  )
 
   it('there are packages to check, so the scan cannot pass vacuously', () => {
     expect(packages.length).toBeGreaterThanOrEqual(4)
@@ -264,27 +312,13 @@ describe('packed artifact pin (pnpm pack — the publish path — what a consume
       it('(a2) `npm publish --dry-run` REFUSES — the prepublishOnly guard fires', () => {
         // npm does not rewrite the workspace protocol, so it must never reach
         // the registry with this manifest. The guard turns npm publish into a
-        // refused command at the counter. Safe to run here: the guard aborts
-        // before npm packs or contacts the registry, and even with the guard
-        // gone a --dry-run uploads nothing.
-        let refused = false
-        let stderr = ''
-        try {
-          execFileSync(NPM, ['publish', '--dry-run'], {
-            cwd: pkgDir,
-            encoding: 'utf8',
-            timeout: 120_000,
-            stdio: ['ignore', 'pipe', 'pipe'],
-          })
-        } catch (err) {
-          refused = true
-          stderr = String((err as { stderr?: string }).stderr ?? err)
-        }
+        // refused command at the counter. npm ran at collection, above.
+        const { refused, stderr, ended } = npmPublishByName.get(name)!
         expect(
           refused,
           'npm publish must be refused by the prepublishOnly guard — npm does not ' +
             'rewrite workspace: specifiers and would ship them literally, burning ' +
-            'the version number permanently',
+            `the version number permanently (npm: ${ended})`,
         ).toBe(true)
         expect(stderr).toMatch(/pnpm publish/)
       })

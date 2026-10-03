@@ -43,21 +43,25 @@ services:
       retries: 10
 
   mcp-config:
-    # One-shot: renders configs/mcp-config.yaml's ${NEO4J_PASSWORD} /
-    # ${POSTGRES_PASSWORD} placeholders from the same root-.env values the
-    # databases are created with, into the volume the gateway reads. That makes
-    # the root .env the gateway's source too; before this the gateway config
-    # carried literals that silently disagreed with any other password.
-    # Re-runs on every `docker compose up`; after changing a password,
-    # `docker compose up -d --force-recreate mcp-gateway` so the gateway
-    # re-reads it. postgres:16-alpine only because the stack already pulls it
-    # and it has a POSIX sh + awk; it runs no database here.
+    # One-shot: renders configs/mcp-config.yaml's ${NEO4J_PASSWORD} placeholder
+    # from the same root-.env value Neo4j is created with, into the volume the
+    # gateway reads. That makes the root .env the gateway's source too; before
+    # this the gateway config carried literals that silently disagreed with any
+    # other password. Re-runs on every `docker compose up`; after changing the
+    # config, the catalog or a password, render and recreate:
+    #   docker compose run --rm mcp-config &&
+    #     docker compose up -d --no-deps --force-recreate mcp-gateway
+    # (`--no-deps` alone skips this renderer and the gateway re-reads the old
+    # copy; `&&` keeps a refused render from recreating it on the old one:
+    # docs/MCP_GATEWAY.md "Neo4j writes"). postgres:16-alpine only
+    # because the stack already pulls it and it has a POSIX sh + awk; it runs
+    # no database here, and it is deliberately NOT given POSTGRES_PASSWORD: no
+    # gateway server reaches Postgres (no-agent-postgres.test.ts).
     image: postgres:16-alpine
     entrypoint:
       ["/bin/sh", "/render.sh", "/in/mcp-config.yaml", "/out/config.yaml"]
     environment:
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:?set NEO4J_PASSWORD in the repo-root .env — see .env.example}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the repo-root .env — see .env.example}
     volumes:
       - ./scripts/render-mcp-config.sh:/render.sh:ro
       - ./configs/mcp-config.yaml:/in/mcp-config.yaml:ro

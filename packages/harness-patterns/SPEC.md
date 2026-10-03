@@ -444,6 +444,14 @@ now, beside the management-tool list; moving it to a host-registered list is an
 open follow-up, due before the next release. The repository's gateway config also ships `read_only: true`,
 which keeps the server from offering the tool at all.
 
+The same list withholds the `database-server` tools (`query_database`,
+`execute_sql`, `list_tables`, `describe_table`, `connect_to_database`,
+`get_connection_examples`, `get_current_database_info`) in both places, with a
+drop warning of its own (#412). No agent reaches Postgres: the server ran SQL
+against the host app's own database. The repository's gateway catalog no longer
+defines it, and the list is what keeps a catalog that regains it from handing
+it to an agent.
+
 ### `simpleLoop(controller, tools, config?)`
 
 ReAct-style decide-execute loop. Calls BAML controller directly. A turn is
@@ -1170,7 +1178,7 @@ interface PlannerConfig extends PatternConfig {
 
 **Why.** A `simpleLoop` controller re-derives its high-level approach on every
 turn. With a diverse tool surface (`tools.all` spanning `neo4j-cypher` +
-`database` + `web_search` + `context7`) that re-derivation is both the
+`memory` + `web_search` + `context7`) that re-derivation is both the
 expensive part of the prompt and the part most prone to greedy, locally
 coherent sequences ("search the web again" when turn 1 already pulled the
 docs). The planner pays for strategy once.
@@ -2011,8 +2019,8 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── run-frame.server.ts     # THE run frame — one ALS scope per run holding all five slots (guard / transports / config / live / inference), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, the rest replace), activeRunFrame() THROWS outside a frame and currentRunFrame() is the soft read
 ├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? and an optional RunFrame; each OPENS the run frame (ruling Q17/D5), or joins the host's
 ├── tool-transport.server.ts # ToolTransport + registerTransport() (process, consulted after every scoped one) / activeTransports() (reads the run frame's `transports` slot); the difference between the two ways to supply one IS the containment invariant — there is no priority field and no argument that could express one
-├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE phases — scoped transports (innermost first) → process transports (registration order) → MCP gateway (terminal fallback, not a transport); leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element; drops the gateway's own management tools (`mcp-find`, `mcp-add`, `mcp-exec`, …) from the catalog (#412, #420), and `write_neo4j_cypher`, which no agent holds (#403)
-├── agent-withheld-tools.ts # AGENT_WITHHELD_TOOLS + isAgentWithheldTool() — the tools no agent may hold (#403: `write_neo4j_cypher`), seen through a gateway or server-namespace prefix; read by listTools() (the catalog) and by simpleLoop/actorCritic (every allowlist check), never by callTool
+├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE phases — scoped transports (innermost first) → process transports (registration order) → MCP gateway (terminal fallback, not a transport); leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element; drops the gateway's own management tools (`mcp-find`, `mcp-add`, `mcp-exec`, …) from the catalog (#412, #420), and `write_neo4j_cypher` and the `database-server` tools, which no agent holds (#403, #412)
+├── agent-withheld-tools.ts # AGENT_WITHHELD_TOOLS + isAgentWithheldTool() — the tools no agent may hold (#403: `write_neo4j_cypher`; #412: the `database-server` tools), each with the decision and server-side switch its drop warning names (withholdingFor()), seen through a gateway or server-namespace prefix; read by listTools() (the catalog) and by simpleLoop/actorCritic (every allowlist check), never by callTool
 ├── compactBulkData.server.ts # compactBulkData(ctx, onPersist, { describe, describeBatch }) — the two describe fns are REQUIRED config (Lane A6)
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)
 ├── loop-recovery.server.ts # The two loops' shared recovery rule (#437): isRecoverableLLMFailure(), the feedback texts, trackLoopRecovery()

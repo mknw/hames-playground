@@ -65,14 +65,20 @@ const MAX_TITLE_CHARS = 50
  * Best-effort cleanup of model output. The prompt asks for a bare title,
  * but small/fast models occasionally wrap in quotes, add a trailing
  * period, or echo a multiline preamble — strip all of those defensively.
- * Empty / unreasonably long → returns null so the caller skips the DB write.
+ * Empty → returns null so the caller skips the DB write; overlong → capped.
+ *
+ * The first line is taken BEFORE the strips (#409): they act on the ends of
+ * the string they are given, so run on a multi-line reply they cleaned the
+ * end of the LAST line and `"Graph Styling Tips"\nHere is why…` kept its
+ * closing quote.
  */
 export function sanitizeTitle(raw: string): string | null {
   const stripped = raw
     .trim()
+    .split('\n')[0] // first line only
+    .trim()
     .replace(/^["'`]+|["'`]+$/g, '') // surrounding quotes / backticks
     .replace(/[.!?]+$/, '') // trailing punctuation
-    .split('\n')[0] // first line only
     .trim()
   if (!stripped) return null
   return stripped.slice(0, MAX_TITLE_CHARS)

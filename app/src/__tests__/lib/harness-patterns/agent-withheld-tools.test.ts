@@ -199,7 +199,7 @@ describe('the Neo4j write tool is withheld from agents', () => {
     expect(advertised).toEqual(['get_neo4j_schema', 'read_neo4j_cypher'])
   })
 
-  it('warns once that the server-side switch is off, naming the switch and the restart', async () => {
+  it('warns once that the server-side switch is off, naming the switch and the recreate', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { listTools } = await import('@hames-ai/harness-patterns/mcp-client.server')
 
@@ -211,7 +211,12 @@ describe('the Neo4j write tool is withheld from agents', () => {
     expect(drops[0][0]).toContain(PREFIXED_WRITE)
     expect(drops[0][0]).toContain(NAMESPACED_WRITE)
     expect(drops[0][0]).toContain('read_only: true')
-    expect(drops[0][0]).toContain('restart the gateway')
+    // Recreate, after a fresh render — never a restart, which re-reads the old
+    // render (docs/MCP_GATEWAY.md "Neo4j writes").
+    expect(drops[0][0]).toContain(
+      'docker compose run --rm mcp-config && docker compose up -d --no-deps --force-recreate mcp-gateway',
+    )
+    expect(drops[0][0]).not.toMatch(/restart/)
   })
 
   it('warns about nothing when the gateway serves Neo4j read-only', async () => {

@@ -92,8 +92,8 @@ see" a configuration decision rather than a code change.
 
 **Tool namespace** — the group an MCP tool belongs to, inferred from its name and
 used to hand a pattern a scoped tool set: `neo4j`, `web`, `context7`,
-`filesystem`, `memory`, `redis`, `database` — plus `all`, which
-is every tool. Namespaces are a grouping over the tools a single MCP gateway
+`filesystem`, `memory`, `redis` — plus `all`, which is every tool. There is no
+`database` namespace: no agent reaches Postgres (#412). Namespaces are a grouping over the tools a single MCP gateway
 exposes, not a security boundary.
 
 ## Storage and runtime

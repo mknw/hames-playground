@@ -2,10 +2,11 @@
  * json-repair: the branches the app-side suites (`json-repair.test.ts`,
  * `json-repair-unescaped-content.test.ts`) never reach — escapes and empty
  * containers inside the unescaped-content strategy, where it DECLINES, and
- * the bracketed-literal repair's nested / quoted / refused shapes (#407).
+ * the bracketed-literal repair's nested / quoted / refused shapes (#407), and
+ * the last-resort single-key handler's refusal of a multi-member object (#408).
  *
  * Each test names the source mutation that reddens it; every one was run
- * (#407 PR body, mutation table). The colon check in `readObject` has no
+ * (#407 and #408 PR bodies, mutation tables). The colon check in `readObject` has no
  * test: `readString(':')` only closes a key on a `"` followed by `:`, so that
  * check cannot be reached and no input can redden a mutation of it.
  */
@@ -118,15 +119,93 @@ describe('bracketed values in the lenient chain', () => {
   it('refuses a nested object member with no colon', () => {
     expect(() => repairJson(`{a: {b}, c: 1}`)).toThrow()
   })
+})
 
-  // #408: the last-resort single-key handler does not check that the input
-  // HAS a single key, so a malformed multi-key object collapses into its
-  // first key. Current output, recorded 2026-09-28:
-  //   {"a": "x "y" z", "b": }   → { a: '"x "y" z", "b":' }
-  //   {a: [x,,y], b: 1}         → { a: '[x,,y], b: 1' }
-  // Un-skip when #408 is fixed.
-  it.skip('BUG #408: a malformed multi-key object throws instead of collapsing into one key', () => {
+// #408: the last-resort single-key handler checked only that the input BEGINS
+// with one key, so a multi-key object malformed anywhere came back as its
+// first key holding the text of the others — well-formed, tagged
+// `lenient-tokens`, and wrong. Output before the fix, recorded 2026-09-28:
+//   {"a": "x "y" z", "b": }   → { a: '"x "y" z", "b":' }
+//   {"a": "x "y" z" "b": 1}   → { a: '"x "y" z" "b": 1' }
+//   {a: [x,,y], b: 1}         → { a: '[x,,y], b: 1' }
+// It now declines, so the call throws: `actorCritic` retries it; `simpleLoop`
+// ends the loop with a recoverable `Invalid tool_args JSON` error.
+describe('last-resort single-key handler (#408)', () => {
+  // Mutation M1: drop `&& !holdsSiblingMember(value)` from the handler → all
+  // three collapse into `a` and return.
+  it("throws on the issue's three inputs instead of collapsing them into the first key", () => {
     expect(() => repairJson(`{"a": "x "y" z", "b": }`)).toThrow()
+    expect(() => repairJson(`{"a": "x "y" z" "b": 1}`)).toThrow()
     expect(() => repairJson(`{a: [x,,y], b: 1}`)).toThrow()
+  })
+
+  // Mutation M2: drop the `,\s*key\s*:` branch of MEMBER_START → an unquoted
+  // sibling after a comma is folded in again.
+  it('throws on an unquoted sibling key after a comma', () => {
+    expect(() => repairJson(`{query: Brussels events, time: 10:00}`)).toThrow()
+    expect(() => repairJson(`{query: MATCH (c)-[r]-() RETURN c, r, limit: 5}`)).toThrow()
+  })
+
+  // Mutation M3: drop `-` from the key class (`[\w$]*`) → `max-results` is
+  // not read as a key and folds into `a`.
+  it('reads a hyphenated key as a key', () => {
+    expect(() => repairJson(`{a: x, max-results: }`)).toThrow()
+  })
+
+  // Mutation M4: drop the `"[^"]*"\s*:` branch → a well-formed first member
+  // with a broken double-quoted sibling folds into one key.
+  it('throws when only the second, double-quoted member is broken', () => {
+    expect(() => repairJson(`{"query": "MATCH (c)-[r]-() RETURN c, r", "limit": }`)).toThrow()
+  })
+
+  // Mutation M5: drop the `'[^']*'\s*:` branch → a single-quoted sibling
+  // key folds into `query`.
+  it('throws on a single-quoted sibling key', () => {
+    expect(() => repairJson(`{query: RETURN 'a', 'b': 1}`)).toThrow()
+  })
+
+  // Mutation M6: loosen ONE_QUOTED_STRING to `/^"[\s\S]*"$/` → a value that
+  // merely starts and ends with a quote is exempted and the siblings fold in.
+  it('does not exempt a value that only starts and ends with a quote', () => {
+    expect(() => repairJson(`{"a": "x", "b": [y,,z], "c": "w"}`)).toThrow()
+  })
+
+  // Mutation M7: drop the ONE_QUOTED_STRING exemption → a cleanly quoted
+  // Cypher string holding `, n:Person` is declined and the call throws.
+  it('keeps one cleanly quoted value whole even when it holds `, key:`', () => {
+    expect(repairJsonTracked(`{query: "MATCH (n) RETURN n, n:Person"}`)).toEqual({
+      args: { query: 'MATCH (n) RETURN n, n:Person' },
+      repair: { strategy: 'lenient-tokens' },
+    })
+  })
+
+  // What the handler is FOR still works: a colon that does not follow a comma
+  // (a label predicate) and a quoted token that no colon follows are content.
+  // Mutation M8: widen the comma branch to any whitespace (`[,\s]\s*key\s*:`)
+  // → `WHERE a:Person` reads as a member and the first call throws; M9: make
+  // the colon optional in the quoted branch (`"[^"]*"\s*:?`) → `"x"` reads as
+  // a key and the second call throws.
+  it('still repairs a single key whose value carries commas, colons and quotes', () => {
+    expect(repairJson(`{query: MATCH (a)-[r]-(b) WHERE a:Person RETURN a, b}`)).toEqual({
+      query: 'MATCH (a)-[r]-(b) WHERE a:Person RETURN a, b',
+    })
+    expect(repairJson(`{query: MATCH (n) RETURN n, "x"}`)).toEqual({
+      query: 'MATCH (n) RETURN n, "x"',
+    })
+  })
+
+  // The price of declining rather than guessing, pinned so it is visible: a
+  // label predicate or label write AFTER a comma is indistinguishable from a
+  // sibling key, and so is a quoted word followed by a colon, so values the
+  // old handler got right now throw. That is NOT a retry everywhere:
+  // `actorCritic` retries it; `simpleLoop` ends the loop with a recoverable
+  // `Invalid tool_args JSON` error — and every Cypher-producing agent is a
+  // `simpleLoop`.
+  // Mutation: M1 or M2 above → the two Cypher values return one key again;
+  // M1, M4 or M6 → the Python one does.
+  it('declines `, b:Label`, label writes and `"y":` too — the cost of not guessing', () => {
+    expect(() => repairJson(`{query: MATCH (a)-[r]-(b) RETURN a, b:Person}`)).toThrow()
+    expect(() => repairJson(`{query: MATCH (a)-[r]->(b) SET a:Customer, b:Vendor}`)).toThrow()
+    expect(() => repairJson(`{"code": "if x == "y":\n    print("a", b)"}`)).toThrow()
   })
 })

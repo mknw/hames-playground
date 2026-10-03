@@ -54,7 +54,7 @@ before the first `docker compose up` on a machine that already has the stack.
   upstream releases cannot run this stack (#417); the comment on the service in
   `docker-compose.yaml` says why, and what a bump needs first
 - **Ports**: 127.0.0.1:8811:8811
-- **MCP Servers**: neo4j-cypher, fetch, web_search, context7, rust-mcp-filesystem, memory, redis, database-server
+- **MCP Servers**: neo4j-cypher, fetch, web_search, context7, rust-mcp-filesystem, memory, redis, playwright. None reaches Postgres: agents get no database access (#412), so the gateway is given no Postgres credential
 - **Transport**: streaming
 - **Config**: reads the RENDERED `/mcp/rendered/config.yaml`, written by the
   one-shot `mcp-config` service from `configs/mcp-config.yaml` with the root
@@ -206,14 +206,14 @@ All MCP configuration files are located in the `configs/` directory:
    - **rust-mcp-filesystem**: File system operations
    - **memory**: Knowledge graph memory
    - **redis**: Redis operations (connects to redis container)
-   - **database-server**: PostgreSQL/MySQL/SQLite queries (connects to postgres container)
+   - **playwright**: browser automation, for development and E2E only
    - Uses SHA256 digests for image references (e.g., `mcp/fetch@sha256:...`)
 
 3. **configs/catalog.yaml**: Full Docker MCP catalog for global mode
 
 4. **docker-compose.yaml**: the one-shot `mcp-config` service renders
    `configs/mcp-config.yaml` into the `mcp_config` volume, filling
-   `${NEO4J_PASSWORD}` / `${POSTGRES_PASSWORD}` from the root `.env`; the gateway
+   `${NEO4J_PASSWORD}` from the root `.env`; the gateway
    mounts that volume and the catalogs read-only
    ```yaml
    volumes:
@@ -255,8 +255,9 @@ them from there:
 - the databases themselves and the `app` container, through `${VAR:?}` in
   `docker-compose.yaml` — every `docker compose` command, including `exec` and
   `ps`, fails until both are set;
-- the MCP gateway, whose `configs/mcp-config.yaml` carries `${…}` placeholders
-  that the one-shot `mcp-config` service fills in on every `up`;
+- the MCP gateway, whose `configs/mcp-config.yaml` carries a `${NEO4J_PASSWORD}`
+  placeholder that the one-shot `mcp-config` service fills in on every `up` (it
+  gets no Postgres credential: no gateway server reaches Postgres);
 - `pnpm dev` on the host, the three test suites' database URLs and the
   org-graph scripts, through `app/src/lib/config/compose-credentials.server.ts`
   (an exported variable wins; otherwise the root `.env` is read);
@@ -308,9 +309,10 @@ live — and recreate what read the old ones: `docker compose up -d
 have `DATABASE_URL`, `NEO4J_PASSWORD` or `TEST_DATABASE_URL` set explicitly in
 `app/.env` or your shell, those still win and must change too — nothing in the
 repo sets them. Use URL-safe characters (`openssl rand -hex 24`): the Postgres
-value is spliced into `postgresql://` URLs, and the gateway renderer refuses
-`& \ / @ : # ? %` and spaces rather than write a broken one. Neo4j 5 rejects
-passwords under 8 characters.
+value is spliced raw into the `app` container's `DATABASE_URL`, and nothing
+on a laptop checks it (`scripts/bootstrap-vps.sh` refuses one on a preview
+host). The gateway renderer refuses `&` and `\` in the Neo4j value rather than
+write a broken one. Neo4j 5 rejects passwords under 8 characters.
 
 **Locked out after failed logins?** Neo4j locks an account briefly after
 repeated authentication failures (`dbms.security.auth_lock_time`). Wait, then

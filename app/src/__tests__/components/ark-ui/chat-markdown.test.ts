@@ -414,7 +414,9 @@ describe('renderAssistantMarkdown: annotation reads the text the reader sees (#4
       ),
     )
 
-    expect(host.textContent).toBe(`if a <img src=//${ATTACKER}/x> b then lt wins`)
+    expect(host.querySelector('p')!.textContent).toBe(
+      `if a <img src=//${ATTACKER}/x> b then lt wins`,
+    )
     expect([...host.querySelectorAll('.graph-entity')].map((s) => s.textContent)).toEqual(['lt'])
     expect(host.querySelector('img')).toBeNull()
   })
@@ -423,7 +425,7 @@ describe('renderAssistantMarkdown: annotation reads the text the reader sees (#4
     const host = mount(renderAssistantMarkdown('AT&T reported.', new Map([['AT&T', ['n1']]]), []))
 
     expect(host.querySelector('.graph-entity')?.getAttribute('data-entity-name')).toBe('AT&T')
-    expect(host.textContent).toBe('AT&T reported.')
+    expect(host.querySelector('p')!.textContent).toBe('AT&T reported.')
   })
 
   it('leaves the text of a refused image alone: the placeholder is built after annotation', () => {
@@ -436,6 +438,14 @@ describe('renderAssistantMarkdown: annotation reads the text the reader sees (#4
     )
     expect(host.querySelector('.blocked-image .graph-entity')).toBeNull()
     expect(host.querySelectorAll('.graph-entity')).toHaveLength(1)
+  })
+
+  it('leaves a match the name lookup cannot resolve as text, rather than throwing', () => {
+    // The regex's `i` flag matches final sigma against σ; `toLowerCase` does not.
+    const host = mount(renderAssistantMarkdown('Aςb and Aσb', new Map([['Aσ', ['n1']]]), []))
+
+    expect([...host.querySelectorAll('.graph-entity')].map((s) => s.textContent)).toEqual(['Aσ'])
+    expect(host.querySelector('p')!.textContent).toBe('Aςb and Aσb')
   })
 
   it('skips code spans and code blocks, as before', () => {

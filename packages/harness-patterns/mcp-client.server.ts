@@ -10,7 +10,7 @@ import { currentRunFrame } from './run-frame.server'
 import { activeTransports, processTransports } from './tool-transport.server'
 import { markGatewayReachable, markGatewayUnreachable } from './gateway-health.server'
 import type { ToolCallResult, MCPToolDescription } from './types'
-import { isAgentWithheldTool } from './agent-withheld-tools'
+import { isAgentWithheldTool, withholdingFor, type Withholding } from './agent-withheld-tools'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
@@ -541,15 +541,16 @@ function isGatewayManagementTool(name: string): boolean {
 
 /** Warn once per process, not once per catalog read: `listTools` is not
  *  memoized, and one line is enough to say the gateway-side switch is off. One
- *  flag per list, because each names its own switch. */
+ *  flag per switch, because each warning names its own: the management tools'
+ *  flag, and one entry per {@link Withholding}. */
 let warnedGatewayManagementTools = false
-let warnedAgentWithheldTools = false
+const warnedWithholdings = new Set<Withholding>()
 
 /**
  * The gateway's catalog in this package's shape, minus its management tools
  * and the tools withheld from agents.
  *
- * A drop is LOGGED, once per list. The filter works either way, but a drop
+ * A drop is LOGGED, once per switch. The filter works either way, but a drop
  * means the gateway-side switch did not hold, and a second layer that silently
  * hides the first one failing would leave nobody knowing that only one layer is
  * left.
@@ -567,14 +568,18 @@ function gatewayToolDescriptions(
         'reads (/root/.docker/config.json in its container; a missing key means "enabled").',
     )
   }
-  const withheld = tools.filter((t) => isAgentWithheldTool(t.name)).map((t) => t.name)
-  if (withheld.length > 0 && !warnedAgentWithheldTools) {
-    warnedAgentWithheldTools = true
+  const withheld = new Map<Withholding, string[]>()
+  for (const { name } of tools) {
+    const why = withholdingFor(name)
+    if (why) withheld.set(why, [...(withheld.get(why) ?? []), name])
+  }
+  for (const [why, names] of withheld) {
+    if (warnedWithholdings.has(why)) continue
+    warnedWithholdings.add(why)
     console.warn(
-      `[mcp-client] the MCP gateway lists ${withheld.join(', ')}; it was left out of the tool ` +
-        'catalog, because agents are read-only against Neo4j (#403). To withhold it at the ' +
-        'server as well, set `read_only: true` for `neo4j-cypher` in the config the gateway ' +
-        'reads, and restart the gateway on it.',
+      `[mcp-client] the MCP gateway lists ${names.join(', ')}; ` +
+        `${names.length === 1 ? 'it was' : 'they were'} left out of the tool catalog, ` +
+        `because ${why.because}. ${why.serverSide}`,
     )
   }
   return tools
@@ -584,10 +589,11 @@ function gatewayToolDescriptions(
 
 export async function listTools(): Promise<MCPToolDescription[]> {
   // The gateway's own management tools (#412/#420) and the tools withheld from
-  // agents (#403: `write_neo4j_cypher`) are dropped from its half of the
-  // catalog (`gatewayToolDescriptions`). This is the one door every gateway
-  // catalog read goes through: `Tools()`, the adapters' description cache, and
-  // so the planner's catalog and every loop's allowlist.
+  // agents (#403: `write_neo4j_cypher`; #412: the `database-server` tools) are
+  // dropped from its half of the catalog (`gatewayToolDescriptions`). This is
+  // the one door every gateway catalog read goes through: `Tools()`, the
+  // adapters' description cache, and so the planner's catalog and every loop's
+  // allowlist.
   //
   // Process-registered tools (#110: the app-side per-user tools) are advertised
   // alongside the gateway's. They do not run on the gateway, so they stay

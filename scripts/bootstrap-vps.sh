@@ -1132,10 +1132,10 @@ stage_checkout() {
   ok "deploying $(git -C "$APP_DIR" log -1 --format='%h %s' "$sha")"
 
   # docs/PREVIEW.md §3a, verbatim: exactly the overlay's five servers. The
-  # tracked file is the DEVELOPMENT set (redis, database-server, filesystem,
-  # playwright) — harmless behind the overlay's --servers allow-list, but the
-  # file and the allow-list should say the same thing. No literal password:
-  # the `mcp-config` service fills the placeholder from .env.
+  # tracked file is the DEVELOPMENT set (redis, filesystem, playwright) —
+  # harmless behind the overlay's --servers allow-list, but the file and the
+  # allow-list should say the same thing. No literal password: the
+  # `mcp-config` service fills the placeholder from .env.
   if put_file "$APP_DIR/configs/mcp-config.yaml" 0644 "$user:$user" <<'EOF'; then :; fi
 # /opt/hames/configs/mcp-config.yaml — written by scripts/bootstrap-vps.sh
 # from docs/PREVIEW.md §3a. Deliberately NOT the tracked development set: these

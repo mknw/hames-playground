@@ -119,11 +119,13 @@ prints the path of the checkout it ran in: its likeliest reader is an agent in a
 lane, and a line carrying that lane's own path would be accepted if pasted.
 
 **The owner's one-time change.** Add one line to `app/.env` in your own
-checkout. The value is that checkout's absolute path. A relative value is
-refused, because it would resolve against whichever checkout the run is in:
+checkout. The value is the absolute path of your local checkout directory,
+whatever that directory is named. It is not the repository's name. A relative
+value is refused, because it would resolve against whichever checkout the run
+is in:
 
 ```bash
-HAMES_TEST_ALLOW_LOCAL_DB='/Users/<you>/Code/kg-agent'
+HAMES_TEST_ALLOW_LOCAL_DB='/absolute/path/to/your/hames-playground-checkout'
 ```
 
 It is a path rather than `1` because a flag would travel. Orca copies

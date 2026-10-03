@@ -15,8 +15,10 @@
  * config file: 9 servers / 134 tools with the flag, 5 servers / 17 tools with
  * the allow-list. Reintroducing the flag, or quietly widening the list, is
  * therefore a change that reads like nothing and reopens a cross-user read of
- * every colleague's Data Stash uploads (`redis`) and arbitrary SQL over
- * `conversations.context` (`database-server`).
+ * every colleague's Data Stash uploads (`redis`). `database-server` (arbitrary
+ * SQL over the app's own Postgres) is no longer in the catalog at all (#412,
+ * `config/no-agent-postgres.test.ts`); it stays in FORBIDDEN below so a catalog
+ * that regains it still cannot reach the preview's allow-list.
  *
  * Source scan rather than a render: `docker compose config` is not available in
  * CI, and the property being pinned is a property of the tracked file.
@@ -35,7 +37,8 @@ const OVERLAY = resolve(process.cwd(), '../docker-compose.prod.yaml')
 /** Exactly the servers docs/PREVIEW.md §3a enumerates, in the overlay's order. */
 const ALLOWED = ['neo4j-cypher', 'fetch', 'web_search', 'context7', 'memory']
 
-/** Enabled in the base compose file, and deliberately absent from the preview. */
+/** Enabled in the base compose file (or, for `database-server`, once was), and
+ *  deliberately absent from the preview. */
 const FORBIDDEN = ['redis', 'database-server', 'rust-mcp-filesystem', 'playwright', 'github']
 
 function gatewayCommand(): string[] {

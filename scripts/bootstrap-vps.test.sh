@@ -482,6 +482,8 @@ expect_problem "endpoint without /v1" bash -c "printf \"VERDA_INFERENCE_ENDPOINT
 expect_problem "VITE_DEV_BYPASS_AUTH present" bash -c "echo \"VITE_DEV_BYPASS_AUTH='false'\" >>'$good'"
 expect_problem "STASH_DIRECT_REDIS unset" sed -i "/^STASH_DIRECT_REDIS=/d" "$good"
 expect_problem "laptop compose file" sed -i "s/^COMPOSE_FILE=.*/COMPOSE_FILE=docker-compose.yaml/" "$good"
+expect_problem "URL-unsafe POSTGRES_PASSWORD (@)" sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD='a@b'|" "$good"
+expect_problem "URL-unsafe POSTGRES_PASSWORD (/)" sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD='a/b'|" "$good"
 
 # ------------------------------------------------------------ 6. escrow
 mkdir -p "$tmproot/x/state"

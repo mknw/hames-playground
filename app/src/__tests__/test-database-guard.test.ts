@@ -18,6 +18,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   symlinkSync,
@@ -274,6 +275,34 @@ describe('skipWithoutDatabase: what a DB-backed test does with no database', () 
     const ci = parse(readFileSync(path.join(repo, '.github/workflows/ci.yml'), 'utf8')) as {
       jobs: Record<string, { env?: Record<string, string> }>
     }
-    expect(ci.jobs.postgres.env?.[REQUIRE_DB]).toBeTruthy()
+    expect(ci.jobs.postgres.env?.[REQUIRE_DB]).toBe('1')
+  })
+
+  it('reads the variable from the process environment by default', () => {
+    vi.stubEnv(REQUIRE_DB, '1')
+    try {
+      expect(() => skipWithoutDatabase(ctx(), false)).toThrow(REQUIRE_DB)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('is the only way a test file on the real database client skips', () => {
+    const src = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+    const dbFiles = readdirSync(src, { recursive: true, encoding: 'utf8' })
+      .filter((f) => /(^|\/)__tests__\/.*\.(test|spec)\.tsx?$/.test(f))
+      .map((f) => ({ f, s: readFileSync(path.join(src, f), 'utf8') }))
+      .filter(
+        ({ s }) =>
+          /db\/client\.server'/.test(s) && !/vi\.mock\(\s*'[^']*db\/client\.server'/.test(s),
+      )
+    // The ten today, so a clean pass below is not "scanned nothing".
+    expect(dbFiles.length).toBeGreaterThanOrEqual(10)
+    for (const { f, s } of dbFiles) {
+      expect(s, f).toContain('skipWithoutDatabase(ctx, dbAvailable)')
+      expect(s, f).not.toMatch(
+        /\b(?:it|test|describe)\.(?:skip|skipIf|runIf|todo)\b|ctx\.skip\(|\bit\(.*\n\s*if \(!dbAvailable\) return/,
+      )
+    }
   })
 })

@@ -2,9 +2,11 @@
  * The `tool_args` double-encoding failure class (#145), closed at the parse
  * side for the shapes that are recoverable without guessing.
  *
- * The anchor is the real payload from `.harness-logs/sandbox-tool-recovery.json`
- * (event `ev-tey7ez`, `flavour-office-loop`), carried verbatim in
- * `fixtures/sandbox-edit-unescaped-quotes.json`. Every assertion here fails
+ * The anchor is `fixtures/sandbox-edit-unescaped-quotes.json`, a SYNTHETIC
+ * reconstruction of the incident captured in `.harness-logs/sandbox-tool-recovery.json`
+ * (event `ev-tey7ez`, `flavour-office-loop`): the same failure class, size class
+ * and quote counts, and none of the captured content, which is not public.
+ * Every assertion here fails
  * against `parseUnescapedContent`'s absence, and the decline cases fail against
  * a version of it that guesses instead of declining — the two mutations this
  * file exists to catch.
@@ -15,7 +17,7 @@ import { repairJson, repairJsonTracked } from '@hames-ai/harness-patterns/json-r
 import incident from './fixtures/sandbox-edit-unescaped-quotes.json'
 
 describe('repairJson — string content that was not escaped', () => {
-  describe('the captured sandbox_edit incident', () => {
+  describe('the sandbox_edit incident (synthetic reconstruction)', () => {
     it('is the shape the analysis claims: strict JSON rejects it mid-string, and it is not a truncation', () => {
       // Pins the premise the whole fix rests on. If this ever stops holding,
       // the fixture was reformatted and every assertion below is testing
@@ -31,11 +33,9 @@ describe('repairJson — string content that was not escaped', () => {
         edits: { oldText: string; newText: string }[]
       }
 
-      expect(args.path).toBe('/work/build_model.py')
+      expect(args.path).toBe('/work/build_report.py')
       expect(args.edits).toHaveLength(1)
-      expect(args.edits[0].oldText).toContain(
-        "wb.save('/work/out/AI_Transformation_Business_Model.xlsx')",
-      )
+      expect(args.edits[0].oldText).toContain("wb.save('/work/out/quarterly_report.xlsx')")
     })
 
     it('restores the Excel formulas verbatim — the quotes that broke the parse are back as content', () => {
@@ -47,12 +47,12 @@ describe('repairJson — string content that was not escaped', () => {
         .edits[0]
 
       expect(newText).toContain(
-        `('Total Revenue (from Revenue Model, annual)', "='Revenue Model'!N"`,
+        `('Units sold (from Monthly Totals, annual)', "='Monthly Totals'!N" + str(total_row))`,
       )
-      expect(newText).toContain(`"*'Cost Structure'!B" + str(var_start+1)`)
+      expect(newText).toContain(`"*'Monthly Totals'!B" + str(total_row)`)
       // The five sites the model DID escape correctly must survive unchanged
       // alongside the 33 it did not.
-      expect(newText).toContain(`'Key Resources': "Consultant's AI/operations expertise`)
+      expect(newText).toContain(`'Notes': "Owner's estimate, revise each quarter"`)
       expect(newText.trimEnd().endsWith("print('all sheets saved')")).toBe(true)
     })
 

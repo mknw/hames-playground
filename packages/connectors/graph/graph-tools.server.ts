@@ -961,7 +961,7 @@ export const GRAPH_SHARED_VIA: readonly GraphSharedVia[] = ['email', 'teams', 'l
 export interface GraphSharedFile {
   /** For an email attachment this is the true filename recovered from the
    *  message, which carries the extension the insights title drops (measured
-   *  2026-08-03: 14 of 15 attachment rows, e.g. "20260802-07346747"). */
+   *  2026-08-03: 14 of 15 attachment rows, e.g. "20260101-00000001"). */
   name: string | null
   /** "file" (a driveItem — carries the handoff pair) or "attachment" (an email
    *  attachment — lives in a mailbox, so there are no drive ids to hand on). */
@@ -1098,8 +1098,8 @@ function sharedAt(r: GraphSharedFile): number {
 /**
  * Reject-don't-drop for a narrowing string filter (#314). A filter the model
  * sent in a wrong shape used to degrade to "no filter" and the tool answered
- * about EVERYONE — e.g. `person: ["Thibault"]` returned the newest attachment
- * mail to any recipient, narrated as "the files you sent Thibault". Same rule
+ * about EVERYONE — e.g. `person: ["Adele"]` returned the newest attachment
+ * mail to any recipient, narrated as files the user had sent that person. Same rule
  * as the `since` date args and `via`: refuse loudly instead of silently
  * widening. `undefined`/`null` mean absent (models send explicit nulls for
  * "unspecified"); anything else non-string is refused.
@@ -1916,7 +1916,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
         person: {
           type: 'string',
           description:
-            'Only exchanges with this person (name or email), e.g. "Thibault". ' +
+            'Only exchanges with this person (name or email), e.g. "Adele". ' +
             'Matches recipients for sent mail, the sender for received mail.',
         },
         direction: {

@@ -145,7 +145,7 @@ class ControllerAction {
   // Required, it cost a finished answer. The turn log can only ever demonstrate
   // NON-final actions — the loop breaks before pushing a final one — so every
   // example the model sees pairs `status` with a tool call it is about to make
-  // ("Searching for files related to TraceFrom project..."). On the terminal
+  // ("Searching for files related to the project..."). On the terminal
   // Return turn there is no call and no progress to report, so the field has no
   // natural filler: observed live as a structurally perfect action (valid JSON,
   // 33 correctly-placed escapes, a 900-char composed answer) that simply omitted

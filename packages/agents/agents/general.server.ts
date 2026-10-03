@@ -72,8 +72,8 @@ async function createPatterns(
     // Cross-namespace work needs more room than a single-route loop: the
     // plan is typically 2-6 steps and a step can take more than one call.
     //
-    // **12, raised from 8 on evidence (#269).** A captured run —
-    // "find the last excel I edited and return a docx report on it" — spent
+    // **12, raised from 8 on evidence (#269).** A captured run — asked to turn
+    // one of the person's recent spreadsheets into a Word summary — spent
     // all 8 rounds and lost the deliverable: 12 tool calls with NO repeated
     // (tool, args) pair, a new fact on every round, and the 8th still
     // recovering from a filesystem `Permission denied`. It was not spinning,

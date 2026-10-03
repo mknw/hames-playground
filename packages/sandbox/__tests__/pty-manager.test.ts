@@ -350,6 +350,34 @@ describe('PtyManager — lifetime', () => {
     expect(mocks.releaseMock).toHaveBeenCalledWith(attachment) // VM hold released
   })
 
+  it('closes a shell nobody ever attached to, releasing its container', async () => {
+    // The terminal route starts the shell on a POST and attaches on a later
+    // GET (#429). A tab closed between the two never attaches; without an
+    // idle clock from the spawn, that shell held its VM until a restart.
+    const mgr = new PtyManager()
+    await mgr.ensure('s1')
+    const term = lastPty()
+
+    vi.advanceTimersByTime(4 * 60_000)
+    expect(mgr.has('s1')).toBe(true)
+
+    vi.advanceTimersByTime(2 * 60_000)
+    expect(mgr.has('s1')).toBe(false)
+    expect(term.kill).toHaveBeenCalledTimes(1)
+    expect(mocks.releaseMock).toHaveBeenCalledWith(attachment)
+  })
+
+  it('keeps a fresh shell once a stream attaches within the idle window', async () => {
+    const mgr = new PtyManager()
+    await mgr.ensure('s1')
+    vi.advanceTimersByTime(60_000)
+    mgr.subscribe('s1', vi.fn()) // the stream GET arrived
+    vi.advanceTimersByTime(10 * 60_000)
+
+    expect(mgr.has('s1')).toBe(true)
+    expect(mocks.releaseMock).not.toHaveBeenCalled()
+  })
+
   it('cancels the idle close when the tab re-mounts in time', async () => {
     const mgr = new PtyManager()
     await mgr.ensure('s1')

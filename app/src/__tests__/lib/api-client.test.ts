@@ -17,6 +17,7 @@ import {
   getStashDocument,
   listStashDocuments,
   openChatStream,
+  openPtyStream,
   patchStashDocument,
   ptyStreamUrl,
   resizePty,
@@ -259,10 +260,41 @@ describe('api-client — sandbox PTY', () => {
     await expect(sendPtyInput('s1', 'x')).resolves.toBeUndefined()
   })
 
-  it('builds the EventSource URL, with the agent id only when there is one', () => {
-    expect(ptyStreamUrl('s 1')).toBe('/api/sandbox/pty/stream?sessionId=s%201')
-    expect(ptyStreamUrl('s1', 'sandbox/x')).toBe(
-      '/api/sandbox/pty/stream?sessionId=s1&agentId=sandbox%2Fx',
+  it('opens the terminal with a POST, never a GET, and hands back its ticket (#429)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ ticket: 't-1' }))
+
+    await expect(openPtyStream('s1')).resolves.toBe('t-1')
+    expect(lastCall()[0]).toBe(API.ptyStream)
+    expect(lastCall()[1]!.method).toBe('POST')
+    expect(lastBody()).toEqual({ sessionId: 's1' })
+  })
+
+  it('forwards the agent id only when there is one, so the server can hydrate /work', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ ticket: 't-1' }))
+    await openPtyStream('s1', 'sandbox/x')
+    expect(lastBody()).toEqual({ sessionId: 's1', agentId: 'sandbox/x' })
+  })
+
+  it("raises the server's reason when the terminal cannot be opened", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ error: 'failed to start sandbox terminal: docker not running' }, 500),
     )
+    await expect(openPtyStream('s1')).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 500,
+      message: 'failed to start sandbox terminal: docker not running',
+    })
+  })
+
+  it('raises a status-bearing message when the refusal has no JSON body', async () => {
+    fetchMock.mockResolvedValue(new Response('Cross-site request refused', { status: 403 }))
+    await expect(openPtyStream('s1')).rejects.toMatchObject({
+      status: 403,
+      message: 'the sandbox terminal could not be opened (403)',
+    })
+  })
+
+  it('builds the EventSource URL from the ticket alone', () => {
+    expect(ptyStreamUrl('a+b/c=')).toBe('/api/sandbox/pty/stream?ticket=a%2Bb%2Fc%3D')
   })
 })

@@ -696,7 +696,12 @@ export interface SimpleLoopConfig extends PatternConfig {
   /** Domain-specific few-shot examples rendered into the LoopController prompt.
    *  Each shot is a `(user, reasoning, tool, args)` tuple shown verbatim under
    *  an "EXAMPLES" section. Keep the list short (3-5) — the prompt grows with
-   *  every shot and is sent on every turn. */
+   *  every shot and is sent on every turn.
+   *
+   *  Filtered by the loop's allowlist before the controller sees them (#401):
+   *  a shot whose `tool` the loop would refuse is dropped, so one list can
+   *  serve a loop that holds a tool and one that does not. Shots of the
+   *  loop-control actions (`Return`, `expandPreviousResult`) always stay. */
   fewShots?: FewShot[]
   /** Hook to enrich/transform a tool result before the `tool_result` event is
    *  committed. See `OnToolResult`. */

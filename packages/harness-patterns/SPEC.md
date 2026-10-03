@@ -340,7 +340,7 @@ pre-1.0, strict→lenient later is free, lenient→strict is breaking.
 ```typescript
 const tools = await Tools({ namespaces: mcpNamespace }) // mcpNamespace: the app's catalog
 const tools = ToolsFrom(descriptions, { namespaces: mcpNamespace }) // options optional here
-tools.neo4j // ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema']
+tools.neo4j // ['read_neo4j_cypher', 'get_neo4j_schema'] — never 'write_neo4j_cypher' (below)
 tools.web // ['search', 'fetch', 'fetch_content']
 tools.graph // app-side, per-user (see below)
 tools.all // all tool names
@@ -430,6 +430,20 @@ once if the gateway lists them (#412, #420). They reconfigure the gateway
 rather than do work, and agents misread them: `mcp-exec` as a shell, `mcp-add`'s
 "added 0 tools" as a success.
 
+`write_neo4j_cypher` is never in that catalog either, whatever the gateway
+lists, and `listTools()` warns once when it does (#403). Agents are read-only
+against Neo4j, `general` included: the one writer is the memory hook (#419),
+through the app. The list (`AGENT_WITHHELD_TOOLS`, asked through
+`isAgentWithheldTool`, which also sees through a gateway prefix and a server
+namespace prefix) is enforced twice: `listTools()` drops it, and every loop's
+allowlist check (`simpleLoop` and `actorCritic`, singular and batched) refuses
+it, so no loop allowlist holds it — not a hand-written one, and not one widened
+by `dynamicToolAllowlist` or `dynamicToolPattern`. `callTool` is not touched,
+so a write the app issues by name is left alone. The list lives in core for
+now, beside the management-tool list; moving it to a host-registered list is an
+open follow-up, due before the next release. The repository's gateway config also ships `read_only: true`,
+which keeps the server from offering the tool at all.
+
 ### `simpleLoop(controller, tools, config?)`
 
 ReAct-style decide-execute loop. Calls BAML controller directly. A turn is
@@ -515,7 +529,13 @@ LLM benefits from seeing the canonical query shape (e.g., parameterized Cypher w
 `MERGE` semantics, bulk `UNWIND` patterns, idiomatic `toLower()` substring search).
 Keep the list short (3-5) — the prompt grows with every shot and is sent on every turn.
 See `packages/agents/agents/neo4j-fewshots.server.ts` for a worked example
-verified against the live Neo4j MCP.
+verified against the live Neo4j MCP. The loop filters the list by its allowlist
+before the controller sees it (#401): a shot whose `tool` the loop would refuse
+is dropped, because a model that copies it names a tool outside the allowlist and
+the loop spends a round on "Tool not allowed" (it ended the loop there before
+#437). Shots of `Return` and `expandPreviousResult`
+always stay. So the shipped Neo4j set, whose upsert example uses
+`write_neo4j_cypher`, shows a read-only loop only its two reads.
 
 **Hooks: `onToolResult`** (closes #7). Called between `callTool()` and the
 `tool_result` event being committed, so the hook can enrich or transform the tool's
@@ -1991,7 +2011,8 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── run-frame.server.ts     # THE run frame — one ALS scope per run holding all five slots (guard / transports / config / live / inference), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, the rest replace), activeRunFrame() THROWS outside a frame and currentRunFrame() is the soft read
 ├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? and an optional RunFrame; each OPENS the run frame (ruling Q17/D5), or joins the host's
 ├── tool-transport.server.ts # ToolTransport + registerTransport() (process, consulted after every scoped one) / activeTransports() (reads the run frame's `transports` slot); the difference between the two ways to supply one IS the containment invariant — there is no priority field and no argument that could express one
-├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE phases — scoped transports (innermost first) → process transports (registration order) → MCP gateway (terminal fallback, not a transport); leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element; drops the gateway's own management tools (`mcp-find`, `mcp-add`, `mcp-exec`, …) from the catalog (#412, #420)
+├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE phases — scoped transports (innermost first) → process transports (registration order) → MCP gateway (terminal fallback, not a transport); leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element; drops the gateway's own management tools (`mcp-find`, `mcp-add`, `mcp-exec`, …) from the catalog (#412, #420), and `write_neo4j_cypher`, which no agent holds (#403)
+├── agent-withheld-tools.ts # AGENT_WITHHELD_TOOLS + isAgentWithheldTool() — the tools no agent may hold (#403: `write_neo4j_cypher`), seen through a gateway or server-namespace prefix; read by listTools() (the catalog) and by simpleLoop/actorCritic (every allowlist check), never by callTool
 ├── compactBulkData.server.ts # compactBulkData(ctx, onPersist, { describe, describeBatch }) — the two describe fns are REQUIRED config (Lane A6)
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)
 ├── loop-recovery.server.ts # The two loops' shared recovery rule (#437): isRecoverableLLMFailure(), the feedback texts, trackLoopRecovery()

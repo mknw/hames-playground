@@ -195,7 +195,7 @@ All MCP configuration files are located in the `configs/` directory:
      username: neo4j
      password: ${NEO4J_PASSWORD} # filled from the root .env by `mcp-config`
      database: neo4j
-     read_only: false
+     read_only: true # agents are read-only against Neo4j (#403)
    ```
 
 2. **configs/custom-catalog.yaml**: Custom catalog definition with corrected environment variable mappings

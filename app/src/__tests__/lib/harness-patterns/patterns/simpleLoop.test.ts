@@ -105,7 +105,7 @@ describe('simpleLoop', () => {
     expect(pattern.config.patternId).toBe('limited-loop')
   })
 
-  it('passes config.fewShots through to the controller', async () => {
+  it('passes config.fewShots through to the controller when the loop holds their tools', async () => {
     const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
     const { createScope } = await import('@hames-ai/harness-patterns/context.server')
     const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
@@ -124,7 +124,9 @@ describe('simpleLoop', () => {
       },
     ]
 
-    const pattern = simpleLoop(mockController, ['Return'], {
+    // The allowlist holds the shot's tool: few-shots are filtered by it (#401),
+    // which `few-shots follow the allowlist` below pins.
+    const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
       patternId: 'shots-loop',
       fewShots,
     })
@@ -2496,5 +2498,96 @@ describe('simpleLoop execution', () => {
       const results = result.events.filter((e) => e.type === 'tool_result')
       expect(JSON.stringify(results.map((e) => e.data))).not.toContain('Tool not allowed')
     })
+  })
+})
+
+/**
+ * #401: a loop never demonstrates a tool it will refuse.
+ *
+ * The shipped Neo4j few-shots include a `write_neo4j_cypher` example. Once
+ * agents became read-only (#403) the write tool left every allowlist, and a
+ * controller that copied the example named a tool the loop refuses — the
+ * singular branch then spends a round on "Tool not allowed" (it ended the
+ * loop there before #437). The few-shots are
+ * filtered by the same predicate the call check uses, so the two cannot drift.
+ */
+describe('simpleLoop few-shots follow the allowlist (#401)', () => {
+  const read = { user: 'r', reasoning: 'r', tool: 'read_neo4j_cypher', args: '{}' }
+  const write = { user: 'w', reasoning: 'w', tool: 'write_neo4j_cypher', args: '{}' }
+  const schema = { user: 's', reasoning: 's', tool: 'get_neo4j_schema', args: '{}' }
+  const returns = { user: 'x', reasoning: 'x', tool: 'Return', args: 'done' }
+  const expand = { user: 'e', reasoning: 'e', tool: 'expandPreviousResult', args: 'ref:a' }
+  const sandbox = { user: 'b', reasoning: 'b', tool: 'sandbox_bash', args: '{}' }
+
+  const context = () => ({
+    sessionId: 'shots',
+    createdAt: Date.now(),
+    events: [
+      { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'q' } },
+    ],
+    status: 'running' as const,
+    data: {},
+    input: 'q',
+  })
+
+  /** Runs one loop whose controller answers Return at once, and returns the
+   *  few-shots the controller was handed on that call. */
+  async function shown(
+    tools: string[],
+    fewShots: (typeof read)[] | undefined,
+    frame: Parameters<typeof withRunFrame>[0] = {},
+  ) {
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
+    const controller = vi
+      .fn()
+      .mockResolvedValue({ action: mockFinalAction('done'), llmCall: undefined })
+    const pattern = simpleLoop(controller, tools, { patternId: 'shots', fewShots })
+    await withRunFrame(frame, () =>
+      pattern.fn(createScope('shots', {}), createEventView(context())),
+    )
+    expect(controller).toHaveBeenCalledTimes(1)
+    return (controller.mock.calls[0][0] as ControllerInput).fewShots
+  }
+
+  beforeEach(() => vi.clearAllMocks())
+
+  it('drops an example of a tool the allowlist does not hold, keeping the rest in order', async () => {
+    const fewShots = await shown(['read_neo4j_cypher', 'get_neo4j_schema'], [schema, write, read])
+    expect(fewShots).toEqual([schema, read])
+  })
+
+  it('keeps an example of every tool the allowlist does hold', async () => {
+    const writeFile = { user: 'f', reasoning: 'f', tool: 'write_file', args: '{}' }
+    const fewShots = await shown(['read_neo4j_cypher', 'write_file'], [read, writeFile])
+    expect(fewShots).toEqual([read, writeFile])
+  })
+
+  it('drops the Neo4j write example even when the allowlist names the tool (#403)', async () => {
+    // A tool withheld from every agent is not on any loop's allowlist, however
+    // the list was written — so its example is never shown either.
+    const fewShots = await shown(['read_neo4j_cypher', 'write_neo4j_cypher'], [read, write])
+    expect(fewShots).toEqual([read])
+  })
+
+  it('keeps Return and expandPreviousResult examples, which the loop always handles', async () => {
+    const fewShots = await shown(['read_neo4j_cypher'], [returns, write, expand])
+    expect(fewShots).toEqual([returns, expand])
+  })
+
+  it('keeps an example of a tool a scoped transport owns, as the call check does', async () => {
+    const transport = {
+      id: 'sandbox:shots',
+      ownsTool: (n: string) => n.startsWith('sandbox_'),
+      callTool: async () => ({ success: true, data: null }),
+      listTools: async () => [],
+    }
+    const fewShots = await shown([], [sandbox, write], { transports: [transport] })
+    expect(fewShots).toEqual([sandbox])
+  })
+
+  it('hands the controller no few-shots when the loop was given none', async () => {
+    expect(await shown(['read_neo4j_cypher'], undefined)).toBeUndefined()
   })
 })

@@ -1,6 +1,6 @@
 # withReferences: design record
 
-> **Status.** Design record written 2026-04-30 and implemented in [PR #34](https://github.com/mknw/hames-playground/pull/34) ([issue #30](https://github.com/mknw/hames-playground/issues/30)); the implementation now lives in [`packages/harness-patterns/`](../../packages/harness-patterns/), and [§14](#14-what-shipped-differently) lists where it departs from this design. The motivating case writes fetched data into Neo4j, which works only when writes are enabled for the Neo4j tool server (`read_only: false` under `neo4j-cypher` in [`configs/mcp-config.yaml`](../../configs/mcp-config.yaml)).
+> **Status.** Design record written 2026-04-30 and implemented in [PR #34](https://github.com/mknw/hames-playground/pull/34) ([issue #30](https://github.com/mknw/hames-playground/issues/30)); the implementation now lives in [`packages/harness-patterns/`](../../packages/harness-patterns/), and [§14](#14-what-shipped-differently) lists where it departs from this design. The motivating case writes fetched data into Neo4j. No agent can do that since 2026-10-03: agents are read-only against Neo4j ([#403](https://github.com/mknw/hames-playground/issues/403)), so the case is history here, and the [walkthrough](./withReferences-tutorial.md) carries data across turns into a Neo4j read instead. The mechanism is the same for a read.
 
 This page records why `withReferences` exists and how it was meant to work. The
 reference for the shipped wrapper is the

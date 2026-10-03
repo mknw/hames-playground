@@ -78,7 +78,7 @@ export function registerToolNamespaces(resolver: NamespaceResolver): () => void 
  *   map. See `ToolsOptions`.
  * @example
  * const tools = await Tools({ namespaces: mcpNamespace })
- * tools.neo4j  // ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema']
+ * tools.neo4j  // ['read_neo4j_cypher', 'get_neo4j_schema'] (listTools withholds the write tool, #403)
  * tools.web    // ['search', 'fetch']
  * tools.all    // all tool names
  */

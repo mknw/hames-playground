@@ -13,6 +13,13 @@
  *  3. read · degree aggregation       (count(r), ORDER BY DESC, LIMIT)
  *  4. write · create-and-connect      (MATCH parent, MERGE child, MERGE rel)
  *  5. write · bulk UNWIND upsert      (parameterized batch with ON CREATE / ON MATCH)
+ *
+ * The shipped agents never see 4 or 5. Agents are read-only against Neo4j
+ * (owner decision 2026-10-03, #403): `write_neo4j_cypher` is in no agent's
+ * allowlist, and `simpleLoop` drops every example of a tool its allowlist does
+ * not hold (#401). The write examples stay here for a loop that does hold the
+ * tool, because the filter, not this list, is what keeps them away from one
+ * that does not.
  */
 
 import type { FewShot } from '@hames-ai/harness-patterns'
@@ -116,9 +123,36 @@ export const NEO4J_FEW_SHOTS: FewShot[] = [
  *  by the substring-search shape (the controller can drop the OR clause when
  *  it wants an exact match), so we drop it in favor of the more advanced bulk
  *  write — which is the one the LLM is most likely to under-utilize without
- *  an explicit example. */
+ *  an explicit example.
+ *
+ *  Under the shipped read-only posture (#403) a controller is shown only the
+ *  two reads: `simpleLoop` filters the upsert out, because no agent's
+ *  allowlist holds `write_neo4j_cypher` (#401). */
 export const NEO4J_FEW_SHOTS_DEFAULT: FewShot[] = [
   NEO4J_FEW_SHOTS[1], // substring search        (read · filter)
   NEO4J_FEW_SHOTS[2], // degree aggregation      (read · aggregate)
   NEO4J_FEW_SHOTS[NEO4J_FEW_SHOTS.length - 1], // bulk UNWIND upsert (write · batch)
 ]
+
+/**
+ * Controller context for every loop that reaches the Neo4j graph: that graph
+ * is read-only for it (#403), and a request to change it is answered, not
+ * attempted.
+ *
+ * Without it a write-shaped question ("add these to the graph") reaches a
+ * controller that holds `read_neo4j_cypher` and `get_neo4j_schema` and nothing
+ * else, and is told nothing about why. The two ways it can then go wrong both
+ * end the loop on an error rather than an answer: it names a write tool it
+ * remembers ("Tool not allowed"), or it sends a write clause through the read
+ * tool, which the server refuses. This tells it the third way, and the one that
+ * is right: say it can only read.
+ *
+ * Passed as `createLoopControllerAdapter`'s context prefix, so it renders in
+ * the prompt's cached, agent-static tier beside the graph schema.
+ */
+export const NEO4J_READ_ONLY_CONTEXT =
+  'The Neo4j knowledge graph is READ-ONLY for you. None of your tools can create, ' +
+  'change or delete anything in it, and read_neo4j_cypher refuses write queries ' +
+  '(CREATE, MERGE, SET, DELETE and the like). If the request asks you to add, change ' +
+  'or delete something in the graph, do not attempt it: Return straight away and say ' +
+  'that you can only read the graph.'

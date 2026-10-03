@@ -515,6 +515,41 @@ export interface RepairedJson {
 
 const LENIENT: JsonRepairNote = { strategy: 'lenient-tokens' }
 
+/** A whole value that is ONE double-quoted string: every interior `"` escaped. */
+const ONE_QUOTED_STRING = /^"(?:[^"\\]|\\[\s\S])*"$/
+
+/**
+ * Something shaped like the start of another object member: a key after a
+ * separator (`, b:`), or a quoted key, which also catches a member whose
+ * separator is missing (`"x" "b": 1`).
+ */
+const MEMBER_START = /,\s*[a-zA-Z_$][\w$-]*\s*:|"[^"]*"\s*:|'[^']*'\s*:/
+
+/**
+ * Whether the text the last-resort handler would take as ONE value holds a
+ * second member (#408). The handler's regex only checks that the input BEGINS
+ * with one key, so a multi-key object malformed anywhere — `{a: [x,,y], b: 1}`,
+ * `{"a": "x "y" z", "b": }` — came back as `{a: "[x,,y], b: 1"}`: well-formed,
+ * tagged `lenient-tokens`, and wrong, with the tool running on its first
+ * argument holding the text of the others.
+ *
+ * The answer to a member-shaped run is to DECLINE, not to split there: the
+ * text that made every strategy above fail is still in the input, and a guess
+ * at where it ends is the same silent mis-coercion #217(b) is about. A declined
+ * repair throws, and the loop patterns turn that into an `Invalid tool_args
+ * JSON` turn the model retries.
+ *
+ * Conservative on purpose, so it costs some inputs the old handler got right:
+ * a label predicate after a comma (`RETURN a, b:Person`) or a quoted word
+ * followed by a colon (`search "error": x`) reads as a member and now throws.
+ * A member-shaped run inside a value that is one cleanly quoted string
+ * (`"RETURN n, n:Person"`) is content, because such a string cannot hold a
+ * second member — that is the one shape exempted.
+ */
+function holdsSiblingMember(value: string): boolean {
+  return !ONE_QUOTED_STRING.test(value) && MEMBER_START.test(value)
+}
+
 /**
  * Parse a JSON string leniently, repairing common LLM mistakes, and report
  * WHICH repair (if any) produced the value.
@@ -569,7 +604,8 @@ export function repairJsonTracked(raw: string): RepairedJson {
   }
 
   // Park bracketed values ({a: [X], b: 5}) before the value regex runs — it
-  // skips them, and the last-resort handler below would absorb their siblings.
+  // skips them, and the input would otherwise reach the last-resort handler
+  // below, which declines a multi-member object (#408) rather than repair it.
   const parked: string[] = []
   s = parkBracketedValues(s, parked)
 
@@ -599,13 +635,14 @@ export function repairJsonTracked(raw: string): RepairedJson {
   //   {query: MATCH (c)-[r]-() RETURN c.name, count(r)}
   // We extract the key, then take everything between the first colon and the
   // final closing brace as a single string value. Only safe when the value has
-  // no nested `{`/`}` — bail otherwise.
+  // no nested `{`/`}`, and when nothing in it looks like a second member — bail
+  // otherwise, and the input throws (see `holdsSiblingMember`, #408).
   const original = raw.trim()
   const singleKey = original.match(/^\{\s*"?([a-zA-Z_$][\w$]*)"?\s*:\s*([\s\S]+?)\s*\}\s*$/)
   if (singleKey) {
     const [, key, rawValue] = singleKey
     const value = rawValue.trim()
-    if (!value.includes('{') && !value.includes('}')) {
+    if (!value.includes('{') && !value.includes('}') && !holdsSiblingMember(value)) {
       // Strip optional surrounding quotes the LLM may or may not have added.
       const unquoted = value.replace(/^['"`]([\s\S]*)['"`]$/, '$1')
       return { args: { [key]: unquoted }, repair: LENIENT }

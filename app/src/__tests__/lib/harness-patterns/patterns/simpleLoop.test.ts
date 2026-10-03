@@ -2513,9 +2513,17 @@ describe('simpleLoop few-shots follow the allowlist (#401)', () => {
     expect(fewShots).toEqual([schema, read])
   })
 
-  it('keeps the write example for a loop that does hold the write tool', async () => {
+  it('keeps an example of every tool the allowlist does hold', async () => {
+    const writeFile = { user: 'f', reasoning: 'f', tool: 'write_file', args: '{}' }
+    const fewShots = await shown(['read_neo4j_cypher', 'write_file'], [read, writeFile])
+    expect(fewShots).toEqual([read, writeFile])
+  })
+
+  it('drops the Neo4j write example even when the allowlist names the tool (#403)', async () => {
+    // A tool withheld from every agent is not on any loop's allowlist, however
+    // the list was written — so its example is never shown either.
     const fewShots = await shown(['read_neo4j_cypher', 'write_neo4j_cypher'], [read, write])
-    expect(fewShots).toEqual([read, write])
+    expect(fewShots).toEqual([read])
   })
 
   it('keeps Return and expandPreviousResult examples, which the loop always handles', async () => {

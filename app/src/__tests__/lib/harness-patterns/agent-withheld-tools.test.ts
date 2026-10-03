@@ -23,6 +23,7 @@ import '../../../lib/inference/config.server'
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
+import type { ControllerInput } from '@hames-ai/harness-patterns/types'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -58,6 +59,10 @@ const WRITE = 'write_neo4j_cypher'
 /** The same tool behind a gateway that prefixes names, the form `inferServer`
  *  already reads; a prefix must not hand the tool back. */
 const PREFIXED_WRITE = `mcp__hames-mcp-gateway__${WRITE}`
+/** The same tool from a server started with `NEO4J_NAMESPACE=graph2`: the pinned
+ *  `mcp-neo4j-cypher` 0.5.0 names its tools `<namespace>-<tool>`, which is how
+ *  a second, namespaced Neo4j server would arrive. */
+const NAMESPACED_WRITE = `graph2-${WRITE}`
 
 /** What an agent may keep: the two Neo4j reads and the other catalog servers. */
 const KEPT = [
@@ -73,7 +78,13 @@ const KEPT = [
 
 /** A gateway serving `neo4j-cypher` with `read_only: false` — the regression the
  *  second layer exists for — interleaved the way the live listing is. */
-const READ_WRITE_LISTING = [...KEPT.slice(0, 2), WRITE, ...KEPT.slice(2), PREFIXED_WRITE]
+const READ_WRITE_LISTING = [
+  ...KEPT.slice(0, 2),
+  WRITE,
+  ...KEPT.slice(2),
+  PREFIXED_WRITE,
+  NAMESPACED_WRITE,
+]
 
 function gatewayListing(names: string[]) {
   return { tools: names.map((name) => ({ name, description: `${name} tool`, inputSchema: {} })) }
@@ -106,7 +117,19 @@ describe('the Neo4j write tool is withheld from agents', () => {
 
     expect(names).not.toContain(WRITE)
     expect(names).not.toContain(PREFIXED_WRITE)
+    expect(names).not.toContain(NAMESPACED_WRITE)
     expect(names).toEqual(KEPT)
+  })
+
+  it('is matched by name, not by substring: a tool merely ending in the same words is kept', async () => {
+    const { isAgentWithheldTool } = await import('@hames-ai/harness-patterns/agent-withheld-tools')
+
+    for (const name of [WRITE, PREFIXED_WRITE, NAMESPACED_WRITE]) {
+      expect(isAgentWithheldTool(name), name).toBe(true)
+    }
+    for (const name of ['read_neo4j_cypher', 'rewrite_neo4j_cypher', `${WRITE}_audit`, 'search']) {
+      expect(isAgentWithheldTool(name), name).toBe(false)
+    }
   })
 
   it('is dropped on the pool-rebuild path as well', async () => {
@@ -186,6 +209,7 @@ describe('the Neo4j write tool is withheld from agents', () => {
     const drops = warn.mock.calls.filter((c) => String(c[0]).includes(WRITE))
     expect(drops).toHaveLength(1)
     expect(drops[0][0]).toContain(PREFIXED_WRITE)
+    expect(drops[0][0]).toContain(NAMESPACED_WRITE)
     expect(drops[0][0]).toContain('read_only: true')
     expect(drops[0][0]).toContain('restart the gateway')
   })
@@ -215,5 +239,222 @@ describe('the Neo4j write tool is withheld from agents', () => {
       arguments: { query: 'MERGE (n:Probe) RETURN n' },
     })
     expect(result).toEqual({ success: true, data: { nodes_created: 1 } })
+  })
+})
+
+/**
+ * The review's MEDIUM on #434: the catalog drop covers every allowlist built
+ * from `Tools()`, but a loop handed a list written by hand used to accept the
+ * tool — and show its few-shot. The loops' own allowlist check now refuses it,
+ * so "no loop allowlist holds it" is true of every loop, not only the shipped
+ * agents'. The gateway here serves the tool and would execute it if asked.
+ */
+describe('a loop whose allowlist names the write tool still cannot call it', () => {
+  const context = () => ({
+    sessionId: 'hand-written',
+    createdAt: Date.now(),
+    events: [
+      {
+        type: 'user_message' as const,
+        ts: 1,
+        patternId: 'harness',
+        data: { content: 'Add several concepts at once: Vectors, Embeddings.' },
+      },
+    ],
+    status: 'running' as const,
+    data: {},
+    input: 'Add several concepts at once: Vectors, Embeddings.',
+  })
+
+  const action = (tool_name: string, tool_args: string, extra: object = {}) => ({
+    reasoning: 'r',
+    tool_name,
+    tool_args,
+    status: 'Working',
+    is_final: false,
+    ...extra,
+  })
+  const finish = { ...action('Return', 'done'), is_final: true }
+
+  /** What the gateway was actually asked to run. */
+  const sentToGateway = () => mockCallTool.mock.calls.map(([c]) => (c as { name: string }).name)
+
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    mockCallTool.mockResolvedValue({ content: [{ type: 'text', text: '[{"n":1}]' }] })
+  })
+
+  it('simpleLoop: shows no write example, advertises no write tool, and refuses the call', async () => {
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+    const { NEO4J_FEW_SHOTS_DEFAULT } =
+      await import('@hames-ai/agents/agents/neo4j-fewshots.server')
+    const upsert = NEO4J_FEW_SHOTS_DEFAULT.find((shot) => shot.tool === WRITE)!
+
+    // A controller that copies the write example — the #401 habit — and names
+    // the tool even when it is not shown one.
+    const controller = vi.fn(async () => ({
+      action: action(WRITE, upsert.args),
+      llmCall: undefined,
+    }))
+    const pattern = simpleLoop(controller, ['read_neo4j_cypher', WRITE], {
+      patternId: 'hand-written',
+      fewShots: NEO4J_FEW_SHOTS_DEFAULT,
+    })
+
+    const result = await withRunFrame({}, () =>
+      pattern.fn(createScope('hand-written', {}), createEventView(context())),
+    )
+
+    const input = (controller.mock.calls[0] as unknown as [ControllerInput])[0]
+    expect(input.tools).toEqual(['read_neo4j_cypher'])
+    expect(input.fewShots?.map((shot) => shot.tool)).not.toContain(WRITE)
+    expect(sentToGateway()).not.toContain(WRITE)
+    const errors = result.events.filter((e) => e.type === 'error')
+    expect(errors).toHaveLength(1)
+    expect(String((errors[0].data as { error: string }).error)).toBe(
+      `Tool not allowed: ${WRITE} (withheld from every agent). Allowed: read_neo4j_cypher`,
+    )
+  })
+
+  it('simpleLoop: a scoped transport that claims the name cannot hand it back either', async () => {
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+
+    const transportCall = vi.fn(async () => ({ success: true, data: { nodes_created: 1 } }))
+    const transport = {
+      id: 'scoped:claims-write',
+      ownsTool: (name: string) => name === WRITE,
+      callTool: transportCall,
+      listTools: async () => [],
+    }
+    const controller = vi.fn(async () => ({
+      action: action(WRITE, '{"query":"MERGE (n)"}'),
+      llmCall: undefined,
+    }))
+    const pattern = simpleLoop(controller, ['read_neo4j_cypher'], { patternId: 'scoped-claim' })
+
+    const result = await withRunFrame({ transports: [transport] }, () =>
+      pattern.fn(createScope('scoped-claim', {}), createEventView(context())),
+    )
+
+    expect(transportCall).not.toHaveBeenCalled()
+    expect(sentToGateway()).not.toContain(WRITE)
+    const errors = result.events.filter((e) => e.type === 'error')
+    expect(String((errors[0]?.data as { error?: string })?.error)).toContain(
+      'withheld from every agent',
+    )
+  })
+
+  it('simpleLoop: refuses it inside a multi-call turn and still runs the read beside it', async () => {
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+
+    const controller = vi
+      .fn()
+      .mockResolvedValueOnce({
+        action: action('read_neo4j_cypher', '{"query":"MATCH (n) RETURN n"}', {
+          additional_calls: [{ tool_name: PREFIXED_WRITE, tool_args: '{"query":"MERGE (n)"}' }],
+        }),
+        llmCall: undefined,
+      })
+      .mockResolvedValueOnce({ action: finish, llmCall: undefined })
+    const pattern = simpleLoop(controller, ['read_neo4j_cypher', PREFIXED_WRITE], {
+      patternId: 'hand-written-batch',
+    })
+
+    const result = await withRunFrame({}, () =>
+      pattern.fn(createScope('hand-written-batch', {}), createEventView(context())),
+    )
+
+    expect(sentToGateway()).toEqual(['read_neo4j_cypher'])
+    const refused = result.events
+      .filter((e) => e.type === 'tool_result')
+      .map((e) => e.data as { tool: string; success: boolean; error?: string })
+      .find((d) => d.tool === PREFIXED_WRITE)
+    expect(refused?.success).toBe(false)
+    expect(refused?.error).toContain('withheld from every agent')
+  })
+
+  it.each<[string, { tools: string[]; config?: Record<string, unknown> }]>([
+    ['a hand-written list', { tools: [WRITE] }],
+    [
+      'a dynamicToolPattern',
+      { tools: ['read_neo4j_cypher'], config: { dynamicToolPattern: /neo4j/ } },
+    ],
+    [
+      'a dynamicToolAllowlist',
+      { tools: [], config: { dynamicToolAllowlist: async () => [WRITE] } },
+    ],
+  ])('actorCritic: %s cannot admit it', async (_label, { tools, config }) => {
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+
+    const actor = vi.fn(async () => ({
+      action: action(WRITE, '{"query":"MERGE (n:Probe)"}'),
+      llmCall: undefined,
+    }))
+    const critic = vi.fn(async () => ({
+      result: { is_sufficient: true, explanation: 'ok' },
+      llmCall: undefined,
+    }))
+    const pattern = actorCritic(actor, critic, tools, {
+      patternId: 'hand-written-actor',
+      maxRetries: 1,
+      ...config,
+    })
+
+    const result = await withRunFrame({}, () =>
+      pattern.fn(createScope('hand-written-actor', {}), createEventView(context())),
+    )
+
+    expect(actor).toHaveBeenCalled()
+    expect(sentToGateway()).not.toContain(WRITE)
+    const refusals = result.events
+      .filter((e) => e.type === 'error')
+      .map((e) => String((e.data as { error: string }).error))
+    expect(refusals).toContain(`Tool not allowed: ${WRITE} (withheld from every agent)`)
+  })
+
+  it('actorCritic: refuses it inside a multi-call attempt and still runs the read beside it', async () => {
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+
+    const actor = vi.fn(async () => ({
+      action: action('read_neo4j_cypher', '{"query":"MATCH (n) RETURN n"}', {
+        additional_calls: [{ tool_name: WRITE, tool_args: '{"query":"MERGE (n)"}' }],
+      }),
+      llmCall: undefined,
+    }))
+    const critic = vi.fn(async () => ({
+      result: { is_sufficient: true, explanation: 'ok' },
+      llmCall: undefined,
+    }))
+    const pattern = actorCritic(actor, critic, ['read_neo4j_cypher', WRITE], {
+      patternId: 'hand-written-actor-batch',
+      maxRetries: 1,
+    })
+
+    const result = await withRunFrame({}, () =>
+      pattern.fn(createScope('hand-written-actor-batch', {}), createEventView(context())),
+    )
+
+    expect(sentToGateway()).toEqual(['read_neo4j_cypher'])
+    const refused = result.events
+      .filter((e) => e.type === 'tool_result')
+      .map((e) => e.data as { tool: string; success: boolean; error?: string })
+      .find((d) => d.tool === WRITE)
+    expect(refused?.success).toBe(false)
+    expect(refused?.error).toBe(`Tool not allowed: ${WRITE} (withheld from every agent)`)
   })
 })

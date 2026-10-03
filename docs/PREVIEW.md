@@ -219,12 +219,15 @@ memory:
 
 A preview provisioned before 2026-10-03 has `read_only: false` in that file.
 Change it to `true`, then render it again and recreate the gateway:
-`docker compose up -d --force-recreate mcp-gateway`. The gateway reads the copy
-the one-shot `mcp-config` service renders, which re-runs here as its
-dependency; with `--no-deps` it would not, and the gateway would re-read the old
-copy. Until then the server still offers the write tool; the app keeps it from
-every agent either way, and logs `the MCP gateway lists write_neo4j_cypher`
-once per process while the server offers it.
+`docker compose run --rm mcp-config && docker compose up -d --no-deps --force-recreate mcp-gateway`.
+The gateway reads the copy the one-shot `mcp-config` service renders, so
+recreating it with `--no-deps` alone, or restarting it, re-reads the old copy
+(`docs/MCP_GATEWAY.md`, "Neo4j writes"). Re-running `scripts/bootstrap-vps.sh`
+rewrites the file but does not recreate the running gateway either, so run the
+same two commands after it. Until then the server still offers the write tool;
+the app keeps it from every agent either way, and logs
+`the MCP gateway lists write_neo4j_cypher` once per process while the server
+offers it.
 
 **What is left out, and why:**
 

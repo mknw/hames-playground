@@ -113,8 +113,10 @@ docker compose up -d
 # View gateway logs
 docker compose logs -f mcp-gateway
 
-# Restart gateway after config changes
-docker compose restart mcp-gateway
+# Apply a changed configs/mcp-config.yaml: render it again, then recreate the
+# gateway. A plain restart re-reads the OLD render (see "Neo4j writes" below).
+docker compose run --rm mcp-config
+docker compose up -d --no-deps --force-recreate mcp-gateway
 ```
 
 ### When the gateway is not there (#276)
@@ -300,9 +302,9 @@ The `dynamic-tools` feature (enabled by default upstream) adds the gateway's own
 Agents are read-only against Neo4j (#403), and the same two-place shape holds it:
 
 - **At the server:** `configs/mcp-config.yaml` sets `read_only: true` for `neo4j-cypher`. The catalog passes it to the pinned `mcp-neo4j-cypher` 0.5.0 as `NEO4J_READ_ONLY`, which then does not offer `write_neo4j_cypher`.
-- **In the app:** `listTools()` leaves `write_neo4j_cypher` out of the catalog every agent's tool list is built from, and logs once if the gateway lists it.
+- **In the app:** `listTools()` leaves `write_neo4j_cypher` out of the catalog every agent's tool list is built from, and logs once if the gateway lists it. Every loop's allowlist check refuses it too, so an allowlist written by hand cannot hand it back.
 
-A changed config reaches a running gateway only when it is rendered again and the gateway is recreated: `docker compose up -d --force-recreate mcp-gateway`. The gateway reads the copy the one-shot `mcp-config` service renders into a volume, and that service re-runs here as the gateway's dependency. Two near-misses: a plain `up -d` re-renders but leaves the running gateway on the config it read at start, and adding `--no-deps` recreates the gateway without re-rendering, so it re-reads the old copy. To keep `--no-deps`, render first: `docker compose run --rm mcp-config`, then `docker compose up -d --no-deps --force-recreate mcp-gateway`.
+A changed config reaches a running gateway only when it is rendered again and the gateway is recreated: `docker compose run --rm mcp-config && docker compose up -d --no-deps --force-recreate mcp-gateway`. The gateway reads the copy the one-shot `mcp-config` service renders into a volume, so three near-misses leave it on the old config: `docker compose restart mcp-gateway` and a plain `up -d` both keep the config it read at start, and `--no-deps --force-recreate mcp-gateway` on its own recreates it without re-rendering. `docker compose up -d --force-recreate mcp-gateway` without `--no-deps` also works, because the renderer re-runs as the gateway's dependency, but it recreates any dependency whose definition has drifted, `neo4j` included; the two-step form cannot touch `neo4j`.
 
 ### Self-Describing Images
 

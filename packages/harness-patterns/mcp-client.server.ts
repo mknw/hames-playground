@@ -10,6 +10,7 @@ import { currentRunFrame } from './run-frame.server'
 import { activeTransports, processTransports } from './tool-transport.server'
 import { markGatewayReachable, markGatewayUnreachable } from './gateway-health.server'
 import type { ToolCallResult, MCPToolDescription } from './types'
+import { isAgentWithheldTool } from './agent-withheld-tools'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
@@ -536,32 +537,6 @@ const CODE_MODE_TOOL_PREFIX = 'code-mode-'
 
 function isGatewayManagementTool(name: string): boolean {
   return GATEWAY_MANAGEMENT_TOOLS.has(name) || name.startsWith(CODE_MODE_TOOL_PREFIX)
-}
-
-/**
- * Catalog-server tools no agent is offered, whatever the gateway lists.
- *
- * Owner decision, 2026-10-03 (#403, #206): agents are READ-ONLY against Neo4j,
- * the `general` agent included. The one writer is the memory hook (#419), and
- * it writes through the app, not through an agent's tool list. So this list
- * narrows the CATALOG (`listTools`, and through it `Tools()`, every loop's
- * allowlist and the planner's catalog) and deliberately not `callTool`: it
- * decides what an agent is offered, not what the app may call, and the hook's
- * write path is the app's.
- *
- * The deployment withholds the tool at the server as well: `read_only: true`
- * for `neo4j-cypher` in `configs/mcp-config.yaml`, under which the pinned
- * `mcp-neo4j-cypher` 0.5.0 does not list it. This list is the second layer,
- * the same shape as {@link GATEWAY_MANAGEMENT_TOOLS}: it holds when a host's
- * config says `false`, or when a server bump changes how the key is read.
- */
-const AGENT_WITHHELD_TOOLS: ReadonlySet<string> = new Set(['write_neo4j_cypher'])
-
-/** Matched on the tool part of a gateway-prefixed name (`mcp__<server>__<tool>`),
- *  the same split `inferServer` makes — a prefix must not hand the tool back. */
-function isAgentWithheldTool(name: string): boolean {
-  const at = name.lastIndexOf('__')
-  return AGENT_WITHHELD_TOOLS.has(at >= 0 ? name.slice(at + 2) : name)
 }
 
 /** Warn once per process, not once per catalog read: `listTools` is not

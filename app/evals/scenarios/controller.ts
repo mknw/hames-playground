@@ -318,10 +318,10 @@ export const controllerToolErrorScenario: Scenario = {
   },
 }
 
-/** Clauses that make a Cypher statement a write. `read_neo4j_cypher` refuses a
- *  query carrying one, and in a single-call turn that refusal ends the loop on
- *  an error. */
-const WRITE_CLAUSE = /\b(CREATE|MERGE|SET|DELETE|DETACH|REMOVE|DROP)\b/i
+/** The words the pinned `read_neo4j_cypher` (mcp-neo4j-cypher 0.5.0) refuses a
+ *  query for — its own list, so this check grades what the server would do. In
+ *  a single-call turn that refusal ends the loop on an error. */
+const WRITE_CLAUSE = /\b(MERGE|CREATE|INSERT|SET|DELETE|REMOVE|ADD)\b/i
 
 /**
  * #401 / #403: a write-shaped request to a loop that can only read.

@@ -356,13 +356,14 @@ active development; the Warning below has the status and what to do meanwhile.
 >   `NEO4J_READ_ONLY` and then does not register its write tool,
 >   `write_neo4j_cypher`. Any value other than `true` or `false` stops it from
 >   starting. Separately, `@hames-ai/harness-patterns` leaves `write_neo4j_cypher`
->   out of the tool catalog every agent's tool list is built from, so a server
->   that does offer it still offers it to no agent, and each agent's controller
+>   out of the tool catalog every agent's tool list is built from, and every
+>   loop refuses it even when its allowlist names it, so a server that does
+>   offer it still offers it to no agent, and each agent's controller
 >   is told to answer a request to change the graph by saying it can only read
->   it. After editing the config, re-render it and recreate the gateway with
->   `docker compose up -d --force-recreate mcp-gateway` (a plain `up -d` leaves
->   the gateway on the config it read at start, and `--no-deps` skips the
->   render).
+>   it. After editing the config, re-render it and recreate the gateway:
+>   `docker compose run --rm mcp-config && docker compose up -d --no-deps --force-recreate mcp-gateway`
+>   (a restart or a plain `up -d` leaves the gateway on the config it read at
+>   start).
 >
 > Both protect the graph, not the network. A query can still make the database
 > fetch URLs through APOC's load procedures: the server's read tool refuses only

@@ -119,8 +119,8 @@ Keep the repo layout intact — **`app/` and `configs/` must stay siblings**: th
 server resolves the MCP catalog via `path.resolve(process.cwd(), '..', 'configs', …)`
 with cwd = `app/` (`server-catalog.server.ts:42`).
 
-Create the config files with **real** values (`docker-config.json` and
-`app/.env` are git-ignored; **`configs/mcp-config.yaml` is tracked**):
+Create the config files with **real** values (`app/.env` is git-ignored;
+**`configs/mcp-config.yaml` and `docker-config.json` are tracked**):
 
 - **`configs/mcp-config.yaml`** — the enabled-servers list + secrets (neo4j
   password, …). The tracked copy ships the compose file's laptop-only
@@ -138,8 +138,19 @@ Create the config files with **real** values (`docker-config.json` and
   publishing a real password to a public repo. Pre-provision statically;
   there is no runtime secret-setting on a Linux host.
 
-- **`docker-config.json`** — Docker registry auth so the gateway can pull MCP
-  server images (mounted read-only into the gateway).
+- **`docker-config.json`** — mounted read-only into the gateway. The tracked
+  copy sets the gateway's `dynamic-tools` feature to `"disabled"`, which keeps
+  the gateway's own management tools (`mcp-find`, `mcp-add`, `mcp-exec`, …)
+  off every agent's tool list (#412, #420). Keep the `features` block: without
+  it the gateway turns them back on. **Never put registry credentials in this
+  file.** It is tracked in a public repo, and Docker `auths` entries are
+  `user:password` in base64. The pinned gateway does not read them for its
+  pulls anyway: it authenticates only through Docker Desktop's backend
+  (upstream `pkg/docker/token.go`). If a server image is private, run
+  `docker login` and `docker pull <image>` on the host as the deploying user.
+  The credentials then live in that user's `~/.docker/config.json`, outside the
+  repo. The gateway runs catalog servers with `--pull never`, so it uses the
+  image the daemon already has.
 - **`app/.env`** — see the env table in step 9.
 
 ## 4. Harden the compose stack for a public host ⚠️
@@ -312,9 +323,8 @@ hames-app` therefore says `active` on a deploy that serves nothing: verify by
 > **Snapshot the database before the first boot with `DATA_ENCRYPTION_KEY`
 > set.** That boot rewrites every existing `conversations` /
 > `users` / `auth_sessions` / `routines` row in place, and there is no
-> down-migration, no dry run and no decrypt-back script — the rollback advice
-> above ("drop the old tree — it is the rollback copy until then") is true of
-> the code and false of the data. Reverting to an earlier build does **not**
+> down-migration, no dry run and no decrypt-back script, so rolling the code
+> back does not roll the data back. Reverting to an earlier build does **not**
 > revert the rows; it produces a build that cannot read them. So:
 >
 > ```bash
@@ -333,41 +343,6 @@ hames-app` therefore says `active` on a deploy that serves nothing: verify by
 > instance. There is no `REDIS_URL`.
 
 ## 10. Operations
-
-**One-time `ui/` → `app/` rename migration** (only if this VM was deployed before
-the #193 rename): the systemd unit above already assumes `app/`, but an existing
-install still has the old dir, `.env` and unit paths. A VM that old also
-predates the hames rename, so this block keeps that install's own names
-(`/opt/kg-agent`, `kg-agent.service`) — read them for `/opt/hames` and
-`hames-app` in the recipes that follow.
-
-```bash
-cd /opt/kg-agent && git pull
-mv -n ui/.env app/.env          # -n: re-running the migration must not clobber app/.env
-sudo sed -i \
-  -e 's#WorkingDirectory=/opt/kg-agent/ui#WorkingDirectory=/opt/kg-agent/app#' \
-  -e 's#EnvironmentFile=/opt/kg-agent/ui/.env#EnvironmentFile=/opt/kg-agent/app/.env#' \
-  /etc/systemd/system/kg-agent.service
-sudo systemctl daemon-reload
-```
-
-Then run the **Update / redeploy** recipe below (install + build under `app/` +
-restart) and confirm the service is actually up:
-
-```bash
-systemctl is-active kg-agent && journalctl -u kg-agent -n 20 --no-pager
-```
-
-`is-active` alone is not the check — a bad `DATA_ENCRYPTION_KEY` leaves the
-unit `active` and every request failing (see the warning above). Read the
-`journalctl` output for `[db] schema ready`.
-
-Only once that restart is verified, drop the old tree — it is the rollback copy
-until then:
-
-```bash
-rm -rf /opt/kg-agent/ui
-```
 
 **Update / redeploy:**
 

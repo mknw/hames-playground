@@ -66,7 +66,25 @@ services:
     restart: "no"
 
   mcp-gateway:
-    image: docker/mcp-gateway
+    # Pinned by digest: upstream's current releases cannot run this stack
+    # (#417, decision 9). Unpinned, a fresh host pulls `latest`, and since
+    # v0.43.1 (#417 verified it by running v0.44.1) the gateway
+    #   * refuses `--catalog=/mcp/custom-catalog.yaml` at start-up, because a
+    #     local catalog must now resolve inside its own catalogs directory;
+    #   * requires auth in container mode, so the app's unauthenticated
+    #     `initialize` gets HTTP 401 (#392).
+    # This digest is the 2026-01-22 build, from before both changes, that the
+    # laptop stack runs on. It is a multi-arch index (linux/amd64 and
+    # linux/arm64), and no upstream tag names it any more.
+    #
+    # Before bumping it:
+    #   1. send a bearer token from the app (#392 step 1, the token from .env);
+    #   2. move the catalog mount under /root/.docker/mcp/catalogs/, and the
+    #      `--catalog` flag here AND in docker-compose.prod.yaml with it;
+    #   3. check the `--config` path too, which #417 did not;
+    #   4. verify on a freshly pulled image, never on a laptop's cached one.
+    # compose-gateway-image.test.ts fails if this stops being a digest.
+    image: docker/mcp-gateway@sha256:abb58d13e267939e602118c0be88be31e2ebcea4c762980ff647ee2aeba92cde
     restart: unless-stopped
     command:
       - --enable-all-servers
@@ -81,6 +99,12 @@ services:
       - mcp_config:/mcp/rendered:ro
       - ./configs/custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
       - ./configs/catalog.yaml:/mcp/catalog.yaml:ro
+      # Turns the gateway's `dynamic-tools` feature OFF, so it does not add its
+      # own management tools (mcp-find, mcp-add, mcp-remove, mcp-exec,
+      # mcp-config-set, code-mode) to the tool list (#412, #420). The key must
+      # stay, set to "disabled": the gateway's default when the key or the file
+      # is missing is ON. The app also drops those names from its catalog
+      # (`listTools` in harness-patterns' mcp-client.server.ts).
       - ./docker-config.json:/root/.docker/config.json:ro
     ports:
       - "127.0.0.1:8811:8811"

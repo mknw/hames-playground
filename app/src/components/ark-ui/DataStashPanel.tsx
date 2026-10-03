@@ -475,9 +475,15 @@ const DocChip = (props: {
   const grayed = () => !!(d().hidden || d().archived)
   // Vector-ingestion status set by the harness-aware auto-ingest path. `pending`
   // → the upload is being chunked/embedded into the local vector store; `failed`
-  // → ingest errored (e.g. embedder offline). Absent → not ingested (the agent
-  // has no redis retriever) — show nothing.
+  // → ingest errored (e.g. embedder offline), so the document is stored but
+  // NOT searchable, and `ingestError` carries the recorded reason (#420).
+  // `not_indexed` → stored by a path that wanted it searchable, in a format
+  // with no text to index: not a failure, but not searchable either, and with
+  // no marker it read exactly like an indexed copy (PR #424 review F4).
+  // Absent → not ingested (the agent has no redis retriever) — show nothing.
   const status = () => d().ingestStatus
+  const notSearchable = () =>
+    `Not searchable — indexing failed: ${d().ingestError ?? 'no reason was recorded'}`
   const [loading, setLoading] = createSignal(false)
   const [menuOpen, setMenuOpen] = createSignal(false)
   // Inline audio player toggle (recordings from the agent trigger endpoint).
@@ -607,7 +613,7 @@ const DocChip = (props: {
           <Show when={status() === 'failed'}>
             <span
               class="i-material-symbols-error"
-              title="Ingest failed — not searchable (is the embedder running?)"
+              title={notSearchable()}
               style={{
                 position: 'absolute',
                 top: '-5px',
@@ -639,8 +645,25 @@ const DocChip = (props: {
           </span>
         </Show>
         <Show when={status() === 'failed'}>
-          <span style={{ 'font-size': '8px', color: 'var(--ui-danger)', 'line-height': '1.1' }}>
-            index failed
+          <span
+            title={notSearchable()}
+            style={{ 'font-size': '8px', color: 'var(--ui-danger)', 'line-height': '1.1' }}
+          >
+            not searchable
+          </span>
+        </Show>
+        {/* Neutral, and no error badge: nothing failed. Same words, because the
+            fact the person needs is the same — this copy cannot be searched. */}
+        <Show when={status() === 'not_indexed'}>
+          <span
+            title="Not searchable — stored as-is: this format has no text to index"
+            style={{
+              'font-size': '8px',
+              color: 'var(--ui-text-tertiary)',
+              'line-height': '1.1',
+            }}
+          >
+            not searchable
           </span>
         </Show>
       </div>
@@ -1271,6 +1294,20 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
     }
     void refresh()
   }
+
+  // A tool can store a document mid-turn (`graph_file_ingest`), and until #420
+  // nothing told an open panel: the copy appeared only after a remount, and a
+  // failed index with it. Re-read the list whenever the turn's tool results
+  // grow — single-flighted and served from the server's list cache, so a turn of
+  // ordinary tool calls costs one cheap read each — and a document that lands
+  // `pending` keeps the poll below running until it is indexed or failed.
+  createEffect(
+    on(
+      () => props.events.filter((e) => e.type === 'tool_result').length,
+      () => void refresh(),
+      { defer: true },
+    ),
+  )
 
   // Gentle, single-flight status poll while an upload is `pending` or within the
   // post-upload watch window. Single-flighting in `lib/stash-documents` prevents

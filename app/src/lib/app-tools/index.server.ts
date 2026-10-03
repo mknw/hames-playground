@@ -43,6 +43,7 @@ import { guessMimeType, isTextMime } from '../stash/upload-service.server'
 import { createAppToolRegistry } from '@hames-ai/connectors/app-tools/registry'
 import {
   registerGraphConnectorTools,
+  type GraphStashIngestOutcome,
   type GraphStashStore,
 } from '@hames-ai/connectors/graph/graph-tools.server'
 import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
@@ -77,10 +78,25 @@ registerGraphConnectorTools({
         await import('@hames-ai/harness-patterns/stash/document-store.server')
       return { storeDocument, maxContentBytes: MAX_CONTENT_BYTES }
     },
-    ingest: (sessionId, documentId) =>
-      import('@hames-ai/harness-patterns/stash/document-ingest.server').then((m) =>
-        m.ingestStashDocument(sessionId, documentId),
-      ),
+    // Reports how the run ended (#420). `ingestStashDocument` answers null for
+    // every failure and writes the reason onto the document, so the reason is
+    // read back from there: the tool then quotes the same `ingestError` the
+    // Data Stash panel's chip shows, rather than a second wording of it. The
+    // read-back costs one fetch, on failure only.
+    ingest: async (sessionId, documentId): Promise<GraphStashIngestOutcome> => {
+      const [{ ingestStashDocument }, { getDocument }] = await Promise.all([
+        import('@hames-ai/harness-patterns/stash/document-ingest.server'),
+        import('@hames-ai/harness-patterns/stash/document-store.server'),
+      ])
+      if (await ingestStashDocument(sessionId, documentId)) return { status: 'indexed' }
+      const doc = await getDocument(sessionId, documentId)
+      return {
+        status: 'failed',
+        error: doc
+          ? (doc.ingestError ?? 'the reason was not recorded')
+          : 'the document is no longer in the Data Stash',
+      }
+    },
   },
 })
 

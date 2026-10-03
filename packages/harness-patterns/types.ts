@@ -243,6 +243,7 @@ export type EventType =
   | 'intent_compacted'
   | 'plan_created'
   | 'content_sanitized'
+  | 'warning'
 
 /** Accounting record for one harness step (#122): token and cost totals
  *  summed across EVERY physical API call the step made — including truncation
@@ -603,8 +604,12 @@ export interface DescribeBatchItem {
 }
 
 /** The single-result describe seam: REQUIRED config on `compactBulkData`.
- *  Non-throwing by contract: an implementation reports failure as `''` so the
- *  caller can skip the summary without a fallback of its own. */
+ *  A FAILED call throws; `''` means the model answered with nothing worth
+ *  keeping. The two are different facts and `compactBulkData` treats them
+ *  differently: either way the result keeps its raw output, but only a throw
+ *  is recorded as a `warning` event (#420). (Until #420 failure was reported
+ *  as `''` too, which is why nothing anywhere said a summarizer was down. An
+ *  implementation that still does that keeps working — it just stays silent.) */
 export type DescribeFn = (
   tool: string,
   toolArgs: string,
@@ -613,9 +618,11 @@ export type DescribeFn = (
 ) => Promise<string>
 
 /** The batched describe seam: REQUIRED config on `compactBulkData`. Returns a
- *  map of item `id` → summary; missing ids (dropped, blank, failed call) are
- *  the caller's cue to fall back per item. `limits` is what `maxBatchItems`
- *  sizes batches against (the CHAIN FLOOR, SA-M6). */
+ *  map of item `id` → summary; missing ids (dropped, blank) are the caller's
+ *  cue to fall back per item, and so is a throw — a FAILED call throws, like
+ *  {@link DescribeFn}, so the failure can be told apart from a thin answer.
+ *  `limits` is what `maxBatchItems` sizes batches against (the CHAIN FLOOR,
+ *  SA-M6). */
 export type DescribeBatchFn = {
   (items: DescribeBatchItem[]): Promise<Map<string, string>>
   limits?: () => ModelLimits
@@ -1167,6 +1174,53 @@ export interface ErrorEventData {
    *
    *  Absent for non-LLM errors (MCP failures, tool errors, etc.). */
   kind?: 'llm_call' | 'budget_exhausted'
+}
+
+/**
+ * The side tasks a turn can lose without failing (#420): conveniences the turn
+ * routes around rather than part of the answer the user asked for. Today every
+ * one is a `describe`-role call; a task of another kind (a sandbox skill that
+ * could not be mounted, say) joins by getting its own member, deliberately —
+ * never by reusing one of these. A marker, so the UI and the tests key on it
+ * rather than on the wording of {@link WarningEventData.message}.
+ */
+export type WarningTask =
+  /** The first-turn conversation title (`GenerateConversationTitle`). */
+  | 'title'
+  /** The post-turn tool-result summaries (`compactBulkData`). */
+  | 'result_summaries'
+  /** `compactIntent`'s standalone rewrite of the latest message. */
+  | 'intent_compaction'
+  /** The retriever's history-aware query rewrite. */
+  | 'query_rewrite'
+  /** `withReferences`' choice of prior results to attach. */
+  | 'reference_selection'
+
+/**
+ * Data payload for a `warning` event: a side task failed and the turn carried
+ * on without it, on the fallback named in {@link WarningEventData.fallback}.
+ *
+ * Deliberately NOT an `error` event with a softer severity. Every reader of
+ * `error` events treats one as a statement about the turn — `settleTurn` turns
+ * "no response + an error" into a failed turn, `runChain` stops on an
+ * irrecoverable one, and `compactExecution` hands `hasErrors()` to the
+ * synthesizer, which then apologises for it in the answer. A side failure must
+ * reach none of them, and a separate TYPE is what guarantees that: no error
+ * reader can match it by accident, now or after the next one is written.
+ *
+ * Human-facing only. `formatEventData` renders it from `task` + `message`, never
+ * from `error` — that string is the failed call's message verbatim, and a
+ * describe call is handed tool results verbatim, so a parse failure can echo
+ * them back.
+ */
+export interface WarningEventData {
+  task: WarningTask
+  /** What did not happen, in one sentence for the person reading the chat. */
+  message: string
+  /** What the turn did instead — the fallback it ran on. */
+  fallback: string
+  /** The underlying failure, verbatim, for the observability drill-down. */
+  error?: string
 }
 
 /** Data payload for reference_attached event — emitted by `withReferences` on pattern entry */

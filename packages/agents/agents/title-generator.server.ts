@@ -148,9 +148,13 @@ function isFirstTurn(ctx: UnifiedContext<unknown>): boolean {
  * frame, before the stream closes. Skips (returns null) when this isn't
  * the first turn — titles are only auto-generated once per conversation.
  *
- * Failure modes (LLM throws, returns empty, sanitizer rejects) all return
- * null, leaving the heuristic title (set by `deriveTitle` in
- * `saveConversation`) in place. No retry, no error event.
+ * Returns null when there is nothing to name (not the first turn, or the
+ * model's title sanitizes to nothing) and REJECTS when the generation itself
+ * failed — the LLM call threw, e.g. because the summarizer is down (#420).
+ * Either way the heuristic title (set by `deriveTitle` in `saveConversation`)
+ * stays in place; the rejection is what lets the caller SAY so, where it used
+ * to be the same silent `null` as "nothing to name". No retry, no event of its
+ * own: whether a failure is shown, and where, is the caller's call.
  */
 export async function runFirstTurnTitleGen(
   ctx: UnifiedContext<unknown>,
@@ -182,33 +186,50 @@ export async function runRegenerateTitle(
   const messages = userMessages(ctx)
   const seed = messages[messages.length - 1] ?? messages[0]
   if (!seed) return null
-  return runTitleAgent(seed, sessionId, userId, deps)
+  // The button's contract is unchanged: a failure leaves the title alone and
+  // answers null. It is not a turn, so there is no transcript to warn in.
+  return runTitleAgent(seed, sessionId, userId, deps).catch((err: unknown) => {
+    console.error('[title-gen] failed:', err)
+    return null
+  })
 }
 
-/** Shared helper — runs the agent, persists on success, swallows failures. */
+/**
+ * Shared helper — runs the agent and persists on success.
+ *
+ * REJECTS when the generation failed. The harness never throws for that — it
+ * catches inside `compactExecution` and settles the run as `status: 'error'`
+ * with an empty response — so the status is the signal, and reading only
+ * `response` is how a summarizer outage used to look exactly like a blank
+ * title. A failed PERSIST is still swallowed: the title was generated, and the
+ * caller's question is whether there is one.
+ */
 async function runTitleAgent(
   userMessage: string,
   sessionId: string,
   userId: string,
   deps: AgentDeps,
 ): Promise<string | null> {
-  try {
-    // The agent generates its own throwaway sessionId for the harness
-    // context; we pass a deterministic one for traceability in logs.
-    const result = await createTitleAgent(deps)(userMessage, `title-gen-${sessionId}`)
-    const title = sanitizeTitle(result.response)
-    if (!title) return null
-    if (!deps.persistTitle) {
-      // Named, not silent: without a persistence channel the title exists only
-      // as this call's return value. The app always supplies one.
-      console.warn('[title-gen] no persistTitle supplied via AgentDeps — title not persisted')
-    } else {
-      await deps.persistTitle(sessionId, userId, title)
-    }
+  // The agent generates its own throwaway sessionId for the harness
+  // context; we pass a deterministic one for traceability in logs.
+  const result = await createTitleAgent(deps)(userMessage, `title-gen-${sessionId}`)
+  if (result.status === 'error') {
+    throw new Error(result.context.error || 'title generation failed')
+  }
+  const title = sanitizeTitle(result.response)
+  if (!title) return null
+  if (!deps.persistTitle) {
+    // Named, not silent: without a persistence channel the title exists only
+    // as this call's return value. The app always supplies one.
+    console.warn('[title-gen] no persistTitle supplied via AgentDeps — title not persisted')
     return title
+  }
+  try {
+    await deps.persistTitle(sessionId, userId, title)
   } catch (err) {
-    // Silent fallthrough — heuristic title remains in the DB row.
-    console.error('[title-gen] failed:', err)
+    // The heuristic title remains in the DB row.
+    console.error('[title-gen] could not persist the title:', err)
     return null
   }
+  return title
 }

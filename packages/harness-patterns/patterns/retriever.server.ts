@@ -41,6 +41,7 @@ import type {
   AssistantMessageEventData,
   ToolResultEventData,
   ErrorEventData,
+  WarningEventData,
   LLMCallData,
   RetrieveQueryFn,
 } from '../types'
@@ -223,18 +224,21 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
             llmCall = call as LLMCallData | undefined
           } catch (err) {
             // Recoverable by contract: a failed rewrite falls back to the raw
-            // message so retrieval still runs. The injected implementation
-            // carries the record on `LLMCallError` (the throw contract).
+            // message so retrieval still runs. A `warning`, not an `error`
+            // (#420): the search itself is unaffected, so nothing about it may
+            // reach the error readers (the synthesizer's apology, the
+            // failed-turn rule). The injected implementation carries the record
+            // on `LLMCallError` (the throw contract).
             const msg = err instanceof Error ? err.message : String(err)
             trackEvent(
               scope,
-              'error',
+              'warning',
               {
-                error: `retriever query rewrite: ${msg}`,
-                severity: resolved.errorSeverity,
-                hint: getErrorHint(msg),
-                kind: 'llm_call' as const,
-              } as ErrorEventData,
+                task: 'query_rewrite',
+                message: 'The search query could not be rewritten from the conversation.',
+                fallback: 'The documents were searched with your message as written.',
+                error: msg,
+              } satisfies WarningEventData,
               true,
               err instanceof LLMCallError ? (err.llmCall as LLMCallData) : undefined,
             )

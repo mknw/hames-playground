@@ -271,9 +271,11 @@ export async function ingestDocument(
  * writes and `setDocumentFlags` throws on a rejected one, which used to escape
  * this function and abort `ensureSessionIngested`'s whole loop (sf-H2).
  *
- * The REASON a document failed is logged. It used to be discarded entirely, so
- * an embedder outage and an unchunkable file were indistinguishable — the panel
- * said 'failed' and nothing anywhere said why.
+ * The REASON a document failed is logged AND recorded on the document as
+ * `ingestError` (#420). It used to be discarded entirely, so an embedder outage
+ * and an unchunkable file were indistinguishable — the panel said 'failed' and
+ * nothing anywhere said why; then it reached the log only, which is where #420
+ * found it after the tool that stored the file had already reported success.
  */
 export async function ingestStashDocument(
   sessionId: string,
@@ -289,7 +291,15 @@ export async function ingestStashDocument(
   // the try below; any other base64 is marked failed so we don't retry forever.
   const needsConversion = doc.encoding === 'base64'
   if (needsConversion && !(conversionEnabled() && isConvertible(doc.mimeType))) {
-    await markIngestStatus(sessionId, docId, 'failed', callTool)
+    await markIngestStatus(
+      sessionId,
+      docId,
+      'failed',
+      callTool,
+      isConvertible(doc.mimeType)
+        ? 'Document conversion is not enabled on this server, so this file has no text to index.'
+        : `${doc.mimeType} has no text conversion, so this file cannot be indexed.`,
+    )
     return null
   }
 
@@ -316,14 +326,16 @@ export async function ingestStashDocument(
     await markIngestStatus(sessionId, docId, 'indexed', callTool)
     return result
   } catch (err) {
-    console.error(
-      `[ingest] ${doc.filename} (${docId}) failed for session ${sessionId}:`,
-      err instanceof Error ? err.message : err,
-    )
-    await markIngestStatus(sessionId, docId, 'failed', callTool)
+    const reason = err instanceof Error ? err.message : String(err)
+    console.error(`[ingest] ${doc.filename} (${docId}) failed for session ${sessionId}:`, reason)
+    await markIngestStatus(sessionId, docId, 'failed', callTool, reason)
     return null
   }
 }
+
+/** Ceiling on a recorded failure reason. It is shown in a tooltip and handed to
+ *  a model in a tool result, and an upstream error body has no length bound. */
+const MAX_INGEST_ERROR_CHARS = 500
 
 /**
  * Write an ingest status without letting the write itself break the caller.
@@ -339,9 +351,14 @@ async function markIngestStatus(
   docId: string,
   ingestStatus: IngestStatus,
   callTool: CallTool,
+  reason?: string,
 ): Promise<void> {
+  // A failure records its reason; any other status clears the previous one, so
+  // a retry that is under way or succeeded never shows a stale failure.
+  const ingestError =
+    ingestStatus === 'failed' ? (reason ?? 'unknown error').slice(0, MAX_INGEST_ERROR_CHARS) : null
   try {
-    await setDocumentFlags(sessionId, docId, { ingestStatus }, callTool)
+    await setDocumentFlags(sessionId, docId, { ingestStatus, ingestError }, callTool)
   } catch (err) {
     console.warn(
       `[ingest] could not persist ingestStatus='${ingestStatus}' for ${docId}:`,

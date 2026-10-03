@@ -72,6 +72,8 @@ export type {
   IntentCompactedEventData,
   PlanCreatedEventData,
   ContentSanitizedEventData,
+  WarningEventData,
+  WarningTask,
 
   // LLM Observability
   LLMCallData,

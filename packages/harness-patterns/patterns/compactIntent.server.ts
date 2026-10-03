@@ -21,7 +21,8 @@
  *
  * Backward-compatible: agents that don't use it are unchanged. On any failure
  * it CLEARS `scope.data.intent` so the actor falls back to the raw user message
- * — never fatal, and never the previous turn's brief.
+ * — never fatal, and never the previous turn's brief — and says so with a
+ * `warning` event rather than an `error` (#420).
  */
 
 import { assertServerOnImport } from '../assert.server'
@@ -34,13 +35,12 @@ import type {
   UserMessageEventData,
   AssistantMessageEventData,
   IntentCompactedEventData,
-  ErrorEventData,
+  WarningEventData,
   LLMCallData,
   CompactIntentFn,
 } from '../types'
 import { LLMCallError } from '../types'
 import { trackEvent, resolveConfig } from '../context.server'
-import { getErrorHint } from '../error-hints'
 import { stripThinkBlocks } from '../content-transforms'
 import { trimToFit } from '../token-budget.server'
 
@@ -153,21 +153,24 @@ export function compactIntent<T extends CompactIntentData>(
       return scope
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
-      // Best-effort: surface the prompt/variables drill-down for the failed
-      // LLM call — the injected implementation carries it on `LLMCallError`
-      // (the seam's throw contract). Intent is cleared → actor falls back to
-      // the raw message.
+      // A WARNING, not an error (#420). The rewrite is a convenience the actor
+      // routes around — intent is cleared, so it works from the raw message —
+      // and an `error` event here reached every error reader on the way: the
+      // synthesizer's `hasErrors()` apology, `settleTurn`'s failed-turn rule,
+      // and an inline bubble quoting the raw BAML message. The failed call's
+      // drill-down still travels with it (the seam's `LLMCallError` contract).
       const failedLlmCall =
         error instanceof LLMCallError ? (error.llmCall as LLMCallData) : undefined
       trackEvent(
         scope,
-        'error',
+        'warning',
         {
+          task: 'intent_compaction',
+          message:
+            'Your message could not be rewritten with the earlier conversation resolved into it.',
+          fallback: 'The agent worked from your message as written.',
           error: msg,
-          severity: resolved.errorSeverity,
-          hint: getErrorHint(msg),
-          ...(failedLlmCall ? { kind: 'llm_call' as const } : {}),
-        } as ErrorEventData,
+        } satisfies WarningEventData,
         true,
         failedLlmCall,
       )

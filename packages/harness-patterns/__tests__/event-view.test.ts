@@ -72,6 +72,27 @@ describe('serialize formatting', () => {
     )
   })
 
+  // #420. A warning's `error` is the failed describe call's message verbatim,
+  // and a describe call is handed tool results verbatim — a parse failure can
+  // quote them back. Mutation: delete the `warning` case (fall through to the
+  // default JSON dump) → the raw error reaches the serialized view.
+  it('renders a warning from its task and message only, never its raw error', () => {
+    const view = createEventView(
+      ctxOf([
+        ev('warning', 'compactBulkData', {
+          task: 'result_summaries',
+          message: "None of this turn's 2 tool results could be summarized.",
+          fallback: 'Later turns see their raw output in place of a summary.',
+          error: 'BamlValidationError: <tool result text the model echoed>',
+        }),
+      ]),
+      { fromLast: false },
+    )
+    expect(view.serialize()).toBe(
+      "<warning>result_summaries: None of this turn's 2 tool results could be summarized.</warning>",
+    )
+  })
+
   // Mutation: in the default case, always `JSON.stringify(event.data)` → a
   // bare string payload is rendered with its quotes.
   it('renders a non-object payload of an unformatted type as plain text', () => {
@@ -105,5 +126,23 @@ describe('serializeCompact pointers', () => {
     })
     const pointer = view.serializeCompact().split('\n')[1]
     expect(pointer).toContain('>short (130 chars)')
+  })
+})
+
+// #420: `compactExecution` hands `hasErrors()` / `lastError()` to the
+// synthesizer, which then apologises in the answer. A side task's warning must
+// never reach that — it is a separate TYPE so no error reader can match it.
+describe('error readers do not see warnings (#420)', () => {
+  // Mutation: make `errors()` select `['error', 'warning']` → reds.
+  it('a view holding only a warning has no errors', () => {
+    const view = createEventView(
+      ctxOf([
+        ev('user_message', 'h', { content: 'q' }),
+        ev('warning', 'p', { task: 'intent_compaction', message: 'm', fallback: 'f', error: 'x' }),
+      ]),
+      { fromLast: false },
+    )
+    expect(view.hasErrors()).toBe(false)
+    expect(view.lastError()).toBeUndefined()
   })
 })

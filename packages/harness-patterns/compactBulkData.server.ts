@@ -14,10 +14,20 @@
  * 6 round-trips and 6 copies of the same system prompt. Anything the batch
  * leaves unanswered — a dropped id, a blank summary, a failed call — falls back
  * to the single-item `ResultDescribe` path for that item alone.
+ *
+ * A result that ends up with no summary keeps its raw output — what every
+ * later view already falls back to without one — so a summarizer outage
+ * costs prompt size, never the turn. What it must not cost is the knowledge
+ * that it happened (#420): when a describe call THROWS and a result is left
+ * unsummarized, ONE `warning` event per turn says how many, and it is
+ * persisted with the rest of the context. This pass runs after the answer was
+ * sent, so that warning reaches the observability panel and the transcript on
+ * the conversation's next load, not mid-turn — the price of not making the
+ * user wait for it.
  */
 
 import { assertServerOnImport } from './assert.server'
-import { enrichToolResult } from './context.server'
+import { createEvent, enrichToolResult } from './context.server'
 import type {
   UnifiedContext,
   ToolResultEventData,
@@ -25,6 +35,7 @@ import type {
   ControllerActionEventData,
   BulkDescribeFns,
   DescribeBatchItem,
+  WarningEventData,
 } from './types'
 import { runtimeConfig } from './runtime-config.server'
 import { estimateTokens } from './token-budget.server'
@@ -191,8 +202,22 @@ export async function compactBulkData(
     })
   }
 
+  // The first failure seen, verbatim — what the warning below quotes. A throw
+  // is the only failure signal: a blank answer is a model that had nothing to
+  // say, and the seam reports that as `''`.
+  let firstFailure: string | undefined
+  const noteFailure = (err: unknown): void => {
+    firstFailure ??= err instanceof Error ? err.message : String(err)
+  }
+
   const summarizeOne = async (target: CompactionTarget): Promise<void> => {
-    const summary = await describeFn(target.tool, target.toolArgs, target.reasoning, target.result)
+    let summary: string
+    try {
+      summary = await describeFn(target.tool, target.toolArgs, target.reasoning, target.result)
+    } catch (err) {
+      noteFailure(err)
+      return
+    }
     if (summary) enrichToolResult(ctx, target.eventId, { summary })
   }
 
@@ -201,7 +226,20 @@ export async function compactBulkData(
     // single-item prompt is the one tuned for it.
     if (batch.length === 1) return summarizeOne(batch[0])
 
-    const byId = await describeBatchFn(batch)
+    // A batch that throws falls back per item like one that dropped every id.
+    // Before, the throw escaped this function and `Promise.allSettled` below
+    // swallowed it — so a failed batch skipped its per-item retry entirely.
+    let byId: Map<string, string>
+    try {
+      byId = await describeBatchFn(batch)
+    } catch (err) {
+      noteFailure(err)
+      console.warn(
+        `[compactBulkData] batched describe of ${batch.length} results failed, ` +
+          `falling back per item: ${err instanceof Error ? err.message : String(err)}`,
+      )
+      byId = new Map()
+    }
     const unanswered: CompactionTarget[] = []
     for (const target of batch) {
       const summary = byId.get(target.id)
@@ -223,7 +261,36 @@ export async function compactBulkData(
     await Promise.allSettled(
       batchTargets(targets, budgetTokens, maxBatchItems(describeBatchFn)).map(summarizeBatch),
     )
+
+    // Only when a call failed AND a result went without: a batch that failed
+    // and was fully recovered per item cost money, not a summary, and is
+    // already in the log above.
+    const missing = targets.filter((t) => !hasSummary(ctx, t.eventId)).length
+    if (firstFailure !== undefined && missing > 0) {
+      ctx.events.push(
+        createEvent('warning', 'compactBulkData', {
+          task: 'result_summaries',
+          message: unsummarizedMessage(missing, targets.length),
+          fallback: 'Later turns see their raw output in place of a summary.',
+          error: firstFailure,
+        } satisfies WarningEventData),
+      )
+    }
   }
 
   await onPersist()
+}
+
+function hasSummary(ctx: UnifiedContext, eventId: string): boolean {
+  const event = ctx.events.find((e) => e.id === eventId)
+  return !!(event?.data as ToolResultEventData | undefined)?.summary
+}
+
+function unsummarizedMessage(missing: number, total: number): string {
+  if (missing < total) {
+    return `${missing} of this turn's ${total} tool results could not be summarized.`
+  }
+  return total === 1
+    ? "This turn's tool result could not be summarized."
+    : `None of this turn's ${total} tool results could be summarized.`
 }

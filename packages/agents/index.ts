@@ -19,6 +19,6 @@ export {
   referencesForDoc,
   type OpenReferenceTarget,
 } from './reference-extractor'
-export { errorBubble, replayMessages, type ReplayedMessage } from './replay'
+export { errorBubble, replayMessages, warningBubble, type ReplayedMessage } from './replay'
 export type { GraphElement } from './types'
 export type { AgentData, AgentDefinition, AgentDeps, SandboxAttach } from './types'

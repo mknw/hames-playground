@@ -53,12 +53,14 @@ registerGraphConnectorTools({
       storeDocument: async () => ({ id: 'doc-1', size: 0 }),
       maxContentBytes: 5 * 1024 * 1024,
     }),
-    ingest: async () => null,
+    ingest: async () => ({ status: 'indexed' as const }),
   },
 })
 
-const runWith = <T>(ctx: { userId: string | null; sessionId: string | null }, fn: () => Promise<T>) =>
-  als.run(ctx, fn)
+const runWith = <T>(
+  ctx: { userId: string | null; sessionId: string | null },
+  fn: () => Promise<T>,
+) => als.run(ctx, fn)
 
 describe('request-scoped identity under concurrency', () => {
   it("keeps each user's identity separate across interleaved calls", async () => {

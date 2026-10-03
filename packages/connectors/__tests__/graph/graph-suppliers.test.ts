@@ -25,7 +25,7 @@ const content = {
 }
 const stash = {
   loadStore: vi.fn(async () => ({ storeDocument: vi.fn(), maxContentBytes: 5 })),
-  ingest: vi.fn(async () => null),
+  ingest: vi.fn(async () => ({ status: 'indexed' as const })),
 }
 
 const goodDeps = { registerAppTool, graphFetch, content, stash }
@@ -36,9 +36,9 @@ beforeEach(() => {
 
 describe('registerGraphConnectorTools refuses a non-function supplier at factory call (F1)', () => {
   it('graphFetch: 42 throws at the factory, naming the field', () => {
-    expect(() =>
-      registerGraphConnectorTools({ ...goodDeps, graphFetch: 42 } as never),
-    ).toThrow(/graphFetch/)
+    expect(() => registerGraphConnectorTools({ ...goodDeps, graphFetch: 42 } as never)).toThrow(
+      /graphFetch/,
+    )
     expect(registerAppTool).not.toHaveBeenCalled()
   })
 

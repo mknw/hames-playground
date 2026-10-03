@@ -19,13 +19,16 @@ prerequisites.
 **What was and was not proved before this was written** is at the bottom
 (§"State of this runbook"). Read it before you rely on a step.
 
-**Three environments, one runbook.** [ADR-0007](adr/0007-three-environments-digest-promotion.md)
-decided on dev, staging and prod, on two VMs. Dev and staging share one VM and
-prod has its own. §§0–11 still describe **one environment on one VM** that
-builds its own image, and that is still how to execute this runbook today. §12
-lists what the Azure session adds for three environments, including what must
-change before two of them can share a box. §13 describes how a deploy and a
-promotion will work once the workflows exist.
+**One runbook, any provider.** [ADR-0008](adr/0008-deployment-guidance-is-provider-neutral.md)
+makes this guidance provider-neutral: which provider, how many hosts and which
+environments a deployment has are its operator's decisions, recorded outside
+this repository. §§0–11 describe **one environment on one VM** that builds its
+own image, with Azure as the worked example where a step is
+provider-specific. §12 lists what a second environment adds, including what
+must change before two of them can share a box, and §13 how a deploy and a
+promotion work once CI builds the images. §14 is the same single-environment
+procedure as a script, `scripts/bootstrap-vps.sh`, for an Ubuntu VPS from any
+provider, with the host hardening and an anti-lockout procedure.
 
 ---
 
@@ -287,8 +290,9 @@ failures count against Let's Encrypt's rate limits. DNS first, then boot.
 
 ## 5. Entra app registration — the exact changes
 
-Use the existing **DTalk v2** registration (`docs/deployment/entra-setup.md` has
-the id) or a new single-tenant one. Three changes, in the Entra admin center:
+Use your existing app registration or a new single-tenant one
+([`deployment/entra-setup.md`](deployment/entra-setup.md) §1). Three changes,
+in the Entra admin center:
 
 **a. Add the redirect URI.** _Authentication → Add a platform → Web → Redirect
 URIs_:
@@ -791,42 +795,44 @@ diagnosis, and nothing is reachable from outside.
   survivable — and changing it needs a re-encryption pass nobody has written.
   Treat `DATA_ENCRYPTION_KEY` as set once for the life of this preview.
 
-## 12. Three environments: what changes for the Azure session
+## 12. More than one environment
 
-[ADR-0007](adr/0007-three-environments-digest-promotion.md) holds the decisions
-and the reasons for them. What follows is what they add to §§0–11. None of it is
-built yet.
+[ADR-0008](adr/0008-deployment-guidance-is-provider-neutral.md) records why
+this is guidance rather than a plan: how many environments a deployment runs,
+and on how many hosts, is its operator's decision. What follows is what a
+second environment (a dev or a prod beside staging, say) adds to §§0–11. None
+of it is built here.
 
-**Two VMs, not one.** One VM runs dev and staging, and the other runs prod.
-Each environment is a complete copy of §§3–7: its own compose project, `.env`,
-Postgres, Neo4j and Redis volumes, and three keys. That means **three separate
-escrows in §7**, with no key reused across environments. Dev and staging each
-load the same org graph into their own Neo4j, and conversation databases are
-never shared.
+**Each environment is a complete copy of §§3–7**: its own compose project,
+`.env`, Postgres, Neo4j and Redis volumes, and three keys. That means **one
+escrow per environment in §7**, with no key reused across environments.
+Environments may load the same graph into their own Neo4j, but conversation
+databases are never shared.
 
-**Changes to compose and code have to land before the VM can be shared.** The
-committed files assume one stack per Docker daemon, in five places:
+**Changes to compose and code have to land before two environments can share
+one host.** The committed files assume one stack per Docker daemon, in five
+places:
 
 1. **Container names.** Every service except `mcp-config` and `mcp-gateway`
-   pins a `container_name` (`docker-compose.yaml:23,97,125,151,177`;
-   `docker-compose.prod.yaml:150`). Those names are global to the daemon. The
+   pins a `container_name` (`docker-compose.yaml:23,121,149,175,201`;
+   `docker-compose.prod.yaml:157`). Those names are global to the daemon. The
    top-level `name: hames` (`docker-compose.yaml:4`) also has to differ per
    project.
 2. **Ports.** Each project publishes the same loopback ports
-   (`docker-compose.yaml:26-180`), and the overlay gives Caddy `80`/`443` in each
-   project (`docker-compose.prod.yaml:155-158`). Only one process can bind each
+   (`docker-compose.yaml:26-204`), and the overlay gives Caddy `80`/`443` in each
+   project (`docker-compose.prod.yaml:162-165`). Only one process can bind each
    port.
 3. **The sandbox reaper.** It force-removes every `kg-sandbox=1` container on
    the host when a process starts
-   (`packages/sandbox/docker-backend.server.ts:394-408`, called from
-   `packages/sandbox/with-sandbox.server.ts:160`; the #97 caveat). A staging
-   restart kills dev's in-flight sandboxes, and the reverse.
+   (`packages/sandbox/docker-backend.server.ts:415-451`, called from
+   `packages/sandbox/with-sandbox.server.ts:198`; the #97 caveat). One
+   environment's restart kills the other's in-flight sandboxes.
 4. **Volumes the gateway creates.** The `memory` server's `claude-memory` volume
    (`configs/custom-catalog.yaml:103-104`) is created by the gateway, not by
    compose, so it is not scoped to a project and both environments would share
    one memory graph. The sandbox cache volume has the same shape
-   (`docker-backend.server.ts:142`), but `SANDBOX_CACHE_VOLUME` overrides it per
-   environment.
+   (`docker-backend.server.ts:151-152`), but `SANDBOX_CACHE_VOLUME` overrides it
+   per environment.
 5. **Memory.** §1 sizes one stack at 16 GiB and calls that "not generous". Two
    stacks have not been measured.
 
@@ -835,67 +841,71 @@ Until those are fixed, a second project on the same VM collides at
 load-bearing as it is today (§2), so read any of those changes against this
 runbook, not against the compose file alone.
 
-**One Caddy, two hostnames.** On the shared VM, a single Caddy outside both
-projects terminates TLS for `dev.<subdomain>` and `staging.<subdomain>` and
-proxies each hostname to its own app. `configs/Caddyfile` has one site block
-(`{$APP_DOMAIN}`, line 18), so it needs a second. It also needs distinct
-upstreams. Line 21 proxies to `app:3444` by compose service name, both projects
-call their app service `app`, and the loopback alternative collides on
-`127.0.0.1:3444` (item 2). The prod VM keeps today's one-site shape.
+**One Caddy, two hostnames.** On a shared host, a single Caddy outside both
+projects terminates TLS for each environment's hostname and proxies each one
+to its own app. `configs/Caddyfile` has one site block (`{$APP_DOMAIN}`, line
+18), so it needs a second. It also needs distinct upstreams. Line 21 proxies
+to `app:3444` by compose service name, both projects call their app service
+`app`, and the loopback alternative collides on `127.0.0.1:3444` (item 2). A
+host with one environment keeps today's one-site shape.
 
-**Hostnames, and the stopgap.** IT provides the company subdomain (the placeholder
-is `*.hames.contoso.com`). The prod hostname is still to be decided. Until DNS
-exists, use Azure's `<label>.<region>.cloudapp.azure.com` name in place of §4's
-A record. The label belongs to a **public IP**, so the shared VM needs **two
-public IPs** to get two names. Either way, Entra needs one redirect URI per
-environment hostname (§5a). An app registration accepts several.
+**Hostnames.** One per environment, under a domain you control (§4), and Entra
+needs one redirect URI per environment hostname (§5a); an app registration
+accepts several. Where DNS is not ready, a provider-assigned name can stand in
+for §4's A record (on Azure, a public IP's `<label>.<region>.cloudapp.azure.com`,
+so two names on one VM means two public IPs). Read §14's note on shared
+provider names and Let's Encrypt's limits before relying on one.
 
-**ACR, OIDC and the managed identity replace `--build`.** CI builds each image
-once and pushes it to a private Azure Container Registry in the company's tenancy.
-GitHub Actions authenticates with OIDC workload-identity federation, so GitHub
-stores no registry password. Each VM pulls with its own managed identity, which
-needs pull rights on the registry. The VM logs in as itself immediately before
-each pull, so this is the first step in the runbook that needs Azure tooling on
-the box (the intro says "no Azure CLI"). The app service then runs
+**A registry replaces `--build`.** CI builds each image once and pushes it to
+a private registry, and each host pulls by digest. Images stay private because
+they can carry org data. Prefer a registry the hosts and CI reach with a
+workload identity over one that needs a stored credential: on Azure, that is a
+container registry that GitHub Actions pushes to through OIDC
+workload-identity federation and each VM pulls from with its own managed
+identity, so no long-lived registry secret exists anywhere. A host that has to
+store a pull credential is the thing to avoid, which is why §14's single box
+builds its own image instead. The app service then runs
 `image: <registry>/<repo>@sha256:<digest>` instead of building
-`hames-app:local` (`docker-compose.yaml:164-176`). That compose change comes
+`hames-app:local` (`docker-compose.yaml:188-200`). That compose change comes
 with the workflows, not before them.
 
-**Each environment has its own allow-list.** Staging's `VITE_ALLOWED_EMAILS`
-lists only a subset of users, and ADR-0007 leaves which users as an open item.
-One image can serve different lists only because the runtime value wins over
-the build-time one (`app/src/lib/auth/allowList.ts:24-28`), so **the CI build
-must not set `VITE_ALLOWED_EMAILS`**. §8 step 5 is still the test of each gate,
-so run it once per environment. An Entra group or app-role check will replace
-the lists later and is not designed here.
+**Each environment has its own allow-list.** A release-candidate environment
+typically lists a subset of users. One image can serve different lists only
+because the runtime value wins over the build-time one
+(`app/src/lib/auth/allowList.ts:24-29`), so **the CI build must not set
+`VITE_ALLOWED_EMAILS`**: if it did, that value would become the fallback
+allow-list in every environment, prod included. §8 step 5 is still the test of
+each gate, so run it once per environment. An Entra group or app-role check
+would replace the lists and is not designed here.
 
-**One GPU box for all three.** Every environment points `VERDA_INFERENCE_*` at
-the same scale-to-zero deployment, so a turn in one environment can queue behind
-a turn in another. Each app process keeps its own cold-start estimate and its
-own wake poll (`app/src/lib/inference/cold-start.server.ts:71-77`;
+**One GPU box for several environments.** If every environment points
+`VERDA_INFERENCE_*` at the same scale-to-zero deployment, a turn in one
+environment can queue behind a turn in another. Each app process keeps its own
+cold-start estimate and its own wake poll
+(`app/src/lib/inference/cold-start.server.ts:71-77`;
 `app/src/lib/inference/wake.server.ts:117,293-303`). So the "starting GPU"
 countdown in one environment does not know about a wake that another
-environment just paid for. An environment that joins partway through another
-environment's cold start can also record the rest of that wait as a cold start
-of its own. That lowers its estimate, and ADR-0007 accepts it as a consequence
-of sharing the box.
+environment just paid for, and an environment that joins partway through
+another's cold start can record the rest of that wait as a cold start of its
+own, which lowers its estimate. Only the countdown is affected, not routing.
 
 **Where the live layer runs.** The coordinated burst, `pnpm eval:harness` and
-`smoke-verda.ts` run against dev or staging rather than the laptop. The laptop
-is aarch64 on colima and the VMs are linux/amd64, and #412 shows what that
-difference hides. The hermetic layers do not move
+`smoke-verda.ts` belong against a remote environment rather than a laptop. A
+laptop on Apple Silicon is aarch64 and the hosts are linux/amd64, and #412
+shows what that difference hides. The hermetic layers do not move
 ([`testing/pyramid.md`](testing/pyramid.md)).
 
 ## 13. Deploy and promotion, once the workflows exist
 
-None of these workflows exist yet. This is the shape they will implement. If
-the two ever disagree, ADR-0007 is the authority.
+None of these workflows exist in this repository yet. This is the shape that
+keeps the artifact that was approved the artifact that ships;
+[ADR-0008](adr/0008-deployment-guidance-is-provider-neutral.md) says why.
 
-| Trigger                                           | What happens                                                                      | Gate                                                                                      |
-| ------------------------------------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Merge to `main`                                   | CI builds the image once, pushes it to ACR and deploys that digest to **dev**     | CI green                                                                                  |
-| Push of a protected tag such as `app-v0.2.0-rc.1` | The digest built for that commit deploys to **staging**                           | a tag ruleset restricts who can create `app-v*` tags                                      |
-| Promotion of a staging release                    | The **same digest** that staging is running deploys to **prod**. Nothing rebuilds | GitHub Environment `prod`: the owner is the only reviewer, and prevent self-review is off |
+| Trigger                                           | What happens                                                                           | Gate                                                 |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Merge to `main`                                   | CI builds the image once, pushes it to the registry and deploys that digest to **dev** | CI green                                             |
+| Push of a protected tag such as `app-v0.2.0-rc.1` | The digest built for that commit deploys to **staging**                                | a tag ruleset restricts who can create `app-v*` tags |
+| Promotion of a staging release                    | The **same digest** that staging is running deploys to **prod**. Nothing rebuilds      | a GitHub Environment `prod` with required reviewers  |
 
 Three rules carry the design:
 
@@ -909,6 +919,302 @@ Three rules carry the design:
   `git checkout` and rebuild stays the procedure for a VM that builds its own
   image. Its #260 warning still applies to any digest built from a commit
   before `56ac2b4`.
+
+## 14. Bootstrapping a single VPS — `scripts/bootstrap-vps.sh`
+
+§§3–8 as one script, plus the host hardening an unmanaged VPS needs, for one
+Ubuntu x86_64 box from any provider. A VPS is the customer's to secure, and
+providers' own hardening guides converge on the same baseline (OVHcloud's
+[How to secure a VPS](https://docs.ovhcloud.com/en/guides/bare-metal-cloud/virtual-private-servers/secure-your-vps)
+is one example): updates, SSH keys only, an optional SSH port move, a host
+firewall and `fail2ban`. The script applies that on the box and then runs
+§§3–8 there. What happens outside the box (a firewall in front of it,
+snapshots, out-of-band access) is an owner action, below. The script is
+idempotent: each stage checks before it changes anything, so you resume by
+re-running it. Its header and `--help` hold the details. A deployment that
+keeps its own parameters and runbook elsewhere runs this script at a pinned
+commit of this repository; nothing in it is specific to one host.
+
+**Before the first run:**
+
+- The commit you deploy must digest-pin the `mcp-gateway` image (#421) and
+  must have the tracked `docker-config.json` set `dynamic-tools` to
+  `"disabled"` (#422). Both are boot gates: the latest upstream gateway release
+  breaks this stack (#417), and with `dynamic-tools` on the gateway adds its
+  own management tools to every agent's tool list. The script never writes
+  that file and never puts a registry credential in it. Every catalog image is
+  public. If one ever needs auth, log in and pull on the host, as §3 says.
+- The login user (`ubuntu` below) has passwordless sudo, its
+  `~/.ssh/authorized_keys` holds your key, and you are logged in with it. The
+  script refuses to turn passwords off for an account without a usable key.
+- Open an interactive SSH session and leave it open for the whole first run.
+  See the anti-lockout procedure below.
+
+**Run it.** Do a dry run first. The hostname and the ACME mailbox are required
+arguments and are never committed anywhere. `--ref` is required on every real
+run that checks out the repo, and it must be the reviewed commit's full
+40-character SHA. A branch name, a tag or a short SHA is refused, so the three
+runs cannot deploy three different states of `main`:
+
+```bash
+# Piped. It never prompts; it lists what is missing.
+ssh ubuntu@<host> 'bash -s -- --hostname <fqdn> --acme-email <mailbox> --ref <sha> --dry-run' \
+  < scripts/bootstrap-vps.sh
+
+# Copied. It prompts for the owner-supplied values, with secrets hidden.
+scp scripts/bootstrap-vps.sh ubuntu@<host>:
+ssh -t ubuntu@<host> 'bash bootstrap-vps.sh --hostname <fqdn> --acme-email <mailbox> --ref <sha>'
+```
+
+Run the second run, which does the apt installs and the image build, so that a
+dropped connection cannot stop an apt transaction halfway: copy the script and
+start it under `tmux`, or with `nohup … > bootstrap.log 2>&1 &`, and follow the
+log.
+
+A first bootstrap takes three runs. Exit code 3 means the run stopped for an
+action, and you re-run with the same arguments once it is done:
+
+1. The first run hardens SSH and the firewall, then stops at the anti-lockout
+   checkpoint.
+2. The second run installs `fail2ban` and Docker, checks out the repo, writes
+   `.env` and builds the images. It then stops before `boot` until the
+   owner-supplied values and the key escrow are in place.
+3. The third run, with `--keys-escrowed`, boots the stack, seeds the graph and
+   runs the smoke checks. The flag counts only on a run after the one that
+   generated the keys: on the generating run it is ignored, because nobody can
+   have escrowed keys that did not exist yet.
+
+| Stage       | What it changes on the box                                                                                                                                                                                                                                                                                                                                                                                    |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `preflight` | Nothing. It refuses anything that is not x86_64 (#412), not Ubuntu, under 4 GiB of RAM or under 20 GiB of free disk, a root login, or a user without passwordless sudo                                                                                                                                                                                                                                        |
+| `updates`   | `apt-get upgrade`, plus `/etc/apt/apt.conf.d/20auto-upgrades`, which turns on daily unattended upgrades from the security origin only. Docker's repo is not in that origin, so the engine is never upgraded under the stack. Reboots are never automatic                                                                                                                                                      |
+| `ssh`       | `/etc/ssh/sshd_config.d/00-hames-hardening.conf`: keys only, no passwords, no keyboard-interactive, no root login, and `Port` lines only if `--ssh-port` is given. The `00-` prefix makes it sort first, because sshd keeps the first value it reads and a cloud image's `50-cloud-init.conf` can turn passwords back on. The stage runs `sshd -t` before any reload and reads the result back with `sshd -T` |
+| `firewall`  | `ufw`: deny incoming, allow outgoing, allow the SSH port(s), 80/tcp, 443/tcp and 443/udp, on IPv4 and IPv6. Each SSH port is allowed and read back before `ufw` is enabled. It prints the rules for a firewall in front of the box                                                                                                                                                                            |
+| `fail2ban`  | Installs `fail2ban` and writes `/etc/fail2ban/jail.local` with the baseline `[sshd]` values: `maxretry = 3`, `findtime = 5m`, `bantime = 30m`, on the SSH port(s). `ignoreip` is loopback plus the operator: `--f2b-ignore <ip>[,…]`, else this SSH session's own client address, printed. It refuses to overwrite a `jail.local` it did not write                                                            |
+| `docker`    | Docker Engine and the compose plugin from Docker's apt repository, never the snap. It checks that the key file holds exactly Docker's one signing key and refuses if Docker publishes no suite for the release. It writes `/etc/docker/daemon.json` with log rotation if the file is absent, requires Compose 2.24 or later, and adds the login user to the `docker` group                                    |
+| `checkout`  | Clones the repo into `/opt/hames`, detached at `--ref`, a required full commit SHA, fetched by id if no branch carries it. It refuses a dirty tree and any commit older than #260. It writes §3a's five-server `configs/mcp-config.yaml` and never touches the tracked `docker-config.json`                                                                                                                   |
+| `env`       | Creates `.env` (mode 600) from the template. It generates the two database passwords and the three keys on the box, and never regenerates an existing value or one a data volume already depends on. It lists, or prompts for, the owner's values. `--keys-escrowed` records the escrow, except on the run that generated the keys                                                                            |
+| `hostname`  | Writes `APP_DOMAIN`, `ACME_EMAIL` and the two auth URIs into `.env`, checks that DNS points at the box, and prints the Entra steps                                                                                                                                                                                                                                                                            |
+| `images`    | `docker compose build` and `pull`, a host pull of the five allow-listed MCP server images (in the gateway a failed pull is only a warning), and `docker build -t kg-sandbox:base rootfs/`. `--sandbox-flavours` also builds the three flavour images the `flavoured-sandbox` agent needs                                                                                                                      |
+| `boot`      | Runs every gate first: the gateway pin, `dynamic-tools` disabled, §6's preflight, the escrow, DNS, a GitHub-token scan, and the rendered config (every port but Caddy's on loopback, the gateway allow-listed). Then it runs `docker compose up -d` and waits for every service                                                                                                                               |
+| `seed`      | Imports `neo4j_dumps/seed-data.cypher`, or `--seed-file`, through `scripts/import-neo4j.sh`, and only into an empty graph. It never passes `--wipe`                                                                                                                                                                                                                                                           |
+| `smoke`     | §8's on-box half: `ss` shows nothing public but the SSH port(s), 80 and 443; the gateway serves exactly the five servers; HTTP redirects to HTTPS; `/api/health` answers over a valid certificate; an unauthenticated `POST /api/events` gets 401; there is no GitHub token; `dynamic-tools` is still disabled; and the graph is not empty                                                                    |
+
+**The anti-lockout procedure.** The lockout-capable stages, `ssh` and
+`firewall`, run first. Once either one changes something, the script stops
+before running anything else:
+
+1. Before the first run, open an interactive session (`ssh ubuntu@<host>`) and
+   leave it open. An sshd reload, a socket restart and enabling `ufw` all leave
+   existing sessions alone.
+2. When the run stops at the checkpoint (exit 3), prove that a **new** login
+   works with the key alone. The script prints the exact command, with `-p` if
+   the port moved:
+   `ssh -o PreferredAuthentications=publickey -o PasswordAuthentication=no ubuntu@<host> true`.
+3. If that fails, revert from the session you kept open:
+   `sudo rm -f /etc/ssh/sshd_config.d/00-hames-hardening.conf`, then
+   `sudo systemctl daemon-reload && sudo systemctl restart ssh.socket`, then
+   `sudo ufw allow 22/tcp`.
+4. If no session is left, use the provider's out-of-band access: a web, serial
+   or KVM console (it logs in with the account's password, if it has one), or a
+   rescue or recovery boot. From a rescue system, find the disk with `lsblk`,
+   mount it on `/mnt`, delete
+   `/mnt/etc/ssh/sshd_config.d/00-hames-hardening.conf`, set `ENABLED=no` in
+   `/mnt/etc/ufw/ufw.conf`, and boot normally. A mistake in a firewall in front
+   of the box is undone in the provider's console, not from rescue. Find out
+   how your provider's rescue access works **before** the first run.
+5. **A `fail2ban` ban drops the kept session too**, because its reject rule
+   matches established packets. Three mistyped user names from one address in
+   5 minutes ban it for 30 minutes; a retried wrong key for the right user
+   does not count. The jail therefore never bans the operator's address
+   (`ignoreip`, above). If it happens anyway, from another address:
+   `sudo fail2ban-client set sshd unbanip <ip>`; else the console, a rescue
+   boot, or wait 30 minutes. A re-run from a different address replaces the
+   exempt one, so two operators pass both with `--f2b-ignore`.
+6. Close the old session only after step 2 passes, then re-run the script.
+
+**The SSH port: not moved by default, available as `--ssh-port`.** Hardening
+guides often recommend a port between 49152 and 65535. The script makes the
+move only when asked, and in two runs, so the box always has a port that is
+known to work:
+
+1. `--ssh-port <P>` adds `P` to `ufw` first, then has sshd listen on 22 **and**
+   `P`, and points the `fail2ban` jail at both. Then the checkpoint asks for a
+   new key login with `-p <P>`.
+2. Add `--ssh-port-verified` to the same arguments after that login works. sshd
+   then listens on `P` only, and `ufw` closes 22 only once nothing listens on
+   it. Then comes the checkpoint again.
+
+On Ubuntu 24.04 and later sshd is socket-activated, so the listening port
+belongs to `ssh.socket` (`ListenStream`), not to sshd. Editing the packaged
+`/lib/systemd/system/ssh.socket`, as some guides do, is overwritten by an
+upgrade. The script writes `Port` lines in its sshd drop-in instead, and
+Ubuntu's `sshd-socket-generator` turns those into the socket's `ListenStream`
+on `systemctl daemon-reload`. The script then restarts `ssh.socket`. If the
+generated socket or the listener does not come up on every port, the script
+puts the previous drop-in back before it stops.
+
+The recommendation is **not to move it by default**. With passwords off,
+key-only login plus `fail2ban` already defeats the brute force that a port move
+hides from. A move also has up to five places that must agree: sshd,
+`ssh.socket`, `ufw`, the `fail2ban` jail and any firewall in front of the box,
+and missing any one of them locks you out. What a move buys is a quieter auth
+log. If you want SSH narrowed, a better control is a firewall rule in front of
+the box that admits only your source address, if it is fixed.
+
+**The login account.** Guides often recommend a restricted user for work that
+does not need root. The options, for a box whose only login is the deploy
+user's key:
+
+- **Keep the login user with passwordless sudo (recommended).** A piped run of
+  this script, or an automated one, cannot answer a password prompt.
+- **Require a password for sudo.** This protects against a stolen key only if
+  the user is also kept out of the `docker` group. The group "grants root-level
+  privileges to the user"
+  ([Docker](https://docs.docker.com/engine/install/linux-postinstall/)), so a
+  stolen key plus the group is root without any password. It also breaks
+  non-interactive runs, and the password has to live somewhere, usually next
+  to the key.
+- **Add a separate deploy user without sudo, which runs docker.** This is
+  restricted in name only. Running docker needs either the `docker` group,
+  which is root-equivalent, or sudo.
+
+The script adds the login user to the `docker` group, which grants nothing that
+passwordless sudo does not already grant. The control is the key: keep it
+passphrase-protected, and held only by the people who run the box. Revisit
+this when a second person needs a login, or if the box moves to rootless
+Docker.
+
+**Owner action: a firewall in front of the box.** Many providers offer one: a
+network or edge firewall, or a cloud security group. It drops traffic before it
+reaches the box, which makes it a second layer worth having. The `firewall`
+stage prints a rule set that mirrors `ufw`, with the actual SSH port(s). For a
+firewall that applies rules in order, first match wins:
+
+| Order | Action | Protocol | Match                        | Why                                                    |
+| ----- | ------ | -------- | ---------------------------- | ------------------------------------------------------ |
+| 0     | Accept | TCP      | state `established`          | replies to the box's own connections (apt, ACME, APIs) |
+| 1     | Accept | UDP      | source port 53               | DNS replies, where UDP is stateless                    |
+| 2     | Accept | TCP      | destination port 22 (or `P`) | SSH; add your source IP if it is fixed                 |
+| 3     | Accept | TCP      | destination port 80          | the ACME HTTP-01 challenge, then the redirect to 443   |
+| 4     | Accept | TCP      | destination port 443         | the app                                                |
+| 5     | Accept | UDP      | destination port 443         | HTTP/3                                                 |
+| 6     | Accept | UDP      | source port 123              | NTP replies, where UDP is stateless                    |
+| 7     | Accept | ICMP     |                              | reachability and path-MTU discovery                    |
+| last  | Deny   | any      |                              | everything else                                        |
+
+A stateful security group needs only the inbound accepts. If the firewall
+filters IPv4 only, `ufw` stays the only filter for IPv6. During a port move,
+keep a rule for 22 beside the one for `P` until the second run. Run §2's
+off-box port scan after you change these rules: it is the only check of the
+network path.
+
+**Owner action: backups and what a disk image holds.** §9's
+`scripts/backup-preview.sh` writes to the same disk and does not survive losing
+the box. A provider snapshot of the whole disk does, and the recommended
+minimum is the key escrow (§7, which `boot` requires) plus one snapshot right
+after the first successful smoke, and again before any risky change such as a
+ref bump across a migration. For a consistent image, `docker compose stop`
+first, then `start` after the snapshot. Check whether your provider also takes
+automatic backups by default, because then a disk image exists whether or not
+you take one.
+
+Know what any disk image of the box holds, and so what anyone who can restore
+one gets:
+
+- the graph and the conversation store;
+- `user_tokens`: each user's MSAL cache, **with the refresh token**, for the
+  delegated Graph scopes (`app/src/lib/auth/user-tokens.server.ts`;
+  the default set is `DEFAULT_GRAPH_SCOPES` in `entra-config.server.ts`);
+- `.env` on the same disk, with `AZURE_CLIENT_SECRET` and the
+  `TOKEN_ENCRYPTION_KEY` that decrypts those tokens, beside
+  `DATA_ENCRYPTION_KEY`;
+- the Data Stash uploads in the redis volume, and Caddy's TLS key.
+
+So an image is not just stored rows: it is live mail, calendar and file access
+as every user, until their refresh tokens are revoked. The app's own column
+encryption does not help against it, because its keys are in the image.
+Protect the provider account itself, with two-factor sign-in and as few people
+as possible. If the provider offers no disk encryption, the options are:
+
+- **Root full-disk encryption.** It needs a custom image and an unlock at
+  every boot, remote (dropbear-initramfs) or through the console. Usually not
+  worth it for a non-production box.
+- **A LUKS data volume.** A loop file or an additional disk, holding Docker's
+  data-root (or just the volumes), `/opt/hames/.env` and `backups/`, unlocked
+  by hand over SSH after a reboot, with `docker.service` ordered after the
+  mount and its passphrase escrowed with the three keys. The script never
+  reboots on its own, so a manual unlock fits. Snapshots and backups then hold
+  ciphertext. It does not protect a running host.
+- **Cheaper first steps.** Trim `AZURE_GRAPH_SCOPES` so the token store holds
+  less, and keep an org-graph export off the box until the volume exists.
+
+**What the owner supplies.** The script generates every secret it can and asks
+for these:
+
+- `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` (the secret
+  **value**), from the Entra app registration (§5).
+- `VITE_ALLOWED_EMAILS`: this deployment's allow-list. The template's
+  `*@contoso.com` counts as missing.
+- `ANTHROPIC_API_KEY`.
+- Optionally, the private tier: `VERDA_INFERENCE_ENDPOINT`,
+  `VERDA_INFERENCE_API_KEY` and `SMALL_LLM_BASE_URL` (all three or none, both
+  URLs ending in `/v1`), plus `SMALL_LLM_API_KEY` and `USE_VERDA_INFERENCE`.
+- `--hostname`, `--acme-email` and `--ref <reviewed commit SHA>` on the command
+  line; `--ssh-port` if you want the port moved; `--f2b-ignore` if the operator's
+  address is not the one running the script.
+- The Entra redirect URI `https://<fqdn>/api/auth/callback`, admin consent for
+  the Graph scopes, and the client secret's expiry date. The `hostname` stage
+  prints the exact steps (§5).
+- The key escrow (§7): copy the three keys off the box from your own terminal,
+  then re-run with `--keys-escrowed`. The marker stores a hash of the keys, so
+  a changed key needs a new escrow, and the flag is ignored on the run that
+  generated them.
+- Which graph to start with: the public seed (the default), or an org graph
+  export copied onto the box and passed as `--seed-file`. That export holds
+  personal data, so it must never be committed.
+- Outside the box: the firewall rules and the backup choice above.
+
+**How a VPS differs from §§1, 2 and 4:**
+
+- **§1, disk encryption.** A VPS may offer no encryption at creation; see the
+  options above.
+- **§2, firewall.** Without an NSG, `ufw` is the host's filter, but Docker
+  publishes ports through its own NAT rules, which divert packets before `ufw`
+  sees them, so `ufw` does not guard a Docker-published port at all
+  ([Docker: packet filtering and firewalls](https://docs.docker.com/engine/network/packet-filtering-firewalls/)).
+  The overlay's `127.0.0.1` binds keep everything except Caddy private. The
+  script checks that intent before boot and checks the result with `ss`
+  afterwards. A firewall in front of the box sits before both.
+- **§4, the hostname.** Prefer a name under a domain you control to the
+  provider's default host name. Let's Encrypt allows 50 certificates per
+  registered domain per 7 days and takes the registered domain from the Public
+  Suffix List ([rate limits](https://letsencrypt.org/docs/rate-limits/)). A
+  provider's default names whose parent domain is not on that list share one
+  limit with every other customer using one: on OVHcloud, for example, the
+  `vps-*.vps.ovh.net` names (checked 2026-10-03).
+
+**What the script was tested against, and what it was not.**
+`scripts/bootstrap-vps.test.sh` runs in CI with ShellCheck. It needs no daemon
+and no root, and it pins the gates: the listener check, the gateway pin,
+`dynamic-tools`, secrets that are never printed or regenerated, the boot gate's
+`.env` checks, the escrow marker, the key check, the port move and the jail
+values. It also runs the `ssh` and `firewall` stages and the checkpoint against
+a fake box (shims for sudo, sshd, ufw, ss and systemctl), asserting what was
+called and in which order, plus the rendered-exposure and volume gates. Each
+pin was shown to go red by a mutation. Before the script was made
+provider-neutral (a change of wording, of the managed-file header and of one
+removed provider-specific warning, not of logic), its real stages were
+exercised in throwaway Ubuntu 24.04 and 26.04 containers, including with
+systemd as PID 1, the real `ssh.socket`, `ufw` and `fail2ban`, over SSH and
+through dropped sessions: the SSH hardening and a refused password login
+afterwards; the two-run port move with a key login on each port; the Docker
+install from the `resolute` suite; and the checkout, `.env` and hostname
+stages, with a re-run that leaves `.env` byte-identical. Not tested: a provider's own image (its
+cloud-init drop-ins, whether `ssh.socket` is enabled), anything that needs a
+Docker daemon (the image build, `up`, ACME, the smoke checks against a live
+stack), a firewall in front of the box and rescue access. The first real run,
+with a session kept open, is the test of those.
 
 ## What is not true of this deployment
 

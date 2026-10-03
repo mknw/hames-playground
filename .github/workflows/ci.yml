@@ -70,6 +70,19 @@ jobs:
         working-directory: .
         run: scripts/import-neo4j.test.sh
 
+      # Pins what decides whether a box is safe to boot
+      # (scripts/bootstrap-vps.sh): the public-listener check, the gateway
+      # digest-pin gate, secrets generated but never printed or regenerated,
+      # the boot gate's .env checks, the escrow marker, and the anti-lockout
+      # stages run against a fake box. Shims for sudo/docker/uname/sshd/ufw/
+      # ss/systemctl; no daemon, no root. ShellCheck is preinstalled on
+      # ubuntu-latest.
+      - name: Shell tests (VPS bootstrap)
+        working-directory: .
+        run: |
+          shellcheck -x scripts/bootstrap-vps.sh scripts/bootstrap-vps.test.sh
+          scripts/bootstrap-vps.test.sh
+
       - run: pnpm typecheck
 
       - run: pnpm lint

@@ -12,14 +12,13 @@ Each agent is one source file, and each is a working composition of the patterns
 `@hames-ai/harness-patterns`. To see a pattern used in context, open the agent that
 uses it:
 
-| To see                                                        | Read                                                                                                                 |
-| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `router` and `routes`, `withReferences`, `withInjectionGuard` | [`search.server.ts`](../../packages/agents/agents/search.server.ts), agent `search`                                  |
-| `retriever` routed beside tool loops                          | [`retriever-agent.server.ts`](../../packages/agents/agents/retriever-agent.server.ts), agent `retriever`             |
-| `planner` ahead of a loop over every tool                     | [`general.server.ts`](../../packages/agents/agents/general.server.ts), agent `general`                               |
-| A loop over an explicit tool list, fully guarded              | [`microsoft-365.server.ts`](../../packages/agents/agents/microsoft-365.server.ts), agent `microsoft-365`             |
-| `compactIntent` and `actorCritic` inside a sandbox            | [`sandbox-session.server.ts`](../../packages/agents/agents/sandbox-session.server.ts), agent `sandbox-session`       |
-| `router` choosing between sandbox flavours                    | [`flavoured-sandbox.server.ts`](../../packages/agents/agents/flavoured-sandbox.server.ts), agent `flavoured-sandbox` |
+| To see                                                                             | Read                                                                                                     |
+| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `router` and `routes`, `withReferences`, `withInjectionGuard`                      | [`search.server.ts`](../../packages/agents/agents/search.server.ts), agent `search`                      |
+| `retriever` routed beside tool loops                                               | [`retriever-agent.server.ts`](../../packages/agents/agents/retriever-agent.server.ts), agent `retriever` |
+| `planner` ahead of a loop over every tool                                          | [`general.server.ts`](../../packages/agents/agents/general.server.ts), agent `general`                   |
+| A loop over an explicit tool list, fully guarded                                   | [`microsoft-365.server.ts`](../../packages/agents/agents/microsoft-365.server.ts), agent `microsoft-365` |
+| `router` choosing between sandbox flavours, each an `actorCritic` inside a sandbox | [`sandbox.server.ts`](../../packages/agents/agents/sandbox.server.ts), agent `sandbox`                   |
 
 Every one of them ends with `compactExecution`, the pattern that writes the answer
 the user sees. None composes `parallel` or `judge`; [`parallel.md`](./parallel.md)

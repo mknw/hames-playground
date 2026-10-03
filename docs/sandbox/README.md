@@ -61,7 +61,7 @@ what it claimed to write?".
 
 ### Durable workspace (`syncWorkspace`, [#89](https://github.com/mknw/hames-playground/issues/89))
 
-For agents that opt in (e.g. **Sandbox · Session**), `/work` has a convention:
+For agents that opt in (e.g. **Sandbox**), `/work` has a convention:
 
 | Path        | Meaning                                                                                                |
 | ----------- | ------------------------------------------------------------------------------------------------------ |
@@ -72,8 +72,10 @@ For agents that opt in (e.g. **Sandbox · Session**), `/work` has a convention:
 Outside `/work`, `/skills/<name>/SKILL.md` holds the user's skills (#415): their
 own and the global skills they have not hidden, written by `withSandbox` at
 each turn's entry (a content-hash sync, so a withdrawn skill leaves and an
-edited one is restored) on a small `noexec` tmpfs of its own. They are managed
-in the UI's Sandbox tab → Skills.
+edited one is restored) on a small `noexec` tmpfs of its own. A routine or a
+triggered run mounts the user's own skills only, never another user's global
+one, because nobody reads its output before it acts. They are managed in the
+UI's Sandbox tab → Skills.
 
 ```sh
 docker exec sbx-xxxx ls -la /work/in /work/out   # what was restored / will persist
@@ -139,7 +141,7 @@ the next sandbox action — see issue
 timer-driven follow-up if dormant accumulation becomes an issue.
 
 Losing the VM no longer loses the work: agents that opt into durable workspaces
-(`syncWorkspace: true`, e.g. **Sandbox · Session**) restore prior files into
+(`syncWorkspace: true`, e.g. **Sandbox**) restore prior files into
 `/work/in` on the next boot and promote `/work/out` deliverables to the
 DataStash each turn — see below.
 

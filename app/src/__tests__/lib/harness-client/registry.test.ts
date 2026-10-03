@@ -30,9 +30,9 @@ vi.mock('../../../lib/harness-client/session.server', () => ({
   agentDeps: () => ({}),
 }))
 
-// The module registers the six agents on import; each one pulls in the whole
+// The module registers the five agents on import; each one pulls in the whole
 // pattern/tool graph, so stub them down to bare configs.
-function stubAgent(id: string): AgentConfig {
+function stubAgent(id: string, extra: Partial<AgentConfig> = {}): AgentConfig {
   return {
     id,
     name: id,
@@ -42,6 +42,7 @@ function stubAgent(id: string): AgentConfig {
     accent: 'blue',
     servers: [],
     createPatterns: async () => [],
+    ...extra,
   }
 }
 vi.mock('@hames-ai/agents/agents/search.server', () => ({
@@ -50,11 +51,8 @@ vi.mock('@hames-ai/agents/agents/search.server', () => ({
 vi.mock('@hames-ai/agents/agents/general.server', () => ({
   generalAgent: stubAgent('general'),
 }))
-vi.mock('@hames-ai/agents/agents/sandbox-session.server', () => ({
-  sandboxSessionAgent: stubAgent('sandbox-session'),
-}))
-vi.mock('@hames-ai/agents/agents/flavoured-sandbox.server', () => ({
-  flavouredSandboxAgent: stubAgent('flavoured-sandbox'),
+vi.mock('@hames-ai/agents/agents/sandbox.server', () => ({
+  sandboxAgent: stubAgent('sandbox', { usesSandbox: true }),
 }))
 vi.mock('@hames-ai/agents/agents/retriever-agent.server', () => ({
   retrieverAgent: stubAgent('retriever'),
@@ -103,15 +101,16 @@ beforeEach(() => {
 describe('registration + lookup', () => {
   it('registers the bundled agents on import', () => {
     expect(getAllAgents().map((a) => a.id)).toEqual(
-      expect.arrayContaining([
-        'search',
-        'general',
-        'sandbox-session',
-        'flavoured-sandbox',
-        'retriever',
-        'microsoft-365',
-      ]),
+      expect.arrayContaining(['search', 'general', 'sandbox', 'retriever', 'microsoft-365']),
     )
+  })
+
+  // Owner decision 2026-10-03: one sandbox agent. The two it replaced are gone
+  // from the picker, and their ids still resolve — `conversations.agent_id`
+  // and `routines.agent_id` hold them for every row written before.
+  it('registers exactly one sandbox agent, and neither of the two it replaced', () => {
+    const ids = getAllAgents().map((a) => a.id)
+    expect(ids.filter((id) => id.includes('sandbox'))).toEqual(['sandbox'])
   })
 
   it('returns undefined for an unknown id rather than throwing', () => {
@@ -127,13 +126,24 @@ describe('registration + lookup', () => {
       expect(getAgent('default')?.id).toBe('search')
     })
 
+    it.each(['sandbox-session', 'flavoured-sandbox'])(
+      "maps the consolidated '%s' id to the one sandbox agent",
+      (legacy) => {
+        expect(canonicalAgentId(legacy)).toBe('sandbox')
+        expect(getAgent(legacy)?.id).toBe('sandbox')
+      },
+    )
+
     it('passes an id it does not know through unchanged', () => {
       expect(canonicalAgentId('retriever')).toBe('retriever')
       expect(canonicalAgentId('no-such-agent')).toBe('no-such-agent')
     })
 
     it('does not resurrect the old id in the listing', () => {
-      expect(getAllAgents().map((a) => a.id)).not.toContain('default')
+      const ids = getAllAgents().map((a) => a.id)
+      expect(ids).not.toContain('default')
+      expect(ids).not.toContain('sandbox-session')
+      expect(ids).not.toContain('flavoured-sandbox')
     })
   })
 
@@ -157,8 +167,22 @@ describe('registration + lookup', () => {
       icon: `i-${id}`,
       accent: 'violet',
       servers: ['neo4j'],
+      // A definition that does not declare a sandbox has none — sent as an
+      // explicit `false`, so the client never interprets an absent flag.
+      usesSandbox: false,
     })
     expect('createPatterns' in meta).toBe(false)
+  })
+
+  // The Sandbox tab's gate is this projection: it reads the definition's
+  // declaration, not the agent's id or name.
+  it('carries each agent’s sandbox declaration to the client', () => {
+    const meta = getAgentMetadata()
+    expect(meta.find((m) => m.id === 'sandbox')?.usesSandbox).toBe(true)
+    expect(meta.find((m) => m.id === 'search')?.usesSandbox).toBe(false)
+
+    registerAgent({ ...stubAgent('renamed-box', { usesSandbox: true }) })
+    expect(getAgentMetadata().find((m) => m.id === 'renamed-box')?.usesSandbox).toBe(true)
   })
 })
 

@@ -83,8 +83,15 @@ export default function Home() {
 
   // The conversation's selected agent, reported up from ChatInterface, so the
   // agent-aware support panels track the live selection (the default agent
-  // until set).
+  // until set). Whether it runs in a sandbox rides along from the registry, and
+  // stays undefined until the agent list has loaded: the Sandbox tab is greyed
+  // out only on a definite "no", never on "not known yet".
   const [currentAgentId, setCurrentAgentId] = createSignal<string>('search')
+  const [currentAgentUsesSandbox, setCurrentAgentUsesSandbox] = createSignal<boolean | undefined>()
+  const handleSelectedAgentChange = (agentId: string, agent?: { usesSandbox: boolean }) => {
+    setCurrentAgentId(agentId)
+    setCurrentAgentUsesSandbox(agent?.usesSandbox)
+  }
 
   // ---------------------------------------------------------------------------
   // Stores
@@ -336,7 +343,7 @@ export default function Home() {
                   sessionId={selectedSessionId()}
                   onContextUpdate={handleContextUpdate}
                   onAgentChangeRequestsNewSession={handleNewChat}
-                  onSelectedAgentChange={setCurrentAgentId}
+                  onSelectedAgentChange={handleSelectedAgentChange}
                   graphEntityNames={graphEntityNames()}
                   onHighlightEntities={setHighlightedIds}
                   onOpenReference={setPendingReference}
@@ -361,7 +368,7 @@ export default function Home() {
             shadow="hover:[0_0_10px_rgba(0,255,255,0.3)]"
           />
 
-          {/* Support Panel (Neo4j, Memory, Context manager, Data, Terminal) */}
+          {/* Support Panel (Neo4j, Memory, Context manager, Data, Sandbox) */}
           <Splitter.Panel id="support">
             <SupportPanel
               graphElements={graphElements()}
@@ -372,6 +379,7 @@ export default function Home() {
               onClearEvents={() => registry.clearEvents(selectedSessionId())}
               sessionId={selectedSessionId()}
               agentId={currentAgentId()}
+              sandboxAvailable={currentAgentUsesSandbox()}
               onStashAction={handleStashAction}
               pendingReference={pendingReference()}
               onUploaded={() => watchEmbedding(selectedSessionId())}

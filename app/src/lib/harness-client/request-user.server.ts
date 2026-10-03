@@ -28,6 +28,14 @@ export interface RequestContext {
   userId: string
   /** Conversation/run this execution belongs to; `null` when there isn't one. */
   sessionId: string | null
+  /**
+   * A person is waiting on this run — an interactive turn or an approval —
+   * rather than a routine or a triggered action that acts before anyone reads
+   * it. Absent means unattended, so a scope that forgets to say is the
+   * restrictive one. Today it decides one thing: whether the sandbox mounts
+   * other users' global skills (`agentDeps()` in `session.server.ts`).
+   */
+  attended?: boolean
 }
 
 const requestStore = new AsyncLocalStorage<RequestContext>()
@@ -56,4 +64,10 @@ export function getRequestUserId(): string | null {
  *  inside a `runWithUserId` scope, which deliberately carries no session. */
 export function getRequestSessionId(): string | null {
   return requestStore.getStore()?.sessionId ?? null
+}
+
+/** Whether the request in scope is ATTENDED (see `RequestContext.attended`).
+ *  False outside a request scope and whenever the scope did not say so. */
+export function isAttendedRequest(): boolean {
+  return requestStore.getStore()?.attended === true
 }

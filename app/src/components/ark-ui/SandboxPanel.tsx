@@ -254,9 +254,9 @@ export const SandboxPanel = (props: SandboxPanelProps) => {
                   aria-hidden="true"
                 />
                 <span text="sm ui-text-secondary" max-w="xs">
-                  No sandbox activity yet. Run the <strong>Sandbox Demo</strong> agent (or any agent
-                  wrapped in <code>withSandbox</code>) to see commands here — or hit{' '}
-                  <strong>Shell</strong> to open a live terminal in this session's sandbox.
+                  No sandbox activity yet. Ask the <strong>Sandbox</strong> agent to run something
+                  to see its commands here — or hit <strong>Shell</strong> to open a live terminal
+                  in this session's sandbox.
                 </span>
               </div>
             }

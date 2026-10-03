@@ -1,6 +1,13 @@
 # Sandbox flavours & runtime selection — design note
 
-> **Status:** the `image-processing` + `data` flavours and a router demonstrator
+> **Since 2026-10-03** the app ships ONE sandbox agent, `sandbox`
+> ([`agents/sandbox.server.ts`](../packages/agents/agents/sandbox.server.ts)): this
+> recipe with three routes — `basic`, `data`, `office` — whose `basic` route is
+> keyed on the bare session id, so it is the container the interactive Shell opens.
+> It replaced `sandbox-session` and `flavoured-sandbox`. The `image-processing`
+> image below is still built and still a valid `rootfs`; no agent selects it.
+>
+> **Status (at #78):** the `image-processing` + `data` flavours and a router demonstrator
 > ship in this PR; the hardening/ergonomics items are tracked in
 > [#116](https://github.com/mknw/hames-playground/issues/116). Tracks
 > [#78](https://github.com/mknw/hames-playground/issues/78). Companion to
@@ -55,8 +62,9 @@ write engine for `pd.ExcelWriter` / `pl.DataFrame.write_excel`.
 `withSandbox(config)(pattern)` returns a `ConfiguredPattern`; `router(name→description)`
 
 - `routes(name→pattern)` compose them. A route can be a flavoured, sandboxed
-  controller — so flavour selection lives entirely in the harness. The demonstrator
-  ([`agents/flavoured-sandbox.server.ts`](../packages/agents/agents/flavoured-sandbox.server.ts)):
+  controller — so flavour selection lives entirely in the harness. The app's
+  sandbox agent ([`agents/sandbox.server.ts`](../packages/agents/agents/sandbox.server.ts))
+  is this recipe; the sketch below keeps the general shape it was introduced with:
 
 ```ts
 // N flavour containers, ONE session workspace: every route is id-addressable

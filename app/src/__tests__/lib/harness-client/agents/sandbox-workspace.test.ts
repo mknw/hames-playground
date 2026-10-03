@@ -1,5 +1,5 @@
 /**
- * Flavoured-sandbox multi-turn workspace regression test (#243 follow-up).
+ * Sandbox-agent multi-turn workspace regression test (#243 follow-up).
  *
  * Reproduces the live failure in `.harness-logs/243.json` at the routing level:
  *
@@ -309,7 +309,7 @@ function listResults(events: unknown[], patternId: string) {
   )
 }
 
-describe('flavoured-sandbox — one session workspace across flavours (#243 follow-up)', () => {
+describe('sandbox agent — one session workspace across flavours (#243 follow-up)', () => {
   beforeEach(() => {
     vms.length = 0
     backendMock.nextId = 0
@@ -324,10 +324,9 @@ describe('flavoured-sandbox — one session workspace across flavours (#243 foll
   })
 
   it('sees an ingested file on turn 2 after the router switches flavour (data → basic)', async () => {
-    const { flavouredSandboxAgent } =
-      await import('@hames-ai/agents/agents/flavoured-sandbox.server')
+    const { sandboxAgent } = await import('@hames-ai/agents/agents/sandbox.server')
     const { harness, continueSession } = await import('@hames-ai/harness-patterns')
-    const patterns = await flavouredSandboxAgent.createPatterns('sess-243', await realSandboxDeps())
+    const patterns = await sandboxAgent.createPatterns('sess-243', await realSandboxDeps())
 
     // Turn 1 — routed to `data`, where the ingested file is hydrated.
     const turn1 = await harness(...patterns)(
@@ -363,10 +362,9 @@ describe('flavoured-sandbox — one session workspace across flavours (#243 foll
     docs.store = []
     routerRoutes.queue = ['basic']
 
-    const { flavouredSandboxAgent } =
-      await import('@hames-ai/agents/agents/flavoured-sandbox.server')
+    const { sandboxAgent } = await import('@hames-ai/agents/agents/sandbox.server')
     const { harness } = await import('@hames-ai/harness-patterns')
-    const patterns = await flavouredSandboxAgent.createPatterns('sess-243', await realSandboxDeps())
+    const patterns = await sandboxAgent.createPatterns('sess-243', await realSandboxDeps())
 
     const turn = await harness(...patterns)('list the files in /work/in', 'sess-243')
     const listing = listResults(turn.context.events, 'flavour-basic-loop')

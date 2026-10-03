@@ -56,7 +56,12 @@ const GROUP_GLOBAL = 'group:global'
 export function statusText(skill: SkillView): string {
   switch (skill.status) {
     case 'mounted':
-      return `Mounted in your sandbox at ${SKILLS_DIR}/${skill.name}/SKILL.md.`
+      // Another user's skill reaches only the runs someone is watching: a
+      // routine or a triggered action mounts its owner's own skills alone.
+      return skill.mine
+        ? `Mounted in your sandbox at ${SKILLS_DIR}/${skill.name}/SKILL.md.`
+        : `Mounted in your sandbox at ${SKILLS_DIR}/${skill.name}/SKILL.md, ` +
+            'except in routines and triggered runs, which mount only your own skills.'
     case 'hidden':
       return 'Hidden: not mounted in your sandbox.'
     case 'shadowed':

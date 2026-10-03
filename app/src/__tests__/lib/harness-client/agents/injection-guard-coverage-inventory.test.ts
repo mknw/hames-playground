@@ -124,8 +124,7 @@ const AGENTS_DIR = join(process.cwd(), '../packages/agents/agents')
 const AGENT_MODULES = [
   { file: 'search.server.ts', exportName: 'searchAgent' },
   { file: 'general.server.ts', exportName: 'generalAgent' },
-  { file: 'sandbox-session.server.ts', exportName: 'sandboxSessionAgent' },
-  { file: 'flavoured-sandbox.server.ts', exportName: 'flavouredSandboxAgent' },
+  { file: 'sandbox.server.ts', exportName: 'sandboxAgent' },
   { file: 'retriever-agent.server.ts', exportName: 'retrieverAgent' },
   { file: 'microsoft-365.server.ts', exportName: 'microsoft365Agent' },
 ] as const
@@ -135,8 +134,7 @@ const AGENT_MODULES = [
 const LOADERS: Record<string, () => Promise<Record<string, unknown>>> = {
   'search.server.ts': () => import('@hames-ai/agents/agents/search.server'),
   'general.server.ts': () => import('@hames-ai/agents/agents/general.server'),
-  'sandbox-session.server.ts': () => import('@hames-ai/agents/agents/sandbox-session.server'),
-  'flavoured-sandbox.server.ts': () => import('@hames-ai/agents/agents/flavoured-sandbox.server'),
+  'sandbox.server.ts': () => import('@hames-ai/agents/agents/sandbox.server'),
   'retriever-agent.server.ts': () => import('@hames-ai/agents/agents/retriever-agent.server'),
   'microsoft-365.server.ts': () => import('@hames-ai/agents/agents/microsoft-365.server'),
 }
@@ -198,14 +196,7 @@ describe('the inventory is complete', () => {
     )
     const registered = [...registry.matchAll(/overlay\((\w+),/g)].map((m) => m[1]).sort()
     expect(registered).toEqual(
-      [
-        'searchAgent',
-        'generalAgent',
-        'sandboxSessionAgent',
-        'flavouredSandboxAgent',
-        'retrieverAgent',
-        'microsoft365Agent',
-      ].sort(),
+      ['searchAgent', 'generalAgent', 'sandboxAgent', 'retrieverAgent', 'microsoft365Agent'].sort(),
     )
     // Every module in `agents/` is now registered: the last unregistered one
     // (`multi-source-research`) was deleted with the GitHub MCP server it was
@@ -285,7 +276,7 @@ describe('agents with NO guard anywhere (pinned gaps)', () => {
     expect(toolSets.all).toEqual(expect.arrayContaining(['fetch', 'read_text_file']))
   })
 
-  it('documents current behavior: sandbox-session has no guard, though in-VM results pass callTool', async () => {
+  it('documents current behavior: the sandbox agent has no guard on any of its three routes', async () => {
     // The SPEC states the chokepoint covers "all three transports (gateway,
     // app-side, sandbox in-VM)". So a sandbox turn that fetches a page and
     // prints it returns attacker-authored text through `callTool` — the guard
@@ -293,27 +284,15 @@ describe('agents with NO guard anywhere (pinned gaps)', () => {
     // sanitized. Sandbox network egress is listed out of scope (#116); the
     // content coming BACK from the sandbox into the actor's turn log is not
     // covered by that exemption, and is not covered by a guard either.
-    const rows = inventory(await patternsOf('sandbox-session.server.ts', 'sandboxSessionAgent'))
-    expect(rows).toEqual([
-      'sandbox-session-intent [compactIntent] UNGUARDED',
-      // `withSandbox` and the `actorCritic` it wraps share a patternId, so both
-      // appear — the wrapper row is what a `withInjectionGuard` row would sit
-      // next to if one were ever added here.
-      'sandbox-session-loop [withSandbox] UNGUARDED',
-      'sandbox-session-loop [actorCritic] UNGUARDED',
-      'sandbox-session-synth [compactExecution] UNGUARDED',
-    ])
-  })
-
-  it('documents current behavior: flavoured-sandbox has no guard on any of its four routes', async () => {
-    const rows = inventory(await patternsOf('flavoured-sandbox.server.ts', 'flavouredSandboxAgent'))
+    const rows = inventory(await patternsOf('sandbox.server.ts', 'sandboxAgent'))
     expect(rows).toEqual([
       'router-* [router] UNGUARDED',
       'routes-* [routes] UNGUARDED',
+      // `withSandbox` and the `actorCritic` it wraps share a patternId, so both
+      // appear — the wrapper row is what a `withInjectionGuard` row would sit
+      // next to if one were ever added here.
       'flavour-basic-loop [withSandbox] UNGUARDED',
       'flavour-basic-loop [actorCritic] UNGUARDED',
-      'flavour-image-loop [withSandbox] UNGUARDED',
-      'flavour-image-loop [actorCritic] UNGUARDED',
       'flavour-data-loop [withSandbox] UNGUARDED',
       'flavour-data-loop [actorCritic] UNGUARDED',
       'flavour-office-loop [withSandbox] UNGUARDED',
@@ -322,7 +301,7 @@ describe('agents with NO guard anywhere (pinned gaps)', () => {
     ])
     // The `office` and `data` flavours exist to PARSE user-supplied documents
     // (#78) — the delivery vehicle the guard's own threat model names first.
-    expect(rows.filter((r) => r.includes('[actorCritic]'))).toHaveLength(4)
+    expect(rows.filter((r) => r.includes('[actorCritic]'))).toHaveLength(3)
   })
 })
 
@@ -331,7 +310,7 @@ describe('agents with NO guard anywhere (pinned gaps)', () => {
 // ============================================================================
 
 describe('roll-up across every agent', () => {
-  it('pins the guarded / unguarded split (3 of 6 agents carry a guard)', async () => {
+  it('pins the guarded / unguarded split (3 of 5 agents carry a guard)', async () => {
     const guarded: string[] = []
     const unguarded: string[] = []
     for (const { file, exportName } of AGENT_MODULES) {
@@ -341,9 +320,7 @@ describe('roll-up across every agent', () => {
     expect(guarded.sort()).toEqual(
       ['search.server.ts', 'retriever-agent.server.ts', 'microsoft-365.server.ts'].sort(),
     )
-    expect(unguarded.sort()).toEqual(
-      ['general.server.ts', 'sandbox-session.server.ts', 'flavoured-sandbox.server.ts'].sort(),
-    )
+    expect(unguarded.sort()).toEqual(['general.server.ts', 'sandbox.server.ts'].sort())
   })
 
   it('documents current behavior: no agent enables the optional LLM screen', async () => {

@@ -72,8 +72,10 @@ export interface ChatInterfaceProps {
    *  the new agent gets its own conversation row rather than overwriting an existing one. */
   onAgentChangeRequestsNewSession?: () => void
   /** Reports the conversation's selected agent (initial, on load, and on change)
-   *  so the parent can drive agent-aware UI. */
-  onSelectedAgentChange?: (agentId: string) => void
+   *  so the parent can drive agent-aware UI. `capabilities` is the agent's
+   *  registry entry — undefined until the agent list has loaded (or if it
+   *  failed to), and reported again once it has. */
+  onSelectedAgentChange?: (agentId: string, capabilities?: { usesSandbox: boolean }) => void
   /** Map of entity/relation names → graph element IDs for interactive highlighting */
   graphEntityNames?: Map<string, string[]>
   /** Callback to highlight specific graph element IDs — driven both by a click
@@ -165,9 +167,18 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   // Report the selected agent up to the parent (initial 'search', then on load
   // and on every change) so agent-aware UI can react. Consumers today are the
   // SupportPanel's Data tab (uploads carry agentId, which gates auto-ingest) and
-  // its Sandbox tab (the Shell needs it to hydrate /work/in). The Tools panel
-  // this comment used to name was removed in #234.
-  createEffect(() => props.onSelectedAgentChange?.(selectedAgent()))
+  // its Sandbox tab (the Shell needs the id to hydrate /work/in, and the tab is
+  // greyed out for an agent whose registry entry says it has no sandbox). The
+  // entry rides along from the list this component already fetched for the
+  // greeting, so the parent needs no second copy of it. The Tools panel this
+  // comment used to name was removed in #234.
+  createEffect(() => {
+    const id = selectedAgent()
+    props.onSelectedAgentChange?.(
+      id,
+      agentMeta().find((a) => a.id === id),
+    )
+  })
   // Cursor into ctx.events — tracks how many events were sent last turn so we
   // emit only the delta (new events) rather than the full accumulated history
   let prevEventCount = 0

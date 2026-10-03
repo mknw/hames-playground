@@ -128,7 +128,8 @@ describe('bracketed values in the lenient chain', () => {
 //   {"a": "x "y" z", "b": }   → { a: '"x "y" z", "b":' }
 //   {"a": "x "y" z" "b": 1}   → { a: '"x "y" z" "b": 1' }
 //   {a: [x,,y], b: 1}         → { a: '[x,,y], b: 1' }
-// It now declines, so the call throws and the loop's retry takes over.
+// It now declines, so the call throws: `actorCritic` retries it; `simpleLoop`
+// ends the loop with a recoverable `Invalid tool_args JSON` error.
 describe('last-resort single-key handler (#408)', () => {
   // Mutation M1: drop `&& !holdsSiblingMember(value)` from the handler → all
   // three collapse into `a` and return.
@@ -194,10 +195,17 @@ describe('last-resort single-key handler (#408)', () => {
   })
 
   // The price of declining rather than guessing, pinned so it is visible: a
-  // label predicate AFTER a comma is indistinguishable from a sibling key, so
-  // a Cypher value the old handler got right now throws and is retried.
-  // Mutation: M1 or M2 above → it returns one key again.
-  it('declines `, b:Label` too — the cost of not guessing', () => {
+  // label predicate or label write AFTER a comma is indistinguishable from a
+  // sibling key, and so is a quoted word followed by a colon, so values the
+  // old handler got right now throw. That is NOT a retry everywhere:
+  // `actorCritic` retries it; `simpleLoop` ends the loop with a recoverable
+  // `Invalid tool_args JSON` error — and every Cypher-producing agent is a
+  // `simpleLoop`.
+  // Mutation: M1 or M2 above → the two Cypher values return one key again;
+  // M1, M4 or M6 → the Python one does.
+  it('declines `, b:Label`, label writes and `"y":` too — the cost of not guessing', () => {
     expect(() => repairJson(`{query: MATCH (a)-[r]-(b) RETURN a, b:Person}`)).toThrow()
+    expect(() => repairJson(`{query: MATCH (a)-[r]->(b) SET a:Customer, b:Vendor}`)).toThrow()
+    expect(() => repairJson(`{"code": "if x == "y":\n    print("a", b)"}`)).toThrow()
   })
 })

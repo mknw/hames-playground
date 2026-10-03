@@ -536,12 +536,17 @@ const MEMBER_START = /,\s*[a-zA-Z_$][\w$-]*\s*:|"[^"]*"\s*:|'[^']*'\s*:/
  * The answer to a member-shaped run is to DECLINE, not to split there: the
  * text that made every strategy above fail is still in the input, and a guess
  * at where it ends is the same silent mis-coercion #217(b) is about. A declined
- * repair throws, and the loop patterns turn that into an `Invalid tool_args
- * JSON` turn the model retries.
+ * repair throws: `actorCritic` retries it; `simpleLoop` ends the loop with a
+ * recoverable `Invalid tool_args JSON` error (in a multi-call batch it is a
+ * per-call error the controller sees only if another call in the batch
+ * succeeded). Not a retry there, but it fails CLOSED — the fold ran the tool
+ * on wrong arguments, which for a write tool is a wrong write.
  *
  * Conservative on purpose, so it costs some inputs the old handler got right:
- * a label predicate after a comma (`RETURN a, b:Person`) or a quoted word
- * followed by a colon (`search "error": x`) reads as a member and now throws.
+ * a label predicate or label write after a comma (`RETURN a, b:Person`,
+ * `SET a:Customer, b:Vendor`, `REMOVE …`) or a quoted word followed by a colon
+ * (`search "error": x`, Python's `if x == "y":` once the same code also holds
+ * an ambiguous `print("a", b)`) reads as a member and now throws.
  * A member-shaped run inside a value that is one cleanly quoted string
  * (`"RETURN n, n:Person"`) is content, because such a string cannot hold a
  * second member — that is the one shape exempted.

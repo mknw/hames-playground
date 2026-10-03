@@ -13,7 +13,7 @@
  * `app/.env`.
  */
 import { describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import pg from 'pg'
@@ -29,6 +29,16 @@ function checkout(appEnv?: string): string {
 
 const PRIVATE_URL = 'postgresql://postgres:test@127.0.0.1:55439/hames_test'
 
+/** The refusal's message for `checkout`, failing the test if it does not throw. */
+function refusalIn(root: string, env: Record<string, string> = {}): string {
+  try {
+    resolveTestDatabase('hames_test', { env, checkout: root })
+  } catch (err) {
+    return (err as Error).message
+  }
+  throw new Error('expected resolveTestDatabase to refuse')
+}
+
 describe('resolveTestDatabase: no URL and no opt-in refuses', () => {
   it('throws instead of falling back to localhost:5432, and says how to choose', () => {
     const root = checkout()
@@ -40,8 +50,36 @@ describe('resolveTestDatabase: no URL and no opt-in refuses', () => {
     // not need to go and find the docs.
     expect(resolve).toThrow(/docker run --rm -d .* -p 55439:5432 .* postgres:16/)
     expect(resolve).toThrow(/TEST_DATABASE_URL=postgresql:\/\/postgres:test@127\.0\.0\.1:55439/)
-    expect(resolve).toThrow(`${ALLOW_LOCAL_DB}='${root}'`)
+    expect(resolve).toThrow(`${ALLOW_LOCAL_DB}='<absolute path of your own primary checkout>'`)
+    expect(resolve).toThrow(/Agents and lanes: use the private Postgres above, and never add this/)
     expect(resolve).toThrow(/CI=1 pnpm test:run/)
+  })
+
+  it('hands a lane no opt-in it could paste to let itself in', () => {
+    // The reader is an agent in a lane, and the cheapest way out of an error is
+    // to paste the line it prints. So: this checkout's path appears nowhere in
+    // the message, and every opt-in value the message shows is refused when the
+    // lane writes it into its own app/.env.
+    const owner = checkout()
+    const envs: Record<string, string>[] = [{}, { [ALLOW_LOCAL_DB]: owner }]
+    for (const env of envs) {
+      const lane = checkout()
+      const message = refusalIn(lane, env)
+      expect(message).not.toContain(lane)
+      expect(message).not.toContain(realpathSync(lane))
+
+      // A quoted value whole (the placeholder has spaces), else up to whitespace.
+      const shown = [
+        ...message.matchAll(new RegExp(`${ALLOW_LOCAL_DB}=(?:'([^']*)'|(\\S+))`, 'g')),
+      ].map((m) => m[1] ?? m[2])
+      expect(shown.length, 'the message no longer shows an opt-in line at all').toBeGreaterThan(0)
+      for (const value of shown) {
+        writeFileSync(path.join(lane, 'app', '.env'), `${ALLOW_LOCAL_DB}='${value}'\n`)
+        expect(() => resolveTestDatabase('hames_test', { env: {}, checkout: lane }), value).toThrow(
+          /Refusing to fall back/,
+        )
+      }
+    }
   })
 
   it('also refuses for the unit suite when CI is absent or explicitly off', () => {
@@ -103,14 +141,38 @@ describe('resolveTestDatabase: the opt-in proceeds, in its own checkout only', (
   })
 
   it('compares real paths, so another spelling of the same checkout still matches', () => {
+    // An explicit symlink, rather than relying on macOS's tmpdir being one: on
+    // Linux CI that would make the two spellings identical and the test vacuous.
     const root = checkout()
-    // macOS's tmpdir is a symlink into /private, so the two spellings differ there.
+    const link = path.join(mkdtempSync(path.join(tmpdir(), 'test-db-link-')), 'checkout')
+    symlinkSync(root, link)
+    // The opt-in names the link; the checkout is the target.
     expectLocal(
-      resolveTestDatabase('hames_test', {
-        env: { [ALLOW_LOCAL_DB]: `${realpathSync(root)}/` },
-        checkout: root,
-      }),
+      resolveTestDatabase('hames_test', { env: { [ALLOW_LOCAL_DB]: `${link}/` }, checkout: root }),
       'hames_test',
+    )
+    // The checkout is reached through the link; the opt-in names the target.
+    expectLocal(
+      resolveTestDatabase('hames_test', { env: { [ALLOW_LOCAL_DB]: root }, checkout: link }),
+      'hames_test',
+    )
+  })
+
+  it('refuses a relative opt-in, which names whatever checkout the run is in', () => {
+    // A relative value resolves against the cwd, which is the running checkout's
+    // app/. So `..` in a copied app/.env would name every lane it lands in.
+    // Both are string results only: nothing here connects.
+    const cwdCheckout = path.resolve('..')
+    expect(() =>
+      resolveTestDatabase('hames_test', { env: { [ALLOW_LOCAL_DB]: '..' }, checkout: cwdCheckout }),
+    ).toThrow(`${ALLOW_LOCAL_DB} is '..', which does not name this checkout`)
+
+    const root = checkout()
+    const relative = path.relative(process.cwd(), root)
+    expect(path.isAbsolute(relative)).toBe(false)
+    writeFileSync(path.join(root, 'app', '.env'), `${ALLOW_LOCAL_DB}='${relative}'\n`)
+    expect(() => resolveTestDatabase('hames_test', { env: {}, checkout: root })).toThrow(
+      /which does not name this checkout/,
     )
   })
 
@@ -118,7 +180,7 @@ describe('resolveTestDatabase: the opt-in proceeds, in its own checkout only', (
     const owner = checkout()
     const lane = checkout(`${ALLOW_LOCAL_DB}=${owner}\n`)
     expect(() => resolveTestDatabase('hames_test', { env: {}, checkout: lane })).toThrow(
-      `${ALLOW_LOCAL_DB} is '${owner}', which is not this checkout`,
+      `${ALLOW_LOCAL_DB} is '${owner}', which does not name this checkout`,
     )
   })
 
@@ -127,7 +189,7 @@ describe('resolveTestDatabase: the opt-in proceeds, in its own checkout only', (
     for (const flag of ['1', 'true']) {
       expect(() =>
         resolveTestDatabase('hames_test', { env: { [ALLOW_LOCAL_DB]: flag }, checkout: root }),
-      ).toThrow(/which is not this checkout/)
+      ).toThrow(/which does not name this checkout/)
     }
   })
 })

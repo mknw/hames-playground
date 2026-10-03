@@ -113,11 +113,14 @@ connects: `resolveTestDatabase()` in `app/src/__tests__/test-database.ts`.
 | neither, and `CI` is set                             | no database: nothing is contacted, the DB-backed suites skip | **refuses**              |
 | neither, anywhere else                               | **refuses**                                                  | **refuses**              |
 
-The refusal is an error, not a skip. Its message lists the three ways out,
-including the exact opt-in line for the checkout it ran in.
+The refusal is an error, not a skip. Its message lists the three ways out. The
+opt-in line in it is a placeholder marked owner-only, and the message never
+prints the path of the checkout it ran in: its likeliest reader is an agent in a
+lane, and a line carrying that lane's own path would be accepted if pasted.
 
 **The owner's one-time change.** Add one line to `app/.env` in your own
-checkout. The value is that checkout's absolute path:
+checkout. The value is that checkout's absolute path. A relative value is
+refused, because it would resolve against whichever checkout the run is in:
 
 ```bash
 HAMES_TEST_ALLOW_LOCAL_DB='/Users/<you>/Code/kg-agent'

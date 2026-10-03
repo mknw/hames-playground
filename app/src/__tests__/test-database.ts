@@ -82,12 +82,15 @@ export function resolveTestDatabase(database: string, options: ResolveOptions = 
   if (env.TEST_DATABASE_URL) return { source: 'explicit', url: env.TEST_DATABASE_URL }
 
   const optIn = env[ALLOW_LOCAL_DB] || envFileValue(path.join(checkout, 'app', '.env'))
-  if (optIn && samePath(optIn, checkout)) {
+  // Absolute only. `realpathSync` resolves a relative value against the cwd,
+  // which is always the running checkout's `app/`, so `..` would name every
+  // checkout a copied `app/.env` lands in: a flag again, in path form.
+  if (optIn && path.isAbsolute(optIn) && samePath(optIn, checkout)) {
     return { source: 'local', url: localDatabaseUrl(database) }
   }
   if (skipInCi && isCi(env.CI)) return { source: 'none', url: noDatabaseUrl(database) }
 
-  throw new Error(refusal(database, checkout, optIn))
+  throw new Error(refusal(database, optIn))
 }
 
 function envFileValue(file: string): string | undefined {
@@ -110,9 +113,17 @@ function isCi(value: string | undefined): boolean {
   return !!value && value !== 'false' && value !== '0'
 }
 
-function refusal(database: string, checkout: string, optIn: string | undefined): string {
+/**
+ * The refusal names the opt-in but never a value the guard would accept here.
+ * The reader it exists for is an agent in a lane, and the cheapest way to clear
+ * an error is to paste whatever line it prints. A line carrying this checkout's
+ * path would be accepted: a lane naming itself looks the same as the owner. So
+ * the opt-in line is a placeholder, marked owner-only, and this checkout's path
+ * appears nowhere in the message. The owner pays for that by typing a path once.
+ */
+function refusal(database: string, optIn: string | undefined): string {
   const why = optIn
-    ? `${ALLOW_LOCAL_DB} is '${optIn}', which is not this checkout (${checkout}). ` +
+    ? `${ALLOW_LOCAL_DB} is '${optIn}', which does not name this checkout. ` +
       'It must be the absolute path of the checkout it opts in, so a copy of it ' +
       "(an Orca worktree's app/.env, an inherited shell export) opts nothing else in."
     : 'Nothing says which Postgres to use.'
@@ -124,8 +135,9 @@ function refusal(database: string, checkout: string, optIn: string | undefined):
     '  - a private, throwaway Postgres (worktrees, lanes, agents):',
     `      docker run --rm -d --name hames-test-pg -p ${PRIVATE_PORT}:5432 -e POSTGRES_PASSWORD=test postgres:16`,
     `      export TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:${PRIVATE_PORT}/${database}`,
-    '  - the compose Postgres on purpose, in your own checkout only. Add this to app/.env:',
-    `      ${ALLOW_LOCAL_DB}='${checkout}'`,
+    "  - the compose Postgres on purpose: the owner's own primary checkout ONLY.",
+    '    Agents and lanes: use the private Postgres above, and never add this line.',
+    `      ${ALLOW_LOCAL_DB}='<absolute path of your own primary checkout>'   # in app/.env`,
     '  - no database, as CI runs it (the unit suite only; its DB-backed suites skip):',
     '      CI=1 pnpm test:run',
     'See docs/testing/pyramid.md, "Which Postgres a test run may touch".',

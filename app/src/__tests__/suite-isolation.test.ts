@@ -35,7 +35,7 @@
  * reproducing a cross-suite bug. Losing either is a regression, so both are pinned.
  */
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -48,16 +48,41 @@ const read = (relative: string): string => readFileSync(path.join(APP_DIR, relat
 
 /** The database name out of a default in a source file:
  *  `resolveTestDatabase('name'…)`, the guard every suite's default goes through
- *  (`src/__tests__/global-setup.ts`). */
+ *  (`src/__tests__/test-database.ts`). */
 function declaredDatabases(source: string): string[] {
   return [...source.matchAll(/resolveTestDatabase\(\s*'([A-Za-z0-9_]+)'/g)].map((m) => m[1])
 }
 
 /** The shapes a suite default had before the guard, each of which reaches the
- *  Postgres on `localhost:5432` without asking: `?? localDatabaseUrl('name')`,
- *  a `TEST_DATABASE_URL ??` fallback, and a literal `?? 'postgresql://…'`. */
+ *  Postgres on `localhost:5432` without asking: the compose-URL helper called
+ *  with a literal name, a `TEST_DATABASE_URL ??` fallback, and a literal
+ *  `?? 'postgresql://…'`. */
 const UNGUARDED_DEFAULT =
   /localDatabaseUrl\(\s*['"`]|TEST_DATABASE_URL\s*\?\?|\?\?\s*['"`]postgresql:/
+
+/** Every test tree a test run loads: the unit suite, both e2e suites, and the
+ *  harness-patterns suite that `pnpm test:run` runs as its second project. */
+const TEST_TREES = ['src/__tests__', 'e2e', 'e2e-browser', '../packages/harness-patterns/__tests__']
+
+/** The only files that may build the live default. The guard builds it after
+ *  the opt-in matched; the URL helper's own test asserts the string it returns
+ *  and connects nowhere. */
+const MAY_BUILD_LIVE_URL = new Set([
+  'src/__tests__/test-database.ts',
+  'src/__tests__/lib/config/compose-credentials.test.ts',
+])
+
+/** A call to the compose-URL helper, or a connection string naming Postgres's
+ *  default port on this machine. */
+const LIVE_DEFAULT =
+  /\blocalDatabaseUrl\s*\(|postgres(?:ql)?:\/\/[^\s'"`]*(?:localhost|127\.0\.0\.1|\[::1\]):5432\b/
+
+/** The `.ts`/`.tsx` sources under `tree`, as paths relative to `app/`. */
+function testSources(tree: string): string[] {
+  return readdirSync(path.join(APP_DIR, tree), { recursive: true, encoding: 'utf8' })
+    .filter((file) => /\.tsx?$/.test(file) && !/(^|[\\/])(node_modules|\.runtime)[\\/]/.test(file))
+    .map((file) => path.join(tree, file))
+}
 
 interface Suite {
   readonly name: string
@@ -149,6 +174,27 @@ describe('suite isolation: no two test suites share a namespace', () => {
           'the Postgres on localhost:5432 without the opt-in',
       ).not.toMatch(UNGUARDED_DEFAULT)
     }
+  })
+
+  it('nothing else in a test tree builds the live default either', () => {
+    // The pin above covers the five files that declare a suite's default. A
+    // helper or a test anywhere else could still build a localhost:5432 URL and
+    // connect: that is how a mocked test once reached the live server, when its
+    // mock stopped applying.
+    for (const tree of TEST_TREES) {
+      const files = testSources(tree)
+      expect(files.length, `${tree} has no sources: the scan is reading nothing`).toBeGreaterThan(0)
+      for (const file of files.filter((f) => !MAY_BUILD_LIVE_URL.has(f))) {
+        expect(
+          read(file),
+          `${file} builds a URL for the Postgres on localhost:5432 outside the guard. Use ` +
+            'resolveTestDatabase(), or a dead port for a URL that must never connect',
+        ).not.toMatch(LIVE_DEFAULT)
+      }
+    }
+    // The allow-list names real files, so a rename cannot silently widen it.
+    const scanned = new Set(TEST_TREES.flatMap(testSources))
+    for (const file of MAY_BUILD_LIVE_URL) expect(scanned.has(file), file).toBe(true)
   })
 
   it('each suite declares its own dev-bypass user id', () => {

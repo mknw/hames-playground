@@ -16,6 +16,11 @@
 #   6. escrow            — an attestation is for the CURRENT keys only
 #   7. authorized_keys_problem — the anti-lockout precondition
 #   8. arguments + preflight — usage errors exit 2; non-x86_64 is refused
+#   9. the review round on PR #426 — same-run escrow (S1), the fail2ban
+#      ignoreip (L1), a required full-SHA --ref (C1), one Docker key (C2)
+#  10. the anti-lockout ORCHESTRATION (T1): the ssh and firewall stages and
+#      main's checkpoint, run for real against a fake box, asserting what was
+#      called and in which order; plus the rendered-exposure and volume gates
 #
 # Linux only (GNU stat, as on the VPS and in CI).
 # Run: scripts/bootstrap-staging.test.sh   (no arguments, exits 0 on green)
@@ -42,22 +47,149 @@ flunk() {
 }
 
 # ------------------------------------------------------------------- shims
+# With FAKEROOT unset the shims change nothing but `sudo`, `docker` and
+# `uname`. With FAKEROOT set (section 9), `sudo` also maps every /etc and
+# /run/systemd path under it, maps /usr/sbin/sshd to a fake sshd, logs every
+# privileged call to $CALLLOG, and the fake ufw / ss / systemctl / sshd keep
+# their state under FAKEROOT — enough to run the ssh and firewall stages, and
+# main's checkpoint, with no root and no real sshd.
 mkdir -p "$tmproot/bin"
+SHIMBIN="$tmproot/bin"
+export SHIMBIN
 cat >"$tmproot/bin/sudo" <<'SHIM'
 #!/usr/bin/env bash
 # Runs the command as the caller: the test never needs root.
 [[ ${1:-} == -n ]] && shift
+if [[ -n ${FAKEROOT:-} ]]; then
+  args=()
+  for a in "$@"; do
+    case $a in
+      /etc/* | /run/systemd/*) a="$FAKEROOT$a" ;;
+      /usr/sbin/sshd) a="$SHIMBIN/sshd" ;;
+    esac
+    args+=("$a")
+  done
+  echo "sudo ${args[*]}" >>"$CALLLOG"
+  [[ ${args[0]} == chown ]] && exit 0
+  exec "${args[@]}"
+fi
 exec "$@"
 SHIM
 cat >"$tmproot/bin/docker" <<'SHIM'
 #!/usr/bin/env bash
-# No daemon and no compose: `have_compose` is false, so the static paths run.
+# No daemon. Unless a case sets SHIM_COMPOSE_JSON (a rendered config) or
+# SHIM_COMPOSE=1, `have_compose` is false, so the static paths run.
+args=" $* "
+if [[ $args == *" compose "* ]]; then
+  [[ -n ${SHIM_COMPOSE_JSON:-}${SHIM_COMPOSE:-} ]] || exit 1
+  [[ $args == *" version "* ]] && { echo "2.30.0"; exit 0; }
+  [[ $args == *" config "* && -n ${SHIM_COMPOSE_JSON:-} ]] && { cat "$SHIM_COMPOSE_JSON"; exit 0; }
+  exit 1
+fi
+if [[ $args == *" volume ls "* ]]; then
+  [[ -n ${SHIM_VOLUME_LS_FAIL:-} ]] && exit 1
+  name=${args#*name=^}
+  name=${name%%\$*}
+  [[ " ${SHIM_VOLUMES:-} " == *" $name "* ]] && echo "$name"
+  exit 0
+fi
 exit 1
 SHIM
 cat >"$tmproot/bin/uname" <<'SHIM'
 #!/usr/bin/env bash
 if [[ ${1:-} == -m ]]; then echo "${SHIM_ARCH:-x86_64}"; else exec /usr/bin/uname "$@"; fi
 SHIM
+cat >"$tmproot/bin/sshd" <<'SHIM'
+#!/usr/bin/env bash
+# Fake sshd over $FAKEROOT/etc/ssh/sshd_config.d/*.conf. -t fails when
+# SHIM_SSHD_T_FAIL=1 and the hardening drop-in exists (a bad new config);
+# -T fails when SHIM_SSHD_TT_FAIL=1, else prints the effective values: the
+# first value of each option wins, Port lines add up and replace 22.
+dir="$FAKEROOT/etc/ssh/sshd_config.d"
+case ${1:-} in
+  -t)
+    [[ ${SHIM_SSHD_T_FAIL:-0} == 1 && -f $dir/00-hames-hardening.conf ]] && { echo "bad configuration option" >&2; exit 255; }
+    exit 0
+    ;;
+  -T)
+    [[ ${SHIM_SSHD_TT_FAIL:-0} == 1 ]] && { echo "/etc/ssh/sshd_config.d/x.conf line 1: Bad configuration option: Bogus" >&2; exit 255; }
+    files=$(LC_ALL=C ls "$dir"/*.conf 2>/dev/null | LC_ALL=C sort)
+    # shellcheck disable=SC2086
+    cat $files /dev/null | awk '
+      { k = tolower($1); v = $2 }
+      k == "port" { ports = ports " " v; next }
+      k != "" && k !~ /^#/ && !(k in seen) { seen[k] = tolower(v) }
+      END {
+        if (ports == "") ports = " 22"
+        n = split(ports, P, " "); for (i = 1; i <= n; i++) print "port " P[i]
+        d["passwordauthentication"] = "yes"; d["permitrootlogin"] = "prohibit-password"
+        d["kbdinteractiveauthentication"] = "no"; d["pubkeyauthentication"] = "yes"
+        for (k in d) print k " " ((k in seen) ? seen[k] : d[k])
+        print "authorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2"
+      }'
+    ;;
+esac
+SHIM
+cat >"$tmproot/bin/systemctl" <<'SHIM'
+#!/usr/bin/env bash
+echo "systemctl $*" >>"$CALLLOG"
+case " $* " in
+  *" daemon-reload "*)
+    # Stand-in for Ubuntu's sshd-socket-generator: Port lines -> ListenStream.
+    gen="$FAKEROOT/run/systemd/generator/ssh.socket.d"
+    rm -rf "$gen"
+    ports=$(cat "$FAKEROOT"/etc/ssh/sshd_config.d/*.conf 2>/dev/null | awk '$1 == "Port" { print $2 }')
+    if [[ -n $ports && -z ${SHIM_NO_GENERATOR:-} ]]; then
+      mkdir -p "$gen"
+      { echo "[Socket]"; echo "ListenStream="; for p in $ports; do echo "ListenStream=0.0.0.0:$p"; echo "ListenStream=[::]:$p"; done; } >"$gen/addresses.conf"
+    fi
+    ;;
+esac
+exit 0
+SHIM
+cat >"$tmproot/bin/ss" <<'SHIM'
+#!/usr/bin/env bash
+# Listening TCP ports: what the drop-in's Port lines say sshd listens on (22
+# when there are none), plus $SHIM_SS_EXTRA (something else holding a port).
+ports=$(cat "$FAKEROOT"/etc/ssh/sshd_config.d/*.conf 2>/dev/null | awk '$1 == "Port" { print $2 }')
+ports="${ports:-22} ${SHIM_SS_EXTRA:-}"
+want=""
+for a in "$@"; do [[ $a == *" = :"* ]] && want=${a##*:}; done
+for p in $ports; do [[ -z $want || $want == "$p" ]] && echo "LISTEN 0 128 0.0.0.0:$p 0.0.0.0:*"; done
+exit 0
+SHIM
+cat >"$tmproot/bin/ufw" <<'SHIM'
+#!/usr/bin/env bash
+# Fake ufw: rules in $FAKEROOT/ufw/added, active when $FAKEROOT/ufw/active
+# exists. SHIM_UFW_DROP names rules that `allow` silently fails to record.
+echo "ufw $*" >>"$CALLLOG"
+st="$FAKEROOT/ufw"
+mkdir -p "$st"
+touch "$st/added"
+case $1 in
+  allow)
+    [[ " ${SHIM_UFW_DROP:-} " == *" $2 "* ]] && exit 0
+    grep -qx "ufw allow $2" "$st/added" || echo "ufw allow $2" >>"$st/added"
+    ;;
+  delete) grep -vx "ufw allow $3" "$st/added" >"$st/a.tmp" || true; mv "$st/a.tmp" "$st/added" ;;
+  show) cat "$st/added" ;;
+  status) if [[ -f $st/active ]]; then echo "Status: active"; else echo "Status: inactive"; fi ;;
+  --force) [[ ${2:-} == enable ]] && touch "$st/active" ;;
+esac
+exit 0
+SHIM
+cat >"$tmproot/bin/getent" <<'SHIM'
+#!/usr/bin/env bash
+if [[ ${1:-} == passwd && -n ${FAKEHOME:-} ]]; then echo "$2:x:1000:1000::$FAKEHOME:/bin/bash"; exit 0; fi
+exec /usr/bin/getent "$@"
+SHIM
+# apt never runs here: every package "is installed", and apt-get only logs.
+printf '#!/usr/bin/env bash\nprintf "install ok installed"\n' >"$tmproot/bin/dpkg-query"
+cat >"$tmproot/bin/apt-get" <<'SHIM'
+#!/usr/bin/env bash
+echo "apt-get $*" >>"${CALLLOG:-/dev/null}"
+SHIM
+printf '#!/usr/bin/env bash\nexit 0\n' >"$tmproot/bin/fail2ban-client"
 chmod +x "$tmproot/bin/"*
 export PATH="$tmproot/bin:$PATH"
 
@@ -69,6 +201,7 @@ lib() {
   # shellcheck source=bootstrap-staging.sh
   . "$SCRIPT"
   DRY_RUN=0 INTERACTIVE=0 KEYS_ESCROWED=0 LOCKOUT_CHANGED=0 NO_SEED=0 SSH_PORT=22 SSH_PORT_VERIFIED=0
+  F2B_IGNORE="" REF="" KEYS_GENERATED=0
 }
 
 # ---------------------------------------------------- 1. public_listeners
@@ -416,11 +549,11 @@ portcase() {
   f2b_jail_content | sed -n 's/^port *= *//p'
 }
 want() { # LABEL GOT EXPECTED
-  if [[ $2 == "$3" ]]; then pass "7b $1"; else flunk "7b $1" "got:  $2"$'\n'"want: $3"; fi
+  if [[ $2 == "$3" ]]; then pass "$1"; else flunk "$1" "got:  $2"$'\n'"want: $3"; fi
 }
-want "default: 22 only, no Port line, jail on ssh" "$(portcase 22 0)" "22|keep22||ssh"
-want "move, run A: 22 AND the new port everywhere" "$(portcase 50022 0)" "22 50022|keep22|Port 22,Port 50022,|22,50022"
-want "move, run B: the new port only; 22 closes" "$(portcase 50022 1)" "50022|close22|Port 50022,|50022"
+want "7b default: 22 only, no Port line, jail on ssh" "$(portcase 22 0)" "22|keep22||ssh"
+want "7b move, run A: 22 AND the new port everywhere" "$(portcase 50022 0)" "22 50022|keep22|Port 22,Port 50022,|22,50022"
+want "7b move, run B: the new port only; 22 closes" "$(portcase 50022 1)" "50022|close22|Port 50022,|50022"
 jail=$(
   lib "$tmproot/k"
   SSH_PORT=22 SSH_PORT_VERIFIED=0
@@ -480,6 +613,263 @@ for n in staging.hames.contoso.com vps-1a2b3c4d.vps.ovh.net; do
   ) && r=0 || r=1
   if ((r == 0)); then flunk "8 wrongly reserved: $n"; else pass "8 not reserved: $n"; fi
 done
+
+# ------------------------------------------- 9. review round: S1, L1, C1, C2
+# S1: --keys-escrowed on the run that GENERATES the keys records nothing.
+mkdir -p "$tmproot/s1"
+cp "$ROOT/.env.production.example" "$tmproot/s1/.env.production.example"
+out=$(
+  lib "$tmproot/s1"
+  KEYS_ESCROWED=1
+  stage_env 2>&1
+  escrow_recorded && echo "BOOT WOULD PASS"
+)
+if [[ $out == *"--keys-escrowed IGNORED"* && $out != *"BOOT WOULD PASS"* && ! -e $tmproot/s1/state/keys-escrowed ]]; then
+  pass "9 S1: --keys-escrowed on the generating run records nothing"
+else flunk "9 S1: same-run escrow was recorded" "$out"; fi
+out=$(
+  lib "$tmproot/s1"
+  KEYS_ESCROWED=1
+  stage_env 2>&1
+  escrow_recorded && echo "RECORDED"
+)
+if [[ $out == *RECORDED* && -e $tmproot/s1/state/keys-escrowed ]]; then
+  pass "9 S1: --keys-escrowed on a later run records the escrow"
+else flunk "9 S1: a later run's escrow was not recorded" "$out"; fi
+out=$(
+  lib "$tmproot/e0b"
+  DRY_RUN=1 KEYS_ESCROWED=1 KEYS_GENERATED=1
+  escrow_recorded && echo PASSES
+)
+if [[ $out != *PASSES* ]]; then pass "9 S1: a dry run does not pretend same-run keys are escrowed"; else flunk "9 S1: dry-run escrow"; fi
+
+# L1: the jail never bans the operator's address.
+jail_ignore() { # SSH_CONNECTION F2B_IGNORE
+  (
+    lib "$tmproot/k"
+    SSH_CONNECTION=$1 F2B_IGNORE=$2
+    unset SSH_CLIENT
+    f2b_jail_content | sed -n 's/^ignoreip = //p'
+  )
+}
+want "9 L1 ignoreip: this session's client address" "$(jail_ignore '198.51.100.4 51234 203.0.113.7 22' '')" "127.0.0.1/8 ::1 198.51.100.4"
+want "9 L1 ignoreip: an IPv6 session" "$(jail_ignore '2001:db8::5 51234 2001:db8::1 22' '')" "127.0.0.1/8 ::1 2001:db8::5"
+want "9 L1 ignoreip: --f2b-ignore wins" "$(jail_ignore '198.51.100.4 51234 203.0.113.7 22' '192.0.2.0/24,198.51.100.9')" "127.0.0.1/8 ::1 192.0.2.0/24 198.51.100.9"
+want "9 L1 ignoreip: --f2b-ignore none" "$(jail_ignore '198.51.100.4 51234 203.0.113.7 22' none)" "127.0.0.1/8 ::1"
+want "9 L1 ignoreip: no session, no flag" "$(jail_ignore '' '')" "127.0.0.1/8 ::1"
+want "9 L1 ignoreip: a garbage SSH_CONNECTION is not written" "$(jail_ignore $'198.51.100.4\nX 1 2 3' '')" "127.0.0.1/8 ::1"
+expect_exit 2 "--f2b-ignore rejects a non-address" --hostname staging.example.invalid --acme-email ops@example.invalid --f2b-ignore '1.2.3.4,evil' --dry-run
+
+# C1: a real run that checks out the repo needs the reviewed commit's full SHA.
+sha40=$(printf 'a%.0s' $(seq 1 40))
+expect_exit 2 "C1: a real run without --ref" --hostname staging.example.invalid --acme-email ops@example.invalid --only checkout
+expect_exit 2 "C1: a branch name is not a --ref" --hostname staging.example.invalid --acme-email ops@example.invalid --ref origin/main --dry-run
+expect_exit 2 "C1: a short SHA is not a --ref" --hostname staging.example.invalid --acme-email ops@example.invalid --ref "${sha40:0:12}" --dry-run
+out=$(HAMES_APP_DIR="$tmproot/c1" HAMES_STATE_DIR="$tmproot/c1s" bash "$SCRIPT" --hostname staging.example.invalid \
+  --acme-email ops@example.invalid --ref "$sha40" --only checkout --dry-run 2>&1)
+rc=$?
+if ((rc == 0)) && [[ $out == *"at $sha40"* ]]; then pass "9 C1: a full SHA is accepted (exit 0)"; else flunk "9 C1: full SHA (rc=$rc)" "$out"; fi
+
+# C2: exactly ONE primary key, and it is Docker's.
+docker_pub='pub:-:4096:1:8D81803C0EBFCD88:1487788586:::-:::scESA::::::23::0:
+fpr:::::::::9DC858229FC7DD38854AE2D88D81803C0EBFCD88:
+uid:-::::1487792064::B5A08F01796E7F521861B449372D1FF271F2DD50::Docker Release (CE deb) <docker@docker.com>::::::::::0:
+sub:-:4096:1:7EA0A9C3F273FCD8:1487788586::::::s::::::23:
+fpr:::::::::D3306A018370199E527AE7317EA0A9C3F273FCD8:'
+extra_pub='pub:-:255:22:0123456789ABCDEF:1700000000:::-:::scESC::::::23::0:
+fpr:::::::::0000000000000000000000000000000000000000:'
+c2() { # LABEL ok|bad COLONS
+  local got
+  got=$(
+    lib "$tmproot/k"
+    docker_key_problem "$3"
+  )
+  if [[ ($2 == ok && -z $got) || ($2 == bad && -n $got) ]]; then pass "9 C2: $1"; else flunk "9 C2: $1" "$got"; fi
+}
+c2 "Docker's key alone" ok "$docker_pub"
+c2 "Docker's key plus an appended key" bad "$docker_pub"$'\n'"$extra_pub"
+c2 "an appended key first" bad "$extra_pub"$'\n'"$docker_pub"
+c2 "another key alone" bad "$extra_pub"
+c2 "no key at all" bad ""
+
+# ------------------------------- 10. the anti-lockout orchestration (T1)
+# The ssh and firewall stages and main's checkpoint, run for real against a
+# fake box: every assertion is about what was CALLED, and in which order.
+ssh-keygen -q -t ed25519 -N '' -f "$tmproot/op" >/dev/null
+box() { # NAME — a fresh fake box; exports FAKEROOT, FAKEHOME, CALLLOG
+  local b="$tmproot/box-$1"
+  rm -rf "$b"
+  mkdir -p "$b/etc/ssh/sshd_config.d" "$b/etc/default" "$b/home/.ssh"
+  chmod 755 "$b" "$b/home"
+  chmod 700 "$b/home/.ssh"
+  echo 'Include /etc/ssh/sshd_config.d/*.conf' >"$b/etc/ssh/sshd_config"
+  echo 'PasswordAuthentication yes' >"$b/etc/ssh/sshd_config.d/50-cloud-init.conf"
+  echo 'IPV6=yes' >"$b/etc/default/ufw"
+  install -m 600 "$tmproot/op.pub" "$b/home/.ssh/authorized_keys"
+  : >"$b/calls.log"
+  export FAKEROOT="$b" FAKEHOME="$b/home" CALLLOG="$b/calls.log"
+}
+dropin() { echo "$FAKEROOT/etc/ssh/sshd_config.d/00-hames-hardening.conf"; }
+stages() { # ARGS… — run the real script; sets $out and $rc
+  out=$(HAMES_STATE_DIR="$FAKEROOT/state" bash "$SCRIPT" --hostname staging.example.invalid \
+    --acme-email ops@example.invalid "$@" 2>&1)
+  rc=$?
+}
+called() { grep -qF -- "$1" "$CALLLOG"; }
+# before A B — the first call matching A comes before the first matching B
+before() {
+  local a b
+  a=$(grep -nF -- "$1" "$CALLLOG" | head -n1 | cut -d: -f1)
+  b=$(grep -nF -- "$2" "$CALLLOG" | head -n1 | cut -d: -f1)
+  [[ -n $a && -n $b ]] && ((a < b))
+}
+not_reloaded() { ! grep -qE 'systemctl .*(reload|restart)' "$CALLLOG"; }
+not_called() { ! grep -qF -- "$1" "$CALLLOG"; }
+not_in_out() { ! grep -qF -- "$1" <<<"$out"; }
+t() { # LABEL CONDITION… — pass if the command succeeds
+  local label=$1
+  shift
+  if "$@"; then pass "10 $label"; else flunk "10 $label (rc=$rc)" "$(tail -6 <<<"$out")"$'\n'"calls: $(tr '\n' ';' <"$CALLLOG")"; fi
+}
+
+# R1 the key precondition: no usable key, nothing written, nothing reloaded.
+box r1
+: >"$FAKEHOME/.ssh/authorized_keys"
+stages --only ssh
+t "R1 no usable key: refused (exit 1)" test "$rc" -eq 1
+t "R1 ... and no drop-in was written" test ! -e "$(dropin)"
+t "R1 ... and sshd was not reloaded" not_reloaded
+
+# R2 the sshd -t gate: a config sshd rejects is undone before any reload.
+box r2
+SHIM_SSHD_T_FAIL=1 stages --only ssh
+t "R2 sshd -t fails: refused (exit 1)" test "$rc" -eq 1
+t "R2 ... the new drop-in is removed" test ! -e "$(dropin)"
+t "R2 ... and sshd was not reloaded" not_reloaded
+box r2b
+printf 'PasswordAuthentication no\n# the previous good one\n' >"$(dropin)"
+SHIM_SSHD_T_FAIL=1 stages --only ssh --ssh-port 50022
+t "R2 a previous drop-in is restored byte for byte" test "$(cat "$(dropin)")" = $'PasswordAuthentication no\n# the previous good one'
+
+# R3 the effective-config readback: another file that wins is caught.
+box r3
+echo 'PasswordAuthentication yes' >"$FAKEROOT/etc/ssh/sshd_config.d/00-aaa-override.conf"
+stages --only ssh
+t "R3 an overriding file: refused (exit 1)" test "$rc" -eq 1
+t "R3 ... naming the effective config" grep -q "effective config" <<<"$out"
+t "R3 ... and sshd was not reloaded" not_reloaded
+
+# R4 the readback before ufw enable: a rule that did not stick stops it.
+box r4
+SHIM_UFW_DROP=22/tcp stages --only firewall
+t "R4 'allow 22/tcp' not recorded: refused (exit 1)" test "$rc" -eq 1
+t "R4 ... and ufw was never enabled" not_called "ufw --force enable"
+box r4b
+stages --only firewall
+t "R4 normal run: 22 allowed before ufw is enabled" before "ufw allow 22/tcp" "ufw --force enable"
+
+# R5 the close-22 guard: 22 closes only once nothing listens on it.
+box r5
+printf 'Port 50022\n' >"$(dropin)"
+mkdir -p "$FAKEROOT/ufw"
+printf 'ufw allow 22/tcp\nufw allow 50022/tcp\n' >"$FAKEROOT/ufw/added"
+touch "$FAKEROOT/ufw/active"
+SHIM_SS_EXTRA=22 stages --only firewall --ssh-port 50022 --ssh-port-verified
+t "R5 something on 22: refused (exit 1)" test "$rc" -eq 1
+t "R5 ... and 22 was not deleted" not_called "ufw delete"
+: >"$CALLLOG"
+stages --only firewall --ssh-port 50022 --ssh-port-verified
+t "R5 nothing on 22: 22 is deleted, then the checkpoint (exit 3)" test "$rc" -eq 3
+t "R5 ... after the new port is allowed" before "ufw allow 50022/tcp" "ufw delete allow 22/tcp"
+
+# R6 the checkpoint call site in main: nothing runs past a lockout change.
+box r6
+stages --only ssh,fail2ban
+t "R6 ssh changed: exit 3 at the checkpoint" test "$rc" -eq 3
+t "R6 ... fail2ban never ran" not_in_out "5/13 fail2ban"
+box r6b
+stages --only ssh,firewall,fail2ban
+t "R6 ssh then firewall: the firewall still runs" grep -q "4/13 firewall" <<<"$out"
+t "R6 ... one checkpoint, then exit 3" test "$rc-$(grep -c 'ANTI-LOCKOUT CHECKPOINT' <<<"$out")" = "3-1"
+t "R6 ... fail2ban never ran" not_in_out "5/13 fail2ban"
+stages --only ssh,firewall
+t "R6 re-run with nothing to change: exit 0" test "$rc" -eq 0
+t "R6 the ssh stage: sshd -t before the reload" before "/sshd -t" "systemctl try-reload-or-restart ssh.service"
+
+# The port move, run A: the firewall opens P before the socket moves.
+box mv
+stages --only ssh --ssh-port 50022
+t "move run A: exit 3 at the checkpoint" test "$rc" -eq 3
+t "move run A: ufw allows 50022 before ssh.socket restarts" before "ufw allow 50022/tcp" "systemctl restart ssh.socket"
+t "move run A: the drop-in listens on 22 AND 50022" test "$(grep '^Port' "$(dropin)" | tr '\n' ' ')" = "Port 22 Port 50022 "
+SHIM_NO_GENERATOR=1 stages --only ssh --ssh-port 50111
+t "move: no regenerated socket -> refused, previous drop-in kept" test "$rc-$(grep '^Port' "$(dropin)" | tr '\n' ' ')" = "1-Port 22 Port 50022 "
+
+# L3: an unreadable CURRENT config is named as such, and nothing is written.
+box l3
+SHIM_SSHD_TT_FAIL=1 stages --only ssh
+t "L3 sshd -T fails: refused with sshd's own error" grep -q "cannot read the CURRENT configuration.*Bad configuration option" <<<"$out"
+t "L3 ... and no drop-in was written" test ! -e "$(dropin)"
+unset FAKEROOT FAKEHOME CALLLOG
+
+# R7 the rendered-exposure gate, and its call in boot.
+cat >"$tmproot/compose-clean.json" <<'JSON'
+{"services": {
+  "postgres": {"ports": [{"host_ip": "127.0.0.1", "published": "5432", "target": 5432}]},
+  "mcp-gateway": {"image": "docker/mcp-gateway@sha256:abb58d13e267939e602118c0be88be31e2ebcea4c762980ff647ee2aeba92cde",
+                  "command": ["--servers=neo4j-cypher,fetch,web_search,context7,memory"],
+                  "ports": [{"host_ip": "127.0.0.1", "published": "8811", "target": 8811}]},
+  "caddy": {"ports": [{"published": "80", "target": 80}, {"published": "443", "target": 443}, {"published": "443", "target": 443, "protocol": "udp"}]}
+}}
+JSON
+exposure() { # JSON-FILE — what rendered_exposure prints for it
+  (
+    mkdir -p "$tmproot/r7"
+    lib "$tmproot/r7"
+    SHIM_COMPOSE_JSON=$1 rendered_exposure
+  )
+}
+variant() { python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); exec(sys.argv[2]); json.dump(c, open(sys.argv[3], "w"))' "$tmproot/compose-clean.json" "$1" "$2"; }
+want "10 R7 the clean render exposes nothing" "$(exposure "$tmproot/compose-clean.json")" ""
+variant 'c["services"]["postgres"]["ports"][0]["host_ip"] = ""' "$tmproot/c-pg.json"
+want "10 R7 postgres on 0.0.0.0 is flagged" "$(exposure "$tmproot/c-pg.json")" "postgres publishes 5432 on '0.0.0.0'"
+variant 'c["services"]["mcp-gateway"]["command"] = ["--enable-all-servers"]' "$tmproot/c-gw.json"
+want "10 R7 an un-allow-listed gateway is flagged" "$(exposure "$tmproot/c-gw.json")" "mcp-gateway is not allow-listed with --servers= (the overlay did not apply)"
+variant 'c["services"]["caddy"]["ports"].append({"published": "8080", "target": 8080})' "$tmproot/c-caddy.json"
+want "10 R7 an extra Caddy port is flagged" "$(exposure "$tmproot/c-caddy.json")" "caddy publishes 8080, not only 80/443"
+mkdir -p "$tmproot/r7b/.git"
+cp "$good" "$tmproot/r7b/.env"
+printf '{"features":{"dynamic-tools":"disabled"}}\n' >"$tmproot/r7b/docker-config.json"
+mkdir -p "$tmproot/r7b/configs"
+: >"$tmproot/r7b/configs/mcp-config.yaml"
+out=$(
+  lib "$tmproot/r7b"
+  DRY_RUN=1 HOSTNAME_ARG=staging.hames.contoso.com ACME_EMAIL_ARG=ops@contoso.com
+  SHIM_COMPOSE_JSON="$tmproot/c-pg.json" stage_boot 2>&1
+)
+t "R7 boot refuses an exposed render" grep -q "WOULD REFUSE: the rendered compose config exposes more than Caddy: postgres" <<<"$out"
+
+# R8 the volume guard: a volume that exists keeps the secret it was made with.
+for vk in hames_postgres_data:POSTGRES_PASSWORD hames_postgres_data:DATA_ENCRYPTION_KEY hames_neo4j_data:NEO4J_PASSWORD; do
+  vol=${vk%%:*} key=${vk#*:}
+  mkdir -p "$tmproot/r8"
+  cp "$good" "$tmproot/r8/.env.production.example"
+  sed "s/^$key=.*/$key=''/" "$good" >"$tmproot/r8/.env"
+  out=$(
+    lib "$tmproot/r8"
+    SHIM_COMPOSE=1 SHIM_VOLUMES=$vol stage_env 2>&1
+  )
+  rc=$?
+  if ((rc == 1)) && [[ $out == *"volume $vol exists but $key is empty"* ]] && grep -qx "$key=''" "$tmproot/r8/.env"; then
+    pass "10 R8 $vol exists, $key empty: refused, nothing generated"
+  else flunk "10 R8 $vol / $key (rc=$rc)" "$(tail -4 <<<"$out")"; fi
+done
+out=$(
+  lib "$tmproot/r8"
+  SHIM_COMPOSE=1 SHIM_VOLUME_LS_FAIL=1 stage_env 2>&1
+)
+rc=$?
+if ((rc == 1)) && [[ $out == *"cannot list Docker volumes"* ]]; then pass "10 R8 an unreachable daemon fails closed"; else flunk "10 R8 daemon down (rc=$rc)" "$(tail -3 <<<"$out")"; fi
 
 echo
 if ((failures)); then

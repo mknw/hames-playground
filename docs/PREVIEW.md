@@ -945,17 +945,25 @@ Its header and `--help` hold the details.
   See the anti-lockout procedure below.
 
 **Run it.** Do a dry run first. The hostname is a required argument, and it is
-never committed anywhere, because this repo is public:
+never committed anywhere, because this repo is public. `--ref` is required on
+every real run that checks out the repo, and it must be the reviewed commit's
+full 40-character SHA. A branch name, a tag or a short SHA is refused, so the
+three runs cannot deploy three different states of `main` (PR #426, C1):
 
 ```bash
 # Piped. It never prompts; it lists what is missing.
-ssh ubuntu@<host> 'bash -s -- --hostname <fqdn> --acme-email <mailbox> --dry-run' \
+ssh ubuntu@<host> 'bash -s -- --hostname <fqdn> --acme-email <mailbox> --ref <sha> --dry-run' \
   < scripts/bootstrap-staging.sh
 
 # Copied. It prompts for the owner-supplied values, with secrets hidden.
 scp scripts/bootstrap-staging.sh ubuntu@<host>:
-ssh -t ubuntu@<host> 'bash bootstrap-staging.sh --hostname <fqdn> --acme-email <mailbox>'
+ssh -t ubuntu@<host> 'bash bootstrap-staging.sh --hostname <fqdn> --acme-email <mailbox> --ref <sha>'
 ```
+
+Run the second run, which does the apt installs and the image build, so that a
+dropped connection cannot stop an apt transaction halfway: copy the script and
+start it under `tmux`, or with `nohup … > bootstrap.log 2>&1 &`, and follow the
+log.
 
 A first bootstrap takes three runs. Exit code 3 means the run stopped for an
 action, and you re-run with the same arguments once it is done:
@@ -966,7 +974,9 @@ action, and you re-run with the same arguments once it is done:
    `.env` and builds the images. It then stops before `boot` until the
    owner-supplied values and the key escrow are in place.
 3. The third run, with `--keys-escrowed`, boots the stack, seeds the graph and
-   runs the smoke checks.
+   runs the smoke checks. The flag counts only on a run after the one that
+   generated the keys: on the generating run it is ignored, because nobody can
+   have escrowed keys that did not exist yet (S1).
 
 | Stage       | What it changes on the box                                                                                                                                                                                                                                                                                                                                                                    |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -974,10 +984,10 @@ action, and you re-run with the same arguments once it is done:
 | `updates`   | `apt-get upgrade` (the guide's first step), plus `/etc/apt/apt.conf.d/20auto-upgrades`, which turns on daily unattended upgrades from the security origin only. Docker's repo is not in that origin, so the engine is never upgraded under the stack. Reboots are never automatic                                                                                                             |
 | `ssh`       | `/etc/ssh/sshd_config.d/00-hames-hardening.conf`: keys only, no passwords, no keyboard-interactive, no root login, and `Port` lines only if `--ssh-port` is given. The `00-` prefix makes it sort first, because sshd keeps the first value it reads and `50-cloud-init.conf` can turn passwords back on. The stage runs `sshd -t` before any reload and reads the result back with `sshd -T` |
 | `firewall`  | `ufw`: deny incoming, allow outgoing, allow the SSH port(s), 80/tcp, 443/tcp and 443/udp, on IPv4 and IPv6. Each SSH port is allowed and read back before `ufw` is enabled. It prints the edge-firewall rules for the owner                                                                                                                                                                   |
-| `fail2ban`  | Installs `fail2ban` and writes `/etc/fail2ban/jail.local` with the guide's `[sshd]` values: `maxretry = 3`, `findtime = 5m`, `bantime = 30m`, on the SSH port(s). It refuses to overwrite a `jail.local` it did not write                                                                                                                                                                     |
+| `fail2ban`  | Installs `fail2ban` and writes `/etc/fail2ban/jail.local` with the guide's `[sshd]` values: `maxretry = 3`, `findtime = 5m`, `bantime = 30m`, on the SSH port(s). `ignoreip` is loopback plus the operator: `--f2b-ignore <ip>[,…]`, else this SSH session's own client address, printed. It refuses to overwrite a `jail.local` it did not write                                             |
 | `docker`    | Docker Engine and the compose plugin from Docker's apt repository, never the snap. It checks the signing key's fingerprint and refuses if Docker publishes no suite for the release (26.04's `resolute` is published). It writes `/etc/docker/daemon.json` with log rotation if the file is absent, requires Compose 2.24 or later, and adds `ubuntu` to the `docker` group                   |
-| `checkout`  | Clones the repo into `/opt/hames`, detached at `--ref` (default `origin/main`). It refuses a dirty tree and any ref older than #260. It writes §3a's five-server `configs/mcp-config.yaml` and never touches the tracked `docker-config.json`                                                                                                                                                 |
-| `env`       | Creates `.env` (mode 600) from the template. It generates the two database passwords and the three keys on the box, and never regenerates an existing value or one a data volume already depends on. It lists, or prompts for, the owner's values. `--keys-escrowed` records the escrow                                                                                                       |
+| `checkout`  | Clones the repo into `/opt/hames`, detached at `--ref`, a required full commit SHA, fetched by id if no branch carries it. It refuses a dirty tree and any commit older than #260. It writes §3a's five-server `configs/mcp-config.yaml` and never touches the tracked `docker-config.json`                                                                                                   |
+| `env`       | Creates `.env` (mode 600) from the template. It generates the two database passwords and the three keys on the box, and never regenerates an existing value or one a data volume already depends on. It lists, or prompts for, the owner's values. `--keys-escrowed` records the escrow, except on the run that generated the keys                                                            |
 | `hostname`  | Writes `APP_DOMAIN`, `ACME_EMAIL` and the two auth URIs into `.env`, checks that DNS points at the box, and prints the Entra steps                                                                                                                                                                                                                                                            |
 | `images`    | `docker compose build` and `pull`, a host pull of the five allow-listed MCP server images (in the gateway a failed pull is only a warning), and `docker build -t kg-sandbox:base rootfs/`. `--sandbox-flavours` also builds the three flavour images the `flavoured-sandbox` agent needs                                                                                                      |
 | `boot`      | Runs every gate first: the gateway pin, `dynamic-tools` disabled, §6's preflight, the escrow, DNS, a GitHub-token scan, and the rendered config (every port but Caddy's on loopback, the gateway allow-listed). Then it runs `docker compose up -d` and waits for every service                                                                                                               |
@@ -1003,11 +1013,21 @@ before running anything else:
    ([Rescue mode](https://docs.ovhcloud.com/en/guides/bare-metal-cloud/virtual-private-servers/rescue)).
    In the Control Panel, on the VPS's `Home` tab, click `...` next to Boot,
    select `Reboot in rescue mode` and confirm. Log in with the credentials it
-   emails, and mount the VPS disk (the guide's example is
+   emails, find the VPS disk with `lsblk`, and mount it (the guide's example is
    `mount /dev/sdb1 /mnt/`). Delete
    `/mnt/etc/ssh/sshd_config.d/00-hames-hardening.conf`, set `ENABLED=no` in
    `/mnt/etc/ufw/ufw.conf`, and reboot in normal mode from the Control Panel.
-5. Close the old session only after step 2 passes, then re-run the script.
+   An edge-firewall mistake is undone in the Control Panel, not in rescue mode.
+5. **A `fail2ban` ban drops the kept session too**, because its reject rule
+   matches established packets (PR #426, L1). Three mistyped user names from
+   one address in 5 minutes ban it for 30 minutes; a retried wrong key for
+   `ubuntu` does not count. The jail therefore never bans the operator's
+   address (`ignoreip`, above). If it happens anyway, from another address:
+   `sudo fail2ban-client set sshd unbanip <ip>`; else the KVM console (if
+   `ubuntu` has a password), rescue mode, or wait 30 minutes. A re-run from a
+   different address replaces the exempt one, so two operators pass both with
+   `--f2b-ignore`.
+6. Close the old session only after step 2 passes, then re-run the script.
 
 **The SSH port: off by default, available as `--ssh-port`.** The guide
 recommends a port between 49152 and 65535. The script makes the move only when
@@ -1103,12 +1123,52 @@ minimum for staging is:
    consistent image, `docker compose stop` first, then `start` after the
    snapshot. This is what rebuilds the box quickly.
 
-`Automated Backup` and §9's nightly cron are both optional on top. Know what a
-provider snapshot holds: the whole disk, so `.env` and its three keys sit in
-the same image as the data they encrypt. That is the pairing §7 keeps out of
-the app-level backups. Anyone who can restore the snapshot can read
-everything, so protect the OVHcloud account itself, with two-factor sign-in
-and as few people as possible.
+`Automated Backup` and §9's nightly cron are both optional on top. The options
+page also lists a "Standard automatic backup", daily and kept for 24 hours, as
+included: check whether it is on for this VPS, because if it is, a disk image
+exists whether or not you take one.
+
+Know what any disk image of this box holds, and so what anyone who can restore
+one gets (PR #426, A1):
+
+- the graph and the conversation store;
+- `user_tokens`: each staging user's MSAL cache, **with the refresh token**,
+  for the seven delegated Graph scopes (`User.Read`, `email`, `Mail.Read`,
+  `Mail.Send`, `Calendars.ReadWrite`, `Files.Read.All`, `Sites.Read.All`;
+  `app/src/lib/auth/user-tokens.server.ts`, `entra-config.server.ts`);
+- `.env` on the same disk, with `AZURE_CLIENT_SECRET` and the
+  `TOKEN_ENCRYPTION_KEY` that decrypts those tokens, beside
+  `DATA_ENCRYPTION_KEY`;
+- the Data Stash uploads in the redis volume, and Caddy's TLS key.
+
+So an image is not just stored rows: it is live mail, calendar and file access
+as every staging user, until their refresh tokens are revoked. That is the
+pairing §7 keeps out of the app-level backups. Protect the OVHcloud account
+itself, with two-factor sign-in and as few people as possible, and read the
+disk-encryption options below.
+
+**Disk encryption on the VPS.** No provider-managed disk encryption appears in
+the guides or on the options page read for this (2026-10-03), so check the
+Control Panel before relying on that. The reviewer's assessment of the options
+(PR #426):
+
+- **Root full-disk encryption.** It needs a custom image and an unlock at
+  every boot, either remote (dropbear-initramfs) or through the KVM console.
+  Not worth it for staging.
+- **A LUKS data volume.** A loop file, or the provider's "External storage
+  space" disk, holding Docker's data-root (or just the volumes),
+  `/opt/hames/.env` and `backups/`. It is unlocked by hand over SSH after a
+  reboot, with `docker.service` ordered after the mount, and its passphrase is
+  escrowed with the other three keys. The script never reboots on its own, so
+  a manual unlock fits. Provider snapshots and backups then hold ciphertext,
+  which closes the gap above. It does not protect a running host.
+- **Cheaper first steps.** Trim `AZURE_GRAPH_SCOPES` on staging, so the token
+  store holds less, and keep the org-graph export off the box until the
+  volume exists.
+
+The recommendation: add the data volume if staging gets the org graph or the
+Microsoft 365 scopes, and trim the scopes at minimum. Neither is built here;
+both are owner calls.
 
 **What the owner supplies.** The script generates every secret it can and asks
 for these:
@@ -1121,14 +1181,16 @@ for these:
 - Optionally, the private tier: `VERDA_INFERENCE_ENDPOINT`,
   `VERDA_INFERENCE_API_KEY` and `SMALL_LLM_BASE_URL` (all three or none, both
   URLs ending in `/v1`), plus `SMALL_LLM_API_KEY` and `USE_VERDA_INFERENCE`.
-- `--hostname` and `--acme-email` on the command line, and `--ssh-port` if you
-  want the port moved.
+- `--hostname`, `--acme-email` and `--ref <reviewed commit SHA>` on the command
+  line; `--ssh-port` if you want the port moved; `--f2b-ignore` if the operator's
+  address is not the one running the script.
 - The Entra redirect URI `https://<fqdn>/api/auth/callback`, admin consent for
   the Graph scopes, and the client secret's expiry date. The `hostname` stage
   prints the exact steps (§5).
 - The key escrow (§7): copy the three keys off the box from your own terminal,
   then re-run with `--keys-escrowed`. The marker stores a hash of the keys, so
-  a changed key needs a new escrow.
+  a changed key needs a new escrow, and the flag is ignored on the run that
+  generated them.
 - Which graph staging starts with: the public seed (the default), or an org
   graph export copied onto the box and passed as `--seed-file`. That export
   holds personal data, so it must never be committed.
@@ -1138,8 +1200,9 @@ for these:
 **How the VPS differs from §§1, 2 and 4:**
 
 - **§1, disk encryption.** Nothing here sets up a substitute for disk
-  encryption at VM creation. The app's own key covers the Postgres columns
-  only.
+  encryption at VM creation. The app's own column encryption does not help
+  against a disk image either, because its keys are in `.env` on the same disk
+  (see the backups paragraph and the disk-encryption options above).
 - **§2, firewall.** There is no NSG. Docker publishes ports through its own NAT
   rules, which divert packets before `ufw` sees them, so `ufw` does not guard a
   Docker-published port at all
@@ -1161,21 +1224,30 @@ for these:
 `scripts/bootstrap-staging.test.sh` runs in CI. It has no daemon and no root,
 and it pins the gates: the listener check, the gateway pin, `dynamic-tools`,
 secrets that are never printed or regenerated, the boot gate's `.env` checks,
-the escrow marker, the key check, the port move and the jail values. Each pin
-was shown to go red by a mutation. The real stages ran on amd64:
+the escrow marker, the key check, the port move and the jail values. Since the
+review on PR #426 it also runs the `ssh` and `firewall` stages and `main`'s
+checkpoint against a fake box (shims for sudo, sshd, ufw, ss and systemctl),
+asserting what was called and in which order, plus the rendered-exposure and
+volume gates. Each pin was shown to go red by a mutation. The real stages ran
+in throwaway Ubuntu 26.04 containers, on amd64 first and natively on arm64 for
+the review round (with `uname -m` reporting x86_64, because amd64 emulation
+was no longer available on the test host):
 
 - the SSH hardening, followed by a refused password login;
 - the two-run port move, through Ubuntu's own `sshd-socket-generator`, with a
   key login on each port;
 - the Docker install from the `resolute` suite (Docker 29.8.2, Compose 5.6.0);
+- `fail2ban -t` on the written `jail.local`, `ignoreip` included;
 - the checkout, `.env` and hostname stages, with a re-run that leaves `.env`
-  byte-identical.
+  byte-identical, `--keys-escrowed` ignored on the generating run and recorded
+  on the next.
 
-`ufw` and the Compose-rendered boot gates ran natively on arm64, because
-neither survives amd64 emulation. Not tested: anything that needs systemd as
-PID 1 or a Docker daemon. That covers the socket restart and `fail2ban` on a
-real host, the image build, `up`, ACME, the smoke checks against a live stack,
-the edge firewall and rescue mode. The first real run is the test of those.
+`ufw` and the Compose-rendered boot gates ran natively on arm64. The reviewer
+on PR #426 also ran the `ssh` and `firewall` stages with systemd as PID 1, the
+real `ssh.socket` and `ufw`, over SSH, including dropped sessions. Not tested:
+anything that needs a Docker daemon (the image build, `up`, ACME, the smoke
+checks against a live stack), `fail2ban` as a running service, the edge
+firewall and rescue mode. The first real run is the test of those.
 
 **Follow-ups this deliberately leaves open:**
 

@@ -5,7 +5,9 @@
 
 Today the app has no deployment; the runbook (`docs/PREVIEW.md`) describes one
 VM that builds its own image from a git checkout (`docker-compose.yaml:164-176`)
-and rolls back by rebuilding an older commit (§10). The owner decided on three
+and rolls back by rebuilding an older commit (§10). _(Corrected 2026-10-03: this
+sentence first said the app had one deployment, which was never true.)_ The
+owner decided on three
 environments: dev, a release candidate called **staging**, and prod. Dev and staging share one Azure
 VM in the company's tenancy, as two compose projects behind one Caddy. Prod has
 its own VM. Releases are trunk-based, and prod runs **the same image digest

@@ -8,11 +8,15 @@
 #
 #   # piped (non-interactive: it never prompts, it lists what is missing)
 #   ssh ubuntu@<host> 'bash -s -- --hostname staging.example.invalid \
-#       --acme-email ops@example.invalid' < scripts/bootstrap-staging.sh
+#       --acme-email ops@example.invalid --ref <40-hex commit>' < scripts/bootstrap-staging.sh
 #
 #   # copied (interactive: prompts, hidden, for the owner-supplied values)
 #   scp scripts/bootstrap-staging.sh ubuntu@<host>:
-#   ssh -t ubuntu@<host> 'bash bootstrap-staging.sh --hostname … --acme-email …'
+#   ssh -t ubuntu@<host> 'bash bootstrap-staging.sh --hostname … --acme-email … --ref …'
+#
+# --ref is REQUIRED on any real run that checks out the repo, and it must be a
+# full commit SHA: every run deploys the commit that was reviewed, never
+# whatever `main` happens to be at that moment.
 #
 # Add --dry-run first: every probe runs, every change is printed, none is made.
 #
@@ -57,6 +61,21 @@ readonly COMPOSE_PROFILE="app"
 readonly MIN_COMPOSE="2.24.0" # docker-compose.prod.yaml's `!override` needs it
 # Docker's apt signing key (docs.docker.com/engine/install/ubuntu).
 readonly DOCKER_GPG_FPR="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+
+# docker_key_problem COLONS — why `gpg --show-keys --with-colons` output is not
+# exactly Docker's one key (empty: it is). Exactly ONE primary key, and it is
+# Docker's: Signed-By trusts every key in the file, so an appended key must
+# fail too (C2, PR #426).
+docker_key_problem() {
+  local npub fpr
+  npub=$(grep -c '^pub:' <<<"$1") || npub=0
+  fpr=$(awk -F: '$1 == "pub" { want = 1; next } want && $1 == "fpr" { print $10; exit }' <<<"$1")
+  if ((npub != 1)); then
+    printf '%s\n' "the key file holds $npub primary keys, not 1"
+  elif [[ $fpr != "$DOCKER_GPG_FPR" ]]; then
+    printf '%s\n' "its fingerprint is '${fpr:-unreadable}', expected $DOCKER_GPG_FPR"
+  fi
+}
 # PR #260's merge: encryption at rest. A ref older than this cannot read the
 # rows a newer one wrote (docs/PREVIEW.md §10), so it is never deployed here.
 readonly ENCRYPTION_BOUNDARY="56ac2b44af11d65c85cabc3096102c3cdc76d2ed"
@@ -232,6 +251,7 @@ fill_generated() {
   fi
   ((DRY_RUN)) && {
     chg "generate $1 on the box (value not shown)"
+    keys_generated_now "$1"
     return 0
   }
   local v
@@ -246,7 +266,14 @@ fill_generated() {
   env_set "$1" "$v"
   unset v
   chg "generated $1 on the box (value not shown)"
+  keys_generated_now "$1"
 }
+
+# keys_generated_now KEY — note that one of the three escrowed keys was made in
+# THIS run. Nobody can have escrowed a key that did not exist when they said
+# so, so --keys-escrowed is ignored for the rest of the run (S1, PR #426).
+KEYS_GENERATED=0
+keys_generated_now() { if [[ $1 =~ ^($KEYS_RE)$ ]]; then KEYS_GENERATED=1; fi; }
 
 keys_fingerprint() {
   {
@@ -401,7 +428,10 @@ c = json.load(sys.stdin)["services"]
 for name, svc in sorted(c.items()):
     for p in svc.get("ports", []):
         ip = p.get("host_ip", "")
-        if name != "caddy" and ip not in ("127.0.0.1", "::1"):
+        if name == "caddy":
+            if str(p.get("published")) not in ("80", "443"):
+                print("caddy publishes %s, not only 80/443" % p.get("published"))
+        elif ip not in ("127.0.0.1", "::1"):
             print("%s publishes %s on %r" % (name, p.get("published"), ip or "0.0.0.0"))
 cmd = c.get("mcp-gateway", {}).get("command", []) or []
 if "--enable-all-servers" in cmd or not any(a.startswith("--servers=") for a in cmd):
@@ -639,7 +669,12 @@ stage_ssh() {
     refuse "/etc/ssh/sshd_config does not include sshd_config.d/*.conf, so a drop-in would be ignored"
     return 0
   fi
-  if ! matches '^authorizedkeysfile .*\.ssh/authorized_keys' "$(sudo /usr/sbin/sshd -T 2>/dev/null)"; then
+  local eff0
+  if ! eff0=$(sudo /usr/sbin/sshd -T 2>&1); then
+    refuse "sshd -T cannot read the CURRENT configuration, so nothing was changed: $(head -n1 <<<"$eff0")"
+    return 0
+  fi
+  if ! matches '^authorizedkeysfile .*\.ssh/authorized_keys' "$eff0"; then
     refuse "sshd's AuthorizedKeysFile does not read ~/.ssh/authorized_keys; the key checked above would not be used"
     return 0
   fi
@@ -808,16 +843,51 @@ ANTI-LOCKOUT CHECKPOINT — sshd and/or the firewall changed in this run.
        sudo ufw allow 22/tcp
      If no session is left, use the provider's rescue mode: Control Panel,
      the VPS's Home tab, "..." next to Boot, "Reboot in rescue mode". Log in
-     with the credentials it emails, mount the VPS disk (the guide's example:
-     mount /dev/sdb1 /mnt/), delete /mnt$SSHD_DROPIN, set ENABLED=no in
-     /mnt/etc/ufw/ufw.conf, then reboot in normal mode from the Control
-     Panel. The KVM console logs in with the account's password, if it has
-     one.
+     with the credentials it emails, find the VPS disk with lsblk, mount it
+     (the guide's example: mount /dev/sdb1 /mnt/), delete /mnt$SSHD_DROPIN,
+     set ENABLED=no in /mnt/etc/ufw/ufw.conf, then reboot in normal mode
+     from the Control Panel. The KVM console logs in with the account's
+     password, if it has one. An edge-firewall mistake is undone in the
+     Control Panel, not in rescue mode.
+     A fail2ban ban drops the kept session too: from another address,
+     sudo fail2ban-client set sshd unbanip <ip>; else the KVM console or
+     rescue mode, or wait 30 minutes.
   4. Only after 'NEW KEY LOGIN OK': close the old session, then
      $next.
 
 EOF
   exit 3
+}
+
+# valid_ip ADDR — an IPv4 or IPv6 address, optionally /prefix. It is written
+# into jail.local, so nothing else may get through.
+valid_ip() {
+  [[ $1 =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}(/([0-9]|[12][0-9]|3[0-2]))?$ ||
+    $1 =~ ^[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*(/([0-9]|[1-9][0-9]|1[01][0-9]|12[0-8]))?$ ]]
+}
+
+# session_client_ip — this SSH session's client address, as the server sees it
+# (and so as fail2ban would): SSH_CONNECTION's first field, else SSH_CLIENT's.
+session_client_ip() {
+  local c=${SSH_CONNECTION:-${SSH_CLIENT:-}}
+  c=${c%% *}
+  if [[ -n $c ]] && valid_ip "$c"; then printf '%s\n' "$c"; fi
+}
+
+# f2b_ignore_list — what the sshd jail never bans: loopback, plus the
+# operator. That is --f2b-ignore when given ("none": loopback only), else this
+# session's own client address. Without it, three mistyped user names from the
+# operator's machine ban that address for 30 minutes, and the ban drops the
+# session the anti-lockout procedure keeps open, too (L1, PR #426).
+f2b_ignore_list() {
+  local list="127.0.0.1/8 ::1" ip
+  if [[ -n $F2B_IGNORE ]]; then
+    [[ $F2B_IGNORE == none ]] || list+=" ${F2B_IGNORE//,/ }"
+  else
+    ip=$(session_client_ip)
+    [[ -n $ip ]] && list+=" $ip"
+  fi
+  printf '%s\n' "$list"
 }
 
 # The provider's guide's [sshd] jail; the port follows --ssh-port, and during
@@ -828,7 +898,8 @@ f2b_jail_content() {
   [[ $ports == 22 ]] && ports=ssh
   cat <<EOF
 # Managed by scripts/bootstrap-staging.sh, from the provider's "How to secure
-# a VPS". The port follows --ssh-port; during a move it is both.
+# a VPS". The port follows --ssh-port; during a move it is both. ignoreip is
+# the operator's address (--f2b-ignore, else the session that ran this).
 [sshd]
 enabled  = true
 port     = $ports
@@ -836,6 +907,7 @@ filter   = sshd
 maxretry = 3
 findtime = 5m
 bantime  = 30m
+ignoreip = $(f2b_ignore_list)
 EOF
 }
 
@@ -847,8 +919,26 @@ stage_fail2ban() {
   # jail.d/defaults-debian.conf, which keeps its systemd backend. Unban a
   # mistyped operator with: sudo fail2ban-client set sshd unbanip <ip>
   if sudo test -f "$F2B_JAIL" && ! sudo grep -q 'Managed by scripts/bootstrap-staging.sh' "$F2B_JAIL"; then
-    refuse "$F2B_JAIL exists and is not this script's; merge the [sshd] values by hand (maxretry 3, findtime 5m, bantime 30m, port $(desired_ssh_ports | tr ' ' ','))"
+    refuse "$F2B_JAIL exists and is not this script's; merge the [sshd] values by hand (maxretry 3, findtime 5m, bantime 30m, port $(desired_ssh_ports | tr ' ' ','), ignoreip $(f2b_ignore_list))"
     return 0
+  fi
+  local ignore ip
+  ignore=$(f2b_ignore_list)
+  if [[ -n $F2B_IGNORE ]]; then
+    ok "never banned: $ignore (--f2b-ignore)"
+  elif ip=$(session_client_ip) && [[ -n $ip ]]; then
+    ok "never banned: $ignore — $ip is THIS session's address (from SSH_CONNECTION); --f2b-ignore <ip>[,<ip>] sets it instead"
+    if ((INTERACTIVE && !DRY_RUN)); then
+      local yn
+      printf '  Exempt %s from fail2ban bans? [Y/n] ' "$ip" >/dev/tty
+      IFS= read -r yn </dev/tty
+      if [[ $yn =~ ^[Nn] ]]; then
+        F2B_IGNORE=none
+        ignore=$(f2b_ignore_list)
+      fi
+    fi
+  else
+    warn "no operator address to exempt (no SSH_CONNECTION, no --f2b-ignore): three mistyped user names from your machine ban it for 30 minutes, kept session included"
   fi
   local changed=0
   if put_file "$F2B_JAIL" 0644 root:root <<<"$(f2b_jail_content)"; then changed=1; fi
@@ -898,14 +988,15 @@ stage_docker() {
     run sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
     run sudo chmod a+r /etc/apt/keyrings/docker.asc
     if ((!DRY_RUN)); then
-      local fpr
-      fpr=$(gpg --show-keys --with-colons /etc/apt/keyrings/docker.asc 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}') || fpr=""
-      if [[ $fpr != "$DOCKER_GPG_FPR" ]]; then
+      local colons problem
+      colons=$(gpg --show-keys --with-colons /etc/apt/keyrings/docker.asc 2>/dev/null) || colons=""
+      problem=$(docker_key_problem "$colons")
+      if [[ -n $problem ]]; then
         sudo rm -f /etc/apt/keyrings/docker.asc
-        refuse "Docker's apt key fingerprint is '${fpr:-unreadable}', expected $DOCKER_GPG_FPR; key removed"
+        refuse "Docker's apt key file is wrong: $problem; key removed"
         return 0
       fi
-      ok "Docker apt key fingerprint $fpr"
+      ok "Docker apt key: exactly one key, fingerprint $DOCKER_GPG_FPR"
     fi
     local codename
     # shellcheck disable=SC1091
@@ -975,7 +1066,7 @@ EOF
 # restored before a checkout and re-written after it, so moving to a new ref
 # never collides with it.
 stage_checkout() {
-  banner "7/13 checkout — $REPO_URL at $REF -> $APP_DIR"
+  banner "7/13 checkout — $REPO_URL at ${REF:-<no --ref>} -> $APP_DIR"
   local user
   user=$(id -un)
   if [[ ! -d $APP_DIR/.git ]]; then
@@ -1004,10 +1095,23 @@ stage_checkout() {
   fi
   run git -C "$APP_DIR" fetch --quiet --prune --tags origin
   local sha
-  sha=$(git -C "$APP_DIR" rev-parse --verify --quiet "$REF^{commit}") || {
-    refuse "git ref '$REF' does not resolve in $APP_DIR"
-    return 0
-  }
+  if [[ -z $REF ]]; then
+    # Only a dry run gets here without --ref (main refuses a real one).
+    note "(dry run without --ref: a real run requires the reviewed commit's full SHA)"
+    sha=$(git -C "$APP_DIR" rev-parse HEAD)
+  elif ! sha=$(git -C "$APP_DIR" rev-parse --verify --quiet "$REF^{commit}"); then
+    # A reviewed commit no branch or tag carries yet (a PR head): GitHub serves
+    # a reachable commit by its id.
+    run git -C "$APP_DIR" fetch --quiet origin "$REF" || true
+    if ! sha=$(git -C "$APP_DIR" rev-parse --verify --quiet "$REF^{commit}"); then
+      if ((DRY_RUN)); then
+        note "(dry run: $REF is not fetched, so it is resolved on the real run)"
+        return 0
+      fi
+      refuse "commit $REF does not exist in $REPO_URL"
+      return 0
+    fi
+  fi
   if ! git -C "$APP_DIR" merge-base --is-ancestor "$ENCRYPTION_BOUNDARY" "$sha"; then
     refuse "$REF ($sha) predates #260's encryption at rest; deploying it cannot read rows a newer build wrote (docs/PREVIEW.md §10)"
     return 0
@@ -1163,7 +1267,9 @@ stage_env() {
 
   # docs/PREVIEW.md §7. The keys exist ONLY in this file until the owner copies
   # them out; the backup script deliberately never copies .env.
-  if ((KEYS_ESCROWED)) && ((!DRY_RUN)); then
+  if ((KEYS_ESCROWED && KEYS_GENERATED)); then
+    warn "--keys-escrowed IGNORED: the keys were generated in this run, so nobody can have escrowed them yet."
+  elif ((KEYS_ESCROWED)) && ((!DRY_RUN)); then
     sudo install -d -m 0700 "$STATE_DIR"
     printf '%s %s\n' "$(date -u +%FT%TZ)" "$(keys_fingerprint)" | sudo tee "$ESCROW_MARKER" >/dev/null
     sudo chmod 600 "$ESCROW_MARKER"
@@ -1178,7 +1284,7 @@ stage_env() {
 }
 
 escrow_recorded() {
-  ((DRY_RUN)) && ((KEYS_ESCROWED)) && return 0
+  ((DRY_RUN && KEYS_ESCROWED && !KEYS_GENERATED)) && return 0
   sudo test -f "$ESCROW_MARKER" || return 1
   [[ "$(sudo cut -d' ' -f2 "$ESCROW_MARKER")" == "$(keys_fingerprint)" ]]
 }
@@ -1312,7 +1418,7 @@ stage_boot() {
     refuse "--hostname/--acme-email are reserved placeholders; Let's Encrypt cannot issue for or mail them"
   fi
   [[ -n $missing ]] && owner_stop "fill the owner-supplied values in $ENV_FILE: $(tr '\n' ' ' <<<"$missing")"
-  escrow_recorded || owner_stop "escrow the three keys off the box (docs/PREVIEW.md §7), then re-run with --keys-escrowed"
+  escrow_recorded || owner_stop "escrow the three keys off the box (docs/PREVIEW.md §7), then re-run with --keys-escrowed (the env stage records it, on a run after the one that generated the keys)"
   dns_points_here "$HOSTNAME_ARG" || owner_stop "point DNS for $HOSTNAME_ARG at this box and wait for it to resolve (docs/PREVIEW.md §4)"
 
   assert_dynamic_tools_off
@@ -1547,12 +1653,14 @@ Usage: bootstrap-staging.sh --hostname FQDN --acme-email ADDRESS [options]
 
   --hostname FQDN     public name Caddy gets a certificate for (REQUIRED)
   --acme-email ADDR   Let's Encrypt contact mailbox (REQUIRED)
-  --ref REF           git ref to deploy (default: origin/main)
+  --ref SHA           the full 40-hex commit to deploy: the reviewed one.
+                      REQUIRED on a real run that includes the checkout stage
   --dry-run           run every probe, print every change, make none
   --only LIST         comma-separated stages, run in canonical order:
                       preflight updates ssh firewall fail2ban docker checkout
                       env hostname images boot seed smoke
   --keys-escrowed     the owner attests the three keys are escrowed off the box
+                      (ignored on the run that generates them)
   --seed-file PATH    Cypher file for an EMPTY graph (default: neo4j_dumps/seed-data.cypher)
   --no-seed           leave the graph alone
   --sandbox-flavours  also build the three sandbox flavour images
@@ -1561,13 +1669,18 @@ Usage: bootstrap-staging.sh --hostname FQDN --acme-email ADDRESS [options]
                       runs: the first listens on 22 AND PORT; after a key login
                       on PORT works, add --ssh-port-verified to close 22
   --ssh-port-verified the operator attests a NEW key login on --ssh-port worked
+  --f2b-ignore LIST   addresses fail2ban never bans, comma-separated (default:
+                      this SSH session's own client address; "none": loopback only)
 EOF
 }
 
 main() {
+  # Never trace: an xtrace line would print every generated and prompted value
+  # (`HAMES_V=<value> awk …` in env_set), even under `bash -x script` (S2).
+  set +x
   set -euo pipefail
   umask 022
-  HOSTNAME_ARG="" ACME_EMAIL_ARG="" REF="origin/main" ONLY="" KEYS_ESCROWED=0
+  HOSTNAME_ARG="" ACME_EMAIL_ARG="" REF="" ONLY="" KEYS_ESCROWED=0 F2B_IGNORE=""
   SEED_FILE="neo4j_dumps/seed-data.cypher" NO_SEED=0 SANDBOX_FLAVOURS=0 NO_PROMPT=0
   LOCKOUT_CHANGED=0 SSH_PORT=22 SSH_PORT_VERIFIED=0
   while (($#)); do
@@ -1584,6 +1697,7 @@ main() {
       --no-prompt) NO_PROMPT=1 ;;
       --ssh-port) SSH_PORT=${2:-} && shift ;;
       --ssh-port-verified) SSH_PORT_VERIFIED=1 ;;
+      --f2b-ignore) F2B_IGNORE=${2:-} && shift ;;
       -h | --help)
         usage
         exit 0
@@ -1626,10 +1740,20 @@ main() {
     printf -- '--ssh-port-verified needs --ssh-port\n'
     exit 2
   fi
-  [[ $REF =~ ^[A-Za-z0-9._/-]+$ ]] || {
-    printf -- '--ref has unexpected characters: %s\n' "$REF"
+  REF=${REF,,}
+  if [[ -n $REF && ! $REF =~ ^[0-9a-f]{40}$ ]]; then
+    printf -- '--ref must be a full 40-character commit SHA (the reviewed commit), not a branch, a tag or a short SHA: %s\n' "$REF"
     exit 2
-  }
+  fi
+  if [[ -n $F2B_IGNORE && $F2B_IGNORE != none ]]; then
+    local a
+    for a in ${F2B_IGNORE//,/ }; do
+      valid_ip "$a" || {
+        printf -- '--f2b-ignore takes IP addresses or CIDRs, comma-separated, or "none": %s\n' "$a"
+        exit 2
+      }
+    done
+  fi
 
   local selected=() s
   if [[ -n $ONLY ]]; then
@@ -1644,11 +1768,18 @@ main() {
     selected=("${STAGES[@]}")
   fi
 
-  say "bootstrap-staging: host=$HOSTNAME_ARG ref=$REF$( ((DRY_RUN)) && printf ' DRY RUN (nothing is changed)')"
   local run_list=()
   for s in "${STAGES[@]}"; do
     [[ " ${selected[*]} " == *" $s "* ]] && run_list+=("$s")
   done
+  # C1, PR #426: every real run deploys the reviewed commit, never whatever
+  # main is at that moment — three runs could otherwise ship three commits.
+  if [[ -z $REF && " ${run_list[*]} " == *" checkout "* ]] && ((!DRY_RUN)); then
+    usage
+    printf -- '\n--ref <40-hex commit> is required for a run that checks out the repo\n'
+    exit 2
+  fi
+  say "bootstrap-staging: host=$HOSTNAME_ARG ref=${REF:-<none>}$( ((DRY_RUN)) && printf ' DRY RUN (nothing is changed)')"
   local i
   for ((i = 0; i < ${#run_list[@]}; i++)); do
     s=${run_list[i]}

@@ -58,13 +58,31 @@ What is deferred, and the shape each deferral keeps:
 
 ## Consequences
 
-- **The hosting provider changes.** Staging's graph and conversation store now
-  live with OVHcloud rather than in the company's Azure tenancy. Both can hold
-  personal data (`docs/data-privacy/plan.md` §"Where the data is"), so the move
-  is a hosting-processor decision as well as an infrastructure one.
+- **The hosting provider changes, and more moves than rows.** Staging's data
+  now lives with OVHcloud rather than in the company's Azure tenancy, so the
+  move is a hosting-processor decision as well as an infrastructure one
+  (`docs/data-privacy/plan.md` §"Where the data is"). The box holds the graph
+  and the conversation store, and also:
+  - `user_tokens`, each staging user's MSAL cache with its refresh token for
+    the seven delegated Graph scopes (`app/src/lib/auth/user-tokens.server.ts`);
+  - `.env` on the same disk, with `AZURE_CLIENT_SECRET` and the
+    `TOKEN_ENCRYPTION_KEY` that decrypts those tokens;
+  - the Data Stash uploads and Caddy's TLS key.
+
+  So a disk image, from a provider snapshot, an automated backup or provider
+  access, yields live mail, calendar and file access as every staging user,
+  not only stored rows.
+
 - **Nothing replaces the disk encryption of `docs/PREVIEW.md` §1.** That layer
   covered the Neo4j store, the Data Stash, `backups/` and `.env`. This change
-  sets up no substitute, and the app's own key covers Postgres columns only.
+  sets up no substitute, and the app's own column encryption does not help
+  against a disk image, because its keys are in that image. No
+  provider-managed disk encryption was found in the provider's guides or
+  options page. The recommended answer is a LUKS data volume holding Docker's
+  data, `.env` and `backups/`, unlocked by hand after a reboot, if staging gets
+  the org graph or the Microsoft 365 scopes; and trimming `AZURE_GRAPH_SCOPES`
+  at minimum. Root full-disk encryption is not worth it for staging.
+  `docs/PREVIEW.md` §14 has the options.
 - **The gateway image is digest-pinned, and the deploy depends on the pin.**
   The latest upstream release breaks the stack (#417). #421 pinned the
   `mcp-gateway` image by digest, and the script refuses to pull or boot an
@@ -89,6 +107,8 @@ What is deferred, and the shape each deferral keeps:
   long-lived credential. The same registry is where the pinned gateway image
   gets mirrored.
 - The company subdomain for staging, which IT provides.
+- Whether the LUKS data volume, or trimmed Graph scopes, come before staging
+  holds real users' data.
 - Prod's host and hostname.
 
 ## Sources

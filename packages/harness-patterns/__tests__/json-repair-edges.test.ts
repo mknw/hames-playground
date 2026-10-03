@@ -371,12 +371,12 @@ describe('what the linear scanner kept (#463)', () => {
     expect(() => repairJson(`{a: [[x,,y]], b: 1}`)).toThrow()
   })
 
-  // Mutation N6: refuse an empty literal → `[ ]` is not parked, and
+  // Mutation N6: refuse an empty literal → `[\u00a0]` is not parked, and
   // JSON.parse rejects the no-break space that `trim()` had dropped. The
   // literal's emptiness is decided by JS whitespace, not JSON's.
   it('repairs a literal holding only whitespace JSON does not allow to an empty one', () => {
-    expect(repairJson(`{a: [ ], b: x}`)).toEqual({ a: [], b: 'x' })
-    expect(repairJson(`{a: { }, b: x}`)).toEqual({ a: {}, b: 'x' })
+    expect(repairJson(`{a: [\u00a0], b: x}`)).toEqual({ a: [], b: 'x' })
+    expect(repairJson(`{a: {\u00a0}, b: x}`)).toEqual({ a: {}, b: 'x' })
   })
 
   // Mutation N7: on a mismatched closer, mark only the innermost literal

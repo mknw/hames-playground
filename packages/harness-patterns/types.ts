@@ -728,15 +728,17 @@ export interface SimpleLoopConfig extends PatternConfig {
    *  results, across patterns, including the fields `resultOmit` hides from the
    *  controller), so the default asks the loop for a summary only. */
   returnStyle?: ReturnStyle
-  /** The consecutive-recovery cap (default: 2). How many rounds IN A ROW may
-   *  produce an answer the loop cannot use — one that would not parse,
-   *  `tool_args` that would not parse, a tool off the allowlist — before the
-   *  loop stops: each one short of the cap is fed back as that round's result,
-   *  and the one that reaches it ends the loop exactly as it did before #437,
-   *  marked `kind: 'recovery_exhausted'`. A round that dispatches a tool resets
-   *  the count, whatever the tool returns; a tool that ran and FAILED is never
-   *  counted. `1` restores the pre-#437 behaviour for those three failures,
-   *  `Infinity` leaves only `maxTurns`; values below 1 are clamped to 1. */
+  /** The consecutive-recovery cap (default: 1): how many answers the loop
+   *  cannot use it will feed back IN A ROW. An unusable answer is one that would
+   *  not parse, `tool_args` that would not parse, a tool off the allowlist, or a
+   *  multi-call turn of which no call could be dispatched. Up to the cap, each is
+   *  fed back as that round's result; the next one ends the loop exactly as it
+   *  did before #437, marked `kind: 'recovery_exhausted'` — so by default a loop
+   *  stops on its second unusable answer in a row. A round that dispatches a
+   *  tool resets the count, whatever the tool returns; a tool that ran and
+   *  FAILED is never counted. `0` permits no recovery (the pre-#437 behaviour
+   *  for those failures), `Infinity` leaves only `maxTurns`; values below 0 are
+   *  clamped to 0. */
   maxConsecutiveRecoveries?: number
 }
 
@@ -774,12 +776,15 @@ export interface ActorCriticConfig extends PatternConfig {
   /** Multi-call turns: 'parallel' (default) | 'sequential' | 'off'.
    *  See `MultiCallMode`. */
   multiToolCalls?: MultiCallMode
-  /** The consecutive-recovery cap (default: 2), counted in ATTEMPTS — the same
+  /** The consecutive-recovery cap (default: 1), counted in ATTEMPTS — the same
    *  rule as `SimpleLoopConfig.maxConsecutiveRecoveries`. An actor answer that
-   *  would not parse, unparseable `tool_args` and a refused tool name count; an
-   *  attempt that dispatches a tool resets the count, and a tool that ran and
-   *  failed is never counted, so the fail-fix-fail iteration a sandbox actor
-   *  debugs by is untouched. */
+   *  would not parse, unparseable `tool_args`, a refused tool name and a
+   *  multi-call attempt that dispatched nothing count; an attempt that
+   *  dispatches a tool resets the count, and a tool that ran and failed is never
+   *  counted, so the fail-fix-fail iteration a sandbox actor debugs by is
+   *  untouched. A refusal against a tool surface that resolved to nothing (no
+   *  static or dynamic names, no scoped transport, no `dynamicToolPattern`)
+   *  neither counts nor resets: the actor had no valid name to choose. */
   maxConsecutiveRecoveries?: number
 }
 
@@ -1175,8 +1180,9 @@ export interface ErrorEventData {
    *  `kind: 'budget_exhausted'`, so a reader has BOTH halves of "7 of 8" and
    *  the panel can render the fraction. Absent on every other error. */
   maxTurns?: number
-  /** The consecutive-recovery cap that ended the loop — always set alongside
-   *  `kind: 'recovery_exhausted'`, absent on every other error. */
+  /** The consecutive-recovery cap that ended the loop, in recoveries permitted
+   *  — always set alongside `kind: 'recovery_exhausted'`, absent on every other
+   *  error. */
   maxConsecutiveRecoveries?: number
   /** Origin of the error.
    *
@@ -1200,8 +1206,8 @@ export interface ErrorEventData {
    *
    *  `recovery_exhausted` means the loop's consecutive-recovery cap ended it
    *  (`SimpleLoopConfig.maxConsecutiveRecoveries` /
-   *  `ActorCriticConfig.maxConsecutiveRecoveries`): that many rounds in a row
-   *  produced an answer the loop could not use, and the last of them is fatal
+   *  `ActorCriticConfig.maxConsecutiveRecoveries`): the loop had already fed
+   *  back that many unusable answers in a row, and the next one is fatal
    *  exactly as it was before #437. The rest of the event is that failure's —
    *  its verbatim message, the pattern's severity and, as for `llm_call`, the
    *  failed call on `ContextEvent.llmCall` — so this marker REPLACES `llm_call`

@@ -756,8 +756,11 @@ export function simpleLoop<T extends SimpleLoopData>(
           const outcomes = await runBatch(subCalls, multiMode)
           // A batch breaks a run of unusable answers only if something in it was
           // DISPATCHED — not one refused or unparseable at the precheck, and not
-          // one a serial batch skipped after an earlier failure.
-          if (subCalls.some((sc, i) => sc.run && !outcomes[i].skipped)) streak.dispatched()
+          // one a serial batch skipped after an earlier failure. A batch of which
+          // nothing was dispatched holds only unusable answers, so it COUNTS
+          // (below) rather than slipping past the cap as a `batch_failed`.
+          const dispatched = subCalls.some((sc, i) => sc.run && !outcomes[i].skipped)
+          if (dispatched) streak.dispatched()
 
           outcomes.forEach((o, i) =>
             trackEvent(
@@ -822,6 +825,16 @@ export function simpleLoop<T extends SimpleLoopData>(
             break
           }
           if (!anySucceeded) {
+            if (!dispatched && streak.unusableAnswer()) {
+              // The consecutive-recovery cap: a turn that dispatched nothing
+              // ends the loop as an all-failed batch did before #437.
+              hasError = true
+              errorMessage = `All ${allCalls.length} calls of the multi-call turn failed: ${errors.join('; ')}`
+              errorTurn = turn
+              errorLlmCall = controllerLlmCall
+              recoveryCapHit = true
+              break
+            }
             trackLoopRecovery(
               scope,
               {

@@ -320,11 +320,13 @@ stops when one is irrecoverable.
   `tool_args` the same way, and record each as a `loop_recovery`, never as an
   `error`: every `error` reader (the turn's outcome, the chain's stop rule,
   `view.hasErrors()`) reads it as a statement about the turn. An unusable
-  ANSWER (unparseable, unparseable `tool_args`, a refused tool) is fed back only
-  until `maxConsecutiveRecoveries` of them (default 2) arrive in a row with no
-  tool dispatched between them: the one that reaches the cap ends the loop as an
-  `error` marked `kind: 'recovery_exhausted'`. A tool that ran and failed never
-  counts toward it. See SPEC, "One failure does not end the loop".
+  ANSWER (unparseable, unparseable `tool_args`, a refused tool, a multi-call
+  turn that dispatched nothing) is fed back at most `maxConsecutiveRecoveries`
+  times in a row with no tool dispatched between them (default 1): the next one
+  ends the loop as an `error` marked `kind: 'recovery_exhausted'`, so by
+  default a loop stops on its second unusable answer in a row. A tool that ran
+  and failed never counts toward it. See SPEC, "One failure does not end the
+  loop".
 - **Usage rides the same record.** Every injected LLM call may attach its
   `LLMCallRecord` (tokens, timing, cost basis); the error path re-attaches it
   so a failed call still counts.

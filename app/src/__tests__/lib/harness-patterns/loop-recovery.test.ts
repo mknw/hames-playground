@@ -46,8 +46,6 @@ vi.mock('@hames-ai/harness-baml/baml_client', () => ({
   b: { LoopController: mockLoopController },
 }))
 
-const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
-
 const TOOLS = ['read_neo4j_cypher']
 const RAW = '{"reasoning": "query the graph", "tool_name": "read_neo4j_cypher"'
 
@@ -62,7 +60,10 @@ async function parseFailure(record: Partial<LLMCallRecord> = {}) {
   )
 }
 
-async function run(pattern: { fn: (s: never, v: never) => Promise<{ events: ContextEvent[] }> }) {
+async function run(
+  pattern: { fn: (s: never, v: never) => Promise<{ events: ContextEvent[] }> },
+  frame: Parameters<typeof withRunFrame>[0] = {},
+) {
   const { createScope } = await import('@hames-ai/harness-patterns/context.server')
   const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
   const scope = createScope('rec', { intent: 'q' })
@@ -74,7 +75,7 @@ async function run(pattern: { fn: (s: never, v: never) => Promise<{ events: Cont
     data: {},
     input: 'q',
   })
-  return (await runInFrame(() => pattern.fn(scope as never, view as never))).events
+  return (await withRunFrame(frame, () => pattern.fn(scope as never, view as never))).events
 }
 
 const ofType = (events: ContextEvent[], type: ContextEvent['type']) =>
@@ -531,7 +532,10 @@ describe('actorCritic: an unparseable actor answer is fed back (#425 C2)', () =>
   // Behaviour change, pinned: a refusal against an EMPTY allowlist used to be
   // suppressed, because as an `error` it flooded the synthesizer's view. A
   // `loop_recovery` reaches no such reader. Mutation: restore the
-  // `allowlistHasContent` guard.
+  // `allowlistHasContent` guard. It does NOT count toward the consecutive-
+  // recovery cap (the #450 delta review's finding 2): the actor had no valid
+  // name to choose, so only the budget ends this one. Mutation: drop
+  // `!surfaceEmpty(...) &&` from the singular refusal's cap check → red.
   it('a refusal is recorded even when the gateway allowlist is empty', async () => {
     const actor = vi
       .fn()
@@ -541,9 +545,8 @@ describe('actorCritic: an unparseable actor answer is fed back (#425 C2)', () =>
     const events = await loop(actor, accept(), [])
 
     expect(recoveries(events)[0]).toMatchObject({ failure: 'tool_not_allowed', tool: 'web_search' })
-    // Two refusals in a row: the consecutive-recovery cap ends the loop.
     expect(ofType(events, 'error').map((e) => (e.data as { kind?: string }).kind)).toEqual([
-      'recovery_exhausted',
+      'budget_exhausted',
     ])
   })
 })
@@ -601,7 +604,7 @@ describe('simpleLoop: the consecutive-recovery cap', () => {
     )
   }
 
-  // Mutations, each red here: the default set to 3 (a third round is played);
+  // Mutations, each red here: the default set to 2 (a third round is played);
   // the cap check removed from any one of the three sites (the loop runs on to
   // its budget instead); the marker dropped from the error.
   it.each([0, 1, 2])('the second unusable answer in a row ends the loop (class %i)', async (i) => {
@@ -623,12 +626,12 @@ describe('simpleLoop: the consecutive-recovery cap', () => {
     expect(errors).toHaveLength(1)
     expect(errors[0]).toMatchObject({
       kind: 'recovery_exhausted',
-      maxConsecutiveRecoveries: 2,
+      maxConsecutiveRecoveries: 1,
       severity: 'recoverable',
       turn: 1,
     })
     expect(errors[0].error).toContain(message)
-    expect(errors[0].hint).toContain('consecutive-recovery cap')
+    expect(errors[0].hint).toContain('consecutive-recovery cap: after 1 recovery in a row')
     expect(errors[0].hint).toContain('`maxConsecutiveRecoveries` on the `rec` pattern')
     expect(ofType(events, 'error')[0].llmCall).toBeDefined()
   })
@@ -670,7 +673,7 @@ describe('simpleLoop: the consecutive-recovery cap', () => {
       .mockResolvedValueOnce(dispatch())
       .mockResolvedValueOnce({ action: mockFinalAction('done') })
 
-    const events = await loop(controller, { maxConsecutiveRecoveries: 1 })
+    const events = await loop(controller, { maxConsecutiveRecoveries: 0 })
 
     expect(controller).toHaveBeenCalledTimes(4)
     expect(errorsOf(events)).toEqual([])
@@ -698,9 +701,12 @@ describe('simpleLoop: the consecutive-recovery cap', () => {
     expect(errorsOf(events)).toEqual([])
   })
 
-  // Mutation: reset on every batch, dispatched or not (drop the `some(...)`
-  // condition) → this one plays a fourth round, red.
-  it('a multi-call turn of which nothing was dispatched does not reset it', async () => {
+  // A turn that dispatched nothing holds only unusable answers, so it COUNTS
+  // (the #450 delta review's finding 1): here it is the second in a row, and
+  // ends the loop. Mutations, each red here: replace simpleLoop's batch cap
+  // check with `if (false)`; or make `if (dispatched) streak.dispatched()`
+  // unconditional.
+  it('a multi-call turn of which nothing was dispatched counts toward the cap', async () => {
     const controller = vi
       .fn()
       .mockRejectedValueOnce(await parseFailure())
@@ -716,21 +722,64 @@ describe('simpleLoop: the consecutive-recovery cap', () => {
 
     const events = await loop(controller)
 
-    expect(controller).toHaveBeenCalledTimes(3)
+    expect(controller).toHaveBeenCalledTimes(2)
     expect(callToolMock).not.toHaveBeenCalled()
-    expect(recoveries(events).map((r) => r.failure)).toEqual(['unparseable_output', 'batch_failed'])
+    expect(recoveries(events).map((r) => r.failure)).toEqual(['unparseable_output'])
     expect(errorsOf(events)).toEqual([
-      expect.objectContaining({ kind: 'recovery_exhausted', turn: 2 }),
+      expect.objectContaining({ kind: 'recovery_exhausted', turn: 1 }),
     ])
   })
 
-  it('the knob: 1 is the pre-#437 behaviour, Infinity leaves only the budget', async () => {
-    const one = vi.fn().mockRejectedValue(await parseFailure())
-    const first = await loop(one, { maxConsecutiveRecoveries: 1 })
-    expect(one).toHaveBeenCalledTimes(1)
+  // Probe P2 of the delta review: before finding 1, this ran all 8 rounds.
+  // Mutations, each red here: simpleLoop's batch cap check → `if (false)`;
+  // `if (dispatched) streak.dispatched()` made unconditional.
+  it('a wholly refused batch every round is capped like a singular refusal', async () => {
+    const controller = vi.fn().mockResolvedValue({
+      action: mockAction({
+        tool_name: 'run_command',
+        tool_args: '{}',
+        additional_calls: [{ tool_name: 'delete_everything', tool_args: '{}' }],
+      }),
+      llmCall: ANSWERED,
+    })
+
+    const events = await loop(controller)
+
+    expect(controller).toHaveBeenCalledTimes(2)
+    expect(callToolMock).not.toHaveBeenCalled()
+    expect(recoveries(events).map((r) => [r.failure, r.turn])).toEqual([['batch_failed', 0]])
+    const errors = errorsOf(events)
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toMatchObject({ kind: 'recovery_exhausted', turn: 1 })
+    expect(errors[0].error).toContain('All 2 calls of the multi-call turn failed')
+    expect(ofType(events, 'error')[0].llmCall).toEqual(ANSWERED)
+  })
+
+  // The two boundaries of the knob, which counts RECOVERIES (owner decision A).
+  // Mutations, one per boundary: the clamp `Math.max(0, …)` → `Math.max(1, …)`
+  // reddens the `0` row; `++run > cap` → `>=` reddens the `1` row.
+  it.each([
+    [0, 1],
+    [1, 2],
+  ])('maxConsecutiveRecoveries: %i → the loop ends on unusable answer %i', async (cap, ends) => {
+    const controller = vi.fn().mockRejectedValue(await parseFailure())
+
+    const events = await loop(controller, { maxConsecutiveRecoveries: cap })
+
+    expect(controller).toHaveBeenCalledTimes(ends)
+    expect(recoveries(events)).toHaveLength(cap)
+    expect(errorsOf(events)).toEqual([
+      expect.objectContaining({ kind: 'recovery_exhausted', maxConsecutiveRecoveries: cap }),
+    ])
+  })
+
+  it('the knob: 0 is the pre-#437 behaviour, Infinity leaves only the budget', async () => {
+    const none = vi.fn().mockRejectedValue(await parseFailure())
+    const first = await loop(none, { maxConsecutiveRecoveries: 0 })
+    expect(none).toHaveBeenCalledTimes(1)
     expect(recoveries(first)).toEqual([])
     expect(errorsOf(first)).toEqual([
-      expect.objectContaining({ kind: 'recovery_exhausted', maxConsecutiveRecoveries: 1 }),
+      expect.objectContaining({ kind: 'recovery_exhausted', maxConsecutiveRecoveries: 0 }),
     ])
 
     const off = vi.fn().mockRejectedValue(await parseFailure())
@@ -741,20 +790,35 @@ describe('simpleLoop: the consecutive-recovery cap', () => {
 })
 
 describe('actorCritic: the consecutive-recovery cap', () => {
-  async function loop(actor: ReturnType<typeof vi.fn>, extra: ActorCriticConfig = {}) {
+  async function loop(
+    actor: ReturnType<typeof vi.fn>,
+    extra: ActorCriticConfig = {},
+    tools: string[] = TOOLS,
+    frame: Parameters<typeof withRunFrame>[0] = {},
+  ) {
     const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
     const critic = vi.fn().mockResolvedValue({ result: mockCriticResult({ is_sufficient: true }) })
     const events = await run(
-      actorCritic(actor as never, critic as never, TOOLS, {
+      actorCritic(actor as never, critic as never, tools, {
         patternId: 'rec',
         maxRetries: 6,
         ...extra,
       }) as never,
+      frame,
     )
     return { critic, events }
   }
 
-  // Mutations, each red here: the default set to 3; the cap check removed from
+  const refusedBatch = {
+    action: mockAction({
+      tool_name: 'run_command',
+      tool_args: '{}',
+      additional_calls: [{ tool_name: 'delete_everything', tool_args: '{}' }],
+    }),
+    llmCall: ANSWERED,
+  }
+
+  // Mutations, each red here: the default set to 2; the cap check removed from
   // any one of the three sites. A refused tool and bad `tool_args` never ended
   // this loop before #437, so for those two the cap is a NEW fatal path.
   it.each([0, 1, 2])('the second unusable answer in a row ends the loop (class %i)', async (i) => {
@@ -773,7 +837,7 @@ describe('actorCritic: the consecutive-recovery cap', () => {
     expect(errors).toHaveLength(1)
     expect(errors[0]).toMatchObject({
       kind: 'recovery_exhausted',
-      maxConsecutiveRecoveries: 2,
+      maxConsecutiveRecoveries: 1,
       severity: 'recoverable',
       iteration: 1,
     })
@@ -826,22 +890,125 @@ describe('actorCritic: the consecutive-recovery cap', () => {
     expect(errorsOf(events)).toEqual([])
   })
 
-  it('honours the knob', async () => {
-    const actor = vi.fn().mockRejectedValue(await parseFailure())
-    const { events } = await loop(actor, { maxConsecutiveRecoveries: 3 })
+  // Probe P2 of the delta review, actorCritic's half: before finding 1, this ran
+  // all 6 attempts. Mutations, each red here: actorCritic's batch cap check →
+  // `if (false)`; its `if (dispatched) streak.dispatched()` made unconditional
+  // (the review's O8).
+  it('a wholly refused batch every attempt is capped like a singular refusal', async () => {
+    const actor = vi.fn().mockResolvedValue(refusedBatch)
+
+    const { events, critic } = await loop(actor)
+
+    expect(actor).toHaveBeenCalledTimes(2)
+    expect(critic).not.toHaveBeenCalled()
+    expect(callToolMock).not.toHaveBeenCalled()
+    expect(recoveries(events).map((r) => [r.failure, r.turn])).toEqual([['batch_failed', 0]])
+    const errors = errorsOf(events)
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toMatchObject({ kind: 'recovery_exhausted', iteration: 1 })
+    expect(errors[0].error).toContain('All 2 calls of the multi-call attempt failed')
+  })
+
+  // Probe P1 of the delta review (finding 2): the dynamic allowlist resolves to
+  // nothing for two attempts — a gateway symptom — then recovers. The actor
+  // named the right tool every time, so those refusals must not count.
+  // Mutation: drop `!surfaceEmpty(...) &&` from the singular refusal's check →
+  // capped at attempt 2 with the tool never dispatched, red.
+  it('a refusal against a tool surface that resolved to nothing does not count', async () => {
+    const dynamicToolAllowlist = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValue(['read_neo4j_cypher'])
+    const actor = vi.fn().mockResolvedValue({ ...dispatch(), llmCall: ANSWERED })
+
+    const { events, critic } = await loop(actor, { maxRetries: 5, dynamicToolAllowlist }, [])
+
     expect(actor).toHaveBeenCalledTimes(3)
+    expect(callToolMock).toHaveBeenCalledTimes(1)
+    expect(critic).toHaveBeenCalledTimes(1)
+    expect(recoveries(events).map((r) => r.failure)).toEqual([
+      'tool_not_allowed',
+      'tool_not_allowed',
+    ])
+    expect(errorsOf(events)).toEqual([])
+  })
+
+  // P1b: the same, through a multi-call attempt. Mutation: drop the
+  // `!surfaceEmpty(...)` conjunct from the batch cap check → red.
+  it('a batch refused against a tool surface that resolved to nothing does not count', async () => {
+    const dynamicToolAllowlist = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValue(['read_neo4j_cypher'])
+    const actor = vi.fn().mockResolvedValue({
+      action: mockAction({
+        tool_name: 'read_neo4j_cypher',
+        tool_args: '{"query":"a"}',
+        additional_calls: [{ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"b"}' }],
+      }),
+      llmCall: ANSWERED,
+    })
+
+    const { events, critic } = await loop(actor, { maxRetries: 5, dynamicToolAllowlist }, [])
+
+    expect(actor).toHaveBeenCalledTimes(3)
+    expect(callToolMock).toHaveBeenCalledTimes(2)
+    expect(critic).toHaveBeenCalledTimes(1)
+    expect(recoveries(events).map((r) => r.failure)).toEqual(['batch_failed', 'batch_failed'])
+    expect(errorsOf(events)).toEqual([])
+  })
+
+  // The control for finding 2: the sandbox shape — `tools: []` INSIDE a scoped
+  // transport — has a real surface (the box's tools), so naming a tool it does
+  // not own is an answer defect and counts. Mutation: drop
+  // `scoped.length === 0 &&` from `surfaceEmpty` → this runs to its budget, red.
+  it('the sandbox shape still counts: tools [] inside a scoped transport', async () => {
+    const transport = {
+      id: 'scoped:sandbox',
+      ownsTool: (name: string) => name.startsWith('sandbox_'),
+      callTool: vi.fn(async () => ({ success: true, data: 'ok' })),
+      listTools: async () => [],
+    }
+    const actor = vi.fn().mockResolvedValue({
+      action: mockAction({ tool_name: 'bash', tool_args: '{"script":"ls"}' }),
+      llmCall: ANSWERED,
+    })
+
+    const { events, critic } = await loop(actor, {}, [], { transports: [transport] })
+
+    expect(actor).toHaveBeenCalledTimes(2)
+    expect(critic).not.toHaveBeenCalled()
+    expect(transport.callTool).not.toHaveBeenCalled()
     expect(errorsOf(events)).toEqual([
-      expect.objectContaining({ kind: 'recovery_exhausted', maxConsecutiveRecoveries: 3 }),
+      expect.objectContaining({ kind: 'recovery_exhausted', iteration: 1 }),
+    ])
+  })
+
+  // The knob's boundaries, actorCritic's half. Mutations: the clamp → `Math.max(1, …)`
+  // reddens the `0` row; `++run > cap` → `>=` reddens the `1` row.
+  it.each([
+    [0, 1],
+    [1, 2],
+    [2, 3],
+  ])('maxConsecutiveRecoveries: %i → the loop ends on unusable answer %i', async (cap, ends) => {
+    const actor = vi.fn().mockRejectedValue(await parseFailure())
+    const { events } = await loop(actor, { maxConsecutiveRecoveries: cap })
+    expect(actor).toHaveBeenCalledTimes(ends)
+    expect(recoveries(events)).toHaveLength(cap)
+    expect(errorsOf(events)).toEqual([
+      expect.objectContaining({ kind: 'recovery_exhausted', maxConsecutiveRecoveries: cap }),
     ])
   })
 })
 
 describe('resolveMaxConsecutiveRecoveries', () => {
   it.each([
-    [undefined, 2],
-    [Number.NaN, 2],
-    [0, 1],
-    [-3, 1],
+    [undefined, 1],
+    [Number.NaN, 1],
+    [0, 0],
+    [-3, 0],
     [2.7, 2],
     [Infinity, Infinity],
   ] as const)('%s → %s', async (declared, expected) => {

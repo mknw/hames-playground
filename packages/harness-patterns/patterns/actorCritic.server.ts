@@ -149,6 +149,17 @@ export function actorCritic<T extends ActorCriticData>(
       config?.maxConsecutiveRecoveries,
     )
     const streak = recoveryStreak(maxConsecutiveRecoveries)
+    // A refusal against a tool surface that resolved to NOTHING is not an
+    // answer defect: the actor had no valid name to choose. `main` read this
+    // exact shape as "almost always a transient MCP gateway issue", one that
+    // resolves once the transport is rebuilt and the dynamic list re-resolves.
+    // Such a refusal is still fed back and recorded as `tool_not_allowed`; it
+    // neither counts toward the cap nor resets it (#450 delta review, finding 2).
+    const surfaceEmpty = (dynamicAllowlist: string[], scoped: readonly unknown[]): boolean =>
+      tools.length === 0 &&
+      dynamicAllowlist.length === 0 &&
+      scoped.length === 0 &&
+      !config?.dynamicToolPattern
     const endOnRecoveryCap = (
       scope: PatternScope<T>,
       error: string,
@@ -484,8 +495,10 @@ export function actorCritic<T extends ActorCriticData>(
 
           const outcomes = await runBatch(subCalls, multiMode)
           // simpleLoop's twin: only a sub-call that was actually dispatched
-          // breaks a run of unusable answers.
-          if (subCalls.some((sc, i) => sc.run && !outcomes[i].skipped)) streak.dispatched()
+          // breaks a run of unusable answers, and an attempt that dispatched
+          // nothing counts toward the cap (below).
+          const dispatched = subCalls.some((sc, i) => sc.run && !outcomes[i].skipped)
+          if (dispatched) streak.dispatched()
 
           outcomes.forEach((o, i) =>
             trackEvent(
@@ -519,6 +532,18 @@ export function actorCritic<T extends ActorCriticData>(
           })
 
           if (!anySucceeded) {
+            if (
+              !dispatched &&
+              !surfaceEmpty(dynamicAllowlist, scopedTransports) &&
+              streak.unusableAnswer()
+            ) {
+              return endOnRecoveryCap(
+                scope,
+                `All ${allCalls.length} calls of the multi-call attempt failed: ${errors.join('; ')}`,
+                attempt,
+                actorLlmCall,
+              )
+            }
             trackLoopRecovery(
               scope,
               {
@@ -566,7 +591,7 @@ export function actorCritic<T extends ActorCriticData>(
             (config?.dynamicToolPattern?.test(action.tool_name) ?? false))
         if (!allowed) {
           const errMsg = refusal(action.tool_name)
-          if (streak.unusableAnswer()) {
+          if (!surfaceEmpty(dynamicAllowlist, scopedTransports) && streak.unusableAnswer()) {
             return endOnRecoveryCap(scope, errMsg, attempt, actorLlmCall)
           }
           // The actor sees the rejection via `previousAttempts` (its standard

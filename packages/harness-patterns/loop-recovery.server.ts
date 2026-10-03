@@ -23,11 +23,12 @@
  *     {@link invalidToolArgsFeedback}.
  *   - **When recovering stops.** {@link recoveryStreak}: the consecutive-
  *     recovery cap. An answer the loop cannot use — one that would not parse,
- *     `tool_args` that would not parse, a tool off the allowlist — is fed back
- *     only until `maxConsecutiveRecoveries` of them (default
- *     {@link DEFAULT_MAX_CONSECUTIVE_RECOVERIES}) arrive in a row; the one that
- *     reaches the cap is fatal exactly as it was before #437, marked
- *     `kind: 'recovery_exhausted'` ({@link recoveryExhaustedMarker}).
+ *     `tool_args` that would not parse, a tool off the allowlist, a multi-call
+ *     turn of which nothing could be dispatched — is fed back at most
+ *     `maxConsecutiveRecoveries` times in a row (default
+ *     {@link DEFAULT_MAX_CONSECUTIVE_RECOVERIES}); the next one is fatal
+ *     exactly as it was before #437, marked `kind: 'recovery_exhausted'`
+ *     ({@link recoveryExhaustedMarker}).
  *   - **What the panel shows.** {@link trackLoopRecovery}: one `loop_recovery`
  *     event per recovery, always tracked — see `LoopRecoveryEventData` for why
  *     it is not an `error`.
@@ -120,39 +121,46 @@ export function invalidToolArgsFeedback(tool: string, args: string, cutOff: bool
     : `Invalid tool_args JSON for ${tool}: ${excerpt(args, 200)}`
 }
 
-/** The consecutive-recovery cap when a loop declares none (#450 review §3;
- *  owner decision 2026-10-03). Each failing round already holds the adapters'
- *  one corrective retry, so two rounds is up to four answers produced after
- *  being told what was wrong — and on the self-hosted tier a cut-off round is
- *  two full-cap generations, which is what an uncapped run multiplied by the
- *  whole budget. */
-export const DEFAULT_MAX_CONSECUTIVE_RECOVERIES = 2
+/** The consecutive-recovery cap when a loop declares none: ONE recovery, so
+ *  the second unusable answer in a row ends the loop (#450 review §3; owner
+ *  decision 2026-10-03, "cap 2", expressed in recoveries since fix round 3 so
+ *  the option counts what it permits, as `maxTurns` and `maxRetries` do). Each
+ *  failing round already holds the adapters' one corrective retry, so two
+ *  rounds is up to four answers produced after being told what was wrong — and
+ *  on the self-hosted tier a cut-off round is two full-cap generations, which
+ *  is what an uncapped run multiplied by the whole budget. */
+export const DEFAULT_MAX_CONSECUTIVE_RECOVERIES = 1
 
 /**
  * A loop's `maxConsecutiveRecoveries`, resolved: absent (or NaN) is the
- * default, anything else is floored and clamped to at least 1 — `1` makes the
- * first unusable answer fatal, `simpleLoop`'s pre-#437 behaviour — and
- * `Infinity` switches the cap off, leaving only the round budget.
+ * default, anything else is floored and clamped to at least 0 — `0` permits no
+ * recovery, so the first unusable answer is fatal (`simpleLoop`'s pre-#437
+ * behaviour) — and `Infinity` switches the cap off, leaving only the round
+ * budget.
  */
 export function resolveMaxConsecutiveRecoveries(declared: number | undefined): number {
   if (declared === undefined || Number.isNaN(declared)) return DEFAULT_MAX_CONSECUTIVE_RECOVERIES
-  return Math.max(1, Math.floor(declared))
+  return Math.max(0, Math.floor(declared))
 }
 
 /** The run of unusable answers since the last round that dispatched a tool. */
 export interface RecoveryStreak {
   /**
    * Count one round whose ANSWER the loop could not use: it would not parse,
-   * its `tool_args` would not parse, or it named a tool off the allowlist.
-   * Returns true when this round is the `cap`-th in a row — the caller then
-   * ends the loop the way it did before #437 instead of feeding the failure
-   * back. A tool that ran and failed is NOT counted: fail, fix, fail is how a
-   * sandbox actor debugs, and capping it would cut that off.
+   * its `tool_args` would not parse, it named a tool off the allowlist, or it
+   * was a multi-call turn of which no call could be dispatched (every call
+   * refused or unparseable at the precheck, or skipped behind one). Returns
+   * true when feeding this one back would exceed the cap — `cap` recoveries in
+   * a row have already been spent — and the caller then ends the loop the way
+   * it did before #437 instead. A tool that ran and failed is NOT counted:
+   * fail, fix, fail is how a sandbox actor debugs, and capping it would cut
+   * that off.
    */
   unusableAnswer(): boolean
   /** A round dispatched a tool (whatever the tool then returned): the run is
-   *  broken. Rounds that do neither — an `expandPreviousResult`, a multi-call
-   *  turn of which no call was dispatched — leave the count where it was. */
+   *  broken. A round that does neither — an `expandPreviousResult`, a
+   *  well-formed action that dispatches nothing — leaves the count where it
+   *  was. */
   dispatched(): void
 }
 
@@ -160,7 +168,7 @@ export interface RecoveryStreak {
 export function recoveryStreak(cap: number): RecoveryStreak {
   let run = 0
   return {
-    unusableAnswer: () => ++run >= cap,
+    unusableAnswer: () => ++run > cap,
     dispatched: () => {
       run = 0
     },
@@ -183,9 +191,10 @@ export function recoveryExhaustedMarker(
     kind: 'recovery_exhausted',
     maxConsecutiveRecoveries: cap,
     hint:
-      `Stopped by the consecutive-recovery cap: ${cap} round${cap === 1 ? '' : 's'} in a row ` +
-      'whose answer the loop could not use (it would not parse, its tool_args would not ' +
-      'parse, or it named a tool off the allowlist). Raise `maxConsecutiveRecoveries` on the ' +
+      `Stopped by the consecutive-recovery cap: after ${cap} recover${cap === 1 ? 'y' : 'ies'} ` +
+      'in a row, another answer the loop could not use (it would not parse, its tool_args ' +
+      'would not parse, it named a tool off the allowlist, or a multi-call turn dispatched ' +
+      'nothing). Raise `maxConsecutiveRecoveries` on the ' +
       `\`${patternId}\` pattern to allow more. The answer is composed from the completed rounds only.`,
   }
 }

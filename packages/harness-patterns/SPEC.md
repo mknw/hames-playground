@@ -475,7 +475,7 @@ interface SimpleLoopConfig extends PatternConfig {
   resultOmit?: Record<string, string[]> // Per-tool fields hidden from the controller turn log (see below)
   multiToolCalls?: 'parallel' | 'sequential' | 'off' // Multi-call turns (default: 'parallel'; see below)
   returnStyle?: 'summary' | 'answer' // What the terminal `Return` carries (default: 'summary'; see below)
-  maxConsecutiveRecoveries?: number // Unusable answers in a row before the loop stops (default: 2; see "One failure does not end the loop")
+  maxConsecutiveRecoveries?: number // Unusable answers in a row the loop feeds back before the next one is fatal (default: 1; see "One failure does not end the loop")
 }
 
 interface FewShot {
@@ -717,7 +717,7 @@ What stays **fatal**, deliberately:
   authority; whether its own parse failure should be survivable is a separate
   decision.
 
-**The consecutive-recovery cap** (`maxConsecutiveRecoveries`, default `2`, on
+**The consecutive-recovery cap** (`maxConsecutiveRecoveries`, default `1`, on
 both loops' configs; #450 review §3, owner decision 2026-10-03). The budget
 alone let a model that keeps producing unusable answers spend every round on
 them, and on the self-hosted tier a cut-off round is two full-cap generations
@@ -725,15 +725,18 @@ them, and on the self-hosted tier a cut-off round is two full-cap generations
 
 - **What counts**: a round (attempt) whose ANSWER the loop cannot use — it would
   not parse (`unparseable_output`), its `tool_args` would not parse
-  (`invalid_tool_args`), or it named a tool off the allowlist
-  (`tool_not_allowed`).
+  (`invalid_tool_args`), it named a tool off the allowlist
+  (`tool_not_allowed`), or it was a multi-call turn of which no call was
+  dispatched (every call refused or unparseable at the precheck, or skipped
+  behind one; recorded as `batch_failed`, which changes its label, not its
+  defect).
 - **What resets it**: any round that dispatches a tool, whatever the tool then
   returns. A tool that ran and failed is never counted — fail, fix, fail is how
-  a sandbox actor debugs. Rounds that do neither leave the count where it was:
-  an `expandPreviousResult`, and a multi-call turn of which no call was
-  dispatched (every call refused or unparseable at the precheck, recorded as
-  `batch_failed`).
-- **What happens at the cap**: the round that reaches it is not fed back. It is
+  a sandbox actor debugs. A round that does neither leaves the count where it
+  was: an `expandPreviousResult`, a well-formed action that dispatches nothing.
+- **What happens at the cap**: the option counts RECOVERIES, the way `maxTurns`
+  counts what it permits. Up to `maxConsecutiveRecoveries` unusable answers in
+  a row are fed back; the next one is not. It is
   fatal exactly as that failure was before #437 — an `error` with the failure's
   own message, the pattern's `errorSeverity` (`recoverable` for both loops, so
   the synthesizer still answers from the completed rounds, #83) and the failed
@@ -741,13 +744,19 @@ them, and on the self-hosted tier a cut-off round is two full-cap generations
   `llm_call`) with `maxConsecutiveRecoveries` beside it and a hint naming the
   lever. So the default stops a loop on its second unusable answer in a row,
   after one recovery.
-- **The knob**: `1` makes the first unusable answer fatal (`simpleLoop`'s
-  pre-#437 behaviour); `Infinity` leaves only the budget; values below `1` are
-  clamped to `1`.
-- **`actorCritic` difference**: a refused tool and unparseable `tool_args` never
-  ended that loop before #437 (they always went back through
+- **The knob**: `0` permits no recovery, so the first unusable answer is fatal
+  (`simpleLoop`'s pre-#437 behaviour); `Infinity` leaves only the budget;
+  values below `0` are clamped to `0`.
+- **`actorCritic` differences**: a refused tool and unparseable `tool_args`
+  never ended that loop before #437 (they always went back through
   `previousAttempts`), so for those two the cap is the first fatal path that
-  loop has — two in a row now end it.
+  loop has — two in a row now end it. That binds the two sandbox agents
+  (`maxRetries: 6`): two consecutive unusable answers now stop them at attempt
+  2, where they used to spend all 6. And a refusal against a tool surface that
+  resolved to NOTHING — no static names, an empty `dynamicToolAllowlist()`, no
+  scoped transport, no `dynamicToolPattern` — neither counts nor resets: the
+  actor had no valid name to choose, and that shape is a gateway symptom, not
+  an answer defect. It is still fed back and recorded as `tool_not_allowed`.
 
 Each recovery records one **`loop_recovery`** event (`LoopRecoveryEventData`:
 `failure`, the verbatim `error`, `tool?`, `turn`, `maxTurns`), carrying the
@@ -782,7 +791,7 @@ interface ActorCriticConfig extends PatternConfig {
   multiToolCalls?: 'parallel' | 'sequential' | 'off' // Same semantics as simpleLoop's (see above);
   // a batch records as ONE Attempt whose result is the combined map
   // the critic evaluates. Sandbox agents use 'sequential'.
-  maxConsecutiveRecoveries?: number // Default: 2. simpleLoop's cap, counted in attempts
+  maxConsecutiveRecoveries?: number // Default: 1. simpleLoop's cap, counted in attempts
   // (see "One failure does not end the loop" under simpleLoop).
 }
 ```

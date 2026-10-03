@@ -202,7 +202,7 @@ neo4j-cypher:
   username: neo4j
   password: ${NEO4J_PASSWORD} # filled from .env by the `mcp-config` render service
   database: neo4j
-  read_only: false
+  read_only: true # agents are read-only against Neo4j (#403), the preview included
 
 fetch:
   enabled: true
@@ -217,15 +217,27 @@ memory:
   enabled: true
 ```
 
+A preview provisioned before 2026-10-03 has `read_only: false` in that file.
+Change it to `true`, then render it again and recreate the gateway:
+`docker compose run --rm mcp-config && docker compose up -d --no-deps --force-recreate mcp-gateway`.
+The gateway reads the copy the one-shot `mcp-config` service renders, so
+recreating it with `--no-deps` alone, or restarting it, re-reads the old copy
+(`docs/MCP_GATEWAY.md`, "Neo4j writes"). Re-running `scripts/bootstrap-vps.sh`
+rewrites the file but does not recreate the running gateway either, so run the
+same two commands after it. Until then the server still offers the write tool;
+the app keeps it from every agent either way, and logs
+`the MCP gateway lists write_neo4j_cypher` once per process while the server
+offers it.
+
 **What is left out, and why:**
 
-| Omitted               | Why                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `redis`               | 45 tools including `scan_keys` and `json_get`. Data Stash keys are `stash:doc:{sessionId}:{docId}` (`packages/harness-patterns/stash/document-store.server.ts:145-146`) — scoped by **session, never by owner** — so this is a read of every colleague's uploaded documents from any signed-in account's controller turn                                                                                                                                                                                                                           |
-| `database-server`     | arbitrary SQL over the app's own Postgres, across every user's rows. `conversations.context` is no longer plaintext — `conversations.server.ts:205` writes it through `encryptJsonb` and `:102`/`:317` read it back (#260) — so a raw `SELECT` returns envelopes rather than transcripts. What stays cleartext is what SQL has to scope and order by: `id`, `user_id`, `agent_id`, both timestamps (`app/src/lib/db/client.server.ts:38-46`). That is still every colleague's conversation metadata, and nothing about the tool makes it read-only |
-| `rust-mcp-filesystem` | 24 tools with `allow_write: true`. No registered agent uses them                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `playwright`          | a browser with `browser_evaluate` / `browser_run_code`. A development and E2E tool; no registered agent uses it                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `github`              | never in the tracked template; removed from `configs/custom-catalog.yaml` entirely by #226 E3, so no config block has a server definition to start; and its last consumer agent was deleted by #266. Three layers deep — but check for the token explicitly anyway, below                                                                                                                                                                                                                                                                          |
+| Omitted               | Why                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `redis`               | 45 tools including `scan_keys` and `json_get`. Data Stash keys are `stash:doc:{sessionId}:{docId}` (`packages/harness-patterns/stash/document-store.server.ts:145-146`) — scoped by **session, never by owner** — so this is a read of every colleague's uploaded documents from any signed-in account's controller turn                                                                 |
+| `database-server`     | removed from `configs/custom-catalog.yaml` entirely (#412): agents get no Postgres access. It ran arbitrary SQL over the app's own Postgres, across every user's rows. No config block has a server definition to start, the `mcp-config` render service is given no Postgres credential, and the app withholds the server's tools from every agent's catalog whatever the gateway lists |
+| `rust-mcp-filesystem` | 24 tools with `allow_write: true`. No registered agent uses them                                                                                                                                                                                                                                                                                                                         |
+| `playwright`          | a browser with `browser_evaluate` / `browser_run_code`. A development and E2E tool; no registered agent uses it                                                                                                                                                                                                                                                                          |
+| `github`              | never in the tracked template; removed from `configs/custom-catalog.yaml` entirely by #226 E3, so no config block has a server definition to start; and its last consumer agent was deleted by #266. Three layers deep — but check for the token explicitly anyway, below                                                                                                                |
 
 **Dropping `redis` costs nothing, on one condition.** Uploads, ingestion and
 search do not use the redis MCP server: `STASH_DIRECT_REDIS='1'` in `.env`
@@ -238,22 +250,27 @@ and the stash falls back to the gateway path you just removed.
 removes. These two properties belong to what stays, and neither is a setting you
 can tighten here:
 
-- **`neo4j-cypher` is shared, writable state.** The catalog gives it
-  `write_neo4j_cypher` alongside the two read tools
-  (`configs/custom-catalog.yaml:9-12`) and the config above sets
-  `read_only: false`. There is no owner scoping anywhere in the graph layer —
+- **`neo4j-cypher` is shared state, and agents only read it.** The owner
+  decided on 2026-10-03 that agents are read-only against Neo4j, the preview
+  included (#403). Two layers hold that: the config above sets
+  `read_only: true`, under which the server does not offer
+  `write_neo4j_cypher`, and the app leaves that tool out of every agent's tool
+  list whatever the server offers (`AGENT_WITHHELD_TOOLS` in
+  `packages/harness-patterns/mcp-client.server.ts`). There is still no owner
+  scoping anywhere in the graph layer —
   `grep -n 'user_id\|ownerId' app/src/lib/neo4j/*.ts` returns nothing — so
-  every signed-in colleague's turn reads **and writes** the same graph. That is
-  deliberate for a preview whose point is the shared graph; §11 records the
-  identical property for `memory`. It is a disclosure obligation rather than a
-  bug, and `PREVIEW-WELCOME.md` carries it.
+  every signed-in colleague's turn reads the same graph. The future writer is
+  the memory hook (#419), which writes through the app and asks the user to
+  confirm first (#206). §11 records the shared property for `memory`, which
+  agents can still write. `PREVIEW-WELCOME.md` carries both.
 - **The agent holding that surface declares no content boundary.**
   `withInjectionGuard` is declared by exactly three agents — `microsoft-365`,
   `search` and `retriever-agent` — and `general`, the one that passes
   `tools.all` into its loop, is not among them (a known, filed gap: #206). Two
   of the preview's five servers are `fetch` and `web_search`, so text from a
   page whose author is not your colleague lands in the same controller turn
-  that holds `write_neo4j_cypher` and the shared `memory` writes, unsanitised.
+  that holds the shared `memory` writes, unsanitised. (It no longer holds
+  `write_neo4j_cypher`: no agent does, since #403.)
   No setting on this VM switches that boundary on for `general` — it is the code
   change filed as #206. It bears on how far to trust an answer that cites a fetched
   page, and on who you invite — the same register §11 uses for the sandbox.
@@ -489,15 +506,22 @@ Step 1b must print exactly:
 
 ```
 - Those servers are enabled: neo4j-cypher, fetch, web_search, context7, memory
-> 17 tools listed in …
+> 16 tools listed in …
 ```
 
 Order varies; the **set** and the **count** do not. `redis`,
-`database-server`, `rust-mcp-filesystem`, `playwright` or `github` in that line
-means the overlay's `--servers` allow-list did not apply — stop and fix it
-before anyone signs in. A count materially above 17 means the same thing (the
-exact number tracks the pinned MCP images, so treat a ±1 drift after an image
-bump as a re-check, not an alarm; 134 is the un-narrowed surface).
+`rust-mcp-filesystem`, `playwright` or `github` in that line means the overlay's
+`--servers` allow-list did not apply, and `database-server` means the catalog
+itself has it back (#412) — either way, stop and fix it before anyone signs in.
+A count materially above 16 means the same thing (the exact number tracks the
+pinned MCP images, so treat a ±1 drift after an image bump as a re-check, not
+an alarm; 134 is the un-narrowed surface).
+
+The count was 17 until 2026-10-03. With `read_only: true` the Neo4j server does
+not offer `write_neo4j_cypher`, so it should now be 16. That figure is
+derived, not yet read off a live box. A 17 after the change means the gateway
+still lists the write tool: check `read_only` in the config above and that the
+gateway was recreated. The app keeps the tool from every agent either way.
 
 Two things that are _not_ failures here: the gateway prints those lines only at
 startup, so on a long-running box `docker compose restart mcp-gateway` first if

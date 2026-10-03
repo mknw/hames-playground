@@ -74,6 +74,8 @@ export type {
   ContentSanitizedEventData,
   WarningEventData,
   WarningTask,
+  LoopRecoveryEventData,
+  LoopRecoveryFailure,
 
   // LLM Observability
   LLMCallData,

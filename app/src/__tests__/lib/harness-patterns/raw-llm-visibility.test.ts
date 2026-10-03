@@ -4,9 +4,12 @@
  * When a model's response cannot be used — BAML could not coerce it, the
  * `tool_args` were cut off at the output cap, the tool name is not on the
  * allowlist, the router invented a route — the ONLY record of what was
- * actually said is `llmCall.rawOutput`. Every `error` event on such a path
- * must carry it; a path that drops it makes the failure undebuggable from the
- * UI, which is the recurring complaint this file exists to prevent.
+ * actually said is `llmCall.rawOutput`. Every event recording such a failure
+ * must carry it — an `error` where the failure ends the step, a
+ * `loop_recovery` where a tool loop feeds it back and continues (#437), a
+ * `warning` where a side task runs past it (#420); a path that drops it makes
+ * the failure undebuggable from the UI, which is the recurring complaint this
+ * file exists to prevent.
  *
  * Two families are pinned here, and they fail differently if regressed:
  *  1. the CALL failed → the adapters wrap it as `LLMCallError` so the raw
@@ -23,7 +26,12 @@ import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { mockAction } from '../../mocks/baml'
 import { mockCallTool, mockListTools, fixtures } from '../../mocks/mcp'
 import type { Collector } from '@boundaryml/baml'
-import type { ContextEvent, ErrorEventData, LLMCallData } from '@hames-ai/harness-patterns/types'
+import type {
+  ContextEvent,
+  ErrorEventData,
+  LLMCallData,
+  LoopRecoveryEventData,
+} from '@hames-ai/harness-patterns/types'
 
 /**
  * #374: a pattern run needs a run frame, and these tests drive patterns
@@ -86,6 +94,13 @@ const errorEvent = (events: ContextEvent[]) => {
   const found = events.find((e) => e.type === 'error')
   expect(found, 'the run emitted no error event').toBeTruthy()
   return found as ContextEvent & { data: ErrorEventData; llmCall?: LLMCallData }
+}
+
+/** The first `loop_recovery` event a loop run produced (#437). */
+const recoveryEvent = (events: ContextEvent[]) => {
+  const found = events.find((e) => e.type === 'loop_recovery')
+  expect(found, 'the run emitted no loop_recovery event').toBeTruthy()
+  return found as ContextEvent & { data: LoopRecoveryEventData; llmCall?: LLMCallData }
 }
 
 /** A controller/actor result whose call succeeded — the CONTENT is the defect. */
@@ -163,10 +178,15 @@ describe('adapters: a failed BAML call carries rawOutput through the throw', () 
 })
 
 // ============================================================================
-// 2. simpleLoop — every LLM-attributable break carries the response
+// 2. simpleLoop — the event recording each failure carries the response
 // ============================================================================
 
-describe('simpleLoop: error events carry the response that caused them', () => {
+// Since #437 slice 1 a failure the loop survives rides a `loop_recovery`
+// rather than an `error` (the #420 move, for the selector's warning, is the
+// precedent): the call record must survive the move, or the drill-down loses
+// the only copy of what the model said. A failure that still ENDS the loop —
+// an unclassified controller throw — keeps its `error` event.
+describe('simpleLoop: the event recording each failure carries the response', () => {
   const loop = async (controller: unknown, tools = ['read_neo4j_cypher']) => {
     const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
     return runPattern(
@@ -189,6 +209,24 @@ describe('simpleLoop: error events carry the response that caused them', () => {
     expect(err.llmCall?.rawOutput).toBe(RAW_TEXT)
   })
 
+  it('a recoverable failed controller call → rawOutput on the recovery', async () => {
+    const { LLMCallError } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const controller = vi
+      .fn()
+      .mockRejectedValue(
+        new LLMCallError(
+          'BamlValidationError: missing reasoning',
+          { functionName: 'LoopController', variables: {}, rawOutput: RAW_TEXT },
+          undefined,
+          { recoverable: true },
+        ),
+      )
+
+    const rec = recoveryEvent(await loop(controller))
+    expect(rec.data.failure).toBe('unparseable_output')
+    expect(rec.llmCall?.rawOutput).toBe(RAW_TEXT)
+  })
+
   it('unparseable tool_args → the response that produced them', async () => {
     const controller = vi
       .fn()
@@ -196,10 +234,10 @@ describe('simpleLoop: error events carry the response that caused them', () => {
         succeededWith({ tool_name: 'read_neo4j_cypher', tool_args: 'not json at all' }),
       )
 
-    const err = errorEvent(await loop(controller))
-    expect(err.data.error).toContain('Invalid tool_args JSON')
-    expect(err.data.kind).toBe('llm_call')
-    expect(err.llmCall?.rawOutput).toBe(RAW_TEXT)
+    const rec = recoveryEvent(await loop(controller))
+    expect(rec.data.error).toContain('Invalid tool_args JSON')
+    expect(rec.data.failure).toBe('invalid_tool_args')
+    expect(rec.llmCall?.rawOutput).toBe(RAW_TEXT)
   })
 
   it('a tool name off the allowlist → the response that named it', async () => {
@@ -207,10 +245,10 @@ describe('simpleLoop: error events carry the response that caused them', () => {
       .fn()
       .mockResolvedValue(succeededWith({ tool_name: 'sandbox_write', tool_args: '{}' }))
 
-    const err = errorEvent(await loop(controller))
-    expect(err.data.error).toContain('Tool not allowed')
-    expect(err.data.kind).toBe('llm_call')
-    expect(err.llmCall?.rawOutput).toBe(RAW_TEXT)
+    const rec = recoveryEvent(await loop(controller))
+    expect(rec.data.error).toContain('Tool not allowed')
+    expect(rec.data.failure).toBe('tool_not_allowed')
+    expect(rec.llmCall?.rawOutput).toBe(RAW_TEXT)
   })
 
   it('a genuine TOOL failure carries no llmCall — the response was fine', async () => {
@@ -228,10 +266,10 @@ describe('simpleLoop: error events carry the response that caused them', () => {
         maxTurns: 1,
       }) as never,
     )
-    const err = errorEvent(events)
-    expect(err.data.error).toContain('gateway down')
-    expect(err.data.kind).toBeUndefined()
-    expect(err.llmCall).toBeUndefined()
+    const rec = recoveryEvent(events)
+    expect(rec.data.error).toContain('gateway down')
+    expect(rec.data.failure).toBe('tool_error')
+    expect(rec.llmCall).toBeUndefined()
   })
 })
 
@@ -239,7 +277,7 @@ describe('simpleLoop: error events carry the response that caused them', () => {
 // 3. actorCritic — the in-loop content defects
 // ============================================================================
 
-describe('actorCritic: error events carry the actor response', () => {
+describe('actorCritic: the event recording each failure carries the actor response', () => {
   const run = async (actor: unknown, tools = ['read_neo4j_cypher']) => {
     const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
     const critic = vi
@@ -268,34 +306,46 @@ describe('actorCritic: error events carry the actor response', () => {
     expect(err.llmCall?.rawOutput).toBe(RAW_TEXT)
   })
 
-  it('unparseable tool_args → rawOutput on the error event', async () => {
+  it('a recoverable failed actor call → rawOutput on the recovery', async () => {
+    const { LLMCallError } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const actor = vi
+      .fn()
+      .mockRejectedValue(
+        new LLMCallError(
+          'BamlValidationError: missing tool_name',
+          { functionName: 'ActorController', variables: {}, rawOutput: RAW_TEXT },
+          undefined,
+          { recoverable: true },
+        ),
+      )
+
+    const rec = recoveryEvent(await run(actor))
+    expect(rec.data.failure).toBe('unparseable_output')
+    expect(rec.llmCall?.rawOutput).toBe(RAW_TEXT)
+  })
+
+  it('unparseable tool_args → rawOutput on the recovery', async () => {
     const actor = vi
       .fn()
       .mockResolvedValue(
         succeededWith({ tool_name: 'read_neo4j_cypher', tool_args: '{"query": unquoted,,,' }),
       )
 
-    const events = await run(actor)
-    const err = events.find(
-      (e) => e.type === 'error' && (e.data as ErrorEventData).error.includes('tool_args'),
-    ) as ContextEvent & { data: ErrorEventData; llmCall?: LLMCallData }
-    expect(err, 'no tool_args error event').toBeTruthy()
-    expect(err.data.kind).toBe('llm_call')
-    expect(err.llmCall?.rawOutput).toBe(RAW_TEXT)
+    const rec = recoveryEvent(await run(actor))
+    expect(rec.data.failure).toBe('invalid_tool_args')
+    expect(rec.data.error).toContain('tool_args')
+    expect(rec.llmCall?.rawOutput).toBe(RAW_TEXT)
   })
 
-  it('a tool name off the allowlist → rawOutput on the error event', async () => {
+  it('a tool name off the allowlist → rawOutput on the recovery', async () => {
     const actor = vi
       .fn()
       .mockResolvedValue(succeededWith({ tool_name: 'sandbox_write', tool_args: '{}' }))
 
-    const events = await run(actor)
-    const err = events.find(
-      (e) => e.type === 'error' && (e.data as ErrorEventData).error.includes('Tool not allowed'),
-    ) as ContextEvent & { data: ErrorEventData; llmCall?: LLMCallData }
-    expect(err, 'no allowlist error event').toBeTruthy()
-    expect(err.data.kind).toBe('llm_call')
-    expect(err.llmCall?.rawOutput).toBe(RAW_TEXT)
+    const rec = recoveryEvent(await run(actor))
+    expect(rec.data.failure).toBe('tool_not_allowed')
+    expect(rec.data.error).toContain('Tool not allowed')
+    expect(rec.llmCall?.rawOutput).toBe(RAW_TEXT)
   })
 })
 

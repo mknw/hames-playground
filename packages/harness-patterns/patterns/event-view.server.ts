@@ -19,6 +19,7 @@ import type {
   ToolResultEventData,
   ContentSanitizedEventData,
   WarningEventData,
+  LoopRecoveryEventData,
 } from '../types'
 
 assertServerOnImport()
@@ -555,6 +556,15 @@ function formatEventData(event: ContextEvent): string {
       // re-serve untrusted content to the next prompt by a side door (#420).
       const data = event.data as WarningEventData
       return `${data.task}: ${data.message}`
+    }
+    case 'loop_recovery': {
+      // METADATA ONLY — never `data.error`. It can be a tool's error text from
+      // an untrusted source or a parse error quoting the model's own output;
+      // the loop's turn log already hands both to the next prompt, and the
+      // default branch below would serve them a second time by a side door.
+      const data = event.data as LoopRecoveryEventData
+      const tool = data.tool ? ` (${data.tool})` : ''
+      return `${data.failure}${tool} at ${data.turn + 1}/${data.maxTurns}, fed back and continued`
     }
     default:
       return typeof event.data === 'object' ? JSON.stringify(event.data) : String(event.data)

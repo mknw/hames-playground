@@ -515,6 +515,50 @@ export interface RepairedJson {
 
 const LENIENT: JsonRepairNote = { strategy: 'lenient-tokens' }
 
+/** A whole value that is ONE double-quoted string: every interior `"` escaped. */
+const ONE_QUOTED_STRING = /^"(?:[^"\\]|\\[\s\S])*"$/
+
+/**
+ * Something shaped like the start of another object member: a key after a
+ * separator (`, b:`), or a quoted key, which also catches a member whose
+ * separator is missing (`"x" "b": 1`). A colon glued to `//` is a URL scheme,
+ * never a key, so `, https://b.com` is content (#453): this bets that no
+ * member's value starts with `//`. A protocol-relative or UNC value written
+ * straight after its key's colon (`src://cdn…`) is merged into the previous
+ * value.
+ */
+const MEMBER_START = /,\s*[a-zA-Z_$][\w$-]*\s*:(?!\/\/)|"[^"]*"\s*:|'[^']*'\s*:/
+
+/**
+ * Whether the text the last-resort handler would take as ONE value holds a
+ * second member (#408). The handler's regex only checks that the input BEGINS
+ * with one key, so a multi-key object malformed anywhere — `{a: [x,,y], b: 1}`,
+ * `{"a": "x "y" z", "b": }` — came back as `{a: "[x,,y], b: 1"}`: well-formed,
+ * tagged `lenient-tokens`, and wrong, with the tool running on its first
+ * argument holding the text of the others.
+ *
+ * The answer to a member-shaped run is to DECLINE, not to split there: the
+ * text that made every strategy above fail is still in the input, and a guess
+ * at where it ends is the same silent mis-coercion #217(b) is about. A declined
+ * repair throws, and both loops treat that as unusable `tool_args`: the error
+ * goes back to the model as a recovery round (#437), and by default the next
+ * unusable answer in a row ends the loop. In a multi-call batch it is that
+ * call's own error. Either way it fails CLOSED — the fold ran the tool on wrong
+ * arguments, which for a write tool is a wrong write.
+ *
+ * Conservative on purpose, so it costs some inputs the old handler got right:
+ * a label predicate or label write after a comma (`RETURN a, b:Person`,
+ * `SET a:Customer, b:Vendor`, `REMOVE …`) or a quoted word followed by a colon
+ * (`search "error": x`, Python's `if x == "y":` once the same code also holds
+ * an ambiguous `print("a", b)`) reads as a member and now throws.
+ * A member-shaped run inside a value that is one cleanly quoted string
+ * (`"RETURN n, n:Person"`) is content, because such a string cannot hold a
+ * second member — that is the one shape exempted.
+ */
+function holdsSiblingMember(value: string): boolean {
+  return !ONE_QUOTED_STRING.test(value) && MEMBER_START.test(value)
+}
+
 /**
  * Parse a JSON string leniently, repairing common LLM mistakes, and report
  * WHICH repair (if any) produced the value.
@@ -559,7 +603,30 @@ export function repairJsonTracked(raw: string): RepairedJson {
   s = s.replace(/,\s*([}\]])/g, '$1')
 
   // Quote unquoted keys:  { key: or , key:  →  {"key": or ,"key":
-  s = s.replace(/([{,])\s*([a-zA-Z_$][\w$]*)\s*:/g, '$1"$2":')
+  //
+  // After `{`, an identifier and a colon are always a key. After a comma they
+  // are a key only when the colon is followed by whitespace or by the first
+  // character of a JSON value (`"`, `[`, `{`, a number, `true`/`false`/`null`).
+  // The bare `, ident:` this step used to accept split ONE unquoted value into
+  // two keys wherever the value's own text held a comma and a colon (#453):
+  // `{query: sites like https://a.com, https://b.com}` came back with a key
+  // `https` holding `//b.com`, and `{query: MATCH (a) RETURN a, b:Person}` with
+  // a key `b` holding `Person`. Both were well-formed, tagged `lenient-tokens`,
+  // and wrong. A colon glued to a bare word or a path is how a URL scheme, a
+  // Cypher label or an RDF prefix reads, so this step leaves it alone. The
+  // steps below then keep the value whole (`://` cannot start a member, see
+  // MEMBER_START) or decline it (#408).
+  //
+  // It does NOT close a `, word:` whose colon is followed by whitespace or by
+  // the start of a value: `{code: lambda a, b: a + b}` and
+  // `{query: site:example.com, intitle:"neo4j"}` both still split.
+  // `{query: movies, limit: 5}` is the input this step exists for, and
+  // `{code: lambda a, b: a + b}` reads exactly the same way, so it still
+  // splits. The cost runs the other way too:
+  // a compact `{a:x,b:y}`, whose second key's colon is glued to a bare word,
+  // now throws instead of repairing.
+  s = s.replace(/\{\s*([a-zA-Z_$][\w$]*)\s*:/g, '{"$1":')
+  s = s.replace(/,\s*([a-zA-Z_$][\w$]*)\s*:(?=\s|["[{]|-?\d|(?:true|false|null)\b)/g, ',"$1":')
 
   // Try again — keys are now quoted, values may already be valid
   try {
@@ -569,7 +636,8 @@ export function repairJsonTracked(raw: string): RepairedJson {
   }
 
   // Park bracketed values ({a: [X], b: 5}) before the value regex runs — it
-  // skips them, and the last-resort handler below would absorb their siblings.
+  // skips them, and the input would otherwise reach the last-resort handler
+  // below, which declines a multi-member object (#408) rather than repair it.
   const parked: string[] = []
   s = parkBracketedValues(s, parked)
 
@@ -580,10 +648,22 @@ export function repairJsonTracked(raw: string): RepairedJson {
   // `(?!\s)` pins `\s*` to the whole run of whitespace: without it the engine
   // backtracks to zero-width, the guards below inspect a space instead of the
   // first value character, and valid values get re-quoted ({a: 5} → {a: " 5"}).
-  s = s.replace(
-    /:\s*(?!\s)(?!")(?!-?\d[\d.]*)(?!true\b)(?!false\b)(?!null\b)(?![[{])([^,}\]]+?)\s*([,}\]])/g,
-    ': "$1"$2',
-  )
+  //
+  // Linear in the input, and both halves of that are load-bearing (#461). The
+  // value is taken GREEDILY up to the terminator and its trailing whitespace is
+  // trimmed afterwards: a lazy `+?` followed by `\s*` re-scanned the whole
+  // whitespace run at every extension, which is quadratic in the run. And the
+  // regex only sees the text up to the LAST terminator: a match cannot cross
+  // one, so no colon after it can match, but each of them would scan to the
+  // end of the input before failing — quadratic in the number of colons.
+  const end = Math.max(s.lastIndexOf(','), s.lastIndexOf('}'), s.lastIndexOf(']')) + 1
+  s =
+    s
+      .slice(0, end)
+      .replace(
+        /:\s*(?!\s)(?!")(?!-?\d[\d.]*)(?!true\b)(?!false\b)(?!null\b)(?![[{])([^,}\]]+)([,}\]])/g,
+        (_match, value: string, close: string) => `: "${value.trimEnd()}"${close}`,
+      ) + s.slice(end)
 
   s = unparkBracketedValues(s, parked)
 
@@ -599,13 +679,20 @@ export function repairJsonTracked(raw: string): RepairedJson {
   //   {query: MATCH (c)-[r]-() RETURN c.name, count(r)}
   // We extract the key, then take everything between the first colon and the
   // final closing brace as a single string value. Only safe when the value has
-  // no nested `{`/`}` — bail otherwise.
+  // no nested `{`/`}`, and when nothing in it looks like a second member — bail
+  // otherwise, and the input throws (see `holdsSiblingMember`, #408).
+  //
+  // The value is SLICED, not captured (#461). The regex this replaces took it
+  // with a lazy `([\s\S]+?)\s*\}`, which re-scanned a whitespace run at every
+  // extension: ~14s of synchronous CPU at 200k characters. The two checks keep
+  // what it accepted — the input ends at a `}`, with at least one character
+  // between the colon and it.
   const original = raw.trim()
-  const singleKey = original.match(/^\{\s*"?([a-zA-Z_$][\w$]*)"?\s*:\s*([\s\S]+?)\s*\}\s*$/)
-  if (singleKey) {
-    const [, key, rawValue] = singleKey
-    const value = rawValue.trim()
-    if (!value.includes('{') && !value.includes('}')) {
+  const head = original.match(/^\{\s*"?([a-zA-Z_$][\w$]*)"?\s*:/)
+  if (head && original.endsWith('}') && original.length - head[0].length > 1) {
+    const key = head[1]
+    const value = original.slice(head[0].length, -1).trim()
+    if (!value.includes('{') && !value.includes('}') && !holdsSiblingMember(value)) {
       // Strip optional surrounding quotes the LLM may or may not have added.
       const unquoted = value.replace(/^['"`]([\s\S]*)['"`]$/, '$1')
       return { args: { [key]: unquoted }, repair: LENIENT }

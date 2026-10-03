@@ -65,6 +65,8 @@ export const eventIconClasses: Record<EventType, string> = {
   // The chat Warning bubble's glyph, in the outline style the rest of this
   // table uses, so the two read as one thing.
   warning: 'i-material-symbols-warning-outline',
+  // A failure the loop fed back and went round again on (#437).
+  loop_recovery: 'i-material-symbols-replay',
 }
 
 export const eventColors: Record<EventType, string> = {
@@ -88,4 +90,7 @@ export const eventColors: Record<EventType, string> = {
   warning: '#f59e0b', // amber-500 — the chat Warning bubble's hue: a side task
   // failed and the turn ran on a fallback (#420), so neither error red nor the
   // orange of a control firing
+  loop_recovery: '#a3e635', // lime-400 — a failure the loop routed around
+  // (#437): something did fail, so not the cyan of a result, and the turn
+  // carried on, so not error red
 }

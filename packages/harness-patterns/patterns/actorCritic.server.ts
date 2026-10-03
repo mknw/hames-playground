@@ -8,6 +8,7 @@
 
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
+import { isAgentWithheldTool } from '../agent-withheld-tools'
 import { repairJsonTracked, type JsonRepairNote } from '../json-repair'
 import { normalizeControllerAction } from '../controller-action'
 import type {
@@ -27,17 +28,31 @@ import { runBatch, combineOutcomes } from '../parallel-tools.server'
 import type { SubCall } from '../parallel-tools.server'
 import { getErrorHint, budgetHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
-import {
-  resolveTurnBudget,
-  runtimeConfig,
-} from '../runtime-config.server'
+import { resolveTurnBudget, runtimeConfig } from '../runtime-config.server'
 import { activeTransports } from '../tool-transport.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
-import type { ActorFn, CriticFnWithLLMData } from '../types'
+import {
+  isRecoverableLLMFailure,
+  unparseableOutputFeedback,
+  invalidToolArgsFeedback,
+  trackLoopRecovery,
+  resolveMaxConsecutiveRecoveries,
+  recoveryStreak,
+  recoveryExhaustedMarker,
+} from '../loop-recovery.server'
+import type { ActorFn, ControllerCallResult, CriticFnWithLLMData, LLMCallRecord } from '../types'
 import { LLMCallError } from '../types'
 import { formatPlanContext, type PlannerData } from './planner.server'
 
 assertServerOnImport()
+
+/** The allowlist refusal, naming a tool withheld from every agent (#403) as
+ *  such, so neither the actor nor a reader takes it for a misspelling. */
+function refusal(name: string): string {
+  return (
+    `Tool not allowed: ${name}` + (isAgentWithheldTool(name) ? ' (withheld from every agent)' : '')
+  )
+}
 
 export interface ActorCriticData {
   attempt?: number
@@ -124,6 +139,47 @@ export function actorCritic<T extends ActorCriticData>(
     let successfulTurns = 0
     const previousAttempts: ScriptExecutionEvent[] = []
     let errorMessage: string | undefined
+
+    // The consecutive-recovery cap (#450 review §3), counted in attempts — see
+    // `recoveryStreak`. The unusable answer that follows `maxConsecutiveRecoveries` recoveries in a row ends the loop with
+    // the error the outer catch records for an LLM failure, plus the marker.
+    // (A refused tool or bad `tool_args` never ended this loop before #437, so
+    // for those two the cap is the first fatal path there is.)
+    const maxConsecutiveRecoveries = resolveMaxConsecutiveRecoveries(
+      config?.maxConsecutiveRecoveries,
+    )
+    const streak = recoveryStreak(maxConsecutiveRecoveries)
+    // A refusal against a tool surface that resolved to NOTHING is not an
+    // answer defect: the actor had no valid name to choose. `main` read this
+    // exact shape as "almost always a transient MCP gateway issue", one that
+    // resolves once the transport is rebuilt and the dynamic list re-resolves.
+    // Such a refusal is still fed back and recorded as `tool_not_allowed`; it
+    // neither counts toward the cap nor resets it (#450 delta review, finding 2).
+    const surfaceEmpty = (dynamicAllowlist: string[], scoped: readonly unknown[]): boolean =>
+      tools.length === 0 &&
+      dynamicAllowlist.length === 0 &&
+      scoped.length === 0 &&
+      !config?.dynamicToolPattern
+    const endOnRecoveryCap = (
+      scope: PatternScope<T>,
+      error: string,
+      attempt: number,
+      llmCall: LLMCallRecord | undefined,
+    ): PatternScope<T> => {
+      trackEvent(
+        scope,
+        'error',
+        {
+          error,
+          severity: resolved.errorSeverity,
+          iteration: attempt,
+          ...recoveryExhaustedMarker(maxConsecutiveRecoveries, resolved.patternId),
+        } as ErrorEventData,
+        true,
+        llmCall,
+      )
+      return scope
+    }
 
     // Shared post-execution tail for singular AND multi-call attempts.
     //
@@ -242,16 +298,50 @@ export function actorCritic<T extends ActorCriticData>(
         // returns the call record on the result.
         // Object seam (Lane A4): the actor's attempts arrive as typed events;
         // no collector is passed (Lane A3) — the implementation owns it.
-        const { action: rawAction, llmCall: actorLlmCall } = await actor({
-          userMessage: userContent,
-          intent,
-          availableTools: tools,
-          previousAttempts,
-          attemptNumber: attempt + 1,
-          maxAttempts: maxRetries,
-          multiCallMode: multiMode === 'off' ? undefined : multiMode,
-          planContext,
-        })
+        let actorResult: ControllerCallResult
+        try {
+          actorResult = await actor({
+            userMessage: userContent,
+            intent,
+            availableTools: tools,
+            previousAttempts,
+            attemptNumber: attempt + 1,
+            maxAttempts: maxRetries,
+            multiCallMode: multiMode === 'off' ? undefined : multiMode,
+            planContext,
+          })
+        } catch (actorError) {
+          // An answer that would not parse is fed back as this attempt's
+          // result, through the same `previousAttempts` channel every other
+          // recoverable failure here uses, and costs the attempt (#437 slice
+          // 1, #425 C2 — it used to reach the outer catch and end the loop
+          // with attempts left). An empty tool name: no call was made, and the
+          // attempt log replays an empty action followed by the ERROR.
+          // Anything else — the model never answered, or an unclassified
+          // failure — rethrows to the outer catch, fatal as before.
+          if (!isRecoverableLLMFailure(actorError)) throw actorError
+          if (streak.unusableAnswer()) {
+            return endOnRecoveryCap(scope, actorError.message, attempt, actorError.llmCall)
+          }
+          previousAttempts.push({
+            toolName: '',
+            script: '',
+            output: '',
+            error: unparseableOutputFeedback(actorError),
+          })
+          trackLoopRecovery(
+            scope,
+            {
+              failure: 'unparseable_output',
+              error: actorError.message,
+              turn: attempt,
+              maxTurns: maxRetries,
+            },
+            actorError.llmCall,
+          )
+          continue
+        }
+        const { action: rawAction, llmCall: actorLlmCall } = actorResult
 
         // Apply the contract's documented defaults ONCE, here, before the
         // action is recorded or read: `is_final` is optional (#159) and absent
@@ -318,16 +408,19 @@ export function actorCritic<T extends ActorCriticData>(
           for (const c of allCalls) {
             const callId = generateId('tc')
             callIds.push(callId)
+            // Withheld from every agent (#403) before any augmentation: no
+            // list, callback or pattern can hand one back.
             const callAllowed =
-              tools.includes(c.tool_name) ||
-              dynamicAllowlist.includes(c.tool_name) ||
-              scopedTransports.some((t) => t.ownsTool(c.tool_name)) ||
-              (config?.dynamicToolPattern?.test(c.tool_name) ?? false)
+              !isAgentWithheldTool(c.tool_name) &&
+              (tools.includes(c.tool_name) ||
+                dynamicAllowlist.includes(c.tool_name) ||
+                scopedTransports.some((t) => t.ownsTool(c.tool_name)) ||
+                (config?.dynamicToolPattern?.test(c.tool_name) ?? false))
             if (!callAllowed) {
               track(c.tool_args)
               subCalls.push({
                 tool: c.tool_name,
-                precheckError: `Tool not allowed: ${c.tool_name}`,
+                precheckError: refusal(c.tool_name),
               })
               continue
             }
@@ -401,6 +494,11 @@ export function actorCritic<T extends ActorCriticData>(
           )
 
           const outcomes = await runBatch(subCalls, multiMode)
+          // simpleLoop's twin: only a sub-call that was actually dispatched
+          // breaks a run of unusable answers, and an attempt that dispatched
+          // nothing counts toward the cap (below).
+          const dispatched = subCalls.some((sc, i) => sc.run && !outcomes[i].skipped)
+          if (dispatched) streak.dispatched()
 
           outcomes.forEach((o, i) =>
             trackEvent(
@@ -434,6 +532,30 @@ export function actorCritic<T extends ActorCriticData>(
           })
 
           if (!anySucceeded) {
+            if (
+              !dispatched &&
+              !surfaceEmpty(dynamicAllowlist, scopedTransports) &&
+              streak.unusableAnswer()
+            ) {
+              return endOnRecoveryCap(
+                scope,
+                `All ${allCalls.length} calls of the multi-call attempt failed: ${errors.join('; ')}`,
+                attempt,
+                actorLlmCall,
+              )
+            }
+            trackLoopRecovery(
+              scope,
+              {
+                failure: 'batch_failed',
+                error: `All ${allCalls.length} calls of the multi-call attempt failed: ${errors.join('; ')}`,
+                turn: attempt,
+                maxTurns: maxRetries,
+              },
+              // Cut off at the cap → the response is the defect; a tool-level
+              // failure keeps no llmCall (simpleLoop's batch twin, same rule).
+              actorLlmCall?.hitOutputCap ? actorLlmCall : undefined,
+            )
             continue
           }
 
@@ -458,51 +580,42 @@ export function actorCritic<T extends ActorCriticData>(
         // this run. Sandbox-owned (`sandbox_*`) names pass without being listed
         // in `tools` or `dynamicToolAllowlist` (see docs/plan/sandbox.md → "How
         // tools reach the controller"). Outside any scope this is a no-op.
+        // A tool withheld from every agent (#403) is refused before any of
+        // the three augmentations is consulted.
         const scopedTransports = activeTransports()
         const allowed =
-          tools.includes(action.tool_name) ||
-          dynamicAllowlist.includes(action.tool_name) ||
-          scopedTransports.some((t) => t.ownsTool(action.tool_name)) ||
-          (config?.dynamicToolPattern?.test(action.tool_name) ?? false)
+          !isAgentWithheldTool(action.tool_name) &&
+          (tools.includes(action.tool_name) ||
+            dynamicAllowlist.includes(action.tool_name) ||
+            scopedTransports.some((t) => t.ownsTool(action.tool_name)) ||
+            (config?.dynamicToolPattern?.test(action.tool_name) ?? false))
         if (!allowed) {
-          const errMsg = `Tool not allowed: ${action.tool_name}`
-          // Only surface as a visible error event when the allowlist has
-          // SOME entries — that's a real actor mistake (proposed wrong tool
-          // name). When the combined allowlist is empty, that's almost
-          // always a transient MCP gateway issue, and a per-turn flood of
-          // identical "Tool not allowed" events would spam the synth's view
-          // and observability UI without helping. The actor still sees the
-          // rejection via `previousAttempts` either way (its standard
-          // feedback channel), and the gateway-down case resolves on the
-          // next turn once `withReconnect` rebuilds the transport and
-          // `toolNamesProvider` re-resolves to a non-empty list.
-          const allowlistHasContent = tools.length > 0 || dynamicAllowlist.length > 0
-          if (allowlistHasContent) {
-            trackEvent(
-              scope,
-              'error',
-              {
-                error: errMsg,
-                severity: 'recoverable',
-                hint:
-                  'Actor proposed a tool not on the allowlist (and not matched by ' +
-                  'dynamicToolPattern / dynamicToolAllowlist).',
-                iteration: attempt,
-                kind: 'llm_call' as const,
-              } as ErrorEventData,
-              // `true`, not `resolved.trackHistory`: actorCritic's default
-              // trackHistory is a content-event allowlist that omits 'error',
-              // so this event and the tool_args one below were dropped for
-              // every agent on default config — the two failures most in need
-              // of being seen were the two that were invisible. Every other
-              // error emission in this file and in simpleLoop already passes
-              // `true`, and 'error' is an ALWAYS_COMMIT type regardless.
-              true,
-              // The tool name the actor chose is the defect, so the response
-              // that named it is the evidence — carry it onto the event.
-              actorLlmCall,
-            )
+          const errMsg = refusal(action.tool_name)
+          if (!surfaceEmpty(dynamicAllowlist, scopedTransports) && streak.unusableAnswer()) {
+            return endOnRecoveryCap(scope, errMsg, attempt, actorLlmCall)
           }
+          // The actor sees the rejection via `previousAttempts` (its standard
+          // feedback channel) and the loop continues. Recorded as a
+          // `loop_recovery`, not an `error` (#437 slice 1): an `error` here
+          // reached the chat as a red bubble and `compactExecution` as "the
+          // run failed" for a mistake the loop then routed around (#235).
+          // Recorded on every refusal, including against an empty allowlist —
+          // the old reason to suppress that case was the flood of `error`
+          // events into the synthesizer's view, which no reader of this event
+          // type has.
+          trackLoopRecovery(
+            scope,
+            {
+              failure: 'tool_not_allowed',
+              error: errMsg,
+              tool: action.tool_name,
+              turn: attempt,
+              maxTurns: maxRetries,
+            },
+            // The tool name the actor chose is the defect, so the response
+            // that named it is the evidence — carry it onto the event.
+            actorLlmCall,
+          )
           previousAttempts.push({
             toolName: action.tool_name,
             script: action.tool_args,
@@ -520,37 +633,29 @@ export function actorCritic<T extends ActorCriticData>(
           args = parsed.args
           argsRepair = parsed.repair
         } catch {
-          // Surface unparseable tool_args as a recoverable error too — same
-          // observability reasoning as the allowlist branch above.
-          //
           // Truncation-aware feedback: when the actor call hit its client's
           // output-token cap, the args aren't malformed — they were CUT OFF.
           // Generic "fix your JSON quoting" feedback makes the model regenerate
           // the same oversized payload until retries exhaust; say the real
           // cause so the retry converges (write smaller, append to continue).
-          const truncated = actorLlmCall?.hitOutputCap ?? false
-          const errMsg = truncated
-            ? `tool_args for ${action.tool_name} were CUT OFF at the output-token limit ` +
-              `(response truncated mid-generation, not a formatting mistake). Produce a ` +
-              `materially smaller tool_args: write the first part of any large file now ` +
-              `and CONTINUE BY APPENDING in later calls (e.g. bash \`cat >> file <<'EOF'\`).`
-            : `Invalid tool_args JSON for ${action.tool_name}: ${action.tool_args}`
-          trackEvent(
+          // Recorded as a `loop_recovery` for the allowlist branch's reason.
+          const errMsg = invalidToolArgsFeedback(
+            action.tool_name,
+            action.tool_args,
+            actorLlmCall?.hitOutputCap ?? false,
+          )
+          if (streak.unusableAnswer()) {
+            return endOnRecoveryCap(scope, errMsg, attempt, actorLlmCall)
+          }
+          trackLoopRecovery(
             scope,
-            'error',
             {
+              failure: 'invalid_tool_args',
               error: errMsg,
-              severity: 'recoverable',
-              hint: truncated
-                ? 'Actor response hit the max_tokens cap mid-tool_args. The actor sees ' +
-                  'truncation-specific feedback in previousAttempts and should split the work.'
-                : 'Actor produced unparseable tool_args. Common causes: unquoted ' +
-                  'keys/values, unescaped newlines inside scripts. The actor will ' +
-                  'see this in previousAttempts and (hopefully) retry with valid JSON.',
-              iteration: attempt,
-              kind: 'llm_call' as const,
-            } as ErrorEventData,
-            true, // see the allowlist branch above
+              tool: action.tool_name,
+              turn: attempt,
+              maxTurns: maxRetries,
+            },
             // `errMsg` quotes the args; only the raw response shows WHERE it
             // went wrong (a cut-off heredoc, an unescaped newline in a script).
             actorLlmCall,
@@ -580,7 +685,9 @@ export function actorCritic<T extends ActorCriticData>(
           resolved.trackHistory,
         )
 
-        // Execute tool
+        // Execute tool. A dispatch ends any run of unusable answers, whatever
+        // the tool then returns.
+        streak.dispatched()
         const result = await callTool(action.tool_name, args)
 
         // onToolResult hook: enrich/transform result before commit. See SimpleLoop for full doc.
@@ -627,7 +734,17 @@ export function actorCritic<T extends ActorCriticData>(
           resolved.trackHistory,
         )
 
+        // The actor sees the failure in `previousAttempts` and tries again — this
+        // loop always worked that way. What #437 slice 1 adds is the record, so
+        // the panel shows the recovery the same way it does for simpleLoop.
         if (!result.success) {
+          trackLoopRecovery(scope, {
+            failure: 'tool_error',
+            error: result.error ?? 'Execution failed',
+            tool: action.tool_name,
+            turn: attempt,
+            maxTurns: maxRetries,
+          })
           continue
         }
 

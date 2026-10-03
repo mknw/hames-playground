@@ -53,13 +53,36 @@ describe('createTitleAgent', () => {
     expect(result.response).toBe('Graph Styling Tips')
   })
 
-  // #409: the quote and punctuation strips run on the ends of the WHOLE reply
-  // before the first line is taken, so a quoted first line followed by more
-  // text keeps its closing quote. Current output, recorded 2026-09-28:
+  // #409: the quote and punctuation strips ran on the ends of the WHOLE reply
+  // before the first line was taken, so a quoted first line followed by more
+  // text kept its closing quote. Output before the fix, recorded 2026-09-28:
   //   '"Graph Styling Tips."\nextra line' → 'Graph Styling Tips."'
-  // Un-skip when #409 is fixed.
-  it.skip('BUG #409: a multi-line reply is sanitized on its first line', () => {
+  // Mutation: move `.split('\n')[0]` back after the two strips → both
+  // expectations keep a stray `"` (and the first a stray `.`).
+  it('sanitizes a multi-line reply on its first line', () => {
     expect(sut.sanitizeTitle('"Graph Styling Tips."\nextra line')).toBe('Graph Styling Tips')
+    expect(sut.sanitizeTitle('"Graph Styling Tips"\nHere is why…')).toBe('Graph Styling Tips')
+  })
+
+  // Mutation: drop the `.trim()` at the top of the strip loop → the `\r` a
+  // CRLF reply leaves on its first line hides the closing quote from the
+  // strip, and the title keeps both quotes (and the `\r`).
+  it('sanitizes the first line of a CRLF reply', () => {
+    expect(sut.sanitizeTitle('"Graph Styling Tips"\r\nHere is why')).toBe('Graph Styling Tips')
+  })
+
+  // Mutation: drop the leading `.trim()` → the first line of the reply is the
+  // empty one, and the title is null.
+  it('skips blank lines ahead of the title', () => {
+    expect(sut.sanitizeTitle('\n\n"Graph Styling Tips"\nHere is why')).toBe('Graph Styling Tips')
+  })
+
+  // The user-visible path: the agent's response, not just the helper.
+  // Mutation: the #409 one above → the response keeps the stray quote.
+  it("sanitizes a multi-line model reply into the agent's response", async () => {
+    generate.mockResolvedValue('"Graph Styling Tips"\nHere is why this title fits.')
+    const result = await sut.createTitleAgent(testAgentDeps)('hello', 's')
+    expect(result.response).toBe('Graph Styling Tips')
   })
 })
 

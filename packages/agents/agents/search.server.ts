@@ -24,7 +24,7 @@ import { bamlPatterns, createLoopControllerAdapter } from '@hames-ai/harness-bam
 import type { AgentData, AgentDefinition, AgentDeps } from '../types'
 
 import { getGraphSchema } from './graph-schema.server'
-import { NEO4J_FEW_SHOTS_DEFAULT } from './neo4j-fewshots.server'
+import { NEO4J_FEW_SHOTS_DEFAULT, NEO4J_READ_ONLY_CONTEXT } from './neo4j-fewshots.server'
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 
@@ -45,7 +45,12 @@ async function createPatterns(
 
   // L14 (#225 Lane B3): each list appears exactly once, at the loop — it is
   // the allowlist AND what the controller advertises, via the seam.
-  const neo4jPattern = simpleLoop<AgentData>(createLoopControllerAdapter(), tools.neo4j ?? [], {
+  //
+  // The graph is read-only for this loop (#403): the catalog holds no write
+  // tool, and the context prefix tells the controller so, and what to answer
+  // instead of attempting a write.
+  const neo4jController = createLoopControllerAdapter(NEO4J_READ_ONLY_CONTEXT)
+  const neo4jPattern = simpleLoop<AgentData>(neo4jController, tools.neo4j ?? [], {
     patternId: 'neo4j-query',
     schema,
     liveEvents: true,

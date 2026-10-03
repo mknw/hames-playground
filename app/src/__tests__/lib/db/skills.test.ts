@@ -6,7 +6,8 @@
  * here. CI has no Postgres, so the same guards are ALSO pinned without one, on
  * the SQL each function sends: `skills-sql.test.ts`.
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
+import { skipWithoutDatabase } from '../../test-database'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -57,8 +58,9 @@ afterAll(async () => {
 })
 
 describe('skills repository — encryption at rest', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('stores name, description and content as envelopes, and reads them back', async () => {
-    if (!dbAvailable) return
     const created = await seed(AUTHOR, 'secret-merger-plan', 'TOP SECRET BODY')
     const { rows } = await query<Record<string, unknown>>(
       'SELECT user_id, name, description, content, is_global FROM skills WHERE id = $1',
@@ -82,15 +84,15 @@ describe('skills repository — encryption at rest', () => {
 })
 
 describe('skills repository — owner scoping and the global flag', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('a private skill is invisible to every other user', async () => {
-    if (!dbAvailable) return
     const s = await seed(AUTHOR, 'private-one')
     expect((await listSkillsVisibleTo(READER)).map((x) => x.id)).not.toContain(s.id)
     expect((await getSkillContents(READER, [s.id])).has(s.id)).toBe(false)
   })
 
   it('only the author makes a skill global or private', async () => {
-    if (!dbAvailable) return
     const s = await seed(AUTHOR, 'shareable')
     expect(await setSkillGlobal(s.id, READER, true)).toBe(false)
     expect((await listSkillsVisibleTo(READER)).map((x) => x.id)).not.toContain(s.id)
@@ -106,7 +108,6 @@ describe('skills repository — owner scoping and the global flag', () => {
   })
 
   it('only the author deletes, and a delete takes every user’s hide with it', async () => {
-    if (!dbAvailable) return
     const s = await seed(AUTHOR, 'deletable')
     await setSkillGlobal(s.id, AUTHOR, true)
     expect(await setSkillHidden(READER, s.id, true)).toBe(true)
@@ -120,7 +121,6 @@ describe('skills repository — owner scoping and the global flag', () => {
   })
 
   it('lists the viewer’s own skills first, then others’ global skills oldest first', async () => {
-    if (!dbAvailable) return
     const g = await seed(OTHER, 'order-global')
     await setSkillGlobal(g.id, OTHER, true)
     const mine = await seed(READER, 'order-mine')
@@ -130,8 +130,9 @@ describe('skills repository — owner scoping and the global flag', () => {
 })
 
 describe('skills repository — hiding another user’s global skill', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('is per viewer, and only for a global skill someone else wrote', async () => {
-    if (!dbAvailable) return
     const g = await seed(AUTHOR, 'hide-me')
     await setSkillGlobal(g.id, AUTHOR, true)
     const priv = await seed(OTHER, 'hide-private')
@@ -155,15 +156,15 @@ describe('skills repository — hiding another user’s global skill', () => {
 })
 
 describe('skills repository — the rules createSkill owns', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('refuses a name the author already uses, but not another user’s', async () => {
-    if (!dbAvailable) return
     await seed(AUTHOR, 'same-name')
     await expect(seed(AUTHOR, 'same-name')).rejects.toBeInstanceOf(SkillRejectedError)
     await expect(seed(READER, 'same-name')).resolves.toMatchObject({ name: 'same-name' })
   })
 
   it(`refuses the ${MAX_SKILLS_PER_USER + 1}th skill of one user`, async () => {
-    if (!dbAvailable) return
     const user = `skills-cap-${tag}`
     try {
       for (let i = 0; i < MAX_SKILLS_PER_USER; i++) await seed(user, `cap-${i}`)
@@ -177,8 +178,9 @@ describe('skills repository — the rules createSkill owns', () => {
 })
 
 describe('skills repository — a row that will not decrypt', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('another user’s global row is skipped; the owner’s own listing fails loudly', async () => {
-    if (!dbAvailable) return
     // A user with no other rows, so the create's own duplicate check (which
     // decrypts that user's names) runs under the foreign key without tripping.
     const stranger = `skills-stranger-${tag}`

@@ -158,29 +158,6 @@ registry:
       - name: REDIS_SSL
         value: "{{redis.ssl}}"
 
-  database-server:
-    description: Database server supporting PostgreSQL, MySQL, and SQLite with schema introspection and full SQL query capabilities
-    title: MCP Database Server
-    type: server
-    image: souhardyak/mcp-db-server@sha256:512a34783fcd232b70630cc5034595ee0cace39f31e3156f7b0f65b21a7fc308
-    tools:
-      - name: query_database
-      - name: list_tables
-      - name: describe_table
-      - name: connect_to_database
-      - name: get_connection_examples
-      - name: get_current_database_info
-    env:
-      - name: DATABASE_URL
-        value: "{{database-server.database_url}}"
-    config:
-      - name: database-server
-        description: Configure the database connection. Supports SQLite, PostgreSQL, and MySQL.
-        type: object
-        properties:
-          database_url:
-            type: string
-
   playwright:
     description: Playwright MCP server.
     title: Playwright

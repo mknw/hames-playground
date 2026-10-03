@@ -37,9 +37,15 @@ import {
   controllerFinalAnswerScenario,
   controllerToolCallScenario,
   controllerToolErrorScenario,
+  controllerUnparseableFeedbackScenario,
+  controllerWriteOnReadOnlyScenario,
   truncationDetectionScenario,
 } from './scenarios/controller'
-import { criticAcceptScenario, criticRejectAndReviseScenario } from './scenarios/actor-critic'
+import {
+  actorUnparseableFeedbackScenario,
+  criticAcceptScenario,
+  criticRejectAndReviseScenario,
+} from './scenarios/actor-critic'
 import { synthesizerGroundedScenario } from './scenarios/synthesizer'
 import { describeBatchScenario } from './scenarios/describe'
 import { referenceSelectorScenario } from './scenarios/reference-selector'
@@ -57,8 +63,11 @@ export const SCENARIOS: Scenario[] = [
   controllerToolCallScenario,
   controllerFinalAnswerScenario,
   controllerToolErrorScenario,
+  controllerUnparseableFeedbackScenario,
+  controllerWriteOnReadOnlyScenario,
   criticAcceptScenario,
   criticRejectAndReviseScenario,
+  actorUnparseableFeedbackScenario,
   synthesizerGroundedScenario,
   describeBatchScenario,
   referenceSelectorScenario,

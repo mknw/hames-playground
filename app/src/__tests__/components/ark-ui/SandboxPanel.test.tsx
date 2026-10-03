@@ -1,6 +1,6 @@
 /**
- * TerminalPanel — the read-only sandbox activity feed and the Activity/Shell
- * toggle (#79 step 7).
+ * SandboxPanel (the "Sandbox" tab, formerly TerminalPanel) — the read-only
+ * sandbox activity feed and the Activity/Shell/Skills toggle (#79 step 7, #415).
  *
  * The panel owns two behaviours worth pinning: how it folds a raw
  * `contextEvents` stream into shell-style entries (pairing `tool_call` to
@@ -29,7 +29,13 @@ vi.mock('../../../components/ark-ui/InteractiveTerminal', () => ({
   ),
 }))
 
-const { TerminalPanel } = await import('../../../components/ark-ui/TerminalPanel')
+// The Skills section loads server-backed state on mount; its own suite is
+// SkillsPanel.test.tsx. Here the contract is only "the toggle mounts it".
+vi.mock('../../../components/ark-ui/SkillsPanel', () => ({
+  SkillsPanel: () => <div data-testid="skills-panel">skills</div>,
+}))
+
+const { SandboxPanel } = await import('../../../components/ark-ui/SandboxPanel')
 
 let ts = 0
 const call = (tool: string, args: unknown, callId?: string): ContextEvent => ({
@@ -61,9 +67,9 @@ const commandLines = (container: HTMLElement) =>
     .filter((el) => el.previousElementSibling?.textContent === '$')
     .map((el) => el.textContent)
 
-describe('TerminalPanel — activity feed', () => {
+describe('SandboxPanel — activity feed', () => {
   it('shows the empty state and no commands before any sandbox activity', () => {
-    const { container, getByText } = render(() => <TerminalPanel events={[]} />)
+    const { container, getByText } = render(() => <SandboxPanel events={[]} />)
 
     expect(getByText(/No sandbox activity yet/)).toBeTruthy()
     expect(commandLines(container)).toEqual([])
@@ -75,7 +81,7 @@ describe('TerminalPanel — activity feed', () => {
       call('read_neo4j_cypher', { query: 'MATCH (n) RETURN n' }, 'c1'),
       result('read_neo4j_cypher', { rows: [] }, { callId: 'c1' }),
     ]
-    const { container, getByText } = render(() => <TerminalPanel events={events} />)
+    const { container, getByText } = render(() => <SandboxPanel events={events} />)
 
     expect(getByText(/No sandbox activity yet/)).toBeTruthy()
     expect(container.textContent).not.toContain('MATCH (n)')
@@ -83,7 +89,7 @@ describe('TerminalPanel — activity feed', () => {
 
   it('counts in the singular for exactly one command', () => {
     const { container } = render(() => (
-      <TerminalPanel events={[call('sandbox_bash', { command: 'ls' }, 'c1')]} />
+      <SandboxPanel events={[call('sandbox_bash', { command: 'ls' }, 'c1')]} />
     ))
     expect(container.textContent).toContain('1 sandbox command')
     expect(container.textContent).not.toContain('1 sandbox commands')
@@ -101,7 +107,7 @@ describe('TerminalPanel — activity feed', () => {
       call('sandbox_search', { query: 'FIXME' }, 'c8'),
       call('sandbox_upload', { name: 'x.csv' }, 'c9'),
     ]
-    const { container } = render(() => <TerminalPanel events={events} />)
+    const { container } = render(() => <SandboxPanel events={events} />)
 
     expect(commandLines(container)).toEqual([
       'python3 /work/count.py',
@@ -118,7 +124,7 @@ describe('TerminalPanel — activity feed', () => {
 
   it('falls back to the serialised args when sandbox_bash carries no command string', () => {
     const { container } = render(() => (
-      <TerminalPanel events={[call('sandbox_bash', { script: 'echo hi' }, 'c1')]} />
+      <SandboxPanel events={[call('sandbox_bash', { script: 'echo hi' }, 'c1')]} />
     ))
     expect(commandLines(container)).toEqual(['{"script":"echo hi"}'])
   })
@@ -126,7 +132,7 @@ describe('TerminalPanel — activity feed', () => {
   it('marks a call still running until its result arrives', () => {
     const started = [call('sandbox_bash', { command: 'sleep 5' }, 'c1')]
     const [events, setEvents] = createSignal<ContextEvent[]>(started)
-    const { container } = render(() => <TerminalPanel events={events()} />)
+    const { container } = render(() => <SandboxPanel events={events()} />)
     expect(container.textContent).toContain('running…')
 
     setEvents([...started, result('sandbox_bash', { stdout: 'done\n' }, { callId: 'c1' })])
@@ -145,7 +151,7 @@ describe('TerminalPanel — activity feed', () => {
         { callId: 'c1' },
       ),
     ]
-    const { container } = render(() => <TerminalPanel events={events} />)
+    const { container } = render(() => <SandboxPanel events={events} />)
 
     expect(container.textContent).toContain('partial output')
     expect(container.textContent).toContain('Traceback: boom')
@@ -157,7 +163,7 @@ describe('TerminalPanel — activity feed', () => {
       call('sandbox_bash', { command: 'true' }, 'c1'),
       result('sandbox_bash', { stdout: 'ok', exit_code: 0 }, { callId: 'c1' }),
     ]
-    const { container } = render(() => <TerminalPanel events={events} />)
+    const { container } = render(() => <SandboxPanel events={events} />)
     expect(container.textContent).not.toContain('exit 0')
   })
 
@@ -166,7 +172,7 @@ describe('TerminalPanel — activity feed', () => {
       call('sandbox_write', { path: '/etc/passwd' }, 'c1'),
       result('sandbox_write', null, { callId: 'c1', success: false, error: 'permission denied' }),
     ]
-    const { container } = render(() => <TerminalPanel events={events} />)
+    const { container } = render(() => <SandboxPanel events={events} />)
     expect(container.textContent).toContain('permission denied')
   })
 
@@ -175,7 +181,7 @@ describe('TerminalPanel — activity feed', () => {
       call('sandbox_bash', { command: 'nope' }, 'c1'),
       result('sandbox_bash', null, { callId: 'c1', success: false }),
     ]
-    const { container } = render(() => <TerminalPanel events={events} />)
+    const { container } = render(() => <SandboxPanel events={events} />)
     expect(container.textContent).toContain('command failed')
   })
 
@@ -184,7 +190,7 @@ describe('TerminalPanel — activity feed', () => {
       call('sandbox_read', { path: '/work/meta.json' }, 'c1'),
       result('sandbox_read', { size: 12, path: '/work/meta.json' }, { callId: 'c1' }),
     ]
-    const { container } = render(() => <TerminalPanel events={events} />)
+    const { container } = render(() => <SandboxPanel events={events} />)
     const pre = container.querySelector('pre')!
     expect(JSON.parse(pre.textContent!)).toEqual({ size: 12, path: '/work/meta.json' })
   })
@@ -194,14 +200,14 @@ describe('TerminalPanel — activity feed', () => {
       call('sandbox_read', { path: '/work/a.txt' }, 'c1'),
       result('sandbox_read', 'hello from the file', { callId: 'c1' }),
     ]
-    const { container } = render(() => <TerminalPanel events={events} />)
+    const { container } = render(() => <SandboxPanel events={events} />)
     expect(container.querySelector('pre')!.textContent).toBe('hello from the file')
   })
 
   it('renders a result whose call was never seen as a standalone entry', () => {
     // Defensive path: an SSE reconnect can drop the tool_call half.
     const { container } = render(() => (
-      <TerminalPanel events={[result('sandbox_bash', { stdout: 'orphan' }, { callId: 'ghost' })]} />
+      <SandboxPanel events={[result('sandbox_bash', { stdout: 'orphan' }, { callId: 'ghost' })]} />
     ))
     expect(commandLines(container)).toEqual(['bash'])
     expect(container.textContent).toContain('orphan')
@@ -210,7 +216,7 @@ describe('TerminalPanel — activity feed', () => {
 
   it('keeps calls apart when they arrive without callIds', () => {
     const { container } = render(() => (
-      <TerminalPanel
+      <SandboxPanel
         events={[
           call('sandbox_bash', { command: 'one' }),
           call('sandbox_bash', { command: 'two' }),
@@ -221,14 +227,14 @@ describe('TerminalPanel — activity feed', () => {
   })
 
   it('tolerates a missing events prop', () => {
-    const { container } = render(() => <TerminalPanel {...({} as { events: ContextEvent[] })} />)
+    const { container } = render(() => <SandboxPanel {...({} as { events: ContextEvent[] })} />)
     expect(container.textContent).toContain('0 sandbox commands')
   })
 })
 
-describe('TerminalPanel — Activity/Shell toggle', () => {
+describe('SandboxPanel — Activity/Shell toggle', () => {
   it('disables Shell and stays on Activity when there is no session', () => {
-    const { getByRole, queryByTestId } = render(() => <TerminalPanel events={[]} />)
+    const { getByRole, queryByTestId } = render(() => <SandboxPanel events={[]} />)
     const shell = getByRole('button', { name: 'Shell' }) as HTMLButtonElement
 
     expect(shell.disabled).toBe(true)
@@ -241,7 +247,7 @@ describe('TerminalPanel — Activity/Shell toggle', () => {
   it('mounts the interactive shell for the active session and can switch back', () => {
     const events = [call('sandbox_bash', { command: 'ls' }, 'c1')]
     const { getByText, queryByTestId, getByTestId } = render(() => (
-      <TerminalPanel events={events} sessionId="sess-1" agentId="sandbox-demo" />
+      <SandboxPanel events={events} sessionId="sess-1" agentId="sandbox-demo" />
     ))
 
     fireEvent.click(getByText('Shell'))
@@ -255,7 +261,39 @@ describe('TerminalPanel — Activity/Shell toggle', () => {
   })
 
   it('treats an empty session id as no session', () => {
-    const { getByRole } = render(() => <TerminalPanel events={[]} sessionId="" />)
+    const { getByRole } = render(() => <SandboxPanel events={[]} sessionId="" />)
     expect((getByRole('button', { name: 'Shell' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+})
+
+describe('SandboxPanel — Skills section (#415)', () => {
+  it('adds Skills beside the terminal sections, which stay as they were', () => {
+    const events = [call('sandbox_bash', { command: 'ls' }, 'c1')]
+    const { getByRole, getByText, queryByTestId, getByTestId } = render(() => (
+      <SandboxPanel events={events} sessionId="sess-1" />
+    ))
+    const toggles = ['Activity', 'Shell', 'Skills'].map((name) => getByRole('button', { name }))
+    expect(toggles.map((b) => b.getAttribute('aria-pressed'))).toEqual(['true', 'false', 'false'])
+
+    fireEvent.click(toggles[2])
+    expect(getByTestId('skills-panel')).toBeTruthy()
+    expect(toggles.map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'true'])
+    // Neither terminal section is mounted underneath it.
+    expect(queryByTestId('interactive-terminal')).toBeNull()
+
+    fireEvent.click(toggles[1])
+    expect(getByTestId('interactive-terminal')).toBeTruthy()
+    expect(queryByTestId('skills-panel')).toBeNull()
+
+    fireEvent.click(toggles[0])
+    expect(getByText('ls')).toBeTruthy()
+  })
+
+  it('is reachable without a session — skills belong to the user, not the conversation', () => {
+    const { getByRole, getByTestId } = render(() => <SandboxPanel events={[]} />)
+    const skills = getByRole('button', { name: 'Skills' }) as HTMLButtonElement
+    expect(skills.disabled).toBe(false)
+    fireEvent.click(skills)
+    expect(getByTestId('skills-panel')).toBeTruthy()
   })
 })

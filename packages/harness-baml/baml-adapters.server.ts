@@ -42,7 +42,10 @@ import type {
 import type { InjectionScreen } from '@hames-ai/harness-patterns/injection-guard'
 import { listTools as mcpListTools } from '@hames-ai/harness-patterns/mcp-client.server'
 import { gatewayDegradation } from '@hames-ai/harness-patterns/gateway-health.server'
-import { activeTransports } from '@hames-ai/harness-patterns/tool-transport.server'
+import {
+  activeTransportContext,
+  activeTransports,
+} from '@hames-ai/harness-patterns/tool-transport.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from './baml_client/inlinedbaml'
 import {
@@ -925,11 +928,19 @@ export function createLoopControllerAdapter(
     // and a per-question plan in there would turn every tool-catalog cache
     // read into a write (#122). It travels as its own `plan_context` argument
     // and renders in tier 2, beside the intent.
+    //
+    // A scoped transport's own `promptContext` (today: the sandbox's skills
+    // index, #415) joins it here — the `user`-role CONTEXT block — and never
+    // the tool catalog, where a line of data would read as a tool, nor the
+    // system message, where another user's words would sit with the
+    // deployment's instructions.
     let context: string | undefined
-    if (input.context || contextPrefix) {
+    const transportContext = activeTransportContext()
+    if (input.context || contextPrefix || transportContext) {
       const parts: string[] = []
       if (contextPrefix) parts.push(contextPrefix)
       if (input.context) parts.push(`GRAPH SCHEMA:\n${input.context}`)
+      if (transportContext) parts.push(transportContext)
       context = parts.join('\n\n')
     }
 
@@ -1309,11 +1320,16 @@ export function createActorControllerAdapter(
     }))
 
     // Adapter-level context (static prefix or per-call provider), with an
-    // upstream plan (#27) leading when one was threaded through by actorCritic.
+    // upstream plan (#27) leading when one was threaded through by actorCritic,
+    // and a scoped transport's `promptContext` (the sandbox's skills index,
+    // #415) last. All of it renders in ActorTaskFrame's `user`-role CONTEXT
+    // block — never in the system message that carries the tool catalog.
     const ownContext = options.contextProvider
       ? await options.contextProvider()
       : options.contextPrefix
-    const context = [input.planContext, ownContext].filter(Boolean).join('\n\n') || undefined
+    const context =
+      [input.planContext, ownContext, activeTransportContext()].filter(Boolean).join('\n\n') ||
+      undefined
     const fewShots = options.fewShots
 
     const variables = {

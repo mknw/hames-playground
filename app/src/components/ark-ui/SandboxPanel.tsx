@@ -1,7 +1,13 @@
 /**
- * Terminal Panel
+ * Sandbox Panel — the support panel's "Sandbox" tab (#415; it was "Terminal").
  *
- * Read-only feed of the agent's in-VM sandbox activity (#79, step 7).
+ * Three sections, toggled from its header: Activity and Shell, the two terminal
+ * sections it has always had and left as they were, and Skills
+ * (`SkillsPanel.tsx`), where a user manages the SKILL.md files their sandbox
+ * mounts under /skills.
+ *
+ * Activity is a read-only feed of the agent's in-VM sandbox activity (#79,
+ * step 7).
  *
  * It derives entirely from the existing event stream — no new event type, no
  * protocol changes. It filters `contextEvents` for `sandbox_*` tool calls
@@ -17,6 +23,7 @@ import { For, Show, createMemo, createSignal } from 'solid-js'
 import type { ContextEvent } from '@hames-ai/harness-patterns'
 import { SANDBOX_TOOL_PREFIX } from '@hames-ai/sandbox/types'
 import { InteractiveTerminal } from './InteractiveTerminal'
+import { SkillsPanel } from './SkillsPanel'
 
 // Local, defensive views of the event payloads (the panel never trusts shape).
 interface ToolCallData {
@@ -45,7 +52,7 @@ interface TerminalEntry {
   pending: boolean
 }
 
-export interface TerminalPanelProps {
+export interface SandboxPanelProps {
   events: ContextEvent[]
   /** Active session id — required to open an interactive shell. */
   sessionId?: string
@@ -106,7 +113,7 @@ function formatResult(result: unknown): { output: string; stderr?: string; exitC
   }
 }
 
-export const TerminalPanel = (props: TerminalPanelProps) => {
+export const SandboxPanel = (props: SandboxPanelProps) => {
   const entries = createMemo<TerminalEntry[]>(() => {
     const order: TerminalEntry[] = []
     const byKey = new Map<string, TerminalEntry>()
@@ -159,12 +166,12 @@ export const TerminalPanel = (props: TerminalPanelProps) => {
     return order
   })
 
-  const [view, setView] = createSignal<'activity' | 'shell'>('activity')
+  const [view, setView] = createSignal<'activity' | 'shell' | 'skills'>('activity')
   const hasSession = () => typeof props.sessionId === 'string' && props.sessionId.length > 0
 
   return (
     <div flex="~ col" h="full" bg="ui-bg-primary" overflow="hidden">
-      {/* Header: count + Activity/Shell toggle */}
+      {/* Header: count + Activity/Shell/Skills toggle */}
       <div
         flex="~"
         items="center"
@@ -185,6 +192,7 @@ export const TerminalPanel = (props: TerminalPanelProps) => {
         <div flex="~" items="center" gap="1">
           <button
             onClick={() => setView('activity')}
+            aria-pressed={view() === 'activity'}
             p="x-2 y-0.5"
             text={view() === 'activity' ? 'xs emerald-400' : 'xs ui-text-tertiary'}
             bg={view() === 'activity' ? 'emerald-600/15' : 'transparent hover:ui-bg-primary'}
@@ -197,6 +205,7 @@ export const TerminalPanel = (props: TerminalPanelProps) => {
           </button>
           <button
             onClick={() => hasSession() && setView('shell')}
+            aria-pressed={view() === 'shell'}
             disabled={!hasSession()}
             title={
               hasSession()
@@ -214,12 +223,26 @@ export const TerminalPanel = (props: TerminalPanelProps) => {
           >
             Shell
           </button>
+          <button
+            onClick={() => setView('skills')}
+            aria-pressed={view() === 'skills'}
+            title="Skills mounted in your sandbox under /skills"
+            p="x-2 y-0.5"
+            text={view() === 'skills' ? 'xs emerald-400' : 'xs ui-text-tertiary'}
+            bg={view() === 'skills' ? 'emerald-600/15' : 'transparent hover:ui-bg-primary'}
+            border="1 transparent"
+            rounded="md"
+            cursor="pointer"
+            transition="all"
+          >
+            Skills
+          </button>
         </div>
       </div>
 
       {/* Body */}
       <Show
-        when={view() === 'shell' && hasSession()}
+        when={view() === 'skills' || (view() === 'shell' && hasSession())}
         fallback={
           <Show
             when={entries().length > 0}
@@ -296,10 +319,18 @@ export const TerminalPanel = (props: TerminalPanelProps) => {
           </Show>
         }
       >
-        {/* Interactive shell — mounts the xterm bound to this session's PTY */}
-        <div flex="1" overflow="hidden">
-          <InteractiveTerminal sessionId={props.sessionId!} agentId={props.agentId} />
-        </div>
+        <Show
+          when={view() === 'skills'}
+          fallback={
+            /* Interactive shell — mounts the xterm bound to this session's PTY */
+            <div flex="1" overflow="hidden">
+              <InteractiveTerminal sessionId={props.sessionId!} agentId={props.agentId} />
+            </div>
+          }
+        >
+          {/* Skills (#415) — what this user's sandbox mounts under /skills */}
+          <SkillsPanel />
+        </Show>
       </Show>
     </div>
   )

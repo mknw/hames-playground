@@ -25,10 +25,18 @@ import { DockerBackend } from './docker-backend.server'
 import { SandboxScheduler } from './scheduler.server'
 import { WarmPool } from './warm-pool.server'
 import { hydrateWorkspace, snapshotOutputs, promoteOutputs } from './work-artifacts.server'
+import { syncSkills } from './skills.server'
+import {
+  SKILLS_INDEX_TOOL,
+  renderSkillsIndex,
+  type SandboxSkill,
+  type SandboxSkillsResolver,
+} from './skills'
 import type { ComputeBackend, McpTransport, RootfsId, RuntimeConfig } from './types'
 import type {
   ConfiguredPattern,
   ErrorEventData,
+  WarningEventData,
   PatternCapabilities,
   PatternScope,
   EventView,
@@ -57,8 +65,18 @@ assertServerOnImport()
  * `McpTransport` is `ToolTransport` plus a VM identity and a lifecycle
  * (`vmId` / `toolNames` / `close`), none of which core has any use for, so the
  * adaptation is a narrowing rather than a new capability.
+ *
+ * `skillsIndex` is the run's skills index (#415), when skills were mounted. It
+ * rides the transport as `promptContext`, which the adapters render in the
+ * request's `user`-role CONTEXT block — not in the tool list, which stays the
+ * transport's own byte for byte, and not in the system message (see
+ * `skills.ts` for the two defects the earlier placement had).
  */
-function runWithSandbox<T>(transport: McpTransport, fn: () => Promise<T>): Promise<T> {
+function runWithSandbox<T>(
+  transport: McpTransport,
+  fn: () => Promise<T>,
+  skillsIndex?: string,
+): Promise<T> {
   return amendRunFrame(
     {
       transports: [
@@ -67,6 +85,7 @@ function runWithSandbox<T>(transport: McpTransport, fn: () => Promise<T>): Promi
           ownsTool: (name) => transport.ownsTool(name),
           callTool: (name, args) => transport.callTool(name, args),
           listTools: () => transport.listTools(),
+          ...(skillsIndex ? { promptContext: skillsIndex } : {}),
         },
       ],
     },
@@ -132,6 +151,25 @@ export interface WithSandboxConfig {
    * does). Requires the MCP gateway (document store lives in Redis).
    */
   syncWorkspace?: boolean
+  /**
+   * Skills to mount for each run (#415): resolved per run, written into the
+   * container as `/skills/<name>/SKILL.md`, and indexed (name + description)
+   * as the transport's `promptContext` — a delimited `<skills>` block in the
+   * request's `user`-role context — so the actor reads a file only when its
+   * description fits the task. See `skills.ts` / `skills.server.ts`.
+   *
+   * A RESOLVER for `tenantId`'s reason: the patterns are built once per
+   * conversation, the user — whose skills these are — is known only inside a
+   * turn. The host decides which skills a run gets and is responsible for
+   * resolving them server-side from the run's owner, never from client input.
+   *
+   * Absent, nothing about the run changes: no `/skills` traffic, no index.
+   * Present, the sync runs on every path (pool, fresh, id), and a failure is
+   * reported as a `warning` event (#420) and the run proceeds without the
+   * skills it could not mount — fail-open on availability, and never an index
+   * line for a file that is not there.
+   */
+  skills?: SandboxSkillsResolver
 }
 
 /** How often the default attachment table sweeps idle parked VMs (#82). This is
@@ -296,6 +334,7 @@ export function withSandbox(config?: WithSandboxConfig) {
     const id = config?.id
     const fresh = config?.fresh === true
     const syncWorkspace = config?.syncWorkspace === true
+    const skills = config?.skills
     // Durable-workspace sync only runs on the id-addressable path (hydrate on
     // entry, promote on exit — see runWithIdAttachment). The capability
     // declaration below reflects that reality: syncWorkspace without an id is a
@@ -362,12 +401,13 @@ export function withSandbox(config?: WithSandboxConfig) {
             pattern,
             sessionId,
             syncWorkspace,
+            skills,
           )
         }
         if (fresh) {
-          return await runWithFreshVm(backend, rootfs, runtime, scope, view, pattern)
+          return await runWithFreshVm(backend, rootfs, runtime, scope, view, pattern, skills)
         }
-        return await runWithPool(backend, pool, rootfs, runtime, scope, view, pattern)
+        return await runWithPool(backend, pool, rootfs, runtime, scope, view, pattern, skills)
       } finally {
         slot.release()
       }
@@ -395,6 +435,100 @@ export function withSandbox(config?: WithSandboxConfig) {
 }
 
 // ============================================================================
+// Skills (#415) — resolve, sync into /skills, render the index.
+// ============================================================================
+
+/**
+ * Report a skills step that did not go to plan, on both channels: a `warning`
+ * event (#420's side-failure scheme — the turn ran on a fallback, so no error
+ * reader may treat it as a statement about the turn: not `settleTurn`, not the
+ * synthesizer's `hasErrors()`) and a console copy, which survives a pattern
+ * that later throws and discards the scope's events.
+ */
+function reportSkillsFailure<T>(
+  scope: PatternScope<T>,
+  warning: Omit<WarningEventData, 'task'>,
+): void {
+  console.error(`[sandbox] skills: ${warning.error ?? warning.message}`)
+  trackEvent(
+    scope,
+    'warning',
+    { task: 'skills_mount', ...warning } satisfies WarningEventData,
+    true,
+  )
+}
+
+/**
+ * Make the container's `/skills` match what the host resolved for this run,
+ * and return the index of what actually landed (or `undefined`).
+ *
+ * Failure policy, named: every step fails OPEN on availability (the run goes on
+ * without the skills it could not mount) and CLOSED on the index (a skill is
+ * listed only once its file is confirmed written). A resolver that throws is
+ * treated as "no skills", and the sync still runs with the empty set — an
+ * id-addressable container may hold skills from an earlier turn, and an
+ * unknown set must not leave a withdrawn skill readable.
+ */
+async function prepareSkills<T>(
+  transport: McpTransport,
+  scope: PatternScope<T>,
+  resolver: SandboxSkillsResolver | undefined,
+): Promise<string | undefined> {
+  if (!resolver) return undefined
+  let skills: readonly SandboxSkill[]
+  try {
+    skills = await resolver()
+  } catch (err) {
+    reportSkillsFailure(scope, {
+      message: 'Your skills could not be loaded for this sandbox.',
+      fallback: 'The agent ran without skills.',
+      error: `could not resolve this run's skills: ${err instanceof Error ? err.message : String(err)}`,
+    })
+    skills = []
+  }
+  // Every mount command is a `sandbox_bash` call, and the index tells the actor
+  // to read a skill with it: a transport without it can do neither.
+  if (!transport.ownsTool(SKILLS_INDEX_TOOL)) {
+    if (skills.length > 0) {
+      reportSkillsFailure(scope, {
+        message: 'This sandbox cannot mount skills.',
+        fallback: 'The agent ran without skills.',
+        error: `this sandbox has no ${SKILLS_INDEX_TOOL} tool, so ${skills.length} skill(s) were not mounted`,
+      })
+    }
+    return undefined
+  }
+  try {
+    const { mounted, skipped, removalError } = await syncSkills(transport, skills)
+    if (skipped.length > 0) {
+      reportSkillsFailure(scope, {
+        message: `${skipped.length} skill(s) could not be mounted in the sandbox.`,
+        fallback: 'The agent ran with the skills that did mount.',
+        error:
+          `${skipped.length} skill(s) not mounted: ` +
+          skipped.map((s) => `${s.name || '(unnamed)'} (${s.error})`).join(', '),
+      })
+    }
+    if (removalError) {
+      reportSkillsFailure(scope, {
+        message:
+          'A skill removed or hidden since the last turn could not be cleared from the sandbox.',
+        fallback: 'It may still be readable in this sandbox; the agent is not told about it.',
+        error: removalError,
+      })
+    }
+    return renderSkillsIndex(mounted)
+  } catch (err) {
+    reportSkillsFailure(scope, {
+      message: 'Your skills could not be mounted in the sandbox.',
+      fallback: 'The agent ran without skills.',
+      error: `mounting failed: ${err instanceof Error ? err.message : String(err)}`,
+    })
+    return undefined
+  }
+}
+
+// ============================================================================
 // Branch implementations — extracted so the main `fn` reads top-to-bottom.
 // ============================================================================
 
@@ -406,6 +540,7 @@ async function runWithPool<T>(
   scope: PatternScope<T>,
   view: EventView,
   pattern: ConfiguredPattern<T>,
+  skills?: SandboxSkillsResolver,
 ): Promise<PatternScope<T>> {
   const vm = await pool.acquire(rootfs, runtime)
   let transport
@@ -416,7 +551,8 @@ async function runWithPool<T>(
     throw err
   }
   try {
-    return await runWithSandbox(transport, () => pattern.fn(scope, view))
+    const index = await prepareSkills(transport, scope, skills)
+    return await runWithSandbox(transport, () => pattern.fn(scope, view), index)
   } finally {
     await transport.close().catch(() => {})
     await pool.release(vm).catch(() => {})
@@ -430,6 +566,7 @@ async function runWithFreshVm<T>(
   scope: PatternScope<T>,
   view: EventView,
   pattern: ConfiguredPattern<T>,
+  skills?: SandboxSkillsResolver,
 ): Promise<PatternScope<T>> {
   const vm = await backend.boot(rootfs, runtime)
   let transport
@@ -440,7 +577,8 @@ async function runWithFreshVm<T>(
     throw err
   }
   try {
-    return await runWithSandbox(transport, () => pattern.fn(scope, view))
+    const index = await prepareSkills(transport, scope, skills)
+    return await runWithSandbox(transport, () => pattern.fn(scope, view), index)
   } finally {
     await transport.close().catch(() => {})
     await backend.destroy(vm).catch(() => {})
@@ -499,19 +637,22 @@ async function runWithIdAttachment<T>(
   pattern: ConfiguredPattern<T>,
   sessionId: string,
   syncWorkspace: boolean,
+  skills?: SandboxSkillsResolver,
 ): Promise<PatternScope<T>> {
   if (fresh) {
     await attachments.destroyById(id).catch(() => {})
   }
   const att = await attachments.acquire(id, rootfs, runtime)
   try {
+    const index = await prepareSkills(att.transport, scope, skills)
+    const run = <R>(fn: () => Promise<R>): Promise<R> => runWithSandbox(att.transport, fn, index)
     // Without workspace sync (the default), run the pattern directly — no
     // document-store / extra transport traffic. Keeps plain `{ id }` sandboxes
     // (and their tests) free of the persistence machinery.
     if (!syncWorkspace) {
-      return await runWithSandbox(att.transport, () => pattern.fn(scope, view))
+      return await run(() => pattern.fn(scope, view))
     }
-    return await runWithSandbox(att.transport, async () => {
+    return await run(async () => {
       // Restore the session's stored documents into /work/in — EVERY turn, not
       // just on a fresh container (#206 §6.1). `hydrateWorkspace` diffs against
       // what /work/in already holds (the mirror of the snapshot/promote pair

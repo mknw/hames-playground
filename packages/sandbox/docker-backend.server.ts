@@ -84,6 +84,16 @@ function hardeningArgs(): string[] {
     '/tmp:rw,nosuid,size=64m',
     '--tmpfs',
     `/work:rw,nosuid,size=${readIntEnv('SANDBOX_WORK_TMPFS_MB', 512)}m,mode=1777`,
+    // /skills (#415): where `withSandbox({ skills })` writes the run's
+    // SKILL.md files. The rootfs is read-only, so it needs a mount of its own.
+    // `noexec`, because v1 skills are instructions and scripts are out of
+    // scope; 4m holds the package's ceiling (MAX_MOUNTED_SKILLS × 64 KiB) with
+    // room to spare. Mode 1777 for /work's reason: the harness writes it as the
+    // image's non-root user, which is also the uid the agent runs as, so the
+    // files are not read-only to the agent — the per-turn hash sync is what
+    // restores them.
+    '--tmpfs',
+    '/skills:rw,nosuid,nodev,noexec,size=4m,mode=1777',
   ]
   const seccomp = process.env.SANDBOX_SECCOMP_PROFILE?.trim()
   if (seccomp) args.push('--security-opt', `seccomp=${seccomp}`)

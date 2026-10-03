@@ -49,7 +49,13 @@ vi.mock('../../../components/ark-ui/DataStashPanel', () => ({
   ),
 }))
 
+vi.mock('../../../components/ark-ui/SkillsPanel', () => ({
+  SkillsPanel: () => <div data-testid="skills-panel" />,
+}))
+
 const { SupportPanel } = await import('../../../components/ark-ui/SupportPanel')
+const { sawSandboxEntry, SANDBOX_BLINK_MS, SANDBOX_BLINK_WINDOW_MS } =
+  await import('../../../lib/sandbox-blink')
 
 const node = (id: string, source?: GraphElement['source']): GraphElement => ({
   data: { id, label: id },
@@ -114,7 +120,7 @@ describe('SupportPanel — tab routing', () => {
     ).toBe('')
   })
 
-  it('routes the Terminal tab to the sandbox feed', async () => {
+  it('routes the Sandbox tab (formerly Terminal) to the sandbox feed', async () => {
     const events: ContextEvent[] = [
       {
         type: 'tool_call',
@@ -127,7 +133,7 @@ describe('SupportPanel — tab routing', () => {
       <SupportPanel graphElements={[]} contextEvents={events} sessionId="sess-9" />
     ))
 
-    await clickTab(container, 'Terminal')
+    await clickTab(container, 'Sandbox')
     expect(container.textContent).toContain('1 sandbox command')
     expect(container.textContent).toContain('ls -la')
   })
@@ -321,5 +327,90 @@ describe('SupportPanel — Context manager tab', () => {
     expect(getByText('hello there')).toBeTruthy()
     fireEvent.click(getByText('Clear'))
     expect(onClearEvents).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('SupportPanel — the Sandbox tab blinks when a sandbox is entered (#415)', () => {
+  const enter = (pattern: string, ts: number, id?: string): ContextEvent => ({
+    id,
+    type: 'pattern_enter',
+    ts,
+    patternId: 'sandbox-session-loop',
+    data: { pattern },
+  })
+  const sandboxTab = (container: HTMLElement) => tab(container, 'Sandbox')
+
+  it('is called Sandbox, not Terminal', () => {
+    const { container } = render(() => <SupportPanel graphElements={[]} />)
+    const labels = [
+      ...container.querySelectorAll<HTMLElement>('[data-scope="tabs"][data-part="trigger"]'),
+    ].map((el) => el.textContent?.trim())
+    expect(labels).toContain('Sandbox')
+    expect(labels).not.toContain('Terminal')
+  })
+
+  it('blinks once per entry, for the duration of the two-pulse keyframes', async () => {
+    vi.useFakeTimers()
+    try {
+      const [events, setEvents] = createSignal<ContextEvent[]>([])
+      const { container } = render(() => (
+        <SupportPanel graphElements={[]} contextEvents={events()} />
+      ))
+      expect(sandboxTab(container).classList.contains('sandbox-tab-blink')).toBe(false)
+
+      const turn1 = [enter('withSandbox(actorCritic)', Date.now(), 'e1')]
+      setEvents(turn1)
+      expect(sandboxTab(container).classList.contains('sandbox-tab-blink')).toBe(true)
+
+      vi.advanceTimersByTime(SANDBOX_BLINK_MS - 1)
+      expect(sandboxTab(container).classList.contains('sandbox-tab-blink')).toBe(true)
+      vi.advanceTimersByTime(1)
+      expect(sandboxTab(container).classList.contains('sandbox-tab-blink')).toBe(false)
+
+      // A later event in the same turn is not a second entry.
+      const later: ContextEvent[] = [
+        ...turn1,
+        { type: 'tool_call', ts: Date.now(), patternId: 'x', data: {} },
+      ]
+      setEvents(later)
+      expect(sandboxTab(container).classList.contains('sandbox-tab-blink')).toBe(false)
+
+      // The next turn's entry blinks again.
+      setEvents([...later, enter('withSandbox(actorCritic)', Date.now(), 'e2')])
+      expect(sandboxTab(container).classList.contains('sandbox-tab-blink')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not blink for a stored conversation’s old entries, or for other patterns', () => {
+    const { container } = render(() => (
+      <SupportPanel
+        graphElements={[]}
+        contextEvents={[
+          enter('withSandbox(actorCritic)', Date.now() - SANDBOX_BLINK_WINDOW_MS - 1, 'old'),
+          enter('actorCritic', Date.now(), 'not-a-sandbox'),
+        ]}
+      />
+    ))
+    expect(sandboxTab(container).classList.contains('sandbox-tab-blink')).toBe(false)
+  })
+
+  it('sawSandboxEntry: recent + unseen + a withSandbox pattern, and remembers what it saw', () => {
+    const now = 1_000_000
+    const seen = new Set<string>()
+    const old = enter('withSandbox(x)', now - SANDBOX_BLINK_WINDOW_MS - 1, 'a')
+    expect(sawSandboxEntry([old], seen, now)).toBe(false)
+    // Seen even though it did not count, so it can never count later.
+    expect(sawSandboxEntry([old], seen, now - SANDBOX_BLINK_WINDOW_MS)).toBe(false)
+
+    const live = enter('withSandbox(x)', now, 'b')
+    expect(sawSandboxEntry([old, live], seen, now)).toBe(true)
+    expect(sawSandboxEntry([old, live], seen, now)).toBe(false)
+    // An event without an id is keyed by pattern id + time.
+    expect(sawSandboxEntry([enter('withSandbox(y)', now)], seen, now)).toBe(true)
+    expect(sawSandboxEntry([enter('withSandbox(y)', now)], seen, now)).toBe(false)
+    // Not a sandbox: a pattern name that merely contains the word.
+    expect(sawSandboxEntry([enter('mywithSandbox(z)', now, 'c')], seen, now)).toBe(false)
   })
 })

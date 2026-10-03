@@ -30,12 +30,13 @@ export const WORK_OUT_DIR = '/work/out'
 
 export type WorkEncoding = 'utf8' | 'base64'
 
-/** Single-quote a string for safe interpolation into a `bash -lc` command. */
-function shq(s: string): string {
+/** Single-quote a string for safe interpolation into a `bash -lc` command.
+ *  Exported for `skills.server.ts`, the other harness-side writer into a VM. */
+export function shq(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`
 }
 
-interface BashOutcome {
+export interface BashOutcome {
   ok: boolean
   stdout: string
   stderr: string
@@ -45,8 +46,10 @@ interface BashOutcome {
 /** Run a command in-VM and normalize the shell tool's result shape.
  *  Marked `internal` so the host-side bash guard (#116) does not screen the
  *  harness's own sync plumbing (mkdir / base64 / find … sha256sum / rm) —
- *  the exemption is by caller, not by command shape (see McpTransport.callTool). */
-async function bash(transport: McpTransport, command: string): Promise<BashOutcome> {
+ *  the exemption is by caller, not by command shape (see McpTransport.callTool).
+ *  Exported for `skills.server.ts`, whose mount commands are the same kind of
+ *  harness plumbing. */
+export async function bash(transport: McpTransport, command: string): Promise<BashOutcome> {
   const res = await transport.callTool('sandbox_bash', { command }, { internal: true })
   const d = (res.data ?? {}) as { stdout?: string; stderr?: string; exit_code?: number }
   const code = typeof d.exit_code === 'number' ? d.exit_code : res.success ? 0 : 1

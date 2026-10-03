@@ -2,16 +2,25 @@
  * Support Panel Component
  *
  * Tabbed interface for knowledge graph visualization and observability tools
- * Tabs: Neo4j | Memory | Context manager | Data | Terminal
+ * Tabs: Neo4j | Memory | Context manager | Data | Sandbox
  */
 
 import { Tabs } from '@ark-ui/solid/tabs'
-import { Show, createSignal, createMemo, createEffect, Suspense } from 'solid-js'
+import {
+  Show,
+  createSignal,
+  createMemo,
+  createEffect,
+  onCleanup,
+  untrack,
+  Suspense,
+} from 'solid-js'
 import type { OpenReferenceTarget } from '~/lib/harness-client'
 import { GraphVisualization } from './GraphVisualization'
 import { ObservabilityPanel } from './ObservabilityPanel'
 import { DataStashPanel, type StashAction } from './DataStashPanel'
-import { TerminalPanel } from './TerminalPanel'
+import { SandboxPanel } from './SandboxPanel'
+import { SANDBOX_BLINK_MS, sawSandboxEntry } from '~/lib/sandbox-blink'
 import type { ElementDefinition, StylesheetJsonBlock } from 'cytoscape'
 import type { ContextEvent, UnifiedContext } from '@hames-ai/harness-patterns'
 
@@ -81,6 +90,19 @@ export const SupportPanel = (props: SupportPanelProps) => {
   )
 
   const memoryElements = createMemo(() => props.graphElements.filter((e) => e.source === 'memory'))
+
+  // The Sandbox tab blinks twice when a sandbox is entered. A second entry
+  // while it is still blinking does not restart it — one signal per burst.
+  const [blinking, setBlinking] = createSignal(false)
+  const seenSandboxEntries = new Set<string>()
+  let blinkTimer: ReturnType<typeof setTimeout> | undefined
+  createEffect(() => {
+    if (!sawSandboxEntry(props.contextEvents ?? [], seenSandboxEntries, Date.now())) return
+    if (untrack(blinking)) return
+    setBlinking(true)
+    blinkTimer = setTimeout(() => setBlinking(false), SANDBOX_BLINK_MS)
+  })
+  onCleanup(() => clearTimeout(blinkTimer))
 
   return (
     <div flex="~ col" h="full" bg="ui-bg-primary">
@@ -169,7 +191,8 @@ export const SupportPanel = (props: SupportPanelProps) => {
           </Tabs.Trigger>
 
           <Tabs.Trigger
-            value="terminal"
+            value="sandbox"
+            class={blinking() ? 'sandbox-tab-blink' : undefined}
             p="x-3 y-2"
             text="sm ui-text-primary"
             flex="~"
@@ -178,14 +201,14 @@ export const SupportPanel = (props: SupportPanelProps) => {
             cursor="pointer"
             border="b-2 transparent"
             transition="all"
-            data-state={selectedTab() === 'terminal' ? 'active' : 'inactive'}
+            data-state={selectedTab() === 'sandbox' ? 'active' : 'inactive'}
             style={{
-              'border-bottom-color': selectedTab() === 'terminal' ? '#10b981' : 'transparent',
-              color: selectedTab() === 'terminal' ? '#10b981' : 'var(--ui-text-secondary)',
+              'border-bottom-color': selectedTab() === 'sandbox' ? '#10b981' : 'transparent',
+              color: selectedTab() === 'sandbox' ? '#10b981' : 'var(--ui-text-secondary)',
             }}
           >
             <span class="i-material-symbols-terminal" w="4" h="4" aria-hidden="true" />
-            Terminal
+            Sandbox
           </Tabs.Trigger>
         </Tabs.List>
 
@@ -245,9 +268,9 @@ export const SupportPanel = (props: SupportPanelProps) => {
             </Suspense>
           </Tabs.Content>
 
-          {/* Terminal Tab — read-only feed + interactive shell (#79) */}
-          <Tabs.Content value="terminal" h="full">
-            <TerminalPanel
+          {/* Sandbox Tab — read-only feed + interactive shell (#79) + skills (#415) */}
+          <Tabs.Content value="sandbox" h="full">
+            <SandboxPanel
               events={props.contextEvents ?? []}
               sessionId={props.sessionId}
               agentId={props.agentId}

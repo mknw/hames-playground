@@ -6,7 +6,7 @@
  * reuses the same container with its /work files, installed packages, and env
  * intact — and it's the *same* container the interactive Shell terminal
  * attaches to (the PTY manager keys on sessionId too). Write a file with the
- * agent, then `cat` it in the Terminal tab's Shell; both see one workspace.
+ * agent, then `cat` it in the Sandbox tab's Shell; both see one workspace.
  *
  * Contrast with an *ephemeral* sandbox (a fresh, reset VM per turn): pick this
  * agent when follow-ups should build on prior state.
@@ -177,7 +177,7 @@ export const sandboxSessionAgent: AgentDefinition = {
     'Persistent sandbox VM shared across turns and with the interactive Shell — build incrementally, inspect files live.',
   welcome:
     'I have a Linux box for this conversation — I can write files and run shell ' +
-    'or Python in it, and it keeps everything between messages. The Terminal tab ' +
+    'or Python in it, and it keeps everything between messages. The Sandbox tab ' +
     'opens the same box, and anything I put in /work/out is kept for next time.',
   servers: [],
   createPatterns,

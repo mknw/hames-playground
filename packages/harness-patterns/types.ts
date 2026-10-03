@@ -1178,11 +1178,11 @@ export interface ErrorEventData {
 
 /**
  * The side tasks a turn can lose without failing (#420): conveniences the turn
- * routes around rather than part of the answer the user asked for. Today every
- * one is a `describe`-role call; a task of another kind (a sandbox skill that
- * could not be mounted, say) joins by getting its own member, deliberately —
- * never by reusing one of these. A marker, so the UI and the tests key on it
- * rather than on the wording of {@link WarningEventData.message}.
+ * routes around rather than part of the answer the user asked for. Most are
+ * `describe`-role calls; a task of another kind joins by getting its own member,
+ * deliberately — never by reusing one of these (`skills_mount` is the first).
+ * A marker, so the UI and the tests key on it rather than on the wording of
+ * {@link WarningEventData.message}.
  */
 export type WarningTask =
   /** The first-turn conversation title (`GenerateConversationTitle`). */
@@ -1195,6 +1195,8 @@ export type WarningTask =
   | 'query_rewrite'
   /** `withReferences`' choice of prior results to attach. */
   | 'reference_selection'
+  /** `@hames-ai/sandbox`'s mount of the run's skills into `/skills` (#415). */
+  | 'skills_mount'
 
 /**
  * Data payload for a `warning` event: a side task failed and the turn carried

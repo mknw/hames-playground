@@ -14,14 +14,14 @@ tool dispatch / topology — see the Mermaid diagrams in
 Every sandbox container carries two labels (set in
 [`packages/sandbox/docker-backend.server.ts`](../../packages/sandbox/docker-backend.server.ts)):
 
-| Label                    | Value                       | Purpose                                          |
-|--------------------------|-----------------------------|--------------------------------------------------|
-| `kg-sandbox=1`           | always `1`                  | The family label — use for filters and reaping.  |
-| `kg-sandbox-id=<sbx-…>`  | the harness's sandbox id    | Same string as the Docker container name.        |
+| Label                   | Value                    | Purpose                                         |
+| ----------------------- | ------------------------ | ----------------------------------------------- |
+| `kg-sandbox=1`          | always `1`               | The family label — use for filters and reaping. |
+| `kg-sandbox-id=<sbx-…>` | the harness's sandbox id | Same string as the Docker container name.       |
 
 The container name (`sbx-XXXXXXXX`) is the harness's stable id. For id-keyed
 attachments (`withSandbox({ id: sessionId })`), this id stays the same across
-the conversation's turns — the container *underneath* may change after a
+the conversation's turns — the container _underneath_ may change after a
 warm-pool `reset`, but the id you see in the UI's terminal prompt is stable.
 
 ## See what's running
@@ -46,7 +46,7 @@ docker ps -a --filter label=kg-sandbox=1
 ```sh
 # Replace sbx-xxxx with a name from `docker ps` above.
 docker exec -it sbx-xxxx bash      # interactive shell — same thing the UI's
-                                    # Terminal tab → Shell gives you, just from
+                                    # Sandbox tab → Shell gives you, just from
                                     # the host CLI.
 docker exec sbx-xxxx ls -la /work  # inspect the agent's workspace
 docker exec sbx-xxxx ps -ef        # processes inside the VM
@@ -63,11 +63,17 @@ what it claimed to write?".
 
 For agents that opt in (e.g. **Sandbox · Session**), `/work` has a convention:
 
-| Path | Meaning |
-|------|---------|
+| Path        | Meaning                                                                                                |
+| ----------- | ------------------------------------------------------------------------------------------------------ |
 | `/work/in`  | Uploads + prior deliverables, restored from the DataStash at each turn's entry (only what is missing). |
-| `/work/out` | Files the agent wants kept — promoted to the DataStash on each turn exit. |
-| `/work/*`   | Scratch, lost when the container recycles. |
+| `/work/out` | Files the agent wants kept — promoted to the DataStash on each turn exit.                              |
+| `/work/*`   | Scratch, lost when the container recycles.                                                             |
+
+Outside `/work`, `/skills/<name>/SKILL.md` holds the user's skills (#415): their
+own and the global skills they have not hidden, written by `withSandbox` at
+each turn's entry (a content-hash sync, so a withdrawn skill leaves and an
+edited one is restored) on a small `noexec` tmpfs of its own. They are managed
+in the UI's Sandbox tab → Skills.
 
 ```sh
 docker exec sbx-xxxx ls -la /work/in /work/out   # what was restored / will persist
@@ -100,7 +106,7 @@ removes anything. So a normal dev-server restart already cleans up after a
 prior crash; you rarely need the manual command below.
 
 > **Caveat:** the auto-reap removes **all** `kg-sandbox=1` containers, including
-> ones a *concurrent* harness process on the same Docker host might own. That's
+> ones a _concurrent_ harness process on the same Docker host might own. That's
 > correct for single-process dev (the v0 shape); a multi-process deployment
 > would need to gate it behind a setting / grace window (noted on #97).
 
@@ -117,12 +123,12 @@ anything else. Same command is in
 
 ## What you'll see in practice
 
-| Pattern                           | Container shape                                                       |
-|-----------------------------------|-----------------------------------------------------------------------|
-| `withSandbox({})` (anonymous)     | Boots a VM for the turn, releases back to the warm pool (cap `base:1`). |
-| `withSandbox({ id })` (session)   | Boots a VM for the chat, parked under the id between turns.           |
-| Interactive Shell (Terminal tab)  | No extra container — attaches to the *session's* VM via `docker exec -it`. |
-| `withSandbox({ fresh: true })`    | One-shot private VM, destroyed on exit (skips pool).                  |
+| Pattern                         | Container shape                                                            |
+| ------------------------------- | -------------------------------------------------------------------------- |
+| `withSandbox({})` (anonymous)   | Boots a VM for the turn, releases back to the warm pool (cap `base:1`).    |
+| `withSandbox({ id })` (session) | Boots a VM for the chat, parked under the id between turns.                |
+| Interactive Shell (Sandbox tab) | No extra container — attaches to the _session's_ VM via `docker exec -it`. |
+| `withSandbox({ fresh: true })`  | One-shot private VM, destroyed on exit (skips pool).                       |
 
 After light use you'll typically see **0 or 1 anonymous warm-pool VM** plus
 **one VM per active session id**. The lazy idle sweep destroys parked entries
@@ -172,9 +178,9 @@ jq -r '.events[] | select(.type=="critic_result") | .data.result.explanation' "$
 jq -r '.events[] | select(.type=="error") | .data.error' "$LOG"
 ```
 
-## What's *not* observable today
+## What's _not_ observable today
 
-- **No in-UI fleet view.** The Terminal tab shows the *current session's*
+- **No in-UI fleet view.** The Sandbox tab shows the _current session's_
   activity and shell — there's no harness-wide "which sandboxes are running"
   panel. Use the `docker ps` snippets above.
 - **No per-VM stdout history outside the agent's view.** The interactive

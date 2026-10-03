@@ -23,6 +23,7 @@ import { withSandbox, type WithSandboxConfig } from '@hames-ai/sandbox'
 import { clientOverrideFor, type BamlRole } from '@hames-ai/harness-baml/clients.server'
 import { canonicalAgentId, getAgent } from './registry.server'
 import { getRequestUserId } from './request-user.server'
+import { resolveSandboxSkills } from '../skills/sandbox-skills.server'
 import {
   loadConversation,
   saveConversation,
@@ -90,6 +91,11 @@ export function agentDeps(): AgentDeps {
     //     becomes the `'default'` tenant package-side, which keeps the cache
     //     volume's name verbatim. That is the single-operator migration rule,
     //     not a fallback that widens anything.
+    //
+    // THE SKILLS ARE SUPPLIED HERE TOO (#415), by the same rule and for the
+    // same reason: a resolver called per run, owned by the request scope's
+    // user, so a cached chain mounts the skills of whoever's turn it is.
+    // No user in scope mounts none (`resolveSandboxSkills`).
     withSandbox: (attach) =>
       withSandbox({
         id: attach.id,
@@ -98,6 +104,7 @@ export function agentDeps(): AgentDeps {
         egress: attach.egress as WithSandboxConfig['egress'],
         syncWorkspace: attach.syncWorkspace,
         tenantId: () => getRequestUserId() ?? undefined,
+        skills: () => resolveSandboxSkills(getRequestUserId()),
       }),
     clientOverride: (role) => clientOverrideFor(role as BamlRole),
     persistTitle: updateConversationTitle,

@@ -3,7 +3,7 @@
  *
  * Encryption cannot live in `query()` — that helper takes opaque SQL and an
  * untyped parameter array, so it cannot tell which parameter is which column.
- * It therefore lives one level up, in the four repository modules that own the
+ * It therefore lives one level up, in the five repository modules that own the
  * encrypted tables. That is only a chokepoint for as long as nothing else runs
  * SQL against those tables, which a reviewer cannot keep verifying by eye. This
  * test is the pin, in the same spirit as the source-scan tests over the Neo4j
@@ -29,11 +29,11 @@ import { join, relative, resolve } from 'node:path'
 const SRC = resolve(process.cwd(), 'src')
 
 /** Tables whose content is encrypted, i.e. the ones this pin guards. */
-const ENCRYPTED_TABLES = ['conversations', 'auth_sessions', 'users', 'routines'] as const
+const ENCRYPTED_TABLES = ['conversations', 'auth_sessions', 'users', 'routines', 'skills'] as const
 
 /**
  * The only production modules allowed to write SQL naming those tables — the
- * four repositories that own encrypt-on-write and decrypt-on-read.
+ * five repositories that own encrypt-on-write and decrypt-on-read.
  *
  * `client.server.ts` is deliberately absent: it holds the DDL bootstrap and the
  * boot gate, which name tables in `CREATE`/`ALTER` (not matched below) and, in
@@ -43,6 +43,7 @@ const ENCRYPTED_TABLES = ['conversations', 'auth_sessions', 'users', 'routines']
 const SEAM_MODULES = [
   'lib/db/conversations.server.ts',
   'lib/db/routines.server.ts',
+  'lib/db/skills.server.ts',
   'lib/auth/session-store.server.ts',
   'lib/auth/users.server.ts',
 ].sort()
@@ -51,6 +52,7 @@ const SEAM_MODULES = [
 const OWNER: Record<string, string> = {
   conversations: 'lib/db/conversations.server.ts',
   routines: 'lib/db/routines.server.ts',
+  skills: 'lib/db/skills.server.ts',
   auth_sessions: 'lib/auth/session-store.server.ts',
   users: 'lib/auth/users.server.ts',
 }

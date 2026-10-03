@@ -4,12 +4,13 @@
  * containers inside the unescaped-content strategy, where it DECLINES, and
  * the bracketed-literal repair's nested / quoted / refused shapes (#407), the
  * last-resort single-key handler's refusal of a multi-member object (#408),
- * which `, word:` the key-quoting step reads as a key (#453), and what the
- * linear rewrite of two quadratic regexes kept from them (#461; the cost
- * itself is pinned in `json-repair-redos.test.ts`).
+ * which `, word:` the key-quoting step reads as a key (#453), what the linear
+ * rewrite of two quadratic regexes kept from them (#461), and the refusals the
+ * linear rewrite of the bracketed-literal scanner kept (#463; the cost of both
+ * is pinned in `json-repair-redos.test.ts`).
  *
  * Each test names the source mutation that reddens it; every one was run
- * (#407, #408, #453 and #461 PR bodies, mutation tables). The colon check in `readObject` has no
+ * (#407, #408, #453, #461 and #463 PR bodies, mutation tables). The colon check in `readObject` has no
  * test: `readString(':')` only closes a key on a `"` followed by `:`, so that
  * check cannot be reached and no input can redden a mutation of it.
  */
@@ -339,5 +340,126 @@ describe('what the linear rewrite kept (#461)', () => {
   it('keeps the old line between `{q: }` and `{q:}`', () => {
     expect(repairJson(`{q: }`)).toEqual({ q: '' })
     expect(() => repairJson(`{q:}`)).toThrow()
+  })
+})
+
+// #463: the bracketed-literal scanner now decides every literal in one pass
+// and renders only the parked ones (the cost is pinned in
+// `json-repair-redos.test.ts`). These are the refusals the old recursive
+// repair made, which no earlier test reached. Every expected value here is
+// what main returned before the rewrite.
+describe('what the linear scanner kept (#463)', () => {
+  // Mutation N2: read a nested literal followed by more text as a scalar →
+  // `[x] y` is quoted, the outer literal is parked, and the call returns.
+  it('refuses a value that starts with a nested literal and goes on', () => {
+    expect(() => repairJson(`{a: [[x] y], b: 1}`)).toThrow()
+  })
+
+  // Mutation N3: accept a blank value → `b` becomes `""` and the call returns.
+  it('refuses a blank value inside a nested object', () => {
+    expect(() => repairJson(`{a: {b: , c: d}, e: 1}`)).toThrow()
+  })
+
+  // Mutation N4: accept a blank key → `{"": "x"}` and the call returns.
+  it('refuses a blank key inside a nested object', () => {
+    expect(() => repairJson(`{a: {: x}, b: 1}`)).toThrow()
+  })
+
+  // Mutation N5: ignore whether a nested literal was refused → `[x,,y]`
+  // renders with an empty string for its blank item and the call returns.
+  it('refuses a literal whose nested literal is refused', () => {
+    expect(() => repairJson(`{a: [[x,,y]], b: 1}`)).toThrow()
+  })
+
+  // Mutation N6: refuse an empty literal → `[\u00a0]` is not parked, and
+  // JSON.parse rejects the no-break space that `trim()` had dropped. The
+  // literal's emptiness is decided by JS whitespace, not JSON's.
+  it('repairs a literal holding only whitespace JSON does not allow to an empty one', () => {
+    expect(repairJson(`{a: [\u00a0], b: x}`)).toEqual({ a: [], b: 'x' })
+    expect(repairJson(`{a: {\u00a0}, b: x}`)).toEqual({ a: {}, b: 'x' })
+  })
+
+  // Mutation N7: on a mismatched closer, mark only the innermost literal
+  // unbalanced → the `q` literal closes at the final `}`, is parked whole,
+  // and `c` comes back as the string `[z]}`.
+  it('leaves every literal open at a mismatched closer unbalanced', () => {
+    expect(repairJson(`{q: {b: x [y, c: [z]}}`)).toEqual({ q: { b: 'x [y', c: ['z'] } })
+  })
+
+  // Mutation N8: render nested literals recursively → past the stack's depth
+  // the call throws a RangeError. Main's recursion did too, somewhere past
+  // ~2 000 levels depending on JIT state. That is the one result this rewrite
+  // changes on purpose (see the module's scanner comment).
+  it('repairs a literal nested 8 000 deep without running out of stack', () => {
+    const depth = 8_000
+    const result = repairJson(`{q: ${'['.repeat(depth)}x${']'.repeat(depth)}}`)
+    let value: unknown = result.q
+    for (let level = 0; level < depth; level++) {
+      expect(Array.isArray(value) && value.length === 1, `level ${level}`).toBe(true)
+      value = (value as unknown[])[0]
+    }
+    expect(value).toBe('x')
+  })
+})
+
+// #463: the lenient chain refuses input over 16 384 characters (after trim),
+// as defence in depth. It only guards the chain: the strict parse and the
+// unescaped-content strategy run first and recover large payloads as before.
+describe('the lenient chain refuses input over 16 384 characters (#463)', () => {
+  const LIMIT = 16_384
+  /** A single-key relaxed object exactly `length` characters long. */
+  const relaxed = (length: number): string => `{q: ${'x'.repeat(length - 5)}}`
+
+  // Mutation B1: `>=` for `>` → the input exactly at the limit throws.
+  it('repairs input exactly at the limit', () => {
+    const input = relaxed(LIMIT)
+    expect(input).toHaveLength(LIMIT)
+    expect(repairJsonTracked(input)).toEqual({
+      args: { q: 'x'.repeat(LIMIT - 5) },
+      repair: { strategy: 'lenient-tokens' },
+    })
+  })
+
+  // Mutation B2: delete the bound → the call returns `{ q: 'xxx…' }`.
+  // Mutation B3: truncate to the limit instead of throwing → the last-resort
+  // handler still reads the untruncated input and returns the same value.
+  // Either way the call returns, and a repair this long is what the bound
+  // exists to refuse.
+  it('throws, naming the length and the limit, one character over it', () => {
+    const input = relaxed(LIMIT + 1)
+    expect(() => repairJson(input)).toThrow(SyntaxError)
+    expect(() => repairJson(input)).toThrow(
+      new SyntaxError(
+        'Not valid JSON, and too long to repair: 16385 characters, where relaxed syntax is ' +
+          'only repaired up to 16384. Send valid JSON: quote every key and string, and escape ' +
+          'quotes and newlines inside strings.',
+      ),
+    )
+  })
+
+  // Mutation B4: measure `raw.length` instead of the trimmed input → the
+  // padding pushes it over and the call throws.
+  it('measures the input after trimming it', () => {
+    expect(repairJson(`  ${relaxed(LIMIT)}\n`)).toEqual({ q: 'x'.repeat(LIMIT - 5) })
+  })
+
+  // Mutation B5: move the bound above the strict parse → valid JSON this long
+  // throws instead of parsing.
+  it('never touches valid JSON, however long', () => {
+    const input = JSON.stringify({ q: 'x'.repeat(100_000) })
+    expect(repairJsonTracked(input)).toEqual({ args: { q: 'x'.repeat(100_000) } })
+  })
+
+  // Mutation B6: move the bound above `parseUnescapedContent` → a long payload
+  // with unescaped content quotes, the class of the 19 KB `sandbox_edit`
+  // incident, throws instead of recovering.
+  it('still recovers unescaped content quotes in a payload over the limit', () => {
+    const body = 'y'.repeat(20_000)
+    const r = repairJsonTracked(`{"cmd": "${body} say "hi" now", "p": "/x"}`)
+    expect(r.args).toEqual({ cmd: `${body} say "hi" now`, p: '/x' })
+    expect(r.repair).toEqual({
+      strategy: 'unescaped-content',
+      counts: { quotes: 2, controlChars: 0 },
+    })
   })
 })

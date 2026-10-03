@@ -466,7 +466,7 @@ describe('simpleLoop execution', () => {
       .mockResolvedValueOnce({
         action: mockAction({
           tool_name: 'read_neo4j_cypher',
-          tool_args: '{"query": "MATCH (n) WHERE n.name = "Revenue Model" RETURN n"}',
+          tool_args: '{"query": "MATCH (n) WHERE n.name = "Sample Node" RETURN n"}',
         }),
         llmCall: undefined,
       })
@@ -493,7 +493,7 @@ describe('simpleLoop execution', () => {
     const toolCall = result.events.find((e) => e.type === 'tool_call')
     expect(toolCall?.data).toMatchObject({
       tool: 'read_neo4j_cypher',
-      args: { query: 'MATCH (n) WHERE n.name = "Revenue Model" RETURN n' },
+      args: { query: 'MATCH (n) WHERE n.name = "Sample Node" RETURN n' },
       repaired: { strategy: 'unescaped-content', counts: { quotes: 2, controlChars: 0 } },
     })
   })

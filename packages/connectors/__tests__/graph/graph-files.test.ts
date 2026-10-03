@@ -744,9 +744,9 @@ describe('webUrlFolderPath', () => {
   it('covers -my.sharepoint.com personal drives', () => {
     expect(
       webUrlFolderPath(
-        'https://contoso-my.sharepoint.com/personal/jane_contoso_com/Documents/STIPP/notes.docx',
+        'https://contoso-my.sharepoint.com/personal/jane_contoso_com/Documents/Proposals/notes.docx',
       ),
-    ).toBe('personal/jane_contoso_com/Documents/STIPP')
+    ).toBe('personal/jane_contoso_com/Documents/Proposals')
   })
 
   it('yields null for Loop URLs — an opaque payload, not a folder', () => {

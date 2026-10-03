@@ -29,9 +29,10 @@
  * That uniformity is the fix for the multi-turn failure #243 left standing: a
  * route without an `id` gets an anonymous-pool box, `syncWorkspace` is a no-op
  * there, and a turn routed to it could not see a file ingested on an earlier
- * turn ("ingest the spreadsheet" → `data`, then "list the files in /work/in" →
- * `basic` → "No such file or directory"). Per-turn flavour choice is the point
- * of this agent, so the workspace — not the routing — is session-wide.
+ * turn (a turn that used an ingested file went to `data`; the next turn, which
+ * asked for the inputs, went to `basic` and got "No such file or directory").
+ * Per-turn flavour choice is the point of this agent, so the workspace — not
+ * the routing — is session-wide.
  *
  * The corollary the actors are told about (WORKSPACE_NOTE): a later turn may
  * land in a DIFFERENT flavour's container, so anything worth keeping goes to

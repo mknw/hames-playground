@@ -107,7 +107,7 @@ return [
 > path, a reset box per turn. But `syncWorkspace` only runs on the id-addressable
 > path, so that route had **no `/work/in` at all**. Because the flavour is chosen
 > **per turn**, a session could ingest a spreadsheet on a `data` turn and then be
-> routed to `basic` for "list the files in /work/in", landing in a container where
+> routed to `basic` for a request to list its inputs, landing in a container where
 > the directory had never been created: `No such file or directory (os error 2)`,
 > six retries, run failed (`.harness-logs/243.json`). Per-turn flavour choice is
 > the whole point of this recipe, so it is the **workspace** that has to be

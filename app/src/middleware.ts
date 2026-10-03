@@ -168,9 +168,11 @@ export default createMiddleware({
   // `setSecurityHeaders` FIRST and unconditionally: it is the one hook that
   // must run in every build, and placing it ahead of the dev-only one means a
   // failure to arm the fake cannot leave a response without its headers.
-  // `refuseServerFunctionGet` second and just as unconditional: it answers a
-  // `GET /_server?…` with a 405 before SolidStart's handler would run the
-  // named function (#429), and that hole is open in every build.
+  // `refuseServerFunctionGet` second and just as unconditional: in the
+  // server-fns router's copy of this module it answers every non-POST with a
+  // 405 before SolidStart's handler would run the named function (#429), and
+  // that hole is open in every build. It keys on the router, not the path —
+  // see its header for the paths h3 routes there.
   onRequest: [
     setSecurityHeaders,
     refuseServerFunctionGet,

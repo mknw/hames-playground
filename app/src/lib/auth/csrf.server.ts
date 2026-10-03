@@ -78,8 +78,12 @@ export function methodNotAllowed(allow: string): Response {
   })
 }
 
-/** Where SolidStart mounts its server-function handler (`server-fns` router). */
-export const SERVER_FUNCTION_BASE = '/_server'
+/**
+ * The vinxi router that serves SolidStart's server functions. vinxi builds this
+ * middleware once per router and defines `import.meta.env.ROUTER_NAME` in each
+ * build, so the test below is a constant in every copy.
+ */
+export const SERVER_FUNCTION_ROUTER = 'server-fns'
 
 /**
  * Middleware hook: refuse every `'use server'` call that is not a `POST`.
@@ -92,13 +96,18 @@ export const SERVER_FUNCTION_BASE = '/_server'
  * `requireUser()` gate passed, because the cookie rode along. The app's own
  * client always `POST`s (`server-runtime.js`), and nothing here uses the
  * `.GET` form, so the only thing this refuses is the attack.
+ *
+ * **It decides by router, never by path.** h3 hands that router any request
+ * whose percent-DECODED path merely starts with `/_server`, with no segment
+ * boundary — `/_serverx`, `/_server.js`, `/%5Fserver`, `/_server%2F` — while
+ * the request URL a hook sees is the raw one. A path test therefore has to
+ * re-implement h3's matcher exactly, and the first version of this hook did
+ * not: it refused `/_server` and `/_server/…` and let every variant above run
+ * its function (#451 review). The router's own name has no such gap: if this
+ * copy of the middleware runs, the server-function handler is next.
  */
 export function refuseServerFunctionGet(event: Pick<FetchEvent, 'request'>): Response | undefined {
-  const { request } = event
-  if (request.method === 'POST') return undefined
-  const { pathname } = new URL(request.url)
-  if (pathname !== SERVER_FUNCTION_BASE && !pathname.startsWith(`${SERVER_FUNCTION_BASE}/`)) {
-    return undefined
-  }
+  if (event.request.method === 'POST') return undefined
+  if (import.meta.env.ROUTER_NAME !== SERVER_FUNCTION_ROUTER) return undefined
   return methodNotAllowed('POST')
 }

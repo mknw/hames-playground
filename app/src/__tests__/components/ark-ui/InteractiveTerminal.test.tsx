@@ -280,6 +280,28 @@ describe('InteractiveTerminal', () => {
     expect(disposeTerm).toHaveBeenCalled()
   })
 
+  it('opens no stream when the tab is unmounted while its POST is in flight', async () => {
+    // Teardown has already run by the time the ticket arrives, so a stream
+    // opened then would never be closed — and its subscription would cancel
+    // the shell's idle clock, holding the container for as long as the page
+    // stays open (#451 review).
+    let answer!: (res: Response) => void
+    fetchMock.mockImplementation((url) =>
+      url === OPEN_URL
+        ? new Promise<Response>((resolve) => (answer = resolve))
+        : Promise.resolve(new Response('{}')),
+    )
+    const { unmount } = render(() => <InteractiveTerminal sessionId="sess-1" />)
+    await tick()
+    expect(opens()).toHaveLength(1) // the POST is out
+
+    unmount()
+    answer(new Response(JSON.stringify({ ticket: 't-late' }), { status: 200 }))
+    await tick()
+
+    expect(FakeEventSource.all).toHaveLength(0)
+  })
+
   it('tears down when unmounted mid-boot, without starting a shell for the gone tab', async () => {
     const { unmount } = render(() => <InteractiveTerminal sessionId="sess-1" />)
     // No await: the dynamic xterm import is still in flight.

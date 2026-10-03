@@ -9,8 +9,14 @@
  * The middleware wiring is a source scan, for the reason
  * `security-headers.test.ts` gives: importing `src/middleware.ts` for real
  * would arm the routine scheduler inside a unit run.
+ *
+ * The server-function guard keys on the router that runs it, which a unit
+ * test can only stub (`ROUTER_NAME`). Which paths h3 actually hands to that
+ * router is visible only to a real nitro build, so CI's docker job probes the
+ * built image with the same variants (`ci.yml`, "Assert no server function
+ * runs from a GET").
  */
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -91,32 +97,68 @@ describe('methodNotAllowed', () => {
 })
 
 describe('refuseServerFunctionGet', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
   const event = (method: string, url: string) => ({ request: new Request(url, { method }) })
   // The shape SolidStart's no-JS path accepts: function id, a name, and the
   // arguments as seroval JSON in the query string.
-  const call = 'http://x/_server?id=src_lib_x_server_ts--deleteSkill_1&name=x&args=%7B%7D'
+  const query = '?id=src_lib_skills_actions_server_ts--deleteSkill_1&name=x&args=%7B%7D'
 
-  it.each([
-    ['GET', call],
-    ['GET', 'http://x/_server/?id=a&name=b'],
-    ['HEAD', call],
-    ['PUT', call],
-  ])('refuses %s %s with a 405', (method, url) => {
-    const res = refuseServerFunctionGet(event(method, url))
-    expect(res?.status).toBe(405)
-    expect(res?.headers.get('Allow')).toBe('POST')
+  /**
+   * Every path h3 hands to the server-function router: it percent-decodes the
+   * path and then matches a bare `startsWith('/_server')`, no segment
+   * boundary. The first version of the hook matched `/_server` and `/_server/…`
+   * on the raw URL, and each of the rest below ran its function on a
+   * production build (#451 review).
+   */
+  const routedToServerFns = [
+    '/_server',
+    '/_server/',
+    '/_serverx',
+    '/_serverless',
+    '/_server.js',
+    '/_server;a',
+    '/_server-anything/x',
+    '/%5Fserver', // `_` encoded
+    '/%5fserver',
+    '/_server%2F', // the slash encoded
+    '/_server%2Fx',
+    '/%5F%73erver', // more than one character encoded
+  ]
+
+  describe('in the server-fns router’s copy of the middleware', () => {
+    beforeEach(() => {
+      vi.stubEnv('ROUTER_NAME', 'server-fns')
+    })
+
+    it.each(routedToServerFns.flatMap((p) => ['GET', 'HEAD'].map((m) => [m, p])))(
+      'refuses %s %s with a 405',
+      (method, pathname) => {
+        const res = refuseServerFunctionGet(event(method, `http://x${pathname}${query}`))
+        expect(res?.status).toBe(405)
+        expect(res?.headers.get('Allow')).toBe('POST')
+      },
+    )
+
+    it.each(['PUT', 'PATCH', 'DELETE', 'OPTIONS'])('refuses %s too', (method) => {
+      expect(refuseServerFunctionGet(event(method, `http://x/_server${query}`))?.status).toBe(405)
+    })
+
+    it.each(routedToServerFns)('lets the client runtime’s POST through: %s', (pathname) => {
+      expect(refuseServerFunctionGet(event('POST', `http://x${pathname}`))).toBeUndefined()
+    })
   })
 
-  it('lets the client runtime’s POST through', () => {
-    expect(refuseServerFunctionGet(event('POST', 'http://x/_server'))).toBeUndefined()
+  describe('in every other router’s copy', () => {
+    it.each(['ssr', 'client', undefined])('ROUTER_NAME=%s refuses no GET', (router) => {
+      if (router) vi.stubEnv('ROUTER_NAME', router)
+      for (const url of ['http://x/', 'http://x/api/health', `http://x/_serverx${query}`]) {
+        expect(refuseServerFunctionGet(event('GET', url)), url).toBeUndefined()
+      }
+    })
   })
-
-  it.each(['http://x/', 'http://x/api/health', 'http://x/_serverless', 'http://x/s/_server'])(
-    'leaves every other GET alone: %s',
-    (url) => {
-      expect(refuseServerFunctionGet(event('GET', url))).toBeUndefined()
-    },
-  )
 })
 
 describe('the server-boot hook runs refuseServerFunctionGet in every build', () => {

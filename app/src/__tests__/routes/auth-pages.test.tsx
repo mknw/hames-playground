@@ -32,14 +32,25 @@ const hrefs = (container: HTMLElement) =>
   [...container.querySelectorAll('a')].map((a) => a.getAttribute('href'))
 
 describe('sign-in page', () => {
-  it('offers the Microsoft hand-off as a real navigation, not a client route', async () => {
+  it('starts the Microsoft hand-off with a form POST, never a GET link (#429)', async () => {
     const { container, findByText } = renderRoute(SignIn, '/auth/signin')
-    await findByText('Sign in with Microsoft')
+    const button = await findByText('Sign in with Microsoft')
 
-    const link = container.querySelector('a[href="/api/auth/login"]')!
-    // Without rel="external" the router intercepts the click and the server
-    // handler never runs — the sign-in silently 404s.
-    expect(link.getAttribute('rel')).toBe('external')
+    const form = button.closest('form')!
+    expect(form.getAttribute('method')).toBe('post')
+    expect(form.getAttribute('action')).toBe('/api/auth/login')
+    expect(button.closest('button')!.getAttribute('type')).toBe('submit')
+    // The old GET link is gone: the route answers a GET without starting
+    // anything, so a link to it would silently do nothing.
+    expect(container.querySelector('a[href^="/api/auth/login"]')).toBeNull()
+  })
+
+  it('carries returnTo on the form action, so a deep link survives the round trip', async () => {
+    const { container, findByText } = renderRoute(SignIn, '/auth/signin?returnTo=%2F%3Fc%3Dabc')
+    await findByText('Sign in with Microsoft')
+    expect(container.querySelector('form')!.getAttribute('action')).toBe(
+      '/api/auth/login?returnTo=%2F%3Fc%3Dabc',
+    )
   })
 
   it('shows no error hint on a first visit', async () => {

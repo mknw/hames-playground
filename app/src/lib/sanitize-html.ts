@@ -161,12 +161,15 @@ function hardenAttributes(node: Element): void {
 // So the rule is the inverse of "block what looks remote": an image is kept
 // only when its source is one of the two below, and is otherwise replaced by
 // inert text. "Same origin" is deliberately NOT one of them. An image is an
-// authenticated GET the page fires on the reader's behalf, and this app has
-// GET routes with side effects — `/api/auth/logout` deletes the session and
-// fires `session_end` routines, `/api/sandbox/pty/stream` claims a session and
-// boots a container — so `![](/api/auth/logout)` would sign the reader out on
-// every render of that answer. The CSP's `img-src 'self'` permits exactly
-// that request, which is why this function, not the header, is the control.
+// authenticated GET the page fires on the reader's behalf, so any GET route
+// with a side effect would run on every render of that answer. This app had
+// two — `/api/auth/logout` signed the reader out and fired `session_end`
+// routines, `/api/sandbox/pty/stream` claimed a session and booted a
+// container — until #429 moved both behind a same-origin POST
+// (`lib/auth/csrf.server.ts`). The rule stays: it does not depend on every
+// future GET route being free of side effects. The CSP's `img-src 'self'`
+// permits exactly that request, which is why this function, not the header,
+// is the control.
 
 /**
  * Exception 1 — a `data:` raster image.

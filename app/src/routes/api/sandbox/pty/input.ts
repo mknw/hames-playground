@@ -8,8 +8,8 @@
  * session (the next stream connect will start one).
  *
  * Ownership: verified via the read gate (`requireSessionOwner`) — a PTY only
- * exists once the stream route has claimed the session, so input never has to
- * claim. A foreign or unknown session gets the same indistinguishable 404.
+ * exists once the stream route's `POST` has claimed the session, so input never
+ * has to claim. A foreign or unknown session gets the same indistinguishable 404.
  */
 import type { APIEvent } from '@solidjs/start/server'
 import { ptyManager } from '@hames-ai/sandbox/pty-manager.server'

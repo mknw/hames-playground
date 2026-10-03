@@ -317,11 +317,26 @@ describe('a loop whose allowlist names the write tool still cannot call it', () 
     expect(input.tools).toEqual(['read_neo4j_cypher'])
     expect(input.fewShots?.map((shot) => shot.tool)).not.toContain(WRITE)
     expect(sentToGateway()).not.toContain(WRITE)
+    // Since #437 a refusal is a recovery the loop feeds back, not an error
+    // that ends it: every round names the tool, every round is refused, and
+    // the consecutive-recovery cap (default: 1 recovery) ends the loop on the second.
+    const refusal = `Tool not allowed: ${WRITE} (withheld from every agent). Allowed: read_neo4j_cypher`
+    const recoveries = result.events
+      .filter((e) => e.type === 'loop_recovery')
+      .map((e) => e.data as { failure: string; error: string })
+    expect(recoveries.length).toBeGreaterThan(0)
+    for (const r of recoveries)
+      expect(r).toMatchObject({ failure: 'tool_not_allowed', error: refusal })
+    // The marker reaches the model: the next round's turn log carries it as
+    // the refused round's ERROR, so the controller reads "withheld", not
+    // "misspelled". Mutation: build the singular refusal without `refusal()`
+    // (no withheld marker) → red.
+    const second = (controller.mock.calls[1] as unknown as [ControllerInput])[0]
+    expect(second.turns[0].tool_result?.error).toBe(refusal)
     const errors = result.events.filter((e) => e.type === 'error')
-    expect(errors).toHaveLength(1)
-    expect(String((errors[0].data as { error: string }).error)).toBe(
-      `Tool not allowed: ${WRITE} (withheld from every agent). Allowed: read_neo4j_cypher`,
-    )
+    expect(errors.map((e) => e.data)).toEqual([
+      expect.objectContaining({ kind: 'recovery_exhausted', error: refusal }),
+    ])
   })
 
   it('simpleLoop: a scoped transport that claims the name cannot hand it back either', async () => {
@@ -349,8 +364,8 @@ describe('a loop whose allowlist names the write tool still cannot call it', () 
 
     expect(transportCall).not.toHaveBeenCalled()
     expect(sentToGateway()).not.toContain(WRITE)
-    const errors = result.events.filter((e) => e.type === 'error')
-    expect(String((errors[0]?.data as { error?: string })?.error)).toContain(
+    const recoveries = result.events.filter((e) => e.type === 'loop_recovery')
+    expect(String((recoveries[0]?.data as { error?: string })?.error)).toContain(
       'withheld from every agent',
     )
   })
@@ -423,8 +438,10 @@ describe('a loop whose allowlist names the write tool still cannot call it', () 
 
     expect(actor).toHaveBeenCalled()
     expect(sentToGateway()).not.toContain(WRITE)
+    // A `loop_recovery` since #437, not an `error`: the actor is told through
+    // `previousAttempts` and the loop goes on.
     const refusals = result.events
-      .filter((e) => e.type === 'error')
+      .filter((e) => e.type === 'loop_recovery')
       .map((e) => String((e.data as { error: string }).error))
     expect(refusals).toContain(`Tool not allowed: ${WRITE} (withheld from every agent)`)
   })

@@ -142,10 +142,10 @@ export const NEO4J_FEW_SHOTS_DEFAULT: FewShot[] = [
  * Without it a write-shaped question ("add these to the graph") reaches a
  * controller that holds `read_neo4j_cypher` and `get_neo4j_schema` and nothing
  * else, and is told nothing about why. The two ways it can then go wrong both
- * end the loop on an error rather than an answer: it names a write tool it
- * remembers ("Tool not allowed"), or it sends a write clause through the read
- * tool, which the server refuses. This tells it the third way, and the one that
- * is right: say it can only read.
+ * spend rounds on an error rather than answering (they ended the loop before
+ * #437): it names a write tool it remembers ("Tool not allowed"), or it sends a
+ * write clause through the read tool, which the server refuses. This tells it
+ * the third way, and the one that is right: say it can only read.
  *
  * Passed as `createLoopControllerAdapter`'s context prefix, so it renders in
  * the prompt's cached, agent-static tier beside the graph schema.

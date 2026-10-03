@@ -46,7 +46,10 @@ vi.mock('@boundaryml/baml', () => {
     }
     constructor(_name?: string) {}
   }
-  return { Collector: MockCollector }
+  // `wrapAsLLMCallError` classifies with `instanceof BamlValidationError`
+  // (#437), so the module surface it reads has to exist on the mock.
+  class BamlValidationError extends Error {}
+  return { Collector: MockCollector, BamlValidationError }
 })
 
 type Ev = { type: EventType; ts: number; patternId: string; data: unknown }

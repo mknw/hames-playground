@@ -277,6 +277,32 @@ describe('context', () => {
       expect(ctx.events.slice(initialEventCount).map((e) => e.type)).toEqual(['warning'])
     })
 
+    // #437: when a controller's answer would not parse, the `loop_recovery` is
+    // the only event carrying what the model said; a loop that then fails must
+    // not drop it under 'on-success'. Mutation: remove 'loop_recovery' from
+    // ALWAYS_COMMIT_TYPES → reds.
+    it('always commits a loop recovery, even under "never"', async () => {
+      const { commitEvents, createContext, createScope } =
+        await import('@hames-ai/harness-patterns/context.server')
+
+      const ctx = createContext('test')
+      const initialEventCount = ctx.events.length
+      const scope = createScope('pattern', {})
+      scope.events.push(
+        { type: 'tool_call', ts: Date.now(), patternId: 'p', data: {} },
+        {
+          type: 'loop_recovery',
+          ts: Date.now(),
+          patternId: 'p',
+          data: { failure: 'unparseable_output', error: 'e', turn: 0, maxTurns: 8 },
+        },
+      )
+
+      commitEvents(ctx, scope, 'never')
+
+      expect(ctx.events.slice(initialEventCount).map((e) => e.type)).toEqual(['loop_recovery'])
+    })
+
     it('should always commit lifecycle events regardless of strategy', async () => {
       const { commitEvents, createContext, createScope } =
         await import('@hames-ai/harness-patterns/context.server')

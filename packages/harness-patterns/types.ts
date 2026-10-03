@@ -244,6 +244,7 @@ export type EventType =
   | 'plan_created'
   | 'content_sanitized'
   | 'warning'
+  | 'loop_recovery'
 
 /** Accounting record for one harness step (#122): token and cost totals
  *  summed across EVERY physical API call the step made — including truncation
@@ -727,6 +728,18 @@ export interface SimpleLoopConfig extends PatternConfig {
    *  results, across patterns, including the fields `resultOmit` hides from the
    *  controller), so the default asks the loop for a summary only. */
   returnStyle?: ReturnStyle
+  /** The consecutive-recovery cap (default: 1): how many answers the loop
+   *  cannot use it will feed back IN A ROW. An unusable answer is one that would
+   *  not parse, `tool_args` that would not parse, a tool off the allowlist, or a
+   *  multi-call turn of which no call could be dispatched. Up to the cap, each is
+   *  fed back as that round's result; the next one ends the loop exactly as it
+   *  did before #437, marked `kind: 'recovery_exhausted'` — so by default a loop
+   *  stops on its second unusable answer in a row. A round that dispatches a
+   *  tool resets the count, whatever the tool returns; a tool that ran and
+   *  FAILED is never counted. `0` permits no recovery (the pre-#437 behaviour
+   *  for those failures), `Infinity` leaves only `maxTurns`; values below 0 are
+   *  clamped to 0. */
+  maxConsecutiveRecoveries?: number
 }
 
 /** Configuration for actorCritic pattern */
@@ -763,6 +776,16 @@ export interface ActorCriticConfig extends PatternConfig {
   /** Multi-call turns: 'parallel' (default) | 'sequential' | 'off'.
    *  See `MultiCallMode`. */
   multiToolCalls?: MultiCallMode
+  /** The consecutive-recovery cap (default: 1), counted in ATTEMPTS — the same
+   *  rule as `SimpleLoopConfig.maxConsecutiveRecoveries`. An actor answer that
+   *  would not parse, unparseable `tool_args`, a refused tool name and a
+   *  multi-call attempt that dispatched nothing count; an attempt that
+   *  dispatches a tool resets the count, and a tool that ran and failed is never
+   *  counted, so the fail-fix-fail iteration a sandbox actor debugs by is
+   *  untouched. A refusal against a tool surface that resolved to nothing (no
+   *  static or dynamic names, no scoped transport, no `dynamicToolPattern`)
+   *  neither counts nor resets: the actor had no valid name to choose. */
+  maxConsecutiveRecoveries?: number
 }
 
 /** Synthetic tool injected into LoopController's tools list when prior results
@@ -1157,6 +1180,10 @@ export interface ErrorEventData {
    *  `kind: 'budget_exhausted'`, so a reader has BOTH halves of "7 of 8" and
    *  the panel can render the fraction. Absent on every other error. */
   maxTurns?: number
+  /** The consecutive-recovery cap that ended the loop, in recoveries permitted
+   *  — always set alongside `kind: 'recovery_exhausted'`, absent on every other
+   *  error. */
+  maxConsecutiveRecoveries?: number
   /** Origin of the error.
    *
    *  `llm_call` means the failure is attributable to an LLM call and the event
@@ -1177,8 +1204,18 @@ export interface ErrorEventData {
    *  `maxTurns` beside it for the budget, `turn` / `iteration` for how far it
    *  got.
    *
+   *  `recovery_exhausted` means the loop's consecutive-recovery cap ended it
+   *  (`SimpleLoopConfig.maxConsecutiveRecoveries` /
+   *  `ActorCriticConfig.maxConsecutiveRecoveries`): the loop had already fed
+   *  back that many unusable answers in a row, and the next one is fatal
+   *  exactly as it was before #437. The rest of the event is that failure's —
+   *  its verbatim message, the pattern's severity and, as for `llm_call`, the
+   *  failed call on `ContextEvent.llmCall` — so this marker REPLACES `llm_call`
+   *  on that event rather than joining it. Read `maxConsecutiveRecoveries`
+   *  beside it for the cap.
+   *
    *  Absent for non-LLM errors (MCP failures, tool errors, etc.). */
-  kind?: 'llm_call' | 'budget_exhausted'
+  kind?: 'llm_call' | 'budget_exhausted' | 'recovery_exhausted'
 }
 
 /**
@@ -1228,6 +1265,59 @@ export interface WarningEventData {
   fallback: string
   /** The underlying failure, verbatim, for the observability drill-down. */
   error?: string
+}
+
+/**
+ * What a loop recovered from (#437 slice 1). A marker, so the panel and the
+ * tests key on it rather than on the wording of {@link LoopRecoveryEventData.error}.
+ */
+export type LoopRecoveryFailure =
+  /** The tool ran and reported failure. */
+  | 'tool_error'
+  /** Every call of a multi-call turn failed — ran and failed, or was refused
+   *  before running. The per-call reasons are in `error`. */
+  | 'batch_failed'
+  /** The model named a tool that is not on the loop's allowlist. */
+  | 'tool_not_allowed'
+  /** The model's `tool_args` did not parse — malformed, or cut off at the
+   *  output cap. */
+  | 'invalid_tool_args'
+  /** The controller's or actor's ANSWER could not be parsed into an action at
+   *  all: the implementation threw an `LLMCallError` marked `recoverable`. */
+  | 'unparseable_output'
+
+/**
+ * Data payload for a `loop_recovery` event: one failure inside `simpleLoop` or
+ * `actorCritic` that was fed back to the model as that round's observation,
+ * with the loop continuing on its remaining budget.
+ *
+ * Deliberately NOT an `error` event, for the reason `warning` is not one
+ * (#420): every reader of `error` treats it as a statement about the TURN —
+ * `settleTurn` turns "no response + an error" into a failed turn, `runChain`
+ * stops on an irrecoverable one, `compactExecution` hands `hasErrors()` to the
+ * synthesizer, which then apologises, and the chat paints a red bubble. A
+ * failure the loop routed around is none of those (#235), and a separate TYPE
+ * is what keeps every error reader from matching it by accident. If the loop
+ * never recovers, the turn-level error comes from whichever bound it reaches
+ * first: the budget (`kind: 'budget_exhausted'`), or — for a run of answers the
+ * loop cannot use — the consecutive-recovery cap (`kind: 'recovery_exhausted'`),
+ * whose final failure is that `error` and not one more `loop_recovery`.
+ *
+ * Always committed, and rendered metadata-only into LLM-facing serializations:
+ * `error` can quote a tool's error text or a parse error that echoes the
+ * model's own output, and the next prompt already carries both through the
+ * loop's turn log.
+ */
+export interface LoopRecoveryEventData {
+  failure: LoopRecoveryFailure
+  /** The failure, verbatim — a tool's error, the refusal, or the parse error. */
+  error: string
+  /** The tool involved, when there is one. */
+  tool?: string
+  /** 0-indexed round (`simpleLoop`) or attempt (`actorCritic`) that failed. */
+  turn: number
+  /** The budget in force, so a reader has both halves of "3 of 12". */
+  maxTurns: number
 }
 
 /** Data payload for reference_attached event — emitted by `withReferences` on pattern entry */
@@ -1392,11 +1482,32 @@ export interface LLMResult<T> {
 export class LLMCallError extends Error {
   readonly llmCall: LLMCallRecord
   readonly cause?: unknown
-  constructor(message: string, llmCall: LLMCallRecord, cause?: unknown) {
+  /**
+   * The failure is in the model's ANSWER — it came back and could not be
+   * parsed (malformed, empty, or cut off at the output cap) — so asking again,
+   * told why, can succeed. `simpleLoop` and `actorCritic` feed such a failure
+   * back as the round's observation and continue on their remaining budget
+   * (#437 slice 1).
+   *
+   * Only the IMPLEMENTATION can know this (the BAML adapters set it for
+   * `BamlValidationError`), so core never infers it from the message. False
+   * covers everything else — a transport error, a timeout, an abort, and any
+   * failure the implementation did not classify — and the loops keep all of
+   * those fatal: the model never answered, so there is nothing to feed back,
+   * and the next call would most likely fail the same way.
+   */
+  readonly recoverable: boolean
+  constructor(
+    message: string,
+    llmCall: LLMCallRecord,
+    cause?: unknown,
+    options?: { recoverable?: boolean },
+  ) {
     super(message)
     this.name = 'LLMCallError'
     this.llmCall = llmCall
     if (cause !== undefined) this.cause = cause
+    this.recoverable = options?.recoverable === true
   }
 }
 

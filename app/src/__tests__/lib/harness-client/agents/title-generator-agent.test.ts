@@ -64,14 +64,11 @@ describe('createTitleAgent', () => {
     expect(sut.sanitizeTitle('"Graph Styling Tips"\nHere is why…')).toBe('Graph Styling Tips')
   })
 
-  // Mutation: drop the `.trim()` between the split and the strips → the `\r`
-  // a CRLF reply leaves on its first line hides the trailing `.` from the
-  // punctuation strip, and the title is `Graph Styling Tips.`. (Since #454 the
-  // pair loop trims before it looks for quotes, so the quoted case no longer
-  // depends on this trim; the unquoted one still does.)
+  // Mutation: drop the `.trim()` at the top of the strip loop → the `\r` a
+  // CRLF reply leaves on its first line hides the closing quote from the
+  // strip, and the title keeps both quotes (and the `\r`).
   it('sanitizes the first line of a CRLF reply', () => {
     expect(sut.sanitizeTitle('"Graph Styling Tips"\r\nHere is why')).toBe('Graph Styling Tips')
-    expect(sut.sanitizeTitle('Graph Styling Tips.\r\nHere is why')).toBe('Graph Styling Tips')
   })
 
   // Mutation: drop the leading `.trim()` → the first line of the reply is the

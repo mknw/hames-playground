@@ -118,8 +118,8 @@ describe('sanitizeTitle', () => {
     expect(sut.sanitizeTitle(`"Dune Review'`)).toBe(`"Dune Review'`)
   })
 
-  // Mutation: drop the `.trim()` after the punctuation strip in the loop →
-  // the padding inside the quotes survives (` Title `).
+  // Mutation: drop the `.trim()` at the top of the strip loop → the padding
+  // inside the quotes survives (` Title `).
   it('trims the padding inside wrapping quotes', () => {
     expect(sut.sanitizeTitle('" Title "')).toBe('Title')
   })

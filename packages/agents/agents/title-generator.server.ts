@@ -61,6 +61,7 @@ interface TitleAgentData extends HarnessData {
 
 const MAX_TITLE_CHARS = 50
 const QUOTES = new Set(['"', "'", '`'])
+const TRAILING_PUNCTUATION = new Set(['.', '!', '?'])
 const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u
 
 /**
@@ -74,21 +75,21 @@ const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u
  * end of the LAST line and `"Graph Styling Tips"\nHere is why…` kept its
  * closing quote.
  *
- * The strips peel one layer per pass, from the outside in (#454): trailing
- * punctuation first, then a quote PAIR that wraps the whole title, then again.
- * So punctuation is stripped whether it sits outside the quotes (`"Title".`)
- * or inside them (`"Title."`), and a quote is only ever removed together with
- * its partner — `Review of "Dune"` keeps its closing quote.
+ * The strips peel one layer per pass, from the outside in (#454): a trailing
+ * punctuation mark, or a quote PAIR that wraps the whole title. So punctuation
+ * is stripped whether it sits outside the quotes (`"Title".`) or inside them
+ * (`"Title."`), and a quote is only ever removed together with its partner —
+ * `Review of "Dune"` keeps its closing quote. The punctuation test is a
+ * character lookup, not `/[.!?]+$/`: that pattern backtracks quadratically on
+ * a long run of `!` that does not end the string (CodeQL js/polynomial-redos).
  */
 export function sanitizeTitle(raw: string): string | null {
-  let title = raw
-    .trim()
-    .split('\n')[0] // first line only
-    .trim()
+  let title = raw.trim().split('\n')[0] // first line only
   for (;;) {
-    title = title.replace(/[.!?]+$/, '').trim() // trailing punctuation
-    if (!wrapsWholeTitle(title)) break
-    title = title.slice(1, -1) // the wrapping quote pair
+    title = title.trim()
+    if (TRAILING_PUNCTUATION.has(title.slice(-1))) title = title.slice(0, -1)
+    else if (wrapsWholeTitle(title)) title = title.slice(1, -1)
+    else break
   }
   if (!title) return null
   return title.slice(0, MAX_TITLE_CHARS)

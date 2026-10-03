@@ -4,7 +4,8 @@
  * Hits the live Postgres container (mirrors session-store.test.ts); skips
  * gracefully when Postgres isn't reachable.
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
+import { skipWithoutDatabase } from '../../test-database'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -44,8 +45,9 @@ afterAll(async () => {
 })
 
 describe('per-user token cache', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('round-trips a cache and reports existence', async () => {
-    if (!dbAvailable) return
     expect(await hasUserTokenCache(TEST_OID)).toBe(false)
 
     await saveUserTokenCache(TEST_OID, CACHE, 'home-acct-1')
@@ -58,7 +60,6 @@ describe('per-user token cache', () => {
   })
 
   it('stores the cache ENCRYPTED at rest (no plaintext secret in the row)', async () => {
-    if (!dbAvailable) return
     const { rows } = await query<{ token_cache: string }>(
       'SELECT token_cache FROM user_tokens WHERE user_id = $1',
       [TEST_OID],
@@ -69,7 +70,6 @@ describe('per-user token cache', () => {
   })
 
   it('upsert replaces the cache (refresh-token rotation) and bumps updated_at', async () => {
-    if (!dbAvailable) return
     const before = await loadUserTokenCache(TEST_OID)
     await new Promise((r) => setTimeout(r, 25))
 
@@ -83,7 +83,6 @@ describe('per-user token cache', () => {
   })
 
   it('treats an undecryptable row as absent (re-auth required)', async () => {
-    if (!dbAvailable) return
     await query('UPDATE user_tokens SET token_cache = $2 WHERE user_id = $1', [
       TEST_OID,
       'v1.aaaa.bbbb.cccc', // well-formed shape, bogus contents
@@ -94,7 +93,6 @@ describe('per-user token cache', () => {
   })
 
   it('delete is idempotent and clears the cache', async () => {
-    if (!dbAvailable) return
     await deleteUserTokenCache(TEST_OID)
     expect(await loadUserTokenCache(TEST_OID)).toBeNull()
     expect(await hasUserTokenCache(TEST_OID)).toBe(false)
@@ -102,7 +100,6 @@ describe('per-user token cache', () => {
   })
 
   it('returns null for a user who never signed in', async () => {
-    if (!dbAvailable) return
     expect(await loadUserTokenCache('never-signed-in-oid')).toBeNull()
   })
 })

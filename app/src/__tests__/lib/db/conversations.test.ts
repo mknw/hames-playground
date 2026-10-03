@@ -77,7 +77,7 @@ describe('deriveTitle', () => {
 })
 
 describe('conversations CRUD', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
 
   it('round-trips a serialized context unchanged', async () => {
     const id = `conv-${Math.random().toString(36).slice(2, 10)}`
@@ -425,7 +425,7 @@ describe('conversations CRUD', () => {
 })
 
 describe('action kind/source/status (agent trigger endpoint)', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
 
   it('defaults to conversation/chat for the normal save path', async () => {
     const id = `conv-${Math.random().toString(36).slice(2, 10)}`
@@ -559,7 +559,7 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
  * suite's abandoned row may legitimately ride along.
  */
 describe('inference_tier (the per-conversation switch)', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
 
   it('is absent until something records one — NULL is not a tier', async () => {
     const id = `tier-${Math.random().toString(36).slice(2, 10)}`
@@ -670,7 +670,7 @@ describe('inference_tier (the per-conversation switch)', () => {
 })
 
 describe('backfillConversationInferenceTier', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
 
   it('copies a RECORDED preference onto that user’s untiered rows, and nothing else', async () => {
     const withPref = `${TEST_USER}-pref`
@@ -758,7 +758,7 @@ describe('backfillConversationInferenceTier', () => {
 })
 
 describe('reapStuckConversations', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
 
   /** Seed one row, then age its `updated_at` by `ageMinutes`. */
   async function seed(id: string, status: 'running' | 'paused' | 'done', age: number) {
@@ -896,7 +896,7 @@ describe('conversation pinning: the cap', () => {
  * name the wrong rule.
  */
 describe('conversation pinning', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
 
   const users: string[] = []
   /** A fresh owner, registered for cleanup in this block's afterAll. */

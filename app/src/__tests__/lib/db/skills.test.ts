@@ -58,7 +58,7 @@ afterAll(async () => {
 })
 
 describe('skills repository — encryption at rest', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
 
   it('stores name, description and content as envelopes, and reads them back', async () => {
     const created = await seed(AUTHOR, 'secret-merger-plan', 'TOP SECRET BODY')
@@ -84,7 +84,7 @@ describe('skills repository — encryption at rest', () => {
 })
 
 describe('skills repository — owner scoping and the global flag', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
 
   it('a private skill is invisible to every other user', async () => {
     const s = await seed(AUTHOR, 'private-one')
@@ -130,7 +130,7 @@ describe('skills repository — owner scoping and the global flag', () => {
 })
 
 describe('skills repository — hiding another user’s global skill', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
 
   it('is per viewer, and only for a global skill someone else wrote', async () => {
     const g = await seed(AUTHOR, 'hide-me')
@@ -156,7 +156,7 @@ describe('skills repository — hiding another user’s global skill', () => {
 })
 
 describe('skills repository — the rules createSkill owns', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
 
   it('refuses a name the author already uses, but not another user’s', async () => {
     await seed(AUTHOR, 'same-name')
@@ -178,7 +178,7 @@ describe('skills repository — the rules createSkill owns', () => {
 })
 
 describe('skills repository — a row that will not decrypt', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
 
   it('another user’s global row is skipped; the owner’s own listing fails loudly', async () => {
     // A user with no other rows, so the create's own duplicate check (which

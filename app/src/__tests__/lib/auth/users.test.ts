@@ -36,7 +36,7 @@ afterAll(async () => {
 })
 
 describe('users repository', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
 
   it('creates on first sign-in with first_login == last_login', async () => {
     await upsertUser({

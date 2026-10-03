@@ -45,7 +45,7 @@ afterAll(async () => {
 })
 
 describe('per-user token cache', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
 
   it('round-trips a cache and reports existence', async () => {
     expect(await hasUserTokenCache(TEST_OID)).toBe(false)

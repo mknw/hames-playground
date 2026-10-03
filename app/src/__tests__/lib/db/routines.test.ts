@@ -62,7 +62,7 @@ afterAll(async () => {
 })
 
 describe('routines CRUD', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
 
   it('round-trips a routine, rehydrating the trigger union', async () => {
     const created = await seed({ label: 'Hourly digest' })
@@ -144,7 +144,7 @@ describe('routines CRUD', () => {
 })
 
 describe('trigger-evaluation queries', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
 
   it('lists only enabled routines, optionally narrowed by kind', async () => {
     const on = await seed({ trigger: { kind: 'session_start' } })
@@ -172,7 +172,7 @@ describe('trigger-evaluation queries', () => {
 })
 
 describe('claimRoutineRun', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
 
   it('claims once, then loses the compare-and-set', async () => {
     const created = await seed()

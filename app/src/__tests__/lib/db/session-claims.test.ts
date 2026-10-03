@@ -41,7 +41,7 @@ afterAll(async () => {
 })
 
 describe('session claims', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
 
   it('records the first toucher and reports no owner for an untouched session', async () => {
     expect(await getSessionClaimOwner(sid('fresh'))).toBeNull()

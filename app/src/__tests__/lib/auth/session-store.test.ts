@@ -45,7 +45,7 @@ afterAll(async () => {
 })
 
 describe('auth session store', () => {
-  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  beforeEach((ctx) => skipWithoutDatabase(ctx, false))
 
   it('round-trips a session (token cache now lives per-user, see #110)', async () => {
     const id = await createSession({

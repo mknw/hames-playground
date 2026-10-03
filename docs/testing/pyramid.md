@@ -180,14 +180,14 @@ test file is included without anyone having to add it. It runs in parallel with
 `check`, so it adds no wall clock to a pull request. Whether a red one blocks
 the merge is the `CI-before-merge` ruleset's decision, not the workflow's.
 
-**It fails closed.** Most DB-backed tests guard with an early `return`, so a run
-that never reached the database still passes them. Its counts differ from a run
-with a database only by the few tests that use `ctx.skip()`. The counts cannot
-say whether the tests ran, so the job reads its log instead. It fails unless the
-global setup printed `created hames_test`, which proves the run reached the
-service and created its database there. It also fails if the log has
-`could not provision`, `no TEST_DATABASE_URL`, or any test file's
-`Postgres unreachable`.
+**It fails closed.** A DB-backed test that cannot reach its database reports as
+skipped, never as passed: each DB `describe` block opens with
+`beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))`, from
+`app/src/__tests__/test-database.ts`. This job also sets
+`TEST_DATABASE_REQUIRED=1`, which turns that skip into a failure. So the job
+cannot go green without running them, whether the service was unreachable, the
+database was never created, or a skip condition is simply wrong.
+`test-database-guard.test.ts` pins that the job sets it.
 
 **It uploads no coverage.** Codecov compares a pull request's upload with its
 base commit on `main`, and a push to `main` never has a database. An upload from

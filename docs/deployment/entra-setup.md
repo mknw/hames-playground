@@ -183,10 +183,11 @@ taken up front. Grant it in the portal first, then extend
 
 ## Sign-in flow (reference)
 
-1. `/auth/signin` → **Sign in with Microsoft** → `GET /api/auth/login`
-   (PKCE + state + nonce stashed in a signed handshake cookie) → 302 to Entra.
+1. `/auth/signin` → **Sign in with Microsoft** → `POST /api/auth/login`
+   (PKCE + state + nonce stashed in a signed handshake cookie) → 303 to Entra.
+   A `GET` there only lands on `/auth/signin` (#429).
 2. Entra → `GET /api/auth/callback`: validate `state`, redeem the code, check
    the allow-list, create a Postgres `auth_sessions` row (with the serialized
    MSAL token cache for #110), set the `kg_session` HttpOnly cookie → `/`.
-3. `GET /api/auth/logout`: delete the session row, clear the cookie, redirect to
-   Entra sign-out.
+3. `POST /api/auth/logout` (same-origin only; a `GET` is a `405`): delete the
+   session row, clear the cookie, redirect to Entra sign-out.

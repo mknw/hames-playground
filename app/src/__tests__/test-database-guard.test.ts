@@ -6,18 +6,36 @@
  * started without `TEST_DATABASE_URL` kept falling back to it, and Orca now
  * copies the repo-root `.env` (the password) into every new worktree. These pin
  * the four outcomes of `resolveTestDatabase()`: refuse, the explicit URL, the
- * opted-in compose Postgres, and CI's "no database" (skip).
+ * opted-in compose Postgres, and CI's "no database" (skip). The last block pins
+ * what a DB-backed test does without a database: skip, or fail where one is
+ * required.
  *
  * Every case passes its own `env` and its own temporary checkout, so nothing
  * here depends on, or reaches, the machine's real Postgres or the owner's
  * `app/.env`.
  */
-import { describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import pg from 'pg'
-import { ALLOW_LOCAL_DB, noDatabaseUrl, resolveTestDatabase } from './test-database'
+import { parse } from 'yaml'
+import {
+  ALLOW_LOCAL_DB,
+  REQUIRE_DB,
+  noDatabaseUrl,
+  resolveTestDatabase,
+  skipWithoutDatabase,
+} from './test-database'
 
 /** A throwaway checkout: a root holding `app/`, with an optional `app/.env`. */
 function checkout(appEnv?: string): string {
@@ -224,5 +242,67 @@ describe('resolveTestDatabase: CI with no database skips', () => {
       resolveTestDatabase('hames_test', { skipInCi: true, env: { CI: '1' }, checkout: lane })
         .source,
     ).toBe('none')
+  })
+})
+
+describe('skipWithoutDatabase: what a DB-backed test does with no database', () => {
+  const ctx = () => ({ skip: vi.fn() })
+
+  it('neither skips nor fails when the probe reached Postgres', () => {
+    for (const env of [{}, { [REQUIRE_DB]: '1' }]) {
+      const c = ctx()
+      expect(() => skipWithoutDatabase(c, true, env)).not.toThrow()
+      expect(c.skip).not.toHaveBeenCalled()
+    }
+  })
+
+  it('skips, rather than passing while asserting nothing, when it did not', () => {
+    const c = ctx()
+    skipWithoutDatabase(c, false, {})
+    expect(c.skip).toHaveBeenCalledOnce()
+  })
+
+  it('fails instead of skipping where a database is required', () => {
+    const c = ctx()
+    expect(() => skipWithoutDatabase(c, false, { [REQUIRE_DB]: '1' })).toThrow(
+      `${REQUIRE_DB} is set, so a DB-backed test may not skip`,
+    )
+    expect(c.skip).not.toHaveBeenCalled()
+  })
+
+  it("is required in CI's postgres job, so a skip there fails the job", () => {
+    const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
+    const ci = parse(readFileSync(path.join(repo, '.github/workflows/ci.yml'), 'utf8')) as {
+      jobs: Record<string, { env?: Record<string, string> }>
+    }
+    expect(ci.jobs.postgres.env?.[REQUIRE_DB]).toBe('1')
+  })
+
+  it('reads the variable from the process environment by default', () => {
+    vi.stubEnv(REQUIRE_DB, '1')
+    try {
+      expect(() => skipWithoutDatabase(ctx(), false)).toThrow(REQUIRE_DB)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('is the only way a test file on the real database client skips', () => {
+    const src = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+    const dbFiles = readdirSync(src, { recursive: true, encoding: 'utf8' })
+      .filter((f) => /(^|\/)__tests__\/.*\.(test|spec)\.tsx?$/.test(f))
+      .map((f) => ({ f, s: readFileSync(path.join(src, f), 'utf8') }))
+      .filter(
+        ({ s }) =>
+          /db\/client\.server'/.test(s) && !/vi\.mock\(\s*'[^']*db\/client\.server'/.test(s),
+      )
+    // The ten today, so a clean pass below is not "scanned nothing".
+    expect(dbFiles.length).toBeGreaterThanOrEqual(10)
+    for (const { f, s } of dbFiles) {
+      expect(s, f).toContain('skipWithoutDatabase(ctx, dbAvailable)')
+      expect(s, f).not.toMatch(
+        /\b(?:it|test|describe)\.(?:skip|skipIf|runIf|todo)\b|ctx\.skip\(|\bit\(.*\n\s*if \(!dbAvailable\) return/,
+      )
+    }
   })
 })

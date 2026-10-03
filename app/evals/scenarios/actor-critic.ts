@@ -65,6 +65,91 @@ const BAD_ATTEMPT: Attempt = {
   result: '1000 data.csv',
 }
 
+/**
+ * The actor's previous answer would not parse, and `actorCritic` fed it back as
+ * that attempt's result instead of ending the loop (#437 slice 1, #425 C2). The
+ * attempt is the one the adapter builds from what the loop records: an empty
+ * tool name (no call was made) and the ERROR from the production
+ * `unparseableOutputFeedback`. The cut-off variant is the one that matters for
+ * report-sized scripts on the 4,096-token private tier.
+ */
+async function unparseableAttempt(hitOutputCap: boolean): Promise<Attempt> {
+  const { LLMCallError } = await import('@hames-ai/harness-patterns/types')
+  const { unparseableOutputFeedback } =
+    await import('@hames-ai/harness-patterns/loop-recovery.server')
+  const error = unparseableOutputFeedback(
+    new LLMCallError(
+      'Failed to coerce value: <root>: Missing required field: tool_args',
+      {
+        functionName: 'ActorController',
+        variables: {},
+        rawOutput: '{"reasoning": "Count the rows with an email", "tool_name": "sandbox_bash"',
+        hitOutputCap,
+      },
+      undefined,
+      { recoverable: true },
+    ),
+  )
+  return {
+    n: 1,
+    action: { reasoning: '', tool_name: '', tool_args: '', status: 'error', is_final: false },
+    result: '',
+    error,
+  }
+}
+
+export const actorUnparseableFeedbackScenario: Scenario = {
+  id: 'actor-unparseable-answer-feedback',
+  role: 'actor',
+  title: 'actorCritic — the actor recovers after its own unparseable answer',
+  what: 'the previous answer would not parse and was fed back as an attempt (#437): the next proposal is a valid action naming the offered tool, not the empty one replayed in the log',
+  run: async (ctx) => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const checks: Check[] = []
+    const collectors: Collector[] = []
+    for (const [label, cut] of [
+      ['parse failure', false],
+      ['cut off at the cap', true],
+    ] as const) {
+      const collector = new Collector(`eval-actor-unparseable-${cut ? 'cap' : 'parse'}`)
+      collectors.push(collector)
+      const action = await b.ActorController(
+        INTENT,
+        INTENT,
+        TOOLS,
+        [await unparseableAttempt(cut)],
+        undefined, // context
+        undefined, // few_shots
+        2, // attempt_n
+        6, // max_attempts
+        undefined, // multi_call_mode
+        ctx.opts('actor', collector),
+      )
+      checks.push(
+        check(
+          `${label}: names the offered tool, not the empty one in the log`,
+          action.tool_name === 'sandbox_bash',
+          `tool_name=${JSON.stringify(action.tool_name)}`,
+        ),
+      )
+      let args: unknown
+      try {
+        args = JSON.parse(action.tool_args)
+      } catch {
+        args = undefined
+      }
+      checks.push(
+        check(
+          `${label}: tool_args parses as a JSON object`,
+          typeof args === 'object' && args !== null && !Array.isArray(args),
+          `tool_args=${JSON.stringify(action.tool_args.slice(0, 160))}`,
+        ),
+      )
+    }
+    return { checks, collectors }
+  },
+}
+
 export const criticAcceptScenario: Scenario = {
   id: 'critic-accepts-sufficient-attempt',
   role: 'critic',

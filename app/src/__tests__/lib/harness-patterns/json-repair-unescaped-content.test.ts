@@ -166,9 +166,8 @@ describe('repairJson — string content that was not escaped', () => {
       // recovery, and a real key never does (a legitimate quote in one arrives
       // escaped). It falls through to the lenient chain instead, which used to
       // fold `p` into `cmd` and run `echo "a", "b"","p":"/x` (#408) and now
-      // declines it as well — so the call throws: `actorCritic` retries it;
-      // `simpleLoop` ends the loop with a recoverable `Invalid tool_args JSON`
-      // error.
+      // declines it as well — so the call throws: both loops feed it back to
+      // the model as a recovery round (#437).
       const intended = { cmd: 'echo "a", "b"', p: '/x' }
       const underEscaped = JSON.stringify(intended).replace(/\\"/g, '"')
 

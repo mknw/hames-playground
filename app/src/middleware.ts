@@ -2,8 +2,10 @@
  * Server middleware — the app's server-boot hook, and its one per-request hook.
  *
  * Per request: the security headers (`lib/security-headers.ts`), set on every
- * response before the route runs. That is the only thing this file does on
- * every request in production; see `onRequest` at the bottom.
+ * response before the route runs, and the refusal of any server-function call
+ * that is not a `POST` (`lib/auth/csrf.server.ts`, #429). Those two are the
+ * only things this file does on every request in production; see `onRequest`
+ * at the bottom.
  *
  * SolidStart imports this module once when the server handler graph loads,
  * before any request is served, which makes it the natural place to arm
@@ -27,6 +29,7 @@
 
 import { createMiddleware } from '@solidjs/start/middleware'
 import { setSecurityHeaders } from './lib/security-headers'
+import { refuseServerFunctionGet } from './lib/auth/csrf.server'
 import { startRoutineScheduler } from './lib/routines/scheduler.server'
 import { installUsageRecorder } from './lib/metrics/usage-recorder.server'
 import {
@@ -156,7 +159,8 @@ installUsageRecorder()
  *
  * `devFakeInferenceUrl()` returns `null` unless `import.meta.env.DEV` — a
  * constant a build replaces with `false` — so the hook is never added to
- * `onRequest` and production's only per-request work is `setSecurityHeaders`.
+ * `onRequest` and production's only per-request work is `setSecurityHeaders`
+ * and `refuseServerFunctionGet`.
  */
 let fakeInferenceReady: Promise<unknown> | null = null
 
@@ -164,8 +168,14 @@ export default createMiddleware({
   // `setSecurityHeaders` FIRST and unconditionally: it is the one hook that
   // must run in every build, and placing it ahead of the dev-only one means a
   // failure to arm the fake cannot leave a response without its headers.
+  // `refuseServerFunctionGet` second and just as unconditional: in the
+  // server-fns router's copy of this module it answers every non-POST with a
+  // 405 before SolidStart's handler would run the named function (#429), and
+  // that hole is open in every build. It keys on the router, not the path —
+  // see its header for the paths h3 routes there.
   onRequest: [
     setSecurityHeaders,
+    refuseServerFunctionGet,
     ...(devFakeInferenceUrl()
       ? [
           async () => {

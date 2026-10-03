@@ -156,13 +156,17 @@ export function trackEvent(
  *  invisible.
  *  Includes 'warning' because it is the ONLY record that a side task (a title,
  *  a summary, an intent rewrite) failed and the turn ran on a fallback (#420):
- *  dropping it under 'on-success' is the silent degradation it exists to end. */
+ *  dropping it under 'on-success' is the silent degradation it exists to end.
+ *  Includes 'loop_recovery' for the same reason: when a controller's answer
+ *  would not parse, it is the only event carrying what the model said, and a
+ *  loop that then fails must not drop the record of how it got there (#437). */
 const ALWAYS_COMMIT_TYPES: Set<EventType> = new Set([
   'pattern_enter',
   'pattern_exit',
   'error',
   'content_sanitized',
   'warning',
+  'loop_recovery',
 ])
 
 /** Commit scope events to context based on strategy.

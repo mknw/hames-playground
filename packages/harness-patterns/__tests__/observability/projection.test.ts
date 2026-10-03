@@ -121,6 +121,28 @@ describe('getEventPreview', () => {
     expect(long).toBe('x'.repeat(50) + '...')
   })
 
+  // #437. Mutation: delete the `loop_recovery` case → the row has no preview,
+  // so the panel shows a recovery with nothing saying what failed or when.
+  it('previews a loop recovery by its class, tool and round', () => {
+    expect(
+      getEventPreview('loop_recovery', {
+        failure: 'tool_error',
+        error: 'Permission denied',
+        tool: 'read_file',
+        turn: 2,
+        maxTurns: 12,
+      }),
+    ).toBe('tool_error read_file · 3/12')
+    expect(
+      getEventPreview('loop_recovery', {
+        failure: 'unparseable_output',
+        error: 'x',
+        turn: 0,
+        maxTurns: 6,
+      }),
+    ).toBe('unparseable_output · 1/6')
+  })
+
   it('gives pattern boundaries and unknown types no preview', () => {
     expect(getEventPreview('pattern_enter', {})).toBe('')
     expect(getEventPreview('pattern_exit', {})).toBe('')

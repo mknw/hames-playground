@@ -240,11 +240,37 @@ export async function sendPtyInput(sessionId: string, data: string): Promise<voi
 }
 
 /**
- * URL for the PTY output stream. An `EventSource`, not a `fetch` — the agent
- * id rides along so the server can hydrate `/work` for durable-workspace
- * agents when this Shell is the first to boot the container (#97 Gap 3).
+ * Open the session's terminal: the server claims the session, starts its shell
+ * (booting the container on first use) and answers with the single-use ticket
+ * the output stream must present (#429). The agent id rides along so the
+ * server can hydrate `/work` for durable-workspace agents when this Shell is
+ * the first to boot the container (#97 Gap 3).
+ *
+ * Rejects with `ApiError` when the server refuses or the shell fails to start —
+ * the message is what the terminal shows — and with whatever `fetch` threw
+ * when the server could not be reached.
  */
-export function ptyStreamUrl(sessionId: string, agentId?: string): string {
-  const base = `${API.ptyStream}?sessionId=${encodeURIComponent(sessionId)}`
-  return agentId ? `${base}&agentId=${encodeURIComponent(agentId)}` : base
+export async function openPtyStream(sessionId: string, agentId?: string): Promise<string> {
+  const response = await fetch(
+    API.ptyStream,
+    jsonRequest(agentId ? { sessionId, agentId } : { sessionId }),
+  )
+  const body = await readJson<{ ticket?: string; error?: string }>(response)
+  if (!response.ok || typeof body?.ticket !== 'string') {
+    throw new ApiError(
+      body?.error ?? `the sandbox terminal could not be opened (${response.status})`,
+      response.status,
+      body,
+    )
+  }
+  return body.ticket
+}
+
+/**
+ * URL for the PTY output stream, carrying a ticket from {@link openPtyStream}.
+ * An `EventSource`, not a `fetch`. The ticket is spent on first use, so a
+ * dropped stream is re-opened with a fresh one, never by re-using this URL.
+ */
+export function ptyStreamUrl(ticket: string): string {
+  return `${API.ptyStream}?ticket=${encodeURIComponent(ticket)}`
 }

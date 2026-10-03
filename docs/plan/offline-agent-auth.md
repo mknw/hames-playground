@@ -75,13 +75,10 @@ and `auth_sessions.token_cache` is no longer written (the column may linger on
 #119-era databases; dropping it is still open). Item 2 (scheduled session sweep)
 landed as `startSessionSweepTimer`. Item 3 (`iat` on the signed handshake)
 landed as `SIGNED_PAYLOAD_MAX_AGE_MS`. What remains of #129 is the **cutover
-chores** — key custody, the client-secret expiry, and the legacy column — **plus
-item 4, which has _not_ landed**: logout is still `GET`-only and unauthenticated
-against cross-site navigation (`routes/api/auth/logout.ts:15` exports `GET` and
-nothing else; no `Origin`/`Referer` check), so a cross-site top-level link can
-still force-logout a user. It stays a nuisance rather than a breach, and it is
-out of scope for this plan, but it belongs on the remains list rather than being
-quietly absorbed into "items 1–3 landed".
+chores** — key custody, the client-secret expiry, and the legacy column. Item 4
+(logout was a `GET` with no `Origin`/`Referer` check, so a cross-site top-level
+link could force-logout a user) landed later, in #429: logout is a same-origin
+`POST` and a `GET` is a `405`.
 
 The one design consequence of the shipped shape that is easy to miss:
 `deleteUserTokenCache` is **deliberately not called on logout**. That is what

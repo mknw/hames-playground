@@ -1,6 +1,9 @@
 /**
  * The Entra sign-in round-trip as the browser sees it (#119):
- * `/api/auth/login` → Entra → `/api/auth/callback`, plus the sign-out redirect.
+ * `POST /api/auth/login` → Entra → `/api/auth/callback`, plus the sign-out
+ * redirect. Sign-in and sign-out are same-origin POSTs since #429; the callback
+ * stays a GET, because that is how Entra redirects back, and is bound to the
+ * POST that started it by the signed handshake.
  *
  * MSAL and Postgres are mocked, but the cookie plumbing is NOT: the handshake
  * cookie the login route sets is the one the callback route reads back, signed
@@ -101,6 +104,17 @@ function evt(url: string, cookie?: string) {
   } as never
 }
 
+/** A form POST from the app's own page — or, with `site`, from elsewhere. */
+function post(url: string, cookie?: string, site = 'same-origin') {
+  return {
+    params: {},
+    request: new Request(url, {
+      method: 'POST',
+      headers: { 'sec-fetch-site': site, ...(cookie ? { cookie } : {}) },
+    }),
+  } as never
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('VITE_ALLOWED_EMAILS', 'alice@example.test')
@@ -120,19 +134,19 @@ beforeEach(() => {
   })
 })
 
-describe('GET /api/auth/login', () => {
+describe('POST /api/auth/login', () => {
   it('503s with setup guidance when Entra is not configured', async () => {
     entraConfigured = false
-    const res = await login.GET(evt('http://x/api/auth/login'))
+    const res = await login.POST(post('http://x/api/auth/login'))
     expect(res.status).toBe(503)
     expect(await res.text()).toMatch(/AZURE_TENANT_ID/)
     expect(buildAuthCodeUrl).not.toHaveBeenCalled()
   })
 
-  it('302s to the authorize URL and stashes state + verifier in the handshake cookie', async () => {
-    const res = await login.GET(evt('http://x/api/auth/login'))
+  it('303s to the authorize URL and stashes state + verifier in the handshake cookie', async () => {
+    const res = await login.POST(post('http://x/api/auth/login'))
 
-    expect(res.status).toBe(302)
+    expect(res.status).toBe(303)
     expect(res.headers.get('Location')).toBe('https://login.microsoftonline.com/authorize?x=1')
     // The challenge (not the verifier) is what goes to the IdP.
     expect(buildAuthCodeUrl.mock.calls[0][0]).toMatchObject({
@@ -145,16 +159,45 @@ describe('GET /api/auth/login', () => {
 
   it('500s without setting a handshake cookie when the URL build fails', async () => {
     buildAuthCodeUrl.mockRejectedValueOnce(new Error('msal exploded'))
-    const res = await login.GET(evt('http://x/api/auth/login'))
+    const res = await login.POST(post('http://x/api/auth/login'))
     expect(res.status).toBe(500)
     expect(res.headers.getSetCookie()).toHaveLength(0)
+  })
+})
+
+describe('sign-in cannot be started from another site (#429)', () => {
+  // As a GET, any site could start the flow; with no `prompt` on the
+  // authorize URL, Entra can complete it unattended for a user already signed
+  // in there, and the callback then mints a session and fires that user's
+  // `session_start` routines.
+  it('a GET of the old URL lands on the sign-in page and starts nothing', async () => {
+    const res = login.GET(evt('http://x/api/auth/login'))
+    expect(res.status).toBe(303)
+    expect(res.headers.get('Location')).toBe('/auth/signin')
+    expect(res.headers.getSetCookie()).toEqual([]) // no handshake
+    expect(buildAuthCodeUrl).not.toHaveBeenCalled()
+  })
+
+  it('a GET keeps a safe returnTo for the sign-in page, and drops an unsafe one', () => {
+    const kept = login.GET(evt('http://x/api/auth/login?returnTo=%2F%3Fc%3Dabc'))
+    expect(kept.headers.get('Location')).toBe('/auth/signin?returnTo=%2F%3Fc%3Dabc')
+
+    const dropped = login.GET(evt('http://x/api/auth/login?returnTo=https%3A%2F%2Fevil.example'))
+    expect(dropped.headers.get('Location')).toBe('/auth/signin')
+  })
+
+  it('a cross-site POST is refused without a handshake cookie or an authorize URL', async () => {
+    const res = await login.POST(post('http://x/api/auth/login', undefined, 'cross-site'))
+    expect(res.status).toBe(403)
+    expect(res.headers.getSetCookie()).toEqual([])
+    expect(buildAuthCodeUrl).not.toHaveBeenCalled()
   })
 })
 
 describe('GET /api/auth/callback', () => {
   /** Run login, then hand its handshake cookie to the callback. */
   async function roundTrip(query: string, cookieOverride?: string) {
-    const started = await login.GET(evt('http://x/api/auth/login'))
+    const started = await login.POST(post('http://x/api/auth/login'))
     const handshake = setCookies(started)[HANDSHAKE_COOKIE]
     const cookie = cookieOverride ?? `${HANDSHAKE_COOKIE}=${encodeURIComponent(handshake)}`
     return callback.GET(evt(`http://x/api/auth/callback?${query}`, cookie))
@@ -247,10 +290,10 @@ describe('GET /api/auth/callback', () => {
   })
 })
 
-describe('GET /api/auth/logout (Entra configured)', () => {
+describe('POST /api/auth/logout (Entra configured)', () => {
   it('redirects to the IdP sign-out and clears the session cookie', async () => {
-    const res = await logout.GET(evt('http://x/api/auth/logout', `${SESSION_COOKIE}=abc123`))
-    expect(res.status).toBe(302)
+    const res = await logout.POST(post('http://x/api/auth/logout', `${SESSION_COOKIE}=abc123`))
+    expect(res.status).toBe(303)
     expect(res.headers.get('Location')).toBe('https://login.microsoftonline.com/logout')
     expect(setCookies(res)[SESSION_COOKIE]).toBe('')
   })
@@ -259,7 +302,7 @@ describe('GET /api/auth/logout (Entra configured)', () => {
     buildLogoutUrl.mockImplementationOnce(() => {
       throw new Error('missing tenant')
     })
-    const res = await logout.GET(evt('http://x/api/auth/logout', `${SESSION_COOKIE}=abc123`))
+    const res = await logout.POST(post('http://x/api/auth/logout', `${SESSION_COOKIE}=abc123`))
     expect(res.headers.get('Location')).toBe('/auth/signin')
     expect(deleteSession).toHaveBeenCalledWith('abc123')
   })

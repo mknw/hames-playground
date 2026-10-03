@@ -19,6 +19,7 @@ import type {
   PlanCreatedEventData,
   ContentSanitizedEventData,
   WarningEventData,
+  LoopRecoveryEventData,
 } from '../types'
 
 export function getEventPreview(type: EventType, data: unknown): string {
@@ -81,6 +82,14 @@ export function getEventPreview(type: EventType, data: unknown): string {
     case 'warning': {
       const d = data as WarningEventData
       return d.message.length > 50 ? d.message.slice(0, 50) + '...' : d.message
+    }
+    case 'loop_recovery': {
+      // The class and the round, which is what tells a recovery from a
+      // failure at a glance; the verbatim error is one click away in the
+      // detail view.
+      const d = data as LoopRecoveryEventData
+      const head = `${d.failure}${d.tool ? ` ${d.tool}` : ''} · ${d.turn + 1}/${d.maxTurns}`
+      return head.length > 50 ? head.slice(0, 50) + '...' : head
     }
     case 'pattern_enter':
     case 'pattern_exit':

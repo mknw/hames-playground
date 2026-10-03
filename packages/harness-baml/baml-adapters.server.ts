@@ -713,7 +713,14 @@ function planParseRetry(
  *  same prompt/variables/HTTP shape that successful calls already attach.
  *  Exported for the call sites that live outside this module (`routeMessageOp`
  *  in `routing.server.ts`) — every BAML failure must reach its pattern the
- *  same way, or the pattern's error event silently loses the raw response. */
+ *  same way, or the pattern's error event silently loses the raw response.
+ *
+ *  `recoverable` is set for `BamlValidationError` only — the model answered and
+ *  the answer did not parse — which is the same test `planParseRetry` applies
+ *  before its one retry. The tool loops feed such a failure back to the model
+ *  and continue on their budget (#437 slice 1); every other BAML failure (HTTP,
+ *  timeout, abort, invalid argument) stays fatal there, because the model never
+ *  answered and the next call would fail the same way. */
 export function wrapAsLLMCallError(
   err: unknown,
   functionName: string,
@@ -723,7 +730,9 @@ export function wrapAsLLMCallError(
 ): LLMCallError {
   const message = err instanceof Error ? err.message : String(err)
   const llmCall = extractFailureLLMCallData(collector, functionName, variables, startTime)
-  return new LLMCallError(message, llmCall, err)
+  return new LLMCallError(message, llmCall, err, {
+    recoverable: err instanceof BamlValidationError,
+  })
 }
 
 // ============================================================================

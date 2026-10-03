@@ -17,15 +17,26 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 }))
 
 import {
+  claimConversation,
+  createConversation,
   loadConversation,
+  releaseConversationClaim,
+  renewConversationClaim,
   saveConversation,
+  ConversationBusyError,
+  ConversationConflictError,
+  TURN_CLAIM_TTL_SECONDS,
+  updateConversationTitle,
+  shareConversation,
+  type ConversationStatus,
+  type CreateConversationInput,
+  type SaveConversationInput,
   listConversations,
   deleteConversation,
   deleteConversations,
   deriveTitle,
   getConversationOwner,
   promoteConversation,
-  setConversationStatus,
   updateConversationContextIfUnchanged,
   setConversationInferenceTier,
   getConversationInferenceTier,
@@ -39,6 +50,25 @@ import { closePool, query } from '../../../lib/db/client.server'
 import { setStoredInferenceTier } from '../../../lib/db/user-prefs.server'
 
 const TEST_USER = `test-user-${Math.random().toString(36).slice(2, 10)}`
+
+/**
+ * A row the way a finished turn leaves it: created, claimed, by the turn it is
+ * created for, then saved at that claim, which releases it. Returns the
+ * version the row ends at.
+ */
+async function seedRow(input: CreateConversationInput): Promise<string> {
+  const held = await createConversation(input)
+  return saveConversation({ ...input, status: input.status ?? 'done', version: held })
+}
+
+/** One more turn on an existing row: claim it, then save at that claim. */
+async function saveTurn(
+  input: Omit<SaveConversationInput, 'version' | 'status'> & { status?: ConversationStatus },
+): Promise<string> {
+  const claimed = await claimConversation(input.id, input.userId)
+  if (!claimed) throw new Error(`no row ${input.id} for ${input.userId}`)
+  return saveConversation({ ...input, status: input.status ?? 'done', version: claimed.version })
+}
 
 let dbAvailable = true
 
@@ -100,7 +130,7 @@ describe('conversations CRUD', () => {
     }
     const serialized = JSON.stringify(ctx)
 
-    await saveConversation({
+    await seedRow({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -117,10 +147,10 @@ describe('conversations CRUD', () => {
     expect(JSON.parse(loaded!.serializedContext)).toEqual(ctx)
   })
 
-  it('upserts (second save overwrites context, preserves title)', async () => {
+  it("a later turn's save replaces the context and keeps the title", async () => {
     const id = `conv-${Math.random().toString(36).slice(2, 10)}`
 
-    await saveConversation({
+    await seedRow({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -129,7 +159,7 @@ describe('conversations CRUD', () => {
     })
 
     // Second write: try to change the title — should be ignored (sticky)
-    await saveConversation({
+    await saveTurn({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -144,7 +174,7 @@ describe('conversations CRUD', () => {
 
   it("a save against another user's conversation id mutates nothing", async () => {
     const id = `conv-${Math.random().toString(36).slice(2, 10)}`
-    await saveConversation({
+    await seedRow({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -161,7 +191,7 @@ describe('conversations CRUD', () => {
     // conversation on reload). Reachable from the URL — `/?c=<someone else's
     // id>` is enough.
     const attacker = `attacker-${Math.random().toString(36).slice(2, 10)}`
-    const saving = saveConversation({
+    const saving = createConversation({
       id,
       userId: attacker,
       agentId: 'evil-agent',
@@ -189,7 +219,7 @@ describe('conversations CRUD', () => {
 
   it('only returns rows for the requesting user', async () => {
     const id = `conv-${Math.random().toString(36).slice(2, 10)}`
-    await saveConversation({
+    await seedRow({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -210,7 +240,7 @@ describe('conversations CRUD', () => {
   describe('updateConversationContextIfUnchanged', () => {
     it('writes at the version it read, and refuses once the row has moved on', async () => {
       const id = `conv-cas-${Math.random().toString(36).slice(2, 10)}`
-      await saveConversation({
+      await seedRow({
         id,
         userId: TEST_USER,
         agentId: 'search',
@@ -245,7 +275,7 @@ describe('conversations CRUD', () => {
 
     it('refuses a stale write after a concurrent turn, leaving the turn intact', async () => {
       const id = `conv-cas-${Math.random().toString(36).slice(2, 10)}`
-      await saveConversation({
+      await seedRow({
         id,
         userId: TEST_USER,
         agentId: 'search',
@@ -255,7 +285,7 @@ describe('conversations CRUD', () => {
 
       const read = (await loadConversation(id, TEST_USER))!
       // The turn's own save lands in between.
-      await saveConversation({
+      await saveTurn({
         id,
         userId: TEST_USER,
         agentId: 'search',
@@ -278,7 +308,7 @@ describe('conversations CRUD', () => {
 
     it('refuses a write from someone who is not the owner', async () => {
       const id = `conv-cas-${Math.random().toString(36).slice(2, 10)}`
-      await saveConversation({
+      await seedRow({
         id,
         userId: TEST_USER,
         agentId: 'search',
@@ -304,7 +334,7 @@ describe('conversations CRUD', () => {
 
   it('getConversationOwner answers who a row belongs to, and null for an unknown id', async () => {
     const id = `conv-${Math.random().toString(36).slice(2, 10)}`
-    await saveConversation({
+    await seedRow({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -322,7 +352,7 @@ describe('conversations CRUD', () => {
     const ids: string[] = []
     for (const n of [1, 2, 3]) {
       const id = `conv-list-${n}-${Math.random().toString(36).slice(2, 8)}`
-      await saveConversation({
+      await seedRow({
         id,
         userId: TEST_USER,
         agentId: 'search',
@@ -346,7 +376,7 @@ describe('conversations CRUD', () => {
     const older = `conv-order-a-${Math.random().toString(36).slice(2, 8)}`
     const newer = `conv-order-b-${Math.random().toString(36).slice(2, 8)}`
     for (const id of [older, newer]) {
-      await saveConversation({
+      await seedRow({
         id,
         userId: TEST_USER,
         agentId: 'search',
@@ -356,7 +386,7 @@ describe('conversations CRUD', () => {
       await new Promise((r) => setTimeout(r, 15))
     }
     // Re-save the OLDER one — upsert path sets updated_at = NOW().
-    await saveConversation({
+    await saveTurn({
       id: older,
       userId: TEST_USER,
       agentId: 'search',
@@ -371,7 +401,7 @@ describe('conversations CRUD', () => {
 
   it('deleteConversation only deletes when user matches', async () => {
     const id = `conv-${Math.random().toString(36).slice(2, 10)}`
-    await saveConversation({
+    await seedRow({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -398,7 +428,7 @@ describe('conversations CRUD', () => {
       [own2, TEST_USER],
       [foreignId, foreignUser],
     ] as const) {
-      await saveConversation({
+      await seedRow({
         id,
         userId,
         agentId: 'search',
@@ -424,12 +454,198 @@ describe('conversations CRUD', () => {
   })
 })
 
+/**
+ * One turn at a time, and every save at the version it read (#458). The turn
+ * runner's use of these is pinned with mocks in `turn.test.ts` and end to end
+ * in `context-row-lost-updates.test.ts`; what only a real database can answer
+ * is here — that the statements themselves refuse.
+ */
+describe('the turn claim and the versioned save', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
+  const mkId = () => `claim-${Math.random().toString(36).slice(2, 10)}`
+  const row = (id: string, serializedContext = '{"turn":1}') => ({
+    id,
+    userId: TEST_USER,
+    agentId: 'search',
+    title: 't',
+    serializedContext,
+  })
+  /** Age a live claim past the lease, as a holder that died would leave it. */
+  const lapse = (id: string) =>
+    query(
+      `UPDATE conversations SET turn_claimed_at = NOW() - INTERVAL '${TURN_CLAIM_TTL_SECONDS + 5} seconds'
+        WHERE id = $1`,
+      [id],
+    )
+
+  // MUTATION: drop `${NO_LIVE_CLAIM}` from claimConversation → the second
+  // claim succeeds and the busy assertion reddens.
+  it('is exclusive: a second claim is refused until the first is released', async () => {
+    const id = mkId()
+    const seeded = await seedRow(row(id))
+
+    const first = (await claimConversation(id, TEST_USER))!
+    // Claim and read are one statement, at a version the claim moved on.
+    expect(JSON.parse(first.serializedContext)).toEqual({ turn: 1 })
+    expect(first.version).not.toBe(seeded)
+
+    await expect(claimConversation(id, TEST_USER)).rejects.toBeInstanceOf(ConversationBusyError)
+    await expect(claimConversation(id, TEST_USER)).rejects.toThrow(
+      /turn is still running in this conversation/,
+    )
+
+    expect(await releaseConversationClaim(id, TEST_USER, first.version)).toBe(true)
+    expect(await claimConversation(id, TEST_USER)).not.toBeNull()
+  })
+
+  it('answers null for an unknown id and for someone else’s, claiming nothing', async () => {
+    const id = mkId()
+    await seedRow(row(id))
+    expect(await claimConversation(`missing-${id}`, TEST_USER)).toBeNull()
+    expect(await claimConversation(id, `${TEST_USER}-other`)).toBeNull()
+    // The owner's row was not claimed by either.
+    expect(await claimConversation(id, TEST_USER)).not.toBeNull()
+  })
+
+  // MUTATION: drop `AND context_version = $8` from saveConversation → the
+  // stale save lands and both assertions on it redden.
+  it('saves only at the version the claim holds, and the save releases the claim', async () => {
+    const id = mkId()
+    await seedRow(row(id))
+    const held = (await claimConversation(id, TEST_USER))!
+
+    const stale = String(Number(held.version) - 1)
+    await expect(
+      saveConversation({ ...row(id, '{"stale":true}'), status: 'done', version: stale }),
+    ).rejects.toBeInstanceOf(ConversationConflictError)
+    expect(JSON.parse((await loadConversation(id, TEST_USER))!.serializedContext)).toEqual({
+      turn: 1,
+    })
+
+    const written = await saveConversation({
+      ...row(id, '{"turn":2}'),
+      status: 'done',
+      version: held.version,
+    })
+    expect(written).not.toBe(held.version)
+    const after = (await loadConversation(id, TEST_USER))!
+    expect(JSON.parse(after.serializedContext)).toEqual({ turn: 2 })
+    expect(after.version).toBe(written)
+    // MUTATION: drop `turn_claimed_at = NULL` from the save → this claim is
+    // refused as busy.
+    expect(await claimConversation(id, TEST_USER)).not.toBeNull()
+  })
+
+  // Why the version is `context_version` and not `xmin`: every one of these is
+  // an UPDATE of the row, each may happen while a turn runs, and none of them
+  // touches `context`. On `xmin` each would have failed the turn's save.
+  it('lets a pin, a share, a tier flip and a title land mid-turn without failing the turn', async () => {
+    const id = mkId()
+    await seedRow(row(id))
+    const held = (await claimConversation(id, TEST_USER))!
+
+    await setConversationPinned(id, TEST_USER, true)
+    await shareConversation(id, TEST_USER)
+    await setConversationInferenceTier(id, TEST_USER, 'verda')
+    await updateConversationTitle(id, TEST_USER, 'A better title')
+
+    await expect(
+      saveConversation({ ...row(id, '{"turn":2}'), status: 'done', version: held.version }),
+    ).resolves.toBeTypeOf('string')
+    const after = (await loadConversation(id, TEST_USER))!
+    expect(JSON.parse(after.serializedContext)).toEqual({ turn: 2 })
+    expect(after.title).toBe('A better title')
+  })
+
+  // A turn whose process died must not lock its conversation for good.
+  // MUTATION: drop the `turn_claimed_at < NOW() - INTERVAL …` arm of
+  // NO_LIVE_CLAIM → the takeover claim is refused as busy.
+  it('treats a claim not renewed within the lease as dead, and refuses the old holder’s save', async () => {
+    const id = mkId()
+    await seedRow(row(id))
+    const dead = (await claimConversation(id, TEST_USER))!
+    await lapse(id)
+
+    const next = (await claimConversation(id, TEST_USER))!
+    expect(next).not.toBeNull()
+
+    // The old holder was only slow after all: its save must not land over the
+    // turn that took the row.
+    await expect(
+      saveConversation({ ...row(id, '{"late":true}'), status: 'done', version: dead.version }),
+    ).rejects.toBeInstanceOf(ConversationConflictError)
+    // Nor may its failure path free the new holder's row or mark it failed.
+    expect(await releaseConversationClaim(id, TEST_USER, dead.version, { failed: true })).toBe(
+      false,
+    )
+    await expect(claimConversation(id, TEST_USER)).rejects.toBeInstanceOf(ConversationBusyError)
+
+    await saveConversation({ ...row(id, '{"turn":2}'), status: 'done', version: next.version })
+    const after = (await loadConversation(id, TEST_USER))!
+    expect(JSON.parse(after.serializedContext)).toEqual({ turn: 2 })
+    expect(after.status).toBe('done')
+  })
+
+  // MUTATION: make renewConversationClaim a no-op → the lapsed claim is taken.
+  it('keeps a renewed claim live past the lease, and renews only the holder’s', async () => {
+    const id = mkId()
+    await seedRow(row(id))
+    const held = (await claimConversation(id, TEST_USER))!
+    await lapse(id)
+
+    expect(await renewConversationClaim(id, TEST_USER, String(Number(held.version) + 1))).toBe(
+      false,
+    )
+    expect(await renewConversationClaim(id, TEST_USER, held.version)).toBe(true)
+    await expect(claimConversation(id, TEST_USER)).rejects.toBeInstanceOf(ConversationBusyError)
+  })
+
+  it('creates a row claimed, and refuses a second create of the same new chat', async () => {
+    const id = mkId()
+    const held = await createConversation(row(id))
+    // Two first messages on one new chat: the second is a second turn.
+    await expect(createConversation(row(id, '{"second":true}'))).rejects.toBeInstanceOf(
+      ConversationBusyError,
+    )
+    await expect(claimConversation(id, TEST_USER)).rejects.toBeInstanceOf(ConversationBusyError)
+    expect(JSON.parse((await loadConversation(id, TEST_USER))!.serializedContext)).toEqual({
+      turn: 1,
+    })
+    await saveConversation({ ...row(id, '{"turn":1,"done":true}'), status: 'done', version: held })
+  })
+
+  // MUTATION: drop `${NO_LIVE_CLAIM}` from updateConversationContextIfUnchanged
+  // → the flip lands at the version it read, under a live turn.
+  it('refuses a flag flip or a summary pass while a turn holds the row', async () => {
+    const id = mkId()
+    await seedRow(row(id))
+    const held = (await claimConversation(id, TEST_USER))!
+    // Read AFTER the claim, so the version is current and only the claim stands
+    // in the way.
+    const read = (await loadConversation(id, TEST_USER))!
+    expect(read.version).toBe(held.version)
+
+    expect(
+      await updateConversationContextIfUnchanged(id, TEST_USER, '{"flag":true}', read.version),
+    ).toBe(false)
+
+    expect(await releaseConversationClaim(id, TEST_USER, held.version)).toBe(true)
+    expect(
+      await updateConversationContextIfUnchanged(id, TEST_USER, '{"flag":true}', read.version),
+    ).toBe(true)
+    expect(JSON.parse((await loadConversation(id, TEST_USER))!.serializedContext)).toEqual({
+      flag: true,
+    })
+  })
+})
+
 describe('action kind/source/status (agent trigger endpoint)', () => {
   beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
   it('defaults to conversation/chat for the normal save path', async () => {
     const id = `conv-${Math.random().toString(36).slice(2, 10)}`
-    await saveConversation({
+    await seedRow({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -443,8 +659,8 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
 
   it('inserts an action with source=post and refreshes status, keeping kind/source immutable on update', async () => {
     const id = `act-${Math.random().toString(36).slice(2, 10)}`
-    // Route's seed insert.
-    await saveConversation({
+    // Route's seed insert — created claimed for the background run.
+    const held = await createConversation({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -459,8 +675,8 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
     expect(loaded!.source).toBe('post')
     expect(loaded!.status).toBe('running')
 
-    // Background run's completion save — passes default kind/source but the
-    // UPDATE must preserve the action's provenance while refreshing status.
+    // Background run's completion save, at the seed's claim — the UPDATE must
+    // preserve the action's provenance while refreshing status.
     await saveConversation({
       id,
       userId: TEST_USER,
@@ -468,6 +684,7 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
       title: 'derived-from-command', // sticky → ignored
       serializedContext: JSON.stringify({ events: [{ id: 'a' }], status: 'done' }),
       status: 'done',
+      version: held,
     })
     loaded = await loadConversation(id, TEST_USER)
     expect(loaded!.kind).toBe('action') // NOT demoted
@@ -478,7 +695,7 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
 
   it('promoteConversation flips action → conversation, scoped to user + idempotent', async () => {
     const id = `act-${Math.random().toString(36).slice(2, 10)}`
-    await saveConversation({
+    await seedRow({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -502,10 +719,13 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
     expect((await loadConversation(id, TEST_USER))!.kind).toBe('conversation')
   })
 
-  it('setConversationStatus updates status without touching context (scoped to user)', async () => {
+  // The run's failure path (sf-M2/sf-M3): a row whose run threw must not keep
+  // showing as running. Fenced by the claim, so neither a wrong owner nor a
+  // version the claim does not hold flips anything.
+  it('a failed release flips status to error without touching context, fenced by the claim', async () => {
     const id = `act-${Math.random().toString(36).slice(2, 10)}`
     const ctx = JSON.stringify({ events: [], status: 'running' })
-    await saveConversation({
+    const held = await createConversation({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -516,19 +736,23 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
       status: 'running',
     })
 
-    await setConversationStatus(id, 'wrong-user', 'error')
+    expect(await releaseConversationClaim(id, 'wrong-user', held, { failed: true })).toBe(false)
+    const notHeld = String(Number(held) + 7)
+    expect(await releaseConversationClaim(id, TEST_USER, notHeld, { failed: true })).toBe(false)
     expect((await loadConversation(id, TEST_USER))!.status).toBe('running')
 
-    await setConversationStatus(id, TEST_USER, 'error')
+    expect(await releaseConversationClaim(id, TEST_USER, held, { failed: true })).toBe(true)
     const loaded = await loadConversation(id, TEST_USER)
     expect(loaded!.status).toBe('error')
     // Context blob untouched.
     expect(loaded!.serializedContext).toBe(ctx)
+    // And the conversation is free for the next turn.
+    expect(await claimConversation(id, TEST_USER)).not.toBeNull()
   })
 
   it('listConversations surfaces kind/source/status', async () => {
     const id = `act-${Math.random().toString(36).slice(2, 10)}`
-    await saveConversation({
+    await seedRow({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -563,7 +787,7 @@ describe('inference_tier (the per-conversation switch)', () => {
 
   it('is absent until something records one — NULL is not a tier', async () => {
     const id = `tier-${Math.random().toString(36).slice(2, 10)}`
-    await saveConversation({
+    await seedRow({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -579,7 +803,7 @@ describe('inference_tier (the per-conversation switch)', () => {
 
   it('is recorded by the save that creates the row, and STICKS across later saves', async () => {
     const id = `tier-${Math.random().toString(36).slice(2, 10)}`
-    await saveConversation({
+    await seedRow({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -592,7 +816,7 @@ describe('inference_tier (the per-conversation switch)', () => {
     // …and the NEXT turn saves under the tier it started on. If that save
     // refreshed the column instead of COALESCing it, the flip would be undone
     // by the very turn that was still finishing when it was made.
-    await saveConversation({
+    await saveTurn({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -607,7 +831,7 @@ describe('inference_tier (the per-conversation switch)', () => {
     // The action-row shape: `seedActionRow` writes the row before any tier is
     // resolved, so the run's own save is what records where it ran.
     const id = `act-${Math.random().toString(36).slice(2, 10)}`
-    await saveConversation({
+    await seedRow({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -618,7 +842,7 @@ describe('inference_tier (the per-conversation switch)', () => {
     })
     expect(await getConversationInferenceTier(id, TEST_USER)).toBeNull()
 
-    await saveConversation({
+    await saveTurn({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -631,7 +855,7 @@ describe('inference_tier (the per-conversation switch)', () => {
 
   it('setConversationInferenceTier is scoped to the owner and reads back on the list', async () => {
     const id = `tier-${Math.random().toString(36).slice(2, 10)}`
-    await saveConversation({
+    await seedRow({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -656,7 +880,7 @@ describe('inference_tier (the per-conversation switch)', () => {
     // `updated_at` is what the sidebar renders as "x ago" and what
     // `countActiveUsers` reads as "this user did something". A flip is neither.
     const id = `tier-${Math.random().toString(36).slice(2, 10)}`
-    await saveConversation({
+    await seedRow({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -680,9 +904,9 @@ describe('backfillConversationInferenceTier', () => {
     const foreign = `bf-${Math.random().toString(36).slice(2, 10)}`
     const base = { agentId: 'search', title: 't', serializedContext: '{}' }
 
-    await saveConversation({ id: untiered, userId: withPref, ...base })
-    await saveConversation({ id: alreadyTiered, userId: withPref, ...base, inferenceTier: 'verda' })
-    await saveConversation({ id: foreign, userId: noPref, ...base })
+    await seedRow({ id: untiered, userId: withPref, ...base })
+    await seedRow({ id: alreadyTiered, userId: withPref, ...base, inferenceTier: 'verda' })
+    await seedRow({ id: foreign, userId: noPref, ...base })
     // Through the repository that owns the table, so this does not depend on
     // `user_prefs` already existing — it bootstraps its own schema, exactly as
     // it does on a deployment where nobody has flipped the switch yet. (That
@@ -728,7 +952,7 @@ describe('backfillConversationInferenceTier', () => {
     // and why it needs a test of its own.
     const unknownPref = `${TEST_USER}-unknown-pref`
     const untiered = `bf-${Math.random().toString(36).slice(2, 10)}`
-    await saveConversation({
+    await seedRow({
       id: untiered,
       userId: unknownPref,
       agentId: 'search',
@@ -762,7 +986,7 @@ describe('reapStuckConversations', () => {
 
   /** Seed one row, then age its `updated_at` by `ageMinutes`. */
   async function seed(id: string, status: 'running' | 'paused' | 'done', age: number) {
-    await saveConversation({
+    await seedRow({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -911,7 +1135,7 @@ describe('conversation pinning', () => {
    *  ordering under test is a fact rather than a race between two NOW()s. */
   const seed = async (userId: string, createdAt: string) => {
     const id = mkId()
-    await saveConversation({
+    await seedRow({
       id,
       userId,
       agentId: 'search',
@@ -1066,13 +1290,13 @@ describe('conversation pinning', () => {
     expect((await loadConversation(id, user))!.updatedAt).toEqual(before)
   })
 
-  it('survives a turn-save: the upsert does not clear a pin', async () => {
+  it('survives a turn-save: the save does not clear a pin', async () => {
     const user = freshUser()
     const id = await seed(user, '2020-01-01T00:00:00Z')
     await setConversationPinned(id, user, true)
 
     // A later turn writes the row again through the normal persistence path.
-    await saveConversation({
+    await saveTurn({
       id,
       userId: user,
       agentId: 'search',

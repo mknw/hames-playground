@@ -26,7 +26,8 @@ import { createContext, serializeContext } from '@hames-ai/harness-patterns'
 import { type SessionData } from './session.server'
 import { runTurnAndPersist } from './turn.server'
 import {
-  saveConversation as dbSaveConversation,
+  createConversation as dbCreateConversation,
+  releaseConversationClaim as dbReleaseConversationClaim,
   type ConversationSource,
 } from '../db/conversations.server'
 
@@ -67,6 +68,11 @@ export interface ActionTrigger {
  * this blob via `saveSession`; the row's `kind`/`source`/sticky `title`
  * survive that overwrite (see `saveConversation`).
  *
+ * The row is created CLAIMED for the run that is about to replace it (#458),
+ * and the version returned is that claim: hand it to
+ * {@link runAgentInBackground}. A user who opens the action and sends a message
+ * while the run is in flight is a second turn on the row, and is refused.
+ *
  * `source` is the only thing that distinguishes a POST-triggered action from a
  * routine-triggered one — both are `kind='action'`, both run identically.
  */
@@ -76,9 +82,9 @@ export async function seedActionRow(
   agentId: string,
   trigger: ActionTrigger,
   source: ConversationSource = 'post',
-): Promise<void> {
+): Promise<string> {
   const ctx = createContext(trigger.transcribedCommand, { trigger } as Partial<SessionData>, runId)
-  await dbSaveConversation({
+  return dbCreateConversation({
     id: runId,
     userId,
     agentId,
@@ -112,6 +118,7 @@ export async function runAgentInBackground(
   message: string,
   agentId: string,
   trigger: ActionTrigger,
+  claimVersion: string,
 ): Promise<void> {
   await runTurnAndPersist({
     mode: 'triggered',
@@ -120,10 +127,19 @@ export async function runAgentInBackground(
     agentId,
     message,
     data: { trigger } as Partial<SessionData>,
-  }).catch(() => {
-    // Nobody awaits this, so the rejection stops here — and it is not lost:
-    // `runTurnAndPersist` logs the failure, flips the seeded row off 'running'
-    // so the UI does not spin forever, and logs that too when the flip itself
-    // is what failed (sf-M3).
+    claimVersion,
+  }).catch(async (err: unknown) => {
+    // Nobody awaits this, so the rejection stops here — and it is not lost. A
+    // run that failed inside the turn was already logged, flipped off
+    // 'running' and released there (sf-M3). What reaches here unhandled is a
+    // throw from BEFORE the turn's own catch — a tier this deployment refuses —
+    // which used to leave the seeded row spinning, and would now also leave it
+    // claimed for a lease. Fenced by the claim's version, so after the turn's
+    // own release this changes nothing.
+    console.error(`[action] run ${runId} failed:`, err)
+    await dbReleaseConversationClaim(runId, userId, claimVersion, { failed: true }).catch(
+      (releaseErr: unknown) =>
+        console.error(`[action] could not flip run ${runId} to status='error':`, releaseErr),
+    )
   })
 }

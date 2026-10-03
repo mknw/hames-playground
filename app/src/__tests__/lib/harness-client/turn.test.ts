@@ -96,15 +96,24 @@ const createEvent = vi.fn((type: string, patternId: string, data: unknown) => ({
   data,
 }))
 
-vi.mock('@hames-ai/harness-patterns', () => ({
-  harness,
-  continueSession,
-  resumeHarness,
-  createContext,
-  serializeContext,
-  compactBulkData,
-  createEvent,
-}))
+vi.mock('@hames-ai/harness-patterns', async () => {
+  // The trailing save's merge works on real contexts, so it gets the real
+  // helpers; everything that runs a turn stays fake.
+  const real = await vi.importActual<typeof import('@hames-ai/harness-patterns/context.server')>(
+    '@hames-ai/harness-patterns/context.server',
+  )
+  return {
+    harness,
+    continueSession,
+    resumeHarness,
+    createContext,
+    serializeContext,
+    compactBulkData,
+    createEvent,
+    deserializeContext: real.deserializeContext,
+    enrichToolResult: real.enrichToolResult,
+  }
+})
 
 // ── the run frame: the REAL one, with every frame this runner opens recorded ─
 //
@@ -188,12 +197,21 @@ vi.mock('../../../lib/metrics/usage-recorder.server', () => ({
 }))
 
 // ── session.server (pattern cache + persistence) ────────────────────────────
-type Loaded = { serializedContext: string; agentId: string; kind: string; status: string } | null
-const loadSession = vi.fn<(id: string, userId: string) => Promise<Loaded>>(async () => null)
-const saveSession = vi.fn(async () => {})
+type Loaded = {
+  serializedContext: string
+  agentId: string
+  kind: string
+  status: string
+  /** The version the turn's claim holds. */
+  version: string
+} | null
+/** The turn's load is its claim (#458): one statement takes the row and reads it. */
+const claimSession = vi.fn<(id: string, userId: string) => Promise<Loaded>>(async () => null)
+/** The end-of-turn save hands back the version it wrote. */
+const saveSession = vi.fn<(...args: unknown[]) => Promise<string | void>>(async () => 'v-saved')
 const getOrBuildPatterns = vi.fn(async (_s: string, agentId: string) => [`patterns:${agentId}`])
 vi.mock('../../../lib/harness-client/session.server', () => ({
-  loadSession,
+  claimSession,
   saveSession,
   getOrBuildPatterns,
   // The composition root's deps bag — the title generator takes it now.
@@ -201,15 +219,37 @@ vi.mock('../../../lib/harness-client/session.server', () => ({
 }))
 
 // ── db/conversations ────────────────────────────────────────────────────────
-const dbSaveConversation = vi.fn<(row: Record<string, unknown>) => Promise<void>>(async () => {})
-const dbSetConversationStatus = vi.fn<
-  (id: string, userId: string, status: string) => Promise<void>
->(async () => {})
+/** Creates a brand-new conversation's row, claimed by the turn creating it. */
+const dbCreateConversation = vi.fn<(row: Record<string, unknown>) => Promise<string | void>>(
+  async () => 'v-seed',
+)
+const dbReleaseConversationClaim = vi.fn<
+  (id: string, userId: string, version: string, opts?: { failed?: boolean }) => Promise<boolean>
+>(async () => true)
+const dbRenewConversationClaim = vi.fn<
+  (id: string, userId: string, version: string) => Promise<boolean>
+>(async () => true)
+/** The trailing pass's write: at a version, and only while no turn holds the row. */
+const dbUpdateContextIfUnchanged = vi.fn<
+  (id: string, userId: string, serialized: string, version: string) => Promise<boolean>
+>(async () => true)
+const dbLoadConversation = vi.fn<
+  (id: string, userId: string) => Promise<{ serializedContext: string; version: string } | null>
+>(async () => null)
+const TURN_CLAIM_RENEW_MS = 30_000
 vi.mock('../../../lib/db/conversations.server', () => ({
-  saveConversation: dbSaveConversation,
-  setConversationStatus: dbSetConversationStatus,
+  createConversation: dbCreateConversation,
+  releaseConversationClaim: dbReleaseConversationClaim,
+  renewConversationClaim: dbRenewConversationClaim,
+  updateConversationContextIfUnchanged: dbUpdateContextIfUnchanged,
+  loadConversation: dbLoadConversation,
+  TURN_CLAIM_RENEW_MS,
+  TURN_CLAIM_TTL_SECONDS: 120,
   deriveTitle: (s: string) => s.slice(0, 10),
 }))
+
+/** Releases that also marked the turn failed — the row's flip to 'error'. */
+const flippedToError = () => dbReleaseConversationClaim.mock.calls.filter((c) => c[3]?.failed)
 
 // ── title agent ─────────────────────────────────────────────────────────────
 const runFirstTurnTitleGen = vi.fn<() => Promise<string | null>>(async () => null)
@@ -217,7 +257,7 @@ vi.mock('@hames-ai/agents/agents/title-generator.server', () => ({
   runFirstTurnTitleGen: (...a: unknown[]) => runFirstTurnTitleGen(...(a as [])),
 }))
 
-const { runTurnAndPersist, TITLE_GEN_TIMEOUT_MS } =
+const { runTurnAndPersist, TITLE_GEN_TIMEOUT_MS, mergeTrailingPass } =
   await import('../../../lib/harness-client/turn.server')
 
 const TRIGGER = { transcribedCommand: 'do it', shortDescription: 'Do it' }
@@ -232,6 +272,7 @@ const STORED: Loaded = {
   agentId: 'search',
   kind: 'conversation',
   status: 'done',
+  version: 'v-claim',
 }
 
 let logged: ReturnType<typeof vi.spyOn>
@@ -252,7 +293,13 @@ beforeEach(() => {
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
   ensureVerdaAwake.mockResolvedValue(undefined)
   resolveConversationTier.mockResolvedValue('anthropic')
-  loadSession.mockResolvedValue(null)
+  claimSession.mockResolvedValue(null)
+  saveSession.mockResolvedValue('v-saved')
+  dbCreateConversation.mockResolvedValue('v-seed')
+  dbReleaseConversationClaim.mockResolvedValue(true)
+  dbRenewConversationClaim.mockResolvedValue(true)
+  dbUpdateContextIfUnchanged.mockResolvedValue(true)
+  dbLoadConversation.mockResolvedValue(null)
   runFirstTurnTitleGen.mockResolvedValue(null)
   logged = vi.spyOn(console, 'error').mockImplementation(() => {})
 })
@@ -282,8 +329,8 @@ describe('interactive turns', () => {
   it('pre-seeds the sidebar row before running a brand-new conversation (#105)', async () => {
     const result = await runTurnAndPersist(interactive())
 
-    expect(dbSaveConversation).toHaveBeenCalledTimes(1)
-    const seeded = dbSaveConversation.mock.calls[0][0]
+    expect(dbCreateConversation).toHaveBeenCalledTimes(1)
+    const seeded = dbCreateConversation.mock.calls[0][0]
     expect(seeded).toMatchObject({
       id: 'sess-1',
       userId: 'user-1',
@@ -296,46 +343,40 @@ describe('interactive turns', () => {
       // different thread — the whole point of the tier being per conversation.
       inferenceTier: 'anthropic',
     })
-    expect(dbSaveConversation.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(dbCreateConversation.mock.invocationCallOrder[0]).toBeLessThan(
       runFresh.mock.invocationCallOrder[0],
     )
 
     expect(continueSession).not.toHaveBeenCalled()
     expect(result.response).toBe('fresh:hello world, this is long')
-    expect(saveSession).toHaveBeenCalledWith(
-      'sess-1',
-      'user-1',
-      'search',
-      'serialized:sess-1',
-      'anthropic',
-    )
+    expect(saveSession).toHaveBeenCalledWith('sess-1', 'user-1', 'search', 'serialized:sess-1', {
+      version: 'v-seed',
+      inferenceTier: 'anthropic',
+    })
   })
 
   it('continues a stored context instead of re-running it fresh', async () => {
-    loadSession.mockResolvedValue(STORED)
+    claimSession.mockResolvedValue(STORED)
 
     const result = await runTurnAndPersist(
       interactive({ sessionId: 'sess-2', message: 'follow up' }),
     )
 
-    expect(dbSaveConversation).not.toHaveBeenCalled() // no re-seed for a known row
+    expect(dbCreateConversation).not.toHaveBeenCalled() // no re-seed for a known row
     expect(harness).not.toHaveBeenCalled()
     // Three arguments, no listener: #374 moved the live listener into the run
     // frame this runner opens, and a nested entry that brought a slot of its
     // own would be refused.
     expect(continueSession).toHaveBeenCalledWith('ctx-a', ['patterns:search'], 'follow up')
     expect(result.response).toBe('continued:follow up')
-    expect(saveSession).toHaveBeenCalledWith(
-      'sess-2',
-      'user-1',
-      'search',
-      'ctx-a+follow up',
-      'anthropic',
-    )
+    expect(saveSession).toHaveBeenCalledWith('sess-2', 'user-1', 'search', 'ctx-a+follow up', {
+      version: 'v-claim',
+      inferenceTier: 'anthropic',
+    })
   })
 
   it('starts fresh when the agent changed under an existing sessionId', async () => {
-    loadSession.mockResolvedValue(STORED)
+    claimSession.mockResolvedValue(STORED)
 
     const result = await runTurnAndPersist(
       interactive({ sessionId: 'sess-3', agentId: 'general', message: 'hi' }),
@@ -344,16 +385,13 @@ describe('interactive turns', () => {
     expect(continueSession).not.toHaveBeenCalled()
     expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-3', 'general')
     expect(result.response).toBe('fresh:hi')
-    expect(saveSession).toHaveBeenCalledWith(
-      'sess-3',
-      'user-1',
-      'general',
-      'serialized:sess-3',
-      'anthropic',
-    )
+    expect(saveSession).toHaveBeenCalledWith('sess-3', 'user-1', 'general', 'serialized:sess-3', {
+      version: 'v-claim',
+      inferenceTier: 'anthropic',
+    })
   })
 
-  // 2026-10-03: the two sandbox agents became one, and `loadSession` maps a
+  // 2026-10-03: the two sandbox agents became one, and the claim's load maps a
   // stored legacy id forward. A tab loaded before that deploy still SENDS the
   // old id, so the requested id has to be mapped the same way: compared raw,
   // 'sandbox-session' !== 'sandbox' reads as an agent switch, the turn starts
@@ -362,7 +400,7 @@ describe('interactive turns', () => {
   // MUTATION: drop `canonicalAgentId` from `planTurn` → `harness` runs fresh
   // and every assertion below reddens.
   it('continues a stored conversation when the request names its agent by a legacy id', async () => {
-    loadSession.mockResolvedValue({ ...STORED, agentId: 'sandbox' })
+    claimSession.mockResolvedValue({ ...STORED, agentId: 'sandbox' })
 
     const result = await runTurnAndPersist(
       interactive({ sessionId: 'sess-legacy', agentId: 'sandbox-session', message: 'and now?' }),
@@ -371,13 +409,10 @@ describe('interactive turns', () => {
     expect(harness).not.toHaveBeenCalled()
     expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-legacy', 'sandbox')
     expect(result.response).toBe('continued:and now?')
-    expect(saveSession).toHaveBeenCalledWith(
-      'sess-legacy',
-      'user-1',
-      'sandbox',
-      'ctx-a+and now?',
-      'anthropic',
-    )
+    expect(saveSession).toHaveBeenCalledWith('sess-legacy', 'user-1', 'sandbox', 'ctx-a+and now?', {
+      version: 'v-claim',
+      inferenceTier: 'anthropic',
+    })
   })
 
   it('exposes the user + conversation to the run as ambient request scope', async () => {
@@ -388,7 +423,7 @@ describe('interactive turns', () => {
   it('puts onEvent in the run frame and delivers its hooks in order', async () => {
     const order: string[] = []
     const onEvent = vi.fn()
-    loadSession.mockResolvedValue(STORED)
+    claimSession.mockResolvedValue(STORED)
     runFirstTurnTitleGen.mockResolvedValue('A title')
     compactBulkData.mockImplementationOnce(async (_ctx, persist) => {
       order.push('compact')
@@ -492,7 +527,7 @@ describe('interactive turns', () => {
     })
     expect(onSettled).toHaveBeenCalled()
     // A side task: the row is never flipped to 'error' for it.
-    expect(dbSetConversationStatus).not.toHaveBeenCalled()
+    expect(flippedToError()).toEqual([])
   })
 
   // #420: the title is generated on the describe-tier summarizer, and when that
@@ -533,11 +568,16 @@ describe('interactive turns', () => {
       await runTurnAndPersist(interactive())
       await flush()
 
-      const withWarning = saveSession.mock.calls.find((call) =>
-        String((call as unknown[])[3]).includes('"type":"warning"'),
+      const withWarning = dbUpdateContextIfUnchanged.mock.calls.find((call) =>
+        call[2].includes('"type":"warning"'),
       )
       expect(withWarning).toBeDefined()
-      expect((withWarning as unknown[]).slice(0, 3)).toEqual(['sess-1', 'user-1', 'search'])
+      // At the version the turn's own save wrote, so it lands on that turn.
+      expect([withWarning![0], withWarning![1], withWarning![3]]).toEqual([
+        'sess-1',
+        'user-1',
+        'v-saved',
+      ])
     })
 
     // PR #424 review F3: the client paints the answer when the stream closes,
@@ -550,10 +590,14 @@ describe('interactive turns', () => {
       runFirstTurnTitleGen.mockRejectedValue(new Error('LLM down'))
       compactBulkData.mockImplementationOnce(async () => {})
       const order: string[] = []
-      const recordSave = async (...args: unknown[]) => {
-        order.push(String(args[3]).includes('"type":"warning"') ? 'save:warning' : 'save:turn')
-      }
-      saveSession.mockImplementationOnce(recordSave).mockImplementationOnce(recordSave)
+      saveSession.mockImplementationOnce(async () => {
+        order.push('save:turn')
+        return 'v-saved'
+      })
+      dbUpdateContextIfUnchanged.mockImplementationOnce(async (_id, _user, ctx) => {
+        order.push(ctx.includes('"type":"warning"') ? 'save:warning' : 'save:other')
+        return true
+      })
       await runTurnAndPersist(interactive({ onSettled: () => order.push('settled') }))
       await flush()
 
@@ -567,21 +611,20 @@ describe('interactive turns', () => {
       await runTurnAndPersist(interactive())
       await flush()
       // The turn's own save, then the compaction's — which carries the warning.
-      expect(saveSession).toHaveBeenCalledTimes(2)
-      expect(String((saveSession.mock.calls[1] as unknown[])[3])).toContain('"type":"warning"')
+      expect(saveSession).toHaveBeenCalledTimes(1)
+      expect(dbUpdateContextIfUnchanged).toHaveBeenCalledTimes(1)
+      expect(dbUpdateContextIfUnchanged.mock.calls[0][2]).toContain('"type":"warning"')
     })
 
     it('a failed save of the warning costs the warning, never the turn', async () => {
       runFirstTurnTitleGen.mockRejectedValue(new Error('LLM down'))
       compactBulkData.mockImplementationOnce(async () => {})
-      saveSession
-        .mockImplementationOnce(async () => {}) // the turn's own save
-        .mockRejectedValueOnce(new Error('db down')) // the warning's
+      dbUpdateContextIfUnchanged.mockRejectedValueOnce(new Error('db down')) // the warning's
       const onSettled = vi.fn()
       await expect(runTurnAndPersist(interactive({ onSettled }))).resolves.toBeDefined()
       await flush()
       expect(onSettled).toHaveBeenCalled()
-      expect(dbSetConversationStatus).not.toHaveBeenCalled()
+      expect(flippedToError()).toEqual([])
       expect(logged).toHaveBeenCalledWith(
         '[title-gen] could not persist the warning:',
         expect.any(Error),
@@ -637,7 +680,7 @@ describe('interactive turns', () => {
         await turn
         await vi.advanceTimersByTimeAsync(3_000)
 
-        const persisted = saveSession.mock.calls.map((c) => String((c as unknown[])[3]))
+        const persisted = dbUpdateContextIfUnchanged.mock.calls.map((c) => c[2])
         expect(persisted.some((ctx) => ctx.includes('"type":"warning"'))).toBe(true)
       } finally {
         vi.useRealTimers()
@@ -675,25 +718,24 @@ describe('interactive turns', () => {
     await flush()
 
     expect(seen).toEqual({ max: 12_345, userId: 'user-1', sessionId: 'sess-1' })
-    // Two writes: the turn, then the summarized context on top of it.
+    // Two writes: the turn, then the summarized context on top of it — at the
+    // version the turn's save produced, so it cannot land over anything newer.
     // The turn's own save records the tier it ran on; the summarization save
-    // below does NOT pass one, because by then the row already has it and
-    // `saveConversation` COALESCEs — re-sending it would be a second writer of
-    // the same fact.
+    // writes the context alone, because by then the row already has the tier
+    // and re-sending it would be a second writer of the same fact.
     expect(saveSession).toHaveBeenNthCalledWith(
       1,
       'sess-1',
       'user-1',
       'search',
       'serialized:sess-1',
-      'anthropic',
+      { version: 'v-seed', inferenceTier: 'anthropic' },
     )
-    expect(saveSession).toHaveBeenNthCalledWith(
-      2,
+    expect(dbUpdateContextIfUnchanged).toHaveBeenCalledWith(
       'sess-1',
       'user-1',
-      'search',
       JSON.stringify({ id: 'ctx:sess-1', events: [] }),
+      'v-saved',
     )
   })
 
@@ -705,7 +747,7 @@ describe('interactive turns', () => {
     await expect(runTurnAndPersist(interactive())).resolves.toMatchObject({ status: 'running' })
     await flush()
 
-    expect(dbSetConversationStatus).not.toHaveBeenCalled()
+    expect(flippedToError()).toEqual([])
     expect(logged).toHaveBeenCalledWith(
       expect.stringContaining('background summarization failed'),
       expect.anything(),
@@ -722,7 +764,9 @@ describe('a throw leaves the row in a terminal state', () => {
       'gateway unreachable',
     )
 
-    expect(dbSetConversationStatus).toHaveBeenCalledWith('sess-boom', 'user-1', 'error')
+    expect(dbReleaseConversationClaim).toHaveBeenCalledWith('sess-boom', 'user-1', 'v-seed', {
+      failed: true,
+    })
     expect(compactBulkData).not.toHaveBeenCalled()
   })
 
@@ -733,12 +777,14 @@ describe('a throw leaves the row in a terminal state', () => {
       'postgres down',
     )
 
-    expect(dbSetConversationStatus).toHaveBeenCalledWith('sess-save', 'user-1', 'error')
+    expect(dbReleaseConversationClaim).toHaveBeenCalledWith('sess-save', 'user-1', 'v-seed', {
+      failed: true,
+    })
   })
 
   it('reports a status flip that itself failed, instead of swallowing it', async () => {
     getOrBuildPatterns.mockRejectedValueOnce(new Error('gateway unreachable'))
-    dbSetConversationStatus.mockRejectedValueOnce(new Error('postgres down too'))
+    dbReleaseConversationClaim.mockRejectedValueOnce(new Error('postgres down too'))
 
     // The original failure is still what the caller sees…
     await expect(runTurnAndPersist(interactive({ sessionId: 'sess-both' }))).rejects.toThrow(
@@ -753,7 +799,9 @@ describe('a throw leaves the row in a terminal state', () => {
 
   it('leaves the row alone on a successful turn', async () => {
     await runTurnAndPersist(interactive())
-    expect(dbSetConversationStatus).not.toHaveBeenCalled()
+    expect(flippedToError()).toEqual([])
+    // The save released the claim in the statement that wrote the turn.
+    expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
   })
 })
 
@@ -766,19 +814,20 @@ describe('triggered turns', () => {
       agentId: 'search',
       message: 'do the thing',
       data: { trigger: TRIGGER },
+      claimVersion: 'v-trig',
       ...over,
     }
   }
 
   it('never continues the seeded placeholder — always a fresh run carrying the trigger', async () => {
     // Even with a row present (there always is one, seeded by `seedActionRow`).
-    loadSession.mockResolvedValue({ ...STORED, kind: 'action', status: 'running' })
+    claimSession.mockResolvedValue({ ...STORED, kind: 'action', status: 'running' })
 
     await runTurnAndPersist(triggered())
 
-    expect(loadSession).not.toHaveBeenCalled()
+    expect(claimSession).not.toHaveBeenCalled()
     expect(continueSession).not.toHaveBeenCalled()
-    expect(dbSaveConversation).not.toHaveBeenCalled() // the caller already seeded it
+    expect(dbCreateConversation).not.toHaveBeenCalled() // the caller already seeded it
     expect(getOrBuildPatterns).toHaveBeenCalledWith('run-1', 'search')
     expect(harness).toHaveBeenCalledWith('patterns:search')
     expect(runFresh).toHaveBeenCalledWith('do the thing', 'run-1', { trigger: TRIGGER })
@@ -789,7 +838,7 @@ describe('triggered turns', () => {
       'user-1',
       'search',
       'serialized:run-1',
-      'anthropic',
+      { version: 'v-trig', inferenceTier: 'anthropic' },
     )
   })
 
@@ -805,7 +854,7 @@ describe('triggered turns', () => {
       'user-1',
       'sandbox',
       'serialized:run-1',
-      'anthropic',
+      { version: 'v-trig', inferenceTier: 'anthropic' },
     )
   })
 
@@ -818,12 +867,11 @@ describe('triggered turns', () => {
 
     expect(compactBulkData).toHaveBeenCalledTimes(1)
     expect(compactBulkData.mock.calls[0][0]).toEqual({ id: 'ctx:run-1', events: [] })
-    expect(saveSession).toHaveBeenNthCalledWith(
-      2,
+    expect(dbUpdateContextIfUnchanged).toHaveBeenCalledWith(
       'run-1',
       'user-1',
-      'search',
       JSON.stringify({ id: 'ctx:run-1', events: [] }),
+      'v-saved',
     )
   })
 
@@ -867,7 +915,9 @@ describe('triggered turns', () => {
     )
 
     expect(saveSession).not.toHaveBeenCalled()
-    expect(dbSetConversationStatus).toHaveBeenCalledWith('run-5', 'user-1', 'error')
+    expect(dbReleaseConversationClaim).toHaveBeenCalledWith('run-5', 'user-1', 'v-trig', {
+      failed: true,
+    })
   })
 })
 
@@ -883,25 +933,21 @@ describe('approval turns', () => {
   }
 
   it('resumes the stored context under the row’s own agent, then persists it', async () => {
-    loadSession.mockResolvedValue({ ...STORED, agentId: 'general', status: 'paused' })
+    claimSession.mockResolvedValue({ ...STORED, agentId: 'general', status: 'paused' })
 
     const result = await runTurnAndPersist(approval())
 
     expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-7', 'general')
     expect(resumeHarness).toHaveBeenCalledWith('ctx-a', ['patterns:general'], true)
     expect(result.response).toBe('approved')
-    expect(saveSession).toHaveBeenNthCalledWith(
-      1,
-      'sess-7',
-      'user-1',
-      'general',
-      'resumed:true',
-      'anthropic',
-    )
+    expect(saveSession).toHaveBeenNthCalledWith(1, 'sess-7', 'user-1', 'general', 'resumed:true', {
+      version: 'v-claim',
+      inferenceTier: 'anthropic',
+    })
   })
 
   it('resumes as rejected', async () => {
-    loadSession.mockResolvedValue({ ...STORED, status: 'paused' })
+    claimSession.mockResolvedValue({ ...STORED, status: 'paused' })
     const result = await runTurnAndPersist(approval({ approved: false }))
     expect(resumeHarness).toHaveBeenCalledWith('ctx-a', ['patterns:search'], false)
     expect(result.response).toBe('rejected')
@@ -910,23 +956,22 @@ describe('approval turns', () => {
   // The resumed turn ran tools too, so its results need the same compaction the
   // first half of the turn got.
   it('summarizes and re-persists the resumed turn', async () => {
-    loadSession.mockResolvedValue({ ...STORED, status: 'paused' })
+    claimSession.mockResolvedValue({ ...STORED, status: 'paused' })
 
     await runTurnAndPersist(approval())
     await flush()
 
     expect(compactBulkData).toHaveBeenCalledTimes(1)
-    expect(saveSession).toHaveBeenNthCalledWith(
-      2,
+    expect(dbUpdateContextIfUnchanged).toHaveBeenCalledWith(
       'sess-7',
       'user-1',
-      'search',
       JSON.stringify({ id: 'ctx:resumed', events: [] }),
+      'v-saved',
     )
   })
 
   it('never re-titles a conversation it resumes', async () => {
-    loadSession.mockResolvedValue({ ...STORED, status: 'paused' })
+    claimSession.mockResolvedValue({ ...STORED, status: 'paused' })
     await runTurnAndPersist(approval())
     expect(runFirstTurnTitleGen).not.toHaveBeenCalled()
   })
@@ -934,18 +979,24 @@ describe('approval turns', () => {
   // A stale approve (double-click, reloaded tab) must not reach the harness: a
   // `Cannot resume` throw from inside the turn would flip a conversation that
   // already completed to 'error'.
-  it('refuses to resume a row that is not paused, touching nothing', async () => {
-    loadSession.mockResolvedValue({ ...STORED, status: 'done' })
+  // The refusal comes AFTER the claim (the claim is the read that says the row
+  // is not paused), so the claim has to be let go — plainly, without marking a
+  // finished conversation failed.
+  // MUTATION: drop the release from `runOneTurn`'s `finally` → the release
+  // assertion reddens, and the conversation would refuse turns for a lease.
+  it('refuses to resume a row that is not paused, releasing the claim and flipping nothing', async () => {
+    claimSession.mockResolvedValue({ ...STORED, status: 'done' })
 
     await expect(runTurnAndPersist(approval())).rejects.toThrow('No pending approval')
 
     expect(resumeHarness).not.toHaveBeenCalled()
     expect(getOrBuildPatterns).not.toHaveBeenCalled()
-    expect(dbSetConversationStatus).not.toHaveBeenCalled()
+    expect(dbReleaseConversationClaim).toHaveBeenCalledWith('sess-7', 'user-1', 'v-claim')
+    expect(flippedToError()).toEqual([])
   })
 
   it('refuses a session the user does not own, touching nothing', async () => {
-    loadSession.mockResolvedValue(null)
+    claimSession.mockResolvedValue(null)
 
     await expect(runTurnAndPersist(approval({ sessionId: 'sess-9' }))).rejects.toThrow(
       'No active session',
@@ -953,9 +1004,10 @@ describe('approval turns', () => {
 
     expect(resumeHarness).not.toHaveBeenCalled()
     expect(getOrBuildPatterns).not.toHaveBeenCalled()
-    // Nothing ran, so nothing is mid-flight to flip or seed.
-    expect(dbSetConversationStatus).not.toHaveBeenCalled()
-    expect(dbSaveConversation).not.toHaveBeenCalled()
+    // Nothing ran and nothing was claimed, so there is nothing to flip, seed
+    // or release.
+    expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
+    expect(dbCreateConversation).not.toHaveBeenCalled()
   })
 })
 
@@ -999,8 +1051,9 @@ describe("the run frame's inference slot — the per-conversation switch, plumbe
       userId: 'user-1',
       agentId: 'search',
       message: 'go',
+      claimVersion: 'v-trig',
     })
-    loadSession.mockResolvedValue({ ...STORED, status: 'paused' })
+    claimSession.mockResolvedValue({ ...STORED, status: 'paused' })
     await runTurnAndPersist({
       mode: 'approval',
       sessionId: 'sess-1',
@@ -1036,7 +1089,7 @@ describe('the request scope says whether anyone is waiting on the run', () => {
   })
 
   it('marks an approval attended — a person pressed the button', async () => {
-    loadSession.mockResolvedValue({ ...STORED, status: 'paused' })
+    claimSession.mockResolvedValue({ ...STORED, status: 'paused' })
     await runTurnAndPersist({
       mode: 'approval',
       sessionId: 'sess-1',
@@ -1054,6 +1107,7 @@ describe('the request scope says whether anyone is waiting on the run', () => {
       agentId: 'sandbox',
       message: 'nightly report',
       data: { trigger: TRIGGER },
+      claimVersion: 'v-trig',
     })
     expect(seenAttended).toEqual([false])
   })
@@ -1098,8 +1152,9 @@ describe('what the header learns from a turn', () => {
     // controller is not a wake.
     resolveConversationTier.mockResolvedValue('verda')
     const order: string[] = []
-    dbSaveConversation.mockImplementation(async () => {
+    dbCreateConversation.mockImplementation(async () => {
       order.push('seed')
+      return 'v-seed'
     })
     ensureVerdaAwake.mockImplementation(async () => {
       order.push('wake')
@@ -1208,10 +1263,12 @@ describe('what the header learns from a turn', () => {
     // for this: a first message that cannot wake the box leaves an errored
     // conversation in the sidebar, the same as a first BAML call that fails
     // (#105's property), rather than a row stuck at 'running' or no row at all.
-    expect(dbSaveConversation).toHaveBeenCalledWith(
+    expect(dbCreateConversation).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'sess-1', status: 'running' }),
     )
-    expect(dbSetConversationStatus).toHaveBeenCalledWith('sess-1', 'user-1', 'error')
+    expect(dbReleaseConversationClaim).toHaveBeenCalledWith('sess-1', 'user-1', 'v-seed', {
+      failed: true,
+    })
   })
 
   it('flips a TRIGGERED run out of running when the box does not wake', async () => {
@@ -1235,13 +1292,16 @@ describe('what the header learns from a turn', () => {
         agentId: 'search',
         message: 'do the thing',
         data: { trigger: TRIGGER },
+        claimVersion: 'v-trig',
       }),
     ).rejects.toThrow(/the private inference box did not wake/)
 
-    expect(dbSetConversationStatus).toHaveBeenCalledWith('run-wake', 'user-1', 'error')
+    expect(dbReleaseConversationClaim).toHaveBeenCalledWith('run-wake', 'user-1', 'v-trig', {
+      failed: true,
+    })
     // A triggered run has no row to seed — `seedActionRow` already wrote it, and
     // touching it here would overwrite the trigger's own title.
-    expect(dbSaveConversation).not.toHaveBeenCalled()
+    expect(dbCreateConversation).not.toHaveBeenCalled()
     // The log `runAgentInBackground` relies on, since it is the only trace this
     // path leaves.
     expect(logged).toHaveBeenCalledWith(
@@ -1256,5 +1316,315 @@ describe('what the header learns from a turn', () => {
     expect(beginVerdaTurn).not.toHaveBeenCalled()
     expect(endVerdaTurn).not.toHaveBeenCalled()
     expect(recordTurn).toHaveBeenCalledWith('anthropic')
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// #458 — one turn per conversation, and every save at the version it read.
+// The statements that refuse are pinned against Postgres in
+// `db/conversations.test.ts`, and the whole race end to end in
+// `db/context-row-lost-updates.test.ts`; what is pinned here is that the turn
+// runner holds the claim, saves at it and lets go of it on every exit path.
+// ════════════════════════════════════════════════════════════════════════════
+
+const BUSY = 'A turn is still running in this conversation. Wait for it to finish, then send again.'
+
+describe('one turn per conversation (#458)', () => {
+  // The refusal is the turn's outcome — the SSE route turns it into an
+  // `event: error` frame. Nothing may run, and nothing of the turn that holds
+  // the conversation may be touched.
+  // MUTATION: catch the refusal in `claimTurn` and fall through to a fresh
+  // conversation → the turn runs and every assertion below reddens.
+  it('refuses a turn while another holds the conversation, running and writing nothing', async () => {
+    claimSession.mockRejectedValueOnce(new Error(BUSY))
+
+    await expect(runTurnAndPersist(interactive())).rejects.toThrow(BUSY)
+
+    expect(getOrBuildPatterns).not.toHaveBeenCalled()
+    expect(saveSession).not.toHaveBeenCalled()
+    expect(dbCreateConversation).not.toHaveBeenCalled()
+    // The claim is the other turn's: not ours to release, its row not ours to fail.
+    expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
+  })
+
+  it('refuses a second first message on a brand-new chat the same way', async () => {
+    dbCreateConversation.mockRejectedValueOnce(new Error(BUSY))
+
+    await expect(runTurnAndPersist(interactive())).rejects.toThrow(BUSY)
+
+    expect(getOrBuildPatterns).not.toHaveBeenCalled()
+    expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
+  })
+
+  it('refuses an approval while a turn is still running in the conversation', async () => {
+    claimSession.mockRejectedValueOnce(new Error(BUSY))
+
+    await expect(
+      runTurnAndPersist({
+        mode: 'approval',
+        sessionId: 'sess-7',
+        userId: 'user-1',
+        approved: true,
+      }),
+    ).rejects.toThrow(BUSY)
+
+    expect(resumeHarness).not.toHaveBeenCalled()
+  })
+
+  // A triggered run does not claim: the seed created its row claimed, and the
+  // run is handed that claim. Claiming again would refuse itself.
+  it('runs a triggered turn on the claim its seed took', async () => {
+    await runTurnAndPersist({
+      mode: 'triggered',
+      sessionId: 'run-c',
+      userId: 'user-1',
+      agentId: 'search',
+      message: 'go',
+      claimVersion: 'v-trig',
+    })
+
+    expect(claimSession).not.toHaveBeenCalled()
+    expect(saveSession).toHaveBeenCalledWith('run-c', 'user-1', 'search', 'serialized:run-c', {
+      version: 'v-trig',
+      inferenceTier: 'anthropic',
+    })
+  })
+
+  describe('the lease', () => {
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    /** A turn parked in its pattern build until `release()`. */
+    function parkedTurn(sessionId: string) {
+      let release!: () => void
+      getOrBuildPatterns.mockImplementationOnce(
+        () => new Promise((resolve) => (release = () => resolve(['patterns:search']))),
+      )
+      claimSession.mockResolvedValue(STORED)
+      const turn = runTurnAndPersist(interactive({ sessionId }))
+      return {
+        release: () => release(),
+        done: async () => {
+          release()
+          await vi.advanceTimersByTimeAsync(TITLE_GEN_TIMEOUT_MS)
+          return turn
+        },
+      }
+    }
+
+    // A slow turn keeps its conversation; only a dead process loses it.
+    // MUTATION: delete the renewal interval → no renewals, and a turn longer
+    // than the lease is overtaken by the next one.
+    it('renews its claim while it runs, at the version it holds, and stops when it ends', async () => {
+      const turn = parkedTurn('sess-long')
+      await vi.advanceTimersByTimeAsync(TURN_CLAIM_RENEW_MS * 3 + 10)
+
+      expect(dbRenewConversationClaim).toHaveBeenCalledTimes(3)
+      expect(dbRenewConversationClaim).toHaveBeenCalledWith('sess-long', 'user-1', 'v-claim')
+
+      await turn.done()
+      await vi.advanceTimersByTimeAsync(TURN_CLAIM_RENEW_MS * 3)
+      // MUTATION: drop `clearInterval(renewal)` → renewals carry on after the turn.
+      expect(dbRenewConversationClaim).toHaveBeenCalledTimes(3)
+    })
+
+    it('says so, once, when a renewal finds the claim taken', async () => {
+      dbRenewConversationClaim.mockResolvedValue(false)
+      const turn = parkedTurn('sess-lost')
+      await vi.advanceTimersByTimeAsync(TURN_CLAIM_RENEW_MS * 3 + 10)
+
+      expect(dbRenewConversationClaim).toHaveBeenCalledTimes(1)
+      expect(logged).toHaveBeenCalledWith(expect.stringContaining('lost the claim on sess-lost'))
+      await turn.done()
+    })
+
+    it('keeps the turn running when a renewal cannot reach the database', async () => {
+      dbRenewConversationClaim.mockRejectedValue(new Error('postgres blip'))
+      const turn = parkedTurn('sess-blip')
+      await vi.advanceTimersByTimeAsync(TURN_CLAIM_RENEW_MS + 10)
+
+      expect(logged).toHaveBeenCalledWith(
+        '[turn] could not renew the claim on sess-blip:',
+        expect.any(Error),
+      )
+      await expect(turn.done()).resolves.toMatchObject({
+        response: 'continued:hello world, this is long',
+      })
+    })
+  })
+
+  it('logs a release that fails, and still surfaces the refusal that needed it', async () => {
+    claimSession.mockResolvedValue({ ...STORED, status: 'done' })
+    dbReleaseConversationClaim.mockRejectedValueOnce(new Error('postgres down'))
+
+    await expect(
+      runTurnAndPersist({
+        mode: 'approval',
+        sessionId: 'sess-7',
+        userId: 'user-1',
+        approved: true,
+      }),
+    ).rejects.toThrow('No pending approval')
+
+    expect(logged).toHaveBeenCalledWith(
+      expect.stringContaining('could not release sess-7'),
+      expect.any(Error),
+    )
+  })
+})
+
+describe('the trailing pass writes over nothing newer (#458)', () => {
+  const ev = (id: string, type: string, data: Record<string, unknown> = {}) => ({
+    id,
+    type,
+    ts: 0,
+    patternId: 'p',
+    data,
+  })
+
+  /** The turn's context: one question, one tool result. */
+  function ourTurn() {
+    return {
+      sessionId: 'sess-1',
+      createdAt: 0,
+      status: 'running',
+      data: {},
+      input: 'q',
+      events: [
+        ev('u1', 'user_message', { content: 'q' }),
+        ev('t1', 'tool_result', { tool: 'x', result: 'raw', success: true }),
+      ],
+    }
+  }
+
+  /** The harness hands back `ctx`, and the summary pass enriches it. */
+  function runWith(ctx: ReturnType<typeof ourTurn>) {
+    runFresh.mockImplementationOnce(async () => ({
+      response: 'answer',
+      serialized: JSON.stringify(ctx),
+      data: {},
+      context: ctx as unknown as Ctx,
+      status: 'running',
+    }))
+    compactBulkData.mockImplementationOnce(async (raw: unknown, persist: () => Promise<void>) => {
+      const c = raw as ReturnType<typeof ourTurn>
+      ;(c.events[1].data as { summary?: string }).summary = 'S'
+      c.events.push(ev('w1', 'warning', { task: 'result_summaries' }))
+      await persist()
+    })
+  }
+
+  // The bug this replaces: the pass wrote the WHOLE context it summarized, so
+  // when the next turn had finished first, that turn was erased.
+  // MUTATION: write `ours` on the retry instead of the merge (overwrite) →
+  // `u2`/`a2` and the flag vanish from the written blob.
+  it('on a conflict, re-reads the row and applies only its summaries and notices to it', async () => {
+    runWith(ourTurn())
+    // The next turn finished in between, and the user hid our tool result.
+    const fresh = ourTurn()
+    ;(fresh.events[1].data as { hidden?: boolean }).hidden = true
+    fresh.events.push(
+      ev('u2', 'user_message', { content: 'next' }),
+      ev('a2', 'assistant_message', { content: 'ans' }),
+    )
+    dbUpdateContextIfUnchanged.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    dbLoadConversation.mockResolvedValueOnce({
+      serializedContext: JSON.stringify(fresh),
+      version: 'v-fresh',
+    })
+
+    await runTurnAndPersist(interactive())
+    await flush()
+
+    expect(dbUpdateContextIfUnchanged).toHaveBeenCalledTimes(2)
+    // The first attempt was at the version the turn's own save wrote.
+    expect(dbUpdateContextIfUnchanged.mock.calls[0][3]).toBe('v-saved')
+    const [id, user, written, version] = dbUpdateContextIfUnchanged.mock.calls[1]
+    expect([id, user, version]).toEqual(['sess-1', 'user-1', 'v-fresh'])
+    const merged = JSON.parse(written) as ReturnType<typeof ourTurn>
+    // The newer turn survives, and the notice lands at the end of its own turn.
+    expect(merged.events.map((e) => e.id)).toEqual(['u1', 't1', 'w1', 'u2', 'a2'])
+    // Its own field added; the flag someone else wrote kept.
+    expect(merged.events[1].data).toMatchObject({ summary: 'S', hidden: true })
+  })
+
+  // A newer turn holds the row: writing now would be overwritten by it, or —
+  // since it moves the version — refuse that turn's save.
+  // MUTATION: fall back to `saveSession` (an unconditional write) after the
+  // last attempt → the turn's own save count rises to 2.
+  it('gives up after its attempts, says so, and never writes over the row', async () => {
+    dbUpdateContextIfUnchanged.mockResolvedValue(false)
+    dbLoadConversation.mockResolvedValue({
+      serializedContext: JSON.stringify({ events: [] }),
+      version: 'v-held',
+    })
+
+    await runTurnAndPersist(interactive())
+    await flush()
+
+    expect(dbUpdateContextIfUnchanged).toHaveBeenCalledTimes(3)
+    expect(saveSession).toHaveBeenCalledTimes(1) // the turn's own, nothing after
+    expect(logged).toHaveBeenCalledWith(
+      expect.stringContaining("this turn's summaries and notices are not saved"),
+    )
+  })
+
+  it('stops, and says why, when the conversation was deleted meanwhile', async () => {
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    dbUpdateContextIfUnchanged.mockResolvedValueOnce(false)
+    dbLoadConversation.mockResolvedValueOnce(null)
+
+    await runTurnAndPersist(interactive())
+    await flush()
+
+    expect(dbUpdateContextIfUnchanged).toHaveBeenCalledTimes(1)
+    expect(warned).toHaveBeenCalledWith(expect.stringContaining('sess-1 is gone'))
+    warned.mockRestore()
+  })
+})
+
+describe('mergeTrailingPass', () => {
+  const ev = (id: string | undefined, type: string, data: Record<string, unknown> = {}) => ({
+    id,
+    type,
+    ts: 0,
+    patternId: 'p',
+    data,
+  })
+  const ctxOf = (events: ReturnType<typeof ev>[]) =>
+    ({ sessionId: 's', createdAt: 0, status: 'running', data: {}, input: '', events }) as never
+
+  it('never overwrites a summary the fresh copy already has', () => {
+    const fresh = ctxOf([ev('t1', 'tool_result', { summary: 'theirs' })])
+    const ours = ctxOf([ev('t1', 'tool_result', { summary: 'ours' })])
+    const merged = mergeTrailingPass(fresh, ours, 1) as unknown as {
+      events: { data: { summary: string } }[]
+    }
+    expect(merged.events[0].data.summary).toBe('theirs')
+  })
+
+  it('copies a summary only onto a tool result with the same id', () => {
+    const fresh = ctxOf([ev('t1', 'assistant_message'), ev('t2', 'tool_result')])
+    const ours = ctxOf([ev('t1', 'tool_result', { summary: 'S' }), ev('t3', 'tool_result', {})])
+    const merged = mergeTrailingPass(fresh, ours, 2) as unknown as {
+      events: { data: Record<string, unknown> }[]
+    }
+    expect(merged.events.map((e) => e.data.summary)).toEqual([undefined, undefined])
+  })
+
+  it('does not duplicate an addition the fresh copy already carries', () => {
+    const fresh = ctxOf([ev('u1', 'user_message'), ev('w1', 'warning')])
+    const ours = ctxOf([ev('u1', 'user_message'), ev('w1', 'warning')])
+    const merged = mergeTrailingPass(fresh, ours, 1) as unknown as { events: { id: string }[] }
+    expect(merged.events.map((e) => e.id)).toEqual(['u1', 'w1'])
+  })
+
+  it('appends an addition whose predecessor the fresh copy no longer has', () => {
+    const fresh = ctxOf([ev('x1', 'user_message')])
+    const ours = ctxOf([ev('u1', 'user_message'), ev('w1', 'warning'), ev(undefined, 'warning')])
+    const merged = mergeTrailingPass(fresh, ours, 1) as unknown as {
+      events: { id?: string; type: string }[]
+    }
+    expect(merged.events.map((e) => e.id ?? e.type)).toEqual(['x1', 'w1', 'warning'])
   })
 })

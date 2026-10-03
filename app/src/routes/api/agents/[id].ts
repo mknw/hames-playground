@@ -114,8 +114,10 @@ export async function POST(event: APIEvent) {
 
   // 5. Insert the observable row before returning, so the action is visible
   //    (with a running spinner) the moment the caller gets its 202.
+  //    The row is created claimed for the run below, which takes the claim.
+  let claim: string
   try {
-    await seedActionRow(runId, userId, agentId, trigger)
+    claim = await seedActionRow(runId, userId, agentId, trigger)
   } catch (err) {
     console.error(`[action] failed to seed action row for ${runId}:`, err)
     return json({ error: 'Failed to create action' }, 500)
@@ -124,7 +126,7 @@ export async function POST(event: APIEvent) {
   // 6. Fire-and-forget the harness run. Intentionally NOT awaited — the run
   //    persists its own result/status on completion (persistent-node-server
   //    assumption; see INSTRUCTIONS.md).
-  void runAgentInBackground(runId, userId, transcribedCommand, agentId, trigger)
+  void runAgentInBackground(runId, userId, transcribedCommand, agentId, trigger, claim)
 
   // 7. 202 Accepted — run_id is the sessionId / conversation row id. The run
   //    starts either way; `recording_stored: false` says the audio did not

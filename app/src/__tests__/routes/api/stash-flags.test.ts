@@ -158,15 +158,17 @@ describe('POST /api/stash', () => {
     expect(saveConversation).not.toHaveBeenCalled()
   })
 
-  it('409s when the conversation moved on between the read and the write', async () => {
-    // The competing writer is the turn's own `compactAndSave`, which fires
+  it('409s when the conversation moved on, or a turn holds it, between the read and the write', async () => {
+    // The competing writers are the turn's own `compactAndSave`, which fires
     // after the stream closes — i.e. while the user is looking at the finished
-    // tool results. An unguarded write here answers `{"ok":true}` and either
-    // loses the flag or replaces the whole turn with the blob it loaded.
+    // tool results — and, since #458, a turn in flight, which is about to save
+    // the blob it loaded when it started. An unguarded write here answers
+    // `{"ok":true}` and either loses the flag or replaces the whole turn with
+    // the blob it loaded. The repository refuses both; the message names both.
     updateConversationContextIfUnchanged.mockResolvedValue(false)
     const res = await POST(evt({ sessionId: 's1', eventId: 'evt-1', action: 'hide' }))
     expect(res.status).toBe(409)
-    expect((await res.json()).error).toMatch(/changed/i)
+    expect((await res.json()).error).toMatch(/changed.*turn is still running/s)
     expect(saveConversation).not.toHaveBeenCalled()
   })
 

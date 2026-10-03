@@ -312,10 +312,10 @@ describe('two turns on one conversation at once', () => {
   it('refuses a chat turn on an action row while its triggered run is in flight', async () => {
     const runId = newId()
     const trigger = { transcribedCommand: 'T', shortDescription: 'a triggered run' }
-    await seedActionRow(runId, USER, 'fake', trigger)
+    const claim = await seedActionRow(runId, USER, 'fake', trigger)
 
     const gateT = gateTurn('T')
-    const background = runAgentInBackground(runId, USER, 'T', 'fake', trigger)
+    const background = runAgentInBackground(runId, USER, 'T', 'fake', trigger, claim)
     await gateT.entered
 
     const chat = await settle(turn(runId, 'I'))

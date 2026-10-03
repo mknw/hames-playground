@@ -96,8 +96,10 @@ export async function fireRoutine(routine: RoutineRow): Promise<string | null> {
     routine: { id: routine.id, trigger: routine.trigger.kind },
   }
 
+  // The row is created claimed for the run below, which takes the claim.
+  let claim: string
   try {
-    await seedActionRow(runId, routine.userId, routine.agentId, trigger, 'routine')
+    claim = await seedActionRow(runId, routine.userId, routine.agentId, trigger, 'routine')
   } catch (err) {
     console.error(`[routines] failed to seed run row for routine ${routine.id}:`, err)
     // The claim advanced `last_run_at` and nothing ran, so without this the
@@ -121,7 +123,7 @@ export async function fireRoutine(routine: RoutineRow): Promise<string | null> {
   }
 
   // Not awaited — same contract as the POST endpoint's background run.
-  void runAgentInBackground(runId, routine.userId, routine.input, routine.agentId, trigger)
+  void runAgentInBackground(runId, routine.userId, routine.input, routine.agentId, trigger, claim)
 
   console.log(
     `[routines] fired ${routine.trigger.kind} routine ${routine.id} ` +

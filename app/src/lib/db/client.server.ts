@@ -134,6 +134,22 @@ const SCHEMA_SQL = `
   CREATE UNIQUE INDEX IF NOT EXISTS conversations_share_token_idx
     ON conversations (share_token) WHERE share_token IS NOT NULL;
 
+  -- One writer at a time on \`context\` (#458). Both plaintext, for the reason
+  -- kind/status are: SQL compares them, and neither says anything about what
+  -- was said. \`conversations.server.ts\` carries the whole design.
+  --   context_version — bumped by every write of \`context\` and by every turn
+  --     claim, and nothing else. Every save names the version it read and
+  --     lands only if the row still has it. NOT \`xmin\`: that moves on a pin,
+  --     a share, a tier flip or a title, all of which may happen mid-turn.
+  --   turn_claimed_at — when the turn holding this row last renewed its
+  --     claim, or NULL when none does. A claim older than the lease is dead.
+  -- The defaults are the truth for every existing row: no write has been
+  -- counted yet, and no turn holds it.
+  ALTER TABLE conversations
+    ADD COLUMN IF NOT EXISTS context_version BIGINT NOT NULL DEFAULT 0;
+  ALTER TABLE conversations
+    ADD COLUMN IF NOT EXISTS turn_claimed_at TIMESTAMPTZ;
+
   -- Session ownership claims. A Data Stash upload can arrive before the
   -- session has any conversation row (a file dropped before the first chat
   -- message), so there is a window in which \`conversations.user_id\` cannot

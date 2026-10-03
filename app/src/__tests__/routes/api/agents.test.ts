@@ -34,9 +34,10 @@ vi.mock('../../../lib/auth/action-tokens.server', () => ({
   },
 }))
 
+/** The seed creates the row claimed for its run, and returns that claim. */
 const seedActionRow = vi.fn<
-  (runId: string, userId: string, agentId: string, trigger: Trigger) => Promise<void>
->(async () => {})
+  (runId: string, userId: string, agentId: string, trigger: Trigger) => Promise<string>
+>(async () => 'v-seed')
 const runAgentInBackground = vi.fn<
   (
     runId: string,
@@ -44,6 +45,7 @@ const runAgentInBackground = vi.fn<
     message: string,
     agentId: string,
     trigger: Trigger,
+    claimVersion: string,
   ) => Promise<void>
 >(async () => {})
 vi.mock('../../../lib/harness-client/action-runner.server', () => ({
@@ -190,9 +192,11 @@ describe('POST /api/agents/:id', () => {
       recordingDocId: 'doc-1',
     })
 
-    // Background run kicked off with the command.
+    // Background run kicked off with the command, on the claim the seed took
+    // (#458) — so no chat turn can take the row in between.
     expect(runAgentInBackground).toHaveBeenCalledTimes(1)
     expect(runAgentInBackground.mock.calls[0][2]).toBe('add a node')
+    expect(runAgentInBackground.mock.calls[0][5]).toBe('v-seed')
   })
 
   it('still 202s when recording storage fails (best-effort provenance)', async () => {

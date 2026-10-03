@@ -23,10 +23,16 @@ type Row = {
 } | null
 
 const loadConversation = vi.fn<(id: string, userId: string) => Promise<Row>>(async () => null)
-const saveConversation = vi.fn<(row: Record<string, unknown>) => Promise<void>>(async () => {})
+const claimConversation = vi.fn<
+  (id: string, userId: string) => Promise<(NonNullable<Row> & { version: string }) | null>
+>(async () => null)
+const saveConversation = vi.fn<(row: Record<string, unknown>) => Promise<string>>(
+  async () => 'v-saved',
+)
 const deleteConversation = vi.fn<(id: string, userId: string) => Promise<void>>(async () => {})
 vi.mock('../../../lib/db/conversations.server', () => ({
   loadConversation,
+  claimConversation,
   saveConversation,
   deleteConversation,
   deriveTitle: (s: string) => (s ? s.slice(0, 12) : null),
@@ -45,15 +51,16 @@ const {
   evictPatterns,
   doNotCachePatterns,
   loadSession,
+  claimSession,
   saveSession,
   deleteSession,
   hasPendingApproval,
-  persistContext,
 } = await import('../../../lib/harness-client/session.server')
 
 beforeEach(() => {
   vi.clearAllMocks()
   loadConversation.mockResolvedValue(null)
+  claimConversation.mockResolvedValue(null)
   getAgent.mockImplementation((id: string) => (id === 'known' ? { id, createPatterns } : undefined))
 })
 
@@ -208,7 +215,10 @@ describe('loadSession', () => {
 describe('saveSession — title + status lifting', () => {
   it('derives the title from the first user_message and stores a finished run as done', async () => {
     const ctx = createContext('Explain the graph schema please', undefined, 'sess-a')
-    await saveSession('sess-a', 'u1', 'known', serializeContext(ctx))
+    const written = await saveSession('sess-a', 'u1', 'known', serializeContext(ctx), {
+      version: 'v-7',
+      inferenceTier: 'verda',
+    })
 
     expect(saveConversation).toHaveBeenCalledWith({
       id: 'sess-a',
@@ -219,20 +229,25 @@ describe('saveSession — title + status lifting', () => {
       // The harness never flips a successful run to 'done' — a persisted
       // 'running' means "completed, never flipped".
       status: 'done',
+      inferenceTier: 'verda',
+      // The save names the version the turn's claim holds…
+      version: 'v-7',
     })
+    // …and hands back the one it wrote, which the trailing pass writes on top of.
+    expect(written).toBe('v-saved')
   })
 
   it('preserves paused and error, the two statuses that are set deliberately', async () => {
     for (const status of ['paused', 'error'] as const) {
       const ctx = { ...createContext('hi', undefined, 'sess-b'), status }
-      await saveSession('sess-b', 'u1', 'known', serializeContext(ctx))
+      await saveSession('sess-b', 'u1', 'known', serializeContext(ctx), { version: 'v-1' })
       expect(saveConversation.mock.lastCall?.[0]).toMatchObject({ status })
     }
   })
 
   it('stores a null title when the context carries no user message', async () => {
     const ctx = { ...createContext('hi', undefined, 'sess-c'), events: [] }
-    await saveSession('sess-c', 'u1', 'known', serializeContext(ctx))
+    await saveSession('sess-c', 'u1', 'known', serializeContext(ctx), { version: 'v-1' })
     expect(saveConversation.mock.lastCall?.[0]).toMatchObject({ title: null })
   })
 
@@ -241,7 +256,7 @@ describe('saveSession — title + status lifting', () => {
   // nothing in it can be replayed.
   it('persists an unparseable blob as status error, not done', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
-    await saveSession('sess-d', 'u1', 'known', 'not json at all')
+    await saveSession('sess-d', 'u1', 'known', 'not json at all', { version: 'v-1' })
     expect(saveConversation).toHaveBeenCalledWith(
       expect.objectContaining({
         title: null,
@@ -259,6 +274,7 @@ describe('saveSession — title + status lifting', () => {
       'u1',
       'known',
       serializeContext(createContext('x', undefined, 'sess-e')),
+      { version: 'v-1' },
     )
     const written = saveConversation.mock.lastCall![0]
     expect('kind' in written).toBe(false)
@@ -338,18 +354,33 @@ describe('hasPendingApproval', () => {
   })
 })
 
-describe('persistContext', () => {
-  it('re-serializes a mutated in-memory context through the same save path', async () => {
-    const ctx = createContext<Record<string, unknown>>('Mutated in place', {}, 'sess-f')
-    await persistContext('sess-f', 'u1', 'known', ctx)
+describe('claimSession', () => {
+  // The claim is the turn's load: the same mapping as `loadSession`, plus the
+  // version the claim holds, which is what the turn's save must name.
+  it('maps the claimed row like a load and carries the version the claim holds', async () => {
+    claimConversation.mockResolvedValue({
+      serializedContext: '{}',
+      agentId: 'renamed-away',
+      kind: 'conversation',
+      status: 'done',
+      version: 'v-42',
+    })
+    await expect(claimSession('s', 'u')).resolves.toEqual({
+      serializedContext: '{}',
+      agentId: 'known',
+      kind: 'conversation',
+      status: 'done',
+      version: 'v-42',
+    })
+    expect(claimConversation).toHaveBeenCalledWith('s', 'u')
+  })
 
-    expect(saveConversation).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: 'sess-f',
-        userId: 'u1',
-        serializedContext: serializeContext(ctx),
-        title: 'Mutated in p',
-      }),
-    )
+  it('is null when the user has no conversation by this id', async () => {
+    await expect(claimSession('s', 'u')).resolves.toBeNull()
+  })
+
+  it('passes a refusal through rather than reading it as a new conversation', async () => {
+    claimConversation.mockRejectedValue(new Error('A turn is still running in this conversation.'))
+    await expect(claimSession('s', 'u')).rejects.toThrow(/still running/)
   })
 })

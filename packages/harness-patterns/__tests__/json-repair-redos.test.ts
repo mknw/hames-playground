@@ -1,18 +1,26 @@
 /**
- * The two regexes #461 found in json-repair cost time linear in their input.
- * The function as a whole does not yet: the scanners in #463 are still super-linear.
+ * json-repair costs time linear in its input: the two regexes #461 found, and
+ * the three bracketed-literal scanner shapes #463 found.
  *
  * `repairJsonTracked` parses the model's `tool_args`, and model output can be
  * steered by content the model has read. The repair runs synchronously on the
  * server's event loop, so a super-linear step in it lets one completion stall
  * every request the process is serving.
  *
- * Two regexes in the lenient chain were quadratic. Both had a lazy group
+ * Two regexes in the lenient chain were quadratic (#461). Both had a lazy group
  * followed by `\s*`, and that pair re-scans a whitespace run each time the lazy
  * group grows by one character. The value regex also had a second quadratic
  * shape: a run of colons with no `,`, `}` or `]` after them. Measured on main
  * before the fix (Node 22, CPU time, one call): ~14 s at 200 000 characters
  * for each shape below. After the fix the same calls take 2-4 ms.
+ *
+ * The bracketed-literal scanner was super-linear in three ways (#463), and
+ * none of them is a regex. An unbalanced literal was scanned to the end of the
+ * input at every colon (quadratic). A nested literal was re-scanned at every
+ * level of the repair's recursion (depth × length). Nested objects whose
+ * innermost value is refused paid that second cost at every nested colon,
+ * which is cubic: ~68 s of CPU at 16k characters. After the fix each of them
+ * takes about a millisecond at 16k.
  *
  * ## The instrument
  *
@@ -25,18 +33,17 @@
  *   clock on a busy runner also counts the time the process spent waiting for
  *   a core, and that made the guard's ReDoS net flake (#280).
  * - **The lowest of three passes.** A GC pause or a busy core can only make a
- *   pass slower. A quadratic step is slow on every pass, so taking the lowest
- *   does not hide it.
+ *   pass slower. A super-linear step is slow on every pass, so taking the
+ *   lowest does not hide it.
  * - **A fixed budget per call, with wide margins on both sides.** At 200k the
  *   two complexity classes differ by more than three orders of magnitude, so
  *   the 250 ms budget is ~60x the fixed code's cost and ~1/50 of the
  *   quadratic code's. There is no linearity-ratio assertion, because the fixed
  *   code's figures are a few milliseconds and too small to divide reliably.
- * - **Escalating sizes**, each 4x the last, with the budget scaled to the
- *   size. A quadratic step goes over the 12.5k or the 50k budget within a
- *   second or two of CPU, and the failed `expect` ends that case there. The
- *   test therefore names the slow shape instead of spending ~40 s in regex
- *   calls that nothing can interrupt.
+ * - **Escalating sizes**, with the budget scaled to the size. A super-linear
+ *   step goes over an early budget within a second or two of CPU, and the
+ *   failed `expect` ends that case there. The test therefore names the slow
+ *   shape instead of spending minutes in calls that nothing can interrupt.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -76,17 +83,70 @@ function measure(input: string): { ms: number; outcome: Outcome } {
   return { ms, outcome }
 }
 
+/**
+ * `JSON.stringify` without recursion. The nested-literal case returns a value
+ * thousands of levels deep, and both `JSON.stringify` and `toEqual` recurse.
+ */
+function canon(value: unknown): string {
+  const out: string[] = []
+  const todo: Array<{ text: string } | { value: unknown }> = [{ value }]
+  while (todo.length > 0) {
+    const next = todo.pop()!
+    if ('text' in next) {
+      out.push(next.text)
+      continue
+    }
+    const v = next.value
+    if (typeof v !== 'object' || v === null) {
+      out.push(JSON.stringify(v))
+      continue
+    }
+    const entries = Array.isArray(v)
+      ? v.map((item) => ({ key: '', item }))
+      : Object.entries(v).map(([key, item]) => ({ key: `${JSON.stringify(key)}:`, item }))
+    out.push(Array.isArray(v) ? '[' : '{')
+    todo.push({ text: Array.isArray(v) ? ']' : '}' })
+    for (let k = entries.length - 1; k >= 0; k--) {
+      todo.push({ value: entries[k].item }, { text: `${k > 0 ? ',' : ''}${entries[k].key}` })
+    }
+  }
+  return out.join('')
+}
+
 const spaces = (n: number): string => ' '.repeat(n)
+
+type Case = {
+  shape: string
+  input: (n: number) => string
+  expected: (n: number) => Outcome
+}
+
+function pin(cases: Case[], sizes: number[]): void {
+  // The timeout covers a regression, not a pass: a super-linear step fails an
+  // early budget in a few seconds of CPU at most, and this keeps that a named
+  // failure on a slow runner instead of a bare timeout.
+  it.each(cases)(
+    '$shape',
+    ({ input, expected }) => {
+      for (const n of sizes) {
+        const text = input(n)
+        const { ms, outcome } = measure(text)
+        expect(
+          ms,
+          `n=${text.length}: ${ms.toFixed(1)} ms CPU, budget ${budgetMs(n).toFixed(0)} ms (lowest of ${REPEATS})`,
+        ).toBeLessThan(budgetMs(n))
+        expect(canon(outcome), `n=${text.length}: outcome`).toBe(canon(expected(n)))
+      }
+    },
+    30_000,
+  )
+}
 
 /**
  * One case per quadratic shape. `expected` is what main returned before the
  * fix, so a fix that got faster by giving up early fails here too.
  */
-const CASES: Array<{
-  shape: string
-  input: (n: number) => string
-  expected: (n: number) => Outcome
-}> = [
+const REGEX_CASES: Case[] = [
   {
     // The last-resort handler takes the whole value.
     shape: 'last-resort handler: `{q: ,` + spaces + `a}`',
@@ -113,23 +173,62 @@ const CASES: Array<{
   },
 ]
 
-describe('json-repair: the #461 regex shapes are linear', () => {
-  // The timeout covers a regression, not a pass: a quadratic step fails the
-  // 12.5k or 50k budget in a few seconds of CPU at most, and this keeps that a
-  // named failure on a slow runner instead of a bare timeout.
-  it.each(CASES)(
-    '$shape',
-    ({ input, expected }) => {
-      for (const n of SIZES) {
-        const text = input(n)
-        const { ms, outcome } = measure(text)
-        expect(
-          ms,
-          `n=${n}: ${ms.toFixed(1)} ms CPU, budget ${budgetMs(n).toFixed(0)} ms (lowest of ${REPEATS})`,
-        ).toBeLessThan(budgetMs(n))
-        expect(outcome, `n=${n}: outcome`).toEqual(expected(n))
-      }
+/** `{q: ` + `[` × d + `x` + `]` × d + `}`, with d chosen so the input is ~n long. */
+const nestedDepth = (n: number): number => Math.floor((n - 6) / 2)
+
+/** The cubic shape's depth and padding for an input ~n long. Depth stays at
+ *  2 000 or less, where the old recursion had not yet run out of stack. */
+function cubicShape(n: number): { d: number; pad: number } {
+  const d = Math.min(Math.floor((n - 7) / 4), 2_000)
+  return { d, pad: Math.floor((n - 7 - 4 * d) / d) }
+}
+
+/**
+ * One case per scanner shape (#463). Sizes start at 2k, where the cubic shape
+ * already cost ~0.5 s, and stop at 16k, where each of the others cost 70 ms
+ * to 300 ms. `expected` is main's outcome, except where noted.
+ */
+const SCANNER_CASES: Case[] = [
+  {
+    // Path 1: every `[` is unbalanced, and each one was scanned to the end.
+    shape: 'unbalanced literal at every colon: `{q: ` + `:[` repeated',
+    input: (n) => `{q: ${':['.repeat((n - 4) / 2)}`,
+    expected: () => 'threw',
+  },
+  {
+    // Path 1 again, after the key-quoting step has run on each `, a:`.
+    shape: 'unbalanced literal at every colon: `{q: x` + `, a: {` repeated',
+    input: (n) => `{q: x${', a: {'.repeat(Math.floor((n - 5) / 6))}`,
+    expected: () => 'threw',
+  },
+  {
+    // Path 2: one literal nested n/2 deep, re-scanned at every level. Main
+    // threw a RangeError once its recursion ran out of stack, which at 16k it
+    // did; there is no recursion left, so the literal now repairs at any depth.
+    shape: 'nested literal: `{q: ` + `[` × d + `x` + `]` × d + `}`',
+    input: (n) => `{q: ${'['.repeat(nestedDepth(n))}x${']'.repeat(nestedDepth(n))}}`,
+    expected: (n) => {
+      let value: unknown = 'x'
+      for (let k = 0; k < nestedDepth(n); k++) value = [value]
+      return { q: value }
     },
-    30_000,
-  )
+  },
+  {
+    // Path 3: each nested literal is refused, because its innermost value
+    // is, and each nested colon paid path 2's cost again.
+    shape: 'refused nested objects: `{a:` + (`{b:` + spaces) × d + `x,,` + `}` × (d + 1)',
+    input: (n) => {
+      const { d, pad } = cubicShape(n)
+      return `{a:${`{b:${spaces(pad)}`.repeat(d)}x,,${'}'.repeat(d + 1)}`
+    },
+    expected: () => 'threw',
+  },
+]
+
+describe('json-repair: the #461 regex shapes are linear', () => {
+  pin(REGEX_CASES, SIZES)
+})
+
+describe('json-repair: the #463 scanner shapes are linear', () => {
+  pin(SCANNER_CASES, [2_048, 16_384])
 })

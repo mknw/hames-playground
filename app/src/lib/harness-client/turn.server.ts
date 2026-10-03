@@ -344,7 +344,9 @@ async function runOneTurn(
             'this turn will not be saved.',
         )
       },
-      (err: unknown) => console.error(`[turn] could not renew the claim on ${sessionId}:`, err),
+      // `%s`, not interpolation: with a second argument the first is a format
+      // string, and the session id comes from the request.
+      (err: unknown) => console.error('[turn] could not renew the claim on %s:', sessionId, err),
     )
   }, TURN_CLAIM_RENEW_MS)
   renewal.unref?.()
@@ -362,8 +364,8 @@ async function runOneTurn(
     if (!held.released) {
       await dbReleaseConversationClaim(sessionId, userId, held.version).catch((err: unknown) =>
         console.error(
-          `[turn] could not release ${sessionId}; it refuses new turns for up to ` +
-            `${TURN_CLAIM_TTL_SECONDS}s:`,
+          `[turn] could not release %s; it refuses new turns for up to ${TURN_CLAIM_TTL_SECONDS}s:`,
+          sessionId,
           err,
         ),
       )
@@ -578,8 +580,9 @@ async function runAndSave(
     await dbReleaseConversationClaim(sessionId, userId, held.version, { failed: true }).catch(
       (statusErr: unknown) => {
         console.error(
-          `[turn] could not flip ${sessionId} to status='error' — the row will keep showing as ` +
-            `running, and refuses new turns for up to ${TURN_CLAIM_TTL_SECONDS}s:`,
+          "[turn] could not flip %s to status='error' — the row will keep showing as running, " +
+            `and refuses new turns for up to ${TURN_CLAIM_TTL_SECONDS}s:`,
+          sessionId,
           statusErr,
         )
       },

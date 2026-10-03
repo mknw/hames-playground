@@ -793,6 +793,7 @@ describe('a throw leaves the row in a terminal state', () => {
     // …and the fact that the row is now stuck is on the record.
     expect(logged).toHaveBeenCalledWith(
       expect.stringContaining('keep showing as'),
+      'sess-both',
       expect.anything(),
     )
   })
@@ -1444,7 +1445,8 @@ describe('one turn per conversation (#458)', () => {
       await vi.advanceTimersByTimeAsync(TURN_CLAIM_RENEW_MS + 10)
 
       expect(logged).toHaveBeenCalledWith(
-        '[turn] could not renew the claim on sess-blip:',
+        '[turn] could not renew the claim on %s:',
+        'sess-blip',
         expect.any(Error),
       )
       await expect(turn.done()).resolves.toMatchObject({
@@ -1467,7 +1469,8 @@ describe('one turn per conversation (#458)', () => {
     ).rejects.toThrow('No pending approval')
 
     expect(logged).toHaveBeenCalledWith(
-      expect.stringContaining('could not release sess-7'),
+      expect.stringContaining('could not release %s'),
+      'sess-7',
       expect.any(Error),
     )
   })

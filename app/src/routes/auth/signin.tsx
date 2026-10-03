@@ -3,7 +3,7 @@ import { useSearchParams } from '@solidjs/router'
 
 /**
  * Sign-in page. Direct Entra OIDC (#119): a single "Sign in with Microsoft"
- * action that hands off to the server route `/api/auth/login`, which starts
+ * action that POSTs to the server route `/api/auth/login`, which starts
  * the auth-code flow. No client-side auth SDK — the exchange is server-side.
  *
  * `?error=…` is set by the callback route on a failed sign-in so we can show a
@@ -24,7 +24,7 @@ export default function SignIn() {
   // `returnTo` arrives already-encoded in this page's own query string, and
   // `useSearchParams` hands it back decoded — so it is re-encoded here rather
   // than concatenated raw, or a conversation id's `?`/`&` would truncate it.
-  const loginHref = () => {
+  const loginAction = () => {
     const target = typeof params.returnTo === 'string' ? params.returnTo : ''
     return target ? `/api/auth/login?returnTo=${encodeURIComponent(target)}` : '/api/auth/login'
   }
@@ -85,25 +85,27 @@ export default function SignIn() {
         </Show>
 
         {/*
-          `rel="external"` is REQUIRED: without it @solidjs/router intercepts
-          the click and treats /api/auth/login as a client page route (→ 404),
-          so the server handler never runs. rel="external" forces a real
-          browser navigation that hits the API route and 302s to Entra.
+          A form POST, not a link (#429): starting sign-in mints a session and
+          fires session_start routines at the end of the round trip, so it is
+          never a GET another site could send. A native submission is a real
+          browser navigation — @solidjs/router only intercepts forms aimed at
+          its own `/_server` actions — so the route runs and 303s to Entra.
         */}
-        <a
-          href={loginHref()}
-          rel="external"
-          cyber-button
-          flex="~"
-          items="center"
-          justify="center"
-          gap="2"
-          w="full"
-          p="y-3"
-        >
-          <span class="i-material-symbols-grid-view" w="5" h="5" aria-hidden="true" />
-          Sign in with Microsoft
-        </a>
+        <form method="post" action={loginAction()}>
+          <button
+            type="submit"
+            cyber-button
+            flex="~"
+            items="center"
+            justify="center"
+            gap="2"
+            w="full"
+            p="y-3"
+          >
+            <span class="i-material-symbols-grid-view" w="5" h="5" aria-hidden="true" />
+            Sign in with Microsoft
+          </button>
+        </form>
 
         <p text="xs ui-text-tertiary center" m="t-6">
           Access is restricted to authorized accounts. If you need access, please contact the

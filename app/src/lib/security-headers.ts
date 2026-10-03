@@ -39,7 +39,9 @@
  *
  * Note what it does NOT stop: a same-origin image is `'self'`, so an
  * `<img src="/api/auth/logout">` would load. Refusing those is the sanitizer's
- * job, and the reason its rule is narrower than this header.
+ * job, and the reason its rule is narrower than this header. (That one is a
+ * `405` since #429 — no GET route changes state — but the sanitizer does not
+ * rely on it.)
  *
  * ## `X-DNS-Prefetch-Control: off`
  *

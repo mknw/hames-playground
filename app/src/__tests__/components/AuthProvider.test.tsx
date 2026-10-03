@@ -248,9 +248,16 @@ describe('AuthProvider', () => {
     expect(navigate).not.toHaveBeenCalled()
   })
 
-  it('exposes signOut, which hands off to the server logout route', async () => {
+  it('exposes signOut, which POSTs a form to the server logout route — never a GET (#429)', async () => {
     isBypassEnabled.mockReturnValue(true)
-    // jsdom refuses a real navigation, so stand in a writable location.
+    // jsdom refuses a real navigation: capture the submission, and stand in a
+    // writable location so a GET navigation would be visible too.
+    const submitted: HTMLFormElement[] = []
+    const submit = vi.spyOn(HTMLFormElement.prototype, 'submit').mockImplementation(function (
+      this: HTMLFormElement,
+    ) {
+      submitted.push(this)
+    })
     const original = window.location
     const stub = { href: '' }
     Object.defineProperty(window, 'location', { value: stub, writable: true, configurable: true })
@@ -268,8 +275,14 @@ describe('AuthProvider', () => {
     await tick()
 
     await signOut()
-    expect(stub.href).toBe('/api/auth/logout')
+    expect(submitted).toHaveLength(1)
+    expect(submitted[0].method).toBe('post')
+    expect(new URL(submitted[0].action).pathname).toBe('/api/auth/logout')
+    expect(submitted[0].isConnected).toBe(true) // a detached form does not submit
+    expect(stub.href).toBe('')
 
+    submitted[0].remove()
+    submit.mockRestore()
     Object.defineProperty(window, 'location', {
       value: original,
       writable: true,

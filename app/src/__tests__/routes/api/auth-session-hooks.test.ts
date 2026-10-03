@@ -4,7 +4,9 @@
  * `session_end` is asserted through the real logout route, which is where the
  * ordering actually matters: the owner has to be resolved from the opaque
  * cookie BEFORE the session row is deleted, or there is nothing left to map it
- * back to a user. Sign-out must also survive a routine or lookup failure.
+ * back to a user. Sign-out must also survive a routine or lookup failure. And
+ * since #429 it is a same-origin POST: no GET, and no other site, can make a
+ * browser sign out and fire its `session_end` routines.
  *
  * (`session_start` lives in `/api/auth/callback`, behind a full MSAL code
  * redemption; its hook is covered at the dispatcher level in
@@ -40,13 +42,14 @@ vi.mock('~/lib/auth/entra-config.server', () => ({
   buildEntraConfig: () => ({}),
 }))
 
-const { GET } = await import('../../../routes/api/auth/logout')
+const { GET, POST } = await import('../../../routes/api/auth/logout')
 
-function evt(cookie?: string) {
+function evt(cookie?: string, site = 'same-origin') {
   return {
     params: {},
     request: new Request('http://x/api/auth/logout', {
-      headers: cookie ? { cookie } : {},
+      method: 'POST',
+      headers: { 'sec-fetch-site': site, ...(cookie ? { cookie } : {}) },
     }),
   } as never
 }
@@ -63,34 +66,59 @@ beforeEach(() => {
   })
 })
 
-describe('GET /api/auth/logout', () => {
+describe('POST /api/auth/logout', () => {
   it('resolves the owner before deleting the session, then fires session_end', async () => {
-    const res = await GET(evt('kg_session=abc123'))
+    const res = await POST(evt('kg_session=abc123'))
 
-    expect(res.status).toBe(302)
+    expect(res.status).toBe(303)
     expect(calls).toEqual(['getSession', 'deleteSession', 'onSessionEnd'])
     expect(onSessionEnd).toHaveBeenCalledWith('user-1')
   })
 
   it('fires nothing when there is no session cookie', async () => {
-    await GET(evt())
+    await POST(evt())
     expect(getSession).not.toHaveBeenCalled()
     expect(onSessionEnd).not.toHaveBeenCalled()
   })
 
   it('still signs out when the owner cannot be resolved', async () => {
     getSession.mockResolvedValue(null)
-    const res = await GET(evt('kg_session=expired'))
-    expect(res.status).toBe(302)
+    const res = await POST(evt('kg_session=expired'))
+    expect(res.status).toBe(303)
     expect(deleteSession).toHaveBeenCalled()
     expect(onSessionEnd).not.toHaveBeenCalled()
   })
 
   it('still signs out when the session lookup throws', async () => {
     getSession.mockRejectedValue(new Error('postgres down'))
-    const res = await GET(evt('kg_session=abc123'))
-    expect(res.status).toBe(302)
+    const res = await POST(evt('kg_session=abc123'))
+    expect(res.status).toBe(303)
     expect(deleteSession).toHaveBeenCalled()
     expect(onSessionEnd).not.toHaveBeenCalled()
+  })
+})
+
+describe('session_end cannot be fired from another site (#429)', () => {
+  it('a GET of the old URL signs nobody out, clears nothing and fires nothing', async () => {
+    // A link, a redirect and an <img> all send a GET, with the Lax cookie.
+    // Handed the full event, as SolidStart would, whatever GET declares.
+    const get = new Request('http://x/api/auth/logout', {
+      headers: { 'sec-fetch-site': 'same-origin', cookie: 'kg_session=abc123' },
+    })
+    const res = await (GET as (event: unknown) => Response | Promise<Response>)({
+      params: {},
+      request: get,
+    })
+    expect(res.status).toBe(405)
+    expect(res.headers.get('Allow')).toBe('POST')
+    expect(res.headers.getSetCookie()).toEqual([])
+    expect(calls).toEqual([])
+  })
+
+  it('a cross-site POST is refused before the session is even looked up', async () => {
+    const res = await POST(evt('kg_session=abc123', 'cross-site'))
+    expect(res.status).toBe(403)
+    expect(res.headers.getSetCookie()).toEqual([])
+    expect(calls).toEqual([])
   })
 })

@@ -123,9 +123,16 @@ export function AuthProvider(props: AuthProviderProps) {
 
   const signOut = async () => {
     if (isServer) return
-    // Full navigation: the server route revokes the session, clears the
-    // cookie, and redirects to Entra sign-out.
-    window.location.href = '/api/auth/logout'
+    // A form POST, as a full navigation in this tab: the server route revokes
+    // the session, clears the cookie, and redirects to Entra sign-out. Never a
+    // GET (#429) — a GET is what any other site can make this browser send to
+    // that route, session cookie and all. A submission rather than `fetch`, so
+    // the browser follows the redirect off the authenticated page.
+    const form = document.createElement('form')
+    form.method = 'POST'
+    form.action = '/api/auth/logout'
+    document.body.append(form)
+    form.submit()
   }
 
   /** Routes that render without a session: sign-in and the shared-conversation

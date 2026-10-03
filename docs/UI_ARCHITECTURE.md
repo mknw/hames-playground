@@ -136,9 +136,11 @@ OpenID Connect **auth-code flow** — the code→token exchange runs server-side
 
 | Route                    | Does                                                                                                                                                               |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `GET /api/auth/login`    | generate PKCE + state + nonce (stashed in a short-lived **signed** handshake cookie) → 302 to Entra authorize                                                      |
+| `POST /api/auth/login`   | generate PKCE + state + nonce (stashed in a short-lived **signed** handshake cookie) → 303 to Entra authorize. A `GET` 303s to `/auth/signin` and starts nothing   |
 | `GET /api/auth/callback` | validate `state` vs the handshake cookie, redeem the code, enforce the allowlist, upsert `users`, create an `auth_sessions` row, set the `kg_session` cookie → `/` |
-| `GET /api/auth/logout`   | delete the session row (server-side revocation), clear the cookie, 302 to Entra sign-out                                                                           |
+| `POST /api/auth/logout`  | delete the session row (server-side revocation), clear the cookie, 303 to Entra sign-out. A `GET` is a `405`                                                       |
+
+**No `GET` changes state (#429).** A state change is a same-origin `POST` (`refuseCrossSite`, `app/src/lib/auth/csrf.server.ts`), and the middleware refuses any non-`POST` call to a `'use server'` function; the `SameSite=Lax` session cookie still rides a cross-site top-level `GET`, so it is not the barrier.
 
 Config lives in `app/src/lib/auth/entra-config.server.ts` (env: `AZURE_TENANT_ID`,
 `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AUTH_SESSION_SECRET`; see
@@ -187,7 +189,7 @@ const { user, loading, refetch, signOut } = useAuth();
 
 1. Authenticated user on `/auth/*` → redirect to `/`
 2. Unauthenticated user on protected route → redirect to `/auth/signin`
-3. `signOut()` → full navigation to `/api/auth/logout`
+3. `signOut()` → a form `POST` to `/api/auth/logout` (a full navigation)
 
 Allowlist rejection is enforced **server-side** (the callback sends unlisted
 emails to `/auth/access-denied` and mints no session).
@@ -195,9 +197,9 @@ emails to `/auth/access-denied` and mints no session).
 ### Sign-in page
 
 **File:** `app/src/routes/auth/signin.tsx` — a single **"Sign in with Microsoft"**
-link to `/api/auth/login`, which starts the OIDC flow. The link carries
-`rel="external"` so `@solidjs/router` doesn't intercept it as a client route
-(without that, the click is swallowed and the server route never runs).
+button in a form that POSTs to `/api/auth/login`, which starts the OIDC flow.
+`@solidjs/router` only intercepts forms aimed at its own `/_server` actions, so
+the submission is a real navigation and the server route runs.
 
 ### Dev Bypass (#42)
 
@@ -253,7 +255,7 @@ user().displayName; // Display name (nullable)
 user().email; // Email address
 
 // Sign out action:
-await signOut(); // → full navigation to /api/auth/logout (revokes session)
+await signOut(); // → form POST to /api/auth/logout (revokes session)
 ```
 
 **Component Structure:**

@@ -30,9 +30,10 @@ const WS = /\s/
 // 2. A NESTED literal was re-scanned at every level of the repair's recursion
 //    (trim, bracket match, split), so a literal d levels deep cost d times its
 //    length, until the recursion ran out of stack and threw a `RangeError`.
-// 3. Nested objects whose INNERMOST value is refused paid 2 at every nested
-//    colon, because the scan resumes one character after a refused literal and
-//    meets the next one: cubic, ~68 s at 16k chars and ~10 min at 200k.
+// 3. Nested objects whose INNERMOST value is refused paid the cost of 2 at
+//    every nested colon, because the scan resumes one character after a
+//    refused literal and meets the next one: cubic, ~68 s at 16k chars and
+//    ~10 min at 200k.
 //
 // `analyzeLiterals` now answers both questions for EVERY literal in one pass.
 // Whether a literal repairs depends only on its own items and on whether the

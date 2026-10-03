@@ -93,6 +93,28 @@ describe('serialize formatting', () => {
     )
   })
 
+  // #437. A recovery's `error` can be an untrusted tool's error text or a
+  // parse error quoting the model's own output, and the loop's turn log already
+  // hands both to the next prompt. Mutation: delete the `loop_recovery` case
+  // (fall through to the default JSON dump) → the raw error reaches the view.
+  it('renders a loop recovery from its class and round only, never its raw error', () => {
+    const view = createEventView(
+      ctxOf([
+        ev('loop_recovery', 'execute', {
+          failure: 'tool_error',
+          error: 'Permission denied: <text from an untrusted tool>',
+          tool: 'read_file',
+          turn: 2,
+          maxTurns: 12,
+        }),
+      ]),
+      { fromLast: false },
+    )
+    expect(view.serialize()).toBe(
+      '<loop_recovery>tool_error (read_file) at 3/12, fed back and continued</loop_recovery>',
+    )
+  })
+
   // Mutation: in the default case, always `JSON.stringify(event.data)` → a
   // bare string payload is rendered with its quotes.
   it('renders a non-object payload of an unformatted type as plain text', () => {
@@ -139,6 +161,27 @@ describe('error readers do not see warnings (#420)', () => {
       ctxOf([
         ev('user_message', 'h', { content: 'q' }),
         ev('warning', 'p', { task: 'intent_compaction', message: 'm', fallback: 'f', error: 'x' }),
+      ]),
+      { fromLast: false },
+    )
+    expect(view.hasErrors()).toBe(false)
+    expect(view.lastError()).toBeUndefined()
+  })
+
+  // #437: a failure a tool loop fed back and continued past is not a statement
+  // about the turn either (#235 was the synthesizer apologising for one).
+  // Mutation: make `errors()` select `['error', 'loop_recovery']` → reds.
+  it('a view holding only a loop recovery has no errors', () => {
+    const view = createEventView(
+      ctxOf([
+        ev('user_message', 'h', { content: 'q' }),
+        ev('loop_recovery', 'p', {
+          failure: 'tool_not_allowed',
+          error: 'Tool not allowed: run_command',
+          tool: 'run_command',
+          turn: 0,
+          maxTurns: 12,
+        }),
       ]),
       { fromLast: false },
     )

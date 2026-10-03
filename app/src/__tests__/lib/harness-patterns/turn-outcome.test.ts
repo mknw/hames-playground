@@ -184,6 +184,31 @@ describe('a side failure never fails the turn (#420)', () => {
   })
 })
 
+// #437: a tool loop that fed a failure back and went on records a
+// `loop_recovery`. Like a warning, it is a separate TYPE so `settleTurn` cannot
+// read a routed-around failure as the turn failing.
+describe('a recovered loop failure never fails the turn (#437)', () => {
+  // Mutation: make `lastTurnError` match `event.type === 'loop_recovery'` too
+  // → an empty turn whose only incident was a recovery reads as failed.
+  it('an empty turn whose only incident is a loop recovery is not reported as failed', async () => {
+    mockChain.mockImplementation(async (ctx: Ctx) => {
+      ctx.events.push({
+        id: `ev-${ctx.events.length}`,
+        type: 'loop_recovery',
+        ts: Date.now(),
+        patternId: 'execute',
+        data: { failure: 'tool_error', error: 'Permission denied', turn: 0, maxTurns: 12 },
+      })
+      return ctx
+    })
+
+    const result = await harness(pattern)('hi')
+
+    expect(result.status).toBe('running')
+    expect(result.context.error).toBeUndefined()
+  })
+})
+
 describe('the turn boundary on a multi-turn context', () => {
   it('continueSession is not condemned by an error from a PREVIOUS turn', async () => {
     const first = createContext<Record<string, unknown>>('first question', {}, 's1')

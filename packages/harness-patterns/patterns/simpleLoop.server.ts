@@ -28,12 +28,15 @@ import type { SubCall } from '../parallel-tools.server'
 import { getErrorHint, budgetHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { omitResultFields } from '../content-transforms'
-import {
-  resolveTurnBudget,
-  runtimeConfig,
-} from '../runtime-config.server'
+import { resolveTurnBudget, runtimeConfig } from '../runtime-config.server'
 import { activeTransports } from '../tool-transport.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
+import {
+  isRecoverableLLMFailure,
+  unparseableOutputFeedback,
+  invalidToolArgsFeedback,
+  trackLoopRecovery,
+} from '../loop-recovery.server'
 import { trimToFit } from '../token-budget.server'
 import type { ControllerFn } from '../types'
 import type { LLMCallRecord } from '../types'
@@ -372,9 +375,30 @@ export function simpleLoop<T extends SimpleLoopData>(
             controllerResult.llmCall,
           )
         } catch (controllerError) {
+          // The model answered and its answer would not parse (#437 slice 1):
+          // tell it so as this round's result and spend the next round on a
+          // fresh answer. The round is consumed — the adapter has already
+          // made its one corrective retry inside it. The turn has no tool
+          // call, so the log replays an empty action followed by the ERROR,
+          // the shape `controller-history-format.test.ts` pins as parseable.
+          if (isRecoverableLLMFailure(controllerError)) {
+            const feedback = unparseableOutputFeedback(controllerError)
+            turns.push({
+              n: turn,
+              tool_result: { tool: '', result: '', success: false, error: feedback },
+            })
+            trackLoopRecovery(
+              scope,
+              { failure: 'unparseable_output', error: controllerError.message, turn, maxTurns },
+              controllerError.llmCall,
+            )
+            continue
+          }
           const msg =
             controllerError instanceof Error ? controllerError.message : String(controllerError)
-          // Exit loop gracefully with partial results instead of losing everything
+          // Anything else is fatal, as it always was: the model never answered
+          // (transport, timeout, abort) or the failure is unclassified. Exit
+          // gracefully with partial results instead of losing everything.
           hasError = true
           errorMessage = msg
           errorTurn = turn
@@ -723,18 +747,25 @@ export function simpleLoop<T extends SimpleLoopData>(
           })
 
           // Partial failure → continue (the controller sees per-call __error
-          // entries and can retry just those); ALL failed → the existing
-          // break path (recoverable error event, compactExecution degrades).
+          // entries and can retry just those). ALL failed → the same, since
+          // #437 slice 1: the turn log above already carries every per-call
+          // error, so the next round is the controller's chance to react.
           if (!anySucceeded) {
-            hasError = true
-            errorMessage = `All ${allCalls.length} calls of the multi-call turn failed: ${errors.join('; ')}`
-            errorTurn = turn
-            // A batch that failed wholesale because the response was CUT OFF is
-            // an LLM-output failure, not a tool failure: carry the response so
-            // the panel can show what was actually generated. Tool-level
-            // failures keep no llmCall — the model's output was fine.
-            if (controllerLlmCall?.hitOutputCap) errorLlmCall = controllerLlmCall
-            break
+            trackLoopRecovery(
+              scope,
+              {
+                failure: 'batch_failed',
+                error: `All ${allCalls.length} calls of the multi-call turn failed: ${errors.join('; ')}`,
+                turn,
+                maxTurns,
+              },
+              // A batch that failed wholesale because the response was CUT OFF
+              // is an LLM-output failure, not a tool failure: carry the
+              // response so the panel can show what was actually generated.
+              // Tool-level failures keep no llmCall — the model's output was fine.
+              controllerLlmCall?.hitOutputCap ? controllerLlmCall : undefined,
+            )
+            continue
           }
 
           scope.data = { ...scope.data, turn, lastAction: action }
@@ -751,14 +782,25 @@ export function simpleLoop<T extends SimpleLoopData>(
           tools.includes(action.tool_name) ||
           scopedTransports.some((t) => t.ownsTool(action.tool_name))
         if (!allowed) {
-          hasError = true
-          errorMessage = `Tool not allowed: ${action.tool_name}. Allowed: ${tools.join(', ')}`
-          errorTurn = turn
-          // The BAML call SUCCEEDED and still ended the loop: the tool name the
-          // model chose is the defect, so the response that named it is the
-          // evidence. Carry it (see the tool_args branch below for why).
-          errorLlmCall = controllerLlmCall
-          break
+          // Nothing ran: record the refusal as the round's result so the next
+          // round can pick a tool that exists (#437 slice 1 — this used to end
+          // the loop, with rounds left, on one invented name).
+          const refusal = `Tool not allowed: ${action.tool_name}. Allowed: ${tools.join(', ')}`
+          turns.push({
+            n: turn,
+            reasoning: action.reasoning,
+            status: action.status,
+            tool_call: { tool: action.tool_name, args: action.tool_args },
+            tool_result: { tool: action.tool_name, result: '', success: false, error: refusal },
+          })
+          trackLoopRecovery(
+            scope,
+            { failure: 'tool_not_allowed', error: refusal, tool: action.tool_name, turn, maxTurns },
+            // The BAML call SUCCEEDED: the tool name the model chose is the
+            // defect, so the response that named it is the evidence.
+            controllerLlmCall,
+          )
+          continue
         }
 
         // Parse tool args (lenient — LLMs may output unquoted keys/values)
@@ -769,21 +811,37 @@ export function simpleLoop<T extends SimpleLoopData>(
           args = parsed.args
           argsRepair = parsed.repair
         } catch {
-          hasError = true
-          // Truncation-aware message: a response cut off at the client's
-          // max_tokens cap is not malformed JSON — name the real cause so the
-          // compactExecution/user sees it (actorCritic carries the retrying variant).
-          errorMessage = controllerLlmCall?.hitOutputCap
-            ? `tool_args for ${action.tool_name} were CUT OFF at the output-token ` +
-              `limit (response truncated mid-generation)`
-            : `Invalid tool_args JSON: ${action.tool_args}`
-          errorTurn = turn
-          // Unparseable or truncated `tool_args` is a failure OF the response,
-          // and the reason is only ever visible in the raw text — a cut-off
-          // heredoc, a bare string where JSON was required. `errorMessage`
-          // quotes the args; the llmCall carries the whole response.
-          errorLlmCall = controllerLlmCall
-          break
+          // Truncation-aware: a response cut off at the client's max_tokens
+          // cap is not malformed JSON, and generic "fix your JSON" feedback
+          // makes the model regenerate the same oversized payload — so the
+          // feedback names the real cause and how to split the work.
+          const feedback = invalidToolArgsFeedback(
+            action.tool_name,
+            action.tool_args,
+            controllerLlmCall?.hitOutputCap ?? false,
+          )
+          turns.push({
+            n: turn,
+            reasoning: action.reasoning,
+            status: action.status,
+            tool_call: { tool: action.tool_name, args: action.tool_args },
+            tool_result: { tool: action.tool_name, result: '', success: false, error: feedback },
+          })
+          trackLoopRecovery(
+            scope,
+            {
+              failure: 'invalid_tool_args',
+              error: feedback,
+              tool: action.tool_name,
+              turn,
+              maxTurns,
+            },
+            // Unparseable or truncated `tool_args` is a failure OF the
+            // response, and the reason is only ever visible in the raw text —
+            // a cut-off heredoc, a bare string where JSON was required.
+            controllerLlmCall,
+          )
+          continue
         }
 
         // Generate correlation ID for this tool call/result pair
@@ -884,11 +942,21 @@ export function simpleLoop<T extends SimpleLoopData>(
           ...(expansions.length > 0 ? { expansions } : {}),
         })
 
+        // A failed tool call is the round's observation, not the end of the
+        // loop (#437 slice 1, #425 C1): the turn above already carries the
+        // error, and the next round is the controller's chance to retry with
+        // corrected arguments, try another tool, or Return and say what went
+        // wrong. A partly failed batch always worked this way; a single failed
+        // call used to end the loop with rounds left.
         if (!result.success) {
-          hasError = true
-          errorMessage = result.error ?? 'Tool call failed'
-          errorTurn = turn
-          break
+          trackLoopRecovery(scope, {
+            failure: 'tool_error',
+            error: result.error ?? 'Tool call failed',
+            tool: action.tool_name,
+            turn,
+            maxTurns,
+          })
+          continue
         }
 
         // Update scope data

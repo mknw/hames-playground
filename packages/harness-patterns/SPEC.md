@@ -180,6 +180,7 @@ type EventType =
   | 'plan_created' // planner — upfront plan (observability; the plan itself travels on scope.data)
   | 'content_sanitized' // withInjectionGuard — untrusted content neutralized (observability + audit)
   | 'warning' // a side task (title, summaries, intent/query rewrite, reference pick, sandbox skills mount) failed; the turn ran on a fallback (#420)
+  | 'loop_recovery' // simpleLoop / actorCritic fed one failure back to the model and continued on its budget (#437)
 
 // Isolated workspace for each pattern
 interface PatternScope<T> {
@@ -593,9 +594,10 @@ and `tool_result.result` is an index-keyed map — `{"1": {tool, result}, "2":
 sub-call, one `tool_call`/`tool_result` event pair is tracked with a shared
 `batchId`, so observability, the compactExecution and graph extraction keep full
 per-tool fidelity. Partial failure → the loop continues (the controller retries
-just the failures); ALL sub-calls failed → the usual recoverable-error break
-path. `Return` and `expandPreviousResult` are singular-only — inside a batch
-they get a per-call error.
+just the failures); ALL sub-calls failed → the loop continues too, recorded as a
+`loop_recovery` (see "One failure does not end the loop" below). `Return` and
+`expandPreviousResult` are singular-only — inside a batch they get a per-call
+error.
 
 **Who writes the final answer: `returnStyle`** (#149). The loop's terminal
 `Return` prose never reaches the user. It does travel to `Synthesize` —
@@ -633,8 +635,51 @@ cached prompt head (system block + tier 1) at no per-turn cost.
 3. Execute returned tool via MCP
 4. Loop until `is_final` or max turns
 5. Prior tool results from earlier turns are passed as `turns_previous_runs: PriorResult[]` — a structured array separate from the current task's `turns`. The LLM can reference them with `ref:<ref_id>` in tool args; `resolveRefs()` auto-expands before MCP execution. Controlled by `rememberPriorTurns` (default: true) and `priorTurnCount` (default: 3).
-6. Controller errors are caught per-iteration — loop exits gracefully with partial results; errors are tracked as events and read by downstream patterns via `view.hasErrors()` / `view.lastError()`, scoped by ViewConfig (so they naturally expire with the view window)
+6. A recoverable failure is fed back as the round's result and the loop continues (next section). A fatal one — a controller that never answered, or an unclassified throw — ends the loop with its partial results; it is tracked as an `error` event and read by downstream patterns via `view.hasErrors()` / `view.lastError()`, scoped by ViewConfig (so it naturally expires with the view window)
 7. After the response reaches the user, `compactBulkData()` runs in the background: it summarizes the turn's `tool_result` events with the describe-tier client and stores each summary on its event. These summaries appear as `PriorResult.summary` on subsequent turns. See [Batched bulk-data compaction](#batched-bulk-data-compaction) for how N results become one call.
+
+**One failure does not end the loop (#437 slice 1, #425 C1/C2).** Both loops
+feed a recoverable failure back to the model as that round's (or attempt's)
+result and continue on their remaining budget. The failure costs the round —
+the budget still bounds the loop — and a model that never recovers is stopped by
+it, with the usual `kind: 'budget_exhausted'` marker.
+
+| Failure                                                     | Before             | Now, both loops                                                         |
+| ----------------------------------------------------------- | ------------------ | ----------------------------------------------------------------------- |
+| a tool call returns `success: false`                        | ended `simpleLoop` | the turn already carries the error; continue                            |
+| every call of a multi-call turn failed                      | ended `simpleLoop` | the per-call errors are in the turn; continue                           |
+| a tool name off the allowlist                               | ended `simpleLoop` | a turn with the refusal as its ERROR; never dispatched; continue        |
+| `tool_args` that do not parse (or were cut off)             | ended `simpleLoop` | a turn with the error — cut-off-aware, with the append advice; continue |
+| the controller/actor ANSWER would not parse (`recoverable`) | ended both loops   | a turn with no tool call and the feedback as its ERROR; continue        |
+
+What stays **fatal**, deliberately:
+
+- **The gateway-outage refusal** (#276) before the loop starts — no round can
+  bring the tools back.
+- **An LLM call that never answered**, and anything the implementation did not
+  classify. Recoverability is read off `LLMCallError.recoverable`, which only
+  the implementation sets (the BAML adapters: for `BamlValidationError`, the
+  same test their one corrective retry uses). It is never inferred from a
+  message, so a transport error, a timeout, an abort, or a plain `Error` from a
+  custom controller ends the loop as before — the model never answered, and the
+  next call would most likely fail the same way.
+- **A `callTool` that throws**, e.g. the deterministic sanitizer. Its throw
+  policy is an open owner decision (#206 D1) that this does not take.
+- **A critic that throws** (`actorCritic`). The critic is the loop's sole exit
+  authority; whether its own parse failure should be survivable is a separate
+  decision.
+
+Each recovery records one **`loop_recovery`** event (`LoopRecoveryEventData`:
+`failure`, the verbatim `error`, `tool?`, `turn`, `maxTurns`), carrying the
+failed call's `llmCall` when the model's answer is the defect — for an
+unparseable answer it is the only record of what the model said. It is
+deliberately **not** an `error`: `settleTurn`, `runChain`'s stop rule,
+`view.hasErrors()` and the chat's error bubble all read `error` as a statement
+about the turn, and a failure the loop routed around is not one (#235). It is
+always committed and renders metadata-only into LLM-facing serializations. The
+synthesizer still sees a failed call: `compactExecution`'s thread mode now
+reports a failed singular call as `{ __error }`, the shape batches already use,
+instead of a successful `null`.
 
 ### `actorCritic(actor, critic, tools, config?)`
 
@@ -667,6 +712,14 @@ interface ActorCriticConfig extends PatternConfig {
 3. Critic evaluates result
 4. Retry with feedback if insufficient
 5. Exit when sufficient or max retries
+
+A failed tool call, a refused tool name, unparseable `tool_args` and — since
+#437 — an actor answer that would not parse all go back to the actor through
+`previousAttempts` and cost one attempt; each records a `loop_recovery`. The
+fatal set is `simpleLoop`'s, plus a critic that throws (see "One failure does
+not end the loop" under `simpleLoop`). A refusal against an empty allowlist is
+recorded too: it used to be suppressed because, as an `error`, it flooded the
+synthesizer's view, and a `loop_recovery` reaches no such reader.
 
 **`criticCadence` — let the actor free-run a multi-step sequence.** By default
 (`1`) the critic runs after every successful turn. This interrupts multi-step
@@ -1634,6 +1687,7 @@ transformed into prompt-friendly types. The table below shows which harness
 | `intent_compacted`   | `IntentCompactedEventData`                                                                                                             | _(not sent to BAML)_                                    | compactIntent only (observability)                            |
 | `plan_created`       | `PlanCreatedEventData`                                                                                                                 | _(the plan reaches BAML as `plan_context` / `context`)_ | planner only; loops read `scope.data.plan`, not the event     |
 | `content_sanitized`  | `ContentSanitizedEventData`                                                                                                            | _(metadata only — NEVER the verbatim spans)_            | withInjectionGuard only (observability + human audit)         |
+| `loop_recovery`      | `LoopRecoveryEventData` (`failure`, `error`, `tool?`, `turn`, `maxTurns`)                                                              | _(metadata only — the turn log carries the feedback)_   | simpleLoop / actorCritic only (observability)                 |
 
 ### Per-Pattern: Events Read → BAML Inputs → BAML Return
 
@@ -1933,6 +1987,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE phases — scoped transports (innermost first) → process transports (registration order) → MCP gateway (terminal fallback, not a transport); leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element; drops the gateway's own management tools (`mcp-find`, `mcp-add`, `mcp-exec`, …) from the catalog (#412, #420)
 ├── compactBulkData.server.ts # compactBulkData(ctx, onPersist, { describe, describeBatch }) — the two describe fns are REQUIRED config (Lane A6)
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)
+├── loop-recovery.server.ts # The two loops' shared recovery rule (#437): isRecoverableLLMFailure(), the feedback texts, trackLoopRecovery()
 ├── token-budget.server.ts  # trimToFit(), estimateTokens() — rolling context window (getContextWindow moved to harness-baml/clients.server with the model tables)
 ├── injection-guard.ts      # Deterministic prompt-injection sanitizer (pure): rule corpus, neutralization, spotlight fence, LLM-screen folding
 │                           # (the guard's ALS scope was its own module until #374; it is now the run frame's `guard` slot, and `ActiveInjectionGuard` lives in injection-guard.ts beside the sanitizer it describes. Opposite nesting rule to transports — it UNIONS, see SD-5; read by callTool + retriever)

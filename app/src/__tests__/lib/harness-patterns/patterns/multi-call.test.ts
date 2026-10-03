@@ -155,19 +155,26 @@ describe('simpleLoop multi-call turns', () => {
     expect(result.events.filter((e) => e.type === 'error')).toHaveLength(0)
   })
 
-  it('all sub-calls failed: break path with a recoverable error event', async () => {
+  // #437 slice 1: a wholly failed batch used to `break` like a single failed
+  // call did. The per-call errors are already in the turn log, so the next
+  // round is the controller's chance to react — same as a partial failure.
+  it('all sub-calls failed: recorded as a recovery, and the controller is asked again', async () => {
     toolErrors.tool_a = 'down'
     toolErrors.tool_b = 'also down'
     const { result, controller } = await runPattern([
       batchAction({ tool: 'tool_a' }, [{ tool_name: 'tool_b', tool_args: '{}' }]),
     ])
 
-    expect(controller).toHaveBeenCalledTimes(1) // loop broke, no second call
-    const errors = result.events.filter((e) => e.type === 'error')
-    expect(errors).toHaveLength(1)
-    const errData = errors[0].data as { error: string; severity: string }
-    expect(errData.error).toContain('All 2 calls')
-    expect(errData.severity).toBe('recoverable')
+    expect(controller).toHaveBeenCalledTimes(2) // fed back, then Return
+    const seen = (controller.mock.calls[1][0] as ControllerInput).turns![0]!.tool_result!
+    expect(seen.success).toBe(false)
+    expect(seen.error).toContain('down')
+    const recoveries = result.events.filter((e) => e.type === 'loop_recovery')
+    expect(recoveries).toHaveLength(1)
+    const data = recoveries[0].data as { failure: string; error: string }
+    expect(data.failure).toBe('batch_failed')
+    expect(data.error).toContain('All 2 calls')
+    expect(result.events.filter((e) => e.type === 'error')).toEqual([])
   })
 
   it('sequential mode: in-order execution, stop on first failure, rest skipped', async () => {

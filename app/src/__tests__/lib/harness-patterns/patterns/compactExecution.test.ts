@@ -1077,6 +1077,51 @@ describe('compactExecution synth input fidelity', () => {
     expect(iterations[0].result).toBeNull()
   })
 
+  // #437 slice 1: the loops now continue past a failed call, so a failure can
+  // sit mid-thread with no error event to speak for it. Its result is `null`
+  // and Synthesize reports every iteration as a success, so the bare value read
+  // as "the tool returned nothing". Mutation: pair a singular result as
+  // `resultData.result` regardless of `success` → the error text is lost.
+  it('a failed singular call reaches the synthesizer as an __error, not a null success', async () => {
+    const { compactExecution, createScope, createEventView } = await harness()
+    let captured: import('@hames-ai/harness-patterns/types').CompactExecutionInput | undefined
+    const pattern = compactExecution({
+      mode: 'thread',
+      patternId: 'synth',
+      synthesize: async (input) => {
+        captured = input
+        return { value: 'ok' }
+      },
+    })
+
+    const action = (tool: string) => ({
+      action: { reasoning: '', tool_name: tool, tool_args: '{}', is_final: false },
+    })
+    const events: Ev[] = [
+      { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'q' } },
+      { type: 'pattern_enter', ts: 2, patternId: 'loop', data: {} },
+      { type: 'controller_action', ts: 3, patternId: 'loop', data: action('read_file') },
+      {
+        type: 'tool_result',
+        ts: 4,
+        patternId: 'loop',
+        data: { callId: 'tc1', tool: 'read_file', result: null, success: false, error: 'denied' },
+      },
+      { type: 'controller_action', ts: 5, patternId: 'loop', data: action('lookup') },
+      {
+        type: 'tool_result',
+        ts: 6,
+        patternId: 'loop',
+        data: { callId: 'tc2', tool: 'lookup', result: { rows: 1 }, success: true },
+      },
+    ]
+
+    await pattern.fn(createScope('test', {}), createEventView(ctxOf(events)))
+
+    const iterations = captured?.loopHistory?.iterations ?? []
+    expect(iterations.map((i) => i.result)).toEqual([{ __error: 'denied' }, { rows: 1 }])
+  })
+
   it('falls back to response mode when nothing real is left to report', async () => {
     const { compactExecution, createScope, createEventView } = await harness()
     let captured: import('@hames-ai/harness-patterns/types').CompactExecutionInput | undefined

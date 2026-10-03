@@ -303,10 +303,22 @@ stops when one is irrecoverable.
   controller (or any injected LLM callable) fails to produce a parseable
   response, the failure surfaces as `LLMCallError` — a typed error whose
   `llmCall` field is the `LLMCallRecord` of the failed call, **including
-  `rawOutput`: the only record of what the model actually said**. The pattern
-  catches it, commits the error event with the record attached, and lets the
-  loop retry. A consumer rendering errors to a user should surface
-  `llmCall.rawOutput` — the model's own words are the debugging artifact.
+  `rawOutput`: the only record of what the model actually said**. An
+  implementation that knows the model ANSWERED and the answer would not parse
+  constructs it with `{ recoverable: true }` (the BAML adapters do, for
+  `BamlValidationError`). The tool loops then feed the failure back to the
+  model and continue on their budget, recording a `loop_recovery` event with
+  the record attached; an unflagged `LLMCallError` — or any other throw — still
+  ends the loop with an `error` event, because "the model never answered" is
+  not something another round fixes. A consumer rendering errors to a user
+  should surface `llmCall.rawOutput` — the model's own words are the debugging
+  artifact.
+- **A failure a loop routed around is not an error.** `simpleLoop` and
+  `actorCritic` survive a failed tool call, a refused tool name and unparseable
+  `tool_args` the same way, and record each as a `loop_recovery`, never as an
+  `error`: every `error` reader (the turn's outcome, the chain's stop rule,
+  `view.hasErrors()`) reads it as a statement about the turn. See SPEC,
+  "One failure does not end the loop".
 - **Usage rides the same record.** Every injected LLM call may attach its
   `LLMCallRecord` (tokens, timing, cost basis); the error path re-attaches it
   so a failed call still counts.
@@ -344,7 +356,7 @@ The exports map:
 | `.`          | the barrel: patterns, combinators, the context/context-event API, `Tools()`, transports, `LLMCallError` |
 | `./patterns` | the pattern factories on their own (`router`, `simpleLoop`, `actorCritic`, …)                           |
 | `./guard`    | the injection guard's deterministic sanitizer, import-free on its own                                   |
-| `./*`        | any package file by path (deep imports, e.g. `@hames-ai/harness-patterns/tool-transport.server`)           |
+| `./*`        | any package file by path (deep imports, e.g. `@hames-ai/harness-patterns/tool-transport.server`)        |
 
 The package publishes to npm (`pnpm publish`, which rewrites `workspace:`
 specifiers at pack time); inside this workspace the app and the Docker image

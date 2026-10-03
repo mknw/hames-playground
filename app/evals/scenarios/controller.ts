@@ -12,6 +12,8 @@
  *  - a FINAL-ANSWER turn (a history that already contains the answer) — stop
  *  - a TOOL-ERROR turn — the feedback branch: the previous call failed, and the
  *    controller has to react to the error rather than re-issue the same call
+ *  - an UNPARSEABLE-ANSWER turn — the controller's own previous answer would
+ *    not parse and was fed back (#437), so the next one has to be a real action
  *
  * Plus `truncationDetectionScenario`, which is not a live-behaviour check at
  * all: it asserts that truncation detection is WIRED for the client under test.
@@ -309,6 +311,89 @@ export const controllerToolErrorScenario: Scenario = {
         noThinkingLeak(collector),
       ],
     }
+  },
+}
+
+/**
+ * The model's previous answer would not parse, and the loop fed that back
+ * instead of ending (#437 slice 1, #425 C1). The turn it adds is the shape
+ * `simpleLoop` writes: NO tool call — so the log replays an empty action — and
+ * an ERROR built by the same `unparseableOutputFeedback` production uses, so
+ * this grades the exact text the model will read.
+ *
+ * The risk being measured is a demonstration one (#248 was the precedent): the
+ * history now holds an assistant turn with an empty `tool_name`, and a model
+ * that continues the form of its own previous messages may copy it. Two
+ * variants, because the feedback differs: a plain parse failure, and an answer
+ * cut off at the output cap — the case the 4,096-token private tier makes
+ * common.
+ */
+async function unparseableTurn(hitOutputCap: boolean): Promise<LoopTurn> {
+  const { LLMCallError } = await import('@hames-ai/harness-patterns/types')
+  const { unparseableOutputFeedback } =
+    await import('@hames-ai/harness-patterns/loop-recovery.server')
+  const error = unparseableOutputFeedback(
+    new LLMCallError(
+      'Failed to coerce value: <root>: Missing required field: tool_args',
+      {
+        functionName: 'LoopController',
+        variables: {},
+        rawOutput:
+          '{"reasoning": "Query the graph for its labels", "tool_name": "read_neo4j_cypher"',
+        hitOutputCap,
+      },
+      undefined,
+      { recoverable: true },
+    ),
+  )
+  return { n: 0, tool_result: { tool: '', result: '', success: false, error } }
+}
+
+export const controllerUnparseableFeedbackScenario: Scenario = {
+  id: 'controller-unparseable-answer-feedback',
+  role: 'controller',
+  title: 'simpleLoop controller — recovers after its own unparseable answer',
+  what: 'the previous answer would not parse and was fed back (#437): the next answer is a valid action naming an offered tool, not the empty one replayed in the log',
+  run: async (ctx) => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const offered = new Set([...TOOLS.map((t) => t.name), 'Return', 'expandPreviousResult'])
+    const checks: Check[] = []
+    const collectors: Collector[] = []
+    for (const [label, cut] of [
+      ['parse failure', false],
+      ['cut off at the cap', true],
+    ] as const) {
+      const collector = new Collector(`eval-controller-unparseable-${cut ? 'cap' : 'parse'}`)
+      collectors.push(collector)
+      const action = await b.LoopController(
+        'What node labels exist in the graph?',
+        'inspect the graph schema and report the node labels',
+        TOOLS,
+        [await unparseableTurn(cut)],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        ctx.opts('controller', collector),
+      )
+      checks.push(
+        check(
+          `${label}: names an offered tool, not the empty one in the log`,
+          offered.has(action.tool_name),
+          `tool_name=${JSON.stringify(action.tool_name)}`,
+        ),
+        check(
+          `${label}: did not give up after one failed answer`,
+          action.tool_name !== 'Return',
+          `tool_name=${JSON.stringify(action.tool_name)} (no tool has run yet)`,
+        ),
+      )
+      const parsed = argsParseAsObject(action.tool_name, action.tool_args)
+      checks.push({ ...parsed, name: `${label}: ${parsed.name}` })
+    }
+    return { collectors, checks }
   },
 }
 

@@ -244,6 +244,7 @@ export type EventType =
   | 'plan_created'
   | 'content_sanitized'
   | 'warning'
+  | 'loop_recovery'
 
 /** Accounting record for one harness step (#122): token and cost totals
  *  summed across EVERY physical API call the step made — including truncation
@@ -1225,6 +1226,57 @@ export interface WarningEventData {
   error?: string
 }
 
+/**
+ * What a loop recovered from (#437 slice 1). A marker, so the panel and the
+ * tests key on it rather than on the wording of {@link LoopRecoveryEventData.error}.
+ */
+export type LoopRecoveryFailure =
+  /** The tool ran and reported failure. */
+  | 'tool_error'
+  /** Every call of a multi-call turn failed — ran and failed, or was refused
+   *  before running. The per-call reasons are in `error`. */
+  | 'batch_failed'
+  /** The model named a tool that is not on the loop's allowlist. */
+  | 'tool_not_allowed'
+  /** The model's `tool_args` did not parse — malformed, or cut off at the
+   *  output cap. */
+  | 'invalid_tool_args'
+  /** The controller's or actor's ANSWER could not be parsed into an action at
+   *  all: the implementation threw an `LLMCallError` marked `recoverable`. */
+  | 'unparseable_output'
+
+/**
+ * Data payload for a `loop_recovery` event: one failure inside `simpleLoop` or
+ * `actorCritic` that was fed back to the model as that round's observation,
+ * with the loop continuing on its remaining budget.
+ *
+ * Deliberately NOT an `error` event, for the reason `warning` is not one
+ * (#420): every reader of `error` treats it as a statement about the TURN —
+ * `settleTurn` turns "no response + an error" into a failed turn, `runChain`
+ * stops on an irrecoverable one, `compactExecution` hands `hasErrors()` to the
+ * synthesizer, which then apologises, and the chat paints a red bubble. A
+ * failure the loop routed around is none of those (#235), and a separate TYPE
+ * is what keeps every error reader from matching it by accident. If the loop
+ * never recovers, the budget runs out and THAT records the turn-level error
+ * (`kind: 'budget_exhausted'`).
+ *
+ * Always committed, and rendered metadata-only into LLM-facing serializations:
+ * `error` can quote a tool's error text or a parse error that echoes the
+ * model's own output, and the next prompt already carries both through the
+ * loop's turn log.
+ */
+export interface LoopRecoveryEventData {
+  failure: LoopRecoveryFailure
+  /** The failure, verbatim — a tool's error, the refusal, or the parse error. */
+  error: string
+  /** The tool involved, when there is one. */
+  tool?: string
+  /** 0-indexed round (`simpleLoop`) or attempt (`actorCritic`) that failed. */
+  turn: number
+  /** The budget in force, so a reader has both halves of "3 of 12". */
+  maxTurns: number
+}
+
 /** Data payload for reference_attached event — emitted by `withReferences` on pattern entry */
 export interface ReferenceAttachedEventData {
   candidates: Array<{ ref_id: string; tool: string; summary: string }>
@@ -1387,11 +1439,32 @@ export interface LLMResult<T> {
 export class LLMCallError extends Error {
   readonly llmCall: LLMCallRecord
   readonly cause?: unknown
-  constructor(message: string, llmCall: LLMCallRecord, cause?: unknown) {
+  /**
+   * The failure is in the model's ANSWER — it came back and could not be
+   * parsed (malformed, empty, or cut off at the output cap) — so asking again,
+   * told why, can succeed. `simpleLoop` and `actorCritic` feed such a failure
+   * back as the round's observation and continue on their remaining budget
+   * (#437 slice 1).
+   *
+   * Only the IMPLEMENTATION can know this (the BAML adapters set it for
+   * `BamlValidationError`), so core never infers it from the message. False
+   * covers everything else — a transport error, a timeout, an abort, and any
+   * failure the implementation did not classify — and the loops keep all of
+   * those fatal: the model never answered, so there is nothing to feed back,
+   * and the next call would most likely fail the same way.
+   */
+  readonly recoverable: boolean
+  constructor(
+    message: string,
+    llmCall: LLMCallRecord,
+    cause?: unknown,
+    options?: { recoverable?: boolean },
+  ) {
     super(message)
     this.name = 'LLMCallError'
     this.llmCall = llmCall
     if (cause !== undefined) this.cause = cause
+    this.recoverable = options?.recoverable === true
   }
 }
 

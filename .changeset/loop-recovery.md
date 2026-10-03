@@ -1,0 +1,15 @@
+---
+"@hames-ai/harness-patterns": minor
+"@hames-ai/harness-baml": minor
+---
+
+A single failure no longer ends a tool loop (#437 slice 1, from #425).
+
+- **`simpleLoop`** used to end on the first failed tool call, the first tool name off its allowlist, the first unparseable `tool_args`, the first multi-call turn whose calls all failed, and the first controller answer that would not parse — each with rounds left. Each is now fed back to the controller as that round's result, and the loop continues on its remaining budget. The failure costs the round, and a controller that never recovers is stopped by the budget with the usual `kind: 'budget_exhausted'` marker.
+- **`actorCritic`** already fed tool failures, refusals and bad `tool_args` back through `previousAttempts`. An actor answer that would not parse now goes the same way, instead of ending the loop with attempts left.
+- **What stays fatal**: the gateway-outage refusal before a loop starts, an LLM call that never answered (transport error, timeout, abort), any failure the implementation did not classify, a `callTool` that throws, and a critic that throws.
+- **`LLMCallError` gains `recoverable`** (constructor option `{ recoverable: true }`). Only an implementation sets it, and the loops read it rather than inferring it from the message. `wrapAsLLMCallError` (`@hames-ai/harness-baml`) sets it for `BamlValidationError`, the same test as its one corrective retry. **Behaviour change for custom controllers**: an `LLMCallError` without the flag, or a plain `Error`, still ends the loop, as before.
+- **New `loop_recovery` event** (`LoopRecoveryEventData`, `LoopRecoveryFailure`): one per recovery, carrying the failure class, the verbatim error, the tool, the round and the budget, plus the failed call's `llmCall` when the model's answer is the defect. It is always committed and rendered metadata-only into LLM-facing serializations. `settleTurn`, `runChain`'s stop rule and `EventView.hasErrors()` never read it. **Breaking for exhaustive consumers**: `EventType` gains `'loop_recovery'`, so a `Record<EventType, …>` or an exhaustive `switch` over it stops compiling until it handles the new member.
+- **`actorCritic`'s in-loop `error` events become `loop_recovery`**: the refused tool name and the unparseable `tool_args` events, which the chat painted as error bubbles and the synthesizer read as a failed run after the loop had recovered (#235). A refusal against an empty allowlist is now recorded too. It was suppressed only because, as an `error`, it flooded the synthesizer's view.
+- **`compactExecution`'s thread mode** reports a failed singular call as `{ __error }`, the shape batches already use, instead of a successful `null`. Now that a loop continues past a failure, that result is the synthesizer's only record of it.
+- The cut-off feedback for `tool_args` now carries the append advice in `simpleLoop` too, from one shared builder. `actorCritic`'s unparseable-args message quotes a bounded excerpt of the args instead of the full payload, which the attempt log already replays.

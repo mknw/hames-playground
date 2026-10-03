@@ -67,9 +67,9 @@ describe('repairJson — string content that was not escaped', () => {
   describe('minimal repros of the same class', () => {
     it('reads a content quote that the structure does not need as a delimiter', () => {
       // Two keys on purpose. On one key the lenient chain's last-resort
-      // handler happens to land on the right answer; on two it reads the
-      // `"` as the end of `path` and swallows `content` into it, returning
-      // ONE key and no error — so a single-key repro would pass with this
+      // handler happens to land on the right answer; on two it used to
+      // swallow `content` into `path`, returning ONE key and no error, and
+      // since #408 it throws — so a single-key repro would pass with this
       // strategy removed and pin nothing.
       expect(repairJson('{"path": "/work/f.py", "content": "print("hello")"}')).toEqual({
         path: '/work/f.py',
@@ -123,26 +123,24 @@ describe('repairJson — string content that was not escaped', () => {
       })
     })
 
-    // A REGRESSION GUARD, not a mutation-killed pin, and labelled so rather
-    // than left looking like one: the decline below is over-determined —
-    // readString's "a key must start with a quote", readObject's unexpected-
-    // token throw, and the full-consumption check each catch it alone, so no
-    // single mutation (nor the two in combination) reddens it. It is here
-    // because the plausible future change is someone adding BACKTRACKING to
-    // "improve" the recovery rate, and that would break it.
+    // A REGRESSION GUARD for THIS strategy, not a mutation-killed pin of it,
+    // and labelled so rather than left looking like one: the decline below is
+    // over-determined — readString's "a key must start with a quote",
+    // readObject's unexpected-token throw, and the full-consumption check each
+    // catch it alone, so no single mutation of this strategy (nor the two in
+    // combination) reddens it. It is here because the plausible future change
+    // is someone adding BACKTRACKING to "improve" the recovery rate, and that
+    // would break it. (The lenient chain's half IS mutation-killed: #408's M1.)
     it('declines when a content quote is followed by a real delimiter — the one ambiguous site', () => {
       // `print("hello", x)`: the quote after `hello` is followed by `,`, which
       // IS what closes a member value, so the structure cannot tell the two
       // readings apart. The greedy reading runs out of grammar one token later
       // and the WHOLE document is declined — a half-read `print("hello` must
-      // never reach a write tool. What the lenient chain then makes of it is
-      // its own pre-existing business; the assertion is that this strategy
-      // refused rather than guessed.
+      // never reach a write tool. The lenient chain used to fold `path` into
+      // `c` after that (#408); it declines too now, so the call throws.
       const raw = '{"c": "print("hello", x)", "path": "/work/f.py"}'
-      const out = repairJsonTracked(raw)
 
-      expect(out.repair?.strategy).not.toBe('unescaped-content')
-      expect(out.args.c).not.toBe('print("hello')
+      expect(() => repairJsonTracked(raw)).toThrow()
     })
 
     it('but keeps reading when the delimiter is the wrong one for this position', () => {
@@ -166,14 +164,16 @@ describe('repairJson — string content that was not escaped', () => {
       //
       // The key guard catches it: `b"",\"p` is a key that needed content
       // recovery, and a real key never does (a legitimate quote in one arrives
-      // escaped). It falls through to the lenient chain instead, which is free
-      // to make its own mess of it — but tags that as `lenient-tokens` rather
-      // than claiming a structural read.
+      // escaped). It falls through to the lenient chain instead, which used to
+      // fold `p` into `cmd` and run `echo "a", "b"","p":"/x` (#408) and now
+      // declines it as well — so the call throws: `actorCritic` retries it;
+      // `simpleLoop` ends the loop with a recoverable `Invalid tool_args JSON`
+      // error.
       const intended = { cmd: 'echo "a", "b"', p: '/x' }
       const underEscaped = JSON.stringify(intended).replace(/\\"/g, '"')
 
       expect(underEscaped).toBe('{"cmd":"echo "a", "b"","p":"/x"}')
-      expect(repairJsonTracked(underEscaped).repair?.strategy).not.toBe('unescaped-content')
+      expect(() => repairJsonTracked(underEscaped)).toThrow()
     })
 
     it('leaves a key alone when its quote arrived properly escaped', () => {

@@ -13,9 +13,8 @@ what the **Entra tenant owner** must provision, plus the env the app needs.
 
 ## 1. App registration
 
-Use the existing **DTalk v2** registration (client id
-`8006d5eb-14f6-4214-be5a-0f3448b34063`) or create one: Entra admin center →
-**App registrations** → **New registration**.
+Use an existing registration (its client id goes in `AZURE_CLIENT_ID`) or
+create one: Entra admin center → **App registrations** → **New registration**.
 
 - **Supported account types:** _Accounts in this organizational directory only_
   (single tenant). Gives a fixed `AZURE_TENANT_ID` and matches the MS-only

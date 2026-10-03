@@ -242,8 +242,9 @@ describe('sanitizeMarkdownHtml — images from outside the app do not load', () 
     ['a tab inside the scheme, which the parser deletes', `ht\ttps://${ATTACKER}/p.png`],
     ['the stash route on ANOTHER origin', `https://${ATTACKER}/api/stash/document/abc?download`],
     // Same origin, but not the stash route: an image is an authenticated GET,
-    // and these have side effects (sign-out + `session_end` routines; a session
-    // claim + container boot). This is why the rule is not "same origin".
+    // and these had side effects until #429 (sign-out + `session_end` routines;
+    // a session claim + container boot). This is why the rule is not "same
+    // origin" — it must not depend on every GET route staying harmless.
     ['a same-origin side-effecting route', '/api/auth/logout'],
     ['the same route, absolute', `${window.location.origin}/api/auth/logout`],
     ['another same-origin GET route', '/api/sandbox/pty/stream?sessionId=s1'],

@@ -12,7 +12,9 @@
  * Lifetime is decoupled from subscribers: switching UI tabs (the SupportPanel
  * unmounts tab content) drops the SSE connection, but the shell must survive
  * so cwd / env / running processes persist. So the PTY lives until the bash
- * process exits, or `IDLE_CLOSE_MS` passes with zero subscribers. While a PTY
+ * process exits, or `IDLE_CLOSE_MS` passes with zero subscribers — counted
+ * from the spawn too, since starting a shell and attaching to it are separate
+ * requests and the second may never come. While a PTY
  * exists it holds the attachment (refCount > 0), so the warm-pool / attachment
  * idle sweep can't reclaim the VM out from under an open terminal.
  *
@@ -186,6 +188,10 @@ export class PtyManager {
     term.onExit(() => this.dispose(sessionId, 'shell exited'))
 
     this.sessions.set(sessionId, session)
+    // Zero subscribers from birth: a shell nobody ever attaches to must still
+    // idle out, or it holds its container until the process restarts. The
+    // first `subscribe` cancels this, exactly as a re-mounted tab does.
+    this.scheduleIdleClose(sessionId)
     return session
   }
 

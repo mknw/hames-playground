@@ -105,7 +105,7 @@ describe('simpleLoop', () => {
     expect(pattern.config.patternId).toBe('limited-loop')
   })
 
-  it('passes config.fewShots through to the controller', async () => {
+  it('passes config.fewShots through to the controller when the loop holds their tools', async () => {
     const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
     const { createScope } = await import('@hames-ai/harness-patterns/context.server')
     const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
@@ -124,7 +124,9 @@ describe('simpleLoop', () => {
       },
     ]
 
-    const pattern = simpleLoop(mockController, ['Return'], {
+    // The allowlist holds the shot's tool: few-shots are filtered by it (#401),
+    // which `few-shots follow the allowlist` below pins.
+    const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
       patternId: 'shots-loop',
       fewShots,
     })
@@ -370,7 +372,11 @@ describe('simpleLoop execution', () => {
     expect(toolResults.length).toBeGreaterThanOrEqual(1)
   })
 
-  it('should track error when tool not in allowed list', async () => {
+  // #437 slice 1: a refused tool name used to `break` the loop with an `error`
+  // event. It is now the round's observation — recorded as a `loop_recovery`,
+  // fed back, and the controller asked again; only the budget ends a loop
+  // whose controller never stops naming the wrong tool.
+  it('records a tool off the allowed list as a recovery and keeps going', async () => {
     const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
     const { createScope } = await import('@hames-ai/harness-patterns/context.server')
     const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
@@ -404,12 +410,23 @@ describe('simpleLoop execution', () => {
 
     const result = await runInFrame(() => pattern.fn(scope, view))
 
+    const recoveries = result.events.filter((e) => e.type === 'loop_recovery')
+    expect(recoveries[0]?.data).toMatchObject({
+      failure: 'tool_not_allowed',
+      tool: 'forbidden_tool',
+      turn: 0,
+    })
+    expect(JSON.stringify(recoveries[0].data)).toContain('Tool not allowed')
+    expect(mockController.mock.calls.length).toBeGreaterThan(1)
+    // The same answer every round: the consecutive-recovery cap (default: 1 recovery)
+    // ends the loop before the budget does.
     const errorEvents = result.events.filter((e) => e.type === 'error')
-    expect(errorEvents.length).toBeGreaterThan(0)
-    expect(JSON.stringify(errorEvents[0].data)).toContain('Tool not allowed')
+    expect(errorEvents.map((e) => (e.data as { kind?: string }).kind)).toEqual([
+      'recovery_exhausted',
+    ])
   })
 
-  it('should track error when tool_args JSON is invalid', async () => {
+  it('records unparseable tool_args as a recovery and keeps going', async () => {
     const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
     const { createScope } = await import('@hames-ai/harness-patterns/context.server')
     const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
@@ -443,9 +460,16 @@ describe('simpleLoop execution', () => {
 
     const result = await runInFrame(() => pattern.fn(scope, view))
 
+    const recoveries = result.events.filter((e) => e.type === 'loop_recovery')
+    expect(recoveries[0]?.data).toMatchObject({ failure: 'invalid_tool_args', turn: 0 })
+    expect(JSON.stringify(recoveries[0].data)).toContain('Invalid tool_args JSON')
+    expect(mockController.mock.calls.length).toBeGreaterThan(1)
+    // The same answer every round: the consecutive-recovery cap (default: 1 recovery)
+    // ends the loop before the budget does.
     const errorEvents = result.events.filter((e) => e.type === 'error')
-    expect(errorEvents.length).toBeGreaterThan(0)
-    expect(JSON.stringify(errorEvents[0].data)).toContain('Invalid tool_args JSON')
+    expect(errorEvents.map((e) => (e.data as { kind?: string }).kind)).toEqual([
+      'recovery_exhausted',
+    ])
   })
 
   it('dispatches under-escaped tool_args and marks the call as reconstructed', async () => {
@@ -596,7 +620,9 @@ describe('simpleLoop execution', () => {
     expect(toolCall?.data).not.toHaveProperty('repaired')
   })
 
-  it('should track error when tool execution fails', async () => {
+  // #437 slice 1 (#425 C1): a failed call is the round's observation, and the
+  // controller's next round can retry it. Before, it ended the loop here.
+  it('a failed tool call is fed back and the loop carries on to Return', async () => {
     const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
     const { createScope } = await import('@hames-ai/harness-patterns/context.server')
     const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
@@ -608,10 +634,17 @@ describe('simpleLoop execution', () => {
       error: 'Connection failed',
     })
 
-    const mockController = vi.fn().mockResolvedValue({
-      action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"test"}' }),
-      llmCall: undefined,
-    })
+    const mockController = vi
+      .fn()
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"test"}' }),
+        llmCall: undefined,
+      })
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"retry"}' }),
+        llmCall: undefined,
+      })
+      .mockResolvedValueOnce({ action: mockFinalAction('done'), llmCall: undefined })
 
     const pattern = simpleLoop(mockController, ['read_neo4j_cypher'], {
       patternId: 'test',
@@ -637,12 +670,26 @@ describe('simpleLoop execution', () => {
 
     const result = await runInFrame(() => pattern.fn(scope, view))
 
-    const errorEvents = result.events.filter((e) => e.type === 'error')
-    expect(errorEvents.length).toBeGreaterThan(0)
-    expect(JSON.stringify(errorEvents[0].data)).toContain('Connection failed')
+    expect(mockController).toHaveBeenCalledTimes(3)
+    // The second round saw the failure as its previous turn.
+    const secondTurns = (mockController.mock.calls[1][0] as ControllerInput).turns
+    expect(secondTurns[0].tool_result).toMatchObject({
+      success: false,
+      error: 'Connection failed',
+    })
+    expect(result.events.filter((e) => e.type === 'loop_recovery').map((e) => e.data)).toEqual([
+      expect.objectContaining({
+        failure: 'tool_error',
+        error: 'Connection failed',
+        tool: 'read_neo4j_cypher',
+        turn: 0,
+      }),
+    ])
+    // Recovered and finished: nothing for the synthesizer to apologise for.
+    expect(result.events.filter((e) => e.type === 'error')).toEqual([])
   })
 
-  it('should track error event when tool fails', async () => {
+  it('a failure on the last round leaves the budget marker, not a tool error', async () => {
     const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
     const { createScope } = await import('@hames-ai/harness-patterns/context.server')
     const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
@@ -661,6 +708,7 @@ describe('simpleLoop execution', () => {
 
     const pattern = simpleLoop(mockController, ['read_neo4j_cypher'], {
       patternId: 'test',
+      maxTurns: 1,
     })
 
     const scope = createScope('test', {})
@@ -683,10 +731,13 @@ describe('simpleLoop execution', () => {
 
     const result = await runInFrame(() => pattern.fn(scope, view))
 
-    // Verify error is tracked as an event, not in scope.data
+    // Verify the outcome is tracked as events, not in scope.data: the failure
+    // as a recovery, and the turn-level error is the exhausted budget.
+    const recovery = result.events.find((e) => e.type === 'loop_recovery')
+    expect(recovery?.data).toMatchObject({ failure: 'tool_error', error: 'Tool execution failed' })
     const errorEvents = result.events.filter((e) => e.type === 'error')
-    expect(errorEvents.length).toBeGreaterThan(0)
-    expect(JSON.stringify(errorEvents[0].data)).toContain('Tool execution failed')
+    expect(errorEvents).toHaveLength(1)
+    expect(errorEvents[0].data).toMatchObject({ kind: 'budget_exhausted', maxTurns: 1 })
   })
 
   it('should track error event when controller crashes', async () => {
@@ -2411,9 +2462,12 @@ describe('simpleLoop execution', () => {
       )
 
       expect(callToolMock).not.toHaveBeenCalledWith('rm_rf', expect.anything())
+      // Refused on every round it was named, never run (#437: a refusal is a
+      // recovery, so the loop asks again rather than ending).
       const refusal = result.events.find(
         (e) =>
-          e.type === 'error' &&
+          e.type === 'loop_recovery' &&
+          (e.data as { failure?: string }).failure === 'tool_not_allowed' &&
           String((e.data as { error?: string }).error).includes('Tool not allowed'),
       )
       expect(refusal).toBeDefined()
@@ -2452,5 +2506,96 @@ describe('simpleLoop execution', () => {
       const results = result.events.filter((e) => e.type === 'tool_result')
       expect(JSON.stringify(results.map((e) => e.data))).not.toContain('Tool not allowed')
     })
+  })
+})
+
+/**
+ * #401: a loop never demonstrates a tool it will refuse.
+ *
+ * The shipped Neo4j few-shots include a `write_neo4j_cypher` example. Once
+ * agents became read-only (#403) the write tool left every allowlist, and a
+ * controller that copied the example named a tool the loop refuses — the
+ * singular branch then spends a round on "Tool not allowed" (it ended the
+ * loop there before #437). The few-shots are
+ * filtered by the same predicate the call check uses, so the two cannot drift.
+ */
+describe('simpleLoop few-shots follow the allowlist (#401)', () => {
+  const read = { user: 'r', reasoning: 'r', tool: 'read_neo4j_cypher', args: '{}' }
+  const write = { user: 'w', reasoning: 'w', tool: 'write_neo4j_cypher', args: '{}' }
+  const schema = { user: 's', reasoning: 's', tool: 'get_neo4j_schema', args: '{}' }
+  const returns = { user: 'x', reasoning: 'x', tool: 'Return', args: 'done' }
+  const expand = { user: 'e', reasoning: 'e', tool: 'expandPreviousResult', args: 'ref:a' }
+  const sandbox = { user: 'b', reasoning: 'b', tool: 'sandbox_bash', args: '{}' }
+
+  const context = () => ({
+    sessionId: 'shots',
+    createdAt: Date.now(),
+    events: [
+      { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'q' } },
+    ],
+    status: 'running' as const,
+    data: {},
+    input: 'q',
+  })
+
+  /** Runs one loop whose controller answers Return at once, and returns the
+   *  few-shots the controller was handed on that call. */
+  async function shown(
+    tools: string[],
+    fewShots: (typeof read)[] | undefined,
+    frame: Parameters<typeof withRunFrame>[0] = {},
+  ) {
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
+    const controller = vi
+      .fn()
+      .mockResolvedValue({ action: mockFinalAction('done'), llmCall: undefined })
+    const pattern = simpleLoop(controller, tools, { patternId: 'shots', fewShots })
+    await withRunFrame(frame, () =>
+      pattern.fn(createScope('shots', {}), createEventView(context())),
+    )
+    expect(controller).toHaveBeenCalledTimes(1)
+    return (controller.mock.calls[0][0] as ControllerInput).fewShots
+  }
+
+  beforeEach(() => vi.clearAllMocks())
+
+  it('drops an example of a tool the allowlist does not hold, keeping the rest in order', async () => {
+    const fewShots = await shown(['read_neo4j_cypher', 'get_neo4j_schema'], [schema, write, read])
+    expect(fewShots).toEqual([schema, read])
+  })
+
+  it('keeps an example of every tool the allowlist does hold', async () => {
+    const writeFile = { user: 'f', reasoning: 'f', tool: 'write_file', args: '{}' }
+    const fewShots = await shown(['read_neo4j_cypher', 'write_file'], [read, writeFile])
+    expect(fewShots).toEqual([read, writeFile])
+  })
+
+  it('drops the Neo4j write example even when the allowlist names the tool (#403)', async () => {
+    // A tool withheld from every agent is not on any loop's allowlist, however
+    // the list was written — so its example is never shown either.
+    const fewShots = await shown(['read_neo4j_cypher', 'write_neo4j_cypher'], [read, write])
+    expect(fewShots).toEqual([read])
+  })
+
+  it('keeps Return and expandPreviousResult examples, which the loop always handles', async () => {
+    const fewShots = await shown(['read_neo4j_cypher'], [returns, write, expand])
+    expect(fewShots).toEqual([returns, expand])
+  })
+
+  it('keeps an example of a tool a scoped transport owns, as the call check does', async () => {
+    const transport = {
+      id: 'sandbox:shots',
+      ownsTool: (n: string) => n.startsWith('sandbox_'),
+      callTool: async () => ({ success: true, data: null }),
+      listTools: async () => [],
+    }
+    const fewShots = await shown([], [sandbox, write], { transports: [transport] })
+    expect(fewShots).toEqual([sandbox])
+  })
+
+  it('hands the controller no few-shots when the loop was given none', async () => {
+    expect(await shown(['read_neo4j_cypher'], undefined)).toBeUndefined()
   })
 })

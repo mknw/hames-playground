@@ -180,6 +180,7 @@ type EventType =
   | 'plan_created' // planner — upfront plan (observability; the plan itself travels on scope.data)
   | 'content_sanitized' // withInjectionGuard — untrusted content neutralized (observability + audit)
   | 'warning' // a side task (title, summaries, intent/query rewrite, reference pick, sandbox skills mount) failed; the turn ran on a fallback (#420)
+  | 'loop_recovery' // simpleLoop / actorCritic fed one failure back to the model and continued on its budget (#437)
 
 // Isolated workspace for each pattern
 interface PatternScope<T> {
@@ -339,7 +340,7 @@ pre-1.0, strict→lenient later is free, lenient→strict is breaking.
 ```typescript
 const tools = await Tools({ namespaces: mcpNamespace }) // mcpNamespace: the app's catalog
 const tools = ToolsFrom(descriptions, { namespaces: mcpNamespace }) // options optional here
-tools.neo4j // ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema']
+tools.neo4j // ['read_neo4j_cypher', 'get_neo4j_schema'] — never 'write_neo4j_cypher' (below)
 tools.web // ['search', 'fetch', 'fetch_content']
 tools.graph // app-side, per-user (see below)
 tools.all // all tool names
@@ -429,6 +430,28 @@ once if the gateway lists them (#412, #420). They reconfigure the gateway
 rather than do work, and agents misread them: `mcp-exec` as a shell, `mcp-add`'s
 "added 0 tools" as a success.
 
+`write_neo4j_cypher` is never in that catalog either, whatever the gateway
+lists, and `listTools()` warns once when it does (#403). Agents are read-only
+against Neo4j, `general` included: the one writer is the memory hook (#419),
+through the app. The list (`AGENT_WITHHELD_TOOLS`, asked through
+`isAgentWithheldTool`, which also sees through a gateway prefix and a server
+namespace prefix) is enforced twice: `listTools()` drops it, and every loop's
+allowlist check (`simpleLoop` and `actorCritic`, singular and batched) refuses
+it, so no loop allowlist holds it — not a hand-written one, and not one widened
+by `dynamicToolAllowlist` or `dynamicToolPattern`. `callTool` is not touched,
+so a write the app issues by name is left alone. The list lives in core for
+now, beside the management-tool list; moving it to a host-registered list is an
+open follow-up, due before the next release. The repository's gateway config also ships `read_only: true`,
+which keeps the server from offering the tool at all.
+
+The same list withholds the `database-server` tools (`query_database`,
+`execute_sql`, `list_tables`, `describe_table`, `connect_to_database`,
+`get_connection_examples`, `get_current_database_info`) in both places, with a
+drop warning of its own (#412). No agent reaches Postgres: the server ran SQL
+against the host app's own database. The repository's gateway catalog no longer
+defines it, and the list is what keeps a catalog that regains it from handing
+it to an agent.
+
 ### `simpleLoop(controller, tools, config?)`
 
 ReAct-style decide-execute loop. Calls BAML controller directly. A turn is
@@ -452,6 +475,7 @@ interface SimpleLoopConfig extends PatternConfig {
   resultOmit?: Record<string, string[]> // Per-tool fields hidden from the controller turn log (see below)
   multiToolCalls?: 'parallel' | 'sequential' | 'off' // Multi-call turns (default: 'parallel'; see below)
   returnStyle?: 'summary' | 'answer' // What the terminal `Return` carries (default: 'summary'; see below)
+  maxConsecutiveRecoveries?: number // Unusable answers in a row the loop feeds back before the next one is fatal (default: 1; see "One failure does not end the loop")
 }
 
 interface FewShot {
@@ -514,7 +538,13 @@ LLM benefits from seeing the canonical query shape (e.g., parameterized Cypher w
 `MERGE` semantics, bulk `UNWIND` patterns, idiomatic `toLower()` substring search).
 Keep the list short (3-5) — the prompt grows with every shot and is sent on every turn.
 See `packages/agents/agents/neo4j-fewshots.server.ts` for a worked example
-verified against the live Neo4j MCP.
+verified against the live Neo4j MCP. The loop filters the list by its allowlist
+before the controller sees it (#401): a shot whose `tool` the loop would refuse
+is dropped, because a model that copies it names a tool outside the allowlist and
+the loop spends a round on "Tool not allowed" (it ended the loop there before
+#437). Shots of `Return` and `expandPreviousResult`
+always stay. So the shipped Neo4j set, whose upsert example uses
+`write_neo4j_cypher`, shows a read-only loop only its two reads.
 
 **Hooks: `onToolResult`** (closes #7). Called between `callTool()` and the
 `tool_result` event being committed, so the hook can enrich or transform the tool's
@@ -593,9 +623,10 @@ and `tool_result.result` is an index-keyed map — `{"1": {tool, result}, "2":
 sub-call, one `tool_call`/`tool_result` event pair is tracked with a shared
 `batchId`, so observability, the compactExecution and graph extraction keep full
 per-tool fidelity. Partial failure → the loop continues (the controller retries
-just the failures); ALL sub-calls failed → the usual recoverable-error break
-path. `Return` and `expandPreviousResult` are singular-only — inside a batch
-they get a per-call error.
+just the failures); ALL sub-calls failed → the loop continues too, recorded as a
+`loop_recovery` (see "One failure does not end the loop" below). `Return` and
+`expandPreviousResult` are singular-only — inside a batch they get a per-call
+error.
 
 **Who writes the final answer: `returnStyle`** (#149). The loop's terminal
 `Return` prose never reaches the user. It does travel to `Synthesize` —
@@ -633,8 +664,111 @@ cached prompt head (system block + tier 1) at no per-turn cost.
 3. Execute returned tool via MCP
 4. Loop until `is_final` or max turns
 5. Prior tool results from earlier turns are passed as `turns_previous_runs: PriorResult[]` — a structured array separate from the current task's `turns`. The LLM can reference them with `ref:<ref_id>` in tool args; `resolveRefs()` auto-expands before MCP execution. Controlled by `rememberPriorTurns` (default: true) and `priorTurnCount` (default: 3).
-6. Controller errors are caught per-iteration — loop exits gracefully with partial results; errors are tracked as events and read by downstream patterns via `view.hasErrors()` / `view.lastError()`, scoped by ViewConfig (so they naturally expire with the view window)
+6. A recoverable failure is fed back as the round's result and the loop continues (next section). A fatal one — a controller that never answered, or an unclassified throw — ends the loop with its partial results; it is tracked as an `error` event and read by downstream patterns via `view.hasErrors()` / `view.lastError()`, scoped by ViewConfig (so it naturally expires with the view window)
 7. After the response reaches the user, `compactBulkData()` runs in the background: it summarizes the turn's `tool_result` events with the describe-tier client and stores each summary on its event. These summaries appear as `PriorResult.summary` on subsequent turns. See [Batched bulk-data compaction](#batched-bulk-data-compaction) for how N results become one call.
+
+**One failure does not end the loop (#437 slice 1, #425 C1/C2).** Both loops
+feed a recoverable failure back to the model as that round's (or attempt's)
+result and continue on their remaining budget. The failure costs the round —
+the budget still bounds the loop — and a model that never recovers is stopped by
+it, with the usual `kind: 'budget_exhausted'` marker, or sooner by the
+consecutive-recovery cap below.
+
+| Failure                                                     | Before             | Now, both loops                                                         |
+| ----------------------------------------------------------- | ------------------ | ----------------------------------------------------------------------- |
+| a tool call returns `success: false`                        | ended `simpleLoop` | the turn already carries the error; continue                            |
+| every call of a multi-call turn failed                      | ended `simpleLoop` | the per-call errors are in the turn; continue                           |
+| a tool name off the allowlist                               | ended `simpleLoop` | a turn with the refusal as its ERROR; never dispatched; continue        |
+| `tool_args` that do not parse (or were cut off)             | ended `simpleLoop` | a turn with the error — cut-off-aware, with the append advice; continue |
+| the controller/actor ANSWER would not parse (`recoverable`) | ended both loops   | a turn with no tool call and the feedback as its ERROR; continue        |
+
+What the model is told about an answer that would not parse depends on why
+(`unparseableOutputFeedback`). A cut-off at the output cap is told to answer
+SMALLER, with the append advice, and is not shown its own oversized text; an
+empty completion is told it was empty. Any other parse failure gets a bounded
+excerpt of the parser's message (≤ 300 characters, which field was missing) and
+a bounded HEAD of its own previous response (≤ 400 characters), labelled as its
+own. The turn log cannot show that response: no action was ever parsed out of
+it, so the round's assistant message replays an empty action, and before this
+the model read a diagnosis of an answer it could not see — a brace-less
+`key: value` envelope, the documented case, is visible only in the raw text.
+Nothing from outside the run enters the prompt this way: the excerpt is the
+model's own output from the round before, and any tool content it quotes was
+already in that round's prompt, in the form the turn log carried it.
+
+What stays **fatal**, deliberately:
+
+- **The gateway-outage refusal** (#276) before the loop starts — no round can
+  bring the tools back.
+- **An LLM call that never answered**, and anything the implementation did not
+  classify. Recoverability is read off `LLMCallError.recoverable`, which only
+  the implementation sets (the BAML adapters: for `BamlValidationError`, the
+  same test their one corrective retry uses). It is never inferred from a
+  message, so a transport error, a timeout, an abort, or a plain `Error` from a
+  custom controller ends the loop as before — the model never answered, and the
+  next call would most likely fail the same way.
+- **A `callTool` that throws**, e.g. the deterministic sanitizer — singular,
+  or in a multi-call turn whose calls all failed (the executor marks a thrown
+  sub-call `threw`, and `simpleLoop` keeps the fatal break for such a batch).
+  Its throw policy is an open owner decision (#206 D1) that this does not
+  take, so the batch behaviour is exactly what it was before #437: a batch in
+  which another call succeeded continues past a throw, as it always has.
+- **A critic that throws** (`actorCritic`). The critic is the loop's sole exit
+  authority; whether its own parse failure should be survivable is a separate
+  decision.
+
+**The consecutive-recovery cap** (`maxConsecutiveRecoveries`, default `1`, on
+both loops' configs; #450 review §3, owner decision 2026-10-03). The budget
+alone let a model that keeps producing unusable answers spend every round on
+them, and on the self-hosted tier a cut-off round is two full-cap generations
+(the answer and the adapter's corrective retry, up to ~5 min). So:
+
+- **What counts**: a round (attempt) whose ANSWER the loop cannot use — it would
+  not parse (`unparseable_output`), its `tool_args` would not parse
+  (`invalid_tool_args`), it named a tool off the allowlist
+  (`tool_not_allowed`), or it was a multi-call turn of which no call was
+  dispatched (every call refused or unparseable at the precheck, or skipped
+  behind one; recorded as `batch_failed`, which changes its label, not its
+  defect).
+- **What resets it**: any round that dispatches a tool, whatever the tool then
+  returns. A tool that ran and failed is never counted — fail, fix, fail is how
+  a sandbox actor debugs. A round that does neither leaves the count where it
+  was: an `expandPreviousResult`, a well-formed action that dispatches nothing.
+- **What happens at the cap**: the option counts RECOVERIES, the way `maxTurns`
+  counts what it permits. Up to `maxConsecutiveRecoveries` unusable answers in
+  a row are fed back; the next one is not. It is
+  fatal exactly as that failure was before #437 — an `error` with the failure's
+  own message, the pattern's `errorSeverity` (`recoverable` for both loops, so
+  the synthesizer still answers from the completed rounds, #83) and the failed
+  answer's `llmCall` — marked `kind: 'recovery_exhausted'` (in place of
+  `llm_call`) with `maxConsecutiveRecoveries` beside it and a hint naming the
+  lever. So the default stops a loop on its second unusable answer in a row,
+  after one recovery.
+- **The knob**: `0` permits no recovery, so the first unusable answer is fatal
+  (`simpleLoop`'s pre-#437 behaviour); `Infinity` leaves only the budget;
+  values below `0` are clamped to `0`.
+- **`actorCritic` differences**: a refused tool and unparseable `tool_args`
+  never ended that loop before #437 (they always went back through
+  `previousAttempts`), so for those two the cap is the first fatal path that
+  loop has — two in a row now end it. That binds the two sandbox agents
+  (`maxRetries: 6`): two consecutive unusable answers now stop them at attempt
+  2, where they used to spend all 6. And a refusal against a tool surface that
+  resolved to NOTHING — no static names, an empty `dynamicToolAllowlist()`, no
+  scoped transport, no `dynamicToolPattern` — neither counts nor resets: the
+  actor had no valid name to choose, and that shape is a gateway symptom, not
+  an answer defect. It is still fed back and recorded as `tool_not_allowed`.
+
+Each recovery records one **`loop_recovery`** event (`LoopRecoveryEventData`:
+`failure`, the verbatim `error`, `tool?`, `turn`, `maxTurns`), carrying the
+failed call's `llmCall` when the model's answer is the defect — for an
+unparseable answer it is the only record of what the model said. It is
+deliberately **not** an `error`: `settleTurn`, `runChain`'s stop rule,
+`view.hasErrors()` and the chat's error bubble all read `error` as a statement
+about the turn, and a failure the loop routed around is not one (#235). It is
+always committed and renders metadata-only into LLM-facing serializations. The
+synthesizer still sees a failed call: `compactExecution`'s thread mode now
+reports a failed singular call as `{ __error }`, the shape batches already use,
+instead of a successful `null`.
 
 ### `actorCritic(actor, critic, tools, config?)`
 
@@ -657,6 +791,8 @@ interface ActorCriticConfig extends PatternConfig {
   multiToolCalls?: 'parallel' | 'sequential' | 'off' // Same semantics as simpleLoop's (see above);
   // a batch records as ONE Attempt whose result is the combined map
   // the critic evaluates. Sandbox agents use 'sequential'.
+  maxConsecutiveRecoveries?: number // Default: 1. simpleLoop's cap, counted in attempts
+  // (see "One failure does not end the loop" under simpleLoop).
 }
 ```
 
@@ -667,6 +803,18 @@ interface ActorCriticConfig extends PatternConfig {
 3. Critic evaluates result
 4. Retry with feedback if insufficient
 5. Exit when sufficient or max retries
+
+A failed tool call, a refused tool name, unparseable `tool_args` and — since
+#437 — an actor answer that would not parse all go back to the actor through
+`previousAttempts` and cost one attempt; each records a `loop_recovery`, and the
+last three are subject to the consecutive-recovery cap. The
+fatal set is `simpleLoop`'s, plus a critic that throws (see "One failure does
+not end the loop" under `simpleLoop`), with one difference this does not
+change: a multi-call attempt has always continued when its calls threw, so
+that is still recorded as a `batch_failed` recovery rather than ending the
+loop — only a singular `callTool` throw is fatal here. A refusal against an empty allowlist is
+recorded too: it used to be suppressed because, as an `error`, it flooded the
+synthesizer's view, and a `loop_recovery` reaches no such reader.
 
 **`criticCadence` — let the actor free-run a multi-step sequence.** By default
 (`1`) the critic runs after every successful turn. This interrupts multi-step
@@ -1090,7 +1238,7 @@ interface PlannerConfig extends PatternConfig {
 
 **Why.** A `simpleLoop` controller re-derives its high-level approach on every
 turn. With a diverse tool surface (`tools.all` spanning `neo4j-cypher` +
-`database` + `web_search` + `context7`) that re-derivation is both the
+`memory` + `web_search` + `context7`) that re-derivation is both the
 expensive part of the prompt and the part most prone to greedy, locally
 coherent sequences ("search the web again" when turn 1 already pulled the
 docs). The planner pays for strategy once.
@@ -1634,6 +1782,7 @@ transformed into prompt-friendly types. The table below shows which harness
 | `intent_compacted`   | `IntentCompactedEventData`                                                                                                             | _(not sent to BAML)_                                    | compactIntent only (observability)                            |
 | `plan_created`       | `PlanCreatedEventData`                                                                                                                 | _(the plan reaches BAML as `plan_context` / `context`)_ | planner only; loops read `scope.data.plan`, not the event     |
 | `content_sanitized`  | `ContentSanitizedEventData`                                                                                                            | _(metadata only — NEVER the verbatim spans)_            | withInjectionGuard only (observability + human audit)         |
+| `loop_recovery`      | `LoopRecoveryEventData` (`failure`, `error`, `tool?`, `turn`, `maxTurns`)                                                              | _(metadata only — the turn log carries the feedback)_   | simpleLoop / actorCritic only (observability)                 |
 
 ### Per-Pattern: Events Read → BAML Inputs → BAML Return
 
@@ -1725,8 +1874,10 @@ BAML Return → string (assistant response text)
 
 > **Raw LLM output on a failed call**: an `error` event whose failure is
 > attributable to an LLM call carries `ErrorEventData.kind: 'llm_call'` (the
-> field's other value, `budget_exhausted`, marks a loop truncated by its round
-> budget — nothing failed there, so no call data is attached) and the
+> field's other values: `budget_exhausted` marks a loop truncated by its round
+> budget — nothing failed there, so no call data is attached — and
+> `recovery_exhausted` marks a loop ended by its consecutive-recovery cap, which
+> carries the failed call exactly as `llm_call` does) and the
 > full `ContextEvent.llmCall` — crucially `rawOutput`, the only record of what
 > the model actually said. Two families qualify and both must attach it:
 >
@@ -1930,9 +2081,11 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── run-frame.server.ts     # THE run frame — one ALS scope per run holding all five slots (guard / transports / config / live / inference), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, the rest replace), activeRunFrame() THROWS outside a frame and currentRunFrame() is the soft read
 ├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? and an optional RunFrame; each OPENS the run frame (ruling Q17/D5), or joins the host's
 ├── tool-transport.server.ts # ToolTransport + registerTransport() (process, consulted after every scoped one) / activeTransports() (reads the run frame's `transports` slot); the difference between the two ways to supply one IS the containment invariant — there is no priority field and no argument that could express one
-├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE phases — scoped transports (innermost first) → process transports (registration order) → MCP gateway (terminal fallback, not a transport); leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element; drops the gateway's own management tools (`mcp-find`, `mcp-add`, `mcp-exec`, …) from the catalog (#412, #420)
+├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE phases — scoped transports (innermost first) → process transports (registration order) → MCP gateway (terminal fallback, not a transport); leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element; drops the gateway's own management tools (`mcp-find`, `mcp-add`, `mcp-exec`, …) from the catalog (#412, #420), and `write_neo4j_cypher` and the `database-server` tools, which no agent holds (#403, #412)
+├── agent-withheld-tools.ts # AGENT_WITHHELD_TOOLS + isAgentWithheldTool() — the tools no agent may hold (#403: `write_neo4j_cypher`; #412: the `database-server` tools), each with the decision and server-side switch its drop warning names (withholdingFor()), seen through a gateway or server-namespace prefix; read by listTools() (the catalog) and by simpleLoop/actorCritic (every allowlist check), never by callTool
 ├── compactBulkData.server.ts # compactBulkData(ctx, onPersist, { describe, describeBatch }) — the two describe fns are REQUIRED config (Lane A6)
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)
+├── loop-recovery.server.ts # The two loops' shared recovery rule (#437): isRecoverableLLMFailure(), the feedback texts, the consecutive-recovery cap (recoveryStreak()), trackLoopRecovery()
 ├── token-budget.server.ts  # trimToFit(), estimateTokens() — rolling context window (getContextWindow moved to harness-baml/clients.server with the model tables)
 ├── injection-guard.ts      # Deterministic prompt-injection sanitizer (pure): rule corpus, neutralization, spotlight fence, LLM-screen folding
 │                           # (the guard's ALS scope was its own module until #374; it is now the run frame's `guard` slot, and `ActiveInjectionGuard` lives in injection-guard.ts beside the sanitizer it describes. Opposite nesting rule to transports — it UNIONS, see SD-5; read by callTool + retriever)

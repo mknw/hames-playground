@@ -1,15 +1,21 @@
-# Committed default gateway config. It holds NO credential: the two password
-# placeholders below are filled from the repo-root `.env` by the one-shot
+# Committed default gateway config. It holds NO credential: the Neo4j password
+# placeholder below is filled from the repo-root `.env` by the one-shot
 # `mcp-config` service in docker-compose.yaml (scripts/render-mcp-config.sh),
-# which is also what the databases themselves are created from — one source,
-# so the gateway cannot disagree with them. The gateway reads the rendered copy,
-# never this file directly. A deployment may still write literals here instead
-# (see .gitignore for that story); a file with no placeholder renders unchanged.
+# which is also what the database itself is created from — one source, so the
+# gateway cannot disagree with it. The gateway reads the rendered copy, never
+# this file directly. A deployment may still write literals here instead (see
+# .gitignore for that story); a file with no placeholder renders unchanged.
 # A fresh
 # clone needs this file to exist BEFORE `docker compose up -d`: compose
 # bind-mounts it into the mcp-gateway, and a missing file becomes an empty
 # directory inside the container, which the gateway refuses to start on.
 # Field reference: configs/template.mcp-config.yaml.
+#
+# No server in this file reaches Postgres, and none may: agents were never
+# meant to query the app's own database. The `database-server` MCP server was
+# removed from the catalog and from here, and the renderer now refuses a
+# leftover Postgres placeholder rather than fill it in. Pinned by
+# app/src/__tests__/lib/config/no-agent-postgres.test.ts.
 
 neo4j-cypher:
   enabled: true
@@ -17,7 +23,10 @@ neo4j-cypher:
   username: neo4j
   password: ${NEO4J_PASSWORD}
   database: neo4j
-  read_only: false
+  # Agents are read-only against Neo4j (#403): with `true` the server does not
+  # offer write_neo4j_cypher. Keep it `true` — the app withholds that tool
+  # from every agent anyway, so `false` only re-opens the server side.
+  read_only: true
 
 fetch:
   enabled: true
@@ -45,10 +54,6 @@ redis:
   username: ""
   password: ""
   ssl: false
-
-database-server:
-  enabled: true
-  database_url: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/hames
 
 playwright:
   enabled: true

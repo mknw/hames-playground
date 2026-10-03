@@ -5,8 +5,8 @@
 .harness-logs/
 
 # MCP config: configs/mcp-config.yaml is COMMITTED and holds no credential —
-# its `${NEO4J_PASSWORD}` / `${POSTGRES_PASSWORD}` placeholders are filled from
-# the root .env by the `mcp-config` compose service. A deployment that trims
+# its `${NEO4J_PASSWORD}` placeholder is filled from the root .env by the
+# `mcp-config` compose service. A deployment that trims
 # the server list edits it in place (docs/deployment/azure-vm.md, then
 # `git update-index --skip-worktree` it — gitignore does not affect a tracked
 # file). Until it existed, a fresh clone could not start the mcp-gateway at all:

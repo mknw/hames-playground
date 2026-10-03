@@ -7,6 +7,7 @@
 
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
+import { isAgentWithheldTool } from '../agent-withheld-tools'
 import { repairJson, repairJsonTracked, type JsonRepairNote } from '../json-repair'
 import { normalizeControllerAction } from '../controller-action'
 import type { LoopTurn, PriorResult, ExpandedRef } from '../types'
@@ -28,12 +29,18 @@ import type { SubCall } from '../parallel-tools.server'
 import { getErrorHint, budgetHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { omitResultFields } from '../content-transforms'
-import {
-  resolveTurnBudget,
-  runtimeConfig,
-} from '../runtime-config.server'
+import { resolveTurnBudget, runtimeConfig } from '../runtime-config.server'
 import { activeTransports } from '../tool-transport.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
+import {
+  isRecoverableLLMFailure,
+  unparseableOutputFeedback,
+  invalidToolArgsFeedback,
+  trackLoopRecovery,
+  resolveMaxConsecutiveRecoveries,
+  recoveryStreak,
+  recoveryExhaustedMarker,
+} from '../loop-recovery.server'
 import { trimToFit } from '../token-budget.server'
 import type { ControllerFn } from '../types'
 import type { LLMCallRecord } from '../types'
@@ -234,6 +241,13 @@ export function simpleLoop<T extends SimpleLoopData>(
     // setting, clamped to the bound the host's stuck-run reaper derives its
     // threshold from (`runtime-config.ts`, `resolveTurnBudget`).
     const maxTurns = resolveTurnBudget('maxToolTurns', config?.maxTurns, settings.maxToolTurns)
+    // The consecutive-recovery cap (#450 review §3): a run of answers this loop
+    // cannot use is fed back at most `maxConsecutiveRecoveries` times in a row; the next one takes the
+    // pre-#437 fatal path below with `recoveryCapHit` set. See `recoveryStreak`.
+    const maxConsecutiveRecoveries = resolveMaxConsecutiveRecoveries(
+      config?.maxConsecutiveRecoveries,
+    )
+    const streak = recoveryStreak(maxConsecutiveRecoveries)
     // Multi-call turns (ControllerAction.additional_calls). 'off' still
     // EXECUTES an un-advertised batch (serially) — it only stops the prompt
     // from inviting one, because the shared output schema means any agent's
@@ -253,6 +267,7 @@ export function simpleLoop<T extends SimpleLoopData>(
     let errorMessage: string | undefined
     let errorTurn: number | undefined
     let errorLlmCall: LLMCallRecord | undefined
+    let recoveryCapHit = false
     let exitedViaReturn = false
 
     // Build structured references to tool results from previous tasks.
@@ -300,6 +315,44 @@ export function simpleLoop<T extends SimpleLoopData>(
     // planner ran — the loop then behaves exactly as it did before.
     const planContext = formatPlanContext((scope.data as PlannerData).plan)
 
+    // THE ALLOWLIST, as one predicate. A tool withheld from agents
+    // (`isAgentWithheldTool`, #403) is refused even when `tools` names it — the
+    // catalog never lists one, but a hand-written allowlist can — and so is
+    // never advertised on the seam either. The rest of the static list is
+    // augmented by the tool surface of every transport scoped to this run —
+    // `sandbox_*` names pass without being listed in `tools` (see
+    // docs/plan/sandbox.md → "How tools reach the controller"); outside any
+    // scope `activeTransports()` is empty and this is the list alone. The
+    // singular check, the batch precheck and the few-shot filter below all ask
+    // THIS, so what the loop demonstrates cannot drift from what it accepts.
+    // (`tools` itself stays the outage guard's input above: that check keys on
+    // the array's identity.)
+    const allowlist = tools.filter((name) => !isAgentWithheldTool(name))
+    const isAllowedTool = (name: string): boolean =>
+      !isAgentWithheldTool(name) &&
+      (allowlist.includes(name) || activeTransports().some((t) => t.ownsTool(name)))
+    const refusal = (name: string): string =>
+      `Tool not allowed: ${name}` +
+      (isAgentWithheldTool(name) ? ' (withheld from every agent)' : '') +
+      `. Allowed: ${allowlist.join(', ')}`
+
+    // Few-shots are filtered by that same allowlist, once per run (#401). An
+    // example of a tool the loop will refuse is worse than no example: a model
+    // that copies it names a tool outside the allowlist, and the singular
+    // branch below spends a round on "Tool not allowed" (it ended the loop
+    // there before #437) instead of answering.
+    // The case that made this concrete is a read-only Neo4j (#403): the shipped
+    // Neo4j few-shots include a `write_neo4j_cypher` example, and with the
+    // write tool off the allowlist, copying it turned a write-shaped question
+    // into an error turn. `Return` and `expandPreviousResult` are loop-control
+    // actions this pattern always handles, so examples of them always stay.
+    // Same contract as `tools` on the seam (L14): the controller is shown only
+    // what this loop will run.
+    const fewShots = config?.fewShots?.filter(
+      (shot) =>
+        shot.tool === 'Return' || shot.tool === EXPAND_TOOL_NAME || isAllowedTool(shot.tool),
+    )
+
     try {
       for (let turn = 0; turn < maxTurns; turn++) {
         // Trim oldest turns if they would overflow the controller's context window
@@ -341,12 +394,12 @@ export function simpleLoop<T extends SimpleLoopData>(
             intent,
             // L14 (#225 Lane B3): the loop's allowlist IS the controller's
             // advertised list — one declaration, on the seam.
-            tools,
+            tools: allowlist,
             turns: trimmedTurns,
             turn,
             context: config?.schema,
             priorResults,
-            fewShots: config?.fewShots,
+            fewShots,
             multiCallMode: multiMode === 'off' ? undefined : multiMode,
             planContext,
             returnStyle,
@@ -372,9 +425,35 @@ export function simpleLoop<T extends SimpleLoopData>(
             controllerResult.llmCall,
           )
         } catch (controllerError) {
+          // The model answered and its answer would not parse (#437 slice 1):
+          // tell it so as this round's result and spend the next round on a
+          // fresh answer. The round is consumed — the adapter has already
+          // made its one corrective retry inside it. The turn has no tool
+          // call, so the log replays an empty action followed by the ERROR,
+          // the shape `controller-history-format.test.ts` pins as parseable.
+          if (isRecoverableLLMFailure(controllerError)) {
+            if (!streak.unusableAnswer()) {
+              const feedback = unparseableOutputFeedback(controllerError)
+              turns.push({
+                n: turn,
+                tool_result: { tool: '', result: '', success: false, error: feedback },
+              })
+              trackLoopRecovery(
+                scope,
+                { failure: 'unparseable_output', error: controllerError.message, turn, maxTurns },
+                controllerError.llmCall,
+              )
+              continue
+            }
+            // One unusable answer past the cap: fatal, by the path below.
+            recoveryCapHit = true
+          }
           const msg =
             controllerError instanceof Error ? controllerError.message : String(controllerError)
-          // Exit loop gracefully with partial results instead of losing everything
+          // Anything else is fatal, as it always was: the model never answered
+          // (transport, timeout, abort) or the failure is unclassified — and so
+          // is an unparseable answer that reached the consecutive-recovery cap.
+          // Exit gracefully with partial results instead of losing everything.
           hasError = true
           errorMessage = msg
           errorTurn = turn
@@ -550,7 +629,6 @@ export function simpleLoop<T extends SimpleLoopData>(
             { tool_name: action.tool_name, tool_args: action.tool_args },
             ...action.additional_calls,
           ]
-          const scopedTransports = activeTransports()
           const MAX_RESULT_CHARS = settings.maxResultChars
           const truncate = (s: string) =>
             s.length > MAX_RESULT_CHARS ? s.slice(0, MAX_RESULT_CHARS) + '…[truncated]' : s
@@ -588,13 +666,11 @@ export function simpleLoop<T extends SimpleLoopData>(
               })
               continue
             }
-            const callAllowed =
-              tools.includes(c.tool_name) || scopedTransports.some((t) => t.ownsTool(c.tool_name))
-            if (!callAllowed) {
+            if (!isAllowedTool(c.tool_name)) {
               track(c.tool_args)
               subCalls.push({
                 tool: c.tool_name,
-                precheckError: `Tool not allowed: ${c.tool_name}. Allowed: ${tools.join(', ')}`,
+                precheckError: refusal(c.tool_name),
               })
               continue
             }
@@ -678,6 +754,13 @@ export function simpleLoop<T extends SimpleLoopData>(
           )
 
           const outcomes = await runBatch(subCalls, multiMode)
+          // A batch breaks a run of unusable answers only if something in it was
+          // DISPATCHED — not one refused or unparseable at the precheck, and not
+          // one a serial batch skipped after an earlier failure. A batch of which
+          // nothing was dispatched holds only unusable answers, so it COUNTS
+          // (below) rather than slipping past the cap as a `batch_failed`.
+          const dispatched = subCalls.some((sc, i) => sc.run && !outcomes[i].skipped)
+          if (dispatched) streak.dispatched()
 
           outcomes.forEach((o, i) =>
             trackEvent(
@@ -723,42 +806,90 @@ export function simpleLoop<T extends SimpleLoopData>(
           })
 
           // Partial failure → continue (the controller sees per-call __error
-          // entries and can retry just those); ALL failed → the existing
-          // break path (recoverable error event, compactExecution degrades).
-          if (!anySucceeded) {
+          // entries and can retry just those). ALL failed → the same, since
+          // #437 slice 1: the turn log above already carries every per-call
+          // error, so the next round is the controller's chance to react.
+          //
+          // EXCEPT when a call THREW (`callTool` raised rather than returning
+          // a failure — the deterministic sanitizer's throw is the case that
+          // matters). A singular throw is fatal (the outer catch below), and
+          // the sanitizer's throw policy is #206 D1, an owner decision this
+          // loop does not take. So an all-failed batch holding a throw keeps
+          // the pre-#437 fatal break, exactly as before. (A batch in which
+          // another call SUCCEEDED continued past a throw before #437 too.)
+          if (!anySucceeded && outcomes.some((o) => o.threw)) {
             hasError = true
             errorMessage = `All ${allCalls.length} calls of the multi-call turn failed: ${errors.join('; ')}`
             errorTurn = turn
-            // A batch that failed wholesale because the response was CUT OFF is
-            // an LLM-output failure, not a tool failure: carry the response so
-            // the panel can show what was actually generated. Tool-level
-            // failures keep no llmCall — the model's output was fine.
             if (controllerLlmCall?.hitOutputCap) errorLlmCall = controllerLlmCall
             break
+          }
+          if (!anySucceeded) {
+            if (!dispatched && streak.unusableAnswer()) {
+              // The consecutive-recovery cap: a turn that dispatched nothing
+              // ends the loop as an all-failed batch did before #437.
+              hasError = true
+              errorMessage = `All ${allCalls.length} calls of the multi-call turn failed: ${errors.join('; ')}`
+              errorTurn = turn
+              errorLlmCall = controllerLlmCall
+              recoveryCapHit = true
+              break
+            }
+            trackLoopRecovery(
+              scope,
+              {
+                failure: 'batch_failed',
+                error: `All ${allCalls.length} calls of the multi-call turn failed: ${errors.join('; ')}`,
+                turn,
+                maxTurns,
+              },
+              // A batch that failed wholesale because the response was CUT OFF
+              // is an LLM-output failure, not a tool failure: carry the
+              // response so the panel can show what was actually generated.
+              // Tool-level failures keep no llmCall — the model's output was fine.
+              controllerLlmCall?.hitOutputCap ? controllerLlmCall : undefined,
+            )
+            continue
           }
 
           scope.data = { ...scope.data, turn, lastAction: action }
           continue
         }
 
-        // Validate tool. The static allowlist is augmented by the tool surface of
-        // every transport scoped to this run — `sandbox_*` names pass without
-        // being listed in `tools` (see docs/plan/sandbox.md → "How tools reach
-        // the controller"). Outside any scope, `activeTransports()` is empty and
-        // this collapses to the original check.
-        const scopedTransports = activeTransports()
-        const allowed =
-          tools.includes(action.tool_name) ||
-          scopedTransports.some((t) => t.ownsTool(action.tool_name))
-        if (!allowed) {
-          hasError = true
-          errorMessage = `Tool not allowed: ${action.tool_name}. Allowed: ${tools.join(', ')}`
-          errorTurn = turn
-          // The BAML call SUCCEEDED and still ended the loop: the tool name the
-          // model chose is the defect, so the response that named it is the
-          // evidence. Carry it (see the tool_args branch below for why).
-          errorLlmCall = controllerLlmCall
-          break
+        // Validate tool against the allowlist (`isAllowedTool`, above), which
+        // refuses a tool withheld from every agent (#403) whatever `tools` says.
+        if (!isAllowedTool(action.tool_name)) {
+          // Nothing ran: record the refusal as the round's result so the next
+          // round can pick a tool that exists (#437 slice 1 — this used to end
+          // the loop, with rounds left, on one invented name). `refusal()`
+          // names a withheld tool as such, so the model reads "withheld", not
+          // "misspelled", and a write-shaped request gets an answer.
+          const refused = refusal(action.tool_name)
+          if (streak.unusableAnswer()) {
+            // The consecutive-recovery cap: this refusal ends the loop exactly
+            // as every refusal did before #437.
+            hasError = true
+            errorMessage = refused
+            errorTurn = turn
+            errorLlmCall = controllerLlmCall
+            recoveryCapHit = true
+            break
+          }
+          turns.push({
+            n: turn,
+            reasoning: action.reasoning,
+            status: action.status,
+            tool_call: { tool: action.tool_name, args: action.tool_args },
+            tool_result: { tool: action.tool_name, result: '', success: false, error: refused },
+          })
+          trackLoopRecovery(
+            scope,
+            { failure: 'tool_not_allowed', error: refused, tool: action.tool_name, turn, maxTurns },
+            // The BAML call SUCCEEDED: the tool name the model chose is the
+            // defect, so the response that named it is the evidence.
+            controllerLlmCall,
+          )
+          continue
         }
 
         // Parse tool args (lenient — LLMs may output unquoted keys/values)
@@ -769,21 +900,47 @@ export function simpleLoop<T extends SimpleLoopData>(
           args = parsed.args
           argsRepair = parsed.repair
         } catch {
-          hasError = true
-          // Truncation-aware message: a response cut off at the client's
-          // max_tokens cap is not malformed JSON — name the real cause so the
-          // compactExecution/user sees it (actorCritic carries the retrying variant).
-          errorMessage = controllerLlmCall?.hitOutputCap
-            ? `tool_args for ${action.tool_name} were CUT OFF at the output-token ` +
-              `limit (response truncated mid-generation)`
-            : `Invalid tool_args JSON: ${action.tool_args}`
-          errorTurn = turn
-          // Unparseable or truncated `tool_args` is a failure OF the response,
-          // and the reason is only ever visible in the raw text — a cut-off
-          // heredoc, a bare string where JSON was required. `errorMessage`
-          // quotes the args; the llmCall carries the whole response.
-          errorLlmCall = controllerLlmCall
-          break
+          // Truncation-aware: a response cut off at the client's max_tokens
+          // cap is not malformed JSON, and generic "fix your JSON" feedback
+          // makes the model regenerate the same oversized payload — so the
+          // feedback names the real cause and how to split the work.
+          const feedback = invalidToolArgsFeedback(
+            action.tool_name,
+            action.tool_args,
+            controllerLlmCall?.hitOutputCap ?? false,
+          )
+          if (streak.unusableAnswer()) {
+            // The consecutive-recovery cap: these args end the loop as they
+            // did before #437, with the same message the recovery would carry.
+            hasError = true
+            errorMessage = feedback
+            errorTurn = turn
+            errorLlmCall = controllerLlmCall
+            recoveryCapHit = true
+            break
+          }
+          turns.push({
+            n: turn,
+            reasoning: action.reasoning,
+            status: action.status,
+            tool_call: { tool: action.tool_name, args: action.tool_args },
+            tool_result: { tool: action.tool_name, result: '', success: false, error: feedback },
+          })
+          trackLoopRecovery(
+            scope,
+            {
+              failure: 'invalid_tool_args',
+              error: feedback,
+              tool: action.tool_name,
+              turn,
+              maxTurns,
+            },
+            // Unparseable or truncated `tool_args` is a failure OF the
+            // response, and the reason is only ever visible in the raw text —
+            // a cut-off heredoc, a bare string where JSON was required.
+            controllerLlmCall,
+          )
+          continue
         }
 
         // Generate correlation ID for this tool call/result pair
@@ -811,7 +968,9 @@ export function simpleLoop<T extends SimpleLoopData>(
           resolved.trackHistory,
         )
 
-        // Execute tool with resolved args
+        // Execute tool with resolved args. A dispatch ends any run of unusable
+        // answers, whatever the tool then returns.
+        streak.dispatched()
         const result = await callTool(action.tool_name, resolvedArgs)
 
         // onToolResult hook: enrich/transform result before the event is committed.
@@ -884,11 +1043,21 @@ export function simpleLoop<T extends SimpleLoopData>(
           ...(expansions.length > 0 ? { expansions } : {}),
         })
 
+        // A failed tool call is the round's observation, not the end of the
+        // loop (#437 slice 1, #425 C1): the turn above already carries the
+        // error, and the next round is the controller's chance to retry with
+        // corrected arguments, try another tool, or Return and say what went
+        // wrong. A partly failed batch always worked this way; a single failed
+        // call used to end the loop with rounds left.
         if (!result.success) {
-          hasError = true
-          errorMessage = result.error ?? 'Tool call failed'
-          errorTurn = turn
-          break
+          trackLoopRecovery(scope, {
+            failure: 'tool_error',
+            error: result.error ?? 'Tool call failed',
+            tool: action.tool_name,
+            turn,
+            maxTurns,
+          })
+          continue
         }
 
         // Update scope data
@@ -913,6 +1082,12 @@ export function simpleLoop<T extends SimpleLoopData>(
             hint: getErrorHint(errorMessage ?? ''),
             turn: errorTurn,
             ...(errorLlmCall ? { kind: 'llm_call' as const } : {}),
+            // Stopped by the consecutive-recovery cap: the marker, the cap and
+            // a hint naming the lever replace `kind` and the message-keyed hint
+            // above; the failure, severity and llmCall are the pre-#437 ones.
+            ...(recoveryCapHit
+              ? recoveryExhaustedMarker(maxConsecutiveRecoveries, resolved.patternId)
+              : {}),
           } as ErrorEventData,
           true,
           errorLlmCall,

@@ -4,7 +4,8 @@
  * Hits the live Postgres container (mirrors conversations.test.ts). Skips
  * gracefully when Postgres isn't reachable so it passes on machines w/o docker.
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
+import { skipWithoutDatabase } from '../../test-database'
 
 // Bypass server-only guard in the jsdom test env.
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -44,8 +45,9 @@ afterAll(async () => {
 })
 
 describe('auth session store', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('round-trips a session (token cache now lives per-user, see #110)', async () => {
-    if (!dbAvailable) return
     const id = await createSession({
       userId: TEST_USER,
       email: 'u@corp.com',
@@ -65,7 +67,6 @@ describe('auth session store', () => {
   })
 
   it('treats an expired session as absent and prunes it', async () => {
-    if (!dbAvailable) return
     const id = await createSession(
       { userId: TEST_USER, email: 'e@corp.com', displayName: null, homeAccountId: null },
       { ttlSeconds: -5 },
@@ -74,14 +75,12 @@ describe('auth session store', () => {
   })
 
   it('returns null for unknown / blank ids', async () => {
-    if (!dbAvailable) return
     expect(await getSession('does-not-exist')).toBeNull()
     expect(await getSession(null)).toBeNull()
     expect(await getSession('')).toBeNull()
   })
 
   it('deleteExpiredSessions removes rows that are already past expiry (#129)', async () => {
-    if (!dbAvailable) return
     await createSession(
       { userId: TEST_USER, email: 'sweep@corp.com', displayName: null, homeAccountId: null },
       { ttlSeconds: -5 },

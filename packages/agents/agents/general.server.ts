@@ -32,6 +32,7 @@ import { bamlPatterns, createLoopControllerAdapter } from '@hames-ai/harness-bam
 import type { AgentData, AgentDefinition, AgentDeps } from '../types'
 
 import { getGraphSchema } from './graph-schema.server'
+import { NEO4J_READ_ONLY_CONTEXT } from './neo4j-fewshots.server'
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 
@@ -60,7 +61,11 @@ async function createPatterns(
     liveEvents: true,
   })
 
-  const executePattern = simpleLoop<AgentData>(createLoopControllerAdapter(), tools.all, {
+  // `tools.all` holds no Neo4j write tool — agents are read-only against Neo4j
+  // (#403), `general` included — and the context prefix tells the controller
+  // so, the same one the routed agents' Neo4j loops carry.
+  const controller = createLoopControllerAdapter(NEO4J_READ_ONLY_CONTEXT)
+  const executePattern = simpleLoop<AgentData>(controller, tools.all, {
     patternId: 'execute',
     schema,
     liveEvents: true,

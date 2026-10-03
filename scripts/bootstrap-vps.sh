@@ -84,7 +84,10 @@ readonly ENCRYPTION_BOUNDARY="56ac2b44af11d65c85cabc3096102c3cdc76d2ed"
 # The preview tool surface, sorted (docs/PREVIEW.md §3a; pinned for the overlay
 # by app/src/__tests__/lib/preview-tool-surface.test.ts).
 readonly PREVIEW_SERVERS="context7 fetch memory neo4j-cypher web_search"
-readonly PREVIEW_TOOL_COUNT=17
+# 16 since #403: with `read_only: true` the Neo4j server does not offer
+# write_neo4j_cypher (it was 17). Derived, not yet read off a live box — a 17
+# here means the gateway still lists the write tool (docs/PREVIEW.md, step 1b).
+readonly PREVIEW_TOOL_COUNT=16
 readonly KEYS_RE="AUTH_SESSION_SECRET|TOKEN_ENCRYPTION_KEY|DATA_ENCRYPTION_KEY"
 
 readonly STAGES=(preflight updates ssh firewall fail2ban docker checkout env hostname images boot seed smoke)
@@ -324,6 +327,14 @@ env_problems() {
   if ((n != 0 && n != 3)); then
     printf '%s\n' "private tier: $n of ${VERDA_TRIO[*]} set — all three or none (a partial tier is refused at run time)"
   fi
+  # Spliced raw into the app's DATABASE_URL (both compose files), where these
+  # break the URL. The gateway renderer used to refuse them; since #412 it
+  # never sees this value, so the check lives here. A generated one is hex.
+  case $(env_get POSTGRES_PASSWORD) in
+    *'&'* | *\\* | *'/'* | *'@'* | *':'* | *'#'* | *'?'* | *'%'* | *' '*)
+      printf '%s\n' "POSTGRES_PASSWORD must be URL-safe (no & \\ / @ : # ? % or space): it is spliced into the app's DATABASE_URL"
+      ;;
+  esac
   for k in VERDA_INFERENCE_ENDPOINT SMALL_LLM_BASE_URL; do
     v=$(env_get "$k")
     [[ -z $v || $v == */v1 ]] || printf '%s\n' "$k must end in /v1"
@@ -1129,10 +1140,10 @@ stage_checkout() {
   ok "deploying $(git -C "$APP_DIR" log -1 --format='%h %s' "$sha")"
 
   # docs/PREVIEW.md §3a, verbatim: exactly the overlay's five servers. The
-  # tracked file is the DEVELOPMENT set (redis, database-server, filesystem,
-  # playwright) — harmless behind the overlay's --servers allow-list, but the
-  # file and the allow-list should say the same thing. No literal password:
-  # the `mcp-config` service fills the placeholder from .env.
+  # tracked file is the DEVELOPMENT set (redis, filesystem, playwright) —
+  # harmless behind the overlay's --servers allow-list, but the file and the
+  # allow-list should say the same thing. No literal password: the
+  # `mcp-config` service fills the placeholder from .env.
   if put_file "$APP_DIR/configs/mcp-config.yaml" 0644 "$user:$user" <<'EOF'; then :; fi
 # /opt/hames/configs/mcp-config.yaml — written by scripts/bootstrap-vps.sh
 # from docs/PREVIEW.md §3a. Deliberately NOT the tracked development set: these
@@ -1143,7 +1154,7 @@ neo4j-cypher:
   username: neo4j
   password: ${NEO4J_PASSWORD} # filled from .env by the `mcp-config` render service
   database: neo4j
-  read_only: false
+  read_only: true # agents are read-only against Neo4j (#403), the preview included
 
 fetch:
   enabled: true

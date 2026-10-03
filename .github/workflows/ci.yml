@@ -241,6 +241,89 @@ jobs:
           flags: sandbox
           fail_ci_if_error: ${{ github.event_name == 'push' }}
 
+  # Layer 1's DB-backed tests, against a throwaway Postgres, on pull requests
+  # ONLY. The owner's decision (2026-10-03): "postgres to CI yes, but only
+  # pre-merge and not every push." `check` above runs the same suite with no
+  # database, so on a push to main those tests skip exactly as before.
+  #
+  # A separate job, because `services` cannot depend on the event: the job's
+  # own `if` is the only way to have a service container on one event and not
+  # on the other. The alternative, a `docker run` step inside `check` gated on
+  # the event, has no service health check (it needs a polling loop) and would
+  # make `check` measure coverage differently on a PR than on main (see the
+  # Codecov note below). The cost is a second install and a second run of the
+  # whole suite, in parallel with `check`, so it adds no wall clock to a PR.
+  # It runs the WHOLE suite rather than a list of DB test files: a list would
+  # silently leave out the next DB test file somebody adds.
+  #
+  # Codecov: this job uploads NOTHING. Codecov compares a PR's upload with its
+  # base commit on main, and main is a push, which has no database. An upload
+  # from here would credit every PR with a coverage rise it did not make and,
+  # under codecov.yml's `require_changes`, make Codecov comment on every PR.
+  # So `check` stays the one `app` upload on both events, measured the same
+  # way on both. What this run reaches is in its log (the text summary). The
+  # floors in app/vitest.config.ts apply here unchanged: same config, and this
+  # run covers a superset of what `check` covers.
+  postgres:
+    name: test · postgres
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        # Compose's major version (postgres:16-alpine), pinned by its index
+        # digest (16.15 when pinned) so a re-tag cannot change what CI tests
+        # against. The password is a throwaway: the container holds no data
+        # and is deleted with the job.
+        image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+        env:
+          POSTGRES_PASSWORD: test
+        # The private-Postgres port from docs/testing/pyramid.md, not 5432.
+        ports:
+          - 55439:5432
+        # The runner waits for `healthy` before the first step, so nothing
+        # below sleeps or polls. `-h 127.0.0.1` matters: the image's first-boot
+        # init runs a temporary server on the Unix socket only, and a socket
+        # check would report it ready just before it restarts.
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+
+    # Set explicitly, so the guard (app/src/__tests__/test-database.ts) takes
+    # its first branch, the URL as given, and never CI's "no database" one.
+    # `hames_test` is the unit suite's own database (#280); the suite's global
+    # setup creates it on the empty service.
+    #
+    # TEST_DATABASE_REQUIRED is what makes this job fail closed: a DB-backed
+    # test that would skip FAILS here (`skipWithoutDatabase`, same file). So a
+    # green run means they ran, whether the service was unreachable, the
+    # database was never created, or a skip condition is simply wrong.
+    # test-database-guard.test.ts pins that this job sets it.
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:test@127.0.0.1:55439/hames_test
+      TEST_DATABASE_REQUIRED: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+        working-directory: .
+
+      # The same command as `check`'s test step.
+      - name: Test against Postgres (with coverage floor)
+        run: pnpm test:run --coverage
+
   packages:
     name: pack · tarball install · exports probe
     runs-on: ubuntu-latest
@@ -439,6 +522,23 @@ jobs:
           code=$(curl -s -o /dev/null -w '%{http_code}' localhost:3444/api/stash)
           echo "/api/stash -> ${code}"
           [ "$code" = "200" ] || { echo "::error::/api/stash returned ${code} — the workspace package did not load at runtime"; exit 1; }
+
+      # #429 / #451: no server function runs from a GET. The guard keys on the
+      # router (`refuseServerFunctionGet`), and only a real nitro router shows
+      # which paths h3 hands to it: any whose percent-DECODED path starts with
+      # `/_server`, no segment boundary. A path-matching guard passed its unit
+      # tests and still ran the function on every variant but the first two
+      # below. 405 is the guard's answer and nothing else gives it: without the
+      # guard these answer 302 or 500 (the function ran) or 404 (an unknown id).
+      - name: Assert no server function runs from a GET
+        run: |
+          fn='src_lib_harness-client_preview-header_server_ts--igniteVerdaBox_1'
+          for p in /_server /_server/ /_serverx /_server.js /%5Fserver /_server%2F /_server%2Fx; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Referer: http://localhost:3444/' \
+              "localhost:3444${p}?id=${fn}&name=x")
+            echo "GET ${p}?id=… -> ${code}"
+            [ "$code" = "405" ] || { echo "::error::GET ${p}?id=… answered ${code}, not 405: a server function is reachable over GET"; exit 1; }
+          done
 
       - name: Container logs
         if: always()

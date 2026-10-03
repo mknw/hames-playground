@@ -11,7 +11,7 @@
  *   )
  *
  * Why: a `simpleLoop` controller re-derives its high-level approach on EVERY
- * turn. With a diverse tool surface (neo4j + database + web + context7) that
+ * turn. With a diverse tool surface (neo4j + memory + web + context7) that
  * re-derivation is the expensive part of the prompt and the part most prone to
  * greedy, locally-coherent choices. The planner pays for the strategy once.
  *

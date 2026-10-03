@@ -3,16 +3,22 @@
  *
  * Client-only widget (xterm needs the DOM, so it's all built in onMount with
  * dynamic imports to stay SSR-safe). Transport is SSE-down / POST-up:
- *   - EventSource /api/sandbox/pty/stream?sessionId  -> term.write (JSON-decoded)
+ *   - POST /api/sandbox/pty/stream { sessionId, agentId } -> { ticket }, then
+ *     EventSource /api/sandbox/pty/stream?ticket -> term.write (JSON-decoded)
  *   - term.onData -> POST /api/sandbox/pty/input { sessionId, data }
  *   - fit + ResizeObserver -> POST /api/sandbox/pty/resize { sessionId, cols, rows }
+ *
+ * The stream opens in two steps because a GET must never start a shell (#429):
+ * the POST does that and hands back a single-use ticket for the EventSource.
+ * A spent ticket also means EventSource's own reconnect (same URL) can never
+ * succeed, so a dropped stream is re-opened here, through a fresh POST.
  *
  * Mounting opens (or attaches to) the session's live sandbox shell; the
  * backend keeps the PTY alive across unmounts (tab switches) and replays
  * scrollback on reconnect, so the shell's cwd/env/processes persist.
  */
 import { onMount, onCleanup, createSignal } from 'solid-js'
-import { ptyStreamUrl, resizePty, sendPtyInput } from '~/lib/api-client'
+import { ApiError, openPtyStream, ptyStreamUrl, resizePty, sendPtyInput } from '~/lib/api-client'
 
 export interface InteractiveTerminalProps {
   sessionId: string
@@ -22,6 +28,11 @@ export interface InteractiveTerminalProps {
 }
 
 type ConnState = 'connecting' | 'connected' | 'closed'
+
+/** First re-open delay after a drop; each consecutive failure waits one more step. */
+const RECONNECT_STEP_MS = 1_000
+/** Consecutive failed re-opens before the tab stays disconnected (~15s of trying). */
+const MAX_RECONNECTS = 5
 
 export const InteractiveTerminal = (props: InteractiveTerminalProps) => {
   let containerRef: HTMLDivElement | undefined
@@ -63,6 +74,7 @@ export const InteractiveTerminal = (props: InteractiveTerminalProps) => {
     }
 
     const sessionId = props.sessionId
+    const agentId = props.agentId
 
     const postResize = () => {
       try {
@@ -79,19 +91,56 @@ export const InteractiveTerminal = (props: InteractiveTerminalProps) => {
     })
 
     // PTY output down. Each frame is a JSON-encoded raw byte string.
-    const es = new EventSource(ptyStreamUrl(sessionId, props.agentId))
-    es.onopen = () => {
-      setState('connected')
-      postResize()
+    let es: EventSource | undefined
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
+    let failures = 0
+
+    const reopenLater = () => {
+      setState('closed')
+      if (disposed || failures >= MAX_RECONNECTS) return
+      failures += 1
+      retryTimer = setTimeout(() => void connect(), RECONNECT_STEP_MS * failures)
     }
-    es.onmessage = (ev) => {
+
+    const connect = async () => {
+      if (disposed) return
+      setState('connecting')
+      let ticket: string
       try {
-        term.write(JSON.parse(ev.data) as string)
-      } catch {
-        /* malformed frame; skip */
+        ticket = await openPtyStream(sessionId, agentId)
+      } catch (err) {
+        if (disposed) return
+        if (err instanceof ApiError) {
+          // The server answered: a refused session or a shell that failed to
+          // start. Asking again would get the same answer.
+          setState('closed')
+          term.write(`\r\n[sandbox terminal unavailable: ${err.message}]\r\n`)
+          return
+        }
+        reopenLater() // unreachable server — it may be restarting
+        return
+      }
+      if (disposed) return
+
+      const source = new EventSource(ptyStreamUrl(ticket))
+      es = source
+      source.onopen = () => {
+        failures = 0
+        setState('connected')
+        postResize()
+      }
+      source.onmessage = (ev) => {
+        try {
+          term.write(JSON.parse(ev.data) as string)
+        } catch {
+          /* malformed frame; skip */
+        }
+      }
+      source.onerror = () => {
+        source.close()
+        reopenLater()
       }
     }
-    es.onerror = () => setState('closed')
 
     const ro = new ResizeObserver(() => postResize())
     ro.observe(containerRef)
@@ -99,18 +148,21 @@ export const InteractiveTerminal = (props: InteractiveTerminalProps) => {
     term.focus()
 
     const teardown = () => {
+      clearTimeout(retryTimer)
       dataSub.dispose()
-      es.close()
+      es?.close()
       ro.disconnect()
       term.dispose()
     }
 
-    // Unmounted while we were still booting/wiring — tear down now.
+    // Unmounted while we were still booting/wiring — tear down now, before
+    // the POST that would start a shell for a tab that is already gone.
     if (disposed) {
       teardown()
       return
     }
     dispose = teardown
+    void connect()
   })
 
   return (

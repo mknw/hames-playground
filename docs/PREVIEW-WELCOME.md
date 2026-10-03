@@ -30,10 +30,9 @@ You chat with it, and it can use tools on your behalf while it answers:
   files** — as you, with your permissions, so in Microsoft 365 it can never
   reach anything you could not open yourself;
 - search the **web**;
-- read and write a **knowledge graph**, and draw it for you — one shared graph,
-  the same one for everybody in the preview, so anything it writes there is
-  visible to a colleague's next question and anything they write is visible to
-  yours;
+- read a **knowledge graph**, and draw it for you — one shared graph, the same
+  one for everybody in the preview. It only reads it: ask it to add or change
+  something there and it should tell you it cannot;
 - **upload documents** and ask questions about them;
 - **run code** in a throwaway container for calculations, data wrangling and
   file conversion.

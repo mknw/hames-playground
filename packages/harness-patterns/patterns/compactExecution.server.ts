@@ -112,7 +112,17 @@ function buildSynthesisInputFromView(
               unpaired.delete(iterations.length - 1)
               openReceived++
               if (openExpected === 1) {
-                open.result = resultData.result
+                // A failed call carries its error in the batch's `__error`
+                // shape. Its `result` is null, and the synthesize step reports
+                // every iteration as a success, so the bare value read as "the
+                // tool succeeded and returned nothing". That was masked while a
+                // failed call always ended the loop and the error event carried
+                // the message; since the loops continue past a failure (#437
+                // slice 1) it is the synthesizer's only record of it.
+                open.result =
+                  resultData.success === false
+                    ? { __error: resultData.error ?? 'Tool call failed' }
+                    : resultData.result
               } else {
                 const acc = (open.result ?? {}) as Record<string, unknown>
                 acc[String(openReceived)] = resultData.success

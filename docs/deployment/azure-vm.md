@@ -323,9 +323,8 @@ hames-app` therefore says `active` on a deploy that serves nothing: verify by
 > **Snapshot the database before the first boot with `DATA_ENCRYPTION_KEY`
 > set.** That boot rewrites every existing `conversations` /
 > `users` / `auth_sessions` / `routines` row in place, and there is no
-> down-migration, no dry run and no decrypt-back script — the rollback advice
-> above ("drop the old tree — it is the rollback copy until then") is true of
-> the code and false of the data. Reverting to an earlier build does **not**
+> down-migration, no dry run and no decrypt-back script, so rolling the code
+> back does not roll the data back. Reverting to an earlier build does **not**
 > revert the rows; it produces a build that cannot read them. So:
 >
 > ```bash
@@ -344,41 +343,6 @@ hames-app` therefore says `active` on a deploy that serves nothing: verify by
 > instance. There is no `REDIS_URL`.
 
 ## 10. Operations
-
-**One-time `ui/` → `app/` rename migration** (only if this VM was deployed before
-the #193 rename): the systemd unit above already assumes `app/`, but an existing
-install still has the old dir, `.env` and unit paths. A VM that old also
-predates the hames rename, so this block keeps that install's own names
-(`/opt/kg-agent`, `kg-agent.service`) — read them for `/opt/hames` and
-`hames-app` in the recipes that follow.
-
-```bash
-cd /opt/kg-agent && git pull
-mv -n ui/.env app/.env          # -n: re-running the migration must not clobber app/.env
-sudo sed -i \
-  -e 's#WorkingDirectory=/opt/kg-agent/ui#WorkingDirectory=/opt/kg-agent/app#' \
-  -e 's#EnvironmentFile=/opt/kg-agent/ui/.env#EnvironmentFile=/opt/kg-agent/app/.env#' \
-  /etc/systemd/system/kg-agent.service
-sudo systemctl daemon-reload
-```
-
-Then run the **Update / redeploy** recipe below (install + build under `app/` +
-restart) and confirm the service is actually up:
-
-```bash
-systemctl is-active kg-agent && journalctl -u kg-agent -n 20 --no-pager
-```
-
-`is-active` alone is not the check — a bad `DATA_ENCRYPTION_KEY` leaves the
-unit `active` and every request failing (see the warning above). Read the
-`journalctl` output for `[db] schema ready`.
-
-Only once that restart is verified, drop the old tree — it is the rollback copy
-until then:
-
-```bash
-rm -rf /opt/kg-agent/ui
-```
 
 **Update / redeploy:**
 

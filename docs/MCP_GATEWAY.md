@@ -80,7 +80,7 @@ From `docker-compose.yaml`:
 
 ```yaml
 mcp-gateway:
-  image: docker/mcp-gateway
+  image: docker/mcp-gateway@sha256:… # pinned by digest (#417); see the comment in docker-compose.yaml
   restart: unless-stopped
   command:
     - --enable-all-servers

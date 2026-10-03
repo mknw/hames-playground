@@ -4,10 +4,12 @@
  * containers inside the unescaped-content strategy, where it DECLINES, and
  * the bracketed-literal repair's nested / quoted / refused shapes (#407), the
  * last-resort single-key handler's refusal of a multi-member object (#408),
- * and which `, word:` the key-quoting step reads as a key (#453).
+ * which `, word:` the key-quoting step reads as a key (#453), and what the
+ * linear rewrite of two quadratic regexes kept from them (#461; the cost
+ * itself is pinned in `json-repair-redos.test.ts`).
  *
  * Each test names the source mutation that reddens it; every one was run
- * (#407, #408 and #453 PR bodies, mutation tables). The colon check in `readObject` has no
+ * (#407, #408, #453 and #461 PR bodies, mutation tables). The colon check in `readObject` has no
  * test: `readString(':')` only closes a key on a `"` followed by `:`, so that
  * check cannot be reached and no input can redden a mutation of it.
  */
@@ -307,5 +309,35 @@ describe('key-quoting after a comma (#453)', () => {
     expect(repairJson(`{q: x, src://cdn.example.com/a.js}`)).toEqual({
       q: 'x, src://cdn.example.com/a.js',
     })
+  })
+})
+
+// #461: the value step and the last-resort handler were rewritten to be linear
+// (see `json-repair-redos.test.ts`). These pin the boundaries the old regexes
+// drew, which no earlier test reached. Every output below is what main returned
+// before the fix, recorded 2026-10-03.
+describe('what the linear rewrite kept (#461)', () => {
+  // Mutation V1: drop `.trimEnd()` from the value step → both values keep the
+  // whitespace before their terminator. The lazy group used to drop it.
+  it('trims the whitespace between a bare value and its terminator', () => {
+    expect(repairJson(`{a: two words   , b: 1}`)).toEqual({ a: 'two words', b: 1 })
+    expect(repairJson(`{a: x, b: two words \t}`)).toEqual({ a: 'x', b: 'two words' })
+  })
+
+  // Mutation S1: drop `original.endsWith('}')` from the last-resort handler →
+  // the slice eats the last character and the call returns
+  // `{ q: 'MATCH (n) RETURN' }`. A completion cut off at the output cap must
+  // throw, so the loop's truncation feedback runs instead of a wrong query.
+  it('throws on an object with no closing brace instead of slicing one off', () => {
+    expect(() => repairJson(`{q: MATCH (n) RETURN n`)).toThrow()
+  })
+
+  // Mutation S2: `> 1` → `> 0` → `{q:}` returns `{ q: '' }`. The old regex
+  // needed at least one character, whitespace included, between the colon and
+  // the `}`, so `{q: }` was accepted and `{q:}` was not. The asymmetry is
+  // pinned as it was, not endorsed.
+  it('keeps the old line between `{q: }` and `{q:}`', () => {
+    expect(repairJson(`{q: }`)).toEqual({ q: '' })
+    expect(() => repairJson(`{q:}`)).toThrow()
   })
 })

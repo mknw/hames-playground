@@ -648,10 +648,22 @@ export function repairJsonTracked(raw: string): RepairedJson {
   // `(?!\s)` pins `\s*` to the whole run of whitespace: without it the engine
   // backtracks to zero-width, the guards below inspect a space instead of the
   // first value character, and valid values get re-quoted ({a: 5} → {a: " 5"}).
-  s = s.replace(
-    /:\s*(?!\s)(?!")(?!-?\d[\d.]*)(?!true\b)(?!false\b)(?!null\b)(?![[{])([^,}\]]+?)\s*([,}\]])/g,
-    ': "$1"$2',
-  )
+  //
+  // Linear in the input, and both halves of that are load-bearing (#461). The
+  // value is taken GREEDILY up to the terminator and its trailing whitespace is
+  // trimmed afterwards: a lazy `+?` followed by `\s*` re-scanned the whole
+  // whitespace run at every extension, which is quadratic in the run. And the
+  // regex only sees the text up to the LAST terminator: a match cannot cross
+  // one, so no colon after it can match, but each of them would scan to the
+  // end of the input before failing — quadratic in the number of colons.
+  const end = Math.max(s.lastIndexOf(','), s.lastIndexOf('}'), s.lastIndexOf(']')) + 1
+  s =
+    s
+      .slice(0, end)
+      .replace(
+        /:\s*(?!\s)(?!")(?!-?\d[\d.]*)(?!true\b)(?!false\b)(?!null\b)(?![[{])([^,}\]]+)([,}\]])/g,
+        (_match, value: string, close: string) => `: "${value.trimEnd()}"${close}`,
+      ) + s.slice(end)
 
   s = unparkBracketedValues(s, parked)
 
@@ -669,11 +681,17 @@ export function repairJsonTracked(raw: string): RepairedJson {
   // final closing brace as a single string value. Only safe when the value has
   // no nested `{`/`}`, and when nothing in it looks like a second member — bail
   // otherwise, and the input throws (see `holdsSiblingMember`, #408).
+  //
+  // The value is SLICED, not captured (#461). The regex this replaces took it
+  // with a lazy `([\s\S]+?)\s*\}`, which re-scanned a whitespace run at every
+  // extension: ~14s of synchronous CPU at 200k characters. The two checks keep
+  // what it accepted — the input ends at a `}`, with at least one character
+  // between the colon and it.
   const original = raw.trim()
-  const singleKey = original.match(/^\{\s*"?([a-zA-Z_$][\w$]*)"?\s*:\s*([\s\S]+?)\s*\}\s*$/)
-  if (singleKey) {
-    const [, key, rawValue] = singleKey
-    const value = rawValue.trim()
+  const head = original.match(/^\{\s*"?([a-zA-Z_$][\w$]*)"?\s*:/)
+  if (head && original.endsWith('}') && original.length - head[0].length > 1) {
+    const key = head[1]
+    const value = original.slice(head[0].length, -1).trim()
     if (!value.includes('{') && !value.includes('}') && !holdsSiblingMember(value)) {
       // Strip optional surrounding quotes the LLM may or may not have added.
       const unquoted = value.replace(/^['"`]([\s\S]*)['"`]$/, '$1')

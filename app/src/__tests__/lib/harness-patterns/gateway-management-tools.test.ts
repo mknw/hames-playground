@@ -102,11 +102,12 @@ const FILESYSTEM_TOOLS: string[] = (() => {
 /** The in-VM sandbox surface, as `V0_IN_VM_SERVERS` exposes it. */
 const SANDBOX_TOOLS = V0_IN_VM_SERVERS.flatMap((s) => Object.values(s.tools))
 
-/** Ordinary server tools from the other catalog servers. */
+/** Ordinary server tools from the other catalog servers. `write_neo4j_cypher`
+ *  is not one an agent keeps since #403 — `agent-withheld-tools.test.ts` pins
+ *  that drop — so it is left out here to keep this file about one filter. */
 const SERVER_TOOLS = [
   'get_neo4j_schema',
   'read_neo4j_cypher',
-  'write_neo4j_cypher',
   'fetch',
   'search',
   'resolve-library-id',

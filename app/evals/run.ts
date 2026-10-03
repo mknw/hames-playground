@@ -37,6 +37,7 @@ import {
   controllerFinalAnswerScenario,
   controllerToolCallScenario,
   controllerToolErrorScenario,
+  controllerWriteOnReadOnlyScenario,
   truncationDetectionScenario,
 } from './scenarios/controller'
 import { criticAcceptScenario, criticRejectAndReviseScenario } from './scenarios/actor-critic'
@@ -57,6 +58,7 @@ export const SCENARIOS: Scenario[] = [
   controllerToolCallScenario,
   controllerFinalAnswerScenario,
   controllerToolErrorScenario,
+  controllerWriteOnReadOnlyScenario,
   criticAcceptScenario,
   criticRejectAndReviseScenario,
   synthesizerGroundedScenario,

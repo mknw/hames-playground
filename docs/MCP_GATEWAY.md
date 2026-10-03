@@ -40,7 +40,7 @@ The MCP Gateway is Docker's tool for managing and running MCP (Model Context Pro
 
 | Server                | Title               | Tools                                                                             | Auth                 | Backend            |
 | --------------------- | ------------------- | --------------------------------------------------------------------------------- | -------------------- | ------------------ |
-| `neo4j-cypher`        | Neo4j Cypher        | `get_neo4j_schema`, `read_neo4j_cypher`, `write_neo4j_cypher`                     | Password (hardcoded) | neo4j container    |
+| `neo4j-cypher`        | Neo4j Cypher        | `get_neo4j_schema`, `read_neo4j_cypher` (writes off, see below)                   | Password (hardcoded) | neo4j container    |
 | `fetch`               | Fetch               | `fetch`                                                                           | None                 | -                  |
 | `web_search`          | DuckDuckGo          | `search`, `fetch_content`                                                         | None                 | -                  |
 | `context7`            | Context7            | `resolve-library-id`, `get-library-docs`                                          | None                 | -                  |
@@ -294,6 +294,15 @@ The `dynamic-tools` feature (enabled by default upstream) adds the gateway's own
 - **In the app:** `listTools()` in `packages/harness-patterns/mcp-client.server.ts` drops those names from the catalog, and logs once if the gateway lists them anyway.
 
 **Note**: The gateway also disables dynamic tools by itself when `--servers` is given without `--enable-all-servers`, which is how the production overlay starts it.
+
+### Neo4j writes
+
+Agents are read-only against Neo4j (#403), and the same two-place shape holds it:
+
+- **At the server:** `configs/mcp-config.yaml` sets `read_only: true` for `neo4j-cypher`. The catalog passes it to the pinned `mcp-neo4j-cypher` 0.5.0 as `NEO4J_READ_ONLY`, which then does not offer `write_neo4j_cypher`.
+- **In the app:** `listTools()` leaves `write_neo4j_cypher` out of the catalog every agent's tool list is built from, and logs once if the gateway lists it.
+
+A changed config reaches a running gateway only when it is rendered again and the gateway is recreated: `docker compose up -d --force-recreate mcp-gateway`. The gateway reads the copy the one-shot `mcp-config` service renders into a volume, and that service re-runs here as the gateway's dependency. Two near-misses: a plain `up -d` re-renders but leaves the running gateway on the config it read at start, and adding `--no-deps` recreates the gateway without re-rendering, so it re-reads the old copy. To keep `--no-deps`, render first: `docker compose run --rm mcp-config`, then `docker compose up -d --no-deps --force-recreate mcp-gateway`.
 
 ### Self-Describing Images
 

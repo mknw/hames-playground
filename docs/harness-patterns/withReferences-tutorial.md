@@ -1,9 +1,9 @@
 # Walkthrough: carrying data across turns with `withReferences`
 
-> **Status.** Hands-on walkthrough in the hames app, first written with the `withReferences` design (2026-04-30) and brought up to date 2026-09-24; the wrapper and the agent it uses live in [`packages/`](../../packages/). Turn 2 writes to Neo4j, which works only when writes are enabled for the Neo4j tool server, as set out under **Before you start** below.
+> **Status.** Hands-on walkthrough in the hames app, first written with the `withReferences` design (2026-04-30) and brought up to date 2026-09-24; the wrapper and the agent it uses live in [`packages/`](../../packages/). On 2026-10-03 turn 2 changed from a write into Neo4j to a lookup in it, because agents became read-only against Neo4j ([#403](https://github.com/mknw/hames-playground/issues/403)). The new turn 2 has not yet been run end to end in the app.
 
 **What you will see:** the `search` agent fetching information about a topic on one
-turn, then writing that data to Neo4j on the next, without fetching it again and
+turn, then looking that data up in Neo4j on the next, without fetching it again and
 without the model inventing the content. About five minutes.
 
 **Before you start.** This walkthrough runs in the hames app, this repository's
@@ -14,12 +14,8 @@ with `docker compose up -d`, and needs an Anthropic API key in `app/.env`, which
 you get at [console.anthropic.com](https://console.anthropic.com). The hames app then
 serves on <http://localhost:3444>.
 
-Turn 2 writes to Neo4j, so the Neo4j tool server must accept writes. Check that
-`neo4j-cypher` has `read_only: false` in
-[`configs/mcp-config.yaml`](../../configs/mcp-config.yaml); if you change it,
-restart the gateway with `docker compose restart mcp-gateway`. With
-`read_only: true` the Neo4j tools can only read, and turn 2 cannot create the
-nodes.
+Nothing here changes your graph: agents only read Neo4j
+([#403](https://github.com/mknw/hames-playground/issues/403)).
 
 This page is the hands-on counterpart to the design record,
 [`with-references.md`](./with-references.md). Two terms it uses:
@@ -38,7 +34,7 @@ This page is the hands-on counterpart to the design record,
 A two-turn conversation:
 
 1. **Turn 1**: _"Search the web for TypeScript 5.7 release info. What are the 5 most important new features?"_
-2. **Turn 2**: _"Add these 5 features to the Neo4j graph as Concept nodes connected to a TypeScript 5.7 root node."_
+2. **Turn 2**: _"Which of these 5 features does the Neo4j graph already have a Concept node for?"_
 
 Without `withReferences`, turn 2 fails: the Neo4j route starts with no prior
 results, and its controller cannot see what the web route fetched on turn 1. The
@@ -85,11 +81,11 @@ The timeline shows the router, the web route and its tool calls, then
 
 ---
 
-## Step 3: turn 2, add to the graph
+## Step 3: turn 2, look them up in the graph
 
 Send:
 
-> Add these 5 features to the Neo4j graph as Concept nodes connected to a TypeScript 5.7 root node.
+> Which of these 5 features does the Neo4j graph already have a Concept node for?
 
 The router classifies the message as `neo4j`. On entry, the wrapper collects the
 successful tool results from turn 1 as candidates. With one candidate it attaches
@@ -141,23 +137,22 @@ from Anthropic's prompt cache.
 
 ---
 
-## Step 5: view the resulting graph
+## Step 5: check what the controller looked up
 
-Switch the side panel to the **Neo4j** tab to see the new nodes.
+Open the `tool_call` event under `neo4j-query`. Its Cypher should name the five
+features from turn 1, either written into the query or its parameters, or as a
+`ref:<ref_id>` value the loop replaced with the full result before the query ran
+(the turn then records the expansion). Either way the names come from the
+attached results, not from the model's memory. The answer says which of the five
+the graph holds; on the demo graph that is probably none of them.
 
-To check them in the Neo4j Browser, paste the query below into it.
+To check the answer yourself, list the graph's concepts in the Neo4j Browser.
 
 > **Needs:** the Neo4j Browser at <http://localhost:7474> (user `neo4j`, password `password`), started by `docker compose up -d` in the [Quickstart](../../README.md#quickstart).
 
 ```cypher
-MATCH (root:Concept {name: 'TypeScript 5.7'})-[r]-(child:Concept)
-RETURN root.name, type(r), child.name, child.description
+MATCH (c:Concept) RETURN c.name ORDER BY c.name
 ```
-
-The node and relationship names depend on the Cypher the model wrote; if the query
-returns nothing, drop the `{name: …}` filter and look for the nodes it created. The
-descriptions on the child nodes should carry specifics from the web results, which
-shows the controller used the attached results rather than writing from memory.
 
 ---
 
@@ -170,14 +165,14 @@ user_message                          user_message
 router (route: web_search)            router (route: neo4j)
 withReferences (skipped='empty')      withReferences (turn-1 results attached)
   └─ web-search loop                    └─ neo4j-query loop
-       └─ search → tool_result               └─ write_neo4j_cypher × N
+       └─ search → tool_result               └─ read_neo4j_cypher
        └─ Return                             └─ Return
 response-synth                        response-synth
 ```
 
 The deciding moment is the wrapper running as turn 2's Neo4j route starts. Without
-it, the loop would start with no prior results, and its controller would write
-nothing or make the content up. With it, the controller's prompt carries summaries
+it, the loop would start with no prior results, and its controller would have
+no feature names to look up: it would stop, or make them up. With it, the controller's prompt carries summaries
 of the turn-1 results, and `expandPreviousResult` loads the full data when needed.
 
 The channel is the one `simpleLoop` already used for its own window of recent

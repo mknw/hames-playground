@@ -84,7 +84,10 @@ readonly ENCRYPTION_BOUNDARY="56ac2b44af11d65c85cabc3096102c3cdc76d2ed"
 # The preview tool surface, sorted (docs/PREVIEW.md §3a; pinned for the overlay
 # by app/src/__tests__/lib/preview-tool-surface.test.ts).
 readonly PREVIEW_SERVERS="context7 fetch memory neo4j-cypher web_search"
-readonly PREVIEW_TOOL_COUNT=17
+# 16 since #403: with `read_only: true` the Neo4j server does not offer
+# write_neo4j_cypher (it was 17). Derived, not yet read off a live box — a 17
+# here means the gateway still lists the write tool (docs/PREVIEW.md, step 1b).
+readonly PREVIEW_TOOL_COUNT=16
 readonly KEYS_RE="AUTH_SESSION_SECRET|TOKEN_ENCRYPTION_KEY|DATA_ENCRYPTION_KEY"
 
 readonly STAGES=(preflight updates ssh firewall fail2ban docker checkout env hostname images boot seed smoke)
@@ -1143,7 +1146,7 @@ neo4j-cypher:
   username: neo4j
   password: ${NEO4J_PASSWORD} # filled from .env by the `mcp-config` render service
   database: neo4j
-  read_only: false
+  read_only: true # agents are read-only against Neo4j (#403), the preview included
 
 fetch:
   enabled: true

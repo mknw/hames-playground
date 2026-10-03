@@ -538,39 +538,81 @@ function isGatewayManagementTool(name: string): boolean {
   return GATEWAY_MANAGEMENT_TOOLS.has(name) || name.startsWith(CODE_MODE_TOOL_PREFIX)
 }
 
+/**
+ * Catalog-server tools no agent is offered, whatever the gateway lists.
+ *
+ * Owner decision, 2026-10-03 (#403, #206): agents are READ-ONLY against Neo4j,
+ * the `general` agent included. The one writer is the memory hook (#419), and
+ * it writes through the app, not through an agent's tool list. So this list
+ * narrows the CATALOG (`listTools`, and through it `Tools()`, every loop's
+ * allowlist and the planner's catalog) and deliberately not `callTool`: it
+ * decides what an agent is offered, not what the app may call, and the hook's
+ * write path is the app's.
+ *
+ * The deployment withholds the tool at the server as well: `read_only: true`
+ * for `neo4j-cypher` in `configs/mcp-config.yaml`, under which the pinned
+ * `mcp-neo4j-cypher` 0.5.0 does not list it. This list is the second layer,
+ * the same shape as {@link GATEWAY_MANAGEMENT_TOOLS}: it holds when a host's
+ * config says `false`, or when a server bump changes how the key is read.
+ */
+const AGENT_WITHHELD_TOOLS: ReadonlySet<string> = new Set(['write_neo4j_cypher'])
+
+/** Matched on the tool part of a gateway-prefixed name (`mcp__<server>__<tool>`),
+ *  the same split `inferServer` makes — a prefix must not hand the tool back. */
+function isAgentWithheldTool(name: string): boolean {
+  const at = name.lastIndexOf('__')
+  return AGENT_WITHHELD_TOOLS.has(at >= 0 ? name.slice(at + 2) : name)
+}
+
 /** Warn once per process, not once per catalog read: `listTools` is not
- *  memoized, and one line is enough to say the gateway-side switch is off. */
+ *  memoized, and one line is enough to say the gateway-side switch is off. One
+ *  flag per list, because each names its own switch. */
 let warnedGatewayManagementTools = false
+let warnedAgentWithheldTools = false
 
 /**
- * The gateway's catalog in this package's shape, minus its management tools.
+ * The gateway's catalog in this package's shape, minus its management tools
+ * and the tools withheld from agents.
  *
- * A drop is LOGGED, once. The filter works either way, but a drop means the
- * gateway-side switch did not hold, and a second layer that silently hides
- * the first one failing would leave nobody knowing that only one layer is left.
+ * A drop is LOGGED, once per list. The filter works either way, but a drop
+ * means the gateway-side switch did not hold, and a second layer that silently
+ * hides the first one failing would leave nobody knowing that only one layer is
+ * left.
  */
 function gatewayToolDescriptions(
   tools: ReadonlyArray<{ name: string; description?: string; inputSchema?: unknown }>,
 ): MCPToolDescription[] {
-  const kept = tools.filter((t) => !isGatewayManagementTool(t.name))
-  if (kept.length < tools.length && !warnedGatewayManagementTools) {
+  const management = tools.filter((t) => isGatewayManagementTool(t.name)).map((t) => t.name)
+  if (management.length > 0 && !warnedGatewayManagementTools) {
     warnedGatewayManagementTools = true
-    const dropped = tools.filter((t) => isGatewayManagementTool(t.name)).map((t) => t.name)
     console.warn(
-      `[mcp-client] the MCP gateway lists its own management tools (${dropped.join(', ')}); ` +
+      `[mcp-client] the MCP gateway lists its own management tools (${management.join(', ')}); ` +
         'they were left out of the tool catalog. To turn them off at the gateway as well, set ' +
         '"features": {"dynamic-tools": "disabled"} in the Docker CLI config the gateway ' +
         'reads (/root/.docker/config.json in its container; a missing key means "enabled").',
     )
   }
-  return kept.map(toDescription)
+  const withheld = tools.filter((t) => isAgentWithheldTool(t.name)).map((t) => t.name)
+  if (withheld.length > 0 && !warnedAgentWithheldTools) {
+    warnedAgentWithheldTools = true
+    console.warn(
+      `[mcp-client] the MCP gateway lists ${withheld.join(', ')}; it was left out of the tool ` +
+        'catalog, because agents are read-only against Neo4j (#403). To withhold it at the ' +
+        'server as well, set `read_only: true` for `neo4j-cypher` in the config the gateway ' +
+        'reads, and restart the gateway on it.',
+    )
+  }
+  return tools
+    .filter((t) => !isGatewayManagementTool(t.name) && !isAgentWithheldTool(t.name))
+    .map(toDescription)
 }
 
 export async function listTools(): Promise<MCPToolDescription[]> {
-  // The gateway's own management tools are dropped from its half of the
-  // catalog (`gatewayToolDescriptions`, #412/#420). This is the one door every
-  // gateway catalog read goes through: `Tools()`, the adapters' description
-  // cache, and so the planner's catalog and every loop's allowlist.
+  // The gateway's own management tools (#412/#420) and the tools withheld from
+  // agents (#403: `write_neo4j_cypher`) are dropped from its half of the
+  // catalog (`gatewayToolDescriptions`). This is the one door every gateway
+  // catalog read goes through: `Tools()`, the adapters' description cache, and
+  // so the planner's catalog and every loop's allowlist.
   //
   // Process-registered tools (#110: the app-side per-user tools) are advertised
   // alongside the gateway's. They do not run on the gateway, so they stay

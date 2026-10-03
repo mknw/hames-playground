@@ -93,8 +93,9 @@ The web tools (`web_search`, `fetch`) need no key.
 
 Build a shipped agent's patterns, compose them into a harness, and ask one
 question. It runs `search`, one of the three agents the
-[Warning under Agent catalog](#agent-catalog) is about: it can write to the Neo4j
-you give it.
+[Warning under Agent catalog](#agent-catalog) is about: it runs model-written
+Cypher against the Neo4j you give it. It only reads; no shipped agent can write
+to Neo4j.
 
 > **Needs:** an Anthropic API key in `ANTHROPIC_API_KEY` (get one at [console.anthropic.com](https://console.anthropic.com/)), and the MCP server and seeded Neo4j from the [three commands under Install](#install).
 
@@ -150,12 +151,18 @@ const toolSet = await Tools({ namespaces: deps.toolNamespaces })
 
 ```typescript
 // A Neo4j tool loop: the shipped controller decides each query, and your
-// optional `enrichNeo4jResult` post-processes each result. From `search.server.ts`:
+// optional `enrichNeo4jResult` post-processes each result. The context prefix
+// tells the controller the graph is read-only and what to answer instead of a
+// write; the loop shows it only the few-shots whose tool it holds, so the
+// set's write example never reaches it. From `search.server.ts`:
 import { simpleLoop, type ConfiguredPattern } from '@hames-ai/harness-patterns'
 import { bamlPatterns, createLoopControllerAdapter } from '@hames-ai/harness-baml'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
 import type { ToolSet } from '@hames-ai/harness-patterns'
-import { NEO4J_FEW_SHOTS_DEFAULT } from '@hames-ai/agents/agents/neo4j-fewshots.server'
+import {
+  NEO4J_FEW_SHOTS_DEFAULT,
+  NEO4J_READ_ONLY_CONTEXT,
+} from '@hames-ai/agents/agents/neo4j-fewshots.server'
 
 function buildNeo4jRoute(
   deps: AgentDeps,
@@ -163,7 +170,8 @@ function buildNeo4jRoute(
   schema: string,
 ): ConfiguredPattern<AgentData> {
   const baml = bamlPatterns()
-  return simpleLoop<AgentData>(createLoopControllerAdapter(), tools.neo4j ?? [], {
+  const neo4jController = createLoopControllerAdapter(NEO4J_READ_ONLY_CONTEXT)
+  return simpleLoop<AgentData>(neo4jController, tools.neo4j ?? [], {
     patternId: 'neo4j-query',
     schema,
     liveEvents: true,
@@ -319,13 +327,13 @@ order under **Composition**; each name is a pattern documented in the
 which neutralizes instructions hidden in untrusted content (a web page, an
 email) before a model reads it.
 
-| Agent             | Composition                                                      | Tools                                                   | Injection guard                                                                          |
-| ----------------- | ---------------------------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `search`          | router → routes(neo4j loop, web loop) → compactExecution         | neo4j-cypher, web_search, fetch                         | web route guarded; neo4j route not guarded (see the Warning below)                       |
-| `retriever-agent` | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                         | web namespace + retriever exact-name guarded together (ingested documents are untrusted) |
-| `microsoft-365`   | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token | whole Microsoft Graph loop guarded (mail and files can be written by anyone)             |
-| `general`         | planner → simpleLoop(tools.all) → compactExecution               | everything                                              | not guarded yet (below)                                                                  |
-| `sandbox`         | router → routes(basic, data, office) → compactExecution          | in-container `sandbox_*`                                | not on tool results yet, on any route; shell commands are screened (below)               |
+| Agent           | Composition                                                      | Tools                                                   | Injection guard                                                                          |
+| --------------- | ---------------------------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `search`        | router → routes(neo4j loop, web loop) → compactExecution         | neo4j-cypher, web_search, fetch                         | web route guarded; neo4j route not guarded (see the Warning below)                       |
+| `retriever`     | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                         | web namespace + retriever exact-name guarded together (ingested documents are untrusted) |
+| `microsoft-365` | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token | whole Microsoft Graph loop guarded (mail and files can be written by anyone)             |
+| `general`       | planner → simpleLoop(tools.all) → compactExecution               | everything                                              | not guarded yet (below)                                                                  |
+| `sandbox`       | router → routes(basic, data, office) → compactExecution          | in-container `sandbox_*`                                | not on tool results yet, on any route; shell commands are screened (below)               |
 
 **Guardrail status.** Two guards ship today. The injection guard covers the
 tool results marked in the table above, and the sandbox agent also gets
@@ -335,19 +343,26 @@ active development; the Warning below has the status and what to do meanwhile.
 
 > **Warning:** Guardrails for these routes are in active development, and a
 > release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)). Until it ships, `search`,
-> `retriever-agent` and `general` are not meant for production use. Two easy ways
-> to keep your data safe while you try them:
+> `retriever` and `general` are not meant for production use. What keeps your
+> data safe while you try them:
 >
 > - **Use throwaway data.** Point them at a fresh Neo4j loaded with the demo graph
 >   (`./scripts/import-neo4j.sh neo4j_dumps/seed-data.cypher`, as under
 >   [Install](#install)), not at data you need.
-> - **Turn writes off.** Set `read_only: true` for `neo4j-cypher` in
->   [configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml). The pinned server, `mcp-neo4j-cypher` 0.5.0, reads it as
->   `NEO4J_READ_ONLY` and then does not register its write tool; any value other
->   than `true` or `false` stops it from starting. The agents then can no longer
->   write into the graph, such as adding web results they found earlier, which is
->   what `withReferences` was built for
->   ([design doc](https://github.com/mknw/hames-playground/blob/main/docs/harness-patterns/with-references.md)).
+> - **Writes are off, in two places.** Agents are read-only against Neo4j
+>   ([#403](https://github.com/mknw/hames-playground/issues/403)). The
+>   repository ships `read_only: true` for `neo4j-cypher` in
+>   [configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml); the pinned server, `mcp-neo4j-cypher` 0.5.0, reads it as
+>   `NEO4J_READ_ONLY` and then does not register its write tool,
+>   `write_neo4j_cypher`. Any value other than `true` or `false` stops it from
+>   starting. Separately, `@hames-ai/harness-patterns` leaves `write_neo4j_cypher`
+>   out of the tool catalog every agent's tool list is built from, so a server
+>   that does offer it still offers it to no agent, and each agent's controller
+>   is told to answer a request to change the graph by saying it can only read
+>   it. After editing the config, re-render it and recreate the gateway with
+>   `docker compose up -d --force-recreate mcp-gateway` (a plain `up -d` leaves
+>   the gateway on the config it read at start, and `--no-deps` skips the
+>   render).
 >
 > Both protect the graph, not the network. A query can still make the database
 > fetch URLs through APOC's load procedures: the server's read tool refuses only
@@ -355,18 +370,18 @@ active development; the Warning below has the status and what to do meanwhile.
 > To close that too, run them against a Neo4j without APOC, or one whose network
 > reaches nothing you care about. The demo graph needs no APOC
 > (`neo4j_dumps/seed-data.cypher` is plain Cypher), but these agents read the
-> schema through the MCP server's `get_neo4j_schema` tool, so check that it still
-> answers on a Neo4j without APOC. On `docker compose`, the Neo4j shares a network
+> schema through the MCP server's `get_neo4j_schema` tool, which runs
+> `CALL apoc.meta.schema(...)` and fails on a Neo4j without APOC. The agents then
+> log `graph schema unavailable` and run without the schema
+> ([graph-schema.server.ts](https://github.com/mknw/hames-playground/blob/main/packages/agents/agents/graph-schema.server.ts)). On `docker compose`, the Neo4j shares a network
 > with the MCP server, Postgres and Redis.
 >
 > Why: these three agents let the model write Cypher and run it through the MCP
-> server's `neo4j-cypher` tools, and the one this repository ships is read-write
-> (`read_only: false`). Their Neo4j loops may call `write_neo4j_cypher`, and the
-> agents' own examples teach it; `general` reaches every tool. None of the three
-> guards its Neo4j route, and nothing asks for approval before a write. So what
-> these agents read, whether a person types it or `general` and the web route fetch
-> it, can try to steer them into changing or deleting your graph (`DETACH DELETE`
-> included). It can also try to make the database fetch URLs: the Neo4j this
+> server's `read_neo4j_cypher` tool, and none of the three guards its Neo4j
+> route. No agent holds `write_neo4j_cypher`, and the read tool refuses queries
+> that look like writes. But what these agents
+> read, whether a person types it or `general` and the web route fetch it, can
+> still try to make the database fetch URLs: the Neo4j this
 > repository ships installs APOC (`NEO4J_PLUGINS=["apoc", "n10s"]` in [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)),
 > and with APOC's load procedures enabled (the default once APOC is installed) a
 > query such as `CALL apoc.load.json('http://…')` makes the database fetch that

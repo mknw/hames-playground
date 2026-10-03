@@ -211,8 +211,9 @@ function unparkBracketedValues(s: string, parked: string[]): string {
 // written `\\\"`, while a `"` belonging to the payload's JSON structure is
 // written `\"`. Captured live in `.harness-logs/sandbox-tool-recovery.json`
 // (event `ev-tey7ez`, the `flavour-office-loop` actor): a 19 180-character
-// `sandbox_edit` whose `newText` was openpyxl code full of Excel formulas —
-// `"='Revenue Model'!N" + str(row)` — reached this module with 5 of its 38
+// `sandbox_edit` whose `newText` was openpyxl code full of Excel formulas that
+// reference sheet names with spaces, held in Python double-quoted strings (the
+// shape is `"='Sheet Name'!N" + str(row)`), reached this module with 5 of its 38
 // content quotes doubly escaped and 33 singly escaped, so the first of the 33
 // ended `newText` 13 706 characters in and `JSON.parse` asked for a `,`.
 // Nothing upstream could have caught it: the response was 9 913 tokens against
@@ -239,7 +240,7 @@ function unparkBracketedValues(s: string, parked: string[]): string {
 // corpus of nine distinct `Invalid tool_args JSON` payloads in `.harness-logs`
 // the ordering is load-bearing, not cosmetic — a `code-mode` script arriving
 // with raw newlines was being "repaired" by the chain into
-// `{"script": "\"const g = read_graph({});\n…\""}`, two quote characters the
+// `{"script": "\"const g = f({});\n…\""}`, two quote characters the
 // model never wrote, wrapping the whole program in a string literal that would
 // have run as a no-op expression. That is precisely the silent mis-coercion
 // #217(b) is open about, and it is why every repair now reports itself.

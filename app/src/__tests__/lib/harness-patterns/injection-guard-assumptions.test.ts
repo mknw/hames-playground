@@ -69,13 +69,15 @@ async function loadGuard() {
 // ============================================================================
 
 /**
- * A real Outlook `webLink`. The `ItemID` is a ~150-char base64url blob; the
+ * An Outlook `webLink` in the real shape (the `ItemID` here is a placeholder
+ * of a real one's length: `AAMk` + an all-zero mailbox GUID + padding). The
+ * real `ItemID` is a ~150-char base64url blob; the
  * dev fixtures in `__tests__/lib/privacy/fixtures.ts` use a 16-char stand-in,
  * which is why nothing in the existing suites noticed this rule firing.
  */
 const OWA_ITEM_ID =
-  'AAMkAGI2NGVhZDMwLTk5MTctNDQ1Yi04NDdmLTFkZTBhZWFmMmM5NwBGAAAAAABZ0nZ4Rk9n' +
-  'TKgAAAAAA1LTAAA9nZ4Rk9nTKgAAAAAA1LTAAB2AAA'
+  'AAMkADAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDAwMAAGAAAAAAAAAAAAAAAA' +
+  'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 const OWA_WEB_LINK =
   `https://outlook.office365.com/owa/?ItemID=${OWA_ITEM_ID}%3D` +
   `&exvsurl=1&viewmodel=ReadMessageItem`

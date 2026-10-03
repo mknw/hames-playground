@@ -107,13 +107,13 @@ logs the driver's error, with its stack trace, before returning it in
 
 > **Warning:** Guardrails for the Cypher path are in active development, and a
 > release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)). Until it ships, `runManualCypher`
-> and the ready-made agents that write Cypher are not meant for production use. The
+> and the ready-made agents that compose Cypher are not meant for production use. The
 > easy way to try them without the risk below is a Neo4j without APOC, such as the
 > `docker run` above: nothing on this page needs APOC, and without it a query
 > cannot make the database fetch URLs. Throwaway data (a fresh Neo4j, loaded with
 > the demo graph `neo4j_dumps/seed-data.cypher` if you want something to query)
-> keeps your data safe too, but not the network. For the agents you can also turn
-> writes off; the [Warning in @hames-ai/agents](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog) says how.
+> keeps your data safe too, but not the network. The agents hold no Neo4j
+> write tool; the [Warning in @hames-ai/agents](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog) says why.
 >
 > Why: `runManualCypher` runs whatever Cypher you pass it. It refuses write clauses
 > and opens a read-only session, but that does not stop a query from reaching the
@@ -124,9 +124,11 @@ logs the driver's error, with its stack trace, before returning it in
 > transaction does not prevent it. So on a Neo4j with APOC, pass it only text from
 > people you would let make requests from your database's network. The ready-made
 > agents do not go through `runManualCypher`: they reach Neo4j through the MCP
-> server's Cypher tools. That server's read tool refuses writes, but with
-> `read_only: false` in [configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml), as this repository ships it, the server also
-> offers a write tool, and the agents may call it. See also
+> server's Cypher tools. That server's read tool refuses writes, and
+> [configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml) ships `read_only: true`, so the server offers no
+> write tool; were it to offer one, `@hames-ai/harness-patterns` leaves it out
+> of every agent's tools anyway
+> ([#403](https://github.com/mknw/hames-playground/issues/403)). See also
 > [#241](https://github.com/mknw/hames-playground/issues/241).
 
 > **Needs:** a Neo4j database with user `neo4j` and password `password` — the `docker run` line under the quick start starts one without APOC; or clone [the repository](https://github.com/mknw/hames-playground) and run `docker compose up -d` ([docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)), which installs APOC.

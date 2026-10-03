@@ -325,7 +325,7 @@ for (const name of ['searchAgent', 'generalAgent', 'sandboxAgent',
   assert.equal(typeof def.createPatterns, 'function', `${name}.createPatterns missing`)
 }
 for (const name of ['getGraphSchema', 'NEO4J_FEW_SHOTS', 'NEO4J_FEW_SHOTS_DEFAULT',
-  'createTitleAgent', 'sanitizeTitle', 'runFirstTurnTitleGen', 'runRegenerateTitle']) {
+  'NEO4J_READ_ONLY_CONTEXT', 'createTitleAgent', 'sanitizeTitle', 'runFirstTurnTitleGen', 'runRegenerateTitle']) {
   assert.notEqual((agents as Record<string, unknown>)[name], undefined, `${name} missing from the agents barrel`)
 }
 

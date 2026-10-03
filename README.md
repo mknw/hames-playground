@@ -308,8 +308,8 @@ composition model, how to write your own pattern, the tool-transport seam), and
 mapping.
 
 One primitive worth a closer look: **`withReferences`** carries data across turns
-without re-fetching. The agent searches the web on one turn and writes the
-findings into Neo4j on the next — an LLM-driven selector attaches the relevant
+without re-fetching. The agent searches the web on one turn and looks the
+findings up in Neo4j on the next — an LLM-driven selector attaches the relevant
 prior `tool_result` events at the new pattern's ingress, and the controller pulls
 the full payload through the synthetic `expandPreviousResult` tool. No
 re-fetching, no hallucinated content.

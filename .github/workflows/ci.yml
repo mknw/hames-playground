@@ -291,8 +291,15 @@ jobs:
     # its first branch, the URL as given, and never CI's "no database" one.
     # `hames_test` is the unit suite's own database (#280); the suite's global
     # setup creates it on the empty service.
+    #
+    # TEST_DATABASE_REQUIRED is what makes this job fail closed: a DB-backed
+    # test that would skip FAILS here (`skipWithoutDatabase`, same file). So a
+    # green run means they ran, whether the service was unreachable, the
+    # database was never created, or a skip condition is simply wrong.
+    # test-database-guard.test.ts pins that this job sets it.
     env:
       TEST_DATABASE_URL: postgresql://postgres:test@127.0.0.1:55439/hames_test
+      TEST_DATABASE_REQUIRED: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -308,34 +315,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
         working-directory: .
 
-      # The same command as `check`'s test step. The log is kept for the next
-      # step.
+      # The same command as `check`'s test step.
       - name: Test against Postgres (with coverage floor)
-        run: |
-          set -o pipefail
-          pnpm test:run --coverage 2>&1 | tee "$RUNNER_TEMP/test.log"
-
-      # A green run here has to mean the DB-backed tests RAN. Most of them
-      # guard with an early `return`, so a run that never reached the database
-      # still passes them, and its counts differ from `check`'s by one file's
-      # skips. These lines settle it instead. The global setup runs in vitest's
-      # main process and always prints: `created hames_test` proves the suite
-      # reached this service and made its database there, and "could not
-      # provision" or "no TEST_DATABASE_URL" is a run that did not. A test
-      # file's own "Postgres unreachable" is the same failure, one file at a
-      # time. Grepped from the log because none of these is in vitest's
-      # machine-readable output.
-      - name: Assert the DB-backed tests ran against the service
-        run: |
-          log="$RUNNER_TEMP/test.log"
-          if ! grep -F '[test-db] created hames_test' "$log"; then
-            echo "::error title=DB-backed tests did not run::The suite never created hames_test on the Postgres service, so its DB-backed tests did not run against it."
-            exit 1
-          fi
-          if grep -E '\[test-db\] (could not provision|CI with no TEST_DATABASE_URL)|Postgres unreachable, skipping' "$log"; then
-            echo "::error title=DB-backed tests skipped::A DB-backed test skipped itself (lines above). This job exists to run them."
-            exit 1
-          fi
+        run: pnpm test:run --coverage
 
   packages:
     name: pack · tarball install · exports probe

@@ -1,5 +1,6 @@
 /**
- * Which Postgres a test suite may use — decided before anything connects.
+ * Which Postgres a test suite may use — decided before anything connects — and
+ * what a DB-backed test does when it cannot reach one.
  *
  * A separate DATABASE per suite (#280) was not enough, because the default
  * SERVER is `localhost:5432`, which on a developer machine is the live compose
@@ -142,4 +143,36 @@ function refusal(database: string, optIn: string | undefined): string {
     '      CI=1 pnpm test:run',
     'See docs/testing/pyramid.md, "Which Postgres a test run may touch".',
   ].join('\n')
+}
+
+/**
+ * Set only in CI's `test · postgres` job, where a database is guaranteed. There,
+ * a DB-backed test that would skip fails instead (see {@link skipWithoutDatabase}).
+ */
+export const REQUIRE_DB = 'TEST_DATABASE_REQUIRED'
+
+/**
+ * What a DB-backed test does when its file's probe could not reach Postgres.
+ * Every describe block whose tests touch the database opens with
+ * `beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))`.
+ *
+ * It skips rather than returning early. An early `return` reports the test as
+ * passed while it asserted nothing, and a green total then rests on no-ops
+ * (`kg-test-pyramid` rule 3). With {@link REQUIRE_DB} set it throws instead, so
+ * the job that exists to run these tests cannot go green by skipping them,
+ * whether the probe failed or the condition passed in here is wrong.
+ */
+export function skipWithoutDatabase(
+  ctx: { skip: () => void },
+  available: boolean,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): void {
+  if (available) return
+  if (env[REQUIRE_DB]) {
+    throw new Error(
+      `[test-db] ${REQUIRE_DB} is set, so a DB-backed test may not skip. ` +
+        "This test's file could not reach Postgres; its warning is above.",
+    )
+  }
+  ctx.skip()
 }

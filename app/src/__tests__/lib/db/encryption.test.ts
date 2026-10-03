@@ -9,7 +9,8 @@
  * Skips gracefully when Postgres isn't reachable, like the other DB suites.
  * `global-setup.ts` points these at a throwaway database.
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
+import { skipWithoutDatabase } from '../../test-database'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -86,8 +87,9 @@ afterAll(async () => {
 })
 
 describe('conversations', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('round-trips title and context, and stores both as ciphertext', async () => {
-    if (!dbAvailable) return
     const id = `enc-conv-${SUFFIX}`
     await saveConversation({
       id,
@@ -121,7 +123,6 @@ describe('conversations', () => {
   // round-trip alone would pass just as happily if it wrote plaintext —
   // `decryptJsonb` accepts a legacy plaintext value on the way back out.
   it('stores ciphertext on the version-guarded context write too', async () => {
-    if (!dbAvailable) return
     const id = `enc-conv-cas-${SUFFIX}`
     await saveConversation({
       id,
@@ -147,13 +148,11 @@ describe('conversations', () => {
   })
 
   it('decrypts titles in the sidebar listing', async () => {
-    if (!dbAvailable) return
     const items = await listConversations(TEST_USER)
     expect(items.map((i) => i.title)).toContain(SECRET_TITLE)
   })
 
   it('re-encrypts an authoritative title override', async () => {
-    if (!dbAvailable) return
     const id = `enc-conv-title-${SUFFIX}`
     await saveConversation({
       id,
@@ -173,7 +172,6 @@ describe('conversations', () => {
   })
 
   it('still yields the event stream for the metrics dashboard', async () => {
-    if (!dbAvailable) return
     const rows = await listConversationEvents(TEST_USER)
     const mine = rows.find((r) => r.id === `enc-conv-${SUFFIX}`)
     expect(mine?.title).toBe(SECRET_TITLE)
@@ -182,8 +180,9 @@ describe('conversations', () => {
 })
 
 describe('auth_sessions', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('round-trips email and display name, and stores both as ciphertext', async () => {
-    if (!dbAvailable) return
     const id = await createSession({
       userId: TEST_USER,
       email: SECRET_EMAIL,
@@ -206,8 +205,9 @@ describe('auth_sessions', () => {
 })
 
 describe('users', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('round-trips email and display name, and stores both as ciphertext', async () => {
-    if (!dbAvailable) return
     await upsertUser({
       id: TEST_USER,
       email: SECRET_EMAIL,
@@ -229,8 +229,9 @@ describe('users', () => {
 })
 
 describe('routines', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('round-trips input and label, and stores both as ciphertext', async () => {
-    if (!dbAvailable) return
     const id = `enc-routine-${SUFFIX}`
     const created = await createRoutine({
       id,
@@ -256,7 +257,6 @@ describe('routines', () => {
   })
 
   it('re-encrypts a patched input', async () => {
-    if (!dbAvailable) return
     const id = `enc-routine-patch-${SUFFIX}`
     await createRoutine({
       id,
@@ -277,11 +277,12 @@ describe('routines', () => {
 })
 
 describe('boot probes, against real SQL', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   // The unit tests drive these through a fake runner, which cannot catch a
   // wrong operator. `context #>> '{}'` in particular is the only way to pull a
   // JSONB string scalar back out as text, and nothing else in the repo uses it.
   it('samples a real envelope from every encrypted column, JSONB included', async () => {
-    if (!dbAvailable) return
     const samples = await sampleEncryptedColumns(runner)
     const byColumn = new Map(samples.map((s) => [s.where, s.value]))
 
@@ -292,14 +293,14 @@ describe('boot probes, against real SQL', () => {
   })
 
   it('accepts the key that wrote those rows', async () => {
-    if (!dbAvailable) return
     await expect(assertKeyOpensStoredData(runner)).resolves.toBeUndefined()
   })
 })
 
 describe('a wrong key, through query() itself', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   it('logs it, and does not re-run the whole init on every later call', async () => {
-    if (!dbAvailable) return
     // The measured symptom before this: the boot gate threw, `query()` cleared
     // `_initPromise` and re-threw silently, and the two callers that hit it
     // first (`getSessionUser`, `listConversations`) both swallow — so a wrong
@@ -332,6 +333,8 @@ describe('a wrong key, through query() itself', () => {
 })
 
 describe('backfill migration', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
   /** Write a row the way the pre-encryption build did: straight plaintext. */
   async function seedLegacyRows(id: string): Promise<void> {
     await query(
@@ -346,7 +349,6 @@ describe('backfill migration', () => {
   }
 
   it('encrypts legacy plaintext rows and leaves them readable', async () => {
-    if (!dbAvailable) return
     const id = `enc-legacy-conv-${SUFFIX}`
     await seedLegacyRows(id)
 
@@ -375,7 +377,6 @@ describe('backfill migration', () => {
   })
 
   it('is idempotent: a second run converts nothing and rewrites nothing', async () => {
-    if (!dbAvailable) return
     const id = `enc-legacy-conv-${SUFFIX}`
     const snapshot = await query<{ title: string; ctx: string }>(
       'SELECT title, context::text AS ctx FROM conversations WHERE id = $1',
@@ -395,7 +396,6 @@ describe('backfill migration', () => {
   })
 
   it('encrypts a title that only looks like an envelope, and reads it back whole', async () => {
-    if (!dbAvailable) return
     // A title a user can genuinely type. Under a prefix test the backfill
     // skipped it for ever, so it stayed readable in every dump — quietly,
     // because nothing counts a row it never selected.
@@ -419,7 +419,6 @@ describe('backfill migration', () => {
   })
 
   it('does not report that same title as stored ciphertext', async () => {
-    if (!dbAvailable) return
     // The other half of the same bug: the key-less boot gate counted a
     // lookalike as an envelope and told the operator to restore a key that had
     // never existed. Asserted at the SQL layer, where the false positive was.
@@ -430,7 +429,6 @@ describe('backfill migration', () => {
   })
 
   it('agrees with looksEncrypted, in Postgres, value by value', async () => {
-    if (!dbAvailable) return
     // One rule in two dialects. A disagreement in one direction leaves data in
     // the clear; in the other it makes the backfill re-read rows it will never
     // convert. Executed here rather than reasoned about, because the JS regex
@@ -459,7 +457,6 @@ describe('backfill migration', () => {
   })
 
   it('does not write a stale snapshot over a column a concurrent writer encrypted', async () => {
-    if (!dbAvailable) return
     // A rolling restart over a legacy store, which is the only shape that
     // reaches this. Instance B snapshots the row at t0 (plaintext title + the
     // conversation so far); instance A finishes the user's next turn at t1,
@@ -511,7 +508,6 @@ describe('backfill migration', () => {
   })
 
   it('does not write a stale snapshot over a column a concurrent PRE-encryption writer replaced', async () => {
-    if (!dbAvailable) return
     // The OTHER half of the same rolling restart, and the half a due-predicate
     // guard cannot see. Instance A is still running pre-encryption code, so its
     // finished turn writes `context` as PLAINTEXT: the column stays due, the
@@ -556,7 +552,6 @@ describe('backfill migration', () => {
   })
 
   it('skips tables that do not exist in this database', async () => {
-    if (!dbAvailable) return
     const report = await encryptExistingRows(runner)
     // `routines` is created lazily; whether it is absent depends on test order,
     // so only assert the shape: every table is either absent or converged.

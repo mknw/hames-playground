@@ -62,11 +62,68 @@ repo's larger changes carry their narrative in the PR body (see
 
 ## Labels
 
-The label set is GitHub's defaults plus topic labels (`harness-patterns`, `ui`,
-`mcp`, `auth`, `observability`, `tech-debt`, `investigation`,
-`refinement`, `low priority`, …). They are **topical, not procedural** — there is
-no triage state vocabulary, and no skill should invent one. Anything that wants
-to know a ticket's state reads the board.
+### Component labels: which codebase a ticket is for
+
+This is one monorepo that ships five npm packages and the reference app beside
+them. **Every issue and PR carries at least one component label**, so a reader
+can tell which codebase the work is for without opening it. Add every component
+the work changes; a ticket that changes a package and the app carries both.
+Where a symptom shows is not on its own a reason to add a label: a wrong sidebar
+title whose cause is in `packages/agents/` is `pkg:agents` until the app side
+changes too. A PR carries the labels of the code it changes, which is usually
+the set on the issue it closes.
+
+**`pkg:<name>`** names one published package, after its directory under
+`packages/`. It covers the package's source, tests, README, SPEC and published
+surface. A package's own docs take its `pkg:` label, not `hames-app:docs`.
+
+| Label                  | Package                      | Covers                                                                                            |
+| ---------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------- |
+| `pkg:harness-patterns` | `@hames-ai/harness-patterns` | Patterns, event views, the run frame, the injection guard, MCP tool transport, the stash pipeline |
+| `pkg:harness-baml`     | `@hames-ai/harness-baml`     | The BAML corpus and its committed client, the adapter factories, role-to-client routing           |
+| `pkg:agents`           | `@hames-ai/agents`           | Agent definitions and few-shots, the graph and reference extractors, replay helpers               |
+| `pkg:connectors`       | `@hames-ai/connectors`       | Microsoft Graph tools, the Neo4j non-agentic layer, the MCP namespace catalog                     |
+| `pkg:sandbox`          | `@hames-ai/sandbox`          | `withSandbox`, the Docker backend, egress profiles, the bash guard, workspace sync                |
+
+**`hames-app:<component>`** names a part of everything that is not a package:
+the reference app under `app/`, plus the repo's infrastructure, tests, CI and
+docs. App paths below are relative to `app/src/`.
+
+| Label                     | Component                     | Where it lives                                                                                                        |
+| ------------------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `hames-app:chat`          | Chat and the turn lifecycle   | `ChatInterface`, `ChatMessages`, `ChatSidebar`, `lib/harness-client/`, `lib/turn-stream.ts`, `routes/api/events.ts`   |
+| `hames-app:ui`            | The app shell                 | Layout, theme, fonts, icons, `Nav`, `SettingsPanel`, `UserMenu`, the `SupportPanel` frame, mobile layout              |
+| `hames-app:graph`         | The Neo4j graph panel         | `GraphVisualization`, `lib/neo4j/`, `lib/org-graph/`, ontology work                                                   |
+| `hames-app:observability` | Observability                 | `ObservabilityPanel` and `observability/`, `lib/metrics/`, `routes/dashboard.tsx`                                     |
+| `hames-app:data-stash`    | The Data Stash                | `DataStashPanel`, `lib/stash/`, `routes/api/stash*`, `lib/redis-direct.server.ts`                                     |
+| `hames-app:sandbox-tab`   | The app side of `pkg:sandbox` | `SandboxPanel`, `InteractiveTerminal`, `routes/api/sandbox/pty/`                                                      |
+| `hames-app:skills`        | User skills                   | `SkillsPanel`, `lib/skills/`, `lib/db/skills.server.ts`                                                               |
+| `hames-app:auth`          | Identity and access           | `lib/auth/`, `routes/auth/`, `routes/api/auth/`, the `'use server'` gates                                             |
+| `hames-app:routines`      | Unattended runs               | `lib/routines/`, `routes/api/routines/`, `routes/api/agents/[id].ts`                                                  |
+| `hames-app:db`            | Postgres                      | `lib/db/`: schema, repositories, encryption at rest, migrations                                                       |
+| `hames-app:inference`     | Inference tiers               | `lib/inference/`, `ConversationTierSwitch`, `lib/cost-rates.server.ts`                                                |
+| `hames-app:mcp-gateway`   | The Docker MCP gateway        | `configs/*.yaml` and the gateway service in compose                                                                   |
+| `hames-app:deployment`    | Build and host tooling        | `app/Dockerfile`, `docker-compose*.yaml`, `configs/Caddyfile`, `scripts/`, `flake.nix`, `Makefile`, env configuration |
+| `hames-app:testing`       | The test pyramid              | Unit test setup, `app/e2e/`, `app/e2e-browser/`, `release:check`, `app/evals/`                                        |
+| `hames-app:ci`            | CI and releases               | `.github/workflows/`, the format and lint gates, `.changeset/`, pack-smoke                                            |
+| `hames-app:docs`          | Repo docs                     | `docs/`, the root `README.md`, `CONTRIBUTING.md`, the agent guides                                                    |
+
+Each family has one colour (`pkg:` blue `1D76DB`, `hames-app:` purple `5319E7`),
+and every label has a one-line description; `gh label list` shows both. When
+work keeps landing where no label fits, add a label to the right family with
+`gh label create "hames-app:<name>" --color 5319E7 --description "..."` and add
+its row here in the same PR. A new package gets its `pkg:` label when its
+directory is added under `packages/`.
+
+### Topic labels
+
+The rest of the set is GitHub's defaults plus older topic labels (`tech-debt`,
+`investigation`, `refinement`, `low priority`, `preview`, …). A few of them
+(`harness-patterns`, `agents`, `ui`, `auth`, `observability`, `mcp`, `infra`)
+came before the component labels and overlap them. Use the component label for
+new work. Component and topic labels are both **topical, not procedural**: there
+is no triage state vocabulary, and no skill should invent one. Anything that
+wants to know a ticket's state reads the board.
 
 ## When a skill says…
 

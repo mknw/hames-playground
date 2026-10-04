@@ -584,8 +584,8 @@ function formatEventData(event: ContextEvent): string {
     }
     case 'approval_request':
     case 'approval_response':
-      // Legacy (#433, F9): superseded by hitl_*, and read by nothing. Its
-      // payload is whatever a 0.1.x host stored, so none of it is rendered.
+      // Legacy (#433, F9): superseded by hitl_*, and never read by readHitl.
+      // Its payload is whatever an older run stored, so none of it renders.
       return 'legacy approval event'
     default:
       return typeof event.data === 'object' ? JSON.stringify(event.data) : String(event.data)

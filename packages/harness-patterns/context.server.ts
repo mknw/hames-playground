@@ -93,6 +93,65 @@ export function createScope<T>(patternId: string, data: T): PatternScope<T> {
 // Event Helpers
 // ============================================================================
 
+/** Create a context event. Step-level token/cost accounting (`metrics`,
+ *  computed by the adapters across ALL attempts of the call) is lifted from
+ *  the llmCall carrier onto the event itself, making events self-contained
+ *  accounting records for any consumer (panel, exports, recordings).
+ *
+ *  Throws for `hitl_request` / `hitl_response`: only core writes those. */
+export function createEvent(
+  type: EventType,
+  patternId: string,
+  data: unknown,
+  llmCall?: LLMCallData,
+): ContextEvent {
+  refuseHitl(type, 'createEvent')
+  return {
+    id: generateId('ev'),
+    type,
+    ts: Date.now(),
+    patternId,
+    data,
+    ...(llmCall && { llmCall }),
+    ...(llmCall?.metrics && { metrics: llmCall.metrics }),
+  }
+}
+
+/** Check if an event type should be tracked based on trackHistory config */
+export function shouldTrack(type: EventType, trackHistory: TrackHistory): boolean {
+  if (typeof trackHistory === 'boolean') {
+    return trackHistory
+  }
+  if (typeof trackHistory === 'string') {
+    return trackHistory === type
+  }
+  if (Array.isArray(trackHistory)) {
+    return trackHistory.includes(type)
+  }
+  return false
+}
+
+/** Add event to scope if it should be tracked.
+ *  When the current pattern has `liveEvents: true`, the event is also forwarded
+ *  to the harness `onEvent` listener immediately via `emitLive()`.
+ *
+ *  Throws for `hitl_request` / `hitl_response` WHATEVER `trackHistory` says:
+ *  only core writes those, and a refusal that depended on configuration would
+ *  pass in one agent and throw in the next. */
+export function trackEvent(
+  scope: PatternScope<unknown>,
+  type: EventType,
+  data: unknown,
+  trackHistory: TrackHistory,
+  llmCall?: LLMCallData,
+): void {
+  refuseHitl(type, 'trackEvent')
+  if (!shouldTrack(type, trackHistory)) return
+  const event = createEvent(type, scope.id, data, llmCall)
+  scope.events.push(event)
+  emitLive(event)
+}
+
 // ============================================================================
 // HITL events: only core writes them (#433, F6)
 // ============================================================================
@@ -166,65 +225,6 @@ export function dropUnmintedHitl(events: ContextEvent[]): ContextEvent[] {
     )
   }
   return events.filter((e) => !forged.includes(e))
-}
-
-/** Create a context event. Step-level token/cost accounting (`metrics`,
- *  computed by the adapters across ALL attempts of the call) is lifted from
- *  the llmCall carrier onto the event itself, making events self-contained
- *  accounting records for any consumer (panel, exports, recordings).
- *
- *  Throws for `hitl_request` / `hitl_response`: only core writes those. */
-export function createEvent(
-  type: EventType,
-  patternId: string,
-  data: unknown,
-  llmCall?: LLMCallData,
-): ContextEvent {
-  refuseHitl(type, 'createEvent')
-  return {
-    id: generateId('ev'),
-    type,
-    ts: Date.now(),
-    patternId,
-    data,
-    ...(llmCall && { llmCall }),
-    ...(llmCall?.metrics && { metrics: llmCall.metrics }),
-  }
-}
-
-/** Check if an event type should be tracked based on trackHistory config */
-export function shouldTrack(type: EventType, trackHistory: TrackHistory): boolean {
-  if (typeof trackHistory === 'boolean') {
-    return trackHistory
-  }
-  if (typeof trackHistory === 'string') {
-    return trackHistory === type
-  }
-  if (Array.isArray(trackHistory)) {
-    return trackHistory.includes(type)
-  }
-  return false
-}
-
-/** Add event to scope if it should be tracked.
- *  When the current pattern has `liveEvents: true`, the event is also forwarded
- *  to the harness `onEvent` listener immediately via `emitLive()`.
- *
- *  Throws for `hitl_request` / `hitl_response` WHATEVER `trackHistory` says:
- *  only core writes those, and a refusal that depended on configuration would
- *  pass in one agent and throw in the next. */
-export function trackEvent(
-  scope: PatternScope<unknown>,
-  type: EventType,
-  data: unknown,
-  trackHistory: TrackHistory,
-  llmCall?: LLMCallData,
-): void {
-  refuseHitl(type, 'trackEvent')
-  if (!shouldTrack(type, trackHistory)) return
-  const event = createEvent(type, scope.id, data, llmCall)
-  scope.events.push(event)
-  emitLive(event)
 }
 
 // ============================================================================

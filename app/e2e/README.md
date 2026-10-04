@@ -16,8 +16,9 @@ Everything between the browser and the model is the real thing. The suite calls
 `runTurnAndPersist`, which resolves the user's inference tier, opens the request
 / settings / tier scopes, builds the agent's patterns, runs
 router → route → simpleLoop → compactExecution, and writes the whole event
-stream to Postgres. Only two things are substituted: the inference endpoint and
-the MCP gateway.
+stream to Postgres. Only the external services are substituted: the inference
+endpoint, the MCP gateway, the document converter, and (for the scenarios that
+install it) Microsoft Graph.
 
 ## Why it exists
 
@@ -65,7 +66,8 @@ so it cannot rot into unbuildable code unnoticed. Same arrangement as
 
 ### Hermetic (default)
 
-No credential, no network, no bill. Two fakes start in-process:
+No credential, no network, no bill. Three fakes start in-process with the boot,
+and a fourth is installed by the scenarios that need it:
 
 - **`lib/fake-llm.ts`** — an OpenAI-compatible endpoint (`POST /v1/chat/completions`,
   `GET /v1/models`) that answers each BAML function with the smallest reply that
@@ -74,6 +76,30 @@ No credential, no network, no bill. Two fakes start in-process:
 - **`lib/fake-gateway.ts`** — a minimal MCP streamable-HTTP server advertising
   `get_neo4j_schema`, `read_neo4j_cypher`, `search` and `fetch`, so tool results
   are deterministic and Docker is not a dependency.
+- **`lib/fake-converter.ts`** — the document converter at `DOC_CONVERT_URL`
+  (`POST /extract`), which `bootApp` points at it in both modes. It answers the
+  synthetic inputs in `fixtures/converter/manifest.json` with fixed Markdown,
+  keyed by the SHA-256 of the bytes and the declared type, and refuses anything
+  else by name. Without it the shipped default, `localhost:8000`, is a
+  developer's own converter.
+- **`lib/fake-graph.ts`** — a Microsoft Graph fixture router at the `graphFetch`
+  seam, answering from `fixtures/graph/` (a home tenancy on `contoso.com`, an
+  outside one on `fabrikam.com`, OneDrive and SharePoint items with their
+  content, and inbox mail with attachments). It is not on by default: the app's
+  own Graph tools are composed in `src/lib/app-tools/index.server.ts`, which
+  only `src/middleware.ts` imports and this suite never loads, so no scenario
+  has Graph tools until it calls
+  `app.installGraphTools()`, which puts the REAL `@hames-ai/connectors` tools,
+  composed over the router, behind the real `callTool`, and returns the
+  function that takes them away.
+
+Both new fakes FAIL CLOSED (#433 S9): a request no fixture models is an error
+that names what was refused, never an empty answer, and it is recorded, so
+`fakeGraph.assertAllMatched()` and `fakeConverter.assertAllMatched()` can fail
+a scenario on it. The fixtures are synthetic, and
+`src/__tests__/e2e-fakes-boundary.test.ts` holds every email domain and link
+host in them to `contoso` and `fabrikam`, and pins that no production module
+reaches either fake. Scenario 10 is their own test.
 
 The one piece of real infrastructure is **Postgres**, and it is the throwaway
 `hames_test_apppath` database this suite provisions for itself with the unit
@@ -191,6 +217,7 @@ fake recorded it.
 | `07-wire-shape-and-planner.e2e.ts` | What a three-turn conversation actually puts on the wire is legal for vLLM (the #263 shape, checked at runtime rather than at template-render time), plus a second agent chain — `general`'s planner → simpleLoop — and the planner FOLLOWING the tier in both switch positions (it joined `VERDA_CLIENT_BY_ROLE` on 2026-08-26; this row said the opposite until the screen change swept it).                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `08-cold-start-ux.e2e.ts`          | The cold-start notice (D-c) reaches the user **during** the wait rather than alongside the answer, carries a positive estimate that says where it came from, precedes anything the self-hosted model said, and is absent on the anthropic tier. Uses `frame.at`, which is why `readSse` stamps arrival times. Hermetic only — by the time it runs, a live box has been warm for several files.                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `09-gateway-degrade.e2e.ts`        | A dead MCP **gateway** — the tool half, not the endpoint, so every LLM call still succeeds and nothing throws. The turn must admit the tools were unavailable instead of answering around them: an `irrecoverable` error in the transcript, a row that is not `done`, no fabricated answer, and the SSE client told. Driven on **both** tool-list shapes an outage produces (#278 F1): `search`, whose `tools.neo4j ?? []` is empty, and `general`, whose `tools.all` comes back AMPUTATED to the nine app-side `graph_*` tools — the shape a length check missed, and the one this file used to cover by luck. Its last case is the control — the same question answers normally once the gateway is listening again, which is also what caught the tool-description cache outliving the outage. Hermetic only (an injected fault). |
+| `10-fixture-router.e2e.ts`         | The converter and Graph fakes, as fakes. They fail closed: an unknown path, an unknown id, an unmodelled query option, a non-Graph host, a write, the wrong body encoding, unknown bytes, the wrong type, an unknown converter config field or route — each is refused by name and recorded. Through the REAL Graph tools, an unmodelled call comes back as a failed tool result, never as an empty day. The fixtures answer what the real code reads: mail from inside and outside the home tenancy with its attachments, OneDrive, external and SharePoint files with their bytes, a modelled 403, an oversized file refused before download, and the identity fields a provenance check reads under a widened `$select`. The converter is driven through the production client. Needs no Postgres.                                |
 
 ### What is NOT covered
 
@@ -229,6 +256,16 @@ to be complete. Add to it when you add a scenario that leaves something out.
 - **The auth gate.** This suite runs _with_ the dev bypass on (`SD-15`), so it
   says nothing about an unauthenticated caller being refused. That stays
   `SD-13`'s own tests' job.
+- **Graph tools in a turn, and the Data Stash they store into.** Scenario 10
+  calls the Graph tools directly and through `callTool`, not from a turn, and no
+  agent here is given them. `graph_file_ingest` stores through a Data Stash
+  bridge, and this suite has no stash backend, so `installGraphTools` refuses a
+  store by name unless a scenario passes its own `stash`.
+- **Whether the Graph fixtures still look like Graph.** The router's shapes are
+  written from Microsoft's documentation and the tools' own code, not captured
+  from a tenant, and nothing here can tell when the real service drifts. That
+  check belongs to a live smoke against a seeded tenant (#425), not to this
+  layer.
 - **A gateway that dies MID-turn.** Scenario 9 takes it down before the turn, so
   the fault lands at pattern-build time (`Tools()`), which is where the collapsed
   tool surface is detectable. A gateway that dies after the patterns are built

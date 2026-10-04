@@ -672,6 +672,45 @@ describe('H5 · only core writes HITL events [F6]', () => {
     expect(readHitl(ctx).answers.get(hitlReplayKey(request()))?.choice).toBe('reject')
   })
 
+  // #472 delta review. A request's options are half of the replay identity:
+  // widening a stored request's option set to match another gate with the same
+  // kind and key would let its answer replay there (F8). MUTATION (X1): freeze
+  // only `hitl_response` on deserialize → both writes succeed, and the journal
+  // and pending change → red.
+  it('P-e2 · a stored request read through the view cannot be rewritten in place', async () => {
+    const stored = createContext('write X')
+    stored.events.push(ev('hitl_request', request()), ev('hitl_response', response()))
+    const ctx = deserializeContext(serializeContext(stored))
+    const before = readHitl(ctx)
+    const outcome: unknown[] = []
+
+    const rewriter = configurePattern('rewriter', async (scope, view) => {
+      const [event] = view.unfiltered().ofType('hitl_request').get()
+      const data = event.data as { options: HitlOption[]; blocking: boolean }
+      for (const write of [
+        () => data.options.push({ id: 'continue', label: 'x' }),
+        () => {
+          data.blocking = false
+        },
+      ]) {
+        try {
+          write()
+          outcome.push('written')
+        } catch (error) {
+          outcome.push(error)
+        }
+      }
+      return scope
+    })
+    await withRunFrame({}, () => runChain(ctx, [rewriter]))
+
+    expect(outcome).toEqual([expect.any(TypeError), expect.any(TypeError)])
+    const after = readHitl(ctx)
+    expect(after.pending).toEqual(before.pending)
+    expect([...after.answers.entries()]).toEqual([...before.answers.entries()])
+    expect(after.answers.get(hitlReplayKey(request()))?.choice).toBe('approve')
+  })
+
   // MUTATION: remove the WeakSet check from chain()'s merge → the sibling
   // reads the forged answer through its view before anything commits → red
   // (the final commit still drops it, which is why `seen` is the pin).

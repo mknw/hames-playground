@@ -93,6 +93,11 @@ export function extractMarkdown(body: unknown): string | null {
  * Convert base64-encoded binary document bytes to markdown via the sidecar.
  * `fetchFn` is injectable so tests never open a socket.
  *
+ * `config` is the sidecar's WHOLE extraction config: a supplied one replaces
+ * the server default outright (kreuzberg `api/handlers.rs`), so the document
+ * sanitizer passes its own pinned object (`DOCUMENT_CONVERT_CONFIG`, #433
+ * F15) and ingest keeps the default below.
+ *
  * @throws on disabled/unreachable sidecar, non-2xx, timeout, or empty output —
  *         callers (ingest) turn a throw into `ingestStatus: 'failed'`.
  */
@@ -101,6 +106,9 @@ export async function convertToMarkdown(
   filename: string,
   mimeType: string,
   fetchFn: typeof fetch = fetch,
+  // Request markdown explicitly — the sidecar defaults to `plain`, which drops
+  // heading markers and would defeat the markdown-aware chunker (bindHeadings).
+  config: Readonly<Record<string, unknown>> = { output_format: 'markdown' },
 ): Promise<string> {
   const bytes = Buffer.from(base64Content, 'base64')
   const form = new FormData()
@@ -108,9 +116,7 @@ export async function convertToMarkdown(
     type: mimeType || 'application/octet-stream',
   })
   form.append('files', blob, filename || 'upload')
-  // Request markdown explicitly — the sidecar defaults to `plain`, which drops
-  // heading markers and would defeat the markdown-aware chunker (bindHeadings).
-  form.append('config', JSON.stringify({ output_format: 'markdown' }))
+  form.append('config', JSON.stringify(config))
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), CONVERT_TIMEOUT_MS)

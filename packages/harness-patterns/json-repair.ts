@@ -5,81 +5,165 @@
  * JSON-like syntax with unquoted keys or string values.
  * This utility attempts a strict parse first, then applies lightweight
  * regex repairs before retrying.
+ *
+ * No step is super-linear in its input (#461, #463). The input is the model's
+ * `tool_args`, which content the model has read can steer, and the repair runs
+ * synchronously on the server's event loop: one super-linear step lets one
+ * completion stall every request the process is serving. As defence in depth,
+ * the regex chain refuses input longer than `LENIENT_CHAIN_MAX_CHARS`.
  */
 
+/** JS whitespace: the set `String.prototype.trim` removes and `\s` matches. */
+const WS = /\s/
+
+// ---------------------------------------------------------------------------
+// Bracketed literals: one pass decides, a second pass renders
+// ---------------------------------------------------------------------------
+//
+// `parkBracketedValues` asks two questions of every `[` / `{` that follows a
+// colon: where does the literal end, and can its contents be repaired? Both
+// used to be answered by scanning the literal itself, from scratch, each time
+// the question was asked, and that made three shapes super-linear (#463):
+//
+// 1. An UNBALANCED literal was scanned to the end of the input before it
+//    failed, once per colon: `{q: ` + `: [` repeated cost ~23 s at 200k chars.
+// 2. A NESTED literal was re-scanned at every level of the repair's recursion
+//    (trim, bracket match, split), so a literal d levels deep cost d times its
+//    length, until the recursion ran out of stack and threw a `RangeError`.
+// 3. Nested objects whose INNERMOST value is refused paid the cost of 2 at
+//    every nested colon, because the scan resumes one character after a
+//    refused literal and meets the next one: cubic, ~68 s at 16k chars and
+//    ~10 min at 200k.
+//
+// `analyzeLiterals` now answers both questions for EVERY literal in one pass.
+// Whether a literal repairs depends only on its own items and on whether the
+// literals directly inside it repair, and those always close first.
+// `renderLiteral` then builds the repaired text for the parked literals only.
+// Parked literals never overlap, so that is linear too. The answers are the
+// old ones, literal for literal, so the same literals are parked as before,
+// including the inner literals of a refused outer one: the scan still resumes
+// one character after a refusal, it just pays O(1) per colon now.
+//
+// Neither pass recurses, and that is the one result this changes: a literal
+// nested deeper than the old recursion's stack (somewhere past ~2 000 levels,
+// depending on JIT state) used to throw `RangeError` here and now repairs like
+// a shallow one. `parseUnescapedContent` still recurses, so an input it gets
+// far enough into (a quoted first key) throws its `RangeError` before this
+// chain runs, as it always did. That costs about a millisecond.
+
+// What one value holds so far, which decides whether the value repairs.
+/** Nothing but whitespace: refused. */
+const EMPTY = 0
+/** One nested literal and nothing else: repairs when that literal does. */
+const LITERAL = 1
+/** Starts with a character that is not a bracket: quoted as a scalar. */
+const SCALAR = 2
+/** A nested literal followed by more text: refused. */
+const LITERAL_THEN_MORE = 3
+
+/** The open literal `analyzeLiterals` is inside, and its current item. */
+interface Frame {
+  open: number
+  isArray: boolean
+  /** Some item so far was refused. */
+  refused: boolean
+  /** Anything but whitespace between the brackets. `[ ]` repairs to `[]`. */
+  content: boolean
+  /** Object only: the current item's first top-level colon has been seen. */
+  colon: boolean
+  /** Object only: the current item holds a non-blank key before that colon. */
+  key: boolean
+  /** The current item's value: the whole item in an array, after the colon in
+   *  an object. A blank item, and a member with no colon, leave it EMPTY. */
+  value: number
+  /** The literal a {@link LITERAL} value consists of. */
+  child: number
+}
+
 /**
- * Index just past the bracket matching the one at `start`, or -1 when the
- * literal is unbalanced. Double-quoted strings (with backslash escapes) are
- * skipped, so `["a]b"]` closes at the right place. Single quotes are NOT
- * treated as delimiters — apostrophes in bare text are far more common in LLM
- * output than a bracket inside a single-quoted string.
+ * For every `[` / `{` outside a double-quoted string, at its index:
+ *
+ * - `end`: the index just past its matching bracket, or 0 when it is
+ *   unbalanced. Double-quoted strings (with backslash escapes) are skipped, so
+ *   `["a]b"]` closes at the right place. Single quotes are NOT delimiters:
+ *   apostrophes in bare text are far more common in LLM output than a bracket
+ *   inside a single-quoted string. A mismatched closer leaves EVERY literal
+ *   still open unbalanced, because a scan from any of them would stop there.
+ * - `repairable`: 1 when the balanced literal's contents can be repaired. An
+ *   item is refused when it is blank, an object member has no top-level colon
+ *   or a blank key, or a value is blank, or starts with a nested literal and
+ *   does not end with it, or IS a nested literal that is refused. `[]` and `{}`
+ *   (whitespace allowed inside) repair as themselves.
  */
-function scanLiteral(s: string, start: number): number {
-  const expected: string[] = []
+function analyzeLiterals(s: string): { end: Int32Array; repairable: Uint8Array } {
+  const end = new Int32Array(s.length)
+  const repairable = new Uint8Array(s.length)
+  const stack: Frame[] = []
   let inString = false
-  for (let i = start; i < s.length; i++) {
+
+  const itemOk = (f: Frame): boolean =>
+    (f.isArray || f.key) &&
+    (f.value === SCALAR || (f.value === LITERAL && repairable[f.child] === 1))
+
+  /** Record one non-blank unit of the current item: a character, or a whole nested literal. */
+  const unit = (f: Frame, child: number): void => {
+    f.content = true
+    if (!f.isArray && !f.colon) f.key = true
+    else if (f.value === EMPTY) {
+      f.value = child >= 0 ? LITERAL : SCALAR
+      f.child = child
+    } else if (f.value === LITERAL) f.value = LITERAL_THEN_MORE
+  }
+
+  for (let i = 0; i < s.length; i++) {
     const ch = s[i]
     if (inString) {
       if (ch === '\\') i++
       else if (ch === '"') inString = false
       continue
     }
-    if (ch === '"') inString = true
-    else if (ch === '[') expected.push(']')
-    else if (ch === '{') expected.push('}')
-    else if (ch === ']' || ch === '}') {
-      if (expected.pop() !== ch) return -1
-      if (expected.length === 0) return i + 1
+    const top: Frame | undefined = stack[stack.length - 1]
+    if (ch === '[' || ch === '{') {
+      stack.push({
+        open: i,
+        isArray: ch === '[',
+        refused: false,
+        content: false,
+        colon: false,
+        key: false,
+        value: EMPTY,
+        child: -1,
+      })
+      continue
     }
-  }
-  return -1
-}
-
-/** Split literal contents on top-level commas. null when unbalanced. */
-function splitTopLevel(inner: string): string[] | null {
-  const parts: string[] = []
-  let depth = 0
-  let inString = false
-  let start = 0
-  for (let i = 0; i < inner.length; i++) {
-    const ch = inner[i]
-    if (inString) {
-      if (ch === '\\') i++
-      else if (ch === '"') inString = false
+    if (ch === ']' || ch === '}') {
+      if (!top) continue
+      stack.pop()
+      if (ch !== (top.isArray ? ']' : '}')) {
+        stack.length = 0
+        continue
+      }
+      end[top.open] = i + 1
+      if (!top.content || (!top.refused && itemOk(top))) repairable[top.open] = 1
+      const parent: Frame | undefined = stack[stack.length - 1]
+      if (parent) unit(parent, top.open)
       continue
     }
     if (ch === '"') inString = true
-    else if (ch === '[' || ch === '{') depth++
-    else if (ch === ']' || ch === '}') {
-      depth--
-      if (depth < 0) return null
-    } else if (ch === ',' && depth === 0) {
-      parts.push(inner.slice(start, i))
-      start = i + 1
+    if (!top) continue
+    if (ch === ',') {
+      if (!itemOk(top)) top.refused = true
+      top.content = true
+      top.colon = top.key = false
+      top.value = EMPTY
+      top.child = -1
+    } else if (ch === ':' && !top.isArray && !top.colon) {
+      top.content = top.colon = true
+    } else if (!WS.test(ch)) {
+      unit(top, -1)
     }
   }
-  if (depth !== 0 || inString) return null
-  parts.push(inner.slice(start))
-  return parts
-}
-
-/** Split an object member on its first top-level colon. null when there is none. */
-function splitMember(item: string): [string, string] | null {
-  let depth = 0
-  let inString = false
-  for (let i = 0; i < item.length; i++) {
-    const ch = item[i]
-    if (inString) {
-      if (ch === '\\') i++
-      else if (ch === '"') inString = false
-      continue
-    }
-    if (ch === '"') inString = true
-    else if (ch === '[' || ch === '{') depth++
-    else if (ch === ']' || ch === '}') depth--
-    else if (ch === ':' && depth === 0) return [item.slice(0, i), item.slice(i + 1)]
-  }
-  return null
+  return { end, repairable }
 }
 
 /** true when `token` is already a valid JSON scalar (string, number, bool, null). */
@@ -98,46 +182,103 @@ function quoteToken(token: string): string {
   return JSON.stringify(singleQuoted ? singleQuoted[1] : token)
 }
 
-/** Repair one value: recurse into nested literals, quote bare scalars. null on failure. */
-function repairValue(rawValue: string): string | null {
-  const token = rawValue.trim()
-  if (token === '') return null
-  if (token.startsWith('[') || token.startsWith('{')) {
-    return scanLiteral(token, 0) === token.length ? repairLiteral(token) : null
+/** One item of a literal, as trimmed index ranges into the input. */
+interface Item {
+  /** Object only: the key. */
+  keyStart: number
+  keyEnd: number
+  valueStart: number
+  valueEnd: number
+  /** The value is exactly one nested literal, which starts at `valueStart`. */
+  literal: boolean
+}
+
+/** The items of the balanced literal at `open`, its nested literals skipped whole. */
+function itemsOf(s: string, open: number, end: Int32Array): Item[] {
+  const isArray = s[open] === '['
+  const close = end[open] - 1
+  const items: Item[] = []
+  let inString = false
+  let content = false
+  let colon = false
+  let keyStart = -1
+  let keyEnd = -1
+  // The first and last non-blank index of the current key or value.
+  let first = -1
+  let last = -1
+  let literal = false
+  for (let i = open + 1; i < close; i++) {
+    const ch = s[i]
+    if (inString) {
+      if (ch === '\\') i++
+      else if (ch === '"') {
+        inString = false
+        last = i
+      }
+      continue
+    }
+    if (ch === ',') {
+      content = true
+      items.push({ keyStart, keyEnd, valueStart: first, valueEnd: last + 1, literal })
+      colon = literal = false
+      keyStart = keyEnd = first = last = -1
+    } else if (ch === ':' && !isArray && !colon) {
+      content = colon = true
+      keyStart = first
+      keyEnd = last + 1
+      first = last = -1
+      literal = false
+    } else if (!WS.test(ch)) {
+      content = true
+      const nested = ch === '[' || ch === '{'
+      literal = first === -1 && nested
+      if (first === -1) first = i
+      if (ch === '"') inString = true
+      // `max` so the scan always moves forward: an end the analysis got wrong
+      // must cost a wrong answer, never a loop that does not terminate.
+      if (nested) i = Math.max(i, end[i] - 1)
+      last = i
+    }
   }
-  return isJsonScalar(token) ? token : quoteToken(token)
+  if (content) items.push({ keyStart, keyEnd, valueStart: first, valueEnd: last + 1, literal })
+  return items
 }
 
 /**
- * Repair a balanced array/object literal whose contents may be unquoted, e.g.
- * `[X, [b, c]]` → `["X", ["b", "c"]]`. Returns null when anything looks off, so
- * the caller can leave the region untouched rather than guess.
+ * The repaired text of the repairable literal at `open`: `[X, [b, c]]` →
+ * `["X", ["b", "c"]]`. Items are joined with `, `, an object member is
+ * `key: value`, a bare scalar is quoted and a JSON one kept. Iterative, so no
+ * nesting depth runs out of stack.
  */
-function repairLiteral(literal: string): string | null {
-  const isArray = literal.startsWith('[')
-  const inner = literal.slice(1, -1)
-  if (inner.trim() === '') return isArray ? '[]' : '{}'
-
-  const items = splitTopLevel(inner)
-  if (!items) return null
-
-  const repaired: string[] = []
-  for (const item of items) {
-    if (item.trim() === '') return null
-    if (isArray) {
-      const value = repairValue(item)
-      if (value === null) return null
-      repaired.push(value)
+function renderLiteral(s: string, open: number, end: Int32Array): string {
+  const out: string[] = []
+  const stack: Array<{ isArray: boolean; items: Item[]; next: number }> = []
+  const enter = (at: number): void => {
+    const isArray = s[at] === '['
+    out.push(isArray ? '[' : '{')
+    stack.push({ isArray, items: itemsOf(s, at, end), next: 0 })
+  }
+  enter(open)
+  while (stack.length > 0) {
+    const f = stack[stack.length - 1]
+    if (f.next === f.items.length) {
+      out.push(f.isArray ? ']' : '}')
+      stack.pop()
       continue
     }
-    const member = splitMember(item)
-    if (!member) return null
-    const key = member[0].trim()
-    const value = repairValue(member[1])
-    if (key === '' || value === null) return null
-    repaired.push(`${isJsonScalar(key) && key.startsWith('"') ? key : quoteToken(key)}: ${value}`)
+    const item = f.items[f.next++]
+    if (f.next > 1) out.push(', ')
+    if (!f.isArray) {
+      const key = s.slice(item.keyStart, item.keyEnd)
+      out.push(isJsonScalar(key) && key.startsWith('"') ? key : quoteToken(key), ': ')
+    }
+    if (item.literal) enter(item.valueStart)
+    else {
+      const token = s.slice(item.valueStart, item.valueEnd)
+      out.push(isJsonScalar(token) ? token : quoteToken(token))
+    }
   }
-  return isArray ? `[${repaired.join(', ')}]` : `{${repaired.join(', ')}}`
+  return out.join('')
 }
 
 const PLACEHOLDER = (index: number) => `__JSON_REPAIR_LITERAL_${index}__`
@@ -150,9 +291,12 @@ const PLACEHOLDER = (index: number) => `__JSON_REPAIR_LITERAL_${index}__`
  * `{"author": "[X], limit: 5"}`.
  *
  * Only complete values are parked (the literal must be followed by `,`, `}` or
- * `]`), so trailing junk still falls through to the original handling.
+ * `]`), so trailing junk still falls through to the original handling. A
+ * literal that is not parked is scanned into, one character on, so a
+ * repairable literal inside a refused one is still parked.
  */
 function parkBracketedValues(s: string, parked: string[]): string {
+  const { end, repairable } = analyzeLiterals(s)
   let out = ''
   let i = 0
   let inString = false
@@ -172,17 +316,16 @@ function parkBracketedValues(s: string, parked: string[]): string {
     if (ch === '"') inString = true
     if (ch === ':') {
       let open = i + 1
-      while (open < s.length && /\s/.test(s[open])) open++
+      while (open < s.length && WS.test(s[open])) open++
       if (s[open] === '[' || s[open] === '{') {
-        const end = scanLiteral(s, open)
-        let after = end
-        while (after > 0 && after < s.length && /\s/.test(s[after])) after++
-        const complete = end > 0 && (after === s.length || [',', '}', ']'].includes(s[after]))
-        const repaired = complete ? repairLiteral(s.slice(open, end)) : null
-        if (repaired !== null) {
-          parked.push(repaired)
+        const close = end[open]
+        let after = close
+        while (after > 0 && after < s.length && WS.test(s[after])) after++
+        const complete = close > 0 && (after === s.length || [',', '}', ']'].includes(s[after]))
+        if (complete && repairable[open] === 1) {
+          parked.push(renderLiteral(s, open, end))
           out += s.slice(i, open) + PLACEHOLDER(parked.length - 1)
-          i = end
+          i = close
           continue
         }
       }
@@ -211,8 +354,9 @@ function unparkBracketedValues(s: string, parked: string[]): string {
 // written `\\\"`, while a `"` belonging to the payload's JSON structure is
 // written `\"`. Captured live in `.harness-logs/sandbox-tool-recovery.json`
 // (event `ev-tey7ez`, the `flavour-office-loop` actor): a 19 180-character
-// `sandbox_edit` whose `newText` was openpyxl code full of Excel formulas —
-// `"='Revenue Model'!N" + str(row)` — reached this module with 5 of its 38
+// `sandbox_edit` whose `newText` was openpyxl code full of Excel formulas that
+// reference sheet names with spaces, held in Python double-quoted strings (the
+// shape is `"='Sheet Name'!N" + str(row)`), reached this module with 5 of its 38
 // content quotes doubly escaped and 33 singly escaped, so the first of the 33
 // ended `newText` 13 706 characters in and `JSON.parse` asked for a `,`.
 // Nothing upstream could have caught it: the response was 9 913 tokens against
@@ -239,7 +383,7 @@ function unparkBracketedValues(s: string, parked: string[]): string {
 // corpus of nine distinct `Invalid tool_args JSON` payloads in `.harness-logs`
 // the ordering is load-bearing, not cosmetic — a `code-mode` script arriving
 // with raw newlines was being "repaired" by the chain into
-// `{"script": "\"const g = read_graph({});\n…\""}`, two quote characters the
+// `{"script": "\"const g = f({});\n…\""}`, two quote characters the
 // model never wrote, wrapping the whole program in a string literal that would
 // have run as a no-op expression. That is precisely the silent mis-coercion
 // #217(b) is open about, and it is why every repair now reports itself.
@@ -515,6 +659,31 @@ export interface RepairedJson {
 
 const LENIENT: JsonRepairNote = { strategy: 'lenient-tokens' }
 
+export class TooLongToRepairError extends SyntaxError {}
+
+/**
+ * The longest input the lenient chain will try to repair, in characters after
+ * trimming (#463). Longer input that neither `JSON.parse` nor
+ * `parseUnescapedContent` accepted THROWS.
+ *
+ * Defence in depth, not the fix: every step of the chain is linear, so at this
+ * size the whole chain costs about a millisecond. What the bound buys is a cap
+ * on any step that is not, should one be found or added later. It sits after
+ * the two strategies that recover large payloads, both of them linear, so a
+ * large valid document and the 19 KB `sandbox_edit` recovery described at
+ * `parseUnescapedContent` never meet it. The chain is for short relaxed-syntax
+ * args like `{query: movies}`: on the `.harness-logs` corpus, the longest input
+ * it repaired is 104 characters, the longest it saw at all is 3 021, and the
+ * one `tool_args` over this bound is that 19 KB recovery.
+ *
+ * It throws rather than truncates, because a prefix is not the document: the
+ * module guarantees no partial document (see `parseUnescapedContent`), and a
+ * truncated repair is the silent mis-coercion #217(b) is about. The throw is a
+ * `SyntaxError`, like every other refusal here. Both loops forward this message
+ * to the model (#437).
+ */
+const LENIENT_CHAIN_MAX_CHARS = 16_384
+
 /** A whole value that is ONE double-quoted string: every interior `"` escaped. */
 const ONE_QUOTED_STRING = /^"(?:[^"\\]|\\[\s\S])*"$/
 
@@ -586,6 +755,15 @@ export function repairJsonTracked(raw: string): RepairedJson {
       args: content.value,
       repair: { strategy: 'unescaped-content', counts: content.counts },
     }
+  }
+
+  // Everything below is the lenient chain, and it runs on short input only.
+  if (s.length > LENIENT_CHAIN_MAX_CHARS) {
+    throw new TooLongToRepairError(
+      `Not valid JSON, and too long to repair: ${s.length} characters, where relaxed ` +
+        `syntax is only repaired up to ${LENIENT_CHAIN_MAX_CHARS}. Send valid JSON: quote ` +
+        'every key and string, and escape quotes and newlines inside strings.',
+    )
   }
 
   // Replace single quotes with double quotes (but not inside double-quoted strings)
@@ -714,6 +892,10 @@ export function repairJsonTracked(raw: string): RepairedJson {
  * - Single-quoted strings: {'key': 'val'} → {"key": "val"}
  * - Bracketed values with unquoted contents: {author: [X], limit: 5}
  *   → {"author": ["X"], "limit": 5}
+ *
+ * Everything but the first item applies only to input of at most 16 384
+ * characters (`LENIENT_CHAIN_MAX_CHARS`); longer input must be valid JSON or
+ * fall in the first item's class.
  *
  * @returns Parsed object — throws if still invalid after repair.
  */

@@ -37,16 +37,16 @@ function message(
   }
 }
 
-const THIBAULT = { name: 'Thibault Desmet', address: 'thibault.desmet@contoso.com' }
-const MARCO = { name: 'Marco Di Rienzo', address: 'marco@contoso.com' }
+const ADELE = { name: 'Adele Vance', address: 'adele.vance@contoso.com' }
+const DIEGO = { name: 'Diego Siciliani', address: 'diego@contoso.com' }
 
 beforeEach(() => {
   h.restoreDefaults()
   graphFetch.mockResolvedValue({
     value: [
-      message('Co-Working booking', [THIBAULT]),
-      message('CORTEX draft', [MARCO]),
-      message('Joint review', [MARCO, THIBAULT]),
+      message('Desk booking', [ADELE]),
+      message('Atlas draft', [DIEGO]),
+      message('Joint review', [DIEGO, ADELE]),
     ],
   })
 })
@@ -85,23 +85,23 @@ describe('graph_mail_attachments', () => {
     expect(lastPath()).not.toContain('contentBytes')
     const data = res.data as GraphMailAttachmentsResult
     expect(data.direction).toBe('sent')
-    expect(data.messages[0].attachments[0].name).toBe('Co-Working booking.pdf')
+    expect(data.messages[0].attachments[0].name).toBe('Desk booking.pdf')
   })
 
   it('direction=received reads the inbox and reports the sender as `with`', async () => {
     graphFetch.mockResolvedValue({
-      value: [message('Invoice', [{ name: 'Me', address: 'me@contoso.com' }], 'Thibault Desmet')],
+      value: [message('Invoice', [{ name: 'Me', address: 'me@contoso.com' }], 'Adele Vance')],
     })
     const res = await runAppTool('graph_mail_attachments', { direction: 'received' })
     expect(lastPath()).toContain('/me/mailFolders/inbox/messages')
     const data = res.data as GraphMailAttachmentsResult
-    expect(data.messages[0].with).toEqual(['Thibault Desmet'])
+    expect(data.messages[0].with).toEqual(['Adele Vance'])
   })
 
   it('person filters sent mail by recipient — first name, any position in the To line', async () => {
-    const res = await runAppTool('graph_mail_attachments', { person: 'thibault' })
+    const res = await runAppTool('graph_mail_attachments', { person: 'adele' })
     const data = res.data as GraphMailAttachmentsResult
-    expect(data.messages.map((m) => m.subject)).toEqual(['Co-Working booking', 'Joint review'])
+    expect(data.messages.map((m) => m.subject)).toEqual(['Desk booking', 'Joint review'])
     // App-side filtering inflates the request window.
     expect(lastPath()).toContain('$top=50')
   })
@@ -123,9 +123,9 @@ describe('graph_mail_attachments', () => {
     // A model shape produced routinely: person as an array or object used to
     // degrade to `''`, the recipient filter short-circuited to true, and the
     // tool returned the newest attachment-bearing mail TO ANYONE while the
-    // model narrated it as "the files you sent Thibault".
+    // model narrated it as files the user had sent that person.
     graphFetch.mockClear()
-    for (const bad of [['Thibault'], { name: 'Thibault' }, 7]) {
+    for (const bad of [['Adele'], { name: 'Adele' }, 7]) {
       const res = await runAppTool('graph_mail_attachments', { person: bad })
       expect(res.success, `person: ${JSON.stringify(bad)}`).toBe(false)
       expect(res.error).toMatch(/person must be a string/)
@@ -138,7 +138,7 @@ describe('graph_mail_attachments', () => {
 
   it('drops messages whose attachments turn out empty (inline-image false positives)', async () => {
     graphFetch.mockResolvedValue({
-      value: [message('Signature only', [THIBAULT], 'Michael Verstraete', [])],
+      value: [message('Signature only', [ADELE], 'Michael Verstraete', [])],
     })
     const res = await runAppTool('graph_mail_attachments', {})
     expect((res.data as GraphMailAttachmentsResult).messages).toEqual([])

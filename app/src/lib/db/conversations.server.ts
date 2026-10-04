@@ -212,7 +212,11 @@ export async function getConversationOwner(id: string): Promise<string | null> {
 //     queued: a queue would itself be state held outside the context.
 //  2. **Every write of `context` names the version it read**
 //     (`context_version`), lands only if the row still has it, and moves it
-//     on. The turn's version is the one its claim returned.
+//     on. The turn's version is the one its claim returned. Every new value
+//     comes from one sequence ({@link NEXT_VERSION}), never from `+ 1`: a
+//     per-row count restarts when a conversation is deleted and its id
+//     recreated, and a turn still holding the deleted row's number would
+//     then save into the new one.
 //  3. **A claim is a lease.** The holder renews it every
 //     {@link TURN_CLAIM_RENEW_MS}; one not renewed for
 //     {@link TURN_CLAIM_TTL_SECONDS} is dead and the next turn may take the
@@ -245,13 +249,39 @@ export const TURN_CLAIM_RENEW_MS = 30_000
 const NO_LIVE_CLAIM = `(turn_claimed_at IS NULL OR turn_claimed_at < NOW() - INTERVAL '${TURN_CLAIM_TTL_SECONDS} seconds')`
 
 /**
+ * The next `context_version`. The column's insert default is the same
+ * sequence (`client.server.ts`), so no number is ever handed out twice, across
+ * rows, deletes and recreates alike.
+ */
+const NEXT_VERSION = `nextval('conversations_context_version_seq')`
+
+/**
+ * A claim older than this has missed at least one renewal: one and a half
+ * renewal intervals, so a single slow round trip does not count but a missed
+ * renewal does. Its holder is presumably gone (a deploy, a crash), and a
+ * refusal says so instead of telling the user to wait for a turn that will
+ * never finish.
+ */
+const INTERRUPTED_AFTER_SECONDS = (TURN_CLAIM_RENEW_MS / 1000) * 1.5
+
+/**
  * A turn was refused because another turn holds the conversation. The message
  * reaches the user verbatim (the SSE route's `event: error`, an error bubble),
  * so it says what happened and what to do.
+ *
+ * `claimAgeSeconds` is how long ago the holder last renewed. Past
+ * {@link INTERRUPTED_AFTER_SECONDS} the holder is presumed dead, and the
+ * message says the turn was interrupted and when the lease lets go — rather
+ * than "still running", which after a deploy or a crash is untrue.
  */
 export class ConversationBusyError extends Error {
-  constructor() {
-    super('A turn is still running in this conversation. Wait for it to finish, then send again.')
+  constructor(claimAgeSeconds?: number | null) {
+    super(
+      claimAgeSeconds != null && claimAgeSeconds > INTERRUPTED_AFTER_SECONDS
+        ? 'The last turn in this conversation was interrupted. You can send again in about ' +
+            `${Math.max(1, Math.ceil(TURN_CLAIM_TTL_SECONDS - claimAgeSeconds))} seconds.`
+        : 'A turn is still running in this conversation. Wait for it to finish, then send again.',
+    )
     this.name = 'ConversationBusyError'
   }
 }
@@ -358,7 +388,7 @@ export async function claimConversation(
 ): Promise<ConversationRow | null> {
   const { rows } = await query<DbRow>(
     `UPDATE conversations
-        SET turn_claimed_at = NOW(), context_version = context_version + 1
+        SET turn_claimed_at = NOW(), context_version = ${NEXT_VERSION}
       WHERE id = $1 AND user_id = $2 AND ${NO_LIVE_CLAIM}
       RETURNING ${ROW_COLUMNS}`,
     [id, userId],
@@ -372,11 +402,14 @@ export async function claimConversation(
       throw err
     }
   }
-  const { rows: existing } = await query(
-    'SELECT 1 FROM conversations WHERE id = $1 AND user_id = $2',
+  // The claim's age, by the database's clock like the lease itself, so the
+  // refusal can tell a live holder from one that stopped renewing.
+  const { rows: existing } = await query<{ claim_age: number | null }>(
+    `SELECT EXTRACT(EPOCH FROM NOW() - turn_claimed_at)::float8 AS claim_age
+       FROM conversations WHERE id = $1 AND user_id = $2`,
     [id, userId],
   )
-  if (existing.length > 0) throw new ConversationBusyError()
+  if (existing.length > 0) throw new ConversationBusyError(existing[0].claim_age)
   return null
 }
 
@@ -429,7 +462,7 @@ export async function saveConversation(input: SaveConversationInput): Promise<st
        status          = $6,
        inference_tier  = COALESCE(inference_tier, $7),
        updated_at      = NOW(),
-       context_version = context_version + 1,
+       context_version = ${NEXT_VERSION},
        turn_claimed_at = NULL
      WHERE id = $1 AND user_id = $2 AND context_version = $8
      RETURNING context_version::text AS version`,
@@ -528,7 +561,7 @@ export async function updateConversationContextIfUnchanged(
 ): Promise<boolean> {
   const { rowCount } = await query(
     `UPDATE conversations
-        SET context = $1::jsonb, updated_at = NOW(), context_version = context_version + 1
+        SET context = $1::jsonb, updated_at = NOW(), context_version = ${NEXT_VERSION}
       WHERE id = $2 AND user_id = $3 AND context_version = $4 AND ${NO_LIVE_CLAIM}`,
     [encryptJsonb(serializedContext), id, userId, version],
   )

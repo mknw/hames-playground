@@ -54,7 +54,6 @@ import {
   createContext,
   serializeContext,
   deserializeContext,
-  enrichToolResult,
   compactBulkData,
   createEvent,
   type ConfiguredPattern,
@@ -759,8 +758,15 @@ async function saveTrailingPass(
  *
  * Exactly two things move, and nothing else of `ours` does — `fresh` may carry
  * a flag flip or a whole later turn, and those win:
- *  - a `summary` on a tool result, matched by event id, written only where
- *    `fresh` has none;
+ *  - a `summary` on a tool result, written only where `fresh` has none, and
+ *    only onto THE RESULT IT SUMMARIZES: same id, a `tool_result`, and the
+ *    same `result`. The id alone is not enough. It would restore a summary
+ *    onto a result substituted after the pass read it — #433 S7 depends on
+ *    this line, because its Δ2 `heldBy` placeholder is exactly that, and a
+ *    stale summary on it would mask its resolution — and ids are 6 random
+ *    characters, so two results may share one. The summary is assigned on
+ *    the matched event itself, not through `enrichToolResult`'s first-id
+ *    lookup, which could write it onto a different event with the same id;
  *  - the events `ours` gained after its own save (the first `savedCount` are
  *    what that save wrote), each inserted after the event it followed, so a
  *    notice lands at the end of its own turn rather than after a newer one.
@@ -772,12 +778,18 @@ export function mergeTrailingPass<T>(
 ): UnifiedContext<T> {
   const present = new Set(fresh.events.map((e) => e.id))
   for (const event of ours.events) {
-    const summary =
-      event.type === 'tool_result' ? (event.data as ToolResultEventData).summary : undefined
+    if (event.type !== 'tool_result') continue
+    const { summary, result } = event.data as ToolResultEventData
     if (!summary || !event.id) continue
-    const target = fresh.events.find((e) => e.id === event.id && e.type === 'tool_result')
+    const summarized = JSON.stringify(result)
+    const target = fresh.events.find(
+      (e) =>
+        e.id === event.id &&
+        e.type === 'tool_result' &&
+        JSON.stringify((e.data as ToolResultEventData).result) === summarized,
+    )
     if (target && !(target.data as ToolResultEventData).summary) {
-      enrichToolResult(fresh, event.id, { summary })
+      ;(target.data as ToolResultEventData).summary = summary
     }
   }
   let anchor = ours.events[savedCount - 1]?.id

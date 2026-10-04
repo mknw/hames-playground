@@ -638,6 +638,113 @@ describe('the turn claim and the versioned save', () => {
       flag: true,
     })
   })
+
+  // SD-11. A first turn still running when its chat is deleted holds the
+  // deleted row's version; a second tab on `?c=<id>` then recreates the id.
+  // On a per-row count both rows start at the same number, and the old turn's
+  // save lands in the new row — resurrecting the deleted conversation and
+  // releasing the new turn's claim.
+  // MUTATION: the column's insert default back to 0 (a per-row count) → the
+  // old save lands and this reddens.
+  it('never repeats a version, so a turn on a deleted conversation cannot save into its recreation', async () => {
+    const id = mkId()
+    const deleted = await createConversation(row(id, '{"deleted":true}'))
+    await deleteConversation(id, TEST_USER)
+    const recreated = await createConversation(row(id, '{"recreated":true}'))
+    expect(recreated).not.toBe(deleted)
+
+    await expect(
+      saveConversation({ ...row(id, '{"resurrected":true}'), status: 'done', version: deleted }),
+    ).rejects.toBeInstanceOf(ConversationConflictError)
+    expect(JSON.parse((await loadConversation(id, TEST_USER))!.serializedContext)).toEqual({
+      recreated: true,
+    })
+    // Still the new turn's: its claim was not released by the old save.
+    await expect(claimConversation(id, TEST_USER)).rejects.toBeInstanceOf(ConversationBusyError)
+    await saveConversation({ ...row(id), status: 'done', version: recreated })
+  })
+
+  // The other half of "never repeats": a claim, a save and a flag write each
+  // draw a NEW number, never `+ 1` on the row's own. Another row's create in
+  // between is what tells the two apart — the sequence has moved past it, a
+  // per-row `+ 1` has not.
+  // MUTATION: `context_version + 1` in place of the sequence in the three
+  // UPDATEs → the first assertion reddens. Each later one would too: on a
+  // per-row count the row's k-th write is its first number + k, and the k-th
+  // number drawn by `past()` is at least that.
+  it('draws every new version past any number already handed out', async () => {
+    const id = mkId()
+    // Created and released, not seeded through a save: the row's number must
+    // be one the sequence handed out, for the comparison below to mean anything.
+    const created = await createConversation(row(id))
+    await releaseConversationClaim(id, TEST_USER, created)
+    const past = async () => Number(await createConversation(row(mkId())))
+
+    let floor = await past()
+    const held = (await claimConversation(id, TEST_USER))!
+    expect(Number(held.version)).toBeGreaterThan(floor)
+
+    floor = await past()
+    const saved = await saveConversation({ ...row(id), status: 'done', version: held.version })
+    expect(Number(saved)).toBeGreaterThan(floor)
+
+    floor = await past()
+    expect(await updateConversationContextIfUnchanged(id, TEST_USER, '{"flag":1}', saved)).toBe(
+      true,
+    )
+    expect(Number((await loadConversation(id, TEST_USER))!.version)).toBeGreaterThan(floor)
+  })
+
+  // A release never moves the version, so without `turn_claimed_at IS NOT
+  // NULL` a renewal landing after a failure release (or a stale-approval
+  // release) would claim the row again for a whole lease, and the user's
+  // retry would be refused as busy.
+  // MUTATION: drop `AND turn_claimed_at IS NOT NULL` from
+  // renewConversationClaim → the renewal succeeds and the claim is refused.
+  it('does not let a late renewal re-claim a released conversation', async () => {
+    const id = mkId()
+    const held = await createConversation(row(id))
+    expect(await releaseConversationClaim(id, TEST_USER, held, { failed: true })).toBe(true)
+
+    expect(await renewConversationClaim(id, TEST_USER, held)).toBe(false)
+    expect(await claimConversation(id, TEST_USER)).not.toBeNull()
+  })
+
+  // A row that cannot be read (a wrong key, a corrupt blob) must not stay
+  // claimed for a lease after the claim that read it threw.
+  // MUTATION: drop the release in claimConversation's decrypt catch → the
+  // second claim is refused as busy.
+  it('lets go of a claim whose row cannot be decrypted', async () => {
+    const id = mkId()
+    await seedRow(row(id))
+    // A JSONB string that is not an envelope: `decryptJsonb` refuses it.
+    await query(`UPDATE conversations SET context = '"not an envelope"'::jsonb WHERE id = $1`, [id])
+    try {
+      await expect(claimConversation(id, TEST_USER)).rejects.toThrow()
+      const again = claimConversation(id, TEST_USER)
+      await expect(again).rejects.toThrow()
+      await expect(again).rejects.not.toBeInstanceOf(ConversationBusyError)
+    } finally {
+      await deleteConversation(id, TEST_USER)
+    }
+  })
+
+  // After a deploy or a crash the holder is gone, and "still running… wait for
+  // it to finish" asks the user to wait for a turn that will never finish.
+  // MUTATION: always use the "still running" text → this reddens.
+  it('says the last turn was interrupted, and when to resend, once the holder stops renewing', async () => {
+    const id = mkId()
+    await seedRow(row(id))
+    await claimConversation(id, TEST_USER)
+    await query(
+      `UPDATE conversations SET turn_claimed_at = NOW() - INTERVAL '60 seconds' WHERE id = $1`,
+      [id],
+    )
+
+    await expect(claimConversation(id, TEST_USER)).rejects.toThrow(
+      /^The last turn in this conversation was interrupted\. You can send again in about (5[89]|60) seconds\.$/,
+    )
+  })
 })
 
 describe('action kind/source/status (agent trigger endpoint)', () => {

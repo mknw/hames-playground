@@ -98,7 +98,9 @@ const createEvent = vi.fn((type: string, patternId: string, data: unknown) => ({
 
 vi.mock('@hames-ai/harness-patterns', async () => {
   // The trailing save's merge works on real contexts, so it gets the real
-  // helpers; everything that runs a turn stays fake.
+  // helpers; everything that runs a turn stays fake. `enrichToolResult` is no
+  // longer called by the merge (it writes onto the FIRST event with an id),
+  // and stays here so the mutation that restores that call runs as written.
   const real = await vi.importActual<typeof import('@hames-ai/harness-patterns/context.server')>(
     '@hames-ai/harness-patterns/context.server',
   )
@@ -1596,6 +1598,32 @@ describe('mergeTrailingPass', () => {
   })
   const ctxOf = (events: ReturnType<typeof ev>[]) =>
     ({ sessionId: 's', createdAt: 0, status: 'running', data: {}, input: '', events }) as never
+  type Merged = { events: { id?: string; data: Record<string, unknown> }[] }
+
+  // #433 S7 depends on this: its Δ2 `heldBy` placeholder REPLACES a result
+  // under the same id after the pass read it, and a summary of the original
+  // restored onto it would mask its resolution.
+  // MUTATION: drop the `result` comparison from the match → the placeholder
+  // gets the stale summary.
+  it('puts no summary on a result that changed under the same id', () => {
+    const fresh = ctxOf([ev('t1', 'tool_result', { result: { heldBy: 'hitl-1' } })])
+    const ours = ctxOf([ev('t1', 'tool_result', { result: 'raw', summary: 'S' })])
+    const merged = mergeTrailingPass(fresh, ours, 1) as unknown as Merged
+    expect(merged.events[0].data.summary).toBeUndefined()
+  })
+
+  // Ids are 6 random characters, so two results can share one.
+  // MUTATION: write through `enrichToolResult(fresh, event.id, …)` again → it
+  // takes the FIRST event with the id, and the summary lands on the wrong one.
+  it('puts the summary on the result it summarizes when two share an id', () => {
+    const fresh = ctxOf([
+      ev('t1', 'tool_result', { result: 'other' }),
+      ev('t1', 'tool_result', { result: 'raw' }),
+    ])
+    const ours = ctxOf([ev('t1', 'tool_result', { result: 'raw', summary: 'S' })])
+    const merged = mergeTrailingPass(fresh, ours, 1) as unknown as Merged
+    expect(merged.events.map((e) => e.data.summary)).toEqual([undefined, 'S'])
+  })
 
   it('never overwrites a summary the fresh copy already has', () => {
     const fresh = ctxOf([ev('t1', 'tool_result', { summary: 'theirs' })])

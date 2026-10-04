@@ -1563,7 +1563,7 @@ view.since(timestamp)
 view.fromLastNTurns(3) // Rolling window: last 3 user turns
 
 // Execution
-view.get() // ContextEvent[]
+view.get() // ContextEvent[] — always a new array, never the live log (#433)
 view.serialize() // XML format for LLM
 view.serializeCompact({ recentTurns: 1 }) // Compact pointers for older results, full for recent
 view.exists() // boolean

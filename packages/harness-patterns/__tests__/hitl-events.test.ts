@@ -14,7 +14,10 @@
  *   H4  `hitl_*` survive every commit strategy (`ALWAYS_COMMIT_TYPES`).
  *   H5  only core writes them [F6]: `createEvent` / `trackEvent` refuse both
  *       types, and `commitEvents` and `chain()` drop any `hitl_*` event core
- *       did not mint.
+ *       did not mint. Since the #472 review (F1), the view is no write path
+ *       either: `get()` never returns the live log, and HITL events are
+ *       deep-frozen at mint and on deserialize, so a recorded decision cannot
+ *       be rewritten in place (pins P-a, P-b, P-e).
  *
  * Every pin names the source mutation that turns it red; each one was run.
  * H2b (a legacy paused blob) belongs to S3, with the `resumeHarness` change.
@@ -120,7 +123,7 @@ describe('H1 · readHitl reads one run: everything after the last user_message',
     ]
     // Positive control: inside run 1 the answer IS the journal's.
     expect(readHitl({ events: run1 }).answers.size).toBe(1)
-    expect(answerOf(viewOf(run1), 'confirm:plan')?.choice).toBe('approve')
+    expect(answerOf(viewOf(run1), 'confirm', 'plan')?.choice).toBe('approve')
 
     const run2Opener = userMessage('write Y')
     const events = [...run1, run2Opener]
@@ -128,7 +131,7 @@ describe('H1 · readHitl reads one run: everything after the last user_message',
     expect(state.runId).toBe(run2Opener.id)
     expect(state.answers.size).toBe(0)
     expect(state.pending).toEqual([])
-    expect(answerOf(viewOf(events), 'confirm:plan')).toBeUndefined()
+    expect(answerOf(viewOf(events), 'confirm', 'plan')).toBeUndefined()
   })
 
   // MUTATION: the same first-user_message window → run 1's unanswered request
@@ -184,7 +187,7 @@ describe('H2 · a legacy approval_* event is never an answer and never a request
     const state = readHitl({ events })
     expect(state.pending.map((r) => r.requestId)).toEqual(['req-a'])
     expect(state.answers.size).toBe(0)
-    expect(answerOf(viewOf(events), 'confirm:plan')).toBeUndefined()
+    expect(answerOf(viewOf(events), 'confirm', 'plan')).toBeUndefined()
   })
 
   // MUTATION: read `approval_request` as a request in readHitl → it is pending.
@@ -309,7 +312,7 @@ describe('the journal applies the §2 replay rule [F8]', () => {
       ev('hitl_response', response({ choice: 'reject' })),
       ev('hitl_response', response({ choice: 'approve' })),
     ]
-    expect(answerOf(viewOf(answered), 'confirm:plan')?.choice).toBe('reject')
+    expect(answerOf(viewOf(answered), 'confirm', 'plan')?.choice).toBe('reject')
 
     const relabelled = [
       userMessage('write X'),
@@ -351,7 +354,7 @@ describe('the journal applies the §2 replay rule [F8]', () => {
 // answerOf
 // ============================================================================
 
-describe('answerOf(view, key) reads the run journal over the UNFILTERED log [F18]', () => {
+describe('answerOf(view, kind, key) reads the run journal over the UNFILTERED log [F18]', () => {
   const events = [
     userMessage('write X'),
     ev('hitl_request', request(), 'gate'),
@@ -369,13 +372,19 @@ describe('answerOf(view, key) reads the run journal over the UNFILTERED log [F18
       viewOf(events, { fromLast: true }),
     ]) {
       expect(view.ofType('hitl_response').count()).toBe(0)
-      expect(answerOf(view, 'confirm:plan')?.choice).toBe('approve')
+      expect(answerOf(view, 'confirm', 'plan')?.choice).toBe('approve')
     }
   })
 
-  it('takes the stored key, which carries the kind', () => {
-    expect(answerOf(viewOf(events), 'plan')).toBeUndefined()
-    expect(answerOf(viewOf(events), 'confirm:nothing')).toBeUndefined()
+  // #472 F2: the consumer names the kind and its own key; core composes the
+  // stored `${kind}:${key}` form. MUTATION: compare against `key` unprefixed
+  // → `answerOf(view, 'confirm', 'plan')` finds nothing → red.
+  it("takes the request's kind and the key the consumer gave it", () => {
+    expect(answerOf(viewOf(events), 'confirm', 'plan')?.choice).toBe('approve')
+    expect(answerOf(viewOf(events), 'provenance', 'plan')).toBeUndefined()
+    expect(answerOf(viewOf(events), 'confirm', 'nothing')).toBeUndefined()
+    // The stored form is core's business, not the caller's.
+    expect(answerOf(viewOf(events), 'confirm', 'confirm:plan')).toBeUndefined()
   })
 
   // MUTATION: return the last match instead of refusing a second one → the
@@ -388,7 +397,7 @@ describe('answerOf(view, key) reads the run journal over the UNFILTERED log [F18
       ev('hitl_response', response({ requestId: 'req-b', choice: 'defer' })),
     ]
     expect(readHitl({ events: ambiguous }).answers.size).toBe(2)
-    expect(answerOf(viewOf(ambiguous), 'confirm:plan')).toBeUndefined()
+    expect(answerOf(viewOf(ambiguous), 'confirm', 'plan')).toBeUndefined()
   })
 })
 
@@ -572,6 +581,97 @@ describe('H5 · only core writes HITL events [F6]', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/dropped a hitl_response.*'forger'/))
   })
 
+  // #472 F3. MUTATION (O1): the filter guards `hitl_response` only → the
+  // forged request is committed, and the run reads as paused on it → red.
+  it('a hitl_request pushed straight into scope.events is never pending', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const forger = configurePattern('forger', async (scope) => {
+      scope.events.push(ev('hitl_request', request(), 'forger'))
+      return scope
+    })
+
+    const ctx = createContext('write X')
+    await withRunFrame({}, () => runChain(ctx, [forger]))
+
+    expect(readHitl(ctx).pending).toEqual([])
+    expect(ctx.events.filter((e) => e.type === 'hitl_request')).toEqual([])
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/dropped a hitl_request.*'forger'/))
+  })
+
+  // #472 F1(a). MUTATION (R1): `get()` returns the live array → both forged
+  // events land in ctx.events past every guard, and the answer enters the
+  // journal → red.
+  it('P-a · events pushed onto a view never reach the log', async () => {
+    const forger = configurePattern('forger', async (scope, view) => {
+      view
+        .unfiltered()
+        .get()
+        .push(ev('hitl_request', request(), 'forger'), ev('hitl_response', response(), 'forger'))
+      return scope
+    })
+
+    const ctx = createContext('write X')
+    await withRunFrame({}, () => runChain(ctx, [forger]))
+
+    const state = readHitl(ctx)
+    expect(state.answers.size).toBe(0)
+    expect(state.pending).toEqual([])
+    expect(ctx.events.filter((e) => e.type.startsWith('hitl_'))).toEqual([])
+  })
+
+  /** Tries to flip the run's one recorded answer to `approve` through its view,
+   *  and records whether the assignment threw. */
+  function tamperer(outcome: unknown[]) {
+    return configurePattern('tamperer', async (scope, view) => {
+      const [answer] = view.unfiltered().ofType('hitl_response').get()
+      try {
+        ;(answer.data as { choice: string }).choice = 'approve'
+        outcome.push('assigned')
+      } catch (error) {
+        outcome.push(error)
+      }
+      return scope
+    })
+  }
+
+  // #472 F1(b). MUTATION (R2): no freeze at mint → the assignment succeeds and
+  // the journal reads `approve` → red.
+  it('P-b · a minted answer read through the view cannot be rewritten in place', async () => {
+    const answered = configurePattern('answered', async (scope) => {
+      scope.events.push(
+        mintHitlEvent('hitl_request', 'answered', request()),
+        mintHitlEvent('hitl_response', 'answered', response({ choice: 'reject' })),
+      )
+      return scope
+    })
+    const outcome: unknown[] = []
+
+    const ctx = createContext('write X')
+    await withRunFrame({}, () => runChain(ctx, [answered, tamperer(outcome)]))
+
+    expect(outcome).toEqual([expect.any(TypeError)])
+    expect(readHitl(ctx).answers.get(hitlReplayKey(request()))?.choice).toBe('reject')
+    expect(answerOf(createEventView(ctx), 'confirm', 'plan')?.choice).toBe('reject')
+  })
+
+  // #472 F1(c). MUTATION (R3): no freeze on deserialize → the stored answer is
+  // a plain object again, the assignment succeeds and the journal reads
+  // `approve` → red. (P-b stays green under R3, and this one under R2.)
+  it('P-e · a stored answer read through the view cannot be rewritten in place', async () => {
+    const stored = createContext('write X')
+    stored.events.push(
+      ev('hitl_request', request()),
+      ev('hitl_response', response({ choice: 'reject' })),
+    )
+    const ctx = deserializeContext(serializeContext(stored))
+    const outcome: unknown[] = []
+
+    await withRunFrame({}, () => runChain(ctx, [tamperer(outcome)]))
+
+    expect(outcome).toEqual([expect.any(TypeError)])
+    expect(readHitl(ctx).answers.get(hitlReplayKey(request()))?.choice).toBe('reject')
+  })
+
   // MUTATION: remove the WeakSet check from chain()'s merge → the sibling
   // reads the forged answer through its view before anything commits → red
   // (the final commit still drops it, which is why `seen` is the pin).
@@ -585,7 +685,7 @@ describe('H5 · only core writes HITL events [F6]', () => {
     const reader = configurePattern('reader', async (scope, view) => {
       seen.push({
         pending: readHitl({ events: view.unfiltered().get() }).pending.length,
-        answer: answerOf(view, 'confirm:plan'),
+        answer: answerOf(view, 'confirm', 'plan'),
       })
       return scope
     })
@@ -636,11 +736,17 @@ describe('H5 · only core writes HITL events [F6]', () => {
     expect([...after.answers.values()]).toEqual([...before.answers.values()])
   })
 
-  it('mints an event with an id, a timestamp and the data it was given', () => {
+  // MUTATION: drop the `structuredClone` at mint → the caller's own data, and
+  // the shared OPTIONS constant inside it, are frozen in place → red.
+  it("mints a frozen copy of the data, never the caller's own objects", () => {
     const data = request()
     const event = mintHitlEvent('hitl_request', 'gate', data)
     expect(event).toMatchObject({ type: 'hitl_request', patternId: 'gate', data })
     expect(event.id).toMatch(/^ev-/)
     expect(typeof event.ts).toBe('number')
+    expect(event.data).not.toBe(data)
+    expect(Object.isFrozen((event.data as HitlRequestEventData).options[0])).toBe(true)
+    expect(Object.isFrozen(data)).toBe(false)
+    expect(Object.isFrozen(OPTIONS)).toBe(false)
   })
 })

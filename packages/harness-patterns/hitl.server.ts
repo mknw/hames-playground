@@ -109,21 +109,30 @@ export function readHitl(ctx: Pick<UnifiedContext, 'events'>): HitlState {
 }
 
 /**
- * The current run's answer to the decision stored under `key` — the
- * `${kind}:${key}` form both HITL events carry — or undefined.
+ * The current run's answer to the `kind` request raised with `key`, or
+ * undefined.
+ *
+ * `key` is the key the consumer gave the request — not the stored
+ * `${kind}:${key}` form, which core composes here. A request raised with the
+ * default content-hash key has no key a consumer can name, so a request whose
+ * answer will be looked up needs an explicit `key`.
  *
  * It reads the view's UNFILTERED log [F18]: a `ViewConfig` that narrows by
  * pattern or type would otherwise hide the `hitl_response` and read as "not
  * answered". Only the replay journal counts, so a proposal's answer is never
- * returned. When the run holds two decisions under one key (the same kind and
- * key, different option sets) there is no single answer, and it returns
- * undefined rather than pick one: an answer must not authorize a different
- * request [F8].
+ * returned. When the run holds two decisions under one kind and key
+ * (different option sets) there is no single answer, and it returns undefined
+ * rather than pick one: an answer must not authorize a different request [F8].
  */
-export function answerOf(view: EventView, key: string): HitlResponseEventData | undefined {
+export function answerOf(
+  view: EventView,
+  kind: string,
+  key: string,
+): HitlResponseEventData | undefined {
+  const stored = `${kind}:${key}`
   let found: HitlResponseEventData | undefined
   for (const answer of readHitl({ events: view.unfiltered().get() }).answers.values()) {
-    if (answer.key !== key) continue
+    if (answer.key !== stored) continue
     if (found) return undefined
     found = answer
   }

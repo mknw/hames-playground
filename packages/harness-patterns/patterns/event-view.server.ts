@@ -342,7 +342,12 @@ export class EventViewImpl implements IEventView {
       events = events.map((e) => this.contentTransforms!.reduce((evt, fn) => fn(evt), e))
     }
 
-    return events
+    // Never hand out the live log (#433, F1). With no filter, limit or
+    // transform, `events` is still `ctx.events` itself, and a caller that
+    // pushed onto it would write the log past every commit-time guard: a
+    // forged `hitl_response` would enter the journal without going through a
+    // scope at all, and a `reverse()` would reorder the run window.
+    return events === this.ctx.events ? events.slice() : events
   }
 
   /** Serialize events to XML format for LLM context */

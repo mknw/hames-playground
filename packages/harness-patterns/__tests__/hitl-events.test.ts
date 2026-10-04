@@ -203,10 +203,14 @@ describe('H2 · a legacy approval_* event is never an answer and never a request
 // ============================================================================
 
 describe('the journal applies the §2 replay rule [F8]', () => {
-  // MUTATION (all five in this block, run as one): drop the replay rule — put
-  // every response in the run into the journal, keyed by its own `key` → the
-  // first four go red (each journal is non-empty), the fifth because the two
-  // option sets collapse onto one key.
+  // MUTATION: drop the replay rule — put every response in the run into the
+  // journal, keyed by its own `key` → the first six tests below go red (each
+  // journal is non-empty, or the two option sets collapse onto one key), and
+  // so does answerOf's ambiguity pin.
+  // One condition at a time, each reddens exactly its own test: admit a
+  // non-blocking request's answer (the first); skip the kind/key match (the
+  // third); skip the available-choice check (the fourth); key the journal by
+  // `key` alone (the fifth, the sixth and answerOf's ambiguity pin).
 
   it("a non-blocking proposal's response never answers a gate", () => {
     const events = [

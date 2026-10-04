@@ -67,6 +67,10 @@ export const eventIconClasses: Record<EventType, string> = {
   warning: 'i-material-symbols-warning-outline',
   // A failure the loop fed back and went round again on (#437).
   loop_recovery: 'i-material-symbols-replay',
+  // A person is asked to decide, and the decision (#433): the same pause and
+  // check glyphs as the legacy approval pair they supersede.
+  hitl_request: 'i-material-symbols-pause-circle-outline',
+  hitl_response: 'i-material-symbols-check-circle-outline',
 }
 
 export const eventColors: Record<EventType, string> = {
@@ -93,4 +97,6 @@ export const eventColors: Record<EventType, string> = {
   loop_recovery: '#a3e635', // lime-400 — a failure the loop routed around
   // (#437): something did fail, so not the cyan of a result, and the turn
   // carried on, so not error red
+  hitl_request: '#f97316', // orange-500 — the legacy approval pair's hues (#433)
+  hitl_response: '#10b981', // emerald-500
 }

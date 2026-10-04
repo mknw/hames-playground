@@ -20,6 +20,8 @@ import type {
   ContentSanitizedEventData,
   WarningEventData,
   LoopRecoveryEventData,
+  HitlRequestEventData,
+  HitlResponseEventData,
 } from '../types'
 
 assertServerOnImport()
@@ -566,6 +568,25 @@ function formatEventData(event: ContextEvent): string {
       const tool = data.tool ? ` (${data.tool})` : ''
       return `${data.failure}${tool} at ${data.turn + 1}/${data.maxTurns}, fed back and continued`
     }
+    case 'hitl_request': {
+      // METADATA ONLY — never `question`, `summary`, `options` or `payloadRef`
+      // (#433, P3). A summary holds a sender and a filename an attacker chose,
+      // and the default branch below would JSON-dump them into the next prompt.
+      const data = event.data as Partial<HitlRequestEventData> | undefined
+      return `decision requested: ${data?.kind} [${data?.requestId}]`
+    }
+    case 'hitl_response': {
+      // METADATA ONLY — never `resolution`, `principal` or `flags`: a
+      // resolution is host output about untrusted content. The model learns an
+      // outcome through the tool_result a resume substitutes, not from here.
+      const data = event.data as Partial<HitlResponseEventData> | undefined
+      return `decision: ${data?.kind} → ${data?.choice ?? 'none'} (${data?.by})`
+    }
+    case 'approval_request':
+    case 'approval_response':
+      // Legacy (#433, F9): superseded by hitl_*, and read by nothing. Its
+      // payload is whatever a 0.1.x host stored, so none of it is rendered.
+      return 'legacy approval event'
     default:
       return typeof event.data === 'object' ? JSON.stringify(event.data) : String(event.data)
   }

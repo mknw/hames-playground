@@ -87,12 +87,13 @@ Every combinator takes patterns and returns a pattern, so they nest freely:
 | `withReferences`     | attach the relevant results of earlier turns at pattern ingress, expandable on demand     |
 | `withInjectionGuard` | neutralize untrusted tool output before a controller reads it                             |
 
-Resume and continue are the same mechanism: `resumeHarness(serialized, patterns, approved)`
-after an approval gate, `continueSession(serialized, patterns, newInput)` for the
-next turn of a conversation. An approval lasts for the run it resumes:
-`continueSession` clears `approved`, so a gate reached on a later turn asks
-again. Within that run it is a bare boolean, so every gate the run reaches reads
-the same answer (#433).
+Resume and continue are the same mechanism:
+`resumeHarness(serialized, patterns, answers, opts)` after a run paused to ask a
+person, `continueSession(serialized, patterns, newInput)` for the next turn of a
+conversation. An answer is keyed by the `requestId` it answers and resumes only
+that pause; a new message instead supersedes whatever was waiting, so an answer
+never outlives its run. See SPEC's
+[Human in the loop](SPEC.md#human-in-the-loop).
 
 ---
 

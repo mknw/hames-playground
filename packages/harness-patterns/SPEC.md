@@ -67,9 +67,12 @@ is and why it is shaped this way, start at the front page —
   - [judge()](#judgeevaluator-config)
   - [chain()](#chainctx-patterns-onevent)
   - [harness()](#harnesspatterns)
-  - [resumeHarness()](#resumeharnessserialized-patterns-approved)
   - [continueSession()](#continuesessionserialized-patterns-newinput)
+- [Human in the loop](#human-in-the-loop)
   - [askHuman()](#askhumanrequest)
+  - [resumeHarness()](#resumeharnessserialized-patterns-answers-opts)
+  - [Supersede and expiry](#supersede-and-expiry)
+  - [Properties (P1–P6)](#properties-p1p6)
 - [EventView Query API](#eventview-query-api)
 - [Configuration System](#configuration-system)
   - [ViewConfig Options](#viewconfig-options)
@@ -327,8 +330,8 @@ store(result.serialized) // JSON string of full context
 // Next turn → continue
 const continued = await continueSession(serialized, patterns, 'follow-up')
 
-// After approval → resume
-const resumed = await resumeHarness(serialized, patterns, true)
+// After a pause → resume with the person's answers (see "Human in the loop")
+const resumed = await resumeHarness(serialized, patterns, { [requestId]: 'approve' })
 ```
 
 ## API Reference
@@ -1466,7 +1469,7 @@ judge(evaluatorFn, {
 
 ### `chain(ctx, patterns, onEvent?)`
 
-Sequential composition of patterns within a UnifiedContext. Optional `onEvent` callback is invoked for each newly committed event (used by SSE streaming).
+Sequential composition of patterns within a UnifiedContext. Optional `onEvent` callback is invoked for each newly committed event (used by SSE streaming). `runChain(ctx, patterns, onEvent?, { startAt })` starts at a top-level index — how `resumeHarness` re-enters a paused pattern; an index outside the chain throws.
 
 ```typescript
 await chain(ctx, [pattern1, pattern2, pattern3])
@@ -1500,28 +1503,6 @@ interface HarnessResultScoped<T> {
 }
 ```
 
-### `resumeHarness(serialized, patterns, approved)`
-
-Resume a paused harness after approval/rejection.
-
-```typescript
-const resumed = await resumeHarness(serializedContext, patterns, true)
-```
-
-**An approval lasts for the run it resumes.** `approved` is written onto `ctx.data` for
-the run it resumes, and `continueSession` deletes it at the next turn's start,
-so a gate reached again on a later turn finds no answer and must pause again. A
-"yes" that outlived its pause would let every later gate proceed without asking
-— fail-open, and silent (#456 c′). Within the resumed run the flag is still a
-bare boolean bound to no request, and `resumeHarness` re-runs the chain from its
-first pattern, so every gate that run reaches (a second gate, or the same gate
-reached again) reads the same answer; binding an answer to the pause it was
-issued for is #433's design. Two things stay with the host. `pendingAction` is
-the gate's own field, which core neither writes nor clears, so a gate clears it
-once answered. A host that drives `runChain` over a restored context, or seeds
-`harness()`'s `initialData` from an earlier result's `data`, skips this reset
-and owns it.
-
 ### `continueSession(serialized, patterns, newInput)`
 
 Continue a session with new user input.
@@ -1530,15 +1511,42 @@ Continue a session with new user input.
 const continued = await continueSession(serializedContext, patterns, 'Follow-up question')
 ```
 
-It resets the per-turn fields on `ctx.data` — `hasError`, `errorMessage`,
-`response` and `approved` — and keeps everything else.
+It first SUPERSEDES whatever the previous run still waits on (see
+[Supersede and expiry](#supersede-and-expiry)), then resets the per-turn fields
+on `ctx.data` — `hasError`, `errorMessage` and `response`, plus `approved`, the
+legacy-blob scrub kept until 1.0 (#433 F9) — and keeps everything else.
+
+## Human in the loop
+
+A run can stop to ask a person, and an answer continues it (#433). A request
+and its answer are two events in the context, `hitl_request` and
+`hitl_response`, and nothing else: no decision rides `ctx.data`, and no store
+outside the context decides a resume (ADR-0009). `readHitl(ctx)` is the one
+reader that turns those events into state — what the current run waits on
+(`pending`) and the answers it holds (the replay journal). A pause ENDS the
+turn; nothing waits in process, so a restart, a closed tab or a second
+instance changes nothing.
+
+The life of one decision:
+
+1. A pattern body or a tool executor calls `askHuman(request)`. It replays a
+   decision this run already holds, applies the unattended rule when nobody is
+   there, or raises the request and returns `pending`; a gated executor then
+   returns `held(outcome)` instead of the content.
+2. The owning `runChain` commits the request and ends the run `paused`.
+3. The host stores the blob, shows the question, and collects an answer.
+4. `resumeHarness(serialized, patterns, answers, opts)` checks the answers
+   against what the run waits on, records them, substitutes each held result
+   with its outcome, and re-enters the paused top-level pattern — whose gate
+   now replays the answer instead of asking.
+5. Or the person sends a new message instead, and `continueSession`
+   SUPERSEDES what was waiting; or nobody answers in time, and `expireHitl`
+   closes it.
 
 ### `askHuman(request)`
 
 Ask a person to decide, from inside a run: a pattern body, or a tool executor
-that holds no scope (#433, slice S2). The answer-bound `resumeHarness` that
-continues a paused run is slice S3; until it lands, the boolean form above is
-unchanged.
+that holds no scope (#433, slice S2).
 
 ```typescript
 const ask = await askHuman({
@@ -1618,6 +1626,162 @@ context opens one; a nested `runChain` sees it open and claims nothing. So no
 accessor that reaches the frame can write the record or suppress a pause, and
 two runs started concurrently in one host frame each get their own
 bookkeeping.
+
+**The store is reachable by its key, and still cannot write the record (S3).**
+Naming the `Symbol.for` key reaches the run's bookkeeping — the price of the
+two-copy idiom. So nothing on it is a way to write the record: its identity
+fields are non-writable, it hands out a COPY of the owning context's events
+and never the live log, and the owner commits from its buffer only what
+`askHuman` could have written there — a blocking request at the owner's own
+top-level index, tier and run, and an `unattended` response only in an
+unattended run, equal to what `resolveUnattended` picks. Anything else is
+dropped with a warning, and `askHuman` reads the buffer through the same rule,
+so a forged answer is never replayed before the commit drops it. What the key
+still reaches is the stop: clearing the waiting set suppresses a pause, which
+forges no answer — the executor already withheld the content, and the request
+is still pending in the record.
+
+### `resumeHarness(serialized, patterns, answers, opts?)`
+
+Resume a paused run with the answers to the requests it waits on (#433, slice
+S3). This replaces the boolean `resumeHarness(serialized, patterns, approved)`,
+which bound an answer to no request.
+
+```typescript
+const resumed = await resumeHarness(serialized, patterns, answers, {
+  principal: user.id, // stamped by the host from its session, never the client
+  resolve: applyChoice, // the host's side effect for one answer
+})
+// answers: { [requestId]: choiceId } or { [requestId]: { choice, flags } }
+```
+
+`answers` maps each waiting `requestId` to an option id, or to
+`{ choice, flags }`. Nothing else is read from it: there is no principal and no
+resolution in an answer, so a client body passed straight through can choose
+only what a person chooses [F4].
+
+**Steps 1–6 only check.** The first that fails throws a `HitlAnswerError`
+whose `code` names it — before anything is recorded and before `resolve` runs,
+so the blob is untouched and still resumable with a correct answer.
+
+| Step | Check                                                                                 | `code`               |
+| ---- | ------------------------------------------------------------------------------------- | -------------------- |
+| 1    | the context is `paused`                                                               | `not-paused`         |
+| 2    | it waits on something: `readHitl(ctx).pending`, the current run's unanswered requests | `no-pending`         |
+| 2b   | no waiting request is past its `expiresAt` [F5]                                       | `expired`            |
+| 2c   | every waiting request was raised on the tier this resume runs on [C1]                 | `tier-changed`       |
+| 3    | every answer names a waiting request — checked against `pending`, never the journal   | `unknown-request`    |
+| 4    | every waiting request is answered, in this one call                                   | `missing-answer`     |
+| 5    | the choice is an option of THAT request event                                         | `invalid-choice`     |
+| 5    | that option is available                                                              | `unavailable-option` |
+| 5    | its flags are that option's flags, and booleans                                       | `invalid-flag`       |
+| 5    | every `required` flag is set `true` by the answer itself (a default does not confirm) | `required-flag`      |
+| 6    | the top-level pattern names equal the request's `resumeAt.names`, the whole list [m4] | `chain-changed`      |
+
+**Then, in order.**
+
+7. `opts.resolve(request, { choice, flags })`, once per answer, in the order the
+   run raised the requests, inside the run frame (so a model call in it takes
+   the run's tier, P5). **It must be idempotent per `requestId`** [Δ4]: if a
+   later `resolve` throws, nothing is recorded and the resume fails, the blob
+   is still paused, and a retry calls every `resolve` again. Key the effect on
+   `request.requestId` and the retry never repeats it.
+8. One `hitl_response` per answer: `by: 'person'`, `principal` from
+   `opts.principal`, `resolution` what `resolve` returned, `flags` with the
+   option's defaults filled in.
+9. Each held `tool_result` of the run becomes its outcome — `resolution`, or
+   `"The user chose: <label>."` without one — **after `sanitizeUntrusted`**
+   (namespace `hitl`), and is marked `heldBy`. A resolution is host output
+   about content that may be hostile, and this is the one path by which it
+   reaches a model (P3). **The step deletes the event's `summary`** [Δ2]: a
+   summary is what compaction wrote about the placeholder, and both compaction
+   (which skips a summarized result) and the loops' prior-results preview
+   (which prefers one) would otherwise keep serving "waiting for a decision" to
+   the re-entered controller and to every later turn. For the same reason,
+   `compactBulkData` never summarizes a held result.
+10. A chosen option with `stopsRun` ends the run `done`, with the response
+    `Stopped at your request (<kind>).`, and re-enters nothing.
+11. Otherwise `runChain(…, { startAt: resumeAt.index })`: the patterns before it
+    are skipped (their events and data are already in the context), and the
+    paused top-level pattern runs again from its start. A gate it reaches
+    replays its answer from the journal. The run may pause again at a new gate,
+    by the same path.
+
+Before step 10, the **legacy-blob scrub** deletes `ctx.data.approved`, as
+`continueSession` does; both stay until 1.0 [F9]. A 0.1.x paused blob holds no
+`hitl_request`, so it cannot be resumed (`no-pending`): `continue()` it.
+
+### Supersede and expiry
+
+**A new message supersedes the run that was waiting** (D11).
+`continueSession` first records `{ choice: null, by: 'superseded' }` for every
+request the run still waits on, and substitutes their held results with
+`The user did not answer; nothing was kept.` — before its reset and before the
+new `user_message`, so the closing events belong to the run they close. The new
+run starts with an empty journal: its window starts at the new message.
+
+**`expireHitl(serialized, now)`** closes what nobody answered in time. Expiry
+is lazy — the host calls it when it next reads the conversation, and after a
+resume refused as `expired` — and both use one predicate (`now >= expiresAt`),
+so a request a resume refused as expired is one `expireHitl` closes. Every
+request past due with no response gets `{ choice: null, by: 'expired' }`: a
+blocking one the current run waits on, and a non-blocking proposal wherever it
+sits in the log [m6]. Held results are substituted with
+`Nobody answered in time; nothing was kept.`. When a blocking request expired
+while the run was paused, the run ends `done` with a fixed response and
+re-enters nothing. It returns the new blob and the expired ids, or `null` when
+nothing was due.
+
+Superseding and expiring never choose for the person (P4): both record
+`choice: null`, and neither re-enters a pattern.
+
+### Properties (P1–P6)
+
+**P1 · Pause binding.** An answer resumes only the pause it was issued for. It
+is accepted only when it names a blocking request pending in the CURRENT run,
+not expired, raised on the same tier, with an available option of that request
+event as its choice — and when every pending request is answered in the same
+call. Acceptance appends a `hitl_response`, so presenting the same answer again
+is refused: a replay, a double submit, an answer to pause A while the run
+waits at B, and an answer from an earlier run all fail step 3. Within a run,
+replay is bound by kind, key and option-id set [F8]. Preconditions, which the
+host owns:
+
+- **(a)** the blob is server-held, owner-scoped state, never accepted from a
+  client — `deserializeContext` is a bare `JSON.parse`;
+- **(b)** request ids are unique: `crypto.randomUUID()`;
+- **(c)** the request that carries an answer is authorized by the host: a
+  `POST`, owner-scoped, gated before any resource is touched, same-origin;
+- **(d)** single use against a CONCURRENT resume of the same blob is a version
+  claim, not a status claim: save a resume's result only if the stored blob is
+  still the version that was loaded, and make every context write conditional
+  on it. Core resumes a string; two resumes of one string both run.
+
+**P2 · Content is withheld while held.** While a request is pending, the tool
+result is a `HeldResult`; a loop that ignored the stop check would still never
+see the content.
+
+**P3 · HITL payloads stay out of prompts.** `formatEventData` renders both
+events metadata only — never `question`, `summary`, `options`, `principal`,
+`flags` or `resolution`. A resolution reaches a model only through the
+substituted, sanitized `tool_result`.
+
+**P4 · Nothing is chosen for a person.** An option without `unattended: true`
+is never picked by the rule, by expiry or by supersession; expiry and
+supersession record `choice: null` and never re-enter.
+
+**P5 · The tier, scoped.** `resolve` runs inside the run frame, so a model call
+it makes through the host's per-call client override takes the run's tier, and
+a resume onto a different tier is refused (`tier-changed`). An embedding
+provider is not a model call through that override, and is outside this
+property.
+
+**P6 · Only core writes HITL events.** `createEvent` and `trackEvent` refuse
+both types; `commitEvents` and `chain()` drop every one a scope carries;
+`EventView.get()` never hands out the live log; HITL events are deep-frozen
+when minted and when deserialized; and the run's bookkeeping store admits only
+what `askHuman` could have written. `readHitl` reads only `hitl_*` events, so a
+legacy `approval_response { approved: true }` answers nothing.
 
 ## EventView Query API
 
@@ -1701,6 +1865,11 @@ affected item:
 | the model dropped an id            | per-item call for that item only                                        |
 | the model answered blank for an id | per-item call for that item only                                        |
 | only one item needed a summary     | skips the batch prompt entirely — single-item path                      |
+
+A **held** result (`result.held === true`, a gated tool's placeholder while a
+person decides) is never summarized (#433 Δ2): a summary of "waiting for a
+decision" would outlive the outcome a resume substitutes, because every later
+view prefers a summary to the result.
 
 A result left without a summary keeps its raw output, which every later view
 already falls back to. When a describe call **threw** and at least one result
@@ -1871,26 +2040,26 @@ transformed into prompt-friendly types. The table below shows which harness
 
 ### Harness EventType → BAML Input Type
 
-| Harness `EventType`  | Event Payload (TS)                                                                                                                     | BAML Type                                               | Consumed By                                                   |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------- |
-| `tool_call`          | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`)                                                                            | `ToolCall`                                              | `LoopTurn.tool_call`, `Attempt.action`                        |
-| `tool_result`        | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`, `sanitized?`) | `ToolResult`                                            | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult` |
-| `controller_action`  | `ControllerActionEventData`                                                                                                            | _(embedded in `LoopTurn.reasoning`)_                    | simpleLoop, actorCritic                                       |
-| `critic_result`      | `CriticResultEventData`                                                                                                                | _(embedded in `Attempt.feedback`)_                      | actorCritic                                                   |
-| `user_message`       | `UserMessageEventData`                                                                                                                 | `Message { role, content }`                             | router (history)                                              |
-| `assistant_message`  | `AssistantMessageEventData`                                                                                                            | `Message { role, content }`                             | router (history)                                              |
-| `pattern_enter`      | `PatternEnterEventData`                                                                                                                | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`      |
-| `pattern_exit`       | `PatternExitEventData`                                                                                                                 | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`      |
-| `approval_request`   | `ApprovalRequestEventData`                                                                                                             | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_request`, not an answer    |
-| `approval_response`  | `ApprovalResponseEventData`                                                                                                            | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_response`, not an answer   |
-| `hitl_request`       | `HitlRequestEventData`                                                                                                                 | _(metadata only — kind and request id)_                 | `readHitl()` / `answerOf()` (#433)                            |
-| `hitl_response`      | `HitlResponseEventData`                                                                                                                | _(metadata only — kind, choice and who decided)_        | `readHitl()` / `answerOf()` (#433)                            |
-| `error`              | `ErrorEventData`                                                                                                                       | _(read via `view.hasErrors()`)_                         | compactExecution (error context), harness error handling      |
-| `reference_attached` | `ReferenceAttachedEventData`                                                                                                           | _(not sent to BAML)_                                    | withReferences only (observability)                           |
-| `intent_compacted`   | `IntentCompactedEventData`                                                                                                             | _(not sent to BAML)_                                    | compactIntent only (observability)                            |
-| `plan_created`       | `PlanCreatedEventData`                                                                                                                 | _(the plan reaches BAML as `plan_context` / `context`)_ | planner only; loops read `scope.data.plan`, not the event     |
-| `content_sanitized`  | `ContentSanitizedEventData`                                                                                                            | _(metadata only — NEVER the verbatim spans)_            | withInjectionGuard only (observability + human audit)         |
-| `loop_recovery`      | `LoopRecoveryEventData` (`failure`, `error`, `tool?`, `turn`, `maxTurns`)                                                              | _(metadata only — the turn log carries the feedback)_   | simpleLoop / actorCritic only (observability)                 |
+| Harness `EventType`  | Event Payload (TS)                                                                                                                                | BAML Type                                               | Consumed By                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------- |
+| `tool_call`          | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`)                                                                                       | `ToolCall`                                              | `LoopTurn.tool_call`, `Attempt.action`                        |
+| `tool_result`        | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`, `sanitized?`, `heldBy?`) | `ToolResult`                                            | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult` |
+| `controller_action`  | `ControllerActionEventData`                                                                                                                       | _(embedded in `LoopTurn.reasoning`)_                    | simpleLoop, actorCritic                                       |
+| `critic_result`      | `CriticResultEventData`                                                                                                                           | _(embedded in `Attempt.feedback`)_                      | actorCritic                                                   |
+| `user_message`       | `UserMessageEventData`                                                                                                                            | `Message { role, content }`                             | router (history)                                              |
+| `assistant_message`  | `AssistantMessageEventData`                                                                                                                       | `Message { role, content }`                             | router (history)                                              |
+| `pattern_enter`      | `PatternEnterEventData`                                                                                                                           | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`      |
+| `pattern_exit`       | `PatternExitEventData`                                                                                                                            | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`      |
+| `approval_request`   | _(legacy payload; its type was removed in #433 S3)_                                                                                               | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_request`, not an answer    |
+| `approval_response`  | _(legacy payload; its type was removed in #433 S3)_                                                                                               | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_response`, not an answer   |
+| `hitl_request`       | `HitlRequestEventData`                                                                                                                            | _(metadata only — kind and request id)_                 | `readHitl()` / `answerOf()` (#433)                            |
+| `hitl_response`      | `HitlResponseEventData`                                                                                                                           | _(metadata only — kind, choice and who decided)_        | `readHitl()` / `answerOf()` (#433)                            |
+| `error`              | `ErrorEventData`                                                                                                                                  | _(read via `view.hasErrors()`)_                         | compactExecution (error context), harness error handling      |
+| `reference_attached` | `ReferenceAttachedEventData`                                                                                                                      | _(not sent to BAML)_                                    | withReferences only (observability)                           |
+| `intent_compacted`   | `IntentCompactedEventData`                                                                                                                        | _(not sent to BAML)_                                    | compactIntent only (observability)                            |
+| `plan_created`       | `PlanCreatedEventData`                                                                                                                            | _(the plan reaches BAML as `plan_context` / `context`)_ | planner only; loops read `scope.data.plan`, not the event     |
+| `content_sanitized`  | `ContentSanitizedEventData`                                                                                                                       | _(metadata only — NEVER the verbatim spans)_            | withInjectionGuard only (observability + human audit)         |
+| `loop_recovery`      | `LoopRecoveryEventData` (`failure`, `error`, `tool?`, `turn`, `maxTurns`)                                                                         | _(metadata only — the turn log carries the feedback)_   | simpleLoop / actorCritic only (observability)                 |
 
 ### Per-Pattern: Events Read → BAML Inputs → BAML Return
 
@@ -2187,12 +2356,12 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── context.server.ts       # Context factory, createEvent(), generateId()
 ├── tools.server.ts         # Tools({ namespaces }) — groups MCP tools by namespace; the map is REQUIRED (ruling B-iii); inferServer consults transports' namespaceFor → registered resolvers (registerToolNamespaces) → heuristic; NO catalog in core — the 86-entry map lives in app-tools/mcp-catalog.ts and registers at boot
 ├── run-frame.server.ts     # THE run frame — one ALS scope per run holding all six slots (guard / transports / config / live / inference / hitl — the last a frozen `{ attended }`), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, hitl passes by reference and is refused below an open one, the rest replace), activeRunFrame() THROWS outside a frame and currentRunFrame() is the soft read
-├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? and an optional RunFrame; each OPENS the run frame (ruling Q17/D5) with a `{ attended: true }` hitl slot unless the frame says otherwise, or joins the host's and adds nothing
-├── hitl.server.ts          # Human in the loop (#433): readHitl() / answerOf() read the hitl_* events; askHuman() raises (or replays, or applies resolveUnattended()) into the run's HITL bookkeeping — an async-context store of its own on a Symbol.for holder, opened by the owning runChain, never on the frame (#477) — held() is a gated executor's placeholder, hitlPending() is the loops' stop check; the owning runChain commits the buffer straight into the context and pauses
+├── harness.server.ts       # harness(), resumeHarness(serialized, patterns, answers, { principal, resolve }), continueSession() — each OPENS the run frame (ruling Q17/D5) with a `{ attended: true }` hitl slot unless the frame says otherwise, or joins the host's and adds nothing; resumeHarness binds every answer to a request the run waits on before anything runs, continueSession supersedes what waits
+├── hitl.server.ts          # Human in the loop (#433): readHitl() / answerOf() read the hitl_* events; askHuman() raises (or replays, or applies resolveUnattended()) into the run's HITL bookkeeping — an async-context store of its own on a Symbol.for holder, opened by the owning runChain, never on the frame (#477) — held() is a gated executor's placeholder, hitlPending() is the loops' stop check; the owning runChain commits from the buffer only what askHuman could have written, straight into the context, and pauses. S3: checkResume() is the pause binding (HitlAnswerError), recordAnswers() / supersedeHitl() / expireHitl() close requests and substitute held results through sanitizeUntrusted
 ├── tool-transport.server.ts # ToolTransport + registerTransport() (process, consulted after every scoped one) / activeTransports() (reads the run frame's `transports` slot); the difference between the two ways to supply one IS the containment invariant — there is no priority field and no argument that could express one
 ├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE phases — scoped transports (innermost first) → process transports (registration order) → MCP gateway (terminal fallback, not a transport); leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element; drops the gateway's own management tools (`mcp-find`, `mcp-add`, `mcp-exec`, …) from the catalog (#412, #420), and `write_neo4j_cypher` and the `database-server` tools, which no agent holds (#403, #412)
 ├── agent-withheld-tools.ts # AGENT_WITHHELD_TOOLS + isAgentWithheldTool() — the tools no agent may hold (#403: `write_neo4j_cypher`; #412: the `database-server` tools), each with the decision and server-side switch its drop warning names (withholdingFor()), seen through a gateway or server-namespace prefix; read by listTools() (the catalog) and by simpleLoop/actorCritic (every allowlist check), never by callTool
-├── compactBulkData.server.ts # compactBulkData(ctx, onPersist, { describe, describeBatch }) — the two describe fns are REQUIRED config (Lane A6)
+├── compactBulkData.server.ts # compactBulkData(ctx, onPersist, { describe, describeBatch }) — the two describe fns are REQUIRED config (Lane A6); never summarizes a held result (#433 Δ2)
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)
 ├── loop-recovery.server.ts # The two loops' shared recovery rule (#437): isRecoverableLLMFailure(), the feedback texts, the consecutive-recovery cap (recoveryStreak()), trackLoopRecovery()
 ├── token-budget.server.ts  # trimToFit(), estimateTokens() — rolling context window (getContextWindow moved to harness-baml/clients.server with the model tables)

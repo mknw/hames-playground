@@ -28,6 +28,7 @@
 
 import { assertServerOnImport } from './assert.server'
 import { createEvent, enrichToolResult } from './context.server'
+import { isHeldResult } from './hitl.server'
 import type {
   UnifiedContext,
   ToolResultEventData,
@@ -151,9 +152,16 @@ export async function compactBulkData(
   }
   const turnEvents = events.slice(turnStart)
 
-  // Collect tool_result events that need summarization
+  // Collect tool_result events that need summarization. A HELD result is
+  // never one (#433 Δ2): it is a placeholder ("waiting for a person's
+  // decision"), not output, and a summary of it would outlive the outcome a
+  // resume substitutes — every later view prefers a summary to the result.
   const toolResults = turnEvents.filter(
-    (e) => e.type === 'tool_result' && e.id && (e.data as ToolResultEventData).success,
+    (e) =>
+      e.type === 'tool_result' &&
+      e.id &&
+      (e.data as ToolResultEventData).success &&
+      !isHeldResult((e.data as ToolResultEventData).result),
   )
   if (toolResults.length === 0) return
 

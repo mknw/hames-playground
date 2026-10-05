@@ -243,6 +243,23 @@ describe('H6 · the same request in the same run asks once', () => {
     expect(outcomes[1]).toEqual(outcomes[0])
     expect(readHitl(ctx).pending).toHaveLength(1)
   })
+
+  // A host that re-runs a paused context it has not answered (what the
+  // boolean `resumeHarness` still does until S3, or a direct `runChain` over
+  // a restored blob). MUTATION: return the existing request's `pending`
+  // without counting it as waiting → no second request, but the run no
+  // longer stops for it and finishes `running` past an unanswered gate → red.
+  it('a request an earlier attempt left waiting is not raised again, and still stops the run', async () => {
+    const ctx = decided({}, null)
+    const outcomes: HitlOutcome[] = []
+    const ran: string[] = []
+    await run([gate([confirm()], outcomes), marker(ran, 'after')], ATTENDED, ctx)
+
+    expect(outcomes).toEqual([{ status: 'pending', requestId: 'req-earlier' }])
+    expect(requests(ctx)).toHaveLength(1)
+    expect(ctx.status).toBe('paused')
+    expect(ran).toEqual([])
+  })
 })
 
 // ============================================================================
@@ -324,17 +341,19 @@ describe('H7 · default keys are content-addressed', () => {
 // ============================================================================
 
 describe('H7b · an answer replays only into the decision it was given for [F8]', () => {
-  // MUTATION: look the answer up by the consumer's bare key (drop the kind
-  // prefix and match any journal entry with that key) → the provenance gate
-  // takes the confirm gate's `approve` → red.
+  // Same key, same options, same question: only the kind differs, so the
+  // kind is all that keeps "approve the plan" from approving the deploy.
+  // MUTATION: look the answer up by the consumer's bare key (match any
+  // journal entry whose stored key ends in it) → the deploy gate takes the
+  // confirm gate's `approve` → red.
   it('two gates with the same explicit key and different kinds ask twice', async () => {
     const ctx = decided({}, { choice: 'approve' })
     const outcomes: HitlOutcome[] = []
-    await run([gate([confirm(), provenance({ key: 'plan' })], outcomes)], ATTENDED, ctx)
+    await run([gate([confirm(), confirm({ kind: 'deploy' })], outcomes)], ATTENDED, ctx)
 
     expect(outcomes[0]).toMatchObject({ status: 'answered', choice: 'approve' })
     expect(outcomes[1].status).toBe('pending')
-    expect(requests(ctx).map((r) => r.key)).toEqual(['confirm:plan', 'provenance:plan'])
+    expect(requests(ctx).map((r) => r.key)).toEqual(['confirm:plan', 'deploy:plan'])
   })
 
   // MUTATION: replay from any response in the window (not only the journal,

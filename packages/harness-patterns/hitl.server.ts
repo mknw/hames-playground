@@ -332,7 +332,14 @@ export async function askHuman<C extends string>(request: HitlRequest<C>): Promi
   }
 
   const waiting = state.pending.find((p) => hitlReplayKey(p) === identity)
-  if (waiting) return { status: 'pending', requestId: waiting.requestId }
+  if (waiting) {
+    // Still waiting, so the run still stops for it — including when the
+    // request was committed by an earlier attempt of this run rather than
+    // raised by this one (a host re-running a paused context it has not
+    // answered): no second request, and no run past it either.
+    slot.waiting.add(waiting.requestId)
+    return { status: 'pending', requestId: waiting.requestId }
+  }
 
   const requestId = randomUUID()
   const rule = request.unattended ?? 'apply-default'

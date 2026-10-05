@@ -254,7 +254,7 @@ const dbReleaseConversationClaim = vi.fn<
     id: string,
     userId: string,
     version: string,
-    opts?: { failed?: boolean; paused?: boolean },
+    opts?: { failed?: boolean; paused?: boolean; hitlTerminal?: boolean },
   ) => Promise<boolean>
 >(async () => true)
 const dbRenewConversationClaim = vi.fn<
@@ -1778,7 +1778,7 @@ describe('resume turns (#433 S7)', () => {
     expect(saveSession).not.toHaveBeenCalled()
     expect(flippedToError()).toEqual([])
     expect(restoredPaused()).toEqual([
-      ['sess-r', 'user-1', 'v-claim', { failed: false, paused: true }],
+      ['sess-r', 'user-1', 'v-claim', { failed: false, paused: true, hitlTerminal: false }],
     ])
   })
 
@@ -1788,8 +1788,10 @@ describe('resume turns (#433 S7)', () => {
     )
 
     await expect(runTurnAndPersist(resume())).rejects.toThrow('(chain-changed)')
+    // The error is TERMINAL for the pause (owner item 1): the release stamps
+    // the marker, which is what the m3 load-restore reads to exempt the row.
     expect(flippedToError()).toEqual([
-      ['sess-r', 'user-1', 'v-claim', { failed: true, paused: false }],
+      ['sess-r', 'user-1', 'v-claim', { failed: true, paused: false, hitlTerminal: true }],
     ])
     expect(restoredPaused()).toEqual([])
   })
@@ -1800,7 +1802,7 @@ describe('resume turns (#433 S7)', () => {
     await expect(runTurnAndPersist(resume())).rejects.toThrow('(invalid-choice)')
     expect(flippedToError()).toEqual([])
     expect(restoredPaused()).toEqual([
-      ['sess-r', 'user-1', 'v-claim', { failed: false, paused: true }],
+      ['sess-r', 'user-1', 'v-claim', { failed: false, paused: true, hitlTerminal: false }],
     ])
   })
 
@@ -1815,7 +1817,7 @@ describe('resume turns (#433 S7)', () => {
     expect(resumeHarness).not.toHaveBeenCalled()
     expect(flippedToError()).toEqual([])
     expect(restoredPaused()).toEqual([
-      ['sess-r', 'user-1', 'v-claim', { failed: false, paused: true }],
+      ['sess-r', 'user-1', 'v-claim', { failed: false, paused: true, hitlTerminal: false }],
     ])
   })
 

@@ -25,6 +25,8 @@ type Row = {
   id?: string
   userId?: string
   version?: string
+  /** The m3-exemption test's marker; the real row always carries it. */
+  hitlEndedAt?: Date | null
 } | null
 
 const loadConversation = vi.fn<(id: string, userId: string) => Promise<Row>>(async () => null)
@@ -249,6 +251,31 @@ describe('loadSession', () => {
       kind: 'conversation',
       status: 'error',
       version: 'v-7',
+    })
+    await expect(loadSession('s', 'u')).resolves.toMatchObject({ status: 'error' })
+    expect(restoreConversationPaused).not.toHaveBeenCalled()
+  })
+
+  // Owner item 1 on review 6004200697 (coordinator decision, pending owner
+  // read): the `chain-changed` terminal `error` is EXEMPT from the repair. The
+  // refusal's blob also still says `paused` — the two `error`s are
+  // indistinguishable without the marker — but that pause can never continue,
+  // so resurrecting it would only oscillate the badge error → paused → refused
+  // → error on every load. The marker the refusal's release stamped
+  // (`hitl_ended_at`) is what the load reads to decline.
+  // MUTATION: restore it anyway (drop the `hitlEndedAt` early return) → this
+  // pin reddens: the repair is called on a terminally-refused row.
+  it('never resurrects a pause that a chain-changed refusal ended terminally (m3 exemption)', async () => {
+    loadConversation.mockResolvedValue({
+      id: 's',
+      userId: 'u',
+      serializedContext:
+        '{"sessionId":"s","createdAt":0,"status":"paused","input":"","data":{},"events":[]}',
+      agentId: 'known',
+      kind: 'conversation',
+      status: 'error',
+      version: 'v-7',
+      hitlEndedAt: new Date('2026-10-05T21:00:00Z'),
     })
     await expect(loadSession('s', 'u')).resolves.toMatchObject({ status: 'error' })
     expect(restoreConversationPaused).not.toHaveBeenCalled()

@@ -797,14 +797,17 @@ async function planResume(
  * spent answer rows. Shares `runOneTurn`'s trailing pass and its claim
  * release; its catch differs from `runAndSave`'s on purpose (A4/F19c):
  *
- * **ONLY `chain-changed` ends in `error`.** The row a resume claims says
- * `paused`, and everything else that can fail here leaves the person able to
- * try again: a refusal records nothing (core's steps 1–6 checked before any
- * `resolve`), a `resolve` that threw records nothing (nothing durable was
- * written), and a wake or pattern-build failure never reached the run. So
- * the release RESTORES `paused` when the row it claimed said `paused`, and
- * `chain-changed` alone — the one refusal that says this paused run can
- * never continue — flips to `error`.
+ * **ONLY `chain-changed` ends in `error`, and its ending is DURABLE.** The
+ * row a resume claims says `paused`, and everything else that can fail here
+ * leaves the person able to try again: a refusal records nothing (core's
+ * steps 1–6 checked before any `resolve`), a `resolve` that threw records
+ * nothing (nothing durable was written), and a wake or pattern-build
+ * failure never reached the run. So the release RESTORES `paused` when the
+ * row it claimed said `paused`, and `chain-changed` alone — the one refusal
+ * that says this paused run can never continue — flips to `error` and
+ * stamps `hitl_ended_at`, so the m3 load-restore exempts it (owner item 1 on
+ * review 6004200697) rather than resurrecting `paused` from a blob that
+ * still says `paused` on every load.
  */
 async function runResumeAndSave(
   req: Extract<TurnRequest, { mode: 'resume' }>,
@@ -899,6 +902,12 @@ async function runResumeAndSave(
       // resume claimed at anything else ('done', say) is released without a
       // flip, which is the re-pin of the old approval refusal.
       paused: !failed && loaded.status === 'paused',
+      // And `chain-changed` is TERMINAL for the pause (owner item 1 on review
+      // 6004200697): the release stamps `hitl_ended_at` beside the `error`,
+      // so the m3 load-restore exempts this row instead of resurrecting
+      // `paused` from a blob that still says `paused`. Every other failure
+      // leaves the pause alive, and the marker unset.
+      hitlTerminal: failed,
     }).catch((releaseErr: unknown) => {
       console.error(
         `[turn] could not release %s; it refuses new turns for up to ${TURN_CLAIM_TTL_SECONDS}s:`,

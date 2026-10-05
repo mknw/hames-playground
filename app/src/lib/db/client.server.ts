@@ -158,6 +158,20 @@ const SCHEMA_SQL = `
   ALTER TABLE conversations
     ADD COLUMN IF NOT EXISTS turn_claimed_at TIMESTAMPTZ;
 
+  -- When a chain-changed refusal terminally ended this conversation's HITL
+  -- pause (#433 S7, owner item 1 on review 6004200697), or NULL. The refusal
+  -- flips the lifted status to 'error' while the blob still says 'paused'
+  -- (a refusal records nothing), so without a marker the m3 load-restore
+  -- would resurrect 'paused' on every load and the row would oscillate
+  -- error -> paused -> refused -> error. With it, that 'error' is DURABLE:
+  -- the load exempts a marked row, and the person's way out is a new message
+  -- (which supersedes the request). The conversation's next successful save
+  -- clears it — that is the turn that moved it on. Plaintext like every
+  -- timestamp (crypto.server.ts doctrine): it says nothing about what was
+  -- said, and no SQL joins on it.
+  ALTER TABLE conversations
+    ADD COLUMN IF NOT EXISTS hitl_ended_at TIMESTAMPTZ;
+
   -- Session ownership claims. A Data Stash upload can arrive before the
   -- session has any conversation row (a file dropped before the first chat
   -- message), so there is a window in which \`conversations.user_id\` cannot

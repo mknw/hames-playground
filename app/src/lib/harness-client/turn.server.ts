@@ -841,7 +841,10 @@ async function runResumeAndSave(
         sessionId,
         userId,
       ).catch((err: unknown) =>
-        console.error(`[hitl] could not close ${sessionId}'s expired answer rows:`, err),
+        // `%s`, not interpolation — the session id comes from the request, and
+        // with a second argument the first is a format string (#470's rule;
+        // CodeQL's tainted-format-string pin agrees).
+        console.error('[hitl] could not close the expired answer rows of %s:', sessionId, err),
       )
       return {
         agentId: loaded.agentId,
@@ -879,7 +882,7 @@ async function runResumeAndSave(
     // turn — the blob is saved and the claim released, so it is logged and
     // the rows close on the next sync or the expiry sweep.
     await syncAnswerRows(result.context, sessionId, userId).catch((err: unknown) =>
-      console.error(`[hitl] could not close ${sessionId}'s spent answer rows:`, err),
+      console.error('[hitl] could not close the spent answer rows of %s:', sessionId, err),
     )
     return {
       agentId: loaded.agentId,
@@ -887,7 +890,7 @@ async function runResumeAndSave(
       saved: { version, eventCount: result.context.events.length },
     }
   } catch (err) {
-    console.error(`[turn] resume failed for ${sessionId}:`, err)
+    console.error(`[turn] resume failed for %s:`, sessionId, err)
     held.released = true
     const failed = err instanceof HitlAnswerError && err.code === 'chain-changed'
     await dbReleaseConversationClaim(sessionId, userId, held.version, {

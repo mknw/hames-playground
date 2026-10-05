@@ -20,7 +20,7 @@ export default defineConfig({
   // plugin, so a bare `@boundaryml/baml` import stays bare and resolves where
   // the server runs. Nitro then does not trace the package either; the image
   // ships it whole (see the `build` stage in Dockerfile). This needs rollup
-  // >= 4.63.6, which the `overrides` floor in pnpm-workspace.yaml explains.
+  // >= 4.63.6, which the `overrides` entry in pnpm-workspace.yaml explains.
   server: {
     rollupConfig: { external: [/^@boundaryml\/baml(\/|$)/] },
   },

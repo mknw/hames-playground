@@ -12,13 +12,15 @@ packages:
 onlyBuiltDependencies:
   - node-pty
 
-# A floor, not a pin. rollup 4.63.6 is the first release that imports an
-# external's re-exported bindings when a dynamically imported module's
-# namespace is built as an object in a shared chunk (rollup#6540). The server
-# bundle needs that since #469 made @boundaryml/baml a rollup external
-# (app/app.config.ts): baml_client/index.ts re-exports three of baml's error
-# classes and is loaded by `await import()`. On 4.60.2 its namespace object
-# named those classes without importing them, so every route that loads BAML
-# threw `ReferenceError: BamlClientFinishReasonError is not defined`.
+# At least 4.63.6, and patch releases only: a new rollup minor is a reviewed
+# lockfile change, not something an install picks up. rollup 4.63.6 is the
+# first release that imports an external's re-exported bindings when a
+# dynamically imported module's namespace is built as an object in a shared
+# chunk (rollup#6540). The server bundle needs that since #469 made
+# @boundaryml/baml a rollup external (app/app.config.ts): baml_client/index.ts
+# re-exports three of baml's error classes and is loaded by `await import()`.
+# On 4.60.2 its namespace object named those classes without importing them,
+# so every route that loads BAML threw `ReferenceError:
+# BamlClientFinishReasonError is not defined`.
 overrides:
-  rollup: ^4.63.6
+  rollup: ~4.63.6

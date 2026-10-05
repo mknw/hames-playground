@@ -1,0 +1,120 @@
+{
+  "messages": [
+    {
+      "folder": "inbox",
+      "message": {
+        "id": "E2E-MSG-INTERNAL",
+        "subject": "Synthetic message from inside the home tenancy",
+        "from": {
+          "emailAddress": { "name": "Colleague One", "address": "colleague.one@contoso.com" }
+        },
+        "sender": {
+          "emailAddress": { "name": "Colleague One", "address": "colleague.one@contoso.com" }
+        },
+        "toRecipients": [
+          { "emailAddress": { "name": "Synthetic User", "address": "synthetic.user@contoso.com" } }
+        ],
+        "sentDateTime": "2026-10-01T08:59:00Z",
+        "receivedDateTime": "2026-10-01T09:00:00Z",
+        "isRead": false,
+        "hasAttachments": true,
+        "bodyPreview": "A synthetic message sent from inside the home tenancy, with one attachment.",
+        "webLink": "https://outlook.contoso.com/mail/inbox/id/E2E-MSG-INTERNAL"
+      },
+      "attachments": [
+        {
+          "attachment": {
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            "id": "E2E-ATT-INT-DOCX",
+            "name": "sample-internal.docx",
+            "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "isInline": false,
+            "lastModifiedDateTime": "2026-10-01T08:59:00Z"
+          },
+          "content": "sample-internal.docx"
+        }
+      ]
+    },
+    {
+      "folder": "inbox",
+      "message": {
+        "id": "E2E-MSG-EXTERNAL",
+        "subject": "Synthetic message from outside the home tenancy",
+        "from": {
+          "emailAddress": { "name": "Sender One", "address": "sender.one@fabrikam.com" }
+        },
+        "sender": {
+          "emailAddress": { "name": "Sender One", "address": "sender.one@fabrikam.com" }
+        },
+        "toRecipients": [
+          { "emailAddress": { "name": "Synthetic User", "address": "synthetic.user@contoso.com" } }
+        ],
+        "sentDateTime": "2026-10-02T08:59:00Z",
+        "receivedDateTime": "2026-10-02T09:00:00Z",
+        "isRead": false,
+        "hasAttachments": true,
+        "bodyPreview": "A synthetic message sent from outside the home tenancy, with two attachments.",
+        "webLink": "https://outlook.contoso.com/mail/inbox/id/E2E-MSG-EXTERNAL"
+      },
+      "attachments": [
+        {
+          "attachment": {
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            "id": "E2E-ATT-EXT-DOCX",
+            "name": "sample-external.docx",
+            "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "isInline": false,
+            "lastModifiedDateTime": "2026-10-02T08:59:00Z"
+          },
+          "content": "sample-external.docx"
+        },
+        {
+          "attachment": {
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            "id": "E2E-ATT-EXT-TXT",
+            "name": "sample-external-notes.txt",
+            "contentType": "text/plain",
+            "isInline": false,
+            "lastModifiedDateTime": "2026-10-02T08:59:00Z"
+          },
+          "content": "sample-external-notes.txt"
+        }
+      ]
+    },
+    {
+      "folder": "inbox",
+      "message": {
+        "id": "E2E-MSG-ON-BEHALF",
+        "subject": "Synthetic message sent on behalf of a home mailbox from outside it",
+        "from": {
+          "emailAddress": { "name": "Colleague One", "address": "colleague.one@contoso.com" }
+        },
+        "sender": {
+          "emailAddress": { "name": "Delegate One", "address": "delegate.one@fabrikam.com" }
+        },
+        "toRecipients": [
+          { "emailAddress": { "name": "Synthetic User", "address": "synthetic.user@contoso.com" } }
+        ],
+        "sentDateTime": "2026-10-03T08:59:00Z",
+        "receivedDateTime": "2026-10-03T09:00:00Z",
+        "isRead": false,
+        "hasAttachments": true,
+        "bodyPreview": "A synthetic message whose from is inside the home tenancy and whose sender is outside it.",
+        "webLink": "https://outlook.contoso.com/mail/inbox/id/E2E-MSG-ON-BEHALF"
+      },
+      "attachments": [
+        {
+          "attachment": {
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            "id": "E2E-ATT-ON-BEHALF-TXT",
+            "name": "sample-on-behalf-notes.txt",
+            "contentType": "text/plain",
+            "isInline": false,
+            "lastModifiedDateTime": "2026-10-03T08:59:00Z"
+          },
+          "content": "sample-on-behalf-notes.txt"
+        }
+      ]
+    }
+  ]
+}

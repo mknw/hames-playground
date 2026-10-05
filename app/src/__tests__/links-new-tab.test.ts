@@ -178,8 +178,9 @@ const HTML_SINKS: Exception[] = [
     match: 'innerHTML={renderAssistantContent(',
     reason:
       "The chat's single markdown render path. `renderAssistantContent` sanitizes marked's " +
-      'output through `sanitizeMarkdownHtml` before the annotators run, so this is the one ' +
-      'sink every assistant message — live or rehydrated from history — passes through.',
+      'output through `sanitizeMarkdownHtml`, whose inert-DOM `annotate` pass is where the ' +
+      'annotators run (#428), so this is the one sink every assistant message — live or ' +
+      'rehydrated from history — passes through.',
   },
 ]
 

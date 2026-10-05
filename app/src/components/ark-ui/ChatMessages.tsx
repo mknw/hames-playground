@@ -5,7 +5,7 @@ import { ToolCallDisplay } from './ToolCallDisplay'
 import { marked } from 'marked'
 import type { RetrievalReference } from '@hames-ai/harness-patterns'
 import type { OpenReferenceTarget } from '@hames-ai/agents'
-import { escapeHtmlAttribute, sanitizeMarkdownHtml } from '~/lib/sanitize-html'
+import { sanitizeMarkdownHtml } from '~/lib/sanitize-html'
 
 // Rendering options only — marked passes raw HTML in the source through
 // untouched, so its output is sanitized downstream (see ~/lib/sanitize-html).
@@ -60,102 +60,107 @@ interface ChatMessagesProps {
 const toggledEntities = new Set<string>()
 
 /**
- * Post-process rendered markdown HTML to wrap known entity/relation names
- * in interactive spans. Matches are case-insensitive, whole-word.
- * Avoids matching inside HTML tags or code blocks.
+ * Wrap every whole-word, case-insensitive mention of one of `names` in the
+ * prose of `root`: the inert, already-sanitized DOM {@link renderAssistantMarkdown}
+ * hands the sanitizer's `annotate` pass. Text inside `code` and `pre` is left
+ * alone. Names are tried longest first, so a longer name wins over a prefix
+ * of it. `wrap` gets the name as written in `names` and the text it matched.
+ *
+ * This only ever splits text nodes and inserts elements `wrap` builds with
+ * `createElement`/`setAttribute`. It never reads or writes an HTML string, so
+ * an attribute value stays an attribute value whatever it holds (#428), and
+ * nothing it sets needs escaping. It matches the text the reader sees, so a
+ * name cannot match inside `&lt;` and a name containing `&` is found.
  */
-function annotateEntities(html: string, entityNames: Map<string, string[]>): string {
-  if (!entityNames || entityNames.size === 0) return html
+function wrapMentions(
+  root: Element,
+  names: string[],
+  wrap: (name: string, match: string, doc: Document) => Element,
+): void {
+  const byLowerCase = new Map<string, string>()
+  for (const name of names)
+    if (!byLowerCase.has(name.toLowerCase())) byLowerCase.set(name.toLowerCase(), name)
+  const escaped = [...names]
+    .sort((a, b) => b.length - a.length)
+    .map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const pattern = new RegExp(`\\b(?:${escaped.join('|')})\\b`, 'gi')
 
-  // Sort names by length (longest first) to avoid partial matches
-  const names = [...entityNames.keys()].sort((a, b) => b.length - a.length)
-  // Only match names with 2+ chars to avoid noise
-  const filteredNames = names.filter((n) => n.length >= 2)
-  if (filteredNames.length === 0) return html
+  const doc = root.ownerDocument
+  const walker = doc.createTreeWalker(
+    root,
+    NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+    (node) =>
+      node.nodeType === Node.TEXT_NODE
+        ? NodeFilter.FILTER_ACCEPT
+        : node.nodeName === 'CODE' || node.nodeName === 'PRE'
+          ? NodeFilter.FILTER_REJECT
+          : NodeFilter.FILTER_SKIP,
+  )
+  // Collected first: replacing a node mid-walk would move the walker.
+  const texts: Text[] = []
+  while (walker.nextNode()) texts.push(walker.currentNode as Text)
 
-  // Build regex that matches any entity name as a whole word
-  const escaped = filteredNames.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-  const pattern = new RegExp(`\\b(${escaped.join('|')})\\b`, 'gi')
-
-  // Split HTML into tag vs text segments to avoid matching inside tags
-  const segments = html.split(/(<[^>]+>)/g)
-  let inCode = false
-
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i]
-
-    // Track code block boundaries
-    if (seg.startsWith('<code') || seg.startsWith('<pre')) inCode = true
-    if (seg === '</code>' || seg === '</pre>') {
-      inCode = false
-      continue
+  for (const text of texts) {
+    const parts: Array<string | Node> = []
+    let last = 0
+    for (const match of text.data.matchAll(pattern)) {
+      // The `i` flag folds a few letters `toLowerCase` keeps apart (final
+      // sigma), so a match can miss the lookup. It stays text, as it did.
+      const name = byLowerCase.get(match[0].toLowerCase())
+      if (name === undefined) continue
+      parts.push(text.data.slice(last, match.index), wrap(name, match[0], doc))
+      last = match.index + match[0].length
     }
-
-    // Skip HTML tags and code content
-    if (seg.startsWith('<') || inCode) continue
-
-    // Replace entity names in text segments
-    segments[i] = seg.replace(pattern, (match) => {
-      // Find the canonical name (case-insensitive lookup)
-      const key = [...entityNames.keys()].find((k) => k.toLowerCase() === match.toLowerCase())
-      if (!key) return match
-      const ids = entityNames.get(key)!
-      // Entity names and ids come from tool results — escape them so a quote
-      // in a name cannot terminate the attribute it is interpolated into.
-      const idsAttr = escapeHtmlAttribute(ids.join(','))
-      const nameAttr = escapeHtmlAttribute(key)
-      const isToggled = toggledEntities.has(key)
-      return `<span class="graph-entity${isToggled ? ' toggled' : ''}" data-entity-name="${nameAttr}" data-entity-ids="${idsAttr}" title="Click to pin highlight">${match}</span>`
-    })
+    if (parts.length === 0) continue
+    parts.push(text.data.slice(last))
+    text.replaceWith(...parts)
   }
-
-  return segments.join('')
 }
 
 /**
- * Wrap retriever-cited filename mentions in the rendered markdown with a
- * clickable `.doc-ref` span + a superscript open-in-new glyph (mirrors
- * {@link annotateEntities}).
- * Skips HTML tags and code blocks. The click opens the inline file viewer.
+ * Wrap known entity/relation names in interactive spans (hover highlights the
+ * graph, click pins it). Names of 2+ characters only, to avoid noise.
  */
-function annotateReferences(html: string, references: RetrievalReference[]): string {
-  if (!references || references.length === 0) return html
+function annotateEntities(root: Element, entityNames: Map<string, string[]>): void {
+  const names = [...entityNames.keys()].filter((n) => n.length >= 2)
+  if (names.length === 0) return
+  wrapMentions(root, names, (name, match, doc) => {
+    const span = doc.createElement('span')
+    span.setAttribute('class', toggledEntities.has(name) ? 'graph-entity toggled' : 'graph-entity')
+    span.setAttribute('data-entity-name', name)
+    span.setAttribute('data-entity-ids', entityNames.get(name)!.join(','))
+    span.setAttribute('title', 'Click to pin highlight')
+    span.textContent = match
+    return span
+  })
+}
+
+/**
+ * Wrap retriever-cited filename mentions in a clickable `.doc-ref` span plus a
+ * superscript open-in-new glyph. The click opens the inline file viewer.
+ */
+function annotateReferences(root: Element, references: RetrievalReference[]): void {
   // filename → docId (first reference for that file)
   const byName = new Map<string, string>()
   for (const r of references) if (r.source && !byName.has(r.source)) byName.set(r.source, r.docId)
-  const names = [...byName.keys()].filter((n) => n.length >= 3).sort((a, b) => b.length - a.length)
-  if (names.length === 0) return html
-
-  const escaped = names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-  const pattern = new RegExp(`\\b(${escaped.join('|')})\\b`, 'gi')
-
-  const segments = html.split(/(<[^>]+>)/g)
-  let inCode = false
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i]
-    if (seg.startsWith('<code') || seg.startsWith('<pre')) inCode = true
-    if (seg === '</code>' || seg === '</pre>') {
-      inCode = false
-      continue
-    }
-    if (seg.startsWith('<') || inCode) continue
-
-    segments[i] = seg.replace(pattern, (match) => {
-      const key = [...byName.keys()].find((k) => k.toLowerCase() === match.toLowerCase())
-      if (!key) return match
-      // Filenames and document ids are user/tool supplied — escape them so a
-      // quote in a filename cannot terminate the attribute it lands in.
-      const docId = escapeHtmlAttribute(byName.get(key)!)
-      // The mark is an empty <sup> carrying an icon utility class — the
-      // `.doc-ref-mark` preflight gives it the `inline-block` an icon needs, and
-      // its `color` is what the mask paints with. It used to be a "↗"
-      // character. Both classes are literals here, so UnoCSS extracts them even
-      // though this markup is built as a string.
-      return `<span class="doc-ref" data-doc-id="${docId}" title="Open ${escapeHtmlAttribute(key)} in viewer">${match}<sup class="doc-ref-mark i-material-symbols-arrow-outward" aria-hidden="true"></sup></span>`
-    })
-  }
-
-  return segments.join('')
+  const names = [...byName.keys()].filter((n) => n.length >= 3)
+  if (names.length === 0) return
+  wrapMentions(root, names, (name, match, doc) => {
+    const span = doc.createElement('span')
+    span.setAttribute('class', 'doc-ref')
+    span.setAttribute('data-doc-id', byName.get(name)!)
+    span.setAttribute('title', `Open ${name} in viewer`)
+    // The mark is an empty <sup> carrying an icon utility class — the
+    // `.doc-ref-mark` preflight gives it the `inline-block` an icon needs, and
+    // its `color` is what the mask paints with. It used to be a "↗"
+    // character. Both classes are literals here, so UnoCSS extracts them even
+    // though the element is built at runtime.
+    const mark = doc.createElement('sup')
+    mark.setAttribute('class', 'doc-ref-mark i-material-symbols-arrow-outward')
+    mark.setAttribute('aria-hidden', 'true')
+    span.append(match, mark)
+    return span
+  })
 }
 
 /** Unique references by document (one footer chip per cited file). */
@@ -166,26 +171,32 @@ function dedupeReferencesByDoc(references: RetrievalReference[]): RetrievalRefer
 /**
  * Render an assistant message to the HTML handed to `innerHTML`.
  *
- * Order matters: marked's output is sanitized FIRST, then annotated. The
- * annotators emit their own `.graph-entity` / `.doc-ref` spans, so running
- * them after sanitization keeps that code-generated markup intact; the values
- * they interpolate are individually escaped instead (see the annotators
- * above). Sanitizing last would have to allow those spans back in anyway,
- * and would re-parse markup we just produced.
+ * The annotators run INSIDE the sanitizer, as its `annotate` pass: on the inert
+ * DOM DOMPurify returns, after the model's own markup has been stripped and
+ * before the image pass and the single serialization. Nothing touches the
+ * string `sanitizeMarkdownHtml` returns, so the sanitizer's output is what
+ * `innerHTML` parses. They used to run on that string, splitting it with a
+ * regex, and a `>` left raw inside an attribute value turned the attribute's
+ * tail back into live markup (#428).
  *
- * This order is also what makes the citations trustworthy (SA-M10):
- * `sanitizeMarkdownHtml` strips `class` down to an allowlist and drops the
- * `data-*` hooks entirely, so a `doc-ref` span in *model output* cannot reach
- * the DOM. Every interactive span the click handlers below respond to was put
- * there by one of these two annotators, from typed reference data.
+ * The other way to give the sanitizer the last word is to annotate BEFORE it.
+ * That is the wrong one here. Running after DOMPurify is what makes the
+ * citations trustworthy (SA-M10): DOMPurify strips `class` down to an
+ * allowlist and drops the `data-*` hooks entirely, so a `doc-ref` span in
+ * *model output* cannot reach the DOM. Annotating first would need those hooks
+ * let through for the model too. In this order, every interactive span the
+ * click handlers below respond to was built by one of these two annotators,
+ * from typed reference data, and the image pass still runs after them.
  */
 export function renderAssistantMarkdown(
   content: string,
   entityNames: Map<string, string[]>,
   references: RetrievalReference[],
 ): string {
-  const html = sanitizeMarkdownHtml(marked.parse(content ?? '') as string)
-  return annotateReferences(annotateEntities(html, entityNames), references)
+  return sanitizeMarkdownHtml(marked.parse(content ?? '') as string, (root) => {
+    annotateEntities(root, entityNames)
+    annotateReferences(root, references)
+  })
 }
 
 export const ChatMessages = (props: ChatMessagesProps) => {

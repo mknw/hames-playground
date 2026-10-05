@@ -27,6 +27,8 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 }))
 
 import {
+  claimConversation,
+  createConversation,
   getShareToken,
   loadSharedConversation,
   saveConversation,
@@ -78,7 +80,7 @@ function tokenShapedConversationId(): string {
 
 /** A saved conversation belonging to `userId`, with one user turn in it. */
 async function seed(userId: string, content: string, id = conversationId()): Promise<string> {
-  await saveConversation({
+  const row = {
     id,
     userId,
     agentId: 'search',
@@ -90,8 +92,10 @@ async function seed(userId: string, content: string, id = conversationId()): Pro
         { id: 'ev-1', type: 'user_message', ts: 1, patternId: 'harness', data: { content } },
       ],
     }),
-    status: 'done',
-  })
+  }
+  // Created by its turn, then saved at that turn's claim — a finished turn.
+  const held = await createConversation(row)
+  await saveConversation({ ...row, status: 'done', version: held })
   return id
 }
 
@@ -255,10 +259,10 @@ describe('owner scoping', () => {
   it('will not let a share ride in on a save', async () => {
     const id = await seed(OWNER, 'hello')
     const token = (await shareConversation(id, OWNER))!
-    // A later turn's save goes through the upsert, which does not name
-    // `share_token` in its UPDATE set — so an ordinary turn neither clears a
-    // share nor creates one.
+    // A later turn's save does not name `share_token` in its UPDATE set — so
+    // an ordinary turn neither clears a share nor creates one.
     await seed(OWNER, 'second turn')
+    const held = (await claimConversation(id, OWNER))!
     await saveConversation({
       id,
       userId: OWNER,
@@ -266,6 +270,7 @@ describe('owner scoping', () => {
       title: null,
       serializedContext: JSON.stringify({ sessionId: id, createdAt: 1, events: [] }),
       status: 'done',
+      version: held.version,
     })
     expect(await getShareToken(id, OWNER)).toBe(token)
   })

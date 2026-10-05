@@ -9,10 +9,10 @@
  *
  * Two helpers live here:
  *  - {@link sanitizeMarkdownHtml} — runs marked's output through DOMPurify with
- *    an allowlist sized to what marked actually emits, then refuses every
- *    image source outside the two this app serves (see {@link isAllowedImageSource}).
- *  - {@link escapeHtmlAttribute} — for values interpolated into attributes of
- *    markup we generate ourselves (entity/reference annotations).
+ *    an allowlist sized to what marked actually emits, lets the caller annotate
+ *    the inert result as a DOM, then refuses every image source outside the
+ *    two this app serves (see {@link isAllowedImageSource}).
+ *  - {@link escapeHtmlAttribute} — the DOM-less fallback's escaper.
  */
 
 import DOMPurify from 'dompurify'
@@ -67,9 +67,10 @@ const ALLOWED_TAGS = [
  * `<span class="doc-ref" data-doc-id="…">` survived sanitization and rendered
  * as a real, clickable citation pointing wherever the model chose — a
  * provenance spoof, in the one part of the UI whose entire job is to say where
- * an answer came from. The annotators in `ChatMessages` run *after* this
- * function and emit those attributes themselves, so nothing genuine is lost:
- * every surviving citation is now one this code put there.
+ * an answer came from. The annotators in `ChatMessages` run *after* DOMPurify,
+ * as {@link sanitizeMarkdownHtml}'s `annotate` pass, and emit those attributes
+ * themselves, so nothing genuine is lost: every surviving citation is now one
+ * this code put there.
  *
  * `target` and `rel` are absent for the same reason: {@link forceLinkTargetBlank}
  * sets them below, after DOMPurify has stripped whatever the model wrote, so the
@@ -274,7 +275,11 @@ function blockAutoLoadingSources(root: Element): void {
   }
 }
 
-/** Escape a value for interpolation into text or a double-quoted attribute. */
+/**
+ * Escape a value for interpolation into text or a double-quoted attribute.
+ * Used by the DOM-less fallback below. Markup this module's callers add goes
+ * through the `annotate` pass as nodes instead, which needs no escaping.
+ */
 export function escapeHtmlAttribute(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -287,13 +292,26 @@ export function escapeHtmlAttribute(value: string): string {
 /**
  * Sanitize HTML produced by `marked` before it is assigned to `innerHTML`.
  *
+ * `annotate`, when given, runs on the inert, already-sanitized `<body>`: after
+ * DOMPurify and its attribute hooks, before the image pass, and before the one
+ * serialization this function returns. It is how the chat adds its entity and
+ * citation spans (#428). They used to be added by splitting the returned
+ * string on `/(<[^>]+>)/`, and wherever a serializer leaves `>` raw inside an
+ * attribute value (jsdom does, older browsers did) that split read the tail of
+ * the attribute as text, so an `<img>` the sanitizer had seen only as an
+ * attribute STRING came back as a live element. A pass that builds nodes
+ * (`createElement`, `setAttribute`, text) has no string to mis-split, and the
+ * image pass still has the last word over anything it adds. So nothing may
+ * transform the string this returns; extend `annotate` instead.
+ *
  * Runs client-side only. The chat message list starts empty and is filled by
  * client-side effects (history hydration, live runs), so this never executes
  * during SSR; DOMPurify needs a DOM and its own `sanitize()` is a no-op pass
  * through when unsupported, so any DOM-less environment falls back to escaping
- * the markup into inert text rather than returning it unchanged.
+ * the markup into inert text rather than returning it unchanged. There is no
+ * markup left to annotate then, so `annotate` does not run.
  */
-export function sanitizeMarkdownHtml(html: string): string {
+export function sanitizeMarkdownHtml(html: string, annotate?: (root: Element) => void): string {
   if (typeof window === 'undefined' || !DOMPurify.isSupported) {
     return escapeHtmlAttribute(html)
   }
@@ -315,6 +333,7 @@ export function sanitizeMarkdownHtml(html: string): string {
   } finally {
     DOMPurify.removeHook('afterSanitizeAttributes')
   }
+  annotate?.(body)
   blockAutoLoadingSources(body)
   return body.innerHTML
 }

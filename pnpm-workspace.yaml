@@ -12,8 +12,41 @@ packages:
 onlyBuiltDependencies:
   - node-pty
 
-# At least 4.63.6, and patch releases only: a new rollup minor is a reviewed
-# lockfile change, not something an install picks up. rollup 4.63.6 is the
+# Release-age cooldown (#480 a): a freshly published version must be at
+# least this many minutes old before an install can RESOLVE it — 4320 = 3
+# days. This is the general policy #478's review offered as the alternative
+# to hand-tightening the rollup range below (O1,
+# https://github.com/mknw/hames-playground/pull/478#issuecomment-5996584721);
+# the owner took both: the cooldown guards every dependency now, and rollup
+# goes back to a normal `^` range below because the cooldown, not a `~`,
+# is what keeps a same-day release out.
+#
+# It guards a NEW resolution — `pnpm add`, `pnpm update`, or a manifest range
+# change that forces one — and does NOT re-validate what a
+# `--frozen-lockfile` install (CI, `app/Dockerfile`) already finds pinned in
+# the committed lockfile: on pnpm 10.28.1 the check runs during resolution
+# only, confirmed against github.com/pnpm/pnpm/issues/10438 (filed on
+# 10.27.0 — a version already present in the lockfile installs regardless of
+# its age). `trustLockfile`, which would re-check every lockfile entry on
+# install, ships in pnpm 11.3 — newer than the version this repo pins — so a
+# frozen install here is unaffected either way.
+#
+# `minimumReleaseAgeExclude` takes package names, scope globs or an exact
+# `name@version`; our own packages are not on a registry today, but excluding
+# the scope now means a future `@hames-ai/*` publish never waits on its own
+# release.
+#
+# To take an urgent security fix published inside the 3-day window: add the
+# package (or `name@version`) to the list below, or re-resolve once with
+# `pnpm install --config.minimum-release-age=0` and commit the result — the
+# flag is a one-shot override for that install, never a standing change here.
+minimumReleaseAge: 4320
+minimumReleaseAgeExclude:
+  - '@hames-ai/*'
+
+# A normal ^-range: the cooldown above is what now guards a freshly published
+# version, so this no longer needs the hand-tightened `~4.63.6` O1 settled on
+# before that policy existed (same review as above). rollup 4.63.6 is the
 # first release that imports an external's re-exported bindings when a
 # dynamically imported module's namespace is built as an object in a shared
 # chunk (rollup#6540). The server bundle needs that since #469 made
@@ -23,4 +56,4 @@ onlyBuiltDependencies:
 # so every route that loads BAML threw `ReferenceError:
 # BamlClientFinishReasonError is not defined`.
 overrides:
-  rollup: ~4.63.6
+  rollup: ^4.63.6

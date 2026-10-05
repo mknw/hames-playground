@@ -1117,3 +1117,77 @@ describe('wrapAsLLMCallError marks only a parse failure recoverable', () => {
     expect(wrapped.recoverable).toBe(expected)
   })
 })
+
+// ============================================================================
+// json-repair's length bound reaches the model (#463 review, finding 1)
+// ============================================================================
+
+describe("json-repair's over-length refusal is forwarded to the model (#463)", () => {
+  /** Relaxed syntax the chain would repair at any smaller size. */
+  const TOO_LONG = '{q: ' + 'x'.repeat(16_400) + '}'
+
+  const accept = () =>
+    vi.fn().mockResolvedValue({ result: mockCriticResult({ is_sufficient: true }) })
+
+  async function simple(controller: ReturnType<typeof vi.fn>) {
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
+    return run(simpleLoop(controller as never, TOOLS, { patternId: 'rec', maxTurns: 4 }) as never)
+  }
+
+  async function actorLoop(actor: ReturnType<typeof vi.fn>) {
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+    return run(
+      actorCritic(actor as never, accept() as never, TOOLS, {
+        patternId: 'rec',
+        maxRetries: 3,
+      }) as never,
+    )
+  }
+
+  /** A single call: the recovery record carries what the model is fed back. */
+  const recoveryError = (events: ContextEvent[]) => recoveries(events)[0]?.error ?? ''
+  /** A batch: the failed call's own `tool_result` carries its precheck error. */
+  const failedCallError = (events: ContextEvent[]) =>
+    ofType(events, 'tool_result')
+      .map((e) => e.data as { success: boolean; error?: string })
+      .find((d) => !d.success)?.error ?? ''
+
+  const single = { action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: TOO_LONG }) }
+  const batch = {
+    action: mockAction({
+      tool_name: 'read_neo4j_cypher',
+      tool_args: '{"query":"a"}',
+      additional_calls: [{ tool_name: 'read_neo4j_cypher', tool_args: TOO_LONG }],
+    }),
+  }
+  const done = { action: mockFinalAction('done') }
+
+  // Mutations, each red: `throw new SyntaxError(` restored in the bound → all
+  // four rows; `err` dropped at a single-call site → that row; the
+  // `TooLongToRepairError` ternary dropped at a precheck → that row.
+  it.each([
+    [
+      'simpleLoop, single call',
+      () => simple(vi.fn().mockResolvedValueOnce(single).mockResolvedValue(done)),
+      recoveryError,
+    ],
+    [
+      'simpleLoop, batch precheck',
+      () => simple(vi.fn().mockResolvedValueOnce(batch).mockResolvedValue(done)),
+      failedCallError,
+    ],
+    [
+      'actorCritic, single call',
+      () => actorLoop(vi.fn().mockResolvedValueOnce(single).mockResolvedValue(dispatch())),
+      recoveryError,
+    ],
+    [
+      'actorCritic, batch precheck',
+      () => actorLoop(vi.fn().mockResolvedValueOnce(batch).mockResolvedValue(dispatch())),
+      failedCallError,
+    ],
+  ] as const)('%s', async (_site, runSite, recorded) => {
+    const events = await runSite()
+    expect(recorded(events)).toContain('too long to repair')
+  })
+})

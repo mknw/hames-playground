@@ -1782,7 +1782,7 @@ describe('#482 F2: the rules cost CPU linear in the part', () => {
     ).toBe('content-type')
   })
 
-  it('2(b): 255-deep default chains and 20,000 runs in a table, in under 500 ms of CPU', async () => {
+  it('2(b): 255-deep default chains and 60,000 runs in a table, in under 500 ms of CPU', async () => {
     const chain = (type: string, p: string) =>
       Array.from(
         { length: 255 },
@@ -1792,9 +1792,10 @@ describe('#482 F2: the rules cost CPU linear in the part', () => {
           '</w:style>',
       ).join('')
     const styles = wStyles(chain('character', 'C') + chain('paragraph', 'P') + chain('table', 'T'))
-    const rsid = noise(8 * 20_000, 5)
+    // 60,000 runs: at 20,000 the memo-less code stayed under the bound (#482 delta F6).
+    const rsid = noise(8 * 60_000, 5)
     const runs = Array.from(
-      { length: 20_000 },
+      { length: 60_000 },
       (_, i) => `<w:r w:rsidR="${rsid.slice(8 * i, 8 * i + 8)}"><w:t>x</w:t></w:r>`,
     ).join('')
     const body =
@@ -2007,6 +2008,88 @@ describe('#482 F6 (A10): equivalent forms of the counted categories count too', 
       [],
     )
     expect(out.counted).toEqual({ whiteText: 2 })
+  })
+})
+
+describe('#482 delta: five more same-class misses, and a stray w:t', () => {
+  it('F1: a hidden window inside a rendered mc:Choice, and nested deeper, is counted', async () => {
+    const view = '<workbookView visibility="hidden"/>'
+    // A Choice Excel renders: it requires x14, which the workbook understands.
+    const ac = (inner: string) =>
+      `<mc:AlternateContent><mc:Choice xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" Requires="x14">${inner}</mc:Choice><mc:Fallback/></mc:AlternateContent>`
+    for (const extra of [
+      ac(`<bookViews>${view}</bookViews>`),
+      `<bookViews>${ac(view)}</bookViews>`,
+    ]) {
+      const out = await disarmed(
+        xlsx({
+          sheets: [{ name: 'S', xml: `<sheetData>${row(1, ['VISIBLE'])}</sheetData>` }],
+          workbookExtra: extra,
+        }),
+        MIME.xlsx,
+        [],
+      )
+      expect(out.counted).toEqual({ hiddenWindows: 1 })
+    }
+  })
+
+  it('F2: black text on a black w:highlight', async () => {
+    const body =
+      `<w:p>${run('VISIBLE')}` +
+      `${run('KEPT', '<w:color w:val="000000"/><w:highlight w:val="black"/>')}</w:p>`
+    expect((await disarmed(docx({ body }), MIME.docx, [])).counted).toEqual({
+      fontMatchesFill: 1,
+    })
+  })
+
+  it('F3: pptx text with an all-white a:gradFill', async () => {
+    const grad =
+      '<a:rPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FFFFFF"/></a:gs>' +
+      '<a:gs pos="100000"><a:srgbClr val="FFFFFF"/></a:gs></a:gsLst></a:gradFill></a:rPr>'
+    const out = await disarmed(
+      pptx({ slides: [{ shapes: shape('VISIBLE') + shape('KEPT', { id: 3, rPr: grad }) }] }),
+      MIME.pptx,
+      [],
+    )
+    expect(out.counted).toEqual({ whiteText: 1 })
+  })
+
+  it('F4: list-style defaults apply to a run with no a:rPr', async () => {
+    const sp =
+      '<p:sp><p:nvSpPr><p:cNvPr id="3" name="s"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/>' +
+      '<p:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr><a:defRPr sz="100"><a:solidFill>' +
+      '<a:srgbClr val="FFFFFF"/></a:solidFill></a:defRPr></a:lvl1pPr></a:lstStyle>' +
+      '<a:p><a:r><a:t>KEPT</a:t></a:r></a:p></p:txBody></p:sp>'
+    const out = await disarmed(pptx({ slides: [{ shapes: shape('VISIBLE') + sp }] }), MIME.pptx, [])
+    expect(out.counted).toEqual({ whiteText: 1, tinyText: 1 })
+  })
+
+  it('F5: a conditional-format dxf with a white font', async () => {
+    const styles =
+      `<styleSheet xmlns="${NS.s}"><fonts><font><color rgb="FF000000"/></font></fonts>` +
+      '<fills><fill><patternFill patternType="none"/></fill></fills>' +
+      '<cellXfs><xf numFmtId="0" fontId="0" fillId="0"/></cellXfs>' +
+      '<dxfs><dxf><font><color rgb="FFFFFFFF"/></font></dxf></dxfs></styleSheet>'
+    const sheet =
+      `<sheetData>${row(1, ['VISIBLE'])}</sheetData>` +
+      '<conditionalFormatting sqref="A1"><cfRule type="expression" dxfId="0" priority="1">' +
+      '<formula>TRUE()</formula></cfRule></conditionalFormatting>'
+    const out = await disarmed(xlsx({ sheets: [{ name: 'S', xml: sheet }], styles }), MIME.xlsx, [])
+    expect(out.counted).toEqual({ fontMatchesFill: 1 })
+  })
+
+  it('F7: a w:t outside any run goes, in the body and in a separator note', async () => {
+    const out = await disarmed(
+      docx({
+        body: `${para('VISIBLE')}<w:p><w:t>STRAYSENTINEL</w:t></w:p>`,
+        footnotes:
+          `<w:footnotes xmlns:w="${NS.w}"><w:footnote w:type="separator" w:id="-1"><w:p>` +
+          '<w:r><w:separator/></w:r><w:t>STRAYNOTESENTINEL</w:t></w:p></w:footnote></w:footnotes>',
+      }),
+      MIME.docx,
+      ['STRAYSENTINEL', 'STRAYNOTESENTINEL'],
+    )
+    expect(out.removed.strayText).toBe(2)
   })
 })
 

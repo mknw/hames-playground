@@ -81,8 +81,13 @@ TOKEN_ENCRYPTION_KEY=<openssl rand -base64 32>
 # purpose: it must rotate independently of the two keys above, because rotating
 # it is far more expensive than either.
 DATA_ENCRYPTION_KEY=<openssl rand -base64 32>
-# Optional overrides (defaults target dev):
-# AUTH_REDIRECT_URI=http://localhost:3444/api/auth/callback
+# REQUIRED in production: the OIDC redirect, and its origin is the app's public
+# origin, which every state-changing request is checked against (#455). Set it to
+# the address browsers load the app from, https://<public host>/api/auth/callback.
+# A production build with it unset, or not an http(s) URL, refuses to boot; a dev
+# build falls back to http://localhost:3444/api/auth/callback.
+AUTH_REDIRECT_URI=https://<public host>/api/auth/callback
+# Optional override (the default targets dev):
 # AUTH_POST_LOGOUT_REDIRECT_URI=http://localhost:3444/auth/signin
 ```
 

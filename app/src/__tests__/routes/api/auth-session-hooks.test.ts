@@ -44,18 +44,23 @@ vi.mock('~/lib/auth/entra-config.server', () => ({
 
 const { GET, POST } = await import('../../../routes/api/auth/logout')
 
+/** The configured public origin (`AUTH_REDIRECT_URI`'s), stubbed below. */
+const APP_ORIGIN = 'https://app.example'
+
 function evt(cookie?: string, site = 'same-origin') {
+  const origin = site === 'same-origin' ? APP_ORIGIN : 'https://attacker.example'
   return {
     params: {},
     request: new Request('http://x/api/auth/logout', {
       method: 'POST',
-      headers: { 'sec-fetch-site': site, ...(cookie ? { cookie } : {}) },
+      headers: { 'sec-fetch-site': site, origin, ...(cookie ? { cookie } : {}) },
     }),
   } as never
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.stubEnv('AUTH_REDIRECT_URI', `${APP_ORIGIN}/api/auth/callback`)
   calls.length = 0
   getSession.mockImplementation(async () => {
     calls.push('getSession')

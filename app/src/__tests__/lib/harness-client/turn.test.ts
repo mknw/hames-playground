@@ -1747,6 +1747,7 @@ describe('resume turns (#433 S7)', () => {
 
     expect(resumeHarness).not.toHaveBeenCalled()
     expect(saveSession).not.toHaveBeenCalled()
+    expect(dbCreateConversation).not.toHaveBeenCalled() // a resume never pre-seeds (#433 S7)
     expect(flippedToError()).toEqual([])
     expect(restoredPaused()).toEqual([])
   })

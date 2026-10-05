@@ -51,7 +51,16 @@
  * an optional BOM and whitespace — A1): no `<!DOCTYPE`, no entity declaration, no
  * reference to an undeclared entity; depth ≤ 256; ≤ 256 attributes per
  * element; ≤ 20 MiB per part; UTF-8 only; namespace-aware (an unbound prefix
- * is refused).
+ * is refused). A TREE (`parseXml`) holds at most 650,000 nodes — elements,
+ * attributes and text all count — because S6's disarm builds trees of parts
+ * up to 20 MiB, and a part of tiny elements is otherwise millions of objects
+ * (amendment A1). The number is twice the largest real part (A14): 324,261
+ * nodes, in 295 vendor-shipped OOXML files measured by structure. Its cost,
+ * measured on the disarm (#482 review): about 0.75 KiB a node at peak, since
+ * the input tree, the rewritten tree and the output string coexist — so
+ * about +480 MiB at the budget (+403 MiB at 500,000; +711 MiB, and an abort
+ * at a 512 MB heap, at 1,000,000). The walks that build nothing are not held
+ * to it.
  *
  * ## Rules beyond the letter of §5.3, each for a measured or named reason
  *
@@ -103,11 +112,12 @@ export const ZIP_LIMITS = Object.freeze({
   maxNameBytes: 512,
 })
 
-/** Spec §5.3 step 1 — XML part limits. */
+/** Spec §5.3 step 1 — XML part limits; `maxTreeNodes` is amendments A1/A14's tree budget. */
 export const XML_LIMITS = Object.freeze({
   maxDepth: 256,
   maxAttributes: 256,
   maxPartBytes: 20 * MiB,
+  maxTreeNodes: 650_000,
 })
 
 export type ZipRefusal =
@@ -145,6 +155,7 @@ export type ZipRefusal =
   | 'xml-attributes'
   | 'xml-namespace'
   | 'xml-malformed'
+  | 'xml-nodes'
 
 /** Thrown for every refusal. `code` names the limit; the message is for logs. */
 export class ZipRefusedError extends Error {
@@ -673,7 +684,8 @@ export interface XmlElement {
 /**
  * Parse one XML part under the §5.3 limits and return its root element.
  * Namespace-aware: rules downstream match on `ns`, so `<x:vanish/>` with `x`
- * bound to the WordprocessingML namespace IS `w:vanish`.
+ * bound to the WordprocessingML namespace IS `w:vanish`. The tree holds at most
+ * `XML_LIMITS.maxTreeNodes` elements, attributes and text nodes (A1).
  *
  * @throws ZipRefusedError (an `xml-*` code) on any limit or well-formedness error.
  */
@@ -779,6 +791,14 @@ function walkXml(
   const stack: OpenElement[] = []
   let root: XmlElement | undefined
   let rootClosed = false
+  // Amendment A1: a tree is bounded by what it holds, not only by its bytes.
+  let nodes = 0
+  const grow = (count: number): void => {
+    nodes += count
+    if (nodes > XML_LIMITS.maxTreeNodes) {
+      refuse('xml-nodes', `more than ${XML_LIMITS.maxTreeNodes} nodes in one tree`)
+    }
+  }
 
   const addText = (raw: string): void => {
     if (raw.length === 0) return
@@ -788,7 +808,10 @@ function walkXml(
     }
     const decoded = decodeReferences(raw)
     const top = stack[stack.length - 1]
-    if (top.children) top.children.push(decoded)
+    if (top.children) {
+      grow(1)
+      top.children.push(decoded)
+    }
   }
 
   const finish = (open: OpenElement, element: XmlElement | undefined): void => {
@@ -849,7 +872,10 @@ function walkXml(
       const end = text.indexOf(']]>', i + 9)
       if (end < 0) refuse('xml-malformed', 'an unterminated CDATA section')
       const top = stack[stack.length - 1]
-      if (top.children) top.children.push(text.slice(i + 9, end))
+      if (top.children) {
+        grow(1)
+        top.children.push(text.slice(i + 9, end))
+      }
       i = end + 3
       continue
     }
@@ -944,6 +970,7 @@ function walkXml(
       }
     }
     i = j
+    if (build) grow(1 + open.attributes.length)
     if (visit) {
       visit({
         name: local,

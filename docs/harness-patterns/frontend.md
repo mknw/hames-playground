@@ -22,7 +22,9 @@ Every turn in the hames app goes through one function, `runTurnAndPersist`
 actions in [`actions.server.ts`](../../app/src/lib/harness-client/actions.server.ts)
 and the streaming route [`routes/api/events.ts`](../../app/src/routes/api/events.ts)
 authenticate the caller and then call it, with mode `'interactive'` for a new
-message or `'approval'` to answer an approval gate. Runs started by a trigger
+message. (The `'approval'` mode that answered a paused run with a bare boolean
+was removed in #433 S3; resuming a pause with an answer bound to its request
+arrives as `mode: 'resume'` on the streaming route.) Runs started by a trigger
 rather than a person call it with mode `'triggered'`, from
 [`action-runner.server.ts`](../../app/src/lib/harness-client/action-runner.server.ts).
 Conversation state is no longer held in memory: each conversation's serialized

@@ -79,8 +79,18 @@ assertServerOnImport()
  * prompt builder sizing a tool surface — where the answer is legitimate and
  * unchanged. A RUN is the thing that must not happen frameless.
  *
+ * `opts.startAt` is where a RESUME re-enters (#433 S3): the patterns before it
+ * are skipped — their events are already in `ctx.events` and their data in
+ * `ctx.data`, which at a pause holds the paused pattern's INPUT (F10) — and
+ * the paused top-level pattern runs again from its own beginning. A gate it
+ * reaches again replays the answer from the run's journal instead of asking.
+ * An index outside the chain throws: a resume checks the chain first
+ * (`chain-changed`), so only a direct caller can get here with one.
+ *
  * @param ctx - UnifiedContext to execute in
  * @param patterns - ConfiguredPatterns to execute in sequence
+ * @param onEvent - called for each newly committed event
+ * @param opts - `startAt`: the top-level index to start from (default 0)
  * @returns Updated UnifiedContext
  *
  * @example
@@ -91,15 +101,21 @@ export async function runChain<T extends Record<string, unknown>>(
   ctx: UnifiedContext<T>,
   patterns: ConfiguredPattern<T>[],
   onEvent?: (event: ContextEvent) => void,
+  opts?: { readonly startAt?: number },
 ): Promise<UnifiedContext<T>> {
   activeRunFrame()
+
+  const startAt = opts?.startAt ?? 0
+  if (!Number.isInteger(startAt) || startAt < 0 || (startAt > 0 && startAt >= patterns.length)) {
+    throw new RangeError(`runChain: startAt ${startAt} is not a top-level index of this chain`)
+  }
 
   if (patterns.length === 0) {
     return ctx
   }
 
   // `hitl` is undefined unless THIS chain owns a HITL run (#433, F7; #477).
-  return withHitlRun(ctx, (hitl) => runPatterns(ctx, patterns, onEvent, hitl))
+  return withHitlRun(ctx, (hitl) => runPatterns(ctx, patterns, onEvent, hitl, startAt))
 }
 
 /** The body of {@link runChain}, inside the HITL run it owns (if any). */
@@ -108,13 +124,14 @@ async function runPatterns<T extends Record<string, unknown>>(
   patterns: ConfiguredPattern<T>[],
   onEvent: ((event: ContextEvent) => void) | undefined,
   hitl: HitlRun | undefined,
+  startAt: number,
 ): Promise<UnifiedContext<T>> {
   const names = patterns.map((p) => p.name)
 
   try {
     let currentData = ctx.data
 
-    for (let i = 0; i < patterns.length; i++) {
+    for (let i = startAt; i < patterns.length; i++) {
       const pattern = patterns[i]
 
       // Stop if status changed from running
@@ -155,9 +172,10 @@ async function runPatterns<T extends Record<string, unknown>>(
         // 5. Commit events based on strategy
         const beforeLen = ctx.events.length
         commitEvents(ctx, result, pattern.config.commitStrategy!)
-        // 5a. Then the HITL events the pattern raised — from the slot, straight
-        //     in, so no strategy can drop the record of a question (#433).
-        if (hitl) commitHitlBuffer(hitl, ctx)
+        // 5a. Then the HITL events the pattern raised — from the run's buffer,
+        //     straight in, so no strategy can drop the record of a question,
+        //     and checked against where THIS loop is (#433).
+        if (hitl) commitHitlBuffer(hitl, ctx, i, names)
 
         // 5b. Emit newly committed events via callback, skipping any that
         //     were already delivered live (dedup by event id).
@@ -205,7 +223,7 @@ async function runPatterns<T extends Record<string, unknown>>(
         const msg = error instanceof Error ? error.message : String(error)
         // A pattern that asked and then threw still asked: the request is
         // recorded, and `error` wins (m2).
-        if (hitl) commitHitlBuffer(hitl, ctx)
+        if (hitl) commitHitlBuffer(hitl, ctx, i, names)
         setError(ctx, msg, patternId)
       }
 

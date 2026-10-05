@@ -20,7 +20,10 @@ Call an entry point. That is the whole contract:
 
 ```typescript
 import { harness } from "@hames-ai/harness-patterns";
-import type { ConfiguredPattern, HarnessData } from "@hames-ai/harness-patterns";
+import type {
+  ConfiguredPattern,
+  HarnessData,
+} from "@hames-ai/harness-patterns";
 
 /** Your turn's data shape. The index signature is what every pattern needs. */
 interface MyData extends HarnessData {
@@ -35,9 +38,10 @@ const result = await agent("what were the Q3 results?");
 
 `harness(...patterns)` returns a runner, and **the runner opens the run frame
 for you**. So does `continueSession` (another turn on a stored context) and
-`resumeHarness` (a turn that was paused at an approval gate). If those three are
-how you run turns, you can stop reading at section 3 — the rest is for hosts
-that need to put something in the frame, or that drive patterns directly.
+`resumeHarness` (a turn that paused to ask a person, continued with their
+answer). If those three are how you run turns, you can stop reading at section
+3 — the rest is for hosts that need to put something in the frame, or that
+drive patterns directly.
 
 ---
 

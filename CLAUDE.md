@@ -162,8 +162,8 @@ const critic = createCriticAdapter()
 ```typescript
 // Continue: pass serialized from previous turn
 continueSession(serialized, patterns, newInput)
-// After approval gate:
-resumeHarness(serialized, patterns, approved)
+// After a pause (#433): answers keyed by requestId; bound to that pause, or refused
+resumeHarness(serialized, patterns, { [requestId]: choiceId }, { principal, resolve })
 ```
 
 **EventView inside patterns:**

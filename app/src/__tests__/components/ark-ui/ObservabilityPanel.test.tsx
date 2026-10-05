@@ -428,9 +428,9 @@ describe('ObservabilityPanel — timeline construction', () => {
     expect(rows(container)[0].textContent).toContain('×2 first_tool, second_tool')
   })
 
-  it('previews approval requests, errors and compacted intents on their rows', () => {
+  it('previews decisions, errors and compacted intents on their rows', () => {
     const events = [
-      ev('approval_request', { request: { action: 'delete everything' } }),
+      ev('hitl_request', { kind: 'confirm', question: 'Delete everything?' }),
       ev('error', { error: 'a catastrophic failure happened' }),
       ev('intent_compacted', { intent: 'find the concepts' }),
       ev('critic_result', { verdict: 'ok' }),
@@ -440,7 +440,8 @@ describe('ObservabilityPanel — timeline construction', () => {
     const text = rows(container)
       .map((r) => r.textContent)
       .join('|')
-    expect(text).toContain('delete everything')
+    expect(text).toContain('decision requested: confirm')
+    expect(text).not.toContain('Delete everything?')
     expect(text).toContain('a catastrophic failure happened')
     expect(text).toContain('find the concepts')
     // critic_result has no preview mapping — the row still renders its type.

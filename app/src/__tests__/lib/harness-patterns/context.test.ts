@@ -549,13 +549,14 @@ describe('context', () => {
       expect(ctx.status).toBe('done')
     })
 
-    it('should set paused status', async () => {
-      const { createContext, setPaused } = await import('@hames-ai/harness-patterns/context.server')
-
-      const ctx = createContext('test')
-      setPaused(ctx)
-
-      expect(ctx.status).toBe('paused')
+    // `paused` is set only by the owning runChain, for a request it records
+    // (#433 S3, D19): `setPaused` is gone, because a paused context that waits
+    // on nothing is one no answer can resume.
+    it('has no public way to set paused', async () => {
+      const context = await import('@hames-ai/harness-patterns/context.server')
+      const barrel = await import('@hames-ai/harness-patterns')
+      expect('setPaused' in context).toBe(false)
+      expect('setPaused' in barrel).toBe(false)
     })
   })
 })

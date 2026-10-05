@@ -17,6 +17,8 @@ import type {
   UserMessageEventData,
   ErrorEventData,
   TurnEstimateSettings,
+  HitlAnswers,
+  HitlRequestEventData,
 } from './types'
 import {
   createContext,
@@ -25,7 +27,8 @@ import {
   setError as setCtxError,
   generateId,
 } from './context.server'
-import { withRunFrame, currentRunFrame, type RunFrame } from './run-frame.server'
+import { checkResume, recordAnswers, supersedeHitl } from './hitl.server'
+import { withRunFrame, currentRunFrame, activeRunFrame, type RunFrame } from './run-frame.server'
 import { runtimeConfig } from './runtime-config.server'
 
 assertServerOnImport()
@@ -283,57 +286,125 @@ export function harness<T extends HarnessData & Record<string, unknown>>(
 }
 
 /**
- * Resume a paused harness from serialized context.
- *
- * @param serializedContext - The serialized UnifiedContext JSON
- * @param patterns - The original patterns
- * @param approved - Whether the action was approved. It lasts for THIS
- *   resumed run only, and every gate that run reaches reads it (#433). It
- *   rides `ctx.data` for that run, and `continueSession` clears it, so a gate
- *   reached on a later turn must ask again.
- * @returns The resumed result with updated context
+ * How a host resumes a paused run (#433, F4). Nothing here comes from the
+ * person's client: `principal` is stamped by the host from its own session,
+ * and `resolve` is the host's own side effect.
  */
-export async function resumeHarness<
-  T extends HarnessData & Record<string, unknown> & { approved?: boolean },
->(
+export interface ResumeOptions {
+  /** Who answered — the host's session identity, recorded on each
+   *  `hitl_response`. Never taken from a client body. */
+  readonly principal?: string
+  /**
+   * The host's side effect for one answer (store the sanitized copy, drop the
+   * quarantine, …). Called once per answer, in the order the run raised the
+   * requests, AFTER every check has passed — so a refused resume runs none —
+   * and inside the run frame, so a model call in it takes the run's tier. What
+   * it returns is recorded as the response's `resolution` and, sanitized, is
+   * what the held result becomes.
+   *
+   * It MUST be idempotent per `requestId` [Δ4]. When a later `resolve` throws,
+   * NOTHING is recorded and the resume fails; the blob is still paused, and a
+   * retry calls every `resolve` again — including the ones that already ran.
+   * Key its effect on `request.requestId` (provenance derives its stash id
+   * from it) and a retry never repeats it.
+   */
+  readonly resolve?: (
+    request: HitlRequestEventData,
+    answer: { readonly choice: string; readonly flags: Readonly<Record<string, boolean>> },
+  ) => Promise<unknown>
+  readonly onEvent?: (event: ContextEvent) => void
+  readonly frame?: RunFrame
+}
+
+/**
+ * Resume a paused run with the answers to the requests it waits on (#433 S3).
+ *
+ * `answers` maps each waiting `requestId` to a choice — a bare option id, or
+ * `{ choice, flags }`. An answer resumes ONLY the pause it was issued for (P1):
+ * it must name a request this run is waiting on, not expired, raised on the
+ * tier this resume runs on, with an available option of THAT request; every
+ * waiting request must be answered at once; and the agent's top-level chain
+ * must be the one the run paused in. Any other answer throws a
+ * `HitlAnswerError` before anything is recorded and before `resolve` runs, so
+ * the blob is untouched. Once accepted, an answer is recorded and its request
+ * is no longer waiting, so presenting it again is refused.
+ *
+ * Then, in order: `opts.resolve` per answer; one `hitl_response` per answer,
+ * `by: 'person'`, carrying `opts.principal` and what `resolve` returned; every
+ * held tool result substituted with its sanitized outcome. If a chosen option
+ * stops the run, it ends `done` with nothing re-entered; otherwise the paused
+ * top-level pattern runs again from its start, and a gate it reaches replays
+ * its answer. The run may pause again at a new gate.
+ *
+ * Single use against a concurrent resume of the SAME blob is the host's: save
+ * the result only if the stored blob is still the version you loaded (P1d).
+ *
+ * @param serializedContext - The paused context, as the HOST stored it (P1a)
+ * @param patterns - The agent's top-level patterns, unchanged since the pause
+ * @param answers - `{ [requestId]: choice | { choice, flags } }`
+ * @param opts - `principal`, `resolve`, and the usual `onEvent` / `frame`
+ */
+export async function resumeHarness<T extends HarnessData & Record<string, unknown>>(
   serializedContext: string,
   patterns: ConfiguredPattern<T>[],
-  approved: boolean,
-  onEvent?: (event: ContextEvent) => void,
-  frame?: RunFrame,
+  answers: HitlAnswers,
+  opts: ResumeOptions = {},
 ): Promise<HarnessResultScoped<T>> {
-  return enterRun(frame, onEvent, async (listener) => {
-    // Restore context from serialized state
+  return enterRun(opts.frame, opts.onEvent, async (listener) => {
     const ctx = deserializeContext<T>(serializedContext)
 
-    if (ctx.status !== 'paused') {
-      throw new Error('Cannot resume: context is not paused')
-    }
+    // Steps 1–6 only CHECK. A refusal throws before anything below runs.
+    const { accepted, startAt } = checkResume(ctx, answers, {
+      names: patterns.map((p) => p.name),
+      tier: activeRunFrame().inference?.tier,
+      now: Date.now(),
+    })
 
     const startTime = Date.now()
 
-    // Set approval state and resume
-    ctx.status = 'running'
-    ctx.data = { ...ctx.data, approved }
+    // 7. The host's side effects, one per answer, inside the frame and after
+    //    every check [F4]. A throw fails the resume with nothing recorded.
+    const resolutions: unknown[] = []
+    for (const { request, answer } of accepted) {
+      resolutions.push(opts.resolve ? await opts.resolve(request, answer) : undefined)
+    }
 
-    // Add approval response event
-    ctx.events.push({
-      id: generateId('ev'),
-      type: 'approval_response',
-      ts: Date.now(),
-      patternId: 'harness',
-      data: { approved },
-    })
+    // 8–9. The decisions, and the held results they release.
+    recordAnswers(ctx, accepted, resolutions, opts.principal)
+
+    // Legacy-blob scrub, until 1.0 (#433 F9): a 0.1.x `resumeHarness(…,
+    // approved)` wrote `approved` onto `ctx.data`, and a gate written for it
+    // would read a stale one as a decision. Core no longer writes it.
+    if (ctx.data && typeof ctx.data === 'object') {
+      delete (ctx.data as Record<string, unknown>).approved
+    }
 
     // Where THIS resume's events start — the restored context already holds
     // every previous turn's, including any error they recorded.
     const eventsBefore = ctx.events.length
 
+    // 10. A choice that stops the run stops it: nothing is re-entered.
+    const stop = accepted.find((a) => a.option.stopsRun)
+    if (stop) {
+      ctx.status = 'done'
+      ctx.data = { ...ctx.data, response: `Stopped at your request (${stop.request.kind}).` }
+      const settled = settleTurn(ctx, eventsBefore)
+      return {
+        response: settled.response,
+        data: ctx.data,
+        status: settled.status,
+        duration_ms: Date.now() - startTime,
+        context: ctx,
+        serialized: serializeContext(ctx),
+      }
+    }
+
+    ctx.status = 'running'
+
     try {
-      // Re-run patterns from the restored (now-running) context. The `approved`
-      // flag rides on ctx.data for a resume-aware gating pattern to consume —
-      // in this run only; `continueSession` clears it at the next turn.
-      await runChain(ctx, patterns, listener)
+      // 11. Re-enter the paused top-level pattern; the ones before it already
+      //     ran, and their events and data are in the context.
+      await runChain(ctx, patterns, listener, { startAt })
 
       // How this turn ended — one shared decision, see `settleTurn`.
       const settled = settleTurn(ctx, eventsBefore)
@@ -383,6 +454,12 @@ export async function continueSession<T extends HarnessData & Record<string, unk
 
     const startTime = Date.now()
 
+    // A new message SUPERSEDES whatever the last run still waits on (#433,
+    // D11): `{ choice: null, by: 'superseded' }` for each, and its held
+    // results say nothing was kept. Before the reset and before the new
+    // user_message, so the closing events belong to the run they close.
+    supersedeHitl(ctx)
+
     // Update input and reset status for new turn
     ctx.input = newInput
     ctx.status = 'running'
@@ -391,11 +468,10 @@ export async function continueSession<T extends HarnessData & Record<string, unk
     // Clear stale fields from previous turn — patterns must produce fresh values.
     // Errors are event-scoped (read via EventView), and response must be
     // re-generated by the compactExecution to prevent duplicate messages.
-    // `approved` is the answer to ONE pause: `resumeHarness` writes it for the
-    // run it resumes, and this is the only place a turn boundary is crossed, so
-    // leaving it would hand every later turn's gate a decision the person made
-    // about a different action — fail-open, and silent (#456 c′). Core clears
-    // what core writes.
+    // `approved` is the legacy-blob scrub, kept until 1.0 (#433 F9): core no
+    // longer writes it, but a 0.1.x blob may hold one, and leaving it would
+    // hand every later turn's gate a decision the person made about a
+    // different action — fail-open, and silent (#456 c′).
     if (ctx.data && typeof ctx.data === 'object') {
       delete (ctx.data as Record<string, unknown>).hasError
       delete (ctx.data as Record<string, unknown>).errorMessage

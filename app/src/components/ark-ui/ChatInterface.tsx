@@ -23,15 +23,13 @@
  */
 
 import { createSignal, createEffect, createMemo, onMount, untrack, Show } from 'solid-js'
-import { ChatMessages, type Message } from './ChatMessages'
+import { ChatMessages } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { AgentSelector } from './AgentSelector'
 import { ConversationTierSwitch } from './ConversationTierSwitch'
 import { ShareConversationButton } from './ShareConversationButton'
 import { LiveProgressBar } from './LiveProgressBar'
 import {
-  approveAction,
-  rejectAction,
   promoteAction,
   loadConversation,
   extractGraphElements,
@@ -40,7 +38,7 @@ import {
   type OpenReferenceTarget,
 } from '~/lib/harness-client'
 import { getSettings } from '~/lib/settings-store'
-import { applyApprovalResult, runTurn, type TurnSink } from '~/lib/turn-stream'
+import { runTurn, type TurnSink } from '~/lib/turn-stream'
 import type { GraphElement } from './SupportPanel'
 import type { UnifiedContext } from '@hames-ai/harness-patterns'
 import {
@@ -117,11 +115,9 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   // Per-session state lives in the registry (#226 B1), so an in-flight turn
   // survives the user switching threads (#105). Writes that belong to a
   // specific run always address `runSessionId` explicitly rather than going
-  // through these displayed-session shorthands.
+  // through this displayed-session shorthand.
   const registry = useSessionRegistry()
   const messages = () => registry.messages(props.sessionId)
-  const setMessages = (next: Message[] | ((prev: Message[]) => Message[])) =>
-    registry.setMessages(props.sessionId, next)
 
   /**
    * File a batch of graph elements against the run's own conversation, and
@@ -179,10 +175,6 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       agentMeta().find((a) => a.id === id),
     )
   })
-  // Cursor into ctx.events — tracks how many events were sent last turn so we
-  // emit only the delta (new events) rather than the full accumulated history
-  let prevEventCount = 0
-
   // Reactive accessors into the per-session registries owned by the route.
   // Re-reading `props.sessionId` inside the memo means snapshot/run-state
   // tracking automatically swaps when the user picks a different thread.
@@ -275,7 +267,6 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     if (hasLocalTurn(sid)) return
 
     registry.setMessages(sid, [])
-    prevEventCount = 0
     // Wipe this conversation's panel state so a rehydration replaces rather
     // than appends. Progress is NOT cleared — a still-running stream for
     // another thread keeps populating its own controller.
@@ -313,7 +304,6 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         try {
           const ctx = JSON.parse(loaded.serialized) as UnifiedContext
           const events = ctx.events ?? []
-          prevEventCount = events.length
           registry.appendEvents(sid, events)
           pushGraph(sid, extractGraphElements(events.filter((e) => e.type === 'tool_result')))
           if (props.onContextUpdate) {
@@ -406,11 +396,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       appendMessage: (message) => registry.appendMessage(runSessionId, message),
       pushEvents: (events) => registry.appendEvents(runSessionId, events),
       pushGraph: (elements) => pushGraph(runSessionId, elements),
-      setContext: (context) => {
-        // The cursor the approval path slices its event delta from.
-        prevEventCount = context.events?.length ?? prevEventCount
-        props.onContextUpdate?.(runSessionId, context)
-      },
+      setContext: (context) => props.onContextUpdate?.(runSessionId, context),
       ingestProgress: (event) => progress.ingest(event),
       finishProgress: () => progress.finish(),
       // Stamped on ARRIVAL, in this browser's clock: the countdown ticks
@@ -495,97 +481,6 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     }
   }
 
-  const handleApproveWrite = async (messageId: string) => {
-    registry.updateRunState(props.sessionId, { isProcessing: true })
-
-    try {
-      // Execute the approved operation
-      const result = await approveAction(props.sessionId)
-
-      // Same fan-out as the streaming turn, through the same sink — only the
-      // event slicing differs, because an approval resumes an existing context.
-      prevEventCount = applyApprovalResult(result, prevEventCount, sinkFor(props.sessionId))
-
-      // Update the message with executed tool call
-      setMessages(
-        messages().map((msg) => {
-          if (msg.id === messageId && msg.toolCall) {
-            return {
-              ...msg,
-              toolCall: { ...msg.toolCall, status: 'executed' as const },
-            }
-          }
-          return msg
-        }),
-      )
-
-      // Add success message
-      const successMessage: Message = {
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: result.response,
-        timestamp: new Date(),
-      }
-      setMessages([...messages(), successMessage])
-    } catch (error) {
-      console.error('Error executing write query:', error)
-
-      // Update the message to mark tool call as error
-      setMessages(
-        messages().map((msg) => {
-          if (msg.id === messageId && msg.toolCall) {
-            return {
-              ...msg,
-              toolCall: { ...msg.toolCall, status: 'error' as const, error: String(error) },
-            }
-          }
-          return msg
-        }),
-      )
-
-      const errorMessage: Message = {
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: `Write operation failed:\n\n\`\`\`\n${error instanceof Error ? error.message : 'Unknown error'}\n\`\`\``,
-        timestamp: new Date(),
-      }
-      setMessages([...messages(), errorMessage])
-    } finally {
-      registry.updateRunState(props.sessionId, { isProcessing: false })
-    }
-  }
-
-  const handleRejectWrite = async (messageId: string) => {
-    try {
-      // Reject the pending operation
-      const result = await rejectAction(props.sessionId)
-
-      // Update the message to show rejection in tool call
-      setMessages(
-        messages().map((msg) => {
-          if (msg.id === messageId && msg.toolCall) {
-            return {
-              ...msg,
-              toolCall: { ...msg.toolCall, status: 'error' as const, error: 'Rejected by user' },
-            }
-          }
-          return msg
-        }),
-      )
-
-      // Add rejection message from agent
-      const responseMessage: Message = {
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: result.response,
-        timestamp: new Date(),
-      }
-      setMessages([...messages(), responseMessage])
-    } catch (error) {
-      console.error('Error rejecting write:', error)
-    }
-  }
-
   // Composer guard banner. Naming the running tool when there is one is the
   // nicety; the load-bearing part is that this returns a string for the whole
   // of `isProcessing()` (SA-M11) — `runningTool` is null in every gap between
@@ -637,8 +532,6 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       <ChatMessages
         messages={messages()}
         welcome={welcome()}
-        onApproveWrite={handleApproveWrite}
-        onRejectWrite={handleRejectWrite}
         graphEntityNames={props.graphEntityNames}
         onHighlightEntities={props.onHighlightEntities}
         onOpenReference={props.onOpenReference}

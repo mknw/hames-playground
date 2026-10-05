@@ -53,9 +53,25 @@ describe('getEventPreview', () => {
     expect(getEventPreview('user_message', {})).toBe('')
   })
 
-  it('previews the requested action, the error text and the compacted intent', () => {
+  it('previews the decision, the error text and the compacted intent', () => {
+    // A decision previews its kind and outcome — never the question or the
+    // summary, which hold strings an attacker can choose (#433 P3).
+    expect(
+      getEventPreview('hitl_request', {
+        kind: 'provenance',
+        question: 'Use offer.docx?',
+        summary: { filename: 'offer.docx' },
+      }),
+    ).toBe('decision requested: provenance')
+    expect(
+      getEventPreview('hitl_response', { kind: 'provenance', choice: 'sanitize', by: 'person' }),
+    ).toBe('decision: provenance → sanitize (person)')
+    expect(getEventPreview('hitl_response', { kind: 'confirm', choice: null, by: 'expired' })).toBe(
+      'decision: confirm → none (expired)',
+    )
+    // Legacy (#433 F9): what an older run stored is not read.
     expect(getEventPreview('approval_request', { request: { action: 'write to Neo4j' } })).toBe(
-      'write to Neo4j',
+      'legacy approval event',
     )
     expect(getEventPreview('error', { error: 'y'.repeat(70) })).toBe('y'.repeat(50))
     expect(getEventPreview('intent_compacted', { intent: 'find the orphans' })).toBe(
@@ -157,6 +173,8 @@ describe('getEventLane', () => {
       'assistant_message',
       'pattern_enter',
       'pattern_exit',
+      'hitl_request',
+      'hitl_response',
       'approval_request',
       'approval_response',
     ] as EventType[]) {

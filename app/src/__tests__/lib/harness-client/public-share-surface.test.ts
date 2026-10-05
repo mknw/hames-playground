@@ -113,11 +113,11 @@ function bodies(source: string): Map<string, string> {
 /**
  * Functions that resolve the caller, directly or through something they call.
  *
- * A fixpoint rather than a literal `requireUser()` grep, because three exports
- * are gated one level down (`processMessage` → `processMessageWithAgent`,
- * `approveAction` / `rejectAction` → `resolveApproval`) and a test that could
- * not see that would have to be weakened with a hand-maintained allow-list —
- * which is where a genuinely ungated export would eventually be parked.
+ * A fixpoint rather than a literal `requireUser()` grep, because an export can
+ * be gated one level down (`processMessage` → `processMessageWithAgent`) and a
+ * test that could not see that would have to be weakened with a hand-maintained
+ * allow-list — which is where a genuinely ungated export would eventually be
+ * parked.
  *
  * This reads DECLARATIONS only, while {@link exportedCallables} reads four
  * export shapes — deliberately, and the asymmetry is the guard. An export in a

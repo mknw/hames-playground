@@ -833,10 +833,6 @@ function visit(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[] {
   ) {
     return drop('unreferencedNotes')
   }
-  // Field code between a begin and its separator: what a reader never sees.
-  if (inCode(fields) && (is(el, NS.m, 'oMath') || is(el, NS.m, 'oMathPara'))) {
-    return drop('fieldCodes')
-  }
 
   // ── Markup compatibility: both branches, and one hidden branch hides all ─
   if (is(el, NS.mc, 'AlternateContent')) {
@@ -891,7 +887,8 @@ function rebuild(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[]
       children.push(c)
       continue
     }
-    // Inside a run in a field's code, everything but its properties goes.
+    // Inside a run in a field's code, everything but its properties goes —
+    // OMML's `m:r` included, which is what takes an equation in the code.
     if (runLike && inCode(fields) && !is(c, NS.w, 'rPr') && !is(c, NS.w, 'fldChar')) {
       ctx.removed.add('fieldCodes')
       fieldCharsIn(c, fields)

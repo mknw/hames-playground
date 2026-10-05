@@ -355,7 +355,9 @@ describe('Z2: the part allowlist — only parts reached through allowlisted rela
   it('drops embeddings and OLE objects, part and element', async () => {
     const body =
       para('VISIBLE') +
-      `<w:p><w:r><w:object><v:shape id="ole1"><v:imagedata r:id="rIdImg" o:title="OLETITLESENTINEL"/></v:shape>` +
+      // The object's preview shape can carry a text box of its own.
+      `<w:p><w:r><w:object><v:shape id="ole1"><v:imagedata r:id="rIdImg" o:title="OLETITLESENTINEL"/>` +
+      `<v:textbox><w:txbxContent>${para('OLEBOXSENTINEL')}</w:txbxContent></v:textbox></v:shape>` +
       `<o:OLEObject Type="Embed" ProgID="Package" ShapeID="ole1" r:id="rIdOle"/></w:object></w:r></w:p>`
     const out = await disarmed(
       docx({
@@ -370,7 +372,7 @@ describe('Z2: the part allowlist — only parts reached through allowlisted rela
         ],
       }),
       MIME.docx,
-      ['OLESENTINEL', 'OLETITLESENTINEL', 'OLEObject', 'embeddings/'],
+      ['OLESENTINEL', 'OLETITLESENTINEL', 'OLEBOXSENTINEL', 'OLEObject', 'embeddings/'],
     )
     expect(out.removed.embeddings).toBe(1)
     expect(out.removed.oleObjects).toBe(1)
@@ -1015,11 +1017,14 @@ describe('Z2: tracked changes — accepted structurally', () => {
   it('drops w:del and w:moveFrom; keeps w:ins and w:moveTo, unwrapped', async () => {
     const body =
       `<w:p>${run('VISIBLE')}<w:del w:id="1" w:author="a"><w:r><w:delText>DELSENTINEL</w:delText></w:r></w:del>` +
+      // Deleted content that is not w:delText: only the w:del rule reaches it.
+      `<w:del w:id="7" w:author="a"><w:r><w:t>DELWTSENTINEL</w:t><w:tab/></w:r></w:del>` +
       `<w:ins w:id="2" w:author="a">${run('INSKEPT')}</w:ins></w:p>` +
       `<w:p><w:moveFromRangeStart w:id="3" w:name="m"/><w:moveFrom w:id="4" w:author="a">${run('MOVEFROMSENTINEL')}</w:moveFrom><w:moveFromRangeEnd w:id="3"/></w:p>` +
       `<w:p><w:moveToRangeStart w:id="5" w:name="m"/><w:moveTo w:id="6" w:author="a">${run('MOVETOKEPT')}</w:moveTo><w:moveToRangeEnd w:id="5"/></w:p>`
     const out = await disarmed(docx({ body }), MIME.docx, [
       'DELSENTINEL',
+      'DELWTSENTINEL',
       'MOVEFROMSENTINEL',
       'w:ins',
       'w:moveTo',
@@ -1028,7 +1033,7 @@ describe('Z2: tracked changes — accepted structurally', () => {
     const all = everything(out.bytes)
     expect(all).toContain('INSKEPT')
     expect(all).toContain('MOVETOKEPT')
-    expect(out.removed.deletions).toBe(2)
+    expect(out.removed.deletions).toBe(3)
   })
 
   it('drops a deleted table row and a stray w:delText', async () => {

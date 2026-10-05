@@ -38,6 +38,7 @@ import {
   crc32,
   parseXml,
   readZip,
+  scanXml,
   writeZip,
   type XmlElement,
   type ZipRefusal,
@@ -373,7 +374,7 @@ describe('decompression', () => {
     inflate.mockClear()
     readZip(buildZip([{ name: 'a.bin', data }]))
     expect(inflate).toHaveBeenCalledTimes(1)
-    expect(inflate.mock.calls[0][1]).toEqual({ maxOutputLength: 100_000 })
+    expect(inflate.mock.calls[0][1]).toEqual({ maxOutputLength: 100_000, info: true })
   })
 
   it('more output than declared is refused (the bomb that lies about its size)', () => {
@@ -391,6 +392,59 @@ describe('decompression', () => {
     // Stored: the two sizes must agree outright.
     expect(refusalOf(() => readZip(buildZip([{ ...ok(), method: 0, usize: 4 }])))).toBe(
       'size-mismatch',
+    )
+  })
+
+  /**
+   * #475 F4 (amendment A2): a deflate stream must end EXACTLY at the entry's
+   * compressed size. `inflateRawSync` ignores what follows its final block,
+   * so without the check a stream that ends early hides bytes inside the
+   * entry's range — a fake descriptor and a whole local entry (D6) — that a
+   * streaming reader takes as the next entry.
+   * MUTATION: drop the `bytesWritten` comparison → both red.
+   */
+  it('D6: a bit-3 entry whose stream ends early, hiding a local entry, is refused', () => {
+    const shown = 'x'
+    const hiddenData = enc.encode('<w:document xmlns:w="urn:x"><w:t>hidden</w:t></w:document>')
+    const hidden = Buffer.concat([
+      Buffer.from(
+        localHeader({
+          name: 'word/document.xml',
+          method: 0,
+          flags: 0,
+          crc: crc32(hiddenData),
+          csize: hiddenData.length,
+          usize: hiddenData.length,
+          extra: new Uint8Array(0),
+        }),
+      ),
+      Buffer.from(hiddenData),
+    ])
+    const fakeDescriptor = Buffer.alloc(16)
+    fakeDescriptor.writeUInt32LE(0x08074b50, 0)
+    const compressed = Buffer.concat([
+      zlib.deflateRawSync(enc.encode(shown)),
+      fakeDescriptor,
+      hidden,
+    ])
+    const z = buildZip([
+      {
+        name: 'a.txt',
+        data: shown,
+        compressed,
+        flags: 0x0008,
+        local: { crc: 0, csize: 0, usize: 0 },
+        descriptor: {},
+      },
+    ])
+    expect(refusalOf(() => readZip(z))).toBe('inflate')
+  })
+
+  it('D7: 64 KiB of junk after the end of a deflate stream is refused', () => {
+    const data = enc.encode('hello')
+    const compressed = Buffer.concat([zlib.deflateRawSync(data), Buffer.alloc(64 * 1024, 0x41)])
+    expect(refusalOf(() => readZip(buildZip([{ name: 'a.txt', data, compressed }])))).toBe(
+      'inflate',
     )
   })
 
@@ -535,6 +589,19 @@ describe('XML parts', () => {
     expect(refusalOf(() => readZip(xmlZip('<r a="&lol;"/>')))).toBe('xml-entity')
   })
 
+  /**
+   * #475 F6: `ref in PREDEFINED` followed the prototype chain, so these four
+   * decoded to `function Object() { [native code] }` and `[object Object]`.
+   * MUTATION: go back to `in` → red.
+   */
+  it('prototype keys are not predefined entities, in text or in an attribute', () => {
+    for (const key of ['constructor', 'toString', 'valueOf', '__proto__']) {
+      expect(refusalOf(() => readZip(xmlZip(`<r>&${key};</r>`)))).toBe('xml-entity')
+      expect(refusalOf(() => readZip(xmlZip(`<r a="&${key};"/>`)))).toBe('xml-entity')
+      expect(refusalOf(() => parseXml(`<r>&${key};</r>`))).toBe('xml-entity')
+    }
+  })
+
   it('depth 256 is accepted; 257 is refused', () => {
     const nest = (d: number) => '<a>'.repeat(d) + '</a>'.repeat(d)
     expect(refusalOf(() => readZip(xmlZip(nest(256))))).toBe('accepted')
@@ -586,9 +653,36 @@ describe('XML parts', () => {
   })
 
   it('a non-XML part is not parsed, whatever it contains', () => {
-    expect(
-      readZip(buildZip([{ name: 'word/media/image1.png', data: BILLION_LAUGHS }])),
-    ).toHaveLength(1)
+    // Real PNG magic first: a part is XML by its CONTENT now (#475 F5), so a
+    // `.png` holding XML text would be — rightly — checked as XML.
+    const png = new Uint8Array([
+      0x89,
+      0x50,
+      0x4e,
+      0x47,
+      0x0d,
+      0x0a,
+      0x1a,
+      0x0a,
+      ...enc.encode(BILLION_LAUGHS),
+    ])
+    expect(readZip(buildZip([{ name: 'word/media/image1.png', data: png }]))).toHaveLength(1)
+  })
+
+  /**
+   * #475 F5 (amendment A1): an XML part is one whose CONTENT is XML, whatever
+   * its name — kreuzberg opens a PPTX slide at whatever Target the rels name.
+   * MUTATION: go back to the name test alone → red.
+   */
+  it('a slide at ppt/slides/s1.bin with a DOCTYPE is refused (XML by content)', () => {
+    const slide =
+      '<?xml version="1.0"?><!DOCTYPE p:sld [<!ENTITY x "y">]>' +
+      '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>'
+    expect(refusalOf(() => readZip(xmlZip(slide, 'ppt/slides/s1.bin')))).toBe('xml-doctype')
+    // A BOM and leading whitespace do not hide it, nor does having no extension.
+    expect(refusalOf(() => readZip(xmlZip('\uFEFF \r\n\t' + slide, 'ppt/slides/s1')))).toBe(
+      'xml-doctype',
+    )
   })
 })
 
@@ -628,6 +722,32 @@ describe('parseXml', () => {
 
   it('strips a byte-order mark', () => {
     expect(parseXml(new Uint8Array([0xef, 0xbb, 0xbf, ...enc.encode('<r/>')])).name).toBe('r')
+  })
+})
+
+describe('scanXml (#475 F2: the type check builds no tree)', () => {
+  it('reports every start tag with its depth, resolved namespace and attributes', () => {
+    const tags: [number, string, string, string[]][] = []
+    scanXml('<r xmlns="urn:a" xmlns:p="urn:p"><p:c p:x="1"/><d><e/></d></r>', (t) =>
+      tags.push([t.depth, t.ns, t.name, t.attributes.map((a) => `${a.ns}|${a.name}=${a.value}`)]),
+    )
+    expect(tags).toEqual([
+      [
+        0,
+        'urn:a',
+        'r',
+        ['http://www.w3.org/2000/xmlns/|xmlns=urn:a', 'http://www.w3.org/2000/xmlns/|p=urn:p'],
+      ],
+      [1, 'urn:p', 'c', ['urn:p|x=1']],
+      [1, 'urn:a', 'd', []],
+      [2, 'urn:a', 'e', []],
+    ])
+  })
+
+  it('refuses exactly what parseXml refuses', () => {
+    expect(refusalOf(() => scanXml('<!DOCTYPE r><r/>', () => {}))).toBe('xml-doctype')
+    expect(refusalOf(() => scanXml('<r><p:c/></r>', () => {}))).toBe('xml-namespace')
+    expect(refusalOf(() => scanXml('<r><c></r>', () => {}))).toBe('xml-malformed')
   })
 })
 

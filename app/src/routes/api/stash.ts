@@ -16,6 +16,10 @@
  * rather than `loadSession`/`saveSession`: the version comes off the same read
  * as the blob, and only the `context` column is written, so a blob that is a
  * turn behind cannot restamp `status`, `title` or `agent_id`.
+ *
+ * It is also refused while a turn holds the conversation (#458): that turn is
+ * about to save the blob it loaded when it started, so a flag landing now
+ * would be reported saved and then silently overwritten.
  */
 import type { APIEvent } from '@solidjs/start/server'
 import {
@@ -108,7 +112,8 @@ export async function POST(event: APIEvent) {
     return new Response(
       JSON.stringify({
         error:
-          'The conversation changed while this action was being applied — reload and try again',
+          'The conversation changed while this action was being applied, or a turn is still ' +
+          'running in it — try again once it finishes',
       }),
       { status: 409, headers: { 'Content-Type': 'application/json' } },
     )

@@ -61,13 +61,18 @@ export async function POST(event: APIEvent) {
   const resolvedAgentId = agentId ?? 'search'
 
   const encoder = new TextEncoder()
+  // `closed` guards every write after `onSettled`: the keep-alive timer and the
+  // error path below both outlive the close, and `enqueue` on a closed
+  // controller throws. A client that disconnects closes it too (`cancel`), and
+  // the turn runs on regardless — so its frames must become no-ops rather
+  // than throws inside the run, which has a conversation claim to release.
+  let closed = false
 
   const stream = new ReadableStream({
+    cancel() {
+      closed = true
+    },
     async start(controller) {
-      // `closed` guards every write after `onSettled`: the keep-alive timer
-      // and the error path below both outlive the close, and `enqueue` on a
-      // closed controller throws.
-      let closed = false
       const send = (frame: string) => {
         if (closed) return
         controller.enqueue(encoder.encode(frame))
@@ -122,6 +127,8 @@ export async function POST(event: APIEvent) {
           // Everything the client waits for has been sent. The turn's trailing
           // summarization runs after this, with the user already served.
           onSettled: () => {
+            // Already closed by a client that went away (`cancel`).
+            if (closed) return
             closed = true
             controller.close()
           },

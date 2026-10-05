@@ -230,4 +230,40 @@ describe('POST /api/events', () => {
       { event: 'error', data: { sessionId: 's1', error: 'gateway unreachable' } },
     ])
   })
+
+  // #458: a second turn on a conversation that is still running is refused,
+  // and the refusal is a visible error frame, not a silent drop.
+  it('reports a refused concurrent turn as an error frame naming why', async () => {
+    const busy =
+      'A turn is still running in this conversation. Wait for it to finish, then send again.'
+    runTurnAndPersist.mockRejectedValue(new Error(busy))
+
+    expect(await frames(await POST(evt({ sessionId: 's1', message: 'hi' })))).toEqual([
+      { event: 'error', data: { sessionId: 's1', error: busy } },
+    ])
+  })
+
+  // A client that goes away does not stop the turn — it runs to its save,
+  // which is what releases the conversation's claim (#458). So the hooks it
+  // calls afterwards must be no-ops, not throws inside the run: `enqueue` on a
+  // cancelled stream throws, and that throw would land in the turn.
+  // MUTATION: drop the stream's `cancel()` → the late hooks throw and the turn
+  // rejects.
+  it('keeps a turn running to its end after the client disconnects', async () => {
+    let finish!: () => void
+    const finished = new Promise<void>((resolve) => (finish = resolve))
+    runTurnAndPersist.mockImplementation(async (req) => {
+      await finished
+      req.onEvent?.({ type: 'tool_result', ts: 2 })
+      req.onResult?.(RESULT)
+      req.onSettled?.()
+      return RESULT
+    })
+
+    const res = await POST(evt({ sessionId: 's1', message: 'hi' }))
+    await res.body!.getReader().cancel('client went away')
+    finish()
+
+    await expect(runTurnAndPersist.mock.results[0].value).resolves.toBe(RESULT)
+  })
 })

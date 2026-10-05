@@ -1,0 +1,2 @@
+Synthetic notes sent on behalf of a home mailbox by a delegate outside the home tenancy.
+They were written for the app-path test suite.

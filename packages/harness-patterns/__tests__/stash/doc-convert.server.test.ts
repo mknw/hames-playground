@@ -20,9 +20,12 @@ import {
   docConvertUrl,
 } from '../../stash/doc-convert.server'
 
-/** Minimal Response-shaped stub so we don't depend on a global Response ctor. */
+/** A real `Response`: the client reads `res.body` under a byte cap (#475 F3),
+ *  so a stub with only `json()` no longer reaches it. */
 function fakeResponse(body: unknown, ok = true, status = 200): Response {
-  return { ok, status, json: async () => body } as unknown as Response
+  return ok
+    ? new Response(JSON.stringify(body), { status })
+    : new Response(null, { status: status === 200 ? 500 : status })
 }
 
 describe('isConvertible', () => {
@@ -140,5 +143,113 @@ describe('docConvertUrl', () => {
     expect(docConvertUrl()).toBe('http://localhost:8000')
     process.env.DOC_CONVERT_URL = 'http://doc-convert:8000'
     expect(docConvertUrl()).toBe('http://doc-convert:8000')
+  })
+})
+
+/**
+ * #475 F3 (amendment A7): the response is bounded WHILE it is read.
+ *
+ * MUTATION (a): go back to `await res.json()` → "a 300 MiB body" goes red
+ * (it reads all 300 MiB before anything refuses it).
+ * MUTATION (b): clear the timer before reading the body → "a body that stalls"
+ * goes red (the late body is accepted).
+ */
+describe('convertToMarkdown bounds the response while reading it (#475 F3)', () => {
+  const b64 = Buffer.from('raw pdf bytes').toString('base64')
+  const MiB = 1024 * 1024
+
+  /** A 300 MiB body produced lazily, counting what the client actually pulls. */
+  function hugeBody() {
+    const chunk = new Uint8Array(MiB).fill(0x20)
+    const state = { pulled: 0, cancelled: false }
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          if (state.pulled >= 300 * MiB) return controller.close()
+          state.pulled += chunk.byteLength
+          controller.enqueue(chunk)
+        },
+        cancel() {
+          state.cancelled = true
+        },
+      },
+      { highWaterMark: 0 },
+    )
+    return { state, response: new Response(stream, { status: 200 }) }
+  }
+
+  it('a 300 MiB body is rejected after reading at most the cap', async () => {
+    const { state, response } = hugeBody()
+    const cap = 8 * MiB
+    await expect(
+      convertToMarkdown(b64, 'a.pdf', 'application/pdf', async () => response, undefined, cap),
+    ).rejects.toThrow(/exceeds/)
+    expect(state.pulled).toBeLessThanOrEqual(cap + MiB)
+    expect(state.cancelled).toBe(true)
+  })
+
+  it('a body that stalls past the timer is rejected', async () => {
+    process.env.DOC_CONVERT_TIMEOUT_MS = '200'
+    vi.resetModules()
+    const fresh = await import('../../stash/doc-convert.server')
+    delete process.env.DOC_CONVERT_TIMEOUT_MS
+    // Headers at once; the body only after 1.5 s — seven times the timer.
+    const stalled = vi.fn(async (_url: string, init: RequestInit) => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          timer = setTimeout(() => {
+            controller.enqueue(new TextEncoder().encode('[{"content":"late"}]'))
+            controller.close()
+          }, 1500)
+          // What a real fetch does: the request signal errors the body too.
+          init.signal?.addEventListener('abort', () => {
+            clearTimeout(timer)
+            controller.error(new DOMException('This operation was aborted', 'AbortError'))
+          })
+        },
+      })
+      return new Response(stream, { status: 200 })
+    })
+    const started = Date.now()
+    await expect(
+      fresh.convertToMarkdown(b64, 'a.pdf', 'application/pdf', stalled as unknown as typeof fetch),
+    ).rejects.toThrow(/abort|timed out/i)
+    expect(Date.now() - started).toBeLessThan(1400)
+  })
+
+  it('the timer holds even when a fetchFn does not tie its body to the signal', async () => {
+    process.env.DOC_CONVERT_TIMEOUT_MS = '200'
+    vi.resetModules()
+    const fresh = await import('../../stash/doc-convert.server')
+    delete process.env.DOC_CONVERT_TIMEOUT_MS
+    const deaf = vi.fn(async () => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          setTimeout(() => {
+            try {
+              controller.enqueue(new TextEncoder().encode('[{"content":"late"}]'))
+              controller.close()
+            } catch {
+              /* already cancelled */
+            }
+          }, 1500)
+        },
+      })
+      return new Response(stream, { status: 200 })
+    })
+    // Review round 2, edit 2: without the abort -> cancel listener this still
+    // rejects, at ~1.5 s, through the post-read `signal.aborted` check.
+    // MUTATION: delete `signal.addEventListener('abort', onAbort, { once: true })` → red.
+    const started = Date.now()
+    await expect(
+      fresh.convertToMarkdown(b64, 'a.pdf', 'application/pdf', deaf as unknown as typeof fetch),
+    ).rejects.toThrow(/timed out/)
+    expect(Date.now() - started).toBeLessThan(1400)
+  })
+
+  it('a response with no body is no content', async () => {
+    const empty = vi.fn(async () => new Response(null, { status: 200 }))
+    await expect(convertToMarkdown(b64, 'a.pdf', 'application/pdf', empty)).rejects.toThrow()
   })
 })

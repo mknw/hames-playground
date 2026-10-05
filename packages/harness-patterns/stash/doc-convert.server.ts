@@ -98,8 +98,15 @@ export function extractMarkdown(body: unknown): string | null {
  * sanitizer passes its own pinned object (`DOCUMENT_CONVERT_CONFIG`, #433
  * F15) and ingest keeps the default below.
  *
- * @throws on disabled/unreachable sidecar, non-2xx, timeout, or empty output —
- *         callers (ingest) turn a throw into `ingestStatus: 'failed'`.
+ * The response is bounded WHILE it is read (#475 F3, amendment A7): the
+ * timeout stays armed through the body, not only the headers, and the body is
+ * read in chunks under `maxResponseBytes`, cancelled the moment it passes the
+ * cap — never buffered whole by `res.json()` before anything can refuse it.
+ * The document sanitizer passes `4 * MAX_CONTENT_BYTES`; ingest keeps no cap.
+ *
+ * @throws on disabled/unreachable sidecar, non-2xx, timeout, an over-cap
+ *         body, or empty output — callers (ingest) turn a throw into
+ *         `ingestStatus: 'failed'`.
  */
 export async function convertToMarkdown(
   base64Content: string,
@@ -109,6 +116,7 @@ export async function convertToMarkdown(
   // Request markdown explicitly — the sidecar defaults to `plain`, which drops
   // heading markers and would defeat the markdown-aware chunker (bindHeadings).
   config: Readonly<Record<string, unknown>> = { output_format: 'markdown' },
+  maxResponseBytes = Infinity,
 ): Promise<string> {
   const bytes = Buffer.from(base64Content, 'base64')
   const form = new FormData()
@@ -120,23 +128,54 @@ export async function convertToMarkdown(
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), CONVERT_TIMEOUT_MS)
-  let res: Response
+  let body: unknown
   try {
-    res = await fetchFn(`${docConvertUrl()}/extract`, {
+    const res = await fetchFn(`${docConvertUrl()}/extract`, {
       method: 'POST',
       body: form,
       signal: controller.signal,
     })
+    if (!res.ok) {
+      throw new Error(`doc-convert /extract failed: HTTP ${res.status}`)
+    }
+    body = JSON.parse(await readBounded(res, maxResponseBytes, controller.signal))
   } finally {
     clearTimeout(timer)
   }
 
-  if (!res.ok) {
-    throw new Error(`doc-convert /extract failed: HTTP ${res.status}`)
-  }
-  const md = extractMarkdown(await res.json())
+  const md = extractMarkdown(body)
   if (md == null || md.trim() === '') {
     throw new Error('doc-convert returned no content')
   }
   return md
+}
+
+/**
+ * Read a response body as UTF-8, chunk by chunk, refusing it past `cap` bytes
+ * and when `signal` aborts. The abort cancels the reader as well, so the timer
+ * holds even for a `fetchFn` that does not tie its body to the signal.
+ */
+async function readBounded(res: Response, cap: number, signal: AbortSignal): Promise<string> {
+  if (!res.body) return ''
+  const reader = res.body.getReader()
+  const onAbort = () => void reader.cancel().catch(() => {})
+  signal.addEventListener('abort', onAbort, { once: true })
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (signal.aborted) throw new Error('doc-convert /extract timed out reading the response')
+      if (done) break
+      total += value.byteLength
+      if (total > cap) {
+        await reader.cancel().catch(() => {})
+        throw new Error(`doc-convert /extract response exceeds ${cap} bytes`)
+      }
+      chunks.push(value)
+    }
+  } finally {
+    signal.removeEventListener('abort', onAbort)
+  }
+  return Buffer.concat(chunks).toString('utf8')
 }

@@ -18,6 +18,8 @@
  *    `xl/workbook.xml`, `ppt/presentation.xml`; kreuzberg's DOCX parser reads
  *    the first literally) — must have the declared type in
  *    `[Content_Types].xml`, and an ODF package's `mimetype` must equal it.
+ *    Both package parts are at most 1 MiB and are scanned, never built into
+ *    a tree (A1).
  *    Every ZIP and XML limit is enforced by the reader (`zip.server.ts`).
  *    kreuzberg picks its parser from the multipart Content-Type and detects
  *    from the filename only for `octet-stream`, so it is sent exactly the
@@ -26,8 +28,10 @@
  *    docx, xlsx, xlsm, pptx). Its output is verified again before it is
  *    converted. A disarm that throws, or returns something that fails the
  *    check, makes Sanitize unavailable — the raw file is never the fallback.
+ *    Concealment it only COUNTED survives, so it reports `'not-removed'` (A3).
  * 3. **Extract [F15]**: `POST /extract` with `DOCUMENT_CONVERT_CONFIG` and
- *    nothing else. Text types stay text and never reach the converter.
+ *    nothing else, its response read under a 4 × 5 MiB byte cap and the
+ *    request timeout (A7). Text types stay text and never reach the converter.
  * 4. **Flatten links**: `[text](url)` → `text (host)`, images → `[image]`, and
  *    a final sweep turns any remaining URL into `(host)` (Z8).
  * 5. **Guard**: `sanitizeUntrusted` from the injection guard, called PURELY —
@@ -43,13 +47,15 @@
  *
  * ## Tiers 1–2, optional (spec §5.4) — `screenDocument`
  *
- * Units are stash chunks of the tier-0 copy. A chunk the guard already
- * neutralized goes to neither tier. Tier 1 (a `DocumentClassifier`, built from
- * the #418 decision seam by `classifierFromDecide`) sees the clean chunks;
- * abstain or error counts as suspicious. Tier 2 (an `InjectionScreen`) sees
- * the suspicious ones and ONLY FLAGS [F3]: a detected chunk gets a chunk-level
- * fence and a report entry, its spans become human-side findings (SD-3), and
- * the model's free-text reason is dropped (s1). `applyScreenVerdict` is not
+ * Units are stash chunks of the tier-0 copy. Tier 1 (a `DocumentClassifier`,
+ * built from the #418 decision seam by `classifierFromDecide`) sees the clean
+ * chunks; abstain or error counts as suspicious. A chunk the guard already
+ * neutralized skips tier 1 and goes straight to tier 2 (A4), so one known
+ * phrase cannot exempt a novel one beside it. Tier 2 (an `InjectionScreen`)
+ * sees the suspicious ones and ONLY FLAGS [F3]: a detected chunk gets a
+ * chunk-level fence and a report entry, the spans it copied verbatim become
+ * human-side findings (SD-3), and the model's free-text reason, and any span
+ * that is not in the chunk, are dropped (s1, A6). `applyScreenVerdict` is not
  * used here: it turns each nominated span into a global, unbounded literal
  * edit over the whole copy, which the document under screening could steer.
  *
@@ -76,11 +82,11 @@ import { chunkDocument, type Chunk } from './chunking.server'
 import { convertToMarkdown, MARKDOWN_MIME } from './doc-convert.server'
 import { MAX_CONTENT_BYTES } from './document-store.server'
 import {
-  parseXml,
   readZip,
+  scanXml,
   ZIP_LIMITS,
   ZipRefusedError,
-  type XmlElement,
+  type XmlAttribute,
   type ZipEntry,
 } from './zip.server'
 
@@ -333,14 +339,13 @@ function verifyOoxml(entries: readonly ZipEntry[], type: SanitizableType): void 
   // The main part: the package's one officeDocument relationship.
   const relsEntry = entryNamed(entries, '_rels/.rels')
   const targets = relsEntry
-    ? elements(
-        rootNamed(relsEntry, RELATIONSHIPS_NS, 'Relationships'),
+    ? rootNamed(
+        relsEntry,
         RELATIONSHIPS_NS,
+        'Relationships',
         'Relationship',
-      )
-        .filter((r) => attr(r, 'Type') === OFFICE_DOCUMENT_REL)
-        .filter((r) => attr(r, 'TargetMode') !== 'External')
-        .map((r) => (attr(r, 'Target') ?? '').replace(/^\//, ''))
+        (r) => attr(r, 'Type') === OFFICE_DOCUMENT_REL && attr(r, 'TargetMode') !== 'External',
+      ).map((r) => (attr(r, 'Target') ?? '').replace(/^\//, ''))
     : []
   if (targets.length === 0) refuse('no-main-part', 'no officeDocument relationship')
   if (targets.length > 1) refuse('content-type', 'more than one officeDocument relationship')
@@ -353,11 +358,18 @@ function verifyOoxml(entries: readonly ZipEntry[], type: SanitizableType): void 
   // Its type: an Override for the part, else the Default for its extension.
   const ctEntry = entryNamed(entries, '[Content_Types].xml')
   if (!ctEntry) refuse('content-type', 'no [Content_Types].xml')
-  const types = rootNamed(ctEntry, CONTENT_TYPES_NS, 'Types')
-  const overrides = elements(types, CONTENT_TYPES_NS, 'Override').filter(
+  const overrides = rootNamed(
+    ctEntry,
+    CONTENT_TYPES_NS,
+    'Types',
+    'Override',
     (o) => (attr(o, 'PartName') ?? '').toLowerCase() === `/${mainPart}`,
   )
-  const defaults = elements(types, CONTENT_TYPES_NS, 'Default').filter(
+  const defaults = rootNamed(
+    ctEntry,
+    CONTENT_TYPES_NS,
+    'Types',
+    'Default',
     (d) => (attr(d, 'Extension') ?? '').toLowerCase() === 'xml',
   )
   if (overrides.length > 1 || defaults.length > 1) {
@@ -369,23 +381,41 @@ function verifyOoxml(entries: readonly ZipEntry[], type: SanitizableType): void 
   }
 }
 
-/** Parse a package part and insist on its root element — by namespace URI. */
-function rootNamed(entry: ZipEntry, ns: string, name: string): XmlElement {
-  const root = parseXml(entry.data)
-  if (root.ns !== ns || root.name !== name) {
-    refuse('content-type', `${entry.name} is not a package ${name} part`)
+/** `[Content_Types].xml` and `_rels/.rels` are each at most 1 MiB (#475 F2,
+ *  amendment A1). One Override for each of the 2,000 entries the reader
+ *  allows is about 300 KB. */
+const PACKAGE_PART_MAX_BYTES = 1024 * 1024
+
+/**
+ * Scan a package part, insist on its root element — by namespace URI — and
+ * return the attributes of the root's `child` elements that `keep` accepts,
+ * at most two (every caller refuses on a second). No tree is built
+ * (`scanXml`), so memory is bounded by construction, not by the part [F2].
+ */
+function rootNamed(
+  entry: ZipEntry,
+  ns: string,
+  name: string,
+  child: string,
+  keep: (attributes: readonly XmlAttribute[]) => boolean,
+): (readonly XmlAttribute[])[] {
+  if (entry.data.length > PACKAGE_PART_MAX_BYTES) {
+    refuse('content-type', `${entry.name} is larger than a package part can be`)
   }
-  return root
+  let rootMatches = false
+  const kept: (readonly XmlAttribute[])[] = []
+  scanXml(entry.data, (tag) => {
+    if (tag.depth === 0) rootMatches = tag.ns === ns && tag.name === name
+    else if (tag.depth === 1 && tag.ns === ns && tag.name === child && kept.length < 2) {
+      if (keep(tag.attributes)) kept.push(tag.attributes)
+    }
+  })
+  if (!rootMatches) refuse('content-type', `${entry.name} is not a package ${name} part`)
+  return kept
 }
 
-function elements(root: XmlElement, ns: string, name: string): XmlElement[] {
-  return root.children.filter(
-    (c): c is XmlElement => typeof c !== 'string' && c.ns === ns && c.name === name,
-  )
-}
-
-function attr(el: XmlElement | undefined, name: string): string | undefined {
-  return el?.attributes.find((a) => a.ns === '' && a.name === name)?.value
+function attr(attributes: readonly XmlAttribute[] | undefined, name: string): string | undefined {
+  return attributes?.find((a) => a.ns === '' && a.name === name)?.value
 }
 
 // ============================================================================
@@ -426,7 +456,9 @@ export async function flattenDocument(
       bytes = disarmed.bytes
       removed = { ...disarmed.removed }
       counted = { ...disarmed.counted }
-      hiddenContent = 'removed'
+      // Counted is NOT removed: hidden rows, white text and 1-pt text are
+      // still in the copy (§5.3 step 2), so F13 must still apply [#475 F7, A3].
+      hiddenContent = Object.values(counted).some((n) => n > 0) ? 'not-removed' : 'removed'
     }
     const convert = deps.convert ?? convertToMarkdown
     text = await convert(
@@ -435,6 +467,7 @@ export async function flattenDocument(
       type.mime,
       undefined,
       DOCUMENT_CONVERT_CONFIG,
+      4 * MAX_CONTENT_BYTES,
     )
   }
   // The copy is what the stash stores, so it is held to the stash's own limit
@@ -469,8 +502,11 @@ export async function flattenDocument(
 
 // Every pattern below is bounded or ends in a terminal run (nothing after it
 // to backtrack for), the discipline `injection-guard.ts` documents.
-const IMAGE = /!\[[^\]\n]{0,2000}\]\([^)\n]{0,2000}\)/g
-const LINK = /\[([^\]\n]{0,2000})\]\(([^)\n]{0,2000})\)/g
+// Each class EXCLUDES its own opener (`[` / `(`), so a failed scan stops at
+// the next possible start and the total work is linear: with `[^\]\n]` alone,
+// 5 MiB of `![` cost 16.8 s of synchronous CPU (#475 F1, SD-2).
+const IMAGE = /!\[[^\][\n]{0,2000}\]\([^()\n]{0,2000}\)/g
+const LINK = /\[([^\][\n]{0,2000})\]\(([^()\n]{0,2000})\)/g
 const URL_WITH_AUTHORITY = /\b[a-z][a-z0-9+.-]{1,31}:\/\/[^\s<>"'`)\]]+/gi
 const URL_WITHOUT_AUTHORITY =
   /\b(?:mailto|data|javascript|vbscript|file|tel|sms|blob|cid):[^\s<>"'`)\]]+/gi
@@ -723,7 +759,7 @@ export function classifierFromDecide(
 const DEFAULT_MAX_CHUNKS = 64
 
 /** Mirrors `marker()` in `injection-guard.ts`: a chunk carrying one was
- *  neutralized at tier 0 and goes to neither tier. */
+ *  neutralized at tier 0, so it skips the classifier and goes to the screen. */
 const TIER0_MARKER = '⟦neutralized:'
 
 const FLAG_OPEN =
@@ -761,13 +797,15 @@ export async function screenDocument(
   const flagged: Chunk[] = []
   let considered = 0
   for (const chunk of chunkDocument(doc.markdown, MARKDOWN_MIME)) {
-    if (chunk.content.includes(TIER0_MARKER)) continue
+    // A tier-0 finding skips the CLASSIFIER and goes straight to the screen:
+    // one known phrase must not exempt a novel one beside it [#475 F8, A4].
+    const tier0 = chunk.content.includes(TIER0_MARKER)
     if (considered >= maxChunks) {
       unscreened.push(chunk.index)
       continue
     }
     considered++
-    if (classify) {
+    if (classify && !tier0) {
       let suspicious = true
       try {
         const v = await classify({ text: chunk.content })
@@ -790,13 +828,15 @@ export async function screenDocument(
     for (const span of verdict.spans) {
       if (span.trim().length === 0) continue
       const at = chunk.content.indexOf(span)
+      // Not in the chunk: model-written text, kept out like `reason` (#475 F9, A6).
+      if (at < 0) continue
       findings.push({
         rule: 'llm-screen-chunk',
         // Fixed text: `verdict.reason` is model-written and stays out (s1).
         description: 'An automated screen flagged this chunk; its text was not changed',
         layer: 'llm-screen',
         match: span,
-        offset: at < 0 ? -1 : chunk.startOffset + at,
+        offset: chunk.startOffset + at,
         replacement: '',
       })
     }

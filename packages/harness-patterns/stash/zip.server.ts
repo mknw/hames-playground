@@ -41,12 +41,14 @@
  * local header's name, method, flags and sizes equal its directory record.
  * Decompression: ratio ≤ 100:1, ≤ 20 MiB per entry and ≤ 50 MiB in total, all
  * on the DECLARED sizes of every entry before any entry is inflated; then
- * `maxOutputLength = min(declared, 20 MiB, remaining)`, and the actual size
- * must equal the declared one and the CRC-32 must match.
+ * `maxOutputLength = min(declared, 20 MiB, remaining)`, the deflate stream
+ * must end exactly at the compressed size (A2), and the actual size must
+ * equal the declared one and the CRC-32 must match.
  * Names: valid UTF-8, ≤ 512 bytes, no NUL, no leading `/` or drive letter,
  * no `\`, no `.`/`..`/empty segment; unique after NFC and case folding.
  * Nesting: an embedded archive is opaque bytes — never opened.
- * XML (`.xml` / `.rels` parts): no `<!DOCTYPE`, no entity declaration, no
+ * XML (any part named `.xml` / `.rels`, or whose content starts with `<` after
+ * an optional BOM and whitespace — A1): no `<!DOCTYPE`, no entity declaration, no
  * reference to an undeclared entity; depth ≤ 256; ≤ 256 attributes per
  * element; ≤ 20 MiB per part; UTF-8 only; namespace-aware (an unbound prefix
  * is refused).
@@ -63,10 +65,12 @@
  *   real values after the data. Measured on 379 vendor-shipped OOXML files on
  *   one machine: none written by Microsoft Office use it, the 13 bundled by
  *   one non-Microsoft application do. So a bit-3 entry is
- *   accepted only when it is DEFLATED (self-terminating; a stored one has no
- *   unambiguous length), its local fields are zero or equal, and the
- *   descriptor after the data equals the directory record. Nothing is read
- *   from the local side that the directory does not also say.
+ *   accepted only when it is DEFLATED — and a deflate stream must end
+ *   EXACTLY at the entry's compressed size (amendment A2), which is what
+ *   makes it self-terminating; a stored one has no unambiguous length — its
+ *   local fields are zero or equal, and the descriptor after the data equals
+ *   the directory record. Nothing is read from the local side that the
+ *   directory does not also say.
  * - **Non-regular entries.** A Unix-mode symlink, device or FIFO entry is
  *   refused. §5.3 lists no rule for it; the dispatch's corpus does, and a
  *   symlink means a different thing to every extractor that honours modes.
@@ -279,7 +283,9 @@ export function readZip(input: Uint8Array): ZipEntry[] {
     }
     if (crc32(data) !== rec.crc) refuse('crc', quoted(rec.name))
     total += data.length
-    if (!rec.directory && isXmlPartName(rec.name)) walkXml(data, false)
+    // By CONTENT, not by name [#475 F5, A1]: kreuzberg opens a PPTX slide at
+    // whatever Target the rels name, so `ppt/slides/s1.bin` is an XML part.
+    if (!rec.directory && (isXmlPartName(rec.name) || looksLikeXml(data))) walkXml(data, false)
     return { name: rec.name, directory: rec.directory, data }
   })
 }
@@ -288,9 +294,20 @@ function inflate(raw: Uint8Array, rec: CentralRecord, remaining: number): Uint8A
   const maxOutputLength = Math.min(rec.usize, ZIP_LIMITS.maxEntryBytes, remaining)
   try {
     // `maxOutputLength` must be ≥ 1; an empty entry's stream is checked by
-    // the size comparison after.
-    return new Uint8Array(inflateRawSync(raw, { maxOutputLength: Math.max(1, maxOutputLength) }))
+    // the size comparison after. `info: true` returns the engine, whose
+    // `bytesWritten` is the INPUT consumed: `inflateRawSync` ignores anything
+    // after the final block, so without this a stream that ends early hides
+    // bytes a streaming reader would read as the next entry [#475 F4, A2].
+    const { buffer, engine } = inflateRawSync(raw, {
+      maxOutputLength: Math.max(1, maxOutputLength),
+      info: true,
+    } as never) as unknown as { buffer: Buffer; engine: { bytesWritten: number } }
+    if (engine.bytesWritten !== raw.length) {
+      refuse('inflate', `${quoted(rec.name)}: bytes after the end of the deflate stream`)
+    }
+    return new Uint8Array(buffer)
   } catch (err) {
+    if (err instanceof ZipRefusedError) throw err
     if ((err as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE') {
       refuse('size-mismatch', `${quoted(rec.name)} inflates past its declared ${rec.usize} bytes`)
     }
@@ -537,6 +554,18 @@ function isXmlPartName(name: string): boolean {
   return lower.endsWith('.xml') || lower.endsWith('.rels')
 }
 
+/** Content that an XML reader would open: an optional UTF-8 BOM and ASCII
+ *  whitespace, then `<`. Binary parts (PNG, JPEG, EMF, OLE) start otherwise. */
+function looksLikeXml(data: Uint8Array): boolean {
+  let i = data[0] === 0xef && data[1] === 0xbb && data[2] === 0xbf ? 3 : 0
+  while (
+    i < data.length &&
+    (data[i] === 0x20 || data[i] === 0x09 || data[i] === 0x0a || data[i] === 0x0d)
+  )
+    i++
+  return data[i] === 0x3c
+}
+
 // ============================================================================
 // Writer — a fresh package, never a patched input (spec §5.3 step 1, S6)
 // ============================================================================
@@ -652,6 +681,28 @@ export function parseXml(input: Uint8Array | string): XmlElement {
   return walkXml(input, true) as XmlElement
 }
 
+/** One start tag, as `scanXml` reports it. `depth` is 0 for the root. */
+export interface XmlStartTag {
+  readonly name: string
+  readonly ns: string
+  readonly prefix: string
+  readonly attributes: readonly XmlAttribute[]
+  readonly depth: number
+}
+
+/**
+ * Walk one XML part under the same limits and well-formedness rules as
+ * `parseXml`, calling `visit` for each start tag in document order, and build
+ * NO tree. Memory is the part plus one element's attributes at a time, so a
+ * caller that keeps only the elements it is looking for holds only those —
+ * bounded by construction, whatever the part holds (#475 F2).
+ *
+ * @throws ZipRefusedError (an `xml-*` code), as `parseXml` does.
+ */
+export function scanXml(input: Uint8Array | string, visit: (tag: XmlStartTag) => void): void {
+  walkXml(input, false, visit)
+}
+
 const XML_NS = 'http://www.w3.org/XML/1998/namespace'
 const XMLNS_NS = 'http://www.w3.org/2000/xmlns/'
 const PREDEFINED: Readonly<Record<string, string>> = {
@@ -675,11 +726,15 @@ interface OpenElement {
 }
 
 /**
- * The one tokenizer behind `parseXml` (`build`) and `readZip`'s validation
+ * The one tokenizer behind `parseXml` (`build`), `scanXml` (`visit`) and `readZip`'s validation
  * (no tree: a 20 MiB part of tiny elements would otherwise be millions of
  * objects nobody reads). Every scan is `indexOf`-driven and linear.
  */
-function walkXml(input: Uint8Array | string, build: boolean): XmlElement | undefined {
+function walkXml(
+  input: Uint8Array | string,
+  build: boolean,
+  visit?: (tag: XmlStartTag) => void,
+): XmlElement | undefined {
   const size = typeof input === 'string' ? Buffer.byteLength(input, 'utf8') : input.length
   if (size > XML_LIMITS.maxPartBytes) {
     refuse('xml-size', `${size} bytes, limit ${XML_LIMITS.maxPartBytes}`)
@@ -747,9 +802,8 @@ function walkXml(input: Uint8Array | string, build: boolean): XmlElement | undef
     }
   }
 
-  const close = (open: OpenElement): void => {
-    // Resolve AFTER every declaration on this element is in scope.
-    const ns = resolve(open.prefix)
+  // Resolve AFTER every declaration on this element is in scope.
+  const resolveAttributes = (open: OpenElement, keep: boolean): XmlAttribute[] => {
     const seen = new Set<string>()
     const attributes: XmlAttribute[] = []
     for (const a of open.attributes) {
@@ -759,8 +813,14 @@ function walkXml(input: Uint8Array | string, build: boolean): XmlElement | undef
       const key = `${attrNs}\u0000${isDecl && prefix === '' ? 'xmlns' : local}`
       if (seen.has(key)) refuse('xml-malformed', `duplicate attribute ${JSON.stringify(a.qname)}`)
       seen.add(key)
-      if (build) attributes.push({ name: local, ns: attrNs, prefix, value: a.value })
+      if (keep) attributes.push({ name: local, ns: attrNs, prefix, value: a.value })
     }
+    return attributes
+  }
+
+  const close = (open: OpenElement): void => {
+    const ns = resolve(open.prefix)
+    const attributes = resolveAttributes(open, build)
     finish(
       open,
       build
@@ -884,6 +944,15 @@ function walkXml(input: Uint8Array | string, build: boolean): XmlElement | undef
       }
     }
     i = j
+    if (visit) {
+      visit({
+        name: local,
+        ns: resolve(prefix),
+        prefix,
+        attributes: resolveAttributes(open, true),
+        depth: stack.length,
+      })
+    }
     stack.push(open)
     if (selfClosing) close(stack.pop()!)
   }
@@ -911,7 +980,9 @@ function decodeReferences(raw: string): string {
     const semi = raw.indexOf(';', amp + 1)
     if (semi < 0 || semi - amp > 12) refuse('xml-entity', 'an unterminated reference')
     const ref = raw.slice(amp + 1, semi)
-    if (ref in PREDEFINED) {
+    // OWN keys only: `in` follows the prototype chain, so `&constructor;`
+    // would decode to a function's source text [#475 F6].
+    if (Object.hasOwn(PREDEFINED, ref)) {
       out += PREDEFINED[ref]
     } else if (ref.startsWith('#')) {
       const code = /^#x[0-9a-fA-F]{1,6}$/.test(ref)

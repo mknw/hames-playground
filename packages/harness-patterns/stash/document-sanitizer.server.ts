@@ -505,8 +505,10 @@ export async function flattenDocument(
 // Each class EXCLUDES its own opener (`[` / `(`), so a failed scan stops at
 // the next possible start and the total work is linear: with `[^\]\n]` alone,
 // 5 MiB of `![` cost 16.8 s of synchronous CPU (#475 F1, SD-2).
-const IMAGE = /!\[[^\][\n]{0,2000}\]\([^()\n]{0,2000}\)/g
-const LINK = /\[([^\][\n]{0,2000})\]\(([^()\n]{0,2000})\)/g
+/** @internal Exported for the #475 F1 linearity pin only. */
+export const IMAGE = /!\[[^\][\n]{0,2000}\]\([^()\n]{0,2000}\)/g
+/** @internal Exported for the #475 F1 linearity pin only. */
+export const LINK = /\[([^\][\n]{0,2000})\]\(([^()\n]{0,2000})\)/g
 const URL_WITH_AUTHORITY = /\b[a-z][a-z0-9+.-]{1,31}:\/\/[^\s<>"'`)\]]+/gi
 const URL_WITHOUT_AUTHORITY =
   /\b(?:mailto|data|javascript|vbscript|file|tel|sms|blob|cid):[^\s<>"'`)\]]+/gi

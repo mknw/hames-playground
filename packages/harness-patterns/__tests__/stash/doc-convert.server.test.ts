@@ -238,9 +238,14 @@ describe('convertToMarkdown bounds the response while reading it (#475 F3)', () 
       })
       return new Response(stream, { status: 200 })
     })
+    // Review round 2, edit 2: without the abort -> cancel listener this still
+    // rejects, at ~1.5 s, through the post-read `signal.aborted` check.
+    // MUTATION: delete `signal.addEventListener('abort', onAbort, { once: true })` → red.
+    const started = Date.now()
     await expect(
       fresh.convertToMarkdown(b64, 'a.pdf', 'application/pdf', deaf as unknown as typeof fetch),
     ).rejects.toThrow(/timed out/)
+    expect(Date.now() - started).toBeLessThan(1400)
   })
 
   it('a response with no body is no content', async () => {

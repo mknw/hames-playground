@@ -35,6 +35,8 @@ import {
   DOCUMENT_CONVERT_CONFIG,
   DOCUMENT_INJECTION_DECISION,
   DocumentRefusedError,
+  IMAGE,
+  LINK,
   classifierFromDecide,
   findingsRecordFor,
   flattenDocument,
@@ -975,6 +977,29 @@ describe('#475 F1 [SD-2]: link flattening is linear on its own openers', () => {
     )
     expect(doc.markdown).toBe('a (x.example) [image] [b c (z.example)')
   })
+
+  /**
+   * Review round 2, edit 1: the bodies above never reach a TARGET class, and
+   * through flattenDocument `![a](` is dominated by the guard's own
+   * `exfil-auto-image` rule, so all four classes are timed directly.
+   * MUTATION: revert any one of the four classes → red.
+   */
+  const MiB = 1024 * 1024
+  it('#475 F1: each flattening class is linear on its own witness body', () => {
+    for (const unit of ['![', '[', '![a](', '[a](']) {
+      const s = unit.repeat(Math.ceil(MiB / unit.length)).slice(0, MiB)
+      for (const re of [IMAGE, LINK]) {
+        let best = Infinity // CPU time, minimum of 3 passes, as in injection-guard-redos.test.ts
+        for (let k = 0; k < 3; k++) {
+          const c = process.cpuUsage()
+          s.replace(re, '')
+          const d = process.cpuUsage(c)
+          best = Math.min(best, (d.user + d.system) / 1000)
+        }
+        expect(best, `${re.source} on ${unit}`).toBeLessThan(100)
+      }
+    }
+  })
 })
 
 describe('#475 F2: the package parts are capped before they are parsed', () => {
@@ -1047,6 +1072,55 @@ describe('#475 F2: the package parts are capped before they are parsed', () => {
         ),
       ),
     ).toBe('accepted')
+  })
+
+  const CT_NS = 'http://schemas.openxmlformats.org/package/2006/content-types'
+  const MAIN_OVERRIDE = `<Override PartName="/word/document.xml" ContentType="${MAIN_TYPES.docx}"/>`
+  const OFFICE_REL = (id: string) =>
+    `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>`
+  const typeCheck = (ct: string, rels: string) =>
+    refusal(
+      flattenDocument(
+        { bytes: docx(ct, rels), filename: 'a.docx', mimeType: DOCX_MIME },
+        { convert: neverConvert },
+      ),
+    )
+
+  /**
+   * Review round 2, edit 3: `kept.length < 2` is load-bearing — with `< 1` a
+   * second match is never collected and both "more than one" refusals are
+   * unreachable. MUTATION: `kept.length < 2` → `kept.length < 1` → red.
+   */
+  it('a [Content_Types].xml with two Overrides for /word/document.xml is refused', async () => {
+    const ct = `<Types xmlns="${CT_NS}">${MAIN_OVERRIDE}${MAIN_OVERRIDE}</Types>`
+    expect(await typeCheck(ct, small(RELS_HEAD, '</Relationships>'))).toBe('content-type')
+  })
+
+  it('a _rels/.rels with two officeDocument relationships is refused', async () => {
+    const rels =
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      `${OFFICE_REL('rId1')}${OFFICE_REL('rId2')}</Relationships>`
+    expect(await typeCheck(small(CT_HEAD, '</Types>'), rels)).toBe('content-type')
+  })
+
+  /**
+   * Review round 2, edit 4: the walk keeps the old code's semantics — only the
+   * root's DIRECT children count, and only under the right root.
+   * MUTATIONS: (a) `tag.depth === 1` → `tag.depth >= 1`; (b) set `rootMatches`
+   * from any element named `Types`, at any depth → red.
+   */
+  it("(a) the main part's Override nested inside a child of <Types> does not count", async () => {
+    const ct =
+      `<Types xmlns="${CT_NS}">` +
+      `<Default Extension="xml" ContentType="application/xml">${MAIN_OVERRIDE}</Default></Types>`
+    expect(await typeCheck(ct, small(RELS_HEAD, '</Relationships>'))).toBe('content-type')
+  })
+
+  it('(b) a correct <Types> nested under a foreign root does not count', async () => {
+    const ct =
+      `<R xmlns="urn:x"><Types xmlns="${CT_NS}"/>` +
+      `<Override xmlns="${CT_NS}" PartName="/word/document.xml" ContentType="${MAIN_TYPES.docx}"/></R>`
+    expect(await typeCheck(ct, small(RELS_HEAD, '</Relationships>'))).toBe('content-type')
   })
 })
 

@@ -95,31 +95,6 @@ export async function promoteAction(sessionId: string): Promise<void> {
 }
 
 /**
- * Approve a pending action.
- */
-export async function approveAction(sessionId: string): Promise<HarnessResultScoped<SessionData>> {
-  return resolveApproval(sessionId, true)
-}
-
-/**
- * Reject a pending action.
- */
-export async function rejectAction(
-  sessionId: string,
-  _reason?: string,
-): Promise<HarnessResultScoped<SessionData>> {
-  return resolveApproval(sessionId, false)
-}
-
-async function resolveApproval(
-  sessionId: string,
-  approved: boolean,
-): Promise<HarnessResultScoped<SessionData>> {
-  const user = await requireUser()
-  return runTurnAndPersist({ mode: 'approval', sessionId, userId: user.id, approved })
-}
-
-/**
  * Clear a session — deletes the row from Postgres and evicts the in-memory
  * pattern cache.
  */

@@ -10,18 +10,22 @@
  * payloads back into the prompt, the exact thing #83 added compaction to
  * prevent. Everything the entry points still differ on is now `mode`:
  *
- * | step                         | interactive | triggered | approval |
- * | ---------------------------- | ----------- | --------- | -------- |
- * | loads the stored context     | yes         | no        | required |
- * | continues it (vs. fresh run) | same agent  | never     | resumes  |
- * | pre-seeds a missing row      | yes (#105)  | no        | no       |
- * | `runWithRequestContext`      | yes         | yes       | yes      |
- * | …`attended` (global skills)  | yes         | no        | yes      |
- * | the run frame (all 5 slots)  | yes         | yes       | yes      |
- * | first-turn title generation  | yes         | no        | no       |
- * | `saveSession`                | yes         | yes       | yes      |
- * | `compactBulkData` + re-save  | yes         | yes       | yes      |
- * | flips a failed row to 'error'| yes         | yes       | yes      |
+ * | step                         | interactive | triggered |
+ * | ---------------------------- | ----------- | --------- |
+ * | loads the stored context     | yes         | no        |
+ * | continues it (vs. fresh run) | same agent  | never     |
+ * | pre-seeds a missing row      | yes (#105)  | no        |
+ * | `runWithRequestContext`      | yes         | yes       |
+ * | …`attended` (global skills)  | yes         | no        |
+ * | the run frame (all 5 slots)  | yes         | yes       |
+ * | first-turn title generation  | yes         | no        |
+ * | `saveSession`                | yes         | yes       |
+ * | `compactBulkData` + re-save  | yes         | yes       |
+ * | flips a failed row to 'error'| yes         | yes       |
+ *
+ * There is no approval mode any more (#433 S3). The boolean `resumeHarness`
+ * it drove is gone: an answer now binds to the request it was issued for, and
+ * resuming a paused run arrives as `mode: 'resume'` on the SSE route (#433 S7).
  *
  * A triggered run never loads: its row is a placeholder written by
  * `seedActionRow` before the HTTP response, and continuing that would replay
@@ -41,7 +45,6 @@ import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   harness,
   continueSession,
-  resumeHarness,
   createContext,
   serializeContext,
   compactBulkData,
@@ -121,7 +124,7 @@ interface TurnBase extends TurnHooks {
 }
 
 /**
- * One turn, in one of three shapes — the only axis the entry points differ on.
+ * One turn, in one of two shapes — the only axis the entry points differ on.
  */
 export type TurnRequest =
   /** A user-driven turn: continues the stored context when the agent matches,
@@ -137,9 +140,6 @@ export type TurnRequest =
       /** Seeded onto the fresh context — the run's `trigger` provenance. */
       data?: Partial<SessionData>
     })
-  /** Resume a context paused at an approval gate. The agent comes from the
-   *  stored row, so there is nothing to pass. */
-  | (TurnBase & { mode: 'approval'; approved: boolean })
 
 /** The harness call this turn makes, once its patterns are built. */
 type RunFn = (
@@ -187,8 +187,8 @@ export async function runTurnAndPersist(
   // `compactAndSave`). Before the widening that was bookkeeping; now it decides
   // which machine this turn's tool results are summarized on.
   //
-  // Resolved here rather than at each entry point so all three modes
-  // (interactive, triggered, approval) get it from one place, and a failure to
+  // Resolved here rather than at each entry point so both modes
+  // (interactive, triggered) get it from one place, and a failure to
   // read it falls back to the deployment default rather than failing the turn.
   //
   // Per conversation since the switch moved off the header: a turn's tier is
@@ -224,7 +224,7 @@ export async function runTurnAndPersist(
   // rather than a wrong number. Core allows this: `harness()` /
   // `continueSession` / `resumeHarness` JOIN an open frame instead of opening a
   // second one, provided they bring no slots of their own, which is why the
-  // three `run` closures in `planTurn` pass neither a frame nor an `onEvent`.
+  // `run` closures in `planTurn` pass neither a frame nor an `onEvent`.
   //
   // TWO of the frame's five slots are filled here, and they replace the two
   // scopes this function used to stack: `config` was `runWithSettings` and
@@ -257,12 +257,12 @@ export async function runTurnAndPersist(
   // is #242's half of this work.
   //
   // `attended` says whether a person is waiting on this turn, and it is a
-  // positive claim: only the two modes a user drives set it. A routine or a
+  // positive claim: only the mode a user drives sets it. A routine or a
   // `POST /api/agents/:id` run acts before anyone reads it, so it mounts the
   // owner's own skills and never another user's global ones (owner decision,
   // 2026-10-03: "Routines can mount private skills, not global ones for now").
   // A mode added later is unattended until someone decides otherwise.
-  const attended = req.mode === 'interactive' || req.mode === 'approval'
+  const attended = req.mode === 'interactive'
   return runWithRequestContext({ userId, sessionId, attended }, () =>
     withRunFrame(
       {
@@ -359,26 +359,6 @@ async function runOneTurn(
  * {@link runAndSave} once the patterns exist.
  */
 function planTurn(req: TurnRequest, loaded: LoadedSession | null): { agentId: string; run: RunFn } {
-  if (req.mode === 'approval') {
-    if (!loaded) throw new Error('No active session')
-    // Nothing to resume unless the row is actually parked at the gate. Checked
-    // here, before anything runs, so a stale approval (a double-click, a
-    // reloaded tab) is a clean rejection instead of a `resumeHarness` throw from
-    // inside the turn — which would flip a conversation that already completed
-    // to 'error'.
-    if (loaded.status !== 'paused') throw new Error('No pending approval')
-    // An approval resumes under whatever agent the row was written with.
-    const { agentId, serializedContext } = loaded
-    return {
-      agentId,
-      // No `onEvent` and no frame: `runTurnAndPersist` already opened the run
-      // frame with the listener in it, and a nested entry that brought slots of
-      // its own would be refused — deliberately, so an inner call can never
-      // replace the enclosing run's guard.
-      run: (patterns) => resumeHarness(serializedContext, patterns, req.approved),
-    }
-  }
-
   const { message } = req
   // The id the REQUEST names is mapped forward the way `loadSession` maps the
   // stored one. A tab loaded before an agent was renamed keeps sending the old
@@ -553,7 +533,7 @@ async function generateTitle(
 /**
  * Summarize this turn's tool results and re-persist them. Detached, and started
  * only after the answer has reached the caller (for the SSE route, after the
- * stream closed), so nobody waits on it — an approval that had to await this
+ * stream closed), so nobody waits on it — a turn that had to await this
  * would hold its response open for the whole describe call. Summaries live on the `tool_result` events and become
  * compact pointers on later turns (#83) — which is why a triggered run needs
  * this as much as an interactive one: a promoted action's next turn would

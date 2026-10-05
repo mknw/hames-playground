@@ -35,8 +35,8 @@ import { DEFAULT_SETTINGS } from '../../../lib/settings'
 
 /** Every run records the ambient scope it saw. */
 const seenScopes: Array<{ userId: string | null; sessionId: string | null }> = []
-/** …and whether that scope said a person is waiting on it (all three entry
- *  points record here, `resumeHarness` included). */
+/** …and whether that scope said a person is waiting on it (both harness entry
+ *  points the turn runner uses record here). */
 const seenAttended: boolean[] = []
 
 type Ctx = { id: string; events: unknown[] }
@@ -67,16 +67,6 @@ const continueSession = vi.fn(
     }
   },
 )
-const resumeHarness = vi.fn(async (_s: string, _p: unknown, approved: boolean) => {
-  seenAttended.push(isAttendedRequest())
-  return {
-    response: approved ? 'approved' : 'rejected',
-    serialized: `resumed:${approved}`,
-    data: {},
-    context: { id: 'ctx:resumed', events: [] } as Ctx,
-    status: 'running',
-  }
-})
 const createContext = vi.fn((message: string, _data: unknown, sessionId: string) => ({
   sessionId,
   events: [{ type: 'user_message', data: { content: message } }],
@@ -99,7 +89,6 @@ const createEvent = vi.fn((type: string, patternId: string, data: unknown) => ({
 vi.mock('@hames-ai/harness-patterns', () => ({
   harness,
   continueSession,
-  resumeHarness,
   createContext,
   serializeContext,
   compactBulkData,
@@ -871,94 +860,6 @@ describe('triggered turns', () => {
   })
 })
 
-describe('approval turns', () => {
-  function approval(over: Record<string, unknown> = {}) {
-    return {
-      mode: 'approval' as const,
-      sessionId: 'sess-7',
-      userId: 'user-1',
-      approved: true,
-      ...over,
-    }
-  }
-
-  it('resumes the stored context under the row’s own agent, then persists it', async () => {
-    loadSession.mockResolvedValue({ ...STORED, agentId: 'general', status: 'paused' })
-
-    const result = await runTurnAndPersist(approval())
-
-    expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-7', 'general')
-    expect(resumeHarness).toHaveBeenCalledWith('ctx-a', ['patterns:general'], true)
-    expect(result.response).toBe('approved')
-    expect(saveSession).toHaveBeenNthCalledWith(
-      1,
-      'sess-7',
-      'user-1',
-      'general',
-      'resumed:true',
-      'anthropic',
-    )
-  })
-
-  it('resumes as rejected', async () => {
-    loadSession.mockResolvedValue({ ...STORED, status: 'paused' })
-    const result = await runTurnAndPersist(approval({ approved: false }))
-    expect(resumeHarness).toHaveBeenCalledWith('ctx-a', ['patterns:search'], false)
-    expect(result.response).toBe('rejected')
-  })
-
-  // The resumed turn ran tools too, so its results need the same compaction the
-  // first half of the turn got.
-  it('summarizes and re-persists the resumed turn', async () => {
-    loadSession.mockResolvedValue({ ...STORED, status: 'paused' })
-
-    await runTurnAndPersist(approval())
-    await flush()
-
-    expect(compactBulkData).toHaveBeenCalledTimes(1)
-    expect(saveSession).toHaveBeenNthCalledWith(
-      2,
-      'sess-7',
-      'user-1',
-      'search',
-      JSON.stringify({ id: 'ctx:resumed', events: [] }),
-    )
-  })
-
-  it('never re-titles a conversation it resumes', async () => {
-    loadSession.mockResolvedValue({ ...STORED, status: 'paused' })
-    await runTurnAndPersist(approval())
-    expect(runFirstTurnTitleGen).not.toHaveBeenCalled()
-  })
-
-  // A stale approve (double-click, reloaded tab) must not reach the harness: a
-  // `Cannot resume` throw from inside the turn would flip a conversation that
-  // already completed to 'error'.
-  it('refuses to resume a row that is not paused, touching nothing', async () => {
-    loadSession.mockResolvedValue({ ...STORED, status: 'done' })
-
-    await expect(runTurnAndPersist(approval())).rejects.toThrow('No pending approval')
-
-    expect(resumeHarness).not.toHaveBeenCalled()
-    expect(getOrBuildPatterns).not.toHaveBeenCalled()
-    expect(dbSetConversationStatus).not.toHaveBeenCalled()
-  })
-
-  it('refuses a session the user does not own, touching nothing', async () => {
-    loadSession.mockResolvedValue(null)
-
-    await expect(runTurnAndPersist(approval({ sessionId: 'sess-9' }))).rejects.toThrow(
-      'No active session',
-    )
-
-    expect(resumeHarness).not.toHaveBeenCalled()
-    expect(getOrBuildPatterns).not.toHaveBeenCalled()
-    // Nothing ran, so nothing is mid-flight to flip or seed.
-    expect(dbSetConversationStatus).not.toHaveBeenCalled()
-    expect(dbSaveConversation).not.toHaveBeenCalled()
-  })
-})
-
 describe("the run frame's inference slot — the per-conversation switch, plumbed", () => {
   it('opens the frame with the tier the CONVERSATION is on', async () => {
     resolveConversationTier.mockResolvedValue('verda')
@@ -1000,15 +901,8 @@ describe("the run frame's inference slot — the per-conversation switch, plumbe
       agentId: 'search',
       message: 'go',
     })
-    loadSession.mockResolvedValue({ ...STORED, status: 'paused' })
-    await runTurnAndPersist({
-      mode: 'approval',
-      sessionId: 'sess-1',
-      userId: 'user-1',
-      approved: true,
-    })
 
-    expect(tierScopes.value).toEqual(['anthropic', 'anthropic', 'anthropic'])
+    expect(tierScopes.value).toEqual(['anthropic', 'anthropic'])
   })
 
   it('runs the turn anyway when the preference cannot be read', async () => {
@@ -1028,21 +922,10 @@ describe("the run frame's inference slot — the per-conversation switch, plumbe
 // run (agent-deps-seam.test.ts); this is where each entry point decides it.
 //
 // MUTATION: set `attended: true` for every mode in `runTurnAndPersist` → the
-// triggered case reddens; drop the flag altogether → the two attended ones do.
+// triggered case reddens; drop the flag altogether → the attended one does.
 describe('the request scope says whether anyone is waiting on the run', () => {
   it('marks an interactive turn attended', async () => {
     await runTurnAndPersist(interactive())
-    expect(seenAttended).toEqual([true])
-  })
-
-  it('marks an approval attended — a person pressed the button', async () => {
-    loadSession.mockResolvedValue({ ...STORED, status: 'paused' })
-    await runTurnAndPersist({
-      mode: 'approval',
-      sessionId: 'sess-1',
-      userId: 'user-1',
-      approved: true,
-    })
     expect(seenAttended).toEqual([true])
   })
 

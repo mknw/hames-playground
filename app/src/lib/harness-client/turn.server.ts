@@ -653,14 +653,14 @@ interface ExpiredRun {
 function resultFromSerialized(serialized: string): HarnessResultScoped<SessionData> {
   const ctx = deserializeContext<SessionData>(serialized)
   const response = (ctx.data as { response?: string } | undefined)?.response ?? ''
-  return {
-    response,
-    data: ctx.data,
-    status: ctx.status,
-    duration_ms: 0,
-    context: ctx,
-    serialized,
+  // `scopedResult` is the package's own construction site, but it re-serializes
+  // and stamps a wall-clock duration; this envelope keeps the stored blob
+  // verbatim, so it narrows by hand the way `scopedResult` does [F18].
+  const base = { response, data: ctx.data, duration_ms: 0, context: ctx, serialized }
+  if (ctx.status === 'paused') {
+    return { ...base, status: 'paused', pending: readHitl(ctx).pending }
   }
+  return { ...base, status: ctx.status }
 }
 
 /**

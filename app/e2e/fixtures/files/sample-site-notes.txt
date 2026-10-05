@@ -1,0 +1,2 @@
+Synthetic site notes for the app-path test suite.
+This file sits in a SharePoint library of the home tenancy and was last edited by a guest from outside it.

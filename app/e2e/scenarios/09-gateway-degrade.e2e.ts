@@ -30,16 +30,18 @@
  *     answers normally once the gateway is listening again, which is what
  *     separates "reports an outage" from "broke the agent".
  *
- * **Two agents, deliberately, because the tool list they are handed has two
- * different shapes** (F1 on #278). `search` reads `tools.neo4j ?? []`, and a
- * gateway namespace has no key at all under an outage, so its loop is handed
- * `[]`. `general` reads `tools.all` — and `listTools` degrades to the app-side
- * tools, so its loop is handed the NINE `graph_*` tools instead. That surface
- * is amputated, not empty, and while the guard opened with `tools.length > 0`
- * this suite's only agent was the one that happened to be covered: `general`
- * still answered a dead gateway with `E2E-FAKE-ANSWER: the graph reports 42
- * nodes.` on a `done` row. Driving both is what makes the coverage designed
- * rather than lucky.
+ * **Two agents, deliberately, because they read two different tool lists**
+ * (F1 on #278). `search` reads `tools.neo4j ?? []`, and a gateway namespace has
+ * no key at all under an outage, so its loop is handed `[]`. `general` reads
+ * `tools.all`, and `listTools` degrades to the app-side tools — which IN THIS
+ * LAYER are none: they are registered only by `src/middleware.ts`, which this
+ * suite never loads (since #225 L3), so `general` is handed `[]` too. In
+ * production it is handed the `graph_*` tools instead, a surface amputated
+ * rather than empty, and while the guard opened with `tools.length > 0`
+ * `general` answered a dead gateway with `E2E-FAKE-ANSWER: the graph reports 42
+ * nodes.` on a `done` row. That amputated shape is pinned in layer 1
+ * (`gateway-degrade.test.ts`); #476 restores it here, with
+ * `app.installGraphTools()`.
  *
  * HERMETIC ONLY. The gateway is faked in both modes, but taking it down is an
  * injected fault, and the live run exists to measure the inference route.
@@ -83,7 +85,7 @@ function admitsTheOutage(serializedContext: string, response: string | undefined
  */
 const AGENTS = [
   { id: 'search', surface: 'an empty namespace list (`tools.neo4j ?? []`)' },
-  { id: 'general', surface: 'a whole surface amputated to its app-side tools (`tools.all`)' },
+  { id: 'general', surface: 'the whole surface (`tools.all`), empty in this layer' },
 ] as const
 
 describe.runIf(IS_HERMETIC)('the tool surface collapses', () => {
@@ -146,13 +148,12 @@ describe.runIf(IS_HERMETIC)('the tool surface collapses', () => {
     ).toBe(true)
   })
 
-  it('refuses the general agent, whose surface was amputated rather than emptied', async () => {
-    // The reviewer's exact reproduction: `general` passes `tools.all` to both
-    // the planner and the executor, and under an outage `tools.all` is the nine
-    // app-side `graph_*` tools. Nothing about that list is empty, which is why
-    // a length check never fired — and the `graph_*` tools cannot answer a
-    // question about the Neo4j graph, so the plan was a plan for tools the loop
-    // did not have.
+  it('refuses the general agent too, which reads the whole surface', async () => {
+    // The reviewer's reproduction: `general` passes `tools.all` to both the
+    // planner and the executor. In production, under an outage, `tools.all` is
+    // the app-side `graph_*` tools, which is why a length check never fired. In
+    // this layer it is empty (see the header), so this case no longer drives the
+    // amputated shape: layer 1 pins that, and #476 restores it here.
     await app.fakeGateway.goDown()
     const sessionId = newSessionId('gateway-down-general-events')
 

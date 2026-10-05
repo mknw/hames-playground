@@ -1,0 +1,2 @@
+Synthetic notes attached to a message from outside the home tenancy.
+They were written for the app-path test suite.

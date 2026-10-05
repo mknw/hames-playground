@@ -74,7 +74,12 @@ describe('the limits are the spec §5.3 step 1 values', () => {
       maxRatio: 100,
       maxNameBytes: 512,
     })
-    expect(XML_LIMITS).toEqual({ maxDepth: 256, maxAttributes: 256, maxPartBytes: 20 * MiB })
+    expect(XML_LIMITS).toEqual({
+      maxDepth: 256,
+      maxAttributes: 256,
+      maxPartBytes: 20 * MiB,
+      maxTreeNodes: 650_000,
+    })
     expect(Object.isFrozen(ZIP_LIMITS)).toBe(true)
     expect(Object.isFrozen(XML_LIMITS)).toBe(true)
   })
@@ -723,6 +728,35 @@ describe('parseXml', () => {
   it('strips a byte-order mark', () => {
     expect(parseXml(new Uint8Array([0xef, 0xbb, 0xbf, ...enc.encode('<r/>')])).name).toBe('r')
   })
+
+  /**
+   * Amendment A1 (#433 S6): the disarm builds TREES of parts up to 20 MiB, and
+   * a part of tiny elements is millions of objects — about 140 bytes each,
+   * measured. So tree mode counts every node it builds — elements, attributes
+   * and text — and refuses past the budget, before the tree outgrows it.
+   * The validation walk (`readZip`) and `scanXml` build nothing and are not
+   * bounded by it. MUTATION: lift the budget → each refusal below turns red.
+   */
+  it(
+    'tree mode refuses a part over the node budget; the walks without a tree do not',
+    {
+      timeout: 30_000,
+    },
+    () => {
+      const n = XML_LIMITS.maxTreeNodes
+      // The root is one node; n - 1 children fit, n do not.
+      expect(refusalOf(() => parseXml('<r>' + '<a/>'.repeat(n - 1) + '</r>'))).toBe('accepted')
+      expect(refusalOf(() => parseXml('<r>' + '<a/>'.repeat(n) + '</r>'))).toBe('xml-nodes')
+      // Attributes count: half as many elements, each with one attribute.
+      expect(refusalOf(() => parseXml('<r>' + '<a b=""/>'.repeat(n / 2) + '</r>'))).toBe(
+        'xml-nodes',
+      )
+      // Text counts: comments split text into nodes without one element.
+      expect(refusalOf(() => parseXml('<r>' + 'x<!---->'.repeat(n) + '</r>'))).toBe('xml-nodes')
+      const big = '<r>' + '<a/>'.repeat(n) + '</r>'
+      expect(refusalOf(() => scanXml(big, () => {}))).toBe('accepted')
+    },
+  )
 })
 
 describe('scanXml (#475 F2: the type check builds no tree)', () => {

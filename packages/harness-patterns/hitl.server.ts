@@ -63,12 +63,19 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomUUID } from 'node:crypto'
 import { assertServerOnImport } from './assert.server'
-import { deserializeContext, generateId, mintHitlEvent, serializeContext } from './context.server'
+import {
+  deserializeContext,
+  generateId,
+  mintHitlEvent,
+  resolveConfig,
+  serializeContext,
+} from './context.server'
 import { redactReport, sanitizeUntrusted } from './injection-guard'
 import { emitLive } from './live-event-context.server'
 import { activeRunFrame } from './run-frame.server'
 import type {
   AssistantMessageEventData,
+  ConfiguredPattern,
   ContextEvent,
   EventView,
   HeldResult,
@@ -80,6 +87,9 @@ import type {
   HitlRequestEventData,
   HitlResponseEventData,
   HitlUnattended,
+  PatternConfig,
+  PatternScope,
+  ScopedPattern,
   ToolResultEventData,
   UnifiedContext,
 } from './types'
@@ -1141,4 +1151,146 @@ export function unattendedStopMessage(kind: string): string {
     `Stopped at the ${kind} check: there was no one to ask, and its rule for that case is ` +
     'to stop the run.'
   )
+}
+
+// ============================================================================
+// The gate patterns (#433, slice S4)
+// ============================================================================
+
+/** Configuration for {@link humanGate}. */
+export interface HumanGateConfig<
+  T extends Record<string, unknown>,
+  C extends string,
+> extends PatternConfig {
+  /** The request this gate raises, built from the view and the data the
+   *  pattern started from. Return null to pass through without asking —
+   *  how a gate decides there is nothing to decide. Thrown
+   *  {@link HitlRequestError}s are validation at raise, not runtime conditions. */
+  readonly request: (view: EventView, data: Readonly<T>) => HitlRequest<C> | null
+  /** What to do with a decision. Runs once per DECISION, not once per raise:
+   *  on the run that raised it (an unattended rule's choice), and again on the
+   *  re-entry after a resume, where the replayed answer is the person's. The
+   *  answer is the shape the record holds — the same fields a `hitl_response`
+   *  event carries, with no `principal` or `resolution` (those are the
+   *  host's, and a pattern never sees them). */
+  readonly onAnswer?: (answer: HitlResponseEventData, data: T) => T
+}
+
+/**
+ * The custom gate: a pattern that asks when its `request` says there is
+ * something to ask (#433 S4). This is the shape `confirm` presets; build one
+ * directly when the decision is not approve/reject — the provenance options,
+ * a memory proposal, anything with its own kind, options and rule.
+ *
+ * - `request(view, data)` returns null → the pattern passes through and asks
+ *   nothing.
+ * - `askHuman` answers (a replayed or unattended decision) → `onAnswer` runs,
+ *   and its return value becomes the pattern's data.
+ * - `askHuman` returns `pending` → the pattern returns unchanged, and the run
+ *   pauses at the boundary. On the resume that re-enters this pattern, the
+ *   gate replays the person's answer and `onAnswer` hears it.
+ *
+ * To READ a decision later instead of acting on it here, give the request an
+ * explicit `key` and call `answerOf(view, kind, key)`.
+ */
+export function humanGate<T extends Record<string, unknown>, C extends string = string>(
+  config: HumanGateConfig<T, C>,
+): ConfiguredPattern<T> {
+  const resolved = resolveConfig('humanGate', config)
+  const fn: ScopedPattern<T> = async (scope: PatternScope<T>, view: EventView) => {
+    const request = config.request(view, scope.data)
+    if (!request) return scope
+    const outcome = await askHuman(request)
+    if (outcome.status === 'pending' || !config.onAnswer) return scope
+    // The decision as the record holds it: the stored key is composed here for
+    // the same reason `askHuman` composes it, and the flags are the answer's.
+    const answer: HitlResponseEventData = {
+      v: 1,
+      requestId: outcome.requestId,
+      key: `${request.kind}:${request.key ?? defaultKey(request)}`,
+      kind: request.kind,
+      choice: outcome.choice,
+      ...(Object.keys(outcome.flags).length > 0 ? { flags: outcome.flags } : {}),
+      by: outcome.by,
+    }
+    scope.data = config.onAnswer(answer, scope.data)
+    return scope
+  }
+  return { name: 'humanGate', fn, config: resolved }
+}
+
+/** Configuration for {@link confirm}. */
+export interface ConfirmConfig<T extends Record<string, unknown>> extends PatternConfig {
+  /** The question, fixed or computed from the data (and the view). Consumer
+   *  text: never an attacker-chosen string [m7]. */
+  readonly question: string | ((data: Readonly<T>, view: EventView) => string)
+  /** Display facts, computed from the data. Untrusted; never rendered into an
+   *  LLM-facing view. */
+  readonly summary?: (data: Readonly<T>) => HitlRequest['summary']
+  /** The replay key. Give one when a later turn will read the decision with
+   *  `answerOf(view, 'confirm', key)` — the default is a content hash no
+   *  consumer can name. */
+  readonly key?: string
+  readonly approveLabel?: string
+  readonly rejectLabel?: string
+  /** What a rejection does. `'stop'` (default) ends the run — attended (the
+   *  resume records the stop) and unattended (the rule's pick stops it)
+   *  alike. `'continue'` lets the chain go on past the gate. */
+  readonly onReject?: 'stop' | 'continue'
+  /** What an unattended run does. Default `'apply-default'`: the rule picks
+   *  Reject. `'park'` waits for a person instead. */
+  readonly unattended?: 'apply-default' | 'park'
+}
+
+/**
+ * The one-call gate at a chain boundary (#433 S4; the common case of O5):
+ *
+ * ```typescript
+ * const agent = harness(planner, confirm({ question: (d) => `Run this plan? ${d.plan.summary}` }), executeLoop)
+ * ```
+ *
+ * Two options, in display order: **Approve** — never picked by the unattended
+ * rule, because nothing is approved without a person (P4) — and **Reject**,
+ * the default and the unattended choice. By default a rejection STOPS the run
+ * (`onReject: 'stop'`): attended, the resume records it and nothing is
+ * re-entered; unattended, the rule picks Reject and the run ends `done` at
+ * the boundary. `onReject: 'continue'` lets the chain run past the gate
+ * instead; read the decision with `answerOf(view, 'confirm', key)` — which
+ * needs an explicit `key` — or act on it with `onAnswer` by composing
+ * `humanGate` directly.
+ */
+export function confirm<T extends Record<string, unknown>>(
+  config: ConfirmConfig<T>,
+): ConfiguredPattern<T> {
+  const {
+    question,
+    summary,
+    key,
+    approveLabel,
+    rejectLabel,
+    onReject,
+    unattended,
+    ...patternConfig
+  } = config
+  const gate = humanGate<T, 'approve' | 'reject'>({
+    ...patternConfig,
+    request: (view, data) => ({
+      kind: 'confirm',
+      ...(key !== undefined ? { key } : {}),
+      question: typeof question === 'function' ? question(data, view) : question,
+      options: [
+        { id: 'approve', label: approveLabel ?? 'Approve' },
+        {
+          id: 'reject',
+          label: rejectLabel ?? 'Reject',
+          unattended: true,
+          ...(onReject !== 'continue' ? { stopsRun: true } : {}),
+        },
+      ],
+      defaultOption: 'reject',
+      ...(summary ? { summary: summary(data) } : {}),
+      ...(unattended !== undefined ? { unattended } : {}),
+    }),
+  })
+  return { ...gate, name: 'confirm' }
 }

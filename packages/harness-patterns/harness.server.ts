@@ -27,7 +27,7 @@ import {
   setError as setCtxError,
   generateId,
 } from './context.server'
-import { checkResume, recordAnswers, supersedeHitl } from './hitl.server'
+import { checkResume, readHitl, recordAnswers, supersedeHitl } from './hitl.server'
 import { withRunFrame, currentRunFrame, activeRunFrame, type RunFrame } from './run-frame.server'
 import { runtimeConfig } from './runtime-config.server'
 
@@ -189,12 +189,86 @@ function enterRun<T>(
   return withRunFrame(supplied, () => fn(onEvent ?? currentRunFrame()?.live?.listener))
 }
 
-/** Result from harness including serialized context */
-export interface HarnessResultScoped<T> extends HarnessResult<T> {
+/** Base fields shared by every status of {@link HarnessResultScoped}. */
+interface HarnessResultBase<T> extends Omit<HarnessResult<T>, 'status'> {
   /** Full UnifiedContext (can be serialized for session persistence) */
   context: UnifiedContext<T>
   /** Serialized context as JSON string */
   serialized: string
+}
+
+/**
+ * What an entry point returns — a union on status [F18]. When the run paused,
+ * `pending` is NON-OPTIONAL and lists every request the run waits on, so the
+ * consumer of a paused result never reaches for `!` and cannot read a pending
+ * list that is not there. Every other status carries no pending list at all:
+ * a done, running or error result has nothing waiting by construction.
+ *
+ * ```typescript
+ * const r = await agent(message)
+ * if (r.status === 'paused') return { ask: r.pending } // narrows; no `!`
+ * ```
+ */
+export type HarnessResultScoped<T> =
+  | (HarnessResultBase<T> & {
+      status: 'paused'
+      /** Every blocking request this run waits on, in raise order —
+       *  `readHitl(ctx).pending` of the returned context. */
+      pending: readonly HitlRequestEventData[]
+    })
+  | (HarnessResultBase<T> & { status: 'running' | 'done' | 'error' })
+
+/** Build the result union from what a turn produced. The one place that
+ *  decides which branch a status lands on, so all three entry points agree
+ *  about what a paused result carries [F18]. */
+function scopedResult<T extends HarnessData & Record<string, unknown>>(
+  ctx: UnifiedContext<T>,
+  settled: { readonly response: string; readonly status: CtxStatus },
+  startTime: number,
+): HarnessResultScoped<T> {
+  const base = {
+    response: settled.response,
+    data: ctx.data,
+    duration_ms: Date.now() - startTime,
+    context: ctx,
+    serialized: serializeContext(ctx),
+  }
+  if (settled.status === 'paused') {
+    return { ...base, status: 'paused', pending: readHitl(ctx).pending }
+  }
+  return { ...base, status: settled.status }
+}
+
+/**
+ * The runner `harness()` returns: the composed patterns are fixed at
+ * composition time, so resuming or continuing is a bound method, not a second
+ * call that has to be handed the same array again.
+ */
+export interface Harness<T extends HarnessData & Record<string, unknown>> {
+  (
+    input: string,
+    sessionId?: string,
+    initialData?: Partial<T>,
+    onEvent?: (event: ContextEvent) => void,
+    frame?: RunFrame,
+  ): Promise<HarnessResultScoped<T>>
+  /** Resume this agent's own paused run (#433 S3). The patterns are the ones
+   *  it was composed with — the chain the pause named (`resumeAt.names`) —
+   *  so the caller never holds the array, and a changed chain is refused
+   *  (`chain-changed`) exactly as for `resumeHarness`. */
+  resume(
+    serialized: string,
+    answers: HitlAnswers,
+    opts?: ResumeOptions,
+  ): Promise<HarnessResultScoped<T>>
+  /** Continue this agent's conversation with a new message, superseding
+   *  whatever it still waits on. See `continueSession`. */
+  continue(
+    serialized: string,
+    input: string,
+    onEvent?: (event: ContextEvent) => void,
+    frame?: RunFrame,
+  ): Promise<HarnessResultScoped<T>>
 }
 
 /**
@@ -220,17 +294,18 @@ export interface HarnessResultScoped<T> extends HarnessResult<T> {
  * const result = await agent('Show me all nodes')
  * // result.context contains full session state
  * // result.serialized can be stored for session persistence
+ * // result.status === 'paused' narrows the union and carries `pending`
  */
 export function harness<T extends HarnessData & Record<string, unknown>>(
   ...patterns: ConfiguredPattern<T>[]
-): (
-  input: string,
-  sessionId?: string,
-  initialData?: Partial<T>,
-  onEvent?: (event: ContextEvent) => void,
-  frame?: RunFrame,
-) => Promise<HarnessResultScoped<T>> {
-  return async (input, sessionId, initialData, onEvent, frame) =>
+): Harness<T> {
+  const run = async (
+    input: string,
+    sessionId?: string,
+    initialData?: Partial<T>,
+    onEvent?: (event: ContextEvent) => void,
+    frame?: RunFrame,
+  ): Promise<HarnessResultScoped<T>> =>
     enterRun(frame, onEvent, async (listener) => {
       const startTime = Date.now()
 
@@ -261,28 +336,28 @@ export function harness<T extends HarnessData & Record<string, unknown>>(
         // How this turn ended — one shared decision, see `settleTurn`.
         const settled = settleTurn(ctx, eventsBefore)
 
-        return {
-          response: settled.response,
-          data: ctx.data,
-          status: settled.status,
-          duration_ms: Date.now() - startTime,
-          context: ctx,
-          serialized: serializeContext(ctx),
-        }
+        return scopedResult(ctx, settled, startTime)
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error)
         setCtxError(ctx, msg, 'harness')
 
-        return {
-          response: `Error: ${msg}`,
-          data: ctx.data,
-          status: 'error' as CtxStatus,
-          duration_ms: Date.now() - startTime,
-          context: ctx,
-          serialized: serializeContext(ctx),
-        }
+        return scopedResult(ctx, { response: `Error: ${msg}`, status: 'error' }, startTime)
       }
     })
+
+  // The bound forms (#433 S4): the composed patterns are fixed here, so a
+  // resume or a continuation never has to be handed the array again — and a
+  // resume can be called only on the agent the pause belongs to.
+  return Object.assign(run, {
+    resume: (serialized: string, answers: HitlAnswers, opts: ResumeOptions = {}) =>
+      resumeHarness(serialized, patterns, answers, opts),
+    continue: (
+      serialized: string,
+      input: string,
+      onEvent?: (event: ContextEvent) => void,
+      frame?: RunFrame,
+    ) => continueSession(serialized, patterns, input, onEvent, frame),
+  })
 }
 
 /**
@@ -389,14 +464,7 @@ export async function resumeHarness<T extends HarnessData & Record<string, unkno
       ctx.status = 'done'
       ctx.data = { ...ctx.data, response: `Stopped at your request (${stop.request.kind}).` }
       const settled = settleTurn(ctx, eventsBefore)
-      return {
-        response: settled.response,
-        data: ctx.data,
-        status: settled.status,
-        duration_ms: Date.now() - startTime,
-        context: ctx,
-        serialized: serializeContext(ctx),
-      }
+      return scopedResult(ctx, settled, startTime)
     }
 
     ctx.status = 'running'
@@ -409,26 +477,12 @@ export async function resumeHarness<T extends HarnessData & Record<string, unkno
       // How this turn ended — one shared decision, see `settleTurn`.
       const settled = settleTurn(ctx, eventsBefore)
 
-      return {
-        response: settled.response,
-        data: ctx.data,
-        status: settled.status,
-        duration_ms: Date.now() - startTime,
-        context: ctx,
-        serialized: serializeContext(ctx),
-      }
+      return scopedResult(ctx, settled, startTime)
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
       setCtxError(ctx, msg, 'harness')
 
-      return {
-        response: `Error: ${msg}`,
-        data: ctx.data,
-        status: 'error' as CtxStatus,
-        duration_ms: Date.now() - startTime,
-        context: ctx,
-        serialized: serializeContext(ctx),
-      }
+      return scopedResult(ctx, { response: `Error: ${msg}`, status: 'error' }, startTime)
     }
   })
 }
@@ -507,26 +561,12 @@ export async function continueSession<T extends HarnessData & Record<string, unk
       // How this turn ended — one shared decision, see `settleTurn`.
       const settled = settleTurn(ctx, eventsBefore)
 
-      return {
-        response: settled.response,
-        data: ctx.data,
-        status: settled.status,
-        duration_ms: Date.now() - startTime,
-        context: ctx,
-        serialized: serializeContext(ctx),
-      }
+      return scopedResult(ctx, settled, startTime)
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
       setCtxError(ctx, msg, 'harness')
 
-      return {
-        response: `Error: ${msg}`,
-        data: ctx.data,
-        status: 'error' as CtxStatus,
-        duration_ms: Date.now() - startTime,
-        context: ctx,
-        serialized: serializeContext(ctx),
-      }
+      return scopedResult(ctx, { response: `Error: ${msg}`, status: 'error' }, startTime)
     }
   })
 }

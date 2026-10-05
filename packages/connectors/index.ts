@@ -21,7 +21,11 @@
  *   - `@hames-ai/connectors/app-tools/registry` — the generic in-process tool
  *     registry (`createAppToolRegistry`);
  *   - `@hames-ai/connectors/graph/graph-tools.server` —
- *     `registerGraphConnectorTools(deps)` and its REQUIRED supplier bag.
+ *     `registerGraphConnectorTools(deps)` and its REQUIRED supplier bag;
+ *   - `@hames-ai/connectors/document/ooxml-disarm.server` — `ooxmlDisarm`,
+ *     the `DocumentDisarm` core's `flattenDocument` takes: it rebuilds an
+ *     untrusted docx, docm, xlsx, xlsm, pptx or pptm from an allowlist of its
+ *     parts (#433 S6).
  *
  * The app that hosted these modules composes them in its
  * `app-tools/index.server.ts` composition root (which stays host-side): it

@@ -503,9 +503,9 @@ jobs:
       # Since #480 decision (b) the boot ALSO exercises BAML's native binding:
       # `src/middleware.ts` loads `@hames-ai/harness-baml/baml_client` at module
       # scope deliberately, so a broken binding throws before the process ever
-      # listens and this step's own loop times out and fails loudly here —
-      # the container never reaching `(healthy)` while BAML routes 500 is
-      # exactly the failure #469 was and the shape this decision closes.
+      # listens and this step's own loop times out and fails loudly here — a
+      # container reporting `(healthy)` while every BAML route answers 500 is
+      # exactly the failure #469 was, and the shape this decision closes.
       - name: Boot it and hit /api/health
         run: |
           docker run -d --name app-smoke -p 3444:3444 hames-app:ci

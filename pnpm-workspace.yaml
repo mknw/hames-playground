@@ -27,9 +27,11 @@ onlyBuiltDependencies:
 # the committed lockfile: on pnpm 10.28.1 the check runs during resolution
 # only, confirmed against github.com/pnpm/pnpm/issues/10438 (filed on
 # 10.27.0 — a version already present in the lockfile installs regardless of
-# its age). `trustLockfile`, which would re-check every lockfile entry on
-# install, ships in pnpm 11.3 — newer than the version this repo pins — so a
-# frozen install here is unaffected either way.
+# its age). pnpm 11.1.3 added a verification pass that re-applies
+# `minimumReleaseAge` to every lockfile entry on install; `trustLockfile`
+# (11.3.0) is its opt-out, not the check. While this repo pins 10.28.1,
+# frozen installs are unaffected — on pnpm >= 11.1.3 they would fail on any
+# lockfile entry younger than the cooldown.
 #
 # `minimumReleaseAgeExclude` takes package names, scope globs or an exact
 # `name@version`; our own packages are not on a registry today, but excluding
@@ -37,12 +39,14 @@ onlyBuiltDependencies:
 # release.
 #
 # To take an urgent security fix published inside the 3-day window: add the
-# package (or `name@version`) to the list below, or re-resolve once with
-# `pnpm install --config.minimum-release-age=0` and commit the result — the
-# flag is a one-shot override for that install, never a standing change here.
+# package (or `name@version`) to the list below, then run `pnpm update <pkg>`;
+# or run `pnpm update <pkg> --config.minimum-release-age=0` once and commit
+# the result — a plain `pnpm install` does not re-resolve a lockfile that
+# already satisfies the manifest, and the flag is a one-shot override, never a
+# standing change here.
 minimumReleaseAge: 4320
 minimumReleaseAgeExclude:
-  - '@hames-ai/*'
+  - "@hames-ai/*"
 
 # A normal ^-range: the cooldown above is what now guards a freshly published
 # version, so this no longer needs the hand-tightened `~4.63.6` O1 settled on

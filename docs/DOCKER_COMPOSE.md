@@ -93,16 +93,20 @@ sequentially, because `pnpm build`'s `&` backgrounded the generate step and the
 app's own `baml_client/` was gitignored so it was never
 already on disk here) → `runtime` (`node:22-bookworm-slim` + `.output`).
 Nitro's node-server output carries its own `node_modules`, so the runtime stage
-installs nothing — but its tracer only follows the `require`/`import` graph it
-can statically see, and it silently drops the two packages that matter most:
-node-pty's `build/Release/` (addon + spawn-helper, loaded by path) and
-`@boundaryml/baml`'s entry `index.js`. Both are therefore staged complete in
+installs nothing — but the two packages that matter most do not arrive there
+complete. Nitro's tracer only follows the `require`/`import` graph it can
+statically see, so it drops node-pty's `build/Release/` (addon + spawn-helper,
+loaded by path). `@boundaryml/baml` is a rollup external (`app/app.config.ts`,
+#469), so nitro neither bundles nor traces it. Before #469 nitro bundled it and
+imported its sibling files by the build stage's absolute path, and every route
+that loads BAML answered 500. Both packages are therefore staged complete in
 the `build` stage (dereferencing pnpm's symlinks into `.pnpm/`) and overlaid
-onto `.output/server/node_modules` in `runtime`, so what the image guarantees
-is that `require('node-pty')` and `require('@boundaryml/baml')` both work —
-asserted by CI, because `/api/health` touches neither and a broken image boots
-happily. `app/node_modules` is `.dockerignore`d because a host-built tree would
-be the wrong platform; the staged copies come from the in-image install.
+onto `.output/server/node_modules` in `runtime`. CI asserts what the image
+guarantees, because `/api/health` touches neither package and a broken image
+boots happily: `require('node-pty')` and `require('@boundaryml/baml')` both
+work, and `POST /api/agents/:id`, a route that loads BAML, reaches its handler.
+`app/node_modules` is `.dockerignore`d because a host-built tree would be the
+wrong platform; the staged copies come from the in-image install.
 
 **Endpoint rewrites** (`environment:` beats `env_file:`):
 

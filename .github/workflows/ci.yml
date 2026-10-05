@@ -523,6 +523,28 @@ jobs:
           echo "/api/stash -> ${code}"
           [ "$code" = "200" ] || { echo "::error::/api/stash returned ${code} — the workspace package did not load at runtime"; exit 1; }
 
+      # #469: a route that loads BAML must load. Nothing above can see how the
+      # BUNDLE imports BAML: /api/health and /api/stash never load it, and the
+      # require in "Assert the natives are self-contained" names the package by
+      # its bare name. So when nitro inlined baml and emitted imports of its
+      # siblings by the build stage's /ws path, every route that loads it (the
+      # chat stream, the server functions, this one) answered 500 and the job
+      # stayed green. POST /api/agents/:id loads BAML through its static
+      # imports (the agent registry), and for an unknown agent it answers 404
+      # before it reads auth, the body, a database or a model, so it needs no
+      # credentials. The body is asserted as well as the status, because an
+      # unmatched path is also a 404 and only the handler says "Unknown agent".
+      - name: Assert a BAML-loading route loads
+        run: |
+          body=$(curl -s -X POST -w '\n%{http_code}' localhost:3444/api/agents/ci-unknown-agent)
+          code=${body##*$'\n'}
+          body=${body%$'\n'*}
+          echo "POST /api/agents/ci-unknown-agent -> ${code} ${body}"
+          [ "$code" = "404" ] && grep -qF '"Unknown agent: ci-unknown-agent"' <<<"$body" || {
+            echo "::error::POST /api/agents/ci-unknown-agent answered ${code}, not the handler's 404: the route's module graph (BAML) did not load"
+            exit 1
+          }
+
       # #429 / #451: no server function runs from a GET. The guard keys on the
       # router (`refuseServerFunctionGet`), and only a real nitro router shows
       # which paths h3 hands to it: any whose percent-DECODED path starts with

@@ -8,6 +8,15 @@
  * — the one implementation shared with the interactive server actions and the
  * triggered runner (#226 C5). This route is only the wire: it authenticates,
  * hands the turn its hooks, and turns each of them into an SSE frame.
+ *
+ * Two modes (#433 S7): the default `interactive` turn (a message), and a
+ * `resume` — a paused run continued with the answers the answer RPC
+ * (`lib/hitl/actions.server.ts`) already recorded. The resume carries no
+ * answers on the wire: they are read from `hitl_requests` against the claimed
+ * blob's `readHitl().pending`, which is what binds an answer to the pause it
+ * was issued for (P1). A resume POST takes the same-origin check every other
+ * state-changing request takes (#467's middleware — nothing here needs its
+ * own), and its refusals arrive as `error` frames with the refusal's message.
  */
 import type { APIEvent } from '@solidjs/start/server'
 import { runTurnAndPersist } from '../../lib/harness-client/turn.server'
@@ -26,10 +35,11 @@ async function requireUserId(): Promise<string> {
 
 export async function POST(event: APIEvent) {
   const body = await event.request.json()
-  const { sessionId, message, agentId, settings } = body as {
+  const { sessionId, message, agentId, mode, settings } = body as {
     sessionId: string
-    message: string
+    message?: string
     agentId?: string
+    mode?: string
     settings?: unknown
   }
   // `settings` is request-body data, and every pattern reads it at execution
@@ -39,11 +49,25 @@ export async function POST(event: APIEvent) {
   // clock) discarded outright as host policy.
   const safeSettings = sanitizeHarnessSettings(settings)
 
-  if (!sessionId || !message) {
-    return new Response(JSON.stringify({ error: 'sessionId and message are required' }), {
+  if (mode !== undefined && mode !== 'interactive' && mode !== 'resume') {
+    return new Response(JSON.stringify({ error: 'mode must be interactive or resume' }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' },
     })
+  }
+  // A resume continues a paused run: it takes no message and no agent — the
+  // run to continue is the stored row's.
+  const resuming = mode === 'resume'
+  if (!sessionId || (!resuming && !message)) {
+    return new Response(
+      JSON.stringify({
+        error: resuming ? 'sessionId is required' : 'sessionId and message are required',
+      }),
+      {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      },
+    )
   }
 
   // This route resolves the user itself: `runTurnAndPersist` takes a `userId`
@@ -81,14 +105,27 @@ export async function POST(event: APIEvent) {
       // SSE_KEEPALIVE_MS. Cleared in the `finally`, so a turn that throws
       // cannot leave a timer writing into a closed stream.
       const keepalive = setInterval(() => send(SSE_KEEPALIVE_FRAME), SSE_KEEPALIVE_MS)
+      // The two modes share every hook — the wire is the same wire (#47's
+      // envelope, the warming notice, the done frame); only what the turn
+      // runs differs.
+      const turnRequest = resuming
+        ? {
+            mode: 'resume' as const,
+            sessionId,
+            userId,
+            settings: safeSettings,
+          }
+        : {
+            mode: 'interactive' as const,
+            sessionId,
+            userId,
+            agentId: resolvedAgentId,
+            message: message as string,
+            settings: safeSettings,
+          }
       try {
         await runTurnAndPersist({
-          mode: 'interactive',
-          sessionId,
-          userId,
-          agentId: resolvedAgentId,
-          message,
-          settings: safeSettings,
+          ...turnRequest,
 
           // `sessionId` rides on every envelope so the client can route the
           // event to the right per-session progress controller (#47). Events

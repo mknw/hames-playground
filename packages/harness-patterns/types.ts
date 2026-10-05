@@ -1506,6 +1506,57 @@ export interface HitlResponseEventData {
 }
 
 // ============================================================================
+// Human in the loop (#433): asking, from inside a run
+// ============================================================================
+
+/** What a consumer asks: the input to `askHuman` (hitl.server.ts). Validated
+ *  when it is raised — an invalid request throws `HitlRequestError`, because
+ *  it is a wiring bug and never a runtime condition. */
+export interface HitlRequest<C extends string = string> {
+  /** Opaque to core: 'provenance', 'memory.confirm', 'confirm', … It must not
+   *  contain ':', so the stored `${kind}:${key}` form is never ambiguous. */
+  readonly kind: string
+  /** Consumer text. Never an attacker-chosen string [m7]. */
+  readonly question: string
+  /** At least two, with unique ids. Array order IS display order. */
+  readonly options: readonly HitlOption<C>[]
+  /** Must name an option that exists and is available. */
+  readonly defaultOption: C
+  /** Replay identity within a run. It must cover everything the decision
+   *  authorizes [F8]. Default: the sha256 of the question, the option-id set
+   *  and the summary. Always stored as `${kind}:${key}`. */
+  readonly key?: string
+  /** Display only, and untrusted: never rendered into an LLM-facing view. */
+  readonly summary?: Readonly<Record<string, string | number | boolean | null>>
+  /** A handle into a host store; the payload itself never rides an event. */
+  readonly payloadRef?: string
+  /** What happens when nobody is there to ask. Default `'apply-default'`. */
+  readonly unattended?: HitlUnattended
+  readonly expiresInMs?: number
+}
+
+/** What `askHuman` tells its caller. `pending`: the run stops at the next
+ *  boundary and a gated executor returns `held(outcome)` meanwhile. */
+export type HitlOutcome<C extends string = string> =
+  | {
+      readonly status: 'answered'
+      readonly requestId: string
+      /** null when the unattended rule found nothing it may pick, and stopped. */
+      readonly choice: C | null
+      readonly flags: Readonly<Record<string, boolean>>
+      readonly by: HitlDecidedBy
+    }
+  | { readonly status: 'pending'; readonly requestId: string }
+
+/** What a gated tool executor returns while the run waits: the placeholder,
+ *  never the content. A resume substitutes the resolution for it (#433 S3). */
+export interface HeldResult {
+  readonly held: true
+  readonly requestId: string
+  readonly note: string
+}
+
+// ============================================================================
 // LLM Call Observability
 // ============================================================================
 

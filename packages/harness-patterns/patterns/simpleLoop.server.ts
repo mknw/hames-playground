@@ -33,6 +33,7 @@ import { runBatch, combineOutcomes } from '../parallel-tools.server'
 import type { SubCall } from '../parallel-tools.server'
 import { getErrorHint, budgetHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
+import { hitlPending } from '../hitl.server'
 import { omitResultFields } from '../content-transforms'
 import { resolveTurnBudget, runtimeConfig } from '../runtime-config.server'
 import { activeTransports } from '../tool-transport.server'
@@ -786,6 +787,11 @@ export function simpleLoop<T extends SimpleLoopData>(
             ),
           )
 
+          // The stop check after a batch (#433): a call in it is waiting for a
+          // person. The held placeholders are tracked above, so a resume can
+          // substitute them; no error is recorded, because nothing failed.
+          if (hitlPending()) return scope
+
           // Controller-facing combined map: per-tool resultOmit projection and
           // per-call truncation (a batch shares ONE turn's context budget —
           // each call gets an equal slice, floor 500 chars), then a whole-map
@@ -1023,6 +1029,12 @@ export function simpleLoop<T extends SimpleLoopData>(
           } as ToolResultEventData,
           resolved.trackHistory,
         )
+
+        // The stop check after a single call (#433): the call is waiting for a
+        // person, and its held placeholder is tracked above. Stop with NO error
+        // event — unlike the failure paths below, nothing failed, and the
+        // budget was not exhausted either.
+        if (hitlPending()) return scope
 
         // Record completed turn for LoopController history.
         // `resultOmit` projects the CONTROLLER's view only — this sits after the

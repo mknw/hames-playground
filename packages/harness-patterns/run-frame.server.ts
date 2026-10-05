@@ -109,6 +109,12 @@ export interface RunFrame {
   live?: LiveEventListener
   /** Which tier this run's model calls take. */
   inference?: InferenceSlot
+  /** Whether a person is there to answer `askHuman` (#433). Supplied by the
+   *  host's amend around its MAIN run only, never below it — a sidecar (a title
+   *  agent, a detached compaction) has none, so it can never pause the user's
+   *  turn. `harness()` and its two siblings default it to `{ attended: true }`
+   *  when they OPEN the frame, and only then. */
+  hitl?: { readonly attended: boolean }
 }
 
 /** The live slot as the emitters see it: the listener plus the per-run
@@ -130,6 +136,11 @@ export interface ActiveRunFrame {
   readonly config: HarnessRuntimeConfig
   readonly live?: LiveEventSlot
   readonly inference?: InferenceSlot
+  /** Frozen, and nothing but `attended` (#477 F1). The run's HITL bookkeeping
+   *  is not here: it is in a store of its own that the owning `runChain`
+   *  opens (`hitl.server.ts`), so nothing that can read the frame can write
+   *  the record or suppress a pause. */
+  readonly hitl?: { readonly attended: boolean }
 }
 
 const NO_TRANSPORTS: readonly ToolTransport[] = Object.freeze([])
@@ -162,6 +173,12 @@ function suppliedSlots(frame: RunFrame): string[] {
   return (Object.keys(frame) as (keyof RunFrame)[]).filter((k) => frame[k] !== undefined)
 }
 
+/** A fresh hitl slot: frozen, with `attended` as its only key. `attended` is a
+ *  POSITIVE claim: only `true` makes a person the one who decides. */
+function hitlSlot(supplied: { readonly attended: boolean }): { readonly attended: boolean } {
+  return Object.freeze({ attended: supplied.attended === true })
+}
+
 function build(frame: RunFrame): ActiveRunFrame {
   return {
     guard: frame.guard,
@@ -171,6 +188,7 @@ function build(frame: RunFrame): ActiveRunFrame {
       ? { listener: frame.live, emittedIds: new Set<string>(), enabled: false }
       : undefined,
     inference: frame.inference,
+    hitl: frame.hitl ? hitlSlot(frame.hitl) : undefined,
   }
 }
 
@@ -230,6 +248,14 @@ export function withRunFrame<T>(frame: RunFrame, fn: () => Promise<T>): Promise<
  *     like transports: the two rules are deliberately opposite, a nested guard
  *     being a second reviewer of the same content where a nested sandbox is a
  *     different machine.
+ *   - `hitl` passes BY REFERENCE (#433, F7). The slot is the run's, not the
+ *     subtree's: `withInjectionGuard` and `withSandbox` amend the frame around
+ *     the very patterns whose tool executors call `askHuman`, so a slot
+ *     dropped here would leave every guarded or sandboxed gate unable to ask.
+ *     A partial may SUPPLY one only where the frame has none — the host's
+ *     amend around its main run — and is refused below an open one. The slot
+ *     is a frozen `{ attended }` and nothing else: the run's bookkeeping is in
+ *     a store of its own (`hitl.server.ts`, #477 F1), opened per run.
  *   - everything else REPLACES for the duration.
  *
  * Refuses outside a frame, by way of {@link activeRunFrame}: something that
@@ -242,6 +268,14 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
   } catch (err) {
     return Promise.reject(err instanceof Error ? err : new Error(String(err)))
   }
+  if (partial.hitl && open.hitl) {
+    return Promise.reject(
+      new Error(
+        'amendRunFrame: this run already carries a hitl slot. Only the host supplies it, once, ' +
+          'around its main run; below that the slot passes by reference (#433).',
+      ),
+    )
+  }
   const amended: ActiveRunFrame = {
     guard: partial.guard ?? open.guard,
     transports: partial.transports
@@ -252,6 +286,7 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
       ? { listener: partial.live, emittedIds: new Set<string>(), enabled: false }
       : open.live,
     inference: partial.inference ?? open.inference,
+    hitl: partial.hitl ? hitlSlot(partial.hitl) : open.hitl,
   }
   return store.run(amended, fn)
 }

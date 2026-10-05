@@ -177,6 +177,12 @@ function enterRun<T>(
     return withRunFrame({}, () => fn(currentRunFrame()?.live?.listener))
   }
   const supplied: RunFrame = { ...(frame ?? {}), ...(onEvent ? { live: onEvent } : {}) }
+  // The hitl slot's default, applied HERE and only when this call OPENS the
+  // frame (#433, F7): a package consumer calling `harness(...)(input)` gets a
+  // gate that asks, with nothing to implement. A JOINED frame keeps whatever
+  // its host put there — a host that opens its own frame supplies the slot
+  // around its main run, so its sidecars never get one by inheritance.
+  if (!currentRunFrame() && !supplied.hitl) supplied.hitl = { attended: true }
   return withRunFrame(supplied, () => fn(onEvent ?? currentRunFrame()?.live?.listener))
 }
 

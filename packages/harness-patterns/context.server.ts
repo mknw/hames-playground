@@ -169,24 +169,25 @@ export function trackEvent(
 // `createEvent` / `trackEvent`, and pushing onto `scope.events` (GUIDE §1),
 // which `commitEvents` and `chain()` then merge — must not be able to write
 // one. The first two refuse both types outright. The second two cannot refuse
-// what is already in an array, so they keep only the HITL events core itself
-// created: each is minted into the module-private set below, and anything
-// else of those two types is dropped, with a warning.
+// what is already in an array, so they drop every HITL event they find, with a
+// warning.
 //
-// Identity, not content, is what the set records, and it is per process: a
-// context that went through `serializeContext` comes back as plain objects.
-// That is deliberate. `readHitl` never consults the set — events already in a
-// stored blob are not re-filtered, because the blob is server-held state the
-// host owns (spec #433 §2, P1a). The set guards the in-run write paths only.
+// EVERY one, not only the ones core did not create (#433 S2, the #472
+// review's ruling 4). No legitimate HITL event travels through a scope: what
+// `askHuman` raises goes into the run frame's `hitl` slot, and the `runChain`
+// that owns the slot commits it straight into `ctx.events`; the resume-time
+// writers append to the context directly. S1 kept a module-private set of
+// "minted" events and let those through, which was per loaded copy — on a
+// tarball install with two resolved copies, one copy's request was "forged"
+// to the other's commit and dropped — and which a deep import of the minting
+// helper could join. With nothing legitimate left on the path, the set is
+// gone and the rule is a type check. `readHitl` never consulted it either:
+// events already in a stored blob are server-held state (spec #433 §2, P1a).
 
 const HITL_EVENT_TYPES: ReadonlySet<EventType> = new Set<EventType>([
   'hitl_request',
   'hitl_response',
 ])
-
-/** Every HITL event core created in this process. Module-private: the only
- *  way in is {@link mintHitlEvent}. */
-const mintedHitlEvents = new WeakSet<ContextEvent>()
 
 function refuseHitl(type: EventType, via: string): void {
   if (HITL_EVENT_TYPES.has(type)) {
@@ -195,11 +196,12 @@ function refuseHitl(type: EventType, via: string): void {
 }
 
 /**
- * Create a HITL event and record it as core's own.
+ * Create a HITL event: a deep-frozen copy of `data`.
  *
- * @internal Core's HITL writers only. It is not in the package barrel: a
- * pattern that called it would be forging the record a resume is checked
- * against, which is exactly what {@link createEvent}'s refusal stops.
+ * @internal Core's HITL writers only, which put what it returns straight into
+ * the context or the run frame's `hitl` slot. It is not in the package barrel,
+ * and what it builds cannot be smuggled in through a scope: `commitEvents` and
+ * `chain()` drop every HITL event they meet.
  */
 export function mintHitlEvent(
   type: 'hitl_request',
@@ -217,19 +219,17 @@ export function mintHitlEvent(
   data: HitlRequestEventData | HitlResponseEventData,
 ): ContextEvent {
   // A deep-frozen COPY (#433, F1). Frozen, so a pattern holding the event —
-  // through a view, after the commit — cannot rewrite the decision in place;
-  // the set below records identity, not content. A copy, so the caller's own
+  // through a view, after the commit — cannot rewrite the decision in place.
+  // A copy, so the caller's own
   // objects (an options constant shared by every request) are not frozen with
   // it, and so the request keeps the "frozen copy" of its options the spec asks for.
-  const event = deepFreeze({
+  return deepFreeze({
     id: generateId('ev'),
     type,
     ts: Date.now(),
     patternId,
     data: structuredClone(data),
   })
-  mintedHitlEvents.add(event)
-  return event
 }
 
 /** `Object.freeze`, recursively, over plain objects and arrays — in place. A
@@ -248,18 +248,19 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null
 }
 
-/** `events` without any `hitl_*` event core did not mint. Every other event
- *  passes untouched, and the same array comes back when nothing is dropped. */
-export function dropUnmintedHitl(events: ContextEvent[]): ContextEvent[] {
-  const forged = events.filter((e) => HITL_EVENT_TYPES.has(e.type) && !mintedHitlEvents.has(e))
-  if (forged.length === 0) return events
-  for (const e of forged) {
+/** `events` without any `hitl_*` event: none belongs on a scope (see above).
+ *  Every other event passes untouched, and the same array comes back when
+ *  nothing is dropped. Each drop is logged, so a forged one is not silent. */
+export function dropHitl(events: ContextEvent[]): ContextEvent[] {
+  const dropped = events.filter((e) => HITL_EVENT_TYPES.has(e.type))
+  if (dropped.length === 0) return events
+  for (const e of dropped) {
     console.warn(
-      `[harness-patterns] dropped a ${e.type} event from '${e.patternId}' that core did not ` +
-        'write: only core writes HITL events (#433).',
+      `[harness-patterns] dropped a ${e.type} event from '${e.patternId}' on a scope: only ` +
+        'core writes HITL events, straight into the context (#433).',
     )
   }
-  return events.filter((e) => !forged.includes(e))
+  return events.filter((e) => !HITL_EVENT_TYPES.has(e.type))
 }
 
 // ============================================================================
@@ -280,9 +281,11 @@ export function dropUnmintedHitl(events: ContextEvent[]): ContextEvent[] {
  *  Includes 'loop_recovery' for the same reason: when a controller's answer
  *  would not parse, it is the only event carrying what the model said, and a
  *  loop that then fails must not drop the record of how it got there (#437).
- *  Includes 'hitl_request' and 'hitl_response' because they ARE the state a
- *  resume derives from (#433): a pattern that asked a person and then failed
- *  must not lose the record of the question, nor of the answer. */
+ *  The two `hitl_*` types are NOT here, although they are always committed
+ *  (#433): they never reach a strategy at all. The owning `runChain` commits
+ *  them from the run frame's slot straight into the context, after every
+ *  pattern including one that threw, and a scope that carries one has it
+ *  dropped before any strategy applies. An entry here would be unreachable. */
 const ALWAYS_COMMIT_TYPES: Set<EventType> = new Set([
   'pattern_enter',
   'pattern_exit',
@@ -290,21 +293,19 @@ const ALWAYS_COMMIT_TYPES: Set<EventType> = new Set([
   'content_sanitized',
   'warning',
   'loop_recovery',
-  'hitl_request',
-  'hitl_response',
 ])
 
 /** Commit scope events to context based on strategy.
  *  Preserves original event order — lifecycle events (pattern_enter/exit) are
  *  always committed regardless of strategy, interleaved with content events
- *  in their original position. A `hitl_*` event core did not mint is never
+ *  in their original position. A `hitl_*` event on a scope is never
  *  committed, under any strategy (#433, F6). */
 export function commitEvents<T>(
   ctx: UnifiedContext<T>,
   scope: PatternScope<unknown>,
   strategy: CommitStrategy,
 ): void {
-  const events = dropUnmintedHitl(scope.events)
+  const events = dropHitl(scope.events)
   switch (strategy) {
     case 'always':
       // All events in original order

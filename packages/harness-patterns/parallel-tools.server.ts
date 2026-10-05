@@ -22,6 +22,7 @@
  */
 
 import { assertServerOnImport } from './assert.server'
+import { hitlPending } from './hitl.server'
 import { MAX_PARALLEL_TOOL_CALLS } from './types'
 import type { MultiCallMode } from './types'
 
@@ -111,21 +112,28 @@ export async function runBatch(calls: SubCall[], mode: MultiCallMode): Promise<S
     return outcomes
   }
 
-  // Serial modes: in-order, stop on first failure, mark the rest skipped.
+  // Serial modes: in-order, stop on first failure, mark the rest skipped. The
+  // same stop for a call that is waiting for a person (#433): a later call in
+  // an effect-chain must not run past a decision nobody has made yet.
   let failedAt: number | null = null
+  let waitingAt: number | null = null
   for (let i = 0; i < calls.length; i++) {
-    if (failedAt !== null) {
+    const stoppedAt = failedAt ?? waitingAt
+    if (stoppedAt !== null) {
+      const why =
+        failedAt !== null ? 'failed earlier in this batch' : "is waiting for a person's decision"
       outcomes[i] = {
         index: i + 1,
         tool: calls[i].tool,
         success: false,
         skipped: true,
-        error: `skipped: call ${failedAt} (${calls[failedAt - 1].tool}) failed earlier in this batch`,
+        error: `skipped: call ${stoppedAt} (${calls[stoppedAt - 1].tool}) ${why}`,
       }
       continue
     }
     outcomes[i] = await runOne(calls[i], i)
     if (!outcomes[i].success) failedAt = i + 1
+    else if (hitlPending()) waitingAt = i + 1
   }
   return outcomes
 }

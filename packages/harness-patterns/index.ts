@@ -84,6 +84,9 @@ export type {
   HitlRequestEventData,
   HitlDecidedBy,
   HitlResponseEventData,
+  HitlRequest,
+  HitlOutcome,
+  HeldResult,
 
   // LLM Observability
   LLMCallData,
@@ -135,7 +138,7 @@ export {
 export { registerTransport, activeTransports, type ToolTransport } from './tool-transport.server'
 
 // ============================================================================
-// The run frame — one ambient scope per run, holding all five slots
+// The run frame — one ambient scope per run, holding every slot a run needs
 // ============================================================================
 //
 // A consumer using the harness entry points never calls any of this: they open
@@ -191,13 +194,27 @@ export {
 // Human in the loop (#433)
 // ============================================================================
 //
-// The two `hitl_*` events are written by core only; these read them.
+// The two `hitl_*` events are written by core only. `askHuman` is how a run
+// asks (from a pattern body or a tool executor); `held` is what a gated
+// executor returns while it waits; `hitlPending` is the stop check a custom
+// loop makes between steps; `resolveUnattended` is the rule applied when
+// nobody is there. `readHitl` and `answerOf` read the events.
 // `answerOf(view, kind, key)` takes the key the consumer gave the request and
 // composes the stored `${kind}:${key}` form itself, so a request looked up
-// later needs an explicit key. The minting helper is deliberately NOT exported
-// here — see `context.server.ts`.
+// later needs an explicit key. The minting helper and the owning chain's
+// slot helpers are deliberately NOT exported here.
 
-export { readHitl, answerOf, type HitlState } from './hitl.server'
+export {
+  askHuman,
+  held,
+  hitlPending,
+  resolveUnattended,
+  HitlRequestError,
+  HELD_NOTE,
+  readHitl,
+  answerOf,
+  type HitlState,
+} from './hitl.server'
 
 // ============================================================================
 // Patterns

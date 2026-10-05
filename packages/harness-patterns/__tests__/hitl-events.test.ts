@@ -11,10 +11,13 @@
  *   H2  a legacy `approval_*` event is never an answer and never a request.
  *   H3  nothing a request or an answer carries reaches an LLM-facing view;
  *       neither does a legacy `approval_*` payload [F9].
- *   H4  `hitl_*` survive every commit strategy (`ALWAYS_COMMIT_TYPES`).
+ *   H4  `hitl_*` survive every commit strategy. Since S2 they never meet one:
+ *       the owning `runChain` commits them from the run frame's slot straight
+ *       into the context (hitl-raise-pause.test.ts has the rest of S2).
  *   H5  only core writes them [F6]: `createEvent` / `trackEvent` refuse both
- *       types, and `commitEvents` and `chain()` drop any `hitl_*` event core
- *       did not mint. Since the #472 review (F1), the view is no write path
+ *       types, and `commitEvents` and `chain()` drop EVERY `hitl_*` event a
+ *       scope carries (S2 retired S1's minted set; the #472 review's ruling
+ *       4). Since the #472 review (F1), the view is no write path
  *       either: `get()` never returns the live log, and HITL events are
  *       deep-frozen at mint and on deserialize, so a recorded decision cannot
  *       be rewritten in place (pins P-a, P-b, P-e).
@@ -25,7 +28,6 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  commitEvents,
   createContext,
   createEvent,
   createScope,
@@ -34,14 +36,16 @@ import {
   serializeContext,
   trackEvent,
 } from '../context.server'
-import { answerOf, hitlReplayKey, readHitl } from '../hitl.server'
+import { answerOf, askHuman, hitlReplayKey, readHitl } from '../hitl.server'
 import { chain, configurePattern, runChain } from '../patterns/chain.server'
 import { createEventView } from '../patterns/event-view.server'
 import { withRunFrame } from '../run-frame.server'
 import type {
   ContextEvent,
+  CommitStrategy,
   EventType,
   HitlOption,
+  HitlRequest,
   HitlRequestEventData,
   HitlResponseEventData,
   UnifiedContext,
@@ -495,28 +499,46 @@ describe('H3 · no HITL payload reaches an LLM-facing view [P3, F9]', () => {
 // ============================================================================
 
 describe('H4 · hitl_* survive every commit strategy', () => {
-  // MUTATION: drop both types from ALWAYS_COMMIT_TYPES → all three red.
-  for (const [strategy, kept] of [
-    ['on-success', ['hitl_request', 'hitl_response']],
-    ['never', ['hitl_request', 'hitl_response']],
-    ['last', ['hitl_request', 'hitl_response', 'tool_result']],
-  ] as const) {
-    it(`survives '${strategy}'${strategy === 'on-success' ? ' after an error' : ''}`, () => {
-      const ctx = createContext('write X')
-      // Under 'on-success' only the always-committed types land once the run
-      // has failed — the case that would otherwise lose the record of a question.
-      ctx.status = 'error'
-      const scope = createScope('gate', {})
-      scope.events.push(
-        ev('tool_call', { tool: 't', args: {} }),
-        mintHitlEvent('hitl_request', 'gate', request()),
-        mintHitlEvent('hitl_response', 'gate', response()),
-        ev('tool_result', { tool: 't', result: 'ok', success: true }),
-      )
-      commitEvents(ctx, scope, strategy)
-      expect(ctx.events.slice(1).map((e) => e.type)).toEqual(kept)
-      expect(readHitl(ctx).answers.size).toBe(1)
-    })
+  /** What the gate asks: the confirm shape, which the unattended rule answers
+   *  `reject` — so one ask records a request AND a response. */
+  const ask: HitlRequest = {
+    kind: 'confirm',
+    key: 'plan',
+    question: 'Run this plan?',
+    options: OPTIONS,
+    defaultOption: 'reject',
+  }
+
+  // Since S2 no strategy decides it: `askHuman` raises into the run frame's
+  // slot, and the owning runChain commits the slot straight into ctx.events
+  // after every pattern, a thrown one included. MUTATION: commit the buffer
+  // through the pattern's scope instead (push it onto `result.events` before
+  // `commitEvents`) → the scope filter drops both → every case red.
+  // MUTATION: skip the buffer commit when the pattern threw → the four
+  // `throws` cases red.
+  for (const strategy of ['on-success', 'never', 'last', 'always'] satisfies CommitStrategy[]) {
+    for (const throws of [false, true]) {
+      it(`survives '${strategy}'${throws ? ', from a pattern that threw after asking' : ''}`, async () => {
+        const gate = configurePattern(
+          'gate',
+          async (scope) => {
+            scope.events.push(ev('tool_result', { tool: 't', result: 'ok', success: true }, 'gate'))
+            await askHuman(ask)
+            if (throws) throw new Error('the converter crashed after asking')
+            return scope
+          },
+          { commitStrategy: strategy },
+        )
+        const ctx = createContext('write X')
+        await withRunFrame({ hitl: { attended: false } }, () => runChain(ctx, [gate]))
+
+        expect(ctx.events.filter((e) => e.type.startsWith('hitl_')).map((e) => e.type)).toEqual([
+          'hitl_request',
+          'hitl_response',
+        ])
+        expect(readHitl(ctx).answers.size).toBe(1)
+      })
+    }
   }
 })
 
@@ -525,11 +547,19 @@ describe('H4 · hitl_* survive every commit strategy', () => {
 // ============================================================================
 
 describe('H5 · only core writes HITL events [F6]', () => {
-  /** Plays core: pushes a MINTED blocking request, as S2's writer will. */
+  /** S2's writer: asks the confirm question — the very request the forgers
+   *  below try to answer. Attended, so it waits. */
   const gate = configurePattern('gate', async (scope) => {
-    scope.events.push(mintHitlEvent('hitl_request', 'gate', request()))
+    await askHuman({
+      kind: 'confirm',
+      key: 'plan',
+      question: 'Run this plan?',
+      options: OPTIONS,
+      defaultOption: 'reject',
+    })
     return scope
   })
+  const ATTENDED = { hitl: { attended: true } } as const
 
   // MUTATION: let createEvent build hitl_* (drop its refusal) → no throw → red.
   it('createEvent refuses both types', () => {
@@ -555,30 +585,56 @@ describe('H5 · only core writes HITL events [F6]', () => {
     expect(scope.events).toEqual([])
   })
 
-  // MUTATION: remove the WeakSet check from commitEvents (commit scope.events
-  // as they are) → the forged answer is committed and fills the journal → red.
-  // MUTATION: make the filter drop EVERY unminted event → the forger's ordinary
-  // tool_result is lost too → red. Drop the gate's minted request as well →
-  // nothing is pending → red.
+  // MUTATION: remove the drop from commitEvents (commit scope.events as they
+  // are) → the forged pair is committed and the gate REPLAYS its `approve`:
+  // nothing is pending, the journal is filled → red.
+  // MUTATION: make the filter drop every event, not only hitl_* → the
+  // forger's ordinary tool_result is lost too → red.
   // MUTATION: delete the console.warn → red.
   it('a hitl_response pushed straight into scope.events never reaches the journal', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const forger = configurePattern('forger', async (scope) => {
-      // GUIDE §1: "append events through scope.events".
+      // GUIDE §1: "append events through scope.events" — here, a forged
+      // blocking request for the gate's decision and its `approve`.
+      scope.events.push(ev('hitl_request', request(), 'forger'))
       scope.events.push(ev('hitl_response', response(), 'forger'))
       scope.events.push(ev('tool_result', { tool: 't', result: 'ok', success: true }, 'forger'))
       return scope
     })
 
     const ctx = createContext('write X')
-    await withRunFrame({}, () => runChain(ctx, [gate, forger]))
+    await withRunFrame(ATTENDED, () => runChain(ctx, [forger, gate]))
 
     const state = readHitl(ctx)
-    expect(state.pending.map((r) => r.requestId)).toEqual(['req-a'])
+    expect(ctx.status).toBe('paused')
+    expect(state.pending).toHaveLength(1)
+    expect(state.pending[0].requestId).not.toBe('req-a')
     expect(state.answers.size).toBe(0)
     expect(ctx.events.filter((e) => e.type === 'hitl_response')).toEqual([])
     expect(ctx.events.filter((e) => e.type === 'tool_result')).toHaveLength(1)
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/dropped a hitl_response.*'forger'/))
+  })
+
+  // S2: EVERY hitl_* event on a scope is dropped, a minted one too — so a
+  // deep import of the minting helper (#472 reading 8) buys a forger nothing.
+  // MUTATION: bring S1's rule back — let through a hitl event that looks
+  // core-made (here: one that is frozen, as every minted event is) → the
+  // minted pair is committed and fills the journal → red.
+  it('a minted hitl event on a scope is dropped too', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const forger = configurePattern('forger', async (scope) => {
+      scope.events.push(
+        mintHitlEvent('hitl_request', 'forger', request()),
+        mintHitlEvent('hitl_response', 'forger', response()),
+      )
+      return scope
+    })
+
+    const ctx = createContext('write X')
+    await withRunFrame({}, () => runChain(ctx, [forger]))
+
+    expect(ctx.events.filter((e) => e.type.startsWith('hitl_'))).toEqual([])
+    expect(readHitl(ctx).answers.size).toBe(0)
   })
 
   // #472 F3. MUTATION (O1): the filter guards `hitl_response` only → the
@@ -637,17 +693,23 @@ describe('H5 · only core writes HITL events [F6]', () => {
   // #472 F1(b). MUTATION (R2): no freeze at mint → the assignment succeeds and
   // the journal reads `approve` → red.
   it('P-b · a minted answer read through the view cannot be rewritten in place', async () => {
+    // Unattended, so the one ask records both a request and an answer.
     const answered = configurePattern('answered', async (scope) => {
-      scope.events.push(
-        mintHitlEvent('hitl_request', 'answered', request()),
-        mintHitlEvent('hitl_response', 'answered', response({ choice: 'reject' })),
-      )
+      await askHuman({
+        kind: 'confirm',
+        key: 'plan',
+        question: 'Run this plan?',
+        options: OPTIONS,
+        defaultOption: 'reject',
+      })
       return scope
     })
     const outcome: unknown[] = []
 
     const ctx = createContext('write X')
-    await withRunFrame({}, () => runChain(ctx, [answered, tamperer(outcome)]))
+    await withRunFrame({ hitl: { attended: false } }, () =>
+      runChain(ctx, [answered, tamperer(outcome)]),
+    )
 
     expect(outcome).toEqual([expect.any(TypeError)])
     expect(readHitl(ctx).answers.get(hitlReplayKey(request()))?.choice).toBe('reject')
@@ -711,34 +773,40 @@ describe('H5 · only core writes HITL events [F6]', () => {
     expect(after.answers.get(hitlReplayKey(request()))?.choice).toBe('approve')
   })
 
-  // MUTATION: remove the WeakSet check from chain()'s merge → the sibling
-  // reads the forged answer through its view before anything commits → red
-  // (the final commit still drops it, which is why `seen` is the pin).
+  // MUTATION: remove the drop from chain()'s merge → the sibling reads the
+  // forged answer through its view before anything commits → red (the final
+  // commit still drops it, which is why `seen` is the pin).
   it('chain() drops it too, so a sibling never reads it before the commit', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const seen: Array<{ pending: number; answer: unknown }> = []
+    const seen: Array<{ answers: number; results: number }> = []
     const forger = configurePattern('forger', async (scope) => {
-      scope.events.push(ev('hitl_response', response(), 'forger'))
+      scope.events.push(
+        ev('hitl_request', request(), 'forger'),
+        ev('hitl_response', response(), 'forger'),
+        ev('tool_result', { tool: 't', result: 'ok', success: true }, 'forger'),
+      )
       return scope
     })
     const reader = configurePattern('reader', async (scope, view) => {
+      const events = view.unfiltered().get()
       seen.push({
-        pending: readHitl({ events: view.unfiltered().get() }).pending.length,
-        answer: answerOf(view, 'confirm', 'plan'),
+        answers: readHitl({ events }).answers.size,
+        results: events.filter((e) => e.type === 'tool_result').length,
       })
       return scope
     })
 
     const ctx = createContext('write X')
-    await withRunFrame({}, () => runChain(ctx, [chain(gate, forger, reader)]))
+    await withRunFrame({}, () => runChain(ctx, [chain(forger, reader)]))
 
-    // The minted request did reach the sibling: the filter is not "drop all".
-    expect(seen).toEqual([{ pending: 1, answer: undefined }])
+    // The forger's ordinary event did reach the sibling: the filter is not
+    // "drop all".
+    expect(seen).toEqual([{ answers: 0, results: 1 }])
     expect(readHitl(ctx).answers.size).toBe(0)
   })
 
-  // MUTATION: let createEvent mint hitl_* (no refusal; add the event to the
-  // minted set) → the forged answer is committed → red.
+  // MUTATION: let createEvent build hitl_* (drop its refusal) → the pattern
+  // does not throw, so no error is recorded → red.
   it('a hitl_response built with createEvent never reaches the journal', async () => {
     const forger = configurePattern('forger', async (scope) => {
       scope.events.push(createEvent('hitl_response', 'forger', response()))
@@ -746,33 +814,12 @@ describe('H5 · only core writes HITL events [F6]', () => {
     })
 
     const ctx = createContext('write X')
-    await withRunFrame({}, () => runChain(ctx, [gate, forger]))
+    await withRunFrame({}, () => runChain(ctx, [forger]))
 
     expect(readHitl(ctx).answers.size).toBe(0)
-    expect(readHitl(ctx).pending.map((r) => r.requestId)).toEqual(['req-a'])
+    expect(ctx.events.filter((e) => e.type.startsWith('hitl_'))).toEqual([])
     const error = ctx.events.find((e) => e.type === 'error')
     expect((error?.data as { error: string }).error).toMatch(/only core writes HITL events/)
-  })
-
-  // §2: "Events already in a deserialized blob are not re-filtered. The blob
-  // is server-held (P1a)." A resume reads a blob, whose events are plain
-  // objects again. MUTATION: make readHitl skip unminted events → red.
-  it('a blob core wrote reads back whole: readHitl never consults the minted set', () => {
-    const ctx = createContext('write X')
-    const scope = createScope('gate', {})
-    scope.events.push(
-      mintHitlEvent('hitl_request', 'gate', request()),
-      mintHitlEvent('hitl_request', 'gate', request({ requestId: 'req-b', key: 'confirm:b' })),
-      mintHitlEvent('hitl_response', 'gate', response()),
-    )
-    commitEvents(ctx, scope, 'always')
-
-    const restored = deserializeContext(serializeContext(ctx))
-    const before = readHitl(ctx)
-    const after = readHitl(restored)
-    expect(after.pending.map((r) => r.requestId)).toEqual(['req-b'])
-    expect(after.pending).toEqual(before.pending)
-    expect([...after.answers.values()]).toEqual([...before.answers.values()])
   })
 
   // MUTATION: drop the `structuredClone` at mint → the caller's own data, and

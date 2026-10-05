@@ -69,6 +69,7 @@ is and why it is shaped this way, start at the front page —
   - [harness()](#harnesspatterns)
   - [resumeHarness()](#resumeharnessserialized-patterns-approved)
   - [continueSession()](#continuesessionserialized-patterns-newinput)
+  - [askHuman()](#askhumanrequest)
 - [EventView Query API](#eventview-query-api)
 - [Configuration System](#configuration-system)
   - [ViewConfig Options](#viewconfig-options)
@@ -1532,6 +1533,92 @@ const continued = await continueSession(serializedContext, patterns, 'Follow-up 
 It resets the per-turn fields on `ctx.data` — `hasError`, `errorMessage`,
 `response` and `approved` — and keeps everything else.
 
+### `askHuman(request)`
+
+Ask a person to decide, from inside a run: a pattern body, or a tool executor
+that holds no scope (#433, slice S2). The answer-bound `resumeHarness` that
+continues a paused run is slice S3; until it lands, the boolean form above is
+unchanged.
+
+```typescript
+const ask = await askHuman({
+  kind: 'provenance', // opaque to core; no ':'
+  question: 'Use this external file?',
+  options: PROVENANCE_OPTIONS, // ≥ 2, unique ids, array order is display order
+  defaultOption: 'sanitize',
+  summary: { domain, filename, size }, // display only; never rendered into a prompt
+})
+if (ask.status === 'pending') return held(ask) // the placeholder, never the content
+```
+
+**Validation at raise.** An invalid request throws `HitlRequestError`, because
+it is a wiring bug: fewer than two options; duplicate option ids; a default
+that is missing or unavailable; an unknown `unattended` value; `'stop'` with no
+`stopsRun` option; duplicate flag ids on one option; a `required` flag on an
+option the unattended rule may pick; a `kind` containing `:`. `askHuman` also
+throws outside a run frame, in a frame with no `hitl` slot, and where no
+`runChain` owns a HITL run.
+
+**The steps, in order.**
+
+1. Validate. The key is stored as `${kind}:${key}`; the default `key` is the
+   sha256 of the question, the option-id set and the summary.
+2. Find the run. The frame's `hitl` slot must be set, and a `runChain` must own
+   a HITL run in this async context.
+3. **Replay.** A decision this run holds for the same kind, key and option-id
+   set is returned, and nothing is written. Its choice must be an available
+   option of the request it answered AND of the newly raised one.
+4. **Deduplicate** by that same full identity. This covers a request in this
+   run's buffer and one an earlier attempt of the run committed and left
+   waiting. A waiting request is not raised again, and the run still pauses
+   for it.
+5. Otherwise a new request: a `crypto.randomUUID()` id, `resumeAt` (the
+   top-level index and every top-level pattern name) and the run's opaque tier.
+6. **Unattended** (`attended` is not exactly `true`), unless the rule is
+   `'park'`: `resolveUnattended` decides, and the request and an `unattended`
+   response are recorded. If the choice has `stopsRun`, or the rule found no
+   option it may pick, the owning `runChain` ends the run `done` at the next
+   boundary with a fixed response, and nothing is re-entered.
+7. **Attended** (and `'park'`): the request is recorded, emitted live whatever
+   the pattern's `liveEvents` says, and `askHuman` returns `pending`.
+
+**`resolveUnattended(request)`.** It never picks an option without
+`unattended: true` (P4).
+
+| Rule            | Picks                                                                                                                         |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `apply-default` | the default if the rule may pick it, else the first available option it may pick; with none, `choice: null` and the run stops |
+| `stop`          | the first available `stopsRun` option the rule may pick; with none, the run still stops and the record holds `choice: null`   |
+| `park`          | nothing: the request waits for a person                                                                                       |
+
+**The pause.** Only the `runChain` that owns the HITL run pauses. After every
+pattern, including one that threw, it commits the run's HITL events straight
+into `ctx.events`, never through a scope: `commitEvents` and `chain()` drop
+every `hitl_*` event a scope carries. Then a request still waiting ends the
+run `paused`. The paused pattern's events are committed and its data is not,
+so re-entry starts from the data it started from. `error` wins over a pending
+request, and a stop wins over a pause.
+
+**The stop checks.** `hitlPending()` is true while a request waits or a rule
+has stopped the run. `simpleLoop` checks after a single call and after a batch;
+`actorCritic` does too, before the critic is asked; a sequential `runBatch`
+skips the calls after one that waits; `chain()` runs no further child. None
+records an error. `parallel` has no check of its own: every branch finishes,
+and the pause happens after.
+
+**The run frame's `hitl` slot is a frozen `{ attended }` and nothing else.**
+`harness()`, `continueSession()` and `resumeHarness()` supply
+`{ attended: true }` when they open the frame, and nothing when they join a
+host's. `amendRunFrame` passes the slot by reference and refuses a second one
+below an open one. The per-run bookkeeping (the owning context, the position,
+the buffer, what waits, the stop) is **not** on the frame (#477 F1, F2). It is
+in an async-context store of its own, on the run frame's `Symbol.for` two-copy
+idiom. The `runChain` that finds the slot set and no HITL run open in its async
+context opens one; a nested `runChain` sees it open and claims nothing. So no
+accessor that reaches the frame can write the record or suppress a pause, and
+two runs started concurrently in one host frame each get their own
+bookkeeping.
+
 ## EventView Query API
 
 Fluent API for filtering events from UnifiedContext:
@@ -2099,8 +2186,9 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── types.ts                # Core types (UnifiedContext, PatternScope, RouterConfig, DIRECT_RESPONSE_ROUTE, the seam callables ControllerFn/PlannerFn/CompactIntentFn/… )
 ├── context.server.ts       # Context factory, createEvent(), generateId()
 ├── tools.server.ts         # Tools({ namespaces }) — groups MCP tools by namespace; the map is REQUIRED (ruling B-iii); inferServer consults transports' namespaceFor → registered resolvers (registerToolNamespaces) → heuristic; NO catalog in core — the 86-entry map lives in app-tools/mcp-catalog.ts and registers at boot
-├── run-frame.server.ts     # THE run frame — one ALS scope per run holding all five slots (guard / transports / config / live / inference), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, the rest replace), activeRunFrame() THROWS outside a frame and currentRunFrame() is the soft read
-├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? and an optional RunFrame; each OPENS the run frame (ruling Q17/D5), or joins the host's
+├── run-frame.server.ts     # THE run frame — one ALS scope per run holding all six slots (guard / transports / config / live / inference / hitl — the last a frozen `{ attended }`), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, hitl passes by reference and is refused below an open one, the rest replace), activeRunFrame() THROWS outside a frame and currentRunFrame() is the soft read
+├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? and an optional RunFrame; each OPENS the run frame (ruling Q17/D5) with a `{ attended: true }` hitl slot unless the frame says otherwise, or joins the host's and adds nothing
+├── hitl.server.ts          # Human in the loop (#433): readHitl() / answerOf() read the hitl_* events; askHuman() raises (or replays, or applies resolveUnattended()) into the run's HITL bookkeeping — an async-context store of its own on a Symbol.for holder, opened by the owning runChain, never on the frame (#477) — held() is a gated executor's placeholder, hitlPending() is the loops' stop check; the owning runChain commits the buffer straight into the context and pauses
 ├── tool-transport.server.ts # ToolTransport + registerTransport() (process, consulted after every scoped one) / activeTransports() (reads the run frame's `transports` slot); the difference between the two ways to supply one IS the containment invariant — there is no priority field and no argument that could express one
 ├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE phases — scoped transports (innermost first) → process transports (registration order) → MCP gateway (terminal fallback, not a transport); leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element; drops the gateway's own management tools (`mcp-find`, `mcp-add`, `mcp-exec`, …) from the catalog (#412, #420), and `write_neo4j_cypher` and the `database-server` tools, which no agent holds (#403, #412)
 ├── agent-withheld-tools.ts # AGENT_WITHHELD_TOOLS + isAgentWithheldTool() — the tools no agent may hold (#403: `write_neo4j_cypher`; #412: the `database-server` tools), each with the decision and server-side switch its drop warning names (withholdingFor()), seen through a gateway or server-namespace prefix; read by listTools() (the catalog) and by simpleLoop/actorCritic (every allowlist check), never by callTool

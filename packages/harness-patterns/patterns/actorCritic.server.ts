@@ -28,6 +28,7 @@ import { runBatch, combineOutcomes } from '../parallel-tools.server'
 import type { SubCall } from '../parallel-tools.server'
 import { getErrorHint, budgetHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
+import { hitlPending } from '../hitl.server'
 import { resolveTurnBudget, runtimeConfig } from '../runtime-config.server'
 import { activeTransports } from '../tool-transport.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
@@ -519,6 +520,11 @@ export function actorCritic<T extends ActorCriticData>(
             ),
           )
 
+          // The stop check after a batch, BEFORE the critic is asked (#433): a
+          // critic must not judge a held placeholder, and the actor must not
+          // spend an attempt on it.
+          if (hitlPending()) return scope
+
           const { combined, anySucceeded, errors } = combineOutcomes(outcomes)
 
           // ONE attempt records the whole batch. `additionalCalls` carries the
@@ -736,6 +742,9 @@ export function actorCritic<T extends ActorCriticData>(
           } as ToolResultEventData,
           resolved.trackHistory,
         )
+
+        // The stop check after a single call, BEFORE the critic is asked (#433).
+        if (hitlPending()) return scope
 
         // The actor sees the failure in `previousAttempts` and tries again — this
         // loop always worked that way. What #437 slice 1 adds is the record, so

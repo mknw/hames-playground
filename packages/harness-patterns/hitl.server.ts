@@ -416,11 +416,14 @@ export function held(
  * stop at its next boundary, because a request waits for a person or an
  * unattended choice stops the run? False outside a HITL run. A SOFT read, like
  * the live emitters: a pattern driven outside any frame simply never stops
- * for a person.
+ * for a person. A run that has CLOSED with a request still waiting still says
+ * yes: the decision is still pending in the record, so work left running in a
+ * continuation must stop rather than carry on past it (fail closed; a late
+ * `askHuman` on that run is refused instead).
  */
 export function hitlPending(): boolean {
   const run = hitlRunStore.getStore()
-  return !!run && !run.closed && (run.waiting.size > 0 || run.stopKind !== undefined)
+  return !!run && (run.waiting.size > 0 || run.stopKind !== undefined)
 }
 
 // ============================================================================

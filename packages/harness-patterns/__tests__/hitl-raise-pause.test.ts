@@ -901,10 +901,12 @@ describe('H12 · askHuman refuses outside a chain-owned run', () => {
     expect(requests(ctx)).toEqual([])
   })
 
-  // The same closed run reads as nothing to stop for. MUTATION: drop the
-  // `run.closed` clause in hitlPending → the late check still reports the
-  // paused run's request as waiting → red.
-  it('a continuation that outlives a paused run is not told it still waits', async () => {
+  // A run that closed with a decision still pending still says "stop": the
+  // request is pending in the record, so a loop or sequential batch left
+  // running in a continuation must not carry on past it (fail closed).
+  // MUTATION: re-add a `!run.closed &&` clause to hitlPending → the late
+  // check reads false → red.
+  it('a continuation that outlives a paused run is still told to stop', async () => {
     let late: Promise<boolean> | undefined
     const asker = configurePattern<Data>('asker', async (scope) => {
       await askHuman(confirm())
@@ -913,7 +915,7 @@ describe('H12 · askHuman refuses outside a chain-owned run', () => {
     })
     const ctx = await run([asker])
     expect(ctx.status).toBe('paused')
-    await expect(late).resolves.toBe(false)
+    await expect(late).resolves.toBe(true)
   })
 })
 

@@ -39,6 +39,7 @@
     "neo4j",
     "app-tools",
     "graph",
+    "document",
     "LICENSE",
     "README.md"
   ],

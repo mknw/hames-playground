@@ -24,8 +24,9 @@
  *    kreuzberg picks its parser from the multipart Content-Type and detects
  *    from the filename only for `octet-stream`, so it is sent exactly the
  *    verified type and a neutral `document.<ext>` name.
- * 2. **Disarm**, when a `disarm` is supplied and the format has one (S6:
- *    docx, xlsx, xlsm, pptx). Its output is verified again before it is
+ * 2. **Disarm**, when a `disarm` is supplied and the format has one (S6's
+ *    `ooxmlDisarm` in `@hames-ai/connectors`: docx, docm, xlsx, xlsm, pptx,
+ *    pptm). Its output is verified again before it is
  *    converted. A disarm that throws, or returns something that fails the
  *    check, makes Sanitize unavailable — the raw file is never the fallback.
  *    Concealment it only COUNTED survives, so it reports `'not-removed'` (A3).
@@ -66,13 +67,16 @@
  *
  * ## Which types Sanitize covers in v1 (D8)
  *
- * pdf · docx · doc · xlsx · xlsm · xls · pptx · ppt · odt · ods · odp · text
- * (plain, Markdown, CSV). Everything else is refused as `unsupported-type`,
- * including xlsb, the template and add-in variants, RTF and the flat XML
- * formats. **docm and pptm are refused too**: §5.3 step 2 lists them for the
- * disarm but D8's list of available types does not, so this slice reads the
- * gap closed (deny by default) and leaves widening to S6, beside the disarm
- * that would cover them.
+ * pdf · docx · docm · doc · xlsx · xlsm · xls · pptx · pptm · ppt · odt · ods ·
+ * odp · text (plain, Markdown, CSV). Everything else is refused as
+ * `unsupported-type`, including xlsb, the template, show and add-in variants,
+ * RTF and the flat XML formats. **docm and pptm joined in S6**, beside the
+ * disarm that covers them: §5.3 step 2 lists them for the disarm, D8 names
+ * neither list for them, and they are xlsm's siblings — the macro-enabled
+ * form of a main type D8 does list, read by the same kreuzberg extractor
+ * (`extractors/docx.rs:1324`, `extractors/pptx.rs:402` at `b8c96b3e`). S5
+ * refused them until then (deny by default, amendment A8). Without a disarm
+ * they report `'not-removed'`, as docx and xlsm do.
  */
 
 import { assertServerOnImport } from '../assert.server'
@@ -233,6 +237,14 @@ const SANITIZABLE: readonly SanitizableType[] = [
     disarm: true,
   },
   {
+    mime: 'application/vnd.ms-word.document.macroEnabled.12',
+    ext: 'docm',
+    family: 'ooxml',
+    mainPart: 'word/document.xml',
+    mainType: 'application/vnd.ms-word.document.macroEnabled.main+xml',
+    disarm: true,
+  },
+  {
     mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     ext: 'xlsx',
     family: 'ooxml',
@@ -254,6 +266,14 @@ const SANITIZABLE: readonly SanitizableType[] = [
     family: 'ooxml',
     mainPart: 'ppt/presentation.xml',
     mainType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml',
+    disarm: true,
+  },
+  {
+    mime: 'application/vnd.ms-powerpoint.presentation.macroEnabled.12',
+    ext: 'pptm',
+    family: 'ooxml',
+    mainPart: 'ppt/presentation.xml',
+    mainType: 'application/vnd.ms-powerpoint.presentation.macroEnabled.main+xml',
     disarm: true,
   },
   { mime: 'application/vnd.oasis.opendocument.text', ext: 'odt', family: 'odf' },

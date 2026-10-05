@@ -295,7 +295,8 @@ describe('Z4 [F12]: the type is verified before anything is converted', () => {
     for (const mimeType of [
       'application/vnd.ms-excel.sheet.binary.macroEnabled.12', // xlsb
       'application/vnd.openxmlformats-officedocument.wordprocessingml.template', // dotx
-      'application/vnd.ms-word.document.macroEnabled.12', // docm (see the module header)
+      'application/vnd.ms-word.template.macroEnabled.12', // dotm
+      'application/vnd.ms-powerpoint.slideshow.macroEnabled.12', // ppsm
       'application/rtf',
       'text/html',
       'application/zip',
@@ -455,7 +456,7 @@ describe('flattenDocument across the families', () => {
     expect(sanitizeOptionFor(doc)).toEqual({ unattended: false })
   })
 
-  it('verifies xlsx, xlsm and pptx packages against their own main parts', async () => {
+  it('verifies xlsx, xlsm, pptx, docm and pptm packages against their own main parts', async () => {
     for (const [mainPart, mainType, mimeType] of [
       ['xl/workbook.xml', MAIN_TYPES.xlsx, XLSX_MIME],
       [
@@ -464,6 +465,17 @@ describe('flattenDocument across the families', () => {
         'application/vnd.ms-excel.sheet.macroEnabled.12',
       ],
       ['ppt/presentation.xml', MAIN_TYPES.pptx, PPTX_MIME],
+      // docm and pptm (#433 S6): refused in S5 until the disarm that covers them landed.
+      [
+        'word/document.xml',
+        'application/vnd.ms-word.document.macroEnabled.main+xml',
+        'application/vnd.ms-word.document.macroEnabled.12',
+      ],
+      [
+        'ppt/presentation.xml',
+        'application/vnd.ms-powerpoint.presentation.macroEnabled.main+xml',
+        'application/vnd.ms-powerpoint.presentation.macroEnabled.12',
+      ],
     ] as const) {
       const doc = await flattenDocument(
         { bytes: ooxmlPackage({ mainPart, mainType }), filename: 'x', mimeType },
@@ -962,9 +974,16 @@ describe('#475 F1 [SD-2]: link flattening is linear on its own openers', () => {
   ]
   for (const [label, body] of bodies) {
     it(`1 MiB of "${label}" flattens in under 1 s`, async () => {
-      const started = performance.now()
-      await flattenDocument(text(body, 'text/markdown'))
-      expect(performance.now() - started).toBeLessThan(1000)
+      // CPU time, minimum of 3 passes, as in injection-guard-redos.test.ts:
+      // interference only ever lengthens a measurement (#482 review).
+      let best = Infinity
+      for (let k = 0; k < 3; k++) {
+        const c = process.cpuUsage()
+        await flattenDocument(text(body, 'text/markdown'))
+        const d = process.cpuUsage(c)
+        best = Math.min(best, (d.user + d.system) / 1000)
+      }
+      expect(best).toBeLessThan(1000)
     })
   }
 

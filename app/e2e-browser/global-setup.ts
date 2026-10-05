@@ -20,6 +20,7 @@ import { startDevServer } from './lib/server'
 import { conversationRows, wipeUserRows } from './lib/db'
 import {
   APP_PORT,
+  APP_URL,
   BYPASS_USER_ID,
   DATA_ENCRYPTION_KEY,
   HANDLES_FILE,
@@ -58,6 +59,13 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     // one of them (`import.meta.env.DEV`) is why this layer runs `vinxi dev`
     // rather than a build — see `lib/server.ts`.
     VITE_DEV_BYPASS_AUTH: 'true',
+    // The origin every write is checked against (#455, `csrf.server.ts`). Its
+    // dev default is `pnpm dev`'s `http://localhost:3444`, and the dev-only
+    // loopback list it accepts besides is on that same port; this suite's
+    // browser is on another port, so without this line every POST it makes —
+    // each turn, each server function — would be refused as cross-origin.
+    // Set here, too, so a developer's own `app/.env` value cannot leak in.
+    AUTH_REDIRECT_URI: `${APP_URL}/api/auth/callback`,
 
     // ---- The fakes ---------------------------------------------------------
     MCP_GATEWAY_URL: backend.gateway.url,

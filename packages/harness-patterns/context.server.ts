@@ -422,11 +422,6 @@ export function setDone<T>(ctx: UnifiedContext<T>): void {
   ctx.status = 'done'
 }
 
-/** Set context status to paused */
-export function setPaused<T>(ctx: UnifiedContext<T>): void {
-  ctx.status = 'paused'
-}
-
 // ============================================================================
 // Default Config Helpers
 // ============================================================================

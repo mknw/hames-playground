@@ -57,6 +57,37 @@ function recordError(message: string) {
 
 const errorEvents = (ctx: Ctx) => ctx.events.filter((e) => e.type === 'error')
 
+/** Park a context on one request, as a stored blob holds it: the owning
+ *  runChain wrote the `hitl_request` and set `paused` (#433). Returns its id. */
+function pauseOn(ctx: { events: unknown[]; status: string }, names = ['test']): string {
+  const requestId = '7f1e8f5a-3c1b-4d2e-9a6b-0c5d4e3f2a1b'
+  ctx.events.push({
+    id: 'ev-request',
+    type: 'hitl_request',
+    ts: Date.now(),
+    patternId: 'test',
+    data: {
+      v: 1,
+      requestId,
+      runId: '',
+      key: 'confirm:write',
+      kind: 'confirm',
+      question: 'Write it?',
+      options: [
+        { id: 'approve', label: 'Approve' },
+        { id: 'reject', label: 'Reject', unattended: true },
+      ],
+      defaultOption: 'reject',
+      unattended: 'apply-default',
+      summary: {},
+      blocking: true,
+      resumeAt: { index: 0, names },
+    },
+  })
+  ctx.status = 'paused'
+  return requestId
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   mockChain.mockImplementation(async (ctx: Ctx) => ctx)
@@ -236,10 +267,12 @@ describe('the turn boundary on a multi-turn context', () => {
 
   it('resumeHarness reports a failed resume, not a silent success', async () => {
     const paused = createContext<Record<string, unknown>>('write to the graph', {}, 's1')
-    paused.status = 'paused'
+    const requestId = pauseOn(paused)
 
     mockChain.mockImplementation(recordError('BamlTimeoutError: Request timed out'))
-    const result = await resumeHarness(serializeContext(paused), [pattern], true)
+    const result = await resumeHarness(serializeContext(paused), [pattern], {
+      [requestId]: 'approve',
+    })
 
     expect(result.status).toBe('error')
     expect(result.response).toBe('Error: BamlTimeoutError: Request timed out')
@@ -248,11 +281,35 @@ describe('the turn boundary on a multi-turn context', () => {
   it('resumeHarness is not condemned by the error that preceded the gate', async () => {
     const paused = createContext<Record<string, unknown>>('write to the graph', {}, 's1')
     await recordError('a tool failed before the approval gate')(paused)
-    paused.status = 'paused'
+    const requestId = pauseOn(paused)
 
-    const result = await resumeHarness(serializeContext(paused), [pattern], true)
+    const result = await resumeHarness(serializeContext(paused), [pattern], {
+      [requestId]: 'approve',
+    })
 
     expect(result.status).toBe('running')
+    expect(result.context.error).toBeUndefined()
+  })
+
+  // H26 (#433), on the resume path: a resumed run that pauses again at a later
+  // gate ends with no response ON PURPOSE, whatever this turn recorded before.
+  // MUTATION: drop `status === 'paused'` from settleTurn's early return → the
+  // turn is reported as `error` → red.
+  it('a resume that pauses again stays paused, not failed', async () => {
+    const paused = createContext<Record<string, unknown>>('write to the graph', {}, 's1')
+    const requestId = pauseOn(paused)
+    mockChain.mockImplementation(async (ctx: Ctx) => {
+      await recordError('a tool failed after the first gate')(ctx)
+      ctx.status = 'paused'
+      return ctx
+    })
+
+    const result = await resumeHarness(serializeContext(paused), [pattern], {
+      [requestId]: 'approve',
+    })
+
+    expect(result.status).toBe('paused')
+    expect(result.response).toBe('')
     expect(result.context.error).toBeUndefined()
   })
 })

@@ -1,111 +1,101 @@
 /**
- * AN APPROVAL LASTS FOR ITS RUN, NOT EVERY LATER TURN (#456, finding c′).
+ * AN ANSWER LASTS FOR ITS RUN, NOT EVERY LATER TURN (#456, finding c′),
+ * rewritten around events for #433 S3 (pin H25).
  *
- * `resumeHarness(serialized, patterns, approved)` writes `approved` onto
- * `ctx.data` so a gate in the resumed run can read the answer. `ctx.data`
- * survives the turn boundary (`serializeContext` is a plain `JSON.stringify`),
- * so unless `continueSession` clears the flag, one "yes" rides every later turn
- * and a gate reached again proceeds without asking: fail-open, and silent.
+ * #457 closed this for the boolean `resumeHarness(serialized, patterns,
+ * approved)`: `approved` rode `ctx.data`, so unless `continueSession` cleared
+ * it, one "yes" rode every later turn and a gate reached again proceeded
+ * without asking. That API is gone. A decision is now a `hitl_response` event
+ * bound to the `hitl_request` it answers, and a gate reads it back through
+ * `askHuman`, which replays only from the CURRENT run's journal — so the
+ * property holds by construction rather than by a reset a host can skip.
  *
  * Driven end to end through the public entry points and the REAL `runChain`,
- * with the gate built the only way a package consumer can build one today.
- * Core has no in-chain pause (#433 §0: a pattern holds a `PatternScope`, and
- * `setPaused` needs the `UnifiedContext`), so the gate pattern records a
- * `pendingAction` and the HOST parks the context with the public `setPaused`.
- * That is the shape the #433 design replaces; the property pinned here is the
- * one it keeps ("answers last for the run", decision 11).
+ * with the gate built the way a package consumer builds one now: `askHuman`
+ * in a pattern body.
  *
- * MUTATION: delete `delete … .approved` from `continueSession`'s per-turn reset
- * → all three tests go red: the first two at their third turn, where the
- * approved write runs again without a pause (`performed` 2, not 1) and the
- * rejected one is refused again without asking (`refused` 2, not 1); the third
- * at once (`performed` 1, not 0).
+ * MUTATION: `readHitl`'s run window starts at the FIRST user_message (#472's
+ * M7) → the first two tests go red at their third turn, where the gate replays
+ * the earlier run's answer instead of asking (`performed` 2, not 1, and
+ * `refused` 2, not 1); the third goes red at its second message
+ * (`performed` 2, not 1).
  *
- * MUTATION: clear `approved` in `resumeHarness` just before its `runChain` (the
- * over-fix) → the first two tests go red at the resume step: the answer never
- * reaches the gate it was given for (`resumed.data.approved` undefined, and
- * `refused` 0, not 1).
- *
- * MUTATION: skip the clear in `continueSession` when the restored context was
- * `paused` → the third test goes red: the answer a paused blob already holds
- * runs the new message's write without a pause (`performed` 1, not 0).
- *
- * MUTATION: move the reset from `continueSession` into `settleTurn` → the
- * third test goes red (`performed` 1, not 0), and so does the first test's
- * `resumed.data.approved` assertion (undefined, not true).
+ * MUTATION: `askHuman` skips the journal lookup → the first two tests go red at
+ * the resume step: the answer never reaches the gate it was given for, which
+ * asks again instead (`performed` 0, not 1).
  */
 
-import { describe, it, expect, vi } from 'vitest'
-
-vi.mock('../assert.server', () => ({ assertServerOnImport: vi.fn() }))
-
+import { describe, expect, it } from 'vitest'
 import {
-  harness,
   continueSession,
+  harness,
   resumeHarness,
-  type HarnessData,
   type HarnessResultScoped,
 } from '../harness.server'
-import { createContext, serializeContext, setPaused } from '../context.server'
+import { askHuman, readHitl } from '../hitl.server'
 import { configurePattern } from '../patterns/chain.server'
-import type { ConfiguredPattern, WithApproval } from '../types'
+import type { ConfiguredPattern, HitlOption } from '../types'
 
-type GateData = HarnessData & WithApproval & Record<string, unknown>
+type Data = { response?: string; [key: string]: unknown }
 
-/** A gated write: runs only on an approval, and asks for one otherwise. */
-function gatedWrite(log: { performed: number; refused: number }): ConfiguredPattern<GateData> {
-  return configurePattern<GateData>('gated-write', async (scope) => {
-    const { approved } = scope.data
-    if (approved === true) {
-      log.performed++
-      scope.data = { ...scope.data, pendingAction: undefined, response: 'written' }
-    } else if (approved === false) {
-      log.refused++
-      scope.data = { ...scope.data, pendingAction: undefined, response: 'not written' }
-    } else {
-      scope.data = {
-        ...scope.data,
-        pendingAction: { action: 'write', payload: null, reason: 'writes the graph' },
-        response: undefined,
-      }
-    }
+const OPTIONS: HitlOption[] = [
+  { id: 'approve', label: 'Approve' },
+  { id: 'reject', label: 'Reject', unattended: true },
+]
+
+/** A gated write: asks, runs only on an approval, and records a refusal. */
+function gatedWrite(
+  log: { performed: number; refused: number },
+  name = 'gated-write',
+  key = 'write',
+): ConfiguredPattern<Data> {
+  return configurePattern<Data>(name, async (scope) => {
+    const outcome = await askHuman({
+      kind: 'confirm',
+      key,
+      question: 'Write to the graph?',
+      options: OPTIONS,
+      defaultOption: 'reject',
+    })
+    if (outcome.status === 'pending') return scope
+    if (outcome.choice === 'approve') log.performed++
+    else log.refused++
+    scope.data = { ...scope.data, response: outcome.choice === 'approve' ? 'written' : 'refused' }
     return scope
   })
 }
 
-/** The host half of today's gate: a turn that left a pending action is parked. */
-function park(result: HarnessResultScoped<GateData>): { serialized: string; paused: boolean } {
-  if (!result.data.pendingAction) return { serialized: result.serialized, paused: false }
-  setPaused(result.context)
-  return { serialized: serializeContext(result.context), paused: true }
+/** The one request a paused result waits on. */
+function waitingOn(result: HarnessResultScoped<Data>): string {
+  expect(result.status).toBe('paused')
+  const { pending } = readHitl(result.context)
+  expect(pending).toHaveLength(1)
+  return pending[0].requestId
 }
 
-describe('an approval lasts for its run, not every later turn', () => {
+describe('an answer lasts for its run, not every later turn', () => {
   it('a later turn that reaches the gate pauses again instead of running', async () => {
     const log = { performed: 0, refused: 0 }
     const patterns = [gatedWrite(log)]
 
-    // Turn 1 reaches the gate and is parked.
-    const first = park(await harness<GateData>(...patterns)('write X', 'sess-approval'))
-    expect(first.paused).toBe(true)
+    // Turn 1 reaches the gate and pauses.
+    const first = await harness<Data>(...patterns)('write X', 'sess-approval')
+    const asked = waitingOn(first)
     expect(log.performed).toBe(0)
 
     // The person approves THAT pause, and the write runs once.
-    const resumed = await resumeHarness<GateData>(first.serialized, patterns, true)
-    expect(resumed.data.approved).toBe(true)
-    const second = park(resumed)
+    const resumed = await resumeHarness<Data>(first.serialized, patterns, { [asked]: 'approve' })
     expect(log.performed).toBe(1)
-    expect(second.paused).toBe(false)
+    expect(resumed.status).toBe('running')
 
     // Turn 3 asks for another write. Nobody has approved it.
-    const continued = await continueSession<GateData>(second.serialized, patterns, 'write Y')
-    const third = park(continued)
+    const third = await continueSession<Data>(resumed.serialized, patterns, 'write Y')
+    const askedAgain = waitingOn(third)
+    expect(askedAgain).not.toBe(asked)
     expect(log.performed).toBe(1)
-    expect(third.paused).toBe(true)
-    expect(continued.data.approved).toBeUndefined()
 
     // Approving the new pause is what runs it.
-    await resumeHarness<GateData>(third.serialized, patterns, true)
+    await resumeHarness<Data>(third.serialized, patterns, { [askedAgain]: 'approve' })
     expect(log.performed).toBe(2)
   })
 
@@ -113,26 +103,35 @@ describe('an approval lasts for its run, not every later turn', () => {
     const log = { performed: 0, refused: 0 }
     const patterns = [gatedWrite(log)]
 
-    const first = park(await harness<GateData>(...patterns)('write X', 'sess-rejection'))
-    const second = park(await resumeHarness<GateData>(first.serialized, patterns, false))
+    const first = await harness<Data>(...patterns)('write X', 'sess-rejection')
+    const second = await resumeHarness<Data>(first.serialized, patterns, {
+      [waitingOn(first)]: 'reject',
+    })
     expect(log.refused).toBe(1)
 
-    const third = park(await continueSession<GateData>(second.serialized, patterns, 'write Y'))
+    const third = await continueSession<Data>(second.serialized, patterns, 'write Y')
+    waitingOn(third)
     expect(log.refused).toBe(1)
     expect(log.performed).toBe(0)
-    expect(third.paused).toBe(true)
   })
 
-  it('a paused context that already holds an answer does not hand it to a new message', async () => {
-    // Paused AND answered: what a resumed run leaves when it pauses again at a
-    // later gate, and what a blob saved before this fix can hold.
+  it('a run paused at a second gate does not hand the first answer to a new message', async () => {
+    // Paused AND holding an answer: what a resumed run leaves when it pauses
+    // again at a later gate. The new message supersedes the second gate, and
+    // its run starts with an empty journal.
     const log = { performed: 0, refused: 0 }
-    const ctx = createContext<GateData>('write X', { approved: true } as GateData, 'sess-repaused')
-    setPaused(ctx)
-    const next = park(
-      await continueSession<GateData>(serializeContext(ctx), [gatedWrite(log)], 'write Y'),
-    )
-    expect(log.performed).toBe(0)
-    expect(next.paused).toBe(true)
+    const patterns = [gatedWrite(log, 'write-a', 'a'), gatedWrite(log, 'write-b', 'b')]
+
+    const first = await harness<Data>(...patterns)('write A then B', 'sess-repaused')
+    const second = await resumeHarness<Data>(first.serialized, patterns, {
+      [waitingOn(first)]: 'approve',
+    })
+    waitingOn(second)
+    expect(log.performed).toBe(1)
+
+    const next = await continueSession<Data>(second.serialized, patterns, 'write A again')
+    waitingOn(next)
+    expect(log.performed).toBe(1)
+    expect(readHitl(next.context).answers.size).toBe(0)
   })
 })

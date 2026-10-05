@@ -104,13 +104,17 @@ function evt(url: string, cookie?: string) {
   } as never
 }
 
+/** The configured public origin (`AUTH_REDIRECT_URI`'s), stubbed below. */
+const APP_ORIGIN = 'https://app.example'
+
 /** A form POST from the app's own page — or, with `site`, from elsewhere. */
 function post(url: string, cookie?: string, site = 'same-origin') {
+  const origin = site === 'same-origin' ? APP_ORIGIN : 'https://attacker.example'
   return {
     params: {},
     request: new Request(url, {
       method: 'POST',
-      headers: { 'sec-fetch-site': site, ...(cookie ? { cookie } : {}) },
+      headers: { 'sec-fetch-site': site, origin, ...(cookie ? { cookie } : {}) },
     }),
   } as never
 }
@@ -118,6 +122,7 @@ function post(url: string, cookie?: string, site = 'same-origin') {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('VITE_ALLOWED_EMAILS', 'alice@example.test')
+  vi.stubEnv('AUTH_REDIRECT_URI', `${APP_ORIGIN}/api/auth/callback`)
   entraConfigured = true
   pkce = { verifier: 'verifier-1', challenge: 'challenge-1' }
   stateValues = ['state-1', 'nonce-1']

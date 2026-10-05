@@ -13,13 +13,14 @@ import type {
   ToolCallEventData,
   ToolResultEventData,
   ControllerActionEventData,
-  ApprovalRequestEventData,
   ErrorEventData,
   IntentCompactedEventData,
   PlanCreatedEventData,
   ContentSanitizedEventData,
   WarningEventData,
   LoopRecoveryEventData,
+  HitlRequestEventData,
+  HitlResponseEventData,
 } from '../types'
 
 export function getEventPreview(type: EventType, data: unknown): string {
@@ -48,10 +49,21 @@ export function getEventPreview(type: EventType, data: unknown): string {
       const content = d.content || ''
       return content.length > 50 ? content.slice(0, 50) + '...' : content
     }
-    case 'approval_request': {
-      const d = data as ApprovalRequestEventData
-      return d.request.action
+    case 'hitl_request': {
+      // The kind, never the question or the summary: those are the dialog's,
+      // and a summary can hold a string an attacker chose (#433 P3, m7).
+      const d = data as Partial<HitlRequestEventData>
+      return `decision requested: ${d.kind}`
     }
+    case 'hitl_response': {
+      const d = data as Partial<HitlResponseEventData>
+      return `decision: ${d.kind} → ${d.choice ?? 'none'} (${d.by})`
+    }
+    case 'approval_request':
+    case 'approval_response':
+      // Legacy (#433, F9): superseded by hitl_*. Whatever an older run stored
+      // is not read, here as in every LLM-facing view.
+      return 'legacy approval event'
     case 'error': {
       const d = data as ErrorEventData
       return d.error.slice(0, 50)
@@ -105,6 +117,8 @@ export function getEventLane(type: EventType): 'interface' | 'tools' {
     case 'assistant_message':
     case 'pattern_enter':
     case 'pattern_exit':
+    case 'hitl_request':
+    case 'hitl_response':
     case 'approval_request':
     case 'approval_response':
       return 'interface'

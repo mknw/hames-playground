@@ -35,8 +35,8 @@ import { DEFAULT_SETTINGS } from '../../../lib/settings'
 
 /** Every run records the ambient scope it saw. */
 const seenScopes: Array<{ userId: string | null; sessionId: string | null }> = []
-/** …and whether that scope said a person is waiting on it (all three entry
- *  points record here, `resumeHarness` included). */
+/** …and whether that scope said a person is waiting on it (both harness entry
+ *  points the turn runner uses record here). */
 const seenAttended: boolean[] = []
 
 type Ctx = { id: string; events: unknown[] }
@@ -67,16 +67,6 @@ const continueSession = vi.fn(
     }
   },
 )
-const resumeHarness = vi.fn(async (_s: string, _p: unknown, approved: boolean) => {
-  seenAttended.push(isAttendedRequest())
-  return {
-    response: approved ? 'approved' : 'rejected',
-    serialized: `resumed:${approved}`,
-    data: {},
-    context: { id: 'ctx:resumed', events: [] } as Ctx,
-    status: 'running',
-  }
-})
 const createContext = vi.fn((message: string, _data: unknown, sessionId: string) => ({
   sessionId,
   events: [{ type: 'user_message', data: { content: message } }],
@@ -107,7 +97,6 @@ vi.mock('@hames-ai/harness-patterns', async () => {
   return {
     harness,
     continueSession,
-    resumeHarness,
     createContext,
     serializeContext,
     compactBulkData,
@@ -924,96 +913,6 @@ describe('triggered turns', () => {
   })
 })
 
-describe('approval turns', () => {
-  function approval(over: Record<string, unknown> = {}) {
-    return {
-      mode: 'approval' as const,
-      sessionId: 'sess-7',
-      userId: 'user-1',
-      approved: true,
-      ...over,
-    }
-  }
-
-  it('resumes the stored context under the row’s own agent, then persists it', async () => {
-    claimSession.mockResolvedValue({ ...STORED, agentId: 'general', status: 'paused' })
-
-    const result = await runTurnAndPersist(approval())
-
-    expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-7', 'general')
-    expect(resumeHarness).toHaveBeenCalledWith('ctx-a', ['patterns:general'], true)
-    expect(result.response).toBe('approved')
-    expect(saveSession).toHaveBeenNthCalledWith(1, 'sess-7', 'user-1', 'general', 'resumed:true', {
-      version: 'v-claim',
-      inferenceTier: 'anthropic',
-    })
-  })
-
-  it('resumes as rejected', async () => {
-    claimSession.mockResolvedValue({ ...STORED, status: 'paused' })
-    const result = await runTurnAndPersist(approval({ approved: false }))
-    expect(resumeHarness).toHaveBeenCalledWith('ctx-a', ['patterns:search'], false)
-    expect(result.response).toBe('rejected')
-  })
-
-  // The resumed turn ran tools too, so its results need the same compaction the
-  // first half of the turn got.
-  it('summarizes and re-persists the resumed turn', async () => {
-    claimSession.mockResolvedValue({ ...STORED, status: 'paused' })
-
-    await runTurnAndPersist(approval())
-    await flush()
-
-    expect(compactBulkData).toHaveBeenCalledTimes(1)
-    expect(dbUpdateContextIfUnchanged).toHaveBeenCalledWith(
-      'sess-7',
-      'user-1',
-      JSON.stringify({ id: 'ctx:resumed', events: [] }),
-      'v-saved',
-    )
-  })
-
-  it('never re-titles a conversation it resumes', async () => {
-    claimSession.mockResolvedValue({ ...STORED, status: 'paused' })
-    await runTurnAndPersist(approval())
-    expect(runFirstTurnTitleGen).not.toHaveBeenCalled()
-  })
-
-  // A stale approve (double-click, reloaded tab) must not reach the harness: a
-  // `Cannot resume` throw from inside the turn would flip a conversation that
-  // already completed to 'error'.
-  // The refusal comes AFTER the claim (the claim is the read that says the row
-  // is not paused), so the claim has to be let go — plainly, without marking a
-  // finished conversation failed.
-  // MUTATION: drop the release from `runOneTurn`'s `finally` → the release
-  // assertion reddens, and the conversation would refuse turns for a lease.
-  it('refuses to resume a row that is not paused, releasing the claim and flipping nothing', async () => {
-    claimSession.mockResolvedValue({ ...STORED, status: 'done' })
-
-    await expect(runTurnAndPersist(approval())).rejects.toThrow('No pending approval')
-
-    expect(resumeHarness).not.toHaveBeenCalled()
-    expect(getOrBuildPatterns).not.toHaveBeenCalled()
-    expect(dbReleaseConversationClaim).toHaveBeenCalledWith('sess-7', 'user-1', 'v-claim')
-    expect(flippedToError()).toEqual([])
-  })
-
-  it('refuses a session the user does not own, touching nothing', async () => {
-    claimSession.mockResolvedValue(null)
-
-    await expect(runTurnAndPersist(approval({ sessionId: 'sess-9' }))).rejects.toThrow(
-      'No active session',
-    )
-
-    expect(resumeHarness).not.toHaveBeenCalled()
-    expect(getOrBuildPatterns).not.toHaveBeenCalled()
-    // Nothing ran and nothing was claimed, so there is nothing to flip, seed
-    // or release.
-    expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
-    expect(dbCreateConversation).not.toHaveBeenCalled()
-  })
-})
-
 describe("the run frame's inference slot — the per-conversation switch, plumbed", () => {
   it('opens the frame with the tier the CONVERSATION is on', async () => {
     resolveConversationTier.mockResolvedValue('verda')
@@ -1056,15 +955,8 @@ describe("the run frame's inference slot — the per-conversation switch, plumbe
       message: 'go',
       claimVersion: 'v-trig',
     })
-    claimSession.mockResolvedValue({ ...STORED, status: 'paused' })
-    await runTurnAndPersist({
-      mode: 'approval',
-      sessionId: 'sess-1',
-      userId: 'user-1',
-      approved: true,
-    })
 
-    expect(tierScopes.value).toEqual(['anthropic', 'anthropic', 'anthropic'])
+    expect(tierScopes.value).toEqual(['anthropic', 'anthropic'])
   })
 
   it('runs the turn anyway when the preference cannot be read', async () => {
@@ -1084,21 +976,10 @@ describe("the run frame's inference slot — the per-conversation switch, plumbe
 // run (agent-deps-seam.test.ts); this is where each entry point decides it.
 //
 // MUTATION: set `attended: true` for every mode in `runTurnAndPersist` → the
-// triggered case reddens; drop the flag altogether → the two attended ones do.
+// triggered case reddens; drop the flag altogether → the attended one does.
 describe('the request scope says whether anyone is waiting on the run', () => {
   it('marks an interactive turn attended', async () => {
     await runTurnAndPersist(interactive())
-    expect(seenAttended).toEqual([true])
-  })
-
-  it('marks an approval attended — a person pressed the button', async () => {
-    claimSession.mockResolvedValue({ ...STORED, status: 'paused' })
-    await runTurnAndPersist({
-      mode: 'approval',
-      sessionId: 'sess-1',
-      userId: 'user-1',
-      approved: true,
-    })
     expect(seenAttended).toEqual([true])
   })
 
@@ -1359,21 +1240,6 @@ describe('one turn per conversation (#458)', () => {
     expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
   })
 
-  it('refuses an approval while a turn is still running in the conversation', async () => {
-    claimSession.mockRejectedValueOnce(new Error(BUSY))
-
-    await expect(
-      runTurnAndPersist({
-        mode: 'approval',
-        sessionId: 'sess-7',
-        userId: 'user-1',
-        approved: true,
-      }),
-    ).rejects.toThrow(BUSY)
-
-    expect(resumeHarness).not.toHaveBeenCalled()
-  })
-
   // A triggered run does not claim: the seed created its row claimed, and the
   // run is handed that claim. Claiming again would refuse itself.
   it('runs a triggered turn on the claim its seed took', async () => {
@@ -1457,18 +1323,41 @@ describe('one turn per conversation (#458)', () => {
     })
   })
 
+  /** A request whose dispatch throws AFTER its claim and before the run: the
+   *  shape the stale-approval refusal had until #433 S3 deleted that mode, and
+   *  the one S7's resume refusals take. `planTurn` is the first to read
+   *  `agentId` once the claim found a stored row. */
+  function throwsAfterClaim(sessionId: string) {
+    return Object.defineProperty(interactive({ sessionId }), 'agentId', {
+      get: () => {
+        throw new Error('refused after the claim')
+      },
+    })
+  }
+
+  // The release in `runOneTurn`'s `finally` — plain, without marking the
+  // conversation failed, because nothing ran.
+  // MUTATION: drop the release from `runOneTurn`'s `finally` → the release
+  // assertion reddens, and the conversation would refuse turns for a lease.
+  it('releases a claim it was refused after, flipping nothing', async () => {
+    claimSession.mockResolvedValue(STORED)
+
+    await expect(runTurnAndPersist(throwsAfterClaim('sess-7'))).rejects.toThrow(
+      'refused after the claim',
+    )
+
+    expect(getOrBuildPatterns).not.toHaveBeenCalled()
+    expect(dbReleaseConversationClaim).toHaveBeenCalledWith('sess-7', 'user-1', 'v-claim')
+    expect(flippedToError()).toEqual([])
+  })
+
   it('logs a release that fails, and still surfaces the refusal that needed it', async () => {
-    claimSession.mockResolvedValue({ ...STORED, status: 'done' })
+    claimSession.mockResolvedValue(STORED)
     dbReleaseConversationClaim.mockRejectedValueOnce(new Error('postgres down'))
 
-    await expect(
-      runTurnAndPersist({
-        mode: 'approval',
-        sessionId: 'sess-7',
-        userId: 'user-1',
-        approved: true,
-      }),
-    ).rejects.toThrow('No pending approval')
+    await expect(runTurnAndPersist(throwsAfterClaim('sess-7'))).rejects.toThrow(
+      'refused after the claim',
+    )
 
     expect(logged).toHaveBeenCalledWith(
       expect.stringContaining('could not release %s'),

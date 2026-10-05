@@ -1,7 +1,7 @@
 /**
  * ChatInterface — the run loop that turns a composer submit into a transcript.
  *
- * The component owns four things worth pinning down, and all four are bugs
+ * The component owns three things worth pinning down, and all three are bugs
  * that have actually been fixed here (#47, #105, #71-adjacent promotion gate):
  *
  *  - hydration: a session swap reloads that thread's history, and must NOT
@@ -9,8 +9,10 @@
  *  - the SSE run: events are filed against the session captured at *submit*
  *    time, so switching threads mid-stream can't misfile a turn;
  *  - the gates: concurrency cap, in-flight block, embedding block, and the
- *    action→conversation promotion confirm;
- *  - the approve/reject round trip on a paused write.
+ *    action→conversation promotion confirm.
+ *
+ * (The approve/reject round trip on a paused write went with the boolean
+ * `resumeHarness` in #433 S3.)
  *
  * The route's per-session state is the real `SessionRegistry` (#226 B1),
  * provided through context exactly as `routes/index.tsx` does — so these
@@ -39,8 +41,6 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 }))
 
 const loadConversation = vi.fn()
-const approveAction = vi.fn()
-const rejectAction = vi.fn()
 const promoteAction = vi.fn()
 const AGENTS = [
   {
@@ -85,8 +85,6 @@ vi.mock('~/lib/harness-client', async () => {
     ...graph,
     ...refs,
     loadConversation,
-    approveAction,
-    rejectAction,
     promoteAction,
     getAgentList,
     // The tier switch beside the agent selector reads on mount and on every
@@ -947,109 +945,6 @@ describe('ChatInterface — action promotion gate', () => {
 
     expect(modal()).toBeTruthy()
     expect(fetchMock).not.toHaveBeenCalled()
-    err.mockRestore()
-  })
-})
-
-describe('ChatInterface — paused write approval', () => {
-  const pausedRun = () =>
-    fetchMock.mockResolvedValue(
-      sseResponse([
-        doneFrame({
-          status: 'paused',
-          response: 'I need approval to write.',
-          data: { pendingAction: { action: 'write_neo4j_cypher', reason: 'creates a node' } },
-        }),
-      ]),
-    )
-
-  const toolTrigger = (root: HTMLElement) =>
-    root.querySelector<HTMLElement>('[data-scope="collapsible"][data-part="trigger"]')!
-  const toolButton = (root: HTMLElement, label: string) =>
-    [...root.querySelectorAll('button')].find((b) => b.textContent?.includes(label))!
-
-  it('offers the pending write for approval and shows the result once approved', async () => {
-    pausedRun()
-    approveAction.mockResolvedValue({ response: 'Node created.', context: { events: [] } })
-    const host = makeHost()
-    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
-    await settle()
-
-    send(container, 'create a node')
-    await settle()
-
-    expect(transcript(container)).toContain('KG: Write')
-    expect(transcript(container)).toContain('Awaiting approval')
-
-    toolTrigger(container).click()
-    await tick()
-    toolButton(container, 'Approve').click()
-    await settle()
-
-    expect(approveAction).toHaveBeenCalledWith('s1')
-    expect(transcript(container)).toContain('Node created.')
-    expect(transcript(container)).toContain('Executed')
-  })
-
-  it('marks the tool call failed and reports why when the write throws', async () => {
-    pausedRun()
-    approveAction.mockRejectedValue(new Error('constraint violation'))
-    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const host = makeHost()
-    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
-    await settle()
-
-    send(container, 'create a node')
-    await settle()
-    toolTrigger(container).click()
-    await tick()
-    toolButton(container, 'Approve').click()
-    await settle()
-
-    expect(transcript(container)).toContain('Write operation failed')
-    expect(transcript(container)).toContain('constraint violation')
-    expect(transcript(container)).toContain('Failed')
-    err.mockRestore()
-  })
-
-  it("records the rejection on the tool call and shows the agent's reply", async () => {
-    pausedRun()
-    rejectAction.mockResolvedValue({ response: 'Understood, skipping the write.' })
-    const host = makeHost()
-    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
-    await settle()
-
-    send(container, 'create a node')
-    await settle()
-    toolTrigger(container).click()
-    await tick()
-    toolButton(container, 'Reject').click()
-    await settle()
-
-    expect(rejectAction).toHaveBeenCalledWith('s1')
-    expect(transcript(container)).toContain('Understood, skipping the write.')
-    toolTrigger(container).click()
-    await tick()
-    expect(transcript(container)).toContain('Rejected by user')
-  })
-
-  it('swallows a failed rejection without inventing an agent reply', async () => {
-    pausedRun()
-    rejectAction.mockRejectedValue(new Error('offline'))
-    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const host = makeHost()
-    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
-    await settle()
-
-    send(container, 'create a node')
-    await settle()
-    toolTrigger(container).click()
-    await tick()
-    toolButton(container, 'Reject').click()
-    await settle()
-
-    expect(transcript(container)).toContain('Awaiting approval')
-    expect(err).toHaveBeenCalled()
     err.mockRestore()
   })
 })

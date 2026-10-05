@@ -412,8 +412,7 @@ interface AgentDefinition {
 }
 
 // The data every pattern in the agent reads and writes during a run:
-interface AgentData
-  extends HarnessData, RouterData, SimpleLoopData, RetrieverData, WithApproval {
+interface AgentData extends HarnessData, RouterData, SimpleLoopData, RetrieverData {
   response?: string
   [key: string]: unknown
 }

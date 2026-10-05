@@ -233,10 +233,10 @@ to be complete. Add to it when you add a scenario that leaves something out.
   the pattern whose **retry** path #263 actually broke is still covered only by
   `prompt-role-order.test.ts` and the evals. Closing it needs a sandbox fake,
   which is larger than this suite.
-- **Two of the three turn modes.** `turn.server.ts` documents `interactive`,
-  `triggered` and `approval`; only `interactive` runs here. So
-  `resumeHarness` behind an approval gate, and the triggered runner's
-  pre-seeded-row path (`POST /api/agents/:id`, a routine), are untraversed.
+- **One of the two turn modes.** `turn.server.ts` documents `interactive` and
+  `triggered`; only `interactive` runs here. So the triggered runner's
+  pre-seeded-row path (`POST /api/agents/:id`, a routine) is untraversed. A
+  paused run's resume has no turn mode yet (#433 S7), so it is untraversed too.
 - **The injection screen, at all.** No agent in this repo enables the opt-in LLM
   screen, so no scenario here makes a `ScreenUntrustedContent` call — the fake
   can answer one (`injection_detected: false`) but nothing asks. The fake router

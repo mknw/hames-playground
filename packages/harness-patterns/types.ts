@@ -972,21 +972,6 @@ export interface ToolCallResult {
 export type ToolSet = Record<string, string[]> & { all: string[] }
 
 // ============================================================================
-// Approval
-// ============================================================================
-
-export interface ApprovalRequest {
-  action: string
-  payload: unknown
-  reason: string
-}
-
-export interface WithApproval {
-  pendingAction?: ApprovalRequest
-  approved?: boolean
-}
-
-// ============================================================================
 // Results
 // ============================================================================
 
@@ -1129,6 +1114,12 @@ export interface ToolResultEventData {
    *  serializes `event.data`), so a full report here would hand the neutralized
    *  injection to the next LLM. See `SanitizeSummary`. */
   sanitized?: import('./injection-guard').SanitizeSummary
+  /** The id of the request this result was HELD for (#433). Set when a resume,
+   *  a supersede or an expiry replaced the `HeldResult` placeholder with the
+   *  outcome; the placeholder's `summary` is deleted in the same step, so a
+   *  compaction summary of "waiting for a decision" can never mask the
+   *  outcome (#433 Δ2). */
+  heldBy?: string
 }
 
 /** Data payload for controller_action event */
@@ -1160,17 +1151,6 @@ export interface PatternEnterEventData {
 export interface PatternExitEventData {
   status: CtxStatus
   error?: string
-}
-
-/** Data payload for approval_request event */
-export interface ApprovalRequestEventData {
-  request: ApprovalRequest
-}
-
-/** Data payload for approval_response event */
-export interface ApprovalResponseEventData {
-  approved: boolean
-  reason?: string
 }
 
 /** Data payload for error event */
@@ -1549,12 +1529,24 @@ export type HitlOutcome<C extends string = string> =
   | { readonly status: 'pending'; readonly requestId: string }
 
 /** What a gated tool executor returns while the run waits: the placeholder,
- *  never the content. A resume substitutes the resolution for it (#433 S3). */
+ *  never the content. A resume substitutes the outcome for it, sanitized, and
+ *  marks the result `heldBy` (#433 S3). */
 export interface HeldResult {
   readonly held: true
   readonly requestId: string
   readonly note: string
 }
+
+/** One answer to `resumeHarness`: a bare option id, or the id with the
+ *  option's flags. Nothing else — no principal and no resolution: a client
+ *  body passed straight through can choose only what a person chooses (#433,
+ *  F4). The host stamps `principal`, and `resolve` returns the resolution. */
+export type HitlAnswer =
+  string | { readonly choice: string; readonly flags?: Readonly<Record<string, boolean>> }
+
+/** `resumeHarness`'s answers, keyed by the `requestId` each one answers. Every
+ *  request the run waits on must be answered, in one call. */
+export type HitlAnswers = Readonly<Record<string, HitlAnswer>>
 
 // ============================================================================
 // LLM Call Observability

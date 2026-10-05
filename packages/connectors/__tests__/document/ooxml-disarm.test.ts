@@ -16,9 +16,11 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import {
+  parseXml,
   readZip,
   ZipRefusedError,
   XML_LIMITS,
+  type XmlElement,
   type ZipRefusal,
 } from '@hames-ai/harness-patterns/stash/zip.server'
 import {
@@ -141,14 +143,23 @@ describe('the rebuilt package', () => {
     await disarmed(docx({ body }), MIME.docx, ['XMLCOMMENTSENTINEL', 'PISENTINEL'])
   })
 
-  it('escapes what it writes: markup characters in text and attributes round-trip', async () => {
+  it('escapes what it writes: text and attribute values round-trip exactly', async () => {
     const body =
-      `<w:p><w:r><w:t xml:space="preserve">VISIBLE &amp; &lt;tag&gt; "q" &#10;line</w:t></w:r></w:p>` +
-      `<w:p><w:pPr><w:pStyle w:val="a&amp;b&quot;c&#10;d"/></w:pPr></w:p>`
+      `<w:p><w:r><w:t xml:space="preserve">VISIBLE &amp; &lt;tag&gt; ]]&gt; "q" &#13;&#10;line</w:t></w:r></w:p>` +
+      `<w:p><w:pPr><w:pStyle w:val="a&amp;b&quot;c&#10;d&#9;e&#13;f&lt;'"/></w:pPr></w:p>` +
+      `<w:p><w:r><w:t><![CDATA[CDATA <raw> & ]]></w:t></w:r></w:p>`
     const out = await ooxmlDisarm(docx({ body }), MIME.docx)
-    const doc = unpack(out.bytes).get('word/document.xml')!
-    expect(doc).toContain('VISIBLE &amp; &lt;tag&gt; "q" \nline')
-    expect(doc).toContain('w:val="a&amp;b&quot;c&#10;d"')
+    const root = parseXml(unpack(out.bytes).get('word/document.xml')!)
+    const texts: string[] = []
+    const vals: string[] = []
+    const walk = (e: XmlElement) => {
+      if (e.name === 't') texts.push(e.children.join(''))
+      if (e.name === 'pStyle') vals.push(e.attributes.find((a) => a.name === 'val')!.value)
+      for (const c of e.children) if (typeof c !== 'string') walk(c)
+    }
+    walk(root)
+    expect(texts).toEqual(['VISIBLE & <tag> ]]> "q" \r\nline', 'CDATA <raw> & '])
+    expect(vals).toEqual(['a&b"c\nd\te\rf<\''])
   })
 
   it('an unwrapped element passes its namespace declarations to its children', async () => {
@@ -846,6 +857,20 @@ describe('Z2: hidden runs — effective vanish, specVanish and webHidden are dro
     await disarmed(styled(styles, para('VISIBLE') + table), MIME.docx, ['TABLESENTINEL'])
   })
 
+  it('a property given twice is read as hiding if either says so', async () => {
+    const styles =
+      '<w:style w:type="paragraph" w:styleId="GhostPara"><w:rPr><w:vanish/></w:rPr></w:style>'
+    const body =
+      `<w:p>${run('VISIBLE')}<w:r><w:rPr><w:b/></w:rPr><w:rPr><w:vanish/></w:rPr><w:t>SECONDRPRSENTINEL</w:t></w:r>` +
+      `<w:r><w:rPr><w:vanish w:val="0"/><w:vanish/></w:rPr><w:t>SECONDVANISHSENTINEL</w:t></w:r></w:p>` +
+      `<w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:pPr><w:pStyle w:val="GhostPara"/></w:pPr>${run('SECONDPPRSENTINEL')}</w:p>`
+    await disarmed(styled(styles, body), MIME.docx, [
+      'SECONDRPRSENTINEL',
+      'SECONDVANISHSENTINEL',
+      'SECONDPPRSENTINEL',
+    ])
+  })
+
   it('a hidden math run', async () => {
     await disarmed(
       docx({
@@ -1511,14 +1536,19 @@ describe('the disarm throws instead of returning a partial package', () => {
   })
 
   it('a relationships part, or the content types, over 1 MiB (A1)', async () => {
+    // Pseudo-random padding: a repeated letter would deflate past the reader's
+    // 100:1 ratio and be refused there, before this check is reached.
+    const pad = Array.from({ length: (1024 * 1024) / 8 }, (_, i) =>
+      ((i * 2654435761) >>> 0).toString(16).padStart(8, '0'),
+    ).join('')
     const bigRels = docx({
       body: para('x'),
-      docRels: [{ id: 'rIdPad', type: RT.settings, target: `${'a'.repeat(1024 * 1024)}.xml` }],
+      docRels: [{ id: 'rIdPad', type: RT.settings, target: `${pad}.xml` }],
     })
     expect(await refusalOf(ooxmlDisarm(bigRels, MIME.docx))).toBe('content-type')
     const bigTypes = buildPackage({
       main: { name: 'word/document.xml', type: CT.docxMain, body: W_EMPTY },
-      parts: [{ name: 'pad.xml', type: `application/x-${'p'.repeat(1024 * 1024)}`, body: '<r/>' }],
+      parts: [{ name: 'pad.xml', type: `application/x-${pad}`, body: '<r/>' }],
     })
     expect(await refusalOf(ooxmlDisarm(bigTypes, MIME.docx))).toBe('content-type')
   })

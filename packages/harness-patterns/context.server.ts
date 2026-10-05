@@ -17,6 +17,8 @@ import type {
   PatternConfig,
   UserMessageEventData,
   LLMCallData,
+  HitlRequestEventData,
+  HitlResponseEventData,
 } from './types'
 
 assertServerOnImport()
@@ -68,9 +70,17 @@ export function serializeContext<T>(ctx: UnifiedContext<T>): string {
   return JSON.stringify(ctx)
 }
 
-/** Deserialize context from JSON string */
+/** Deserialize context from JSON string.
+ *
+ *  Every `hitl_*` event comes back deep-frozen, as one is at mint (#433, F1):
+ *  a stored decision is the record a resume is checked against, so a pattern
+ *  that reads it through a view must not be able to rewrite it in place. */
 export function deserializeContext<T = Record<string, unknown>>(json: string): UnifiedContext<T> {
-  return JSON.parse(json) as UnifiedContext<T>
+  const ctx = JSON.parse(json) as UnifiedContext<T>
+  for (const event of ctx.events) {
+    if (HITL_EVENT_TYPES.has(event.type)) deepFreeze(event)
+  }
+  return ctx
 }
 
 // ============================================================================
@@ -94,13 +104,16 @@ export function createScope<T>(patternId: string, data: T): PatternScope<T> {
 /** Create a context event. Step-level token/cost accounting (`metrics`,
  *  computed by the adapters across ALL attempts of the call) is lifted from
  *  the llmCall carrier onto the event itself, making events self-contained
- *  accounting records for any consumer (panel, exports, recordings). */
+ *  accounting records for any consumer (panel, exports, recordings).
+ *
+ *  Throws for `hitl_request` / `hitl_response`: only core writes those. */
 export function createEvent(
   type: EventType,
   patternId: string,
   data: unknown,
   llmCall?: LLMCallData,
 ): ContextEvent {
+  refuseHitl(type, 'createEvent')
   return {
     id: generateId('ev'),
     type,
@@ -128,7 +141,11 @@ export function shouldTrack(type: EventType, trackHistory: TrackHistory): boolea
 
 /** Add event to scope if it should be tracked.
  *  When the current pattern has `liveEvents: true`, the event is also forwarded
- *  to the harness `onEvent` listener immediately via `emitLive()`. */
+ *  to the harness `onEvent` listener immediately via `emitLive()`.
+ *
+ *  Throws for `hitl_request` / `hitl_response` WHATEVER `trackHistory` says:
+ *  only core writes those, and a refusal that depended on configuration would
+ *  pass in one agent and throw in the next. */
 export function trackEvent(
   scope: PatternScope<unknown>,
   type: EventType,
@@ -136,10 +153,113 @@ export function trackEvent(
   trackHistory: TrackHistory,
   llmCall?: LLMCallData,
 ): void {
+  refuseHitl(type, 'trackEvent')
   if (!shouldTrack(type, trackHistory)) return
   const event = createEvent(type, scope.id, data, llmCall)
   scope.events.push(event)
   emitLive(event)
+}
+
+// ============================================================================
+// HITL events: only core writes them (#433, F6)
+// ============================================================================
+//
+// A `hitl_response` is an answer, and an answer resumes a run past a decision
+// a person was asked to make. So the paths a pattern author is TOLD to use —
+// `createEvent` / `trackEvent`, and pushing onto `scope.events` (GUIDE §1),
+// which `commitEvents` and `chain()` then merge — must not be able to write
+// one. The first two refuse both types outright. The second two cannot refuse
+// what is already in an array, so they keep only the HITL events core itself
+// created: each is minted into the module-private set below, and anything
+// else of those two types is dropped, with a warning.
+//
+// Identity, not content, is what the set records, and it is per process: a
+// context that went through `serializeContext` comes back as plain objects.
+// That is deliberate. `readHitl` never consults the set — events already in a
+// stored blob are not re-filtered, because the blob is server-held state the
+// host owns (spec #433 §2, P1a). The set guards the in-run write paths only.
+
+const HITL_EVENT_TYPES: ReadonlySet<EventType> = new Set<EventType>([
+  'hitl_request',
+  'hitl_response',
+])
+
+/** Every HITL event core created in this process. Module-private: the only
+ *  way in is {@link mintHitlEvent}. */
+const mintedHitlEvents = new WeakSet<ContextEvent>()
+
+function refuseHitl(type: EventType, via: string): void {
+  if (HITL_EVENT_TYPES.has(type)) {
+    throw new Error(`${via} cannot write a ${type} event: only core writes HITL events (#433).`)
+  }
+}
+
+/**
+ * Create a HITL event and record it as core's own.
+ *
+ * @internal Core's HITL writers only. It is not in the package barrel: a
+ * pattern that called it would be forging the record a resume is checked
+ * against, which is exactly what {@link createEvent}'s refusal stops.
+ */
+export function mintHitlEvent(
+  type: 'hitl_request',
+  patternId: string,
+  data: HitlRequestEventData,
+): ContextEvent
+export function mintHitlEvent(
+  type: 'hitl_response',
+  patternId: string,
+  data: HitlResponseEventData,
+): ContextEvent
+export function mintHitlEvent(
+  type: 'hitl_request' | 'hitl_response',
+  patternId: string,
+  data: HitlRequestEventData | HitlResponseEventData,
+): ContextEvent {
+  // A deep-frozen COPY (#433, F1). Frozen, so a pattern holding the event —
+  // through a view, after the commit — cannot rewrite the decision in place;
+  // the set below records identity, not content. A copy, so the caller's own
+  // objects (an options constant shared by every request) are not frozen with
+  // it, and so the request keeps the "frozen copy" of its options the spec asks for.
+  const event = deepFreeze({
+    id: generateId('ev'),
+    type,
+    ts: Date.now(),
+    patternId,
+    data: structuredClone(data),
+  })
+  mintedHitlEvents.add(event)
+  return event
+}
+
+/** `Object.freeze`, recursively, over plain objects and arrays — in place. A
+ *  value already frozen is left as it is, which also ends a cycle. */
+function deepFreeze<T>(value: T): T {
+  if (!Array.isArray(value) && !isPlainObject(value)) return value
+  if (Object.isFrozen(value)) return value
+  Object.freeze(value)
+  for (const child of Object.values(value as object)) deepFreeze(child)
+  return value
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null) return false
+  const proto: unknown = Object.getPrototypeOf(value)
+  return proto === Object.prototype || proto === null
+}
+
+/** `events` without any `hitl_*` event core did not mint. Every other event
+ *  passes untouched, and the same array comes back when nothing is dropped. */
+export function dropUnmintedHitl(events: ContextEvent[]): ContextEvent[] {
+  const forged = events.filter((e) => HITL_EVENT_TYPES.has(e.type) && !mintedHitlEvents.has(e))
+  if (forged.length === 0) return events
+  for (const e of forged) {
+    console.warn(
+      `[harness-patterns] dropped a ${e.type} event from '${e.patternId}' that core did not ` +
+        'write: only core writes HITL events (#433).',
+    )
+  }
+  return events.filter((e) => !forged.includes(e))
 }
 
 // ============================================================================
@@ -159,7 +279,10 @@ export function trackEvent(
  *  dropping it under 'on-success' is the silent degradation it exists to end.
  *  Includes 'loop_recovery' for the same reason: when a controller's answer
  *  would not parse, it is the only event carrying what the model said, and a
- *  loop that then fails must not drop the record of how it got there (#437). */
+ *  loop that then fails must not drop the record of how it got there (#437).
+ *  Includes 'hitl_request' and 'hitl_response' because they ARE the state a
+ *  resume derives from (#433): a pattern that asked a person and then failed
+ *  must not lose the record of the question, nor of the answer. */
 const ALWAYS_COMMIT_TYPES: Set<EventType> = new Set([
   'pattern_enter',
   'pattern_exit',
@@ -167,35 +290,39 @@ const ALWAYS_COMMIT_TYPES: Set<EventType> = new Set([
   'content_sanitized',
   'warning',
   'loop_recovery',
+  'hitl_request',
+  'hitl_response',
 ])
 
 /** Commit scope events to context based on strategy.
  *  Preserves original event order — lifecycle events (pattern_enter/exit) are
  *  always committed regardless of strategy, interleaved with content events
- *  in their original position. */
+ *  in their original position. A `hitl_*` event core did not mint is never
+ *  committed, under any strategy (#433, F6). */
 export function commitEvents<T>(
   ctx: UnifiedContext<T>,
   scope: PatternScope<unknown>,
   strategy: CommitStrategy,
 ): void {
+  const events = dropUnmintedHitl(scope.events)
   switch (strategy) {
     case 'always':
       // All events in original order
-      ctx.events.push(...scope.events)
+      ctx.events.push(...events)
       break
     case 'on-success':
       if (ctx.status !== 'error') {
-        ctx.events.push(...scope.events)
+        ctx.events.push(...events)
       } else {
         // Only lifecycle events
-        ctx.events.push(...scope.events.filter((e) => ALWAYS_COMMIT_TYPES.has(e.type)))
+        ctx.events.push(...events.filter((e) => ALWAYS_COMMIT_TYPES.has(e.type)))
       }
       break
     case 'last': {
       // Lifecycle events + last content event, preserving order
-      const lastContentIdx = findLastIndex(scope.events, (e) => !ALWAYS_COMMIT_TYPES.has(e.type))
-      for (let i = 0; i < scope.events.length; i++) {
-        const e = scope.events[i]
+      const lastContentIdx = findLastIndex(events, (e) => !ALWAYS_COMMIT_TYPES.has(e.type))
+      for (let i = 0; i < events.length; i++) {
+        const e = events[i]
         if (ALWAYS_COMMIT_TYPES.has(e.type) || i === lastContentIdx) {
           ctx.events.push(e)
         }
@@ -204,7 +331,7 @@ export function commitEvents<T>(
     }
     case 'never':
       // Only lifecycle events
-      ctx.events.push(...scope.events.filter((e) => ALWAYS_COMMIT_TYPES.has(e.type)))
+      ctx.events.push(...events.filter((e) => ALWAYS_COMMIT_TYPES.has(e.type)))
       break
   }
 }

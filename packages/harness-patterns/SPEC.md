@@ -172,8 +172,8 @@ type EventType =
   | 'critic_result'
   | 'pattern_enter'
   | 'pattern_exit'
-  | 'approval_request'
-  | 'approval_response'
+  | 'approval_request' // @deprecated legacy (#433) — superseded by hitl_request; readHitl() never reads it
+  | 'approval_response' // @deprecated legacy (#433) — superseded by hitl_response; readHitl() never reads it
   | 'error'
   | 'reference_attached' // withReferences — selector decision (observability)
   | 'intent_compacted' // compactIntent — rewritten brief (observability)
@@ -181,6 +181,8 @@ type EventType =
   | 'content_sanitized' // withInjectionGuard — untrusted content neutralized (observability + audit)
   | 'warning' // a side task (title, summaries, intent/query rewrite, reference pick, sandbox skills mount) failed; the turn ran on a fallback (#420)
   | 'loop_recovery' // simpleLoop / actorCritic fed one failure back to the model and continued on its budget (#437)
+  | 'hitl_request' // a person is asked to decide (#433) — core writes it; readHitl() derives state from it
+  | 'hitl_response' // the decision on one hitl_request (#433) — core writes it
 
 // Isolated workspace for each pattern
 interface PatternScope<T> {
@@ -1561,7 +1563,7 @@ view.since(timestamp)
 view.fromLastNTurns(3) // Rolling window: last 3 user turns
 
 // Execution
-view.get() // ContextEvent[]
+view.get() // ContextEvent[] — always a new array, never the live log (#433)
 view.serialize() // XML format for LLM
 view.serializeCompact({ recentTurns: 1 }) // Compact pointers for older results, full for recent
 view.exists() // boolean
@@ -1792,8 +1794,10 @@ transformed into prompt-friendly types. The table below shows which harness
 | `assistant_message`  | `AssistantMessageEventData`                                                                                                            | `Message { role, content }`                             | router (history)                                              |
 | `pattern_enter`      | `PatternEnterEventData`                                                                                                                | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`      |
 | `pattern_exit`       | `PatternExitEventData`                                                                                                                 | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`      |
-| `approval_request`   | `ApprovalRequestEventData`                                                                                                             | _(not sent to BAML)_                                    | (reserved — no active emitter)                                |
-| `approval_response`  | `ApprovalResponseEventData`                                                                                                            | _(not sent to BAML)_                                    | (reserved — no active emitter)                                |
+| `approval_request`   | `ApprovalRequestEventData`                                                                                                             | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_request`, not an answer    |
+| `approval_response`  | `ApprovalResponseEventData`                                                                                                            | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_response`, not an answer   |
+| `hitl_request`       | `HitlRequestEventData`                                                                                                                 | _(metadata only — kind and request id)_                 | `readHitl()` / `answerOf()` (#433)                            |
+| `hitl_response`      | `HitlResponseEventData`                                                                                                                | _(metadata only — kind, choice and who decided)_        | `readHitl()` / `answerOf()` (#433)                            |
 | `error`              | `ErrorEventData`                                                                                                                       | _(read via `view.hasErrors()`)_                         | compactExecution (error context), harness error handling      |
 | `reference_attached` | `ReferenceAttachedEventData`                                                                                                           | _(not sent to BAML)_                                    | withReferences only (observability)                           |
 | `intent_compacted`   | `IntentCompactedEventData`                                                                                                             | _(not sent to BAML)_                                    | compactIntent only (observability)                            |

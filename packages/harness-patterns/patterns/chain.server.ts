@@ -21,6 +21,7 @@ import {
   resolveConfig,
   setError,
   createEvent,
+  dropUnmintedHitl,
 } from '../context.server'
 import { setLivePatternEnabled, wasEmittedLive } from '../live-event-context.server'
 import { createEventView } from './event-view.server'
@@ -258,7 +259,11 @@ export function chain<T extends Record<string, unknown>>(
         const subView = createEventView(syntheticCtx, pattern.config.viewConfig, subId)
         const childScope = createScope<T>(subId, currentData)
         const result = await pattern.fn(childScope, subView)
-        scope.events.push(...result.events)
+        // Drop any hitl_* event core did not mint HERE, not only at the final
+        // commit: the next sub-pattern's view is built from these events, so
+        // a forged answer merged now would be read before anything commits
+        // (#433, F6).
+        scope.events.push(...dropUnmintedHitl(result.events))
         scope.events.push(createEvent('pattern_exit', subId, { status: 'completed' }))
         currentData = result.data
       }

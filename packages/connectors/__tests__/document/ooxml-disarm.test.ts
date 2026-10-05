@@ -1759,7 +1759,7 @@ describe('#482 F2: the rules cost CPU linear in the part', () => {
    * run scanned both stacks (quadratic: 5.8 s of CPU at 60,000); now the
    * field state is O(1) a node and the 257th open field is refused.
    */
-  it('2(a): 30,000 open fields then 30,000 runs is refused in under 500 ms of CPU', async () => {
+  it('2(a): 30,000 open fields then 30,000 runs costs no more than the same-size part without them', async () => {
     const fields =
       '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>'.repeat(
         30_000,
@@ -1767,8 +1767,17 @@ describe('#482 F2: the rules cost CPU linear in the part', () => {
     const runs = Array.from({ length: 30_000 }, (_, i) => `<w:r><w:t>${i}</w:t></w:r>`).join('')
     const bytes = docx({ body: `<w:p>${fields}${runs}</w:p>` })
     expect(await refusalOf(ooxmlDisarm(bytes, MIME.docx))).toBe('content-type')
-    expect(await cpuMs(() => ooxmlDisarm(bytes, MIME.docx))).toBeLessThan(500)
-  }, 60_000)
+    // Relative, not absolute: CI's runners are ~3× slower than a laptop, so
+    // the review's 500 ms held here and not there. The baseline is a part of
+    // the same node count with no fields; quadratic field state is many times it.
+    const base = docx({
+      body: `<w:p>${Array.from({ length: 90_000 }, (_, i) => `<w:r><w:t>${i}</w:t></w:r>`).join('')}</w:p>`,
+    })
+    const ratio =
+      (await cpuMs(() => ooxmlDisarm(bytes, MIME.docx))) /
+      (await cpuMs(() => ooxmlDisarm(base, MIME.docx)))
+    expect(ratio).toBeLessThan(2)
+  }, 120_000)
 
   it('2(a): fields nest 256 deep, and the 257th begin is refused', async () => {
     const begins = (n: number) => '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'.repeat(n)
@@ -1782,7 +1791,7 @@ describe('#482 F2: the rules cost CPU linear in the part', () => {
     ).toBe('content-type')
   })
 
-  it('2(b): 255-deep default chains and 60,000 runs in a table, in under 500 ms of CPU', async () => {
+  it('2(b): 255-deep default chains over 60,000 runs cost no more than the same part without them', async () => {
     const chain = (type: string, p: string) =>
       Array.from(
         { length: 255 },
@@ -1803,8 +1812,25 @@ describe('#482 F2: the rules cost CPU linear in the part', () => {
       `<w:p>${run('VISIBLE')}${runs}</w:p></w:tc></w:tr></w:tbl>`
     const bytes = docx({ body, styles })
     expect(everything((await ooxmlDisarm(bytes, MIME.docx)).bytes)).toContain('VISIBLE')
-    expect(await cpuMs(() => ooxmlDisarm(bytes, MIME.docx))).toBeLessThan(500)
-  }, 60_000)
+    // Relative, not absolute (see 2(a)): the baseline is the same part with
+    // the same styles unchained, so only the chains' resolution differs.
+    const flat = wStyles(
+      ['character', 'paragraph', 'table']
+        .flatMap((type, t) =>
+          Array.from(
+            { length: 255 },
+            (_, i) =>
+              `<w:style w:type="${type}"${i === 0 ? ' w:default="1"' : ''} w:styleId="${'CPT'[t]}${i}"/>`,
+          ),
+        )
+        .join(''),
+    )
+    const base = docx({ body, styles: flat })
+    const ratio =
+      (await cpuMs(() => ooxmlDisarm(bytes, MIME.docx))) /
+      (await cpuMs(() => ooxmlDisarm(base, MIME.docx)))
+    expect(ratio).toBeLessThan(1.3)
+  }, 120_000)
 })
 
 describe('#482 F3 (A13): a basedOn chain cut off by the bound counts as hiding', () => {

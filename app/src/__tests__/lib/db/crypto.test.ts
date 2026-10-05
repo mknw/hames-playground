@@ -517,6 +517,8 @@ describe('inventory', () => {
     expect(ENCRYPTED_TABLES.map((t) => t.table).sort()).toEqual([
       'auth_sessions',
       'conversations',
+      'hitl_quarantine',
+      'hitl_requests',
       'routines',
       'skills',
       'users',

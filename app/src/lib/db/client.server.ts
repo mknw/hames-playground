@@ -173,6 +173,72 @@ const SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS session_claims_expires_idx
     ON session_claims (expires_at);
+
+  -- HITL transport and index (#433 S7). NEVER AUTHORITATIVE: the decision state
+  -- is the conversation blob's hitl_* events (ADR-0009), and every answer this
+  -- table holds is validated against readHitl(blob).pending before a resume
+  -- consumes it — a row that is not pending is closed as superseded, never
+  -- applied. Two roles: the ANSWER IN TRANSIT (the person answered; the resume
+  -- that consumes the answer has not run yet, or failed and is retryable), and
+  -- the PROPOSAL PAYLOAD of a non-blocking request (S11) whose payload may
+  -- not ride an event. The payload — personal data the person has not chosen
+  -- to save, and for proposals chose nothing about — is DELETED the moment the
+  -- request is answered or expires (F20b): the skeleton (ids, kind, status,
+  -- timestamps) stays for audit, with the payload and the answer's content
+  -- the only encrypted columns. Retention of skeletons is inherited, SD-11.
+  --
+  -- Everything SQL filters on is plaintext, per the doctrine in
+  -- crypto.server.ts: the lifted kind/status, the owner and session ids, the
+  -- expiry the sweep reads. \`answer\` and \`payload\` are TEXT envelopes.
+  CREATE TABLE IF NOT EXISTS hitl_requests (
+    request_id  TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    session_id  TEXT NOT NULL,
+    run_id      TEXT,
+    kind        TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    blocks_run  BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at  TIMESTAMPTZ,
+    answered_at TIMESTAMPTZ,
+    answer      TEXT,
+    payload     TEXT
+  );
+  CREATE INDEX IF NOT EXISTS hitl_requests_session_idx
+    ON hitl_requests (user_id, session_id);
+  -- The sweep's read: only rows that still hold a payload are due, and a
+  -- partial index keeps it that shape when the answered majority (payload
+  -- purged) grows.
+  CREATE INDEX IF NOT EXISTS hitl_requests_expires_idx
+    ON hitl_requests (expires_at) WHERE payload IS NOT NULL;
+
+  -- The quarantine (#433 S7, F2): the raw file, the tier-0 copy, its findings
+  -- (F20a) and the sender's FULL address (C2 — the stored summary and the
+  -- disclaimer carry the domain only) of a document held for a provenance
+  -- decision. App-only and Postgres, NEVER Redis: the gateway's redis server is
+  -- a tool surface every agent holding tools.all can read, and a quarantine
+  -- there fails P2 the moment anyone asks the agent about the held file
+  -- (review F2). Agents have had no Postgres since #412 — pinned gateway-side
+  -- by no-agent-postgres.test.ts and package-side by
+  -- agent-postgres-tools.test.ts — so no tool can list or read this table.
+  -- Owner scope gives erasure a path (SD-11): the row dies with its request
+  -- (expires_at), and an expired request can only resolve to "not kept".
+  -- Every content column is an encrypted envelope; the sweep reads only
+  -- expires_at.
+  CREATE TABLE IF NOT EXISTS hitl_quarantine (
+    request_id     TEXT PRIMARY KEY,
+    user_id        TEXT NOT NULL,
+    session_id     TEXT NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at     TIMESTAMPTZ NOT NULL,
+    raw_file       TEXT,
+    tier0_copy     TEXT,
+    findings       TEXT,
+    sender_address TEXT
+  );
+  CREATE INDEX IF NOT EXISTS hitl_quarantine_expires_idx
+    ON hitl_quarantine (expires_at);
 `
 
 /**
@@ -210,6 +276,12 @@ async function initSchema(): Promise<void> {
   // process.
   const { backfillConversationInferenceTier } = await import('./conversations.server')
   await backfillConversationInferenceTier(directRunner)
+  // Arm the HITL expiry sweep (#433 S7): a quarantine row or a request payload
+  // past its `expires_at` must leave without anybody asking (F2, F20b, SD-11).
+  // Dynamic import for the same cycle reason as the backfill above, and for
+  // the sweep's own idempotence a second init cannot stack a second timer.
+  const { startHitlSweepTimer } = await import('./hitl.server')
+  startHitlSweepTimer()
   console.log('[db] schema ready')
 }
 

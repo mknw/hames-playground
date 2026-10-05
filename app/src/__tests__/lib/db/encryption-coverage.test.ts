@@ -28,8 +28,19 @@ import { join, relative, resolve } from 'node:path'
 // uses); `import.meta.url` is not a file URL in this jsdom environment.
 const SRC = resolve(process.cwd(), 'src')
 
-/** Tables whose content is encrypted, i.e. the ones this pin guards. */
-const ENCRYPTED_TABLES = ['conversations', 'auth_sessions', 'users', 'routines', 'skills'] as const
+/** Tables whose content is encrypted, i.e. the ones this pin guards. The
+ *  HITL pair (#433 S7) joins here: the answer/payload columns of
+ *  `hitl_requests` and the four content columns of `hitl_quarantine` are
+ *  personal data the decisions carry. */
+const ENCRYPTED_TABLES = [
+  'conversations',
+  'auth_sessions',
+  'users',
+  'routines',
+  'skills',
+  'hitl_requests',
+  'hitl_quarantine',
+] as const
 
 /**
  * The only production modules allowed to write SQL naming those tables — the
@@ -44,6 +55,7 @@ const SEAM_MODULES = [
   'lib/db/conversations.server.ts',
   'lib/db/routines.server.ts',
   'lib/db/skills.server.ts',
+  'lib/db/hitl.server.ts',
   'lib/auth/session-store.server.ts',
   'lib/auth/users.server.ts',
 ].sort()
@@ -53,6 +65,8 @@ const OWNER: Record<string, string> = {
   conversations: 'lib/db/conversations.server.ts',
   routines: 'lib/db/routines.server.ts',
   skills: 'lib/db/skills.server.ts',
+  hitl_requests: 'lib/db/hitl.server.ts',
+  hitl_quarantine: 'lib/db/hitl.server.ts',
   auth_sessions: 'lib/auth/session-store.server.ts',
   users: 'lib/auth/users.server.ts',
 }

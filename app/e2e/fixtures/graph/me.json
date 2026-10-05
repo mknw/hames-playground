@@ -1,0 +1,11 @@
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "displayName": "Synthetic User",
+  "givenName": "Synthetic",
+  "surname": "User",
+  "userPrincipalName": "synthetic.user@contoso.com",
+  "mail": "synthetic.user@contoso.com",
+  "jobTitle": "Test fixture",
+  "officeLocation": "Fixture office",
+  "preferredLanguage": "en-US"
+}

@@ -12,6 +12,7 @@
  *
  * | step                         | interactive | triggered | approval |
  * | ---------------------------- | ----------- | --------- | -------- |
+ * | claims the conversation      | yes         | its seed  | yes      |
  * | loads the stored context     | yes         | no        | required |
  * | continues it (vs. fresh run) | same agent  | never     | resumes  |
  * | pre-seeds a missing row      | yes (#105)  | no        | no       |
@@ -23,9 +24,17 @@
  * | `compactBulkData` + re-save  | yes         | yes       | yes      |
  * | flips a failed row to 'error'| yes         | yes       | yes      |
  *
+ * ONE TURN PER CONVERSATION (#458). Every mode claims its conversation before
+ * it runs and is the row's only writer until its save releases the claim; a
+ * second turn meanwhile is refused with `ConversationBusyError`, which reaches
+ * the user as an error frame. The lease, and why a turn is refused rather
+ * than queued, are in `db/conversations.server.ts`.
+ *
  * A triggered run never loads: its row is a placeholder written by
  * `seedActionRow` before the HTTP response, and continuing that would replay
- * the trigger command as a second user_message. It also skips title generation
+ * the trigger command as a second user_message. The seed is also its claim —
+ * created claimed, so no chat turn can take the row between the seed and the
+ * run — and the run is handed the version it holds. It also skips title generation
  * on purpose — `seedActionRow` lifts the trigger's `short_description` into the
  * sticky `title` column, and `runFirstTurnTitleGen` writes *through* that
  * stickiness (`updateConversationTitle`), so generating one would overwrite the
@@ -44,16 +53,19 @@ import {
   resumeHarness,
   createContext,
   serializeContext,
+  deserializeContext,
   compactBulkData,
   createEvent,
   type ConfiguredPattern,
   type ContextEvent,
   type HarnessResultScoped,
+  type ToolResultEventData,
+  type UnifiedContext,
   type WarningEventData,
 } from '@hames-ai/harness-patterns'
 import {
   getOrBuildPatterns,
-  loadSession,
+  claimSession,
   saveSession,
   agentDeps,
   type LoadedSession,
@@ -74,8 +86,13 @@ import { recordTurn } from '../metrics/usage-recorder.server'
 import type { HarnessSettings } from '../settings'
 import { runFirstTurnTitleGen } from '@hames-ai/agents/agents/title-generator.server'
 import {
-  saveConversation as dbSaveConversation,
-  setConversationStatus as dbSetConversationStatus,
+  createConversation as dbCreateConversation,
+  loadConversation as dbLoadConversation,
+  releaseConversationClaim as dbReleaseConversationClaim,
+  renewConversationClaim as dbRenewConversationClaim,
+  updateConversationContextIfUnchanged as dbUpdateContextIfUnchanged,
+  TURN_CLAIM_RENEW_MS,
+  TURN_CLAIM_TTL_SECONDS,
   deriveTitle,
 } from '../db/conversations.server'
 
@@ -136,6 +153,8 @@ export type TurnRequest =
       message: string
       /** Seeded onto the fresh context — the run's `trigger` provenance. */
       data?: Partial<SessionData>
+      /** The version `seedActionRow` returned: the claim this run holds. */
+      claimVersion: string
     })
   /** Resume a context paused at an approval gate. The agent comes from the
    *  stored row, so there is nothing to pass. */
@@ -310,37 +329,48 @@ async function runOneTurn(
   tier: InferenceTier,
 ): Promise<HarnessResultScoped<SessionData>> {
   const { sessionId, userId } = req
-  // A triggered run never loads (see the module docstring).
-  const loaded = req.mode === 'triggered' ? null : await loadSession(sessionId, userId)
-  const { agentId, run } = planTurn(req, loaded)
+  // Refused here, before anything runs, when another turn holds the row.
+  const held = await claimTurn(req, tier)
+  // The lease is renewed for as long as this turn holds it, so a slow turn
+  // keeps its conversation and only a dead process loses it.
+  const renewal = setInterval(() => {
+    dbRenewConversationClaim(sessionId, userId, held.version).then(
+      (renewed) => {
+        if (renewed || held.released) return
+        clearInterval(renewal)
+        console.error(
+          `[turn] lost the claim on ${sessionId}: another turn took it after it lapsed, so ` +
+            'this turn will not be saved.',
+        )
+      },
+      // `%s`, not interpolation: with a second argument the first is a format
+      // string, and the session id comes from the request.
+      (err: unknown) => console.error('[turn] could not renew the claim on %s:', sessionId, err),
+    )
+  }, TURN_CLAIM_RENEW_MS)
+  renewal.unref?.()
 
-  if (req.mode === 'interactive' && !loaded) {
-    // Brand-new conversation: persist the row BEFORE the run so it exists
-    // in the sidebar for its whole first turn (#105) — previously the row
-    // only appeared at run end, so an in-flight new chat was invisible (and
-    // lost outright if the user clicked "+ New Chat" again, dropping its
-    // placeholder). Mirrors `seedActionRow`: a minimal valid context
-    // carrying the user message (so a mid-run reload still replays it) and
-    // a title derived from the message; the run's own `saveSession` below
-    // overwrites the blob, and the first-turn LLM title replaces the
-    // derived one. Guarded on `!loaded`, so pre-seeded action rows (which
-    // always exist before their run) are never touched.
-    await dbSaveConversation({
-      id: sessionId,
-      userId,
-      agentId,
-      title: deriveTitle(req.message),
-      serializedContext: serializeContext(createContext(req.message, undefined, sessionId)),
-      status: 'running',
-      // The tier this turn resolved, recorded on the row it is creating. For a
-      // brand-new chat that value came from the user's last-used seed, and
-      // writing it here is what stops the conversation following a later flip
-      // made in a different thread.
-      inferenceTier: tier,
-    })
+  let ran: { agentId: string; result: HarnessResultScoped<SessionData>; saved: SavedTurn }
+  try {
+    const { agentId, run } = planTurn(req, held.loaded)
+    ran = { agentId, ...(await runAndSave(req, agentId, run, tier, held)) }
+  } finally {
+    clearInterval(renewal)
+    // Every exit path lets go. The save released the claim in the statement
+    // that wrote the turn, and a failed run released it in `runAndSave`'s
+    // catch; what is left is a turn refused after its claim (a stale
+    // approval), which must not keep the conversation for a lease.
+    if (!held.released) {
+      await dbReleaseConversationClaim(sessionId, userId, held.version).catch((err: unknown) =>
+        console.error(
+          `[turn] could not release %s; it refuses new turns for up to ${TURN_CLAIM_TTL_SECONDS}s:`,
+          sessionId,
+          err,
+        ),
+      )
+    }
   }
-
-  const result = await runAndSave(req, agentId, run, tier)
+  const { result, saved } = ran
 
   req.onResult?.(result)
   const titleWarned = req.mode === 'interactive' ? await generateTitle(req, result) : false
@@ -349,14 +379,71 @@ async function runOneTurn(
   // all three scopes, so it keeps them for its whole continuation (the
   // tier scope included: a detached summarization must not silently
   // change provider halfway through a turn).
-  void compactAndSave(req, agentId, result, titleWarned)
+  void compactAndSave(req, result, titleWarned, saved)
   return result
+}
+
+/** This turn's hold on its conversation. */
+interface HeldTurn {
+  /** The stored context the claim covers, or null for a fresh run. */
+  loaded: LoadedSession | null
+  /** The context version the claim holds — what every write of this turn names. */
+  version: string
+  /** Set once the claim is let go, by the save or by a failure. */
+  released: boolean
+}
+
+/** What the end-of-turn save wrote: the trailing pass writes on top of it. */
+interface SavedTurn {
+  version: string
+  /** Events in the saved context; anything after them was added later. */
+  eventCount: number
+}
+
+/**
+ * Take the conversation for this turn, or refuse. Throws
+ * `ConversationBusyError` (from the repository) while another turn holds it.
+ */
+async function claimTurn(req: TurnRequest, tier: InferenceTier): Promise<HeldTurn> {
+  const { sessionId, userId } = req
+  // A triggered run never loads (see the module docstring), and its claim was
+  // taken by the seed it is about to replace.
+  if (req.mode === 'triggered') return { loaded: null, version: req.claimVersion, released: false }
+
+  const loaded = await claimSession(sessionId, userId)
+  if (loaded) return { loaded, version: loaded.version, released: false }
+  if (req.mode === 'approval') throw new Error('No active session')
+
+  // Brand-new conversation: persist the row BEFORE the run so it exists in the
+  // sidebar for its whole first turn (#105) — previously the row only appeared
+  // at run end, so an in-flight new chat was invisible (and lost outright if
+  // the user clicked "+ New Chat" again, dropping its placeholder). Mirrors
+  // `seedActionRow`: a minimal valid context carrying the user message (so a
+  // mid-run reload still replays it) and a title derived from the message; the
+  // run's own `saveSession` overwrites the blob, and the first-turn LLM title
+  // replaces the derived one. Created claimed, so a second first message on the
+  // same new chat is refused rather than racing this one.
+  const version = await dbCreateConversation({
+    id: sessionId,
+    userId,
+    agentId: canonicalAgentId(req.agentId),
+    title: deriveTitle(req.message),
+    serializedContext: serializeContext(createContext(req.message, undefined, sessionId)),
+    status: 'running',
+    // The tier this turn resolved, recorded on the row it is creating. For a
+    // brand-new chat that value came from the user's last-used seed, and
+    // writing it here is what stops the conversation following a later flip
+    // made in a different thread.
+    inferenceTier: tier,
+  })
+  return { loaded: null, version, released: false }
 }
 
 /**
  * What this turn runs, and under which agent — the whole mode dispatch, in one
- * place and before anything is written. Pure: the returned `run` is invoked by
- * {@link runAndSave} once the patterns exist.
+ * place and before anything but the claim is written. Pure: the returned `run`
+ * is invoked by {@link runAndSave} once the patterns exist. A refusal here (a
+ * stale approval) leaves the claim to {@link runOneTurn}'s `finally`.
  */
 function planTurn(req: TurnRequest, loaded: LoadedSession | null): { agentId: string; run: RunFn } {
   if (req.mode === 'approval') {
@@ -414,8 +501,11 @@ function planTurn(req: TurnRequest, loaded: LoadedSession | null): { agentId: st
  * status='running' forever — the row seeded above, or a pre-seeded action row.
  * The harness itself catches internally (it returns an `error` status rather
  * than throwing), so the realistic throws are pattern construction (a gateway
- * outage) and the final `saveSession`. Flip the row to 'error', then rethrow so
- * the caller still sees the failure (sf-M2).
+ * outage) and the final `saveSession` — including its refusal when the claim
+ * lapsed and another turn took the row. Flip the row to 'error' and release
+ * the claim, then rethrow so the caller still sees the failure (sf-M2). The
+ * flip is fenced by the claim's version, so a turn that lost the row flips
+ * nothing that is now another turn's.
  *
  * THE WAKE IS ONE OF THOSE THROWS, and it is why this function takes a tier at
  * all. It ran one layer up until #279's review, outside this `catch`, and the
@@ -452,7 +542,8 @@ async function runAndSave(
   agentId: string,
   run: RunFn,
   tier: InferenceTier,
-): Promise<HarnessResultScoped<SessionData>> {
+  held: HeldTurn,
+): Promise<{ result: HarnessResultScoped<SessionData>; saved: SavedTurn }> {
   const { sessionId, userId } = req
   try {
     // WAKE THEN RUN. The self-hosted box scales to zero, so on the private tier
@@ -471,21 +562,30 @@ async function runAndSave(
     // started after this returns, off the user's wire.
     const patterns = await getOrBuildPatterns(sessionId, agentId)
     const result = await amendRunFrame({ live: req.onEvent }, () => run(patterns))
-    // The tier goes with the save so a row that has none yet — an action row
-    // `seedActionRow` wrote before any tier was resolved, a legacy row the
-    // backfill left alone — records the one it just ran on. `saveConversation`
-    // COALESCEs it, so this never overwrites a flip.
-    await saveSession(sessionId, userId, agentId, result.serialized, tier)
-    return result
+    // Written at the version the claim holds, releasing it in the same
+    // statement. The tier goes with the save so a row that has none yet — an
+    // action row `seedActionRow` wrote before any tier was resolved, a legacy
+    // row the backfill left alone — records the one it just ran on.
+    // `saveConversation` COALESCEs it, so this never overwrites a flip.
+    const version = await saveSession(sessionId, userId, agentId, result.serialized, {
+      version: held.version,
+      inferenceTier: tier,
+    })
+    held.released = true
+    return { result, saved: { version, eventCount: result.context.events.length } }
   } catch (err) {
     console.error(`[turn] run failed for ${sessionId}:`, err)
-    await dbSetConversationStatus(sessionId, userId, 'error').catch((statusErr: unknown) => {
-      console.error(
-        `[turn] could not flip ${sessionId} to status='error' — the row will keep showing as ` +
-          'running:',
-        statusErr,
-      )
-    })
+    held.released = true
+    await dbReleaseConversationClaim(sessionId, userId, held.version, { failed: true }).catch(
+      (statusErr: unknown) => {
+        console.error(
+          "[turn] could not flip %s to status='error' — the row will keep showing as running, " +
+            `and refuses new turns for up to ${TURN_CLAIM_TTL_SECONDS}s:`,
+          sessionId,
+          statusErr,
+        )
+      },
+    )
     throw err
   }
 }
@@ -570,17 +670,20 @@ async function generateTitle(
  * warning (see `generateTitle`), whose only write this is. One save, here,
  * rather than a second writer racing this one over the same row: a context
  * serialized before the summaries land would overwrite them.
+ *
+ * The save itself is {@link saveTrailingPass}: it runs after the turn let go of
+ * the conversation, so the next turn may already have written over the row.
  */
 async function compactAndSave(
   req: TurnRequest,
-  agentId: string,
   result: HarnessResultScoped<SessionData>,
   mustPersist: boolean,
+  saved: SavedTurn,
 ): Promise<void> {
   let persisted = false
   const persist = async (): Promise<void> => {
     persisted = true
-    await saveSession(req.sessionId, req.userId, agentId, serializeContext(result.context))
+    await saveTrailingPass(req, result.context, saved)
   }
   // Lane A6: the two describe implementations are REQUIRED injected config on
   // compactBulkData — `bamlPatterns()` supplies the describe-tier pair.
@@ -592,4 +695,111 @@ async function compactAndSave(
       console.error('[title-gen] could not persist the warning:', err),
     )
   }
+}
+
+/** How many times the trailing save writes before it gives up. */
+const TRAILING_SAVE_ATTEMPTS = 3
+
+/**
+ * Persist what the trailing pass added to this turn — summaries on its tool
+ * results, and the notices appended after its save — WITHOUT overwriting
+ * anything written since that save.
+ *
+ * The first attempt writes this turn's whole context at the version its own
+ * save produced, which is the common case and identical to what it always
+ * wrote. When the row has moved on — a newer turn finished, a flag was
+ * flipped — it re-reads the row and applies ONLY its own additions to it
+ * ({@link mergeTrailingPass}), then writes at the version it just read.
+ * Re-applying is the smallest correct option: the pass owns two narrow things,
+ * a `summary` field per event id and a few appended events, so a merge is
+ * exact, where retrying the whole blob could only ever overwrite.
+ *
+ * It gives up, with a log line, when the row will not hold still or a newer
+ * turn holds it: that turn is about to write the context it loaded when it
+ * started, so a write now would be overwritten or would refuse that turn's
+ * save. What is lost then is derived data — later turns see those results raw
+ * rather than summarized (#83's cost), and a notice is only in the log — never
+ * a recorded event.
+ */
+async function saveTrailingPass(
+  req: TurnRequest,
+  ours: UnifiedContext<SessionData>,
+  saved: SavedTurn,
+): Promise<void> {
+  const { sessionId, userId } = req
+  let next = ours
+  let version = saved.version
+  for (let attempt = 1; ; attempt++) {
+    if (await dbUpdateContextIfUnchanged(sessionId, userId, serializeContext(next), version)) {
+      return
+    }
+    if (attempt === TRAILING_SAVE_ATTEMPTS) break
+    const fresh = await dbLoadConversation(sessionId, userId)
+    if (!fresh) {
+      console.warn(`[summarize] ${sessionId} is gone; this turn's summaries have nowhere to go.`)
+      return
+    }
+    next = mergeTrailingPass(
+      deserializeContext<SessionData>(fresh.serializedContext),
+      ours,
+      saved.eventCount,
+    )
+    version = fresh.version
+  }
+  console.error(
+    `[summarize] ${sessionId} moved on under every attempt, or a newer turn holds it: this ` +
+      "turn's summaries and notices are not saved.",
+  )
+}
+
+/**
+ * Apply what a trailing pass added to `ours` onto `fresh`, a newer copy of the
+ * same conversation, and return `fresh`.
+ *
+ * Exactly two things move, and nothing else of `ours` does — `fresh` may carry
+ * a flag flip or a whole later turn, and those win:
+ *  - a `summary` on a tool result, written only where `fresh` has none, and
+ *    only onto THE RESULT IT SUMMARIZES: same id, a `tool_result`, and the
+ *    same `result`. The id alone is not enough. It would restore a summary
+ *    onto a result substituted after the pass read it — #433 S7 depends on
+ *    this line, because its Δ2 `heldBy` placeholder is exactly that, and a
+ *    stale summary on it would mask its resolution — and ids are 6 random
+ *    characters, so two results may share one. The summary is assigned on
+ *    the matched event itself, not through `enrichToolResult`'s first-id
+ *    lookup, which could write it onto a different event with the same id;
+ *  - the events `ours` gained after its own save (the first `savedCount` are
+ *    what that save wrote), each inserted after the event it followed, so a
+ *    notice lands at the end of its own turn rather than after a newer one.
+ */
+export function mergeTrailingPass<T>(
+  fresh: UnifiedContext<T>,
+  ours: UnifiedContext<T>,
+  savedCount: number,
+): UnifiedContext<T> {
+  const present = new Set(fresh.events.map((e) => e.id))
+  for (const event of ours.events) {
+    if (event.type !== 'tool_result') continue
+    const { summary, result } = event.data as ToolResultEventData
+    if (!summary || !event.id) continue
+    const summarized = JSON.stringify(result)
+    const target = fresh.events.find(
+      (e) =>
+        e.id === event.id &&
+        e.type === 'tool_result' &&
+        JSON.stringify((e.data as ToolResultEventData).result) === summarized,
+    )
+    if (target && !(target.data as ToolResultEventData).summary) {
+      ;(target.data as ToolResultEventData).summary = summary
+    }
+  }
+  let anchor = ours.events[savedCount - 1]?.id
+  for (const event of ours.events.slice(savedCount)) {
+    if (event.id === undefined || !present.has(event.id)) {
+      const at = anchor === undefined ? -1 : fresh.events.findIndex((e) => e.id === anchor)
+      fresh.events.splice(at === -1 ? fresh.events.length : at + 1, 0, event)
+      present.add(event.id)
+    }
+    anchor = event.id
+  }
+  return fresh
 }

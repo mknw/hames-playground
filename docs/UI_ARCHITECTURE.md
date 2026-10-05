@@ -396,7 +396,7 @@ backgrounded run keeps filling its own thread.
   - Empty state with icon
 - **User messages:** Right-aligned, cyber-700 background
 - **AI messages:** Left-aligned, dark-bg-tertiary background
-- **Chat-Graph Entity Linking:** After rendering markdown, `annotateEntities()` post-processes the HTML to wrap known entity and relation names in `<span class="graph-entity" data-entity-name="..." data-entity-ids="...">` elements. Hovering highlights matching graph nodes/edges; clicking toggles a persistent highlight. A module-level `toggledEntities` Set tracks persistent state. Event delegation on the messages container handles all interactions via `handleMouseOver`, `handleMouseOut`, `handleClick`.
+- **Chat-Graph Entity Linking:** `annotateEntities()` wraps known entity and relation names in `<span class="graph-entity" data-entity-name="..." data-entity-ids="...">` elements. It runs inside `sanitizeMarkdownHtml` as its `annotate` pass, on the sanitized DOM's text nodes, never on the HTML string (#428). Hovering highlights matching graph nodes/edges; clicking toggles a persistent highlight. A module-level `toggledEntities` Set tracks persistent state. Event delegation on the messages container handles all interactions via `handleMouseOver`, `handleMouseOut`, `handleClick`.
   - **Props:** `graphEntityNames?: Map<string, string[]>` (name → element IDs, built in `index.tsx` from graph elements), `onHighlightEntities?: (ids: string[]) => void`
   - **CSS:** `.graph-entity` styles in `uno.config.ts` (dashed underline, cyan glow on hover/toggle)
 
@@ -568,7 +568,7 @@ index.tsx (view state only)
     │       │
     │       ├─> AgentSelector (selectedAgent, onAgentChange, disabled)
     │       ├─> ChatMessages (messages, graphEntityNames, onHighlightEntities, onApproveWrite, onRejectWrite)
-    │       │       └─ annotateEntities() — wraps entity names in interactive spans post-render
+    │       │       └─ annotateEntities() — wraps entity names in interactive spans, on the sanitized DOM
     │       └─> ChatInput (onSend, disabled, blockedMessage)
     │
     ├─> ChatSidebar (threads, selectedId, onDeleteThreads — run state from the registry)

@@ -77,6 +77,27 @@ const compactBulkData = vi.fn(async (_ctx: unknown, onPersist: () => Promise<voi
   await onPersist()
 })
 
+/** A resume's run, observable like the fresh/continue fakes. Tests drive its
+ *  outcome per call: it defaults to a finished resume. */
+const resumeHarness = vi.fn(
+  async (serialized: string, _patterns: unknown, _answers: unknown, opts: unknown) => {
+    seenScopes.push({ userId: getRequestUserId(), sessionId: getRequestSessionId() })
+    seenAttended.push(isAttendedRequest())
+    const o = opts as { resolve?: (r: { requestId: string }) => Promise<unknown> }
+    if (o?.resolve) await o.resolve({ requestId: 'req-uuid-1' })
+    return {
+      response: 'resumed',
+      serialized: `${serialized}+resumed`,
+      data: {},
+      context: {
+        id: 'ctx:resumed',
+        events: [{ type: 'hitl_response', data: { v: 1, requestId: 'req-uuid-1', by: 'person' } }],
+      },
+      status: 'done',
+    }
+  },
+)
+
 /** The real one's shape; the id is fixed so a test can find the event it made. */
 const createEvent = vi.fn((type: string, patternId: string, data: unknown) => ({
   id: 'ev-warning',
@@ -91,18 +112,29 @@ vi.mock('@hames-ai/harness-patterns', async () => {
   // helpers; everything that runs a turn stays fake. `enrichToolResult` is no
   // longer called by the merge (it writes onto the FIRST event with an id),
   // and stays here so the mutation that restores that call runs as written.
+  // The HITL reader is REAL too (#433 S7): the resume's planning derives
+  // pending requests and expiry from the same code core validates answers
+  // with, and `expireHitl`/`HitlAnswerError` come with it — a resume test that
+  // had to stub the reader would pin nothing about the binding.
   const real = await vi.importActual<typeof import('@hames-ai/harness-patterns/context.server')>(
     '@hames-ai/harness-patterns/context.server',
+  )
+  const realHitl = await vi.importActual<typeof import('@hames-ai/harness-patterns/hitl.server')>(
+    '@hames-ai/harness-patterns/hitl.server',
   )
   return {
     harness,
     continueSession,
+    resumeHarness,
     createContext,
     serializeContext,
     compactBulkData,
     createEvent,
     deserializeContext: real.deserializeContext,
     enrichToolResult: real.enrichToolResult,
+    readHitl: realHitl.readHitl,
+    expireHitl: realHitl.expireHitl,
+    HitlAnswerError: realHitl.HitlAnswerError,
   }
 })
 
@@ -118,6 +150,9 @@ type OpenedFrame = {
   config?: { maxResultForSummary?: number }
   inference?: { tier?: string }
   live?: unknown
+  /** The host's one `hitl` slot (#433 F7/m8): supplied around the main run
+   *  only, carrying the turn's `attended`. */
+  hitl?: { attended: boolean }
 }
 const openedFrames: OpenedFrame[] = []
 vi.mock('@hames-ai/harness-patterns/run-frame.server', async () => {
@@ -215,7 +250,12 @@ const dbCreateConversation = vi.fn<(row: Record<string, unknown>) => Promise<str
   async () => 'v-seed',
 )
 const dbReleaseConversationClaim = vi.fn<
-  (id: string, userId: string, version: string, opts?: { failed?: boolean }) => Promise<boolean>
+  (
+    id: string,
+    userId: string,
+    version: string,
+    opts?: { failed?: boolean; paused?: boolean },
+  ) => Promise<boolean>
 >(async () => true)
 const dbRenewConversationClaim = vi.fn<
   (id: string, userId: string, version: string) => Promise<boolean>
@@ -241,6 +281,38 @@ vi.mock('../../../lib/db/conversations.server', () => ({
 
 /** Releases that also marked the turn failed — the row's flip to 'error'. */
 const flippedToError = () => dbReleaseConversationClaim.mock.calls.filter((c) => c[3]?.failed)
+/** Releases that restored `paused` (#433 A4) — a resume refusal that leaves the
+ *  person able to answer again. */
+const restoredPaused = () => dbReleaseConversationClaim.mock.calls.filter((c) => c[3]?.paused)
+
+// ── db/hitl: the answer rows and the quarantine (mocked; their SQL is pinned
+//    in db/hitl.test.ts) ─────────────────────────────────────────────────────
+/** The answers in transit for the claimed session, as the table reads them. */
+const loadHitlAnswerRows = vi.fn<
+  (
+    sessionId: string,
+    userId: string,
+  ) => Promise<
+    Array<{
+      requestId: string
+      sessionId: string
+      kind: string
+      status: string
+      blocksRun: boolean
+      expiresAt: Date | null
+      answeredAt: Date | null
+      answer: { choice: string; flags?: Record<string, boolean> } | null
+      payload: unknown
+    }>
+  >
+>(async () => [])
+const closeHitlRows = vi.fn(async () => 0)
+const deleteQuarantine = vi.fn(async () => {})
+vi.mock('../../../lib/db/hitl.server', () => ({
+  loadHitlAnswerRows: (s: string, u: string) => loadHitlAnswerRows(s, u),
+  closeHitlRows: (...a: unknown[]) => closeHitlRows(...(a as [])),
+  deleteQuarantine: (...a: unknown[]) => deleteQuarantine(...(a as [])),
+}))
 
 // ── title agent ─────────────────────────────────────────────────────────────
 const runFirstTurnTitleGen = vi.fn<() => Promise<string | null>>(async () => null)
@@ -250,6 +322,9 @@ vi.mock('@hames-ai/agents/agents/title-generator.server', () => ({
 
 const { runTurnAndPersist, TITLE_GEN_TIMEOUT_MS, mergeTrailingPass } =
   await import('../../../lib/harness-client/turn.server')
+// The REAL refusal class, through the mock that passes it verbatim: the tests
+// throw exactly what core's resume would.
+const { HitlAnswerError } = await import('@hames-ai/harness-patterns')
 
 const TRIGGER = { transcribedCommand: 'do it', shortDescription: 'Do it' }
 
@@ -1546,5 +1621,491 @@ describe('mergeTrailingPass', () => {
       events: { id?: string; type: string }[]
     }
     expect(merged.events.map((e) => e.id ?? e.type)).toEqual(['x1', 'w1', 'warning'])
+  })
+})
+
+// ── resume turns (#433 S7) ───────────────────────────────────────────────────
+//
+// The paused blob is REAL (the same serialized shape a pausing turn saves), and
+// the reader is the real `readHitl` — so the binding pins below — "an answer
+// resumes only the pause it was issued for" — are exercised against the same
+// derivation core validates with, not a parallel one.
+
+/** One pending `confirm` request, the shape a pausing turn recorded. */
+function pendingRequest(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    v: 1,
+    requestId: 'req-uuid-1',
+    runId: 'run-1',
+    key: 'confirm:abc',
+    kind: 'confirm',
+    question: 'Proceed?',
+    options: [
+      { id: 'approve', label: 'Approve' },
+      { id: 'reject', label: 'Reject', stopsRun: true },
+    ],
+    defaultOption: 'approve',
+    unattended: 'park',
+    summary: {},
+    blocking: true,
+    resumeAt: { index: 0, names: ['p1'] },
+    tier: 'anthropic',
+    ...over,
+  }
+}
+
+/** A serialized paused context, hand-built the way a pausing turn saves it. */
+function pausedBlob(over: Record<string, unknown> = {}, request = pendingRequest()): string {
+  return JSON.stringify({
+    sessionId: 'sess-r',
+    createdAt: 0,
+    status: 'paused',
+    input: 'do it',
+    data: {},
+    events: [
+      { id: 'u1', type: 'user_message', ts: 0, patternId: 'harness', data: { content: 'do it' } },
+      { id: 'h1', type: 'hitl_request', ts: 1, patternId: 'harness', data: request },
+    ],
+    ...over,
+  })
+}
+
+function resume(over: Record<string, unknown> = {}) {
+  return { mode: 'resume' as const, sessionId: 'sess-r', userId: 'user-1', ...over }
+}
+
+/** The claimed row a paused conversation reads as. */
+function claimedPaused(blob: string, status = 'paused'): Loaded {
+  return {
+    serializedContext: blob,
+    agentId: 'search',
+    kind: 'conversation',
+    status,
+    version: 'v-claim',
+  }
+}
+
+/** An answer row as the table reads it back. */
+function answerRow(requestId: string, choice: string, flags?: Record<string, boolean>) {
+  return {
+    requestId,
+    sessionId: 'sess-r',
+    kind: 'confirm',
+    status: 'answered',
+    blocksRun: true,
+    expiresAt: null,
+    answeredAt: new Date(),
+    answer: { choice, ...(flags ? { flags } : {}) },
+    payload: null,
+  }
+}
+
+describe('resume turns (#433 S7)', () => {
+  beforeEach(() => {
+    claimSession.mockResolvedValue(claimedPaused(pausedBlob()))
+    loadHitlAnswerRows.mockResolvedValue([answerRow('req-uuid-1', 'approve')])
+    closeHitlRows.mockResolvedValue(1)
+  })
+
+  it('claims the paused row through the turn claim and resumes with the recorded answers', async () => {
+    const result = await runTurnAndPersist(resume())
+
+    // The claim is the same one every turn takes (#470's, not a claimPaused).
+    expect(claimSession).toHaveBeenCalledWith('sess-r', 'user-1')
+    // The answers come from the TABLE, filtered against the blob's pending —
+    // and the run is core's, with the host's principal and side effect.
+    expect(resumeHarness).toHaveBeenCalledTimes(1)
+    const [blob, patterns, answers, opts] = resumeHarness.mock.calls[0]
+    expect(blob).toBe(pausedBlob())
+    expect(patterns).toEqual(['patterns:search'])
+    expect(answers).toEqual({ 'req-uuid-1': { choice: 'approve' } })
+    expect((opts as { principal: string }).principal).toBe('user-1')
+    // Saved at the version the claim holds (F1), and the spent rows closed.
+    expect(saveSession).toHaveBeenCalledWith(
+      'sess-r',
+      'user-1',
+      'search',
+      `${pausedBlob()}+resumed`,
+      {
+        version: 'v-claim',
+        inferenceTier: 'anthropic',
+      },
+    )
+    expect(closeHitlRows).toHaveBeenCalledWith(['req-uuid-1'], 'user-1', 'applied')
+    expect(result.status).toBe('done')
+  })
+
+  it('resolve drops the held content (the one side effect the host owns)', async () => {
+    await runTurnAndPersist(resume())
+    expect(deleteQuarantine).toHaveBeenCalledWith('req-uuid-1', 'user-1')
+  })
+
+  it('refuses a session the user does not own, flipping nothing', async () => {
+    claimSession.mockResolvedValue(null)
+
+    await expect(runTurnAndPersist(resume())).rejects.toThrow('No active session')
+
+    expect(resumeHarness).not.toHaveBeenCalled()
+    expect(saveSession).not.toHaveBeenCalled()
+    expect(flippedToError()).toEqual([])
+    expect(restoredPaused()).toEqual([])
+  })
+
+  it('refuses a row that is not paused, releasing the claim and flipping nothing', async () => {
+    const blob = pausedBlob({ status: 'done' })
+    claimSession.mockResolvedValue(claimedPaused(blob, 'done'))
+
+    await expect(runTurnAndPersist(resume())).rejects.toThrow('resumeHarness refused (not-paused)')
+
+    expect(resumeHarness).not.toHaveBeenCalled()
+    expect(saveSession).not.toHaveBeenCalled()
+    // A4's restore applies only to a row that was paused: this one is released
+    // plain, neither errored nor re-paused.
+    expect(flippedToError()).toEqual([])
+    expect(restoredPaused()).toEqual([])
+  })
+
+  it('a tier-changed refusal happens before the wake and restores paused (A4/C1)', async () => {
+    resolveConversationTier.mockResolvedValue('verda')
+    claimSession.mockResolvedValue(claimedPaused(pausedBlob())) // tier 'anthropic'
+
+    await expect(runTurnAndPersist(resume())).rejects.toThrow('(tier-changed)')
+
+    // The refusal never pays a cold start — the delta review's point.
+    expect(ensureVerdaAwake).not.toHaveBeenCalled()
+    expect(resumeHarness).not.toHaveBeenCalled()
+    expect(saveSession).not.toHaveBeenCalled()
+    expect(flippedToError()).toEqual([])
+    expect(restoredPaused()).toEqual([
+      ['sess-r', 'user-1', 'v-claim', { failed: false, paused: true }],
+    ])
+  })
+
+  it('only chain-changed ends the row in error (A4/F19c)', async () => {
+    resumeHarness.mockRejectedValueOnce(
+      new HitlAnswerError('chain-changed', "the agent's top-level patterns changed"),
+    )
+
+    await expect(runTurnAndPersist(resume())).rejects.toThrow('(chain-changed)')
+    expect(flippedToError()).toEqual([
+      ['sess-r', 'user-1', 'v-claim', { failed: true, paused: false }],
+    ])
+    expect(restoredPaused()).toEqual([])
+  })
+
+  it('any other refusal leaves the row paused, so the person can answer again', async () => {
+    resumeHarness.mockRejectedValueOnce(new HitlAnswerError('invalid-choice', 'not an option'))
+
+    await expect(runTurnAndPersist(resume())).rejects.toThrow('(invalid-choice)')
+    expect(flippedToError()).toEqual([])
+    expect(restoredPaused()).toEqual([
+      ['sess-r', 'user-1', 'v-claim', { failed: false, paused: true }],
+    ])
+  })
+
+  it('a failure before the run leaves the row paused (A4)', async () => {
+    resolveConversationTier.mockResolvedValue('verda')
+    claimSession.mockResolvedValue(claimedPaused(pausedBlob({}, pendingRequest({ tier: 'verda' }))))
+    const wakeFailed = new Error('the private inference box did not wake')
+    ensureVerdaAwake.mockRejectedValueOnce(wakeFailed)
+
+    await expect(runTurnAndPersist(resume())).rejects.toThrow(wakeFailed)
+
+    expect(resumeHarness).not.toHaveBeenCalled()
+    expect(flippedToError()).toEqual([])
+    expect(restoredPaused()).toEqual([
+      ['sess-r', 'user-1', 'v-claim', { failed: false, paused: true }],
+    ])
+  })
+
+  it('a stop-only resume never wakes the box (A5)', async () => {
+    resolveConversationTier.mockResolvedValue('verda')
+    claimSession.mockResolvedValue(claimedPaused(pausedBlob({}, pendingRequest({ tier: 'verda' }))))
+    loadHitlAnswerRows.mockResolvedValue([answerRow('req-uuid-1', 'reject')])
+
+    await runTurnAndPersist(resume())
+
+    expect(ensureVerdaAwake).not.toHaveBeenCalled()
+    expect(resumeHarness).toHaveBeenCalledTimes(1)
+  })
+
+  it('a resume with work to re-enter still wakes the box on the private tier', async () => {
+    resolveConversationTier.mockResolvedValue('verda')
+    claimSession.mockResolvedValue(claimedPaused(pausedBlob({}, pendingRequest({ tier: 'verda' }))))
+
+    await runTurnAndPersist(resume())
+
+    expect(ensureVerdaAwake).toHaveBeenCalledTimes(1)
+  })
+
+  it('missing answers are refused before the wake', async () => {
+    resolveConversationTier.mockResolvedValue('verda')
+    claimSession.mockResolvedValue(claimedPaused(pausedBlob({}, pendingRequest({ tier: 'verda' }))))
+    loadHitlAnswerRows.mockResolvedValue([])
+
+    await expect(runTurnAndPersist(resume())).rejects.toThrow('(missing-answer)')
+
+    expect(ensureVerdaAwake).not.toHaveBeenCalled()
+    expect(resumeHarness).not.toHaveBeenCalled()
+  })
+
+  it('closes answers whose request is no longer pending as superseded, never applied', async () => {
+    loadHitlAnswerRows.mockResolvedValue([
+      answerRow('req-uuid-1', 'approve'),
+      answerRow('req-gone', 'approve'),
+    ])
+
+    await runTurnAndPersist(resume())
+
+    // Only the pending request's answer reaches the harness (P1); the stale
+    // one is closed superseded — m5's "your answer was not applied".
+    expect(resumeHarness.mock.calls[0][2]).toEqual({ 'req-uuid-1': { choice: 'approve' } })
+    expect(closeHitlRows).toHaveBeenCalledWith(['req-gone'], 'user-1', 'superseded')
+  })
+
+  it('an expired request ends the run without waking anything or re-entering it', async () => {
+    resolveConversationTier.mockResolvedValue('verda')
+    claimSession.mockResolvedValue(
+      claimedPaused(pausedBlob({}, pendingRequest({ tier: 'verda', expiresAt: Date.now() - 1 }))),
+    )
+
+    const result = await runTurnAndPersist(resume())
+
+    // No wake, no patterns, no resume: the run is over and its record says so.
+    expect(ensureVerdaAwake).not.toHaveBeenCalled()
+    expect(getOrBuildPatterns).not.toHaveBeenCalled()
+    expect(resumeHarness).not.toHaveBeenCalled()
+    expect(result.status).toBe('done')
+    expect(result.response).toContain('expired')
+
+    // The closed blob is saved at the claimed version, and it carries the
+    // expiry's closing response — the answer's rows close against it.
+    const [id, user, agent, written, held] = saveSession.mock.calls[0]
+    expect([id, user, agent]).toEqual(['sess-r', 'user-1', 'search'])
+    expect(held).toEqual({ version: 'v-claim', inferenceTier: 'verda' })
+    const closed = JSON.parse(written as string) as {
+      status: string
+      events: { type: string; data?: { by?: string } }[]
+    }
+    expect(closed.status).toBe('done')
+    expect(closed.events.some((e) => e.type === 'hitl_response' && e.data?.by === 'expired')).toBe(
+      true,
+    )
+    expect(closeHitlRows).toHaveBeenCalledWith(['req-uuid-1'], 'user-1', 'expired')
+  })
+
+  it('amends the run frame with the hitl slot, on the turn\u2019s own attended value (F7/m8)', async () => {
+    await runTurnAndPersist(resume())
+
+    // The host's one amend around its main run carries the slot — without it
+    // a second gate in the re-entered run would throw instead of pausing.
+    expect(amendedFrames.some((f) => f.hitl?.attended === true)).toBe(true)
+    expect(seenAttended).toEqual([true])
+  })
+
+  it('an unattended run\u2019s slot says so — the same value, not a second derivation (m8)', async () => {
+    await runTurnAndPersist(interactive())
+    // A routine/triggered run is unattended; its amend carries that.
+    expect(amendedFrames.some((f) => f.hitl && f.hitl.attended === false)).toBe(false)
+  })
+
+  it('summarizes and re-persists the resumed turn, and never re-titles it', async () => {
+    await runTurnAndPersist(resume())
+    await flush()
+
+    expect(compactBulkData).toHaveBeenCalledTimes(1)
+    expect(dbUpdateContextIfUnchanged).toHaveBeenCalledWith(
+      'sess-r',
+      'user-1',
+      expect.any(String),
+      'v-saved',
+    )
+    expect(runFirstTurnTitleGen).not.toHaveBeenCalled()
+  })
+})
+
+describe('the trailing pass after a resume (A3/Δ2)', () => {
+  const ev = (id: string, type: string, data: Record<string, unknown> = {}) => ({
+    id,
+    type,
+    ts: 0,
+    patternId: 'p',
+    data,
+  })
+
+  /**
+   * The paused turn and the resume, in the order A3 describes: the paused
+   * turn's detached summary pass is still in flight when the resume claims,
+   * runs and saves — so its write lands after the resume's save, at the
+   * version the PAUSED turn's own save produced. That write must neither
+   * restore `paused` nor drop the resume's events.
+   */
+  it('neither restores paused nor drops the resume\u2019s events', async () => {
+    // ── the paused turn: its run held one normal result and one held result.
+    const held = ev('t-held', 'tool_result', {
+      tool: 'lookup',
+      result: { held: true, requestId: 'req-uuid-1', note: 'waiting' },
+      success: true,
+    })
+    const pausedCtx = {
+      sessionId: 'sess-a3',
+      createdAt: 0,
+      status: 'paused',
+      input: 'do it',
+      data: {},
+      events: [
+        ev('u1', 'user_message', { content: 'do it' }),
+        ev('t1', 'tool_result', { tool: 'x', result: 'raw', success: true }),
+        held,
+        ev('h1', 'hitl_request', pendingRequest()),
+      ],
+    }
+    let releaseSummarizer!: () => void
+    const gate = new Promise<void>((r) => (releaseSummarizer = r))
+    // Snapshot BEFORE the summarizer's mock mutates the same object: the
+    // paused turn's save wrote the context as the RUN returned it.
+    const pausedSerialized = JSON.stringify(pausedCtx)
+    runFresh.mockImplementationOnce(async () => ({
+      response: 'paused',
+      serialized: JSON.stringify(pausedCtx),
+      data: {},
+      context: pausedCtx as unknown as Ctx,
+      status: 'paused',
+    }))
+    // The paused turn's summary pass: it summarizes its normal result (the
+    // legacy compaction that also summarized the HELD result is the Δ2 case,
+    // pinned below at the merge), and it is HELD until the resume has saved.
+    compactBulkData.mockImplementationOnce(async (raw: unknown, persist: () => Promise<void>) => {
+      const c = raw as typeof pausedCtx
+      ;(c.events[1].data as { summary?: string }).summary = 'S'
+      await gate
+      await persist()
+    })
+
+    await runTurnAndPersist(interactive({ sessionId: 'sess-a3' }))
+    expect(saveSession).toHaveBeenCalledWith(
+      'sess-a3',
+      'user-1',
+      'search',
+      pausedSerialized,
+      expect.objectContaining({ inferenceTier: 'anthropic' }),
+    )
+
+    // ── the resume: claims the paused row, runs, saves. Its events are the
+    // hitl_response and the substituted held result.
+    const resumedCtx = {
+      ...pausedCtx,
+      status: 'done',
+      events: [
+        ...pausedCtx.events.map((e) =>
+          e.id === 't-held'
+            ? {
+                ...e,
+                data: { ...e.data, result: 'The user chose: Approve.', heldBy: 'req-uuid-1' },
+              }
+            : { ...e },
+        ),
+        ev('r1', 'hitl_response', {
+          v: 1,
+          requestId: 'req-uuid-1',
+          key: 'confirm:abc',
+          kind: 'confirm',
+          choice: 'approve',
+          by: 'person',
+        }),
+      ],
+    }
+    claimSession.mockResolvedValueOnce(claimedPaused(JSON.stringify(pausedCtx)))
+    resumeHarness.mockImplementationOnce(
+      async () =>
+        ({
+          response: 'resumed',
+          serialized: JSON.stringify(resumedCtx),
+          data: {},
+          context: resumedCtx,
+          status: 'done',
+        }) as never,
+    )
+    loadHitlAnswerRows.mockResolvedValue([answerRow('req-uuid-1', 'approve')])
+
+    await runTurnAndPersist(resume({ sessionId: 'sess-a3' }))
+    // The resume's own trailing pass lands first (it wrote at its save's
+    // version); the calls under assertion are the PAUSED turn's, from here on.
+    await flush()
+    dbUpdateContextIfUnchanged.mockClear()
+
+    // ── the paused turn's trailing save lands now, after the resume's save.
+    dbUpdateContextIfUnchanged.mockResolvedValueOnce(false)
+    dbLoadConversation.mockResolvedValueOnce({
+      serializedContext: JSON.stringify(resumedCtx),
+      version: 'v-resumed',
+    })
+    releaseSummarizer()
+    await flush()
+
+    // Its first attempt was at ITS version — refused, because the resume's
+    // save moved the row on (A3's mutation: an unconditional save writes the
+    // paused blob here, and the row says paused again).
+    expect(dbUpdateContextIfUnchanged).toHaveBeenCalledTimes(2)
+    expect(dbUpdateContextIfUnchanged.mock.calls[0]).toEqual([
+      'sess-a3',
+      'user-1',
+      expect.any(String),
+      'v-saved',
+    ])
+    const firstAttempt = JSON.parse(dbUpdateContextIfUnchanged.mock.calls[0][2]) as {
+      status: string
+    }
+    expect(firstAttempt.status).toBe('paused')
+    // The second attempt is the MERGE onto the resumed row: not paused, the
+    // resume's events still there, and this turn's summary on its own result.
+    const [id, user, written, version] = dbUpdateContextIfUnchanged.mock.calls[1]
+    expect([id, user, version]).toEqual(['sess-a3', 'user-1', 'v-resumed'])
+    const merged = JSON.parse(written as string) as {
+      status: string
+      events: Array<{ id?: string; type: string; data: Record<string, unknown> }>
+    }
+    expect(merged.status).toBe('done')
+    expect(merged.events.map((e) => e.id ?? e.type)).toContain('r1')
+    expect(merged.events.find((e) => e.id === 't1')?.data.summary).toBe('S')
+    // Δ2: the stale summary of the HELD placeholder is not restored onto the
+    // substituted result — the re-entered controller reads the outcome.
+    expect(merged.events.find((e) => e.id === 't-held')?.data.summary).toBeUndefined()
+  })
+
+  it('never restores a summary onto an event marked heldBy, even one whose result matches (Δ2)', () => {
+    const fresh = {
+      sessionId: 's',
+      createdAt: 0,
+      status: 'running',
+      data: {},
+      input: 'q',
+      events: [
+        ev('t-h', 'tool_result', {
+          tool: 'x',
+          // A resolution that happens to equal the placeholder: the
+          // same-result comparison alone would match, and only the
+          // `heldBy` marker says what this event is.
+          result: { held: true, requestId: 'req-uuid-1', note: 'waiting' },
+          heldBy: 'req-uuid-1',
+          success: true,
+        }),
+      ],
+    }
+    const ours = {
+      ...fresh,
+      events: [
+        ev('t-h', 'tool_result', {
+          tool: 'x',
+          result: { held: true, requestId: 'req-uuid-1', note: 'waiting' },
+          summary: 'waiting for a decision',
+          success: true,
+        }),
+      ],
+    }
+    const merged = mergeTrailingPass(fresh as never, ours as never, 1) as unknown as {
+      events: { data: Record<string, unknown> }[]
+    }
+    expect(merged.events[0].data.summary).toBeUndefined()
   })
 })

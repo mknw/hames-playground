@@ -29,6 +29,7 @@ import {
   saveConversation,
   deleteConversation,
   deriveTitle,
+  restoreConversationPaused,
   updateConversationTitle,
   type ConversationKind,
   type ConversationRow,
@@ -260,13 +261,40 @@ function toLoadedSession(row: ConversationRow): LoadedSession {
   }
 }
 
+/**
+ * Repair a row that drifted off its blob's 'paused' (#433 S7, m3): a resume
+ * that died between claim and save can leave the lifted `status` saying
+ * 'running' or 'error' while the blob still says 'paused'. Every load is the
+ * host's chance to put the pause back — fenced by the version this read saw,
+ * refused while a turn holds the row (`restoreConversationPaused`).
+ */
+function restorePausedFromBlob(row: ConversationRow): void {
+  if (row.status === 'paused' || extractStatusFromContext(row.serializedContext) !== 'paused') {
+    return
+  }
+  void restoreConversationPaused(row.id, row.userId, row.version)
+    .then((restored) => {
+      if (restored) {
+        console.warn(
+          `[session] ${row.id} said '${row.status}' while its blob says 'paused' — restored, ` +
+            'so the pause is visible and resumable again (a turn died before its save).',
+        )
+      }
+    })
+    .catch((err: unknown) =>
+      console.error(`[session] could not restore 'paused' on ${row.id}:`, err),
+    )
+}
+
 /** Load a serialized context for (sessionId, userId), or null if not found. */
 export async function loadSession(
   sessionId: string,
   userId: string,
 ): Promise<LoadedSession | null> {
   const row = await loadConversation(sessionId, userId)
-  return row ? toLoadedSession(row) : null
+  if (!row) return null
+  restorePausedFromBlob(row)
+  return toLoadedSession(row)
 }
 
 /**

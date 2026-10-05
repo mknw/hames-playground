@@ -517,14 +517,55 @@ export async function releaseConversationClaim(
   id: string,
   userId: string,
   version: string,
-  { failed = false }: { failed?: boolean } = {},
+  { failed = false, paused = false }: { failed?: boolean; paused?: boolean } = {},
 ): Promise<boolean> {
+  // `paused` restores the lifted status to 'paused' while releasing (#433 S7,
+  // A4/C1): a resume refused for anything but `chain-changed` must leave the
+  // row saying what the blob still says — the person can answer again — so a
+  // `tier-changed` refusal or a pre-run failure RESTORES 'paused' rather than
+  // merely not touching it. Like `failed`, fenced by the claim's version: a
+  // turn that lost the row restores nothing that is another turn's, and the
+  // caller passes `paused: true` only when the row it CLAIMED said 'paused'
+  // (the amendment to A4: the restore applies only to a row that was paused).
   const { rowCount } = await query(
     failed
       ? `UPDATE conversations SET turn_claimed_at = NULL, status = 'error', updated_at = NOW()
           WHERE id = $1 AND user_id = $2 AND context_version = $3`
-      : `UPDATE conversations SET turn_claimed_at = NULL
-          WHERE id = $1 AND user_id = $2 AND context_version = $3`,
+      : paused
+        ? `UPDATE conversations SET turn_claimed_at = NULL, status = 'paused', updated_at = NOW()
+            WHERE id = $1 AND user_id = $2 AND context_version = $3`
+        : `UPDATE conversations SET turn_claimed_at = NULL
+            WHERE id = $1 AND user_id = $2 AND context_version = $3`,
+    [id, userId, version],
+  )
+  return (rowCount ?? 0) > 0
+}
+
+/**
+ * Restore the lifted `status` to 'paused' when the blob says 'paused' and the
+ * column has drifted off it (#433 S7, m3). A resume that dies between its
+ * claim and its save leaves the row at whatever a crash or the reaper put
+ * there while the blob still says 'paused'; the host repairs it ON LOAD, at
+ * the version the load read, and never while a turn holds the row — a live
+ * claim means a turn is writing the truth right now, and this write must
+ * neither race it nor refuse its save.
+ *
+ * Status only, never the blob: the blob IS the source of this fact. `false`
+ * covers moved-on, turn-in-flight, unknown id and wrong owner alike — a
+ * repair that did not land costs a wrong sidebar badge until the next load,
+ * never a lost decision.
+ *
+ * One of the context writes that name the version they read (#470, F1): an
+ * unconditional version of this would race the turn that just took the row.
+ */
+export async function restoreConversationPaused(
+  id: string,
+  userId: string,
+  version: string,
+): Promise<boolean> {
+  const { rowCount } = await query(
+    `UPDATE conversations SET status = 'paused', updated_at = NOW()
+      WHERE id = $1 AND user_id = $2 AND context_version = $3 AND ${NO_LIVE_CLAIM}`,
     [id, userId, version],
   )
   return (rowCount ?? 0) > 0

@@ -86,9 +86,12 @@
  * once empty literals and `[…]` codes are gone; a `[White]` or `[Color2]`
  * format, a font or rich-text run colour equal to its cell's fill once
  * `indexed`, `theme` and tint are resolved to RGB (no fill is white); white
- * or near-white text (every channel ≥ `F0`), text with no fill or alpha 0,
- * a docx font colour equal to its `w:shd` fill, and text of 1 pt or less
- * (`w:sz` or `w:szCs`); and shapes placed off the slide.
+ * or near-white text (every channel ≥ `F0`), text with no fill, alpha 0 or an
+ * all-white gradient, a docx font colour equal to its `w:shd` fill or its
+ * `w:highlight`, and text of 1 pt or less (`w:sz` or `w:szCs`) — a pptx run
+ * inheriting size and fill from its body's list style; a conditional-format
+ * font that can turn text white; and shapes placed off the slide. A `w:t`
+ * outside any run is dropped: Word never renders it.
  *
  * ## Failure policy
  *
@@ -555,11 +558,6 @@ function disarm(
       if (id === undefined) return
       const state = attrOf(tag.attributes, 'state')
       ;(state === undefined || state === 'visible' ? shownSheets : hiddenSheets).add(id)
-    } else if (family.kind === 'sheet' && is(list, NS.s, 'bookViews')) {
-      const visibility = attrOf(tag.attributes, 'visibility')
-      if (is(tag, NS.s, 'workbookView') && visibility !== undefined && visibility !== 'visible') {
-        counted.add('hiddenWindows')
-      }
     } else if (family.kind === 'slides' && is(list, NS.p, 'sldIdLst') && is(tag, NS.p, 'sldId')) {
       if (id !== undefined) listedSlides.add(id)
     }
@@ -634,7 +632,14 @@ function disarm(
     })
     if (part.role === 'theme') shared.theme ??= readTheme(rewritten)
     if (part.role === 'wordStyles') shared.wordStyles = readWordStyles(rewritten)
-    if (part.role === 'sheetStyles') shared.sheetStyles = readSheetStyles(rewritten)
+    if (part.role === 'sheetStyles') {
+      shared.sheetStyles = readSheetStyles(rewritten)
+      // A conditional-format font that can turn text white: counted for the
+      // part, without evaluating the rule (#482 delta F5).
+      if (shared.sheetStyles.dxfFonts.some((c) => nearWhite(toRgb(c, shared)))) {
+        counted.add('fontMatchesFill')
+      }
+    }
     if (part.role === 'sharedStrings') shared.strings = readSharedStrings(rewritten)
     if (part.role === 'wordMain') collectNoteRefs(rewritten, shared.noteRefs)
     if (part.role === 'slidesMain') shared.slideSize = readSlideSize(rewritten)
@@ -853,6 +858,8 @@ interface Scope {
   readonly pFill?: string
   /** Inside a separator-type note: only separator marks stay (A11). */
   readonly separator?: boolean
+  /** The enclosing `p:txBody`'s level-1 list-style run defaults. */
+  readonly defRPr?: XmlElement
 }
 
 /** One field stack: its kinds, and how many are `code` — so `inCode` is O(1) (#482 F2a). */
@@ -1044,6 +1051,9 @@ function visit(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[] {
     inner = { ...scope, tblStyles: wVals(el, 'tblPr', 'tblStyle') }
   } else if (is(el, NS.w, 'footnote') || is(el, NS.w, 'endnote')) {
     inner = { ...scope, separator: separatorNote(el) }
+  } else if (is(el, NS.p, 'txBody')) {
+    const lvl1 = childEl(childEl(el, NS.a, 'lstStyle'), NS.a, 'lvl1pPr')
+    inner = { ...scope, defRPr: childEl(lvl1, NS.a, 'defRPr') }
   }
   const out = rebuild(el, ctx, fields, inner)
 
@@ -1081,6 +1091,11 @@ function rebuild(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[]
   for (const c of el.children) {
     if (typeof c === 'string') {
       children.push(c)
+      continue
+    }
+    // A `w:t` outside any run: Word never renders it (#482 delta F7).
+    if (!runLike && is(c, NS.w, 't')) {
+      ctx.removed.add('strayText')
       continue
     }
     // Inside a run in a field's code, everything but its properties goes —
@@ -1346,8 +1361,15 @@ function levels(styles: WordStyles, rStyles: readonly string[], scope: Scope): R
 
 function count(el: XmlElement, ctx: Ctx, scope: Scope): void {
   if (is(el, NS.w, 'r') && hasText(el, NS.w)) countWordRun(el, ctx, scope)
-  else if (is(el, NS.a, 'r') && hasText(el, NS.a)) countDrawingRun(el, ctx)
-  else if (ctx.role === 'worksheet') countSheet(el, ctx)
+  else if (is(el, NS.a, 'r') && hasText(el, NS.a)) countDrawingRun(el, ctx, scope.defRPr)
+  else if (ctx.role === 'sheetMain' && is(el, NS.s, 'bookViews')) {
+    // Read from the compat-processed tree, so markup nesting cannot hide a
+    // hidden window from the count (#482 delta F1, A10).
+    for (const view of childEls(el, NS.s, 'workbookView')) {
+      const visibility = attrOf(view.attributes, 'visibility')
+      if (visibility !== undefined && visibility !== 'visible') ctx.counted.add('hiddenWindows')
+    }
+  } else if (ctx.role === 'worksheet') countSheet(el, ctx)
   else if (ctx.role === 'slide' && is(el, NS.p, 'spTree')) countOffSlide(el, ctx)
 }
 
@@ -1379,9 +1401,13 @@ function countWordRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
   if (theme === 'background1' || theme === 'light1' || nearWhite(val)) {
     ctx.counted.add('whiteText')
   }
-  // A font colour equal to its own or its paragraph's shading (A10).
+  // A font colour equal to its own or its paragraph's shading, or to its own
+  // highlight (A10; #482 delta F2).
   const fill = shdFill(run, 'rPr') ?? scope.pFill
-  if (val !== undefined && fill !== undefined && val === fill) ctx.counted.add('fontMatchesFill')
+  const highlights = wVals(run, 'rPr', 'highlight').map((h) => HIGHLIGHT[h])
+  if (val !== undefined && (val === fill || highlights.includes(val))) {
+    ctx.counted.add('fontMatchesFill')
+  }
   const sz = nearest(all, 'sz')
   const szCs = nearest(all, 'szCs')
   if ((sz !== undefined && sz <= 2) || (szCs !== undefined && szCs <= 2)) {
@@ -1389,22 +1415,63 @@ function countWordRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
   }
 }
 
-function countDrawingRun(run: XmlElement, ctx: Ctx): void {
+/** `w:highlight`'s fixed named palette. */
+const HIGHLIGHT: Readonly<Record<string, string>> = {
+  black: '000000',
+  blue: '0000FF',
+  cyan: '00FFFF',
+  green: '00FF00',
+  magenta: 'FF00FF',
+  red: 'FF0000',
+  yellow: 'FFFF00',
+  white: 'FFFFFF',
+  darkBlue: '000080',
+  darkCyan: '008080',
+  darkGreen: '008000',
+  darkMagenta: '800080',
+  darkRed: '800000',
+  darkYellow: '808000',
+  darkGray: '808080',
+  lightGray: 'C0C0C0',
+}
+
+/** A DrawingML colour that reads as white or is fully transparent. */
+function invisibleClr(clr: XmlElement | undefined): boolean {
+  if (!clr) return false
+  const val = attrOf(clr.attributes, 'val')
+  return (
+    int(attrOf(childEl(clr, NS.a, 'alpha')?.attributes ?? [], 'val')) === 0 ||
+    (is(clr, NS.a, 'srgbClr') && nearWhite(hex6(val))) ||
+    (is(clr, NS.a, 'schemeClr') && (val === 'bg1' || val === 'lt1'))
+  )
+}
+
+const FILLS = ['noFill', 'solidFill', 'gradFill', 'blipFill', 'pattFill', 'grpFill']
+
+/**
+ * `defRPr` is the enclosing `p:txBody`'s `a:lstStyle/a:lvl1pPr/a:defRPr`: a run
+ * whose own `a:rPr` lacks a size or a fill inherits them (#482 delta F4). Only
+ * the body-local list style; master and layout styles are not resolved.
+ */
+function countDrawingRun(run: XmlElement, ctx: Ctx, defRPr: XmlElement | undefined): void {
   const rPr = childEl(run, NS.a, 'rPr')
-  if (!rPr) return
-  const fill = childEl(rPr, NS.a, 'solidFill')
-  const clr = fill ? elements(fill)[0] : undefined
-  const val = clr ? attrOf(clr.attributes, 'val') : undefined
-  const alpha = clr ? int(attrOf(childEl(clr, NS.a, 'alpha')?.attributes ?? [], 'val')) : undefined
+  const hasFill = (p: XmlElement | undefined) =>
+    p !== undefined && elements(p).some((c) => c.ns === NS.a && FILLS.includes(c.name))
+  const fillFrom = hasFill(rPr) ? rPr : defRPr
+  const solid = childEl(fillFrom, NS.a, 'solidFill')
+  const grad = childEl(fillFrom, NS.a, 'gradFill')
+  const stops = grad
+    ? childEls(childEl(grad, NS.a, 'gsLst') ?? grad, NS.a, 'gs').map((gs) => elements(gs)[0])
+    : []
   if (
-    childEl(rPr, NS.a, 'noFill') ||
-    alpha === 0 ||
-    (clr !== undefined && is(clr, NS.a, 'srgbClr') && nearWhite(hex6(val))) ||
-    (clr !== undefined && is(clr, NS.a, 'schemeClr') && (val === 'bg1' || val === 'lt1'))
+    childEl(fillFrom, NS.a, 'noFill') ||
+    invisibleClr(solid ? elements(solid)[0] : undefined) ||
+    // An all-white (or all-transparent) gradient (#482 delta F3).
+    (stops.length > 0 && stops.every(invisibleClr))
   ) {
     ctx.counted.add('whiteText')
   }
-  const sz = int(attrOf(rPr.attributes, 'sz'))
+  const sz = int(attrOf(rPr?.attributes ?? [], 'sz')) ?? int(attrOf(defRPr?.attributes ?? [], 'sz'))
   if (sz !== undefined && sz <= 100) ctx.counted.add('tinyText')
 }
 
@@ -1507,6 +1574,8 @@ interface SheetStyles {
   readonly fills: readonly (Color | undefined)[]
   /** The workbook's own palette (`<colors><indexedColors>`), when it has one. */
   readonly palette?: readonly string[]
+  /** Conditional-format (`dxf`) font colours. */
+  readonly dxfFonts: readonly Color[]
 }
 
 /** Excel's default indexed palette, 0–63, then system foreground and background. */
@@ -1653,6 +1722,9 @@ function readSheetStyles(root: XmlElement): SheetStyles {
           (attrOf(c.attributes, 'rgb') ?? '').slice(-6),
         )
       : undefined,
+    dxfFonts: list('dxfs', 'dxf')
+      .map((d) => colorOf(childEl(childEl(d, NS.s, 'font'), NS.s, 'color')))
+      .filter((c): c is Color => c !== undefined),
   }
 }
 

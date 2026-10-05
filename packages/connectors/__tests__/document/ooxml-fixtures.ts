@@ -469,6 +469,8 @@ export interface PptxSpec {
   readonly macroEnabled?: boolean
   /** `<p:sldSz>`; default 9,144,000 × 6,858,000 EMU. */
   readonly size?: { readonly cx: number; readonly cy: number }
+  /** Inner XML appended to `<p:presentation>` after `<p:notesSz>`. */
+  readonly presentationExtra?: string
   readonly presentationRels?: readonly Rel[]
   readonly rootRels?: readonly Rel[]
   readonly parts?: readonly Part[]
@@ -537,7 +539,7 @@ export function pptx(spec: PptxSpec): Uint8Array {
       body:
         `${XML_DECL}<p:presentation ${P_ROOT_NS}><p:sldIdLst>${ids.join('')}</p:sldIdLst>` +
         `<p:sldSz cx="${size.cx}" cy="${size.cy}"/><p:notesSz cx="6858000" cy="9144000"/>` +
-        '</p:presentation>',
+        `${spec.presentationExtra ?? ''}</p:presentation>`,
     },
     parts: [...parts, ...(spec.parts ?? [])],
     rels: {
@@ -561,7 +563,12 @@ export function everything(bytes: Uint8Array): string {
   return [...unpack(bytes).entries()].map(([n, t]) => `${n}\n${t}`).join('\n')
 }
 
-/** Wrap paragraph content in markup compatibility, the rule-bearing half in `branch`. */
+/**
+ * Wrap content in markup compatibility, the rule-bearing half in `branch` —
+ * which is always the branch Word renders (A9): a Choice that requires `w14`
+ * (understood), or a Fallback behind a Choice that requires a namespace no
+ * consumer understands. `other` goes in the branch Word does not render.
+ */
 export function inAlternateContent(
   ruled: string,
   branch: 'choice' | 'fallback',
@@ -571,9 +578,13 @@ export function inAlternateContent(
   const choice = branch === 'choice' ? ruled : other
   const fallback = branch === 'fallback' ? ruled : other
   const decl = mcPrefix === 'mc' ? '' : ` xmlns:${mcPrefix}="${NS.mc}"`
+  const requires =
+    branch === 'choice'
+      ? `xmlns:w14="${NS.w14}" Requires="w14"`
+      : 'xmlns:zz="urn:not-understood" Requires="zz"'
   return (
     `<${mcPrefix}:AlternateContent${decl}>` +
-    `<${mcPrefix}:Choice Requires="w14">${choice}</${mcPrefix}:Choice>` +
+    `<${mcPrefix}:Choice ${requires}>${choice}</${mcPrefix}:Choice>` +
     `<${mcPrefix}:Fallback>${fallback}</${mcPrefix}:Fallback>` +
     `</${mcPrefix}:AlternateContent>`
   )

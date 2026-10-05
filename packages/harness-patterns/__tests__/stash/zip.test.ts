@@ -78,7 +78,7 @@ describe('the limits are the spec §5.3 step 1 values', () => {
       maxDepth: 256,
       maxAttributes: 256,
       maxPartBytes: 20 * MiB,
-      maxTreeNodes: 1_000_000,
+      maxTreeNodes: 650_000,
     })
     expect(Object.isFrozen(ZIP_LIMITS)).toBe(true)
     expect(Object.isFrozen(XML_LIMITS)).toBe(true)

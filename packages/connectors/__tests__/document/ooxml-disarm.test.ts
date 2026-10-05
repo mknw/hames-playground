@@ -1234,24 +1234,26 @@ describe('Z2: references to a dropped part', () => {
     expect(out.removed.references).toBe(2)
     expect(unpack(out.bytes).get('word/document.xml')).toContain('<w:sectPr/>')
   })
+})
 
-  it('VML’s o:relid is a relationship reference too', async () => {
+describe('Z2: VML is not understood, so legacy w:pict content goes (A9)', () => {
+  it('V1: a VML text box with visibility:hidden, and VML alt and o:title', async () => {
     const body =
       para('VISIBLE') +
-      `<w:p><w:r><w:pict><v:shape id="s"><v:imagedata o:relid="rIdVmlImg"/></v:shape></w:pict></w:r></w:p>`
-    await disarmed(
+      `<w:p><w:r><w:pict><v:shape id="s" style="visibility:hidden" alt="VMLALTSENTINEL"><v:imagedata o:relid="rIdVmlImg" o:title="VMLTITLESENTINEL"/>` +
+      `<v:textbox><w:txbxContent>${para('VMLHIDDENSENTINEL')}</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>`
+    const out = await disarmed(
       docx({
         body,
         docRels: [{ id: 'rIdVmlImg', type: RT.image, target: 'media/image1.png' }],
         parts: [{ name: 'word/media/image1.png', type: CT.png, body: blob('VMLIMGSENTINEL') }],
       }),
       MIME.docx,
-      ['rIdVmlImg', 'VMLIMGSENTINEL', 'imagedata'],
+      ['VMLHIDDENSENTINEL', 'VMLALTSENTINEL', 'VMLTITLESENTINEL', 'rIdVmlImg', 'v:shape'],
     )
+    expect(out.removed.unknownMarkup).toBe(1)
   })
-})
 
-describe('Z2: OLE and ActiveX elements that carry content of their own', () => {
   it('an o:OLEObject with field codes, outside w:object', async () => {
     const body =
       para('VISIBLE') +
@@ -1265,9 +1267,11 @@ describe('Z2: OLE and ActiveX elements that carry content of their own', () => {
       MIME.docx,
       ['OLEPROGSENTINEL', 'OLEFIELDSENTINEL', 'OLEObject'],
     )
-    expect(out.removed.oleObjects).toBe(1)
+    expect(out.removed.unknownMarkup).toBe(1)
   })
+})
 
+describe('Z2: OLE and ActiveX elements that carry content of their own', () => {
   it('a pptx p:oleObj and p:controls', async () => {
     const frame =
       `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="9" name="o"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>` +
@@ -1493,7 +1497,7 @@ describe('Z2: concealment is counted, not dropped', () => {
 // Markup compatibility: every element rule applies inside mc:Choice AND mc:Fallback
 // ============================================================================
 
-describe('Z2: every element rule holds inside mc:Choice and mc:Fallback', () => {
+describe('Z2: every element rule holds in the mc:Choice or mc:Fallback Word renders (A9)', () => {
   /** Paragraph content carrying one rule's carrier, by name. */
   const carriers: Record<string, { xml: (s: string) => string; rels?: Rel[] }> = {
     vanish: { xml: (s) => run(s, '<w:vanish/>') },
@@ -1543,20 +1547,32 @@ describe('Z2: every element rule holds inside mc:Choice and mc:Fallback', () => 
     }
   }
 
-  it('a hiding rule in one branch drops the whole mc:AlternateContent, the other branch’s copy too', async () => {
-    const hidden = run('CHOICEHIDDEN', '<w:vanish/>')
+  it('J1: text only in a Choice whose Requires Word does not understand is dropped', async () => {
     const body =
       para('VISIBLE') +
-      `<w:p>${inAlternateContent(hidden, 'choice', run('FALLBACKCOPYSENTINEL'))}</w:p>`
-    const out = await disarmed(docx({ body }), MIME.docx, ['CHOICEHIDDEN', 'FALLBACKCOPYSENTINEL'])
+      `<w:p>${inAlternateContent(run('FALLBACKKEPT'), 'fallback', run('J1CHOICESENTINEL'))}</w:p>`
+    const out = await disarmed(docx({ body }), MIME.docx, ['J1CHOICESENTINEL', 'AlternateContent'])
+    expect(everything(out.bytes)).toContain('FALLBACKKEPT')
     expect(out.removed.alternateContent).toBe(1)
   })
 
-  it('a branch with no hiding rule keeps both branches (sanitized)', async () => {
-    const body = `<w:p>${inAlternateContent(run('VISIBLE'), 'choice', run('FALLBACKKEPT'))}</w:p>`
-    const out = await disarmed(docx({ body }), MIME.docx, [])
-    expect(everything(out.bytes)).toContain('FALLBACKKEPT')
+  it('J2: text only in the Fallback Word does not render is dropped', async () => {
+    const body =
+      para('VISIBLE') +
+      `<w:p>${inAlternateContent(run('CHOICEKEPT'), 'choice', run('J2FALLBACKSENTINEL'))}</w:p>`
+    const out = await disarmed(docx({ body }), MIME.docx, ['J2FALLBACKSENTINEL', 'mc:Fallback'])
+    expect(everything(out.bytes)).toContain('CHOICEKEPT')
   })
+
+  for (const branch of ['choice', 'fallback'] as const) {
+    it(`the rendered ${branch} is itself reduced: an ignorable wrapper inside it goes`, async () => {
+      const wrapped = `<zz2:wrap xmlns:zz2="urn:ignorable">${run('NESTEDWRAPSENTINEL')}</zz2:wrap>`
+      const body =
+        para('VISIBLE') + `<w:p>${inAlternateContent(wrapped + run('BRANCHKEPT'), branch)}</w:p>`
+      const out = await disarmed(docx({ body }), MIME.docx, ['NESTEDWRAPSENTINEL'])
+      expect(everything(out.bytes)).toContain('BRANCHKEPT')
+    })
+  }
 
   it('a hidden pptx shape inside mc:Fallback', async () => {
     const ac = inAlternateContent(
@@ -1573,9 +1589,9 @@ describe('Z2: every element rule holds inside mc:Choice and mc:Fallback', () => 
     const sheet =
       `<sheetData><row r="1"><c r="A1" t="str"><f>A2</f><v>VISIBLE</v></c></row></sheetData>` +
       inAlternateContent(
-        '<x14:dummy xmlns:x14="urn:x14"/>',
-        'choice',
         `<c xmlns="${NS.s}"><f>FFALLBACKSENTINEL</f></c>`,
+        'fallback',
+        '<x14:dummy xmlns:x14="urn:x14"/>',
       )
     await disarmed(xlsx({ sheets: [{ name: 'S', xml: sheet }] }), MIME.xlsx, ['FFALLBACKSENTINEL'])
   })
@@ -1649,6 +1665,374 @@ describe('Z2: the rules match the namespace URI, whatever the prefix', () => {
 // ============================================================================
 // Refusals: the disarm throws rather than returning something it did not finish
 // ============================================================================
+
+// ============================================================================
+// #482 review: the fix round's pins, one per finding (amendments A9–A13)
+// ============================================================================
+
+/** CPU time of `f`, minimum of 3 passes — interference only ever lengthens it. */
+async function cpuMs(f: () => Promise<unknown>): Promise<number> {
+  let best = Infinity
+  for (let k = 0; k < 3; k++) {
+    const c = process.cpuUsage()
+    await f().catch(() => undefined)
+    const d = process.cpuUsage(c)
+    best = Math.min(best, (d.user + d.system) / 1000)
+  }
+  return best
+}
+
+describe('#482 F1 (A9): markup compatibility runs first', () => {
+  it('K1: runs inside an mc:Ignorable wrapper are dropped with it', async () => {
+    const body =
+      `<w:p xmlns:x="urn:junk" mc:Ignorable="x">${run('VISIBLE')}` +
+      `<x:wrap>${run('K1SENTINEL')}</x:wrap></w:p>`
+    const out = await disarmed(docx({ body }), MIME.docx, ['K1SENTINEL', 'x:wrap'])
+    expect(out.removed.unknownMarkup).toBe(1)
+  })
+
+  it('K2: w rebound to a junk URI inside such a wrapper', async () => {
+    const body =
+      para('VISIBLE') +
+      `<w:p><x:wrap xmlns:x="urn:junk"><w:r xmlns:w="urn:junk2"><w:t>K2SENTINEL</w:t></w:r></x:wrap></w:p>`
+    await disarmed(docx({ body }), MIME.docx, ['K2SENTINEL'])
+  })
+
+  it('K3: an element of an unknown, non-ignorable namespace', async () => {
+    const body = `<w:p>${run('VISIBLE')}<y:block xmlns:y="urn:unknown">${run('K3SENTINEL')}</y:block></w:p>`
+    await disarmed(docx({ body }), MIME.docx, ['K3SENTINEL'])
+  })
+
+  it('K6: a Strict-namespace element in a transitional package; a Strict root is refused', async () => {
+    const strict = 'http://purl.oclc.org/ooxml/wordprocessingml/main'
+    const body = `${para('VISIBLE')}<s:p xmlns:s="${strict}"><s:r><s:t>K6SENTINEL</s:t></s:r></s:p>`
+    await disarmed(docx({ body }), MIME.docx, ['K6SENTINEL'])
+    const root = buildPackage({
+      main: {
+        name: 'word/document.xml',
+        type: CT.docxMain,
+        body: `<w:document xmlns:w="${strict}"><w:body>${para('K6ROOTSENTINEL')}</w:body></w:document>`,
+      },
+    })
+    expect(await refusalOf(ooxmlDisarm(root, MIME.docx))).toBe('content-type')
+  })
+
+  it('G4: a w:vanish inside mc:AlternateContent inside w:rPr', async () => {
+    const body =
+      `<w:p>${run('VISIBLE')}<w:r><w:rPr>${inAlternateContent('<w:vanish/>', 'choice')}</w:rPr>` +
+      `<w:t>G4SENTINEL</w:t></w:r></w:p>`
+    await disarmed(docx({ body }), MIME.docx, ['G4SENTINEL'])
+  })
+
+  it('G5: the whole w:rPr inside mc:AlternateContent in the run', async () => {
+    const body =
+      `<w:p>${run('VISIBLE')}<w:r>${inAlternateContent('<w:rPr><w:vanish/></w:rPr>', 'choice')}` +
+      `<w:t>G5SENTINEL</w:t></w:r></w:p>`
+    await disarmed(docx({ body }), MIME.docx, ['G5SENTINEL'])
+  })
+
+  it('G6: a style’s vanish inside mc:AlternateContent in its w:rPr', async () => {
+    const styles = wStyles(
+      DOCX_STYLES_NORMAL +
+        `<w:style w:type="character" w:styleId="Ghost"><w:rPr>` +
+        `${inAlternateContent('<w:vanish/>', 'choice', '', 'mcx')}</w:rPr></w:style>`,
+    )
+    const body = `<w:p>${run('VISIBLE')}${run('G6SENTINEL', '<w:rStyle w:val="Ghost"/>')}</w:p>`
+    await disarmed(docx({ body, styles }), MIME.docx, ['G6SENTINEL'])
+  })
+
+  it('X11: a row in a foreign namespace, with hidden="1"', async () => {
+    const sheet =
+      `<sheetData>${row(1, ['VISIBLE'])}<f:row xmlns:f="urn:foreign" r="2" hidden="1">` +
+      `<c r="A2" t="inlineStr"><is><t>X11SENTINEL</t></is></c></f:row></sheetData>`
+    const out = await disarmed(xlsx({ sheets: [{ name: 'S', xml: sheet }] }), MIME.xlsx, [
+      'X11SENTINEL',
+    ])
+    expect(out.removed.unknownMarkup).toBe(1)
+  })
+})
+
+describe('#482 F2: the rules cost CPU linear in the part', () => {
+  /**
+   * The reviewer's shape — open fields, then runs — at 30,000 of each, so
+   * it fits the node budget and reaches the field rule: before the fix, each
+   * run scanned both stacks (quadratic: 5.8 s of CPU at 60,000); now the
+   * field state is O(1) a node and the 257th open field is refused.
+   */
+  it('2(a): 30,000 open fields then 30,000 runs is refused in under 500 ms of CPU', async () => {
+    const fields =
+      '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>'.repeat(
+        30_000,
+      )
+    const runs = Array.from({ length: 30_000 }, (_, i) => `<w:r><w:t>${i}</w:t></w:r>`).join('')
+    const bytes = docx({ body: `<w:p>${fields}${runs}</w:p>` })
+    expect(await refusalOf(ooxmlDisarm(bytes, MIME.docx))).toBe('content-type')
+    expect(await cpuMs(() => ooxmlDisarm(bytes, MIME.docx))).toBeLessThan(500)
+  }, 60_000)
+
+  it('2(a): fields nest 256 deep, and the 257th begin is refused', async () => {
+    const begins = (n: number) => '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'.repeat(n)
+    await disarmed(
+      docx({ body: para('VISIBLE') + `<w:p>${begins(256)}${run('X')}</w:p>` }),
+      MIME.docx,
+      [],
+    )
+    expect(
+      await refusalOf(ooxmlDisarm(docx({ body: `<w:p>${begins(257)}</w:p>` }), MIME.docx)),
+    ).toBe('content-type')
+  })
+
+  it('2(b): 255-deep default chains and 20,000 runs in a table, in under 500 ms of CPU', async () => {
+    const chain = (type: string, p: string) =>
+      Array.from(
+        { length: 255 },
+        (_, i) =>
+          `<w:style w:type="${type}"${i === 0 ? ' w:default="1"' : ''} w:styleId="${p}${i}">` +
+          (i < 254 ? `<w:basedOn w:val="${p}${i + 1}"/>` : '') +
+          '</w:style>',
+      ).join('')
+    const styles = wStyles(chain('character', 'C') + chain('paragraph', 'P') + chain('table', 'T'))
+    const rsid = noise(8 * 20_000, 5)
+    const runs = Array.from(
+      { length: 20_000 },
+      (_, i) => `<w:r w:rsidR="${rsid.slice(8 * i, 8 * i + 8)}"><w:t>x</w:t></w:r>`,
+    ).join('')
+    const body =
+      '<w:tbl><w:tblGrid><w:gridCol/></w:tblGrid><w:tr><w:tc>' +
+      `<w:p>${run('VISIBLE')}${runs}</w:p></w:tc></w:tr></w:tbl>`
+    const bytes = docx({ body, styles })
+    expect(everything((await ooxmlDisarm(bytes, MIME.docx)).bytes)).toContain('VISIBLE')
+    expect(await cpuMs(() => ooxmlDisarm(bytes, MIME.docx))).toBeLessThan(500)
+  }, 60_000)
+})
+
+describe('#482 F3 (A13): a basedOn chain cut off by the bound counts as hiding', () => {
+  it('G2: vanish on the 300th style hides; a 100-deep chain without it does not', async () => {
+    const chain = (p: string, n: number, last: string) =>
+      Array.from(
+        { length: n },
+        (_, i) =>
+          `<w:style w:type="character" w:styleId="${p}${i}">` +
+          (i < n - 1 ? `<w:basedOn w:val="${p}${i + 1}"/>` : last) +
+          '</w:style>',
+      ).join('')
+    const styles = wStyles(
+      DOCX_STYLES_NORMAL + chain('A', 300, '<w:rPr><w:vanish/></w:rPr>') + chain('B', 100, ''),
+    )
+    const body =
+      `<w:p>${run('VISIBLE', '<w:rStyle w:val="B0"/>')}` +
+      `${run('G2SENTINEL', '<w:rStyle w:val="A0"/>')}</w:p>`
+    await disarmed(docx({ body, styles }), MIME.docx, ['G2SENTINEL'])
+  })
+})
+
+describe('#482 F4 (A11): a separator-type note keeps only its separator marks', () => {
+  const sep = (type: string, text: string) =>
+    `<w:footnotes xmlns:w="${NS.w}"><w:footnote w:type="${type}" w:id="-1"><w:p>` +
+    `<w:r><w:separator/></w:r><w:r><w:t>${text}</w:t></w:r></w:p></w:footnote></w:footnotes>`
+
+  it('M1: text inside a separator footnote, no footnote references', async () => {
+    const out = await disarmed(
+      docx({ body: para('VISIBLE'), footnotes: sep('separator', 'M1SENTINEL') }),
+      MIME.docx,
+      ['M1SENTINEL'],
+    )
+    expect(everything(out.bytes)).toContain('w:separator')
+    expect(out.removed.separatorText).toBe(1)
+  })
+
+  it('M2: text inside a continuationNotice footnote', async () => {
+    await disarmed(
+      docx({ body: para('VISIBLE'), footnotes: sep('continuationNotice', 'M2SENTINEL') }),
+      MIME.docx,
+      ['M2SENTINEL'],
+    )
+  })
+})
+
+describe('#482 F5 (A12): visibility is read only from the list that names it', () => {
+  it('X3: a worksheet <sheets> never lists, named only in an extLst <sheet>', async () => {
+    await disarmed(
+      xlsx({
+        sheets: [
+          { name: 'Shown', xml: `<sheetData>${row(1, ['VISIBLE'])}</sheetData>` },
+          {
+            name: 'Unlisted',
+            unlisted: true,
+            xml: `<sheetData>${row(1, ['X3SENTINEL'])}</sheetData>`,
+          },
+        ],
+        // Two decoys: the right name at the wrong depth, and the right depth in another namespace.
+        workbookExtra:
+          '<extLst><ext uri="{decoy}"><sheet name="D" sheetId="9" r:id="rIdSheet2"/></ext></extLst>' +
+          '<d:sheets xmlns:d="urn:decoy"><d:sheet name="D" sheetId="9" r:id="rIdSheet2"/></d:sheets>',
+      }),
+      MIME.xlsx,
+      ['X3SENTINEL'],
+    )
+  })
+
+  it('P8: a slide <p:sldIdLst> does not list, named only in a p:extLst <p:sldId>', async () => {
+    await disarmed(
+      pptx({
+        slides: [{ shapes: shape('VISIBLE') }, { shapes: shape('P8SENTINEL'), unlisted: true }],
+        presentationExtra:
+          '<p:extLst><p:ext uri="{decoy}"><p:sldId id="300" r:id="rIdSlide2"/></p:ext></p:extLst>' +
+          '<d:sldIdLst xmlns:d="urn:decoy"><d:sldId id="301" r:id="rIdSlide2"/></d:sldIdLst>',
+      }),
+      MIME.pptx,
+      ['P8SENTINEL'],
+    )
+  })
+})
+
+describe('#482 F6 (A10): equivalent forms of the counted categories count too', () => {
+  const xf = (numFmtId: number, fontId: number, fillId: number) =>
+    `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}"/>`
+  const cell = (s: number, t: string) =>
+    `<sheetData><row r="1"><c r="A1" s="${s}" t="inlineStr"><is><t>${t}</t></is></c></row></sheetData>`
+  const counts = async (sheet: string, styles: string, sharedStrings?: string) =>
+    (
+      await disarmed(
+        xlsx({ sheets: [{ name: 'S', xml: sheet }], styles, sharedStrings }),
+        MIME.xlsx,
+        [],
+        'KEPT',
+      )
+    ).counted
+
+  it('X6: a format of empty literals, "";"";"";""', async () => {
+    const styles = sStyles({
+      numFmts:
+        '<numFmt numFmtId="164" formatCode="&quot;&quot;;&quot;&quot;;&quot;&quot;;&quot;&quot;"/>',
+      xfs: [xf(0, 0, 0), xf(164, 0, 0)],
+    })
+    expect(await counts(cell(1, 'KEPT'), styles)).toEqual({ hiddenNumberFormats: 1 })
+  })
+
+  it('X7: a [White] format section', async () => {
+    const styles = sStyles({
+      numFmts: '<numFmt numFmtId="165" formatCode="[White]@"/>',
+      xfs: [xf(0, 0, 0), xf(165, 0, 0)],
+    })
+    expect(await counts(cell(1, 'KEPT'), styles)).toEqual({ fontMatchesFill: 1 })
+  })
+
+  it('X8: font rgb on a solid fill given as indexed — white on 9, and black on 8', async () => {
+    // Black on black is the case that needs the palette: unresolved, an
+    // indexed fill reads as "no fill", and a white font would count anyway.
+    const styles = sStyles({
+      fonts: [
+        '<font><sz val="11"/></font>',
+        '<font><color rgb="FFFFFFFF"/></font>',
+        '<font><color rgb="FF000000"/></font>',
+      ],
+      fills: [
+        '<fill><patternFill patternType="none"/></fill>',
+        '<fill><patternFill patternType="gray125"/></fill>',
+        '<fill><patternFill patternType="solid"><fgColor indexed="9"/></patternFill></fill>',
+        '<fill><patternFill patternType="solid"><fgColor indexed="8"/></patternFill></fill>',
+      ],
+      xfs: [xf(0, 0, 0), xf(0, 1, 2), xf(0, 2, 3)],
+    })
+    expect(await counts(cell(1, 'KEPT'), styles)).toEqual({ fontMatchesFill: 1 })
+    expect(await counts(cell(2, 'KEPT'), styles)).toEqual({ fontMatchesFill: 1 })
+  })
+
+  it('X9: a white rich-text run in sharedStrings, in a cell with no fill', async () => {
+    const styles = sStyles({ xfs: [xf(0, 0, 0)] })
+    const sst =
+      `<sst xmlns="${NS.s}"><si><r><t>KEPT</t></r><r><rPr><color rgb="FFFFFFFF"/></rPr>` +
+      '<t>X9SENTINEL</t></r></si></sst>'
+    const sheet = '<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData>'
+    expect(await counts(sheet, styles, sst)).toEqual({ fontMatchesFill: 1 })
+  })
+
+  it('X4, X5: a row height of 0.1 and a column width of 0.01', async () => {
+    const sheet =
+      '<cols><col min="1" max="1" width="0.01"/></cols>' +
+      `<sheetData>${row(1, ['KEPT'], ' ht="0.1" customHeight="1"')}</sheetData>`
+    expect(await counts(sheet, sStyles({ xfs: [xf(0, 0, 0)] }))).toEqual({
+      zeroRowHeights: 1,
+      zeroColumnWidths: 1,
+    })
+  })
+
+  it('X10: a hidden workbook window', async () => {
+    const hidden = await disarmed(
+      xlsx({
+        sheets: [{ name: 'S', xml: `<sheetData>${row(1, ['VISIBLE'])}</sheetData>` }],
+        workbookExtra: '<bookViews><workbookView visibility="hidden"/></bookViews>',
+      }),
+      MIME.xlsx,
+      [],
+    )
+    expect(hidden.counted).toEqual({ hiddenWindows: 1 })
+  })
+
+  it('W2: near-white text, FFFFFE', async () => {
+    const body = `<w:p>${run('VISIBLE')}${run('KEPT', '<w:color w:val="FFFFFE"/>')}</w:p>`
+    expect((await disarmed(docx({ body }), MIME.docx, [])).counted).toEqual({ whiteText: 1 })
+  })
+
+  it('W3: black text on black shading, the run’s or the paragraph’s', async () => {
+    const black = '<w:color w:val="000000"/>'
+    const body =
+      `<w:p>${run('VISIBLE')}${run('KEPT', `${black}<w:shd w:val="clear" w:fill="000000"/>`)}</w:p>` +
+      `<w:p><w:pPr><w:shd w:val="clear" w:fill="000000"/></w:pPr>${run('KEPT', black)}</w:p>`
+    expect((await disarmed(docx({ body }), MIME.docx, [])).counted).toEqual({ fontMatchesFill: 2 })
+  })
+
+  it('W5: complex-script size 1 pt (w:szCs)', async () => {
+    const body = `<w:p>${run('VISIBLE')}${run('KEPT', '<w:cs/><w:szCs w:val="2"/>')}</w:p>`
+    expect((await disarmed(docx({ body }), MIME.docx, [])).counted).toEqual({ tinyText: 1 })
+  })
+
+  it('P3, P4: pptx text with a:noFill, and with alpha 0', async () => {
+    const out = await disarmed(
+      pptx({
+        slides: [
+          {
+            shapes:
+              shape('VISIBLE') +
+              shape('KEPT', { id: 3, rPr: '<a:rPr><a:noFill/></a:rPr>' }) +
+              shape('KEPT', {
+                id: 4,
+                rPr: '<a:rPr><a:solidFill><a:srgbClr val="000000"><a:alpha val="0"/></a:srgbClr></a:solidFill></a:rPr>',
+              }),
+          },
+        ],
+      }),
+      MIME.pptx,
+      [],
+    )
+    expect(out.counted).toEqual({ whiteText: 2 })
+  })
+})
+
+describe('#482 F7 (A11): a deleted table cell is a deletion', () => {
+  it('F4: a w:tc marked w:cellDel goes with its text', async () => {
+    const body =
+      '<w:tbl><w:tblGrid><w:gridCol/><w:gridCol/></w:tblGrid><w:tr>' +
+      `<w:tc>${para('VISIBLE')}</w:tc>` +
+      `<w:tc><w:tcPr><w:cellDel w:id="1" w:author="a"/></w:tcPr>${para('F4SENTINEL')}</w:tc></w:tr></w:tbl>`
+    const out = await disarmed(docx({ body }), MIME.docx, ['F4SENTINEL'])
+    expect(out.removed.deletions).toBe(1)
+  })
+})
+
+describe('#482 F8: an unwrap carries only the declarations a child uses', () => {
+  it('a w:ins with 200 declarations around a run with 100 attributes still reopens', async () => {
+    const decls = Array.from({ length: 200 }, (_, i) => `xmlns:n${i}="urn:n${i}"`).join(' ')
+    const attrs = Array.from({ length: 100 }, (_, i) => `a${i}=""`).join(' ')
+    const body = `<w:p><w:ins w:id="1" w:author="a" ${decls}><w:r ${attrs}><w:t>VISIBLE</w:t></w:r></w:ins></w:p>`
+    const doc = await flattenDocument(
+      { bytes: docx({ body }), filename: 'x', mimeType: MIME.docx },
+      { convert: async () => 'VISIBLE', disarm: ooxmlDisarm },
+    )
+    expect(doc.report.hiddenContent).toBe('removed')
+  })
+})
 
 describe('the disarm throws instead of returning a partial package', () => {
   const W_EMPTY = `<w:document xmlns:w="${NS.w}"><w:body/></w:document>`

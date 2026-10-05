@@ -974,9 +974,16 @@ describe('#475 F1 [SD-2]: link flattening is linear on its own openers', () => {
   ]
   for (const [label, body] of bodies) {
     it(`1 MiB of "${label}" flattens in under 1 s`, async () => {
-      const started = performance.now()
-      await flattenDocument(text(body, 'text/markdown'))
-      expect(performance.now() - started).toBeLessThan(1000)
+      // CPU time, minimum of 3 passes, as in injection-guard-redos.test.ts:
+      // interference only ever lengthens a measurement (#482 review).
+      let best = Infinity
+      for (let k = 0; k < 3; k++) {
+        const c = process.cpuUsage()
+        await flattenDocument(text(body, 'text/markdown'))
+        const d = process.cpuUsage(c)
+        best = Math.min(best, (d.user + d.system) / 1000)
+      }
+      expect(best).toBeLessThan(1000)
     })
   }
 

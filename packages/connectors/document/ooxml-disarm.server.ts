@@ -88,9 +88,11 @@
  * `indexed`, `theme` and tint are resolved to RGB (no fill is white); white
  * or near-white text (every channel ≥ `F0`), text with no fill, alpha 0 or an
  * all-white gradient, a docx font colour equal to its `w:shd` fill or its
- * `w:highlight`, and text of 1 pt or less (`w:sz` or `w:szCs`) — a pptx run
- * inheriting size and fill from its body's list style; a conditional-format
- * font that can turn text white; and shapes placed off the slide. A `w:t`
+ * `w:highlight` (both resolved through the style cascade), and text of 1 pt or
+ * less (`w:sz` or `w:szCs`) — a pptx run inheriting size and fill from its
+ * body's list style at its paragraph's own level; a conditional-format font
+ * that can turn text white, or fill equal to a declared font colour; and
+ * shapes placed off the slide. A `w:t`
  * outside any run is dropped: Word never renders it.
  *
  * ## Failure policy
@@ -636,7 +638,16 @@ function disarm(
       shared.sheetStyles = readSheetStyles(rewritten)
       // A conditional-format font that can turn text white: counted for the
       // part, without evaluating the rule (#482 delta F5).
-      if (shared.sheetStyles.dxfFonts.some((c) => nearWhite(toRgb(c, shared)))) {
+      const st = shared.sheetStyles
+      const fonts = st.fonts.flatMap((c) => (c ? [toRgb(c, shared)] : []))
+      if (
+        st.dxfFonts.some((c) => nearWhite(toRgb(c, shared))) ||
+        // …or a conditional fill equal to a font colour the part declares (re-check F3).
+        st.dxfFills.some((c) => {
+          const rgb = toRgb(c, shared)
+          return rgb !== undefined && fonts.includes(rgb)
+        })
+      ) {
         counted.add('fontMatchesFill')
       }
     }
@@ -858,7 +869,9 @@ interface Scope {
   readonly pFill?: string
   /** Inside a separator-type note: only separator marks stay (A11). */
   readonly separator?: boolean
-  /** The enclosing `p:txBody`'s level-1 list-style run defaults. */
+  /** The enclosing `p:txBody`'s list-style run defaults, by level 1–9. */
+  readonly lstLevels?: ReadonlyMap<number, XmlElement>
+  /** The defaults for the enclosing paragraph's own level. */
   readonly defRPr?: XmlElement
 }
 
@@ -1052,8 +1065,17 @@ function visit(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[] {
   } else if (is(el, NS.w, 'footnote') || is(el, NS.w, 'endnote')) {
     inner = { ...scope, separator: separatorNote(el) }
   } else if (is(el, NS.p, 'txBody')) {
-    const lvl1 = childEl(childEl(el, NS.a, 'lstStyle'), NS.a, 'lvl1pPr')
-    inner = { ...scope, defRPr: childEl(lvl1, NS.a, 'defRPr') }
+    const lst = childEl(el, NS.a, 'lstStyle')
+    const levels = new Map<number, XmlElement>()
+    for (let n = 1; n <= 9; n++) {
+      const def = childEl(childEl(lst, NS.a, `lvl${n}pPr`), NS.a, 'defRPr')
+      if (def) levels.set(n, def)
+    }
+    inner = { ...scope, lstLevels: levels, defRPr: undefined }
+  } else if (is(el, NS.a, 'p')) {
+    // The paragraph's declared level picks its list-style defaults (#482 re-check F2).
+    const lvl = int(attrOf(childEl(el, NS.a, 'pPr')?.attributes ?? [], 'lvl')) ?? 0
+    inner = { ...scope, defRPr: scope.lstLevels?.get(lvl + 1) }
   }
   const out = rebuild(el, ctx, fields, inner)
 
@@ -1171,6 +1193,8 @@ interface RunProps {
   readonly color?: { readonly val?: string; readonly theme?: string }
   readonly sz?: number
   readonly szCs?: number
+  /** `w:highlight/@w:val` (#482 re-check F1). */
+  readonly highlight?: string
 }
 
 /** What a style, or a combination of styles, gives a run. */
@@ -1179,6 +1203,7 @@ interface Resolved {
   readonly color?: { readonly val?: string; readonly theme?: string }
   readonly sz?: number
   readonly szCs?: number
+  readonly highlight?: string
 }
 
 interface StyleDef {
@@ -1221,6 +1246,7 @@ function runProps(rPr: XmlElement | undefined): RunProps | undefined {
     color: color && { val: wVal(color), theme: attrOf(color.attributes, 'themeColor', NS.w) },
     sz: int(wVal(childEl(rPr, NS.w, 'sz'))),
     szCs: int(wVal(childEl(rPr, NS.w, 'szCs'))),
+    highlight: wVal(childEl(rPr, NS.w, 'highlight')),
   }
 }
 
@@ -1261,7 +1287,7 @@ function readWordStyles(root: XmlElement): WordStyles {
 }
 
 /** Nearest first: the first level that defines it wins. */
-function nearest<K extends 'color' | 'sz' | 'szCs'>(
+function nearest<K extends 'color' | 'sz' | 'szCs' | 'highlight'>(
   levels: readonly (Pick<RunProps, K> | undefined)[],
   key: K,
 ): RunProps[K] {
@@ -1320,6 +1346,7 @@ function resolveStyle(styles: WordStyles, id: string): Resolved {
       color: nearest([...direct, ...parents], 'color'),
       sz: nearest([...direct, ...parents], 'sz'),
       szCs: nearest([...direct, ...parents], 'szCs'),
+      highlight: nearest([...direct, ...parents], 'highlight'),
     })
   }
   return memo.get(start)!
@@ -1350,6 +1377,7 @@ function levels(styles: WordStyles, rStyles: readonly string[], scope: Scope): R
     color: nearest(all, 'color'),
     sz: nearest(all, 'sz'),
     szCs: nearest(all, 'szCs'),
+    highlight: nearest(all, 'highlight'),
   }
   styles.combined.set(key, combined)
   return combined
@@ -1401,11 +1429,13 @@ function countWordRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
   if (theme === 'background1' || theme === 'light1' || nearWhite(val)) {
     ctx.counted.add('whiteText')
   }
-  // A font colour equal to its own or its paragraph's shading, or to its own
-  // highlight (A10; #482 delta F2).
+  // A font colour equal to its own or its paragraph's shading, or to its
+  // highlight — resolved through the cascade like size (A10; #482 delta F2,
+  // re-check F1).
   const fill = shdFill(run, 'rPr') ?? scope.pFill
-  const highlights = wVals(run, 'rPr', 'highlight').map((h) => HIGHLIGHT[h])
-  if (val !== undefined && (val === fill || highlights.includes(val))) {
+  const highlight = nearest(all, 'highlight')
+  const lit = highlight === undefined ? undefined : HIGHLIGHT[highlight]
+  if (val !== undefined && (val === fill || val === lit)) {
     ctx.counted.add('fontMatchesFill')
   }
   const sz = nearest(all, 'sz')
@@ -1576,6 +1606,8 @@ interface SheetStyles {
   readonly palette?: readonly string[]
   /** Conditional-format (`dxf`) font colours. */
   readonly dxfFonts: readonly Color[]
+  /** Conditional-format (`dxf`) solid fill colours. */
+  readonly dxfFills: readonly Color[]
 }
 
 /** Excel's default indexed palette, 0–63, then system foreground and background. */
@@ -1724,6 +1756,16 @@ function readSheetStyles(root: XmlElement): SheetStyles {
       : undefined,
     dxfFonts: list('dxfs', 'dxf')
       .map((d) => colorOf(childEl(childEl(d, NS.s, 'font'), NS.s, 'color')))
+      .filter((c): c is Color => c !== undefined),
+    // A dxf's solid fill. Excel writes a dxf's fill colour as bgColor, so both
+    // are read: counting more is the safe direction (#482 re-check F3).
+    dxfFills: list('dxfs', 'dxf')
+      .flatMap((d) => {
+        const pattern = childEl(childEl(d, NS.s, 'fill'), NS.s, 'patternFill')
+        const type = pattern && attrOf(pattern.attributes, 'patternType')
+        if (!pattern || (type !== undefined && type !== 'solid')) return []
+        return [childEl(pattern, NS.s, 'fgColor'), childEl(pattern, NS.s, 'bgColor')].map(colorOf)
+      })
       .filter((c): c is Color => c !== undefined),
   }
 }

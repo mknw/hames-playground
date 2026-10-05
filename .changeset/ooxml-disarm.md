@@ -14,7 +14,7 @@ An OOXML disarm for untrusted office files (#433 S6), and the two core changes i
     - a hidden workbook window;
     - a number format that is only `;` once empty literals and `[…]` codes are gone;
     - a `[White]` or `[Color2]` format, and a font or rich-text run colour equal to its cell's fill, with indexed, theme and tint colours resolved to RGB;
-    - white or near-white text, text with no fill, alpha 0 or an all-white gradient (including through a pptx body's list-style defaults), a docx font colour equal to its shading or highlight, and a conditional-format font that can turn text white;
+    - white or near-white text, text with no fill, alpha 0 or an all-white gradient (including through a pptx body's list-style defaults at the paragraph's level), a docx font colour equal to its shading or highlight (resolved through the style cascade), and a conditional-format font that can turn text white or fill equal to a declared font colour;
     - text of 1 pt or less (`w:sz` or `w:szCs`);
     - shapes off the slide.
 

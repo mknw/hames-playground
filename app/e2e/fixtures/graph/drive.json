@@ -92,6 +92,12 @@
         "name": "sample-external.docx",
         "webUrl": "https://fabrikam-my.sharepoint.com/personal/sender_one_fabrikam_com/Documents/sample-external.docx",
         "lastModifiedDateTime": "2026-10-02T10:00:00Z",
+        "createdBy": {
+          "user": { "displayName": "Synthetic User", "email": "synthetic.user@contoso.com" }
+        },
+        "lastModifiedBy": {
+          "user": { "displayName": "Synthetic User", "email": "synthetic.user@contoso.com" }
+        },
         "parentReference": {
           "driveId": "b!e2e-onedrive-synthetic-user",
           "driveType": "business",
@@ -106,6 +112,22 @@
           },
           "size": 1552,
           "webUrl": "https://fabrikam-my.sharepoint.com/personal/sender_one_fabrikam_com/Documents/sample-external.docx",
+          "createdBy": {
+            "user": { "displayName": "Sender One", "email": "sender.one@fabrikam.com" }
+          },
+          "lastModifiedBy": {
+            "user": { "displayName": "Sender One", "email": "sender.one@fabrikam.com" }
+          },
+          "shared": {
+            "scope": "users",
+            "sharedDateTime": "2026-10-02T10:05:00Z",
+            "owner": {
+              "user": { "displayName": "Sender One", "email": "sender.one@fabrikam.com" }
+            },
+            "sharedBy": {
+              "user": { "displayName": "Sender One", "email": "sender.one@fabrikam.com" }
+            }
+          },
           "parentReference": {
             "driveId": "b!e2e-drive-fabrikam-sender",
             "driveType": "business"

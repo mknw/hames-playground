@@ -161,6 +161,15 @@ export function bootApp(): Promise<AppHandles> {
   return booted
 }
 
+/**
+ * The booted app, or null when nothing in this process has booted it. Never
+ * boots: `e2e/setup.ts` reads it after every test to fail one whose requests a
+ * fake refused, and a file that never booted has no fakes to ask.
+ */
+export function peekBootedApp(): Promise<AppHandles> | null {
+  return booted
+}
+
 async function boot(): Promise<AppHandles> {
   // ---- Credentials -------------------------------------------------------
   // Live mode needs the real ones, and vitest does not load `.env` into
@@ -275,6 +284,10 @@ async function boot(): Promise<AppHandles> {
   }
 
   const userId = BYPASS_USER.id
+  /** One install at a time: dispatch takes the FIRST transport that owns a
+   *  tool, so a second install would sit behind a leaked first one, and with
+   *  `isolate: false` a leaked one outlives its file. */
+  let graphInstalled = false
 
   return {
     userId,
@@ -284,19 +297,34 @@ async function boot(): Promise<AppHandles> {
     fakeConverter,
 
     async installGraphTools(opts = {}) {
-      const [requestUser, { registerTransport }, { invalidateToolDescriptions }] =
-        await Promise.all([
+      if (graphInstalled) {
+        throw new Error(
+          'e2e: installGraphTools is already installed; call the function the first install ' +
+            'returned before installing again.',
+        )
+      }
+      graphInstalled = true
+      const compose = async () => {
+        const [requestUser, transports, adapters] = await Promise.all([
           import('../../src/lib/harness-client/request-user.server'),
           import('@hames-ai/harness-patterns/tool-transport.server'),
           import('@hames-ai/harness-baml/baml-adapters.server'),
         ])
-      const registry = await composeGraphTools(fakeGraph, {
-        resolveContext: {
-          userId: requestUser.getRequestUserId,
-          sessionId: requestUser.getRequestSessionId,
-        },
-        stash: opts.stash,
+        const registry = await composeGraphTools(fakeGraph, {
+          resolveContext: {
+            userId: requestUser.getRequestUserId,
+            sessionId: requestUser.getRequestSessionId,
+          },
+          stash: opts.stash,
+        })
+        return { registry, transports, adapters }
+      }
+      const { registry, transports, adapters } = await compose().catch((err: unknown) => {
+        graphInstalled = false
+        throw err
       })
+      const { registerTransport } = transports
+      const { invalidateToolDescriptions } = adapters
       const unregister = registerTransport({
         id: 'e2e-fake-graph',
         ownsTool: (name) => registry.hasAppTool(name),
@@ -307,9 +335,13 @@ async function boot(): Promise<AppHandles> {
       // The adapters cache the catalog for the life of the process; without
       // this, a controller built after the install would not be shown the tools.
       invalidateToolDescriptions()
+      let uninstalled = false
       return () => {
+        if (uninstalled) return
+        uninstalled = true
         unregister()
         invalidateToolDescriptions()
+        graphInstalled = false
       }
     },
 

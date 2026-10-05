@@ -37,6 +37,7 @@ import {
   type FakeGraph,
 } from '../lib/fake-graph'
 import { startFakeConverter, type FakeConverter } from '../lib/fake-converter'
+import { fixtureBinaries } from '../lib/fixture-binaries'
 import type { AppToolRegistry } from '@hames-ai/connectors/app-tools/registry'
 import type {
   GraphFetchInit,
@@ -167,11 +168,48 @@ describe('the Graph fixture router', () => {
         'the me route answers JSON, and the caller asked for bytes',
       )
       expect(graph.unmatched).toHaveLength(4)
-      // The control: an absolute URL on Graph itself is a paging link, and is answered.
+      // The control: an absolute URL on Graph itself is answered.
       await expect(fetchAs(`${GRAPH_BASE}/me`)).resolves.toMatchObject({
         mail: 'synthetic.user@contoso.com',
       })
       expect(graph.unmatched).toHaveLength(4)
+    })
+
+    it('refuses a request header and a GET body, which the real graphFetch forwards', async () => {
+      await expect(
+        fetchAs('/me', { headers: { Prefer: 'outlook.timezone="UTC"' } }),
+      ).rejects.toThrow('request header Prefer is not modelled')
+      await expect(fetchAs('/me', { body: {} })).rejects.toThrow(
+        'a GET with a body is not modelled',
+      )
+      expect(graph.unmatched).toEqual([
+        'GET /me: request header Prefer is not modelled',
+        'GET /me: a GET with a body is not modelled',
+      ])
+    })
+
+    it('records a fault inside the fake as refused, never as a modelled error', async () => {
+      // `%E0%A4%A` does not decode, so the fake itself throws: that is not a
+      // Graph error any fixture asked for, and must not read as a match.
+      await expect(fetchAs('/me/drive/items/%E0%A4%A')).rejects.toThrow(URIError)
+      expect(graph.unmatched).toHaveLength(1)
+      expect(graph.unmatched[0]).toMatch(/^GET \/me\/drive\/items\/%E0%A4%A: the fake failed: /)
+      expect(graph.requests.at(-1)?.route).toBeNull()
+    })
+
+    it('says a list was cut short, and refuses the link that would page it', async () => {
+      const first = (await fetchAs('/me/drive/root/children?$top=1')) as Json
+      expect((first.value as Json[]).map((i) => i.id)).toEqual(['E2E-ITEM-INT-DOCX'])
+      const next = first['@odata.nextLink']
+      expect(next).toBe(`${GRAPH_BASE}/me/drive/root/children?$skiptoken=e2e-unmodelled`)
+      expect(graph.unmatched).toEqual([])
+      await expect(fetchAs(String(next))).rejects.toThrow(
+        'query option $skiptoken is not modelled on the drive root children route',
+      )
+      expect(graph.unmatched).toHaveLength(1)
+      // A list that fits says nothing more.
+      const all = (await fetchAs('/me/drive/root/children?$top=50')) as Json
+      expect(all).not.toHaveProperty('@odata.nextLink')
     })
 
     it('through the real tool code, an unmodelled call is a failed tool result naming the route, never an empty answer', async () => {
@@ -206,16 +244,37 @@ describe('the Graph fixture router', () => {
           userPrincipalName: 'synthetic.user@contoso.com',
         },
       })
+      // The scopes the tool asked for are on the record, for a later slice to assert.
+      expect(graph.requests.map((r) => r.scopes)).toEqual([['User.Read']])
     })
 
-    it('graph_mail_attachments: a message from outside the home tenancy and one from inside, newest first', async () => {
+    it('graph_mail_attachments: mail sent on behalf, from outside and from inside, newest first', async () => {
       const result = await run('graph_mail_attachments', { direction: 'received' })
       expect(result.success, JSON.stringify(result)).toBe(true)
       const { messages } = result.data as {
-        messages: Array<{ with: string[]; attachments: Json[] }>
+        messages: Array<{ with: string[]; attachments: Json[]; webLink: string | null }>
       }
-      expect(messages.map((m) => m.with)).toEqual([['Sender One'], ['Colleague One']])
+      // The listing names the `from` mailbox, so the on-behalf message reads as
+      // inside: only its `sender` says otherwise (the provenance tests below).
+      expect(messages.map((m) => m.with)).toEqual([
+        ['Colleague One'],
+        ['Sender One'],
+        ['Colleague One'],
+      ])
+      // Both mail tools select `webLink`; the fixtures carry it, so it is shaped.
+      expect(messages.map((m) => m.webLink)).toEqual([
+        'https://outlook.contoso.com/mail/inbox/id/E2E-MSG-ON-BEHALF',
+        'https://outlook.contoso.com/mail/inbox/id/E2E-MSG-EXTERNAL',
+        'https://outlook.contoso.com/mail/inbox/id/E2E-MSG-INTERNAL',
+      ])
       expect(messages[0].attachments).toEqual([
+        {
+          name: 'sample-on-behalf-notes.txt',
+          size: fixtureFile('sample-on-behalf-notes.txt').length,
+          contentType: 'text/plain',
+        },
+      ])
+      expect(messages[1].attachments).toEqual([
         {
           name: 'sample-external.docx',
           size: fixtureFile('sample-external.docx').length,
@@ -227,7 +286,7 @@ describe('the Graph fixture router', () => {
           contentType: 'text/plain',
         },
       ])
-      expect(messages[1].attachments).toEqual([
+      expect(messages[2].attachments).toEqual([
         {
           name: 'sample-internal.docx',
           size: fixtureFile('sample-internal.docx').length,
@@ -341,6 +400,20 @@ describe('the Graph fixture router', () => {
       expect(await identityDomains('/me/drive/items/E2E-ITEM-UNKNOWN-TXT')).toEqual([])
     })
 
+    it('a shortcut carries the home user who added it on top, and the external owner inside remoteItem', async () => {
+      const path = '/me/drive/items/E2E-ITEM-SHORTCUT-EXT-DOCX'
+      // A classifier that reads only the top level sees home identities here:
+      // the dangerous shape, which is why the fixture has both layers.
+      expect(await identityDomains(path)).toEqual(['contoso.com', 'contoso.com'])
+      const shortcut = (await fetchAs(`${path}?$select=${PROVENANCE_SELECT}`)) as Json
+      const remote = shortcut.remoteItem as Json
+      const shared = remote.shared as Json
+      const domains = [remote.createdBy, remote.lastModifiedBy, shared.owner, shared.sharedBy].map(
+        (identity) => String(((identity as Json).user as Json).email).split('@')[1],
+      )
+      expect(domains).toEqual(['fabrikam.com', 'fabrikam.com', 'fabrikam.com', 'fabrikam.com'])
+    })
+
     it('$select projects: a field that was not asked for is not returned', async () => {
       // Today's ingest select, which carries no provenance at all.
       const item = (await fetchAs(
@@ -363,6 +436,13 @@ describe('the Graph fixture router', () => {
       expect(internal.from).toEqual({
         emailAddress: { name: 'Colleague One', address: 'colleague.one@contoso.com' },
       })
+      // Sent on behalf: `from` is a home mailbox, `sender` is outside. A gate
+      // that reads the wrong field gets the wrong answer on this one.
+      const onBehalf = (await fetchAs('/me/messages/E2E-MSG-ON-BEHALF?$select=from,sender')) as Json
+      expect([onBehalf.from, onBehalf.sender]).toEqual([
+        { emailAddress: { name: 'Colleague One', address: 'colleague.one@contoso.com' } },
+        { emailAddress: { name: 'Delegate One', address: 'delegate.one@fabrikam.com' } },
+      ])
 
       const listed = (await fetchAs('/me/messages/E2E-MSG-EXTERNAL/attachments?$select=name')) as {
         value: Json[]
@@ -393,6 +473,20 @@ describe('the Graph fixture router', () => {
       )
       expect(raw).toBe(attachment.contentBytes)
     })
+  })
+})
+
+describe('the binary fixtures', () => {
+  it('are exactly what fixture-binaries.ts generates', () => {
+    const generated = fixtureBinaries()
+    expect(Object.keys(generated)).toEqual([
+      'sample-internal.docx',
+      'sample-external.docx',
+      'sample-external.pdf',
+    ])
+    for (const [name, bytes] of Object.entries(generated)) {
+      expect(fixtureFile(name).equals(bytes), name).toBe(true)
+    }
   })
 })
 
@@ -496,6 +590,47 @@ describe('the fake converter', () => {
     expect(converter.unmatched).toHaveLength(refused.length)
   })
 
+  it('refuses a query string, a config with other values, and an extra form field', async () => {
+    const post = (opts: { query?: string; config?: string; extra?: [string, string] }) => {
+      const form = new FormData()
+      const pdf = new Blob([new Uint8Array(fixtureFile('sample-external.pdf'))], {
+        type: 'application/pdf',
+      })
+      form.append('files', pdf, 'sample-external.pdf')
+      form.append('config', opts.config ?? JSON.stringify({ output_format: 'markdown' }))
+      if (opts.extra) form.append(...opts.extra)
+      return fetch(`${converter.url}/extract${opts.query ?? ''}`, { method: 'POST', body: form })
+    }
+    const refused: Array<[Parameters<typeof post>[0], number, string]> = [
+      [{ query: '?output_format=html' }, 404, 'no route POST /extract?output_format=html'],
+      [
+        { config: JSON.stringify({ output_format: 'markdown', use_cache: true }) },
+        400,
+        'is not one the fake answers',
+      ],
+      [
+        { config: JSON.stringify({ output_format: 'markdown', max_archive_depth: 3 }) },
+        400,
+        'is not one the fake answers',
+      ],
+      [
+        { config: JSON.stringify({ output_format: 'markdown', use_cache: 'yes' }) },
+        400,
+        'is not one the fake answers',
+      ],
+      [{ extra: ['pages', '1'] }, 400, 'form field pages is not modelled'],
+    ]
+    for (const [opts, status, reason] of refused) {
+      const res = await post(opts)
+      expect(res.status, JSON.stringify(opts)).toBe(status)
+      expect(((await res.json()) as { message: string }).message).toContain(reason)
+    }
+    expect(converter.unmatched).toHaveLength(refused.length)
+    // The control: the same request with none of those is answered.
+    expect((await post({})).status).toBe(200)
+    expect(converter.unmatched).toHaveLength(refused.length)
+  })
+
   it('refuses any route but POST /extract', async () => {
     const get = await fetch(`${converter.url}/extract`)
     expect(get.status).toBe(405)
@@ -545,6 +680,7 @@ describe('the wiring bootApp does', () => {
           userId: app.userId,
           method: 'GET',
           path: expect.stringMatching(/^\/me\?\$select=/),
+          scopes: ['User.Read'],
           route: 'me',
         },
       ])
@@ -561,5 +697,17 @@ describe('the wiring bootApp does', () => {
       uninstall()
     }
     expect(await names()).not.toContain('graph_me')
+  })
+
+  it('refuses a second installGraphTools while one is installed', async () => {
+    const uninstall = await app.installGraphTools()
+    try {
+      await expect(app.installGraphTools()).rejects.toThrow('already installed')
+    } finally {
+      uninstall()
+    }
+    // Once taken away, it installs again.
+    const again = await app.installGraphTools()
+    again()
   })
 })

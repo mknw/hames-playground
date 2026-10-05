@@ -22,15 +22,20 @@
  * of its bytes AND the part's declared type, because kreuzberg picks its parser
  * from that type (spec §5.1, F12): the right bytes under the wrong type are a
  * different request. A pipeline that rewrites the bytes before conversion
- * (spec §5.3's disarm) sends different bytes, and needs its own manifest entry.
+ * (spec §5.3's disarm) sends different bytes, and needs its own manifest entry
+ * for them, which only works if the rewrite is BYTE-DETERMINISTIC (fixed zip
+ * timestamps, a fixed entry order): an output that differs run to run can never
+ * match an entry.
  *
  * ## Failing closed
  *
  * Anything else is refused with an error status and a body that names what was
- * refused: a route other than `POST /extract`, a request without exactly one
- * file, a `config` it cannot honour (kreuzberg's `ExtractionConfig` is
- * `deny_unknown_fields`, so an unknown field is refused here too, by name), and
- * bytes or a type no manifest entry holds. Never a default document. The
+ * refused: a route other than `POST /extract` (a query string included), a form
+ * field other than `files` and `config`, a request without exactly one file, a
+ * `config` it cannot honour (kreuzberg's `ExtractionConfig` is
+ * `deny_unknown_fields`, so an unknown field is refused here too, by name, and
+ * a known field is accepted only with the values in {@link ACCEPTED_CONFIGS}),
+ * and bytes or a type no manifest entry holds. Never a default document. The
  * production client reports only the status, so every refusal is also
  * RECORDED, and {@link FakeConverter.assertAllMatched} fails a scenario that
  * caused one, naming the digest, the filename and the type.
@@ -39,6 +44,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
+import { isDeepStrictEqual } from 'node:util'
 import { fixtureFile } from './fake-graph'
 
 /** One request, as the fake saw it. */
@@ -74,6 +80,20 @@ interface ManifestEntry {
 /** The `ExtractionConfig` fields the fake understands. A real kreuzberg field
  *  missing here is refused: extend this list together with what it means. */
 const KNOWN_CONFIG = ['output_format', 'max_archive_depth', 'use_cache'] as const
+
+/**
+ * The only configs answered: what `doc-convert.server.ts` sends today, and the
+ * one spec §5.3 step 3 pins (F15). A config that differs in any value is a
+ * different extraction, and a fake that answered it the same way could not see
+ * that pin regress.
+ */
+const ACCEPTED_CONFIGS: readonly object[] = [
+  { output_format: 'markdown' },
+  { output_format: 'markdown', max_archive_depth: 0, use_cache: false },
+]
+
+/** The multipart fields `POST /extract` is sent. */
+const FORM_FIELDS = ['files', 'config']
 
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 
@@ -130,6 +150,9 @@ export async function startFakeConverter(): Promise<FakeConverter> {
       return refuse(400, 'the body is not multipart/form-data')
     }
 
+    const extra = [...new Set(form.keys())].find((k) => !FORM_FIELDS.includes(k))
+    if (extra !== undefined) return refuse(400, `form field ${extra} is not modelled`)
+
     const files = form.getAll('files')
     const [file] = files
     if (files.length !== 1 || !(file instanceof File)) {
@@ -162,6 +185,9 @@ export async function startFakeConverter(): Promise<FakeConverter> {
         `config output_format is ${JSON.stringify(format)}; the fake answers "markdown" only`,
       )
     }
+    if (!ACCEPTED_CONFIGS.some((accepted) => isDeepStrictEqual(config, accepted))) {
+      return refuse(400, `config ${rawConfig} is not one the fake answers`)
+    }
 
     const entry = manifest.get(record.file.sha256)
     const named = `sha256 ${record.file.sha256} (${file.name}, ${file.type || 'no type'})`
@@ -181,7 +207,7 @@ export async function startFakeConverter(): Promise<FakeConverter> {
   const server = http.createServer((req, res) => {
     const record: ConverterRequestRecord = {
       method: req.method ?? 'GET',
-      path: (req.url ?? '/').split('?')[0],
+      path: req.url ?? '/',
       status: 0,
     }
     requests.push(record)

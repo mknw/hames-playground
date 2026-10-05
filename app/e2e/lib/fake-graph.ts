@@ -24,9 +24,12 @@
  *
  * A request the fixtures do not model is an ERROR, never a quiet empty answer.
  * An unknown path, an id no fixture holds, a query option the route does not
- * model, a filter it cannot evaluate, a host that is not Graph, a body asked
- * for in the wrong encoding: each throws {@link UnmatchedGraphRequest}, whose
- * message names the method, the path and the reason. The throw alone is not
+ * model, a filter it cannot evaluate, a host that is not Graph, a request
+ * header or a GET body (the real `graphFetch` forwards both, and they change
+ * the answer), a body asked for in the wrong encoding: each throws
+ * {@link UnmatchedGraphRequest}, whose message names the method, the path and
+ * the reason. A fault inside the fake itself (a malformed id that will not
+ * decode, say) is recorded the same way. The throw alone is not
  * enough, because the tool registry turns every throw into
  * `{ success: false, error }` and a model may carry on around a failed tool.
  * So every refusal is also RECORDED, and {@link FakeGraph.assertAllMatched}
@@ -37,7 +40,8 @@
  * `"error": { "status": 403 }` answers every route with that status, the way
  * the real `graphFetch` reports it (401 and 403 as `GraphAuthRequiredError`,
  * anything else as a plain `Error`). It counts as matched, because a fixture
- * asked for it. Such an item is left out of folder listings.
+ * asked for it, and only an error a fixture asked for does. Such an item is
+ * left out of folder listings.
  *
  * ## What it models
  *
@@ -54,9 +58,17 @@
  * Which domains count as home is deployment configuration in the app, so a
  * scenario that classifies provenance configures `contoso.com` as home.
  *
+ * A list cut short by `$top` says so, the way Graph does, with an
+ * `@odata.nextLink`; following that link is refused, because paging is not
+ * modelled. A caller that reads a short list as complete is therefore caught.
+ *
  * NOT modelled, so refused: Microsoft Search (`POST /search/query`), insights,
- * the calendar, sent items, paging links, and every write. Add a route when a
+ * the calendar, sent items, paging, and every write. Add a route when a
  * scenario needs one; never widen a route to answer what it does not model.
+ *
+ * The binary content files are generated, not hand-made:
+ * `fixture-binaries.ts` writes them, and scenario 10 pins that the committed
+ * bytes are exactly what it writes.
  */
 import { readFileSync } from 'node:fs'
 import { GraphAuthRequiredError } from '@hames-ai/connectors/graph/graph-auth'
@@ -69,7 +81,7 @@ import type {
 } from '@hames-ai/connectors/graph/graph-tools.server'
 
 /** The base the real `graphFetch` puts before a relative path. An absolute
- *  URL (a paging link) must start with it, or it is refused. */
+ *  URL must start with it, or it is refused. */
 export const GRAPH_BASE = 'https://graph.microsoft.com/v1.0'
 
 const FIXTURES = new URL('../fixtures/', import.meta.url)
@@ -101,6 +113,8 @@ export interface GraphRequestRecord {
   userId: string
   method: string
   path: string
+  /** The scopes the caller asked the token for, as it passed them. */
+  scopes?: readonly string[]
   /** The route that answered, or null when the request was refused. */
   route: string | null
 }
@@ -138,6 +152,8 @@ interface RouteRequest {
   userId: string
   method: string
   path: string
+  /** `path` relative to {@link GRAPH_BASE}, without its query. */
+  bare: string
   query: URLSearchParams
   /** Refuse the request: throws {@link UnmatchedGraphRequest}. */
   refuse: (reason: string) => never
@@ -148,6 +164,8 @@ interface Route {
   pattern: RegExp
   /** The query options this route models; any other is refused. */
   options: readonly string[]
+  /** The request headers this route models; any other is refused. */
+  headers?: readonly string[]
   /** `bytes` routes answer base64, and must be asked for with `responseType: 'base64'`. */
   body: 'json' | 'bytes'
   answer(params: string[], req: RouteRequest): unknown
@@ -188,13 +206,19 @@ function project(resource: Json, select: string | null, always: readonly string[
   return out
 }
 
-/** `$top`, which must be a positive integer when present. */
-function top<T>(list: T[], req: RouteRequest): T[] {
+/** A collection, cut to `$top` (a positive integer when present). A list that
+ *  was cut short carries an `@odata.nextLink`, as Graph's does; following it is
+ *  refused, because no route models `$skiptoken`. */
+function page(list: Json[], req: RouteRequest): Json {
   const raw = req.query.get('$top')
-  if (raw === null) return list
+  if (raw === null) return { value: list }
   const n = Number(raw)
   if (!Number.isInteger(n) || n < 1) req.refuse(`$top=${raw} is not a positive integer`)
-  return list.slice(0, n)
+  if (list.length <= n) return { value: list }
+  return {
+    value: list.slice(0, n),
+    '@odata.nextLink': `${GRAPH_BASE}${req.bare}?$skiptoken=e2e-unmodelled`,
+  }
 }
 
 /** The `$filter` clauses the mail tools send, joined by `and`. */
@@ -256,6 +280,8 @@ export function createFakeGraph(): FakeGraph {
 
   const requests: GraphRequestRecord[] = []
   const unmatched: string[] = []
+  /** The Graph errors a fixture asked for. Any other throw is a fault. */
+  const modelled = new WeakSet<object>()
 
   /** Item `id` on `driveId`, or a refusal. An error modelled on the item is
    *  raised here, the way the real `graphFetch` raises it. */
@@ -264,22 +290,24 @@ export function createFakeGraph(): FakeGraph {
     const hit = items.find((f) => f.item.id === id && parentOf(f.item).driveId === onDrive)
     if (!hit) return req.refuse(`no drive item ${id} on drive ${onDrive}`)
     const status = hit.error?.status
-    if (status === 401 || status === 403) {
-      throw new GraphAuthRequiredError(
-        `Microsoft Graph denied the request (${status}) — the account may lack consent for this scope.`,
-        req.userId,
-        status,
-      )
-    }
-    if (status !== undefined) throw new Error(`[graph] ${req.method} ${req.path} failed: ${status}`)
-    return hit
+    if (status === undefined) return hit
+    const e =
+      status === 401 || status === 403
+        ? new GraphAuthRequiredError(
+            `Microsoft Graph denied the request (${status}) — the account may lack consent for this scope.`,
+            req.userId,
+            status,
+          )
+        : new Error(`[graph] ${req.method} ${req.path} failed: ${status}`)
+    modelled.add(e)
+    throw e
   }
 
   function children(req: RouteRequest, under: (parent: Json) => boolean): Json {
     const listed = items
       .filter((f) => !f.error && under(parentOf(f.item)))
       .map((f) => project(f.item, req.query.get('$select'), ['id']))
-    return { value: top(listed, req) }
+    return page(listed, req)
   }
 
   function messageById(id: string, req: RouteRequest): MessageFixture {
@@ -374,7 +402,7 @@ export function createFakeGraph(): FakeGraph {
           .filter((m) => keep(m.message))
           .sort((a, b) => sign * (received(a) - received(b)))
           .map((m) => messageJson(m, req))
-        return { value: top(listed, req) }
+        return page(listed, req)
       },
     },
     {
@@ -430,6 +458,7 @@ export function createFakeGraph(): FakeGraph {
     }
     if (!relative.startsWith('/')) refuse('a Graph path starts with /')
     if (method !== 'GET') refuse(`${method} is not modelled; the fake answers reads only`)
+    if (init.body !== undefined) refuse('a GET with a body is not modelled')
 
     const at = relative.indexOf('?')
     const bare = at < 0 ? relative : relative.slice(0, at)
@@ -445,6 +474,12 @@ export function createFakeGraph(): FakeGraph {
         }
       }
       if (new Set(keys).size !== keys.length) refuse('a query option appears twice')
+      // The real `graphFetch` forwards headers, and Graph answers differently
+      // under some (`Prefer: outlook.timezone`, `outlook.body-content-type`).
+      // Checked per route, so a route that models one can list it.
+      for (const h of Object.keys(init.headers ?? {})) {
+        if (!(route.headers ?? []).includes(h)) refuse(`request header ${h} is not modelled`)
+      }
       const wantsBytes = init.responseType === 'base64'
       if (wantsBytes !== (route.body === 'bytes')) {
         refuse(
@@ -453,7 +488,7 @@ export function createFakeGraph(): FakeGraph {
         )
       }
       const params = m.slice(1).map((p) => (p === undefined ? p : decodeURIComponent(p)))
-      const req: RouteRequest = { userId, method, path, query, refuse }
+      const req: RouteRequest = { userId, method, path, bare, query, refuse }
       return { route: route.name, body: route.answer(params as string[], req) }
     }
     return refuse('no route models this path')
@@ -465,6 +500,7 @@ export function createFakeGraph(): FakeGraph {
         userId,
         method: (init.method ?? 'GET').toUpperCase(),
         path,
+        ...(init.scopes ? { scopes: [...init.scopes] } : {}),
         route: null,
       }
       requests.push(record)
@@ -475,9 +511,13 @@ export function createFakeGraph(): FakeGraph {
       } catch (err) {
         if (err instanceof UnmatchedGraphRequest) {
           unmatched.push(`${err.method} ${err.path}: ${err.reason}`)
-        } else {
+        } else if (modelled.has(err as object)) {
           // A Graph error a fixture asked for: the request matched.
           record.route = 'modelled error'
+        } else {
+          // Anything else is the fake failing, which is never a match.
+          const message = err instanceof Error ? err.message : String(err)
+          unmatched.push(`${record.method} ${path}: the fake failed: ${message}`)
         }
         throw err
       }

@@ -713,13 +713,17 @@ export function supersedeHitl(ctx: Pick<UnifiedContext, 'events'>): string[] {
  * by: 'expired' }`: a blocking one the current run waits on, and a
  * non-blocking proposal wherever it sits in the log [m6]. Held results are
  * substituted. When a blocking request expired while the run was paused, the
- * run ends `done` with a fixed response and nothing is re-entered. Returns
- * null when nothing was due, so the host writes nothing.
+ * run ends `done` with a fixed response and nothing is re-entered — and the
+ * run's OTHER pending requests are closed `{ choice: null, by: 'superseded' }`
+ * [#481 F2]. Answers are all-or-nothing, so once one has expired the rest
+ * cannot be answered either; left open, they would be listed as pending on a
+ * finished run that no resume can take. Returns null when nothing was due, so
+ * the host writes nothing.
  */
 export function expireHitl(
   serialized: string,
   now: number,
-): { serialized: string; expired: string[] } | null {
+): { serialized: string; expired: string[]; superseded: string[] } | null {
   const ctx = deserializeContext(serialized)
   const answered = new Set<string>()
   for (const event of ctx.events) {
@@ -734,14 +738,24 @@ export function expireHitl(
     seen.add(r.requestId)
     if (!r.blocking && !answered.has(r.requestId) && pastDue(r, now)) proposals.push(r)
   }
-  const blocking = readHitl(ctx).pending.filter((r) => pastDue(r, now))
+  const pending = readHitl(ctx).pending
+  const blocking = pending.filter((r) => pastDue(r, now))
   if (blocking.length === 0 && proposals.length === 0) return null
 
   const expired = [
     ...closeUnanswered(ctx, blocking, 'expired', EXPIRED_NOTE),
     ...closeUnanswered(ctx, proposals, 'expired', EXPIRED_NOTE),
   ]
+  const superseded: string[] = []
   if (blocking.length > 0 && ctx.status === 'paused') {
+    superseded.push(
+      ...closeUnanswered(
+        ctx,
+        pending.filter((r) => !pastDue(r, now)),
+        'superseded',
+        SUPERSEDED_NOTE,
+      ),
+    )
     const response =
       `The ${blocking[0].kind} decision expired before anyone answered, ` +
       'so the run stopped there.'
@@ -755,7 +769,7 @@ export function expireHitl(
       data: { content: response } satisfies AssistantMessageEventData,
     })
   }
-  return { serialized: serializeContext(ctx), expired }
+  return { serialized: serializeContext(ctx), expired, superseded }
 }
 
 /** Record that nobody chose (`choice: null`) on each request, and substitute
@@ -799,6 +813,14 @@ export function isHeldResult(value: unknown): value is HeldResult {
  * skips a summarized result) and the loops' prior-results preview (which
  * prefers one) would otherwise keep serving "waiting for a decision" in place
  * of the outcome, to the re-entered controller and to every later turn.
+ *
+ * A held result is identified by the UUID v4 INSIDE its `requestId`, not by an
+ * exact match [#481 F1]: the opt-in LLM screen fences every string leaf of a
+ * result it flags, the placeholder's id included, and an exact match would
+ * then record the answer and leave the fenced held note in place for good. A
+ * leaf with no UUID naming one of these outcomes is not substituted; a forged
+ * placeholder that carries a real waiting id gets only core's sanitized
+ * outcome, which is harmless.
  */
 function substituteHeld(
   ctx: Pick<UnifiedContext, 'events'>,
@@ -809,8 +831,9 @@ function substituteHeld(
     const event = ctx.events[i]
     if (event.type !== 'tool_result') continue
     const data = event.data as ToolResultEventData
-    if (!isHeldResult(data.result) || !outcomes.has(data.result.requestId)) continue
-    const requestId = data.result.requestId
+    if (!isHeldResult(data.result)) continue
+    const requestId = heldRequestId(data.result.requestId, outcomes)
+    if (requestId === undefined) continue
     const { data: result, report } = sanitizeUntrusted(outcomes.get(requestId), {
       tool: data.tool,
       namespace: 'hitl',
@@ -825,6 +848,18 @@ function substituteHeld(
       ...(report.findings.length > 0 ? { sanitized: redactReport(report) } : {}),
     } satisfies ToolResultEventData
   }
+}
+
+/** The UUID v4 found in a held placeholder's `requestId` that names one of
+ *  `outcomes`, or undefined. Unanchored, so a fenced id still resolves. */
+function heldRequestId(
+  requestId: string,
+  outcomes: ReadonlyMap<string, unknown>,
+): string | undefined {
+  for (const [found] of requestId.matchAll(UUID_V4_IN_TEXT)) {
+    if (outcomes.has(found)) return found
+  }
+  return undefined
 }
 
 /** Index of the first event of the current run: just after the last
@@ -990,6 +1025,8 @@ interface CommitPoint {
 }
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+/** {@link UUID_V4}, unanchored: the ids inside a string that may be fenced. */
+const UUID_V4_IN_TEXT = new RegExp(UUID_V4.source.slice(1, -1), 'g')
 
 /**
  * The buffered events core could have written, in order. `askHuman` writes

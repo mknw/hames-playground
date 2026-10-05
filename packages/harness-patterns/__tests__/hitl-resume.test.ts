@@ -26,8 +26,13 @@
  *   H22b  a held result the paused turn's compaction summarized: after resume
  *         neither the re-entered controller nor a later turn reads the held
  *         note; a held result is never compacted [Δ2].
+ *   H22c  a held result whose leaves the LLM screen fenced is still
+ *         substituted on resume, and marked heldBy [#481 F1].
  *   H23   supersede: `choice: null`, held results replaced, empty journal.
  *   H24   `expireHitl`, a non-blocking proposal included [m6].
+ *   H24c  when `expireHitl` ends the run, its other pending requests are
+ *         superseded, so nothing is left pending that no resume can answer
+ *         [#481 F2].
  *   H27   a refused resume calls no `resolve`; `principal` and `resolution`
  *         come only from the host [F4].
  *   H27b  a resume whose second `resolve` throws, once retried, stores
@@ -59,7 +64,8 @@ import {
   readHitl,
   SUPERSEDED_NOTE,
 } from '../hitl.server'
-import { configurePattern } from '../patterns/chain.server'
+import { applyScreenVerdict, sanitizeUntrusted } from '../injection-guard'
+import { configurePattern, runChain } from '../patterns/chain.server'
 import { simpleLoop, type SimpleLoopData } from '../patterns/simpleLoop.server'
 import { withRunFrame, type RunFrame } from '../run-frame.server'
 import type { ToolTransport } from '../tool-transport.server'
@@ -821,6 +827,58 @@ describe('H22b · a held result is never compacted, and substitution deletes its
 })
 
 // ============================================================================
+// H22c · a placeholder the LLM screen fenced is still substituted [#481 F1]
+// ============================================================================
+
+describe('H22c · a held result whose leaves the LLM screen fenced is still substituted', () => {
+  // The opt-in screen fences EVERY string leaf of a result it flags, the held
+  // placeholder's `requestId` included, so the id is no longer the bare UUID.
+  // MUTATION: match `data.result.requestId` exactly in `substituteHeld` → the
+  // answer is recorded but the fenced held note stays, with no heldBy → red.
+  it('is substituted and marked heldBy on resume', async () => {
+    const fenced: ToolTransport = {
+      id: 'screened',
+      ownsTool: (name) => name === 'gated_ingest' || name === 'plain_read',
+      callTool: async (name) => {
+        if (name === 'plain_read') return { success: true, data: 'read ok' }
+        const outcome = await askHuman(provenance())
+        if (outcome.status !== 'pending') return { success: true, data: { stored: outcome.choice } }
+        const ctx = { tool: 'gated_ingest', namespace: 'ms-graph' }
+        const placeholder = held(outcome)
+        const screened = applyScreenVerdict(
+          placeholder,
+          { injection_detected: true, reason: 'imperative text', spans: [] },
+          ctx,
+          sanitizeUntrusted(placeholder, ctx).report,
+        )
+        return { success: true, data: screened.data }
+      },
+      listTools: async () => [],
+    }
+    const { patterns } = loopRun([], [])
+    const frame: RunFrame = { transports: [fenced] }
+    const { result, blob, pending } = await pausedAt(patterns, frame)
+    const id = pending[0].requestId
+    const before = heldEvent(result.context).data as ToolResultEventData
+    // Not vacuous: the placeholder's id really is fenced, not the bare UUID.
+    expect((before.result as { requestId: string }).requestId).not.toBe(id)
+    expect((before.result as { requestId: string }).requestId).toContain(id)
+
+    const resumed = await resume(
+      blob,
+      patterns,
+      { [id]: 'sanitize' },
+      { frame, resolve: async () => ({ documentId: 'doc-9' }) },
+    )
+
+    const after = heldEvent(resumed.context).data as ToolResultEventData
+    expect(after.heldBy).toBe(id)
+    expect(after.result).toEqual({ documentId: 'doc-9' })
+    expect(JSON.stringify(after.result)).not.toContain("waiting for a person's decision")
+  })
+})
+
+// ============================================================================
 // H23 · supersede
 // ============================================================================
 
@@ -939,6 +997,35 @@ describe('H24 · expireHitl closes what nobody answered in time', () => {
       }),
     ])
     expect(expireHitl(out.serialized, 2_000)).toBeNull()
+  })
+
+  // Answers are all-or-nothing (H18): once one waiting request has expired,
+  // the rest cannot be answered either. MUTATION: close only the past-due
+  // requests → the run ends done with `confirm:later` still pending, and
+  // answering it gives not-paused → red.
+  it('H24c · ending the run supersedes its other pending requests [#481 F2]', async () => {
+    const log = newLog()
+    const both = configurePattern<Data>('gate', async (scope) => {
+      log.entered.push('gate')
+      await askHuman(confirm('soon', { expiresInMs: 1 }))
+      await askHuman(confirm('later'))
+      return scope
+    })
+    const { blob, pending } = await pausedAt([both])
+    expect(pending.map((r) => r.key)).toEqual(['confirm:soon', 'confirm:later'])
+    const [soon, later] = pending.map((r) => r.requestId)
+
+    const out = expireHitl(blob, Date.now() + 60_000)!
+
+    expect(out.expired).toEqual([soon])
+    expect(out.superseded).toEqual([later])
+    const ctx = JSON.parse(out.serialized) as UnifiedContext<Data>
+    expect(ctx.status).toBe('done')
+    expect(readHitl(ctx).pending).toEqual([])
+    expect(responses(ctx)).toEqual([
+      expect.objectContaining({ requestId: soon, choice: null, by: 'expired' }),
+      expect.objectContaining({ requestId: later, choice: null, by: 'superseded' }),
+    ])
   })
 })
 
@@ -1320,10 +1407,14 @@ describe('an answer forged through the run’s async store never reaches the rec
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('dropped a hitl_response'))
   })
 
-  /** A request pushed into the buffer by hand, at the owner's position. */
-  function forgeRequest(tier: string | undefined): string {
+  /** A request pushed into the buffer by hand, at the owner's position —
+   *  except for whatever `over` changes. */
+  function forgeRequest(
+    tier: string | undefined,
+    over: Partial<HitlRequestEventData> = {},
+  ): string {
     const run = reachRun()
-    const requestId = randomUUID()
+    const requestId = over.requestId ?? randomUUID()
     run.buffer.push({
       id: `ev-forged-${requestId}`,
       type: 'hitl_request',
@@ -1334,6 +1425,7 @@ describe('an answer forged through the run’s async store never reaches the rec
         runId: run.ownerEvents()[0]?.id ?? '',
         resumeAt: { index: run.position!.index, names: run.position!.names },
         ...(tier !== undefined ? { tier } : {}),
+        ...over,
       }),
     })
     run.waiting.add(requestId)
@@ -1366,6 +1458,64 @@ describe('an answer forged through the run’s async store never reaches the rec
         ),
       ),
     ).toBe('no-pending')
+  })
+
+  // #481 F3: the other three fields the commit checks against the owner, one
+  // fixture each, like the tier one above.
+
+  // MUTATION (OWN-1): drop `r.runId === at.runId` → recorded → red.
+  it('a request forged with another runId is not recorded', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const forger = configurePattern<Data>('gate', async (scope) => {
+      forgeRequest(undefined, { runId: 'ev-another-run' })
+      return scope
+    })
+    const { result } = await pausedAt([forger])
+
+    expect(ofType(result.context, 'hitl_request')).toEqual([])
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('dropped a hitl_request'))
+  })
+
+  // MUTATION (OWN-2): drop `!at.known.has(r.requestId)` → a second request
+  // under an id the record already holds is committed → red.
+  it('a request forged under an id the record already holds is not recorded', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const ctx = createContext<Data>('write the report', {}, 'sess-known')
+    const existing = storedRequest({ runId: ctx.events[0].id ?? '' })
+    ctx.events.push({
+      id: 'ev-known',
+      type: 'hitl_request',
+      ts: 1,
+      patternId: 'gate',
+      data: existing,
+    })
+    const forger = configurePattern<Data>('gate', async (scope) => {
+      forgeRequest(undefined, { requestId: existing.requestId, key: 'confirm:other' })
+      return scope
+    })
+
+    await withRunFrame({ hitl: { attended: true } }, () => runChain(ctx, [forger]))
+
+    const recorded = ofType(ctx, 'hitl_request').map((e) => e.data as HitlRequestEventData)
+    expect(recorded).toEqual([existing])
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('dropped a hitl_request'))
+  })
+
+  // A forged request at an EARLIER index that became the only pending one
+  // would make a resume re-enter an earlier pattern.
+  // MUTATION (OWN-3): drop `r.resumeAt.index === at.index` → recorded → red.
+  it('a request forged with another resume index is not recorded', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const log = newLog()
+    const forger = configurePattern<Data>('gate', async (scope) => {
+      const names = reachRun().position!.names
+      forgeRequest(undefined, { resumeAt: { index: 0, names } })
+      return scope
+    })
+    const { result } = await pausedAt([marker('plan', log), forger])
+
+    expect(ofType(result.context, 'hitl_request')).toEqual([])
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('dropped a hitl_request'))
   })
 
   // The positive control for the pin above: the same forgery at the owner's

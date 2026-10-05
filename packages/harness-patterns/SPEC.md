@@ -1685,10 +1685,14 @@ so the blob is untouched and still resumable with a correct answer.
    the run's tier, P5). **It must be idempotent per `requestId`** [Δ4]: if a
    later `resolve` throws, nothing is recorded and the resume fails, the blob
    is still paused, and a retry calls every `resolve` again. Key the effect on
-   `request.requestId` and the retry never repeats it.
+   `request.requestId` and the retry never repeats it. A `resolve` that throws
+   is rethrown UNCHANGED — not as a `HitlAnswerError` — and nothing is
+   recorded; the host decides what the row does.
 8. One `hitl_response` per answer: `by: 'person'`, `principal` from
-   `opts.principal`, `resolution` what `resolve` returned, `flags` with the
-   option's defaults filled in.
+   `opts.principal`, `resolution` what `resolve` returned, and `flags`: the
+   option's defaults overlaid with what the answer sent. A `required` flag must
+   be set `true` by the answer itself (step 5); a default of `true` does not
+   confirm.
 9. Each held `tool_result` of the run becomes its outcome — `resolution`, or
    `"The user chose: <label>."` without one — **after `sanitizeUntrusted`**
    (namespace `hitl`), and is marked `heldBy`. A resolution is host output
@@ -1698,7 +1702,12 @@ so the blob is untouched and still resumable with a correct answer.
    (which skips a summarized result) and the loops' prior-results preview
    (which prefers one) would otherwise keep serving "waiting for a decision" to
    the re-entered controller and to every later turn. For the same reason,
-   `compactBulkData` never summarizes a held result.
+   `compactBulkData` never summarizes a held result. When the sanitizer finds
+   something, the result carries only the redacted summary (counts and rule
+   ids); no `content_sanitized` event is emitted, so no verbatim span enters
+   the blob (SD-3). A held result is identified by the **UUID v4 inside** its
+   `requestId`, not by an exact match, so a placeholder that the injection
+   guard's LLM screen fenced is still substituted (#481 F1).
 10. A chosen option with `stopsRun` ends the run `done`, with the response
     `Stopped at your request (<kind>).`, and re-enters nothing.
 11. Otherwise `runChain(…, { startAt: resumeAt.index })`: the patterns before it
@@ -1710,6 +1719,9 @@ so the blob is untouched and still resumable with a correct answer.
 Before step 10, the **legacy-blob scrub** deletes `ctx.data.approved`, as
 `continueSession` does; both stay until 1.0 [F9]. A 0.1.x paused blob holds no
 `hitl_request`, so it cannot be resumed (`no-pending`): `continue()` it.
+
+The `hitl_response` events a resume or a supersede appends are **not emitted
+live**: their wire shape belongs to the host's resume stream (#433 S7/S8).
 
 ### Supersede and expiry
 
@@ -1729,8 +1741,11 @@ blocking one the current run waits on, and a non-blocking proposal wherever it
 sits in the log [m6]. Held results are substituted with
 `Nobody answered in time; nothing was kept.`. When a blocking request expired
 while the run was paused, the run ends `done` with a fixed response and
-re-enters nothing. It returns the new blob and the expired ids, or `null` when
-nothing was due.
+re-enters nothing, and the run's **other** pending requests are closed
+`{ choice: null, by: 'superseded' }` (#481 F2): answers are all-or-nothing, so
+once one has expired the rest cannot be answered either, and a finished run
+never lists a pending request. It returns the new blob with the `expired` and
+`superseded` ids, or `null` when nothing was due.
 
 Superseding and expiring never choose for the person (P4): both record
 `choice: null`, and neither re-enters a pattern.

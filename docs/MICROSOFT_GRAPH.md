@@ -52,10 +52,12 @@ set until `graph_files_search` claimed it.
 
 **Writes.** None yet. Adding one is the same shape as a read tool, but it should
 carry a confirmation gate: creating an event emails real invitations, and
-`Mail.Send` sends real mail. The ready-made `withApproval` pattern was removed
-in #125, so a write tool wires its own pause using the surviving primitives
-(`pauseContext()` → `status='paused'`, `resumeHarness()`, and the
-`approveAction`/`rejectAction` server actions already bound to the UI).
+`Mail.Send` sends real mail. The gate is #433's: the tool's executor calls
+`askHuman(…)` and returns `held(outcome)` while the person decides, and the run
+continues through `resumeHarness(serialized, patterns, answers, opts)` with an
+answer bound to that request. (The boolean `resumeHarness`, the
+`approveAction`/`rejectAction` server actions and `setPaused` were removed in
+#433 S3.)
 
 ---
 

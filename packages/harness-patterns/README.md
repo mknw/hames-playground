@@ -335,7 +335,8 @@ walk through tasks end to end.
 | **Carrying data**     | `withReferences` hands a pattern the relevant results of earlier turns, expandable on demand · `retriever` searches a vector store          |
 | **Compaction**        | `compactExecution` turns the accumulated events into the answer · `compactIntent` rewrites the request into a brief                         |
 | **Guards**            | `withInjectionGuard` neutralizes untrusted tool output before a controller reads it                                                         |
-| **Composition**       | `chain` · `harness` · `continueSession` · `resumeHarness`                                                                                   |
+| **Composition**       | `chain` · `harness` (a runner: `agent.resume` / `agent.continue` carry its own patterns) · `continueSession` · `resumeHarness`              |
+| **Asking a human**    | `confirm` — a one-call gate at a chain boundary · `humanGate` — the custom gate · `askHuman` / `held` inside a tool executor                |
 | **Models and tools**  | model calls come in as functions (ready-made in `@hames-ai/harness-baml`) · MCP tools via `Tools()` and `callTool`                          |
 
 Each of these has a section in the [spec](./SPEC.md), with the signatures,

@@ -182,6 +182,7 @@ export {
   harness,
   resumeHarness,
   continueSession,
+  type Harness,
   type HarnessData,
   type HarnessResultScoped,
   type ResumeOptions,
@@ -215,8 +216,15 @@ export {
   readHitl,
   answerOf,
   expireHitl,
+  // The gate patterns (S4): `confirm` is the one-call common case, `humanGate`
+  // the custom one. They live beside `askHuman` because they are thin shapes
+  // over it, and their `onAnswer` needs the stored-key composition.
+  humanGate,
+  confirm,
   type HitlState,
   type HitlAnswerErrorCode,
+  type HumanGateConfig,
+  type ConfirmConfig,
 } from './hitl.server'
 
 // ============================================================================

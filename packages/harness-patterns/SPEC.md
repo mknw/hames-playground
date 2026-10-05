@@ -71,6 +71,7 @@ is and why it is shaped this way, start at the front page —
 - [Human in the loop](#human-in-the-loop)
   - [askHuman()](#askhumanrequest)
   - [resumeHarness()](#resumeharnessserialized-patterns-answers-opts)
+  - [humanGate() and confirm()](#humangate-and-confirm)
   - [Supersede and expiry](#supersede-and-expiry)
   - [Properties (P1–P6)](#properties-p1p6)
 - [EventView Query API](#eventview-query-api)
@@ -1496,11 +1497,21 @@ const result = await agent('query', sessionId, undefined, (event) => {
 interface HarnessResultScoped<T> {
   response: string
   data: T
-  status: 'running' | 'paused' | 'done' | 'error'
   duration_ms: number
   context: UnifiedContext<T>
   serialized: string // JSON for session persistence
-}
+} & (
+  | { status: 'paused'; pending: readonly HitlRequestEventData[] } // non-optional [F18]
+  | { status: 'running' | 'done' | 'error' }
+)
+```
+
+A union on status [F18]: `pending` is non-optional when the run paused, so the
+consumer of a paused result reads every waiting request straight off it and
+never reaches for `!`:
+
+```typescript
+if (r.status === 'paused') return { ask: r.pending }
 ```
 
 ### `continueSession(serialized, patterns, newInput)`
@@ -1722,6 +1733,56 @@ Before step 10, the **legacy-blob scrub** deletes `ctx.data.approved`, as
 
 The `hitl_response` events a resume or a supersede appends are **not emitted
 live**: their wire shape belongs to the host's resume stream (#433 S7/S8).
+
+### humanGate() and confirm()
+
+The gate patterns (#433 S4): the custom case first, the one-call preset over
+it.
+
+```typescript
+const gate = humanGate<PlanData, 'approve' | 'reject'>({
+  request: (view, data) => decideWhatToAsk(data) ?? null, // null asks nothing
+  onAnswer: (answer, data) => ({ ...data, decided: answer.choice }),
+})
+
+const agent = harness(
+  planner,
+  confirm<PlanData>({ question: (d) => `Run this plan? ${d.plan.summary}`, key: 'plan' }),
+  executeLoop,
+)
+```
+
+`humanGate({ request, onAnswer })` is a leaf pattern. `request(view, data)`
+builds the `HitlRequest` — the full surface: kind, options with their flags and
+`unattended`/`stopsRun`/`unavailable` marks, the default, a summary, a
+`payloadRef`, a rule and an expiry — or returns `null` to pass through without
+asking. When `askHuman` answers (a replayed decision, or the unattended rule's
+pick), `onAnswer` runs once per DECISION — on the run that raised it, and
+again on the re-entry after a resume, where the replayed answer is the
+person's — with the shape the record holds (`HitlResponseEventData`, without
+the host's `principal` and `resolution`, which a pattern never sees) and its
+return value becomes the pattern's data. To read a decision in a LATER turn
+instead, give the request an explicit `key` and call
+`answerOf(view, kind, key)`.
+
+`confirm(config)` presets it: two options, **Approve** (never picked without a
+person, P4) and **Reject** — the default, the unattended choice, and by
+default a `stopsRun` option, so a rejection ends the run (`Stopped at your
+request (confirm).` after a resume; the unattended rule's pick ends it `done`
+at the boundary with a fixed response). `onReject: 'continue'` keeps `stopsRun`
+off the option, so a rejection lets the chain run past the gate. `unattended:
+'park'` makes an unattended run wait instead of deciding. `approveLabel`,
+`rejectLabel` and `summary(data)` are display only; `question` may be computed
+from the data; `key` should be given when a later turn will read the decision
+with `answerOf(view, 'confirm', key)`. Every other config field passes through
+to the pattern (`patternId`, `viewConfig`, …).
+
+**Bound forms.** The runner `harness(...)` returns carries the agent's own
+patterns: `agent.resume(serialized, answers, opts?)` and
+`agent.continue(serialized, input, onEvent?, frame?)` — the same calls as
+`resumeHarness` / `continueSession`, without the patterns argument, so a
+resume can only be made on the agent the pause belongs to. The standalone
+functions remain for hosts that hold the pattern array themselves.
 
 ### Supersede and expiry
 
@@ -2371,8 +2432,8 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── context.server.ts       # Context factory, createEvent(), generateId()
 ├── tools.server.ts         # Tools({ namespaces }) — groups MCP tools by namespace; the map is REQUIRED (ruling B-iii); inferServer consults transports' namespaceFor → registered resolvers (registerToolNamespaces) → heuristic; NO catalog in core — the 86-entry map lives in app-tools/mcp-catalog.ts and registers at boot
 ├── run-frame.server.ts     # THE run frame — one ALS scope per run holding all six slots (guard / transports / config / live / inference / hitl — the last a frozen `{ attended }`), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, hitl passes by reference and is refused below an open one, the rest replace), activeRunFrame() THROWS outside a frame and currentRunFrame() is the soft read
-├── harness.server.ts       # harness(), resumeHarness(serialized, patterns, answers, { principal, resolve }), continueSession() — each OPENS the run frame (ruling Q17/D5) with a `{ attended: true }` hitl slot unless the frame says otherwise, or joins the host's and adds nothing; resumeHarness binds every answer to a request the run waits on before anything runs, continueSession supersedes what waits
-├── hitl.server.ts          # Human in the loop (#433): readHitl() / answerOf() read the hitl_* events; askHuman() raises (or replays, or applies resolveUnattended()) into the run's HITL bookkeeping — an async-context store of its own on a Symbol.for holder, opened by the owning runChain, never on the frame (#477) — held() is a gated executor's placeholder, hitlPending() is the loops' stop check; the owning runChain commits from the buffer only what askHuman could have written, straight into the context, and pauses. S3: checkResume() is the pause binding (HitlAnswerError), recordAnswers() / supersedeHitl() / expireHitl() close requests and substitute held results through sanitizeUntrusted
+├── harness.server.ts       # harness() (a bound runner: agent.resume / agent.continue carry its own patterns, S4), resumeHarness(serialized, patterns, answers, { principal, resolve }), continueSession() — each OPENS the run frame (ruling Q17/D5) with a `{ attended: true }` hitl slot unless the frame says otherwise, or joins the host's and adds nothing; resumeHarness binds every answer to a request the run waits on before anything runs, continueSession supersedes what waits; HarnessResultScoped is a union on status — `pending` is non-optional when paused [F18]
+├── hitl.server.ts          # Human in the loop (#433): readHitl() / answerOf() read the hitl_* events; askHuman() raises (or replays, or applies resolveUnattended()) into the run's HITL bookkeeping — an async-context store of its own on a Symbol.for holder, opened by the owning runChain, never on the frame (#477) — held() is a gated executor's placeholder, hitlPending() is the loops' stop check; the owning runChain commits from the buffer only what askHuman could have written, straight into the context, and pauses. S3: checkResume() is the pause binding (HitlAnswerError), recordAnswers() / supersedeHitl() / expireHitl() close requests and substitute held results through sanitizeUntrusted. S4: humanGate() / confirm() are the gate patterns — the custom case and the one-call preset over askHuman
 ├── tool-transport.server.ts # ToolTransport + registerTransport() (process, consulted after every scoped one) / activeTransports() (reads the run frame's `transports` slot); the difference between the two ways to supply one IS the containment invariant — there is no priority field and no argument that could express one
 ├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE phases — scoped transports (innermost first) → process transports (registration order) → MCP gateway (terminal fallback, not a transport); leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element; drops the gateway's own management tools (`mcp-find`, `mcp-add`, `mcp-exec`, …) from the catalog (#412, #420), and `write_neo4j_cypher` and the `database-server` tools, which no agent holds (#403, #412)
 ├── agent-withheld-tools.ts # AGENT_WITHHELD_TOOLS + isAgentWithheldTool() — the tools no agent may hold (#403: `write_neo4j_cypher`; #412: the `database-server` tools), each with the decision and server-side switch its drop warning names (withholdingFor()), seen through a gateway or server-namespace prefix; read by listTools() (the catalog) and by simpleLoop/actorCritic (every allowlist check), never by callTool

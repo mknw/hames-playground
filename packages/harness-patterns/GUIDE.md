@@ -87,13 +87,113 @@ Every combinator takes patterns and returns a pattern, so they nest freely:
 | `withReferences`     | attach the relevant results of earlier turns at pattern ingress, expandable on demand     |
 | `withInjectionGuard` | neutralize untrusted tool output before a controller reads it                             |
 
-Resume and continue are the same mechanism:
+Resume and continue are the same mechanism, in two shapes:
 `resumeHarness(serialized, patterns, answers, opts)` after a run paused to ask a
 person, `continueSession(serialized, patterns, newInput)` for the next turn of a
-conversation. An answer is keyed by the `requestId` it answers and resumes only
-that pause; a new message instead supersedes whatever was waiting, so an answer
-never outlives its run. See SPEC's
-[Human in the loop](SPEC.md#human-in-the-loop).
+conversation — or the bound `agent.resume(...)` / `agent.continue(...)` on the
+runner, which carry the agent's own patterns. An answer is keyed by the
+`requestId` it answers and resumes only that pause; a new message instead
+supersedes whatever was waiting, so an answer never outlives its run. See SPEC's
+[Human in the loop](SPEC.md#human-in-the-loop), and "Asking a human" below for
+the whole loop a host writes.
+
+### Asking a human
+
+A run can stop to ask the person watching it, and an answer continues it. The
+common case is one call — the `confirm` preset at a chain boundary; the custom
+case is `humanGate({ request, onAnswer })`, and inside a tool executor it is
+`askHuman(request)` plus `held(outcome)` (SPEC's
+[Human in the loop](SPEC.md#human-in-the-loop) section holds the full contract:
+what a request may say, the unattended rule, and every way an answer can fail
+to bind, enumerated by `HitlAnswerError.code`).
+
+The whole loop a host writes is two requests. A paused result is a union on
+status: when the status is `'paused'`, `pending` is non-optional and lists
+every decision the run waits on — no `!`, no separate reader:
+
+```typescript
+import { harness, confirm } from '@hames-ai/harness-patterns'
+import type { ConfiguredPattern, HarnessData, HitlAnswers } from '@hames-ai/harness-patterns'
+
+interface PlanData extends HarnessData {
+  [key: string]: unknown
+  plan?: { summary: string }
+}
+
+declare const planner: ConfiguredPattern<PlanData>
+declare const executeLoop: ConfiguredPattern<PlanData>
+declare const db: {
+  save(id: string, userId: string, blob: string): Promise<void>
+  load(id: string, userId: string): Promise<{ blob: string; version: number }>
+  saveIf(id: string, userId: string, blob: string, version: number): Promise<boolean>
+}
+declare function choicesFromForm(): HitlAnswers
+declare function conflict(): Error
+
+// The gate is one pattern between the others: Reject is the default and the
+// unattended choice and stops the run; Approve needs a person, always.
+const agent = harness(
+  planner,
+  confirm<PlanData>({ question: (d) => `Run this plan? ${d.plan?.summary ?? ''}`, key: 'plan' }),
+  executeLoop,
+)
+
+// POST /chat
+async function chat(id: string, userId: string, message: string) {
+  const r = await agent(message)
+  await db.save(id, userId, r.serialized) // server-held, owner-scoped (P1a)
+  if (r.status === 'paused') return { ask: r.pending } // every pending request
+  return { answer: r.response }
+}
+
+// POST /answer: same-origin, owner checked (P1c); the client sends choice ids only
+async function answer(id: string, userId: string) {
+  const { blob, version } = await db.load(id, userId)
+  const next = await agent.resume(blob, choicesFromForm()) // { [requestId]: choiceId }
+  if (!(await db.saveIf(id, userId, next.serialized, version))) throw conflict() // one answer wins (P1d)
+  return { answer: next.response }
+}
+```
+
+Inside a tool executor — a gated executor withholds the content while the
+decision waits, and the placeholder is what the loop sees:
+
+```typescript
+import { askHuman, held } from '@hames-ai/harness-patterns'
+import type { HeldResult, HitlOption } from '@hames-ai/harness-patterns'
+
+const PROVENANCE_OPTIONS: readonly HitlOption<'sanitize' | 'remove' | 'stop' | 'continue'>[] = [
+  { id: 'sanitize', label: 'Sanitize', unattended: true },
+  { id: 'remove', label: 'Remove', unattended: true },
+  { id: 'stop', label: 'Stop the run', unattended: true, stopsRun: true },
+  { id: 'continue', label: 'Continue normally' },
+]
+
+declare const domain: string
+declare const filename: string
+declare const size: number
+
+declare function payloadRef(): string | undefined
+
+async function ingest(): Promise<{ stored: true } | HeldResult> {
+  const outcome = await askHuman({
+    kind: 'provenance',
+    question: 'Use this external file?',
+    options: PROVENANCE_OPTIONS,
+    defaultOption: 'sanitize',
+    summary: { domain, filename, size },
+    ...(payloadRef() !== undefined ? { payloadRef: payloadRef() } : {}),
+  })
+  // Withhold: the run pauses at the boundary, and the placeholder is what a
+  // loop sees. On 'answered', keep going — the decision is in the outcome.
+  if (outcome.status === 'pending') return held(outcome)
+  return { stored: true }
+}
+```
+
+See the runner's `agent.resume` / `agent.continue` for the bound forms of the
+two calls above, and `answerOf(view, kind, key)` to read a decision in a later
+turn (give the request an explicit `key` when you will look it up).
 
 ---
 

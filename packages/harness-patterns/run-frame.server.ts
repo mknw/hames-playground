@@ -126,39 +126,6 @@ export interface LiveEventSlot {
   enabled: boolean
 }
 
-/** Where the owning `runChain` is: what a raised request records as its
- *  `resumeAt`, and the pattern its events are tagged with. */
-export interface HitlPosition {
-  readonly index: number
-  /** EVERY top-level pattern name, so a resume can refuse a changed chain [m4]. */
-  readonly names: readonly string[]
-  readonly patternId: string
-}
-
-/** The hitl slot as core sees it: the host's `attended`, plus the per-run
- *  bookkeeping `askHuman` and the owning `runChain` keep there (#433, F7) —
- *  the way the live slot carries `emittedIds`. Mutable on purpose, and written
- *  by those two only. It is passed BY REFERENCE through
- *  {@link amendRunFrame}, so every combinator below the host's amend sees the
- *  one slot of the one run. */
-export interface HitlSlot {
-  readonly attended: boolean
-  /** The context of the `runChain` that owns this slot, or undefined between
-   *  runs. The first chain to run with an unowned slot claims it; a chain
-   *  nested inside one of its patterns finds it owned and leaves it alone. */
-  owner?: object
-  /** Where the owner is. Undefined until it dispatches its first pattern. */
-  position?: HitlPosition
-  /** HITL events raised this run and not yet committed. The owner commits them
-   *  STRAIGHT into `ctx.events` at the next boundary — never through a scope,
-   *  so no `commitStrategy` and no copy of the scope filter can drop one. */
-  readonly buffer: ContextEvent[]
-  /** Request ids raised this run that wait for a person. */
-  readonly waiting: Set<string>
-  /** The kind whose unattended rule chose to stop the run, if one did. */
-  stopKind?: string
-}
-
 /** The frame as its readers see it — built once by {@link withRunFrame}. */
 export interface ActiveRunFrame {
   readonly guard?: ActiveInjectionGuard
@@ -169,7 +136,11 @@ export interface ActiveRunFrame {
   readonly config: HarnessRuntimeConfig
   readonly live?: LiveEventSlot
   readonly inference?: InferenceSlot
-  readonly hitl?: HitlSlot
+  /** Frozen, and nothing but `attended` (#477 F1). The run's HITL bookkeeping
+   *  is not here: it is in a store of its own that the owning `runChain`
+   *  opens (`hitl.server.ts`), so nothing that can read the frame can write
+   *  the record or suppress a pause. */
+  readonly hitl?: { readonly attended: boolean }
 }
 
 const NO_TRANSPORTS: readonly ToolTransport[] = Object.freeze([])
@@ -202,10 +173,10 @@ function suppliedSlots(frame: RunFrame): string[] {
   return (Object.keys(frame) as (keyof RunFrame)[]).filter((k) => frame[k] !== undefined)
 }
 
-/** A fresh hitl slot. `attended` is a POSITIVE claim: only `true` makes a
- *  person the one who decides. */
-function hitlSlot(supplied: { readonly attended: boolean }): HitlSlot {
-  return { attended: supplied.attended === true, buffer: [], waiting: new Set<string>() }
+/** A fresh hitl slot: frozen, with `attended` as its only key. `attended` is a
+ *  POSITIVE claim: only `true` makes a person the one who decides. */
+function hitlSlot(supplied: { readonly attended: boolean }): { readonly attended: boolean } {
+  return Object.freeze({ attended: supplied.attended === true })
 }
 
 function build(frame: RunFrame): ActiveRunFrame {
@@ -279,11 +250,12 @@ export function withRunFrame<T>(frame: RunFrame, fn: () => Promise<T>): Promise<
  *     different machine.
  *   - `hitl` passes BY REFERENCE (#433, F7). The slot is the run's, not the
  *     subtree's: `withInjectionGuard` and `withSandbox` amend the frame around
- *     the very patterns whose tool executors call `askHuman`, so a slot rebuilt
- *     or dropped here would leave every guarded or sandboxed gate unable to
- *     ask. A partial may SUPPLY one only where the frame has none — the host's
- *     amend around its main run — and is refused below an open one, because
- *     a second slot would hide the run's bookkeeping from its own patterns.
+ *     the very patterns whose tool executors call `askHuman`, so a slot
+ *     dropped here would leave every guarded or sandboxed gate unable to ask.
+ *     A partial may SUPPLY one only where the frame has none — the host's
+ *     amend around its main run — and is refused below an open one. The slot
+ *     is a frozen `{ attended }` and nothing else: the run's bookkeeping is in
+ *     a store of its own (`hitl.server.ts`, #477 F1), opened per run.
  *   - everything else REPLACES for the duration.
  *
  * Refuses outside a frame, by way of {@link activeRunFrame}: something that

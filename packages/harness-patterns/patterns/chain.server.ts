@@ -24,13 +24,13 @@ import {
   dropHitl,
 } from '../context.server'
 import {
-  claimHitlSlot,
   commitHitlBuffer,
   hitlHalt,
   hitlPending,
-  positionHitlSlot,
-  releaseHitlSlot,
+  positionHitlRun,
   unattendedStopMessage,
+  withHitlRun,
+  type HitlRun,
 } from '../hitl.server'
 import { setLivePatternEnabled, wasEmittedLive } from '../live-event-context.server'
 import { createEventView } from './event-view.server'
@@ -50,10 +50,12 @@ assertServerOnImport()
  * 7. Adds pattern_exit event
  * 8. Passes data forward
  *
- * PAUSES FOR A PERSON, but only in the chain that OWNS the run frame's `hitl`
- * slot (#433, F7) — the first `runChain` to run with an unowned slot. After
- * every pattern, one that threw included, it commits the slot's buffer of
- * HITL events straight into `ctx.events` (never through the scope filter,
+ * PAUSES FOR A PERSON, but only in the chain that OWNS a HITL run (#433, F7):
+ * the `runChain` that finds the frame's `hitl` slot set and no HITL run open
+ * in its async context opens one, in a store of its own rather than on the
+ * frame (#477 F1, F2). After every pattern, one that threw included, it
+ * commits the run's buffer of HITL events straight into `ctx.events` (never
+ * through the scope filter,
  * which drops every HITL event). Then, unless the pattern failed (`error`
  * wins, m2), a request still waiting ends the run `paused` WITHOUT forwarding
  * the paused pattern's data — re-entry starts from the data it started from
@@ -96,8 +98,17 @@ export async function runChain<T extends Record<string, unknown>>(
     return ctx
   }
 
-  // Undefined unless THIS chain owns the run's hitl slot (#433, F7).
-  const hitl = claimHitlSlot(ctx)
+  // `hitl` is undefined unless THIS chain owns a HITL run (#433, F7; #477).
+  return withHitlRun(ctx, (hitl) => runPatterns(ctx, patterns, onEvent, hitl))
+}
+
+/** The body of {@link runChain}, inside the HITL run it owns (if any). */
+async function runPatterns<T extends Record<string, unknown>>(
+  ctx: UnifiedContext<T>,
+  patterns: ConfiguredPattern<T>[],
+  onEvent: ((event: ContextEvent) => void) | undefined,
+  hitl: HitlRun | undefined,
+): Promise<UnifiedContext<T>> {
   const names = patterns.map((p) => p.name)
 
   try {
@@ -119,7 +130,7 @@ export async function runChain<T extends Record<string, unknown>>(
       setLivePatternEnabled(liveEnabled)
 
       // Where a request raised by this pattern will say to resume (m4).
-      if (hitl) positionHitlSlot(hitl, i, names, patternId)
+      if (hitl) positionHitlRun(hitl, i, names, patternId)
 
       // 1. Create isolated scope for this pattern
       const scope = createScope<T>(patternId, currentData)
@@ -214,8 +225,6 @@ export async function runChain<T extends Record<string, unknown>>(
     const msg = error instanceof Error ? error.message : String(error)
     setError(ctx, msg, 'chain')
     return ctx
-  } finally {
-    if (hitl) releaseHitlSlot(hitl)
   }
 }
 

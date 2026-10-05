@@ -26,24 +26,28 @@
  * ## Asking (slice S2)
  *
  * {@link askHuman} is the one writer a run has. It is called from inside a run
- * — a pattern body, or a tool executor that holds no scope and no context —
- * and reads the run frame's `hitl` slot: the host's `attended`, plus the
- * bookkeeping core keeps there. It replays a decision the run already holds,
- * applies the unattended rule when nobody is there, or raises the request into
- * the slot's buffer and returns `pending`. Nothing it raises goes through a
- * scope: the `runChain` that owns the slot commits the buffer straight into
- * the context at the next boundary and pauses there ({@link commitHitlBuffer},
- * {@link hitlHalt}). The STOP is cooperative — the loops and sequencers ask
+ * — a pattern body, or a tool executor that holds no scope and no context.
+ * The run frame's `hitl` slot says only whether a person is there (a frozen
+ * `{ attended }`); the bookkeeping — the owning context, where it is, the
+ * buffer, what waits and whether a rule stopped the run — is in a store of its
+ * own that the owning `runChain` opens, which nothing public hands out (#477
+ * F1), and which each concurrent run gets separately (F2). `askHuman` replays a
+ * decision the run already holds, applies the unattended rule when nobody is
+ * there, or raises the request into that buffer and returns `pending`. Nothing
+ * it raises goes through a scope: the owning `runChain` commits the buffer
+ * straight into the context at the next boundary and pauses there
+ * ({@link commitHitlBuffer}, {@link hitlHalt}). The STOP is cooperative — the loops and sequencers ask
  * {@link hitlPending} between steps — but the WITHHOLDING is not: a gated
  * executor returns {@link held} instead of the content, so a loop that ignored
  * the check would still never see what is being decided.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomUUID } from 'node:crypto'
 import { assertServerOnImport } from './assert.server'
 import { mintHitlEvent } from './context.server'
 import { emitLive } from './live-event-context.server'
-import { activeRunFrame, currentRunFrame, type HitlSlot } from './run-frame.server'
+import { activeRunFrame } from './run-frame.server'
 import type {
   ContextEvent,
   EventView,
@@ -287,8 +291,9 @@ function defaultFlags(option: HitlOption | undefined): Record<string, boolean> {
  * executor; no scope is needed). In order:
  *
  * 1. Validate the request; an invalid one throws {@link HitlRequestError}.
- * 2. Find the run's slot. Outside a frame, with no `hitl` slot, or with a slot
- *    no `runChain` owns, it THROWS: there is no run to pause.
+ * 2. Find the run. Outside a frame, with no `hitl` slot, or with no `runChain`
+ *    owning a HITL run in this async context, it THROWS: there is no run to
+ *    pause.
  * 3. Replay: a decision this run already holds for the same kind, key and
  *    option set is returned, if its choice is still an available option of
  *    THIS request, and nothing is written.
@@ -304,21 +309,22 @@ function defaultFlags(option: HitlOption | undefined): Record<string, boolean> {
 export async function askHuman<C extends string>(request: HitlRequest<C>): Promise<HitlOutcome<C>> {
   validate(request)
   const frame = activeRunFrame()
-  const slot = frame.hitl
-  if (!slot) {
+  if (!frame.hitl) {
     refuse(
       'this run has no hitl slot. harness() and its siblings supply one when they open the ' +
         'frame; a host that opens its own adds `hitl: { attended }` around its main run.',
     )
   }
-  const owner = slot.owner as Pick<UnifiedContext, 'events'> | undefined
-  const position = slot.position
-  if (!owner || !position) refuse('no runChain owns this run, so there is no run to pause')
+  // The bookkeeping comes from the run's OWN store, never from the frame
+  // (#477 F1): nothing a pattern can reach through the frame writes it.
+  const run = hitlRunStore.getStore()
+  const position = run?.position
+  if (!run || !position) refuse('no runChain owns this run, so there is no run to pause')
 
   const kind = request.kind
   const key = `${kind}:${request.key ?? defaultKey(request)}`
   const identity = hitlReplayKey({ kind, key, options: request.options })
-  const state = readHitl({ events: [...owner.events, ...slot.buffer] })
+  const state = readHitl({ events: [...run.owner.events, ...run.buffer] })
 
   const earlier = state.answers.get(identity)
   if (earlier && isAvailable(request.options, earlier.choice)) {
@@ -337,7 +343,7 @@ export async function askHuman<C extends string>(request: HitlRequest<C>): Promi
     // request was committed by an earlier attempt of this run rather than
     // raised by this one (a host re-running a paused context it has not
     // answered): no second request, and no run past it either.
-    slot.waiting.add(waiting.requestId)
+    run.waiting.add(waiting.requestId)
     return { status: 'pending', requestId: waiting.requestId }
   }
 
@@ -363,11 +369,11 @@ export async function askHuman<C extends string>(request: HitlRequest<C>): Promi
   }
   const event = mintHitlEvent('hitl_request', position.patternId, data)
 
-  if (!slot.attended && rule !== 'park') {
+  if (!run.attended && rule !== 'park') {
     const { choice, stopsRun } = resolveUnattended(request)
     const flags = defaultFlags(request.options.find((o) => o.id === choice))
     const by: HitlDecidedBy = 'unattended'
-    slot.buffer.push(
+    run.buffer.push(
       event,
       mintHitlEvent('hitl_response', position.patternId, {
         v: 1,
@@ -379,12 +385,12 @@ export async function askHuman<C extends string>(request: HitlRequest<C>): Promi
         by,
       }),
     )
-    if (stopsRun) slot.stopKind ??= kind
+    if (stopsRun) run.stopKind ??= kind
     return { status: 'answered', requestId, choice, flags, by }
   }
 
-  slot.buffer.push(event)
-  slot.waiting.add(requestId)
+  run.buffer.push(event)
+  run.waiting.add(requestId)
   // Forced: the person watching must see the question while the run is still
   // going. Recorded as delivered, so the commit does not send it twice.
   emitLive(event, true)
@@ -406,59 +412,116 @@ export function held(
 /**
  * The stop check every loop and sequencer makes between steps: must this run
  * stop at its next boundary, because a request waits for a person or an
- * unattended choice stops the run? False outside a run, and in a run with no
- * slot or no owning chain. A SOFT read, like the live emitters: a pattern
- * driven outside any frame simply never stops for a person.
+ * unattended choice stops the run? False outside a HITL run. A SOFT read, like
+ * the live emitters: a pattern driven outside any frame simply never stops
+ * for a person.
  */
 export function hitlPending(): boolean {
-  const slot = currentRunFrame()?.hitl
-  return !!slot?.owner && (slot.waiting.size > 0 || slot.stopKind !== undefined)
+  const run = hitlRunStore.getStore()
+  return !!run && (run.waiting.size > 0 || run.stopKind !== undefined)
 }
 
 // ============================================================================
 // The owning runChain's half (internal)
 // ============================================================================
 
+/** Where the owning `runChain` is: what a raised request records as its
+ *  `resumeAt`, and the pattern its events are tagged with. */
+interface HitlPosition {
+  readonly index: number
+  /** EVERY top-level pattern name, so a resume can refuse a changed chain [m4]. */
+  readonly names: readonly string[]
+  readonly patternId: string
+}
+
 /**
- * Claim the open frame's hitl slot for `ctx`, if it has one no chain owns.
- * Returns the slot when this chain now owns it, undefined otherwise: a
- * `runChain` nested inside one of the owner's patterns gets undefined and
- * leaves the owner's buffer alone [F7].
+ * One run's HITL bookkeeping (#433 S2). It is NOT on the run frame (#477 F1):
+ * the frame is a public, typed surface (`activeRunFrame()` is in the barrel),
+ * and a buffer the owner commits unchecked, or a `waiting` set that decides
+ * whether the run stops, would be a write path into the record and around the
+ * pause for any pattern holding it. It lives in {@link hitlRunStore}, which
+ * nothing exports, and each `runChain` that owns a run opens its own — so two
+ * runs started concurrently in one host frame never share one (F2).
+ *
+ * @internal `runChain` and `askHuman` only.
+ */
+export interface HitlRun {
+  readonly attended: boolean
+  /** The context of the `runChain` that opened this run. */
+  readonly owner: Pick<UnifiedContext, 'events'>
+  /** Where the owner is. Undefined until it dispatches its first pattern. */
+  position?: HitlPosition
+  /** HITL events raised this run and not yet committed. The owner commits them
+   *  STRAIGHT into `ctx.events` at the next boundary, never through a scope,
+   *  so no `commitStrategy` and no copy of the scope filter can drop one. */
+  readonly buffer: ContextEvent[]
+  /** Request ids this run waits on for a person. */
+  readonly waiting: Set<string>
+  /** The kind whose unattended rule chose to stop the run, if one did. */
+  stopKind?: string
+}
+
+/**
+ * The store, on a `globalThis` symbol: the run frame's two-copy idiom (#374
+ * D4). Two loaded copies of this package find the same store, so a request
+ * one copy raises is the one the other copy's `runChain` commits.
+ */
+const HITL_RUN_KEY: unique symbol = Symbol.for('hames.harness-patterns.hitl-run') as never
+type HitlRunHolder = { store: AsyncLocalStorage<HitlRun> }
+const hitlRunHolders = globalThis as unknown as Record<symbol, HitlRunHolder | undefined>
+const hitlRunStore = (hitlRunHolders[HITL_RUN_KEY] ??= {
+  store: new AsyncLocalStorage<HitlRun>(),
+}).store
+
+/**
+ * Run `body` as the owner of a HITL run, or not. The `runChain` that finds the
+ * frame's `hitl` slot set and no HITL run open in its async context opens one,
+ * `hitlRunStore.run(bookkeeping, body)`, and is handed it; a `runChain` nested
+ * inside one of the owner's patterns sees it open and claims nothing [F7]. A
+ * frame with no slot opens nothing, and `askHuman` refuses there (H12).
  *
  * @internal `runChain` only.
  */
-export function claimHitlSlot(ctx: object): HitlSlot | undefined {
+export function withHitlRun<R>(
+  ctx: Pick<UnifiedContext, 'events'>,
+  body: (run: HitlRun | undefined) => Promise<R>,
+): Promise<R> {
   const slot = activeRunFrame().hitl
-  if (!slot || slot.owner) return undefined
-  slot.owner = ctx
-  return slot
+  if (!slot || hitlRunStore.getStore()) return body(undefined)
+  const run: HitlRun = {
+    attended: slot.attended === true,
+    owner: ctx,
+    buffer: [],
+    waiting: new Set<string>(),
+  }
+  return hitlRunStore.run(run, () => body(run))
 }
 
 /** Where the owner is, before each pattern. @internal `runChain` only. */
-export function positionHitlSlot(
-  slot: HitlSlot,
+export function positionHitlRun(
+  run: HitlRun,
   index: number,
   names: readonly string[],
   patternId: string,
 ): void {
-  slot.position = { index, names, patternId }
+  run.position = { index, names, patternId }
 }
 
 /** Commit the buffer straight into the context, never through a scope, so no
  *  strategy and no copy of the scope filter can drop the record of a question.
  *  @internal `runChain` only. */
-export function commitHitlBuffer(slot: HitlSlot, ctx: Pick<UnifiedContext, 'events'>): void {
-  ctx.events.push(...slot.buffer.splice(0))
+export function commitHitlBuffer(run: HitlRun, ctx: Pick<UnifiedContext, 'events'>): void {
+  ctx.events.push(...run.buffer.splice(0))
 }
 
 /** Must the run end at this boundary, and how? A stop wins over a pause: a
  *  choice that stops the run stops it, whatever else is waiting.
  *  @internal `runChain` only. */
 export function hitlHalt(
-  slot: HitlSlot,
+  run: HitlRun,
 ): { readonly stop: string } | { readonly pause: true } | undefined {
-  if (slot.stopKind !== undefined) return { stop: slot.stopKind }
-  if (slot.waiting.size > 0) return { pause: true }
+  if (run.stopKind !== undefined) return { stop: run.stopKind }
+  if (run.waiting.size > 0) return { pause: true }
   return undefined
 }
 
@@ -468,13 +531,4 @@ export function unattendedStopMessage(kind: string): string {
     `Stopped at the ${kind} check: there was no one to ask, and its rule for that case is ` +
     'to stop the run.'
   )
-}
-
-/** Hand the slot back when the owning chain returns. @internal `runChain` only. */
-export function releaseHitlSlot(slot: HitlSlot): void {
-  slot.owner = undefined
-  slot.position = undefined
-  slot.buffer.length = 0
-  slot.waiting.clear()
-  slot.stopKind = undefined
 }

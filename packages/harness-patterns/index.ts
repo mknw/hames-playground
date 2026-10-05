@@ -155,8 +155,6 @@ export {
   type ActiveRunFrame,
   type InferenceSlot,
   type LiveEventSlot,
-  type HitlSlot,
-  type HitlPosition,
   type LiveEventListener,
   type RunClientOverride,
 } from './run-frame.server'

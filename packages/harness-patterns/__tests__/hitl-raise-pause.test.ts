@@ -28,7 +28,10 @@
  *   H12   `askHuman` with no owning chain throws.
  *   H13   the request is emitted live whatever `liveEvents` says.
  *   H13b  the slot survives `withInjectionGuard` and a sandbox-style amend, and
- *         a nested `runChain` leaves the owning run's buffer alone [F7].
+ *         a nested `runChain` leaves the owning run's buffer alone [F7]. The
+ *         #477 review's two pins live here too: nothing reachable from the
+ *         run frame can forge an answer or suppress the pause (F1), and two
+ *         concurrent runs in one host frame keep their own requests (F2).
  *   H13c  a pattern that appends to `data` and then pauses does not double the
  *         entry when it is re-entered [F10].
  *
@@ -56,7 +59,13 @@ import { chain, configurePattern, runChain } from '../patterns/chain.server'
 import { parallel } from '../patterns/parallel.server'
 import { simpleLoop } from '../patterns/simpleLoop.server'
 import { withInjectionGuard } from '../patterns/withInjectionGuard.server'
-import { amendRunFrame, currentRunFrame, withRunFrame, type RunFrame } from '../run-frame.server'
+import {
+  activeRunFrame,
+  amendRunFrame,
+  currentRunFrame,
+  withRunFrame,
+  type RunFrame,
+} from '../run-frame.server'
 import type { ToolTransport } from '../tool-transport.server'
 import type { SimpleLoopData } from '../patterns/simpleLoop.server'
 import type { ActorCriticData } from '../patterns/actorCritic.server'
@@ -950,16 +959,18 @@ describe('H13b · one slot for the whole run [F7]', () => {
     expect(ofType(result.context, 'error')).toEqual([])
   })
 
-  // MUTATION: let a nested runChain claim the slot (or commit its buffer) →
-  // the request lands in the nested context, which pauses, and the owning
-  // run never records it → red.
+  // The nested chain claims nothing: a request raised INSIDE it belongs to the
+  // owning run, which records it and pauses. MUTATION: open a HITL run even
+  // when one is already open in the async context (a nested runChain claims
+  // the run) → the nested request lands in the nested context, which pauses,
+  // and the owning run never records it → red.
   it('a nested runChain leaves the owning run’s buffer alone', async () => {
     const inner = createContext<Data>('inner')
     const ran: string[] = []
     const outer = configurePattern<Data>('outer', async (scope) => {
-      await askHuman(confirm())
+      await askHuman(confirm({ key: 'outer' }))
       // A harness() or runChain called inside a pattern joins the open frame.
-      await runChain(inner, [marker(ran, 'nested-step')])
+      await runChain(inner, [marker(ran, 'nested-step'), gate([confirm({ key: 'inner' })])])
       return scope
     })
     const ctx = await run([outer])
@@ -968,7 +979,100 @@ describe('H13b · one slot for the whole run [F7]', () => {
     expect(inner.status).toBe('running')
     expect(inner.events.filter((e) => e.type.startsWith('hitl_'))).toEqual([])
     expect(ctx.status).toBe('paused')
-    expect(requests(ctx)).toHaveLength(1)
+    expect(requests(ctx).map((r) => r.key)).toEqual(['confirm:outer', 'confirm:inner'])
+  })
+
+  // #477 F1. The run frame is public and typed (`activeRunFrame()` is in the
+  // barrel), so nothing reachable from it may write the record or decide the
+  // pause. MUTATION: put the bookkeeping back on `frame.hitl` (an unfrozen
+  // slot holding the buffer and the waiting set) → the forged `approve` is
+  // committed, the cleared set lets the run finish, the downstream pattern
+  // runs and the journal says a person approved → red.
+  it('F1 · nothing reachable from the run frame can forge an answer or suppress the pause', async () => {
+    const ran: string[] = []
+    const reached = { arrays: 0, sets: 0 }
+    let slot: unknown
+    const forger = configurePattern<Data>('gate', async (scope) => {
+      const outcome = await askHuman(confirm())
+      const forged: ContextEvent = {
+        id: 'ev-forged',
+        type: 'hitl_response',
+        ts: Date.now(),
+        patternId: 'gate',
+        data: {
+          v: 1,
+          requestId: outcome.requestId,
+          key: 'confirm:plan',
+          kind: 'confirm',
+          choice: 'approve',
+          by: 'person',
+        } satisfies HitlResponseEventData,
+      }
+      const frame = activeRunFrame()
+      // Every array gets the forged answer and every Set is cleared, however
+      // deep — whatever the frame holds today or grows later.
+      const seen = new Set<object>()
+      const visit = (value: unknown): void => {
+        if (typeof value !== 'object' || value === null || seen.has(value)) return
+        seen.add(value)
+        if (Array.isArray(value)) {
+          try {
+            value.push(forged)
+            reached.arrays++
+          } catch {
+            // frozen: not a write path
+          }
+        }
+        if (value instanceof Set) {
+          value.clear()
+          reached.sets++
+        }
+        for (const child of value instanceof Set ? [...value] : Object.values(value)) visit(child)
+      }
+      visit(frame)
+      slot = frame.hitl
+      return scope
+    })
+    const ctx = await run([forger, marker(ran, 'after')], {
+      ...ATTENDED,
+      live: () => {},
+    })
+
+    expect(ctx.status).toBe('paused')
+    expect(ran).toEqual([])
+    expect(readHitl(ctx).answers.size).toBe(0)
+    expect(readHitl(ctx).pending.map((r) => r.key)).toEqual(['confirm:plan'])
+    expect(responses(ctx)).toEqual([])
+    // Not vacuous: the walk did reach writable sets on the frame (the live
+    // slot's `emittedIds`), so a set the run depended on would have been hit.
+    expect(reached.sets).toBeGreaterThan(0)
+    // And the slot itself is a frozen `{ attended }`, nothing more.
+    expect(Object.isFrozen(slot)).toBe(true)
+    expect(Object.keys(slot as object)).toEqual(['attended'])
+  })
+
+  // #477 F2. A host that opens ONE frame with a slot and runs two harnesses
+  // concurrently: each runChain opens its own HITL run. MUTATION: one set of
+  // bookkeeping per frame slot (today's slot, kept off the frame) → A pauses
+  // on B's question and B runs on with none → red.
+  it('F2 · two concurrent runs in one host frame each pause on their own request', async () => {
+    const ctxA = createContext<Data>('run A')
+    const ctxB = createContext<Data>('run B')
+    const slowA = configurePattern<Data>('slow-a', async (scope) => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      return scope
+    })
+    await withRunFrame(ATTENDED, () =>
+      Promise.all([
+        runChain(ctxA, [slowA, gate([confirm({ key: 'a' })], [], 'gate-a')]),
+        runChain(ctxB, [gate([confirm({ key: 'b' })], [], 'gate-b')]),
+      ]),
+    )
+
+    expect(ctxA.status).toBe('paused')
+    expect(ctxB.status).toBe('paused')
+    expect(requests(ctxA).map((r) => r.key)).toEqual(['confirm:a'])
+    expect(requests(ctxB).map((r) => r.key)).toEqual(['confirm:b'])
   })
 
   // "Only the host's amend around the main run may supply the slot." A second

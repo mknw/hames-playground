@@ -77,6 +77,14 @@ export type {
   LoopRecoveryEventData,
   LoopRecoveryFailure,
 
+  // Human in the loop (#433)
+  HitlFlag,
+  HitlOption,
+  HitlUnattended,
+  HitlRequestEventData,
+  HitlDecidedBy,
+  HitlResponseEventData,
+
   // LLM Observability
   LLMCallData,
   LLMCallRecord,
@@ -178,6 +186,18 @@ export {
   type HarnessData,
   type HarnessResultScoped,
 } from './harness.server'
+
+// ============================================================================
+// Human in the loop (#433)
+// ============================================================================
+//
+// The two `hitl_*` events are written by core only; these read them.
+// `answerOf(view, kind, key)` takes the key the consumer gave the request and
+// composes the stored `${kind}:${key}` form itself, so a request looked up
+// later needs an explicit key. The minting helper is deliberately NOT exported
+// here — see `context.server.ts`.
+
+export { readHitl, answerOf, type HitlState } from './hitl.server'
 
 // ============================================================================
 // Patterns

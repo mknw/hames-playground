@@ -36,6 +36,7 @@ disposition plus an ADR is a net context saving over a paragraph of prose in
 | [0006](0006-no-rails-runner-for-guards.md)              | Rails-style pre/post checks are the wrong shape for guards                                   | accepted                | 2026-09-21 |
 | [0007](0007-three-environments-digest-promotion.md)     | Three environments on two VMs, with prod promoted by image digest                            | superseded by ADR-0008  | 2026-10-01 |
 | [0008](0008-deployment-guidance-is-provider-neutral.md) | Deployment guidance is provider-neutral; a deployment's own decisions live with its operator | accepted                | 2026-10-03 |
+| [0009](0009-hitl-state-is-events.md)                    | HITL decisions are events in the UnifiedContext, and resume derives from them                | proposed                | 2026-10-04 |
 
 This table is **the only place statuses are aggregated**. A file whose status
 changes updates both the file and this row in the same commit.

@@ -30,7 +30,10 @@ import {
 } from './mode'
 import { startFakeLlm, type FakeLlm } from './fake-llm'
 import { startFakeGateway, type FakeGateway } from './fake-gateway'
+import { startFakeConverter, type FakeConverter } from './fake-converter'
+import { createFakeGraph, composeGraphTools, type FakeGraph } from './fake-graph'
 import { installHermeticRouting, assertHermeticRouting } from './baml-route'
+import type { GraphStashBridge } from '@hames-ai/connectors/graph/graph-tools.server'
 
 // ============================================================================
 // Types the scenarios use
@@ -91,10 +94,32 @@ export interface AppHandles {
    * seen a call since.
    */
   goToSleep(): Promise<void>
+  /**
+   * Put the real Microsoft Graph tools, composed over {@link fakeGraph}, behind
+   * the real `callTool`, and return the function that takes them away.
+   *
+   * OPT-IN, unlike the other fakes, because it changes what a turn can do. The
+   * app's own composition root (`src/lib/app-tools/index.server.ts`) is
+   * imported only by `src/middleware.ts`, which this suite never loads, so since
+   * #225 L3 moved that import there no scenario here has had Graph tools, and an
+   * agent offered `tools.all` would start seeing them. A scenario that needs
+   * them installs them in `beforeAll` and calls the returned function in
+   * `afterAll`. The tools resolve the caller the way the production composition
+   * does (`request-user.server.ts`), and they register as a PROCESS transport,
+   * the same position the app's own tools take.
+   *
+   * `stash` is the Data Stash bridge `graph_file_ingest` stores through. This
+   * suite has no stash backend, so it defaults to one that refuses by name.
+   */
+  installGraphTools(opts?: { stash?: GraphStashBridge }): Promise<() => void>
   /** The id every turn runs as (the dev-bypass user). */
   readonly userId: string
   readonly fakeLlm: FakeLlm
   readonly fakeGateway: FakeGateway
+  /** The Graph fixture router behind {@link installGraphTools}. */
+  readonly fakeGraph: FakeGraph
+  /** The converter `DOC_CONVERT_URL` points at, in both modes. */
+  readonly fakeConverter: FakeConverter
 }
 
 /** The shape of a harness result, narrowed to what a scenario asserts on. */
@@ -136,6 +161,15 @@ export function bootApp(): Promise<AppHandles> {
   return booted
 }
 
+/**
+ * The booted app, or null when nothing in this process has booted it. Never
+ * boots: `e2e/setup.ts` reads it after every test to fail one whose requests a
+ * fake refused, and a file that never booted has no fakes to ask.
+ */
+export function peekBootedApp(): Promise<AppHandles> | null {
+  return booted
+}
+
 async function boot(): Promise<AppHandles> {
   // ---- Credentials -------------------------------------------------------
   // Live mode needs the real ones, and vitest does not load `.env` into
@@ -167,6 +201,16 @@ async function boot(): Promise<AppHandles> {
   // uninterpretable.
   const fakeGateway = await startFakeGateway()
   process.env.MCP_GATEWAY_URL = fakeGateway.url
+
+  // The document converter is faked in BOTH modes, for the gateway's reason —
+  // and because the shipped default, `http://localhost:8000`, is the compose
+  // sidecar on a developer's machine. `doc-convert.server.ts` reads this per
+  // call, so this is the shipped seam, not a new one.
+  const fakeConverter = await startFakeConverter()
+  process.env.DOC_CONVERT_URL = fakeConverter.url
+  // Graph is reached through an injected function, not an env var, so the
+  // router is only built here; `installGraphTools` is what wires it in.
+  const fakeGraph = createFakeGraph()
 
   const fakeLlm = await startFakeLlm()
   if (IS_HERMETIC) {
@@ -240,11 +284,66 @@ async function boot(): Promise<AppHandles> {
   }
 
   const userId = BYPASS_USER.id
+  /** One install at a time: dispatch takes the FIRST transport that owns a
+   *  tool, so a second install would sit behind a leaked first one, and with
+   *  `isolate: false` a leaked one outlives its file. */
+  let graphInstalled = false
 
   return {
     userId,
     fakeLlm,
     fakeGateway,
+    fakeGraph,
+    fakeConverter,
+
+    async installGraphTools(opts = {}) {
+      if (graphInstalled) {
+        throw new Error(
+          'e2e: installGraphTools is already installed; call the function the first install ' +
+            'returned before installing again.',
+        )
+      }
+      graphInstalled = true
+      const compose = async () => {
+        const [requestUser, transports, adapters] = await Promise.all([
+          import('../../src/lib/harness-client/request-user.server'),
+          import('@hames-ai/harness-patterns/tool-transport.server'),
+          import('@hames-ai/harness-baml/baml-adapters.server'),
+        ])
+        const registry = await composeGraphTools(fakeGraph, {
+          resolveContext: {
+            userId: requestUser.getRequestUserId,
+            sessionId: requestUser.getRequestSessionId,
+          },
+          stash: opts.stash,
+        })
+        return { registry, transports, adapters }
+      }
+      const { registry, transports, adapters } = await compose().catch((err: unknown) => {
+        graphInstalled = false
+        throw err
+      })
+      const { registerTransport } = transports
+      const { invalidateToolDescriptions } = adapters
+      const unregister = registerTransport({
+        id: 'e2e-fake-graph',
+        ownsTool: (name) => registry.hasAppTool(name),
+        callTool: (name, args) => registry.runAppTool(name, args),
+        listTools: async () => registry.appToolDescriptions(),
+        namespaceFor: (name) => registry.appToolNamespace(name) ?? undefined,
+      })
+      // The adapters cache the catalog for the life of the process; without
+      // this, a controller built after the install would not be shown the tools.
+      invalidateToolDescriptions()
+      let uninstalled = false
+      return () => {
+        if (uninstalled) return
+        uninstalled = true
+        unregister()
+        invalidateToolDescriptions()
+        graphInstalled = false
+      }
+    },
 
     async runTurn(sessionId, message, agentId = 'search') {
       return withTimeout(

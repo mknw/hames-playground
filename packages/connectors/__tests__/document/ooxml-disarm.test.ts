@@ -37,6 +37,7 @@ import {
   everything,
   inAlternateContent,
   MIME,
+  noise,
   NS,
   para,
   pptx,
@@ -1107,6 +1108,34 @@ describe('Z2: field codes and DDE', () => {
     ])
   })
 
+  it('a hidden begin still opens a field: the code after it is dropped', async () => {
+    const body =
+      `<w:p><w:r><w:rPr><w:vanish/></w:rPr><w:fldChar w:fldCharType="begin"/></w:r>` +
+      `<w:r><w:instrText>QUOTE</w:instrText></w:r><w:r><w:t>HIDDENBEGINSENTINEL</w:t></w:r>` +
+      `<w:r><w:fldChar w:fldCharType="separate"/></w:r>${run('VISIBLE')}` +
+      `<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`
+    await disarmed(docx({ body }), MIME.docx, ['HIDDENBEGINSENTINEL'])
+  })
+
+  it('a deleted separator does not end the code: the text after it is dropped', async () => {
+    const body =
+      `<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>QUOTE</w:instrText></w:r>` +
+      `<w:del w:id="1" w:author="a"><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:del>` +
+      `<w:r><w:t>DELSEPSENTINEL</w:t></w:r>` +
+      `<w:r><w:fldChar w:fldCharType="separate"/></w:r>${run('VISIBLE')}` +
+      `<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`
+    await disarmed(docx({ body }), MIME.docx, ['DELSEPSENTINEL'])
+  })
+
+  it('an equation inside a field’s code is code', async () => {
+    const body =
+      `<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>EQ</w:instrText></w:r>` +
+      `<m:oMath><m:r><m:t>MATHCODESENTINEL</m:t></m:r></m:oMath>` +
+      `<w:r><w:fldChar w:fldCharType="separate"/></w:r>${run('VISIBLE')}` +
+      `<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`
+    await disarmed(docx({ body }), MIME.docx, ['MATHCODESENTINEL'])
+  })
+
   it('w:fldSimple: the instruction goes, the result runs stay', async () => {
     await disarmed(
       docx({
@@ -1200,6 +1229,133 @@ describe('Z2: references to a dropped part', () => {
     expect(out.removed.references).toBe(2)
     expect(unpack(out.bytes).get('word/document.xml')).toContain('<w:sectPr/>')
   })
+
+  it('VML’s o:relid is a relationship reference too', async () => {
+    const body =
+      para('VISIBLE') +
+      `<w:p><w:r><w:pict><v:shape id="s"><v:imagedata o:relid="rIdVmlImg"/></v:shape></w:pict></w:r></w:p>`
+    await disarmed(
+      docx({
+        body,
+        docRels: [{ id: 'rIdVmlImg', type: RT.image, target: 'media/image1.png' }],
+        parts: [{ name: 'word/media/image1.png', type: CT.png, body: blob('VMLIMGSENTINEL') }],
+      }),
+      MIME.docx,
+      ['rIdVmlImg', 'VMLIMGSENTINEL', 'imagedata'],
+    )
+  })
+})
+
+describe('Z2: OLE and ActiveX elements that carry content of their own', () => {
+  it('an o:OLEObject with field codes, outside w:object', async () => {
+    const body =
+      para('VISIBLE') +
+      `<w:p><w:r><w:pict><o:OLEObject Type="Link" ProgID="OLEPROGSENTINEL" r:id="rIdOle">` +
+      `<o:LinkType>Picture</o:LinkType><o:FieldCodes>OLEFIELDSENTINEL</o:FieldCodes></o:OLEObject></w:pict></w:r></w:p>`
+    const out = await disarmed(
+      docx({
+        body,
+        docRels: [{ id: 'rIdOle', type: RT.oleObject, target: 'embeddings/oleObject1.bin' }],
+      }),
+      MIME.docx,
+      ['OLEPROGSENTINEL', 'OLEFIELDSENTINEL', 'OLEObject'],
+    )
+    expect(out.removed.oleObjects).toBe(1)
+  })
+
+  it('a pptx p:oleObj and p:controls', async () => {
+    const frame =
+      `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="9" name="o"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>` +
+      `<p:xfrm><a:off x="0" y="0"/><a:ext cx="10" cy="10"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole">` +
+      `<p:oleObj progId="PPTOLESENTINEL" r:id="rIdOle"><p:embed/></p:oleObj></a:graphicData></a:graphic></p:graphicFrame>`
+    const out = await disarmed(
+      pptx({
+        slides: [
+          {
+            shapes:
+              shape('VISIBLE') +
+              frame +
+              `<p:controls><p:control name="PPTCTLSENTINEL" spid="1" r:id="rIdCtl"><p:pic/></p:control></p:controls>`,
+            rels: [
+              { id: 'rIdOle', type: RT.oleObject, target: '../embeddings/oleObject1.bin' },
+              { id: 'rIdCtl', type: RT.control, target: '../activeX/activeX1.xml' },
+            ],
+          },
+        ],
+      }),
+      MIME.pptx,
+      ['PPTOLESENTINEL', 'PPTCTLSENTINEL', 'oleObj'],
+    )
+    expect(out.removed).toMatchObject({ oleObjects: 1, controls: 1 })
+  })
+
+  it('an xlsx oleObjects and controls', async () => {
+    const sheet =
+      `<sheetData>${row(1, ['VISIBLE'])}</sheetData>` +
+      `<oleObjects><oleObject progId="XLOLESENTINEL" shapeId="1" r:id="rIdOle"><objectPr defaultSize="0"><anchor/></objectPr></oleObject></oleObjects>` +
+      `<controls><control shapeId="2" name="XLCTLSENTINEL" r:id="rIdCtl"><controlPr/></control></controls>`
+    await disarmed(
+      xlsx({
+        sheets: [
+          {
+            name: 'S',
+            xml: sheet,
+            rels: [
+              { id: 'rIdOle', type: RT.oleObject, target: '../embeddings/oleObject1.bin' },
+              { id: 'rIdCtl', type: RT.control, target: '../activeX/activeX1.xml' },
+            ],
+          },
+        ],
+      }),
+      MIME.xlsx,
+      ['XLOLESENTINEL', 'XLCTLSENTINEL'],
+    )
+  })
+})
+
+describe('Z2: a notes slide cannot bring a hidden slide back', () => {
+  it('a visible slide’s notes that point at a hidden slide reach nothing', async () => {
+    const out = await disarmed(
+      pptx({
+        slides: [
+          { shapes: shape('VISIBLE'), notes: 'NOTESVISIBLE' },
+          { shapes: shape('BACKEDGESENTINEL'), show: '0' },
+        ],
+        extraRels: {
+          'ppt/notesSlides/notesSlide1.xml': [
+            { id: 'rIdSlide', type: RT.slide, target: '../slides/slide1.xml' },
+            { id: 'rIdOther', type: RT.slide, target: '../slides/slide2.xml' },
+          ],
+        },
+      }),
+      MIME.pptx,
+      ['BACKEDGESENTINEL', 'slide2.xml'],
+    )
+    expect(everything(out.bytes)).toContain('NOTESVISIBLE')
+  })
+})
+
+describe('the output reopens through the reader that refused the input', () => {
+  it('a part too repetitive to deflate under 100:1 is stored', async () => {
+    const body = para('VISIBLE') + '<w:p/>'.repeat(200_000)
+    const out = await ooxmlDisarm(docx({ body, stored: true }), MIME.docx)
+    expect(everything(out.bytes)).toContain('VISIBLE')
+  })
+
+  it(
+    'a part the rewrite would take past 20 MiB is refused, not written',
+    {
+      timeout: 30_000,
+    },
+    async () => {
+      // A single-quoted attribute of `"` and pseudo-random hex: each `"` is
+      // written back as `&quot;`, six bytes for one, and the hex keeps the
+      // input under the reader's 100:1 ratio.
+      const value = noise(3_250_000).replace(/./g, '"$&')
+      const body = `<w:p><w:pPr><w:pStyle w:val='${value}'/></w:pPr></w:p>`
+      expect(await refusalOf(ooxmlDisarm(docx({ body }), MIME.docx))).toBe('xml-size')
+    },
+  )
 })
 
 // ============================================================================
@@ -1538,9 +1694,7 @@ describe('the disarm throws instead of returning a partial package', () => {
   it('a relationships part, or the content types, over 1 MiB (A1)', async () => {
     // Pseudo-random padding: a repeated letter would deflate past the reader's
     // 100:1 ratio and be refused there, before this check is reached.
-    const pad = Array.from({ length: (1024 * 1024) / 8 }, (_, i) =>
-      ((i * 2654435761) >>> 0).toString(16).padStart(8, '0'),
-    ).join('')
+    const pad = noise(1024 * 1024)
     const bigRels = docx({
       body: para('x'),
       docRels: [{ id: 'rIdPad', type: RT.settings, target: `${pad}.xml` }],

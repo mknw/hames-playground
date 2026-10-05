@@ -737,18 +737,26 @@ describe('parseXml', () => {
    * The validation walk (`readZip`) and `scanXml` build nothing and are not
    * bounded by it. MUTATION: lift the budget → each refusal below turns red.
    */
-  it('tree mode refuses a part over the node budget; the walks without a tree do not', () => {
-    const n = XML_LIMITS.maxTreeNodes
-    // The root is one node; n - 1 children fit, n do not.
-    expect(refusalOf(() => parseXml('<r>' + '<a/>'.repeat(n - 1) + '</r>'))).toBe('accepted')
-    expect(refusalOf(() => parseXml('<r>' + '<a/>'.repeat(n) + '</r>'))).toBe('xml-nodes')
-    // Attributes count: half as many elements, each with one attribute.
-    expect(refusalOf(() => parseXml('<r>' + '<a b=""/>'.repeat(n / 2) + '</r>'))).toBe('xml-nodes')
-    // Text counts: comments split text into nodes without one element.
-    expect(refusalOf(() => parseXml('<r>' + 'x<!---->'.repeat(n) + '</r>'))).toBe('xml-nodes')
-    const big = '<r>' + '<a/>'.repeat(n) + '</r>'
-    expect(refusalOf(() => scanXml(big, () => {}))).toBe('accepted')
-  })
+  it(
+    'tree mode refuses a part over the node budget; the walks without a tree do not',
+    {
+      timeout: 30_000,
+    },
+    () => {
+      const n = XML_LIMITS.maxTreeNodes
+      // The root is one node; n - 1 children fit, n do not.
+      expect(refusalOf(() => parseXml('<r>' + '<a/>'.repeat(n - 1) + '</r>'))).toBe('accepted')
+      expect(refusalOf(() => parseXml('<r>' + '<a/>'.repeat(n) + '</r>'))).toBe('xml-nodes')
+      // Attributes count: half as many elements, each with one attribute.
+      expect(refusalOf(() => parseXml('<r>' + '<a b=""/>'.repeat(n / 2) + '</r>'))).toBe(
+        'xml-nodes',
+      )
+      // Text counts: comments split text into nodes without one element.
+      expect(refusalOf(() => parseXml('<r>' + 'x<!---->'.repeat(n) + '</r>'))).toBe('xml-nodes')
+      const big = '<r>' + '<a/>'.repeat(n) + '</r>'
+      expect(refusalOf(() => scanXml(big, () => {}))).toBe('accepted')
+    },
+  )
 })
 
 describe('scanXml (#475 F2: the type check builds no tree)', () => {

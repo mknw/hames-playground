@@ -766,7 +766,6 @@ const DROP: ReadonlyMap<string, ReadonlyMap<string, string | null>> = new Map([
       ['instrText', 'fieldCodes'],
       ['delInstrText', 'fieldCodes'],
       ['object', 'oleObjects'],
-      ['control', 'controls'],
     ]),
   ],
   [NS.o, new Map([['OLEObject', 'oleObjects']])],
@@ -775,7 +774,6 @@ const DROP: ReadonlyMap<string, ReadonlyMap<string, string | null>> = new Map([
     new Map([
       ['oleObj', 'oleObjects'],
       ['controls', 'controls'],
-      ['control', 'controls'],
     ]),
   ],
   [

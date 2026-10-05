@@ -162,6 +162,8 @@ export interface Part {
   /** An Override in `[Content_Types].xml`; omit to fall back to the Default. */
   readonly type?: string
   readonly body: string | Uint8Array
+  /** Store it rather than deflate it: a repetitive part would break the reader's 100:1 ratio. */
+  readonly stored?: boolean
 }
 
 export interface PackageSpec {
@@ -216,16 +218,31 @@ export function buildPackage(spec: PackageSpec): Uint8Array {
   for (const [source, list] of Object.entries(spec.rels ?? {})) {
     rels[source] = [...(rels[source] ?? []), ...list]
   }
-  const files: { name: string; data: Uint8Array }[] = [
+  const files: { name: string; data: Uint8Array; method?: 0 | 8 }[] = [
     { name: '[Content_Types].xml', data: enc.encode(ct) },
   ]
   for (const [source, list] of Object.entries(rels)) {
     files.push({ name: relsPartName(source), data: enc.encode(relsXml(list)) })
   }
   for (const p of parts) {
-    files.push({ name: p.name, data: typeof p.body === 'string' ? enc.encode(p.body) : p.body })
+    files.push({
+      name: p.name,
+      data: typeof p.body === 'string' ? enc.encode(p.body) : p.body,
+      method: p.stored ? 0 : 8,
+    })
   }
   return writeZip(files)
+}
+
+/** `n` pseudo-random hex digits (an LCG): padding no deflater can shrink past 4:1. */
+export function noise(n: number, seed = 1): string {
+  let x = seed >>> 0
+  let out = ''
+  for (let i = 0; i < n; i++) {
+    x = (Math.imul(x, 1103515245) + 12345) >>> 0
+    out += ((x >>> 16) & 15).toString(16)
+  }
+  return out
 }
 
 /** A synthetic binary blob (an OLE header, then filler) — never a real file. */
@@ -270,6 +287,8 @@ export const run = (text: string, rPr = ''): string =>
 export interface DocxSpec {
   readonly body: string
   readonly macroEnabled?: boolean
+  /** Store `word/document.xml` rather than deflate it. */
+  readonly stored?: boolean
   readonly styles?: string
   readonly numbering?: string
   readonly footnotes?: string
@@ -299,6 +318,7 @@ export function docx(spec: DocxSpec): Uint8Array {
       name: 'word/document.xml',
       type: spec.macroEnabled ? CT.docmMain : CT.docxMain,
       body: wDocument(spec.body),
+      stored: spec.stored,
     },
     parts: [...parts, ...(spec.parts ?? [])],
     rels: {

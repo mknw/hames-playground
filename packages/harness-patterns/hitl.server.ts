@@ -319,7 +319,9 @@ export async function askHuman<C extends string>(request: HitlRequest<C>): Promi
   // (#477 F1): nothing a pattern can reach through the frame writes it.
   const run = hitlRunStore.getStore()
   const position = run?.position
-  if (!run || !position) refuse('no runChain owns this run, so there is no run to pause')
+  if (!run || !position || run.closed) {
+    refuse('no runChain owns this run, so there is no run to pause')
+  }
 
   const kind = request.kind
   const key = `${kind}:${request.key ?? defaultKey(request)}`
@@ -418,7 +420,7 @@ export function held(
  */
 export function hitlPending(): boolean {
   const run = hitlRunStore.getStore()
-  return !!run && (run.waiting.size > 0 || run.stopKind !== undefined)
+  return !!run && !run.closed && (run.waiting.size > 0 || run.stopKind !== undefined)
 }
 
 // ============================================================================
@@ -459,6 +461,10 @@ export interface HitlRun {
   readonly waiting: Set<string>
   /** The kind whose unattended rule chose to stop the run, if one did. */
   stopKind?: string
+  /** Set when the owning `runChain` has returned. A continuation the run
+   *  started and did not await still sees this run in its async context, and
+   *  must not ask into a buffer nobody will commit (#477 delta review). */
+  closed?: boolean
 }
 
 /**
@@ -494,7 +500,11 @@ export function withHitlRun<R>(
     buffer: [],
     waiting: new Set<string>(),
   }
-  return hitlRunStore.run(run, () => body(run))
+  return hitlRunStore.run(run, () =>
+    body(run).finally(() => {
+      run.closed = true
+    }),
+  )
 }
 
 /** Where the owner is, before each pattern. @internal `runChain` only. */

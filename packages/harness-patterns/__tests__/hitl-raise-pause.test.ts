@@ -874,13 +874,46 @@ describe('H12 · askHuman refuses outside a chain-owned run', () => {
     )
   })
 
-  // MUTATION: never release the slot when the owning runChain returns → the
-  // second ask is buffered into a run that has already ended → red.
+  // Outside the run's async context: no HITL run is open there at all.
+  // MUTATION: D2 (resolve silently when there is no owning run) → red.
   it('after the owning runChain has returned', async () => {
     await withRunFrame(ATTENDED, async () => {
       await runChain(createContext<Data>('go'), [gate([confirm()])])
       await expect(askHuman(confirm())).rejects.toThrow(/no runChain owns/)
     })
+  })
+
+  // Inside it: a continuation the run started and did not await still sees the
+  // finished run in its async context (#477 delta review; the retired C6's
+  // guarantee). MUTATION: drop the `run.closed` check in askHuman → the late
+  // ask returns `pending` into a buffer nobody commits, silently → red.
+  it('a continuation that outlives the owning run cannot ask', async () => {
+    let late: Promise<HitlOutcome> | undefined
+    const starter = configurePattern<Data>('starter', async (scope) => {
+      late = new Promise((resolve) => setTimeout(resolve, 20)).then(() => askHuman(confirm()))
+      late.catch(() => {}) // observed below, after the run has returned
+      return scope
+    })
+    const ctx = await run([starter])
+    expect(ctx.status).toBe('running')
+
+    await expect(late).rejects.toThrow(/no runChain owns/)
+    expect(requests(ctx)).toEqual([])
+  })
+
+  // The same closed run reads as nothing to stop for. MUTATION: drop the
+  // `run.closed` clause in hitlPending → the late check still reports the
+  // paused run's request as waiting → red.
+  it('a continuation that outlives a paused run is not told it still waits', async () => {
+    let late: Promise<boolean> | undefined
+    const asker = configurePattern<Data>('asker', async (scope) => {
+      await askHuman(confirm())
+      late = new Promise((resolve) => setTimeout(resolve, 20)).then(() => hitlPending())
+      return scope
+    })
+    const ctx = await run([asker])
+    expect(ctx.status).toBe('paused')
+    await expect(late).resolves.toBe(false)
   })
 })
 

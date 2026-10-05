@@ -34,10 +34,14 @@ export function setLivePatternEnabled(enabled: boolean): void {
 /**
  * Emit an event live if the current frame is enabled.
  * Returns true when the listener was invoked, false otherwise.
+ *
+ * `force` emits whatever the current pattern's `liveEvents` says. One caller
+ * uses it: `askHuman`, whose request a person must see while the run is still
+ * going, not at the commit after the pattern that asked has finished (#433).
  */
-export function emitLive(event: ContextEvent): boolean {
+export function emitLive(event: ContextEvent, force = false): boolean {
   const slot = currentRunFrame()?.live
-  if (!slot || !slot.enabled) return false
+  if (!slot || (!slot.enabled && !force)) return false
   slot.listener(event)
   if (event.id) slot.emittedIds.add(event.id)
   return true

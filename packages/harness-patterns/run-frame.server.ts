@@ -109,6 +109,12 @@ export interface RunFrame {
   live?: LiveEventListener
   /** Which tier this run's model calls take. */
   inference?: InferenceSlot
+  /** Whether a person is there to answer `askHuman` (#433). Supplied by the
+   *  host's amend around its MAIN run only, never below it — a sidecar (a title
+   *  agent, a detached compaction) has none, so it can never pause the user's
+   *  turn. `harness()` and its two siblings default it to `{ attended: true }`
+   *  when they OPEN the frame, and only then. */
+  hitl?: { readonly attended: boolean }
 }
 
 /** The live slot as the emitters see it: the listener plus the per-run
@@ -118,6 +124,39 @@ export interface LiveEventSlot {
   readonly listener: LiveEventListener
   readonly emittedIds: Set<string>
   enabled: boolean
+}
+
+/** Where the owning `runChain` is: what a raised request records as its
+ *  `resumeAt`, and the pattern its events are tagged with. */
+export interface HitlPosition {
+  readonly index: number
+  /** EVERY top-level pattern name, so a resume can refuse a changed chain [m4]. */
+  readonly names: readonly string[]
+  readonly patternId: string
+}
+
+/** The hitl slot as core sees it: the host's `attended`, plus the per-run
+ *  bookkeeping `askHuman` and the owning `runChain` keep there (#433, F7) —
+ *  the way the live slot carries `emittedIds`. Mutable on purpose, and written
+ *  by those two only. It is passed BY REFERENCE through
+ *  {@link amendRunFrame}, so every combinator below the host's amend sees the
+ *  one slot of the one run. */
+export interface HitlSlot {
+  readonly attended: boolean
+  /** The context of the `runChain` that owns this slot, or undefined between
+   *  runs. The first chain to run with an unowned slot claims it; a chain
+   *  nested inside one of its patterns finds it owned and leaves it alone. */
+  owner?: object
+  /** Where the owner is. Undefined until it dispatches its first pattern. */
+  position?: HitlPosition
+  /** HITL events raised this run and not yet committed. The owner commits them
+   *  STRAIGHT into `ctx.events` at the next boundary — never through a scope,
+   *  so no `commitStrategy` and no copy of the scope filter can drop one. */
+  readonly buffer: ContextEvent[]
+  /** Request ids raised this run that wait for a person. */
+  readonly waiting: Set<string>
+  /** The kind whose unattended rule chose to stop the run, if one did. */
+  stopKind?: string
 }
 
 /** The frame as its readers see it — built once by {@link withRunFrame}. */
@@ -130,6 +169,7 @@ export interface ActiveRunFrame {
   readonly config: HarnessRuntimeConfig
   readonly live?: LiveEventSlot
   readonly inference?: InferenceSlot
+  readonly hitl?: HitlSlot
 }
 
 const NO_TRANSPORTS: readonly ToolTransport[] = Object.freeze([])
@@ -162,6 +202,12 @@ function suppliedSlots(frame: RunFrame): string[] {
   return (Object.keys(frame) as (keyof RunFrame)[]).filter((k) => frame[k] !== undefined)
 }
 
+/** A fresh hitl slot. `attended` is a POSITIVE claim: only `true` makes a
+ *  person the one who decides. */
+function hitlSlot(supplied: { readonly attended: boolean }): HitlSlot {
+  return { attended: supplied.attended === true, buffer: [], waiting: new Set<string>() }
+}
+
 function build(frame: RunFrame): ActiveRunFrame {
   return {
     guard: frame.guard,
@@ -171,6 +217,7 @@ function build(frame: RunFrame): ActiveRunFrame {
       ? { listener: frame.live, emittedIds: new Set<string>(), enabled: false }
       : undefined,
     inference: frame.inference,
+    hitl: frame.hitl ? hitlSlot(frame.hitl) : undefined,
   }
 }
 
@@ -230,6 +277,13 @@ export function withRunFrame<T>(frame: RunFrame, fn: () => Promise<T>): Promise<
  *     like transports: the two rules are deliberately opposite, a nested guard
  *     being a second reviewer of the same content where a nested sandbox is a
  *     different machine.
+ *   - `hitl` passes BY REFERENCE (#433, F7). The slot is the run's, not the
+ *     subtree's: `withInjectionGuard` and `withSandbox` amend the frame around
+ *     the very patterns whose tool executors call `askHuman`, so a slot rebuilt
+ *     or dropped here would leave every guarded or sandboxed gate unable to
+ *     ask. A partial may SUPPLY one only where the frame has none — the host's
+ *     amend around its main run — and is refused below an open one, because
+ *     a second slot would hide the run's bookkeeping from its own patterns.
  *   - everything else REPLACES for the duration.
  *
  * Refuses outside a frame, by way of {@link activeRunFrame}: something that
@@ -242,6 +296,14 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
   } catch (err) {
     return Promise.reject(err instanceof Error ? err : new Error(String(err)))
   }
+  if (partial.hitl && open.hitl) {
+    return Promise.reject(
+      new Error(
+        'amendRunFrame: this run already carries a hitl slot. Only the host supplies it, once, ' +
+          'around its main run; below that the slot passes by reference (#433).',
+      ),
+    )
+  }
   const amended: ActiveRunFrame = {
     guard: partial.guard ?? open.guard,
     transports: partial.transports
@@ -252,6 +314,7 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
       ? { listener: partial.live, emittedIds: new Set<string>(), enabled: false }
       : open.live,
     inference: partial.inference ?? open.inference,
+    hitl: partial.hitl ? hitlSlot(partial.hitl) : open.hitl,
   }
   return store.run(amended, fn)
 }

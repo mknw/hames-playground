@@ -21,8 +21,17 @@ import {
   resolveConfig,
   setError,
   createEvent,
-  dropUnmintedHitl,
+  dropHitl,
 } from '../context.server'
+import {
+  claimHitlSlot,
+  commitHitlBuffer,
+  hitlHalt,
+  hitlPending,
+  positionHitlSlot,
+  releaseHitlSlot,
+  unattendedStopMessage,
+} from '../hitl.server'
 import { setLivePatternEnabled, wasEmittedLive } from '../live-event-context.server'
 import { createEventView } from './event-view.server'
 
@@ -40,6 +49,18 @@ assertServerOnImport()
  * 6. Stops the chain if that pattern reported an irrecoverable error
  * 7. Adds pattern_exit event
  * 8. Passes data forward
+ *
+ * PAUSES FOR A PERSON, but only in the chain that OWNS the run frame's `hitl`
+ * slot (#433, F7) — the first `runChain` to run with an unowned slot. After
+ * every pattern, one that threw included, it commits the slot's buffer of
+ * HITL events straight into `ctx.events` (never through the scope filter,
+ * which drops every HITL event). Then, unless the pattern failed (`error`
+ * wins, m2), a request still waiting ends the run `paused` WITHOUT forwarding
+ * the paused pattern's data — re-entry starts from the data it started from
+ * the first time, so no pattern has to be safe to re-run over its own
+ * half-written state (F10) — and an unattended choice that stops the run ends
+ * it `done`. A `runChain` nested inside one of the owner's patterns neither
+ * commits nor pauses: the owner does, at its own boundary.
  *
  * REFUSES OUTSIDE A RUN FRAME. This is where "no frame, no run" (ruling D3,
  * issue #374) is enforced, and it is one line because there is now one frame
@@ -75,6 +96,10 @@ export async function runChain<T extends Record<string, unknown>>(
     return ctx
   }
 
+  // Undefined unless THIS chain owns the run's hitl slot (#433, F7).
+  const hitl = claimHitlSlot(ctx)
+  const names = patterns.map((p) => p.name)
+
   try {
     let currentData = ctx.data
 
@@ -92,6 +117,9 @@ export async function runChain<T extends Record<string, unknown>>(
       // Toggle live emission for this pattern's lifecycle (incl. enter/exit).
       // Inner patterns invoked by wrappers inherit this flag automatically.
       setLivePatternEnabled(liveEnabled)
+
+      // Where a request raised by this pattern will say to resume (m4).
+      if (hitl) positionHitlSlot(hitl, i, names, patternId)
 
       // 1. Create isolated scope for this pattern
       const scope = createScope<T>(patternId, currentData)
@@ -116,6 +144,9 @@ export async function runChain<T extends Record<string, unknown>>(
         // 5. Commit events based on strategy
         const beforeLen = ctx.events.length
         commitEvents(ctx, result, pattern.config.commitStrategy!)
+        // 5a. Then the HITL events the pattern raised — from the slot, straight
+        //     in, so no strategy can drop the record of a question (#433).
+        if (hitl) commitHitlBuffer(hitl, ctx)
 
         // 5b. Emit newly committed events via callback, skipping any that
         //     were already delivered live (dedup by event id).
@@ -144,10 +175,26 @@ export async function runChain<T extends Record<string, unknown>>(
           ctx.error = fatal
         }
 
-        // 6. Pass data forward
-        currentData = result.data
+        // 5d. End the run for a person (#433). Only while it is still running:
+        //     an irrecoverable error above wins (m2), and the next turn
+        //     supersedes the request.
+        const halt = hitl && ctx.status === 'running' ? hitlHalt(hitl) : undefined
+        if (halt && 'pause' in halt) {
+          // Paused: the pattern's EVENTS are committed, its DATA is not (F10).
+          ctx.status = 'paused'
+        } else if (halt) {
+          // An unattended rule chose to stop: nothing is re-entered.
+          ctx.status = 'done'
+          currentData = { ...result.data, response: unattendedStopMessage(halt.stop) } as T
+        } else {
+          // 6. Pass data forward
+          currentData = result.data
+        }
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error)
+        // A pattern that asked and then threw still asked: the request is
+        // recorded, and `error` wins (m2).
+        if (hitl) commitHitlBuffer(hitl, ctx)
         setError(ctx, msg, patternId)
       }
 
@@ -167,6 +214,8 @@ export async function runChain<T extends Record<string, unknown>>(
     const msg = error instanceof Error ? error.message : String(error)
     setError(ctx, msg, 'chain')
     return ctx
+  } finally {
+    if (hitl) releaseHitlSlot(hitl)
   }
 }
 
@@ -259,13 +308,15 @@ export function chain<T extends Record<string, unknown>>(
         const subView = createEventView(syntheticCtx, pattern.config.viewConfig, subId)
         const childScope = createScope<T>(subId, currentData)
         const result = await pattern.fn(childScope, subView)
-        // Drop any hitl_* event core did not mint HERE, not only at the final
-        // commit: the next sub-pattern's view is built from these events, so
-        // a forged answer merged now would be read before anything commits
-        // (#433, F6).
-        scope.events.push(...dropUnmintedHitl(result.events))
+        // Drop every hitl_* event HERE, not only at the final commit: the next
+        // sub-pattern's view is built from these events, so a forged answer
+        // merged now would be read before anything commits (#433, F6).
+        scope.events.push(...dropHitl(result.events))
         scope.events.push(createEvent('pattern_exit', subId, { status: 'completed' }))
         currentData = result.data
+        // The stop check between children (#433): no sibling runs while a
+        // decision is pending. The owning runChain pauses after this pattern.
+        if (hitlPending()) break
       }
       scope.data = currentData
       return scope

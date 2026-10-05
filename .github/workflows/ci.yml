@@ -495,7 +495,7 @@ jobs:
       #
       # AUTH_REDIRECT_URI is the one variable the run is given: its origin is the
       # app's public origin, which the write check below compares against
-      # (#455). Unset, a production build refuses every browser write.
+      # (#455). Unset, a production build refuses to boot.
       - name: Boot it and hit /api/health
         run: |
           docker run -d --name app-smoke -p 3444:3444 \

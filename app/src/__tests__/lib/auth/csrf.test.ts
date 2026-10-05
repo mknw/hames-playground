@@ -40,8 +40,10 @@ const {
   refuseServerFunctionGet,
   methodNotAllowed,
   resolveAppOrigin,
-  warnIfAppOriginUnconfigured,
+  assertAppOriginConfigured,
+  acceptedOrigins,
   DEV_APP_ORIGIN,
+  DEV_ORIGIN_HOSTS,
   APP_ORIGIN_ENV,
 } = await import('~/lib/auth/csrf.server')
 const { buildEntraConfig } = await import('~/lib/auth/entra-config.server')
@@ -127,20 +129,51 @@ describe('resolveAppOrigin — the identity every check compares against', () =>
   })
 })
 
-describe('warnIfAppOriginUnconfigured', () => {
-  it('says so at boot when a production build has no public origin', () => {
+describe('assertAppOriginConfigured — a production build without a public origin does not boot', () => {
+  it('logs one named line and then throws, when the variable is unset', () => {
     const log = vi.fn()
-    warnIfAppOriginUnconfigured({}, false, log)
+    expect(() => assertAppOriginConfigured({}, false, log)).toThrow(/AUTH_REDIRECT_URI/)
     expect(log).toHaveBeenCalledOnce()
-    expect(log.mock.calls[0][0]).toMatch(/AUTH_REDIRECT_URI/)
-    expect(log.mock.calls[0][0]).toMatch(/refuses every state-changing request/)
+    expect(log.mock.calls[0][0]).toMatch(/^\[csrf\] AUTH_REDIRECT_URI/)
+    expect(log.mock.calls[0][0]).toMatch(/refuses to boot/)
+  })
+
+  it('throws for a value that is set but is not an http(s) URL, too', () => {
+    const log = vi.fn()
+    expect(() =>
+      assertAppOriginConfigured({ AUTH_REDIRECT_URI: 'app.example/api/auth/callback' }, false, log),
+    ).toThrow(/AUTH_REDIRECT_URI/)
   })
 
   it('is silent in dev and when the origin is configured', () => {
     const log = vi.fn()
-    warnIfAppOriginUnconfigured({}, true, log)
-    warnIfAppOriginUnconfigured({ AUTH_REDIRECT_URI: REDIRECT }, false, log)
+    assertAppOriginConfigured({}, true, log)
+    assertAppOriginConfigured({ AUTH_REDIRECT_URI: REDIRECT }, false, log)
     expect(log).not.toHaveBeenCalled()
+  })
+
+  // The reviewer's finding 1, in their terms. One change: under decision B the
+  // import also THROWS, so it is awaited as a rejection instead of resolving.
+  it('is emitted by importing the module, not only when called', async () => {
+    vi.resetModules()
+    vi.stubEnv('AUTH_REDIRECT_URI', undefined)
+    env.DEV = false
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await expect(import('~/lib/auth/csrf.server')).rejects.toThrow(/AUTH_REDIRECT_URI/)
+    const lines = log.mock.calls.filter(([m]) => String(m).startsWith('[csrf] AUTH_REDIRECT_URI'))
+    log.mockRestore()
+    expect(lines).toHaveLength(1)
+  })
+
+  it('lets a production build with the variable set import cleanly', async () => {
+    vi.resetModules()
+    vi.stubEnv('AUTH_REDIRECT_URI', REDIRECT)
+    env.DEV = false
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await expect(import('~/lib/auth/csrf.server')).resolves.toBeDefined()
+    const lines = log.mock.calls.filter(([m]) => String(m).startsWith('[csrf]'))
+    log.mockRestore()
+    expect(lines).toHaveLength(0)
   })
 })
 
@@ -183,6 +216,9 @@ describe('isSameOriginRequest', () => {
     ['a page elsewhere', 'https://attacker.example/app.example/', false],
     ['a sibling page', 'https://evil.app.example/', false],
     ['garbage', 'not a url', false],
+    ['a host that merely starts with this origin', `${OWN}.attacker.example/`, false],
+    ['this host on another port', `${OWN}:8443/`, false],
+    ['userinfo that spells this origin', `${OWN}@attacker.example/`, false],
   ])('with no Origin, Referer from %s → %s', (_label, referer, expected) => {
     expect(isSameOriginRequest(req({ referer }), OWN)).toBe(expected)
   })
@@ -367,6 +403,12 @@ describe('refuseCrossOriginStateChange — the one chokepoint for writes (#455)'
       expect(res?.status).toBe(403)
     })
 
+    it('does not exempt a cookie-less write that carries only Sec-Fetch-Site', () => {
+      expect(
+        refuseCrossOriginStateChange(event('POST', { 'sec-fetch-site': 'cross-site' }))?.status,
+      ).toBe(403)
+    })
+
     it('does not exempt a request whose Referer names a foreign page', () => {
       const res = refuseCrossOriginStateChange(
         event('POST', { referer: 'https://attacker.example/form' }),
@@ -411,14 +453,70 @@ describe('refuseCrossOriginStateChange — the one chokepoint for writes (#455)'
   })
 
   describe('the public origin', () => {
+    const aliases = (port: string) => [
+      `http://localhost:${port}`,
+      `http://127.0.0.1:${port}`,
+      `http://[::1]:${port}`,
+      `http://host.docker.internal:${port}`,
+    ]
+    const write = (origin: string) =>
+      refuseCrossOriginStateChange(event('POST', { origin, ...COOKIE }))?.status
+
     it('defaults to the dev server in a dev build', () => {
       vi.stubEnv('AUTH_REDIRECT_URI', undefined)
       env.DEV = true
-      const dev = { origin: DEV_APP_ORIGIN, ...COOKIE }
-      expect(refuseCrossOriginStateChange(event('POST', dev))).toBeUndefined()
-      // Another loopback name is another origin: set AUTH_REDIRECT_URI for it.
-      const other = { origin: 'http://127.0.0.1:3444', ...COOKIE }
-      expect(refuseCrossOriginStateChange(event('POST', other))?.status).toBe(403)
+      expect(write(DEV_APP_ORIGIN)).toBeUndefined()
+    })
+
+    it('admits the four loopback and docker-host names on the same port, in a dev build', () => {
+      // Decision A (#467 review): one origin cannot serve a developer's own
+      // `localhost` tab and Playwright MCP through `host.docker.internal` at once.
+      vi.stubEnv('AUTH_REDIRECT_URI', undefined)
+      env.DEV = true
+      for (const origin of aliases('3444')) expect(write(origin), origin).toBeUndefined()
+    })
+
+    it.each([
+      ['a rebound name', 'http://rebound.example:3444'],
+      ['a name under .localhost', 'http://evil.localhost:3444'],
+      ['the docker host on another port', 'http://host.docker.internal:3445'],
+      ['loopback over another scheme', 'https://127.0.0.1:3444'],
+    ])('still refuses %s in a dev build (%s)', (_label, origin) => {
+      vi.stubEnv('AUTH_REDIRECT_URI', undefined)
+      env.DEV = true
+      expect(write(origin)).toBe(403)
+    })
+
+    it('follows the configured port, not a fixed one', () => {
+      vi.stubEnv('AUTH_REDIRECT_URI', 'http://127.0.0.1:3446/api/auth/callback')
+      env.DEV = true
+      for (const origin of aliases('3446')) expect(write(origin), origin).toBeUndefined()
+      for (const origin of aliases('3444')) expect(write(origin), origin).toBe(403)
+    })
+
+    it('ignores the list entirely in a production build', () => {
+      vi.stubEnv('AUTH_REDIRECT_URI', 'http://app.internal:3444/api/auth/callback')
+      env.DEV = false
+      expect(write('http://app.internal:3444')).toBeUndefined()
+      for (const origin of aliases('3444')) expect(write(origin), origin).toBe(403)
+      expect([...acceptedOrigins('http://app.internal:3444', false)]).toEqual([
+        'http://app.internal:3444',
+      ])
+    })
+
+    it('is a fixed list in source that no environment variable widens', () => {
+      expect([...DEV_ORIGIN_HOSTS]).toEqual([
+        'localhost',
+        '127.0.0.1',
+        '[::1]',
+        'host.docker.internal',
+      ])
+      expect(Object.isFrozen(DEV_ORIGIN_HOSTS)).toBe(true)
+      // The module reads exactly one variable, the one that names the origin.
+      const source = readFileSync(path.join(APP, 'src/lib/auth/csrf.server.ts'), 'utf8')
+      const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+      expect(code.match(/process\.env\.\w+/g)).toBeNull()
+      expect(code.match(/env\[[^\]]*\]/g)).toEqual(['env[APP_ORIGIN_ENV]'])
     })
 
     it('refuses every browser write when a production build has none configured', async () => {

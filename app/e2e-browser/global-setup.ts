@@ -60,8 +60,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     // rather than a build — see `lib/server.ts`.
     VITE_DEV_BYPASS_AUTH: 'true',
     // The origin every write is checked against (#455, `csrf.server.ts`). Its
-    // dev default is `pnpm dev`'s `http://localhost:3444`; this suite's browser
-    // is on another port and host, so without this line every POST it makes —
+    // dev default is `pnpm dev`'s `http://localhost:3444`, and the dev-only
+    // loopback list it accepts besides is on that same port; this suite's
+    // browser is on another port, so without this line every POST it makes —
     // each turn, each server function — would be refused as cross-origin.
     // Set here, too, so a developer's own `app/.env` value cannot leak in.
     AUTH_REDIRECT_URI: `${APP_URL}/api/auth/callback`,

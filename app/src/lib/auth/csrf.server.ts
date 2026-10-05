@@ -48,6 +48,23 @@
  * hands any web page the developer's whole app. The same reasoning is why
  * `Sec-Fetch-Site: same-origin` is a veto and no longer a pass on its own.
  *
+ * A dev build also accepts {@link DEV_ORIGIN_HOSTS} — `localhost`, `127.0.0.1`,
+ * `[::1]`, `host.docker.internal` — on the configured origin's scheme and port,
+ * because one origin cannot serve a developer's own tab and Playwright MCP
+ * (through the docker host alias) at once. The list is fixed in source, no
+ * variable widens it, and a production build ignores it entirely
+ * ({@link acceptedOrigins}). It is safe where it applies: no page is served
+ * from those names on that port but the dev server's own, and vite already
+ * answers a rebound `Host` with its own 403 before this hook runs.
+ *
+ * The check depends on the page's **referrer policy**. The app's own native
+ * form `POST`s (sign-in, sign-out) carry their real `Origin`, and the
+ * terminal's `EventSource` its `Referer`, only under a policy that keeps them
+ * on same-origin requests — the browser default and Caddy's
+ * `strict-origin-when-cross-origin`. Under `no-referrer` the forms send
+ * `Origin: null` and the stream sends neither, and all three get a 403.
+ * `security-headers.test.ts` pins the Caddyfile against that value.
+ *
  * ## Who is exempt: no browser provenance and no session cookie
  *
  * CSRF needs a browser to attach a credential the attacker does not hold. The
@@ -70,9 +87,12 @@
  * Failure policy: **fail closed.** A request with a session cookie and no
  * `Origin` or `Referer` is refused: no current browser sends one, and no
  * caller of this app is a script holding a copied cookie. A production build
- * with no `AUTH_REDIRECT_URI` refuses every browser write, says why in the
- * 403, and logs it at boot ({@link warnIfAppOriginUnconfigured}) — sign-in is
- * broken in that state anyway, since the redirect falls back to localhost.
+ * whose `AUTH_REDIRECT_URI` is unset or not an `http(s)` URL **does not boot**
+ * ({@link assertAppOriginConfigured}, decision B of the #467 review): serving
+ * 403s while `/api/health` answers 200 would pass every healthcheck and
+ * deploy gate and tell only the first user to click. `DATA_ENCRYPTION_KEY` is
+ * the precedent. Sign-in is broken in that state anyway, since the redirect
+ * falls back to localhost.
  */
 import type { FetchEvent } from '@solidjs/start/server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
@@ -87,11 +107,23 @@ export const APP_ORIGIN_ENV = 'AUTH_REDIRECT_URI'
  * The public origin a dev build assumes when {@link APP_ORIGIN_ENV} is unset:
  * `pnpm dev`'s own address, which is also the origin of the OIDC redirect's
  * dev default (`entra-config.server.ts`; a test pins the two together).
- * Reaching the dev server under any other name — `127.0.0.1`, the docker host
- * alias, the browser e2e suite's port — means setting the variable to that
- * address.
+ * {@link DEV_ORIGIN_HOSTS} cover the other loopback names on the same port;
+ * any other name or port — the browser e2e suite's, say — means setting the
+ * variable to that address.
  */
 export const DEV_APP_ORIGIN = 'http://localhost:3444'
+
+/**
+ * The host names a DEV build accepts besides the configured origin's own, each
+ * on the configured origin's scheme and port. Fixed here and frozen: no
+ * environment variable widens it, and a production build never consults it.
+ */
+export const DEV_ORIGIN_HOSTS = Object.freeze([
+  'localhost',
+  '127.0.0.1',
+  '[::1]',
+  'host.docker.internal',
+] as const)
 
 /**
  * The origin this app's pages are served from, or `null` when it cannot be
@@ -117,21 +149,45 @@ export function resolveAppOrigin(
   }
 }
 
-/** Log, once at boot, that a production build will refuse every browser write. */
-export function warnIfAppOriginUnconfigured(
+/**
+ * The origins whose pages may write: the configured one, plus — in a dev build
+ * only — {@link DEV_ORIGIN_HOSTS} on its scheme and port. Empty when the
+ * origin is unknown, which every check treats as "refuse".
+ */
+export function acceptedOrigins(
+  appOrigin: string | null,
+  dev: boolean = import.meta.env.DEV === true,
+): ReadonlySet<string> {
+  if (appOrigin === null) return new Set()
+  if (!dev) return new Set([appOrigin])
+  const { protocol, port } = new URL(appOrigin)
+  const onPort = port ? `:${port}` : ''
+  return new Set([appOrigin, ...DEV_ORIGIN_HOSTS.map((host) => `${protocol}//${host}${onPort}`)])
+}
+
+/**
+ * Refuse to boot a production build that does not know its public origin.
+ *
+ * Runs at module load, which is server boot: the middleware imports this
+ * module before any request is served. The line goes to the log first, so the
+ * operator gets one named sentence whatever the runtime then does with the
+ * uncaught error. A dev build never throws: it has {@link DEV_APP_ORIGIN}.
+ */
+export function assertAppOriginConfigured(
   env: Record<string, string | undefined> = process.env,
   dev: boolean = import.meta.env.DEV === true,
   log: (message: string) => void = console.error,
 ): void {
   if (dev || resolveAppOrigin(env, dev) !== null) return
-  log(
+  const message =
     `[csrf] ${APP_ORIGIN_ENV} is unset or not an http(s) URL, so this server does not know ` +
-      `its public origin and refuses every state-changing request from a browser (fail closed). ` +
-      `Set it to https://<public host>/api/auth/callback.`,
-  )
+    `its public origin and refuses to boot: it could not tell the app's own pages from any ` +
+    `other site's. Set it to https://<public host>/api/auth/callback.`
+  log(message)
+  throw new Error(message)
 }
 
-warnIfAppOriginUnconfigured()
+assertAppOriginConfigured()
 
 /**
  * Whether the browser says this request came from a page on `appOrigin`.
@@ -139,24 +195,27 @@ warnIfAppOriginUnconfigured()
  * `Sec-Fetch-Site` vetoes when present: the browser sets it and a page cannot,
  * and `same-site` (a sibling subdomain), `cross-site` and `none` (a typed URL)
  * are refusals. It never admits on its own — see the module header on DNS
- * rebinding. `Origin`, then `Referer`, must name `appOrigin` exactly; a request
- * with neither is refused, as is every request when `appOrigin` is `null`.
+ * rebinding. `Origin`, then `Referer`, must name one of
+ * {@link acceptedOrigins} exactly; a request with neither is refused, as is
+ * every request when `appOrigin` is `null`.
  */
 export function isSameOriginRequest(
   request: Request,
   appOrigin: string | null = resolveAppOrigin(),
+  dev: boolean = import.meta.env.DEV === true,
 ): boolean {
   const site = request.headers.get('sec-fetch-site')
   if (site !== null && site !== 'same-origin') return false
-  if (appOrigin === null) return false
+  const accepted = acceptedOrigins(appOrigin, dev)
+  if (accepted.size === 0) return false
 
   const origin = request.headers.get('origin')
-  if (origin !== null) return origin === appOrigin
+  if (origin !== null) return accepted.has(origin)
 
   const referer = request.headers.get('referer')
   if (referer === null) return false
   try {
-    return new URL(referer).origin === appOrigin
+    return accepted.has(new URL(referer).origin)
   } catch {
     return false
   }

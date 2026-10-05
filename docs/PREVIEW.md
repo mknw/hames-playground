@@ -340,10 +340,11 @@ in the variable; Entra rejects the sign-in if the registration does not carry it
 > check never reads `Host`. Callers that send no browser headers and no session cookie, such as
 > the bearer-token agent trigger, are not affected
 > ([`AGENT_TRIGGER.md`](AGENT_TRIGGER.md#authentication--configsaction-tokensyaml)).
-> Unset in a production build, the app knows no public origin and refuses every
-> write from a browser: it fails closed, logs a `[csrf]` line at boot, and the
-> `403` names the variable. One app, one public origin: serving the same
-> container under a second hostname means its writes are refused there.
+> Unset, or not an `http(s)` URL, a production build **refuses to boot**, with
+> a `[csrf]` line naming the variable. One app, one public origin: serving the
+> same container under a second hostname means its writes are refused there.
+> Keep the proxy's `Referrer-Policy` off `no-referrer`: under it the sign-in and
+> sign-out forms send `Origin: null` and are refused.
 
 **b. Post-logout URI.** Set `AUTH_POST_LOGOUT_REDIRECT_URI` in `.env` to
 
@@ -378,10 +379,9 @@ operator who edits `APP_DOMAIN` most easily forgets. The post-logout URI does no
 fail loudly: unset, it silently defaults to `http://localhost:3444/…`
 (`app/src/lib/auth/entra-config.server.ts:39-40,119-121`). `AUTH_REDIRECT_URI`
 is no longer silent, because it is also the public origin every write is checked
-against (§5a), but it still fails only at the first click: unset, the boot log
-carries a `[csrf]` line and the sign-in button answers `403`; left at the
-placeholder, the sign-in button answers `403 … only from pages on
-https://preview.example.com`.
+against (§5a): unset, the server refuses to boot with a `[csrf]` line naming it;
+left at the placeholder, it boots and the sign-in button answers `403 … only
+from pages on https://preview.example.com`.
 
 ```bash
 grep -n 'example\.com' .env       # must return nothing

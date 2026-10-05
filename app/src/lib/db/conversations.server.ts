@@ -84,8 +84,11 @@ export interface ConversationRow {
   createdAt: Date
   updatedAt: Date
   /**
-   * Opaque row version for {@link updateConversationContextIfUnchanged} — the
-   * row's `xmin`, which every UPDATE changes. Compare it, never parse it.
+   * The version of `context` this read saw: `context_version`, bumped by every
+   * write of the blob and by every turn claim, and by nothing else. Every save
+   * names the version it read and lands only if the row still has it — see
+   * {@link saveConversation} and {@link updateConversationContextIfUnchanged}.
+   * Compare it, never parse it.
    */
   version: string
 }
@@ -134,6 +137,10 @@ interface DbListRow {
   pinned_at: Date | null
 }
 
+/** Every column a {@link ConversationRow} is built from, for a SELECT or a RETURNING. */
+const ROW_COLUMNS =
+  'id, user_id, agent_id, title, context, kind, source, status, inference_tier, created_at, updated_at, context_version::text AS version'
+
 function rowToConversation(row: DbRow): ConversationRow {
   return {
     id: row.id,
@@ -160,7 +167,7 @@ export async function loadConversation(
   userId: string,
 ): Promise<ConversationRow | null> {
   const { rows } = await query<DbRow>(
-    'SELECT id, user_id, agent_id, title, context, kind, source, status, inference_tier, created_at, updated_at, xmin::text AS version FROM conversations WHERE id = $1 AND user_id = $2',
+    `SELECT ${ROW_COLUMNS} FROM conversations WHERE id = $1 AND user_id = $2`,
     [id, userId],
   )
   if (rows.length === 0) return null
@@ -183,101 +190,160 @@ export async function getConversationOwner(id: string): Promise<string | null> {
   return rows.length > 0 ? rows[0].user_id : null
 }
 
-export interface SaveConversationInput {
+// ============================================================================
+// Writing `context`: one turn at a time, every save at the version it read
+// ============================================================================
+//
+// The row has three writers of `context`, and until #458 two of them were
+// last-writer-wins: the turn's own end-of-turn save, and the summary pass it
+// starts detached after the answer (`compactAndSave`). A summary pass that
+// outlasted the next turn replaced that turn's events with the context of the
+// turn before; two turns on one conversation (a second tab, a double submit)
+// kept only the later save; and a flag flipped mid-turn was reported saved and
+// then overwritten by the turn. The third writer, `/api/stash`, already checked
+// a version — the only one that did.
+//
+// The rule now, enforced in the statements below rather than by convention:
+//
+//  1. **A turn CLAIMS its conversation before it runs, and while the claim is
+//     live it is the only writer of `context`.** A second turn is refused
+//     ({@link ConversationBusyError}); a writer that is not a turn (the summary
+//     pass, a flag flip) waits until no claim is live. Refused rather than
+//     queued: a queue would itself be state held outside the context.
+//  2. **Every write of `context` names the version it read**
+//     (`context_version`), lands only if the row still has it, and moves it
+//     on. The turn's version is the one its claim returned. Every new value
+//     comes from one sequence ({@link NEXT_VERSION}), never from `+ 1`: a
+//     per-row count restarts when a conversation is deleted and its id
+//     recreated, and a turn still holding the deleted row's number would
+//     then save into the new one.
+//  3. **A claim is a lease.** The holder renews it every
+//     {@link TURN_CLAIM_RENEW_MS}; one not renewed for
+//     {@link TURN_CLAIM_TTL_SECONDS} is dead and the next turn may take the
+//     row. Taking it moves the version on, so the dead holder's late save —
+//     should its process turn out to be alive after all — is refused instead
+//     of landing over the new turn's work.
+//
+// Why a renewed lease and not the stuck-run reaper's status-plus-age check:
+// that threshold is a bound on the LONGEST LEGITIMATE TURN (90 minutes, see
+// {@link STUCK_RUN_TIMEOUT_MINUTES}), because with no heartbeat "nothing has
+// been written" cannot tell a slow turn from a dead process. Used as a lock
+// expiry it would refuse every conversation whose turn died in a deploy or a
+// restart for an hour and a half. The renewal is that heartbeat, which lets
+// the expiry measure "is the holder alive" instead of "how long can a turn
+// be" — and keeps the lock out of `status` and `updated_at`, both of which
+// mean something else to the sidebar, the reaper and the active-user count.
+
+/**
+ * How long a claim survives without a renewal. Four renewal intervals, so a
+ * slow round trip or a stalled event loop costs a live turn nothing; the price
+ * of the number is how long a conversation whose turn's process died stays
+ * refused.
+ */
+export const TURN_CLAIM_TTL_SECONDS = 120
+
+/** How often the turn holding a conversation renews its claim. */
+export const TURN_CLAIM_RENEW_MS = 30_000
+
+/** No turn holds the row: nobody claimed it, or the claim was not renewed in time. */
+const NO_LIVE_CLAIM = `(turn_claimed_at IS NULL OR turn_claimed_at < NOW() - INTERVAL '${TURN_CLAIM_TTL_SECONDS} seconds')`
+
+/**
+ * The next `context_version`. The column's insert default is the same
+ * sequence (`client.server.ts`), so no number is ever handed out twice, across
+ * rows, deletes and recreates alike.
+ */
+const NEXT_VERSION = `nextval('conversations_context_version_seq')`
+
+/**
+ * A claim older than this has missed at least one renewal: one and a half
+ * renewal intervals, so a single slow round trip does not count but a missed
+ * renewal does. Its holder is presumably gone (a deploy, a crash), and a
+ * refusal says so instead of telling the user to wait for a turn that will
+ * never finish.
+ */
+const INTERRUPTED_AFTER_SECONDS = (TURN_CLAIM_RENEW_MS / 1000) * 1.5
+
+/**
+ * A turn was refused because another turn holds the conversation. The message
+ * reaches the user verbatim (the SSE route's `event: error`, an error bubble),
+ * so it says what happened and what to do.
+ *
+ * `claimAgeSeconds` is how long ago the holder last renewed. Past
+ * {@link INTERRUPTED_AFTER_SECONDS} the holder is presumed dead, and the
+ * message says the turn was interrupted and when the lease lets go — rather
+ * than "still running", which after a deploy or a crash is untrue.
+ */
+export class ConversationBusyError extends Error {
+  constructor(claimAgeSeconds?: number | null) {
+    super(
+      claimAgeSeconds != null && claimAgeSeconds > INTERRUPTED_AFTER_SECONDS
+        ? 'The last turn in this conversation was interrupted. You can send again in about ' +
+            `${Math.max(1, Math.ceil(TURN_CLAIM_TTL_SECONDS - claimAgeSeconds))} seconds.`
+        : 'A turn is still running in this conversation. Wait for it to finish, then send again.',
+    )
+    this.name = 'ConversationBusyError'
+  }
+}
+
+/**
+ * A save found the row at a different version than its writer read — another
+ * writer got there first — and wrote nothing. Like {@link ConversationBusyError}
+ * its message is user-facing; the detail goes to the log.
+ */
+export class ConversationConflictError extends Error {
+  constructor() {
+    super('This conversation changed while the turn was running, so the turn was not saved.')
+    this.name = 'ConversationConflictError'
+  }
+}
+
+export interface CreateConversationInput {
   id: string
   userId: string
   agentId: string
-  /** Sticky — only set the first time, ignored on subsequent updates. */
   title: string | null
   /** Full serializeContext() output. Stored as JSONB. */
   serializedContext: string
-  /**
-   * Lifted copy of the context status, refreshed on every save so the sidebar
-   * can filter/badge without deserializing the blob. Defaults to 'running'.
-   */
+  /** Lifted copy of the context status. Defaults to 'running': a row is
+   *  created for the turn that is about to run on it. */
   status?: ConversationStatus
-  /**
-   * Row kind. Only honoured on INSERT — `kind` is immutable through this upsert
-   * path (promotion uses {@link promoteConversation}), so an existing action
-   * stays an action across the background run's status saves. Default
-   * 'conversation' (the chat path).
-   */
+  /** Row kind, immutable from here on (promotion uses
+   *  {@link promoteConversation}). Default 'conversation'. */
   kind?: ConversationKind
-  /**
-   * Immutable provenance. Only honoured on INSERT (never updated). Default
-   * 'chat'. The POST-trigger route passes 'post'.
-   */
+  /** Immutable provenance. Default 'chat'. */
   source?: ConversationSource
-  /**
-   * The tier this turn ran on, RECORDED rather than set: written on INSERT, and
-   * on UPDATE only when the row has none yet (`COALESCE`, the same stickiness
-   * `title` has). A caller that does not know the tier omits it and changes
-   * nothing.
-   *
-   * Sticky because this path runs on every save: refreshing it from the caller
-   * would overwrite a mid-conversation flip with whatever tier the turn started
-   * on. Fillable because the rows that reach here without one are real — an
-   * action row seeded by `seedActionRow` before any tier is resolved, and a
-   * legacy row the backfill left alone — and one turn under a tier is exactly
-   * what makes that tier this conversation's. {@link setConversationInferenceTier}
-   * is the only mutator.
-   */
+  /** The tier the creating turn resolved, recorded on the row it creates. */
   inferenceTier?: string
 }
 
 /**
- * Upsert a conversation row.
+ * Create a conversation row, CLAIMED by the turn creating it, and return the
+ * version that turn holds.
  *
- * Stickiness on UPDATE (ON CONFLICT):
- *   - `title`           — sticky via COALESCE (a dedicated rename overrides it).
- *   - `kind` / `source` — NOT in the UPDATE set, so they keep their INSERT
- *     values. This is what lets the route insert `kind='action'` once and have
- *     the background run's later status saves preserve it. Promotion is the
- *     only mutator of `kind` (see {@link promoteConversation}).
- *   - `inference_tier`  — sticky via COALESCE, like `title`: a save fills it if
- *     the row has none and never overwrites one. The dedicated setter
- *     ({@link setConversationInferenceTier}) is what a user's flip goes through.
- *   - `status`          — always refreshed from the latest context.
+ * The two creators are the interactive pre-seed of a brand-new chat (#105) and
+ * `seedActionRow` for a triggered run; both create the row for a turn that is
+ * about to run on it, so the claim is taken in the same statement — there is
+ * no moment at which the row exists unclaimed and a second turn could slip in.
  *
- * Owner-scoped like every other write in this module: the UPDATE fires only
- * when the row already belongs to `input.userId`, so a save against someone
- * else's conversation id cannot clobber their context. The user-facing entry
- * points never reach here with a foreign id — `loadSession` is user-scoped, so
- * a foreign session just looks new — which makes this the backstop that keeps
- * the resulting blind INSERT from becoming an UPDATE.
- *
- * **Unlike {@link promoteConversation} et al., a 0-row write here THROWS.** In
- * Postgres an `ON CONFLICT DO UPDATE ... WHERE <false>` updates nothing and
- * raises nothing, and this is the one wrong-user no-op that loses data: the
- * save is the last step of a turn that has already run, called tools, been
- * billed and streamed an answer, so swallowing it means `event: done`, an
- * assistant bubble, a green completion mark — and no conversation on reload,
- * with no log line. It is reachable from the URL (`/?c=<someone else's id>`:
- * `loadSession` returns null, the app treats it as a new chat, and every write
- * of that turn hits a foreign row). Throwing turns that into a failed turn:
- * `runAndSave` already logs it, flips the row to `status='error'` and re-raises.
- * The interactive pre-seed (`turn.server.ts:267`) is OUTSIDE that try and is
- * the first write to hit a foreign row: it surfaces through the SSE route's
- * own catch as an `event: error` and leaves no row spinning, because nothing
- * was seeded.
- *
- * Zero rows means exactly one thing — the id exists under a different owner —
- * because a fresh id INSERTs and an owned id UPDATEs. Whether the product
- * should instead re-mint the id and save under the caller is an open owner
- * call; this only stops the loss from being silent.
+ * Never an upsert. An id that already exists is one of two things, and both
+ * refuse:
+ *  - it is the caller's own — a second first message on the same new chat
+ *    whose first already created the row: {@link ConversationBusyError};
+ *  - it belongs to someone else (`/?c=<their id>`: `loadSession` is
+ *    user-scoped, so a foreign id looks new): THROWS, and the browser is told
+ *    only that the turn could not be saved. "Belongs to another user" is an
+ *    ownership fact for the log, not for the caller. Whether the product
+ *    should instead re-mint the id is an open owner call; this only stops the
+ *    write from landing on their row.
  */
-export async function saveConversation(input: SaveConversationInput): Promise<void> {
-  const { rowCount } = await query(
-    `INSERT INTO conversations (id, user_id, agent_id, title, context, kind, source, status, inference_tier)
-     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)
-     ON CONFLICT (id) DO UPDATE SET
-       agent_id       = EXCLUDED.agent_id,
-       context        = EXCLUDED.context,
-       title          = COALESCE(conversations.title, EXCLUDED.title),
-       status         = EXCLUDED.status,
-       inference_tier = COALESCE(conversations.inference_tier, EXCLUDED.inference_tier),
-       updated_at     = NOW()
-     WHERE conversations.user_id = EXCLUDED.user_id`,
+export async function createConversation(input: CreateConversationInput): Promise<string> {
+  const { rows } = await query<{ version: string }>(
+    `INSERT INTO conversations
+       (id, user_id, agent_id, title, context, kind, source, status, inference_tier, turn_claimed_at)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, NOW())
+     ON CONFLICT (id) DO NOTHING
+     RETURNING context_version::text AS version`,
     [
       input.id,
       input.userId,
@@ -290,44 +356,202 @@ export async function saveConversation(input: SaveConversationInput): Promise<vo
       input.inferenceTier ?? null,
     ],
   )
-  if ((rowCount ?? 0) === 0) {
-    // Detail to the log, not to the browser: this message reaches the user
-    // verbatim (turn.server.ts:267 → events.ts:131 `event: error` → an error
-    // bubble), and "belongs to another user" is an ownership fact the caller
-    // has no business being told.
-    console.error(
-      `[db] saving conversation ${input.id} wrote no rows: the id exists and belongs to another ` +
-        'user, so the owner-scoped upsert matched nothing.',
-    )
-    throw new Error(`[db] conversation ${input.id} could not be saved; the turn is not persisted.`)
+  if (rows.length > 0) return rows[0].version
+  if ((await getConversationOwner(input.id)) === input.userId) throw new ConversationBusyError()
+  console.error(
+    `[db] creating conversation ${input.id} wrote no rows: the id exists and belongs to another ` +
+      'user.',
+  )
+  throw new Error(`[db] conversation ${input.id} could not be saved; the turn is not persisted.`)
+}
+
+/**
+ * Claim an existing conversation for one turn and return it as claimed —
+ * `version` is the version that turn now holds. `null` when the user has no
+ * such conversation (unknown id, or someone else's).
+ *
+ * Claim and read are one statement, so the turn runs on exactly the context
+ * its claim covers: nothing can land between the read and the claim.
+ *
+ * Throws {@link ConversationBusyError} when another turn's claim is live. A
+ * claim that has not been renewed for {@link TURN_CLAIM_TTL_SECONDS} is not
+ * live: its turn's process is presumed dead, and this claim takes the row.
+ * Taking it moves the version on, which is what refuses the old holder's save
+ * if it was only slow.
+ *
+ * Does NOT touch `updated_at` or `status`: a claim is not chat activity, and
+ * the turn's own save sets both when it ends.
+ */
+export async function claimConversation(
+  id: string,
+  userId: string,
+): Promise<ConversationRow | null> {
+  const { rows } = await query<DbRow>(
+    `UPDATE conversations
+        SET turn_claimed_at = NOW(), context_version = ${NEXT_VERSION}
+      WHERE id = $1 AND user_id = $2 AND ${NO_LIVE_CLAIM}
+      RETURNING ${ROW_COLUMNS}`,
+    [id, userId],
+  )
+  if (rows.length > 0) {
+    try {
+      return rowToConversation(rows[0])
+    } catch (err) {
+      // An unreadable row (a wrong key) must not stay claimed for a lease.
+      await releaseConversationClaim(id, userId, rows[0].version).catch(() => {})
+      throw err
+    }
   }
+  // The claim's age, by the database's clock like the lease itself, so the
+  // refusal can tell a live holder from one that stopped renewing.
+  const { rows: existing } = await query<{ claim_age: number | null }>(
+    `SELECT EXTRACT(EPOCH FROM NOW() - turn_claimed_at)::float8 AS claim_age
+       FROM conversations WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  )
+  if (existing.length > 0) throw new ConversationBusyError(existing[0].claim_age)
+  return null
+}
+
+export interface SaveConversationInput {
+  id: string
+  userId: string
+  agentId: string
+  /** Sticky — fills a row that has none, never overwrites one. */
+  title: string | null
+  /** Full serializeContext() output. Stored as JSONB. */
+  serializedContext: string
+  /** Lifted copy of the context status, so the sidebar can filter and badge
+   *  without deserializing the blob. */
+  status: ConversationStatus
+  /**
+   * The tier this turn ran on, RECORDED rather than set: written only when the
+   * row has none yet (`COALESCE`, the stickiness `title` has), so it never
+   * overwrites a mid-conversation flip. A row reaches here without one when
+   * `seedActionRow` created it before any tier was resolved, or the backfill
+   * left a legacy row alone; one turn under a tier is what makes that tier
+   * this conversation's. {@link setConversationInferenceTier} is the only
+   * mutator.
+   */
+  inferenceTier?: string
+  /** The version the turn's claim holds — {@link claimConversation} or
+   *  {@link createConversation}. */
+  version: string
+}
+
+/**
+ * The end-of-turn save, by the turn that holds the claim: writes the turn's
+ * context **only if the row is still at the version the claim holds**,
+ * releases the claim in the same statement, and returns the version it wrote.
+ *
+ * Throws {@link ConversationConflictError} when nothing was written — the
+ * claim lapsed and was taken over, or the row was deleted mid-turn. Either way
+ * the turn's result has nowhere safe to go, and the caller ends the turn
+ * visibly instead of writing over the newer row. (The upsert this replaces
+ * also resurrected a conversation the user had deleted mid-turn.)
+ *
+ * `kind` and `source` are not in the SET: they are fixed at creation, which is
+ * what lets an action row survive its background run's save.
+ */
+export async function saveConversation(input: SaveConversationInput): Promise<string> {
+  const { rows } = await query<{ version: string }>(
+    `UPDATE conversations SET
+       agent_id        = $3,
+       title           = COALESCE(title, $4),
+       context         = $5::jsonb,
+       status          = $6,
+       inference_tier  = COALESCE(inference_tier, $7),
+       updated_at      = NOW(),
+       context_version = ${NEXT_VERSION},
+       turn_claimed_at = NULL
+     WHERE id = $1 AND user_id = $2 AND context_version = $8
+     RETURNING context_version::text AS version`,
+    [
+      input.id,
+      input.userId,
+      input.agentId,
+      encryptFieldOrNull(input.title),
+      encryptJsonb(input.serializedContext),
+      input.status,
+      input.inferenceTier ?? null,
+      input.version,
+    ],
+  )
+  if (rows.length > 0) return rows[0].version
+  console.error(
+    `[db] saving conversation ${input.id} at version ${input.version} wrote no rows: another ` +
+      'writer moved the row on (its claim lapsed and was taken), or the row is gone.',
+  )
+  throw new ConversationConflictError()
+}
+
+/**
+ * Keep a claim alive — the turn holding it calls this every
+ * {@link TURN_CLAIM_RENEW_MS}. `false` means the claim is no longer this
+ * turn's: it lapsed and was taken, or the turn already saved.
+ */
+export async function renewConversationClaim(
+  id: string,
+  userId: string,
+  version: string,
+): Promise<boolean> {
+  const { rowCount } = await query(
+    `UPDATE conversations SET turn_claimed_at = NOW()
+      WHERE id = $1 AND user_id = $2 AND context_version = $3 AND turn_claimed_at IS NOT NULL`,
+    [id, userId, version],
+  )
+  return (rowCount ?? 0) > 0
+}
+
+/**
+ * Release a claim without saving — the turn ended before its save. With
+ * `failed`, it also records the turn as failed (`status='error'`), which is
+ * what keeps a row whose run threw from spinning on `running` (sf-M2/sf-M3).
+ *
+ * Fenced by the version the claim holds, like every write here: a turn whose
+ * claim was taken over releases nothing and flips nothing, so it can neither
+ * free the new holder's conversation nor mark its run failed. A no-op after
+ * the turn's own save, which already released it.
+ */
+export async function releaseConversationClaim(
+  id: string,
+  userId: string,
+  version: string,
+  { failed = false }: { failed?: boolean } = {},
+): Promise<boolean> {
+  const { rowCount } = await query(
+    failed
+      ? `UPDATE conversations SET turn_claimed_at = NULL, status = 'error', updated_at = NOW()
+          WHERE id = $1 AND user_id = $2 AND context_version = $3`
+      : `UPDATE conversations SET turn_claimed_at = NULL
+          WHERE id = $1 AND user_id = $2 AND context_version = $3`,
+    [id, userId, version],
+  )
+  return (rowCount ?? 0) > 0
 }
 
 /**
  * Replace a conversation's context blob **only if the row is still at the
- * version the caller read**, reporting whether it wrote.
+ * version the caller read and no turn holds it**, reporting whether it wrote.
  *
- * For a caller that does read-modify-write on the whole blob — `/api/stash`
- * flipping `hidden`/`archived` on one event — where {@link saveConversation}'s
- * last-writer-wins is not good enough. The competing writer is the turn's own
- * `compactAndSave`, which fires just after the answer lands, i.e. exactly when
- * a user acts on a finished tool result. Unguarded, whichever write is second
- * wins outright: the flag silently vanishes, or — the worse direction — the
- * turn's entire event set is replaced by the blob this caller loaded before it.
+ * For the writers that are not a turn and do read-modify-write on the whole
+ * blob: `/api/stash` flipping `hidden`/`archived` on one event, and the turn's
+ * detached summary pass. Unguarded, whichever write is second wins outright —
+ * the flag silently vanishes, or a turn's whole event set is replaced by the
+ * blob this caller loaded before it.
  *
- * `version` is {@link ConversationRow.version}, i.e. the row's `xmin`. NOT
- * `updated_at`: it is a microsecond `TIMESTAMPTZ` and `pg` hands it back as a
- * millisecond JS `Date`, so a round-tripped stamp never compares equal to what
- * is stored, and its `::text` rendering depends on the session's TimeZone.
- * `xmin` is the transaction that last wrote the row — exact, integral, and
- * changed by every UPDATE.
+ * Refused while a turn's claim is live, because that turn is about to write
+ * the blob it loaded when it STARTED: a write landing now would either be
+ * overwritten by it or, since it moves the version, refuse that turn's save.
+ * The turn wins; this caller is told it did not write.
  *
  * Context only: `title`, `status`, `agent_id` and `inference_tier` are left
- * alone, because the blob a flag-flipper holds may be a turn behind and
+ * alone, because the blob such a caller holds may be a turn behind and
  * restamping them from it would undo what the turn just recorded.
  *
- * `false` covers row-moved-on, unknown id and wrong owner alike — all three
- * mean "your write did not land", which is what the caller must report.
+ * `false` covers moved-on, turn-in-flight, unknown id and wrong owner alike —
+ * all four mean "your write did not land", which is what the caller must
+ * report.
  */
 export async function updateConversationContextIfUnchanged(
   id: string,
@@ -336,8 +560,9 @@ export async function updateConversationContextIfUnchanged(
   version: string,
 ): Promise<boolean> {
   const { rowCount } = await query(
-    `UPDATE conversations SET context = $1::jsonb, updated_at = NOW()
-     WHERE id = $2 AND user_id = $3 AND xmin::text = $4`,
+    `UPDATE conversations
+        SET context = $1::jsonb, updated_at = NOW(), context_version = ${NEXT_VERSION}
+      WHERE id = $2 AND user_id = $3 AND context_version = $4 AND ${NO_LIVE_CLAIM}`,
     [encryptJsonb(serializedContext), id, userId, version],
   )
   return (rowCount ?? 0) > 0
@@ -353,23 +578,6 @@ export async function promoteConversation(id: string, userId: string): Promise<v
     `UPDATE conversations SET kind = 'conversation', updated_at = NOW()
      WHERE id = $1 AND user_id = $2 AND kind = 'action'`,
     [id, userId],
-  )
-}
-
-/**
- * Update only the lifted `status` column (no context write). Used by the
- * background runner's failure path to flip a stuck 'running' row to 'error'
- * when the run threw before producing a serialized context. Scoped by user_id.
- */
-export async function setConversationStatus(
-  id: string,
-  userId: string,
-  status: ConversationStatus,
-): Promise<void> {
-  await query(
-    `UPDATE conversations SET status = $1, updated_at = NOW()
-     WHERE id = $2 AND user_id = $3`,
-    [status, id, userId],
   )
 }
 
@@ -794,7 +1002,7 @@ export async function deleteConversations(ids: string[], userId: string): Promis
 
 /**
  * Authoritative title override. Bypasses the COALESCE-sticky rule that
- * `saveConversation` applies on upsert — used by the LLM title generator
+ * `saveConversation` applies — used by the LLM title generator
  * to replace the heuristic title with a model-authored one once it lands.
  *
  * Safe by construction: the WHERE clause includes `user_id`, so a wrong

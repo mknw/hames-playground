@@ -45,14 +45,17 @@ failure (e.g. Redis down) is logged and the run still proceeds.
 | `lib/harness-client/action-runner.server.ts` | `seedActionRow` (observable `running` row) + `runAgentInBackground` (fresh harness run, off the request path). **Server-only, deliberately NOT `"use server"`** — it takes a `userId`, so exposing it as a client RPC would let a caller run as any user |
 | `lib/harness-client/turn.server.ts`          | `runTurnAndPersist` — the one implementation of run-a-turn-and-persist, shared with the interactive path (#226 C5). `runAgentInBackground` is this in `triggered` mode                                                                                   |
 | `lib/harness-client/actions.server.ts`       | `promoteAction()` server action (flip `kind`); `ConversationSummary` carries `kind`/`source`/`status`                                                                                                                                                    |
-| `lib/db/conversations.server.ts`             | `kind`/`source`/`status` columns; `promoteConversation`, `setConversationStatus`; `saveConversation` keeps `kind`/`source` immutable on update                                                                                                           |
+| `lib/db/conversations.server.ts`             | `kind`/`source`/`status` columns; `createConversation` (the seed, created claimed for its run), `releaseConversationClaim` (the failure flip), `promoteConversation`; `saveConversation` keeps `kind`/`source` immutable on update                       |
 
 ## Execution model — in-process fire-and-forget (v1)
 
 1. The route authenticates, parses the multipart body, and stores the recording.
 2. `seedActionRow` inserts the row with a minimal seeded `UnifiedContext` (just
    the command as the first `user_message` + `data.trigger`) so the action is
-   observable — with a `running` spinner — the instant `202` returns.
+   observable — with a `running` spinner — the instant `202` returns. The row
+   is created **claimed** for the run (#458), and the seed returns that claim:
+   a user who opens the running action and sends a message is a second turn on
+   the row, and is refused until the run's save releases it.
 3. `runAgentInBackground` runs the turn to completion **without being awaited**,
    through the shared `runTurnAndPersist` in `triggered` mode: a fresh
    `harness(...)` run, _not_ `continueSession` — it never re-appends to the
@@ -62,7 +65,8 @@ failure (e.g. Redis down) is logged and the run still proceeds.
    `saveSession` overwrites the blob and lifts `status`, then `compactBulkData`
    summarizes the turn's tool results and re-persists them — the same tail the
    interactive path has always had, and which this path silently skipped until
-   #226 C5. On an unexpected throw the row is flipped to `error`.
+   #226 C5. Both writes are at the version the claim holds. On an unexpected
+   throw the row is flipped to `error` and the claim released.
 
 Precedent: `routes/api/events.ts` already fires post-response async work
 (title-gen, tool-result summaries).

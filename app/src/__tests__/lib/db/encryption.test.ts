@@ -20,10 +20,13 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 
 import { closePool, query } from '../../../lib/db/client.server'
 import {
+  claimConversation,
+  createConversation,
   listConversationEvents,
   listConversations,
   loadConversation,
   saveConversation,
+  type CreateConversationInput,
   updateConversationContextIfUnchanged,
   updateConversationTitle,
 } from '../../../lib/db/conversations.server'
@@ -41,6 +44,12 @@ import { ENCRYPTED_SQL, encryptField, looksEncrypted } from '../../../lib/db/cry
 const SUFFIX = Math.random().toString(36).slice(2, 10)
 const TEST_USER = `enc-user-${SUFFIX}`
 const OTHER_USER = `enc-legacy-${SUFFIX}`
+
+/** A finished turn's row: created claimed by its turn, then saved at that claim. */
+async function seedRow(input: CreateConversationInput): Promise<void> {
+  const held = await createConversation(input)
+  await saveConversation({ ...input, status: input.status ?? 'done', version: held })
+}
 
 const SECRET_TITLE = 'Q3 salary review for Alex Doe'
 const SECRET_BODY = 'alex.doe@example.com asked about the acquisition'
@@ -91,14 +100,17 @@ describe('conversations', () => {
 
   it('round-trips title and context, and stores both as ciphertext', async () => {
     const id = `enc-conv-${SUFFIX}`
-    await saveConversation({
-      id,
-      userId: TEST_USER,
-      agentId: 'general',
-      title: SECRET_TITLE,
-      serializedContext: context(),
-      status: 'done',
-    })
+    const row = { id, userId: TEST_USER, agentId: 'general', title: SECRET_TITLE }
+    // Both writers of a turn's row: the create that claims it (the pre-seed,
+    // which already carries the user's message) and the save that ends the turn.
+    const held = await createConversation({ ...row, serializedContext: context() })
+    const created = await query<{ title: string; ctx: string }>(
+      'SELECT title, context::text AS ctx FROM conversations WHERE id = $1',
+      [id],
+    )
+    expect(looksEncrypted(created.rows[0].title)).toBe(true)
+    expect(created.rows[0].ctx).not.toContain(SECRET_BODY)
+    await saveConversation({ ...row, serializedContext: context(), status: 'done', version: held })
 
     const loaded = await loadConversation(id, TEST_USER)
     expect(loaded?.title).toBe(SECRET_TITLE)
@@ -124,7 +136,7 @@ describe('conversations', () => {
   // `decryptJsonb` accepts a legacy plaintext value on the way back out.
   it('stores ciphertext on the version-guarded context write too', async () => {
     const id = `enc-conv-cas-${SUFFIX}`
-    await saveConversation({
+    await seedRow({
       id,
       userId: TEST_USER,
       agentId: 'general',
@@ -154,7 +166,7 @@ describe('conversations', () => {
 
   it('re-encrypts an authoritative title override', async () => {
     const id = `enc-conv-title-${SUFFIX}`
-    await saveConversation({
+    await seedRow({
       id,
       userId: TEST_USER,
       agentId: 'general',
@@ -480,6 +492,7 @@ describe('backfill migration', () => {
       const result = await query(text, params)
       if (!interleaved && text.startsWith('SELECT') && text.includes('FROM conversations')) {
         interleaved = true
+        const held = (await claimConversation(id, OTHER_USER))!
         await saveConversation({
           id,
           userId: OTHER_USER,
@@ -487,6 +500,7 @@ describe('backfill migration', () => {
           title: null,
           serializedContext: context('-turn-4'),
           status: 'done',
+          version: held.version,
         })
       }
       return result as never

@@ -9,7 +9,7 @@
  * awaiting it.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -22,8 +22,14 @@ const runTurnAndPersist = vi.fn<(req: Record<string, unknown>) => Promise<unknow
 vi.mock('../../../lib/harness-client/turn.server', () => ({ runTurnAndPersist }))
 
 type Saved = Record<string, unknown>
-const dbSaveConversation = vi.fn<(row: Saved) => Promise<void>>(async () => {})
-vi.mock('../../../lib/db/conversations.server', () => ({ saveConversation: dbSaveConversation }))
+const dbCreateConversation = vi.fn<(row: Saved) => Promise<string>>(async () => 'v-seed')
+const dbReleaseConversationClaim = vi.fn<
+  (id: string, userId: string, version: string, opts?: { failed?: boolean }) => Promise<boolean>
+>(async () => true)
+vi.mock('../../../lib/db/conversations.server', () => ({
+  createConversation: dbCreateConversation,
+  releaseConversationClaim: dbReleaseConversationClaim,
+}))
 
 const { seedActionRow, runAgentInBackground } =
   await import('../../../lib/harness-client/action-runner.server')
@@ -41,11 +47,17 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
 describe('seedActionRow', () => {
   it('inserts a running action row whose context replays the trigger command', async () => {
-    await seedActionRow('run-1', 'user-1', 'search', TRIGGER)
+    // The row is created claimed for its run (#458), and the claim is what
+    // the caller hands the run.
+    await expect(seedActionRow('run-1', 'user-1', 'search', TRIGGER)).resolves.toBe('v-seed')
 
-    const row = dbSaveConversation.mock.calls[0][0]
+    const row = dbCreateConversation.mock.calls[0][0]
     expect(row).toMatchObject({
       id: 'run-1',
       userId: 'user-1',
@@ -67,18 +79,21 @@ describe('seedActionRow', () => {
 
   it('records a routine-fired run with source=routine, otherwise identically', async () => {
     await seedActionRow('run-2', 'user-1', 'search', TRIGGER, 'routine')
-    expect(dbSaveConversation.mock.calls[0][0]).toMatchObject({ kind: 'action', source: 'routine' })
+    expect(dbCreateConversation.mock.calls[0][0]).toMatchObject({
+      kind: 'action',
+      source: 'routine',
+    })
   })
 
   it('stores a null title when the trigger carries no description', async () => {
     await seedActionRow('run-3', 'user-1', 'search', { ...TRIGGER, shortDescription: '' })
-    expect(dbSaveConversation.mock.calls[0][0]).toMatchObject({ title: null })
+    expect(dbCreateConversation.mock.calls[0][0]).toMatchObject({ title: null })
   })
 })
 
 describe('runAgentInBackground', () => {
   it('drives one triggered turn, carrying the trigger as the run’s data', async () => {
-    await runAgentInBackground('run-4', 'user-1', 'do the thing', 'search', TRIGGER)
+    await runAgentInBackground('run-4', 'user-1', 'do the thing', 'search', TRIGGER, 'v-seed')
 
     expect(runTurnAndPersist).toHaveBeenCalledWith({
       mode: 'triggered',
@@ -87,17 +102,52 @@ describe('runAgentInBackground', () => {
       agentId: 'search',
       message: 'do the thing',
       data: { trigger: TRIGGER },
+      // The seed's claim: the run takes the row the seed created for it.
+      claimVersion: 'v-seed',
     })
+    expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
   })
 
   // The driver has already logged the failure and flipped the row off
   // 'running' (sf-M2/sf-M3). Rethrowing here would only surface as an
   // unhandled rejection: the callers `void` this.
   it('never rejects — a failed run must not take the process with it', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
     runTurnAndPersist.mockRejectedValueOnce(new Error('gateway down'))
 
     await expect(
-      runAgentInBackground('run-5', 'user-1', 'x', 'search', TRIGGER),
+      runAgentInBackground('run-5', 'user-1', 'x', 'search', TRIGGER, 'v-seed'),
     ).resolves.toBeUndefined()
+  })
+
+  // A throw from before the turn's own catch (a tier this deployment refuses)
+  // used to leave the seeded row spinning — and would now leave it claimed for
+  // a lease. The release is fenced by the seed's claim, so after a turn that
+  // already released it this is a no-op in the database.
+  // MUTATION: drop the release from the `.catch` → the assertion reddens.
+  it('lets go of the seed’s claim, marking the run failed, whatever threw', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    runTurnAndPersist.mockRejectedValueOnce(new Error('verda tier is not configured'))
+
+    await runAgentInBackground('run-6', 'user-1', 'x', 'search', TRIGGER, 'v-seed')
+
+    expect(dbReleaseConversationClaim).toHaveBeenCalledWith('run-6', 'user-1', 'v-seed', {
+      failed: true,
+    })
+    expect(logged).toHaveBeenCalledWith('[action] run run-6 failed:', expect.any(Error))
+  })
+
+  it('still never rejects when the release itself fails', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    runTurnAndPersist.mockRejectedValueOnce(new Error('gateway down'))
+    dbReleaseConversationClaim.mockRejectedValueOnce(new Error('postgres down'))
+
+    await expect(
+      runAgentInBackground('run-7', 'user-1', 'x', 'search', TRIGGER, 'v-seed'),
+    ).resolves.toBeUndefined()
+    expect(logged).toHaveBeenCalledWith(
+      "[action] could not flip run run-7 to status='error':",
+      expect.any(Error),
+    )
   })
 })

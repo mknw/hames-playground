@@ -125,16 +125,21 @@ WORKDIR /ws/app
 COPY . .
 RUN pnpm exec vinxi build
 
-# Nitro traces the `require`/`import` graph it can statically see, which is not
-# enough for two packages — and it fails silently, leaving an image that boots
-# and serves /api/health while the first use of either throws:
+# Two native packages do not reach .output/server/node_modules complete on
+# their own. Either gap fails silently: the image boots and serves /api/health,
+# and the first use of the package throws.
 #
-#   * node-pty         — lib/index.js loads build/Release/pty.node by path, so
+#   * node-pty         — nitro traces what it can statically see, and
+#                        lib/index.js loads build/Release/pty.node by path, so
 #                        only lib/ + package.json are traced and
 #                        `require('node-pty')` throws.
-#   * @boundaryml/baml — the per-arch baml-<platform> package lands but the
-#                        entry index.js does not, so the first BAML call dies
-#                        with "Cannot find module .../baml/index.js".
+#   * @boundaryml/baml — app.config.ts makes it a rollup external (#469), so
+#                        nitro neither bundles nor traces it, and this copy is
+#                        the ONLY way it reaches the image. Without that
+#                        external, nitro inlined the package's index.js and
+#                        emitted imports of its siblings by this stage's
+#                        absolute /ws path, so every BAML-loading route
+#                        answered 500.
 #
 # So stage both packages COMPLETE for the runtime stage to overlay. pnpm's
 # node_modules/<pkg> are symlinks into .pnpm/<pkg>@<ver>/node_modules/<pkg>, so
@@ -161,7 +166,7 @@ RUN set -eux; \
 
 # ---------------------------------------------------------------------------
 # runtime — nitro's node-server output carries its own package.json and
-# node_modules, so nothing is installed here; the natives its tracer missed are
+# node_modules, so nothing is installed here; the two native packages are
 # overlaid from the build stage's staging dir (see above).
 # ---------------------------------------------------------------------------
 FROM node:${NODE_VERSION} AS runtime

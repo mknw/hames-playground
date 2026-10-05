@@ -40,9 +40,9 @@ const seedActionRow = vi.fn<
     agentId: string,
     trigger: Trigger,
     source?: string,
-  ) => Promise<void>
->(async () => {})
-const runAgentInBackground = vi.fn<() => Promise<void>>(async () => {})
+  ) => Promise<string | undefined>
+>(async () => 'v-seed')
+const runAgentInBackground = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {})
 vi.mock('../../../lib/harness-client/action-runner.server', () => ({
   seedActionRow,
   runAgentInBackground,
@@ -80,7 +80,7 @@ beforeEach(() => {
   claimRoutineRunAt.mockReset().mockResolvedValue(CLAIMED_AT)
   releaseRoutineClaim.mockReset().mockResolvedValue(true)
   getAgent.mockReturnValue({ id: 'search' })
-  seedActionRow.mockResolvedValue(undefined)
+  seedActionRow.mockResolvedValue('v-seed')
   listEnabledRoutinesForUser.mockResolvedValue([])
 })
 
@@ -109,6 +109,8 @@ describe('fireRoutine', () => {
       'summarise the graph',
       'search',
     ])
+    // On the claim the seed took (#458): the routine's row is the run's alone.
+    expect(runAgentInBackground.mock.calls[0][5]).toBe('v-seed')
   })
 
   it('titles an unlabelled routine from its trigger and input', async () => {

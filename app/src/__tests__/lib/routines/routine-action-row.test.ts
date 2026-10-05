@@ -50,10 +50,11 @@ interface SavedRow {
   source?: string
   status?: string
 }
-const saveConversation = vi.fn<(row: SavedRow) => Promise<void>>(async () => {})
+/** The seed creates the row — claimed for its run (#458). */
+const createConversation = vi.fn<(row: SavedRow) => Promise<string>>(async () => 'v-seed')
 vi.mock('../../../lib/db/conversations.server', () => ({
-  saveConversation,
-  setConversationStatus: vi.fn(async () => {}),
+  createConversation,
+  releaseConversationClaim: vi.fn(async () => true),
 }))
 
 vi.mock('../../../lib/session-id', () => ({ newSessionId: () => 'run-fixed' }))
@@ -89,8 +90,8 @@ describe('a routine run', () => {
     const runId = await fireRoutine(routine())
     expect(runId).toBe('run-fixed')
 
-    expect(saveConversation).toHaveBeenCalledTimes(1)
-    const row = saveConversation.mock.calls[0][0]
+    expect(createConversation).toHaveBeenCalledTimes(1)
+    const row = createConversation.mock.calls[0][0]
     expect(row).toMatchObject({
       id: 'run-fixed',
       userId: 'user-1',
@@ -105,7 +106,7 @@ describe('a routine run', () => {
 
   it('seeds a context that replays the routine input and carries provenance', async () => {
     await fireRoutine(routine())
-    const ctx = JSON.parse(saveConversation.mock.calls[0][0].serializedContext)
+    const ctx = JSON.parse(createConversation.mock.calls[0][0].serializedContext)
 
     expect(ctx.sessionId).toBe('run-fixed')
     const firstUser = (ctx.events as Array<{ type: string; data: { content?: string } }>).find(
@@ -121,7 +122,7 @@ describe('a routine run', () => {
 
   it('tags a session-lifecycle run with its own trigger kind', async () => {
     await fireRoutine(routine({ trigger: { kind: 'session_start' }, label: null }))
-    const row = saveConversation.mock.calls[0][0]
+    const row = createConversation.mock.calls[0][0]
     expect(row.source).toBe('routine')
     expect(JSON.parse(row.serializedContext).data.trigger.routine).toEqual({
       id: 'routine-1',

@@ -1,18 +1,19 @@
 /**
  * `ooxmlDisarm` — rebuild an OOXML package from an allowlist — Server Only
- * (#433 S6; spec §5.3 step 2, review F11 and F12, amendments A1 and A3).
+ * (#433 S6; spec §5.3 step 2, review F11 and F12, amendments A1, A3, A9–A15).
  *
  * The input is an ATTACKER-SUPPLIED docx, docm, xlsx, xlsm, pptx or pptm that
  * an external sender put in front of the provenance gate. This is the
  * `DocumentDisarm` core's `flattenDocument` runs before the converter: what it
  * returns is what kreuzberg extracts, and so what the model reads. Its job is
  * to make that the text a person looking at the document would see — no more.
+ * `hiddenContent: 'removed'` is only reported when it returned and counted
+ * nothing (A3), so everything below either removes a carrier or counts it.
  *
  * It is built on core's bounded reader (`stash/zip.server`, Δ3) and nothing
  * else: no reader of its own, no new dependency (F17). Every archive and XML
- * limit of §5.3 step 1 is the reader's; the one this module adds is
- * amendment A1's, through `parseXml`, whose trees are capped at
- * `XML_LIMITS.maxTreeNodes`.
+ * limit of §5.3 step 1 is the reader's; the one this module leans on is
+ * amendment A1/A14's tree budget, `XML_LIMITS.maxTreeNodes`.
  *
  * ## A fresh package from an allowlist — never a patched input
  *
@@ -30,16 +31,27 @@
  * content types, the package relationships and every relationships part are
  * written fresh, with canonical targets.
  *
- * A worksheet is visible when `<sheets>` lists it with no `state` but
- * `visible`; a slide when `<p:sldIdLst>` lists it and its `show` is not
- * false. A slide the list omits is dropped too: PowerPoint never shows it,
- * and kreuzberg reads every slide relationship (`pptx/parser.rs:470-485`).
+ * A worksheet or slide is visible only through the list that names it (A12):
+ * a `<sheet>` directly under the workbook's `<sheets>` with no `state` but
+ * `visible`, a `<p:sldId>` directly under `<p:sldIdLst>` whose slide's `show`
+ * is not false. A slide the list omits is dropped too: kreuzberg reads every
+ * slide relationship (`pptx/parser.rs:470-485`).
+ *
+ * ## Markup compatibility first (A9)
+ *
+ * Before any rule, every kept part — styles included — is reduced to what
+ * Word renders. Elements outside the namespaces this module understands are
+ * dropped WITH their content (`mc:Ignorable` wrappers, unknown or Strict
+ * namespaces, a conventional prefix rebound to another URI); VML (`v`, `o`,
+ * `w10`) is not understood, so legacy `w:pict` content goes with them. Each
+ * `mc:AlternateContent` keeps ONE branch — the first `mc:Choice` whose
+ * `Requires` prefixes all resolve, in scope, to understood namespaces, else
+ * `mc:Fallback` — exactly as Word chooses, and the other branches are
+ * dropped. kreuzberg matches literal `w:` names and reads every branch
+ * (`docx/parser.rs:1266-1281`), so without this an ignorable wrapper or the
+ * branch Word never renders would carry text past every rule below.
  *
  * ## Rules inside the kept parts — by namespace URI, never by prefix
- *
- * Every rule matches the RESOLVED namespace (`<x:vanish/>` with `x` bound to
- * WordprocessingML is `w:vanish`; `w:` bound to anything else is not), and
- * applies inside `mc:Choice` and `mc:Fallback` alike.
  *
  * Dropped:
  * - runs (`w:r`, and OMML's `m:r`) whose EFFECTIVE `vanish`, `specVanish` or
@@ -47,47 +59,36 @@
  *   (its conditional formatting included), the paragraph style and the
  *   character style, each through its `basedOn` chain and with the default
  *   style standing in for a missing one. Toggle semantics are not modelled:
- *   any style level that hides is read as hiding, which can only drop more;
- * - shapes with `hidden` on `wp:docPr` or on any `*:cNvPr` (the shape is the
- *   element that carries it, directly or through its `nv…Pr`);
+ *   any style level that hides is read as hiding. A chain longer than 256, or
+ *   one that loops, counts as hiding too (A13). Each style id is resolved once
+ *   and each style combination once, so the cost is linear in the part;
+ * - shapes with `hidden` on `wp:docPr` or on any `*:cNvPr`;
  * - `descr` and `title` on `wp:docPr` and on any `*:cNvPr` (alt text);
- * - tracked changes, accepted: `w:del`, `w:moveFrom`, a deleted row, any
- *   `w:delText`, the move-range markers and every property revision go;
- *   `w:ins` and `w:moveTo` are unwrapped;
+ * - tracked changes, accepted: `w:del`, `w:moveFrom`, a deleted row or cell
+ *   (A11), any `w:delText`, the move-range markers and every property
+ *   revision go; `w:ins` and `w:moveTo` are unwrapped;
  * - field codes: `w:instrText`, `w:fldChar` (with its form-field data) and
  *   everything between a field's begin and its separator, nested fields
- *   included; `w:fldSimple` is unwrapped. In SpreadsheetML, cell formulas
- *   (`f`, the cached value stays) and `definedNames` — DDE is a formula over
- *   an external link, and the link is a dropped part;
- * - OLE and ActiveX elements (`w:object`, `o:OLEObject`, `p:oleObj`,
+ *   included, with O(1) field state per node and a nesting limit of 256
+ *   (A13); `w:fldSimple` is unwrapped. In SpreadsheetML, cell formulas (`f`,
+ *   the cached value stays) and `definedNames`;
+ * - OLE and ActiveX elements (`w:object`, `p:oleObj`, `p:controls`,
  *   `oleObjects`, `controls`), and comment markers;
- * - every relationship reference (`r:*`, VML's `o:relid`) to a relationship
- *   that was not kept; an element that was nothing but that reference goes
- *   with it;
- * - footnotes and endnotes no kept reference points at (kreuzberg prints
- *   every note, referenced or not).
+ * - every `r:*` reference to a relationship that was not kept; an element
+ *   that was nothing but that reference goes with it;
+ * - footnotes and endnotes no kept reference points at, and in a
+ *   separator-type note every run but its separator mark (A11): kreuzberg
+ *   prints every note, whatever its type.
  *
  * Counted, not dropped (`counted`, which makes `hiddenContent` `'not-removed'`
- * — amendment A3): hidden rows and columns, zero row heights and column
- * widths, the `;;;` number format, a font colour equal to its fill (no fill
- * is white), white text and text of 1 pt or less (docx and pptx), and shapes
- * placed off the slide.
- *
- * ## Beyond the letter of §5.3, each for a named reason
- *
- * - **A hiding rule in one `mc:AlternateContent` branch drops the whole
- *   element.** The branches are alternative renderings of ONE object: Word
- *   shows the first it understands, kreuzberg reads them all. Dropping only
- *   the branch that says "hidden" would leave the other branch's copy in the
- *   extract while the person sees nothing.
- * - **Field state is tracked twice**: once over the kept content and once
- *   over everything, dropped content included, and text is code if either
- *   says so — a hidden `begin` must not turn the code after it into text.
- * - **Unreferenced notes and unlisted slides are dropped** (above): both are
- *   text a reader of the document is never shown and kreuzberg extracts.
- * - **A relationships part and the content types are at most 1 MiB**, as
- *   S5's type check holds them (A1), and two relationships sharing an Id in a
- *   kept part refuse the package: which one a consumer resolves is a guess.
+ * — A3, A10): hidden rows and columns; row heights under 1 and column widths
+ * under 0.5; a hidden workbook window; a number format that is only `;`
+ * once empty literals and `[…]` codes are gone; a `[White]` or `[Color2]`
+ * format, a font or rich-text run colour equal to its cell's fill once
+ * `indexed`, `theme` and tint are resolved to RGB (no fill is white); white
+ * or near-white text (every channel ≥ `F0`), text with no fill or alpha 0,
+ * a docx font colour equal to its `w:shd` fill, and text of 1 pt or less
+ * (`w:sz` or `w:szCs`); and shapes placed off the slide.
  *
  * ## Failure policy
  *
@@ -129,15 +130,71 @@ const NS = {
   r: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
   wp: 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing',
   a: 'http://schemas.openxmlformats.org/drawingml/2006/main',
+  pic: 'http://schemas.openxmlformats.org/drawingml/2006/picture',
   p: 'http://schemas.openxmlformats.org/presentationml/2006/main',
   s: 'http://schemas.openxmlformats.org/spreadsheetml/2006/main',
   m: 'http://schemas.openxmlformats.org/officeDocument/2006/math',
   mc: 'http://schemas.openxmlformats.org/markup-compatibility/2006',
-  o: 'urn:schemas-microsoft-com:office:office',
   ct: 'http://schemas.openxmlformats.org/package/2006/content-types',
   rels: 'http://schemas.openxmlformats.org/package/2006/relationships',
+  xml: 'http://www.w3.org/XML/1998/namespace',
   xmlns: 'http://www.w3.org/2000/xmlns/',
 } as const
+
+const MSO = 'http://schemas.microsoft.com/office/'
+
+/**
+ * The element namespaces each family understands (A9). An element in any
+ * other namespace is dropped with its content, the way Word ignores it.
+ * VML (`v`, `o`, `w10`) is deliberately absent: no rule here models its
+ * visibility or its `alt`.
+ */
+const DRAWING = [
+  NS.a,
+  NS.pic,
+  NS.mc,
+  `${MSO}drawing/2010/main`, // a14
+  `${MSO}drawing/2012/main`, // a15
+  `${MSO}drawing/2014/main`, // a16
+]
+const UNDERSTOOD: Readonly<Record<'word' | 'sheet' | 'slides', ReadonlySet<string>>> = {
+  word: new Set([
+    ...DRAWING,
+    NS.w,
+    NS.wp,
+    NS.m,
+    `${MSO}word/2010/wordprocessingDrawing`, // wp14
+    `${MSO}word/2010/wordprocessingShape`, // wps
+    `${MSO}word/2010/wordprocessingGroup`, // wpg
+    `${MSO}word/2010/wordprocessingCanvas`, // wpc
+    `${MSO}word/2010/wordml`, // w14
+    `${MSO}word/2012/wordml`, // w15
+    `${MSO}word/2015/wordml/symex`, // w16se
+    `${MSO}word/2016/wordml/cid`, // w16cid
+    `${MSO}word/2018/wordml`, // w16
+    `${MSO}word/2018/wordml/cex`, // w16cex
+    `${MSO}word/2020/wordml/sdtdatahash`, // w16sdtdh
+    `${MSO}word/2023/wordml/word16du`, // w16du
+  ]),
+  sheet: new Set([
+    ...DRAWING,
+    NS.s,
+    `${MSO}spreadsheetml/2009/9/main`, // x14
+    `${MSO}spreadsheetml/2009/9/ac`, // x14ac
+    `${MSO}spreadsheetml/2010/11/main`, // x15
+    `${MSO}spreadsheetml/2010/11/ac`, // x15ac
+    `${MSO}spreadsheetml/2014/revision`, // xr
+    `${MSO}spreadsheetml/2015/revision2`, // xr2
+    `${MSO}spreadsheetml/2016/revision3`, // xr3
+    `${MSO}excel/2006/main`, // xm
+  ]),
+  slides: new Set([
+    ...DRAWING,
+    NS.p,
+    `${MSO}powerpoint/2010/main`, // p14
+    `${MSO}powerpoint/2012/main`, // p15
+  ]),
+}
 
 const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/'
 const OFFICE_DOCUMENT = `${REL}officeDocument`
@@ -242,6 +299,12 @@ const FAMILIES: ReadonlyMap<string, Family> = new Map([
 
 /** `[Content_Types].xml` and every relationships part, as S5's type check holds them (A1). */
 const PACKAGE_PART_MAX_BYTES = 1024 * 1024
+
+/** Fields nested deeper than this are refused (A13). */
+const MAX_FIELD_DEPTH = 256
+
+/** A `basedOn` chain longer than this counts as hiding, never as absent (A13). */
+const MAX_STYLE_DEPTH = 256
 
 const XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
 
@@ -434,6 +497,11 @@ interface KeptPart {
   readonly rels: KeptRel[]
 }
 
+/** `{ns, name}` of an element or a scanned start tag. */
+type Named = { readonly ns: string; readonly name: string }
+
+const is = (el: Named, ns: string, name: string): boolean => el.ns === ns && el.name === name
+
 function disarm(
   entries: readonly ZipEntry[],
   family: Family,
@@ -471,26 +539,31 @@ function disarm(
   const reasons = new Map<string, string>()
   keep(mainEntry, family.mainRole, mainType)
 
-  // Which worksheets and slides the main part shows. Read by scanning: the
-  // tree is built once, later, when the part is rewritten.
+  // Which worksheets and slides the main part shows: only through the list
+  // that names them, a depth-2 entry under its depth-1 list (A12). A
+  // `<sheet>` or `<p:sldId>` anywhere else — an `extLst`, say — is a decoy.
+  // Read by scanning: the tree is built once, later, when the part is rewritten.
   const shownSheets = new Set<string>()
   const hiddenSheets = new Set<string>()
   const listedSlides = new Set<string>()
-  if (family.kind === 'sheet') {
-    scanXml(mainEntry.data, (tag) => {
-      if (tag.ns !== NS.s || tag.name !== 'sheet') return
-      const id = attrOf(tag.attributes, 'id', NS.r)
+  let list: Named | undefined
+  scanXml(mainEntry.data, (tag) => {
+    if (tag.depth === 1) list = tag
+    if (tag.depth !== 2 || !list) return
+    const id = attrOf(tag.attributes, 'id', NS.r)
+    if (family.kind === 'sheet' && is(list, NS.s, 'sheets') && is(tag, NS.s, 'sheet')) {
       if (id === undefined) return
       const state = attrOf(tag.attributes, 'state')
       ;(state === undefined || state === 'visible' ? shownSheets : hiddenSheets).add(id)
-    })
-  } else if (family.kind === 'slides') {
-    scanXml(mainEntry.data, (tag) => {
-      if (tag.ns !== NS.p || tag.name !== 'sldId') return
-      const id = attrOf(tag.attributes, 'id', NS.r)
+    } else if (family.kind === 'sheet' && is(list, NS.s, 'bookViews')) {
+      const visibility = attrOf(tag.attributes, 'visibility')
+      if (is(tag, NS.s, 'workbookView') && visibility !== undefined && visibility !== 'visible') {
+        counted.add('hiddenWindows')
+      }
+    } else if (family.kind === 'slides' && is(list, NS.p, 'sldIdLst') && is(tag, NS.p, 'sldId')) {
       if (id !== undefined) listedSlides.add(id)
-    })
-  }
+    }
+  })
 
   for (let i = 0; i < order.length; i++) {
     const part = order[i]
@@ -538,26 +611,31 @@ function disarm(
     removed.add(reasons.get(key) ?? categoryOf(e.name, pkg.typeOf(e.name)))
   }
 
-  // Rewrite the kept parts. Styles first (the rules resolve through them),
-  // then the main part (its note references decide which notes stay), then
-  // the rest in the order they were reached.
+  // Rewrite the kept parts. What the rules read comes first — the theme and
+  // styles they resolve colours and hiding through, the shared strings a cell
+  // points at — then the main part (its note references decide which notes
+  // stay), then the rest in the order they were reached.
   const shared: Shared = { removed, counted, noteRefs: new Set() }
   const out = new Map<KeptPart, string>()
-  const styleRoles: Role[] = ['wordStyles', 'sheetStyles']
+  const first: Role[] = ['theme', 'wordStyles', 'sheetStyles', 'sharedStrings']
   const sequence = [
-    ...order.filter((p) => styleRoles.includes(p.role)),
+    ...first.flatMap((role) => order.filter((p) => p.role === role)),
     order[0],
-    ...order.filter((p) => p !== order[0] && !styleRoles.includes(p.role)),
+    ...order.filter((p) => p !== order[0] && !first.includes(p.role)),
   ]
+  const understood = UNDERSTOOD[family.kind]
   for (const part of sequence) {
-    const root = parseXml(pkg.get(part.name)!.data)
+    // Markup compatibility BEFORE any rule (A9): the rules then see what Word renders.
+    const root = compat(parseXml(pkg.get(part.name)!.data), understood, removed)
     const rewritten = rewritePart(root, {
       ...shared,
       role: part.role,
       keptIds: new Set(part.rels.map((r) => r.id)),
     })
+    if (part.role === 'theme') shared.theme ??= readTheme(rewritten)
     if (part.role === 'wordStyles') shared.wordStyles = readWordStyles(rewritten)
     if (part.role === 'sheetStyles') shared.sheetStyles = readSheetStyles(rewritten)
+    if (part.role === 'sharedStrings') shared.strings = readSharedStrings(rewritten)
     if (part.role === 'wordMain') collectNoteRefs(rewritten, shared.noteRefs)
     if (part.role === 'slidesMain') shared.slideSize = readSlideSize(rewritten)
     out.set(part, XML_DECL + serialize(rewritten))
@@ -638,18 +716,126 @@ function relsXml(source: string, rels: readonly KeptRel[]): string {
 }
 
 // ============================================================================
-// Rewriting one part
+// Markup compatibility (A9)
 // ============================================================================
 
 type Node = XmlElement | string
+
+const elements = (el: XmlElement): XmlElement[] =>
+  el.children.filter((c): c is XmlElement => typeof c !== 'string')
+
+const decls = (el: XmlElement): XmlAttribute[] => el.attributes.filter((a) => a.ns === NS.xmlns)
+
+/** The prefix a declaration binds: `xmlns:x` → `x`, `xmlns` → `''`. */
+const declared = (a: XmlAttribute): string => (a.prefix === 'xmlns' ? a.name : '')
+
+function withScope(
+  scope: ReadonlyMap<string, string>,
+  el: XmlElement,
+): ReadonlyMap<string, string> {
+  const own = decls(el)
+  if (own.length === 0) return scope
+  const next = new Map(scope)
+  for (const d of own) next.set(declared(d), d.value)
+  return next
+}
+
+/** Reduce a part to what Word renders. The root must itself be understood. */
+function compat(root: XmlElement, understood: ReadonlySet<string>, removed: Tally): XmlElement {
+  if (!understood.has(root.ns) || root.ns === NS.mc) {
+    refuse('content-type', 'a part whose root element the disarm does not understand')
+  }
+  const scope = new Map([['xml', NS.xml]])
+  return compatNode(root, understood, removed, scope)[0] as XmlElement
+}
+
+function compatNode(
+  el: XmlElement,
+  understood: ReadonlySet<string>,
+  removed: Tally,
+  outer: ReadonlyMap<string, string>,
+): Node[] {
+  const scope = withScope(outer, el)
+  if (el.ns === NS.mc && el.name === 'AlternateContent') {
+    const branches = elements(el).filter(
+      (c) => c.ns === NS.mc && (c.name === 'Choice' || c.name === 'Fallback'),
+    )
+    const chosen =
+      branches.find((c) => {
+        if (c.name !== 'Choice') return false
+        const inScope = withScope(scope, c)
+        const requires = (attrOf(c.attributes, 'Requires') ?? '').split(/\s+/).filter(Boolean)
+        return requires.every((p) => understood.has(inScope.get(p) ?? ''))
+      }) ?? branches.find((c) => c.name === 'Fallback')
+    removed.add('alternateContent', branches.length - (chosen ? 1 : 0))
+    if (!chosen) return []
+    const inner = withScope(scope, chosen)
+    const kids = chosen.children.flatMap((c) =>
+      typeof c === 'string' ? [c] : compatNode(c, understood, removed, inner),
+    )
+    const branchDecls = decls(chosen)
+    const carried = [
+      ...branchDecls,
+      ...decls(el).filter((d) => !branchDecls.some((b) => declared(b) === declared(d))),
+    ]
+    return carry(carried, kids)
+  }
+  if (!understood.has(el.ns) || el.ns === NS.mc) {
+    removed.add('unknownMarkup')
+    return []
+  }
+  const children = el.children.flatMap((c) =>
+    typeof c === 'string' ? [c] : compatNode(c, understood, removed, scope),
+  )
+  return [{ ...el, children }]
+}
+
+/** The prefixes an element's subtree uses — memoized, so carrying is linear (#482 F8). */
+const usedMemo = new WeakMap<XmlElement, ReadonlySet<string>>()
+
+function usedPrefixes(el: XmlElement): ReadonlySet<string> {
+  const hit = usedMemo.get(el)
+  if (hit) return hit
+  const used = new Set<string>([el.prefix])
+  for (const a of el.attributes) {
+    if (a.ns === NS.xmlns) continue
+    if (a.prefix !== '') used.add(a.prefix)
+    // Markup-compatibility attributes name prefixes in their values.
+    if (a.ns === NS.mc) {
+      for (const token of a.value.split(/\s+/)) if (token) used.add(token.split(':')[0])
+    }
+  }
+  for (const c of elements(el)) for (const p of usedPrefixes(c)) used.add(p)
+  usedMemo.set(el, used)
+  return used
+}
+
+/** Splice `children` in place of their parent, carrying only the declarations they use. */
+function carry(carried: readonly XmlAttribute[], children: readonly Node[]): Node[] {
+  if (carried.length === 0) return [...children]
+  return children.map((c) => {
+    if (typeof c === 'string') return c
+    const own = new Set(decls(c).map(declared))
+    const used = usedPrefixes(c)
+    const needed = carried.filter((d) => !own.has(declared(d)) && used.has(declared(d)))
+    return needed.length === 0 ? c : { ...c, attributes: [...needed, ...c.attributes] }
+  })
+}
+
+// ============================================================================
+// Rewriting one part
+// ============================================================================
 
 interface Shared {
   readonly removed: Tally
   readonly counted: Tally
   /** `footnote:<id>` / `endnote:<id>` for every reference the main part kept. */
   readonly noteRefs: Set<string>
+  theme?: ReadonlyMap<string, string>
   wordStyles?: WordStyles
   sheetStyles?: SheetStyles
+  /** Each shared string's rich-text run colours, by index. */
+  strings?: readonly (readonly Color[])[]
   slideSize?: { cx: number; cy: number }
 }
 
@@ -663,20 +849,23 @@ interface Scope {
   /** `undefined` outside a paragraph or table; empty for "the default style". */
   readonly pStyles?: readonly string[]
   readonly tblStyles?: readonly string[]
+  /** The enclosing paragraph's `w:shd` fill. */
+  readonly pFill?: string
+  /** Inside a separator-type note: only separator marks stay (A11). */
+  readonly separator?: boolean
+}
+
+/** One field stack: its kinds, and how many are `code` — so `inCode` is O(1) (#482 F2a). */
+interface FieldStack {
+  readonly kinds: ('code' | 'result')[]
+  code: number
 }
 
 /** Field-code state, per part: one stack over kept content, one over everything. */
 interface Fields {
-  kept: ('code' | 'result')[]
-  all: ('code' | 'result')[]
-  /** Hiding-rule hits, for the `mc:AlternateContent` rule. */
-  hidden: number
+  readonly kept: FieldStack
+  readonly all: FieldStack
 }
-
-const is = (el: XmlElement, ns: string, name: string): boolean => el.ns === ns && el.name === name
-
-const elements = (el: XmlElement): XmlElement[] =>
-  el.children.filter((c): c is XmlElement => typeof c !== 'string')
 
 const childEl = (el: XmlElement | undefined, ns: string, name: string): XmlElement | undefined =>
   el ? elements(el).find((c) => is(c, ns, name)) : undefined
@@ -685,15 +874,15 @@ const childEl = (el: XmlElement | undefined, ns: string, name: string): XmlEleme
 const childEls = (el: XmlElement, ns: string, name: string): XmlElement[] =>
   elements(el).filter((c) => is(c, ns, name))
 
+const wVal = (el: XmlElement | undefined): string | undefined =>
+  el ? attrOf(el.attributes, 'val', NS.w) : undefined
+
 /** The `w:val` of every `w:<prop>` in every `w:<props>` of `el` (`pPr`/`pStyle`, …). */
 const wVals = (el: XmlElement, props: string, prop: string): string[] =>
   childEls(el, NS.w, props)
     .flatMap((p) => childEls(p, NS.w, prop))
     .map(wVal)
     .filter((v): v is string => v !== undefined)
-
-const wVal = (el: XmlElement | undefined): string | undefined =>
-  el ? attrOf(el.attributes, 'val', NS.w) : undefined
 
 /** ST_OnOff: present and not false. Only `w:val` counts — Word ignores an unqualified one. */
 function onOff(el: XmlElement | undefined, attr?: string): boolean | undefined {
@@ -712,7 +901,7 @@ const textOf = (el: XmlElement): string =>
   el.children.map((c) => (typeof c === 'string' ? c : textOf(c))).join('')
 
 function rewritePart(root: XmlElement, ctx: Ctx): XmlElement {
-  const fields: Fields = { kept: [], all: [], hidden: 0 }
+  const fields: Fields = { kept: { kinds: [], code: 0 }, all: { kinds: [], code: 0 } }
   const nodes = visit(root, ctx, fields, {})
   // The root itself is never dropped by a rule that drops elements (none
   // targets a part's root), so this is the one element `visit` returned.
@@ -720,13 +909,22 @@ function rewritePart(root: XmlElement, ctx: Ctx): XmlElement {
   return top ?? { ...root, children: [] }
 }
 
-/** Advance both field stacks over one `w:fldChar`. */
-function fieldChar(el: XmlElement, stacks: ('code' | 'result')[][]): void {
+/** Advance field stacks over one `w:fldChar`; refuse nesting deeper than 256 (A13). */
+function fieldChar(el: XmlElement, stacks: readonly FieldStack[]): void {
   const type = attrOf(el.attributes, 'fldCharType', NS.w)
   for (const s of stacks) {
-    if (type === 'begin') s.push('code')
-    else if (type === 'separate' && s.length > 0) s[s.length - 1] = 'result'
-    else if (type === 'end') s.pop()
+    if (type === 'begin') {
+      if (s.kinds.length >= MAX_FIELD_DEPTH) {
+        refuse('content-type', `fields nested deeper than ${MAX_FIELD_DEPTH}`)
+      }
+      s.kinds.push('code')
+      s.code++
+    } else if (type === 'separate' && s.kinds.length > 0) {
+      if (s.kinds[s.kinds.length - 1] === 'code') s.code--
+      s.kinds[s.kinds.length - 1] = 'result'
+    } else if (type === 'end' && s.kinds.length > 0) {
+      if (s.kinds.pop() === 'code') s.code--
+    }
   }
 }
 
@@ -736,8 +934,7 @@ function fieldCharsIn(el: XmlElement, fields: Fields): void {
   for (const c of elements(el)) fieldCharsIn(c, fields)
 }
 
-const inCode = (fields: Fields): boolean =>
-  fields.kept.includes('code') || fields.all.includes('code')
+const inCode = (fields: Fields): boolean => fields.kept.code > 0 || fields.all.code > 0
 
 /** Elements dropped whole, by namespace and local name, and what each counts as. */
 const DROP: ReadonlyMap<string, ReadonlyMap<string, string | null>> = new Map([
@@ -768,7 +965,6 @@ const DROP: ReadonlyMap<string, ReadonlyMap<string, string | null>> = new Map([
       ['object', 'oleObjects'],
     ]),
   ],
-  [NS.o, new Map([['OLEObject', 'oleObjects']])],
   [
     NS.p,
     new Map([
@@ -798,6 +994,8 @@ const UNWRAP: ReadonlyMap<string, ReadonlyMap<string, string | null>> = new Map(
   ],
 ])
 
+const isRun = (el: XmlElement): boolean => is(el, NS.w, 'r') || is(el, NS.m, 'r')
+
 function visit(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[] {
   const drop = (key: string | null): Node[] => {
     if (key !== null) ctx.removed.add(key)
@@ -818,13 +1016,17 @@ function visit(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[] {
   }
   if (is(el, NS.w, 'tr') && childEl(childEl(el, NS.w, 'trPr'), NS.w, 'del'))
     return drop('deletions')
-  if (isHiddenShape(el)) {
-    fields.hidden++
-    return drop('hiddenShapes')
-  }
-  if ((is(el, NS.w, 'r') || is(el, NS.m, 'r')) && runHidden(el, ctx, scope)) {
-    fields.hidden++
-    return drop('hiddenRuns')
+  if (is(el, NS.w, 'tc') && childEl(childEl(el, NS.w, 'tcPr'), NS.w, 'cellDel'))
+    return drop('deletions')
+  if (isHiddenShape(el)) return drop('hiddenShapes')
+  if (isRun(el) && runHidden(el, ctx, scope)) return drop('hiddenRuns')
+  if (
+    isRun(el) &&
+    scope.separator &&
+    !childEl(el, NS.w, 'separator') &&
+    !childEl(el, NS.w, 'continuationSeparator')
+  ) {
+    return drop('separatorText')
   }
   if (
     (ctx.role === 'wordFootnotes' || ctx.role === 'wordEndnotes') &&
@@ -834,28 +1036,22 @@ function visit(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[] {
     return drop('unreferencedNotes')
   }
 
-  // ── Markup compatibility: both branches, and one hidden branch hides all ─
-  if (is(el, NS.mc, 'AlternateContent')) {
-    const before = fields.hidden
-    const rebuilt = rebuild(el, ctx, fields, scope)
-    if (fields.hidden > before) {
-      ctx.removed.add('alternateContent')
-      return []
-    }
-    return rebuilt
-  }
-
   // ── Scope, then the element itself ─────────────────────────────────────
   let inner = scope
-  if (is(el, NS.w, 'p')) inner = { ...scope, pStyles: wVals(el, 'pPr', 'pStyle') }
-  else if (is(el, NS.w, 'tbl')) inner = { ...scope, tblStyles: wVals(el, 'tblPr', 'tblStyle') }
+  if (is(el, NS.w, 'p')) {
+    inner = { ...scope, pStyles: wVals(el, 'pPr', 'pStyle'), pFill: shdFill(el, 'pPr') }
+  } else if (is(el, NS.w, 'tbl')) {
+    inner = { ...scope, tblStyles: wVals(el, 'tblPr', 'tblStyle') }
+  } else if (is(el, NS.w, 'footnote') || is(el, NS.w, 'endnote')) {
+    inner = { ...scope, separator: separatorNote(el) }
+  }
   const out = rebuild(el, ctx, fields, inner)
 
   const unwrapKey = UNWRAP.get(el.ns)?.get(el.name)
   if (unwrapKey !== undefined) {
     if (unwrapKey !== null) ctx.removed.add(unwrapKey)
     const self = out[0] as XmlElement | undefined
-    return self ? unwrap(el, self.children) : []
+    return self ? carry(decls(el), self.children) : []
   }
   return out
 }
@@ -867,7 +1063,7 @@ function rebuild(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[]
   const attributes: XmlAttribute[] = []
   const altBearer = is(el, NS.wp, 'docPr') || el.name === 'cNvPr'
   for (const a of el.attributes) {
-    if ((a.ns === NS.r || (a.ns === NS.o && a.name === 'relid')) && !ctx.keptIds.has(a.value)) {
+    if (a.ns === NS.r && !ctx.keptIds.has(a.value)) {
       ctx.removed.add('references')
       lostReference = true
       continue
@@ -880,7 +1076,7 @@ function rebuild(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[]
   }
   if (altText) ctx.removed.add('altText')
 
-  const runLike = is(el, NS.w, 'r') || is(el, NS.m, 'r')
+  const runLike = isRun(el)
   const children: Node[] = []
   for (const c of el.children) {
     if (typeof c === 'string') {
@@ -903,18 +1099,6 @@ function rebuild(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[]
   return [rebuilt]
 }
 
-/** Replace `el` by `children`, carrying its namespace declarations onto them. */
-function unwrap(el: XmlElement, children: readonly Node[]): Node[] {
-  const decls = el.attributes.filter((a) => a.ns === NS.xmlns)
-  if (decls.length === 0) return [...children]
-  const key = (a: XmlAttribute) => (a.prefix === 'xmlns' ? a.name : '')
-  return children.map((c) => {
-    if (typeof c === 'string') return c
-    const own = new Set(c.attributes.filter((a) => a.ns === NS.xmlns).map(key))
-    return { ...c, attributes: [...decls.filter((d) => !own.has(key(d))), ...c.attributes] }
-  })
-}
-
 // ============================================================================
 // Hidden shapes, hidden runs, notes
 // ============================================================================
@@ -932,24 +1116,27 @@ function isHiddenShape(el: XmlElement): boolean {
 }
 
 const HIDING = ['vanish', 'specVanish', 'webHidden'] as const
+type Hiding = (typeof HIDING)[number]
 
 function runHidden(run: XmlElement, ctx: Ctx, scope: Scope): boolean {
   const rPrs = childEls(run, NS.w, 'rPr')
-  const rStyles = wVals(run, 'rPr', 'rStyle')
+  const styled = ctx.wordStyles && levels(ctx.wordStyles, wVals(run, 'rPr', 'rStyle'), scope)
   for (const prop of HIDING) {
     const direct = rPrs.flatMap((r) => childEls(r, NS.w, prop)).map((e) => onOff(e))
     if (direct.includes(true)) return true
     if (direct.length > 0) continue // set false directly: absolute, whatever a style says
-    if (ctx.wordStyles && styleHides(ctx.wordStyles, prop, rStyles, scope)) return true
+    if (styled && styled.hides[prop]) return true
   }
   return false
 }
 
-function noteKept(note: XmlElement, ctx: Ctx): boolean {
+function separatorNote(note: XmlElement): boolean {
   const type = attrOf(note.attributes, 'type', NS.w)
-  if (type === 'separator' || type === 'continuationSeparator' || type === 'continuationNotice') {
-    return true
-  }
+  return type === 'separator' || type === 'continuationSeparator' || type === 'continuationNotice'
+}
+
+function noteKept(note: XmlElement, ctx: Ctx): boolean {
+  if (separatorNote(note)) return true
   const kind = note.name === 'footnote' ? 'footnote' : 'endnote'
   return ctx.noteRefs.has(`${kind}:${attrOf(note.attributes, 'id', NS.w)}`)
 }
@@ -961,16 +1148,25 @@ function collectNoteRefs(el: XmlElement, refs: Set<string>): void {
 }
 
 // ============================================================================
-// WordprocessingML styles
+// WordprocessingML styles — each id resolved once, each combination once (#482 F2b, A13)
 // ============================================================================
 
 interface RunProps {
   readonly on: ReadonlyMap<string, boolean>
   readonly color?: { readonly val?: string; readonly theme?: string }
   readonly sz?: number
+  readonly szCs?: number
 }
 
-interface WordStyle {
+/** What a style, or a combination of styles, gives a run. */
+interface Resolved {
+  readonly hides: Readonly<Record<Hiding, boolean>>
+  readonly color?: { readonly val?: string; readonly theme?: string }
+  readonly sz?: number
+  readonly szCs?: number
+}
+
+interface StyleDef {
   readonly basedOn?: string
   readonly rPr?: RunProps
   /** A table style's conditional formatting (`w:tblStylePr`). */
@@ -979,14 +1175,23 @@ interface WordStyle {
 
 interface WordStyles {
   /** By lower-cased id; every definition of an id, since a duplicate is ambiguous. */
-  readonly byId: ReadonlyMap<string, readonly WordStyle[]>
+  readonly byId: ReadonlyMap<string, readonly StyleDef[]>
   readonly docDefaults?: RunProps
   /** Every style claiming `w:default` for its type: two claimants are ambiguous, so both count. */
   readonly defaults: Readonly<Record<StyleType, readonly string[]>>
+  /** Per lower-cased id, over its whole `basedOn` chain. */
+  readonly resolved: Map<string, Resolved & { readonly depth: number }>
+  /** Per (rStyles, pStyles, tblStyles) key. */
+  readonly combined: Map<string, Resolved>
 }
 
 type StyleType = 'paragraph' | 'character' | 'table'
 const STYLE_TYPES: readonly string[] = ['paragraph', 'character', 'table']
+
+function int(v: string | undefined): number | undefined {
+  const n = Number.parseInt(v ?? '', 10)
+  return Number.isFinite(n) ? n : undefined
+}
 
 function runProps(rPr: XmlElement | undefined): RunProps | undefined {
   if (!rPr) return undefined
@@ -996,19 +1201,16 @@ function runProps(rPr: XmlElement | undefined): RunProps | undefined {
     if (v !== undefined) on.set(prop, v)
   }
   const color = childEl(rPr, NS.w, 'color')
-  const sz = Number.parseInt(wVal(childEl(rPr, NS.w, 'sz')) ?? '', 10)
   return {
     on,
-    color: color && {
-      val: wVal(color),
-      theme: attrOf(color.attributes, 'themeColor', NS.w),
-    },
-    sz: Number.isFinite(sz) ? sz : undefined,
+    color: color && { val: wVal(color), theme: attrOf(color.attributes, 'themeColor', NS.w) },
+    sz: int(wVal(childEl(rPr, NS.w, 'sz'))),
+    szCs: int(wVal(childEl(rPr, NS.w, 'szCs'))),
   }
 }
 
 function readWordStyles(root: XmlElement): WordStyles {
-  const byId = new Map<string, WordStyle[]>()
+  const byId = new Map<string, StyleDef[]>()
   const defaults: Record<StyleType, string[]> = { paragraph: [], character: [], table: [] }
   for (const s of elements(root)) {
     if (!is(s, NS.w, 'style')) continue
@@ -1040,56 +1242,106 @@ function readWordStyles(root: XmlElement): WordStyles {
   const docDefaults = runProps(
     childEl(childEl(childEl(root, NS.w, 'docDefaults'), NS.w, 'rPrDefault'), NS.w, 'rPr'),
   )
-  return { byId, docDefaults, defaults }
+  return { byId, docDefaults, defaults, resolved: new Map(), combined: new Map() }
 }
 
-/** Every style in these ids' `basedOn` chains, nearest first; cycles and runaway chains end. */
-function chain(styles: WordStyles, ids: readonly string[]): WordStyle[] {
-  const out: WordStyle[] = []
-  const seen = new Set<string>()
-  const queue = ids.map((id) => id.toLowerCase())
-  while (queue.length > 0 && out.length < 256) {
-    const key = queue.shift()!
-    if (seen.has(key)) continue
-    seen.add(key)
-    for (const s of styles.byId.get(key) ?? []) {
-      out.push(s)
-      if (s.basedOn !== undefined) queue.push(s.basedOn.toLowerCase())
+/** Nearest first: the first level that defines it wins. */
+function nearest<K extends 'color' | 'sz' | 'szCs'>(
+  levels: readonly (Pick<RunProps, K> | undefined)[],
+  key: K,
+): RunProps[K] {
+  for (const l of levels) if (l?.[key] !== undefined) return l[key]
+  return undefined
+}
+
+/**
+ * Resolve one style id over its whole `basedOn` chain, ONCE: an iterative
+ * post-order walk that memoizes every id it finishes, so each id costs its
+ * own definitions and nothing more. A loop, or a chain deeper than 256,
+ * counts as hiding — a bound that cuts a chain never reads as "absent" (A13).
+ */
+function resolveStyle(styles: WordStyles, id: string): Resolved {
+  const start = id.toLowerCase()
+  const memo = styles.resolved
+  const done = memo.get(start)
+  if (done) return done
+  const open = new Set<string>([start])
+  const bases = (key: string) =>
+    (styles.byId.get(key) ?? [])
+      .map((d) => d.basedOn?.toLowerCase())
+      .filter((b): b is string => b !== undefined)
+  const frames: { key: string; bases: string[]; i: number; looped: boolean }[] = [
+    { key: start, bases: bases(start), i: 0, looped: false },
+  ]
+  while (frames.length > 0) {
+    const f = frames[frames.length - 1]
+    if (f.i < f.bases.length) {
+      const b = f.bases[f.i++]
+      if (memo.has(b)) continue
+      if (open.has(b)) {
+        f.looped = true
+        continue
+      }
+      open.add(b)
+      frames.push({ key: b, bases: bases(b), i: 0, looped: false })
+      continue
     }
+    frames.pop()
+    open.delete(f.key)
+    const defs = styles.byId.get(f.key) ?? []
+    const own = defs.flatMap((d) => [d.rPr, ...d.conditional]).filter((p) => p !== undefined)
+    const parents = f.bases.map((b) => memo.get(b)).filter((r) => r !== undefined)
+    const depth = 1 + Math.max(0, ...parents.map((p) => p.depth))
+    const broken = f.looped || depth > MAX_STYLE_DEPTH
+    const hides = {} as Record<Hiding, boolean>
+    for (const prop of HIDING) {
+      hides[prop] =
+        broken || own.some((p) => p.on.get(prop) === true) || parents.some((p) => p.hides[prop])
+    }
+    const direct = defs.map((d) => d.rPr)
+    memo.set(f.key, {
+      hides,
+      depth,
+      color: nearest([...direct, ...parents], 'color'),
+      sz: nearest([...direct, ...parents], 'sz'),
+      szCs: nearest([...direct, ...parents], 'szCs'),
+    })
   }
-  return out
+  return memo.get(start)!
 }
 
-/** The style levels a run in this scope inherits from, nearest first. */
-function levels(styles: WordStyles, rStyles: readonly string[], scope: Scope): RunProps[] {
-  const props: (RunProps | undefined)[] = []
+/** What the styles give a run in this scope — memoized per combination. */
+function levels(styles: WordStyles, rStyles: readonly string[], scope: Scope): Resolved {
+  const key = `${rStyles.join('\u0000')}|${scope.pStyles?.join('\u0000') ?? '\u0001'}|${scope.tblStyles?.join('\u0000') ?? '\u0001'}`
+  const hit = styles.combined.get(key)
+  if (hit) return hit
   const named = (ids: readonly string[], type: StyleType) =>
     ids.length > 0 ? ids : styles.defaults[type]
-  props.push(...chain(styles, named(rStyles, 'character')).map((s) => s.rPr))
+  const parts: Resolved[] = [...named(rStyles, 'character').map((id) => resolveStyle(styles, id))]
   if (scope.pStyles !== undefined) {
-    props.push(...chain(styles, named(scope.pStyles, 'paragraph')).map((s) => s.rPr))
+    parts.push(...named(scope.pStyles, 'paragraph').map((id) => resolveStyle(styles, id)))
   }
   if (scope.tblStyles !== undefined) {
-    for (const s of chain(styles, named(scope.tblStyles, 'table'))) {
-      props.push(s.rPr, ...s.conditional)
-    }
+    parts.push(...named(scope.tblStyles, 'table').map((id) => resolveStyle(styles, id)))
   }
-  props.push(styles.docDefaults)
-  return props.filter((p): p is RunProps => p !== undefined)
-}
-
-/** Any level that hides, hides: toggles cancelling out is not modelled (it only drops more). */
-function styleHides(
-  styles: WordStyles,
-  prop: string,
-  rStyles: readonly string[],
-  scope: Scope,
-): boolean {
-  return levels(styles, rStyles, scope).some((p) => p.on.get(prop) === true)
+  const base = styles.docDefaults
+  const hides = {} as Record<Hiding, boolean>
+  for (const prop of HIDING) {
+    hides[prop] = parts.some((p) => p.hides[prop]) || base?.on.get(prop) === true
+  }
+  const all = [...parts, base]
+  const combined: Resolved = {
+    hides,
+    color: nearest(all, 'color'),
+    sz: nearest(all, 'sz'),
+    szCs: nearest(all, 'szCs'),
+  }
+  styles.combined.set(key, combined)
+  return combined
 }
 
 // ============================================================================
-// Counted, not dropped
+// Counted, not dropped (A3, A10)
 // ============================================================================
 
 function count(el: XmlElement, ctx: Ctx, scope: Scope): void {
@@ -1102,59 +1354,110 @@ function count(el: XmlElement, ctx: Ctx, scope: Scope): void {
 const hasText = (run: XmlElement, ns: string): boolean =>
   elements(run).some((c) => is(c, ns, 't') && textOf(c).trim() !== '')
 
+/** A six-digit hex colour, or `undefined`. */
+const hex6 = (v: string | undefined): string | undefined =>
+  v !== undefined && /^[0-9a-f]{6}$/i.test(v) ? v.toUpperCase() : undefined
+
+/** White, or near enough to read as white: every channel ≥ 0xF0 (A10). */
+const nearWhite = (hex: string | undefined): boolean =>
+  hex !== undefined && [0, 2, 4].every((i) => Number.parseInt(hex.slice(i, i + 2), 16) >= 0xf0)
+
+function shdFill(el: XmlElement, props: string): string | undefined {
+  const shd = childEl(childEl(el, NS.w, props), NS.w, 'shd')
+  return hex6(shd ? attrOf(shd.attributes, 'fill', NS.w) : undefined)
+}
+
 function countWordRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
   const direct = childEls(run, NS.w, 'rPr').map(runProps)
-  const rStyles = wVals(run, 'rPr', 'rStyle')
-  const stack = [...direct, ...(ctx.wordStyles ? levels(ctx.wordStyles, rStyles, scope) : [])]
-  const color = stack.find((p) => p?.color !== undefined)?.color
-  const sz = stack.find((p) => p?.sz !== undefined)?.sz
-  // A theme colour wins over `w:val` in Word; either one saying white counts.
-  const white =
-    color !== undefined &&
-    (color.theme === 'background1' ||
-      color.theme === 'light1' ||
-      color.val?.toUpperCase() === 'FFFFFF')
-  if (white) ctx.counted.add('whiteText')
-  if (sz !== undefined && sz <= 2) ctx.counted.add('tinyText')
+  const styled = ctx.wordStyles
+    ? levels(ctx.wordStyles, wVals(run, 'rPr', 'rStyle'), scope)
+    : undefined
+  const all = [...direct, styled]
+  const color = nearest(all, 'color')
+  const val = hex6(color?.val)
+  const theme = color?.theme
+  if (theme === 'background1' || theme === 'light1' || nearWhite(val)) {
+    ctx.counted.add('whiteText')
+  }
+  // A font colour equal to its own or its paragraph's shading (A10).
+  const fill = shdFill(run, 'rPr') ?? scope.pFill
+  if (val !== undefined && fill !== undefined && val === fill) ctx.counted.add('fontMatchesFill')
+  const sz = nearest(all, 'sz')
+  const szCs = nearest(all, 'szCs')
+  if ((sz !== undefined && sz <= 2) || (szCs !== undefined && szCs <= 2)) {
+    ctx.counted.add('tinyText')
+  }
 }
 
 function countDrawingRun(run: XmlElement, ctx: Ctx): void {
   const rPr = childEl(run, NS.a, 'rPr')
   if (!rPr) return
   const fill = childEl(rPr, NS.a, 'solidFill')
-  const rgb = attrOf(childEl(fill, NS.a, 'srgbClr')?.attributes ?? [], 'val')
-  const scheme = attrOf(childEl(fill, NS.a, 'schemeClr')?.attributes ?? [], 'val')
-  if (rgb?.toUpperCase() === 'FFFFFF' || scheme === 'bg1' || scheme === 'lt1') {
+  const clr = fill ? elements(fill)[0] : undefined
+  const val = clr ? attrOf(clr.attributes, 'val') : undefined
+  const alpha = clr ? int(attrOf(childEl(clr, NS.a, 'alpha')?.attributes ?? [], 'val')) : undefined
+  if (
+    childEl(rPr, NS.a, 'noFill') ||
+    alpha === 0 ||
+    (clr !== undefined && is(clr, NS.a, 'srgbClr') && nearWhite(hex6(val))) ||
+    (clr !== undefined && is(clr, NS.a, 'schemeClr') && (val === 'bg1' || val === 'lt1'))
+  ) {
     ctx.counted.add('whiteText')
   }
-  const sz = Number.parseInt(attrOf(rPr.attributes, 'sz') ?? '', 10)
-  if (Number.isFinite(sz) && sz <= 100) ctx.counted.add('tinyText')
+  const sz = int(attrOf(rPr.attributes, 'sz'))
+  if (sz !== undefined && sz <= 100) ctx.counted.add('tinyText')
 }
 
-const zero = (v: string | undefined): boolean => v !== undefined && Number.parseFloat(v) === 0
+/** Below these, a row or column is as good as hidden (A10). */
+const tiny = (v: string | undefined, under: number): boolean => {
+  const n = v === undefined ? Number.NaN : Number.parseFloat(v)
+  return Number.isFinite(n) && n < under
+}
 
 function countSheet(el: XmlElement, ctx: Ctx): void {
   if (is(el, NS.s, 'row')) {
     if (flag(el, 'hidden')) ctx.counted.add('hiddenRows')
-    if (zero(attrOf(el.attributes, 'ht'))) ctx.counted.add('zeroRowHeights')
+    if (tiny(attrOf(el.attributes, 'ht'), 1)) ctx.counted.add('zeroRowHeights')
   } else if (is(el, NS.s, 'col')) {
     if (flag(el, 'hidden')) ctx.counted.add('hiddenColumns')
-    if (zero(attrOf(el.attributes, 'width'))) ctx.counted.add('zeroColumnWidths')
+    if (tiny(attrOf(el.attributes, 'width'), 0.5)) ctx.counted.add('zeroColumnWidths')
   } else if (is(el, NS.s, 'sheetFormatPr')) {
     if (flag(el, 'zeroHeight')) ctx.counted.add('hiddenRows')
-    if (zero(attrOf(el.attributes, 'defaultRowHeight'))) ctx.counted.add('zeroRowHeights')
-    if (zero(attrOf(el.attributes, 'defaultColWidth'))) ctx.counted.add('zeroColumnWidths')
+    if (tiny(attrOf(el.attributes, 'defaultRowHeight'), 1)) ctx.counted.add('zeroRowHeights')
+    if (tiny(attrOf(el.attributes, 'defaultColWidth'), 0.5)) ctx.counted.add('zeroColumnWidths')
   } else if (is(el, NS.s, 'c') && ctx.sheetStyles) {
     if (!childEl(el, NS.s, 'v') && !childEl(el, NS.s, 'is')) return
-    const xf = ctx.sheetStyles.xfs[Number.parseInt(attrOf(el.attributes, 's') ?? '0', 10)]
+    const styles = ctx.sheetStyles
+    const xf = styles.xfs[int(attrOf(el.attributes, 's')) ?? 0]
     if (!xf) return
-    const format = ctx.sheetStyles.numFmts.get(xf.numFmtId)
-    if (format !== undefined && format.replace(/\s/g, '') === ';;;') {
+    const format = styles.numFmts.get(xf.numFmtId) ?? ''
+    // `;;;` once empty literals, `[…]` codes and whitespace are gone (A10): only
+    // `;` left, or nothing left but an empty literal. A bare `[h]` is not hidden.
+    const bare = format
+      .replace(/""/g, '')
+      .replace(/\[[^\]]*\]/g, '')
+      .replace(/\s/g, '')
+    if (/^;*$/.test(bare) && (bare !== '' || format.includes('""'))) {
       ctx.counted.add('hiddenNumberFormats')
     }
-    const font = ctx.sheetStyles.fonts[xf.fontId]
-    const fill = ctx.sheetStyles.fills[xf.fillId]
-    if (font && (fill ? sameColor(font, fill) : isWhite(font))) ctx.counted.add('fontMatchesFill')
+    const fill = styles.fills[xf.fillId]
+    const fillRgb = fill === undefined ? undefined : toRgb(fill, ctx)
+    const invisible = (c: Color | undefined): boolean => {
+      const rgb = c === undefined ? undefined : toRgb(c, ctx)
+      return fillRgb === undefined ? nearWhite(rgb) : rgb === fillRgb
+    }
+    const v = childEl(el, NS.s, 'v')
+    const runs =
+      attrOf(el.attributes, 't') === 's'
+        ? (ctx.strings?.[(v && int(textOf(v))) ?? -1] ?? [])
+        : runColors(childEl(el, NS.s, 'is'))
+    if (
+      /\[(white|color ?2)\]/i.test(format) ||
+      invisible(styles.fonts[xf.fontId]) ||
+      runs.some(invisible)
+    ) {
+      ctx.counted.add('fontMatchesFill')
+    }
   }
 }
 
@@ -1171,8 +1474,7 @@ function countOffSlide(spTree: XmlElement, ctx: Ctx): void {
     const off = childEl(xfrm, NS.a, 'off')
     const ext = childEl(xfrm, NS.a, 'ext')
     if (!off) continue
-    const num = (e: XmlElement | undefined, n: string) =>
-      Number.parseInt(attrOf(e?.attributes ?? [], n) ?? '0', 10) || 0
+    const num = (e: XmlElement | undefined, n: string) => int(attrOf(e?.attributes ?? [], n)) ?? 0
     const [x, y, cx, cy] = [num(off, 'x'), num(off, 'y'), num(ext, 'cx'), num(ext, 'cy')]
     if (x >= size.cx || y >= size.cy || x + cx <= 0 || y + cy <= 0) {
       ctx.counted.add('offSlideShapes')
@@ -1182,12 +1484,12 @@ function countOffSlide(spTree: XmlElement, ctx: Ctx): void {
 
 function readSlideSize(root: XmlElement): { cx: number; cy: number } | undefined {
   const sz = childEl(root, NS.p, 'sldSz')
-  const cx = Number.parseInt(attrOf(sz?.attributes ?? [], 'cx') ?? '', 10)
-  const cy = Number.parseInt(attrOf(sz?.attributes ?? [], 'cy') ?? '', 10)
-  return Number.isFinite(cx) && Number.isFinite(cy) ? { cx, cy } : undefined
+  const cx = int(attrOf(sz?.attributes ?? [], 'cx'))
+  const cy = int(attrOf(sz?.attributes ?? [], 'cy'))
+  return cx !== undefined && cy !== undefined ? { cx, cy } : undefined
 }
 
-// ── SpreadsheetML styles ────────────────────────────────────────────────────
+// ── SpreadsheetML colours: indexed, theme and tint resolved to RGB (A10) ────
 
 interface Color {
   readonly rgb?: string
@@ -1203,31 +1505,142 @@ interface SheetStyles {
   readonly fonts: readonly (Color | undefined)[]
   /** A SOLID fill's colour; `undefined` for no fill (white). */
   readonly fills: readonly (Color | undefined)[]
+  /** The workbook's own palette (`<colors><indexedColors>`), when it has one. */
+  readonly palette?: readonly string[]
+}
+
+/** Excel's default indexed palette, 0–63, then system foreground and background. */
+const PALETTE = (
+  '000000 FFFFFF FF0000 00FF00 0000FF FFFF00 FF00FF 00FFFF ' +
+  '000000 FFFFFF FF0000 00FF00 0000FF FFFF00 FF00FF 00FFFF ' +
+  '800000 008000 000080 808000 800080 008080 C0C0C0 808080 ' +
+  '9999FF 993366 FFFFCC CCFFFF 660066 FF8080 0066CC CCCCFF ' +
+  '000080 FF00FF FFFF00 00FFFF 800080 800000 008080 0000FF ' +
+  '00CCFF CCFFFF CCFFCC FFFF99 99CCFF FF99CC CC99FF FFCC99 ' +
+  '3366FF 33CCCC 99CC00 FFCC00 FF9900 FF6600 666699 969696 ' +
+  '003366 339966 003300 333300 993300 993366 333399 333333 ' +
+  '000000 FFFFFF'
+).split(' ')
+
+/** SpreadsheetML's theme index order, and the Office defaults when no theme part is kept. */
+const THEME_SLOTS = ['lt1', 'dk1', 'lt2', 'dk2', 'accent1', 'accent2', 'accent3', 'accent4'].concat(
+  ['accent5', 'accent6', 'hlink', 'folHlink'],
+)
+const THEME_DEFAULTS: Readonly<Record<string, string>> = {
+  dk1: '000000',
+  lt1: 'FFFFFF',
+  dk2: '1F497D',
+  lt2: 'EEECE1',
+  accent1: '4F81BD',
+  accent2: 'C0504D',
+  accent3: '9BBB59',
+  accent4: '8064A2',
+  accent5: '4BACC6',
+  accent6: 'F79646',
+  hlink: '0000FF',
+  folHlink: '800080',
+}
+
+function readTheme(root: XmlElement): ReadonlyMap<string, string> {
+  const scheme = childEl(childEl(root, NS.a, 'themeElements'), NS.a, 'clrScheme')
+  const colors = new Map<string, string>()
+  for (const slot of scheme ? elements(scheme) : []) {
+    const c = elements(slot)[0]
+    const v = c && hex6(attrOf(c.attributes, is(c, NS.a, 'sysClr') ? 'lastClr' : 'val'))
+    if (slot.ns === NS.a && v) colors.set(slot.name, v)
+  }
+  return colors
+}
+
+function toRgb(c: Color, ctx: Shared): string | undefined {
+  let rgb: string | undefined
+  if (c.rgb !== undefined) rgb = hex6(c.rgb.slice(-6))
+  else if (c.indexed !== undefined) {
+    const i = int(c.indexed) ?? -1
+    rgb = hex6(ctx.sheetStyles?.palette?.[i] ?? PALETTE[i])
+  } else if (c.theme !== undefined) {
+    const slot = THEME_SLOTS[int(c.theme) ?? -1]
+    rgb = slot && (ctx.theme?.get(slot) ?? THEME_DEFAULTS[slot])
+  }
+  const tint = Number.parseFloat(c.tint ?? '0')
+  return rgb && Number.isFinite(tint) && tint !== 0 ? applyTint(rgb, tint) : rgb
+}
+
+/** Excel's tint: lighten or darken the HSL lightness. */
+function applyTint(hex: string, tint: number): string {
+  const [r, g, b] = [0, 2, 4].map((i) => Number.parseInt(hex.slice(i, i + 2), 16) / 255)
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  let l = (max + min) / 2
+  const d = max - min
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1))
+  let h = 0
+  if (d !== 0) {
+    h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4
+    h *= 60
+    if (h < 0) h += 360
+  }
+  l = tint < 0 ? l * (1 + tint) : l * (1 - tint) + tint
+  const c = (1 - Math.abs(2 * l - 1)) * s
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1))
+  const m = l - c / 2
+  const [r1, g1, b1] =
+    h < 60
+      ? [c, x, 0]
+      : h < 120
+        ? [x, c, 0]
+        : h < 180
+          ? [0, c, x]
+          : h < 240
+            ? [0, x, c]
+            : h < 300
+              ? [x, 0, c]
+              : [c, 0, x]
+  return [r1, g1, b1]
+    .map((v) =>
+      Math.round((v + m) * 255)
+        .toString(16)
+        .padStart(2, '0'),
+    )
+    .join('')
+    .toUpperCase()
 }
 
 function colorOf(el: XmlElement | undefined): Color | undefined {
-  if (!el) return undefined
+  if (!el || flag(el, 'auto')) return undefined
   const a = (n: string) => attrOf(el.attributes, n)
   return { rgb: a('rgb'), theme: a('theme'), tint: a('tint'), indexed: a('indexed') }
 }
 
+/** The colours of a rich string's runs (`r/rPr/color`). */
+function runColors(si: XmlElement | undefined): Color[] {
+  if (!si) return []
+  return childEls(si, NS.s, 'r')
+    .map((r) => colorOf(childEl(childEl(r, NS.s, 'rPr'), NS.s, 'color')))
+    .filter((c): c is Color => c !== undefined)
+}
+
+function readSharedStrings(root: XmlElement): Color[][] {
+  return childEls(root, NS.s, 'si').map(runColors)
+}
+
 function readSheetStyles(root: XmlElement): SheetStyles {
-  const int = (v: string | undefined) => Number.parseInt(v ?? '0', 10) || 0
+  const num = (v: string | undefined) => int(v) ?? 0
   const numFmts = new Map<number, string>()
-  for (const f of elements(childEl(root, NS.s, 'numFmts') ?? root)) {
-    if (!is(f, NS.s, 'numFmt')) continue
-    numFmts.set(int(attrOf(f.attributes, 'numFmtId')), attrOf(f.attributes, 'formatCode') ?? '')
+  for (const f of childEls(childEl(root, NS.s, 'numFmts') ?? root, NS.s, 'numFmt')) {
+    numFmts.set(num(attrOf(f.attributes, 'numFmtId')), attrOf(f.attributes, 'formatCode') ?? '')
   }
-  const list = (name: string, item: string) =>
-    elements(childEl(root, NS.s, name) ?? { ...root, children: [] }).filter((e) =>
-      is(e, NS.s, item),
-    )
+  const list = (name: string, item: string) => {
+    const container = childEl(root, NS.s, name)
+    return container ? childEls(container, NS.s, item) : []
+  }
+  const indexed = childEl(childEl(root, NS.s, 'colors'), NS.s, 'indexedColors')
   return {
     numFmts,
     xfs: list('cellXfs', 'xf').map((x) => ({
-      numFmtId: int(attrOf(x.attributes, 'numFmtId')),
-      fontId: int(attrOf(x.attributes, 'fontId')),
-      fillId: int(attrOf(x.attributes, 'fillId')),
+      numFmtId: num(attrOf(x.attributes, 'numFmtId')),
+      fontId: num(attrOf(x.attributes, 'fontId')),
+      fillId: num(attrOf(x.attributes, 'fillId')),
     })),
     fonts: list('fonts', 'font').map((f) => colorOf(childEl(f, NS.s, 'color'))),
     fills: list('fills', 'fill').map((f) => {
@@ -1235,23 +1648,12 @@ function readSheetStyles(root: XmlElement): SheetStyles {
       if (!pattern || attrOf(pattern.attributes, 'patternType') !== 'solid') return undefined
       return colorOf(childEl(pattern, NS.s, 'fgColor'))
     }),
+    palette: indexed
+      ? childEls(indexed, NS.s, 'rgbColor').map((c) =>
+          (attrOf(c.attributes, 'rgb') ?? '').slice(-6),
+        )
+      : undefined,
   }
-}
-
-const rgb6 = (c: Color): string | undefined => c.rgb?.slice(-6).toUpperCase()
-
-function sameColor(a: Color, b: Color): boolean {
-  if (a.rgb !== undefined && b.rgb !== undefined) return rgb6(a) === rgb6(b)
-  if (a.theme !== undefined && b.theme !== undefined) {
-    return a.theme === b.theme && (a.tint ?? '0') === (b.tint ?? '0')
-  }
-  if (a.indexed !== undefined && b.indexed !== undefined) return a.indexed === b.indexed
-  return false
-}
-
-/** White on the default (white) background: rgb FFFFFF, theme 0 (Background 1), indexed 1 or 9. */
-function isWhite(c: Color): boolean {
-  return rgb6(c) === 'FFFFFF' || c.theme === '0' || c.indexed === '1' || c.indexed === '9'
 }
 
 // ============================================================================

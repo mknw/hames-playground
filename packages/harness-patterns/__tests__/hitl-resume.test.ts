@@ -465,7 +465,8 @@ describe('H17 · an answer must be an available option of THAT request', () => {
   })
 
   // MUTATION: drop the subset check → a flag the option never declared is
-  // accepted (and recorded) → red.
+  // accepted (and recorded) → red. MUTATION: drop the object check → a
+  // number or a boolean has no entries to refuse, and is accepted → red.
   it('invalid-flag: a flag the chosen option does not declare, or that is not a boolean', async () => {
     const { blob, id, patterns } = await provenancePause()
     const flagged = (flags: unknown) =>
@@ -479,6 +480,9 @@ describe('H17 · an answer must be an available option of THAT request', () => {
       ),
     ).toBe('invalid-flag')
     expect(await flagged(['markInjected'])).toBe('invalid-flag')
+    // Not an object at all: no entries for the subset check to refuse.
+    expect(await flagged(42)).toBe('invalid-flag')
+    expect(await flagged(true)).toBe('invalid-flag')
   })
 
   // MUTATION: drop the required-flag check → 'continue' is accepted without
@@ -1294,6 +1298,26 @@ describe('an answer forged through the run’s async store never reaches the rec
 
     await resume(blob, [forger], { [pending[0].requestId]: 'reject' })
     expect(decided).toEqual(['reject'])
+  })
+
+  // In an UNATTENDED run an `unattended` response is a legitimate buffer
+  // entry — but only the one the rule picks. MUTATION: drop the choice check
+  // in `isRuleAnswer` → a forged "unattended" approval of a parked request is
+  // committed and fills the journal → red.
+  it('an "unattended" answer the rule would not pick is dropped', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const forger = configurePattern<Data>('gate', async (scope) => {
+      const outcome = await askHuman(confirm('plan', { unattended: 'park' }))
+      if (outcome.status === 'pending') {
+        reachRun().buffer.push(response(outcome.requestId, { by: 'unattended' }))
+      }
+      return scope
+    })
+    const { result } = await pausedAt([forger], { hitl: { attended: false } })
+
+    expect(responses(result.context)).toEqual([])
+    expect(readHitl(result.context).pending).toHaveLength(1)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('dropped a hitl_response'))
   })
 
   /** A request pushed into the buffer by hand, at the owner's position. */

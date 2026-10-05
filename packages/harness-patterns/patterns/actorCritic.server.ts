@@ -9,7 +9,7 @@
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
 import { isAgentWithheldTool } from '../agent-withheld-tools'
-import { repairJsonTracked, type JsonRepairNote } from '../json-repair'
+import { repairJsonTracked, TooLongToRepairError, type JsonRepairNote } from '../json-repair'
 import { normalizeControllerAction } from '../controller-action'
 import type {
   ControllerAction,
@@ -430,14 +430,16 @@ export function actorCritic<T extends ActorCriticData>(
               const parsed = repairJsonTracked(c.tool_args)
               callArgs = parsed.args
               callRepair = parsed.repair
-            } catch {
+            } catch (err) {
               track(c.tool_args)
               subCalls.push({
                 tool: c.tool_name,
                 precheckError: actorLlmCall?.hitOutputCap
                   ? `tool_args for ${c.tool_name} were CUT OFF at the output-token limit — ` +
                     `the batch was too large; use fewer calls per attempt or split large payloads`
-                  : `Invalid tool_args JSON for ${c.tool_name}`,
+                  : err instanceof TooLongToRepairError
+                    ? `Invalid tool_args JSON for ${c.tool_name}: ${err.message}`
+                    : `Invalid tool_args JSON for ${c.tool_name}`,
               })
               continue
             }
@@ -632,7 +634,7 @@ export function actorCritic<T extends ActorCriticData>(
           const parsed = repairJsonTracked(action.tool_args)
           args = parsed.args
           argsRepair = parsed.repair
-        } catch {
+        } catch (err) {
           // Truncation-aware feedback: when the actor call hit its client's
           // output-token cap, the args aren't malformed — they were CUT OFF.
           // Generic "fix your JSON quoting" feedback makes the model regenerate
@@ -643,6 +645,7 @@ export function actorCritic<T extends ActorCriticData>(
             action.tool_name,
             action.tool_args,
             actorLlmCall?.hitOutputCap ?? false,
+            err,
           )
           if (streak.unusableAnswer()) {
             return endOnRecoveryCap(scope, errMsg, attempt, actorLlmCall)

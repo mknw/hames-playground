@@ -1,12 +1,13 @@
 /**
  * Sandbox-agent multi-turn workspace regression test (#243 follow-up).
  *
- * Reproduces the live failure in `.harness-logs/243.json` at the routing level:
+ * Reproduces the live failure in `.harness-logs/243.json` at the routing level
+ * (the turn texts below are synthetic; the router is scripted):
  *
- *   turn 1 "ingest the attached spreadsheet"  → router picks `data`   → the file
- *                                               is in /work/in, all good
- *   turn 2 "list the files in /work/in"       → router picks `basic`  → a
- *                                               DIFFERENT flavour container
+ *   turn 1, works on the ingested file → router picks `data`   → the file is in
+ *                                        /work/in, all good
+ *   turn 2, asks for the inputs        → router picks `basic`  → a DIFFERENT
+ *                                        flavour container
  *
  * Before the fix, `basic` was the one route built without an attachment `id`
  * (anonymous warm pool), and `syncWorkspace` is a no-op without one — so turn 2
@@ -223,7 +224,7 @@ vi.mock('@hames-ai/sandbox/docker-backend.server', () => {
 })
 
 // ---- Document store: the session owns one ingested file -------------------
-const INGESTED = 'Coworking_Analyse.csv'
+const INGESTED = 'sample_inputs.csv'
 const docs = vi.hoisted(() => ({
   store: [] as Array<{ id: string; filename: string; content: string }>,
 }))
@@ -330,7 +331,7 @@ describe('sandbox agent — one session workspace across flavours (#243 follow-u
 
     // Turn 1 — routed to `data`, where the ingested file is hydrated.
     const turn1 = await harness(...patterns)(
-      'Ingest the attached spreadsheet and tell me what columns it has.',
+      'Load the stored workbook and describe its columns.',
       'sess-243',
     )
     const dataListing = listResults(turn1.context.events, 'flavour-data-loop')
@@ -341,7 +342,11 @@ describe('sandbox agent — one session workspace across flavours (#243 follow-u
     // Turn 2 — routed to `basic`: a DIFFERENT flavour, hence a different
     // container and a different filesystem. This is the exact turn that failed
     // in 243.json with "No such file or directory".
-    const turn2 = await continueSession(turn1.serialized, patterns, 'list the files in /work/in')
+    const turn2 = await continueSession(
+      turn1.serialized,
+      patterns,
+      'Show what is in the inputs folder.',
+    )
     const basicListing = listResults(turn2.context.events, 'flavour-basic-loop')
     expect(basicListing.length).toBeGreaterThan(0)
     expect(basicListing[0].data.success).toBe(true)
@@ -366,7 +371,7 @@ describe('sandbox agent — one session workspace across flavours (#243 follow-u
     const { harness } = await import('@hames-ai/harness-patterns')
     const patterns = await sandboxAgent.createPatterns('sess-243', await realSandboxDeps())
 
-    const turn = await harness(...patterns)('list the files in /work/in', 'sess-243')
+    const turn = await harness(...patterns)('Show what is in the inputs folder.', 'sess-243')
     const listing = listResults(turn.context.events, 'flavour-basic-loop')
     expect(listing.length).toBeGreaterThan(0)
     expect(listing[0].data.success).toBe(true)

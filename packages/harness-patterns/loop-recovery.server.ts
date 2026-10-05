@@ -36,6 +36,7 @@
 
 import { assertServerOnImport } from './assert.server'
 import { trackEvent } from './context.server'
+import { TooLongToRepairError } from './json-repair'
 import { LLMCallError } from './types'
 import type { ErrorEventData, LLMCallRecord, LoopRecoveryEventData, PatternScope } from './types'
 
@@ -113,12 +114,17 @@ export function unparseableOutputFeedback(err: LLMCallError): string {
  * message, so the error carries a bounded excerpt rather than a second full
  * copy of what can be a report-sized script.
  */
-export function invalidToolArgsFeedback(tool: string, args: string, cutOff: boolean): string {
+export function invalidToolArgsFeedback(
+  tool: string,
+  args: string,
+  cutOff: boolean,
+  err?: unknown,
+): string {
   return cutOff
     ? `tool_args for ${tool} were CUT OFF at the output-token limit (response truncated ` +
         'mid-generation, not a formatting mistake). Produce a materially smaller tool_args: ' +
         `${APPEND_ADVICE}.`
-    : `Invalid tool_args JSON for ${tool}: ${excerpt(args, 200)}`
+    : `Invalid tool_args JSON for ${tool}: ${err instanceof TooLongToRepairError ? err.message : excerpt(args, 200)}`
 }
 
 /** The consecutive-recovery cap when a loop declares none: ONE recovery, so

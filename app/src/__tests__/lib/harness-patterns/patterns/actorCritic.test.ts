@@ -127,7 +127,7 @@ describe('actorCritic execution', () => {
     // actorCritic is where the incident landed — `.harness-logs/
     // sandbox-tool-recovery.json`, event ev-tey7ez, a `sandbox_edit` whose
     // content quotes were escaped one level instead of two. Shape-for-shape
-    // repro; the 19 KB original is pinned in
+    // repro; a 20 KB synthetic reconstruction is pinned in
     // json-repair-unescaped-content.test.ts.
     const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
     const { createScope } = await import('@hames-ai/harness-patterns/context.server')

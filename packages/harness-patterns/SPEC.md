@@ -1300,10 +1300,10 @@ pattern emits `plan_created` with `skipped: 'no-message'` instead — a visible
 skip rather than silence, mirroring `intent_compacted.skipped`.
 
 **Clearing matters.** `scope.data` survives the turn boundary (the harness
-resets only `hasError` / `errorMessage` / `response`, and `serializeContext` is
-a plain `JSON.stringify`). A path that returned the scope untouched would hand
-turn 2's executor turn 1's plan — for a different question, under wording that
-tells it to prefer the plan over its own judgement.
+resets only `hasError` / `errorMessage` / `response` / `approved`, and
+`serializeContext` is a plain `JSON.stringify`). A path that returned the scope
+untouched would hand turn 2's executor turn 1's plan — for a different question,
+under wording that tells it to prefer the plan over its own judgement.
 
 **One-shot.** Replanning on failure is out of scope: a failed step is handled by
 `simpleLoop`'s own error path. `n_steps` is exposed on `scope.data.plan` as a
@@ -1505,6 +1505,20 @@ Resume a paused harness after approval/rejection.
 const resumed = await resumeHarness(serializedContext, patterns, true)
 ```
 
+**An approval lasts for the run it resumes.** `approved` is written onto `ctx.data` for
+the run it resumes, and `continueSession` deletes it at the next turn's start,
+so a gate reached again on a later turn finds no answer and must pause again. A
+"yes" that outlived its pause would let every later gate proceed without asking
+— fail-open, and silent (#456 c′). Within the resumed run the flag is still a
+bare boolean bound to no request, and `resumeHarness` re-runs the chain from its
+first pattern, so every gate that run reaches (a second gate, or the same gate
+reached again) reads the same answer; binding an answer to the pause it was
+issued for is #433's design. Two things stay with the host. `pendingAction` is
+the gate's own field, which core neither writes nor clears, so a gate clears it
+once answered. A host that drives `runChain` over a restored context, or seeds
+`harness()`'s `initialData` from an earlier result's `data`, skips this reset
+and owns it.
+
 ### `continueSession(serialized, patterns, newInput)`
 
 Continue a session with new user input.
@@ -1512,6 +1526,9 @@ Continue a session with new user input.
 ```typescript
 const continued = await continueSession(serializedContext, patterns, 'Follow-up question')
 ```
+
+It resets the per-turn fields on `ctx.data` — `hasError`, `errorMessage`,
+`response` and `approved` — and keeps everything else.
 
 ## EventView Query API
 
@@ -2089,7 +2106,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── token-budget.server.ts  # trimToFit(), estimateTokens() — rolling context window (getContextWindow moved to harness-baml/clients.server with the model tables)
 ├── injection-guard.ts      # Deterministic prompt-injection sanitizer (pure): rule corpus, neutralization, spotlight fence, LLM-screen folding
 │                           # (the guard's ALS scope was its own module until #374; it is now the run frame's `guard` slot, and `ActiveInjectionGuard` lives in injection-guard.ts beside the sanitizer it describes. Opposite nesting rule to transports — it UNIONS, see SD-5; read by callTool + retriever)
-├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values)
+├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values). No step is super-linear (#461, #463), and the lenient regex chain refuses input over 16 384 chars: it throws, never truncates
 ├── assert.server.ts        # Server-only guards
 └── patterns/               # The pattern factories — a directory OF THIS package, exported as @hames-ai/harness-patterns/patterns
     ├── index.ts

@@ -1,0 +1,238 @@
+{
+  "meDriveId": "b!e2e-onedrive-synthetic-user",
+  "items": [
+    {
+      "item": {
+        "id": "E2E-ITEM-INT-DOCX",
+        "name": "sample-internal.docx",
+        "file": {
+          "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        },
+        "webUrl": "https://contoso-my.sharepoint.com/personal/synthetic_user_contoso_com/Documents/sample-internal.docx",
+        "lastModifiedDateTime": "2026-09-30T09:00:00Z",
+        "createdBy": {
+          "user": { "displayName": "Colleague One", "email": "colleague.one@contoso.com" }
+        },
+        "lastModifiedBy": {
+          "user": { "displayName": "Synthetic User", "email": "synthetic.user@contoso.com" }
+        },
+        "parentReference": {
+          "driveId": "b!e2e-onedrive-synthetic-user",
+          "driveType": "business",
+          "id": "E2E-ROOT",
+          "path": "/drive/root:"
+        }
+      },
+      "content": "sample-internal.docx"
+    },
+    {
+      "item": {
+        "id": "E2E-ITEM-UNKNOWN-TXT",
+        "name": "sample-notes.txt",
+        "file": { "mimeType": "text/plain" },
+        "webUrl": "https://contoso-my.sharepoint.com/personal/synthetic_user_contoso_com/Documents/sample-notes.txt",
+        "lastModifiedDateTime": "2026-09-29T09:00:00Z",
+        "createdBy": { "application": { "displayName": "Synthetic Sync App" } },
+        "lastModifiedBy": { "application": { "displayName": "Synthetic Sync App" } },
+        "parentReference": {
+          "driveId": "b!e2e-onedrive-synthetic-user",
+          "driveType": "business",
+          "id": "E2E-ROOT",
+          "path": "/drive/root:"
+        }
+      },
+      "content": "sample-notes.txt"
+    },
+    {
+      "item": {
+        "id": "E2E-ITEM-FOLDER",
+        "name": "synthetic-folder",
+        "folder": { "childCount": 1 },
+        "webUrl": "https://contoso-my.sharepoint.com/personal/synthetic_user_contoso_com/Documents/synthetic-folder",
+        "lastModifiedDateTime": "2026-09-28T09:00:00Z",
+        "createdBy": {
+          "user": { "displayName": "Synthetic User", "email": "synthetic.user@contoso.com" }
+        },
+        "lastModifiedBy": {
+          "user": { "displayName": "Synthetic User", "email": "synthetic.user@contoso.com" }
+        },
+        "parentReference": {
+          "driveId": "b!e2e-onedrive-synthetic-user",
+          "driveType": "business",
+          "id": "E2E-ROOT",
+          "path": "/drive/root:"
+        }
+      }
+    },
+    {
+      "item": {
+        "id": "E2E-ITEM-OVERSIZE-PDF",
+        "name": "sample-oversize.pdf",
+        "file": { "mimeType": "application/pdf" },
+        "size": 2000000000,
+        "webUrl": "https://contoso-my.sharepoint.com/personal/synthetic_user_contoso_com/Documents/synthetic-folder/sample-oversize.pdf",
+        "lastModifiedDateTime": "2026-09-28T09:30:00Z",
+        "createdBy": {
+          "user": { "displayName": "Synthetic User", "email": "synthetic.user@contoso.com" }
+        },
+        "lastModifiedBy": {
+          "user": { "displayName": "Synthetic User", "email": "synthetic.user@contoso.com" }
+        },
+        "parentReference": {
+          "driveId": "b!e2e-onedrive-synthetic-user",
+          "driveType": "business",
+          "id": "E2E-ITEM-FOLDER",
+          "path": "/drive/root:/synthetic-folder"
+        }
+      }
+    },
+    {
+      "item": {
+        "id": "E2E-ITEM-SHORTCUT-EXT-DOCX",
+        "name": "sample-external.docx",
+        "webUrl": "https://fabrikam-my.sharepoint.com/personal/sender_one_fabrikam_com/Documents/sample-external.docx",
+        "lastModifiedDateTime": "2026-10-02T10:00:00Z",
+        "createdBy": {
+          "user": { "displayName": "Synthetic User", "email": "synthetic.user@contoso.com" }
+        },
+        "lastModifiedBy": {
+          "user": { "displayName": "Synthetic User", "email": "synthetic.user@contoso.com" }
+        },
+        "parentReference": {
+          "driveId": "b!e2e-onedrive-synthetic-user",
+          "driveType": "business",
+          "id": "E2E-ROOT",
+          "path": "/drive/root:"
+        },
+        "remoteItem": {
+          "id": "E2E-ITEM-EXT-DOCX",
+          "name": "sample-external.docx",
+          "file": {
+            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          },
+          "size": 1552,
+          "webUrl": "https://fabrikam-my.sharepoint.com/personal/sender_one_fabrikam_com/Documents/sample-external.docx",
+          "createdBy": {
+            "user": { "displayName": "Sender One", "email": "sender.one@fabrikam.com" }
+          },
+          "lastModifiedBy": {
+            "user": { "displayName": "Sender One", "email": "sender.one@fabrikam.com" }
+          },
+          "shared": {
+            "scope": "users",
+            "sharedDateTime": "2026-10-02T10:05:00Z",
+            "owner": {
+              "user": { "displayName": "Sender One", "email": "sender.one@fabrikam.com" }
+            },
+            "sharedBy": {
+              "user": { "displayName": "Sender One", "email": "sender.one@fabrikam.com" }
+            }
+          },
+          "parentReference": {
+            "driveId": "b!e2e-drive-fabrikam-sender",
+            "driveType": "business"
+          }
+        }
+      }
+    },
+    {
+      "item": {
+        "id": "E2E-ITEM-DENIED",
+        "name": "sample-denied.loop",
+        "file": { "mimeType": "application/octet-stream" },
+        "parentReference": {
+          "driveId": "b!e2e-onedrive-synthetic-user",
+          "driveType": "business",
+          "id": "E2E-ROOT",
+          "path": "/drive/root:"
+        }
+      },
+      "error": { "status": 403 }
+    },
+    {
+      "item": {
+        "id": "E2E-ITEM-EXT-DOCX",
+        "name": "sample-external.docx",
+        "file": {
+          "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        },
+        "webUrl": "https://fabrikam-my.sharepoint.com/personal/sender_one_fabrikam_com/Documents/sample-external.docx",
+        "lastModifiedDateTime": "2026-10-02T10:00:00Z",
+        "createdBy": {
+          "user": { "displayName": "Sender One", "email": "sender.one@fabrikam.com" }
+        },
+        "lastModifiedBy": {
+          "user": { "displayName": "Sender One", "email": "sender.one@fabrikam.com" }
+        },
+        "shared": {
+          "scope": "users",
+          "sharedDateTime": "2026-10-02T10:05:00Z",
+          "owner": { "user": { "displayName": "Sender One", "email": "sender.one@fabrikam.com" } },
+          "sharedBy": {
+            "user": { "displayName": "Sender One", "email": "sender.one@fabrikam.com" }
+          }
+        },
+        "parentReference": {
+          "driveId": "b!e2e-drive-fabrikam-sender",
+          "driveType": "business",
+          "id": "E2E-FABRIKAM-ROOT",
+          "path": "/drive/root:"
+        }
+      },
+      "content": "sample-external.docx"
+    },
+    {
+      "item": {
+        "id": "E2E-ITEM-EXT-PDF",
+        "name": "sample-external.pdf",
+        "file": { "mimeType": "application/pdf" },
+        "webUrl": "https://fabrikam-my.sharepoint.com/personal/sender_one_fabrikam_com/Documents/sample-external.pdf",
+        "lastModifiedDateTime": "2026-10-02T10:10:00Z",
+        "createdBy": {
+          "user": { "displayName": "Sender One", "email": "sender.one@fabrikam.com" }
+        },
+        "lastModifiedBy": {
+          "user": { "displayName": "Sender One", "email": "sender.one@fabrikam.com" }
+        },
+        "shared": {
+          "scope": "users",
+          "sharedDateTime": "2026-10-02T10:15:00Z",
+          "owner": { "user": { "displayName": "Sender One", "email": "sender.one@fabrikam.com" } },
+          "sharedBy": {
+            "user": { "displayName": "Sender One", "email": "sender.one@fabrikam.com" }
+          }
+        },
+        "parentReference": {
+          "driveId": "b!e2e-drive-fabrikam-sender",
+          "driveType": "business",
+          "id": "E2E-FABRIKAM-ROOT",
+          "path": "/drive/root:"
+        }
+      },
+      "content": "sample-external.pdf"
+    },
+    {
+      "item": {
+        "id": "E2E-ITEM-SITE-TXT",
+        "name": "sample-site-notes.txt",
+        "file": { "mimeType": "text/plain" },
+        "webUrl": "https://contoso.sharepoint.com/sites/synthetic-site/Shared%20Documents/sample-site-notes.txt",
+        "lastModifiedDateTime": "2026-10-01T15:00:00Z",
+        "createdBy": {
+          "user": { "displayName": "Colleague One", "email": "colleague.one@contoso.com" }
+        },
+        "lastModifiedBy": {
+          "user": { "displayName": "Guest One", "email": "guest.one@fabrikam.com" }
+        },
+        "parentReference": {
+          "driveId": "b!e2e-drive-contoso-site",
+          "driveType": "documentLibrary",
+          "id": "E2E-SITE-ROOT",
+          "path": "/drive/root:",
+          "siteId": "contoso.sharepoint.com,00000000-0000-4000-8000-0000000000a1,00000000-0000-4000-8000-0000000000a2"
+        }
+      },
+      "content": "sample-site-notes.txt"
+    }
+  ]
+}

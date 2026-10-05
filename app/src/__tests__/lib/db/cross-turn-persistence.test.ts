@@ -34,10 +34,27 @@ import {
   createEventView,
 } from '@hames-ai/harness-patterns'
 import type { ContextEvent } from '@hames-ai/harness-patterns'
-import { saveSession, loadSession } from '../../../lib/harness-client/session.server'
+import { claimSession, saveSession, loadSession } from '../../../lib/harness-client/session.server'
+import { createConversation } from '../../../lib/db/conversations.server'
 import { closePool, query } from '../../../lib/db/client.server'
 
 const TEST_USER = `xtest-${Math.random().toString(36).slice(2, 10)}`
+
+/** Persist a context the way a turn does: claim the conversation (creating it
+ *  on its first turn), then save at that claim. */
+async function persistTurn(sessionId: string, serialized: string): Promise<void> {
+  const claimed = await claimSession(sessionId, TEST_USER)
+  const version =
+    claimed?.version ??
+    (await createConversation({
+      id: sessionId,
+      userId: TEST_USER,
+      agentId: 'search',
+      title: null,
+      serializedContext: serialized,
+    }))
+  await saveSession(sessionId, TEST_USER, 'search', serialized, { version })
+}
 
 let dbAvailable = true
 
@@ -142,7 +159,7 @@ describe('cross-turn persistence after conversation switch', () => {
     const ctx = makeConvoWithWebSearch(sessionId)
     const originalEvents = JSON.parse(JSON.stringify(ctx.events))
 
-    await saveSession(sessionId, TEST_USER, 'search', serializeContext(ctx))
+    await persistTurn(sessionId, serializeContext(ctx))
     const loaded = await loadSession(sessionId, TEST_USER)
     expect(loaded).not.toBeNull()
     expect(loaded!.agentId).toBe('search')
@@ -156,7 +173,7 @@ describe('cross-turn persistence after conversation switch', () => {
   it('EventView on a loaded context exposes prior tool_results to withReferences-style queries', async () => {
     const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`
     const ctx = makeConvoWithWebSearch(sessionId)
-    await saveSession(sessionId, TEST_USER, 'search', serializeContext(ctx))
+    await persistTurn(sessionId, serializeContext(ctx))
 
     const loaded = await loadSession(sessionId, TEST_USER)
     const restored = deserializeContext(loaded!.serializedContext)
@@ -182,7 +199,7 @@ describe('cross-turn persistence after conversation switch', () => {
     // EventView still sees the prior tool_result alongside the new user_message.
     const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`
     const ctx = makeConvoWithWebSearch(sessionId)
-    await saveSession(sessionId, TEST_USER, 'search', serializeContext(ctx))
+    await persistTurn(sessionId, serializeContext(ctx))
 
     // Load + simulate continueSession's append
     const loaded = await loadSession(sessionId, TEST_USER)
@@ -216,7 +233,7 @@ describe('cross-turn persistence after conversation switch', () => {
     // surfaces the stored agentId so the dispatch decision is unambiguous.
     const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`
     const ctx = makeConvoWithWebSearch(sessionId)
-    await saveSession(sessionId, TEST_USER, 'search', serializeContext(ctx))
+    await persistTurn(sessionId, serializeContext(ctx))
     const loaded = await loadSession(sessionId, TEST_USER)
     expect(loaded!.agentId).toBe('search')
     // runTurn's dispatch: if request.agentId !== loaded.agentId → fresh harness.
@@ -226,7 +243,7 @@ describe('cross-turn persistence after conversation switch', () => {
   it('saving twice keeps the same row (no duplicate conversations on resume)', async () => {
     const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`
     const ctx = makeConvoWithWebSearch(sessionId)
-    await saveSession(sessionId, TEST_USER, 'search', serializeContext(ctx))
+    await persistTurn(sessionId, serializeContext(ctx))
 
     // Simulate a second turn: append a new event and re-save
     ctx.events.push({
@@ -236,7 +253,7 @@ describe('cross-turn persistence after conversation switch', () => {
       patternId: 'harness',
       data: { content: 'and now retrieve it' },
     })
-    await saveSession(sessionId, TEST_USER, 'search', serializeContext(ctx))
+    await persistTurn(sessionId, serializeContext(ctx))
 
     const { rows } = await query<{ count: string }>(
       'SELECT COUNT(*)::text AS count FROM conversations WHERE id = $1 AND user_id = $2',
@@ -261,7 +278,7 @@ describe('status lifting on save (agent-trigger status column)', () => {
   async function savedStatus(sessionId: string, ctxStatus: string): Promise<string | undefined> {
     const ctx = createContext('hi', {}, sessionId)
     ;(ctx as { status: string }).status = ctxStatus
-    await saveSession(sessionId, TEST_USER, 'search', serializeContext(ctx))
+    await persistTurn(sessionId, serializeContext(ctx))
     return (await loadSession(sessionId, TEST_USER))?.status
   }
 

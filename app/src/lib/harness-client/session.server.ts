@@ -13,8 +13,7 @@
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ConfiguredPattern } from '@hames-ai/harness-patterns'
-import { deserializeContext, serializeContext } from '@hames-ai/harness-patterns'
-import type { UnifiedContext } from '@hames-ai/harness-patterns'
+import { deserializeContext } from '@hames-ai/harness-patterns'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
 import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import { enrichNeo4jResult } from './neo4j-enricher.server'
@@ -25,12 +24,14 @@ import { canonicalAgentId, getAgent } from './registry.server'
 import { getRequestUserId, isAttendedRequest } from './request-user.server'
 import { resolveSandboxSkills } from '../skills/sandbox-skills.server'
 import {
+  claimConversation,
   loadConversation,
   saveConversation,
   deleteConversation,
   deriveTitle,
   updateConversationTitle,
   type ConversationKind,
+  type ConversationRow,
   type ConversationStatus,
 } from '../db/conversations.server'
 
@@ -241,13 +242,13 @@ export interface LoadedSession {
   status: ConversationStatus
 }
 
-/** Load a serialized context for (sessionId, userId), or null if not found. */
-export async function loadSession(
-  sessionId: string,
-  userId: string,
-): Promise<LoadedSession | null> {
-  const row = await loadConversation(sessionId, userId)
-  if (!row) return null
+/** A session as a turn holds it: loaded under its claim. */
+export interface ClaimedSession extends LoadedSession {
+  /** The context version the claim holds — what the turn's save must name. */
+  version: string
+}
+
+function toLoadedSession(row: ConversationRow): LoadedSession {
   return {
     serializedContext: row.serializedContext,
     // Rows written before an agent was renamed still carry the old id; map it
@@ -259,39 +260,55 @@ export async function loadSession(
   }
 }
 
+/** Load a serialized context for (sessionId, userId), or null if not found. */
+export async function loadSession(
+  sessionId: string,
+  userId: string,
+): Promise<LoadedSession | null> {
+  const row = await loadConversation(sessionId, userId)
+  return row ? toLoadedSession(row) : null
+}
+
 /**
- * Persist the latest serialized context for this conversation. Title is
- * derived from the first user_message on the very first save and never
- * overwritten after that (sticky in the DB layer).
+ * Claim the stored conversation for one turn and load it, or null when the
+ * user has none by this id. Throws `ConversationBusyError` while another turn
+ * holds it — `claimConversation` owns the lease.
+ */
+export async function claimSession(
+  sessionId: string,
+  userId: string,
+): Promise<ClaimedSession | null> {
+  const row = await claimConversation(sessionId, userId)
+  return row ? { ...toLoadedSession(row), version: row.version } : null
+}
+
+/**
+ * The end-of-turn save: persist the turn's serialized context at the version
+ * its claim holds, release the claim, and return the version written. Throws
+ * `ConversationConflictError` when the row moved on under the turn (see
+ * `saveConversation`). The title is derived from the first user_message and is
+ * sticky in the DB layer.
  *
- * `inferenceTier` is the tier the caller's turn ran on, and is RECORDED rather
- * than set: the DB layer COALESCEs it, so it fills a row that has none and
- * never overwrites a user's flip. Callers with no turn behind them (the Data
- * Stash route re-saving a context) omit it and change nothing — stamping the
- * deployment default from outside a turn would claim a routing that never
- * happened.
+ * `inferenceTier` is the tier the turn ran on, and is RECORDED rather than set:
+ * the DB layer COALESCEs it, so it fills a row that has none and never
+ * overwrites a user's flip.
  */
 export async function saveSession(
   sessionId: string,
   userId: string,
   agentId: string,
   serializedContext: string,
-  inferenceTier?: string,
-): Promise<void> {
-  const title = extractTitleFromContext(serializedContext)
-  const status = extractStatusFromContext(serializedContext)
-  await saveConversation({
+  held: { version: string; inferenceTier?: string },
+): Promise<string> {
+  return saveConversation({
     id: sessionId,
     userId,
     agentId,
-    title,
+    title: extractTitleFromContext(serializedContext),
     serializedContext,
-    status,
-    inferenceTier,
-    // kind/source omitted → only used on the row's first INSERT (a fresh chat
-    // defaults to 'conversation'/'chat'). For an already-inserted action row
-    // the ON CONFLICT UPDATE leaves kind/source untouched, so this save just
-    // refreshes context + status without demoting the action.
+    status: extractStatusFromContext(serializedContext),
+    inferenceTier: held.inferenceTier,
+    version: held.version,
   })
 }
 
@@ -364,17 +381,4 @@ function extractStatusFromContext(serializedContext: string): ConversationStatus
     )
     return 'error'
   }
-}
-
-/**
- * Re-serialize a mutated in-memory context and persist it. Used by the stash
- * API which mutates `tool_result` events in place via `enrichToolResult`.
- */
-export async function persistContext(
-  sessionId: string,
-  userId: string,
-  agentId: string,
-  ctx: UnifiedContext,
-): Promise<void> {
-  await saveSession(sessionId, userId, agentId, serializeContext(ctx))
 }

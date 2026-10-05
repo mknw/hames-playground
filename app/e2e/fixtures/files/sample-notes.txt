@@ -1,0 +1,2 @@
+Synthetic notes for the app-path test suite.
+This file sits in the signed-in user's OneDrive and no identity on it carries an email address.

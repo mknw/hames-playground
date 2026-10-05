@@ -33,8 +33,8 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { harness, type HarnessResultScoped } from '../harness.server'
-import { confirm, humanGate } from '../hitl.server'
-import { configurePattern } from '../patterns/chain.server'
+import { answerOf, confirm, humanGate } from '../hitl.server'
+import { createEventView, configurePattern } from '../patterns'
 import type { RunFrame } from '../run-frame.server'
 import type { ConfiguredPattern, HitlRequestEventData, HitlResponseEventData } from '../types'
 
@@ -158,7 +158,7 @@ describe('H30 · confirm: Reject by default, picked unattended, and Approve need
   it("onReject: 'continue' lets the run go on instead of stopping", async () => {
     const ran: string[] = []
     const agent = harness<Data>(
-      confirm<Data>({ question: 'Run this plan?', onReject: 'continue' }),
+      confirm<Data>({ question: 'Run this plan?', onReject: 'continue', key: 'plan' }),
       marker(ran, 'after'),
     )
     const result = await agent('go', undefined, undefined, undefined, UNATTENDED)
@@ -169,6 +169,9 @@ describe('H30 · confirm: Reject by default, picked unattended, and Approve need
     expect(responses(result.context)).toEqual([
       expect.objectContaining({ kind: 'confirm', choice: 'reject', by: 'unattended' }),
     ])
+    // The documented read path (readings 3 + S1 amendment 3): the decision is
+    // on the journal under the kind and the explicit key.
+    expect(answerOf(createEventView(result.context, {}), 'confirm', 'plan')?.choice).toBe('reject')
   })
 
   it('carries the consumer’s labels and computed question', async () => {
@@ -188,6 +191,19 @@ describe('H30 · confirm: Reject by default, picked unattended, and Approve need
     expect(raised[0].summary).toEqual({ topic: 'the report' })
     const labels = raised[0].options.map((o) => o.label)
     expect(labels).toEqual(['Ship it', 'Hold'])
+  })
+
+  // MUTATION (M-H30-park): delete confirm's `unattended` pass-through → the
+  // request is raised with the default 'apply-default' rule, the unattended
+  // run decides instead of waiting → red.
+  it("unattended: 'park' is forwarded: an unattended run waits instead of deciding", async () => {
+    const agent = harness<Data>(confirm<Data>({ question: 'go?', key: 'plan', unattended: 'park' }))
+    const result = await agent('go', undefined, undefined, undefined, UNATTENDED)
+    if (result.status !== 'paused') throw new Error('expected paused') // narrows the union
+
+    expect(result.pending).toHaveLength(1)
+    expect(result.pending[0].unattended).toBe('park')
+    expect(responses(result.context)).toEqual([]) // nobody decided
   })
 })
 
@@ -286,6 +302,7 @@ describe('humanGate · the custom case', () => {
   })
 
   it('after a resume, the re-entered gate replays and onAnswer hears the person', async () => {
+    let heardKey: string | undefined
     const agent = harness<Data>(
       humanGate<Data, 'approve' | 'reject'>({
         request: () => ({
@@ -298,7 +315,10 @@ describe('humanGate · the custom case', () => {
           ],
           defaultOption: 'reject',
         }),
-        onAnswer: (answer, data) => ({ ...data, decided: `${answer.choice}:${answer.by}` }),
+        onAnswer: (answer, data) => {
+          heardKey = answer.key
+          return { ...data, decided: `${answer.choice}:${answer.by}` }
+        },
       }),
       marker([], 'after'),
     )
@@ -310,5 +330,43 @@ describe('humanGate · the custom case', () => {
     })
     expect(next.status).toBe('running')
     expect(next.data.decided).toBe('approve:person')
+    // The key onAnswer hears is the STORED `${kind}:${key}` form — the same
+    // string `answerOf(view, kind, key)` resolves and the record holds
+    // (review finding 2). MUTATION (M-HG-key): drop the kind prefix → red.
+    expect(heardKey).toBe('deploy:release')
+    expect(responses(next.context)[0].key).toBe('deploy:release')
+  })
+
+  // MUTATION (M-H31-opts): the bound .resume drops `opts` (principal and
+  // resolve never reach resumeHarness) → red; (M-H31-continue-event):
+  // .continue drops `onEvent` → the second half goes red.
+  it('.resume forwards opts: principal recorded, resolve ran once; .continue forwards onEvent', async () => {
+    const agent = harness<Data>(
+      confirm<Data>({ question: 'go?', key: 'plan' }),
+      marker([], 'after'),
+    )
+    const paused = await agent('go', undefined, undefined, undefined, ATTENDED)
+    if (paused.status !== 'paused') throw new Error('expected paused')
+    const id = paused.pending[0].requestId
+    let resolves = 0
+    const next = await agent.resume(
+      paused.serialized,
+      { [id]: 'approve' },
+      {
+        principal: 'u1',
+        resolve: async () => {
+          resolves += 1
+          return 'applied'
+        },
+      },
+    )
+    expect(responses(next.context).find((r) => r.requestId === id)?.principal).toBe('u1')
+    expect(resolves).toBe(1)
+
+    // .continue is a forward too: its onEvent reaches the live emissions.
+    const seen: string[] = []
+    await agent.continue(next.serialized, 'again', (e) => seen.push(e.type))
+    expect(seen).toContain('user_message')
+    expect(seen).toContain('hitl_request') // the gate asks again for the new turn
   })
 })

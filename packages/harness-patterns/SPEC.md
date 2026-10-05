@@ -1765,9 +1765,12 @@ return value becomes the pattern's data. To read a decision in a LATER turn
 instead, give the request an explicit `key` and call
 `answerOf(view, kind, key)`.
 
-`confirm(config)` presets it: two options, **Approve** (never picked without a
-person, P4) and **Reject** — the default, the unattended choice, and by
-default a `stopsRun` option, so a rejection ends the run (`Stopped at your
+`confirm(config)` presets it: two options, **in display order Approve first,
+Reject second** — deliberately the opposite of §7's default-first pattern, a
+recorded decision (#433, amendment of 6003928300), so a future "harmonization"
+with §7 has to argue past it — with **Approve** never picked without a person
+(P4), and **Reject** the default, the unattended choice, and by default a
+`stopsRun` option, so a rejection ends the run (`Stopped at your
 request (confirm).` after a resume; the unattended rule's pick ends it `done`
 at the boundary with a fixed response). `onReject: 'continue'` keeps `stopsRun`
 off the option, so a rejection lets the chain run past the gate. `unattended:
@@ -1781,8 +1784,12 @@ to the pattern (`patternId`, `viewConfig`, …).
 patterns: `agent.resume(serialized, answers, opts?)` and
 `agent.continue(serialized, input, onEvent?, frame?)` — the same calls as
 `resumeHarness` / `continueSession`, without the patterns argument, so a
-resume can only be made on the agent the pause belongs to. The standalone
-functions remain for hosts that hold the pattern array themselves.
+resume can only be made on the agent the pause belongs to. The `Harness<T>`
+interface carries `harness()`'s own generic bound
+(`T extends HarnessData & Record<string, unknown>`, the same bound
+`resumeHarness` declares) rather than the sketch's bare `T`, so the interface
+and the factory cannot drift apart (#433, amendment of 6003928300). The
+standalone functions remain for hosts that hold the pattern array themselves.
 
 ### Supersede and expiry
 

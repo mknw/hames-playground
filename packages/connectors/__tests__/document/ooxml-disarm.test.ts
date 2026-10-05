@@ -2119,6 +2119,66 @@ describe('#482 delta: five more same-class misses, and a stray w:t', () => {
   })
 })
 
+describe('#482 re-check: the cascade, list levels, and the dxf fill', () => {
+  const kept = '<w:color w:val="000000"/><w:highlight w:val="black"/>'
+
+  it('F1: black on a black highlight supplied by a character style', async () => {
+    const styles = wStyles(
+      DOCX_STYLES_NORMAL +
+        `<w:style w:type="character" w:styleId="Ink"><w:rPr>${kept}</w:rPr></w:style>`,
+    )
+    const body = `<w:p>${run('VISIBLE')}${run('KEPT', '<w:rStyle w:val="Ink"/>')}</w:p>`
+    expect((await disarmed(docx({ body, styles }), MIME.docx, [])).counted).toEqual({
+      fontMatchesFill: 1,
+    })
+  })
+
+  it('F1: black on a black highlight supplied by docDefaults', async () => {
+    const styles = wStyles(
+      DOCX_STYLES_NORMAL +
+        `<w:docDefaults><w:rPrDefault><w:rPr>${kept}</w:rPr></w:rPrDefault></w:docDefaults>`,
+    )
+    const body = `<w:p>${run('VISIBLE', '<w:highlight w:val="yellow"/>')}${run('KEPT')}</w:p>`
+    expect((await disarmed(docx({ body, styles }), MIME.docx, [])).counted).toEqual({
+      fontMatchesFill: 1,
+    })
+  })
+
+  it('F2: a paragraph at lvl="1" takes lvl2pPr defaults; a level-1 paragraph does not', async () => {
+    const body = (pPr: string) =>
+      '<p:sp><p:nvSpPr><p:cNvPr id="3" name="s"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/>' +
+      '<p:txBody><a:bodyPr/><a:lstStyle><a:lvl2pPr><a:defRPr sz="100"><a:solidFill>' +
+      '<a:srgbClr val="FFFFFF"/></a:solidFill></a:defRPr></a:lvl2pPr></a:lstStyle>' +
+      `<a:p>${pPr}<a:r><a:t>KEPT</a:t></a:r></a:p></p:txBody></p:sp>`
+    const at2 = await disarmed(
+      pptx({ slides: [{ shapes: shape('VISIBLE') + body('<a:pPr lvl="1"/>') }] }),
+      MIME.pptx,
+      [],
+    )
+    expect(at2.counted).toEqual({ whiteText: 1, tinyText: 1 })
+    const at1 = await disarmed(
+      pptx({ slides: [{ shapes: shape('VISIBLE') + body('') }] }),
+      MIME.pptx,
+      [],
+    )
+    expect(at1.counted).toEqual({})
+  })
+
+  it('F3: a conditional-format dxf whose solid fill equals the base font colour', async () => {
+    const styles =
+      `<styleSheet xmlns="${NS.s}"><fonts><font><color rgb="FF000000"/></font></fonts>` +
+      '<fills><fill><patternFill patternType="none"/></fill></fills>' +
+      '<cellXfs><xf numFmtId="0" fontId="0" fillId="0"/></cellXfs>' +
+      '<dxfs><dxf><fill><patternFill patternType="solid"><fgColor rgb="FF000000"/></patternFill></fill></dxf></dxfs></styleSheet>'
+    const sheet =
+      `<sheetData>${row(1, ['VISIBLE'])}</sheetData>` +
+      '<conditionalFormatting sqref="A1"><cfRule type="expression" dxfId="0" priority="1">' +
+      '<formula>TRUE()</formula></cfRule></conditionalFormatting>'
+    const out = await disarmed(xlsx({ sheets: [{ name: 'S', xml: sheet }], styles }), MIME.xlsx, [])
+    expect(out.counted).toEqual({ fontMatchesFill: 1 })
+  })
+})
+
 describe('#482 F7 (A11): a deleted table cell is a deletion', () => {
   it('F4: a w:tc marked w:cellDel goes with its text', async () => {
     const body =

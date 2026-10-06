@@ -2271,9 +2271,12 @@ describe('#492: the resolver is fail-closed — provable visibility, by contrast
       `${run('WHITEONDARK', '<w:color w:val="FFFFFF"/>')}</w:p>` +
       `<w:p>${run('BLACKONBLACK', '<w:color w:val="000000"/><w:shd w:val="clear" w:fill="000000"/>')}</w:p>` +
       // A solid shading draws w:color, not w:fill — hiding there counts too.
-      `<w:p>${run('SECRETSOLID', '<w:color w:val="000000"/><w:shd w:val="solid" w:color="000000" w:fill="auto"/>')}</w:p>`
+      `<w:p>${run('SECRETSOLID', '<w:color w:val="000000"/><w:shd w:val="solid" w:color="000000" w:fill="auto"/>')}</w:p>` +
+      // And one written with no w:val at all, the way real documents shade
+      // table cells: the default is clear, so the fill paints and hides.
+      `<w:p><w:pPr><w:shd w:fill="000000"/></w:pPr>${run('SECRETNOVALSHD', '<w:color w:val="000000"/>')}</w:p>`
     const out = await disarmed(docx({ body }), MIME.docx, [])
-    expect(out.counted).toEqual({ 'colour-contrast': 2 })
+    expect(out.counted).toEqual({ 'colour-contrast': 3 })
   })
 
   it('a pattern shading is checked against both its colours', async () => {
@@ -2308,12 +2311,16 @@ describe('#492: the resolver is fail-closed — provable visibility, by contrast
   })
 
   it('themeTint and themeShade resolve: shaded light1 stays visible, tinted dark1 goes white', async () => {
-    const body =
+    const tinted =
       `<w:p>${run('VISIBLE')}` +
-      `${run('SECRETTINTEDTEXT', '<w:color w:val="000000" w:themeColor="dark1" w:themeTint="FF"/>')}` +
+      `${run('SECRETTINTEDTEXT', '<w:color w:val="000000" w:themeColor="dark1" w:themeTint="FF"/>')}</w:p>`
+    expect((await disarmed(docx({ body: tinted }), MIME.docx, [])).counted).toEqual({
+      'colour-contrast': 1,
+    })
+    const shaded =
+      `<w:p>${run('VISIBLE')}` +
       `${run('SHADEDLIGHT', '<w:color w:val="000000" w:themeColor="light1" w:themeShade="FF"/>')}</w:p>`
-    const out = await disarmed(docx({ body }), MIME.docx, [])
-    expect(out.counted).toEqual({ 'colour-contrast': 1 })
+    expect((await disarmed(docx({ body: shaded }), MIME.docx, [])).counted).toEqual({})
   })
 
   it('cascade order: direct formatting beats the style, which beats docDefaults', async () => {
@@ -2676,14 +2683,14 @@ describe('#492: masters and layouts are read for resolution and never emitted', 
       }),
       MIME.pptx,
     )
-    const list = names(out.bytes)
-    expect(list).not.toContain('ppt/slideLayouts/slideLayout1.xml')
-    expect(list).not.toContain('ppt/slideMasters/slideMaster1.xml')
-    expect(list).not.toContain('ppt/notesMasters/notesMaster1.xml')
-    const all = everything(out.bytes)
-    expect(all).not.toContain('slideLayout')
-    expect(all).not.toContain('slideMaster')
-    expect(all).not.toContain('notesMaster')
+    const list = names(out.bytes).map((n) => n.toLowerCase())
+    expect(list).not.toContain('ppt/slidelayouts/slidelayout1.xml')
+    expect(list).not.toContain('ppt/slidemasters/slidemaster1.xml')
+    expect(list).not.toContain('ppt/notesmasters/notesmaster1.xml')
+    const all = everything(out.bytes).toLowerCase()
+    expect(all).not.toContain('slidelayout')
+    expect(all).not.toContain('slidemaster')
+    expect(all).not.toContain('notesmaster')
     // They left as dropped parts, labelled by what they were.
     expect(out.removed.otherParts).toBe(3)
   })

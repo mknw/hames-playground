@@ -1007,7 +1007,6 @@ interface Scope {
   readonly shape?: {
     readonly ph?: { readonly type?: string; readonly idx?: string }
     readonly fill?: DFill
-    readonly unknownFill: boolean
     readonly fontScale: number
   }
   /** The slide's own background, when it has one (#492). */
@@ -1250,7 +1249,6 @@ function visit(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[] {
       shape: {
         ph: phOf(el),
         fill: fill.kind === 'absent' ? undefined : fill,
-        unknownFill: fill.kind === 'unknown',
         fontScale: 1,
       },
     }
@@ -2720,7 +2718,7 @@ function countDrawingRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
   if (unknown.size > 0 || inheritance.broken) ctx.counted.add('unknown-property')
 
   const bg = drawingBackgrounds(scope, inheritance, s, ctx)
-  if (scope.shape?.unknownFill || bg.unknown) ctx.counted.add('unknown-property')
+  if (bg.unknown) ctx.counted.add('unknown-property')
   else {
     // No fill anywhere resolves to the theme's text colour through the map.
     // No fill anywhere: PowerPoint's default text colour is the theme's tx1

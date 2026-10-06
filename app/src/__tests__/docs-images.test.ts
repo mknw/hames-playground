@@ -15,7 +15,9 @@ const IMAGES_DIR = path.resolve(__dirname, '../../../docs/images')
 const MAX_BYTES = 500 * 1024
 const KEBAB = /^[a-z0-9]+(-[a-z0-9]+)*\.[a-z0-9]+$/
 
-const files = readdirSync(IMAGES_DIR).filter((f) => statSync(path.join(IMAGES_DIR, f)).isFile())
+const files = readdirSync(IMAGES_DIR, { recursive: true, withFileTypes: true })
+  .filter((e) => e.isFile())
+  .map((e) => path.relative(IMAGES_DIR, path.join(e.parentPath, e.name)))
 
 describe('docs/images', () => {
   it('has images to check', () => {

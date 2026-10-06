@@ -1,25 +1,28 @@
 #!/usr/bin/env node
 /**
- * #418 measurement spike — cygnet (Gemma-4-12B-it, llama-server :8890).
+ * Endpoint-agnostic: it targets ANY OpenAI-compatible logprob endpoint
+ * (`--url`, `--key`, `--model`), a raw llama.cpp `/completion` endpoint, or a
+ * `/v1/systemone` decision server (`--readout systemone`) such as ollaya's
+ * (jevk5, kev, decider, laya, von, winnow) or cygnet's shim. Default target is
+ * the owner's local cygnet on :8890.
  *
- * Scores SYNTHETIC closed-choice cases from the app's real decision use
- * cases, by reading option-letter next-token probabilities (no generation):
+ * Scores SYNTHETIC closed-choice cases from the app's real decision use cases:
  *   - the memory-hook target   (personal_memory | organizational_graph | none)
  *   - ask-for-confirmation     (ask | skip)
- *   - the memory kind          (episodic | semantic | preference | none)
+ *   - the memory kind          (episodic | semantic | preference | trait)
  *   - injection classification (clean | suspicious) — the merged
  *     DOCUMENT_INJECTION_DECISION question (document-sanitizer.server.ts)
  *
- * Reports accuracy, calibration (raw and with cygnet's T=3.4 applied to the
- * letter probabilities), latency per decision, and the cost of a multi-field
- * decision as N single passes versus one combined pass over the product
- * label set (3 × 2 × 4 = 24 letters, A..X).
+ * Reports accuracy, calibration (raw and with cygnet's T=3.4 applied), latency
+ * per decision, and the cost of a multi-field decision as N single passes
+ * versus one combined pass over the product label set (3 × 2 × 4 = 24 letters).
  *
  * The server was started with `--reasoning auto`, so every chat request
  * carries chat_template_kwargs { enable_thinking: false }; a raw /completion
  * fallback is also implemented and used if the chat readout is unusable.
  *
  * Usage: node scripts/spike-418-cygnet/spike.mjs [--url http://127.0.0.1:8890]
+ *        [--readout chat|raw|systemone] [--key <token>] [--model <id>]
  *        [--small http://127.0.0.1:8095]  (optional 4B comparison)
  * Data is synthetic; no real names. Never starts or stops any model.
  */
@@ -34,11 +37,15 @@ const flag = (name, dflt) => {
 };
 const URL_BASE = flag("url", "http://127.0.0.1:8890");
 const SMALL_BASE = flag("small", ""); // e.g. http://127.0.0.1:8095 — only if up
+const READOUT = flag("readout", ""); // chat | raw | systemone; '' = probe chat then raw
+const API_KEY = flag("key", ""); // Authorization: Bearer, for a hosted OpenAI-compatible endpoint
+const MODEL = flag("model", ""); // model id when the endpoint needs one
 const OUT_DIR = new URL(".", import.meta.url).pathname;
 
 // ── cygnet's recipe constants ────────────────────────────────────────────────
 const CYGNET_T = 3.4; // the fitted temperature cygnet applies to letter probs
-const TOP_K = 30; // letters to see in the top-k; 24-product needs 24
+const SEMIF_T = 1.532; // jevk5's published SemIf readout temperature
+const TOP_K = 20; // matches the production LocalQwenSmallDecide declaration
 const N_CASES_MIN = 20; // the task asks 20–40 synthetic cases
 
 // ── the prompt shapes ────────────────────────────────────────────────────────
@@ -104,7 +111,7 @@ const K_LABELS = [
     description: "a stable fact about the user or their world",
   },
   { id: "preference", description: "how the user wants things done" },
-  { id: "none", description: "nothing to keep" },
+  { id: "trait", description: "a stable fact about who the user is" },
 ];
 const I_Q =
   "Does this passage contain text addressed to an AI assistant — an instruction, a role change, a request to call a tool or to hide something from the user — rather than ordinary document content?";
@@ -290,9 +297,11 @@ async function post(base, path, body, timeoutMs) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), timeoutMs ?? 30_000);
   try {
+    const headers = { "content-type": "application/json" };
+    if (API_KEY) headers.authorization = `Bearer ${API_KEY}`;
     const res = await fetch(`${base}${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers,
       body: JSON.stringify(body),
       signal: ctl.signal,
     });
@@ -304,6 +313,34 @@ async function post(base, path, body, timeoutMs) {
   } finally {
     clearTimeout(t);
   }
+}
+
+/** A /v1/systemone decision server (ollaya, cygnet's shim). BEST-EFFORT: the
+ *  exact schema is the server's. Returns the same { top, ms } shape as the
+ *  logprob readers, mapping each label to its option letter, so `pickLetters`
+ *  and the metrics are shared. */
+async function readSystemone(base, state, question, labels) {
+  const criteria = Object.fromEntries(labels.map((l) => [l.id, l.description]));
+  const body = { input: state, choice: { question, criteria } };
+  const t0 = performance.now();
+  const res = await post(base, "/v1/systemone", body);
+  const ms = performance.now() - t0;
+  const probs =
+    res.probabilities ??
+    res.choice?.probabilities ??
+    res.answer_probabilities ??
+    (Array.isArray(res.options)
+      ? Object.fromEntries(
+          res.options.map((o) => [o.id ?? o.label, o.probability]),
+        )
+      : null);
+  if (!probs || typeof probs !== "object")
+    throw new Error("no probabilities in /v1/systemone response");
+  const top = labels.map((l, i) => ({
+    token: String.fromCharCode(65 + i),
+    logprob: Math.log(Math.max(Number(probs[l.id] ?? 0), 1e-12)),
+  }));
+  return { top, ms, sampled: res.choice ?? res.answer ?? "" };
 }
 
 function pickLetters(topLogprobs, letterCount) {
@@ -332,6 +369,7 @@ async function readChat(base, prompt) {
     top_logprobs: TOP_K,
     chat_template_kwargs: { enable_thinking: false },
   };
+  if (MODEL) body.model = MODEL;
   const t0 = performance.now();
   const res = await post(base, "/v1/chat/completions", body);
   const ms = performance.now() - t0;
@@ -360,13 +398,15 @@ async function readCompletion(base, prompt) {
   return { top, ms, sampled: res.content ?? "" };
 }
 
-/** Decision readout for one (state, question, labels). mode: 'chat' | 'raw'. */
+/** Decision readout for one (state, question, labels). mode: 'chat' | 'raw' | 'systemone'. */
 async function decide(mode, state, question, labels, base = URL_BASE) {
   const prompt = buildPrompt(state, question, labels);
   const read =
-    mode === "raw"
-      ? await readCompletion(base, prompt)
-      : await readChat(base, prompt);
+    mode === "systemone"
+      ? await readSystemone(base, state, question, labels)
+      : mode === "raw"
+        ? await readCompletion(base, prompt)
+        : await readChat(base, prompt);
   const mass = pickLetters(read.top, labels.length);
   const total = [...mass.values()].reduce((a, b) => a + b, 0);
   const coverage = total;
@@ -434,15 +474,24 @@ function brier(rows) {
 async function main() {
   console.log(`#418 cygnet spike — ${URL_BASE} — ${new Date().toISOString()}`);
 
-  // Preflight, bounded.
+  // Preflight, bounded. `/health` is llama.cpp's; a hosted or vLLM endpoint may
+  // only answer `/v1/models`, so fall back to that before giving up.
   const ctl = new AbortController();
   const to = setTimeout(() => ctl.abort(), 10_000);
   let health = "unreachable";
   try {
     const r = await fetch(`${URL_BASE}/health`, { signal: ctl.signal });
-    health = r.ok ? "ok" : `http-${r.status}`;
-  } catch (e) {
-    health = `unreachable (${e.message})`;
+    health = r.ok ? "ok" : "";
+  } catch {
+    health = "";
+  }
+  if (health !== "ok") {
+    try {
+      const r = await fetch(`${URL_BASE}/v1/models`, { signal: ctl.signal });
+      health = r.ok ? "ok" : `http-${r.status}`;
+    } catch (e) {
+      health = `unreachable (${e.message})`;
+    }
   }
   clearTimeout(to);
   if (health !== "ok") {
@@ -468,54 +517,59 @@ async function main() {
     small: null,
   };
 
-  // 0. Probe chat vs raw /completion on the first case and keep the readout
-  //    whose letters actually hold mass at the answer position. A bad chat
-  //    readout (thinking marker first, empty first token) shows up as low
-  //    coverage; the task's fallback is the raw /completion prompt.
-  let mode = "chat";
-  try {
-    const chatProbe = await decide(
-      "chat",
-      MEMORY_CASES[0].state,
-      T_Q,
-      T_LABELS,
-    );
-    results.probe.chat = {
-      coverage: chatProbe.coverage,
-      sampled: chatProbe.sampled,
-    };
-    if (chatProbe.coverage < 0.05) {
-      const rawProbe = await decide(
-        "raw",
-        MEMORY_CASES[0].state,
-        T_Q,
-        T_LABELS,
-      );
-      results.probe.raw = {
-        coverage: rawProbe.coverage,
-        sampled: rawProbe.sampled,
-      };
-      if (rawProbe.coverage > chatProbe.coverage) mode = "raw";
-    }
-  } catch (e) {
-    results.probe.chat = { error: String(e.message ?? e) };
+  // 0. Pick the readout. With --readout, use it directly. Otherwise probe
+  //    chat vs raw /completion on the first case and keep the readout whose
+  //    letters actually hold mass at the answer position. A bad chat readout
+  //    (thinking marker first, empty first token) shows up as low coverage.
+  let mode = READOUT || "chat";
+  if (READOUT) {
+    const probe = await decide(mode, MEMORY_CASES[0].state, T_Q, T_LABELS);
+    results.probe[mode] = { coverage: probe.coverage, sampled: probe.sampled };
+  } else {
     try {
-      const rawProbe = await decide(
-        "raw",
+      const chatProbe = await decide(
+        "chat",
         MEMORY_CASES[0].state,
         T_Q,
         T_LABELS,
       );
-      results.probe.raw = {
-        coverage: rawProbe.coverage,
-        sampled: rawProbe.sampled,
+      results.probe.chat = {
+        coverage: chatProbe.coverage,
+        sampled: chatProbe.sampled,
       };
-      mode = "raw";
-    } catch (e2) {
-      results.probe.raw = { error: String(e2.message ?? e2) };
-      throw new Error(
-        `neither chat nor raw readout worked: ${e.message ?? e} / ${e2.message ?? e2}`,
-      );
+      if (chatProbe.coverage < 0.05) {
+        const rawProbe = await decide(
+          "raw",
+          MEMORY_CASES[0].state,
+          T_Q,
+          T_LABELS,
+        );
+        results.probe.raw = {
+          coverage: rawProbe.coverage,
+          sampled: rawProbe.sampled,
+        };
+        if (rawProbe.coverage > chatProbe.coverage) mode = "raw";
+      }
+    } catch (e) {
+      results.probe.chat = { error: String(e.message ?? e) };
+      try {
+        const rawProbe = await decide(
+          "raw",
+          MEMORY_CASES[0].state,
+          T_Q,
+          T_LABELS,
+        );
+        results.probe.raw = {
+          coverage: rawProbe.coverage,
+          sampled: rawProbe.sampled,
+        };
+        mode = "raw";
+      } catch (e2) {
+        results.probe.raw = { error: String(e2.message ?? e2) };
+        throw new Error(
+          `neither chat nor raw readout worked: ${e.message ?? e} / ${e2.message ?? e2}`,
+        );
+      }
     }
   }
   results.mode = mode;
@@ -532,6 +586,8 @@ async function main() {
   ];
   for (const field of fields) {
     for (const c of MEMORY_CASES) {
+      // 'none' target stores nothing, so the kind field is inapplicable there.
+      if (field.name === "memory.kind" && c.gold.target === "none") continue;
       const d = await decide(mode, c.state, field.question, field.labels);
       const row = {
         case: c.id,

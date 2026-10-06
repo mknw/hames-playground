@@ -2281,7 +2281,7 @@ describe('#492: the resolver is fail-closed — provable visibility, by contrast
     const body =
       `<w:p>${run('VISIBLE')}` +
       `${run('SECRETONPATTERN', `<w:color w:val="000000"/>${pat}`)}` +
-      `${run('YELLOWONPATTERN', `<w:color w:val="FFFF00"/>${pat}`)}</w:p>`
+      `${run('GREYONPATTERN', `<w:color w:val="595959"/>${pat}`)}</w:p>`
     const out = await disarmed(docx({ body }), MIME.docx, [])
     expect(out.counted).toEqual({ 'colour-contrast': 1 })
   })
@@ -2431,7 +2431,7 @@ describe('#492: pptx runs resolve through their shapes, their slides, and the pa
     })
   })
 
-  it('a shape background or text fill the resolver does not model makes the run unknown-property', async () => {
+  it('a shape background the resolver does not model makes the run unknown-property', async () => {
     const blackRun = '<a:rPr><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:rPr>'
     const out = await disarmed(
       pptx({
@@ -2443,10 +2443,6 @@ describe('#492: pptx runs resolve through their shapes, their slides, and the pa
                 id: 3,
                 rPr: blackRun,
                 spPr: '<a:blipFill><a:blip r:embed="rIdNone"/></a:blipFill>',
-              }) +
-              shape('SECRETPATTERNTEXT', {
-                id: 4,
-                rPr: '<a:rPr><a:pattFill><a:fgClr><a:srgbClr val="000000"/></a:fgClr></a:pattFill></a:rPr>',
               }),
           },
         ],
@@ -2454,7 +2450,25 @@ describe('#492: pptx runs resolve through their shapes, their slides, and the pa
       MIME.pptx,
       [],
     )
-    expect(out.counted).toEqual({ 'unknown-property': 2 })
+    expect(out.counted).toEqual({ 'unknown-property': 1 })
+  })
+
+  it('a pattern TEXT fill is read against both its colours, like a gradient', async () => {
+    const whitePattern =
+      '<a:rPr><a:pattFill><a:fgClr><a:srgbClr val="FFFFFF"/></a:fgClr>' +
+      '<a:bgClr><a:srgbClr val="FFFFFF"/></a:bgClr></a:pattFill></a:rPr>'
+    const out = await disarmed(
+      pptx({
+        slides: [
+          {
+            shapes: shape('VISIBLE') + shape('SECRETPATTERNTEXT', { id: 4, rPr: whitePattern }),
+          },
+        ],
+      }),
+      MIME.pptx,
+      [],
+    )
+    expect(out.counted).toEqual({ 'colour-contrast': 1 })
   })
 
   it('gradients resolve stop by stop, and transparency is read', async () => {
@@ -2597,9 +2611,16 @@ describe('#492: masters and layouts are read for resolution and never emitted', 
   it('the master’s colour map is read: a flipped tx1 remaps the resolved text colour', async () => {
     const flipped = CLR_MAP.replace('tx1="dk1"', 'tx1="lt1"')
     const tx1Run = '<a:rPr><a:solidFill><a:schemeClr val="tx1"/></a:solidFill></a:rPr>'
+    const black = '<a:rPr><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:rPr>'
     const spec = (clrMap: string, sentinel: string) =>
       pptx({
-        slides: [{ shapes: shape('VISIBLE') + shape(sentinel, { id: 3, ph: 'body', rPr: tx1Run }) }],
+        slides: [
+          {
+            shapes:
+              shape('VISIBLE', { rPr: black }) +
+              shape(sentinel, { id: 3, ph: 'body', rPr: tx1Run }),
+          },
+        ],
         style: { layouts: [pStylePart('sldLayout')], master: pStylePart('sldMaster', '', clrMap) },
       })
     expect((await disarmed(spec(CLR_MAP, 'STANDARDTX1_CONTROL'), MIME.pptx, [])).counted).toEqual({})
@@ -2660,8 +2681,10 @@ describe('#492: masters and layouts are read for resolution and never emitted', 
 describe('#492: xlsx cells resolve through their styles, their fills and their formats', () => {
   const xf = (numFmtId: number, fontId: number, fillId: number): string =>
     `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}"/>`
-  const cell = (s: number, t: string): string =>
-    `<sheetData><row r="1"><c r="A1" s="${s}" t="inlineStr"><is><t>${t}</t></is></c></row></sheetData>`
+  const cells = (list: readonly (readonly [s: number, t: string, ref: string])[]): string =>
+    `<sheetData><row r="1">${list
+      .map(([s, t, ref]) => `<c r="${ref}" s="${s}" t="inlineStr"><is><t>${t}</t></is></c>`)
+      .join('')}</row></sheetData>`
 
   it('a 1 pt font and a 1 pt rich-text run count as too-small', async () => {
     const styles = sStyles({
@@ -2670,16 +2693,23 @@ describe('#492: xlsx cells resolve through their styles, their fills and their f
       xfs: [xf(0, 0, 0), xf(0, 1, 0)],
     })
     const out = await disarmed(
-      xlsx({ sheets: [{ name: 'S', xml: cell(1, 'SECRETTINYFONT') }], styles }),
+      xlsx({
+        sheets: [{ name: 'S', xml: cells([[0, 'VISIBLE', 'A1'], [1, 'SECRETTINYFONT', 'B1']]) }],
+        styles,
+      }),
       MIME.xlsx,
       [],
     )
     const sst =
-      `<sst xmlns="${NS.s}"><si><r><rPr><sz val="1"/><color rgb="FF000000"/></rPr><t>SECRETTINYRUN</t></r></si></sst>`
+      `<sst xmlns="${NS.s}"><si><r><t>VISIBLE</t></r></si>` +
+      '<si><r><rPr><sz val="1"/><color rgb="FF000000"/></rPr><t>SECRETTINYRUN</t></r></si></sst>'
     const rich = await disarmed(
       xlsx({
         sheets: [
-          { name: 'S', xml: '<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData>' },
+          {
+            xml:
+              '<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row></sheetData>',
+          },
         ],
         styles: sStyles({ xfs: [xf(0, 0, 0)] }),
         sharedStrings: sst,
@@ -2696,27 +2726,34 @@ describe('#492: xlsx cells resolve through their styles, their fills and their f
       fonts: ['<font><sz val="11"/><color rgb="FF000000"/></font>'],
       fills: [
         '<fill><patternFill patternType="none"/></fill>',
-        '<fill><patternFill patternType="pct50"><fgColor rgb="FF0A0A0A"/><bgColor rgb="FFFFFFFF"/></patternFill></fill>',
+        '<fill><patternFill patternType="lightUp"><fgColor rgb="FF0A0A0A"/><bgColor rgb="FFFFFFFF"/></patternFill></fill>',
+        '<fill><patternFill patternType="solid"><fgColor rgb="FF000000"/></patternFill></fill>',
       ],
       numFmts: '<numFmt numFmtId="165" formatCode="[White]@"/>',
-      xfs: [xf(0, 0, 0), xf(0, 0, 1), xf(165, 0, 1)],
+      xfs: [xf(0, 0, 0), xf(0, 0, 1), xf(165, 0, 2)],
     })
     // A black font on a half-black pattern: the black half conceals it.
     const pattern = await disarmed(
-      xlsx({ sheets: [{ name: 'S', xml: cell(1, 'SECRETONPATTERN') }], styles }),
+      xlsx({
+        sheets: [{ name: 'S', xml: cells([[0, 'VISIBLE', 'A1'], [1, 'SECRETONPATTERN', 'B1']]) }],
+        styles,
+      }),
       MIME.xlsx,
       [],
     )
-    // [White]@ over that same dark-pattern fill: white on black is visible.
+    // [White]@ over a solid black fill: white on black is visible.
     const whiteFormat = await disarmed(
-      xlsx({ sheets: [{ name: 'S', xml: cell(2, 'WHITEFORMAT_CONTROL') }], styles }),
+      xlsx({
+        sheets: [{ name: 'S', xml: cells([[0, 'VISIBLE', 'A1'], [2, 'WHITEFORMAT_CONTROL', 'B1']]) }],
+        styles,
+      }),
       MIME.xlsx,
       [],
     )
     // [White]@ over no fill at all: white on white, concealed.
     const bare = await disarmed(
       xlsx({
-        sheets: [{ name: 'S', xml: cell(1, 'SECRETWHITEFORMAT') }],
+        sheets: [{ name: 'S', xml: cells([[0, 'VISIBLE', 'A1'], [1, 'SECRETWHITEFORMAT', 'B1']]) }],
         styles: sStyles({
           fonts: ['<font><sz val="11"/></font>'],
           numFmts: '<numFmt numFmtId="165" formatCode="[White]@"/>',
@@ -2734,7 +2771,7 @@ describe('#492: xlsx cells resolve through their styles, their fills and their f
   it('an automatic font colour adapts to its fill and does not count', async () => {
     const out = await disarmed(
       xlsx({
-        sheets: [{ name: 'S', xml: cell(1, 'AUTODARK_CONTROL') }],
+        sheets: [{ name: 'S', xml: cells([[0, 'VISIBLE', 'A1'], [1, 'AUTODARK_CONTROL', 'B1']]) }],
         styles: sStyles({
           fonts: ['<font><sz val="11"/><color auto="1"/></font>'],
           fills: [
@@ -2771,7 +2808,7 @@ describe('#492: xlsx cells resolve through their styles, their fills and their f
 
     const off = '<a:xfrm><a:off x="9144000" y="0"/><a:ext cx="100" cy="100"/></a:xfrm>'
     const laid = await disarmed(
-      pptx({ slides: [{ shapes: shape('OFFSLIDEKEPT', { id: 6, xfrm: off }) }] }),
+      pptx({ slides: [{ shapes: shape('VISIBLE') + shape('OFFSLIDEKEPT', { id: 6, xfrm: off }) }] }),
       MIME.pptx,
       [],
     )

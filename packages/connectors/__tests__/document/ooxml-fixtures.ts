@@ -76,8 +76,6 @@ export const RT = {
   slideLayout: `${R}slideLayout`,
   slideMaster: `${R}slideMaster`,
   notesMaster: `${R}notesMaster`,
-  slideLayout: `${R}slideLayout`,
-  slideMaster: `${R}slideMaster`,
   extendedProperties: `${R}extended-properties`,
   customProperties: `${R}custom-properties`,
   coreProperties:
@@ -125,8 +123,6 @@ export const CT = {
   slideLayout: `${OD}presentationml.slideLayout+xml`,
   slideMaster: `${OD}presentationml.slideMaster+xml`,
   notesMaster: `${OD}presentationml.notesMaster+xml`,
-  slideLayout: `${OD}presentationml.slideLayout+xml`,
-  slideMaster: `${OD}presentationml.slideMaster+xml`,
   pComments: `${OD}presentationml.comments+xml`,
   vba: 'application/vnd.ms-office.vbaProject',
   vbaData: 'application/vnd.ms-word.vbaData+xml',

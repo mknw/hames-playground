@@ -7,19 +7,18 @@
  * transitions, the assistant-message construction (including the paused
  * `pendingAction` shape) and a `finally` that had to fire four callbacks in
  * order. None of it could be exercised without mounting a component and
- * stubbing `fetch`, and it had already drifted from its sibling —
- * `handleApproveWrite` repeated the same graph/events/context fan-out with
- * different semantics.
+ * stubbing `fetch`.
  *
  * The module is framework-free: no Solid, no DOM. It takes a `TurnRequest`,
  * writes through a narrow `TurnSink` of effects, and reports where the turn
- * ended as an explicit `TurnState`. The component becomes wiring, the state
- * machine is testable against a scripted event array, and the approval path
- * (`applyApprovalResult`) feeds the *same* sink, so the two cannot drift.
+ * ended as an explicit `TurnState`. The component becomes wiring, and the state
+ * machine is testable against a scripted event array. (The approval path that
+ * fed the same sink, `applyApprovalResult`, went with the boolean
+ * `resumeHarness` in #433 S3: a resume runs over this stream instead.)
  *
  * The wire format is untouched — `parseChatStream` still owns it.
  */
-import { extractGraphElements, extractGraphFromResult } from '@hames-ai/agents'
+import { extractGraphElements } from '@hames-ai/agents'
 import { extractReferences } from '@hames-ai/agents'
 // Imported from the module rather than the barrel: `replay.ts` is deliberately
 // dependency-free (no server-only imports), and the stream handler wants
@@ -335,30 +334,4 @@ function pendingActionOf(
   const pending = (final.data as Record<string, unknown>).pendingAction as
     { action: string; reason: string } | undefined
   return pending
-}
-
-// ============================================================================
-// The approval path
-// ============================================================================
-
-/**
- * Fan a resumed run's result out through the same sink the streaming turn
- * uses. This is the half that had drifted: it slices an event *delta* (the
- * approval resumes an existing context, so `result.context.events` is the
- * whole history) where `runTurn` emits each event as it arrives.
- *
- * Returns the new event cursor.
- */
-export function applyApprovalResult(
-  result: { context?: UnifiedContext },
-  fromEventIndex: number,
-  sink: TurnSink,
-): number {
-  sink.pushGraph(extractGraphFromResult(result))
-  if (!result.context) return fromEventIndex
-
-  const events = result.context.events
-  if (events) sink.pushEvents(events.slice(fromEventIndex))
-  sink.setContext(result.context)
-  return events?.length ?? fromEventIndex
 }

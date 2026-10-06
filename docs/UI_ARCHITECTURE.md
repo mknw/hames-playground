@@ -140,7 +140,25 @@ OpenID Connect **auth-code flow** — the code→token exchange runs server-side
 | `GET /api/auth/callback` | validate `state` vs the handshake cookie, redeem the code, enforce the allowlist, upsert `users`, create an `auth_sessions` row, set the `kg_session` cookie → `/` |
 | `POST /api/auth/logout`  | delete the session row (server-side revocation), clear the cookie, 303 to Entra sign-out. A `GET` is a `405`                                                       |
 
-**No `GET` changes state (#429).** A state change is a same-origin `POST` (`refuseCrossSite`, `app/src/lib/auth/csrf.server.ts`), and the middleware refuses any non-`POST` call to a `'use server'` function; the `SameSite=Lax` session cookie still rides a cross-site top-level `GET`, so it is not the barrier.
+**No `GET` changes state (#429).** A state change is a `POST` (or `PUT` / `PATCH` / `DELETE`), and the middleware refuses any non-`POST` call to a `'use server'` function; the `SameSite=Lax` session cookie still rides a cross-site top-level `GET`, so it is not the barrier.
+
+**Every write comes from the app's own origin (#455).** One middleware hook, `refuseCrossOriginStateChange` (`app/src/lib/auth/csrf.server.ts`), runs in front of both routers. It answers `403` to any request whose method is not `GET`, `HEAD` or `OPTIONS` and whose provenance is not the app's origin. That covers every API route and every server function under `/_server`, with no per-route line to forget. It closes the gap `SameSite=Lax` leaves: a **sibling origin** under the same registrable domain counts as the "same site", so its form `POST` carries the cookie. Each rule is pinned in `csrf.test.ts` together with the mutation that turns it red:
+
+| Request                                                                                                 | Answer                                                                                                                                       |
+| ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Origin` (else `Referer`) equals the **public origin**, and `Sec-Fetch-Site` is absent or `same-origin` | passes                                                                                                                                       |
+| `Sec-Fetch-Site` is `same-site`, `cross-site` or `none`, or `Origin` / `Referer` names any other origin | `403`                                                                                                                                        |
+| no `Origin`, `Referer` or `Sec-Fetch-Site`, **and** no `kg_session` cookie                              | passes. No browser attached a credential, so it is not CSRF-shaped, and the route's own auth decides. This is the bearer-token agent trigger |
+| a `kg_session` cookie with no `Origin` and no `Referer`                                                 | `403`, fail closed. Every current browser sends `Origin` on a write                                                                          |
+| `Sec-Fetch-Site: same-origin` with no `Origin` or `Referer`                                             | `403`. It never admits a request on its own (see DNS rebinding below)                                                                        |
+
+The **public origin** is the origin of `AUTH_REDIRECT_URI`. The OIDC callback that URI names is what sets `kg_session`, so its origin is the only one whose pages hold a session. A dev build without the variable assumes `http://localhost:3444`. A production build without it, or with a value that is not an `http(s)` URL, **refuses to boot**, with a `[csrf]` line naming the variable: serving `403`s while `/api/health` answers `200` would pass every healthcheck and tell only the first user to click.
+
+The request's own `Host` is never compared. Under DNS rebinding, a page whose name points at the server sends a `Host`, an `Origin` and a `Sec-Fetch-Site` that all agree, and on a dev server the auth bypass authenticates that page with no cookie at all. A dev build also accepts `localhost`, `127.0.0.1`, `[::1]` and `host.docker.internal` on the configured origin's scheme and port: a fixed list in source that no variable widens and a production build ignores, so a developer's own tab and Playwright MCP can both write. Any other name or port (the browser e2e suite's, for one) means setting `AUTH_REDIRECT_URI` to that address.
+
+The check depends on the page's referrer policy. The sign-in and sign-out forms are native `POST`s and the terminal stream is an `EventSource`, and under `no-referrer` they would send `Origin: null` or no provenance at all and get a `403`. The browser default and Caddy's `strict-origin-when-cross-origin` keep both headers on same-origin requests; `security-headers.test.ts` pins the Caddyfile against `no-referrer`.
+
+Two places also call `refuseCrossSite` directly, against the same origin: the terminal stream's `GET`, which the middleware does not cover, and the three routes #429 hardened (sign-in, sign-out, opening the terminal), as defence in depth.
 
 Config lives in `app/src/lib/auth/entra-config.server.ts` (env: `AZURE_TENANT_ID`,
 `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AUTH_SESSION_SECRET`; see
@@ -1014,8 +1032,8 @@ app/
 │       │   ├── queries.ts         # runManualCypher() (read-only), getNodeProperties()
 │       │   └── graph-edit.server.ts # createGraphNode()/linkGraphNodes()/setGraphNodeProperty() — authenticated, intent-shaped graph writes
 │       └── harness-client/        # Pre-built agent server actions
-│           ├── actions.server.ts  # processMessage(), approveAction(), listConversations(), loadConversation()
-│           ├── turn.server.ts     # runTurnAndPersist() — the one run-a-turn-and-persist flow (interactive | triggered | approval)
+│           ├── actions.server.ts  # processMessage(), listConversations(), loadConversation()
+│           ├── turn.server.ts     # runTurnAndPersist() — the one run-a-turn-and-persist flow (interactive | triggered)
 │           ├── action-runner.server.ts # seedActionRow() + runAgentInBackground() — triggered runs, off the request path
 │           ├── session.server.ts  # In-process pattern cache + Postgres-backed serialized context (per-user)
 │           ├── registry.server.ts # Agent registry (6 examples)

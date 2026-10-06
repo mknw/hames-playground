@@ -66,8 +66,6 @@ export type {
   CriticResultEventData,
   PatternEnterEventData,
   PatternExitEventData,
-  ApprovalRequestEventData,
-  ApprovalResponseEventData,
   ErrorEventData,
   IntentCompactedEventData,
   PlanCreatedEventData,
@@ -87,6 +85,8 @@ export type {
   HitlRequest,
   HitlOutcome,
   HeldResult,
+  HitlAnswer,
+  HitlAnswers,
 
   // LLM Observability
   LLMCallData,
@@ -94,10 +94,6 @@ export type {
   LLMResult,
   ModelLimits,
   CostBasis,
-
-  // Approval Types
-  ApprovalRequest,
-  WithApproval,
 
   // Infrastructure types
   MCPToolDescription,
@@ -186,8 +182,10 @@ export {
   harness,
   resumeHarness,
   continueSession,
+  type Harness,
   type HarnessData,
   type HarnessResultScoped,
+  type ResumeOptions,
 } from './harness.server'
 
 // ============================================================================
@@ -201,8 +199,11 @@ export {
 // nobody is there. `readHitl` and `answerOf` read the events.
 // `answerOf(view, kind, key)` takes the key the consumer gave the request and
 // composes the stored `${kind}:${key}` form itself, so a request looked up
-// later needs an explicit key. The minting helper and the owning chain's
-// slot helpers are deliberately NOT exported here.
+// later needs an explicit key. `resumeHarness` (above) continues a pause and
+// throws `HitlAnswerError` for an answer that does not bind to it;
+// `expireHitl` closes what nobody answered in time. The minting helper, the
+// resume's check/record steps and the owning chain's slot helpers are
+// deliberately NOT exported here.
 
 export {
   askHuman,
@@ -210,10 +211,20 @@ export {
   hitlPending,
   resolveUnattended,
   HitlRequestError,
+  HitlAnswerError,
   HELD_NOTE,
   readHitl,
   answerOf,
+  expireHitl,
+  // The gate patterns (S4): `confirm` is the one-call common case, `humanGate`
+  // the custom one. They live beside `askHuman` because they are thin shapes
+  // over it, and their `onAnswer` needs the stored-key composition.
+  humanGate,
+  confirm,
   type HitlState,
+  type HitlAnswerErrorCode,
+  type HumanGateConfig,
+  type ConfirmConfig,
 } from './hitl.server'
 
 // ============================================================================
@@ -275,7 +286,6 @@ export {
   exitPattern,
   setError,
   setDone,
-  setPaused,
   generateId,
   resolveConfig,
   getDefaultTrackHistory,

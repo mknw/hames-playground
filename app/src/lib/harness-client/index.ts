@@ -9,8 +9,6 @@
 export {
   processMessage,
   processMessageWithAgent,
-  approveAction,
-  rejectAction,
   promoteAction,
   clearSession,
   deleteConversationsBulk,

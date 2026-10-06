@@ -178,33 +178,6 @@ describe('processMessage / processMessageWithAgent', () => {
   })
 })
 
-describe('approval gate', () => {
-  it('resumes the stored context as approved, for the current user', async () => {
-    const result = await actions.approveAction('sess-7')
-    expect(runTurnAndPersist).toHaveBeenCalledWith({
-      mode: 'approval',
-      sessionId: 'sess-7',
-      userId: 'bypass-user',
-      approved: true,
-    })
-    expect(result.response).toBe('ran:approval')
-  })
-
-  it('resumes as rejected, ignoring the (unused) reason', async () => {
-    await actions.rejectAction('sess-8', 'too risky')
-    expect(runTurnAndPersist).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: 'approval', approved: false }),
-    )
-  })
-
-  // The turn driver owns the "does this session exist?" check — it needs the
-  // row anyway to know which agent to resume under.
-  it('surfaces the driver’s refusal for a session the user does not own', async () => {
-    runTurnAndPersist.mockRejectedValueOnce(new Error('No active session'))
-    await expect(actions.approveAction('sess-9')).rejects.toThrow('No active session')
-  })
-})
-
 describe('sidebar actions', () => {
   it('promotes an action row for the current user only', async () => {
     await actions.promoteAction('sess-10')

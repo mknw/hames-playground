@@ -18,6 +18,37 @@ vi.mock('@hames-ai/harness-patterns/patterns/chain.server', () => ({
   chain: vi.fn(),
 }))
 
+/** Park a context on one request, as a stored blob holds it: the owning
+ *  runChain wrote the `hitl_request` and set `paused` (#433). Returns its id. */
+function pauseOn(ctx: { events: unknown[]; status: string }, names = ['test']): string {
+  const requestId = '7f1e8f5a-3c1b-4d2e-9a6b-0c5d4e3f2a1b'
+  ctx.events.push({
+    id: 'ev-request',
+    type: 'hitl_request',
+    ts: Date.now(),
+    patternId: 'test',
+    data: {
+      v: 1,
+      requestId,
+      runId: '',
+      key: 'confirm:write',
+      kind: 'confirm',
+      question: 'Write it?',
+      options: [
+        { id: 'approve', label: 'Approve' },
+        { id: 'reject', label: 'Reject', unattended: true },
+      ],
+      defaultOption: 'reject',
+      unattended: 'apply-default',
+      summary: {},
+      blocking: true,
+      resumeAt: { index: 0, names },
+    },
+  })
+  ctx.status = 'paused'
+  return requestId
+}
+
 describe('harness', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -203,75 +234,57 @@ describe('resumeHarness', () => {
     })
   })
 
+  const mockPattern = () => ({
+    name: 'test',
+    fn: vi.fn(async (scope) => scope),
+    config: { patternId: 'test' },
+  })
+
   it('should export resumeHarness function', async () => {
     const { resumeHarness } = await import('@hames-ai/harness-patterns/harness.server')
     expect(resumeHarness).toBeDefined()
     expect(typeof resumeHarness).toBe('function')
   })
 
-  it('should throw if context is not paused', async () => {
+  it('refuses a context that is not paused, with a coded error', async () => {
     const { resumeHarness } = await import('@hames-ai/harness-patterns/harness.server')
+    const { HitlAnswerError } = await import('@hames-ai/harness-patterns/hitl.server')
     const { serializeContext, createContext } =
       await import('@hames-ai/harness-patterns/context.server')
 
-    // Create a running context
     const ctx = createContext('test')
     ctx.status = 'running'
-    const serialized = serializeContext(ctx)
 
-    const mockPattern = {
-      name: 'test',
-      fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' },
-    }
+    const refusal = resumeHarness(serializeContext(ctx), [mockPattern()], {})
+    await expect(refusal).rejects.toBeInstanceOf(HitlAnswerError)
+    await expect(refusal).rejects.toMatchObject({ code: 'not-paused' })
+    expect(mockChain).not.toHaveBeenCalled()
+  })
 
-    await expect(resumeHarness(serialized, [mockPattern], true)).rejects.toThrow(
-      'Cannot resume: context is not paused',
+  it('records the answer and re-enters at the paused pattern', async () => {
+    const { resumeHarness } = await import('@hames-ai/harness-patterns/harness.server')
+    const { serializeContext, createContext } =
+      await import('@hames-ai/harness-patterns/context.server')
+
+    const ctx = createContext<{ response?: string }>('test')
+    const requestId = pauseOn(ctx)
+
+    const result = await resumeHarness(
+      serializeContext(ctx),
+      [mockPattern()],
+      { [requestId]: 'approve' },
+      { principal: 'user-1' },
     )
-  })
 
-  it('should resume paused context with approval', async () => {
-    const { resumeHarness } = await import('@hames-ai/harness-patterns/harness.server')
-    const { serializeContext, createContext } =
-      await import('@hames-ai/harness-patterns/context.server')
-
-    // Create a paused context
-    const ctx = createContext<{ approved?: boolean; response?: string }>('test')
-    ctx.status = 'paused'
-    const serialized = serializeContext(ctx)
-
-    const mockPattern = {
-      name: 'test',
-      fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' },
-    }
-
-    const result = await resumeHarness(serialized, [mockPattern], true)
-
-    expect(result.data.approved).toBe(true)
-    expect(mockChain).toHaveBeenCalled()
-  })
-
-  it('should add approval_response event', async () => {
-    const { resumeHarness } = await import('@hames-ai/harness-patterns/harness.server')
-    const { serializeContext, createContext } =
-      await import('@hames-ai/harness-patterns/context.server')
-
-    const ctx = createContext<{ approved?: boolean; response?: string }>('test')
-    ctx.status = 'paused'
-    const serialized = serializeContext(ctx)
-
-    const mockPattern = {
-      name: 'test',
-      fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' },
-    }
-
-    const result = await resumeHarness(serialized, [mockPattern], false)
-
-    const approvalEvents = result.context.events.filter((e) => e.type === 'approval_response')
-    expect(approvalEvents.length).toBeGreaterThan(0)
-    expect((approvalEvents[0].data as { approved: boolean }).approved).toBe(false)
+    expect(mockChain).toHaveBeenCalledWith(expect.anything(), expect.anything(), undefined, {
+      startAt: 0,
+    })
+    const answers = result.context.events.filter((e) => e.type === 'hitl_response')
+    expect(answers.map((e) => e.data)).toEqual([
+      expect.objectContaining({ requestId, choice: 'approve', by: 'person', principal: 'user-1' }),
+    ])
+    // The legacy event is never written any more (#433 F9).
+    expect(result.context.events.some((e) => e.type === 'approval_response')).toBe(false)
   })
 
   it('should handle errors during resume', async () => {
@@ -281,17 +294,12 @@ describe('resumeHarness', () => {
 
     mockChain.mockRejectedValue(new Error('Resume error'))
 
-    const ctx = createContext<{ approved?: boolean; response?: string }>('test')
-    ctx.status = 'paused'
-    const serialized = serializeContext(ctx)
+    const ctx = createContext<{ response?: string }>('test')
+    const requestId = pauseOn(ctx)
 
-    const mockPattern = {
-      name: 'test',
-      fn: vi.fn(async (scope) => scope),
-      config: { patternId: 'test' },
-    }
-
-    const result = await resumeHarness(serialized, [mockPattern], true)
+    const result = await resumeHarness(serializeContext(ctx), [mockPattern()], {
+      [requestId]: 'reject',
+    })
 
     expect(result.status).toBe('error')
     expect(result.response).toContain('Resume error')

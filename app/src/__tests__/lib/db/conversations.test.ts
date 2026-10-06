@@ -709,6 +709,58 @@ describe('the turn claim and the versioned save', () => {
     expect(await renewConversationClaim(id, TEST_USER, held)).toBe(false)
     expect(await claimConversation(id, TEST_USER)).not.toBeNull()
   })
+  // Owner item 1 on review 6004200697 (coordinator decision, pending owner
+  // read): a `chain-changed` refusal ends the pause TERMINALLY, and the m3
+  // load-restore must be able to tell that `error` apart from a failed
+  // superseding message's — BOTH leave the blob `paused`, so the marker is
+  // the only difference. Pinned here: the terminal release stamps it, a
+  // plain failure neither stamps nor clears it, and the conversation's next
+  // successful save — the turn that moved it on — clears it.
+  // MUTATION: drop `hitl_ended_at = NOW()` from the terminal release → the
+  // first assertion reddens. Stamp it on every failed release → the second
+  // row's assertion reddens. Drop `hitl_ended_at = NULL` from
+  // saveConversation → the last assertion reddens.
+  it('a chain-changed release ends the pause terminally; a plain failure does not, and the next save clears it', async () => {
+    const id = mkId()
+    const paused = JSON.stringify({ events: [], status: 'paused' })
+    const held = await createConversation({ ...row(id, paused), status: 'paused' })
+
+    // The terminal refusal: error, and marked, so the m3 load-restore
+    // exempts this row instead of resurrecting the pause.
+    expect(
+      await releaseConversationClaim(id, TEST_USER, held, { failed: true, hitlTerminal: true }),
+    ).toBe(true)
+    const refused = (await loadConversation(id, TEST_USER))!
+    expect(refused.status).toBe('error')
+    expect(refused.hitlEndedAt).not.toBeNull()
+
+    // A LATER plain failure on the same conversation is not an un-termaling:
+    // the chain-changed verdict stands, and the marker must outlive it.
+    const again = (await claimConversation(id, TEST_USER))!
+    expect(await releaseConversationClaim(id, TEST_USER, again.version, { failed: true })).toBe(
+      true,
+    )
+    expect((await loadConversation(id, TEST_USER))!.hitlEndedAt).not.toBeNull()
+
+    // The next successful save is the turn that moved the conversation on:
+    // the marker goes, so a later pause's drift is repairable again.
+    const third = (await claimConversation(id, TEST_USER))!
+    await saveConversation({
+      ...row(id, JSON.stringify({ events: [], status: 'done' })),
+      status: 'done',
+      version: third.version,
+    })
+    expect((await loadConversation(id, TEST_USER))!.hitlEndedAt).toBeNull()
+
+    // And a plain failure ALONE sets no marker — that row's `error` is the
+    // drift the m3 repair exists for (a failed superseding message).
+    const other = mkId()
+    const otherHeld = await createConversation({ ...row(other, paused), status: 'paused' })
+    expect(await releaseConversationClaim(other, TEST_USER, otherHeld, { failed: true })).toBe(true)
+    const plain = (await loadConversation(other, TEST_USER))!
+    expect(plain.status).toBe('error')
+    expect(plain.hitlEndedAt).toBeNull()
+  })
 
   // A row that cannot be read (a wrong key, a corrupt blob) must not stay
   // claimed for a lease after the claim that read it threw.

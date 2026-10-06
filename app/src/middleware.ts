@@ -2,10 +2,11 @@
  * Server middleware — the app's server-boot hook, and its one per-request hook.
  *
  * Per request: the security headers (`lib/security-headers.ts`), set on every
- * response before the route runs, and the refusal of any server-function call
- * that is not a `POST` (`lib/auth/csrf.server.ts`, #429). Those two are the
- * only things this file does on every request in production; see `onRequest`
- * at the bottom.
+ * response before the route runs; the refusal of any server-function call that
+ * is not a `POST` (#429); and the refusal of any state-changing request that
+ * did not come from the app's own origin (#455) — both in
+ * `lib/auth/csrf.server.ts`. Those three are the only things this file does on
+ * every request in production; see `onRequest` at the bottom.
  *
  * SolidStart imports this module once when the server handler graph loads,
  * before any request is served, which makes it the natural place to arm
@@ -31,7 +32,7 @@
 
 import { createMiddleware } from '@solidjs/start/middleware'
 import { setSecurityHeaders } from './lib/security-headers'
-import { refuseServerFunctionGet } from './lib/auth/csrf.server'
+import { refuseCrossOriginStateChange, refuseServerFunctionGet } from './lib/auth/csrf.server'
 import { startRoutineScheduler } from './lib/routines/scheduler.server'
 import { installUsageRecorder } from './lib/metrics/usage-recorder.server'
 import {
@@ -154,8 +155,8 @@ installUsageRecorder()
  *
  * `devFakeInferenceUrl()` returns `null` unless `import.meta.env.DEV` — a
  * constant a build replaces with `false` — so the hook is never added to
- * `onRequest` and production's only per-request work is `setSecurityHeaders`
- * and `refuseServerFunctionGet`.
+ * `onRequest` and production's only per-request work is `setSecurityHeaders`,
+ * `refuseServerFunctionGet` and `refuseCrossOriginStateChange`.
  */
 export default createMiddleware({
   // `setSecurityHeaders` FIRST and unconditionally: it is the one hook that
@@ -166,9 +167,14 @@ export default createMiddleware({
   // 405 before SolidStart's handler would run the named function (#429), and
   // that hole is open in every build. It keys on the router, not the path —
   // see its header for the paths h3 routes there.
+  // `refuseCrossOriginStateChange` third, in BOTH routers' copies: the one
+  // chokepoint for every write — API routes and `/_server` alike — whose
+  // Origin (else Referer) is not the configured public origin (#455). Ahead of
+  // every route, so no route has to remember a line of its own.
   onRequest: [
     setSecurityHeaders,
     refuseServerFunctionGet,
+    refuseCrossOriginStateChange,
     ...(devFakeInferenceUrl()
       ? [
           async () => {

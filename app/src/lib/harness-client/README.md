@@ -6,7 +6,7 @@ Server-side module that bridges the UI with the `harness-patterns` framework. Ha
 
 ```
 harness-client/
-├── actions.server.ts          # processMessage(), processMessageStreaming(), approveAction(), rejectAction(), listConversations(), loadConversation()
+├── actions.server.ts          # processMessage(), processMessageStreaming(), listConversations(), loadConversation()
 ├── session.server.ts          # In-process pattern cache + Postgres-backed serialized context (per-user, scoped via userId); owns the AgentDeps bag (agentDeps())
 ├── registry.server.ts         # The composition-root overlay: registers the @hames-ai/agents definitions with this app's icon/accent, exports getAgentMetadata()
 ├── neo4j-enricher.server.ts   # `onToolResult` recipe — fetches 1-hop neighborhood for touched nodes
@@ -37,10 +37,6 @@ const result = await processMessageStreaming(sessionId, message, 'search', (evt:
   controller.enqueue(encoder.encode(`data: ${JSON.stringify(evt)}\n\n`))
 })
 ```
-
-### `approveAction(sessionId)` / `rejectAction(sessionId)`
-
-Resume a paused session after user approval or rejection of a write operation.
 
 ### `getAgentMetadata()`
 
@@ -108,5 +104,5 @@ Sessions are split into two layers:
 1. First message: auth → `processMessageStreaming(sessionId, message, agentId)` builds patterns, runs the agent, and `saveSession(sessionId, userId, agentId, serializeContext(ctx), tier)` upserts the row. Title is derived from the first user message and stuck via `COALESCE` on update; `tier` — the inference tier the turn resolved (`lib/inference/tier.server.ts`) — is stuck the same way, so the row RECORDS where it ran and a later flip is never undone by a turn that was still finishing.
 2. Subsequent messages: `loadSession(sessionId, userId)` reads the row, `deserializeContext()` rehydrates state, `continueSession()` runs the next turn.
 3. Sidebar selection: `loadConversation(sessionId)` returns the rehydrated context; `ChatInterface` replays events into graph + observability via the existing pipeline.
-4. Approval flow (plumbing): a paused context (`status: 'paused'`) resumes via `approveAction()` / `rejectAction()` → `resumeHarness()`; the resumed context is re-saved. The gating pattern that pauses a run is being redesigned — see "Execute under Supervision" (#123).
+4. Pauses: a run that asks a person (`askHuman`, #433) ends `status: 'paused'` and is saved like any turn. The boolean approve/reject actions are gone (#433 S3); a resume, with answers bound to the requests the run waits on, arrives as `mode: 'resume'` on the streaming route (#433 S7).
 5. Agent change / new chat: `deleteSession()` evicts the pattern cache and removes the row (or simply selects a different `sessionId`).

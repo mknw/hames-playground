@@ -267,3 +267,74 @@ describe('POST /api/events', () => {
     await expect(runTurnAndPersist.mock.results[0].value).resolves.toBe(RESULT)
   })
 })
+
+// ── mode: 'resume' (#433 S7) ──────────────────────────────────────────────────
+
+describe("POST /api/events — mode: 'resume'", () => {
+  it('drives a resume turn with no message and no agent, on the same wire', async () => {
+    const res = await POST(evt({ sessionId: 's1', mode: 'resume', settings: { maxTurns: 3 } }))
+    const wire = await frames(res)
+
+    expect(runTurnAndPersist.mock.calls[0][0]).toMatchObject({
+      mode: 'resume',
+      sessionId: 's1',
+      userId: 'user-1',
+      // The caller-supplied settings are clamped by the same sanitizer as an
+      // interactive turn's — the resume inherits the request path unchanged.
+      settings: expect.any(Object),
+      onEvent: expect.any(Function),
+      onWarming: expect.any(Function),
+      onResult: expect.any(Function),
+      onTitle: expect.any(Function),
+      onSettled: expect.any(Function),
+    })
+    expect('message' in runTurnAndPersist.mock.calls[0][0]).toBe(false)
+    expect('agentId' in runTurnAndPersist.mock.calls[0][0]).toBe(false)
+    // The frames are the same wire an interactive turn uses.
+    expect(wire.at(-2)).toMatchObject({
+      event: 'message',
+      data: { type: 'tool_result', sessionId: 's1' },
+    })
+    expect(wire.at(-1)).toMatchObject({
+      event: 'done',
+      data: { sessionId: 's1', status: 'running' },
+    })
+  })
+
+  it('requires only a sessionId for a resume — a missing message is not a 400', async () => {
+    const res = await POST(evt({ sessionId: 's1', mode: 'resume' }))
+    expect(res.status).toBe(200)
+    expect(runTurnAndPersist).toHaveBeenCalled()
+  })
+
+  it('refuses an unknown mode, before authenticating', async () => {
+    const res = await POST(evt({ sessionId: 's1', message: 'hi', mode: 'approval' }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/interactive or resume/)
+    expect(getAuthenticatedUser).not.toHaveBeenCalled()
+    expect(runTurnAndPersist).not.toHaveBeenCalled()
+  })
+
+  it('still requires a sessionId for a resume, before authenticating', async () => {
+    const res = await POST(evt({ mode: 'resume' }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/sessionId is required/)
+    expect(getAuthenticatedUser).not.toHaveBeenCalled()
+  })
+
+  it('emits a refused resume as an error frame naming the refusal, keeping the row paused', async () => {
+    runTurnAndPersist.mockRejectedValueOnce(
+      new Error('resumeHarness refused (tier-changed): request req-1 was raised on another tier'),
+    )
+    const res = await POST(evt({ sessionId: 's1', mode: 'resume' }))
+    const wire = await frames(res)
+
+    expect(wire.at(-1)).toMatchObject({
+      event: 'error',
+      data: {
+        sessionId: 's1',
+        error: expect.stringContaining('(tier-changed)'),
+      },
+    })
+  })
+})

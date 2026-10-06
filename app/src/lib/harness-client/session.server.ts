@@ -29,6 +29,7 @@ import {
   saveConversation,
   deleteConversation,
   deriveTitle,
+  restoreConversationPaused,
   updateConversationTitle,
   type ConversationKind,
   type ConversationRow,
@@ -260,13 +261,54 @@ function toLoadedSession(row: ConversationRow): LoadedSession {
   }
 }
 
+/**
+ * Repair a row left at a status its blob does not say (#433 S7, m3 as amended
+ * by #433 comment 6004211643): `error` today — a superseding MESSAGE whose run
+ * failed on a paused conversation released `failed: true` while nothing saved,
+ * so the blob still says `paused`. Under #470's claim a resume that dies
+ * between claim and save no longer drifts the row (the claim touches only
+ * `turn_claimed_at` / `context_version`), and the reaper flips only `running`
+ * rows; a future status rule that drifts it is covered by the same repair.
+ * Every load is the host's chance to put the pause back — fenced by the
+ * version this read saw, refused while a turn holds the row
+ * (`restoreConversationPaused`).
+ *
+ * THE ONE EXEMPTION (owner item 1 on review 6004200697, coordinator decision
+ * pending owner read): a row whose `hitl_ended_at` is set — a `chain-changed`
+ * refusal terminally ended its pause — is NEVER repaired. The refusal's blob
+ * also still says `paused` (nothing was recorded), so without the marker the
+ * badge would oscillate `error` → `paused` → refused `chain-changed` → `error`
+ * on every load. The row's `error` is final; the person's way out is a new
+ * message, which supersedes the request.
+ */
+function restorePausedFromBlob(row: ConversationRow): void {
+  if (row.status === 'paused' || extractStatusFromContext(row.serializedContext) !== 'paused') {
+    return
+  }
+  if (row.hitlEndedAt != null) return
+  void restoreConversationPaused(row.id, row.userId, row.version)
+    .then((restored) => {
+      if (restored) {
+        console.warn(
+          `[session] ${row.id} said '${row.status}' while its blob says 'paused' — restored, ` +
+            'so the pause is visible and resumable again (a failed superseding message left the row at its error).',
+        )
+      }
+    })
+    .catch((err: unknown) =>
+      console.error(`[session] could not restore 'paused' on ${row.id}:`, err),
+    )
+}
+
 /** Load a serialized context for (sessionId, userId), or null if not found. */
 export async function loadSession(
   sessionId: string,
   userId: string,
 ): Promise<LoadedSession | null> {
   const row = await loadConversation(sessionId, userId)
-  return row ? toLoadedSession(row) : null
+  if (!row) return null
+  restorePausedFromBlob(row)
+  return toLoadedSession(row)
 }
 
 /**

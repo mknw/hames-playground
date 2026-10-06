@@ -40,18 +40,46 @@
  * {@link hitlPending} between steps — but the WITHHOLDING is not: a gated
  * executor returns {@link held} instead of the content, so a loop that ignored
  * the check would still never see what is being decided.
+ *
+ * ## Resuming, superseding, expiring (slice S3)
+ *
+ * A pause ends the turn; what continues it is an ANSWER, and an answer resumes
+ * only the pause it was issued for (P1). {@link checkResume} is that binding:
+ * every answer must name a request this run is waiting on, not expired, raised
+ * on the tier the resume runs on, with a choice that is an available option of
+ * THAT request event — and every waiting request must be answered in the same
+ * call. It is checked against `pending`, never against the journal, so an
+ * answer that was already applied is refused: acceptance appends a
+ * `hitl_response`, and an answered request is no longer pending.
+ * {@link recordAnswers} then writes the decisions and substitutes each held
+ * result with its sanitized outcome. A new message SUPERSEDES whatever is
+ * still waiting ({@link supersedeHitl}), and {@link expireHitl} closes a
+ * request nobody answered in time — a non-blocking proposal included (m6).
+ * Every one of them substitutes the held results it closes and deletes their
+ * `summary`, so the placeholder's compaction summary can never mask the
+ * outcome (Δ2).
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomUUID } from 'node:crypto'
 import { assertServerOnImport } from './assert.server'
-import { mintHitlEvent } from './context.server'
+import {
+  deserializeContext,
+  generateId,
+  mintHitlEvent,
+  resolveConfig,
+  serializeContext,
+} from './context.server'
+import { redactReport, sanitizeUntrusted } from './injection-guard'
 import { emitLive } from './live-event-context.server'
 import { activeRunFrame } from './run-frame.server'
 import type {
+  AssistantMessageEventData,
+  ConfiguredPattern,
   ContextEvent,
   EventView,
   HeldResult,
+  HitlAnswers,
   HitlDecidedBy,
   HitlOption,
   HitlOutcome,
@@ -59,6 +87,10 @@ import type {
   HitlRequestEventData,
   HitlResponseEventData,
   HitlUnattended,
+  PatternConfig,
+  PatternScope,
+  ScopedPattern,
+  ToolResultEventData,
   UnifiedContext,
 } from './types'
 
@@ -326,7 +358,13 @@ export async function askHuman<C extends string>(request: HitlRequest<C>): Promi
   const kind = request.kind
   const key = `${kind}:${request.key ?? defaultKey(request)}`
   const identity = hitlReplayKey({ kind, key, options: request.options })
-  const state = readHitl({ events: [...run.owner.events, ...run.buffer] })
+  // What the run holds: its committed record, plus what this run raised and
+  // has not committed yet — the latter only as far as core could have written
+  // it, so an answer pushed into the buffer by anything else is never replayed
+  // here, before the commit would have dropped it (#433 S3).
+  const state = readHitl({
+    events: [...run.ownerEvents(), ...admitBuffered(run.buffer, run.attended)],
+  })
 
   const earlier = state.answers.get(identity)
   if (earlier && isAvailable(request.options, earlier.choice)) {
@@ -427,6 +465,423 @@ export function hitlPending(): boolean {
 }
 
 // ============================================================================
+// Resuming, superseding, expiring (#433, slice S3)
+// ============================================================================
+
+/** Why `resumeHarness` refused. Every refusal is thrown BEFORE anything is
+ *  recorded and before the host's `resolve` runs, so the blob it was given is
+ *  untouched and still resumable with a correct answer. */
+export type HitlAnswerErrorCode =
+  | 'not-paused'
+  | 'no-pending'
+  | 'expired'
+  | 'tier-changed'
+  | 'unknown-request'
+  | 'missing-answer'
+  | 'invalid-choice'
+  | 'unavailable-option'
+  | 'invalid-flag'
+  | 'required-flag'
+  | 'chain-changed'
+
+/** An answer that does not resume this pause. `code` says which check refused
+ *  it; `requestId` names the waiting request it concerns, when there is one.
+ *  The message never quotes what the caller sent. */
+export class HitlAnswerError extends Error {
+  readonly code: HitlAnswerErrorCode
+  readonly requestId?: string
+  constructor(code: HitlAnswerErrorCode, message: string, requestId?: string) {
+    super(`resumeHarness refused (${code}): ${message}`)
+    this.name = 'HitlAnswerError'
+    this.code = code
+    if (requestId !== undefined) this.requestId = requestId
+  }
+}
+
+/** One answer that passed every check, normalized. @internal `resumeHarness`. */
+export interface AcceptedAnswer {
+  /** The waiting request it answers — the event as recorded, so frozen. */
+  readonly request: HitlRequestEventData
+  /** The option chosen, from THAT request's own options. */
+  readonly option: HitlOption
+  readonly answer: { readonly choice: string; readonly flags: Readonly<Record<string, boolean>> }
+}
+
+/** Past its `expiresAt`? One predicate for the resume check and for
+ *  {@link expireHitl}, so a request `resumeHarness` refuses as expired is one
+ *  `expireHitl` closes at that instant or any later one. */
+const pastDue = (r: HitlRequestEventData, now: number): boolean =>
+  r.expiresAt !== undefined && now >= r.expiresAt
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
+
+const own = (o: object, key: string): boolean => Object.prototype.hasOwnProperty.call(o, key)
+
+/**
+ * The binding (P1), steps 1–6 of the spec: checks only, in order, and the
+ * first that fails throws {@link HitlAnswerError}. Nothing here writes.
+ *
+ * 1. the context is `paused` (`not-paused`);
+ * 2. it waits on something (`no-pending`) — `readHitl(ctx).pending`, the
+ *    blocking requests of the CURRENT run with no response:
+ *    2b. none of them is past due (`expired`) [F5];
+ *    2c. each was raised on the tier this resume runs on (`tier-changed`) [C1];
+ * 3. every answer names one of them (`unknown-request`) — checked against
+ *    `pending`, NEVER against the journal: an answer already applied names a
+ *    request that is no longer waiting, so a replay, a double submit, an answer
+ *    to a pause the run has moved past and one from an earlier run are all
+ *    refused here;
+ * 4. every one of them is answered (`missing-answer`);
+ * 5. each answer's choice is an option of THAT request event
+ *    (`invalid-choice`), an available one (`unavailable-option`), its flags are
+ *    that option's flags (`invalid-flag`), and every required flag is set true
+ *    by the answer itself (`required-flag`) — a default does not confirm;
+ * 6. the top-level chain is the one the run paused in (`chain-changed`) [m4].
+ *
+ * @internal `resumeHarness` only.
+ */
+export function checkResume(
+  ctx: Pick<UnifiedContext, 'events' | 'status'>,
+  answers: HitlAnswers,
+  at: {
+    readonly names: readonly string[]
+    readonly tier: string | undefined
+    readonly now: number
+  },
+): { readonly accepted: readonly AcceptedAnswer[]; readonly startAt: number } {
+  if (ctx.status !== 'paused') {
+    throw new HitlAnswerError('not-paused', `the context is '${ctx.status}', not paused`)
+  }
+  const { pending } = readHitl(ctx)
+  if (pending.length === 0) {
+    throw new HitlAnswerError('no-pending', 'the context is paused, but waits on no request')
+  }
+  for (const r of pending) {
+    if (pastDue(r, at.now)) {
+      throw new HitlAnswerError('expired', `request ${r.requestId} is past due`, r.requestId)
+    }
+  }
+  for (const r of pending) {
+    if (r.tier !== at.tier) {
+      throw new HitlAnswerError(
+        'tier-changed',
+        `request ${r.requestId} was raised on another inference tier than this resume runs on`,
+        r.requestId,
+      )
+    }
+  }
+
+  const given: Record<string, unknown> = isRecord(answers) ? answers : {}
+  const waiting = new Set(pending.map((r) => r.requestId))
+  for (const id of Object.keys(given)) {
+    if (!waiting.has(id)) {
+      throw new HitlAnswerError('unknown-request', 'an answer names no request this run waits on')
+    }
+  }
+  for (const r of pending) {
+    if (!own(given, r.requestId)) {
+      throw new HitlAnswerError(
+        'missing-answer',
+        `request ${r.requestId} is not answered`,
+        r.requestId,
+      )
+    }
+  }
+
+  const accepted = pending.map((request): AcceptedAnswer => {
+    const raw = given[request.requestId]
+    const choice = typeof raw === 'string' ? raw : isRecord(raw) ? raw.choice : undefined
+    const option =
+      typeof choice === 'string' ? request.options.find((o) => o.id === choice) : undefined
+    if (!option) {
+      throw new HitlAnswerError(
+        'invalid-choice',
+        `the answer to ${request.requestId} is not one of its options`,
+        request.requestId,
+      )
+    }
+    if (option.unavailable) {
+      throw new HitlAnswerError(
+        'unavailable-option',
+        `'${option.id}' is not available on ${request.requestId}`,
+        request.requestId,
+      )
+    }
+    const sent = isRecord(raw) ? raw.flags : undefined
+    if (sent !== undefined && !isRecord(sent)) {
+      throw new HitlAnswerError('invalid-flag', 'flags must be an object', request.requestId)
+    }
+    const declared = option.flags ?? []
+    for (const [id, value] of Object.entries(sent ?? {})) {
+      if (typeof value !== 'boolean' || !declared.some((f) => f.id === id)) {
+        throw new HitlAnswerError(
+          'invalid-flag',
+          `a flag is not one '${option.id}' declares`,
+          request.requestId,
+        )
+      }
+    }
+    for (const flag of declared) {
+      if (flag.required && sent?.[flag.id] !== true) {
+        throw new HitlAnswerError(
+          'required-flag',
+          `'${option.id}' needs '${flag.id}' confirmed`,
+          request.requestId,
+        )
+      }
+    }
+    const flags = { ...defaultFlags(option), ...(sent as Record<string, boolean> | undefined) }
+    return { request, option, answer: { choice: option.id, flags } }
+  })
+
+  const startAt = pending[0].resumeAt?.index
+  const sameChain = (r: HitlRequestEventData): boolean =>
+    r.resumeAt !== undefined &&
+    r.resumeAt.index === startAt &&
+    r.resumeAt.names.length === at.names.length &&
+    r.resumeAt.names.every((name, i) => name === at.names[i])
+  if (
+    startAt === undefined ||
+    !Number.isInteger(startAt) ||
+    startAt < 0 ||
+    startAt >= at.names.length ||
+    !pending.every(sameChain)
+  ) {
+    throw new HitlAnswerError(
+      'chain-changed',
+      "the agent's top-level patterns are not the ones this run paused in",
+    )
+  }
+  return { accepted, startAt }
+}
+
+/**
+ * Steps 8–9: append one `hitl_response` per accepted answer (`by: 'person'`;
+ * `principal` and `resolution` from the HOST, never from the answer) and
+ * substitute each held result with its outcome. Returns the response events,
+ * in the order they were appended.
+ *
+ * @internal `resumeHarness` only.
+ */
+export function recordAnswers(
+  ctx: Pick<UnifiedContext, 'events'>,
+  accepted: readonly AcceptedAnswer[],
+  resolutions: readonly unknown[],
+  principal: string | undefined,
+): ContextEvent[] {
+  const recorded: ContextEvent[] = []
+  const outcomes = new Map<string, unknown>()
+  accepted.forEach(({ request, option, answer }, i) => {
+    const resolution = resolutions[i]
+    recorded.push(
+      mintHitlEvent('hitl_response', 'harness', {
+        v: 1,
+        requestId: request.requestId,
+        key: request.key,
+        kind: request.kind,
+        choice: answer.choice,
+        ...(option.flags?.length ? { flags: answer.flags } : {}),
+        by: 'person',
+        ...(principal !== undefined ? { principal } : {}),
+        ...(resolution !== undefined ? { resolution } : {}),
+      }),
+    )
+    outcomes.set(request.requestId, resolution ?? `The user chose: ${option.label}.`)
+  })
+  ctx.events.push(...recorded)
+  substituteHeld(ctx, outcomes)
+  return recorded
+}
+
+/** What a superseded held result says. */
+export const SUPERSEDED_NOTE = 'The user did not answer; nothing was kept.'
+
+/** What an expired held result says. */
+export const EXPIRED_NOTE = 'Nobody answered in time; nothing was kept.'
+
+/**
+ * A new message SUPERSEDES the run that was waiting (D11). `continueSession`
+ * calls this before its reset and before the new `user_message`: every request
+ * the run still waits on gets `{ choice: null, by: 'superseded' }` — nobody
+ * chose, and nothing is chosen for them (P4) — and its held results say so.
+ * The new run starts with an empty journal by construction, because its
+ * window starts at the new message. Returns the closed request ids.
+ *
+ * @internal `continueSession` only.
+ */
+export function supersedeHitl(ctx: Pick<UnifiedContext, 'events'>): string[] {
+  return closeUnanswered(ctx, readHitl(ctx).pending, 'superseded', SUPERSEDED_NOTE)
+}
+
+/**
+ * Close every request nobody answered in time, from a stored blob. Expiry is
+ * lazy: the host calls this when it next reads the conversation, and after a
+ * resume refused as `expired`.
+ *
+ * Each request past its `expiresAt` with no response gets `{ choice: null,
+ * by: 'expired' }`: a blocking one the current run waits on, and a
+ * non-blocking proposal wherever it sits in the log [m6]. Held results are
+ * substituted. When a blocking request expired while the run was paused, the
+ * run ends `done` with a fixed response and nothing is re-entered — and the
+ * run's OTHER pending requests are closed `{ choice: null, by: 'superseded' }`
+ * [#481 F2]. Answers are all-or-nothing, so once one has expired the rest
+ * cannot be answered either; left open, they would be listed as pending on a
+ * finished run that no resume can take. Returns null when nothing was due, so
+ * the host writes nothing.
+ */
+export function expireHitl(
+  serialized: string,
+  now: number,
+): { serialized: string; expired: string[]; superseded: string[] } | null {
+  const ctx = deserializeContext(serialized)
+  const answered = new Set<string>()
+  for (const event of ctx.events) {
+    if (event.type === 'hitl_response' && isResponse(event)) answered.add(event.data.requestId)
+  }
+  const seen = new Set<string>()
+  const proposals: HitlRequestEventData[] = []
+  for (const event of ctx.events) {
+    if (event.type !== 'hitl_request' || !isRequest(event)) continue
+    const r = event.data
+    if (seen.has(r.requestId)) continue
+    seen.add(r.requestId)
+    if (!r.blocking && !answered.has(r.requestId) && pastDue(r, now)) proposals.push(r)
+  }
+  const pending = readHitl(ctx).pending
+  const blocking = pending.filter((r) => pastDue(r, now))
+  if (blocking.length === 0 && proposals.length === 0) return null
+
+  const expired = [
+    ...closeUnanswered(ctx, blocking, 'expired', EXPIRED_NOTE),
+    ...closeUnanswered(ctx, proposals, 'expired', EXPIRED_NOTE),
+  ]
+  const superseded: string[] = []
+  if (blocking.length > 0 && ctx.status === 'paused') {
+    superseded.push(
+      ...closeUnanswered(
+        ctx,
+        pending.filter((r) => !pastDue(r, now)),
+        'superseded',
+        SUPERSEDED_NOTE,
+      ),
+    )
+    const response =
+      `The ${blocking[0].kind} decision expired before anyone answered, ` +
+      'so the run stopped there.'
+    ctx.status = 'done'
+    ctx.data = { ...(ctx.data as Record<string, unknown>), response }
+    ctx.events.push({
+      id: generateId('ev'),
+      type: 'assistant_message',
+      ts: Date.now(),
+      patternId: 'harness',
+      data: { content: response } satisfies AssistantMessageEventData,
+    })
+  }
+  return { serialized: serializeContext(ctx), expired, superseded }
+}
+
+/** Record that nobody chose (`choice: null`) on each request, and substitute
+ *  its held results with `note`. */
+function closeUnanswered(
+  ctx: Pick<UnifiedContext, 'events'>,
+  requests: readonly HitlRequestEventData[],
+  by: 'superseded' | 'expired',
+  note: string,
+): string[] {
+  const outcomes = new Map<string, unknown>()
+  for (const r of requests) {
+    ctx.events.push(
+      mintHitlEvent('hitl_response', 'harness', {
+        v: 1,
+        requestId: r.requestId,
+        key: r.key,
+        kind: r.kind,
+        choice: null,
+        by,
+      }),
+    )
+    outcomes.set(r.requestId, note)
+  }
+  substituteHeld(ctx, outcomes)
+  return requests.map((r) => r.requestId)
+}
+
+/** Is this a gated executor's placeholder? */
+export function isHeldResult(value: unknown): value is HeldResult {
+  return isRecord(value) && value.held === true && typeof value.requestId === 'string'
+}
+
+/**
+ * Replace every held `tool_result` of the current run whose request has an
+ * outcome now. `result` becomes the outcome AFTER `sanitizeUntrusted`
+ * (namespace `hitl`): a resolution is host output about content that may be
+ * hostile, and this is the one path by which it reaches a model (P3). The
+ * event is marked `heldBy`, and its `summary` is DELETED [Δ2]: a summary is
+ * what compaction wrote about the placeholder, and both compaction (which
+ * skips a summarized result) and the loops' prior-results preview (which
+ * prefers one) would otherwise keep serving "waiting for a decision" in place
+ * of the outcome, to the re-entered controller and to every later turn.
+ *
+ * A held result is identified by the UUID v4 INSIDE its `requestId`, not by an
+ * exact match [#481 F1]: the opt-in LLM screen fences every string leaf of a
+ * result it flags, the placeholder's id included, and an exact match would
+ * then record the answer and leave the fenced held note in place for good. A
+ * leaf with no UUID naming one of these outcomes is not substituted; a forged
+ * placeholder that carries a real waiting id gets only core's sanitized
+ * outcome, which is harmless.
+ */
+function substituteHeld(
+  ctx: Pick<UnifiedContext, 'events'>,
+  outcomes: ReadonlyMap<string, unknown>,
+): void {
+  if (outcomes.size === 0) return
+  for (let i = runStart(ctx.events); i < ctx.events.length; i++) {
+    const event = ctx.events[i]
+    if (event.type !== 'tool_result') continue
+    const data = event.data as ToolResultEventData
+    if (!isHeldResult(data.result)) continue
+    const requestId = heldRequestId(data.result.requestId, outcomes)
+    if (requestId === undefined) continue
+    const { data: result, report } = sanitizeUntrusted(outcomes.get(requestId), {
+      tool: data.tool,
+      namespace: 'hitl',
+    })
+    // A fresh object: no `summary`, and no `sanitized` that described the
+    // placeholder rather than what replaced it.
+    const { summary: _summary, sanitized: _sanitized, ...rest } = data
+    event.data = {
+      ...rest,
+      result,
+      heldBy: requestId,
+      ...(report.findings.length > 0 ? { sanitized: redactReport(report) } : {}),
+    } satisfies ToolResultEventData
+  }
+}
+
+/** The UUID v4 found in a held placeholder's `requestId` that names one of
+ *  `outcomes`, or undefined. Unanchored, so a fenced id still resolves. */
+function heldRequestId(
+  requestId: string,
+  outcomes: ReadonlyMap<string, unknown>,
+): string | undefined {
+  for (const [found] of requestId.matchAll(UUID_V4_IN_TEXT)) {
+    if (outcomes.has(found)) return found
+  }
+  return undefined
+}
+
+/** Index of the first event of the current run: just after the last
+ *  `user_message` (0 when there is none). */
+function runStart(events: readonly ContextEvent[]): number {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].type === 'user_message') return i + 1
+  }
+  return 0
+}
+
+// ============================================================================
 // The owning runChain's half (internal)
 // ============================================================================
 
@@ -448,12 +903,22 @@ interface HitlPosition {
  * nothing exports, and each `runChain` that owns a run opens its own — so two
  * runs started concurrently in one host frame never share one (F2).
  *
+ * The store is still reachable by naming its `Symbol.for` key — the price of
+ * the two-copy idiom — so nothing on this object may be a way to WRITE THE
+ * RECORD (#433 S3): `attended`, `ownerEvents`, `buffer` and `waiting` are
+ * non-writable properties, `ownerEvents()` hands out a copy and never the live
+ * log, and what sits in `buffer` is admitted only as far as core could have
+ * written it ({@link admitBuffered}). What stays reachable is the stop:
+ * clearing `waiting` still suppresses a pause, which forges no answer — the
+ * gated executor has already withheld the content, and the request is still
+ * pending in the record.
+ *
  * @internal `runChain` and `askHuman` only.
  */
 export interface HitlRun {
   readonly attended: boolean
-  /** The context of the `runChain` that opened this run. */
-  readonly owner: Pick<UnifiedContext, 'events'>
+  /** A COPY of the owning context's events. Never the live array. */
+  readonly ownerEvents: () => ContextEvent[]
   /** Where the owner is. Undefined until it dispatches its first pattern. */
   position?: HitlPosition
   /** HITL events raised this run and not yet committed. The owner commits them
@@ -497,12 +962,15 @@ export function withHitlRun<R>(
 ): Promise<R> {
   const slot = activeRunFrame().hitl
   if (!slot || hitlRunStore.getStore()) return body(undefined)
-  const run: HitlRun = {
-    attended: slot.attended === true,
-    owner: ctx,
-    buffer: [],
-    waiting: new Set<string>(),
-  }
+  // Non-writable (`defineProperties` defaults), so nothing that reaches the
+  // store can swap the reader for one that serves a forged log, or flip the
+  // run to unattended (#433 S3).
+  const run = Object.defineProperties({} as HitlRun, {
+    attended: { value: slot.attended === true, enumerable: true },
+    ownerEvents: { value: (): ContextEvent[] => [...ctx.events], enumerable: true },
+    buffer: { value: [] as ContextEvent[], enumerable: true },
+    waiting: { value: new Set<string>(), enumerable: true },
+  })
   return hitlRunStore.run(run, () =>
     body(run).finally(() => {
       run.closed = true
@@ -520,11 +988,150 @@ export function positionHitlRun(
   run.position = { index, names, patternId }
 }
 
-/** Commit the buffer straight into the context, never through a scope, so no
- *  strategy and no copy of the scope filter can drop the record of a question.
- *  @internal `runChain` only. */
-export function commitHitlBuffer(run: HitlRun, ctx: Pick<UnifiedContext, 'events'>): void {
-  ctx.events.push(...run.buffer.splice(0))
+/**
+ * Commit the buffer straight into the context, never through a scope, so no
+ * strategy and no copy of the scope filter can drop the record of a question.
+ *
+ * Only what core could have written is committed ({@link admitBuffered}), and
+ * a request only where the OWNER is: at the top-level index and names it is
+ * passed here from its own loop, on the tier of its own frame, in the run its
+ * own context is on. So an answer, or a request carrying another `resumeAt` or
+ * another tier, pushed into the buffer by anything but `askHuman` never
+ * reaches the record a resume is checked against (#433 S3, P6).
+ *
+ * @internal `runChain` only.
+ */
+export function commitHitlBuffer(
+  run: HitlRun,
+  ctx: Pick<UnifiedContext, 'events'>,
+  index: number,
+  names: readonly string[],
+): void {
+  const buffered = run.buffer.splice(0)
+  if (buffered.length === 0) return
+  const known = new Set<string>()
+  for (const event of ctx.events) {
+    if (event.type === 'hitl_request' && isRequest(event)) known.add(event.data.requestId)
+  }
+  const at: CommitPoint = {
+    index,
+    names,
+    tier: activeRunFrame().inference?.tier,
+    runId: runIdOf(ctx.events),
+    known,
+  }
+  ctx.events.push(...admitBuffered(buffered, run.attended, at))
+}
+
+/** Where and on what the owner is when it commits: what a request it raised
+ *  must say about itself. */
+interface CommitPoint {
+  readonly index: number
+  readonly names: readonly string[]
+  readonly tier: string | undefined
+  readonly runId: string
+  /** Request ids the context already holds. */
+  readonly known: ReadonlySet<string>
+}
+
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+/** {@link UUID_V4}, unanchored: the ids inside a string that may be fenced. */
+const UUID_V4_IN_TEXT = new RegExp(UUID_V4.source.slice(1, -1), 'g')
+
+/**
+ * The buffered events core could have written, in order. `askHuman` writes
+ * exactly two shapes into the buffer, so nothing else is admitted:
+ *
+ * - a blocking `hitl_request` with a fresh UUID, a valid request, and — at
+ *   commit, when `at` is given — the owner's `resumeAt`, tier and run;
+ * - an UNATTENDED `hitl_response`, only in an unattended run, to a request
+ *   admitted earlier in the same buffer, whose choice and flags are exactly
+ *   what {@link resolveUnattended} picks for it. A person's answer is never in
+ *   a buffer: only a resume records one, straight into the context.
+ *
+ * At commit every other event is dropped with a warning, so a forgery is not
+ * silent. `askHuman` reads the buffer through the same rule (without `at`),
+ * so an answer forged into it is not replayed before the commit drops it.
+ */
+function admitBuffered(
+  buffer: readonly ContextEvent[],
+  attended: boolean,
+  at?: CommitPoint,
+): ContextEvent[] {
+  const admitted: ContextEvent[] = []
+  const raised = new Map<string, HitlRequestEventData>()
+  const answered = new Set<string>()
+  for (const event of buffer) {
+    if (
+      event.type === 'hitl_request' &&
+      isRequest(event) &&
+      admitsRequest(event.data, raised, at)
+    ) {
+      raised.set(event.data.requestId, event.data)
+      admitted.push(event)
+      continue
+    }
+    if (event.type === 'hitl_response' && isResponse(event) && !attended) {
+      const request = raised.get(event.data.requestId)
+      if (request && !answered.has(request.requestId) && isRuleAnswer(event.data, request)) {
+        answered.add(request.requestId)
+        admitted.push(event)
+        continue
+      }
+    }
+    if (at) {
+      console.warn(
+        `[harness-patterns] dropped a ${event.type} event from '${event.patternId}' in the HITL ` +
+          'buffer: only askHuman writes there, and this is not an event it wrote (#433).',
+      )
+    }
+  }
+  return admitted
+}
+
+function admitsRequest(
+  r: HitlRequestEventData,
+  raised: ReadonlyMap<string, HitlRequestEventData>,
+  at: CommitPoint | undefined,
+): boolean {
+  if (r.blocking !== true || !UUID_V4.test(r.requestId) || raised.has(r.requestId)) return false
+  if (typeof r.kind !== 'string' || typeof r.key !== 'string') return false
+  if (!r.key.startsWith(`${r.kind}:`)) return false
+  try {
+    validate(r)
+  } catch {
+    return false
+  }
+  if (!at) return true
+  return (
+    !at.known.has(r.requestId) &&
+    r.tier === at.tier &&
+    r.runId === at.runId &&
+    r.resumeAt !== undefined &&
+    r.resumeAt.index === at.index &&
+    r.resumeAt.names.length === at.names.length &&
+    r.resumeAt.names.every((name, i) => name === at.names[i])
+  )
+}
+
+/** Exactly the response `askHuman`'s unattended path writes for `request`. */
+function isRuleAnswer(r: HitlResponseEventData, request: HitlRequestEventData): boolean {
+  if (r.by !== 'unattended' || r.kind !== request.kind || r.key !== request.key) return false
+  if (r.principal !== undefined || r.resolution !== undefined) return false
+  const { choice } = resolveUnattended(request)
+  if (r.choice !== choice) return false
+  const expected = defaultFlags(request.options.find((o) => o.id === choice))
+  const got = r.flags ?? {}
+  const ids = Object.keys(expected)
+  return Object.keys(got).length === ids.length && ids.every((id) => got[id] === expected[id])
+}
+
+/** The id of the run's `user_message`, or '' — what `askHuman` stamps. */
+function runIdOf(events: readonly ContextEvent[]): string {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].type === 'user_message') return events[i].id ?? ''
+  }
+  return ''
 }
 
 /** Must the run end at this boundary, and how? A stop wins over a pause: a
@@ -544,4 +1151,146 @@ export function unattendedStopMessage(kind: string): string {
     `Stopped at the ${kind} check: there was no one to ask, and its rule for that case is ` +
     'to stop the run.'
   )
+}
+
+// ============================================================================
+// The gate patterns (#433, slice S4)
+// ============================================================================
+
+/** Configuration for {@link humanGate}. */
+export interface HumanGateConfig<
+  T extends Record<string, unknown>,
+  C extends string,
+> extends PatternConfig {
+  /** The request this gate raises, built from the view and the data the
+   *  pattern started from. Return null to pass through without asking —
+   *  how a gate decides there is nothing to decide. Thrown
+   *  {@link HitlRequestError}s are validation at raise, not runtime conditions. */
+  readonly request: (view: EventView, data: Readonly<T>) => HitlRequest<C> | null
+  /** What to do with a decision. Runs once per DECISION, not once per raise:
+   *  on the run that raised it (an unattended rule's choice), and again on the
+   *  re-entry after a resume, where the replayed answer is the person's. The
+   *  answer is the shape the record holds — the same fields a `hitl_response`
+   *  event carries, with no `principal` or `resolution` (those are the
+   *  host's, and a pattern never sees them). */
+  readonly onAnswer?: (answer: HitlResponseEventData, data: T) => T
+}
+
+/**
+ * The custom gate: a pattern that asks when its `request` says there is
+ * something to ask (#433 S4). This is the shape `confirm` presets; build one
+ * directly when the decision is not approve/reject — the provenance options,
+ * a memory proposal, anything with its own kind, options and rule.
+ *
+ * - `request(view, data)` returns null → the pattern passes through and asks
+ *   nothing.
+ * - `askHuman` answers (a replayed or unattended decision) → `onAnswer` runs,
+ *   and its return value becomes the pattern's data.
+ * - `askHuman` returns `pending` → the pattern returns unchanged, and the run
+ *   pauses at the boundary. On the resume that re-enters this pattern, the
+ *   gate replays the person's answer and `onAnswer` hears it.
+ *
+ * To READ a decision later instead of acting on it here, give the request an
+ * explicit `key` and call `answerOf(view, kind, key)`.
+ */
+export function humanGate<T extends Record<string, unknown>, C extends string = string>(
+  config: HumanGateConfig<T, C>,
+): ConfiguredPattern<T> {
+  const resolved = resolveConfig('humanGate', config)
+  const fn: ScopedPattern<T> = async (scope: PatternScope<T>, view: EventView) => {
+    const request = config.request(view, scope.data)
+    if (!request) return scope
+    const outcome = await askHuman(request)
+    if (outcome.status === 'pending' || !config.onAnswer) return scope
+    // The decision as the record holds it: the stored key is composed here for
+    // the same reason `askHuman` composes it, and the flags are the answer's.
+    const answer: HitlResponseEventData = {
+      v: 1,
+      requestId: outcome.requestId,
+      key: `${request.kind}:${request.key ?? defaultKey(request)}`,
+      kind: request.kind,
+      choice: outcome.choice,
+      ...(Object.keys(outcome.flags).length > 0 ? { flags: outcome.flags } : {}),
+      by: outcome.by,
+    }
+    scope.data = config.onAnswer(answer, scope.data)
+    return scope
+  }
+  return { name: 'humanGate', fn, config: resolved }
+}
+
+/** Configuration for {@link confirm}. */
+export interface ConfirmConfig<T extends Record<string, unknown>> extends PatternConfig {
+  /** The question, fixed or computed from the data (and the view). Consumer
+   *  text: never an attacker-chosen string [m7]. */
+  readonly question: string | ((data: Readonly<T>, view: EventView) => string)
+  /** Display facts, computed from the data. Untrusted; never rendered into an
+   *  LLM-facing view. */
+  readonly summary?: (data: Readonly<T>) => HitlRequest['summary']
+  /** The replay key. Give one when a later turn will read the decision with
+   *  `answerOf(view, 'confirm', key)` — the default is a content hash no
+   *  consumer can name. */
+  readonly key?: string
+  readonly approveLabel?: string
+  readonly rejectLabel?: string
+  /** What a rejection does. `'stop'` (default) ends the run — attended (the
+   *  resume records the stop) and unattended (the rule's pick stops it)
+   *  alike. `'continue'` lets the chain go on past the gate. */
+  readonly onReject?: 'stop' | 'continue'
+  /** What an unattended run does. Default `'apply-default'`: the rule picks
+   *  Reject. `'park'` waits for a person instead. */
+  readonly unattended?: 'apply-default' | 'park'
+}
+
+/**
+ * The one-call gate at a chain boundary (#433 S4; the common case of O5):
+ *
+ * ```typescript
+ * const agent = harness(planner, confirm({ question: (d) => `Run this plan? ${d.plan.summary}` }), executeLoop)
+ * ```
+ *
+ * Two options, in display order: **Approve** — never picked by the unattended
+ * rule, because nothing is approved without a person (P4) — and **Reject**,
+ * the default and the unattended choice. By default a rejection STOPS the run
+ * (`onReject: 'stop'`): attended, the resume records it and nothing is
+ * re-entered; unattended, the rule picks Reject and the run ends `done` at
+ * the boundary. `onReject: 'continue'` lets the chain run past the gate
+ * instead; read the decision with `answerOf(view, 'confirm', key)` — which
+ * needs an explicit `key` — or act on it with `onAnswer` by composing
+ * `humanGate` directly.
+ */
+export function confirm<T extends Record<string, unknown>>(
+  config: ConfirmConfig<T>,
+): ConfiguredPattern<T> {
+  const {
+    question,
+    summary,
+    key,
+    approveLabel,
+    rejectLabel,
+    onReject,
+    unattended,
+    ...patternConfig
+  } = config
+  const gate = humanGate<T, 'approve' | 'reject'>({
+    ...patternConfig,
+    request: (view, data) => ({
+      kind: 'confirm',
+      ...(key !== undefined ? { key } : {}),
+      question: typeof question === 'function' ? question(data, view) : question,
+      options: [
+        { id: 'approve', label: approveLabel ?? 'Approve' },
+        {
+          id: 'reject',
+          label: rejectLabel ?? 'Reject',
+          unattended: true,
+          ...(onReject !== 'continue' ? { stopsRun: true } : {}),
+        },
+      ],
+      defaultOption: 'reject',
+      ...(summary ? { summary: summary(data) } : {}),
+      ...(unattended !== undefined ? { unattended } : {}),
+    }),
+  })
+  return { ...gate, name: 'confirm' }
 }

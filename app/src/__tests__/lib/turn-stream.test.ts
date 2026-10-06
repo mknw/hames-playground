@@ -9,13 +9,7 @@
  * frame, a torn-down stream, a paused write).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import {
-  runTurn,
-  applyApprovalResult,
-  IDLE_TURN,
-  type TurnSink,
-  type TurnState,
-} from '~/lib/turn-stream'
+import { runTurn, IDLE_TURN, type TurnSink, type TurnState } from '~/lib/turn-stream'
 import type { Message } from '~/components/ark-ui/ChatMessages'
 import type { ContextEvent, UnifiedContext } from '@hames-ai/harness-patterns'
 import type { GraphElement } from '@hames-ai/agents'
@@ -497,55 +491,6 @@ describe('runTurn — failure paths', () => {
     await expect(runTurn(request(), rec.sink)).resolves.toMatchObject({ outcome: 'error' })
     expect(rec.messages[0]).toMatchObject({ role: 'error', content: 'offline' })
     err.mockRestore()
-  })
-})
-
-describe('applyApprovalResult', () => {
-  const context = (n: number): UnifiedContext =>
-    ({
-      events: Array.from({ length: n }, (_, i) => ({ type: 'tool_call', ts: i })),
-    }) as unknown as UnifiedContext
-
-  it('emits only the events added since the cursor, and returns the new one', async () => {
-    const rec = recorder()
-    const cursor = applyApprovalResult({ context: context(5) }, 3, rec.sink)
-
-    expect(cursor).toBe(5)
-    expect(rec.events.map((e) => e.ts)).toEqual([3, 4])
-    expect(rec.contexts).toHaveLength(1)
-  })
-
-  it('emits nothing when the resumed run added no events', () => {
-    const rec = recorder()
-    expect(applyApprovalResult({ context: context(3) }, 3, rec.sink)).toBe(3)
-    expect(rec.events).toEqual([])
-  })
-
-  it('leaves the cursor alone when the result carries no context at all', () => {
-    const rec = recorder()
-    expect(applyApprovalResult({}, 7, rec.sink)).toBe(7)
-    expect(rec.contexts).toEqual([])
-  })
-
-  it('fans graph elements out through the same sink the streaming turn uses', () => {
-    const rec = recorder()
-    applyApprovalResult(
-      {
-        context: {
-          events: [
-            {
-              type: 'tool_result',
-              patternId: 'neo4j-query',
-              ts: 1,
-              data: { tool: 'read_neo4j_cypher', result: singleNodeFixture, success: true },
-            },
-          ],
-        } as unknown as UnifiedContext,
-      },
-      0,
-      rec.sink,
-    )
-    expect(rec.graph.map((e) => e.data?.id)).toEqual(['Redis'])
   })
 })
 

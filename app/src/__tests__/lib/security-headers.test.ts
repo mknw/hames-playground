@@ -27,6 +27,7 @@ import {
 } from '~/lib/security-headers'
 
 const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
+const REPO = path.resolve(APP, '..')
 
 /** `img-src 'self' data:` → `{ 'img-src': ["'self'", 'data:'] }`. */
 function directives(policy: string): Record<string, string[]> {
@@ -116,5 +117,18 @@ describe('the server-boot hook runs it, first, in every build', () => {
     // or a spread that holds it would both fail here.
     expect(code).toMatch(/onRequest:\s*\[\s*setSecurityHeaders\s*,/)
     expect(code.match(/setSecurityHeaders/g)).toHaveLength(2)
+  })
+})
+
+// The reviewer's finding 4 on #467. The origin check (`csrf.server.ts`) admits
+// the app's own native form POSTs (sign-in, sign-out) and the terminal's
+// EventSource only because the page's referrer policy keeps `Origin` and
+// `Referer` on same-origin requests. Under `no-referrer` all three get a 403.
+describe('the referrer policy the origin check depends on', () => {
+  it('Caddy never serves the no-referrer policy that nulls Origin on the app’s own form POSTs', () => {
+    const caddy = readFileSync(path.join(REPO, 'configs/Caddyfile'), 'utf8')
+    const policy = caddy.match(/^\s*Referrer-Policy\s+(\S+)/m)?.[1]
+    expect(policy).toBeDefined()
+    expect(policy).not.toBe('no-referrer')
   })
 })

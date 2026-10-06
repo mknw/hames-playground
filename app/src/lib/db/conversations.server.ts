@@ -91,6 +91,18 @@ export interface ConversationRow {
    * Compare it, never parse it.
    */
   version: string
+  /**
+   * When a `chain-changed` refusal terminally ended this conversation's HITL
+   * pause (#433 S7, owner item 1 on review 6004200697), or null. The row's
+   * `error` is then FINAL for the pause: the m3 load-restore must not
+   * resurrect `paused` from the blob, which still says `paused` because a
+   * refusal records nothing. Cleared by the conversation's next successful
+   * save ({@link saveConversation}), which is the turn that moved it on.
+   *
+   * Plaintext like every timestamp (crypto.server.ts doctrine): a timestamp
+   * says nothing about what was said.
+   */
+  hitlEndedAt: Date | null
 }
 
 export interface ConversationListItem {
@@ -123,6 +135,7 @@ interface DbRow {
   created_at: Date
   updated_at: Date
   version: string
+  hitl_ended_at: Date | null
 }
 
 interface DbListRow {
@@ -139,7 +152,7 @@ interface DbListRow {
 
 /** Every column a {@link ConversationRow} is built from, for a SELECT or a RETURNING. */
 const ROW_COLUMNS =
-  'id, user_id, agent_id, title, context, kind, source, status, inference_tier, created_at, updated_at, context_version::text AS version'
+  'id, user_id, agent_id, title, context, kind, source, status, inference_tier, created_at, updated_at, context_version::text AS version, hitl_ended_at'
 
 function rowToConversation(row: DbRow): ConversationRow {
   return {
@@ -155,6 +168,7 @@ function rowToConversation(row: DbRow): ConversationRow {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     version: row.version,
+    hitlEndedAt: row.hitl_ended_at ?? null,
   }
 }
 
@@ -463,7 +477,8 @@ export async function saveConversation(input: SaveConversationInput): Promise<st
        inference_tier  = COALESCE(inference_tier, $7),
        updated_at      = NOW(),
        context_version = ${NEXT_VERSION},
-       turn_claimed_at = NULL
+       turn_claimed_at = NULL,
+       hitl_ended_at   = NULL
      WHERE id = $1 AND user_id = $2 AND context_version = $8
      RETURNING context_version::text AS version`,
     [
@@ -517,14 +532,83 @@ export async function releaseConversationClaim(
   id: string,
   userId: string,
   version: string,
-  { failed = false }: { failed?: boolean } = {},
+  {
+    failed = false,
+    paused = false,
+    hitlTerminal = false,
+  }: { failed?: boolean; paused?: boolean; hitlTerminal?: boolean } = {},
 ): Promise<boolean> {
+  // `paused` restores the lifted status to 'paused' while releasing (#433 S7,
+  // A4/C1): a resume refused for anything but `chain-changed` must leave the
+  // row saying what the blob still says — the person can answer again — so a
+  // `tier-changed` refusal or a pre-run failure RESTORES 'paused' rather than
+  // merely not touching it. Like `failed`, fenced by the claim's version: a
+  // turn that lost the row restores nothing that is another turn's, and the
+  // caller passes `paused: true` only when the row it CLAIMED said 'paused'
+  // (the amendment to A4: the restore applies only to a row that was paused).
+  //
+  // `hitlTerminal` is the `chain-changed` half of the same release (owner
+  // item 1 on review 6004200697, coordinator decision pending owner read): it
+  // stamps `hitl_ended_at` beside the `error` flip, so the row's terminal
+  // state is DURABLE — the m3 load-restore exempts a row whose pause ended
+  // this way, instead of resurrecting `paused` from a blob that still says
+  // `paused` on every load. Only the resume path may pass it, and only with
+  // `failed`: a plain run failure leaves no pause to end.
+  const failedSql = hitlTerminal
+    ? `UPDATE conversations SET turn_claimed_at = NULL, status = 'error', updated_at = NOW(),
+                                 hitl_ended_at = NOW()
+         WHERE id = $1 AND user_id = $2 AND context_version = $3`
+    : `UPDATE conversations SET turn_claimed_at = NULL, status = 'error', updated_at = NOW()
+         WHERE id = $1 AND user_id = $2 AND context_version = $3`
   const { rowCount } = await query(
     failed
-      ? `UPDATE conversations SET turn_claimed_at = NULL, status = 'error', updated_at = NOW()
-          WHERE id = $1 AND user_id = $2 AND context_version = $3`
-      : `UPDATE conversations SET turn_claimed_at = NULL
-          WHERE id = $1 AND user_id = $2 AND context_version = $3`,
+      ? failedSql
+      : paused
+        ? `UPDATE conversations SET turn_claimed_at = NULL, status = 'paused', updated_at = NOW()
+            WHERE id = $1 AND user_id = $2 AND context_version = $3`
+        : `UPDATE conversations SET turn_claimed_at = NULL
+            WHERE id = $1 AND user_id = $2 AND context_version = $3`,
+    [id, userId, version],
+  )
+  return (rowCount ?? 0) > 0
+}
+
+/**
+ * Restore the lifted `status` to 'paused' when the blob says 'paused' and the
+ * column has drifted off it (#433 S7, m3 as amended by #433 comment
+ * 6004211643). The row is left at a status its blob does not say — `error`
+ * today: a superseding MESSAGE whose run failed on a paused conversation
+ * (the catch releases `failed: true` while nothing saved, so the blob still
+ * says `paused`); under #470's claim a resume that dies between claim and
+ * save no longer drifts the row at all, and a future status rule that does
+ * is covered by the same repair. The host repairs it ON LOAD, at the version
+ * the load read, and never while a turn holds the row — a live claim means a
+ * turn is writing the truth right now, and this write must neither race it
+ * nor refuse its save.
+ *
+ * Status only, never the blob: the blob IS the source of this fact. `false`
+ * covers moved-on, turn-in-flight, unknown id and wrong owner alike — a
+ * repair that did not land costs a wrong sidebar badge until the next load,
+ * never a lost decision.
+ *
+ * THE ONE EXEMPTION IS THE CALLER'S (owner item 1 on review 6004200697): a
+ * row whose `hitl_ended_at` is set — a `chain-changed` refusal ended its
+ * pause terminally — is never repaired; `restorePausedFromBlob` reads the
+ * marker off the row it loaded and declines to call this. The blob still
+ * says `paused` in that case too, so the SQL alone could not tell the two
+ * `error`s apart.
+ *
+ * One of the context writes that name the version they read (#470, F1): an
+ * unconditional version of this would race the turn that just took the row.
+ */
+export async function restoreConversationPaused(
+  id: string,
+  userId: string,
+  version: string,
+): Promise<boolean> {
+  const { rowCount } = await query(
+    `UPDATE conversations SET status = 'paused', updated_at = NOW()
+      WHERE id = $1 AND user_id = $2 AND context_version = $3 AND ${NO_LIVE_CLAIM}`,
     [id, userId, version],
   )
   return (rowCount ?? 0) > 0

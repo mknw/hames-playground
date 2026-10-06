@@ -32,12 +32,7 @@ export interface ElementDefinition {
 }
 
 import type { ClientOverride } from '@hames-ai/harness-baml/consumer-clients.server'
-import type {
-  ConfiguredPattern,
-  RetrieverBackend,
-  WithApproval,
-  RetrieverData,
-} from '@hames-ai/harness-patterns'
+import type { ConfiguredPattern, RetrieverBackend, RetrieverData } from '@hames-ai/harness-patterns'
 import type { OnToolResult } from '@hames-ai/harness-patterns/types'
 import type { HarnessData } from '@hames-ai/harness-patterns/harness.server'
 import type { RouterData } from '@hames-ai/harness-patterns/patterns/router.server'
@@ -57,10 +52,10 @@ export interface GraphElement extends ElementDefinition {
 
 /**
  * The composite the app calls `SessionData` (app `session.server.ts`) — all
- * five bases are core exports, so the package owns it and the app narrows.
+ * four bases are core exports, so the package owns it and the app narrows.
+ * A decision is not data (#433): it is a `hitl_*` event, read with `answerOf`.
  */
-export interface AgentData
-  extends HarnessData, RouterData, SimpleLoopData, RetrieverData, WithApproval {
+export interface AgentData extends HarnessData, RouterData, SimpleLoopData, RetrieverData {
   response?: string
   [key: string]: unknown
 }

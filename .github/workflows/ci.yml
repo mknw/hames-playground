@@ -506,9 +506,14 @@ jobs:
       # listens and this step's own loop times out and fails loudly here — a
       # container reporting `(healthy)` while every BAML route answers 500 is
       # exactly the failure #469 was, and the shape this decision closes.
+      #
+      # AUTH_REDIRECT_URI is the one variable the run is given: its origin is the
+      # app's public origin, which the write check below compares against
+      # (#455). Unset, a production build refuses to boot.
       - name: Boot it and hit /api/health
         run: |
-          docker run -d --name app-smoke -p 3444:3444 hames-app:ci
+          docker run -d --name app-smoke -p 3444:3444 \
+            -e AUTH_REDIRECT_URI=http://localhost:3444/api/auth/callback hames-app:ci
           served=""
           for i in $(seq 1 30); do
             if [ -z "$served" ] && curl -fsS localhost:3444/api/health; then
@@ -575,6 +580,43 @@ jobs:
             echo "GET ${p}?id=… -> ${code}"
             [ "$code" = "405" ] || { echo "::error::GET ${p}?id=… answered ${code}, not 405: a server function is reachable over GET"; exit 1; }
           done
+
+      # #455: one middleware hook refuses every write whose Origin (else
+      # Referer) is not the configured public origin, in front of BOTH routers —
+      # the API routes and the server-function handler — and lets a request with
+      # no browser headers and no session cookie (a bearer-token device) through
+      # to the route's own auth. Only a real build shows that the hook runs in
+      # front of both. 403 is the hook's answer and nothing else on these paths
+      # gives it: without the hook the server function runs (302 plus a `flash`
+      # cookie) and each route answers with its own status.
+      - name: Assert a cross-origin write is refused
+        run: |
+          own=http://localhost:3444
+          fn='src_lib_harness-client_preview-header_server_ts--igniteVerdaBox_1'
+          form=(-H 'Content-Type: application/x-www-form-urlencoded' --data 'a=b')
+          answer() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+          refuse() {
+            code=$(answer "${@:2}")
+            echo "$1 -> ${code}"
+            [ "$code" = "403" ] || { echo "::error::$1 answered ${code}, not 403: a cross-origin write reached its handler"; exit 1; }
+          }
+          refuse 'POST /_server from a sibling origin' -X POST "${form[@]}" -H 'Sec-Fetch-Site: same-site' \
+            -H 'Origin: http://sibling.localhost:3444' -H 'Cookie: kg_session=ci' "localhost:3444/_server?id=${fn}&name=x"
+          refuse 'POST /api/events cross-site' -X POST -H 'Content-Type: application/json' --data '{}' \
+            -H 'Origin: https://attacker.example' -H 'Cookie: kg_session=ci' localhost:3444/api/events
+          refuse 'DELETE /api/stash/document/x from a sibling origin' -X DELETE \
+            -H 'Origin: http://sibling.localhost:3444' -H 'Cookie: kg_session=ci' localhost:3444/api/stash/document/x
+          # The app's own page still gets through: the function runs, its
+          # requireUser() turns the session-less call away, and the no-JS path
+          # answers that with a 302 back to the Referer.
+          code=$(answer -X POST "${form[@]}" -H 'Sec-Fetch-Site: same-origin' -H "Origin: ${own}" \
+            -H "Referer: ${own}/" "localhost:3444/_server?id=${fn}&name=x")
+          echo "POST /_server from its own origin -> ${code}"
+          [ "$code" = "302" ] || { echo "::error::a same-origin server-function POST answered ${code}, not 302"; exit 1; }
+          code=$(answer -X POST -H 'Authorization: Bearer ci' -F 'transcribed_command=hi' \
+            localhost:3444/api/agents/ci-unknown-agent)
+          echo "POST /api/agents/:id, bearer and no Origin -> ${code}"
+          [ "$code" != "403" ] || { echo "::error::a bearer-token call with no browser headers was refused as cross-origin"; exit 1; }
 
       - name: Container logs
         if: always()

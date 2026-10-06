@@ -84,6 +84,12 @@ docker compose build app && docker compose up -d app
 curl localhost:3444/api/health
 ```
 
+The local service needs `AUTH_REDIRECT_URI=http://localhost:3444/api/auth/callback`
+in `app/.env`. `app/.env.example` leaves it commented out, and a production build
+whose public origin is unset refuses to boot (#455, `app/src/lib/auth/csrf.server.ts`).
+Under `restart: unless-stopped` that shows up as a crash loop, not as a container
+that serves.
+
 **The image**: three stages — `deps` (full `pnpm install --frozen-lockfile`,
 with a C toolchain because node-pty compiles from source) → `build`
 (just `vinxi build` since the one-corpus change: the BAML client is committed

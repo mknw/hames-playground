@@ -390,11 +390,7 @@ class Tally {
  * key can come back by mistake.
  */
 export type ConcealReason =
-  | 'colour-contrast'
-  | 'too-small'
-  | 'hidden-flag'
-  | 'layout'
-  | 'unknown-property'
+  'colour-contrast' | 'too-small' | 'hidden-flag' | 'layout' | 'unknown-property'
 
 class Reasons {
   readonly values: Record<string, number> = {}
@@ -1222,11 +1218,7 @@ function visit(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[] {
     if (bgEl !== undefined) {
       inner = {
         ...scope,
-        slideBg: bgFill(
-          bgEl,
-          { theme: ctx.theme, clrMap: slideInheritanceOf(ctx).clrMap },
-          ctx,
-        ),
+        slideBg: bgFill(bgEl, { theme: ctx.theme, clrMap: slideInheritanceOf(ctx).clrMap }, ctx),
       }
     }
   } else if (
@@ -1631,9 +1623,7 @@ function readWordStyles(root: XmlElement): WordStyles {
 }
 
 /** Nearest first: the first level that defines it wins. */
-function nearest<
-  K extends 'color' | 'sz' | 'szCs' | 'highlight' | 'shd' | 'scale' | 'position',
->(
+function nearest<K extends 'color' | 'sz' | 'szCs' | 'highlight' | 'shd' | 'scale' | 'position'>(
   levels: readonly (Pick<RunProps, K> | undefined)[],
   key: K,
 ): RunProps[K] {
@@ -1716,7 +1706,10 @@ function resolveStyle(styles: WordStyles, id: string): Resolved {
       position: nearest([...direct, ...parents], 'position'),
       unknown: unknownOf([...own, ...parents]),
       pShd: nearestShd([...defs.map((d) => d.pShd), ...parents.map((p) => p.pShd)]),
-      conditionalShd: [...defs.flatMap((d) => d.conditionalShd), ...parents.flatMap((p) => p.conditionalShd)],
+      conditionalShd: [
+        ...defs.flatMap((d) => d.conditionalShd),
+        ...parents.flatMap((p) => p.conditionalShd),
+      ],
     })
   }
   return memo.get(start)!
@@ -1810,9 +1803,7 @@ const hex6 = (v: string | undefined): string | undefined =>
 
 /** `w:color`'s value or a shading colour, with `auto` and 8-digit forms read. */
 const solid = (v: string | undefined): string | undefined =>
-  v === undefined || v.toLowerCase() === 'auto'
-    ? undefined
-    : hex6(v.length > 6 ? v.slice(-6) : v)
+  v === undefined || v.toLowerCase() === 'auto' ? undefined : hex6(v.length > 6 ? v.slice(-6) : v)
 
 /** A resolved foreground: adaptive (auto), a colour, or un-modelled. */
 type Fg = { kind: 'auto' } | { kind: 'rgb'; rgb: string } | { kind: 'unknown' }
@@ -1910,9 +1901,7 @@ const WORD_SHD: ReadonlySet<string> = new Set(
 
 /** What a `w:shd` paints: nothing, one or two colours, or an un-modelled pattern. */
 type ShdColours =
-  | { kind: 'none' }
-  | { kind: 'colours'; readonly colours: readonly string[] }
-  | { kind: 'unknown' }
+  { kind: 'none' } | { kind: 'colours'; readonly colours: readonly string[] } | { kind: 'unknown' }
 
 function shdColours(shd: Shd | undefined): ShdColours {
   if (shd === undefined) return { kind: 'none' }
@@ -1951,9 +1940,7 @@ function wordBackgrounds(
   ctx: Ctx,
 ): { readonly unknown: boolean; readonly colours: readonly string[] } {
   const levels: readonly (readonly Shd[])[] = [
-    childEls(run, NS.w, 'rPr').flatMap((r) =>
-      childEls(r, NS.w, 'shd').map(shdOf).filter(isShd),
-    ),
+    childEls(run, NS.w, 'rPr').flatMap((r) => childEls(r, NS.w, 'shd').map(shdOf).filter(isShd)),
     [styled?.shd, scope.pShd, styled?.pShd].filter(isShd),
     ...((scope.tblFills ?? []) as readonly (readonly Shd[])[]),
   ]
@@ -2214,8 +2201,9 @@ function fillEl(el: XmlElement, s: Scheme): DFill {
     return clr.rgb === undefined && !clr.transparent ? { kind: 'unknown' } : { kind: 'solid', clr }
   }
   if (is(el, NS.a, 'gradFill')) {
-    const stops = childEls(childEl(el, NS.a, 'gsLst') ?? el, NS.a, 'gs')
-      .map((gs) => drawingClr(elements(gs)[0], s))
+    const stops = childEls(childEl(el, NS.a, 'gsLst') ?? el, NS.a, 'gs').map((gs) =>
+      drawingClr(elements(gs)[0], s),
+    )
     if (stops.length === 0) return { kind: 'unknown' }
     return { kind: 'grad', stops }
   }
@@ -2567,9 +2555,7 @@ function drawingBackgrounds(
   const levels: readonly DFill[] = [
     scope.shape?.fill ?? FILL_ABSENT,
     scope.slideBg ?? FILL_ABSENT,
-    inheritance.layout?.bg === undefined
-      ? FILL_ABSENT
-      : bgFill(inheritance.layout.bg, s, ctx),
+    inheritance.layout?.bg === undefined ? FILL_ABSENT : bgFill(inheritance.layout.bg, s, ctx),
     inheritance.master?.bg === undefined ? FILL_ABSENT : bgFill(inheritance.master.bg, s, ctx),
   ]
   for (const level of levels) {
@@ -2739,7 +2725,6 @@ function countDrawingRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
   }
 }
 
-
 /** Count concealment for one rebuilt element (A3: counted, not dropped). */
 function count(el: XmlElement, ctx: Ctx, scope: Scope): void {
   if (is(el, NS.w, 'r') && hasText(el, NS.w)) countWordRun(el, ctx, scope)
@@ -2801,10 +2786,7 @@ function countCell(el: XmlElement, ctx: Ctx): void {
   // The size family: the cell's font and each rich run's own, which inherits
   // the cell font's size when it declares none (#492).
   const cellSz = styles.fonts[xf.fontId]?.sz
-  if (
-    (cellSz ?? 11) <= 1 ||
-    runs.some((r) => (r.sz ?? cellSz ?? 11) <= 1)
-  ) {
+  if ((cellSz ?? 11) <= 1 || runs.some((r) => (r.sz ?? cellSz ?? 11) <= 1)) {
     ctx.counted.add('too-small')
   }
   // The colour family: the cell's fill, then the font and each rich run
@@ -3124,9 +3106,7 @@ function readSheetStyles(root: XmlElement): SheetStyles {
       fillId: num(attrOf(x.attributes, 'fillId')),
     })),
     fonts: list('fonts', 'font').map((f) => {
-      const sz = Number.parseFloat(
-        attrOf(childEl(f, NS.s, 'sz')?.attributes ?? [], 'val') ?? '',
-      )
+      const sz = Number.parseFloat(attrOf(childEl(f, NS.s, 'sz')?.attributes ?? [], 'val') ?? '')
       return {
         color: colorOf(childEl(f, NS.s, 'color')),
         sz: Number.isFinite(sz) ? sz : undefined,

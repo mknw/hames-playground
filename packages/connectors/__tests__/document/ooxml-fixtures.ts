@@ -524,7 +524,7 @@ export function shape(
   return (
     `<p:sp><p:nvSpPr><p:cNvPr id="${opts.id ?? 2}" name="Shape"${opts.cNvPr ? ` ${opts.cNvPr}` : ''}/>` +
     `<p:cNvSpPr/><p:nvPr>${opts.ph ? `<p:ph type="${opts.ph}"/>` : ''}</p:nvPr></p:nvSpPr>` +
-    `<p:spPr>${opts.spPr ?? (opts.xfrm ?? '')}</p:spPr>${opts.style ?? ''}` +
+    `<p:spPr>${opts.spPr ?? opts.xfrm ?? ''}</p:spPr>${opts.style ?? ''}` +
     `<p:txBody><a:bodyPr>${opts.bodyPr ?? ''}</a:bodyPr><a:p><a:r>${opts.rPr ?? '<a:rPr lang="en-US"/>'}<a:t>${text}</a:t></a:r></a:p></p:txBody></p:sp>`
   )
 }

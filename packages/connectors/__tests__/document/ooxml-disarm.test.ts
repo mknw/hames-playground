@@ -2320,7 +2320,7 @@ describe('#492: the resolver is fail-closed — provable visibility, by contrast
     const styles = wStyles(
       DOCX_STYLES_NORMAL +
         '<w:docDefaults><w:rPrDefault><w:rPr><w:color w:val="000000"/></w:rPr></w:rPrDefault></w:docDefaults>' +
-        '<w:style w:type="character" w:styleId="Pale"><w:rPr><w:color w:val="D9D9D9"/></w:rPr></w:style>',
+        '<w:style w:type="character" w:styleId="Pale"><w:rPr><w:color w:val="E8E8E8"/></w:rPr></w:style>',
     )
     const body =
       `<w:p>${run('VISIBLE')}` +
@@ -2343,21 +2343,31 @@ describe('#492: the resolver is fail-closed — provable visibility, by contrast
   })
 
   it('a rendering property outside the allowlist counts as unknown-property, directly or through a style', async () => {
+    const w14 = 'http://schemas.microsoft.com/office/word/2010/wordml'
     const styles = wStyles(
       DOCX_STYLES_NORMAL +
-        '<w:style w:type="character" w:styleId="Raised"><w:rPr><w:position w:val="20"/></w:rPr></w:style>',
+        `<w:style w:type="character" w:styleId="Ghost"><w:rPr><w14:textFill xmlns:w14="${w14}">` +
+        '<w14:noFill/></w14:textFill></w:rPr></w:style>',
     )
-    const w14 = 'http://schemas.microsoft.com/office/word/2010/wordml'
     const body =
       `<w:p>${run('VISIBLE')}` +
       `${run('SECRETW14TEXTFILL', `<w14:textFill xmlns:w14="${w14}"><w14:noFill/></w14:textFill>`)}` +
-      `${run('SECRETPOSITION', '<w:position w:val="-2000"/>')}` +
-      `${run('SECRETRAISEDSTYLE', '<w:rStyle w:val="Raised"/>')}` +
+      `${run('SECRETGHOSTSTYLE', '<w:rStyle w:val="Ghost"/>')}` +
       // Ordinary formatting the allowlist judges unable to conceal: bold,
-      // italic, underline, caps, kerning, sub/superscript, letter spacing.
-      `${run('BOLDITALIC', '<w:b/><w:i/><w:u w:val="single"/><w:smallCaps/><w:kern w:val="2"/><w:spacing w:val="20"/><w:vertAlign w:val="superscript"/>')}</w:p>`
+      // italic, underline, caps, kerning, sub/superscript, letter spacing,
+      // typography extensions, and raised text within the layout bound.
+      `${run('BOLDITALIC', `<w:b/><w:i/><w:u w:val="single"/><w:smallCaps/><w:kern w:val="2"/><w:spacing w:val="20"/><w:vertAlign w:val="superscript"/><w14:ligatures xmlns:w14="${w14}" w14:val="standard"/><w:position w:val="8"/>`)}</w:p>`
     const out = await disarmed(docx({ body, styles }), MIME.docx, [])
-    expect(out.counted).toEqual({ 'unknown-property': 3 })
+    expect(out.counted).toEqual({ 'unknown-property': 2 })
+  })
+
+  it('a raised or lowered run beyond the bound has left the line, which is the layout class', async () => {
+    const body =
+      `<w:p>${run('VISIBLE')}` +
+      `${run('SECRETLEFTPAGE', '<w:position w:val="-2000"/>')}` +
+      `${run('RAISEDCONTROL', '<w:position w:val="8"/>')}</w:p>`
+    const out = await disarmed(docx({ body }), MIME.docx, [])
+    expect(out.counted).toEqual({ layout: 1 })
   })
 })
 
@@ -2529,19 +2539,20 @@ describe('#492: pptx runs resolve through their shapes, their slides, and the pa
           {
             shapes:
               shape('VISIBLE') +
-              shape('SECRETEFFECT', {
+              shape('SECRETSOFTEDGE', {
                 id: 3,
-                rPr: '<a:rPr><a:effectLst><a:outerShdw blurRad="0"/></a:effectLst></a:rPr>',
+                rPr: '<a:rPr><a:effectLst><a:softEdge rad="6350"/></a:effectLst></a:rPr>',
               }) +
               shape('SECRETEXTLST', {
                 id: 4,
                 rPr: '<a:rPr><a:extLst><a:ext uri="urn:test"/></a:extLst></a:rPr>',
               }) +
               // Ordinary formatting the allowlist judges unable to conceal:
-              // bold, caps, letter spacing, sub/superscript, underline.
+              // bold, caps, letter spacing, sub/superscript, underline — and
+              // an EMPTY effect list, or one of shadows only.
               shape('BOLDSPCCAPS', {
                 id: 5,
-                rPr: '<a:rPr b="1" spc="400" cap="all" baseline="30000" u="sng"/>',
+                rPr: '<a:rPr b="1" spc="400" cap="all" baseline="30000" u="sng"><a:effectLst><a:outerShdw blurRad="50800" dist="38100"><a:srgbClr val="000000"/></a:outerShdw></a:effectLst></a:rPr>',
               }),
           },
         ],
@@ -2707,6 +2718,7 @@ describe('#492: xlsx cells resolve through their styles, their fills and their f
       xlsx({
         sheets: [
           {
+            name: 'S',
             xml:
               '<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row></sheetData>',
           },
@@ -2788,12 +2800,13 @@ describe('#492: xlsx cells resolve through their styles, their fills and their f
   })
 
   it('the counted keys are exactly the five reasons', async () => {
+    const w14 = 'http://schemas.microsoft.com/office/word/2010/wordml'
     const word = await disarmed(
       docx({
         body:
           `<w:p>${run('SECRETWHITE', '<w:color w:val="FFFFFF"/>')}` +
           `${run('SECRETTINY', '<w:sz w:val="2"/>')}` +
-          `${run('SECRETUNKNOWN', '<w:position w:val="20"/>')}${run('VISIBLE')}</w:p>`,
+          `${run('SECRETUNKNOWN', `<w14:textFill xmlns:w14="${w14}"><w14:noFill/></w14:textFill>`)}${run('VISIBLE')}</w:p>`,
       }),
       MIME.docx,
       [],

@@ -1414,6 +1414,8 @@ interface RunProps {
   readonly shd?: Shd
   /** `w:w` character scale, in percent (#492). */
   readonly scale?: number
+  /** `w:position`, raised or lowered text in half-points (#492). */
+  readonly position?: number
   /** Rendering properties the resolver does not model, by local name (#492). */
   readonly unknown: ReadonlySet<string>
 }
@@ -1427,6 +1429,7 @@ interface Resolved {
   readonly highlight?: string
   readonly shd?: Shd
   readonly scale?: number
+  readonly position?: number
   readonly unknown: ReadonlySet<string>
   /** The style's own `w:pPr/w:shd` — a background behind the run (#492). */
   readonly pShd?: Shd
@@ -1476,6 +1479,10 @@ function int(v: string | undefined): number | undefined {
  */
 const WORD_INERT: ReadonlySet<string> = new Set([
   'rStyle',
+  // Typography extensions (w14/w15/…): ligatures and stylistic sets draw the
+  // same glyphs at the same size and colour (#492, from the benign corpus).
+  'http://schemas.microsoft.com/office/word/2010/wordml:ligatures',
+  'http://schemas.microsoft.com/office/word/2010/wordml:stylisticSets',
   'rFonts',
   'b',
   'bCs',
@@ -1509,7 +1516,22 @@ const WORD_INERT: ReadonlySet<string> = new Set([
 ])
 
 /** The `w:rPr` children the resolver reads for visibility (#492). */
-const WORD_READ: ReadonlySet<string> = new Set(['color', 'sz', 'szCs', 'highlight', 'shd', 'w'])
+const WORD_READ: ReadonlySet<string> = new Set([
+  'color',
+  'sz',
+  'szCs',
+  'highlight',
+  'shd',
+  'w',
+  'position',
+])
+
+/**
+ * A raised or lowered run within this many half-points (15 pt) still draws
+ * its glyphs on the page, so it cannot conceal; beyond it the glyphs leave
+ * the line, which is the layout class (#485's family) and counts `layout`.
+ */
+const MAX_POSITION = 300
 
 /** One element's `w:<props>/w:shd` copies, as one background level. */
 const shdLevel = (el: XmlElement, props: string): readonly Shd[] =>
@@ -1536,19 +1558,20 @@ function runProps(rPr: XmlElement | undefined): RunProps | undefined {
   const unknown = new Set<string>()
   let shd: Shd | undefined
   let scale: number | undefined
+  let position: number | undefined
   // Every child is a rendering property: one the resolver neither reads nor
   // can prove inert makes the run not-provably-visible (#492, fail-closed).
   for (const c of elements(rPr)) {
-    if (c.ns !== NS.w) {
-      if (!WORD_INERT.has(c.name) && !WORD_READ.has(c.name)) unknown.add(`${c.ns}:${c.name}`)
-      continue
-    }
-    if (WORD_READ.has(c.name)) {
+    // A property outside the wordprocessingml namespace keys by namespace and
+    // local name, so the typography extensions above can be inert precisely.
+    const key = c.ns === NS.w ? c.name : `${c.ns}:${c.name}`
+    if (WORD_READ.has(key)) {
       if (c.name === 'shd') shd = shdOf(c)
       else if (c.name === 'w') scale = int(wVal(c))
+      else if (c.name === 'position') position = int(wVal(c))
       continue
     }
-    if (!WORD_INERT.has(c.name)) unknown.add(c.name)
+    if (!WORD_INERT.has(key)) unknown.add(key)
   }
   return {
     on,
@@ -1563,6 +1586,7 @@ function runProps(rPr: XmlElement | undefined): RunProps | undefined {
     highlight: wVal(childEl(rPr, NS.w, 'highlight')),
     shd,
     scale,
+    position,
     unknown,
   }
 }
@@ -1609,7 +1633,9 @@ function readWordStyles(root: XmlElement): WordStyles {
 }
 
 /** Nearest first: the first level that defines it wins. */
-function nearest<K extends 'color' | 'sz' | 'szCs' | 'highlight' | 'shd' | 'scale'>(
+function nearest<
+  K extends 'color' | 'sz' | 'szCs' | 'highlight' | 'shd' | 'scale' | 'position',
+>(
   levels: readonly (Pick<RunProps, K> | undefined)[],
   key: K,
 ): RunProps[K] {
@@ -1689,6 +1715,7 @@ function resolveStyle(styles: WordStyles, id: string): Resolved {
       highlight: nearest([...direct, ...parents], 'highlight'),
       shd: nearest([...direct, ...parents], 'shd'),
       scale: nearest([...direct, ...parents], 'scale'),
+      position: nearest([...direct, ...parents], 'position'),
       unknown: unknownOf([...own, ...parents]),
       pShd: nearestShd([...defs.map((d) => d.pShd), ...parents.map((p) => p.pShd)]),
       conditionalShd: [...defs.flatMap((d) => d.conditionalShd), ...parents.flatMap((p) => p.conditionalShd)],
@@ -1725,6 +1752,7 @@ function levels(styles: WordStyles, rStyles: readonly string[], scope: Scope): R
     highlight: nearest(all, 'highlight'),
     shd: nearest(all, 'shd'),
     scale: nearest(all, 'scale'),
+    position: nearest(all, 'position'),
     unknown: unknownOf(all),
     pShd: nearestShd(parts.map((p) => p.pShd)),
     conditionalShd: parts.flatMap((p) => p.conditionalShd),
@@ -1741,14 +1769,14 @@ function levels(styles: WordStyles, rStyles: readonly string[], scope: Scope): R
 /**
  * A run is visibly distinct only if its foreground contrasts with every
  * colour of its effective background by at least this ratio (WCAG relative
- * luminance). 1.5 keeps grey footnotes (595959 ≈ 7.0), coloured headings
- * (4F81BD ≈ 4.9) and mid-grey text (A9A9A9 ≈ 2.1) visibly distinct, while
- * white (1.0), near-white FFFFFE (1.0) and BFBFBF (1.5) do not pass. The
- * threshold is measured against a benign corpus of ordinary Office files,
- * where the resolver flags under the owner's ~2% budget (#492 decision 1);
- * the PR reports the measured rate.
+ * luminance). 1.4 keeps grey footnotes (595959 ≈ 7.0), coloured headings
+ * (4F81BD ≈ 4.9), mid-grey text (A9A9A9 ≈ 2.1) and the mid-grey-on-pale-fill
+ * headers real spreadsheets carry (BFBFBF/DCE6F1 ≈ 1.46) visibly distinct,
+ * while white (1.0), near-white FFFFFE (1.0) and D9D9D9 (1.26) do not pass.
+ * The threshold is measured against a benign corpus of ordinary Office files
+ * under the owner's ~2% budget (#492 decision 1); the PR reports the rate.
  */
-const MIN_CONTRAST = 1.5
+const MIN_CONTRAST = 1.4
 
 const channel = (hex: string, i: number): number => {
   const v = Number.parseInt(hex.slice(i, i + 2), 16) / 255
@@ -1891,8 +1919,10 @@ type ShdColours =
 function shdColours(shd: Shd | undefined): ShdColours {
   if (shd === undefined) return { kind: 'none' }
   const val = shd.val?.toLowerCase()
-  if (val === undefined || val === 'nil') return { kind: 'none' }
-  if (val === 'clear') {
+  // No `w:val` is the default, clear: the fill paints (real documents write
+  // cell shading with no `w:val` at all). Only `nil` is nothing.
+  if (val === 'nil') return { kind: 'none' }
+  if (val === undefined || val === 'clear') {
     const c = solid(shd.fill)
     return c === undefined ? { kind: 'none' } : { kind: 'colours', colours: [c] }
   }
@@ -2025,6 +2055,13 @@ function countWordRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
     sz !== undefined || szCs !== undefined ? Math.min(sz ?? 200, szCs ?? 200) : undefined
   const pt = ((halfPt ?? 20) / 2) * ((scale ?? 100) / 100)
   if (pt <= 1) ctx.counted.add('too-small')
+
+  // A raised or lowered run beyond the bound has left the line: the layout
+  // class, of which #485 is the filed remainder (#492).
+  const position = nearest(all, 'position')
+  if (position !== undefined && (position > MAX_POSITION || position < -MAX_POSITION)) {
+    ctx.counted.add('layout')
+  }
 }
 
 // ── DrawingML colours and fills ─────────────────────────────────────────────
@@ -2450,6 +2487,15 @@ const DRAWING_INERT_CHILDREN: ReadonlySet<string> = new Set([
   'uFillTx',
 ])
 
+/** Effect children that draw the glyphs as they are (a shadow, a glow, …). */
+const EFFECTS_INERT: ReadonlySet<string> = new Set([
+  'outerShdw',
+  'innerShdw',
+  'prstShdw',
+  'reflection',
+  'glow',
+])
+
 /** The rendering properties of one `a:rPr`/`a:defRPr` element the resolver cannot model. */
 function drawingUnknown(props: XmlElement): ReadonlySet<string> {
   const unknown = new Set<string>()
@@ -2471,6 +2517,13 @@ function drawingUnknown(props: XmlElement): ReadonlySet<string> {
       is(c, NS.a, 'highlight')
     ) {
       continue
+    }
+    if (is(c, NS.a, 'effectLst') || is(c, NS.a, 'effectDag')) {
+      // An empty list is a no-op, and shadows, glows and reflections draw the
+      // glyphs as they are; only an effect that can blur them away — `blur`,
+      // `softEdge` — is un-modelled (#492, from the benign corpus).
+      const effects = elements(c).flatMap((e) => (is(e, NS.a, 'effectDag') ? elements(e) : [e]))
+      if (effects.every((e) => EFFECTS_INERT.has(e.name))) continue
     }
     if (!DRAWING_INERT_CHILDREN.has(c.name)) unknown.add(c.name)
   }

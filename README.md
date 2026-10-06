@@ -1,6 +1,11 @@
 <div align="center">
 
 <picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/hames-banner-dark.png">
+  <img src="docs/images/hames-banner-light.png" alt="hames: supports of a harness to which its traces are fastened. The @hames-ai packages on npm: harness-patterns, harness-baml, agents, connectors, sandbox." width="640">
+</picture>
+
+<picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/harness-patterns/hames_light-text-on-transparent-bg.png">
   <source media="(prefers-color-scheme: light)" srcset="docs/harness-patterns/hames_dark-text-on-transparent-bg.png">
   <img src="docs/harness-patterns/hames_dark-text-on-transparent-bg.png" alt="hames" width="380">

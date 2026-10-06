@@ -14,6 +14,8 @@
 | [reviewing.md](reviewing.md)                                                            | **Review map** for the global `/reviewing-changes` skill: pointers to where conventions, spec resolution, gates and the review protocol live — facts stated here directly only when stated nowhere else                                                                                          |
 | [tutorials/README.md](tutorials/README.md)                                              | **Developer tutorials** — task-shaped "how do I use X in my app" pages for consumers of the `@hames-ai` packages: hosting the harness, wiring a host, guarding an agent, sandboxes and workspaces, bringing your own model. Every TypeScript snippet is compile-pinned against the live packages |
 
+**Images** go in `docs/images/`: lowercase kebab-case names, at most 500 KB each, optimised before committing (`hames-banner-*.png` are the README/website banners). `app/src/__tests__/docs-images.test.ts` enforces both.
+
 ---
 
 ## Tutorials (`docs/tutorials/`)

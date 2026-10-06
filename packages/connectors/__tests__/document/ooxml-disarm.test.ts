@@ -39,12 +39,14 @@ import {
   MIME,
   noise,
   NS,
+  P_ROOT_NS,
   para,
   pptx,
   row,
   RT,
   run,
   shape,
+  SP_TREE_HEAD,
   sStyles,
   unpack,
   wNotes,
@@ -1382,10 +1384,8 @@ describe('Z2: concealment is counted, not dropped', () => {
     expect(all).toContain('ROWHIDDENKEPT')
     expect(all).toContain('ROWZEROKEPT')
     expect(out.counted).toEqual({
-      hiddenRows: 1,
-      hiddenColumns: 1,
-      zeroRowHeights: 1,
-      zeroColumnWidths: 1,
+      'hidden-flag': 2,
+      'too-small': 2,
     })
   })
 
@@ -1402,7 +1402,7 @@ describe('Z2: concealment is counted, not dropped', () => {
       MIME.xlsx,
       [],
     )
-    expect(out.counted).toEqual({ hiddenRows: 1, zeroRowHeights: 1, zeroColumnWidths: 1 })
+    expect(out.counted).toEqual({ 'hidden-flag': 1, 'too-small': 2 })
   })
 
   it('xlsx: the ;;; number format, and a font colour equal to its fill', async () => {
@@ -1430,7 +1430,7 @@ describe('Z2: concealment is counted, not dropped', () => {
     const sheet = `<sheetData><row r="1">${cell('A1', 0, 'VISIBLE')}${cell('B1', 1, 'FORMATKEPT')}${cell('C1', 2, 'GREENKEPT')}${cell('D1', 3, 'WHITEKEPT')}</row></sheetData>`
     const out = await disarmed(xlsx({ sheets: [{ name: 'S', xml: sheet }], styles }), MIME.xlsx, [])
     expect(everything(out.bytes)).toContain('GREENKEPT')
-    expect(out.counted).toEqual({ hiddenNumberFormats: 1, fontMatchesFill: 2 })
+    expect(out.counted).toEqual({ 'hidden-flag': 1, 'colour-contrast': 2 })
   })
 
   it('docx: white text and text of 1 pt or less, direct or through a style', async () => {
@@ -1444,7 +1444,7 @@ describe('Z2: concealment is counted, not dropped', () => {
       `${run('TINYKEPT', '<w:sz w:val="2"/>')}${run('TINYSTYLEKEPT', '<w:rStyle w:val="Tiny"/>')}</w:p>`
     const out = await disarmed(docx({ body, styles }), MIME.docx, [])
     expect(everything(out.bytes)).toContain('TINYSTYLEKEPT')
-    expect(out.counted).toEqual({ whiteText: 2, tinyText: 2 })
+    expect(out.counted).toEqual({ 'colour-contrast': 2, 'too-small': 2 })
   })
 
   it('pptx: white text, text of 1 pt or less, and a shape placed off the slide', async () => {
@@ -1475,7 +1475,7 @@ describe('Z2: concealment is counted, not dropped', () => {
       [],
     )
     expect(everything(out.bytes)).toContain('OFFSLIDEKEPT')
-    expect(out.counted).toEqual({ whiteText: 2, tinyText: 1, offSlideShapes: 2 })
+    expect(out.counted).toEqual({ 'colour-contrast': 2, 'too-small': 1, layout: 2 })
   })
 
   it('anything counted makes flattenDocument report not-removed, so unattended picks Remove (A3)', async () => {
@@ -1487,7 +1487,7 @@ describe('Z2: concealment is counted, not dropped', () => {
       },
       { convert: async () => 'VISIBLE', disarm: ooxmlDisarm },
     )
-    expect(doc.report.counted).toEqual({ whiteText: 1 })
+    expect(doc.report.counted).toEqual({ 'colour-contrast': 1 })
     expect(doc.report.hiddenContent).toBe('not-removed')
     expect(sanitizeOptionFor(doc)).toEqual({ unattended: false })
   })
@@ -1654,7 +1654,7 @@ describe('Z2: the rules match the namespace URI, whatever the prefix', () => {
     const s = await disarmed(xlsx({ sheets: [{ name: 'S', xml: sheet }] }), MIME.xlsx, [
       'XFSENTINEL',
     ])
-    expect(s.counted).toEqual({ hiddenRows: 1 })
+    expect(s.counted).toEqual({ 'hidden-flag': 1 })
     const pShape = `<k:sp xmlns:k="${NS.p}"><k:nvSpPr><k:cNvPr id="3" name="s" hidden="1"/><k:cNvSpPr/><k:nvPr/></k:nvSpPr><k:txBody><a:bodyPr/><a:p><a:r><a:t>KSHAPESENTINEL</a:t></a:r></a:p></k:txBody></k:sp>`
     await disarmed(pptx({ slides: [{ shapes: shape('VISIBLE') + pShape }] }), MIME.pptx, [
       'KSHAPESENTINEL',
@@ -1934,7 +1934,7 @@ describe('#482 F6 (A10): equivalent forms of the counted categories count too', 
         '<numFmt numFmtId="164" formatCode="&quot;&quot;;&quot;&quot;;&quot;&quot;;&quot;&quot;"/>',
       xfs: [xf(0, 0, 0), xf(164, 0, 0)],
     })
-    expect(await counts(cell(1, 'KEPT'), styles)).toEqual({ hiddenNumberFormats: 1 })
+    expect(await counts(cell(1, 'KEPT'), styles)).toEqual({ 'hidden-flag': 1 })
   })
 
   it('X7: a [White] format section', async () => {
@@ -1942,7 +1942,7 @@ describe('#482 F6 (A10): equivalent forms of the counted categories count too', 
       numFmts: '<numFmt numFmtId="165" formatCode="[White]@"/>',
       xfs: [xf(0, 0, 0), xf(165, 0, 0)],
     })
-    expect(await counts(cell(1, 'KEPT'), styles)).toEqual({ fontMatchesFill: 1 })
+    expect(await counts(cell(1, 'KEPT'), styles)).toEqual({ 'colour-contrast': 1 })
   })
 
   it('X8: font rgb on a solid fill given as indexed — white on 9, and black on 8', async () => {
@@ -1962,8 +1962,8 @@ describe('#482 F6 (A10): equivalent forms of the counted categories count too', 
       ],
       xfs: [xf(0, 0, 0), xf(0, 1, 2), xf(0, 2, 3)],
     })
-    expect(await counts(cell(1, 'KEPT'), styles)).toEqual({ fontMatchesFill: 1 })
-    expect(await counts(cell(2, 'KEPT'), styles)).toEqual({ fontMatchesFill: 1 })
+    expect(await counts(cell(1, 'KEPT'), styles)).toEqual({ 'colour-contrast': 1 })
+    expect(await counts(cell(2, 'KEPT'), styles)).toEqual({ 'colour-contrast': 1 })
   })
 
   it('X9: a white rich-text run in sharedStrings, in a cell with no fill', async () => {
@@ -1972,7 +1972,7 @@ describe('#482 F6 (A10): equivalent forms of the counted categories count too', 
       `<sst xmlns="${NS.s}"><si><r><t>KEPT</t></r><r><rPr><color rgb="FFFFFFFF"/></rPr>` +
       '<t>X9SENTINEL</t></r></si></sst>'
     const sheet = '<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData>'
-    expect(await counts(sheet, styles, sst)).toEqual({ fontMatchesFill: 1 })
+    expect(await counts(sheet, styles, sst)).toEqual({ 'colour-contrast': 1 })
   })
 
   it('X4, X5: a row height of 0.1 and a column width of 0.01', async () => {
@@ -1980,8 +1980,7 @@ describe('#482 F6 (A10): equivalent forms of the counted categories count too', 
       '<cols><col min="1" max="1" width="0.01"/></cols>' +
       `<sheetData>${row(1, ['KEPT'], ' ht="0.1" customHeight="1"')}</sheetData>`
     expect(await counts(sheet, sStyles({ xfs: [xf(0, 0, 0)] }))).toEqual({
-      zeroRowHeights: 1,
-      zeroColumnWidths: 1,
+      'too-small': 2,
     })
   })
 
@@ -1994,12 +1993,12 @@ describe('#482 F6 (A10): equivalent forms of the counted categories count too', 
       MIME.xlsx,
       [],
     )
-    expect(hidden.counted).toEqual({ hiddenWindows: 1 })
+    expect(hidden.counted).toEqual({ 'hidden-flag': 1 })
   })
 
   it('W2: near-white text, FFFFFE', async () => {
     const body = `<w:p>${run('VISIBLE')}${run('KEPT', '<w:color w:val="FFFFFE"/>')}</w:p>`
-    expect((await disarmed(docx({ body }), MIME.docx, [])).counted).toEqual({ whiteText: 1 })
+    expect((await disarmed(docx({ body }), MIME.docx, [])).counted).toEqual({ 'colour-contrast': 1 })
   })
 
   it('W3: black text on black shading, the run’s or the paragraph’s', async () => {
@@ -2007,12 +2006,12 @@ describe('#482 F6 (A10): equivalent forms of the counted categories count too', 
     const body =
       `<w:p>${run('VISIBLE')}${run('KEPT', `${black}<w:shd w:val="clear" w:fill="000000"/>`)}</w:p>` +
       `<w:p><w:pPr><w:shd w:val="clear" w:fill="000000"/></w:pPr>${run('KEPT', black)}</w:p>`
-    expect((await disarmed(docx({ body }), MIME.docx, [])).counted).toEqual({ fontMatchesFill: 2 })
+    expect((await disarmed(docx({ body }), MIME.docx, [])).counted).toEqual({ 'colour-contrast': 2 })
   })
 
   it('W5: complex-script size 1 pt (w:szCs)', async () => {
     const body = `<w:p>${run('VISIBLE')}${run('KEPT', '<w:cs/><w:szCs w:val="2"/>')}</w:p>`
-    expect((await disarmed(docx({ body }), MIME.docx, [])).counted).toEqual({ tinyText: 1 })
+    expect((await disarmed(docx({ body }), MIME.docx, [])).counted).toEqual({ 'too-small': 1 })
   })
 
   it('P3, P4: pptx text with a:noFill, and with alpha 0', async () => {
@@ -2033,7 +2032,7 @@ describe('#482 F6 (A10): equivalent forms of the counted categories count too', 
       MIME.pptx,
       [],
     )
-    expect(out.counted).toEqual({ whiteText: 2 })
+    expect(out.counted).toEqual({ 'colour-contrast': 2 })
   })
 })
 
@@ -2055,7 +2054,7 @@ describe('#482 delta: five more same-class misses, and a stray w:t', () => {
         MIME.xlsx,
         [],
       )
-      expect(out.counted).toEqual({ hiddenWindows: 1 })
+      expect(out.counted).toEqual({ 'hidden-flag': 1 })
     }
   })
 
@@ -2064,7 +2063,7 @@ describe('#482 delta: five more same-class misses, and a stray w:t', () => {
       `<w:p>${run('VISIBLE')}` +
       `${run('KEPT', '<w:color w:val="000000"/><w:highlight w:val="black"/>')}</w:p>`
     expect((await disarmed(docx({ body }), MIME.docx, [])).counted).toEqual({
-      fontMatchesFill: 1,
+      'colour-contrast': 1,
     })
   })
 
@@ -2077,7 +2076,7 @@ describe('#482 delta: five more same-class misses, and a stray w:t', () => {
       MIME.pptx,
       [],
     )
-    expect(out.counted).toEqual({ whiteText: 1 })
+    expect(out.counted).toEqual({ 'colour-contrast': 1 })
   })
 
   it('F4: list-style defaults apply to a run with no a:rPr', async () => {
@@ -2087,7 +2086,7 @@ describe('#482 delta: five more same-class misses, and a stray w:t', () => {
       '<a:srgbClr val="FFFFFF"/></a:solidFill></a:defRPr></a:lvl1pPr></a:lstStyle>' +
       '<a:p><a:r><a:t>KEPT</a:t></a:r></a:p></p:txBody></p:sp>'
     const out = await disarmed(pptx({ slides: [{ shapes: shape('VISIBLE') + sp }] }), MIME.pptx, [])
-    expect(out.counted).toEqual({ whiteText: 1, tinyText: 1 })
+    expect(out.counted).toEqual({ 'colour-contrast': 1, 'too-small': 1 })
   })
 
   it('F5: a conditional-format dxf with a white font', async () => {
@@ -2101,7 +2100,7 @@ describe('#482 delta: five more same-class misses, and a stray w:t', () => {
       '<conditionalFormatting sqref="A1"><cfRule type="expression" dxfId="0" priority="1">' +
       '<formula>TRUE()</formula></cfRule></conditionalFormatting>'
     const out = await disarmed(xlsx({ sheets: [{ name: 'S', xml: sheet }], styles }), MIME.xlsx, [])
-    expect(out.counted).toEqual({ fontMatchesFill: 1 })
+    expect(out.counted).toEqual({ 'colour-contrast': 1 })
   })
 
   it('F7: a w:t outside any run goes, in the body and in a separator note', async () => {
@@ -2129,7 +2128,7 @@ describe('#482 re-check: the cascade, list levels, and the dxf fill', () => {
     )
     const body = `<w:p>${run('VISIBLE')}${run('KEPT', '<w:rStyle w:val="Ink"/>')}</w:p>`
     expect((await disarmed(docx({ body, styles }), MIME.docx, [])).counted).toEqual({
-      fontMatchesFill: 1,
+      'colour-contrast': 1,
     })
   })
 
@@ -2140,7 +2139,7 @@ describe('#482 re-check: the cascade, list levels, and the dxf fill', () => {
     )
     const body = `<w:p>${run('VISIBLE', '<w:highlight w:val="yellow"/>')}${run('KEPT')}</w:p>`
     expect((await disarmed(docx({ body, styles }), MIME.docx, [])).counted).toEqual({
-      fontMatchesFill: 1,
+      'colour-contrast': 1,
     })
   })
 
@@ -2155,7 +2154,7 @@ describe('#482 re-check: the cascade, list levels, and the dxf fill', () => {
       MIME.pptx,
       [],
     )
-    expect(at2.counted).toEqual({ whiteText: 1, tinyText: 1 })
+    expect(at2.counted).toEqual({ 'colour-contrast': 1, 'too-small': 1 })
     const at1 = await disarmed(
       pptx({ slides: [{ shapes: shape('VISIBLE') + body('') }] }),
       MIME.pptx,
@@ -2175,9 +2174,627 @@ describe('#482 re-check: the cascade, list levels, and the dxf fill', () => {
       '<conditionalFormatting sqref="A1"><cfRule type="expression" dxfId="0" priority="1">' +
       '<formula>TRUE()</formula></cfRule></conditionalFormatting>'
     const out = await disarmed(xlsx({ sheets: [{ name: 'S', xml: sheet }], styles }), MIME.xlsx, [])
-    expect(out.counted).toEqual({ fontMatchesFill: 1 })
+    expect(out.counted).toEqual({ 'colour-contrast': 1 })
   })
 })
+
+// ============================================================================
+// #492: the fail-closed effective-visibility resolver (colour, fill, size)
+// ============================================================================
+
+/**
+ * The resolver replaces #482's per-property concealment counters with ONE
+ * effective-visibility computation per run: resolve the run's effective
+ * foreground colour, background (shading, highlight, cell or shape fill,
+ * gradient stops included), transparency and size through its format's FULL
+ * cascade, then count the run as concealed UNLESS its text is provably visibly
+ * distinct. The predicate is FAIL-CLOSED (#492 decision 1): any rendering
+ * property outside the resolver's explicit allowlist makes the run
+ * not-provably-visible, so an unknown mechanism lands in `counted`, never in
+ * `'removed'`. A contrast threshold keeps ordinary styling visibly distinct.
+ * The counted keys are exactly the five reasons of decision 3:
+ * `colour-contrast`, `too-small`, `hidden-flag`, `layout`, `unknown-property`.
+ */
+const X_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+
+/** A minimal DrawingML theme, with `lt1` configurable for the theme pin. */
+const aTheme = (lt1: string): string =>
+  `${X_DECL}<a:theme xmlns:a="${NS.a}" name="T"><a:themeElements>` +
+  `<a:clrScheme name="S"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>` +
+  `<a:lt1><a:sysClr val="window" lastClr="${lt1}"/></a:lt1>` +
+  '<a:dk2><a:srgbClr val="1F497D"/></a:dk2><a:lt2><a:srgbClr val="EEECE1"/></a:lt2>' +
+  [1, 2, 3, 4, 5, 6].map((n) => `<a:accent${n}><a:srgbClr val="4F81BD"/></a:accent${n}>`).join('') +
+  '<a:hlink><a:srgbClr val="0000FF"/></a:hlink><a:folHlink><a:srgbClr val="800080"/></a:folHlink>' +
+  '</a:clrScheme></a:themeElements></a:theme>'
+
+/** A theme with a fill scheme, for the `fillRef` pin. */
+const FMT_THEME = (fill: string): string =>
+  `${X_DECL}<a:theme xmlns:a="${NS.a}" name="T"><a:themeElements>` +
+  '<a:clrScheme name="S"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>' +
+  '<a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>' +
+  '<a:dk2><a:srgbClr val="1F497D"/></a:dk2><a:lt2><a:srgbClr val="EEECE1"/></a:lt2></a:clrScheme>' +
+  '<a:fmtScheme name="F"><a:fillStyleLst>' +
+  fill +
+  '</a:fillStyleLst><a:lnStyleLst/><a:effectStyleLst/><a:bgFillStyleLst/></a:fmtScheme>' +
+  '</a:themeElements></a:theme>'
+
+/** A body-placeholder shape whose list style's level 1 hides its text. */
+const WHITE_1PT =
+  '<a:lvl1pPr><a:defRPr sz="100"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:defRPr></a:lvl1pPr>'
+/** Grey 24 pt at level 1 — ordinary, visibly distinct text. */
+const GREY_24 =
+  '<a:lvl1pPr><a:defRPr sz="2400"><a:solidFill><a:srgbClr val="595959"/></a:solidFill></a:defRPr></a:lvl1pPr>'
+
+/** A placeholder shape with a level-1 list style. */
+const phShape = (lstStyle: string, ph = 'body'): string =>
+  `<p:sp><p:nvSpPr><p:cNvPr id="2" name="P"/><p:cNvSpPr/><p:nvPr><p:ph type="${ph}"/></p:nvPr></p:nvSpPr>` +
+  `<p:spPr/><p:txBody><a:bodyPr/><a:lstStyle>${lstStyle}</a:lstStyle>` +
+  '<a:p><a:r><a:t>STYLETEXT</a:t></a:r></a:p></p:txBody></p:sp>'
+
+/** A run with no properties of its own, in a paragraph whose `a:pPr/a:defRPr` hides it. */
+const paraDefShape = (text: string): string =>
+  '<p:sp><p:nvSpPr><p:cNvPr id="7" name="D"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/>' +
+  '<p:txBody><a:bodyPr/><a:p><a:pPr><a:defRPr sz="100"><a:solidFill>' +
+  '<a:srgbClr val="FFFFFF"/></a:solidFill></a:defRPr></a:pPr>' +
+  `<a:r><a:t>${text}</a:t></a:r></a:p></p:txBody></p:sp>`
+
+const CLR_MAP =
+  '<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>'
+
+/** A PresentationML style part: layouts, masters and notes masters. */
+const pStylePart = (root: string, spTree = '', after = '', bg = ''): string =>
+  `${X_DECL}<p:${root} ${P_ROOT_NS}><p:cSld name="P">${bg ? `<p:bg>${bg}</p:bg>` : ''}` +
+  `<p:spTree>${SP_TREE_HEAD}${spTree}</p:spTree></p:cSld>${after}</p:${root}>`
+
+/** A master whose `bodyStyle` hides level-1 text. */
+const MASTER_TXSTYLES =
+  '<p:txStyles><p:titleStyle><a:lvl1pPr><a:defRPr sz="2400"/></a:lvl1pPr></p:titleStyle>' +
+  '<p:bodyStyle><a:lvl1pPr><a:defRPr sz="100"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:defRPr></a:lvl1pPr></p:bodyStyle>' +
+  '<p:otherStyle><a:lvl1pPr><a:defRPr sz="1800"/></a:lvl1pPr></p:otherStyle></p:txStyles>'
+const NOTES_TXSTYLES = `<p:txStyles><p:notesStyle>${WHITE_1PT}</p:notesStyle></p:txStyles>`
+
+describe('#492: the resolver is fail-closed — provable visibility, by contrast', () => {
+  it('white and near-white text on the page count; grey footnotes and coloured headings do not', async () => {
+    const body =
+      `<w:p>${run('VISIBLE')}` +
+      `${run('SECRETWHITE', '<w:color w:val="FFFFFF"/>')}` +
+      `${run('SECRETNEARWHITE', '<w:color w:val="FFFFFE"/>')}` +
+      `${run('GREYFOOTNOTE', '<w:color w:val="595959"/>')}` +
+      `${run('BLUEHEADING', '<w:color w:val="4F81BD"/>')}</w:p>`
+    const out = await disarmed(docx({ body }), MIME.docx, [])
+    expect(out.counted).toEqual({ 'colour-contrast': 2 })
+  })
+
+  it('white text on a dark background is provably visible and does not count', async () => {
+    const body =
+      `<w:p><w:pPr><w:shd w:val="clear" w:fill="0A0A0A"/></w:pPr>${run('VISIBLE')}` +
+      `${run('WHITEONDARK', '<w:color w:val="FFFFFF"/>')}</w:p>` +
+      `<w:p>${run('BLACKONBLACK', '<w:color w:val="000000"/><w:shd w:val="clear" w:fill="000000"/>')}</w:p>` +
+      // A solid shading draws w:color, not w:fill — hiding there counts too.
+      `<w:p>${run('SECRETSOLID', '<w:color w:val="000000"/><w:shd w:val="solid" w:color="000000" w:fill="auto"/>')}</w:p>`
+    const out = await disarmed(docx({ body }), MIME.docx, [])
+    expect(out.counted).toEqual({ 'colour-contrast': 2 })
+  })
+
+  it('a pattern shading is checked against both its colours', async () => {
+    const pat = '<w:shd w:val="pct50" w:color="0A0A0A" w:fill="FFFFFF"/>'
+    const body =
+      `<w:p>${run('VISIBLE')}` +
+      `${run('SECRETONPATTERN', `<w:color w:val="000000"/>${pat}`)}` +
+      `${run('YELLOWONPATTERN', `<w:color w:val="FFFF00"/>${pat}`)}</w:p>`
+    const out = await disarmed(docx({ body }), MIME.docx, [])
+    expect(out.counted).toEqual({ 'colour-contrast': 1 })
+  })
+
+  it('a w:shd whose pattern the resolver does not model counts as unknown-property', async () => {
+    const body = `<w:p>${run('VISIBLE')}${run('SECRETWEIRDSHD', '<w:shd w:val="weird"/>')}</w:p>`
+    const out = await disarmed(docx({ body }), MIME.docx, [])
+    expect(out.counted).toEqual({ 'unknown-property': 1 })
+  })
+
+  it('the theme part is read: a theme whose light colour is dark makes light1 text visible', async () => {
+    const body =
+      `<w:p>${run('VISIBLE')}${run('SECRETTHEMELIGHT', '<w:color w:val="000000" w:themeColor="light1"/>')}</w:p>`
+    const bytes = (lt1: string): Uint8Array =>
+      docx({
+        body,
+        parts: [{ name: 'word/theme/theme1.xml', type: CT.theme, body: aTheme(lt1) }],
+        docRels: [{ id: 'rIdTheme', type: RT.theme, target: 'theme/theme1.xml' }],
+      })
+    const dark = await disarmed(bytes('0A0A0A'), MIME.docx, [])
+    expect(dark.counted).toEqual({})
+    const light = await disarmed(bytes('FFFFFF'), MIME.docx, [])
+    expect(light.counted).toEqual({ 'colour-contrast': 1 })
+  })
+
+  it('themeTint and themeShade resolve: shaded light1 stays visible, tinted dark1 goes white', async () => {
+    const body =
+      `<w:p>${run('VISIBLE')}` +
+      `${run('SECRETTINTEDTEXT', '<w:color w:val="000000" w:themeColor="dark1" w:themeTint="FF"/>')}` +
+      `${run('SHADEDLIGHT', '<w:color w:val="000000" w:themeColor="light1" w:themeShade="FF"/>')}</w:p>`
+    const out = await disarmed(docx({ body }), MIME.docx, [])
+    expect(out.counted).toEqual({ 'colour-contrast': 1 })
+  })
+
+  it('cascade order: direct formatting beats the style, which beats docDefaults', async () => {
+    const styles = wStyles(
+      DOCX_STYLES_NORMAL +
+        '<w:docDefaults><w:rPrDefault><w:rPr><w:color w:val="000000"/></w:rPr></w:rPrDefault></w:docDefaults>' +
+        '<w:style w:type="character" w:styleId="Pale"><w:rPr><w:color w:val="D9D9D9"/></w:rPr></w:style>',
+    )
+    const body =
+      `<w:p>${run('VISIBLE')}` +
+      `${run('SECRETPALESTYLE', '<w:rStyle w:val="Pale"/>')}` +
+      `${run('OVERRIDDEN', '<w:rStyle w:val="Pale"/><w:color w:val="595959"/>')}</w:p>` +
+      // docDefaults hide on a black paragraph; the direct control survives.
+      `<w:p><w:pPr><w:shd w:val="clear" w:fill="000000"/></w:pPr>` +
+      `${run('YELLOWCONTROL', '<w:color w:val="FFFF00"/>')}${run('SECRETBARE')}</w:p>`
+    const out = await disarmed(docx({ body, styles }), MIME.docx, [])
+    expect(out.counted).toEqual({ 'colour-contrast': 2 })
+  })
+
+  it('a 1% character scale (w:w) makes the effective size too small — the #486 shape', async () => {
+    const body =
+      `<w:p>${run('VISIBLE')}` +
+      `${run('SECRETSCALED', '<w:sz w:val="40"/><w:w w:val="1"/>')}` +
+      `${run('WIDECONTROL', '<w:sz w:val="40"/><w:w w:val="50"/>')}</w:p>`
+    const out = await disarmed(docx({ body }), MIME.docx, [])
+    expect(out.counted).toEqual({ 'too-small': 1 })
+  })
+
+  it('a rendering property outside the allowlist counts as unknown-property, directly or through a style', async () => {
+    const styles = wStyles(
+      DOCX_STYLES_NORMAL +
+        '<w:style w:type="character" w:styleId="Raised"><w:rPr><w:position w:val="20"/></w:rPr></w:style>',
+    )
+    const w14 = 'http://schemas.microsoft.com/office/word/2010/wordml'
+    const body =
+      `<w:p>${run('VISIBLE')}` +
+      `${run('SECRETW14TEXTFILL', `<w14:textFill xmlns:w14="${w14}"><w14:noFill/></w14:textFill>`)}` +
+      `${run('SECRETPOSITION', '<w:position w:val="-2000"/>')}` +
+      `${run('SECRETRAISEDSTYLE', '<w:rStyle w:val="Raised"/>')}` +
+      // Ordinary formatting the allowlist judges unable to conceal: bold,
+      // italic, underline, caps, kerning, sub/superscript, letter spacing.
+      `${run('BOLDITALIC', '<w:b/><w:i/><w:u w:val="single"/><w:smallCaps/><w:kern w:val="2"/><w:spacing w:val="20"/><w:vertAlign w:val="superscript"/>')}</w:p>`
+    const out = await disarmed(docx({ body, styles }), MIME.docx, [])
+    expect(out.counted).toEqual({ 'unknown-property': 3 })
+  })
+})
+
+describe('#492: pptx runs resolve through their shapes, their slides, and the parts behind them', () => {
+  it('a run’s background is the shape’s fill, else the slide’s, else the layout’s, else the master’s, else white', async () => {
+    const whiteRun = '<a:rPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:rPr>'
+    const blackFill = '<a:solidFill><a:srgbClr val="0A0A0A"/></a:solidFill>'
+    const blackBg =
+      '<p:bgPr><a:solidFill><a:srgbClr val="0A0A0A"/></a:solidFill><a:effectLst/></p:bgPr>'
+    const white = (sentinel: string) => shape(sentinel, { id: 3, rPr: whiteRun })
+    const counted = async (bytes: Uint8Array) =>
+      (await disarmed(bytes, MIME.pptx, [])).counted
+    expect(
+      await counted(
+        pptx({
+          slides: [
+            {
+              shapes:
+                shape('VISIBLE') +
+                shape('WHITEONBLACKSHAPE_CONTROL', { id: 3, rPr: whiteRun, spPr: blackFill }),
+            },
+          ],
+        }),
+      ),
+    ).toEqual({})
+    expect(
+      await counted(pptx({ slides: [{ bg: blackBg, shapes: white('VISIBLE') }] })),
+    ).toEqual({})
+    expect(
+      await counted(
+        pptx({
+          slides: [{ shapes: white('VISIBLE') }],
+          style: { layouts: [pStylePart('sldLayout', '', '', blackBg)], master: pStylePart('sldMaster', '', CLR_MAP) },
+        }),
+      ),
+    ).toEqual({})
+    expect(
+      await counted(
+        pptx({
+          slides: [{ shapes: white('VISIBLE') }],
+          style: {
+            layouts: [pStylePart('sldLayout')],
+            master: pStylePart('sldMaster', '', CLR_MAP, blackBg),
+          },
+        }),
+      ),
+    ).toEqual({})
+    expect(await counted(pptx({ slides: [{ shapes: white('SECRETWHITEPAGE') + shape('VISIBLE') }] }))).toEqual({
+      'colour-contrast': 1,
+    })
+  })
+
+  it('a shape’s p:style fillRef resolves through the theme’s fill scheme', async () => {
+    const theme = FMT_THEME(
+      '<a:solidFill><a:srgbClr val="0A0A0A"/></a:solidFill><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>',
+    )
+    const fillRef = (idx: number): string =>
+      `<p:style><a:lnRef idx="1"><a:schemeClr val="accent1"/></a:lnRef>` +
+      `<a:fillRef idx="${idx}"><a:schemeClr val="accent1"/></a:fillRef>` +
+      '<a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"/></p:style>'
+    const whiteRun = '<a:rPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:rPr>'
+    const spec = (idx: number, sentinel: string) =>
+      pptx({
+        slides: [{ shapes: shape(sentinel, { id: 3, rPr: whiteRun, style: fillRef(idx) }) + shape('VISIBLE') }],
+        presentationRels: [{ id: 'rIdTheme', type: RT.theme, target: 'theme/theme1.xml' }],
+        parts: [{ name: 'ppt/theme/theme1.xml', type: CT.theme, body: theme }],
+      })
+    expect((await disarmed(spec(1, 'FILLREFONE_CONTROL'), MIME.pptx, [])).counted).toEqual({})
+    expect((await disarmed(spec(2, 'SECRETFILLREF'), MIME.pptx, [])).counted).toEqual({
+      'colour-contrast': 1,
+    })
+  })
+
+  it('a shape background or text fill the resolver does not model makes the run unknown-property', async () => {
+    const blackRun = '<a:rPr><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:rPr>'
+    const out = await disarmed(
+      pptx({
+        slides: [
+          {
+            shapes:
+              shape('VISIBLE') +
+              shape('SECRETBLIPBG', {
+                id: 3,
+                rPr: blackRun,
+                spPr: '<a:blipFill><a:blip r:embed="rIdNone"/></a:blipFill>',
+              }) +
+              shape('SECRETPATTERNTEXT', {
+                id: 4,
+                rPr: '<a:rPr><a:pattFill><a:fgClr><a:srgbClr val="000000"/></a:fgClr></a:pattFill></a:rPr>',
+              }),
+          },
+        ],
+      }),
+      MIME.pptx,
+      [],
+    )
+    expect(out.counted).toEqual({ 'unknown-property': 2 })
+  })
+
+  it('gradients resolve stop by stop, and transparency is read', async () => {
+    const grad = (a: string, b: string): string =>
+      `<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="${a}"/></a:gs>` +
+      `<a:gs pos="100000"><a:srgbClr val="${b}"/></a:gs></a:gsLst></a:gradFill>`
+    const alpha = (v: number): string =>
+      `<a:solidFill><a:srgbClr val="000000"><a:alpha val="${v}"/></a:srgbClr></a:solidFill>`
+    const out = await disarmed(
+      pptx({
+        slides: [
+          {
+            shapes:
+              shape('VISIBLE') +
+              shape('SECRETALLWHITEGRAD', { id: 3, rPr: `<a:rPr>${grad('FFFFFF', 'FFFFFF')}</a:rPr>` }) +
+              shape('MIXEDGRADCONTROL', { id: 4, rPr: `<a:rPr>${grad('FFFFFF', '0A0A0A')}</a:rPr>` }) +
+              shape('SECRETALPHA0', { id: 5, rPr: `<a:rPr>${alpha(0)}</a:rPr>` }) +
+              shape('ALPHA40CONTROL', { id: 6, rPr: `<a:rPr>${alpha(40000)}</a:rPr>` }),
+          },
+        ],
+      }),
+      MIME.pptx,
+      [],
+    )
+    expect(out.counted).toEqual({ 'colour-contrast': 2 })
+  })
+
+  it('normAutofit fontScale composes with the size', async () => {
+    const out = await disarmed(
+      pptx({
+        slides: [
+          {
+            shapes:
+              shape('VISIBLE') +
+              shape('SECRETFONTSCALE', {
+                id: 3,
+                rPr: '<a:rPr sz="2400"/>',
+                bodyPr: '<a:normAutofit fontScale="4000" lnSpcReduction="0"/>',
+              }) +
+              shape('FONTSCALECONTROL', {
+                id: 4,
+                rPr: '<a:rPr sz="2400"/>',
+                bodyPr: '<a:normAutofit fontScale="50000" lnSpcReduction="0"/>',
+              }),
+          },
+        ],
+      }),
+      MIME.pptx,
+      [],
+    )
+    expect(out.counted).toEqual({ 'too-small': 1 })
+  })
+
+  it('an un-modelled rPr mechanism on a pptx run counts as unknown-property', async () => {
+    const out = await disarmed(
+      pptx({
+        slides: [
+          {
+            shapes:
+              shape('VISIBLE') +
+              shape('SECRETEFFECT', {
+                id: 3,
+                rPr: '<a:rPr><a:effectLst><a:outerShdw blurRad="0"/></a:effectLst></a:rPr>',
+              }) +
+              shape('SECRETEXTLST', {
+                id: 4,
+                rPr: '<a:rPr><a:extLst><a:ext uri="urn:test"/></a:extLst></a:rPr>',
+              }) +
+              // Ordinary formatting the allowlist judges unable to conceal:
+              // bold, caps, letter spacing, sub/superscript, underline.
+              shape('BOLDSPCCAPS', {
+                id: 5,
+                rPr: '<a:rPr b="1" spc="400" cap="all" baseline="30000" u="sng"/>',
+              }),
+          },
+        ],
+      }),
+      MIME.pptx,
+      [],
+    )
+    expect(out.counted).toEqual({ 'unknown-property': 2 })
+  })
+})
+
+describe('#492: masters and layouts are read for resolution and never emitted', () => {
+  it('a layout’s list-style defaults resolve for the slide’s placeholder runs', async () => {
+    const out = await disarmed(
+      pptx({
+        slides: [
+          {
+            shapes:
+              shape('VISIBLE') +
+              shape('SECRETLAYOUTBODY', { id: 3, ph: 'body' }) +
+              paraDefShape('SECRETPARADEF') +
+              shape('SECRETLAYOUTTITLE', { id: 4, ph: 'title' }) +
+              shape('DIRECTCONTROL', {
+                id: 5,
+                ph: 'body',
+                rPr: '<a:rPr sz="2400"><a:solidFill><a:srgbClr val="595959"/></a:solidFill></a:rPr>',
+              }),
+          },
+        ],
+        style: {
+          layouts: [pStylePart('sldLayout', phShape(WHITE_1PT))],
+          master: pStylePart('sldMaster', '', CLR_MAP),
+        },
+      }),
+      MIME.pptx,
+      [],
+    )
+    // The body placeholder inherits the layout body placeholder's white 1-pt
+    // level 1; the paragraph's own a:pPr/a:defRPr hides its run the same way.
+    // The title placeholder has no matching layout placeholder and the master
+    // has no txStyles, so it inherits nothing — its default text is visible.
+    expect(out.counted).toEqual({ 'colour-contrast': 2, 'too-small': 2 })
+  })
+
+  it('a master’s txStyles resolve through the layout, and the layout wins', async () => {
+    const master = pStylePart('sldMaster', '', CLR_MAP + MASTER_TXSTYLES)
+    const masterOnly = await disarmed(
+      pptx({
+        slides: [{ shapes: shape('VISIBLE') + shape('SECRETMASTERBODY', { id: 3, ph: 'body' }) }],
+        style: { layouts: [pStylePart('sldLayout')], master },
+      }),
+      MIME.pptx,
+      [],
+    )
+    expect(masterOnly.counted).toEqual({ 'colour-contrast': 1, 'too-small': 1 })
+    const layoutWins = await disarmed(
+      pptx({
+        slides: [{ shapes: shape('VISIBLE') + shape('LAYOUTCONTROL', { id: 3, ph: 'body' }) }],
+        style: { layouts: [pStylePart('sldLayout', phShape(GREY_24))], master },
+      }),
+      MIME.pptx,
+      [],
+    )
+    expect(layoutWins.counted).toEqual({})
+  })
+
+  it('the master’s colour map is read: a flipped tx1 remaps the resolved text colour', async () => {
+    const flipped = CLR_MAP.replace('tx1="dk1"', 'tx1="lt1"')
+    const tx1Run = '<a:rPr><a:solidFill><a:schemeClr val="tx1"/></a:solidFill></a:rPr>'
+    const spec = (clrMap: string, sentinel: string) =>
+      pptx({
+        slides: [{ shapes: shape('VISIBLE') + shape(sentinel, { id: 3, ph: 'body', rPr: tx1Run }) }],
+        style: { layouts: [pStylePart('sldLayout')], master: pStylePart('sldMaster', '', clrMap) },
+      })
+    expect((await disarmed(spec(CLR_MAP, 'STANDARDTX1_CONTROL'), MIME.pptx, [])).counted).toEqual({})
+    expect((await disarmed(spec(flipped, 'SECRETFLIPPEDTX1'), MIME.pptx, [])).counted).toEqual({
+      'colour-contrast': 1,
+    })
+  })
+
+  it('notes inherit from the notes master', async () => {
+    const out = await disarmed(
+      pptx({
+        slides: [{ shapes: shape('VISIBLE'), notes: 'SECRETNOTESBODY', notesPh: 'body' }],
+        style: { notesMaster: pStylePart('notesMaster', '', CLR_MAP + NOTES_TXSTYLES) },
+      }),
+      MIME.pptx,
+      [],
+    )
+    expect(out.counted).toEqual({ 'colour-contrast': 1, 'too-small': 1 })
+  })
+
+  it('a slide whose layout points at a missing part, or one of the wrong type, is unknown-property — never a silent bypass', async () => {
+    const rels = (target: string): Rel[] => [{ id: 'rIdLayout', type: RT.slideLayout, target }]
+    const missing = pptx({
+      slides: [{ shapes: shape('VISIBLE') + shape('SECRETTEXT', { id: 3 }), rels: rels('slideLayouts/slideLayout9.xml') }],
+    })
+    expect((await disarmed(missing, MIME.pptx, [])).counted).toEqual({ 'unknown-property': 2 })
+    const wrongType = pptx({
+      slides: [{ shapes: shape('VISIBLE') + shape('SECRETTEXT', { id: 3 }), rels: rels('../slides/slide1.xml') }],
+    })
+    expect((await disarmed(wrongType, MIME.pptx, [])).counted).toEqual({ 'unknown-property': 2 })
+  })
+
+  it('the layout, master and notes master parts are never in the output, nor their relationships', async () => {
+    const out = await ooxmlDisarm(
+      pptx({
+        slides: [{ shapes: shape('VISIBLE'), notes: 'NOTESKEPT', notesPh: 'body' }],
+        style: {
+          layouts: [pStylePart('sldLayout', phShape(WHITE_1PT))],
+          master: pStylePart('sldMaster', '', CLR_MAP + MASTER_TXSTYLES),
+          notesMaster: pStylePart('notesMaster', '', CLR_MAP + NOTES_TXSTYLES),
+        },
+      }),
+      MIME.pptx,
+    )
+    const list = names(out.bytes)
+    expect(list).not.toContain('ppt/slideLayouts/slideLayout1.xml')
+    expect(list).not.toContain('ppt/slideMasters/slideMaster1.xml')
+    expect(list).not.toContain('ppt/notesMasters/notesMaster1.xml')
+    const all = everything(out.bytes)
+    expect(all).not.toContain('slideLayout')
+    expect(all).not.toContain('slideMaster')
+    expect(all).not.toContain('notesMaster')
+    // They left as dropped parts, labelled by what they were.
+    expect(out.removed.otherParts).toBe(3)
+  })
+})
+
+describe('#492: xlsx cells resolve through their styles, their fills and their formats', () => {
+  const xf = (numFmtId: number, fontId: number, fillId: number): string =>
+    `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}"/>`
+  const cell = (s: number, t: string): string =>
+    `<sheetData><row r="1"><c r="A1" s="${s}" t="inlineStr"><is><t>${t}</t></is></c></row></sheetData>`
+
+  it('a 1 pt font and a 1 pt rich-text run count as too-small', async () => {
+    const styles = sStyles({
+      fonts: ['<font><sz val="11"/></font>', '<font><sz val="1"/><color rgb="FF000000"/></font>'],
+      fills: ['<fill><patternFill patternType="none"/></fill>'],
+      xfs: [xf(0, 0, 0), xf(0, 1, 0)],
+    })
+    const out = await disarmed(
+      xlsx({ sheets: [{ name: 'S', xml: cell(1, 'SECRETTINYFONT') }], styles }),
+      MIME.xlsx,
+      [],
+    )
+    const sst =
+      `<sst xmlns="${NS.s}"><si><r><rPr><sz val="1"/><color rgb="FF000000"/></rPr><t>SECRETTINYRUN</t></r></si></sst>`
+    const rich = await disarmed(
+      xlsx({
+        sheets: [
+          { name: 'S', xml: '<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData>' },
+        ],
+        styles: sStyles({ xfs: [xf(0, 0, 0)] }),
+        sharedStrings: sst,
+      }),
+      MIME.xlsx,
+      [],
+    )
+    expect(out.counted).toEqual({ 'too-small': 1 })
+    expect(rich.counted).toEqual({ 'too-small': 1 })
+  })
+
+  it('a pattern fill is checked against both its colours, and [White] resolves against the fill', async () => {
+    const styles = sStyles({
+      fonts: ['<font><sz val="11"/><color rgb="FF000000"/></font>'],
+      fills: [
+        '<fill><patternFill patternType="none"/></fill>',
+        '<fill><patternFill patternType="pct50"><fgColor rgb="FF0A0A0A"/><bgColor rgb="FFFFFFFF"/></patternFill></fill>',
+      ],
+      numFmts: '<numFmt numFmtId="165" formatCode="[White]@"/>',
+      xfs: [xf(0, 0, 0), xf(0, 0, 1), xf(165, 0, 1)],
+    })
+    // A black font on a half-black pattern: the black half conceals it.
+    const pattern = await disarmed(
+      xlsx({ sheets: [{ name: 'S', xml: cell(1, 'SECRETONPATTERN') }], styles }),
+      MIME.xlsx,
+      [],
+    )
+    // [White]@ over that same dark-pattern fill: white on black is visible.
+    const whiteFormat = await disarmed(
+      xlsx({ sheets: [{ name: 'S', xml: cell(2, 'WHITEFORMAT_CONTROL') }], styles }),
+      MIME.xlsx,
+      [],
+    )
+    // [White]@ over no fill at all: white on white, concealed.
+    const bare = await disarmed(
+      xlsx({
+        sheets: [{ name: 'S', xml: cell(1, 'SECRETWHITEFORMAT') }],
+        styles: sStyles({
+          fonts: ['<font><sz val="11"/></font>'],
+          numFmts: '<numFmt numFmtId="165" formatCode="[White]@"/>',
+          xfs: [xf(0, 0, 0), xf(165, 0, 0)],
+        }),
+      }),
+      MIME.xlsx,
+      [],
+    )
+    expect(pattern.counted).toEqual({ 'colour-contrast': 1 })
+    expect(whiteFormat.counted).toEqual({})
+    expect(bare.counted).toEqual({ 'colour-contrast': 1 })
+  })
+
+  it('an automatic font colour adapts to its fill and does not count', async () => {
+    const out = await disarmed(
+      xlsx({
+        sheets: [{ name: 'S', xml: cell(1, 'AUTODARK_CONTROL') }],
+        styles: sStyles({
+          fonts: ['<font><sz val="11"/><color auto="1"/></font>'],
+          fills: [
+            '<fill><patternFill patternType="none"/></fill>',
+            '<fill><patternFill patternType="solid"><fgColor rgb="FF000000"/></patternFill></fill>',
+          ],
+          xfs: [xf(0, 0, 0), xf(0, 0, 1)],
+        }),
+      }),
+      MIME.xlsx,
+      [],
+    )
+    expect(out.counted).toEqual({})
+  })
+
+  it('the counted keys are exactly the five reasons', async () => {
+    const word = await disarmed(
+      docx({
+        body:
+          `<w:p>${run('SECRETWHITE', '<w:color w:val="FFFFFF"/>')}` +
+          `${run('SECRETTINY', '<w:sz w:val="2"/>')}` +
+          `${run('SECRETUNKNOWN', '<w:position w:val="20"/>')}${run('VISIBLE')}</w:p>`,
+      }),
+      MIME.docx,
+      [],
+    )
+    expect(Object.keys(word.counted).sort()).toEqual(['colour-contrast', 'too-small', 'unknown-property'])
+
+    const sheet =
+      '<cols><col min="1" max="1" hidden="1"/></cols>' +
+      `<sheetData>${row(1, ['VISIBLE'])}${row(2, ['FLAGROW'], ' hidden="1"')}${row(3, ['ZERO'], ' ht="0" customHeight="1"')}</sheetData>`
+    const book = await disarmed(xlsx({ sheets: [{ name: 'S', xml: sheet }] }), MIME.xlsx, [])
+    expect(Object.keys(book.counted).sort()).toEqual(['hidden-flag', 'too-small'])
+
+    const off = '<a:xfrm><a:off x="9144000" y="0"/><a:ext cx="100" cy="100"/></a:xfrm>'
+    const laid = await disarmed(
+      pptx({ slides: [{ shapes: shape('OFFSLIDEKEPT', { id: 6, xfrm: off }) }] }),
+      MIME.pptx,
+      [],
+    )
+    expect(Object.keys(laid.counted)).toEqual(['layout'])
+  })
+})
+
+describe('#492 F2: the resolver costs CPU linear in the part', () => {
+  it('placeholder runs resolving through layout and master cost no more than the same shapes without placeholders', async () => {
+    const ph = Array.from({ length: 1_500 }, (_, i) => shape(`s${i}`, { id: i + 2, ph: 'body' })).join('')
+    const plain = Array.from({ length: 1_500 }, (_, i) => shape(`s${i}`, { id: i + 2 })).join('')
+    const bytes = pptx({
+      slides: [{ shapes: ph }],
+      style: { layouts: [pStylePart('sldLayout', phShape(WHITE_1PT))], master: pStylePart('sldMaster', '', CLR_MAP + MASTER_TXSTYLES) },
+    })
+    const base = pptx({ slides: [{ shapes: plain }] })
+    const ratio =
+      (await cpuMs(() => ooxmlDisarm(bytes, MIME.pptx))) /
+      (await cpuMs(() => ooxmlDisarm(base, MIME.pptx)))
+    expect(ratio).toBeLessThan(2)
+  }, 120_000)
+})
+
 
 describe('#482 F7 (A11): a deleted table cell is a deletion', () => {
   it('F4: a w:tc marked w:cellDel goes with its text', async () => {

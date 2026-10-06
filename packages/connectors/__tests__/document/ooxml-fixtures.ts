@@ -75,6 +75,9 @@ export const RT = {
   notesSlide: `${R}notesSlide`,
   slideLayout: `${R}slideLayout`,
   slideMaster: `${R}slideMaster`,
+  notesMaster: `${R}notesMaster`,
+  slideLayout: `${R}slideLayout`,
+  slideMaster: `${R}slideMaster`,
   extendedProperties: `${R}extended-properties`,
   customProperties: `${R}custom-properties`,
   coreProperties:
@@ -119,6 +122,9 @@ export const CT = {
   macrosheet: 'application/vnd.ms-excel.macrosheet+xml',
   slide: `${OD}presentationml.slide+xml`,
   notesSlide: `${OD}presentationml.notesSlide+xml`,
+  slideLayout: `${OD}presentationml.slideLayout+xml`,
+  slideMaster: `${OD}presentationml.slideMaster+xml`,
+  notesMaster: `${OD}presentationml.notesMaster+xml`,
   slideLayout: `${OD}presentationml.slideLayout+xml`,
   slideMaster: `${OD}presentationml.slideMaster+xml`,
   pComments: `${OD}presentationml.comments+xml`,
@@ -459,9 +465,23 @@ export interface SlideSpec {
   readonly show?: string
   /** Notes text for this slide; omitted means no notes part. */
   readonly notes?: string
+  /** The placeholder type the notes text shape carries (`body` for the notes body). */
+  readonly notesPh?: string
   /** Leave the slide out of `<p:sldIdLst>` (its relationship stays). */
   readonly unlisted?: boolean
   readonly rels?: readonly Rel[]
+  /** `<p:bg>` inner XML for the slide's own background (`<p:bgPr>` content). */
+  readonly bg?: string
+}
+
+/** Read-for-resolution style parts beside the slides (#492 decision 2). */
+export interface PptxStyleSpec {
+  /** `ppt/slideLayouts/slideLayout<n>.xml` bodies; slide `n` gets layout `n`. */
+  readonly layouts?: readonly (string | undefined)[]
+  /** `ppt/slideMasters/slideMaster1.xml`, the target of every layout given. */
+  readonly master?: string
+  /** `ppt/notesMasters/notesMaster1.xml`, the target of every notes slide. */
+  readonly notesMaster?: string
 }
 
 export interface PptxSpec {
@@ -475,29 +495,41 @@ export interface PptxSpec {
   readonly rootRels?: readonly Rel[]
   readonly parts?: readonly Part[]
   readonly extraRels?: Readonly<Record<string, readonly Rel[]>>
+  /** Layouts, the master and the notes master, read for resolution only. */
+  readonly style?: PptxStyleSpec
 }
 
-const P_ROOT_NS = `xmlns:p="${NS.p}" xmlns:a="${NS.a}" xmlns:r="${NS.r}" xmlns:mc="${NS.mc}"`
+export const P_ROOT_NS = `xmlns:p="${NS.p}" xmlns:a="${NS.a}" xmlns:r="${NS.r}" xmlns:mc="${NS.mc}"`
 
-const SP_TREE_HEAD =
+export const SP_TREE_HEAD =
   '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>'
 
-export function pSlide(shapes: string, show?: string): string {
+export function pSlide(shapes: string, show?: string, bg?: string): string {
   return (
     `${XML_DECL}<p:sld ${P_ROOT_NS}${show === undefined ? '' : ` show="${show}"`}>` +
-    `<p:cSld><p:spTree>${SP_TREE_HEAD}${shapes}</p:spTree></p:cSld></p:sld>`
+    `<p:cSld>${bg ? `<p:bg>${bg}</p:bg>` : ''}<p:spTree>${SP_TREE_HEAD}${shapes}</p:spTree></p:cSld></p:sld>`
   )
 }
 
-/** A text shape. `cNvPr` attributes and an `a:rPr` are optional. */
+/** A text shape. `cNvPr` attributes, an `a:rPr`, a placeholder, `a:bodyPr` inner XML, `p:spPr` inner XML and a `p:style` are optional. */
 export function shape(
   text: string,
-  opts: { id?: number; cNvPr?: string; rPr?: string; xfrm?: string } = {},
+  opts: {
+    id?: number
+    cNvPr?: string
+    rPr?: string
+    xfrm?: string
+    ph?: string
+    bodyPr?: string
+    spPr?: string
+    style?: string
+  } = {},
 ): string {
   return (
     `<p:sp><p:nvSpPr><p:cNvPr id="${opts.id ?? 2}" name="Shape"${opts.cNvPr ? ` ${opts.cNvPr}` : ''}/>` +
-    `<p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${opts.xfrm ?? ''}</p:spPr>` +
-    `<p:txBody><a:bodyPr/><a:p><a:r>${opts.rPr ?? '<a:rPr lang="en-US"/>'}<a:t>${text}</a:t></a:r></a:p></p:txBody></p:sp>`
+    `<p:cNvSpPr/><p:nvPr>${opts.ph ? `<p:ph type="${opts.ph}"/>` : ''}</p:nvPr></p:nvSpPr>` +
+    `<p:spPr>${opts.spPr ?? (opts.xfrm ?? '')}</p:spPr>${opts.style ?? ''}` +
+    `<p:txBody><a:bodyPr>${opts.bodyPr ?? ''}</a:bodyPr><a:p><a:r>${opts.rPr ?? '<a:rPr lang="en-US"/>'}<a:t>${text}</a:t></a:r></a:p></p:txBody></p:sp>`
   )
 }
 
@@ -506,13 +538,32 @@ export function pptx(spec: PptxSpec): Uint8Array {
   const presRels: Rel[] = []
   const ids: string[] = []
   const extra: Record<string, Rel[]> = {}
+  const style = spec.style ?? {}
   spec.slides.forEach((s, i) => {
     const n = i + 1
     const name = `ppt/slides/slide${n}.xml`
-    parts.push({ name, type: CT.slide, body: pSlide(s.shapes, s.show) })
+    parts.push({ name, type: CT.slide, body: pSlide(s.shapes, s.show, s.bg) })
     presRels.push({ id: `rIdSlide${n}`, type: RT.slide, target: `slides/slide${n}.xml` })
     if (!s.unlisted) ids.push(`<p:sldId id="${255 + n}" r:id="rIdSlide${n}"/>`)
     const slideRels: Rel[] = [...(s.rels ?? [])]
+    // Read-for-resolution wiring (#492 decision 2): the slide's layout, the
+    // layout's master, and the notes slide's notes master. The disarm reads
+    // these parts for style resolution; they are never kept or emitted.
+    const layout = style.layouts?.[i]
+    if (layout !== undefined) {
+      const layoutName = `ppt/slideLayouts/slideLayout${n}.xml`
+      parts.push({ name: layoutName, type: CT.slideLayout, body: layout })
+      slideRels.push({
+        id: 'rIdLayout',
+        type: RT.slideLayout,
+        target: `../slideLayouts/slideLayout${n}.xml`,
+      })
+      if (style.master !== undefined) {
+        extra[layoutName] = [
+          { id: 'rIdMaster', type: RT.slideMaster, target: '../slideMasters/slideMaster1.xml' },
+        ]
+      }
+    }
     if (s.notes !== undefined) {
       const notesName = `ppt/notesSlides/notesSlide${n}.xml`
       parts.push({
@@ -520,7 +571,7 @@ export function pptx(spec: PptxSpec): Uint8Array {
         type: CT.notesSlide,
         body:
           `${XML_DECL}<p:notes ${P_ROOT_NS}><p:cSld><p:spTree>${SP_TREE_HEAD}` +
-          `${shape(s.notes, { id: 3 })}</p:spTree></p:cSld></p:notes>`,
+          `${shape(s.notes, { id: 3, ph: s.notesPh })}</p:spTree></p:cSld></p:notes>`,
       })
       slideRels.push({
         id: 'rIdNotes',
@@ -528,9 +579,30 @@ export function pptx(spec: PptxSpec): Uint8Array {
         target: `../notesSlides/notesSlide${n}.xml`,
       })
       extra[notesName] = [{ id: 'rIdSlide', type: RT.slide, target: `../slides/slide${n}.xml` }]
+      if (style.notesMaster !== undefined) {
+        extra[notesName].push({
+          id: 'rIdNotesMaster',
+          type: RT.notesMaster,
+          target: '../notesMasters/notesMaster1.xml',
+        })
+      }
     }
     if (slideRels.length > 0) extra[name] = slideRels
   })
+  if (style.master !== undefined) {
+    parts.push({
+      name: 'ppt/slideMasters/slideMaster1.xml',
+      type: CT.slideMaster,
+      body: style.master,
+    })
+  }
+  if (style.notesMaster !== undefined) {
+    parts.push({
+      name: 'ppt/notesMasters/notesMaster1.xml',
+      type: CT.notesMaster,
+      body: style.notesMaster,
+    })
+  }
   const size = spec.size ?? { cx: 9144000, cy: 6858000 }
   return buildPackage({
     main: {

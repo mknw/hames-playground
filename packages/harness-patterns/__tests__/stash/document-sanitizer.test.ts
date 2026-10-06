@@ -447,7 +447,7 @@ describe('flattenDocument across the families', () => {
    * MUTATION: set 'removed' unconditionally whenever a disarm ran → red.
    */
   it('a disarm that counts one hidden row gives not-removed and unattended: false', async () => {
-    const disarm = async (bytes: Uint8Array) => ({ bytes, removed: {}, counted: { hiddenRows: 1 } })
+    const disarm = async (bytes: Uint8Array) => ({ bytes, removed: {}, counted: { 'hidden-flag': 1 } })
     const doc = await flattenDocument(
       { bytes: ooxmlPackage(), filename: 'a.docx', mimeType: DOCX_MIME },
       { convert: convertTo('body'), disarm },

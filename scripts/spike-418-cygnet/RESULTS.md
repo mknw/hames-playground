@@ -9,12 +9,12 @@ be produced the moment a box is available.
 
 ## Reachability, measured
 
-| Target | Probe | Result |
-| --- | --- | --- |
+| Target                                                                | Probe                                         | Result                                                       |
+| --------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------ |
 | `http://127.0.0.1:8890` (cygnet, `ggml-org/gemma-4-12B-it-GGUF:Q8_0`) | `GET /v1/models`, `POST /v1/chat/completions` | connection refused (`curl` exit 7); `lsof` shows no listener |
-| `http://127.0.0.1:8095` (the `LocalQwenSmall` 4B, `make llm-small`) | `GET /v1/models` | connection refused (exit 7) |
-| `http://127.0.0.1:8080` (`pnpm dev:llama`, GLM-4.7-Flash) | `GET /v1/models` | connection refused (exit 7) |
-| `http://127.0.0.1:8090` (`make embed`) | `GET /v1/models` | connection refused (exit 7) |
+| `http://127.0.0.1:8095` (the `LocalQwenSmall` 4B, `make llm-small`)   | `GET /v1/models`                              | connection refused (exit 7)                                  |
+| `http://127.0.0.1:8080` (`pnpm dev:llama`, GLM-4.7-Flash)             | `GET /v1/models`                              | connection refused (exit 7)                                  |
+| `http://127.0.0.1:8090` (`make embed`)                                | `GET /v1/models`                              | connection refused (exit 7)                                  |
 
 Observed from this worktree on 2026-10-06T22:23Z. No listener on any of the four
 ports. The script's own preflight then printed:

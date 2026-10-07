@@ -75,7 +75,11 @@ psql_q() { compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -
 # text, hex digits sort the same under musl and glibc): the numbers the restore
 # is held to. Counts alone prove cardinality, not content.
 table_counts() {
-  psql_q <<'SQL'
+  # Pinned session settings: t::text renders timestamps by TimeZone/DateStyle,
+  # and two clusters' postgresql.conf may differ. -q keeps the SET tags out.
+  psql_q -q <<'SQL'
+SET TimeZone = 'UTC';
+SET DateStyle = 'ISO, YMD';
 SELECT format('SELECT %L, count(*), coalesce(md5(string_agg(md5(t::text), %L ORDER BY md5(t::text))), %L) FROM %I.%I t', tablename, '', '-', schemaname, tablename)
 FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename \gexec
 SQL
@@ -93,9 +97,22 @@ require_running() {
 mode_dump() {
   require_running
 
+  # The dump must come from the OLD cluster. After a pull, an early
+  # `docker compose up` brings postgres up on the NEW, empty volume (and the
+  # app's initSchema fills it with empty tables); dumping that would print
+  # "dump OK" for the wrong database. Mirror of restore's new-volume check.
+  local was_ver
+  was_ver="$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -c 'SELECT version()')"
+  [ "$(libc_of "$was_ver")" = "linux-musl" ] \
+    || fail "the running Postgres is not the alpine-era one (libc: $(libc_of "$was_ver")) — a docker compose up already ran on this commit; see 'If docker compose up already ran' in the runbook. Do NOT remove $POSTGRES_DATA_VOLUME until its counts are checked"
+  [ -n "$(docker ps -q --filter "volume=$POSTGRES_OLD_VOLUME")" ] \
+    || fail "no running container mounts $POSTGRES_OLD_VOLUME — the dump must read the old cluster"
+
   # pg_dump of one database leaves every other database in the cluster behind.
   local extra
-  extra="$(psql_q -c "SELECT datname FROM pg_database WHERE NOT datistemplate AND datname NOT IN ('postgres', '$POSTGRES_DB') ORDER BY datname")"
+  # hames_test* are the three test-suite databases (docs/testing/pyramid.md):
+  # the suites re-provision them, so they are safe to leave behind.
+  extra="$(psql_q -c "SELECT datname FROM pg_database WHERE NOT datistemplate AND datname NOT IN ('postgres', '$POSTGRES_DB', 'hames_test', 'hames_test_apppath', 'hames_test_browser') ORDER BY datname")"
   [ -z "$extra" ] || fail "this cluster holds databases the dump would leave behind: $(tr '\n' ' ' <<<"$extra")— dump them separately (or clear them out yourself) first"
 
   local out

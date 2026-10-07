@@ -75,12 +75,19 @@ case "${1:-}" in
             [ -n "$q" ] || q=$(cat)
             log "psql $(printf '%s' "$q" | tr '\n' ' ' | cut -c1-70)"
             case "$q" in
-              *datistemplate*) printf '%s' "${SHIM_EXTRA_DBS:-}" ;;
+              *datistemplate*)
+                # honour the query's own exemptions: a name it lists in quotes is filtered out
+                while IFS= read -r d; do
+                  [ -n "$d" ] || continue
+                  case "$q" in *"'$d'"*) ;; *) echo "$d" ;; esac
+                done <<<"${SHIM_EXTRA_DBS:-}"
+                ;;
               *"SELECT datname, datcollate"*)
                 [ "${SHIM_COLLATION_FAIL:-0}" = 1 ] && exit 1
                 printf 'hames\ten_US.utf8\ten_US.utf8\n' ;;
               *"SELECT version()"*) echo "${SHIM_VERSION:-PostgreSQL 16.11 on x86_64-pc-linux-musl, compiled by gcc}" ;;
               *string_agg*)
+                printf '%s' "$q" >"$SHIM_DIR/counts.query"
                 n=$(($(cat "$SHIM_DIR/n" 2>/dev/null || echo 0) + 1)); echo "$n" >"$SHIM_DIR/n"
                 f="$SHIM_DIR/counts.$n"; [ -f "$f" ] || f="$SHIM_DIR/counts.1"
                 cat "$f" ;;
@@ -133,6 +140,21 @@ case "${1:-}" in
 esac
 SHIM
 chmod +x "$tmproot/bin/docker"
+
+# stat: the copy-verification snippet runs `stat -c %s` (GNU/busybox). Translate on BSD.
+cat >"$tmproot/bin/stat" <<'STAT'
+#!/usr/bin/env bash
+if /usr/bin/stat -c %s / >/dev/null 2>&1; then exec /usr/bin/stat "$@"; fi
+[ "$1" = "-c" ] && [ "$2" = "%s" ] && { shift 2; exec /usr/bin/stat -f %z "$@"; }
+exec /usr/bin/stat "$@"
+STAT
+chmod +x "$tmproot/bin/stat"
+# pg_controldata / cp stand-ins for the in-container snippet (see run_copy_snippet)
+cat >"$tmproot/bin/pg_controldata" <<'PGC'
+#!/usr/bin/env bash
+echo "Database cluster state:               ${SNIP_STATE:-shut down}"
+PGC
+chmod +x "$tmproot/bin/pg_controldata"
 
 # ------------------------------------------------------------------- harness
 OLDVOL=hames_postgres_data
@@ -189,7 +211,7 @@ t "the copy verification can fail the script (state and size)" \
 # ======================================================================== dump
 fresh dump-ok
 mkdir -p "$case_dir/dumps" && chmod 755 "$case_dir/dumps" # an existing, too-open parent
-go dump
+SHIM_BUSY_VOLUMES="$OLDVOL" go dump
 if check "dump: happy path" 0; then
   dumpdir=$(printf '%s\n' "$out" | grep "^$case_dir/dumps/" | head -n1)
   t "dump: lands in the migration dir, not under backups/" bash -c "[ -d '$dumpdir' ] && case '$dumpdir' in */backups/*) exit 1 ;; esac"
@@ -202,7 +224,7 @@ if check "dump: happy path" 0; then
 fi
 
 fresh dump-extra-db
-SHIM_EXTRA_DBS=$'otherdb\n' go dump
+SHIM_BUSY_VOLUMES="$OLDVOL" SHIM_EXTRA_DBS=$'otherdb\n' go dump
 check "dump: an extra database refuses" nz
 has 'pg_dump' && flunk "dump: pg_dump ran despite an extra database" || pass "dump: nothing was dumped"
 [ -z "$(ls "$case_dir/dumps")" ] && pass "dump: no dump directory was created" || flunk "dump: a directory was created before the refusal"
@@ -211,20 +233,50 @@ printf '%s' "$out" | grep -q otherdb && pass "dump: the refusal names the databa
 fresh dump-counts-moved
 printf '%s\n' "$COUNTS_A" >"$case_dir/counts.1"
 printf 'conversations\t5\taaaa\nusers\t2\tbbbb\n' >"$case_dir/counts.2"
-go dump
+SHIM_BUSY_VOLUMES="$OLDVOL" go dump
 check "dump: counts that move while dumping refuse" nz
 
 fresh dump-no-conversations
-SHIM_TOC_NO_CONV=1 go dump
+SHIM_BUSY_VOLUMES="$OLDVOL" SHIM_TOC_NO_CONV=1 go dump
 check "dump: an archive with no conversations table refuses" nz
 
 fresh dump-collation-fails
-SHIM_COLLATION_FAIL=1 go dump
+SHIM_BUSY_VOLUMES="$OLDVOL" SHIM_COLLATION_FAIL=1 go dump
 check "dump: a failing command aborts the script (set -e)" nz
 
 fresh dump-not-running
-SHIM_PG_RUNNING=0 go dump
+SHIM_BUSY_VOLUMES="$OLDVOL" SHIM_PG_RUNNING=0 go dump
 check "dump: postgres not running refuses" nz
+
+fresh dump-on-new-cluster
+SHIM_VERSION='PostgreSQL 16.10 on x86_64-pc-linux-gnu, compiled by gcc' SHIM_BUSY_VOLUMES="$NEWVOL" go dump
+check "dump: a glibc server on the new volume refuses (D1)" nz
+has 'pg_dump' && flunk "dump: dumped the NEW cluster" || pass "dump: nothing was dumped from the new cluster"
+[ -z "$(ls "$case_dir/dumps")" ] && pass "dump: no dump directory was created" || flunk "dump: a directory was created before the refusal"
+
+fresh dump-glibc-server
+SHIM_VERSION='PostgreSQL 16.10 on x86_64-pc-linux-gnu, compiled by gcc' SHIM_BUSY_VOLUMES="$OLDVOL" go dump
+check "dump: a glibc server refuses even where the old volume is mounted (D1)" nz
+has 'pg_dump' && flunk "dump: dumped a glibc server" || pass "dump: nothing was dumped from a glibc server"
+
+fresh dump-not-on-old-volume
+SHIM_BUSY_VOLUMES="$NEWVOL" go dump
+check "dump: a musl server not on the old volume refuses (D1)" nz
+has 'pg_dump' && flunk "dump: dumped though nothing mounts the old volume" || pass "dump: nothing was dumped"
+
+fresh dump-test-dbs-exempt
+SHIM_BUSY_VOLUMES="$OLDVOL" SHIM_EXTRA_DBS=$'hames_test\nhames_test_apppath\nhames_test_browser\n' go dump
+check "dump: the three hames_test* databases do not block it (D2)" 0
+
+fresh dump-tz
+SHIM_BUSY_VOLUMES="$OLDVOL" go dump
+if check "dump: happy path (session settings)" 0; then
+  q=$(tr '\n' ' ' <"$case_dir/counts.query")
+  case "$q" in
+    *"SET TimeZone = 'UTC'"*"SET DateStyle = 'ISO, YMD'"*"string_agg"*) pass "counts: TimeZone/DateStyle are pinned before the checksum query (D4)" ;;
+    *) flunk "counts: session settings not pinned before the checksum" "$q" ;;
+  esac
+fi
 
 # =============================================================== volume-backup
 fresh vb-ok
@@ -243,6 +295,33 @@ if check "volume-backup: happy path" 0; then
     flunk "volume-backup: the container script can modify or remove data" "$(cat "$args")"
   else pass "volume-backup: the container script has no rm/mv/-delete/redirect into the source"; fi
   [ "$(count_of 'volume create')" = 1 ] && has "volume create ${OLDVOL}_alpine_backup" && pass "volume-backup: creates only the backup volume" || flunk "volume-backup: unexpected volume create"
+fi
+
+# D3: the verification is behaviour, not text. Run the exact script the shim captured,
+# with /from and /to rewritten to scratch dirs, a pg_controldata stand-in and (for the
+# last case) a cp that loses a file.
+if [ -s "$case_dir/run.args" ]; then
+  snippet_of() { awk 'f{print} /^-c$/{f=1}' "$1"; }
+  snip_dir="$tmproot/snip"
+  run_copy_snippet() { # run_copy_snippet <state> <drop-file:0|1>; sets $snip_rc
+    rm -rf "$snip_dir"
+    mkdir -p "$snip_dir/from/base" "$snip_dir/to" "$snip_dir/bin"
+    echo one >"$snip_dir/from/PG_VERSION"
+    echo two >"$snip_dir/from/base/f"
+    if [ "$2" = 1 ]; then
+      printf '#!/usr/bin/env bash\n/bin/cp "$@" && rm -f "%s/to/base/f"\n' "$snip_dir" >"$snip_dir/bin/cp"
+      chmod +x "$snip_dir/bin/cp"
+    fi
+    snippet_of "$case_dir/run.args" | sed -e "s#/from#$snip_dir/from#g" -e "s#/to#$snip_dir/to#g" >"$snip_dir/snippet.sh"
+    PATH="$snip_dir/bin:$tmproot/bin:$PATH" SNIP_STATE="$1" sh "$snip_dir/snippet.sh" >/dev/null 2>&1
+    snip_rc=$?
+  }
+  run_copy_snippet "shut down" 0
+  [ "$snip_rc" = 0 ] && pass "volume-backup snippet: a whole copy of a cleanly shut down cluster passes" || flunk "volume-backup snippet: rc=$snip_rc on a good copy"
+  run_copy_snippet "in production" 0
+  [ "$snip_rc" != 0 ] && pass "volume-backup snippet: a cluster that is not shut down fails" || flunk "volume-backup snippet: accepted state 'in production'"
+  run_copy_snippet "shut down" 1
+  [ "$snip_rc" != 0 ] && pass "volume-backup snippet: a copy that lost a file fails (count and bytes)" || flunk "volume-backup snippet: accepted a copy missing a file"
 fi
 
 fresh vb-target-exists

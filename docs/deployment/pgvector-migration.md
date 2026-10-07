@@ -42,7 +42,10 @@ fails when they part). Do not edit one without the other.
   yourself when you are done.
 - **The cluster must hold only the `hames` database** (plus the `postgres` one).
   `dump` refuses otherwise, because a dump of one database leaves any other
-  behind. Dump or drop the other yourself first.
+  behind. The three test-suite databases (`hames_test`, `hames_test_apppath`,
+  `hames_test_browser`) are the expected exception: the suites re-provision
+  them, so they are left behind without a word. Anything else, dump yourself
+  first; do not change the old cluster to make the check pass.
 - Free disk for roughly three copies of the database (the live volume, the dump,
   the optional volume backup).
 - `docker compose` resolves the stack from the repo root. On the VM that is
@@ -93,6 +96,27 @@ docker compose up -d
 `vector` extension, or whose database already holds tables — so running it twice,
 or against the old image, stops with a message instead of doing anything. It
 restores in a single transaction: if it fails, the database is still empty.
+
+## If `docker compose up` already ran on this commit
+
+The likely slip after a pull. Postgres came up on the NEW, empty
+`hames_pg16_glibc_data`, and once the app ran it holds empty tables. Nothing is
+lost — the old cluster is untouched — but `dump` now refuses (the server is not
+the alpine one, and nothing mounts the old volume), and it must: a dump of this
+database would be a dump of nothing. To get back to a state `dump` accepts:
+
+```bash
+docker compose stop
+git checkout <the commit before this change>     # old compose file: old image, old volume
+docker compose up -d postgres
+git checkout -                                   # back to this commit — do NOT `up`
+./scripts/migrate-postgres-pgvector.sh dump      # continue the sequence above
+```
+
+Do not remove `hames_pg16_glibc_data` until its row counts have been checked: it
+may hold something the app wrote while it ran. Step 4's `restore` then needs an
+EMPTY database, so once the dump is taken, bring the new image up on a freshly
+emptied volume yourself — and only then.
 
 ## Rollback
 

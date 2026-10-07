@@ -119,6 +119,26 @@ describe('runbook ↔ compose ↔ script', () => {
     expect(runbook.slice(0, runbook.indexOf('## Rollback'))).not.toContain('docker volume rm')
   })
 
+  it('no `docker compose up` runs before the dump in the sequence, and the already-ran recovery is documented', () => {
+    const block = /```bash\n([\s\S]*?)```/.exec(runbook)?.[1] ?? ''
+    const cmds = block.split('\n').filter((l) => l.trim() && !l.trim().startsWith('#'))
+    const dump = cmds.findIndex((l) => l.includes('migrate-postgres-pgvector.sh dump'))
+    const up = cmds.findIndex((l) => /docker compose up/.test(l))
+    expect(dump).toBeGreaterThan(-1)
+    expect(up, 'an `up` before the dump starts postgres on the empty new volume').toBeGreaterThan(
+      dump,
+    )
+    expect(runbook).toContain('## If `docker compose up` already ran on this commit')
+    expect(runbook).toMatch(/Do not remove `hames_pg16_glibc_data` until/)
+  })
+
+  it('names the three test databases as expected and safe to leave behind', () => {
+    for (const d of ['hames_test', 'hames_test_apppath', 'hames_test_browser']) {
+      expect(runbook).toContain(d)
+      expect(script).toContain(`'${d}'`)
+    }
+  })
+
   it('starts the new image only after the dump, and pulls before it', () => {
     expect(runbook.indexOf('git pull'), 'the runbook must say when to pull').toBeGreaterThan(-1)
     expect(runbook.indexOf('docker compose up -d --wait postgres')).toBeGreaterThan(-1)

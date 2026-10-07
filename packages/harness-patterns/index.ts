@@ -108,6 +108,17 @@ export type {
   MemoryKind,
   MemoryCandidate,
   MemoryStore,
+  MemoryExtractedCandidate,
+  MemoryExtractInput,
+  MemoryExtractFn,
+  MemoryEmbedder,
+  MemoryNeighbor,
+  MemoryInsertRow,
+  MemorySourceRow,
+  MemoryWriteTx,
+  MemoryWriteStore,
+  MemoryWriteAction,
+  MemoryWrittenEventData,
   MemoryQueryEmbedder,
   MemoryWakeWait,
   MemorySkipReason,
@@ -312,6 +323,42 @@ export {
   type MemoryRecallLabel,
   type RecalledMemory,
 } from './patterns'
+
+// Memory store (#419 M2): the post-reply step and its pure acceptance rules. A
+// host calls `settleMemory` from inside its post-turn continuation, before it
+// saves; the acceptance rules are exported so a host can reuse them (a
+// compaction pass applies the same ones).
+export {
+  settleMemory,
+  resolveStoreRoute,
+  readStoreWindow,
+  MEMORY_STORE_SET,
+  MEMORY_STORE_KEY,
+  MEMORY_STORE_FALLBACKS,
+  MEMORY_MERGE_SPEC,
+  MEMORY_MERGE_KEY,
+  type MemoryStoreConfig,
+  type MemoryStoreSettings,
+  type MemoryStoreGateSettings,
+  type MemoryStoreSkip,
+  type MemorySettleReport,
+  type MemoryStoreFields,
+  type MemoryTarget,
+  type MemoryConfirm,
+  type MemorySensitivity,
+  type MemoryMergeLabel,
+  type RejectRule,
+  type StoreRoute,
+} from './memory-store.server'
+export {
+  acceptCandidate,
+  identifiersIn,
+  MEMORY_KINDS,
+  MAX_MEMORY_CHARS,
+  MIN_EVIDENCE_CHARS,
+  type Acceptance,
+  type AcceptanceRule,
+} from './memory-acceptance.server'
 
 // Decisions (#418): the user-facing half of the typedDecision seam. The pure
 // scoring helpers (`scoreDecision`, `sumLabelMass`, …) stay on './patterns'.

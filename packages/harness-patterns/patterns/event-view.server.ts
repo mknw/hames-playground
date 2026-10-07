@@ -24,6 +24,7 @@ import type {
   HitlResponseEventData,
   DecisionMadeEventData,
   MemoryRecalledEventData,
+  MemoryWrittenEventData,
 } from '../types'
 
 assertServerOnImport()
@@ -609,6 +610,13 @@ function formatEventData(event: ContextEvent): string {
       return data.skipped
         ? `memory recall skipped: ${data.skipped}`
         : `memory recalled: ${data.attached?.length ?? 0} attached`
+    }
+    case 'memory_written': {
+      // METADATA ONLY — never a memory's content (#419 M2). Ids, kind, tier and
+      // a hash; the explicit case keeps a field added later out of the JSON
+      // dump below, which every LLM-facing serialization runs.
+      const data = event.data as MemoryWrittenEventData
+      return `memory ${data.action}: ${data.kind}`
     }
     case 'approval_request':
     case 'approval_response':

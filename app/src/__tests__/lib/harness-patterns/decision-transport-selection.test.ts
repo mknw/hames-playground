@@ -306,3 +306,66 @@ describe('the private-tier lock on the non-logprob branches (review finding 3)',
     expect(verbalizedStub).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('one layer order for the resolver and the router (review R1)', () => {
+  const ROLES = [
+    'controller',
+    'planner',
+    'critic',
+    'compactExecution',
+    'router',
+    'describe',
+    'screen',
+    'decide',
+  ] as const
+
+  afterEach(async () => {
+    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
+    configureConsumerClients(undefined)
+  })
+
+  // "Selection by the client" only holds while the name the adapter reads and
+  // the client the call is actually sent to agree. They are two functions
+  // (`resolveClientForRole`, `clientOverrideFor`) and the only thing that keeps
+  // them one answer is the layer order: per-run, then consumer, then tier map.
+  it.each(['anthropic', 'verda'] as const)(
+    'with per-run AND consumer layers set to different clients, the resolver names the routed client (%s tier)',
+    async (tier) => {
+      const clients = await import('@hames-ai/harness-baml/clients.server')
+      const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+      if (tier === 'verda') clients.assertInferenceTier('verda')
+      clients.configureConsumerClients((role) => ({ client: `Consumer-${role}` }))
+      const frame = {
+        inference: {
+          ...(tier === 'verda' ? { tier: 'verda' } : {}),
+          clientOverride: (role: string) => ({ client: `PerRun-${role}` }),
+        },
+      }
+      await withRunFrame(frame, async () => {
+        for (const role of ROLES) {
+          const routed = clients.clientOverrideFor(role)?.client
+          expect(routed, role).toBe(`PerRun-${role}`)
+          expect(clients.resolveClientForRole(role), role).toBe(routed)
+        }
+      })
+      // Consumer alone, and nothing but the tier: still the same answer.
+      for (const role of ROLES) {
+        await withRunFrame(tier === 'verda' ? { inference: { tier: 'verda' } } : {}, async () => {
+          expect(clients.resolveClientForRole(role), role).toBe(
+            clients.clientOverrideFor(role)?.client,
+          )
+        })
+      }
+      clients.configureConsumerClients(undefined)
+      await withRunFrame(tier === 'verda' ? { inference: { tier: 'verda' } } : {}, async () => {
+        for (const role of ROLES) {
+          const routed = clients.clientOverrideFor(role)?.client
+          // No layer names a client: the override is absent and the resolver
+          // falls to the tier map / the mirror — the one place they may differ
+          // in SHAPE (undefined vs a name), never in the client a call takes.
+          if (routed !== undefined) expect(clients.resolveClientForRole(role), role).toBe(routed)
+        }
+      })
+    },
+  )
+})

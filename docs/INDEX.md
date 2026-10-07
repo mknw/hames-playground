@@ -154,14 +154,15 @@ Source-level index: see [app/README.md](../app/README.md#documentation-index).
 
 ## Infrastructure Documentation
 
-| Document                                         | Description                                                                                                                                                                           |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [DOCKER_COMPOSE.md](DOCKER_COMPOSE.md)           | Neo4j, MCP Gateway, Redis service configuration                                                                                                                                       |
-| [MCP_GATEWAY.md](MCP_GATEWAY.md)                 | MCP Gateway reference, CLI, troubleshooting                                                                                                                                           |
-| [sandbox-flavours.md](sandbox-flavours.md)       | Sandbox rootfs flavours (#78) — the `image-processing` + `data` + `office` images, the router-over-flavoured-sandboxes recipe, ephemeral vs persistent, and deferred hardening (#116) |
-| [sandbox/README.md](sandbox/README.md)           | Sandbox debugging — identify/inspect/reap containers, `/work` durable-workspace layout, `.harness-logs` jq recipes                                                                    |
-| [deployment/azure-vm.md](deployment/azure-vm.md) | Single-VM deployment runbook (Azure VM or any VPS): compose hardening (loopback binds), UI as systemd host service, Caddy TLS, env reference, ops                                     |
-| [PREVIEW.md](PREVIEW.md)                         | The container run shape of the same box, wired end to end for the preview: `docker-compose.prod.yaml`, `.env.production.example`, Caddy, `scripts/backup-preview.sh`                  |
+| Document                                                             | Description                                                                                                                                                                                                        |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [DOCKER_COMPOSE.md](DOCKER_COMPOSE.md)                               | Neo4j, MCP Gateway, Redis service configuration                                                                                                                                                                    |
+| [MCP_GATEWAY.md](MCP_GATEWAY.md)                                     | MCP Gateway reference, CLI, troubleshooting                                                                                                                                                                        |
+| [sandbox-flavours.md](sandbox-flavours.md)                           | Sandbox rootfs flavours (#78) — the `image-processing` + `data` + `office` images, the router-over-flavoured-sandboxes recipe, ephemeral vs persistent, and deferred hardening (#116)                              |
+| [sandbox/README.md](sandbox/README.md)                               | Sandbox debugging — identify/inspect/reap containers, `/work` durable-workspace layout, `.harness-logs` jq recipes                                                                                                 |
+| [deployment/pgvector-migration.md](deployment/pgvector-migration.md) | One-time Postgres move from `postgres:16-alpine` to the digest-pinned pgvector image by dump-and-restore (#419 M8): why an image swap is wrong (collation), `scripts/migrate-postgres-pgvector.sh` modes, rollback |
+| [deployment/azure-vm.md](deployment/azure-vm.md)                     | Single-VM deployment runbook (Azure VM or any VPS): compose hardening (loopback binds), UI as systemd host service, Caddy TLS, env reference, ops                                                                  |
+| [PREVIEW.md](PREVIEW.md)                                             | The container run shape of the same box, wired end to end for the preview: `docker-compose.prod.yaml`, `.env.production.example`, Caddy, `scripts/backup-preview.sh`                                               |
 
 **Key config files:**
 

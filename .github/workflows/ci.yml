@@ -83,6 +83,18 @@ jobs:
           shellcheck -x scripts/bootstrap-vps.sh scripts/bootstrap-vps.test.sh
           scripts/bootstrap-vps.test.sh
 
+      # Pins the Postgres → pgvector migration script (#419 M8) against a docker
+      # shim that ALLOW-LISTS the calls it may make: the source mount stays :ro,
+      # the copy runs forward and is verified, a running container under any
+      # compose project blocks it, an extra database blocks the dump, the dump
+      # lives outside the rotated backups/ tree, and no rm/stop/--clean ever
+      # reaches docker.
+      - name: Shell tests (pgvector migration)
+        working-directory: .
+        run: |
+          shellcheck -x scripts/migrate-postgres-pgvector.sh scripts/migrate-postgres-pgvector.test.sh
+          scripts/migrate-postgres-pgvector.test.sh
+
       - run: pnpm typecheck
 
       - run: pnpm lint

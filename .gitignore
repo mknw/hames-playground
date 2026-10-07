@@ -70,6 +70,11 @@ docker-compose.override.yml
 # accidental `git add -A` on the VM would publish them.
 backups/
 
+# The one-off Postgres -> pgvector migration dump (scripts/migrate-postgres-pgvector.sh).
+# A full copy of the conversation store, like backups/ — and kept OUT of backups/
+# because backup-preview.sh deletes depth-1 directories there after RETENTION_DAYS.
+pgvector-migration-dump/
+
 # Local model weights (GGUF) — hundreds of MB each, never committed.
 # models/README.md documents what belongs here and stays tracked.
 models/*

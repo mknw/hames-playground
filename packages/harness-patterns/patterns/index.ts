@@ -41,6 +41,22 @@ export { withReferences, __clearReferenceCache } from './with-references.server'
 // EventView
 export { EventViewImpl, createEventView } from './event-view.server'
 
+// Decisions (#418) — the pure scoring half of the policy layer. The awaited
+// wrapper (`evaluateDecision` / `decide` / `decideFields`) and the
+// `typedDecision` pattern arrive with #418 T2, beside these.
+export {
+  sumLabelMass,
+  calibrateLabelMass,
+  normalizeLabelMass,
+  preCallAbstain,
+  resolveDecisionCuts,
+  scoreDecision,
+  type TopLogprob,
+  type ResolvedCut,
+  type DecisionScoring,
+  type ScoredDecision,
+} from './typedDecision.server'
+
 // Re-export config types from main types
 export type {
   RouterConfig,

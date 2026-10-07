@@ -71,3 +71,30 @@ export function harnessUsesSyncWorkspace<T>(patterns: ConfiguredPattern<T>[] | u
   if (!patterns || patterns.length === 0) return false
   return patterns.some((p) => declaresWorkspaceSync(p) || harnessUsesSyncWorkspace(p.children))
 }
+
+/**
+ * The decision keys declared anywhere in the (nested) pattern graph (#418,
+ * D12) — the `DecisionSpec.key` values whose calibration a host can feed.
+ * Deduplicated in first-seen order. The probe that consumes it (warning when
+ * a `requireCalibrated` key has no calibration entry) is the host's (#418
+ * T6), because the calibration store is host-fed; this walk is what makes the
+ * declared surface readable without running the harness.
+ */
+export function harnessDecisionKeys<T>(patterns: ConfiguredPattern<T>[] | undefined): string[] {
+  if (!patterns || patterns.length === 0) return []
+  const keys: string[] = []
+  const seen = new Set<string>()
+  for (const pattern of patterns) {
+    for (const key of pattern.capabilities?.decisionKeys ?? []) {
+      if (seen.has(key)) continue
+      seen.add(key)
+      keys.push(key)
+    }
+    for (const key of harnessDecisionKeys(pattern.children)) {
+      if (seen.has(key)) continue
+      seen.add(key)
+      keys.push(key)
+    }
+  }
+  return keys
+}

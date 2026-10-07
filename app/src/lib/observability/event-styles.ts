@@ -71,6 +71,9 @@ export const eventIconClasses: Record<EventType, string> = {
   // check glyphs as the legacy approval pair they supersede.
   hitl_request: 'i-material-symbols-pause-circle-outline',
   hitl_response: 'i-material-symbols-check-circle-outline',
+  // One typed decision the policy layer evaluated (#418). Placeholder entry —
+  // #418 T6 owns the real presentation (bars, the abstained chip).
+  decision_made: 'i-material-symbols-rule',
 }
 
 export const eventColors: Record<EventType, string> = {
@@ -99,4 +102,5 @@ export const eventColors: Record<EventType, string> = {
   // carried on, so not error red
   hitl_request: '#f97316', // orange-500 — the legacy approval pair's hues (#433)
   hitl_response: '#10b981', // emerald-500
+  decision_made: '#38bdf8', // sky-400 — placeholder entry; #418 T6 owns the hue
 }

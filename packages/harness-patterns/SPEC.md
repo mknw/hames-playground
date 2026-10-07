@@ -188,6 +188,7 @@ type EventType =
   | 'loop_recovery' // simpleLoop / actorCritic fed one failure back to the model and continued on its budget (#437)
   | 'hitl_request' // a person is asked to decide (#433) — core writes it; readHitl() derives state from it
   | 'hitl_response' // the decision on one hitl_request (#433) — core writes it
+  | 'decision_made' // one typed decision the policy layer evaluated (#418) — metadata only; the state's SIZE rides, never its text
 
 // Isolated workspace for each pattern
 interface PatternScope<T> {
@@ -217,6 +218,7 @@ interface ConfiguredPattern<T> {
 interface PatternCapabilities {
   retrievalBackends?: readonly string[] // declared by `retriever`: the backends it will query
   workspaceSync?: boolean // declared by a wrapper that gives its subtree a durable workspace
+  decisionKeys?: readonly string[] // declared by a deciding pattern (#418): the DecisionSpec keys whose calibration a host can feed
 }
 ```
 
@@ -1866,6 +1868,62 @@ when minted and when deserialized; and the run's bookkeeping store admits only
 what `askHuman` could have written. `readHitl` reads only `hitl_*` events, so a
 legacy `approval_response { approved: true }` answers nothing.
 
+## Decisions (typedDecision, #418)
+
+Probability-typed decisions over a closed label set, in three layers: the
+**raw seam** (`DecideFn` → `DecideResult`) — one call, one distribution, no
+policy, frozen against the merged `classifierFromDecide` consumer, which must
+be handed the raw seam and never a policy-applying wrapper (D7); the **policy
+layer** (`patterns/typedDecision.server.ts`) — applies a `DecisionPolicy`,
+records `decision_made`, never throws; and the **transports** behind the raw
+seam (a logprob readout on the private tier, Jev on the Anthropic tier, an
+operator-named verbalized secondary — #418 T3/T4/T5).
+
+T1 carries the TYPES (`DecisionSpec` / `DecisionSetSpec` with `mode`,
+`DecisionMethod` incl. `'jev'`, `AbstainReason` incl. `'method-mismatch'`,
+`DecisionPolicy` with `thresholdMethod`, `DecisionCalibrationEntry`,
+`DecideFn` / `DecideAllFn`, `MAX_DECISION_LABELS` = 20) and the PURE scoring
+half; T2 adds the awaited wrapper (`evaluateDecision` / `decide` /
+`decideFields`) and the `typedDecision` chain step; the transports are
+harness-baml and app slices.
+
+The pure policy math, unit-pinned:
+
+- `sumLabelMass(top, labels)` — the logprob readout's letter-variant summing:
+  every top-k token trimmed to the letter it names (`'B'`, `' B'`, `'(B'`),
+  summed as probability mass, with `coverage` = the matched mass (the leftover
+  is `1 − coverage`).
+- `calibrateLabelMass(mass, entry)` — the host-fed calibration entry applied
+  in log space (temperature ÷, bias +, softmax). A malformed entry degrades to
+  the identity; it never throws.
+- `normalizeLabelMass(mass, labels)` — a distribution over the spec's labels:
+  unseen label 0, sum 1.
+- `preCallAbstain({ policy, state, method })` — the F3 pre-call gate:
+  `'no-state'` on an empty state; `'uncalibrated'` when `requireCalibrated`
+  and the resolved client's method is KNOWINGLY non-calibratable (a verbalized
+  secondary). Calibratable methods and unknown ones are called — the post-call
+  `calibrated` check is the honest gate there.
+- `resolveDecisionCuts(policy, entry, method)` — the F2 threshold resolution:
+  the applied calibration entry's own cuts win; otherwise the policy's apply
+  only when the serving method equals `policy.thresholdMethod ?? 'logprob'`;
+  otherwise the cut is a mismatch → the decision abstains
+  `'method-mismatch'` rather than applying a threshold tuned on another
+  distribution.
+- `scoreDecision(input)` — the pure half of `evaluateDecision`: abstain in the
+  order `no-state` → `error` → `uncalibrated` → `low-coverage` →
+  `method-mismatch` → `low-confidence` → `low-margin`; on every abstain or
+  error the label is `policy.fallback` (REQUIRED, D8) and `top` is the argmax
+  (`null` only with no distribution at all); `margin = p₁ − p₂`,
+  `confidence = (K·p_max − 1)/(K − 1)`.
+
+The `decision_made` event is in `ALWAYS_COMMIT_TYPES` and renders METADATA
+ONLY into LLM-facing serializations (`key: label (p, margin)` plus the abstain
+reason — the `state` never enters the event; it survives only in the
+transport's `llmCall.variables`). `PatternCapabilities.decisionKeys` +
+`harnessDecisionKeys(patterns)` make the declared decision surface readable
+without running the harness; the per-tier calibration probe that consumes them
+is #418 T6.
+
 ## EventView Query API
 
 Fluent API for filtering events from UnifiedContext:
@@ -2123,26 +2181,27 @@ transformed into prompt-friendly types. The table below shows which harness
 
 ### Harness EventType → BAML Input Type
 
-| Harness `EventType`  | Event Payload (TS)                                                                                                                                | BAML Type                                               | Consumed By                                                   |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------- |
-| `tool_call`          | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`)                                                                                       | `ToolCall`                                              | `LoopTurn.tool_call`, `Attempt.action`                        |
-| `tool_result`        | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`, `sanitized?`, `heldBy?`) | `ToolResult`                                            | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult` |
-| `controller_action`  | `ControllerActionEventData`                                                                                                                       | _(embedded in `LoopTurn.reasoning`)_                    | simpleLoop, actorCritic                                       |
-| `critic_result`      | `CriticResultEventData`                                                                                                                           | _(embedded in `Attempt.feedback`)_                      | actorCritic                                                   |
-| `user_message`       | `UserMessageEventData`                                                                                                                            | `Message { role, content }`                             | router (history)                                              |
-| `assistant_message`  | `AssistantMessageEventData`                                                                                                                       | `Message { role, content }`                             | router (history)                                              |
-| `pattern_enter`      | `PatternEnterEventData`                                                                                                                           | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`      |
-| `pattern_exit`       | `PatternExitEventData`                                                                                                                            | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`      |
-| `approval_request`   | _(legacy payload; its type was removed in #433 S3)_                                                                                               | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_request`, not an answer    |
-| `approval_response`  | _(legacy payload; its type was removed in #433 S3)_                                                                                               | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_response`, not an answer   |
-| `hitl_request`       | `HitlRequestEventData`                                                                                                                            | _(metadata only — kind and request id)_                 | `readHitl()` / `answerOf()` (#433)                            |
-| `hitl_response`      | `HitlResponseEventData`                                                                                                                           | _(metadata only — kind, choice and who decided)_        | `readHitl()` / `answerOf()` (#433)                            |
-| `error`              | `ErrorEventData`                                                                                                                                  | _(read via `view.hasErrors()`)_                         | compactExecution (error context), harness error handling      |
-| `reference_attached` | `ReferenceAttachedEventData`                                                                                                                      | _(not sent to BAML)_                                    | withReferences only (observability)                           |
-| `intent_compacted`   | `IntentCompactedEventData`                                                                                                                        | _(not sent to BAML)_                                    | compactIntent only (observability)                            |
-| `plan_created`       | `PlanCreatedEventData`                                                                                                                            | _(the plan reaches BAML as `plan_context` / `context`)_ | planner only; loops read `scope.data.plan`, not the event     |
-| `content_sanitized`  | `ContentSanitizedEventData`                                                                                                                       | _(metadata only — NEVER the verbatim spans)_            | withInjectionGuard only (observability + human audit)         |
-| `loop_recovery`      | `LoopRecoveryEventData` (`failure`, `error`, `tool?`, `turn`, `maxTurns`)                                                                         | _(metadata only — the turn log carries the feedback)_   | simpleLoop / actorCritic only (observability)                 |
+| Harness `EventType`  | Event Payload (TS)                                                                                                                                                                          | BAML Type                                               | Consumed By                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `tool_call`          | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`)                                                                                                                                 | `ToolCall`                                              | `LoopTurn.tool_call`, `Attempt.action`                                      |
+| `tool_result`        | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`, `sanitized?`, `heldBy?`)                                           | `ToolResult`                                            | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult`               |
+| `controller_action`  | `ControllerActionEventData`                                                                                                                                                                 | _(embedded in `LoopTurn.reasoning`)_                    | simpleLoop, actorCritic                                                     |
+| `critic_result`      | `CriticResultEventData`                                                                                                                                                                     | _(embedded in `Attempt.feedback`)_                      | actorCritic                                                                 |
+| `user_message`       | `UserMessageEventData`                                                                                                                                                                      | `Message { role, content }`                             | router (history)                                                            |
+| `assistant_message`  | `AssistantMessageEventData`                                                                                                                                                                 | `Message { role, content }`                             | router (history)                                                            |
+| `pattern_enter`      | `PatternEnterEventData`                                                                                                                                                                     | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`                    |
+| `pattern_exit`       | `PatternExitEventData`                                                                                                                                                                      | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`                    |
+| `approval_request`   | _(legacy payload; its type was removed in #433 S3)_                                                                                                                                         | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_request`, not an answer                  |
+| `approval_response`  | _(legacy payload; its type was removed in #433 S3)_                                                                                                                                         | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_response`, not an answer                 |
+| `hitl_request`       | `HitlRequestEventData`                                                                                                                                                                      | _(metadata only — kind and request id)_                 | `readHitl()` / `answerOf()` (#433)                                          |
+| `hitl_response`      | `HitlResponseEventData`                                                                                                                                                                     | _(metadata only — kind, choice and who decided)_        | `readHitl()` / `answerOf()` (#433)                                          |
+| `error`              | `ErrorEventData`                                                                                                                                                                            | _(read via `view.hasErrors()`)_                         | compactExecution (error context), harness error handling                    |
+| `reference_attached` | `ReferenceAttachedEventData`                                                                                                                                                                | _(not sent to BAML)_                                    | withReferences only (observability)                                         |
+| `intent_compacted`   | `IntentCompactedEventData`                                                                                                                                                                  | _(not sent to BAML)_                                    | compactIntent only (observability)                                          |
+| `plan_created`       | `PlanCreatedEventData`                                                                                                                                                                      | _(the plan reaches BAML as `plan_context` / `context`)_ | planner only; loops read `scope.data.plan`, not the event                   |
+| `content_sanitized`  | `ContentSanitizedEventData`                                                                                                                                                                 | _(metadata only — NEVER the verbatim spans)_            | withInjectionGuard only (observability + human audit)                       |
+| `loop_recovery`      | `LoopRecoveryEventData` (`failure`, `error`, `tool?`, `turn`, `maxTurns`)                                                                                                                   | _(metadata only — the turn log carries the feedback)_   | simpleLoop / actorCritic only (observability)                               |
+| `decision_made`      | `DecisionMadeEventData` (`key`, `labels`, `probs`, `label`, `top`, `margin`, `confidence`, `abstained`, `reason?`, `policy`, `method?`, `calibrated`, `coverage?`, `stateChars`, `shadow?`) | _(metadata only — the state's SIZE, never the text)_    | typedDecision / decisionRouter (#418); consumers read `data.decisions[key]` |
 
 ### Per-Pattern: Events Read → BAML Inputs → BAML Return
 
@@ -2466,6 +2525,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
     ├── compactIntent.server.ts # Rewrites latest message → scope.data.intent for router-less actors; emits intent_compacted
     ├── planner.server.ts       # Upfront decomposition → scope.data.plan (+ formatPlanContext, read by both loop patterns); emits plan_created
     ├── retriever.server.ts     # retriever() — vector-store search as a pattern
+    ├── typedDecision.server.ts # #418: the decision policy layer's PURE half — sumLabelMass / calibrateLabelMass / normalizeLabelMass (the logprob readout's math, composed by T3's transport), preCallAbstain (F3), resolveDecisionCuts (F2), scoreDecision (the pure half of evaluateDecision; the awaited wrapper + typedDecision/decisionRouter patterns are T2)
     └── event-view.server.ts    # EventViewImpl (fluent query API, serializeCompact)
 
 packages/harness-baml/                   # The BAML companion PACKAGE (Lane A6) — EVERYTHING that touches baml_client lives here

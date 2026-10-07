@@ -251,6 +251,23 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
         o,
       ),
   ],
+  // #418 T5. The verbalized secondary: system first, then the data and the
+  // question as a user block, with the output format INSIDE that user block —
+  // a trailing `ctx.output_format` as its own system turn is the shape the
+  // Anthropic path rewrites silently and vLLM refuses.
+  [
+    'DecideVerbalized',
+    (o) => () =>
+      b.request.DecideVerbalized(
+        'state',
+        'which?',
+        [
+          { letter: 'A', description: 'first' },
+          { letter: 'B', description: 'second' },
+        ],
+        o,
+      ),
+  ],
 ]
 
 const roles = (body: Body) => (body.messages ?? []).map((m) => m.role)

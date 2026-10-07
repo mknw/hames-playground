@@ -715,7 +715,21 @@ describe('every routed role has a wired call site', () => {
     const code = corpus()
     expect(code.match(/b\.Decide\(/g) ?? []).toHaveLength(1)
     expect(callArgs(code, 'b.Decide(')).toContain("clientOverrideFor('decide')")
-    expect(code.match(/clientOverrideFor\('decide'\)/g) ?? []).toHaveLength(1)
+    // Two call sites in all: the readout above and, since T5, the verbalized
+    // secondary — pinned in its own test below, so neither count hides the other.
+    expect(code.match(/clientOverrideFor\('decide'\)/g) ?? []).toHaveLength(2)
+  })
+
+  it('the verbalized secondary spreads the decide override on its OWN call (defence in depth)', () => {
+    // `DecideVerbalized` declares `DecideAnthropic`, a PUBLIC provider. Its tier
+    // lock refuses a private-tier run before any request; this spread is the
+    // second line — were the lock ever removed, the call would land on the
+    // private tier's own client instead of a public one. A call with no spread
+    // reads like routing and changes nothing, so it is pinned ON the call
+    // expression, by balanced parens, exactly like `Decide`.
+    const code = corpus()
+    expect(code.match(/b\.DecideVerbalized\(/g) ?? []).toHaveLength(1)
+    expect(callArgs(code, 'b.DecideVerbalized(')).toContain("clientOverrideFor('decide')")
   })
 
   it('routes both memory functions through the describe spread, on each call', async () => {

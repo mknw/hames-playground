@@ -53,6 +53,7 @@ import {
   activeInferenceTier,
   activeCostRates,
   clientOverrideFor,
+  DECIDE_DEFAULT_CLIENT,
   decisionCalibrationFor,
   JEV_CLIENTS,
   limitsFor,
@@ -1762,10 +1763,11 @@ function decideFailure(
   variables: Record<string, unknown>,
   startTime: number,
   cause?: unknown,
+  functionName: 'Decide' | 'DecideVerbalized' = 'Decide',
 ): LLMCallError {
   return new LLMCallError(
     message,
-    extractFailureLLMCallData(undefined, 'Decide', variables, startTime),
+    extractFailureLLMCallData(undefined, functionName, variables, startTime),
     cause,
   )
 }
@@ -1967,5 +1969,118 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
       ...(transport === 'logprob' && { calibration: decisionCalibrationFor(client, key) }),
     }
   }
+  return fn
+}
+
+// ============================================================================
+// Typed decision — the explicit verbalized secondary (#418, T5)
+// ============================================================================
+
+/**
+ * The probabilities a chat model STATED, as a distribution over `letters`.
+ * Per-letter values are clamped to [0, 1] and summed if a letter repeats;
+ * letters the spec does not have are ignored; the result is renormalised, so a
+ * model whose figures sum to 0.9 or 1.3 still yields a distribution. Returns
+ * `undefined` when no listed letter carries any mass — an unusable answer, not
+ * a confident zero, which the caller turns into an `LLMCallError`.
+ */
+export function verbalizedProbabilities(
+  stated: ReadonlyArray<{ readonly letter: string; readonly probability: number }>,
+  letters: readonly string[],
+): Record<string, number> | undefined {
+  const mass: Record<string, number> = {}
+  for (const { letter, probability } of stated ?? []) {
+    const key = typeof letter === 'string' ? letter.trim().toUpperCase() : ''
+    if (!letters.includes(key) || !Number.isFinite(probability)) continue
+    mass[key] = (mass[key] ?? 0) + Math.min(1, Math.max(0, probability))
+  }
+  const { probs, total } = normalizeLabelMass(mass, letters)
+  return total > 0 ? probs : undefined
+}
+
+/**
+ * `DecideFn` backed by `DecideVerbalized` — the explicit SECONDARY a host
+ * injects as `createDecideAdapter({ verbalized })`. Nothing in this repo does:
+ * it is reachable only when an operator has named `DecideAnthropic` with
+ * `configureDecideSecondary` (decision G5) AND the host wired this in, so it is
+ * never a default and never a fallback — the Jev-unreachable path stays
+ * fail-closed.
+ *
+ * `method: 'verbalized'` and `calibrated: false` are CONSTANTS here, not read
+ * from the response: nothing about a stated probability was measured, so no
+ * input can make this transport report otherwise. A `requireCalibrated` policy
+ * therefore abstains on it, and a calibration entry is never applied.
+ *
+ * It carries its OWN tier lock rather than leaning on `createDecideAdapter`'s:
+ * a host composing it on the raw seam must not be able to reach a public
+ * provider from a private-tier run by skipping the adapter. The check is a
+ * positive match on the Anthropic tier, before any request.
+ */
+export function createVerbalizedDecide(): DecideFn {
+  const fn = async <L extends string>(input: DecideInput<L>): Promise<DecideResult<L>> => {
+    const startTime = Date.now()
+    const { spec, state } = input
+    const variables = { state, question: spec.question, labels: spec.labels }
+    const fail = (message: string, cause?: unknown) =>
+      decideFailure(message, variables, startTime, cause, 'DecideVerbalized')
+
+    if ((activeInferenceTier() as string) !== 'anthropic') {
+      throw fail(
+        'Refusing the verbalized decide secondary outside the Anthropic tier: it calls a ' +
+          'public provider, and nothing was sent to any provider.',
+      )
+    }
+    // REACHABLE ONLY WHEN NAMED (G5). The role's own default is never served
+    // by the secondary: until the Jev transport exists the adapter would
+    // otherwise hand `JevDecide` to whatever verbalized function a host injected,
+    // and an operator who never named this would be answered by it anyway.
+    const resolved = resolveClientForRole('decide')
+    if (resolved === DECIDE_DEFAULT_CLIENT) {
+      throw fail(
+        `The verbalized decide secondary was asked to serve ${resolved}, the role's own default: ` +
+          'it serves only a client an operator named (configureDecideSecondary).',
+      )
+    }
+    const count = spec.labels.length
+    if (count < 2 || count > MAX_DECISION_LABELS) {
+      throw fail(
+        `Decision ${spec.key} has ${count} labels; the verbalized secondary takes 2..${MAX_DECISION_LABELS}.`,
+      )
+    }
+    const letters = spec.labels.map((_, i) => String.fromCharCode(65 + i))
+    const options = spec.labels.map((l, i) => ({ letter: letters[i], description: l.description }))
+
+    const { b } = await import('./baml_client')
+    const collector = new Collector('DecideVerbalized')
+    let stated: Array<{ letter: string; probability: number }>
+    try {
+      // Spread routes the call like every other role: on the Anthropic tier it
+      // is the operator-named secondary (or undefined → the declared
+      // `DecideAnthropic`); were the lock above ever removed, a private-tier
+      // run would land on the private tier's own client, never a public one.
+      stated = await b.DecideVerbalized(state, spec.question, options, {
+        collector,
+        ...clientOverrideFor('decide'),
+      })
+    } catch (e) {
+      throw wrapAsLLMCallError(e, 'DecideVerbalized', variables, startTime, collector)
+    }
+
+    const byLetter = verbalizedProbabilities(stated, letters)
+    if (!byLetter) {
+      throw new LLMCallError(
+        'DecideVerbalized returned no probability for any listed option; an unusable answer is ' +
+          'an error, not a confident zero.',
+        extractFailureLLMCallData(collector, 'DecideVerbalized', variables, startTime),
+      )
+    }
+    const probs = {} as Record<L, number>
+    spec.labels.forEach((l, i) => {
+      probs[l.id] = byLetter[letters[i]] ?? 0
+    })
+    const llmCall = extractLLMCallData(collector, 'DecideVerbalized', variables, startTime, stated)
+    return { probs, method: 'verbalized', calibrated: false, ...(llmCall && { llmCall }) }
+  }
+  fn.limits = () => limitsFor('decide')
   return fn
 }

@@ -74,6 +74,21 @@ client<llm> SynthesizerAnthropic {
   }
 }
 
+// The decide role's explicit SECONDARY (#418, slice T5) — `DecideVerbalized`
+// and nothing else declares it, and it is deliberately NOT part of the
+// DescribeAnthropic block below: that chain's canonical list is "what rides
+// the cheap tier", and a decision gate must never be moved by re-pointing it.
+// Sonnet-tier with thinking off, like the controller: a structured answer
+// (a probability per option), no reasoning to expose, and no Haiku backstop on
+// structured output. Reached ONLY through `configureDecideSecondary` on the
+// Anthropic tier; the role's default there is the Jev adapter (T4).
+client<llm> DecideAnthropic {
+  provider fallback
+  options {
+    strategy [AnthropicSonnet5NoThink, AnthropicSonnet46NoThink]
+  }
+}
+
 // The cheap tier — and THE canonical list of what rides it. Every other
 // mention (local-client.baml, clients.server.ts, CLAUDE.md, models/README.md)
 // points here instead of repeating a subset that goes stale; three of them

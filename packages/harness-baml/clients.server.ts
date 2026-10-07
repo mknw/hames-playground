@@ -614,6 +614,10 @@ export const SWITCHED_FUNCTIONS_BY_ROLE: Partial<Record<BamlRole, readonly strin
     'CompactMemories',
   ],
   screen: ['ScreenUntrustedContent'],
+  // `DecideVerbalized` (T5) is deliberately NOT listed: this map is "what a tier
+  // decision re-points", and the verbalized secondary is refused on the private
+  // tier rather than moved to it. It still spreads `clientOverrideFor('decide')`
+  // as defence in depth (clients-verda pins it).
   decide: ['Decide'],
 }
 
@@ -635,6 +639,60 @@ export const LOGPROB_CLIENTS: ReadonlySet<string> = new Set(['LocalQwenSmallDeci
  *  `decision-transport-selection` can pin both halves of F1's selection rule
  *  against one source. */
 export const JEV_CLIENTS: ReadonlySet<string> = new Set()
+
+/** Where the decide role lands on the Anthropic tier when nothing names
+ *  anything else: the mirror's own value. Exported so the verbalized secondary
+ *  can refuse to serve it — the secondary is for a role an operator RE-NAMED,
+ *  never for the default (slice T5). */
+export const DECIDE_DEFAULT_CLIENT: string = CLIENT_BY_ROLE.decide
+
+/** The clients an operator may name as the decide role's explicit secondary
+ *  (slice T5, decision G5). One member: `DecideAnthropic`, the chain
+ *  `DecideVerbalized` declares. It is in neither `LOGPROB_CLIENTS` nor
+ *  `JEV_CLIENTS`, so the adapter's selection by the resolved client sends it to
+ *  the verbalized transport — the whole mechanism. */
+export const DECIDE_SECONDARY_CLIENTS = ['DecideAnthropic'] as const
+export type DecideSecondaryClient = (typeof DECIDE_SECONDARY_CLIENTS)[number]
+
+let decideSecondary: DecideSecondaryClient | undefined
+
+/**
+ * Name the decide role's verbalized secondary, or clear it with `undefined`
+ * (the default, and exactly main's behaviour). Operator config, fed once at the
+ * composition root beside the other `configure*` accessors; nothing in this
+ * repo calls it.
+ *
+ * VALIDATED: anything but a member of {@link DECIDE_SECONDARY_CLIENTS} or
+ * `undefined` throws here, at configuration, never on a turn — a typo that
+ * silently changed where a memory-write gate's decisions land is the failure
+ * this guards.
+ *
+ * It applies on the Anthropic tier ONLY (see {@link decideSecondaryFor}); the
+ * private tier ignores it, so naming it can never move a private-tier call.
+ */
+export function configureDecideSecondary(client: DecideSecondaryClient | undefined): void {
+  if (client !== undefined && !DECIDE_SECONDARY_CLIENTS.includes(client)) {
+    throw new Error(
+      `configureDecideSecondary: ${JSON.stringify(client)} is not a decide secondary — ` +
+        `the only one is ${DECIDE_SECONDARY_CLIENTS.map((c) => `'${c}'`).join(', ')} (or undefined to clear).`,
+    )
+  }
+  decideSecondary = client
+}
+
+/**
+ * THE ONE READ of the secondary setting — `resolveClientForRole` and
+ * `clientOverrideFor` both come through here, so the transport the adapter
+ * selects and the client the call is routed to cannot disagree (G5 condition
+ * 2). A POSITIVE match on the Anthropic tier, named explicitly: any other tier —
+ * the private one, an unknown one, a future one — ignores the setting, because
+ * "not verda" would extend a public-provider route to every tier nobody has
+ * reviewed yet.
+ */
+function decideSecondaryFor(role: BamlRole): DecideSecondaryClient | undefined {
+  if (role !== 'decide' || decideSecondary === undefined) return undefined
+  return (activeInferenceTier() as string) === 'anthropic' ? decideSecondary : undefined
+}
 
 // ----------------------------------------------------------------------------
 // Decision calibration — host-fed, keyed (clientName, spec.key) (D11)
@@ -808,7 +866,12 @@ export function clientOverrideFor(role: BamlRole): BamlClientOverride | undefine
   if (consumerBag) return consumerBag
 
   const client = verdaClientFor(role)
-  if (!client) return undefined
+  if (!client) {
+    // The decide role's operator-named secondary (G5): an explicit bag, so the
+    // client the call takes is the one `resolveClientForRole` reports.
+    const secondary = decideSecondaryFor(role)
+    return secondary ? { client: secondary } : undefined
+  }
   // A bag naming a private-tier client is a call about to take the override —
   // #274 wrote this hook when the `router` still answered on Anthropic, so the
   // first bag of a turn belonged to the controller; the 2026-08-26 widening put
@@ -870,6 +933,7 @@ export function resolveClientForRole(role: BamlRole): string {
     perRun?.client ??
     consumerClients?.(role)?.client ??
     verdaClientFor(role) ??
+    decideSecondaryFor(role) ??
     CLIENT_BY_ROLE[role]
   )
 }

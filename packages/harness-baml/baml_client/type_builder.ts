@@ -79,12 +79,14 @@ export default class TypeBuilder {
     
     ToolResult: ClassViewer<'ToolResult', "tool" | "result" | "success" | "error">;
     
+    VerbalizedOption: ClassViewer<'VerbalizedOption', "letter" | "probability">;
+    
     
 
     constructor() {
         this.tb = new _TypeBuilder({
           classes: new Set([
-            "Attempt","CompactedMemory","ControllerAction","CriticResult","DecideOption","DescribeBatchResult","DescribeItemSummary","DescribeTarget","ExpandedRef","ExtractedMemory","FewShot","LoopTurn","MemoryMember","Message","PlanResult","PriorResult","ReferenceCandidate","ReferenceSelection","ReferenceSelectorResult","RouteOption","RoutingResult","ScreenVerdict","ToolCall","ToolCallRequest","ToolDescription","ToolResult",
+            "Attempt","CompactedMemory","ControllerAction","CriticResult","DecideOption","DescribeBatchResult","DescribeItemSummary","DescribeTarget","ExpandedRef","ExtractedMemory","FewShot","LoopTurn","MemoryMember","Message","PlanResult","PriorResult","ReferenceCandidate","ReferenceSelection","ReferenceSelectorResult","RouteOption","RoutingResult","ScreenVerdict","ToolCall","ToolCallRequest","ToolDescription","ToolResult","VerbalizedOption",
           ]),
           enums: new Set([
             
@@ -194,6 +196,10 @@ export default class TypeBuilder {
         
         this.ToolResult = this.tb.classViewer("ToolResult", [
           "tool","result","success","error",
+        ]);
+        
+        this.VerbalizedOption = this.tb.classViewer("VerbalizedOption", [
+          "letter","probability",
         ]);
         
         

@@ -20,7 +20,7 @@ $ pnpm add @boundaryml/baml
 
 import type { Image, Audio, Pdf, Video } from "@boundaryml/baml"
 import type { Checked, Check } from "./types"
-import type {  Attempt,  ControllerAction,  CriticResult,  DescribeBatchResult,  DescribeItemSummary,  DescribeTarget,  ExpandedRef,  FewShot,  LoopTurn,  Message,  PlanResult,  PriorResult,  ReferenceCandidate,  ReferenceSelection,  ReferenceSelectorResult,  RouteOption,  RoutingResult,  ScreenVerdict,  ToolCall,  ToolCallRequest,  ToolDescription,  ToolResult } from "./types"
+import type {  Attempt,  ControllerAction,  CriticResult,  DecideOption,  DescribeBatchResult,  DescribeItemSummary,  DescribeTarget,  ExpandedRef,  FewShot,  LoopTurn,  Message,  PlanResult,  PriorResult,  ReferenceCandidate,  ReferenceSelection,  ReferenceSelectorResult,  RouteOption,  RoutingResult,  ScreenVerdict,  ToolCall,  ToolCallRequest,  ToolDescription,  ToolResult } from "./types"
 import type * as types from "./types"
 
 /******************************************************************************
@@ -64,6 +64,10 @@ export namespace partial_types {
       is_sufficient?: boolean | null
       explanation?: string | null
       suggested_approach?: string | null
+    }
+    export interface DecideOption {
+      letter?: string | null
+      description?: string | null
     }
     export interface DescribeBatchResult {
       summaries: DescribeItemSummary[]

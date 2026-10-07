@@ -23,7 +23,7 @@ import type { BamlRuntime, BamlCtxManager, Image, Audio, Pdf, Video, FunctionLog
 import { toBamlError, HTTPRequest, ClientRegistry } from "@boundaryml/baml"
 import type { Checked, Check } from "./types"
 import type * as types from "./types"
-import type {Attempt, ControllerAction, CriticResult, DescribeBatchResult, DescribeItemSummary, DescribeTarget, ExpandedRef, FewShot, LoopTurn, Message, PlanResult, PriorResult, ReferenceCandidate, ReferenceSelection, ReferenceSelectorResult, RouteOption, RoutingResult, ScreenVerdict, ToolCall, ToolCallRequest, ToolDescription, ToolResult} from "./types"
+import type {Attempt, ControllerAction, CriticResult, DecideOption, DescribeBatchResult, DescribeItemSummary, DescribeTarget, ExpandedRef, FewShot, LoopTurn, Message, PlanResult, PriorResult, ReferenceCandidate, ReferenceSelection, ReferenceSelectorResult, RouteOption, RoutingResult, ScreenVerdict, ToolCall, ToolCallRequest, ToolDescription, ToolResult} from "./types"
 import type TypeBuilder from "./type_builder"
 import type * as events from "./events"
 
@@ -129,6 +129,39 @@ env?: Record<string, string | undefined>
       "Critic",
       {
       "intent": intent,"attempts": attempts
+      },
+      this.ctxManager.cloneContext(),
+      __baml_options__?.tb?.__tb(),
+      __clientRegistry__,
+      false,
+      __env__
+      )
+      } catch (error) {
+      throw toBamlError(error);
+      }
+      }
+      
+  async Decide(
+  state: string,question: string,options: types.DecideOption[],
+  __baml_options__?: BamlCallOptions<never>
+  ): Promise<HTTPRequest> {
+    try {
+    const __rawEnv__ = __baml_options__?.env ? { ...process.env, ...__baml_options__.env } : { ...process.env };
+    const __env__: Record<string, string> = Object.fromEntries(
+      Object.entries(__rawEnv__).filter(([_, value]) => value !== undefined) as [string, string][]
+      );
+
+      // Resolve client option to clientRegistry (client takes precedence)
+      let __clientRegistry__ = __baml_options__?.clientRegistry;
+      if (__baml_options__?.client) {
+        __clientRegistry__ = __clientRegistry__ || new ClientRegistry();
+        __clientRegistry__.setPrimary(__baml_options__.client);
+      }
+
+      return await this.runtime.buildRequest(
+      "Decide",
+      {
+      "state": state,"question": question,"options": options
       },
       this.ctxManager.cloneContext(),
       __baml_options__?.tb?.__tb(),
@@ -564,6 +597,39 @@ env?: Record<string, string | undefined>
           "Critic",
           {
           "intent": intent,"attempts": attempts
+          },
+          this.ctxManager.cloneContext(),
+          __baml_options__?.tb?.__tb(),
+          __clientRegistry__,
+          true,
+          __env__
+          )
+          } catch (error) {
+          throw toBamlError(error);
+          }
+          }
+          
+      async Decide(
+      state: string,question: string,options: types.DecideOption[],
+      __baml_options__?: BamlCallOptions<never>
+      ): Promise<HTTPRequest> {
+        try {
+        const __rawEnv__ = __baml_options__?.env ? { ...process.env, ...__baml_options__.env } : { ...process.env };
+        const __env__: Record<string, string> = Object.fromEntries(
+          Object.entries(__rawEnv__).filter(([_, value]) => value !== undefined) as [string, string][]
+          );
+
+          // Resolve client option to clientRegistry (client takes precedence)
+          let __clientRegistry__ = __baml_options__?.clientRegistry;
+          if (__baml_options__?.client) {
+            __clientRegistry__ = __clientRegistry__ || new ClientRegistry();
+            __clientRegistry__.setPrimary(__baml_options__.client);
+          }
+
+          return await this.runtime.buildRequest(
+          "Decide",
+          {
+          "state": state,"question": question,"options": options
           },
           this.ctxManager.cloneContext(),
           __baml_options__?.tb?.__tb(),

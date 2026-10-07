@@ -159,6 +159,9 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   LocalGLM: 16_384,
   // = the `--ctx-size` `make llm-small` serves it with; keep the two in step.
   LocalQwenSmall: 32_768,
+  // #418 T3. The same 4B on the same server, so the same `--ctx-size`; the
+  // decide readout's state is trimmed against this (`limitsFor('decide')`).
+  LocalQwenSmallDecide: 32_768,
   // Self-hosted (verda-client.baml) — vLLM was started with
   // `--max-model-len 131072`, so this is the server's hard ceiling on
   // prompt + completion, not a model-family marketing number. An earlier plan
@@ -212,6 +215,13 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // Local (local-client.baml — manual wiring only, not in any chain).
   LocalGLM: 2_048,
   LocalQwenSmall: 2_048,
+  // #418 T3. `max_tokens 2`: a first-token readout (the answer letter, then
+  // EOS). 2 rather than the spec's 1 because llama-server b9190 ABORTS on a
+  // repeated identical prompt at `max_tokens: 1` — the full account is on
+  // `LocalQwenSmallDecide` in local-client.baml. A cap-hit is by design here, so
+  // the adapter stamps `hitOutputCap: false` itself (D14); otherwise
+  // `llmCallHitOutputCap` would read every call as truncated.
+  LocalQwenSmallDecide: 2,
   // Self-hosted (verda-client.baml). Mirrors the `max_tokens` declared there;
   // without this entry the truncation retry is blind on every Verda-routed
   // controller turn, which is the failure this map exists for. 4 096 rather
@@ -294,7 +304,11 @@ export const CLIENT_PRICING: Record<string, { inPerMTok: number; outPerMTok: num
  * rather than a guess about the URL: a URL check would silently re-price the
  * same call differently on two hosts.
  */
-export const LOCAL_PRICED_CLIENTS: ReadonlySet<string> = new Set(['LocalQwenSmall', 'LocalGLM'])
+export const LOCAL_PRICED_CLIENTS: ReadonlySet<string> = new Set([
+  'LocalQwenSmall',
+  'LocalQwenSmallDecide',
+  'LocalGLM',
+])
 
 /**
  * The one BAML client billed by wall-clock rather than by token.

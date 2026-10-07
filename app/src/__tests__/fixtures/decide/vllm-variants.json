@@ -1,0 +1,89 @@
+{
+  "server": "CONSTRUCTED to vLLM's OpenAI chat-completions logprobs schema (token/logprob/bytes per top_logprobs entry, choices[0].logprobs.content[]); NOT recorded from a vLLM server \u2014 none was available to slice T3. The masses are chosen so the expected sums are exact: A=.62 (three variants), B=.28 (B, ' B', 'B.'), C=.04, D=.01; 'Btool' (a longer word), '<think>' and 'x' match no label. coverage=.95.",
+  "response": {
+    "id": "chatcmpl-constructed",
+    "object": "chat.completion",
+    "model": "qwen3.5-4b-instruct",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "A"
+        },
+        "finish_reason": "length",
+        "logprobs": {
+          "content": [
+            {
+              "token": "A",
+              "logprob": -0.693147,
+              "bytes": [65],
+              "top_logprobs": [
+                {
+                  "token": "A",
+                  "logprob": -0.693147,
+                  "bytes": [65]
+                },
+                {
+                  "token": " A",
+                  "logprob": -2.302585,
+                  "bytes": [32, 65]
+                },
+                {
+                  "token": "(A",
+                  "logprob": -3.912023,
+                  "bytes": [40, 65]
+                },
+                {
+                  "token": "B",
+                  "logprob": -1.609438,
+                  "bytes": [66]
+                },
+                {
+                  "token": " B",
+                  "logprob": -2.995732,
+                  "bytes": [32, 66]
+                },
+                {
+                  "token": "B.",
+                  "logprob": -3.506558,
+                  "bytes": [66, 46]
+                },
+                {
+                  "token": "C",
+                  "logprob": -3.218876,
+                  "bytes": [67]
+                },
+                {
+                  "token": "D",
+                  "logprob": -4.60517,
+                  "bytes": [68]
+                },
+                {
+                  "token": "Btool",
+                  "logprob": -3.912023,
+                  "bytes": [66, 116, 111, 111, 108]
+                },
+                {
+                  "token": "<think>",
+                  "logprob": -4.60517,
+                  "bytes": [60, 116, 104, 105, 110, 107, 62]
+                },
+                {
+                  "token": "x",
+                  "logprob": -3.912023,
+                  "bytes": [120]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 160,
+      "completion_tokens": 2,
+      "total_tokens": 162
+    }
+  }
+}

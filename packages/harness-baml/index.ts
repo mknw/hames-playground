@@ -21,6 +21,9 @@ export {
   createActorControllerAdapter,
   createCriticAdapter,
   createInjectionScreen,
+  createDecideAdapter,
+  decideTransportFor,
+  topLogprobsOf,
   accountBamlCall,
   withUsageAccounting,
   llmCallHitOutputCap,
@@ -36,6 +39,8 @@ export {
   type LegacyActorFn,
   type PlannerFnWithLLMData,
   type DescribeBatchItem,
+  type DecideAdapterOptions,
+  type DecideServing,
 } from './baml-adapters.server'
 export { routeMessageOp } from './routing.server'
 export {
@@ -45,6 +50,10 @@ export {
   assertInferenceTier,
   activeInferenceTier,
   clientOverrideFor,
+  LOGPROB_CLIENTS,
+  JEV_CLIENTS,
+  configureDecisionCalibration,
+  decisionCalibrationFor,
   configureConsumerClients,
   activeConsumerClients,
   resolveClientForRole,

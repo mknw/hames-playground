@@ -139,11 +139,17 @@ environment works too, and wins over the file.
 non-default port and points the run at it:
 
 ```bash
-docker run --rm -d --name hames-test-pg -p 55439:5432 -e POSTGRES_PASSWORD=test postgres:16
+docker run --rm -d --name hames-test-pg -p 55439:5432 -e POSTGRES_PASSWORD=test pgvector/pgvector:0.8.0-pg16-bookworm
 export TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:55439/hames_test
 pnpm test:run                # the DB-backed suites run against it
 docker stop hames-test-pg    # --rm deletes the container
 ```
+
+The image is pgvector's postgres:16 (bookworm), not plain `postgres:16`: the
+memory DB-backed suites (#419 M4) need the `vector` extension, which ships
+only in that image, and every other suite runs on it unchanged. On a plain
+postgres image those suites skip instead — and under `TEST_DATABASE_REQUIRED`
+that skip is a failure.
 
 Two lanes that each start one need different ports and container names.
 `TEST_DATABASE_URL` is one variable for all three suites, so with it set they
@@ -167,10 +173,10 @@ back on its own would go round it.
 The owner's decision (2026-10-03): "postgres to CI yes, but only pre-merge and
 not every push." So layer 1 runs in two CI jobs, and the event decides which:
 
-| Job (its check name)              | Runs on                               | Database                                                               | Layer 1's DB-backed tests | Uploads coverage |
-| --------------------------------- | ------------------------------------- | ---------------------------------------------------------------------- | ------------------------- | ---------------- |
-| `typecheck · lint · test · build` | every pull request and push to `main` | none: `CI` is set and `TEST_DATABASE_URL` is not (the third row above) | skip                      | yes, to Codecov  |
-| `test · postgres`                 | pull requests only                    | a `postgres:16-alpine` service, pinned by digest, on port 55439        | run                       | no               |
+| Job (its check name)              | Runs on                               | Database                                                                              | Layer 1's DB-backed tests | Uploads coverage |
+| --------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------- | ---------------- |
+| `typecheck · lint · test · build` | every pull request and push to `main` | none: `CI` is set and `TEST_DATABASE_URL` is not (the third row above)                | skip                      | yes, to Codecov  |
+| `test · postgres`                 | pull requests only                    | a `pgvector/pgvector` (postgres:16 bookworm) service, pinned by digest, on port 55439 | run                       | no               |
 
 The second job runs the same `pnpm test:run --coverage` with `TEST_DATABASE_URL`
 set to the service, so the guard takes its first row. It is a job of its own

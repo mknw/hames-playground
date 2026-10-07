@@ -1,0 +1,9 @@
+---
+"@hames-ai/harness-patterns": minor
+---
+
+**#418 slice T1 — the typedDecision seam: decision types, pure policy math, the `decision_made` event.** Additive surface, no behaviour change to any existing pattern.
+
+- Core types: `DecisionLabel` / `DecisionSpec` / `DecisionSetSpec` (with `mode?: 'fields' | 'joint'`), `DecisionMethod` (`'logprob' | 'jev' | 'verbalized'`), `AbstainReason` (incl. `'method-mismatch'`), `Decision`, `DecisionPolicy` (REQUIRED `fallback`, `thresholdMethod`), `DecisionCalibrationEntry`, `DecideInput` / `DecideResult` / `DecideFn` / `DecideAllFn`, and `MAX_DECISION_LABELS` (20 — vLLM's default `--max-logprobs`).
+- The decision policy layer's PURE scoring half, `@hames-ai/harness-patterns/patterns/typedDecision.server.ts`: `sumLabelMass` / `calibrateLabelMass` / `normalizeLabelMass` (the logprob readout's letter-variant summing, log-space temperature/bias calibration, renormalisation + coverage), `preCallAbstain` (F3 — `requireCalibrated` on a knowingly non-calibratable client abstains before any call), `resolveDecisionCuts` (F2 — an applied calibration entry's cuts win; static cuts apply only on their fitted method, else `'method-mismatch'`), and `scoreDecision` — the pure half of `evaluateDecision` (abstain order `no-state → error → uncalibrated → low-coverage → method-mismatch → low-confidence → low-margin`; the fallback always answers). The awaited wrapper (`evaluateDecision` / `decide` / `decideFields`) and the `typedDecision` pattern land with T2.
+- New event type `decision_made`, in `ALWAYS_COMMIT_TYPES`, METADATA ONLY: `formatEventData` renders `key: label (p, margin | abstained: reason)`; the `state`'s SIZE rides (`stateChars`), never its text. `PatternCapabilities.decisionKeys` + `harnessDecisionKeys()` make a graph's declared decision surface readable without running it.

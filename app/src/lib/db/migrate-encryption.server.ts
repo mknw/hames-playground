@@ -130,6 +130,17 @@ export const ENCRYPTED_TABLES: readonly TableSpec[] = [
     textColumns: ['raw_file', 'tier0_copy', 'findings', 'sender_address'],
     jsonbColumns: [],
   },
+  {
+    // Memory (#419 M4). `content` and `evidence` are the personal text the
+    // store pipeline writes; `embedding` is the owner's declared plaintext
+    // exception (D2 — embeddings are NOT encrypted), so it is absent here by
+    // design and classified in memories.server.ts's COLUMN_CLASSIFICATION,
+    // which the column-classification pin holds against this list.
+    table: 'memories',
+    pk: 'id',
+    textColumns: ['content', 'evidence'],
+    jsonbColumns: [],
+  },
 ]
 
 /** Per-table outcome. `absent` tables were skipped, not counted. */

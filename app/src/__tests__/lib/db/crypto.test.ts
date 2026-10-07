@@ -519,6 +519,7 @@ describe('inventory', () => {
       'conversations',
       'hitl_quarantine',
       'hitl_requests',
+      'memories',
       'routines',
       'skills',
       'users',

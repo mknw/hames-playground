@@ -66,7 +66,9 @@ describe('resolveTestDatabase: no URL and no opt-in refuses', () => {
     )
     // The three ways out are in the message itself, so a lane that hits it does
     // not need to go and find the docs.
-    expect(resolve).toThrow(/docker run --rm -d .* -p 55439:5432 .* postgres:16/)
+    expect(resolve).toThrow(
+      /docker run --rm -d .* -p 55439:5432 .* pgvector\/pgvector:0\.8\.0-pg16-bookworm/,
+    )
     expect(resolve).toThrow(/TEST_DATABASE_URL=postgresql:\/\/postgres:test@127\.0\.0\.1:55439/)
     expect(resolve).toThrow(`${ALLOW_LOCAL_DB}='<absolute path of your own primary checkout>'`)
     expect(resolve).toThrow(/Agents and lanes: use the private Postgres above, and never add this/)

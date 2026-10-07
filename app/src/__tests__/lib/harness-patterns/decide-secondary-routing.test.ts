@@ -127,6 +127,41 @@ describe('the tier match is POSITIVE (G5 condition 1)', () => {
   })
 })
 
+describe('R1 — an unrecognised tier in the RUN FRAME is not the Anthropic tier either', () => {
+  // `activeInferenceTier()` narrows an unrecognised frame value to the default,
+  // which is how a typo, or a second private tier written ahead of the union,
+  // read as Anthropic. The frame is the wire; `defaultTier` is not.
+  it.each(['verda-eu', '', 'ANTHROPIC'])('frame tier %j ignores the setting', async (t) => {
+    configureDecideSecondary('DecideAnthropic')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+    await withRunFrame({ inference: { tier: t } }, async () => {
+      expect(resolveClientForRole('decide')).toBe(DECIDE_DEFAULT_CLIENT)
+      expect(clientOverrideFor('decide')).toBeUndefined()
+    })
+  })
+
+  it('the factory refuses under such a frame, before any request', async () => {
+    const { createVerbalizedDecide } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+    configureConsumerClients((role) => (role === 'decide' ? { client: 'ByoDecide' } : undefined))
+    await expect(
+      withRunFrame({ inference: { tier: 'verda-eu' } }, () =>
+        createVerbalizedDecide()({
+          spec: {
+            key: 'k',
+            question: 'q',
+            labels: [
+              { id: 'a', description: 'a' },
+              { id: 'b', description: 'b' },
+            ],
+          },
+          state: 's',
+        }),
+      ),
+    ).rejects.toThrow(/outside the Anthropic tier/)
+  })
+})
+
 describe('one source: the resolver and the override agree (G5 condition 2)', () => {
   it.each(['anthropic', 'verda', 'future'])('tier %s, every setting', (t) => {
     tier(t)
@@ -164,23 +199,33 @@ describe('reachable only when an operator names it', () => {
     expect(DECIDE_DEFAULT_CLIENT).not.toBe('DecideAnthropic')
   })
 
-  it('nothing in app/src outside tests calls configureDecideSecondary or createVerbalizedDecide', () => {
-    const root = path.resolve(process.cwd(), 'src')
+  it('nothing outside harness-baml names configureDecideSecondary or createVerbalizedDecide', () => {
+    // The IDENTIFIER, not a call: an aliased import (`import { x as y }`) is
+    // still a name in the file. Every workspace package is walked, not only app/.
+    const repo = path.resolve(process.cwd(), '..')
+    const roots = [
+      path.join(repo, 'app', 'src'),
+      ...readdirSync(path.join(repo, 'packages'))
+        .filter((n) => n !== 'harness-baml')
+        .map((n) => path.join(repo, 'packages', n)),
+    ]
+    const skip = new Set(['__tests__', 'node_modules', 'baml_client', 'dist'])
     const offenders: string[] = []
     const walk = (dir: string) => {
       for (const name of readdirSync(dir)) {
         const full = path.join(dir, name)
         if (statSync(full).isDirectory()) {
-          if (name !== '__tests__') walk(full)
+          if (!skip.has(name)) walk(full)
         } else if (/\.(ts|tsx)$/.test(name)) {
-          const code = readFileSync(full, 'utf8')
-          if (/\b(configureDecideSecondary|createVerbalizedDecide)\s*\(/.test(code)) {
-            offenders.push(path.relative(root, full))
+          if (
+            /\b(configureDecideSecondary|createVerbalizedDecide)\b/.test(readFileSync(full, 'utf8'))
+          ) {
+            offenders.push(path.relative(repo, full))
           }
         }
       }
     }
-    walk(root)
+    roots.filter((r) => statSync(r, { throwIfNoEntry: false })?.isDirectory()).forEach(walk)
     expect(offenders).toEqual([])
   })
 })

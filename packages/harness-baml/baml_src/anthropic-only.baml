@@ -80,8 +80,10 @@ client<llm> SynthesizerAnthropic {
 // the cheap tier", and a decision gate must never be moved by re-pointing it.
 // Sonnet-tier with thinking off, like the controller: a structured answer
 // (a probability per option), no reasoning to expose, and no Haiku backstop on
-// structured output. Reached ONLY through `configureDecideSecondary` on the
-// Anthropic tier; the role's default there is the Jev adapter (T4).
+// structured output. Reached only when the decide role is RE-NAMED onto it —
+// `configureDecideSecondary` on the Anthropic tier, a consumer client or a
+// per-run `clientOverride` naming it; the role's default there is the Jev
+// adapter (T4), which the secondary replaces when named.
 client<llm> DecideAnthropic {
   provider fallback
   options {

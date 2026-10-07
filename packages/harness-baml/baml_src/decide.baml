@@ -77,9 +77,10 @@ function Decide(
 // probabilities are systematically overconfident; that is why this is a
 // secondary an operator must name, never a default and never a fallback.
 //
-// WHO REACHES IT. Nothing, unless an operator configures it
-// (`configureDecideSecondary('DecideAnthropic')`, decision G5 on #418) AND the
-// run is on the Anthropic tier. It declares `DecideAnthropic`, a PUBLIC
+// WHO REACHES IT. Nothing, unless the decide role is RE-NAMED onto it —
+// `configureDecideSecondary('DecideAnthropic')` (decision G5 on #418), a
+// consumer client or a per-run override — and, for the setting, the run is
+// explicitly on the Anthropic tier. It declares `DecideAnthropic`, a PUBLIC
 // provider, so it can never serve a private-tier call: the tier lock in the
 // adapter refuses before any request, and if that were ever removed the
 // per-call `clientOverrideFor('decide')` spread would send the call to the

@@ -54,6 +54,7 @@ import {
   activeCostRates,
   clientOverrideFor,
   DECIDE_DEFAULT_CLIENT,
+  onExplicitAnthropicTier,
   decisionCalibrationFor,
   JEV_CLIENTS,
   limitsFor,
@@ -2015,13 +2016,20 @@ export function createDecideAllAdapter(
 // Typed decision — the explicit verbalized secondary (#418, T5)
 // ============================================================================
 
+/** How far a stated distribution may sum from 1 and still be read. Looser than
+ *  Jev's 0.01 because a chat model writes its figures by hand. */
+export const VERBALIZED_MASS_TOLERANCE = 0.05
+
 /**
- * The probabilities a chat model STATED, as a distribution over `letters`.
- * Per-letter values are clamped to [0, 1] and summed if a letter repeats;
- * letters the spec does not have are ignored; the result is renormalised, so a
- * model whose figures sum to 0.9 or 1.3 still yields a distribution. Returns
- * `undefined` when no listed letter carries any mass — an unusable answer, not
- * a confident zero, which the caller turns into an `LLMCallError`.
+ * The probabilities a chat model STATED, as a distribution over `letters` — or
+ * `undefined` when the answer is not a usable distribution, which the caller
+ * turns into an `LLMCallError`. Fails closed on the same shapes the Jev
+ * transport does (#511 R3): every listed option exactly once, each value in
+ * [0, 1], summing to 1 within {@link VERBALIZED_MASS_TOLERANCE}. An omitted
+ * option is not a stated 0, a percent scale is not a probability, and a
+ * repeated letter is ambiguous — none of them is repaired into certainty.
+ * Letters the spec does not have are ignored; what is left is renormalised
+ * only for the small rounding the tolerance allows.
  */
 export function verbalizedProbabilities(
   stated: ReadonlyArray<{ readonly letter: string; readonly probability: number }>,
@@ -2030,11 +2038,21 @@ export function verbalizedProbabilities(
   const mass: Record<string, number> = {}
   for (const { letter, probability } of stated ?? []) {
     const key = typeof letter === 'string' ? letter.trim().toUpperCase() : ''
-    if (!letters.includes(key) || !Number.isFinite(probability)) continue
-    mass[key] = (mass[key] ?? 0) + Math.min(1, Math.max(0, probability))
+    if (!letters.includes(key)) continue
+    if (key in mass) return undefined // stated twice: ambiguous
+    if (
+      typeof probability !== 'number' ||
+      !Number.isFinite(probability) ||
+      probability < 0 ||
+      probability > 1
+    )
+      return undefined // out of range, incl. a percent scale
+    mass[key] = probability
   }
-  const { probs, total } = normalizeLabelMass(mass, letters)
-  return total > 0 ? probs : undefined
+  if (letters.some((l) => !(l in mass))) return undefined // an omitted option is not a stated 0
+  const sum = letters.reduce((a, l) => a + mass[l], 0)
+  if (Math.abs(sum - 1) > VERBALIZED_MASS_TOLERANCE) return undefined
+  return normalizeLabelMass(mass, letters).probs
 }
 
 /**
@@ -2063,21 +2081,22 @@ export function createVerbalizedDecide(): DecideFn {
     const fail = (message: string, cause?: unknown) =>
       decideFailure(message, variables, startTime, cause, 'DecideVerbalized')
 
-    if ((activeInferenceTier() as string) !== 'anthropic') {
+    if (!onExplicitAnthropicTier()) {
       throw fail(
         'Refusing the verbalized decide secondary outside the Anthropic tier: it calls a ' +
           'public provider, and nothing was sent to any provider.',
       )
     }
     // REACHABLE ONLY WHEN NAMED (G5). The role's own default is never served
-    // by the secondary: until the Jev transport exists the adapter would
-    // otherwise hand `JevDecide` to whatever verbalized function a host injected,
-    // and an operator who never named this would be answered by it anyway.
+    // by the secondary: it serves a client that was RE-NAMED — by
+    // `configureDecideSecondary`, by a consumer client registered for the role,
+    // or by a per-run `clientOverride`. Belt and braces since the Jev transport
+    // exists: the default now selects Jev and never reaches this function.
     const resolved = resolveClientForRole('decide')
     if (resolved === DECIDE_DEFAULT_CLIENT) {
       throw fail(
         `The verbalized decide secondary was asked to serve ${resolved}, the role's own default: ` +
-          'it serves only a client an operator named (configureDecideSecondary).',
+          'it serves only a client that was re-named (configureDecideSecondary, a consumer client or a per-run override).',
       )
     }
     const count = spec.labels.length
@@ -2108,8 +2127,9 @@ export function createVerbalizedDecide(): DecideFn {
     const byLetter = verbalizedProbabilities(stated, letters)
     if (!byLetter) {
       throw new LLMCallError(
-        'DecideVerbalized returned no probability for any listed option; an unusable answer is ' +
-          'an error, not a confident zero.',
+        'DecideVerbalized returned no usable distribution: a usable answer states every listed ' +
+          'option exactly once, each in [0, 1], summing to 1 ± ' +
+          `${VERBALIZED_MASS_TOLERANCE}. An unusable answer is an error, not a confident zero.`,
         extractFailureLLMCallData(collector, 'DecideVerbalized', variables, startTime),
       )
     }

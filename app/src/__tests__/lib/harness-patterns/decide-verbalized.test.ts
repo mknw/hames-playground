@@ -142,11 +142,11 @@ describe('the transport, as served by a client an operator named', () => {
     expect(r.probs.episodic).toBeCloseTo(0.7, 6)
   })
 
-  it('renormalises figures that do not sum to 1', async () => {
+  it('renormalises rounding within the tolerance, and uses the result', async () => {
     await nameByoClient()
-    content = stated(0.45, 0.45, 0) // sums to 0.9
+    content = stated(0.6, 0.3, 0.08) // sums to 0.98
     const r = await (await verbalized())({ spec: SPEC, state: 's' })
-    expect(r.probs.episodic).toBeCloseTo(0.5, 6)
+    expect(r.probs.episodic).toBeCloseTo(0.6 / 0.98, 9)
     expect(Object.values(r.probs).reduce((a, b) => a + b, 0)).toBeCloseTo(1, 9)
   })
 
@@ -160,7 +160,7 @@ describe('the transport, as served by a client an operator named', () => {
     const { LLMCallError } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const err = await (await verbalized())({ spec: SPEC, state: 's' }).catch((e) => e)
     expect(err).toBeInstanceOf(LLMCallError)
-    expect(String(err.message)).toMatch(/no probability for any listed option/)
+    expect(String(err.message)).toMatch(/no usable distribution/)
     expect(err.llmCall.functionName).toBe('DecideVerbalized')
   })
 
@@ -178,46 +178,39 @@ describe('the transport, as served by a client an operator named', () => {
   })
 })
 
-describe('verbalizedProbabilities (pure)', () => {
-  it('clamps, ignores unknown letters, sums repeats, renormalises; undefined when no mass', async () => {
+describe('verbalizedProbabilities (pure) — fails closed like the Jev transport (#511 R3)', () => {
+  const L = ['A', 'B', 'C']
+  const row = (...v: Array<[string, number]>) =>
+    v.map(([letter, probability]) => ({ letter, probability }))
+
+  it('reads a complete, in-range distribution within the tolerance', async () => {
     const { verbalizedProbabilities: v } =
       await import('@hames-ai/harness-baml/baml-adapters.server')
-    expect(
-      v(
-        [
-          { letter: 'A', probability: 3 },
-          { letter: 'B', probability: -1 },
-        ],
-        ['A', 'B'],
-      ),
-    ).toEqual({
-      A: 1,
-      B: 0,
+    expect(v(row(['A', 0.5], ['B', 0.25], ['C', 0.25]), L)).toEqual({ A: 0.5, B: 0.25, C: 0.25 })
+    expect(v(row([' a ', 0.5], ['b', 0.25], ['C', 0.25]), L)).toEqual({ A: 0.5, B: 0.25, C: 0.25 })
+    // An unlisted letter is ignored; the listed ones still make a complete answer.
+    expect(v(row(['Q', 0.9], ['A', 0.5], ['B', 0.25], ['C', 0.25]), L)).toEqual({
+      A: 0.5,
+      B: 0.25,
+      C: 0.25,
     })
-    expect(
-      v(
-        [
-          { letter: 'A', probability: 0.3 },
-          { letter: 'Q', probability: 0.7 },
-        ],
-        ['A', 'B'],
-      ),
-    ).toEqual({
-      A: 1,
-      B: 0,
-    })
-    expect(
-      v(
-        [
-          { letter: ' a ', probability: 0.25 },
-          { letter: 'A', probability: 0.25 },
-          { letter: 'B', probability: 0.5 },
-        ],
-        ['A', 'B'],
-      ),
-    ).toEqual({ A: 0.5, B: 0.5 })
-    expect(v([{ letter: 'A', probability: Number.NaN }], ['A', 'B'])).toBeUndefined()
-    expect(v([], ['A', 'B'])).toBeUndefined()
+  })
+
+  it.each([
+    ['omitted options', row(['A', 1])],
+    ['a single partial value', row(['A', 0.3])],
+    ['a percent scale', row(['A', 70], ['B', 20], ['C', 10])],
+    ['a negative value', row(['A', 1.2], ['B', -0.2], ['C', 0])],
+    ['a value above 1', row(['A', 1.5], ['B', 0], ['C', 0])],
+    ['a repeated letter', row(['A', 0.5], ['A', 0.5], ['B', 0.25], ['C', 0.25])],
+    ['a sum of 0.6', row(['A', 0.3], ['B', 0.2], ['C', 0.1])],
+    ['an unlisted letter carrying the mass', row(['Q', 1], ['A', 0], ['B', 0], ['C', 0])],
+    ['a non-finite value', row(['A', Number.NaN], ['B', 0.5], ['C', 0.5])],
+    ['no answer', []],
+  ])('%s is not a usable distribution', async (_name, stated) => {
+    const { verbalizedProbabilities: v } =
+      await import('@hames-ai/harness-baml/baml-adapters.server')
+    expect(v(stated, L)).toBeUndefined()
   })
 })
 
@@ -240,7 +233,7 @@ describe('reachable only when an operator names it', () => {
     const { LLMCallError } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const err = await (await verbalized())({ spec: SPEC, state: 's' }).catch((e) => e)
     expect(err).toBeInstanceOf(LLMCallError)
-    expect(String(err.message)).toMatch(/serves only a client an operator named/)
+    expect(String(err.message)).toMatch(/serves only a client that was re-named/)
     expect(hits).toHaveLength(0)
   })
 
@@ -249,14 +242,37 @@ describe('reachable only when an operator names it', () => {
     const { createDecideAdapter, createVerbalizedDecide } =
       await import('@hames-ai/harness-baml/baml-adapters.server')
     const decide = createDecideAdapter({ verbalized: createVerbalizedDecide() })
-    expect(decide.serving('memory.kind')).toEqual({ method: 'verbalized' })
+    // The role's default is refused by the factory, so nothing is reported as
+    // verbalized until a client is named (#513 review R3).
+    expect(decide.serving('memory.kind').method).not.toBe('verbalized')
     await nameByoClient()
+    expect(decide.serving('memory.kind')).toEqual({ method: 'verbalized' })
     content = stated(0.1, 0.1, 0.8)
     const r = await decide({ spec: SPEC, state: 's' })
     expect(r.method).toBe('verbalized')
     expect(r.calibrated).toBe(false)
     expect(r.probs.preference).toBeCloseTo(0.8, 6)
     expect(clients.resolveClientForRole('decide')).toBe('ByoDecide')
+  })
+
+  it('requireCalibrated still abstains on the real factory: uncalibrated, and no request is made (D15)', async () => {
+    // A consumer client (the loopback), NOT the DecideAnthropic secondary, so a
+    // regression reaches the loopback rather than a public endpoint.
+    const { createDecideAdapter, createVerbalizedDecide } =
+      await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { evaluateDecision } =
+      await import('@hames-ai/harness-patterns/patterns/typedDecision.server')
+    await nameByoClient()
+    content = stated(0.1, 0.1, 0.8)
+    const out = await evaluateDecision({
+      decide: createDecideAdapter({ verbalized: createVerbalizedDecide() }),
+      spec: SPEC,
+      state: 's',
+      policy: { fallback: 'episodic', requireCalibrated: true },
+    })
+    expect(out.decision.abstained).toBe(true)
+    expect(out.decision.reason).toBe('uncalibrated')
+    expect(hits).toHaveLength(0)
   })
 
   it('through createDecideAdapter on the private tier: the lock holds with the secondary injected', async () => {
@@ -304,11 +320,21 @@ describe('the declared client — DecideAnthropic', () => {
   it('mirrors its chain floor and window in the host tables (a missing entry blinds truncation detection)', async () => {
     const { CLIENT_MAX_OUTPUT_TOKENS, MODEL_CONTEXT_WINDOWS } =
       await import('../../../lib/settings')
+    // The floor is the min over the PARSED chain, so a leaf added to the
+    // strategy moves this expectation instead of hiding behind two hard-coded names.
+    const { readFileSync } = await import('node:fs')
+    const path = await import('node:path')
+    const src = readFileSync(
+      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/anthropic-only.baml'),
+      'utf8',
+    )
+    const chain = /client<llm> DecideAnthropic \{[\s\S]*?strategy \[([^\]]*)\]/
+      .exec(src)![1]
+      .split(',')
+      .map((x) => x.trim())
+    expect(chain.length).toBeGreaterThan(0)
     expect(CLIENT_MAX_OUTPUT_TOKENS.DecideAnthropic).toBe(
-      Math.min(
-        CLIENT_MAX_OUTPUT_TOKENS.AnthropicSonnet5NoThink,
-        CLIENT_MAX_OUTPUT_TOKENS.AnthropicSonnet46NoThink,
-      ),
+      Math.min(...chain.map((c) => CLIENT_MAX_OUTPUT_TOKENS[c])),
     )
     expect(MODEL_CONTEXT_WINDOWS.DecideAnthropic).toBe(MODEL_CONTEXT_WINDOWS.ControllerAnthropic)
   })

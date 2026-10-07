@@ -684,6 +684,14 @@ export function configureDecideSecondary(client: DecideSecondaryClient | undefin
   decideSecondary = client
 }
 
+/** G5 condition 1: true only when the run is EXPLICITLY on the Anthropic tier — the
+ *  frame's RAW tier when one is set (an unrecognised value is not the Anthropic tier,
+ *  although `activeInferenceTier()` narrows it to the default), else the default. */
+export function onExplicitAnthropicTier(): boolean {
+  const framed = currentRunFrame()?.inference?.tier
+  return (framed ?? tierPolicy.defaultTier()) === 'anthropic'
+}
+
 /**
  * THE ONE READ of the secondary setting — `resolveClientForRole` and
  * `clientOverrideFor` both come through here, so the transport the adapter
@@ -695,7 +703,7 @@ export function configureDecideSecondary(client: DecideSecondaryClient | undefin
  */
 function decideSecondaryFor(role: BamlRole): DecideSecondaryClient | undefined {
   if (role !== 'decide' || decideSecondary === undefined) return undefined
-  return (activeInferenceTier() as string) === 'anthropic' ? decideSecondary : undefined
+  return onExplicitAnthropicTier() ? decideSecondary : undefined
 }
 
 // ----------------------------------------------------------------------------

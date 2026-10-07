@@ -2647,8 +2647,12 @@ function drawingHighlight(
     if (props === undefined) continue
     const hl = childEl(props, NS.a, 'highlight')
     if (hl === undefined) continue
+    // A level that DEFINES a highlight ends the scan, whatever it resolves
+    // to (#495 F10): transparent paints nothing — the fill beneath shows, and
+    // a farther defRPr's highlight is never inherited over the run's own —
+    // and an unresolvable one is not provably any colour.
     const clr = drawingClr(elements(hl)[0], s)
-    if (clr.transparent) continue // paints nothing: the fill beneath shows
+    if (clr.transparent) return { unknown: false }
     if (clr.unknown || clr.rgb === undefined) return { unknown: true }
     return { clr, unknown: false }
   }

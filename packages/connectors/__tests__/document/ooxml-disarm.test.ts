@@ -2985,6 +2985,28 @@ describe('#495 review: a mechanism that reads as a KNOWN state must still resolv
     expect(out.counted).toEqual({ 'colour-contrast': 1 })
   })
 
+  // F10 (the fix round's own code): a Nearer defined highlight terminates the
+  // scan, transparent included — inheritance never adopts a farther defRPr's
+  // highlight over the run's own. White glyphs, own alpha-0 highlight, a
+  // defRPr opaque highlight, on a white shape: the real render is white on
+  // white, so the run counts.
+  it('a nearer transparent a:highlight means no highlight: a farther defRPr one is not inherited', async () => {
+    const whiteGlyph =
+      '<a:rPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:highlight><a:srgbClr val="000000"><a:alpha val="0"/></a:srgbClr></a:highlight></a:rPr>'
+    const sp = (inner: string) =>
+      '<p:sp><p:nvSpPr><p:cNvPr id="5" name="S"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>' +
+      '<p:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></p:spPr>' +
+      `<p:txBody><a:bodyPr/><a:p><a:pPr><a:defRPr><a:highlight><a:srgbClr val="000000"/></a:highlight></a:defRPr></a:pPr>${inner}</a:p></p:txBody></p:sp>`
+    const out = await disarmed(
+      pptx({
+        slides: [{ shapes: shape('VISIBLE') + sp(`<a:r>${whiteGlyph}<a:t>SECRETV3</a:t></a:r>`) }],
+      }),
+      MIME.pptx,
+      [],
+    )
+    expect(out.counted).toEqual({ 'colour-contrast': 1 })
+  })
+
   // Finding 3: a pptx table cell fill is the background of its text. The
   // grey-on-grey cell counts once the fill resolves; before that its grey
   // text read as grey-on-white, visibly distinct.

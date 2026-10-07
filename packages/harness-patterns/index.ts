@@ -101,6 +101,7 @@ export type {
   DecideResult,
   DecideFn,
   DecideAllFn,
+  DecideServing,
   DecisionMadeEventData,
 
   // LLM Observability
@@ -285,6 +286,25 @@ export {
 
 // EventView
 export { EventViewImpl, createEventView } from './patterns'
+
+// Decisions (#418): the user-facing half of the typedDecision seam. The pure
+// scoring helpers (`scoreDecision`, `sumLabelMass`, …) stay on './patterns'.
+export {
+  typedDecision,
+  decisionRouter,
+  decide,
+  decideFields,
+  evaluateDecision,
+  assertDecisionSetSpec,
+  DECISION_ROUTER_KEY,
+  type TypedDecisionConfig,
+  type TypedDecisionData,
+  type DecisionRouterConfig,
+  type DecisionCall,
+  type DecideFieldsCall,
+  type DecideOptions,
+  type EvaluatedDecision,
+} from './patterns'
 
 // ============================================================================
 // Context Helpers

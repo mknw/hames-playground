@@ -41,10 +41,24 @@ export { withReferences, __clearReferenceCache } from './with-references.server'
 // EventView
 export { EventViewImpl, createEventView } from './event-view.server'
 
-// Decisions (#418) — the pure scoring half of the policy layer. The awaited
+// Decisions (#418) — the policy layer: the pure scoring half (T1), the awaited
 // wrapper (`evaluateDecision` / `decide` / `decideFields`) and the
-// `typedDecision` pattern arrive with #418 T2, beside these.
+// `typedDecision` / `decisionRouter` patterns (T2).
 export {
+  evaluateDecision,
+  decide,
+  decideFields,
+  assertDecisionSetSpec,
+  typedDecision,
+  decisionRouter,
+  DECISION_ROUTER_KEY,
+  type DecisionCall,
+  type EvaluatedDecision,
+  type DecideOptions,
+  type DecideFieldsCall,
+  type TypedDecisionConfig,
+  type TypedDecisionData,
+  type DecisionRouterConfig,
   sumLabelMass,
   calibrateLabelMass,
   normalizeLabelMass,

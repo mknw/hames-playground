@@ -1726,6 +1726,24 @@ export interface DecideResult<L extends string = string> {
 export type DecideFn = {
   <L extends string>(input: DecideInput<L>): Promise<DecideResult<L>>
   limits?: () => ModelLimits
+  serving?: DecideServing
+}
+
+/** What a transport knows about the client it WILL serve a decision from,
+ *  resolved per call from the spec key — the adapter's half of the F2/F3
+ *  contract (T3/T4 fill it; `evaluateDecision` reads it).
+ *
+ *   - `method` is known BEFORE the call, which is what lets a
+ *     `requireCalibrated` policy abstain without paying (F3).
+ *   - `calibration` is the host-fed entry for (serving client, `key`); its
+ *     cuts win over the policy's static thresholds (F2).
+ *
+ *  OPTIONAL, and its absence removes only the pre-call shortcut: the post-call
+ *  `method-mismatch` / `uncalibrated` checks still run on the result's own
+ *  `method` / `calibrated`. */
+export type DecideServing = (key: string) => {
+  readonly method?: DecisionMethod
+  readonly calibration?: DecisionCalibrationEntry
 }
 
 /** The structured entry: several typed fields over one state (D6). NOTE (F6):
@@ -1737,6 +1755,7 @@ export type DecideAllFn = {
     readonly state: string
   }): Promise<{ readonly fields: { readonly [K in keyof F]: DecideResult<F[K]> } }>
   limits?: () => ModelLimits
+  serving?: DecideServing
 }
 
 /** Data payload for `decision_made` — one typed decision the policy layer
@@ -1963,6 +1982,10 @@ export const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory> = {
   // The retriever's matches are surfaced as a tool_result (the channel the
   // compactExecution reads via view.fromLastPattern()) — same as a simpleLoop tool.
   retriever: ['tool_result'],
+  // The decision IS the deliverable (#418): track it so the distribution
+  // survives in ctx.events and the panel. `error` is always tracked anyway.
+  typedDecision: 'decision_made',
+  decisionRouter: 'decision_made',
 }
 
 /** Default commitStrategy by pattern type */
@@ -1976,6 +1999,10 @@ export const DEFAULT_COMMIT_STRATEGY: Record<string, CommitStrategy> = {
   compactIntent: 'always',
   planner: 'always',
   retriever: 'always',
+  // A decision a consumer acted on must stay explainable on a failed turn
+  // (`decision_made` is in ALWAYS_COMMIT_TYPES regardless, #418).
+  typedDecision: 'always',
+  decisionRouter: 'always',
 }
 
 /**
@@ -2034,6 +2061,15 @@ export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverab
   // retriever is best-effort: a backend failure yields empty matches and the
   // compactExecution answers from whatever else is in context — never fatal.
   retriever: 'recoverable',
+  // typedDecision never throws and always leaves a verdict (`policy.fallback`,
+  // REQUIRED), so a failed decision is the consumer's abstain, not a hole in
+  // the turn — the consumer that cannot proceed on its fallback says so itself.
+  typedDecision: 'recoverable',
+  // decisionRouter has router's failure shape: a failed decision clears
+  // `data.route` and `routes()` would throw on it, so it stops the turn where
+  // it happened (parity with `router`; #418 D10). `errorSeverity: 'recoverable'`
+  // turns that into "continue on `policy.fallback`".
+  decisionRouter: 'irrecoverable',
   // ---------------------------------------------------------------------------
   // The FIVE best-effort types were unlisted until #273 D-d, and therefore
   // inherited `resolveConfig`'s `'irrecoverable'` fallback; the three that

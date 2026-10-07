@@ -272,11 +272,15 @@ jobs:
 
     services:
       postgres:
-        # Compose's major version (postgres:16-alpine), pinned by its index
-        # digest (16.15 when pinned) so a re-tag cannot change what CI tests
-        # against. The password is a throwaway: the container holds no data
-        # and is deleted with the job.
-        image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+        # pgvector's postgres:16 image (bookworm), pinned by its manifest INDEX
+        # digest so a re-tag cannot change what CI tests against. It replaces
+        # the plain postgres:16-alpine service (#419 M4): memories.server.ts's
+        # lazy ensureSchema runs `CREATE EXTENSION vector`, which the alpine
+        # image answers with `extension "vector" is not available` — and since
+        # #460 a DB-backed test that would skip FAILS this job, so a
+        # vector-less service could only turn red. The compose/dev database
+        # migration itself is #419 M8, not this workflow.
+        image: pgvector/pgvector@sha256:a132765ec351c65111b5b675928a3a0515a466a40f97277329db8b8209ad8bc9
         env:
           POSTGRES_PASSWORD: test
         # The private-Postgres port from docs/testing/pyramid.md, not 5432.
@@ -304,7 +308,7 @@ jobs:
     # test-database-guard.test.ts pins that this job sets it.
     env:
       TEST_DATABASE_URL: postgresql://postgres:test@127.0.0.1:55439/hames_test
-      TEST_DATABASE_REQUIRED: "1"
+      TEST_DATABASE_REQUIRED: '1'
 
     steps:
       - uses: actions/checkout@v4

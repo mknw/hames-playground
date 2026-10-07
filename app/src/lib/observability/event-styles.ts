@@ -74,6 +74,9 @@ export const eventIconClasses: Record<EventType, string> = {
   // One typed decision the policy layer evaluated (#418). Placeholder entry —
   // #418 T6 owns the real presentation (bars, the abstained chip).
   decision_made: 'i-material-symbols-rule',
+  // What memory recall attached, or why nothing (#419). Placeholder entry —
+  // the memory UI slice owns the presentation.
+  memory_recalled: 'i-material-symbols-memory-outline',
 }
 
 export const eventColors: Record<EventType, string> = {
@@ -103,4 +106,5 @@ export const eventColors: Record<EventType, string> = {
   hitl_request: '#f97316', // orange-500 — the legacy approval pair's hues (#433)
   hitl_response: '#10b981', // emerald-500
   decision_made: '#38bdf8', // sky-400 — placeholder entry; #418 T6 owns the hue
+  memory_recalled: '#2dd4bf', // teal-400 — placeholder entry; #419's UI slice owns the hue
 }

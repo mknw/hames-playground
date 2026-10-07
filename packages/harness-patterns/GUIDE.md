@@ -141,6 +141,43 @@ key (`conversationalRoute`) that `routes()` dispatches to a pass-through, and
 run it with `shadow: true` beside your existing `router()` to measure agreement
 before swapping. See SPEC's [Decisions](SPEC.md#decisions-typeddecision-418).
 
+### Recalling what the user told us
+
+`memoryRecall` is the recall half of persistent memory: a chain step that runs
+first and, when the latest message plausibly depends on something the user said
+before, sets `data.memories` and a formatted `data.memoryContext` for the
+responder. Core hosts no database or embedder — you inject a `MemoryStore`
+bound to the turn's owner, the raw decision seam, a query embedder and the rule
+for which tiers a turn may read:
+
+```typescript
+import { memoryRecall, harnessUsesMemory } from '@hames-ai/harness-patterns'
+import type { DecideFn, MemoryQueryEmbedder, MemoryStore } from '@hames-ai/harness-patterns'
+
+declare const store: MemoryStore // the host's database, already bound to the owner
+declare const decide: DecideFn // bamlPatterns().decide
+declare const embed: MemoryQueryEmbedder
+declare const currentUser: () => string | null
+
+const recall = memoryRecall({
+  store,
+  decide,
+  embed,
+  owner: currentUser,
+  // fail closed: an unknown tier reads the narrowest set
+  visibleTiers: (tier) => (tier === 'private' ? ['private', 'public'] : ['public']),
+})
+
+harnessUsesMemory([recall]) // true — gate the memory wake and the post-reply store on this
+```
+
+It never throws and never stops what follows it: a down store, a gate that
+abstains or a wake that has not landed all end in "attach nothing", recorded as
+a `memory_recalled` event of ids and a reason — never the memories themselves.
+A turn's memories are cleared on every exit, so a skipped turn never inherits
+the last one's. The user sees nothing either way. See SPEC's
+[Memory recall](SPEC.md#memory-recall-memoryrecall-419).
+
 ### Asking a human
 
 A run can stop to ask the person watching it, and an answer continues it. The

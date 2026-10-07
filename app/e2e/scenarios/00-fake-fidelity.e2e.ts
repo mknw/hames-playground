@@ -192,3 +192,46 @@ describe('the fake recognises every BAML function', () => {
     })
   }
 })
+
+// #418 T4. The Jev transport is a REST adapter, so no `b.request` render can
+// check it; this drives the REAL transport at the fake instead. The fake exists
+// so a hermetic run never reaches OpenRouter — it is only worth that while the
+// transport and the fake agree on the wire.
+describe("the fake's Jev endpoint (Decisions API)", () => {
+  const SET = {
+    key: 'turn',
+    fields: {
+      route: {
+        key: 'route',
+        question: 'Which route?',
+        labels: [
+          { id: 'search', description: 'look something up' },
+          { id: 'chat', description: 'just talk' },
+        ],
+      },
+    },
+  }
+
+  it('answers the shipped transport with typed probabilities, recorded under the Jev model id', async () => {
+    const { fakeLlm } = await bootApp()
+    fakeLlm.reset()
+    const { createJevTransport } = await import('@hames-ai/harness-baml/jev-decide.server')
+    const r = await createJevTransport().decideAll({ spec: SET, state: 's' })
+    expect(r.fields.route.method).toBe('jev')
+    expect(r.fields.route.probs.search).toBeCloseTo(0.9, 9)
+    expect(r.fields.route.llmCall?.metrics?.basis).toBe('provider')
+    expect(fakeLlm.calls.map((c) => [c.model, c.outcome])).toEqual([['typesafe/jev-1.13', 'ok']])
+  })
+
+  it('an armed status fault is a Jev error the transport fails closed on', async () => {
+    const { fakeLlm } = await bootApp()
+    fakeLlm.reset()
+    fakeLlm.arm({ kind: 'status', status: 500, times: 1 })
+    const { createJevTransport } = await import('@hames-ai/harness-baml/jev-decide.server')
+    await expect(createJevTransport().decideAll({ spec: SET, state: 's' })).rejects.toThrow(
+      /Jev answered HTTP 500/,
+    )
+    expect(fakeLlm.calls.map((c) => c.outcome)).toEqual(['status'])
+    fakeLlm.reset()
+  })
+})

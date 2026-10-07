@@ -26,6 +26,7 @@ export {
   createCriticAdapter,
   createInjectionScreen,
   createDecideAdapter,
+  createDecideAllAdapter,
   decideTransportFor,
   topLogprobsOf,
   accountBamlCall,

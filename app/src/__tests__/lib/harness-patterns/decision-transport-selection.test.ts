@@ -5,7 +5,7 @@
  *   resolved client           transport
  *   ─────────────────────     ───────────────────────────────────────────────
  *   ∈ LOGPROB_CLIENTS         the BAML `Decide` readout
- *   ∈ JEV_CLIENTS             the Jev REST adapter (slice T4; none wired yet)
+ *   ∈ JEV_CLIENTS             the Jev REST adapter (`jev-decide.server.ts`, slice T4)
  *   anything else             the injected verbalized secondary (slice T5)
  *
  * The throw rule is therefore NARROW: a client CLAIMED logprob-capable whose
@@ -14,7 +14,7 @@
  * against a counting fake server, so "never calls `Decide`" is a statement about
  * requests that were not made, not about a mock that was not invoked.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import path from 'node:path'
@@ -89,19 +89,16 @@ describe('the selection table (by the resolved client)', () => {
     expect(LOGPROB_CLIENTS.has(VERDA_CLIENT_BY_ROLE.decide!)).toBe(true)
   })
 
-  it('a JEV_CLIENTS member selects the Jev transport (the set is empty until T4)', async () => {
+  it('a JEV_CLIENTS member selects the Jev transport; the Anthropic tier’s decide client is one', async () => {
     const { decideTransportFor } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const { JEV_CLIENTS } = await import('@hames-ai/harness-baml/clients.server')
-    expect(JEV_CLIENTS.size).toBe(0)
-    ;(JEV_CLIENTS as Set<string>).add('JevDecide')
-    try {
-      expect(decideTransportFor('JevDecide')).toBe('jev')
-    } finally {
-      ;(JEV_CLIENTS as Set<string>).delete('JevDecide')
-    }
+    const { JEV_CLIENTS, resolveClientForRole } =
+      await import('@hames-ai/harness-baml/clients.server')
+    expect([...JEV_CLIENTS]).toEqual(['JevDecide'])
+    expect(JEV_CLIENTS.has(resolveClientForRole('decide'))).toBe(true)
+    expect(decideTransportFor('JevDecide')).toBe('jev')
   })
 
-  it.each(['AnthropicHaiku45', 'VerdaQwen', 'LocalQwenSmall', 'JevDecide', 'whatever'])(
+  it.each(['AnthropicHaiku45', 'VerdaQwen', 'LocalQwenSmall', 'whatever'])(
     'any other client (%s) is verbalized — a chat model cannot be read for a distribution',
     async (client) => {
       const { decideTransportFor } = await import('@hames-ai/harness-baml/baml-adapters.server')
@@ -111,6 +108,19 @@ describe('the selection table (by the resolved client)', () => {
 })
 
 describe('a non-logprob client never calls `Decide` and never throws a logprob error', () => {
+  // The Anthropic tier's own client is Jev (T4), so a verbalized read is reached
+  // by a consumer layer naming a chat client for the role.
+  beforeEach(async () => {
+    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
+    configureConsumerClients((role) =>
+      role === 'decide' ? { client: 'AnthropicHaiku45' } : undefined,
+    )
+  })
+  afterEach(async () => {
+    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
+    configureConsumerClients(undefined)
+  })
+
   it('the Anthropic tier (no frame) takes the verbalized secondary: calibrated false, zero requests', async () => {
     const { createDecideAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const decide = createDecideAdapter({ verbalized: verbalizedStub as unknown as DecideFn })
@@ -127,7 +137,7 @@ describe('a non-logprob client never calls `Decide` and never throws a logprob e
     const decide = createDecideAdapter()
     const err = await decide({ spec: SPEC, state: 's' }).catch((e) => e)
     expect(err).toBeInstanceOf(LLMCallError)
-    expect(String(err.message)).toMatch(/no decide transport for client JevDecide/i)
+    expect(String(err.message)).toMatch(/no decide transport for client AnthropicHaiku45/i)
     expect(String(err.message)).toMatch(/rather than downgrading/)
     // Not the logprob throw, and nothing was sent anywhere.
     expect(String(err.message)).not.toMatch(/top_logprobs/)
@@ -282,24 +292,22 @@ describe('the private-tier lock on the non-logprob branches (review finding 3)',
     expect(requests).toBe(0)
   })
 
-  it('the Jev branch refuses the same way, so T4 inherits the lock', async () => {
-    const { configureConsumerClients, JEV_CLIENTS } =
-      await import('@hames-ai/harness-baml/clients.server')
-    ;(JEV_CLIENTS as Set<string>).add('JevDecide')
+  it('the Jev branch refuses the same way (the adapter-level lock; the transport’s own is `jev-tier-lock`)', async () => {
+    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
     configureConsumerClients((role) => (role === 'decide' ? { client: 'JevDecide' } : undefined))
-    try {
-      const { createDecideAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
-      const decide = createDecideAdapter()
-      await expect(onPrivateTier(() => decide({ spec: SPEC, state: 's' }))).rejects.toThrow(
-        /Refusing decide transport "jev"/,
-      )
-      expect(requests).toBe(0)
-    } finally {
-      ;(JEV_CLIENTS as Set<string>).delete('JevDecide')
-    }
+    const { createDecideAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const decide = createDecideAdapter()
+    await expect(onPrivateTier(() => decide({ spec: SPEC, state: 's' }))).rejects.toThrow(
+      /Refusing decide transport "jev"/,
+    )
+    expect(requests).toBe(0)
   })
 
   it('does not lock the Anthropic tier: the injected secondary is still reachable there', async () => {
+    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
+    configureConsumerClients((role) =>
+      role === 'decide' ? { client: 'AnthropicHaiku45' } : undefined,
+    )
     const { createDecideAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const decide = createDecideAdapter({ verbalized: verbalizedStub as unknown as DecideFn })
     await decide({ spec: SPEC, state: 's' })

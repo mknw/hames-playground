@@ -287,6 +287,15 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       json(res, 200, { list: [] })
       return
     }
+    // The Anthropic tier's decide transport (#418 T4): OpenRouter's Decisions
+    // API, a different wire format from chat-completions. Pointed here by
+    // `JEV_DECISIONS_URL` in `app.ts`, so a hermetic run never reaches the real one.
+    if (req.method === 'POST' && req.url?.startsWith('/api/alpha/decisions')) {
+      let rawJev = ''
+      req.on('data', (chunk) => (rawJev += chunk))
+      req.on('end', () => serveJev(rawJev, res))
+      return
+    }
     if (req.method !== 'POST' || !req.url?.startsWith('/v1/chat/completions')) {
       json(res, 404, { error: { message: `no fake route for ${req.method} ${req.url}` } })
       return
@@ -296,6 +305,63 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
     req.on('data', (chunk) => (raw += chunk))
     req.on('end', () => {
       void serve(raw, res)
+    })
+  }
+
+  /** `POST /api/alpha/decisions`: deterministic typed answers — every question
+   *  answered with its FIRST option at 0.9 and the rest sharing 0.1, and a
+   *  `usage.cost` — so a scenario asserts routing and accounting, never model
+   *  quality. Honours an armed `status` fault, so a Jev 5xx is reachable. */
+  function serveJev(raw: string, res: http.ServerResponse): void {
+    let body: {
+      model?: string
+      state?: unknown
+      questions?: Record<string, { criteria?: unknown }>
+    }
+    try {
+      body = JSON.parse(raw || '{}')
+    } catch {
+      json(res, 400, { error: { code: 400, message: 'fake-llm: request body was not JSON' } })
+      return
+    }
+    const model = body.model ?? '(no model)'
+    const prompt = JSON.stringify(body)
+    const fault = takeFault(model, false)
+    if (fault?.kind === 'status') {
+      calls.push({
+        at: Date.now() - startedAt,
+        model,
+        fn: null,
+        prompt,
+        outcome: 'status',
+        delayedMs: 0,
+      })
+      json(res, fault.status, {
+        error: {
+          code: fault.status,
+          message: fault.message ?? `fake-llm: injected HTTP ${fault.status}`,
+        },
+      })
+      return
+    }
+    const answers: Record<string, unknown> = {}
+    for (const [name, q] of Object.entries(body.questions ?? {})) {
+      const options = Object.keys((q.criteria ?? {}) as Record<string, unknown>)
+      const rest = options.length > 1 ? 0.1 / (options.length - 1) : 0
+      answers[name] = {
+        type: 'choice',
+        choice: options[0],
+        confidence: 0.9,
+        probabilities: Object.fromEntries(options.map((o, i) => [o, i === 0 ? 0.9 : rest])),
+      }
+    }
+    calls.push({ at: Date.now() - startedAt, model, fn: null, prompt, outcome: 'ok', delayedMs: 0 })
+    json(res, 200, {
+      id: 'gen-dec-e2e-fake',
+      model,
+      provider: 'e2e-fake',
+      answers,
+      usage: { input_tokens: 1, output_tokens: 0, cost: 0.00001 },
     })
   }
 

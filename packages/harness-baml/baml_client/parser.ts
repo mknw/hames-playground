@@ -23,7 +23,7 @@ import { toBamlError } from "@boundaryml/baml"
 import type { Checked, Check } from "./types"
 import type { partial_types } from "./partial_types"
 import type * as types from "./types"
-import type {Attempt, ControllerAction, CriticResult, DecideOption, DescribeBatchResult, DescribeItemSummary, DescribeTarget, ExpandedRef, FewShot, LoopTurn, Message, PlanResult, PriorResult, ReferenceCandidate, ReferenceSelection, ReferenceSelectorResult, RouteOption, RoutingResult, ScreenVerdict, ToolCall, ToolCallRequest, ToolDescription, ToolResult} from "./types"
+import type {Attempt, CompactedMemory, ControllerAction, CriticResult, DecideOption, DescribeBatchResult, DescribeItemSummary, DescribeTarget, ExpandedRef, ExtractedMemory, FewShot, LoopTurn, MemoryMember, Message, PlanResult, PriorResult, ReferenceCandidate, ReferenceSelection, ReferenceSelectorResult, RouteOption, RoutingResult, ScreenVerdict, ToolCall, ToolCallRequest, ToolDescription, ToolResult} from "./types"
 import type TypeBuilder from "./type_builder"
 
 export class LlmResponseParser {
@@ -76,6 +76,29 @@ export class LlmResponseParser {
     }
   }
   
+  CompactMemories(
+      llmResponse: string,
+      __baml_options__?: { tb?: TypeBuilder, clientRegistry?: ClientRegistry, env?: Record<string, string | undefined> }
+  ): types.CompactedMemory {
+    try {
+      const __rawEnv__ = __baml_options__?.env ? { ...process.env, ...__baml_options__.env } : { ...process.env };
+      const __env__: Record<string, string> = Object.fromEntries(
+        Object.entries(__rawEnv__).filter(([_, value]) => value !== undefined) as [string, string][]
+      );
+      return this.runtime.parseLlmResponse(
+        "CompactMemories",
+        llmResponse,
+        false,
+        this.ctxManager.cloneContext(),
+        __baml_options__?.tb?.__tb(),
+        __baml_options__?.clientRegistry,
+        __env__,
+      ) as types.CompactedMemory
+    } catch (error) {
+      throw toBamlError(error);
+    }
+  }
+  
   Critic(
       llmResponse: string,
       __baml_options__?: { tb?: TypeBuilder, clientRegistry?: ClientRegistry, env?: Record<string, string | undefined> }
@@ -117,6 +140,29 @@ export class LlmResponseParser {
         __baml_options__?.clientRegistry,
         __env__,
       ) as string
+    } catch (error) {
+      throw toBamlError(error);
+    }
+  }
+  
+  ExtractMemory(
+      llmResponse: string,
+      __baml_options__?: { tb?: TypeBuilder, clientRegistry?: ClientRegistry, env?: Record<string, string | undefined> }
+  ): types.ExtractedMemory[] {
+    try {
+      const __rawEnv__ = __baml_options__?.env ? { ...process.env, ...__baml_options__.env } : { ...process.env };
+      const __env__: Record<string, string> = Object.fromEntries(
+        Object.entries(__rawEnv__).filter(([_, value]) => value !== undefined) as [string, string][]
+      );
+      return this.runtime.parseLlmResponse(
+        "ExtractMemory",
+        llmResponse,
+        false,
+        this.ctxManager.cloneContext(),
+        __baml_options__?.tb?.__tb(),
+        __baml_options__?.clientRegistry,
+        __env__,
+      ) as types.ExtractedMemory[]
     } catch (error) {
       throw toBamlError(error);
     }
@@ -404,6 +450,29 @@ export class LlmStreamParser {
     }
   }
   
+  CompactMemories(
+      llmResponse: string,
+      __baml_options__?: { tb?: TypeBuilder, clientRegistry?: ClientRegistry, env?: Record<string, string | undefined> }
+  ): partial_types.CompactedMemory {
+    try {
+      const __rawEnv__ = __baml_options__?.env ? { ...process.env, ...__baml_options__.env } : { ...process.env };
+      const __env__: Record<string, string> = Object.fromEntries(
+        Object.entries(__rawEnv__).filter(([_, value]) => value !== undefined) as [string, string][]
+      );
+      return this.runtime.parseLlmResponse(
+        "CompactMemories",
+        llmResponse,
+        true,
+        this.ctxManager.cloneContext(),
+        __baml_options__?.tb?.__tb(),
+        __baml_options__?.clientRegistry,
+        __env__,
+      ) as partial_types.CompactedMemory
+    } catch (error) {
+      throw toBamlError(error);
+    }
+  }
+  
   Critic(
       llmResponse: string,
       __baml_options__?: { tb?: TypeBuilder, clientRegistry?: ClientRegistry, env?: Record<string, string | undefined> }
@@ -445,6 +514,29 @@ export class LlmStreamParser {
         __baml_options__?.clientRegistry,
         __env__,
       ) as string
+    } catch (error) {
+      throw toBamlError(error);
+    }
+  }
+  
+  ExtractMemory(
+      llmResponse: string,
+      __baml_options__?: { tb?: TypeBuilder, clientRegistry?: ClientRegistry, env?: Record<string, string | undefined> }
+  ): partial_types.ExtractedMemory[] {
+    try {
+      const __rawEnv__ = __baml_options__?.env ? { ...process.env, ...__baml_options__.env } : { ...process.env };
+      const __env__: Record<string, string> = Object.fromEntries(
+        Object.entries(__rawEnv__).filter(([_, value]) => value !== undefined) as [string, string][]
+      );
+      return this.runtime.parseLlmResponse(
+        "ExtractMemory",
+        llmResponse,
+        true,
+        this.ctxManager.cloneContext(),
+        __baml_options__?.tb?.__tb(),
+        __baml_options__?.clientRegistry,
+        __env__,
+      ) as partial_types.ExtractedMemory[]
     } catch (error) {
       throw toBamlError(error);
     }

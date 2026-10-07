@@ -123,6 +123,11 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
       trimmedTurns,
       input.hasError ?? false,
       input.errorMessage,
+      // `memory_context` (#419 M9): the trailing BAML parameter exists, and the
+      // seam that carries a recalled block to this call is M5's wiring. Until
+      // then it is passed EXPLICITLY as null — the options bag is the argument
+      // AFTER it, and omitting it would hand the bag to the wrong parameter.
+      null,
       synthOpts,
     )
   } catch (e) {

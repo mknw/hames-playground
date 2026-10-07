@@ -21,7 +21,7 @@ client<llm> LocalGLM {
 // The flip is per TIER, not per chain, and it went through the per-call
 // override rather than through any `client` line here:
 //
-//   * ANTHROPIC TIER — unchanged. The six describe functions still declare
+//   * ANTHROPIC TIER — unchanged. The eight describe functions still declare
 //     `client DescribeAnthropic` (→ AnthropicHaiku45) and still run there. The
 //     canonical per-function list is the block on that chain in
 //     anthropic-only.baml. Nothing in this file is read on that tier.
@@ -32,7 +32,7 @@ client<llm> LocalGLM {
 //     roles take; the private tier is now two models, not one — the heavy roles
 //     on VerdaQwen and summarization here.
 //
-//   * WHY NOT the obvious lever. Rewriting the six `client DescribeAnthropic`
+//   * WHY NOT the obvious lever. Rewriting the eight `client DescribeAnthropic`
 //     lines (or pointing them at a new `DescribeLocal` chain) would move
 //     describe on BOTH tiers at once, which is not what was asked for, and it
 //     would move ScreenUntrustedContent with them — see below. The `client`
@@ -131,7 +131,7 @@ client<llm> LocalQwenSmall {
     // client instead of with one machine's launch command. `openai-generic`
     // forwards an unrecognised option into the request body verbatim, which is
     // what puts it on the wire; `verda-body-shape.test.ts` renders one real request
-    // per private-tier function offline — the six describe ones against THIS
+    // per private-tier function offline — the eight describe ones against THIS
     // client — and pins it, because nothing upstream would look wrong.
     chat_template_kwargs {
       enable_thinking false

@@ -341,8 +341,9 @@ export type BamlRole =
   | 'critic' // Critic
   | 'compactExecution' // Synthesize
   | 'router' // Router
-  // The summarization tier — SIX functions. The canonical list (and the
-  // seventh function, `screen`, that shares the chain) is on the
+  // The summarization tier — EIGHT functions (six at the 2026-08-26 flip, plus
+  // the two memory functions of #419). The canonical list (and the ninth
+  // function, `screen`, that shares the chain) is on the
   // DescribeAnthropic block in baml_src/anthropic-only.baml.
   | 'describe'
   | 'screen' // ScreenUntrustedContent (withInjectionGuard's opt-in LLM layer)
@@ -545,7 +546,7 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   //
   // If `SMALL_LLM_BASE_URL` is unset the tier is REFUSED, not descaled — see
   // `assertPrivateTierConfigured` in lib/inference/config.server.ts.
-  describe: 'LocalQwenSmall', // the six summarization functions
+  describe: 'LocalQwenSmall', // the eight summarization functions
   // The composite consequence of THIS line, in the style the `planner:` entry
   // above sets: the screen now inherits the scale-to-zero LATENCY profile as
   // well as the routing. A guarded tool result can wait a 146s cold start — or
@@ -589,7 +590,7 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
  * The `describe` list IS the second copy of a list whose canonical home is the
  * `DescribeAnthropic` block in `baml_src/anthropic-only.baml`, and there is no
  * way around that once the role moves: this file needs the function NAMES and
- * BAML has no export of them. `clients-verda.test.ts` reads the six `client
+ * BAML has no export of them. `clients-verda.test.ts` reads the eight `client
  * DescribeAnthropic` declarations out of `baml_src/` and pins them equal to
  * this array, which is what stops the copy drifting — and, more to the point,
  * what fails if a seventh describe function is added and forgotten here, since
@@ -609,6 +610,8 @@ export const SWITCHED_FUNCTIONS_BY_ROLE: Partial<Record<BamlRole, readonly strin
     'CompactIntent',
     'RetrieveQuery',
     'ReferenceSelector',
+    'ExtractMemory',
+    'CompactMemories',
   ],
   screen: ['ScreenUntrustedContent'],
   decide: ['Decide'],

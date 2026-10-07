@@ -126,7 +126,10 @@ import {
   defineInferenceClients,
   activateConsumerClients,
 } from "@hames-ai/harness-baml/consumer-clients.server";
-import { bamlPatterns, createLoopControllerAdapter } from "@hames-ai/harness-baml";
+import {
+  bamlPatterns,
+  createLoopControllerAdapter,
+} from "@hames-ai/harness-baml";
 import { simpleLoop } from "@hames-ai/harness-patterns/patterns/simpleLoop.server";
 import { searchAgent } from "@hames-ai/agents/agents";
 import type { AgentDeps } from "@hames-ai/agents/types";
@@ -178,6 +181,12 @@ declare const routes: RouteOption[];
 declare const history: Message[];
 
 const { b } = await import("@hames-ai/harness-baml/baml_client");
-const render = await b.request.Router("q", routes, history, plug("router")!);
+const render = await b.request.Router(
+  "q",
+  routes,
+  history,
+  null,
+  plug("router")!,
+);
 render.body.json().model; // → 'meta-llama/Llama-3.3-27B'
 ```

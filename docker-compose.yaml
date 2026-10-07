@@ -121,7 +121,18 @@ services:
         condition: service_completed_successfully
 
   postgres:
-    image: postgres:16-alpine
+    # pgvector's postgres:16 image (Debian bookworm), pinned by its manifest
+    # INDEX digest — the SAME digest `.github/workflows/ci.yml` runs its
+    # `test · postgres` job on, so dev, compose and CI are one image
+    # (postgres-image-pin.test.ts fails when they part). `withMemory` stores
+    # embeddings in a `vector(1024)` column (#419) and the alpine image cannot
+    # `CREATE EXTENSION vector`. musl -> glibc changes text collation, so an
+    # EXISTING `postgres_data` volume must not be pointed at this image: move it
+    # by dump-and-restore into a fresh volume, once, with
+    # docs/deployment/pgvector-migration.md and scripts/migrate-postgres-pgvector.sh.
+    # Bumping it: take the new INDEX digest, change it here and in ci.yml
+    # together, and re-run the restore drill in that runbook.
+    image: pgvector/pgvector:0.8.0-pg16-bookworm@sha256:a132765ec351c65111b5b675928a3a0515a466a40f97277329db8b8209ad8bc9
     container_name: hames-postgres
     restart: unless-stopped
     ports:
@@ -183,6 +194,60 @@ services:
     networks:
       - app-network
 
+  embedder:
+    # The memory/Data Stash embedder (#419 M8): `llama-server --embedding` over
+    # Qwen3-Embedding-0.6B, the same invocation as `make embed`, on the compose
+    # network ONLY. It has no `ports:` — nothing on the host or the LAN can
+    # reach it, and the app finds it by service name (`EMBEDDINGS_LOCAL_URL`
+    # below). Memory text is profiling data about employees (SD-10, SD-12), so
+    # the embedder is company-run and unreachable from outside by construction;
+    # compose-embedder.test.ts pins both halves, in this file AND in
+    # docker-compose.prod.yaml, which must close the exposure on its own (SD-18).
+    # A deployment that really needs it on the host (the systemd run shape,
+    # docs/deployment/azure-vm.md §7) adds a git-ignored override bound to
+    # 127.0.0.1 — never here.
+    #
+    # In the `app` profile with the container app: the host dev loop keeps
+    # using `make embed` on :8090 and never needs this. The GGUF is not in git
+    # (models/README.md); the container exits at start if it is missing, which
+    # is why it is not part of the bare `docker compose up -d`.
+    #
+    # Pinned by index digest (multi-arch: linux/amd64 and linux/arm64) under the
+    # floating `server` tag, which is what a re-tag cannot change under us. It
+    # may scale to zero behind the joint memory wake (lib/inference/
+    # memory-wake.server.ts), whose probe is `POST {EMBEDDINGS_LOCAL_URL}/embeddings`
+    # — a forward pass, never this healthcheck — so URL, path and port here are
+    # what that module reads.
+    image: ghcr.io/ggml-org/llama.cpp:server@sha256:33868c035b21dc63f7c60b7438774283fd99215bc319114eb03de5df4ce7cd6b
+    profiles: ["app"]
+    restart: unless-stopped
+    command:
+      - --embedding
+      - -m
+      - /models/Qwen3-Embedding-0.6B-Q8_0.gguf
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8090"
+      - --ctx-size
+      - "8192"
+    volumes:
+      - ./models:/models:ro
+    # Placeholder, not a measurement: the GGUF is 639 MB and the RSS of
+    # llama-server on top of it is unmeasured (#419 spec §7).
+    mem_limit: 2g
+    networks:
+      - app-network
+    healthcheck:
+      # /health answers 503 while the weights load and 200 once they are in.
+      # Compose ordering only: readiness for the app is the memory wake's
+      # forward-pass probe, and /health was never proof of that.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
   app:
     # The SolidStart app (#197). Deployment/parity — NOT the dev loop: `pnpm dev`
     # on the host is still the way to develop, and this service is not part of
@@ -225,12 +290,14 @@ services:
       - MCP_GATEWAY_URL=http://mcp-gateway:8811/mcp
       - REDIS_HOST_DIRECT=redis
       - DOC_CONVERT_URL=http://doc-convert:8000
-      # Data Stash embeddings run on a llama-server on the HOST (port 8090, see
-      # CLAUDE.md), which is not a compose service — hence host.docker.internal.
-      - EMBEDDINGS_LOCAL_URL=http://host.docker.internal:8090/v1
+      # The `embedder` service above, by name, on the compose network. The `/v1`
+      # suffix is required: `/embeddings` is appended verbatim by both the
+      # Data Stash client and the memory wake's probe.
+      - EMBEDDINGS_LOCAL_URL=http://embedder:8090/v1
     extra_hosts:
       # Linux hosts need this mapping spelled out; Docker Desktop/colima provide
-      # host.docker.internal anyway and ignore it.
+      # host.docker.internal anyway and ignore it. Kept for the one thing that
+      # still lives on the host: `SMALL_LLM_BASE_URL` (`make llm-small`, :8095).
       - "host.docker.internal:host-gateway"
     volumes:
       # The compute sandbox shells `docker run`/`docker exec` (sandbox
@@ -253,6 +320,11 @@ services:
       mcp-gateway:
         # No healthcheck on the gateway image, and the app reconnects per call
         # anyway (mcp-client.server.ts pools + retries), so started is enough.
+        condition: service_started
+      embedder:
+        # Started, not healthy: the embedder may scale to zero and memory is
+        # fail-open behind the joint wake, so a slow weight load must not hold
+        # the app back.
         condition: service_started
       doc-convert:
         # No healthcheck on the doc-convert image; STASH_CONVERT_DOCS defaults

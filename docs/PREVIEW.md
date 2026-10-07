@@ -84,7 +84,7 @@ Open exactly three inbound ports:
 **Nothing else.** Postgres, Neo4j, Redis, the MCP gateway, doc-convert and the
 app's own 3444 are all published on `127.0.0.1` by
 `docker-compose.prod.yaml`, so they are reachable over SSH tunnels and from
-nowhere else.
+nowhere else. The `embedder` is published nowhere, loopback included.
 
 > This is worth checking rather than assuming after any compose edit. Docker
 > writes its own iptables rules and a `0.0.0.0` publish reaches the host
@@ -786,18 +786,22 @@ diagnosis, and nothing is reachable from outside.
 
 ## 11. Known limitations of this preview
 
-- **Semantic search over uploaded documents will not work.** The Data Stash
-  embedder defaults to a `llama-server` on port 8090 that this stack does not
-  run; the base compose points the app at `host.docker.internal:8090`, and on the
-  VM nothing is listening there. Upload, storage, download and conversion all
-  work — only vector search over the uploads is dead. Fix it by running the
-  embedding server on the VM as its own systemd unit — `make embed` at the repo
-  root is that server, and [`models/README.md`](../models/README.md) says which
-  GGUF it expects — and setting `EMBEDDINGS_LOCAL_URL` (the `/v1` suffix is
-  required); or by pointing `EMBEDDINGS_PROVIDER` at a hosted embedder. The
-  endpoint does not have to be on this box: "local" names the OpenAI-compatible
-  wire format, not the machine. See [`azure-vm.md` §7](deployment/azure-vm.md)
-  and [`DATA_STASH.md`](DATA_STASH.md).
+- **Semantic search over uploaded documents (and memory) needs the GGUF on the
+  VM.** The stack carries the embedder as the compose `embedder` service
+  (profile `app`, so the `COMPOSE_PROFILES=app` of the bring-up includes it;
+  internal network only; the app is pointed at `http://embedder:8090/v1`). The
+  weights are not in git: put `Qwen3-Embedding-0.6B-Q8_0.gguf` in `models/`
+  ([`models/README.md`](../models/README.md)), or the service exits at start and
+  vector search over uploads stays dead while everything else — upload, storage,
+  download, conversion — works. The service publishes **no port**, not even on
+  loopback. Alternatively point `EMBEDDINGS_LOCAL_URL` at a remote
+  OpenAI-compatible embedder (the `/v1` suffix is required; "local" names the
+  wire format, not the machine) or `EMBEDDINGS_PROVIDER` at a hosted one — which
+  sends text off the box and is not what memory uses. See
+  [`azure-vm.md` §7](deployment/azure-vm.md) and [`DATA_STASH.md`](DATA_STASH.md).
+- **The Postgres image changed (#419 M8).** An existing database moves onto it
+  by dump-and-restore, once: [`deployment/pgvector-migration.md`](deployment/pgvector-migration.md).
+  Do not just `docker compose up` the new image over the old volume.
 - **Neo4j's password is set once.** `NEO4J_AUTH` is applied only when the data
   volume is empty, so changing `NEO4J_PASSWORD` in `.env` after first boot
   changes what the app sends and not what the database expects — the symptom is

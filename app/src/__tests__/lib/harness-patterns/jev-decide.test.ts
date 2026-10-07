@@ -331,6 +331,11 @@ describe('jev-fallback — fail closed, never a downgrade to another provider', 
         }),
     ],
     [
+      'a label omitted, the rest summing to 1',
+      async () =>
+        Response.json({ ...JEV_BODY, answers: { 'memory.recall': { probabilities: { yes: 1 } } } }),
+    ],
+    [
       'a label omitted (mass 0.55)',
       async () =>
         Response.json({

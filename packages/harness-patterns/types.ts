@@ -265,6 +265,10 @@ export type EventType =
    *  why it attached nothing. IDS ONLY — never memory content. See
    *  `MemoryRecalledEventData`. */
   | 'memory_recalled'
+  /** One memory the store step wrote or reinforced (#419 M2). METADATA ONLY —
+   *  ids, kind, tier and a content HASH, never the content. See
+   *  `MemoryWrittenEventData`. */
+  | 'memory_written'
 
 /** Accounting record for one harness step (#122): token and cost totals
  *  summed across EVERY physical API call the step made — including truncation
@@ -1936,6 +1940,141 @@ export interface MemoryRecalledEventData {
   /** The thrown error's CLASS, for `skipped: 'error'`. The message is logged,
    *  not recorded: an error can quote what it was reading. */
   readonly errorKind?: string
+}
+
+// ============================================================================
+// Memory store (#419 M2)
+// ============================================================================
+//
+// The injected seams and event payload of `settleMemory`, the store half of
+// `withMemory`. Same rules as the recall half above: no database, no embedder,
+// no provider vocabulary in core — the host binds the owner into the store it
+// hands in, and a tier is an opaque string.
+
+/** One candidate memory as the extractor returns it — UNFILTERED. `kind` is a
+ *  plain string on purpose: the closed set is core's deterministic acceptance,
+ *  and a candidate the adapter quietly dropped would be one acceptance could
+ *  never log (structurally the harness-baml `ExtractedMemory`). */
+export interface MemoryExtractedCandidate {
+  readonly kind: string
+  readonly content: string
+  readonly evidence: string
+}
+
+/** What the extractor is handed (the `describe`-role call): the store gate's
+ *  kind as a HINT, the labelled window, and the current user message bare so
+ *  the evidence rule has ONE text to point at. */
+export interface MemoryExtractInput {
+  readonly kindHint: string
+  readonly window: string
+  readonly latestUser: string
+}
+
+/** The extractor seam — at most the first three candidates are read. */
+export type MemoryExtractFn = (
+  input: MemoryExtractInput,
+) => Promise<LLMResult<readonly MemoryExtractedCandidate[]>>
+
+/** The full embedder seam: recall's query half plus the DOCUMENT side (no
+ *  query instruction). Company-run; the host pins its provider. */
+export interface MemoryEmbedder extends MemoryQueryEmbedder {
+  /** Embed stored texts, one vector per text, in order. */
+  documents(texts: string[]): Promise<number[][]>
+}
+
+/** The nearest ACTIVE memory of the owner to a candidate, same tier and same
+ *  embedding space, with its cosine SIMILARITY (`1 - distance`). */
+export interface MemoryNeighbor {
+  readonly id: string
+  readonly kind: MemoryKind
+  readonly content: string
+  readonly similarity: number
+}
+
+/** A memory to insert. The host encrypts `content`/`evidence` on write. */
+export interface MemoryInsertRow {
+  readonly id: string
+  readonly kind: MemoryKind
+  readonly tier: string
+  readonly content: string
+  readonly evidence: string
+  readonly embedding: readonly number[]
+  readonly embedSpace: string
+}
+
+/** The provenance row: which conversation event a memory was built from. */
+export interface MemorySourceRow {
+  readonly memoryId: string
+  readonly eventId: string
+  readonly ordinal: number
+  readonly conversationId: string
+}
+
+/**
+ * The write half of the persistence seam, handed to ONE transaction. Owner-bound
+ * like {@link MemoryStore}: no method takes a user.
+ *
+ * Every call here belongs to the transaction `MemoryWriteStore.transaction`
+ * opened — they commit together or roll back together, which is the whole of
+ * the idempotency guarantee (F9).
+ */
+export interface MemoryWriteTx {
+  /** Nearest memory of the owner's in `tier` and `embedSpace`, or null. */
+  nearest(q: {
+    readonly embedding: readonly number[]
+    readonly embedSpace: string
+    readonly tier: string
+  }): Promise<MemoryNeighbor | null>
+  insert(row: MemoryInsertRow): Promise<void>
+  /** Count this sighting: `evidence_count + 1`, `last_seen_at = now`. */
+  reinforce(id: string): Promise<void>
+  /** Replace a memory's text and vector with a newer statement of the same
+   *  fact, and count the sighting. */
+  update(
+    id: string,
+    next: {
+      readonly content: string
+      readonly evidence: string
+      readonly embedding: readonly number[]
+      readonly embedSpace: string
+    },
+  ): Promise<void>
+  /** Insert the provenance row. Returns **false, inserting nothing,** when
+   *  `(owner, eventId, ordinal)` already exists — the primary-key conflict that
+   *  says this candidate was written before. */
+  addSource(src: MemorySourceRow): Promise<boolean>
+  /** Rows the owner has, all tiers (the compaction threshold's input). */
+  count(): Promise<number>
+}
+
+/**
+ * The write seam. `transaction(fn)` MUST: open ONE database transaction; take
+ * the owner's advisory lock inside it (`pg_advisory_xact_lock`), so two
+ * concurrent stores for one user — and compaction — serialize; run `fn`;
+ * COMMIT if it resolved; ROLLBACK and rethrow if it threw. A host whose
+ * transaction does not roll back on a throw breaks idempotency.
+ */
+export interface MemoryWriteStore {
+  transaction<R>(fn: (tx: MemoryWriteTx) => Promise<R>): Promise<R>
+}
+
+/** What a stored memory's event says happened to it. */
+export type MemoryWriteAction = 'inserted' | 'reinforced' | 'updated'
+
+/** Data payload for `memory_written`. METADATA ONLY (SD-3): the content is user
+ *  data, and this payload is JSON-dumped wholesale by anything that serializes
+ *  `event.data`. `contentHash` is the SHA-256 of the stored content — it lets a
+ *  reader tell two writes apart without holding either. Pinned by
+ *  `event-hygiene`. */
+export interface MemoryWrittenEventData {
+  readonly memoryId: string
+  readonly kind: MemoryKind
+  readonly tier: string
+  readonly contentHash: string
+  /** The `user_message` event the memory was built from. */
+  readonly eventId: string
+  readonly ordinal: number
+  readonly action: MemoryWriteAction
 }
 
 // ============================================================================

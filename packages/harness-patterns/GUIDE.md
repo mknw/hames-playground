@@ -178,6 +178,40 @@ A turn's memories are cleared on every exit, so a skipped turn never inherits
 the last one's. The user sees nothing either way. See SPEC's
 [Memory recall](SPEC.md#memory-recall-memoryrecall-419).
 
+### Writing what the user told us
+
+`settleMemory` is the store half: call it from your post-turn continuation,
+**await it, then save the context**, so the `memory_written` events it records
+are in the one save. It decides from the question/answer pair whether anything
+is worth keeping, extracts at most three candidates from the user's own words,
+runs them through deterministic acceptance (verbatim evidence, identifier
+closure, the injection sanitizer), and writes each in a transaction of your
+`MemoryWriteStore`. It never throws; it fails closed — an abstained, uncalibrated
+or sensitive read, a read that needs a confirmation your host cannot yet ask, an
+organisational-graph target, a failed wake: all store nothing and say why.
+
+```typescript
+import { settleMemory, harnessUsesMemory } from '@hames-ai/harness-patterns'
+import type { MemoryStoreConfig } from '@hames-ai/harness-patterns'
+
+declare const memory: MemoryStoreConfig // store, decide, extract, embed, owner, …
+declare const patterns: Parameters<typeof harnessUsesMemory>[0]
+declare const ctx: Parameters<typeof settleMemory>[0]
+declare function saveSession(ctx: unknown): Promise<void> // your host's save
+
+// in the continuation that runs after the answer was sent:
+if (harnessUsesMemory(patterns)) {
+  const report = await settleMemory(ctx, memory) // never throws
+  // report.written, report.skipped, report.compactionDue …
+}
+await saveSession(ctx) // the events are already in ctx.events
+```
+
+Your `MemoryWriteStore.transaction(fn)` must open one transaction, take the
+owner's advisory lock inside it, and **roll back and rethrow if `fn` throws** —
+that rollback is what makes a retry a no-op. See SPEC's
+[Memory store](SPEC.md#memory-store-settlememory-419).
+
 ### Asking a human
 
 A run can stop to ask the person watching it, and an answer continues it. The

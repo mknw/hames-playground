@@ -220,16 +220,40 @@ describe('`serving` — what the policy layer reads BEFORE the call', () => {
       method: 'logprob',
       calibration: undefined,
     })
-    // Anthropic tier (no frame): the resolved client is the Jev mirror, which no
-    // transport serves yet. It reports NOTHING — not a 'verbalized' no model will
-    // serve (review finding 4); absent means "read it from the result" (G1).
-    expect(decide.serving('memory.kind')).toEqual({})
+    // Anthropic tier (no frame): the resolved client is Jev (T4), which is
+    // calibratable: its method, and its own fitted entry when the host fed one.
+    expect(decide.serving('memory.kind')).toEqual({ method: 'jev' })
+    configureDecisionCalibration({ JevDecide: { 'memory.kind': entry } })
+    expect(decide.serving('memory.kind')).toEqual({ method: 'jev', calibration: entry })
+  })
+
+  it('reports nothing for a client no transport serves (review finding 4)', async () => {
+    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
+    const { createDecideAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    configureConsumerClients((role) =>
+      role === 'decide' ? { client: 'AnthropicHaiku45' } : undefined,
+    )
+    try {
+      // Verbalized, and no secondary wired: not a 'verbalized' no model will
+      // serve; absent means "read it from the result" (G1).
+      expect(createDecideAdapter().serving('memory.kind')).toEqual({})
+    } finally {
+      configureConsumerClients(undefined)
+    }
   })
 
   it('reports the verbalized method only when a secondary is actually wired', async () => {
     const { createDecideAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
+    configureConsumerClients((role) =>
+      role === 'decide' ? { client: 'AnthropicHaiku45' } : undefined,
+    )
     const wired = createDecideAdapter({ verbalized: (async () => ({})) as never })
-    expect(wired.serving('memory.kind')).toEqual({ method: 'verbalized' })
+    try {
+      expect(wired.serving('memory.kind')).toEqual({ method: 'verbalized' })
+    } finally {
+      configureConsumerClients(undefined)
+    }
     // …and the private-tier lock un-wires it again: nothing non-logprob is
     // servable there, so nothing is reported.
     expect(await onPrivateTier(async () => wired.serving('memory.kind'))).toMatchObject({

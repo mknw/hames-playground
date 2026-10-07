@@ -144,9 +144,13 @@ function fakeDb(opts: { failAfterInsert?: boolean; failTransaction?: boolean; se
     async addSource(src) {
       if (opts.failAfterInsert) throw new Error('crash between memory and source')
       const key = `${src.eventId}#${src.ordinal}`
-      if (sources.has(key)) return false
+      if (sources.has(key)) return { inserted: false as const, memoryId: sources.get(key)! }
       sources.set(key, src.memoryId)
-      return true
+      return { inserted: true as const }
+    },
+    async read(id) {
+      const r = rows.get(id)
+      return r ? { kind: r.kind as MemoryNeighbor['kind'], content: r.content } : null
     },
     async count() {
       return rows.size
@@ -245,7 +249,23 @@ function fakeExtract(out: MemoryExtractedCandidate[] = [cand()]) {
   const calls: Array<{ kindHint: string; window: string; latestUser: string }> = []
   const fn = vi.fn(async (input: { kindHint: string; window: string; latestUser: string }) => {
     calls.push(input)
-    return { value: out, call: { callId: 'extract-call' } as never }
+    // A realistic record: the real adapter's `variables` and `parsedOutput` ARE
+    // the window and the candidates.
+    return {
+      value: out,
+      call: {
+        functionName: 'ExtractMemory',
+        variables: { window: 'CALL-SENTINEL', latestUser: 'CALL-SENTINEL' },
+        promptTemplate: 'CALL-SENTINEL',
+        rawInput: 'CALL-SENTINEL',
+        rawOutput: 'CALL-SENTINEL',
+        parsedOutput: out.map((c) => ({ ...c, content: 'CALL-SENTINEL' })),
+        usage: { inputTokens: 40, outputTokens: 12, cachedInputTokens: 0, totalTokens: 52 },
+        durationMs: 321,
+        provider: 'openai-generic',
+        clientName: 'LocalQwenSmall',
+      },
+    }
   })
   return { fn, calls }
 }
@@ -293,6 +313,9 @@ function config(over: Partial<MemoryStoreConfig> & { db?: ReturnType<typeof fake
     owner: () => 'user-1',
     tier: () => 'verda',
     ...over,
+    // D11: the switch is REQUIRED for a write; every test but the one that
+    // pins its absence runs with the user's switch on.
+    settings: { enabled: () => true, ...over.settings },
   }
   return { cfg, db, decide, extract, embedCalls: e.calls }
 }
@@ -519,8 +542,27 @@ describe('acceptance-rules', () => {
     expect(ok('The user wants 4096 rows from https://corp.example/data.')).toBe(true)
     expect(ok('The user emails priya@corp.example.')).toBe(true)
     // The generic subject and a sentence start are not names.
-    expect(identifiersIn('The user prefers dark mode. Always.')).toEqual([])
+    expect(identifiersIn('The user prefers dark mode. They like it.')).toEqual([])
     expect(identifiersIn('The user works with Priya.')).toEqual(['Priya'])
+  })
+
+  it('H2: a sentence-initial name is checked like any other capital', () => {
+    expect(identifiersIn('Mallory approves the user reports.')).toEqual(['Mallory'])
+    expect(identifiersIn('The user prefers metric. Mallory is the boss.')).toEqual(['Mallory'])
+    for (const content of [
+      'Mallory approves all of the user reports.',
+      'The user prefers metric. Mallory is the boss.',
+    ]) {
+      expect(reject({ content })).toBe('identifier-closure')
+    }
+    // Said by the user → fine, wherever it sits.
+    const user = 'Mallory approves everything. I always prefer metric units'
+    expect(
+      acceptCandidate(cand({ content: 'Mallory approves everything.' }), {
+        latestUser: user,
+        userMessages: [user],
+      }).ok,
+    ).toBe(true)
   })
 
   it('identifier closure is a whole-token match, not a substring', () => {
@@ -598,9 +640,26 @@ describe('acceptance-rules', () => {
     })
     const ctx = turn()
     await settleMemory(ctx, cfg)
-    expect(db.rows()[0].kind).toBe('episodic')
-    expect(written(ctx)[0].kind).toBe('episodic')
     expect(MEMORY_STORE_FALLBACKS.kind).toBe('episodic')
+  })
+
+  it('H1: a flat kind read plus a confident confirm = skip ASKS — nothing is stored before M6', async () => {
+    const flatKind = fakeDecide({}, (i) =>
+      i.spec.key === 'memory.store.kind'
+        ? logprob({ episodic: 0.26, semantic: 0.25, preference: 0.25, trait: 0.24 })
+        : undefined,
+    )
+    const { cfg, db, extract } = config({
+      decide: flatKind.fn,
+      extract: fakeExtract([cand({ kind: 'trait' })]).fn,
+    })
+    const ctx = turn()
+    const report = await settleMemory(ctx, cfg)
+    expect(report.skipped).toBe('no-confirmation')
+    expect(report.route).toEqual({ target: 'personal_memory', confirm: 'ask' })
+    expect(db.rows()).toEqual([])
+    expect(extract.fn).not.toHaveBeenCalled()
+    expect(written(ctx)).toEqual([])
   })
 
   it('a confident kind is the extractor’s kind — the hint steers, it does not bind', async () => {
@@ -920,6 +979,15 @@ describe('fail-closed paths', () => {
     expect((await stops({ owner: () => '' })).report.skipped).toBe('no-user')
   })
 
+  it('M3: no switch configured → nothing is written (D11: off until the user enables it)', async () => {
+    const { cfg, db, decide } = config()
+    const report = await settleMemory(turn(), { ...cfg, settings: {} })
+    expect(report.skipped).toBe('disabled')
+    expect((await settleMemory(turn(), { ...cfg, settings: undefined })).skipped).toBe('disabled')
+    expect(db.rows()).toEqual([])
+    expect(decide.calls).toEqual([])
+  })
+
   it('the user’s switch off, or unreadable → nothing', async () => {
     expect((await stops({ settings: { enabled: () => false } })).report.skipped).toBe('disabled')
     const throws = await stops({
@@ -939,6 +1007,19 @@ describe('fail-closed paths', () => {
     expect(r.db.rows()).toEqual([])
     // No frame either:
     expect((await stops({ tier: undefined })).report.skipped).toBe('no-tier')
+  })
+
+  it('L2: a tier override that disagrees with the run frame stores nothing', async () => {
+    const { cfg, db } = config({ tier: () => 'anthropic' })
+    const report = await withRunFrame({ inference: { tier: 'verda' } }, () =>
+      settleMemory(turn(), cfg),
+    )
+    expect(report.skipped).toBe('no-tier')
+    expect(db.rows()).toEqual([])
+    // Agreeing is fine.
+    const ok = config({ tier: () => 'verda' })
+    await withRunFrame({ inference: { tier: 'verda' } }, () => settleMemory(turn(), ok.cfg))
+    expect(ok.db.rows()).toHaveLength(1)
   })
 
   it('a turn that ended in error or paused → nothing', async () => {
@@ -1026,6 +1107,15 @@ describe('fail-closed paths', () => {
     expect(throws.report.skipped).toBe('error')
     expect(throws.db.rows()).toEqual([])
     expect((await stops({ embed: mk(async () => []) })).db.rows()).toEqual([])
+    // L3: one candidate, two vectors — a count mismatch is refused, not truncated.
+    const twoVectors = await stops({
+      embed: mk(async () => [
+        [1, 0],
+        [0, 1],
+      ]),
+    })
+    expect(twoVectors.report.skipped).toBe('error')
+    expect(twoVectors.db.rows()).toEqual([])
     expect((await stops({ embed: mk(async () => [[Number.NaN, 1]]) })).db.rows()).toEqual([])
     expect((await stops({ embed: mk(async () => [[]]) })).db.rows()).toEqual([])
     const noSpace = await stops({ embed: { ...mk(async () => [[1, 0]]), spaceId: '' } })
@@ -1203,10 +1293,52 @@ describe('memory-written-persisted', () => {
       await settleMemory(ctx, cfg)
     })
     expect(ctx.events.some((e) => e.type === 'memory_written')).toBe(true)
-    expect(live.filter((e) => e.type === 'memory_written')).toEqual([])
+    expect(live).toEqual([]) // L1: not even a decision event reaches the listener
     for (const e of ctx.events.filter((e) => e.type === 'memory_written')) {
       expect(wasEmittedLive(e)).toBe(false)
     }
+  })
+
+  it('H3: the extractor’s call rides the event REDACTED — no variables, prompt or output', async () => {
+    const { cfg } = config()
+    const ctx = turn()
+    await settleMemory(ctx, cfg)
+    const events = ctx.events.filter((e) => e.type === 'memory_written')
+    expect(JSON.stringify(events)).not.toContain('CALL-SENTINEL')
+    expect(JSON.stringify(events)).not.toContain('metric')
+    // Cost attribution survives.
+    expect(events[0].llmCall).toMatchObject({
+      functionName: 'ExtractMemory',
+      usage: { totalTokens: 52 },
+      durationMs: 321,
+      provider: 'openai-generic',
+      clientName: 'LocalQwenSmall',
+      variables: {},
+    })
+    expect(events[0].llmCall).not.toHaveProperty('rawOutput')
+    expect(events[0].llmCall).not.toHaveProperty('parsedOutput')
+  })
+
+  it('M1: a retry after a LOST save re-records the event (the memory and source already exist)', async () => {
+    const db = fakeDb()
+    const { cfg } = config({ db })
+    const ctx = turn()
+    await settleMemory(ctx, cfg)
+    // The host's save was refused: the events are gone, the rows are not.
+    ctx.events = ctx.events.filter((e) => e.type !== 'memory_written')
+    const memoryId = db.rows()[0].id
+
+    const retry = await settleMemory(ctx, cfg)
+    expect(retry).toMatchObject({ written: 0, duplicates: 1 })
+    const [ev] = written(ctx)
+    expect(ev).toMatchObject({ memoryId, kind: 'preference', action: 'reinforced', ordinal: 0 })
+    expect(ev.contentHash).toBe(
+      (await import('node:crypto')).createHash('sha256').update(CONTENT).digest('hex'),
+    )
+    expect(db.rows()[0].evidenceCount).toBe(1) // still rolled back
+    // And a SECOND retry, with the event present, records nothing more.
+    await settleMemory(ctx, cfg)
+    expect(written(ctx)).toHaveLength(1)
   })
 
   it('the extractor’s call is recorded once, on the first memory it produced', async () => {
@@ -1307,7 +1439,11 @@ describe('idempotency-transaction', () => {
     await Promise.all([settleMemory(ctx, a.cfg), settleMemory(ctx2, b.cfg)])
     expect(db.rows()).toHaveLength(1)
     expect(db.sources()).toHaveLength(1)
-    expect(written(ctx).length + written(ctx2).length).toBe(1)
+    // One write. The loser's own context (it never saw the winner's event)
+    // gets the repair record, so exactly ONE event says `inserted`.
+    const all = [...written(ctx), ...written(ctx2)]
+    expect(all.filter((e) => e.action === 'inserted')).toHaveLength(1)
+    expect(all.every((e) => e.memoryId === db.rows()[0].id)).toBe(true)
   })
 
   it('two concurrent stores of the SAME FACT from two turns serialize: one row, reinforced', async () => {

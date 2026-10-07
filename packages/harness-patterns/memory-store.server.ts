@@ -14,7 +14,11 @@
  * `memory_written` it records is in `ctx.events` BEFORE that continuation's
  * `saveSession`. One version-conditional save carries the turn's events and
  * the memory references together: no second detached save, no race with the
- * next turn, and no memory that exists while its event does not. It writes
+ * next turn. That holds only while the save lands: the host's trailing save is
+ * refused while a newer turn holds the conversation, so a user who replies
+ * during this function's wake/extract/embed/merge time commits memories and loses
+ * their events. A retry re-records a lost event (see the conflict handling
+ * below); the mechanism that avoids the loss is the host's (M5). It writes
  * straight into `ctx.events` and never through `trackEvent`, so nothing here
  * can reach a live listener, which is to say the transcript. It NEVER throws
  * and never touches the conversation row: a failure is a logged line and a
@@ -59,6 +63,7 @@ import { assertServerOnImport } from './assert.server'
 import { createEvent, generateId } from './context.server'
 import { stripThinkBlocks } from './content-transforms'
 import { currentRunFrame } from './run-frame.server'
+import { setLivePatternEnabled } from './live-event-context.server'
 import { trimToFit } from './token-budget.server'
 import { acceptCandidate, type AcceptanceRule } from './memory-acceptance.server'
 import { decide, decideFields } from './patterns/typedDecision.server'
@@ -78,6 +83,7 @@ import type {
   MemoryNeighbor,
   MemoryWakeWait,
   MemoryWriteAction,
+  MemoryWriteTx,
   MemoryWriteStore,
   MemoryWrittenEventData,
   PatternScope,
@@ -228,7 +234,8 @@ export interface MemoryStoreGateSettings {
 }
 
 export interface MemoryStoreSettings {
-  /** The user's memory switch. Absent → on. A throw stops the store. */
+  /** The user's memory switch. REQUIRED for a write: absent → nothing is stored
+   *  (D11, off until the user enables it). A throw stops the store. */
   readonly enabled?: () => boolean | Promise<boolean>
   readonly gate?: MemoryStoreGateSettings
   /** Question/answer pairs the gate and the extractor see. Default 1. */
@@ -445,10 +452,40 @@ function logStop(reason: string, extra = ''): void {
   console.warn(`[memory-store] stored nothing: ${reason}${extra ? ` (${extra})` : ''}`)
 }
 
+/** The extractor's call record without what it carried: `variables`,
+ *  `promptTemplate`, `rawInput`, `rawOutput` and `parsedOutput` are the
+ *  candidates and the window — the memory's text. Cost attribution survives. */
+function redactCall(call: LLMCallRecord | undefined): LLMCallRecord | undefined {
+  if (!call) return undefined
+  return {
+    functionName: call.functionName,
+    variables: {},
+    ...(call.usage ? { usage: call.usage } : {}),
+    ...(call.metrics ? { metrics: call.metrics } : {}),
+    ...(call.durationMs !== undefined ? { durationMs: call.durationMs } : {}),
+    ...(call.provider ? { provider: call.provider } : {}),
+    ...(call.clientName ? { clientName: call.clientName } : {}),
+  }
+}
+
+/** Insert the provenance row inside the open transaction; on a primary-key
+ *  conflict, read what the existing row points at and roll the candidate back. */
+async function claim(
+  tx: MemoryWriteTx,
+  memoryId: string,
+  src: { eventId: string; ordinal: number; conversationId: string },
+): Promise<void> {
+  const r = await tx.addSource({ memoryId, ...src })
+  if (!r.inserted) throw new SourceConflict(r.memoryId, await tx.read(r.memoryId))
+}
+
 /** Thrown inside a candidate's transaction to roll it back: this candidate's
  *  provenance row exists, so it was written before. */
 class SourceConflict extends Error {
-  constructor() {
+  constructor(
+    readonly memoryId: string,
+    readonly existing: { kind: MemoryKind; content: string } | null,
+  ) {
     super('memory source row already exists')
     this.name = 'MemorySourceConflict'
   }
@@ -523,15 +560,26 @@ async function run(
     return { ...emptyReport(), ...more, skipped }
   }
 
+  // This step's events are never the transcript: switch the live slot off, so a
+  // decision event cannot reach a listener either (L1).
+  setLivePatternEnabled(false)
   const userId = owner()
   if (userId === null || userId === undefined || userId === '') return stop('no-user')
   try {
-    if (settings?.enabled && !(await settings.enabled())) return stop('disabled')
+    // D11: memory is off until the user enables it. A host that supplies no
+    // switch has not asked for writes.
+    if (!settings?.enabled) return stop('disabled', 'no switch configured')
+    if (!(await settings.enabled())) return stop('disabled')
   } catch (err) {
     return stop('disabled', `switch unreadable: ${errorKind(err)}`)
   }
 
-  const tier = cfg.tier ? cfg.tier() : currentRunFrame()?.inference?.tier
+  const frameTier = currentRunFrame()?.inference?.tier
+  const tier = cfg.tier ? cfg.tier() : frameTier
+  // D8: a stamp that disagrees with the tier the calls ran under would recall a
+  // private memory into a public-tier turn.
+  if (cfg.tier && frameTier !== undefined && tier !== frameTier)
+    return stop('no-tier', 'tier override disagrees with the run frame')
   if (typeof tier !== 'string' || tier === '') return stop('no-tier')
 
   if (ctx.status === 'error' || ctx.status === 'paused') return stop('turn-failed', ctx.status)
@@ -601,7 +649,9 @@ async function run(
   const route = resolveStoreRoute(
     {
       target: decided.target.label,
-      confirm: decided.confirm.label,
+      // A kind nobody established is not a PROVABLY routine one (D7/F2): when the
+      // kind read abstained, the question is asked whatever `confirm` said.
+      confirm: decided.kind.abstained ? 'ask' : decided.confirm.label,
       kind: decided.kind.label,
     },
     settings?.routineKinds ?? DEFAULT_ROUTINE_KINDS,
@@ -707,10 +757,10 @@ async function run(
             embedding,
             embedSpace: embed.spaceId,
           })
-          if (!(await tx.addSource({ memoryId, ...src }))) throw new SourceConflict()
+          await claim(tx, memoryId, src)
         } else {
           memoryId = near.id
-          if (!(await tx.addSource({ memoryId, ...src }))) throw new SourceConflict()
+          await claim(tx, memoryId, src)
           if (verdict === 'update') {
             action = 'updated'
             stored = cand.content
@@ -738,14 +788,38 @@ async function run(
         ordinal: cand.ordinal,
         action: done.action,
       }
-      // The extractor's call is recorded once, on the first memory it produced.
+      // The extractor's call is recorded once, on the first memory it produced —
+      // REDACTED: its variables, prompt and output hold the candidates and the
+      // window, which is the memory's text.
       flushDecisions(ctx, scope)
-      ctx.events.push(createEvent('memory_written', 'memory-store', data, pendingCall))
+      ctx.events.push(createEvent('memory_written', 'memory-store', data, redactCall(pendingCall)))
       pendingCall = undefined
       written++
     } catch (err) {
-      if (err instanceof SourceConflict) duplicates++
-      else {
+      if (err instanceof SourceConflict) {
+        duplicates++
+        // The memory and its source exist; if the event that references them was
+        // lost (the host's save was refused), a retry repairs the reference.
+        const recorded = ctx.events.some((e) => {
+          if (e.type !== 'memory_written') return false
+          const d = e.data as MemoryWrittenEventData
+          return d.eventId === userEventId && d.ordinal === cand.ordinal
+        })
+        if (!recorded && err.existing) {
+          flushDecisions(ctx, scope)
+          ctx.events.push(
+            createEvent('memory_written', 'memory-store', {
+              memoryId: err.memoryId,
+              kind: err.existing.kind,
+              tier,
+              contentHash: sha256(err.existing.content),
+              eventId: userEventId,
+              ordinal: cand.ordinal,
+              action: 'reinforced',
+            } satisfies MemoryWrittenEventData),
+          )
+        }
+      } else {
         failed++
         logStop('a candidate could not be written', errorKind(err))
       }

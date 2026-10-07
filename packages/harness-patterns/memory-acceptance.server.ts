@@ -74,6 +74,11 @@ const NAME_RE = /\p{Lu}[\p{L}\p{N}'’-]+/gu
  *  not a name the user supplied. */
 const GENERIC_SUBJECT = new Set(['user'])
 
+/** The only capitalised words a sentence may open with unchecked. Any other
+ *  sentence-initial capital is checked like every other capital: a false reject
+ *  stores nothing, which fails closed. */
+const SENTENCE_OPENERS = new Set(['the', 'user', 'they', 'their', 'this', 'that', 'a', 'an', 'it'])
+
 const TRAILING_PUNCT = /[.,;:!?)\]}'’"]+$/u
 
 /** Identifier-like substrings of `content` that must appear in the user's own
@@ -94,7 +99,7 @@ export function identifiersIn(content: string): string[] {
   for (const m of rest.matchAll(NAME_RE)) {
     const before = rest.slice(0, m.index)
     const sentenceStart = before.trim() === '' || /[.!?]\s+$/u.test(before)
-    if (sentenceStart) continue
+    if (sentenceStart && SENTENCE_OPENERS.has(m[0].toLowerCase())) continue
     if (GENERIC_SUBJECT.has(m[0].toLowerCase())) continue
     out.add(m[0])
   }

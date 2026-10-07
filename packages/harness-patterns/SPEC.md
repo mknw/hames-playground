@@ -2273,7 +2273,7 @@ const report = await settleMemory(ctx, {
   owner, // () => string | null — from the host's request context
   tier, // () => string | undefined — default: the run frame's inference.tier
   awaitWake, // MemoryWakeWait — the app's awaitMemoryWake, as-is
-  settings, // enabled, gate cuts, thresholds, softLimit, routineKinds, …
+  settings, // enabled (REQUIRED to write — absent stores nothing, D11), gate cuts, thresholds, softLimit, routineKinds, …
 })
 ```
 
@@ -2326,7 +2326,9 @@ Each rule drops the candidate and names itself; nothing is repaired. In order:
 `kind` in the closed set · `shape` (one non-empty line, ≤ 280 characters) ·
 `evidence-length` (≥ 8 characters after NFKC) · `evidence-verbatim` ·
 `identifier-closure` (every URL, email, @handle, 3+-digit number and capitalised
-name — sentence-initial words and the generic "user" exempt — occurs as a whole
+name — only `the user they their this that a an it` may open a sentence
+unchecked; any other sentence-initial capital is checked like every other —
+occurs as a whole
 token in a user message of the window) · `sanitizer` (`sanitizeUntrusted` reports
 zero findings on `content`, because a memory is replayed into a later prompt).
 `report.rejected` counts drops by rule id. A route that skipped confirmation on
@@ -2344,8 +2346,9 @@ lock (`MemoryWriteStore.transaction` — it MUST roll back on a throw):
    timeout or `distinct` → insert. Episodes and facts only reinforce or insert;
    kinds and tiers never merge.
 3. Insert/reinforce/update **and the `memory_sources` row in the same
-   transaction.** `addSource` returning `false` is the primary-key conflict on
-   `(owner, eventId, ordinal)`: the transaction is rolled back, so a retry of
+   transaction.** `addSource` returning `{ inserted: false, memoryId }` is the primary-key
+   conflict on `(owner, eventId, ordinal)` (`ON CONFLICT DO NOTHING RETURNING`; a
+   bare INSERT would abort the transaction): the transaction is rolled back, so a retry of
    the same event is a no-op (the reinforce is undone with it), and a crash can
    leave neither a memory without its source nor a source without its memory.
    `ordinal` is the candidate's index in the extractor's output.
@@ -2360,8 +2363,22 @@ One per memory written, recorded after its commit:
 `{ memoryId, kind, tier, contentHash, eventId, ordinal, action }` — **never the
 content** (`contentHash` is the SHA-256 of the stored text; a reinforce hashes the
 existing memory, not the candidate). `formatEventData` renders it from `action` and
-`kind` alone (pin `event-hygiene`). The extractor's `llmCall` rides the first one;
-a call that produced nothing has no event to ride and is not recorded.
+`kind` alone (pin `event-hygiene`). The extractor's `llmCall` rides the first one **redacted**:
+`functionName`, `usage`, `metrics`, `durationMs`, `provider`, `clientName` only —
+`variables`, `promptTemplate`, `rawInput`, `rawOutput` and `parsedOutput` are the
+candidates and the window, i.e. the memory's text, and never reach the blob. A
+call that produced nothing has no event to ride and is not recorded.
+
+**Residual (host save).** "One save carries both" holds only if that save lands.
+The host's trailing save (`saveTrailingPass`) is refused while a newer turn holds
+the conversation, and `settleMemory` may sit in that continuation for the wake
+budget plus extract, embed and merge time: a user who replies in that window
+commits memories and loses their `memory_written` events. A retry repairs the
+reference — on a conflict it re-records the event (`action: 'reinforced'`, hashed
+from a `read`) when the context has none for `(eventId, ordinal)` — but nothing
+replays a turn on its own. The mechanism (wait for the claim to release, or
+reconcile `memory_sources` against events on load) is M5's, and M5 cannot land
+without an interleaving pin for it.
 
 `report.compactionDue` is true when the owner's count reaches `softLimit` (300);
 compaction itself is the next slice.

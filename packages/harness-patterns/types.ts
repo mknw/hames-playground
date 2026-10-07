@@ -2039,10 +2039,17 @@ export interface MemoryWriteTx {
       readonly embedSpace: string
     },
   ): Promise<void>
-  /** Insert the provenance row. Returns **false, inserting nothing,** when
-   *  `(owner, eventId, ordinal)` already exists — the primary-key conflict that
-   *  says this candidate was written before. */
-  addSource(src: MemorySourceRow): Promise<boolean>
+  /** Insert the provenance row. On a primary-key conflict on
+   *  `(owner, eventId, ordinal)` — this candidate was written before — insert
+   *  nothing and return `{ inserted: false, memoryId }` with the memory the
+   *  EXISTING row points at (`ON CONFLICT DO NOTHING RETURNING`; a bare INSERT
+   *  would abort the whole transaction). */
+  addSource(
+    src: MemorySourceRow,
+  ): Promise<{ inserted: true } | { inserted: false; memoryId: string }>
+  /** Read one memory of the owner's by id, or null. Used only to re-record a
+   *  lost `memory_written` on a retry. */
+  read(id: string): Promise<{ kind: MemoryKind; content: string } | null>
   /** Rows the owner has, all tiers (the compaction threshold's input). */
   count(): Promise<number>
 }

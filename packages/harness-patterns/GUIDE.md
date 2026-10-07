@@ -82,7 +82,7 @@ Every combinator takes patterns and returns a pattern, so they nest freely:
 | Combinator           | What it does                                                                              |
 | -------------------- | ----------------------------------------------------------------------------------------- |
 | `chain` / `harness`  | run patterns in order; `harness` is the top-level entry that stops on irrecoverable error |
-| `routes`             | dispatch on `data.route` (set by `router`); pass-through on the `'user'` route            |
+| `routes`             | dispatch on `data.route` (set by `router` or `decisionRouter`); pass-through on `'user'`  |
 | `parallel`           | run patterns concurrently, merge their event sets                                         |
 | `withReferences`     | attach the relevant results of earlier turns at pattern ingress, expandable on demand     |
 | `withInjectionGuard` | neutralize untrusted tool output before a controller reads it                             |
@@ -96,6 +96,50 @@ runner, which carry the agent's own patterns. An answer is keyed by the
 supersedes whatever was waiting, so an answer never outlives its run. See SPEC's
 [Human in the loop](SPEC.md#human-in-the-loop), and "Asking a human" below for
 the whole loop a host writes.
+
+### Deciding with probabilities
+
+`typedDecision` asks ONE closed question and returns a probability for every
+permitted label, with `margin`, `confidence` and an explicit abstain. It writes
+no text. Hand it the raw decision seam (`bamlPatterns().decide`) and a policy;
+`fallback` is required, because the verdict is what a consumer acts on and a
+failed decision must still have one:
+
+```typescript
+import { typedDecision } from '@hames-ai/harness-patterns'
+import type { DecideFn } from '@hames-ai/harness-patterns'
+
+declare const baml: { decide: DecideFn } // bamlPatterns() in a real host
+
+typedDecision({
+  decide: baml.decide,
+  spec: {
+    key: 'memory.recall',
+    question: 'Does answering the latest message need anything remembered about this user?',
+    labels: [
+      { id: 'skip', description: 'no — this conversation is enough' },
+      { id: 'recall', description: 'yes — it depends on something from before' },
+    ],
+  },
+  policy: { fallback: 'skip', minConfidence: 0.6 },
+})
+// → scope.data.decisions['memory.recall'].label — act on THIS, never on `top`
+```
+
+It never throws and always overwrites its key, failures included. Outside a
+pattern, `decide(scope, call)` is the same decision recorded on a scope you
+hold, `evaluateDecision(call)` is it with no scope at all, and
+`decideFields(scope, { decide, set, state, policy })` answers several typed
+fields over one state, one `decision_made` per field.
+
+`decisionRouter` is `router()`'s sibling built on it: the routes are the
+labels, the verdict becomes `data.route`, and `policy.fallback` names the route
+taken when the decision abstains. Put `compactIntent` in front (it writes the
+intent the router no longer does) and pass `preserveIntent: true`, or the
+router clears that intent; give conversational turns an ordinary route
+key (`conversationalRoute`) that `routes()` dispatches to a pass-through, and
+run it with `shadow: true` beside your existing `router()` to measure agreement
+before swapping. See SPEC's [Decisions](SPEC.md#decisions-typeddecision-418).
 
 ### Asking a human
 

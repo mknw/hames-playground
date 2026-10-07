@@ -167,7 +167,8 @@ mode_volume_backup() {
 mode_restore() {
   local dir="${1:-}"
   [ -n "$dir" ] || fail "usage: restore <dump-dir> (the directory the dump mode printed)"
-  [ -s "$dir/postgres.dump" ] && [ -s "$dir/counts.tsv" ] || fail "$dir has no postgres.dump / counts.tsv"
+  [ -s "$dir/postgres.dump" ] || fail "$dir has no postgres.dump"
+  [ -s "$dir/counts.tsv" ] || fail "$dir has no counts.tsv"
   require_running
   [ -n "$(docker ps -q --filter "volume=$POSTGRES_DATA_VOLUME")" ] \
     || fail "no running container mounts $POSTGRES_DATA_VOLUME — restore only into the postgres that runs on the new volume"

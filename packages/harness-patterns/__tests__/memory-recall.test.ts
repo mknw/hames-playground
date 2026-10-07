@@ -43,7 +43,7 @@ import {
 } from '@hames-ai/harness-patterns/memory-ranking.server'
 import { configurePattern, runChain } from '@hames-ai/harness-patterns/patterns/chain.server'
 import { createEventView } from '@hames-ai/harness-patterns/patterns/event-view.server'
-import { createContext } from '@hames-ai/harness-patterns/context.server'
+import { createContext, serializeContext } from '@hames-ai/harness-patterns/context.server'
 import { harnessUsesMemory } from '@hames-ai/harness-patterns/pattern-capabilities'
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import type {
@@ -83,7 +83,10 @@ const mem = (
 /** A store that IGNORES the tiers it is asked for — so the core's own filter is
  *  what the tier pin measures — and records what it was asked. */
 function fakeStore(rows: MemoryCandidate[], opts: { throwOn?: 'count' | 'candidates' } = {}) {
-  const asked: { count: string[][]; candidates: Array<{ tiers: readonly string[] }> } = {
+  const asked: {
+    count: string[][]
+    candidates: Array<{ tiers: readonly string[]; embedSpace?: string }>
+  } = {
     count: [],
     candidates: [],
   }
@@ -94,7 +97,7 @@ function fakeStore(rows: MemoryCandidate[], opts: { throwOn?: 'count' | 'candida
       return rows.length
     },
     async candidates(q) {
-      asked.candidates.push({ tiers: q.tiers })
+      asked.candidates.push({ tiers: q.tiers, embedSpace: q.embedSpace })
       if (opts.throwOn === 'candidates') throw new Error('db down')
       return rows
     },
@@ -102,9 +105,9 @@ function fakeStore(rows: MemoryCandidate[], opts: { throwOn?: 'count' | 'candida
   return { store, asked }
 }
 
-const embedder = (spaceId: string | undefined = SPACE) => ({
+const embedder = (spaceId: string = SPACE) => ({
   query: async () => [1, 0, 0],
-  ...(spaceId !== undefined ? { spaceId } : {}),
+  spaceId,
 })
 
 const logprob = (probs: Record<string, number>, extra: Partial<DecideResult> = {}) =>
@@ -440,8 +443,18 @@ describe('memoryRecall: skip reasons', () => {
           .store,
       }),
     )
-    expect(recalled(ctx)[0]).toMatchObject({ skipped: 'error', attached: [] })
+    expect(recalled(ctx)[0]).toMatchObject({
+      skipped: 'error',
+      attached: [],
+      errorKind: 'MemoryEmbeddingSpaceMismatch',
+    })
     expect(ctx.data.memories).toEqual([])
+  })
+
+  it('tells the store which embedding space the query was embedded in', async () => {
+    const { store, asked } = fakeStore(TWO_TIERS)
+    await run(config({ store }))
+    expect(asked.candidates[0]).toMatchObject({ embedSpace: SPACE })
   })
 })
 
@@ -465,7 +478,14 @@ describe('tier-filter', () => {
     expect(ctx.data.memories!.map((m) => m.id).sort()).toEqual(['a1', 'v1'])
   })
 
-  it('reads the turn’s tier from the run frame when no resolver is given', async () => {
+  it('reads the turn’s tier from the run frame when no resolver is given (verda sees both)', async () => {
+    const { tier: _t, ...rest } = config()
+    const ctx = await run(rest, { frame: { inference: { tier: 'verda' } } })
+    expect(ctx.data.memories!.map((m) => m.id).sort()).toEqual(['a1', 'v1'])
+    expect(recalled(ctx)[0].tier).toBe('verda')
+  })
+
+  it('reads the turn’s tier from the run frame when no resolver is given (anthropic sees one)', async () => {
     const { tier: _t, ...rest } = config()
     const ctx = await run(rest, { frame: { inference: { tier: 'anthropic' } } })
     expect(ctx.data.memories!.map((m) => m.id)).toEqual(['a1'])
@@ -522,7 +542,10 @@ describe('recall-never-skips-downstream', () => {
   const failures: Array<[string, Partial<MemoryRecallConfig>]> = [
     ['count throws', { store: fakeStore(TWO_TIERS, { throwOn: 'count' }).store }],
     ['candidates throws', { store: fakeStore(TWO_TIERS, { throwOn: 'candidates' }).store }],
-    ['the embedder rejects', { embed: { query: async () => Promise.reject(new Error('x')) } }],
+    [
+      'the embedder rejects',
+      { embed: { spaceId: SPACE, query: async () => Promise.reject(new Error('x')) } },
+    ],
     ['the gate throws', { decide: fakeDecide(() => Promise.reject(new Error('x'))).fn }],
     [
       'the switch throws',
@@ -778,6 +801,7 @@ describe('event-hygiene', () => {
       view.serializeCompact(),
       view.serializeCompact({ recentTurns: 2 }),
       ctx.events.map((e) => JSON.stringify({ type: e.type, data: e.data })).join('\n'),
+      serializeContext(ctx),
     ]
   }
 
@@ -833,5 +857,182 @@ describe('capability and defaults', () => {
 
   it('is absent from a harness that did not opt in', () => {
     expect(harnessUsesMemory([])).toBe(false)
+  })
+})
+
+// ============================================================================
+// memory-not-in-blob (review F1) — the persisted conversation blob
+// ============================================================================
+
+describe('memory-not-in-blob', () => {
+  const SENTINEL = '⟦SENTINEL-blob-content⟧'
+  const rows = [mem('m-1', `prefers metric units ${SENTINEL}`, 0.9)]
+
+  it('serializeContext drops the memory keys, while the turn still holds them', async () => {
+    const ctx = await run(config({ store: fakeStore(rows).store }))
+    expect(JSON.stringify(ctx.data.memories)).toContain(SENTINEL)
+    expect(ctx.data.memoryContext).toContain(SENTINEL)
+    const blob = serializeContext(ctx)
+    expect(blob).not.toContain(SENTINEL)
+    expect(blob).not.toContain('memoryContext')
+  })
+
+  it('keeps every other data key', async () => {
+    const ctx = await run(config({ store: fakeStore(rows).store }), { seed: { keep: 'me' } })
+    expect(JSON.parse(serializeContext(ctx)).data.keep).toBe('me')
+  })
+
+  it('a PAUSED run keeps the block: a resume re-enters from the blob', async () => {
+    const ctx = await run(config({ store: fakeStore(rows).store }))
+    ctx.status = 'paused'
+    expect(serializeContext(ctx)).toContain(SENTINEL)
+  })
+})
+
+// ============================================================================
+// recall-gate-cost (review F3) — the gate's llmCall rides the one event
+// ============================================================================
+
+describe('recall-gate-cost', () => {
+  const CALL = { functionName: 'Decide', variables: {}, rawOutput: 'A' }
+  const costly = () => fakeDecide(() => logprob({ retrieve: 0.9, skip: 0.1 }, { llmCall: CALL }))
+  const callOf = (ctx: { events: ContextEvent[] }) =>
+    ctx.events.find((e) => e.type === 'memory_recalled')?.llmCall
+
+  it('success path: the event carries the gate’s llmCall', async () => {
+    const ctx = await run(config({ decide: costly().fn }))
+    expect(callOf(ctx)).toMatchObject({ functionName: 'Decide' })
+  })
+
+  it('deadline path: a gate that answered in time is still recorded', async () => {
+    const ctx = await run(
+      config({
+        decide: costly().fn,
+        settings: { gate: { timeoutMs: 40 } },
+        embed: { spaceId: SPACE, query: () => new Promise(() => {}) },
+      }),
+    )
+    expect(recalled(ctx)[0]).toMatchObject({ skipped: 'timeout', gate: { label: 'retrieve' } })
+    expect(callOf(ctx)).toMatchObject({ functionName: 'Decide' })
+  })
+})
+
+// ============================================================================
+// Review F6 — pins for the surviving mutants
+// ============================================================================
+
+describe('review F6', () => {
+  it('the gate state uses the FINAL assistant message even when a non-final one follows it', async () => {
+    const d = retrieves()
+    await run(config({ decide: d.fn }), {
+      input: 'next?',
+      prior: [
+        {
+          type: 'assistant_message',
+          ts: 2,
+          patternId: 'a',
+          data: { content: 'the final answer', final: true },
+        },
+        {
+          type: 'assistant_message',
+          ts: 3,
+          patternId: 'a',
+          data: { content: 'status line', final: false },
+        },
+      ] as ContextEvent[],
+    })
+    expect(d.calls[0].state).toBe('Assistant: the final answer\n\nUser: next?')
+  })
+
+  it('an empty-string owner is no user', async () => {
+    const ctx = await run(config({ owner: () => '' }))
+    expect(recalled(ctx)[0].skipped).toBe('no-user')
+  })
+
+  it('a previous reply larger than the gate’s window is dropped, the user message kept', async () => {
+    const d = fakeDecide(() => logprob({ retrieve: 0.9, skip: 0.1 }), {
+      limits: () => ({ contextWindow: 4_200 }),
+    })
+    await run(config({ decide: d.fn }), {
+      input: 'short question',
+      prior: [
+        {
+          type: 'assistant_message',
+          ts: 2,
+          patternId: 'a',
+          data: { content: 'x'.repeat(20_000), final: true },
+        },
+      ] as ContextEvent[],
+    })
+    expect(d.calls[0].state).toBe('User: short question')
+  })
+
+  it('a <think> block in the previous reply never reaches the gate', async () => {
+    const d = retrieves()
+    await run(config({ decide: d.fn }), {
+      prior: [
+        {
+          type: 'assistant_message',
+          ts: 2,
+          patternId: 'a',
+          data: { content: '<think>SECRET-THOUGHT</think>visible', final: true },
+        },
+      ] as ContextEvent[],
+    })
+    expect(d.calls[0].state).toContain('visible')
+    expect(d.calls[0].state).not.toContain('SECRET-THOUGHT')
+  })
+
+  it('a throwing limits() fails open to maxMemoryTokens (the 5% ceiling is lost, not the recall)', async () => {
+    const ctx = await run(
+      config({
+        limits: () => {
+          throw new Error('no limits')
+        },
+      }),
+    )
+    expect(ctx.data.memories!.length).toBeGreaterThan(0)
+  })
+
+  it('the documented defaults: 5 memories, 400 tokens, 1500 ms', async () => {
+    const rows = Array.from({ length: 8 }, (_, i) =>
+      mem(`m${i}`, `prefers metric units variant${i}`, 0.9 - i * 0.01),
+    )
+    expect((await run(config({ store: fakeStore(rows).store }))).data.memories).toHaveLength(5)
+    // 400 tokens: ~1600 chars. Eight 300-char lines can't all fit.
+    const fat = Array.from({ length: 8 }, (_, i) =>
+      mem(`f${i}`, `prefers metric units ${'z'.repeat(280)}${i}`, 0.9 - i * 0.01),
+    )
+    const ctx = await run(config({ store: fakeStore(fat).store, settings: { maxMemories: 8 } }))
+    expect(recalled(ctx)[0].tokens).toBeLessThanOrEqual(400)
+    expect(recalled(ctx)[0].tokens).toBeGreaterThan(300)
+    expect(ctx.data.memories!.length).toBeLessThan(8)
+    // 1500 ms: a wake asked for its budget.
+    const budgets: number[] = []
+    await run(config({ awaitWake: async (b) => (budgets.push(b), 'awake') }))
+    expect(budgets).toEqual([1500])
+  })
+
+  it('BM25 uses k1 1.2 and b 0.75: one exact lexical score', () => {
+    const r = rankMemories(
+      'zymurgy',
+      [
+        { id: 'a', content: 'zymurgy brewing notes today', semantic: 0.9, lastSeenMs: 1 },
+        { id: 'b', content: 'unrelated words here', semantic: 0.9, lastSeenMs: 1 },
+        {
+          id: 'c',
+          content: 'other things entirely, many more words go in this one',
+          semantic: 0.9,
+          lastSeenMs: 1,
+        },
+      ],
+      { minSemantic: 0.5, minIdf: 0.1 },
+    )
+    const a = r.ranked.find((x) => x.id === 'a')!
+    const n = 3
+    const dl = 4
+    const avgdl = (4 + 3 + 8) / 3
+    const expected = (idf(n, 1) * 1 * 2.2) / (1 + 1.2 * (1 - 0.75 + (0.75 * dl) / avgdl))
+    expect(a.lexical).toBeCloseTo(expected, 10)
   })
 })

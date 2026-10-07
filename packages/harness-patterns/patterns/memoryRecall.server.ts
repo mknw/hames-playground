@@ -91,7 +91,7 @@ import { currentRunFrame } from '../run-frame.server'
 import { stripThinkBlocks } from '../content-transforms'
 import { trimToFit } from '../token-budget.server'
 import { capMemories, memoryTokenBudget, rankMemories } from '../memory-ranking.server'
-import { evaluateDecision } from './typedDecision.server'
+import { evaluateDecision, type EvaluatedDecision } from './typedDecision.server'
 
 assertServerOnImport()
 
@@ -395,17 +395,18 @@ export function memoryRecall<T extends MemoryRecallData>(
         (w) => (wake = w),
         () => (wake = 'skipped' as const),
       )
+      let gateDone: EvaluatedDecision<MemoryRecallLabel> | undefined
       const gateP = evaluateDecision({
         decide,
         spec: MEMORY_RECALL_SPEC,
         state: query.state,
         policy,
-      })
+      }).then((e) => (gateDone = e))
       const searchP = (async () => {
         const embedding = await embed.query(query.latest)
         return store.candidates({
           embedding,
-          ...(embed.spaceId !== undefined ? { embedSpace: embed.spaceId } : {}),
+          embedSpace: embed.spaceId,
           tiers,
         })
       })().then(
@@ -424,6 +425,11 @@ export function memoryRecall<T extends MemoryRecallData>(
       if (settled === DEADLINE) {
         // Which of the three was slow is the thing worth recording: a wake that
         // had not landed is the box starting; anything else is just slow.
+        // A gate that answered before the deadline was a paid call: record it.
+        if (gateDone) {
+          llmCall = gateDone.llmCall
+          gateRec = gateRecord(gateDone.decision, query.state.length)
+        }
         return skip(wake === 'awake' ? 'timeout' : 'waking')
       }
       const [evaluated, search] = settled
@@ -452,13 +458,14 @@ export function memoryRecall<T extends MemoryRecallData>(
 
       // A distance across two embedding spaces is a number that means nothing;
       // refuse loudly rather than rank on it.
-      if (embed.spaceId !== undefined) {
-        const bad = rows.find((r) => r.embedSpace !== embed.spaceId)
-        if (bad) {
-          throw new Error(
-            `memory embedding space mismatch: a row is in '${bad.embedSpace}', the query in '${embed.spaceId}'`,
-          )
-        }
+      const bad = rows.find((r) => r.embedSpace !== embed.spaceId)
+      if (bad) {
+        const e = new Error(
+          `memory embedding space mismatch: a row is in '${bad.embedSpace}', the query in '${embed.spaceId}'`,
+        )
+        // Persistent, unlike a DB blip: name it so the panel can tell them apart.
+        e.name = 'MemoryEmbeddingSpaceMismatch'
+        throw e
       }
 
       const byId = new Map(rows.map((r) => [r.id, r]))

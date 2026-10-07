@@ -2216,6 +2216,31 @@ reason, method, calibrated, `stateChars`); recall records **no separate
 `decision_made`**, and the gate's `llmCall` rides this event so its cost is
 counted once.
 
+### Memory text never rides the persisted blob (review F1)
+
+`data.memories` / `data.memoryContext` hold decrypted memory text, and `ctx.data`
+is part of the serialized session. `serializeContext` therefore drops
+`TRANSIENT_DATA_KEYS` (`memories`, `memoryContext`) unless the run is `paused`
+(a resume re-enters from the blob, so a paused blob keeps the block — short-lived,
+but the same plaintext). Without it Forget and retention would never reach the
+conversation blob or the nightly dump (pin `memory-not-in-blob`).
+
+### Cost, and what is unrecordable
+
+The gate's `llmCall` rides the `memory_recalled` event on the success path AND
+on a deadline that fires after the gate answered (pins `recall-gate-cost`). A gate
+that finishes after the event is written is unrecordable without a late mutation.
+
+### Notes
+
+- With ONE stored memory the lexical channel cannot fire (`idf(1,1) = 0.288 <
+τ_idf 0.5`): such users get semantic-only recall. M11 calibrates τ_idf.
+- `MemoryQueryEmbedder.spaceId` is REQUIRED, and the store is told `embedSpace`; a
+  mismatch throws `MemoryEmbeddingSpaceMismatch` (a string compare, since
+  `assertSameSpace` takes space objects, not ids).
+- The recalled block carries no provenance fence: the responder's render (M9) must
+  fence it.
+
 ### `harnessUsesMemory(patterns)`
 
 `PatternCapabilities.memory` is declared by `memoryRecall`; `harnessUsesMemory`

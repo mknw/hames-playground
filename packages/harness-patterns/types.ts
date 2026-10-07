@@ -1862,7 +1862,7 @@ export interface MemoryQueryEmbedder {
   /** Embed a QUERY (the model's query instruction applies). */
   query(text: string): Promise<readonly number[]>
   /** The embedding space this embedder produces (`embeddingSpaceId()`). */
-  readonly spaceId?: string
+  readonly spaceId: string
 }
 
 /** The wake wait recall's gate shares with the host's wake — structurally

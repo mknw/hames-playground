@@ -221,6 +221,7 @@ interface PatternCapabilities {
   retrievalBackends?: readonly string[] // declared by `retriever`: the backends it will query
   workspaceSync?: boolean // declared by a wrapper that gives its subtree a durable workspace
   decisionKeys?: readonly string[] // declared by a deciding pattern (#418): the DecisionSpec keys whose calibration a host can feed
+  calibratedDecisionKeys?: readonly string[] // the subset of decisionKeys whose policy sets requireCalibrated (#418 T6): read by harnessCalibratedDecisionKeys
   memory?: true // declared by memoryRecall (#419): read by harnessUsesMemory, the opt-in probe for the memory wake and store
 }
 ```
@@ -2091,8 +2092,14 @@ ONLY into LLM-facing serializations (`key: label (p, margin)` plus the abstain
 reason — the `state` never enters the event; it survives only in the
 transport's `llmCall.variables`). `PatternCapabilities.decisionKeys` +
 `harnessDecisionKeys(patterns)` make the declared decision surface readable
-without running the harness; the per-tier calibration probe that consumes them
-is #418 T6.
+without running the harness. `calibratedDecisionKeys` +
+`harnessCalibratedDecisionKeys(patterns)` name the subset whose policy sets
+`requireCalibrated` — the keys that abstain on every call until a calibration
+entry exists — and are what a host's per-tier calibration probe warns about
+(#418 T6; `typedDecision` and `decisionRouter` declare it, and only when the
+policy requires it).
+`getEventPreview` renders `decision_made` as `key: label`, or
+`key: abstained (reason) → fallback`; never the question or the state.
 
 ## Memory recall (memoryRecall, #419)
 

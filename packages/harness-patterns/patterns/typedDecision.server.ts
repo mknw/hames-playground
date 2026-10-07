@@ -44,6 +44,7 @@ import type {
   ErrorEventData,
   EventView,
   LLMCallRecord,
+  PatternCapabilities,
   PatternConfig,
   PatternScope,
   TrackHistory,
@@ -1012,6 +1013,17 @@ function assertFallbackIsALabel(owner: string, spec: DecisionSpec, fallback: str
   }
 }
 
+/** What a deciding pattern declares: its key, and — when its policy requires
+ *  calibration — that key again under `calibratedDecisionKeys`, so a host probe
+ *  can tell a control that is merely uncalibrated from one that can never
+ *  pass (G4). Absent rather than `[]` when the policy does not require it. */
+function decisionCapabilities(key: string, policy: DecisionPolicy<string>): PatternCapabilities {
+  return {
+    decisionKeys: [key],
+    ...(policy.requireCalibrated === true && { calibratedDecisionKeys: [key] }),
+  }
+}
+
 export interface TypedDecisionConfig<L extends string = string> extends PatternConfig {
   /** REQUIRED: the raw decision seam (`bamlPatterns().decide`, or your own). */
   readonly decide: DecideFn
@@ -1070,7 +1082,7 @@ export function typedDecision<T extends TypedDecisionData, L extends string>(
     fn,
     config: resolved,
     estimateTurns: () => 1,
-    capabilities: { decisionKeys: [spec.key] },
+    capabilities: decisionCapabilities(spec.key, policy),
   }
 }
 
@@ -1197,6 +1209,6 @@ export function decisionRouter<T extends RouterData & TypedDecisionData>(
     fn,
     config: resolved,
     estimateTurns: () => 1,
-    capabilities: { decisionKeys: [spec.key] },
+    capabilities: decisionCapabilities(spec.key, policy),
   }
 }

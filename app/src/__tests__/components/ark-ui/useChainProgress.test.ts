@@ -280,3 +280,21 @@ describe('createChainProgress', () => {
     })
   })
 })
+
+// #418 F7: `decideFields` records one `decision_made` per field, and the
+// chain estimate counts the PATTERN (one turn). A bar that counted events would
+// run past its own denominator on every storing turn.
+describe('decision_made', () => {
+  it('does not advance the bar or change the status', () => {
+    createRoot(() => {
+      const p = createChainProgress()
+      p.ingest(ev('user_message', 'harness', { content: 'hi', chainTurnEstimate: 3 }))
+      for (const key of ['a', 'b', 'c', 'd']) {
+        p.ingest(ev('decision_made', 'memory-store', { key, label: 'yes', abstained: false }))
+      }
+      expect(p.snapshot().currentTurn).toBe(0)
+      expect(p.snapshot().status).toBeNull()
+      expect(p.snapshot().maxProjection).toBe(3)
+    })
+  })
+})

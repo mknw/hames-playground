@@ -8,10 +8,11 @@
  * `decision_made` event data. Everything here is deterministic and unit-pinned
  * (`__tests__/typed-decision.test.ts`); no LLM is called from this module.
  *
- * T2 adds the pattern half on top of these exports: `evaluateDecision` (the
- * awaited wrapper — resolve the client, call the raw seam, score), `decide`
- * (the never-throwing consumer entry) and `decideFields`, plus the
- * `typedDecision` chain step and `decisionRouter`.
+ * T2 (the second half of this file) adds the pattern half on top of these
+ * exports: `evaluateDecision` (the awaited wrapper — ask the transport what it
+ * will serve, call the raw seam, score), `decide` (the never-throwing
+ * in-scope consumer entry) and `decideFields` (several typed fields over one
+ * state), plus the `typedDecision` chain step and `decisionRouter`.
  *
  * The three layers of the seam (#418): the RAW seam (`DecideFn` →
  * `DecideResult`) is one call, one distribution, no policy — frozen against
@@ -23,17 +24,39 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
+import { DIRECT_RESPONSE_ROUTE, LLMCallError, MAX_DECISION_LABELS } from '../types'
 import type {
   AbstainReason,
+  AssistantMessageEventData,
+  ConfiguredPattern,
+  ContextEvent,
+  DecideAllFn,
+  DecideFn,
+  DecideResult,
   Decision,
   DecisionCalibrationEntry,
+  DecisionLabel,
   DecisionMadeEventData,
   DecisionMethod,
   DecisionPolicy,
+  DecisionSetSpec,
   DecisionSpec,
-  DecideResult,
   ErrorEventData,
+  EventView,
+  LLMCallRecord,
+  PatternConfig,
+  PatternScope,
+  TrackHistory,
+  UserMessageEventData,
+  ViewConfig,
 } from '../types'
+import { resolveConfig, trackEvent } from '../context.server'
+import { getErrorHint } from '../error-hints'
+import { currentRunFrame } from '../run-frame.server'
+import { DEFAULT_RUNTIME_CONFIG } from '../runtime-config'
+import { stripThinkBlocks } from '../content-transforms'
+import { trimToFit } from '../token-budget.server'
+import type { RouterData, Routes } from './router.server'
 
 assertServerOnImport()
 
@@ -457,4 +480,690 @@ export function scoreDecision<L extends string>(input: DecisionScoring<L>): Scor
   }
 
   return { decision, event }
+}
+
+// ============================================================================
+// The awaited wrapper — evaluateDecision / decide / decideFields (T2)
+// ============================================================================
+
+/** One raw-seam call to evaluate: the transport, the question, the state, the
+ *  consumer's policy. */
+export interface DecisionCall<L extends string = string> {
+  readonly decide: DecideFn
+  readonly spec: DecisionSpec<L>
+  /** The text the decision is asked over. Only its LENGTH is recorded. */
+  readonly state: string
+  readonly policy: DecisionPolicy<L>
+  /** A shadow-mode caller: recorded on the event, changes no verdict. */
+  readonly shadow?: true
+}
+
+/** What {@link evaluateDecision} hands back: the verdict, the event data to
+ *  record, and — when something failed — the error to record beside it. */
+export interface EvaluatedDecision<L extends string = string> {
+  readonly decision: Decision<L>
+  readonly event: DecisionMadeEventData
+  /** The transport's call record. Rides on the `error` event when `error.kind`
+   *  is `'llm_call'` (the call threw), otherwise on `decision_made`: the record
+   *  is attached to exactly ONE event, so its cost is counted once. */
+  readonly llmCall?: LLMCallRecord
+  /** Present when the seam threw OR returned no usable distribution. */
+  readonly error?: ErrorEventData
+}
+
+/** Options for the in-scope entries. */
+export interface DecideOptions {
+  /** Which event types the scope records. Default `'decision_made'`. `error`
+   *  is always recorded, whatever this says. */
+  readonly trackHistory?: TrackHistory
+  /** Stamped on the `error` event a failed decision records. Default
+   *  `'recoverable'`: a failed decision always has a verdict (the fallback),
+   *  so it is the CONSUMER that knows whether the turn can proceed on it. */
+  readonly errorSeverity?: 'recoverable' | 'irrecoverable'
+}
+
+type Serving = ReturnType<NonNullable<DecideFn['serving']>>
+
+/** What the transport says it will serve. A throwing or absent `serving` is
+ *  `{}`: it removes only the pre-call shortcut, never a post-call check. */
+function readServing(src: { serving?: DecideFn['serving'] } | undefined, key: string): Serving {
+  try {
+    return src?.serving?.(key) ?? {}
+  } catch {
+    return {}
+  }
+}
+
+function readContextWindow(fn: { limits?: DecideFn['limits'] } | undefined): number {
+  try {
+    const w = fn?.limits?.().contextWindow
+    return typeof w === 'number' && Number.isFinite(w) && w > 0 ? w : DEFAULT_CONTEXT_WINDOW
+  } catch {
+    return DEFAULT_CONTEXT_WINDOW
+  }
+}
+
+/** The state window when the transport reports none — the router's own default. */
+const DEFAULT_CONTEXT_WINDOW = 16_384
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null
+}
+
+/** A thrown value → the error event data, carrying the call record when the
+ *  adapter attached one (`LLMCallError`). */
+function errorFrom(e: unknown): { error: ErrorEventData; llmCall?: LLMCallRecord } {
+  const llmCall = e instanceof LLMCallError ? e.llmCall : undefined
+  return {
+    error: {
+      error: e instanceof Error ? e.message : String(e),
+      ...(llmCall ? { kind: 'llm_call' as const } : {}),
+    },
+    ...(llmCall ? { llmCall } : {}),
+  }
+}
+
+/** A raw-seam return the scorer can read: junk (not an object, no `probs`)
+ *  becomes an empty distribution, which the scorer reports as an unusable
+ *  readout — an error, never a throw. */
+function sanitizeResult<L extends string>(raw: unknown, serving: Serving): DecideResult<L> {
+  if (!isRecord(raw)) {
+    return { probs: {}, method: serving.method ?? 'logprob', calibrated: false } as DecideResult<L>
+  }
+  return { ...raw, probs: isRecord(raw.probs) ? raw.probs : {} } as unknown as DecideResult<L>
+}
+
+interface Outcome<L extends string> {
+  readonly result?: DecideResult<L>
+  readonly error?: ErrorEventData
+  readonly llmCall?: LLMCallRecord
+}
+
+/** Score one outcome and assemble the {@link EvaluatedDecision}. */
+function settle<L extends string>(
+  call: Pick<DecisionCall<L>, 'spec' | 'policy' | 'state' | 'shadow'>,
+  serving: Serving,
+  outcome: Outcome<L>,
+): EvaluatedDecision<L> {
+  const { decision, event } = scoreDecision({
+    spec: call.spec,
+    policy: call.policy,
+    state: call.state,
+    result: outcome.result,
+    error: outcome.error,
+    calibration: serving.calibration,
+    method: serving.method,
+    shadow: call.shadow,
+  })
+  // `reason: 'error'` covers a throw AND an unusable readout; both must leave
+  // an `error` event so a consumer gating on severity has something to read.
+  const error =
+    outcome.error ??
+    (decision.reason === 'error'
+      ? { error: `Decision '${call.spec.key}' returned no usable distribution` }
+      : undefined)
+  const llmCall = outcome.llmCall ?? outcome.result?.llmCall
+  return { decision, event, ...(llmCall && { llmCall }), ...(error && { error }) }
+}
+
+/** The floor under "never throws": a defect in the scorer itself (a malformed
+ *  spec or policy) still yields a verdict. */
+function lastResort<L extends string>(call: DecisionCall<L>, e: unknown): EvaluatedDecision<L> {
+  const fallback = (call.policy as { fallback: L }).fallback
+  const message = e instanceof Error ? e.message : String(e)
+  const key = call.spec?.key ?? ''
+  return {
+    decision: {
+      key,
+      label: fallback,
+      top: null,
+      probs: {} as Decision<L>['probs'],
+      margin: 0,
+      confidence: 0,
+      abstained: true,
+      reason: 'error',
+      calibrated: false,
+    },
+    event: {
+      key,
+      question: call.spec?.question ?? '',
+      labels: [],
+      probs: {},
+      label: fallback,
+      top: null,
+      margin: 0,
+      confidence: 0,
+      abstained: true,
+      reason: 'error',
+      policy: { fallback },
+      calibrated: false,
+      stateChars: typeof call.state === 'string' ? call.state.length : 0,
+    },
+    error: { error: `Decision '${key}' could not be scored: ${message}` },
+  }
+}
+
+/**
+ * Scope-free: ask the transport what it will serve, call the raw seam, apply
+ * the policy, hand back what to record. NEVER throws — the seam throwing, the
+ * seam returning junk and a pre-call refusal are all an abstained decision
+ * whose `label` is `policy.fallback`. For work that holds a context but no
+ * pattern scope (the post-response position); inside a pattern call
+ * {@link decide}.
+ *
+ * The F3 gate runs first: a `requireCalibrated` policy on a client the
+ * transport KNOWS is non-calibratable (`decide.serving(key).method ===
+ * 'verbalized'`) abstains `'uncalibrated'` without making the call at all.
+ */
+export async function evaluateDecision<L extends string>(
+  call: DecisionCall<L>,
+): Promise<EvaluatedDecision<L>> {
+  try {
+    const serving = readServing(call.decide, call.spec.key)
+    if (preCallAbstain({ policy: call.policy, state: call.state, method: serving.method })) {
+      return settle(call, serving, {})
+    }
+    let raw: unknown
+    try {
+      raw = await call.decide({ spec: call.spec, state: call.state })
+    } catch (e) {
+      const { error, llmCall } = errorFrom(e)
+      return settle(call, serving, { error, llmCall })
+    }
+    return settle(call, serving, { result: sanitizeResult<L>(raw, serving) })
+  } catch (e) {
+    return lastResort(call, e)
+  }
+}
+
+/** Record one evaluated decision on the scope: exactly ONE `decision_made`,
+ *  and — when it failed — ONE `error`. Returns the decision stamped with the
+ *  recorded event's id (absent when `trackHistory` filtered the event out). */
+function record<L extends string>(
+  scope: PatternScope<unknown>,
+  evaluated: EvaluatedDecision<L>,
+  opts: DecideOptions,
+  recordError = true,
+): Decision<L> {
+  const errorOwnsCall = evaluated.error?.kind === 'llm_call'
+  const before = scope.events.length
+  trackEvent(
+    scope,
+    'decision_made',
+    evaluated.event,
+    opts.trackHistory ?? 'decision_made',
+    errorOwnsCall ? undefined : evaluated.llmCall,
+  )
+  const recorded = scope.events[before]
+  const eventId = recorded?.type === 'decision_made' ? recorded.id : undefined
+  if (evaluated.error && recordError) {
+    trackEvent(
+      scope,
+      'error',
+      {
+        ...evaluated.error,
+        severity: opts.errorSeverity ?? 'recoverable',
+        hint: getErrorHint(evaluated.error.error),
+      } as ErrorEventData,
+      true,
+      errorOwnsCall ? evaluated.llmCall : undefined,
+    )
+  }
+  return eventId ? { ...evaluated.decision, eventId } : evaluated.decision
+}
+
+/**
+ * In-scope: {@link evaluateDecision} + record exactly ONE `decision_made`
+ * (carrying the call record) and, on failure, ONE `error` event (`kind:
+ * 'llm_call'` when the throw carried a record). Never throws on a failed
+ * decision — the caller always gets a verdict to act on. This is what a
+ * wrapper such as `withMemory` calls.
+ */
+export async function decide<L extends string>(
+  scope: PatternScope<unknown>,
+  call: DecisionCall<L>,
+  opts: DecideOptions = {},
+): Promise<Decision<L>> {
+  return record(scope, await evaluateDecision(call), opts)
+}
+
+// --- decideFields ---------------------------------------------------------
+
+/** Several typed fields over ONE state. */
+export interface DecideFieldsCall<F extends Record<string, string>> {
+  readonly decide: DecideFn
+  /** A one-call provider (Jev): when present and `set.mode !== 'joint'` the
+   *  whole set is one request. Absent → one `decide` pass per field. */
+  readonly decideAll?: DecideAllFn
+  readonly set: DecisionSetSpec<F>
+  readonly state: string
+  readonly policy: { readonly [K in keyof F]: DecisionPolicy<F[K]> }
+}
+
+/** The joint product's size: the number of label combinations. */
+function jointProduct(set: DecisionSetSpec<Record<string, string>>): number {
+  return Object.values(set.fields).reduce((n, spec) => n * spec.labels.length, 1)
+}
+
+/**
+ * Refuse a set that cannot be served as declared — a programmer error, so it
+ * THROWS (unlike a decision, which never does), and does so before any call:
+ * `mode: 'joint'` scores the label PRODUCT in one pass from the same top-k
+ * window a single spec reads, so a product above {@link MAX_DECISION_LABELS}
+ * cannot be read out faithfully. Call it where the set is declared to fail at
+ * construction; `decideFields` calls it first regardless.
+ */
+export function assertDecisionSetSpec(set: DecisionSetSpec<Record<string, string>>): void {
+  if (set.mode !== 'joint') return
+  const product = jointProduct(set)
+  if (product > MAX_DECISION_LABELS) {
+    throw new Error(
+      `DecisionSetSpec '${set.key}': mode 'joint' scores the ${product}-label product in one ` +
+        `pass, above MAX_DECISION_LABELS (${MAX_DECISION_LABELS}) — use mode 'fields'.`,
+    )
+  }
+}
+
+/** Separator of a joint label id (`'a | b | c'`). */
+const JOINT_SEP = ' | '
+
+/** The product spec a joint pass scores, and the tuple behind each product id. */
+function buildJointSpec(
+  set: DecisionSetSpec<Record<string, string>>,
+  keys: readonly string[],
+): { spec: DecisionSpec<string>; tuples: Map<string, Record<string, string>> } {
+  let combos: Array<Record<string, DecisionLabel>> = [{}]
+  for (const k of keys) {
+    combos = combos.flatMap((c) => set.fields[k].labels.map((l) => ({ ...c, [k]: l })))
+  }
+  const tuples = new Map<string, Record<string, string>>()
+  const labels: DecisionLabel[] = combos.map((c) => {
+    const id = keys.map((k) => c[k].id).join(JOINT_SEP)
+    if (tuples.has(id)) {
+      throw new Error(`DecisionSetSpec '${set.key}': joint label id '${id}' is ambiguous`)
+    }
+    tuples.set(id, Object.fromEntries(keys.map((k) => [k, c[k].id])))
+    return { id, description: keys.map((k) => `${k}: ${c[k].description}`).join('; ') }
+  })
+  return {
+    spec: {
+      key: set.key,
+      question: `Answer every question, as one combined choice: ${keys
+        .map((k, i) => `(${i + 1}) ${set.fields[k].question}`)
+        .join(' ')}`,
+      labels,
+    },
+    tuples,
+  }
+}
+
+/** Marginalise a joint distribution to one field's: sum the combinations that
+ *  agree on the field's label. */
+function marginalise(
+  probs: Readonly<Record<string, number>>,
+  tuples: Map<string, Record<string, string>>,
+  field: string,
+): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const [id, tuple] of tuples) {
+    const p = probs[id]
+    if (typeof p !== 'number' || !Number.isFinite(p) || p <= 0) continue
+    out[tuple[field]] = (out[tuple[field]] ?? 0) + p
+  }
+  return out
+}
+
+async function evaluateFields<F extends Record<string, string>>(
+  call: DecideFieldsCall<F>,
+): Promise<{ readonly [K in keyof F]: EvaluatedDecision<F[K]> }> {
+  const { set, state } = call
+  const keys = Object.keys(set.fields) as Array<keyof F & string>
+  const joint = set.mode === 'joint'
+  const src = !joint && call.decideAll ? call.decideAll : call.decide
+  const setServing = joint ? readServing(call.decide, set.key) : {}
+  const servingOf = (k: string): Serving => {
+    const own = readServing(src, set.fields[k as keyof F].key)
+    return { method: own.method ?? setServing.method, calibration: own.calibration }
+  }
+  const callOf = (k: keyof F & string) => ({
+    spec: set.fields[k],
+    policy: call.policy[k],
+    state,
+  })
+
+  const out: Record<string, EvaluatedDecision<string>> = {}
+  const live: Array<keyof F & string> = []
+  for (const k of keys) {
+    const serving = servingOf(k)
+    if (preCallAbstain({ policy: call.policy[k], state, method: serving.method })) {
+      out[k] = settle(callOf(k), serving, {})
+    } else live.push(k)
+  }
+
+  /** Every live field failed the same way. */
+  const failAll = (e: unknown) => {
+    const { error, llmCall } = errorFrom(e)
+    for (const k of live) out[k] = settle(callOf(k), servingOf(k), { error, llmCall })
+  }
+
+  if (live.length > 0) {
+    try {
+      if (joint) {
+        const { spec, tuples } = buildJointSpec(set, live)
+        let raw: unknown
+        let failed = false
+        try {
+          raw = await call.decide({ spec, state })
+        } catch (e) {
+          failAll(e)
+          failed = true
+        }
+        if (!failed) {
+          const r = sanitizeResult<string>(raw, setServing)
+          for (const k of live) {
+            out[k] = settle(callOf(k), servingOf(k), {
+              result: { ...r, probs: marginalise(r.probs, tuples, k) } as DecideResult<string>,
+            })
+          }
+        }
+      } else if (call.decideAll) {
+        const subset = {
+          key: set.key,
+          fields: Object.fromEntries(live.map((k) => [k, set.fields[k]])),
+        } as DecisionSetSpec<Record<string, string>>
+        const raw: unknown = await call.decideAll({ spec: subset, state })
+        const fields = isRecord(raw) && isRecord(raw.fields) ? raw.fields : {}
+        for (const k of live) {
+          out[k] = settle(callOf(k), servingOf(k), {
+            result: sanitizeResult(fields[k], servingOf(k)),
+          })
+        }
+      } else {
+        // One pass per field, SEQUENTIAL: the state prefix is byte-identical,
+        // so the first pass warms the backend's prefix cache for the rest.
+        for (const k of live) {
+          let raw: unknown
+          try {
+            raw = await call.decide({ spec: set.fields[k], state })
+          } catch (e) {
+            const { error, llmCall } = errorFrom(e)
+            out[k] = settle(callOf(k), servingOf(k), { error, llmCall })
+            continue
+          }
+          out[k] = settle(callOf(k), servingOf(k), { result: sanitizeResult(raw, servingOf(k)) })
+        }
+      }
+    } catch (e) {
+      // A set-wide failure (the one-call provider threw, the joint spec was
+      // ambiguous): every field takes it.
+      failAll(e)
+    }
+  }
+  return out as { readonly [K in keyof F]: EvaluatedDecision<F[K]> }
+}
+
+/**
+ * Decide several typed fields over one state — the owner's "ONE call, SEVERAL
+ * typed fields". The PROVIDER decides how the set is served:
+ *
+ *  - `decideAll` present (and `mode !== 'joint'`): one request, every field
+ *    its own typed question;
+ *  - `mode: 'joint'`: the label product scored in ONE `decide` pass and
+ *    marginalised back to each field (refused above
+ *    {@link MAX_DECISION_LABELS}, see {@link assertDecisionSetSpec});
+ *  - otherwise one `decide` pass per field with a byte-identical state.
+ *
+ * Records ONE `decision_made` PER FIELD — each has its own key, policy and
+ * calibration and must be independently attributable — and, when a call
+ * failed, one `error` for the set. `decision_made` is excluded from the
+ * progress bar's step count, so a four-field set does not add four steps.
+ * Throws only for a set refused by {@link assertDecisionSetSpec}.
+ */
+export async function decideFields<F extends Record<string, string>>(
+  scope: PatternScope<unknown>,
+  call: DecideFieldsCall<F>,
+  opts: DecideOptions = {},
+): Promise<{ [K in keyof F]: Decision<F[K]> }> {
+  assertDecisionSetSpec(call.set)
+  const evaluated = await evaluateFields(call)
+  const out: Record<string, Decision<string>> = {}
+  let errorRecorded = false
+  const seenCalls = new Set<LLMCallRecord>()
+  for (const k of Object.keys(call.set.fields)) {
+    const ev = evaluated[k as keyof F]
+    // A set-wide call record is shared by reference: attach it once.
+    const dup = ev.llmCall !== undefined && seenCalls.has(ev.llmCall)
+    if (ev.llmCall) seenCalls.add(ev.llmCall)
+    // A set-wide failure carries the same message for every field: record one.
+    const dupError = ev.error !== undefined && errorRecorded
+    if (ev.error) errorRecorded = true
+    out[k] = record(scope, dup ? { ...ev, llmCall: undefined } : ev, opts, !dupError)
+  }
+  return out as { [K in keyof F]: Decision<F[K]> }
+}
+
+// ============================================================================
+// The patterns — typedDecision and decisionRouter (T2)
+// ============================================================================
+
+/** What `typedDecision` writes: the verdict per spec key. Overwritten every
+ *  turn, including failures — `scope.data` survives the turn boundary, so a
+ *  decision left in place would be last turn's. */
+export interface TypedDecisionData {
+  decisions?: Record<string, Decision>
+}
+
+/** The default decision state: the window's user messages plus FINAL
+ *  assistant messages (the router's intermediate status lines are not part of
+ *  the conversation), think-blocks stripped, oldest dropped to fit the
+ *  transport's window. Tool results are opt-in — pass your own `state`: an
+ *  assistant reply can echo untrusted tool content, and what a steered
+ *  decision reads is the consumer's call, not a default's. */
+function renderDefaultState(view: EventView, fn: DecideFn): string {
+  const turns = view
+    .get()
+    .map((e): ContextEvent => stripThinkBlocks(e))
+    .flatMap((e) => {
+      if (e.type === 'user_message') {
+        return [`User: ${(e.data as UserMessageEventData).content}`]
+      }
+      if (e.type === 'assistant_message' && (e.data as AssistantMessageEventData).final === true) {
+        return [`Assistant: ${(e.data as AssistantMessageEventData).content}`]
+      }
+      return []
+    })
+  return trimToFit(turns, (t) => t.join('\n\n'), 300, readContextWindow(fn)).join('\n\n')
+}
+
+/** The default window: the router's — recent user/assistant messages across
+ *  turns. Soft read of the run frame for the same reason `router()` reads it:
+ *  this runs at CONSTRUCTION, which is not a run. */
+function defaultDecisionView(): ViewConfig {
+  return {
+    fromLast: false,
+    fromLastNTurns: (currentRunFrame()?.config ?? DEFAULT_RUNTIME_CONFIG).routerTurnWindow,
+    eventTypes: ['user_message', 'assistant_message'],
+    contentTransforms: [stripThinkBlocks],
+  }
+}
+
+function assertFallbackIsALabel(owner: string, spec: DecisionSpec, fallback: string): void {
+  if (!spec.labels.some((l) => l.id === fallback)) {
+    throw new Error(
+      `${owner}: policy.fallback '${fallback}' is not one of the labels of '${spec.key}'`,
+    )
+  }
+}
+
+export interface TypedDecisionConfig<L extends string = string> extends PatternConfig {
+  /** REQUIRED: the raw decision seam (`bamlPatterns().decide`, or your own). */
+  readonly decide: DecideFn
+  readonly spec: DecisionSpec<L>
+  readonly policy: DecisionPolicy<L>
+  /** Render the state the decision is asked over. Default: see
+   *  {@link renderDefaultState} — messages only. */
+  readonly state?: (view: EventView, data: Readonly<Record<string, unknown>>) => string
+}
+
+/**
+ * A chain step that asks one closed question and writes the verdict to
+ * `scope.data.decisions[spec.key]`. It generates no text and never throws: a
+ * failed decision is an abstain onto `policy.fallback`, with an `error` event
+ * (recoverable unless configured otherwise) beside the `decision_made`.
+ *
+ * `data.decisions[spec.key]` is overwritten on EVERY exit.
+ *
+ * @example
+ * typedDecision({ decide: baml.decide, spec: RETRIEVE, policy: { fallback: 'skip', minConfidence: 0.6 } })
+ */
+export function typedDecision<T extends TypedDecisionData, L extends string>(
+  config: TypedDecisionConfig<L>,
+): ConfiguredPattern<T> {
+  const { decide: decideFn, spec, policy, state: stateFn, ...patternConfig } = config
+  assertFallbackIsALabel('typedDecision', spec, policy.fallback)
+  const resolved = resolveConfig('typedDecision', {
+    viewConfig: defaultDecisionView(),
+    ...patternConfig,
+  })
+
+  const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
+    // Drop last turn's verdict FIRST: whatever happens below, a stale one
+    // never survives.
+    const { [spec.key]: _stale, ...kept } = scope.data.decisions ?? {}
+    scope.data = { ...scope.data, decisions: kept }
+
+    let state = ''
+    let stateError: ErrorEventData | undefined
+    try {
+      state = stateFn
+        ? stateFn(view, scope.data as unknown as Readonly<Record<string, unknown>>)
+        : renderDefaultState(view, decideFn)
+    } catch (e) {
+      stateError = { error: `typedDecision state builder failed: ${errorFrom(e).error.error}` }
+    }
+    const decision = await decide(
+      scope,
+      { decide: decideFn, spec, state, policy },
+      { trackHistory: resolved.trackHistory, errorSeverity: resolved.errorSeverity },
+    )
+    if (stateError) {
+      trackEvent(scope, 'error', { ...stateError, severity: resolved.errorSeverity }, true)
+    }
+    scope.data = { ...scope.data, decisions: { ...scope.data.decisions, [spec.key]: decision } }
+    return scope
+  }
+
+  return {
+    name: 'typedDecision',
+    fn,
+    config: resolved,
+    estimateTurns: () => 1,
+    capabilities: { decisionKeys: [spec.key] },
+  }
+}
+
+/** The key `decisionRouter` decides under — what calibration and thresholds
+ *  are fitted against. */
+export const DECISION_ROUTER_KEY = 'route'
+
+export interface DecisionRouterConfig extends PatternConfig {
+  /** REQUIRED: the raw decision seam. */
+  readonly decide: DecideFn
+  /** `fallback` names the ROUTE taken when the decision abstains or fails. */
+  readonly policy: DecisionPolicy<string>
+  /** "No tool — just answer": an ORDINARY route key `routes()` dispatches to a
+   *  pass-through. Never `DIRECT_RESPONSE_ROUTE`: a decision has no reply text
+   *  to pass through, so that sentinel would end the turn empty. */
+  readonly conversationalRoute?: { readonly name: string; readonly description: string }
+  /** Leave `data.intent` alone (compose after `compactIntent`, which rewrites
+   *  it every turn). Default false: clear it, so a conversation migrated from
+   *  `router()` cannot carry the old router's intent into the next loop. */
+  readonly preserveIntent?: boolean
+  /** Record the decision and set NOTHING — run beside `router()` to measure
+   *  agreement. A shadow failure is always recoverable. */
+  readonly shadow?: boolean
+}
+
+/**
+ * The decision-typed sibling of `router()`: classifies the latest message
+ * into one of `routeDescriptions` (plus `conversationalRoute`) by a
+ * probability-typed decision, and sets `data.route`. Pair with `routes()`.
+ *
+ * What it does NOT produce: the reply text and the rewritten `intent` — compose
+ * `compactIntent` first (with `preserveIntent`), and dispatch the
+ * conversational route to a pass-through that `compactExecution` answers.
+ *
+ * Failure parity with `router`: the pattern defaults to `irrecoverable` — a
+ * failed decision clears `data.route` (and `routes()` would throw on it) and
+ * the turn ends where it happened. `errorSeverity: 'recoverable'` continues on
+ * `policy.fallback` instead. An abstain that is not a failure (low confidence)
+ * always continues on the fallback.
+ */
+export function decisionRouter<T extends RouterData & TypedDecisionData>(
+  routeDescriptions: Routes,
+  config: DecisionRouterConfig,
+): ConfiguredPattern<T> {
+  const { decide: decideFn, policy, conversationalRoute, preserveIntent, shadow, ...rest } = config
+  const labels: DecisionLabel[] = [
+    ...Object.entries(routeDescriptions).map(([id, description]) => ({ id, description })),
+    ...(conversationalRoute
+      ? [{ id: conversationalRoute.name, description: conversationalRoute.description }]
+      : []),
+  ]
+  const ids = labels.map((l) => l.id)
+  if (new Set(ids).size !== ids.length) {
+    throw new Error('decisionRouter: route names must be unique (check conversationalRoute)')
+  }
+  if (ids.includes(DIRECT_RESPONSE_ROUTE)) {
+    throw new Error(
+      `decisionRouter: a route may not be named '${DIRECT_RESPONSE_ROUTE}' — that is the direct-response sentinel, and a decision has no reply to pass through`,
+    )
+  }
+  const spec: DecisionSpec = {
+    key: DECISION_ROUTER_KEY,
+    question: "Which route should handle the user's latest message?",
+    labels,
+  }
+  assertFallbackIsALabel('decisionRouter', spec, policy.fallback)
+  const resolved = resolveConfig('decisionRouter', { viewConfig: defaultDecisionView(), ...rest })
+
+  /** Drop the routing carried over from an earlier turn — same rule, same
+   *  reason as `router`'s `clearRouting`. */
+  const clearRouting = (scope: PatternScope<T>): void => {
+    scope.data = { ...scope.data, route: undefined, intent: undefined }
+  }
+
+  const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
+    const state = renderDefaultState(view, decideFn)
+    const decision = await decide(
+      scope,
+      { decide: decideFn, spec, state, policy, ...(shadow && { shadow: true as const }) },
+      {
+        trackHistory: resolved.trackHistory,
+        errorSeverity: shadow ? 'recoverable' : resolved.errorSeverity,
+      },
+    )
+    if (shadow) return scope
+
+    const failedFatally = decision.reason === 'error' && resolved.errorSeverity === 'irrecoverable'
+    if (failedFatally) {
+      clearRouting(scope)
+    } else {
+      scope.data = {
+        ...scope.data,
+        route: decision.label,
+        ...(preserveIntent ? {} : { intent: undefined }),
+      }
+    }
+    scope.data = { ...scope.data, decisions: { ...scope.data.decisions, [spec.key]: decision } }
+    return scope
+  }
+
+  return {
+    name: 'decisionRouter',
+    fn,
+    config: resolved,
+    estimateTurns: () => 1,
+    capabilities: { decisionKeys: [spec.key] },
+  }
 }

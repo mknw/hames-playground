@@ -64,6 +64,7 @@ is and why it is shaped this way, start at the front page —
   - [withInjectionGuard()](#withinjectionguardconfigpattern)
   - [router()](#routerroutedescriptions-config)
   - [routes()](#routespatternmap-config)
+  - [typedDecision() and decisionRouter()](#decisions-typeddecision-418)
   - [judge()](#judgeevaluator-config)
   - [chain()](#chainctx-patterns-onevent)
   - [harness()](#harnesspatterns)
@@ -1884,8 +1885,8 @@ T1 carries the TYPES (`DecisionSpec` / `DecisionSetSpec` with `mode`,
 `DecisionPolicy` with `thresholdMethod`, `DecisionCalibrationEntry`,
 `DecideFn` / `DecideAllFn`, `MAX_DECISION_LABELS` = 20) and the PURE scoring
 half; T2 adds the awaited wrapper (`evaluateDecision` / `decide` /
-`decideFields`) and the `typedDecision` chain step; the transports are
-harness-baml and app slices.
+`decideFields`), the `typedDecision` chain step and `decisionRouter`; the
+transports are harness-baml and app slices (T3–T5).
 
 The pure policy math, unit-pinned:
 
@@ -1915,6 +1916,161 @@ The pure policy math, unit-pinned:
   error the label is `policy.fallback` (REQUIRED, D8) and `top` is the argmax
   (`null` only with no distribution at all); `margin = p₁ − p₂`,
   `confidence = (K·p_max − 1)/(K − 1)`.
+
+#### The awaited wrapper
+
+```typescript
+interface DecisionCall<L> {
+  decide: DecideFn // the raw seam
+  spec: DecisionSpec<L>
+  state: string // only its LENGTH is ever recorded
+  policy: DecisionPolicy<L>
+  shadow?: true
+}
+
+evaluateDecision(call): Promise<{ decision; event; llmCall?; error? }> // scope-free, never throws
+decide(scope, call, opts?): Promise<Decision<L>> // + records, never throws
+decideFields(scope, call, opts?): Promise<{ [K in keyof F]: Decision<F[K]> }>
+```
+
+`evaluateDecision` asks the transport what it will serve, calls the raw seam
+and scores the outcome with `scoreDecision`. It NEVER throws: a seam that
+throws, one that returns junk (not an object, no `probs`, no usable mass) and a
+pre-call refusal are all an **abstained decision whose `label` is
+`policy.fallback`**, and a throw or an unusable readout also yields an `error`
+(`kind: 'llm_call'` when the throw carried an `LLMCallError`'s record).
+
+`decide` is `evaluateDecision` + the recording: exactly ONE `decision_made`
+(`opts.trackHistory`, default `'decision_made'`; `decision.eventId` is the
+recorded event's id) and, on failure, ONE `error` (`opts.errorSeverity`,
+default `'recoverable'` — a failed decision always has a verdict, so the
+CONSUMER knows whether the turn can proceed on it). The call record
+(`llmCall`) rides exactly ONE event, so its cost is counted once: the `error`
+event when the call threw with a record, `decision_made` otherwise. Use
+`evaluateDecision` where there is a context and no scope (the post-response
+position).
+
+**`DecideFn.serving` — the adapter's contract.** The raw seam carries two
+facts `evaluateDecision` needs and the call alone cannot tell it, so a
+transport MAY expose them:
+
+```typescript
+serving?: (key: string) => { method?: DecisionMethod; calibration?: DecisionCalibrationEntry }
+```
+
+- `method` is the method of the client the call WILL be served from, resolved
+  per call from the spec key. It is what lets the F3 gate abstain a
+  `requireCalibrated` decision on a knowingly verbalized client **before** the
+  call (zero LLM calls).
+- `calibration` is the host-fed entry for (serving client, `key`). Its
+  `minConfidence` / `minMargin` WIN over the policy's static thresholds (F2).
+- **Absent `serving` removes only the pre-call shortcut, never a check.** The
+  method then comes from the result's own `method`, so the post-call
+  `'method-mismatch'` and `'uncalibrated'` abstentions still fire. A `serving`
+  that throws is treated as absent.
+
+The T3/T4 adapters fill it. `DecideAllFn` carries the same member.
+
+#### `decideFields`
+
+The owner's "ONE call, SEVERAL typed fields". The provider decides how the set
+is served:
+
+| How         | When                                                             | Calls                                                                                               |
+| ----------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `decideAll` | a one-call provider (Jev) is supplied and `set.mode !== 'joint'` | ONE request; each field a typed question                                                            |
+| joint       | `set.mode === 'joint'`                                           | ONE `decide` pass over the label **product** (ids `'a \| b \| c'`), marginalised back to each field |
+| per field   | otherwise                                                        | one `decide` pass per field, **sequential**, with a byte-identical state                            |
+
+The state prefix is byte-identical across the per-field passes, so the backend's
+prefix cache serves every pass after the first. A field whose pre-call gate
+refuses it is left out of the set call. `decideFields` records ONE
+`decision_made` PER FIELD — each has its own key, policy and calibration and
+must be independently attributable — and ONE `error` for a set-wide failure.
+`decision_made` is excluded from the progress bar's step count (app slice T6),
+so a four-field set does not add four steps.
+
+`assertDecisionSetSpec(set)` throws for a `mode: 'joint'` set whose label
+product exceeds `MAX_DECISION_LABELS` (a joint pass reads the product's mass
+from one top-k window). It is a programmer error, so it throws — call it where
+the set is declared to fail at construction; `decideFields` calls it first
+regardless, before any call.
+
+#### `typedDecision(config)`
+
+```typescript
+interface TypedDecisionConfig<L> extends PatternConfig {
+  decide: DecideFn // REQUIRED — `bamlPatterns().decide` (T3), or your own
+  spec: DecisionSpec<L>
+  policy: DecisionPolicy<L> // `fallback` must be one of the labels (checked at construction)
+  state?: (view: EventView, data) => string
+}
+interface TypedDecisionData {
+  decisions?: Record<string, Decision>
+}
+```
+
+A chain step that asks one closed question and writes the verdict to
+`scope.data.decisions[spec.key]`. It generates no text and never throws.
+**`data.decisions[spec.key]` is overwritten on EVERY exit** — success, a failed
+call, an empty state, a throwing `state` builder — because `scope.data`
+survives the turn boundary and a verdict left in place would be last turn's
+(the router and planner clear their outputs for the same reason). Other keys
+are left alone.
+
+The default `state` is the window's user messages plus FINAL assistant
+messages (the router's intermediate status lines are not part of the
+conversation), think-blocks stripped, oldest dropped to fit
+`decide.limits().contextWindow` (16 384 when the transport reports none).
+Tool results are opt-in — pass your own `state`: an assistant reply can echo
+untrusted tool content. The default view mirrors `router`'s
+(`fromLastNTurns: routerTurnWindow`). It declares
+`capabilities.decisionKeys: [spec.key]`.
+
+Defaults (all three maps carry an entry for the type): `commitStrategy:
+'always'`, `trackHistory: 'decision_made'`, `errorSeverity: 'recoverable'`,
+`estimateTurns: () => 1`.
+
+#### `decisionRouter(routeDescriptions, config)`
+
+```typescript
+interface DecisionRouterConfig extends PatternConfig {
+  decide: DecideFn // REQUIRED
+  policy: DecisionPolicy<string> // `fallback` names the ROUTE taken on abstain / failure
+  conversationalRoute?: { name: string; description: string } // an ORDINARY route key
+  preserveIntent?: boolean // default false: clear data.intent
+  shadow?: boolean // record, set nothing
+}
+```
+
+The decision-typed sibling of `router()`: the routes (plus
+`conversationalRoute`) are the labels of one decision under the key `route`,
+and the verdict becomes `data.route`; pair it with `routes()`. It produces the
+ROUTE only — not the reply and not a rewritten `intent` — so compose
+`compactIntent` first (with `preserveIntent: true`) and dispatch the
+conversational route to a pass-through that the final `compactExecution`
+answers.
+
+- It **never sets `DIRECT_RESPONSE_ROUTE`**: a decision has no reply text to
+  pass through, so that sentinel would end the turn empty. A route named like
+  it is refused at construction, as are duplicate route names and a
+  `policy.fallback` that is no route.
+- `routes()` never sees an undefined route: every verdict is a label (the
+  fallback is required). A non-failure abstain (low confidence, …) continues on
+  the fallback route.
+- **Failure parity with `router`**: the default `errorSeverity` is
+  `irrecoverable`. A FAILED decision (`reason: 'error'`) clears `data.route` and
+  `data.intent` and ends the turn where it happened.
+  `errorSeverity: 'recoverable'` instead continues on `policy.fallback`.
+- `preserveIntent: false` clears `data.intent` so a conversation migrated from
+  `router()` cannot carry the old router's intent into the next loop.
+- `shadow: true` records the decision (`decision_made.shadow = true`) and sets
+  **nothing** — not `route`, `intent` or `data.decisions` — so it can run
+  beside `router()` to measure agreement. A shadow failure is always
+  `recoverable`, whatever `errorSeverity` says: it can never end a turn.
+
+Defaults: `commitStrategy: 'always'`, `trackHistory: 'decision_made'`,
+`errorSeverity: 'irrecoverable'`, `estimateTurns: () => 1`.
 
 The `decision_made` event is in `ALWAYS_COMMIT_TYPES` and renders METADATA
 ONLY into LLM-facing serializations (`key: label (p, margin)` plus the abstain
@@ -2525,7 +2681,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
     ├── compactIntent.server.ts # Rewrites latest message → scope.data.intent for router-less actors; emits intent_compacted
     ├── planner.server.ts       # Upfront decomposition → scope.data.plan (+ formatPlanContext, read by both loop patterns); emits plan_created
     ├── retriever.server.ts     # retriever() — vector-store search as a pattern
-    ├── typedDecision.server.ts # #418: the decision policy layer's PURE half — sumLabelMass / calibrateLabelMass / normalizeLabelMass (the logprob readout's math, composed by T3's transport), preCallAbstain (F3), resolveDecisionCuts (F2), scoreDecision (the pure half of evaluateDecision; the awaited wrapper + typedDecision/decisionRouter patterns are T2)
+    ├── typedDecision.server.ts # #418: the decision policy layer — the PURE half (sumLabelMass / calibrateLabelMass / normalizeLabelMass, preCallAbstain (F3), resolveDecisionCuts (F2), scoreDecision), the awaited wrapper (evaluateDecision / decide / decideFields) and the typedDecision / decisionRouter patterns
     └── event-view.server.ts    # EventViewImpl (fluent query API, serializeCompact)
 
 packages/harness-baml/                   # The BAML companion PACKAGE (Lane A6) — EVERYTHING that touches baml_client lives here

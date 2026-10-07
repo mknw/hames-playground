@@ -134,7 +134,10 @@ function refusal(database: string, optIn: string | undefined): string {
       `.env present this run could log in and write to it. ${why}`,
     'Choose one:',
     '  - a private, throwaway Postgres (worktrees, lanes, agents):',
-    `      docker run --rm -d --name hames-test-pg -p ${PRIVATE_PORT}:5432 -e POSTGRES_PASSWORD=test postgres:16`,
+    // The pgvector image, not plain postgres:16: the memory suites (#419 M4)
+    // need the vector extension, and it ships in THIS image only. Every other
+    // DB-backed suite runs on it unchanged, so one image serves all three.
+    `      docker run --rm -d --name hames-test-pg -p ${PRIVATE_PORT}:5432 -e POSTGRES_PASSWORD=test pgvector/pgvector:0.8.0-pg16-bookworm`,
     `      export TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:${PRIVATE_PORT}/${database}`,
     "  - the compose Postgres on purpose: the owner's own primary checkout ONLY.",
     '    Agents and lanes: use the private Postgres above, and never add this line.',

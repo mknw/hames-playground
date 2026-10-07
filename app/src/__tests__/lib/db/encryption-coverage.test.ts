@@ -40,11 +40,12 @@ const ENCRYPTED_TABLES = [
   'skills',
   'hitl_requests',
   'hitl_quarantine',
+  'memories',
 ] as const
 
 /**
  * The only production modules allowed to write SQL naming those tables — the
- * five repositories that own encrypt-on-write and decrypt-on-read.
+ * repositories that own encrypt-on-write and decrypt-on-read.
  *
  * `client.server.ts` is deliberately absent: it holds the DDL bootstrap and the
  * boot gate, which name tables in `CREATE`/`ALTER` (not matched below) and, in
@@ -56,6 +57,7 @@ const SEAM_MODULES = [
   'lib/db/routines.server.ts',
   'lib/db/skills.server.ts',
   'lib/db/hitl.server.ts',
+  'lib/db/memories.server.ts',
   'lib/auth/session-store.server.ts',
   'lib/auth/users.server.ts',
 ].sort()
@@ -67,6 +69,7 @@ const OWNER: Record<string, string> = {
   skills: 'lib/db/skills.server.ts',
   hitl_requests: 'lib/db/hitl.server.ts',
   hitl_quarantine: 'lib/db/hitl.server.ts',
+  memories: 'lib/db/memories.server.ts',
   auth_sessions: 'lib/auth/session-store.server.ts',
   users: 'lib/auth/users.server.ts',
 }

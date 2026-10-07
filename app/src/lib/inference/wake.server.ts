@@ -238,14 +238,34 @@ export const DEFAULT_VERDA_WAKE_POLL_INTERVAL_MS = 5_000
  * under 1ms (`'0.5'`) pass the guard and then become the very `0` the paragraph
  * above says is refused — silently, since the warning had already been skipped.
  */
-function envMs(name: string, fallback: number): number {
+/**
+ * A positive-millisecond env override, or the default — SHARED by both wakes.
+ *
+ * Exported since #419 D20 so the Verda wake and the memory wake read their
+ * bounds through ONE parser and cannot drift into two validation policies (the
+ * memory wake's `MEMORY_WAKE_*` vars are read through this too). The var name
+ * is in the message, so the prefix stays generic.
+ *
+ * Read per call rather than at module load, the same rule the rest of this
+ * route follows: a script that sets the var before importing a pattern has to
+ * be seen. A zero, a negative or a garbage value is REFUSED with a warning
+ * rather than honoured — a zero attempt timeout would abort every attempt
+ * before it left the process and turn the wake into a silent, instant failure
+ * loop, which is the one outcome worse than a wrong number.
+ *
+ * The floor is applied BEFORE the check, not after, because the value that
+ * reaches the poll is the floored one: validating the raw parse let a fraction
+ * under 1ms (`'0.5'`) pass the guard and then become the very `0` the paragraph
+ * above says is refused — silently, since the warning had already been skipped.
+ */
+export function wakeEnvMs(name: string, fallback: number): number {
   const raw = process.env[name]
   if (raw === undefined) return fallback
   const parsed = Number(raw)
   const ms = Math.floor(parsed)
   if (!Number.isFinite(ms) || ms <= 0) {
     console.warn(
-      `[verda] ${name}=${JSON.stringify(raw)} is not a positive number of ms; ` +
+      `[wake] ${name}=${JSON.stringify(raw)} is not a positive number of ms; ` +
         `falling back to ${fallback}.`,
     )
     return fallback
@@ -255,19 +275,19 @@ function envMs(name: string, fallback: number): number {
 
 /** `VERDA_WAKE_TIMEOUT_MS`, or {@link DEFAULT_VERDA_WAKE_TIMEOUT_MS}. */
 export function verdaWakeTimeoutMs(): number {
-  return envMs('VERDA_WAKE_TIMEOUT_MS', DEFAULT_VERDA_WAKE_TIMEOUT_MS)
+  return wakeEnvMs('VERDA_WAKE_TIMEOUT_MS', DEFAULT_VERDA_WAKE_TIMEOUT_MS)
 }
 
 /** `VERDA_WAKE_ATTEMPT_TIMEOUT_MS`, or
  *  {@link DEFAULT_VERDA_WAKE_ATTEMPT_TIMEOUT_MS}. */
 export function verdaWakeAttemptTimeoutMs(): number {
-  return envMs('VERDA_WAKE_ATTEMPT_TIMEOUT_MS', DEFAULT_VERDA_WAKE_ATTEMPT_TIMEOUT_MS)
+  return wakeEnvMs('VERDA_WAKE_ATTEMPT_TIMEOUT_MS', DEFAULT_VERDA_WAKE_ATTEMPT_TIMEOUT_MS)
 }
 
 /** `VERDA_WAKE_POLL_INTERVAL_MS`, or
  *  {@link DEFAULT_VERDA_WAKE_POLL_INTERVAL_MS}. */
 export function verdaWakePollIntervalMs(): number {
-  return envMs('VERDA_WAKE_POLL_INTERVAL_MS', DEFAULT_VERDA_WAKE_POLL_INTERVAL_MS)
+  return wakeEnvMs('VERDA_WAKE_POLL_INTERVAL_MS', DEFAULT_VERDA_WAKE_POLL_INTERVAL_MS)
 }
 
 /**
@@ -285,10 +305,19 @@ export const VERDA_WAKE_PROMPT = 'wake'
  *  assert the visible string rather than a substring it chose itself. */
 export const VERDA_WAKE_FAILED = 'the private inference box did not wake'
 
-/** The sentence every wake failure ends with. The reassurance is the point on a
- *  confidential-compute route: the failure a user would fear is a silent
- *  fall-back, and the message says it did not happen (SD-12). */
-const NO_FALLBACK = 'The turn was not started; nothing was sent to any other provider.'
+/** The promise every wake failure ends with — nothing was sent elsewhere
+ *  (SD-12). The reassurance is the point on a confidential-compute route: the
+ *  failure a user would fear is a silent fall-back, and the message says it did
+ *  not happen. Exported since #419 D20 so BOTH wakes make the promise in ONE
+ *  wording and cannot drift apart; the Verda wake's own sentence prefixes it
+ *  with the clause that is true there and false for memory (the memory turn
+ *  DOES start — it just runs without memory). */
+export const NOTHING_SENT_ELSEWHERE = 'nothing was sent to any other provider.'
+
+/** The sentence every Verda wake failure ends with: the turn did not start, and
+ *  nothing was sent to any other provider. Exported so a test can assert the
+ *  visible string rather than a substring it chose itself. */
+export const NO_FALLBACK = `The turn was not started; ${NOTHING_SENT_ELSEWHERE}`
 
 const WAKE_KEY = Symbol.for('hames-app.verda-wake')
 interface WakeState {
@@ -508,14 +537,15 @@ async function attempt(timeoutMs: number): Promise<string | null> {
 }
 
 /**
- * Is this status the deployment saying "no", rather than "not yet"?
+ * Is this status the endpoint saying "no", rather than "not yet"? SHARED by
+ * both wakes (exported since #419 D20, so the classification cannot drift):
  *
  * 4xx except 408 (request timeout) and 429 (rate limited), which are both the
  * server asking to be tried again. Everything at 5xx is retried: that band
  * includes the gateway's own `504 inference request was canceled`, which is
  * precisely what a box that is still starting says.
  */
-function isRefusal(status: number): boolean {
+export function isRefusal(status: number): boolean {
   return status >= 400 && status < 500 && status !== 408 && status !== 429
 }
 

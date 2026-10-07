@@ -3315,13 +3315,15 @@ function cellFill(pattern: XmlElement | undefined, dxf: boolean): CellFill | und
   return { kind: 'unknown', colours: [] }
 }
 
-/** A solid fill's colour: `fgColor` beside `bgColor` (#495 F8). */
+/** A solid fill's colour: its `fgColor`, else its `bgColor` (#495 F8). */
 function solidFill(pattern: XmlElement): CellFill {
-  const candidates = [childEl(pattern, NS.s, 'fgColor'), childEl(pattern, NS.s, 'bgColor')]
-    .map(colorOf)
-    .filter(isColor)
-  if (candidates.length === 0) return { kind: 'unknown', colours: [] }
-  return { kind: 'solid', colours: candidates }
+  // A solid pattern renders ONE colour — the foreground. Excel writes a dxf's
+  // colour as `bgColor`, so that resolves when `fgColor` is absent; treating
+  // both as backgrounds would flag every fill whose legacy `bgColor` is black.
+  const fg = colorOf(childEl(pattern, NS.s, 'fgColor'))
+  const bg = colorOf(childEl(pattern, NS.s, 'bgColor'))
+  const c = fg !== undefined ? fg : bg
+  return c === undefined ? { kind: 'unknown', colours: [] } : { kind: 'solid', colours: [c] }
 }
 
 const isColor = (c: Color | undefined): c is Color => c !== undefined

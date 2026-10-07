@@ -3111,6 +3111,29 @@ describe('#495 review: a mechanism that reads as a KNOWN state must still resolv
     expect(base.counted).toEqual({ 'colour-contrast': 1 })
   })
 
+  // Finding 1, the conditional-format half: an automatic dxf font renders
+  // black too, and over its own dark fill it cannot contrast.
+  it('an automatic conditional-format font renders black: over its dark fill it counts', async () => {
+    // The base font is white, so nothing but the dxf's own automatic (black)
+    // font over its black fill can hide anything here.
+    // The only declared font is the white base, carried by a cell that sits
+    // on a dark fill so it is visibly distinct — so nothing can count except
+    // the dxf's own automatic (black) font over its own black fill.
+    const styles =
+      `<styleSheet xmlns="${NS.s}"><fonts><font><color rgb="FFFFFFFF"/></font></fonts>` +
+      '<fills><fill><patternFill patternType="none"/></fill>' +
+      '<fill><patternFill patternType="solid"><fgColor rgb="FF404040"/></patternFill></fill></fills>' +
+      '<cellXfs><xf numFmtId="0" fontId="0" fillId="1"/></cellXfs>' +
+      '<dxfs><dxf><font><color auto="1"/></font><fill><patternFill patternType="solid">' +
+      '<fgColor rgb="FF000000"/></patternFill></fill></dxf></dxfs></styleSheet>'
+    const sheet =
+      `<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>VISIBLE</t></is></c></row></sheetData>` +
+      '<conditionalFormatting sqref="A1"><cfRule type="expression" dxfId="0" priority="1">' +
+      '<formula>TRUE()</formula></cfRule></conditionalFormatting>'
+    const out = await disarmed(xlsx({ sheets: [{ name: 'S', xml: sheet }], styles }), MIME.xlsx, [])
+    expect(out.counted).toEqual({ 'colour-contrast': 1 })
+  })
+
   // Finding 9: a fill entry carrying more than its patternFill is not provably
   // any colour (Excel 2010+ gradients ride in extLst as x14:fill).
   it('xlsx: a fill entry with more than its patternFill is not provably any colour', async () => {

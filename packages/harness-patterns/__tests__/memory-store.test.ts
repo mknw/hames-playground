@@ -722,6 +722,35 @@ describe('acceptance-rules: dedupe and merge', () => {
     return { db, ctx, report, decide }
   }
 
+  it('N1: the merge decision redacts the old memory text but keeps the call identity', async () => {
+    // Mutation: decide(local, → decide(scope, in chooseAction.
+    const db = fakeDb({ seed: [seed({ content: 'OLD-SENTINEL' })] })
+    const decide = fakeDecide({}, (input) => {
+      if (input.spec.key !== 'memory.merge') return undefined
+      return {
+        ...confident(input.spec.labels, 'distinct'),
+        llmCall: {
+          functionName: 'Decide',
+          variables: { state: input.state },
+          rawInput: input.state,
+        },
+      }
+    })
+    const { embed } = fakeEmbed({ [CONTENT]: at(0.8) })
+    const { cfg } = config({ db, decide: decide.fn, embed })
+    const ctx = turn()
+
+    const report = await settleMemory(ctx, cfg)
+
+    expect(report.written).toBe(1)
+    expect(decide.calls.find((c) => c.key === 'memory.merge')?.state).toContain('OLD-SENTINEL')
+    expect(JSON.stringify(ctx.events)).not.toContain('OLD-SENTINEL')
+    const merge = ctx.events.find(
+      (e) => e.type === 'decision_made' && (e.data as { key: string }).key === 'memory.merge',
+    )
+    expect(merge?.llmCall?.functionName).toBe('Decide')
+  })
+
   it('a same-kind near-duplicate (cos ≥ τ_dup) REINFORCES — no merge question, no new row', async () => {
     const { db, ctx, decide } = await run({ sim: 0.97 })
     expect(db.rows()).toHaveLength(1)

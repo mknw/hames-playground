@@ -860,14 +860,27 @@ async function chooseAction(
     minMargin: cut?.minMargin ?? DEFAULT_MIN_MARGIN,
     ...(cut?.thresholdMethod ? { thresholdMethod: cut.thresholdMethod } : {}),
   }
+  const local: PatternScope<Record<string, never>> = {
+    id: scope.id,
+    events: [],
+    data: {},
+    startTime: Date.now(),
+  }
   let timer: ReturnType<typeof setTimeout> | undefined
   const verdict = await Promise.race([
-    decide(scope, {
+    decide(local, {
       decide: decideFn,
       spec: MEMORY_MERGE_SPEC,
       state: `Existing memory: ${near.content}\nNew statement: ${cand.content}`,
       policy,
-    }).then((d) => d.label),
+    }).then((d) => {
+      scope.events.push(
+        ...local.events.map((e) =>
+          e.llmCall ? { ...e, llmCall: redactCall(e.llmCall as LLMCallRecord) } : e,
+        ),
+      )
+      return d.label
+    }),
     new Promise<MemoryMergeLabel>((resolve) => {
       timer = setTimeout(() => resolve('distinct'), t.mergeMs)
     }),

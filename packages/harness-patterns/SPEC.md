@@ -1938,7 +1938,14 @@ and scores the outcome with `scoreDecision`. It NEVER throws: a seam that
 throws, one that returns junk (not an object, no `probs`, no usable mass) and a
 pre-call refusal are all an **abstained decision whose `label` is
 `policy.fallback`**, and a throw or an unusable readout also yields an `error`
-(`kind: 'llm_call'` when the throw carried an `LLMCallError`'s record).
+(`kind: 'llm_call'` when the throw carried an `LLMCallError`'s record). A
+readout with ANY entry that is not a finite non-negative number is unusable as
+a whole (`reason: 'error'`) — it is never renormalised over the entries that
+survive, which would invent certainty from a corrupt distribution. The thrown
+message is **redacted of the call's `state` and capped at 500 characters**
+before it enters the `error` event, because a transport that echoes its request
+would otherwise copy the state into an event that is JSON-dumped into LLM-facing
+views (SD-3); the state survives only in `llmCall.variables`.
 
 `decide` is `evaluateDecision` + the recording: exactly ONE `decision_made`
 (`opts.trackHistory`, default `'decision_made'`; `decision.eventId` is the
@@ -2024,7 +2031,9 @@ conversation), think-blocks stripped, oldest dropped to fit
 `decide.limits().contextWindow` (16 384 when the transport reports none).
 Tool results are opt-in — pass your own `state`: an assistant reply can echo
 untrusted tool content. The default view mirrors `router`'s
-(`fromLastNTurns: routerTurnWindow`). It declares
+(`fromLastNTurns: routerTurnWindow`) and narrows to messages; **when you pass a
+`state` and no `viewConfig`, the narrowing is dropped** (the turn window stays)
+so your builder can see `tool_result` events. It declares
 `capabilities.decisionKeys: [spec.key]`.
 
 Defaults (all three maps carry an entry for the type): `commitStrategy:
@@ -2062,6 +2071,9 @@ answers.
   `irrecoverable`. A FAILED decision (`reason: 'error'`) clears `data.route` and
   `data.intent` and ends the turn where it happened.
   `errorSeverity: 'recoverable'` instead continues on `policy.fallback`.
+- A state that cannot be built is a failure like any other: routing is cleared
+  (non-shadow), the abstained `no-state` verdict is written and one `error`
+  is recorded at the pattern's severity (shadow records only).
 - `preserveIntent: false` clears `data.intent` so a conversation migrated from
   `router()` cannot carry the old router's intent into the next loop.
 - `shadow: true` records the decision (`decision_made.shadow = true`) and sets

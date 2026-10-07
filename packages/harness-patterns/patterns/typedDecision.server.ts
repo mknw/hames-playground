@@ -359,12 +359,18 @@ export function scoreDecision<L extends string>(input: DecisionScoring<L>): Scor
   let usable = false
   if (input.result) {
     const mass: Partial<Record<L, number>> = {}
+    // A corrupt entry (present but not a finite non-negative number) makes the
+    // WHOLE readout unusable: skipping it and renormalising over the rest would
+    // invent certainty from a distribution that is demonstrably broken.
+    let corrupt = false
     for (const label of labels) {
-      const p = (input.result.probs as Record<string, number | undefined>)[label as string]
-      if (typeof p === 'number' && Number.isFinite(p) && p > 0) mass[label] = p
+      const p = (input.result.probs as Record<string, unknown>)[label as string]
+      if (p === undefined) continue
+      if (typeof p !== 'number' || !Number.isFinite(p) || p < 0) corrupt = true
+      else if (p > 0) mass[label] = p
     }
     const normalized = normalizeLabelMass(mass, labels)
-    if (normalized.total > 0) {
+    if (!corrupt && normalized.total > 0) {
       probs = normalized.probs
       usable = true
     }
@@ -550,15 +556,23 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null
 }
 
+/** Longest transport message an `error` event carries. */
+const MAX_ERROR_CHARS = 500
+
 /** A thrown value → the error event data, carrying the call record when the
- *  adapter attached one (`LLMCallError`). */
-function errorFrom(e: unknown): { error: ErrorEventData; llmCall?: LLMCallRecord } {
+ *  adapter attached one (`LLMCallError`). The message is REDACTED of the call's
+ *  `state` and capped: a transport that echoes its request (an HTTP client, a
+ *  BAML validation error with the prompt) would otherwise copy the state —
+ *  which can hold sanitized mail or tool results — into an event that is
+ *  JSON-dumped into LLM-facing views (SD-3). The state survives only in
+ *  `llmCall.variables`. */
+function errorFrom(e: unknown, state?: string): { error: ErrorEventData; llmCall?: LLMCallRecord } {
   const llmCall = e instanceof LLMCallError ? e.llmCall : undefined
+  let message = e instanceof Error ? e.message : String(e)
+  if (state) message = message.split(state).join('[state]')
+  if (message.length > MAX_ERROR_CHARS) message = `${message.slice(0, MAX_ERROR_CHARS)}…`
   return {
-    error: {
-      error: e instanceof Error ? e.message : String(e),
-      ...(llmCall ? { kind: 'llm_call' as const } : {}),
-    },
+    error: { error: message, ...(llmCall ? { kind: 'llm_call' as const } : {}) },
     ...(llmCall ? { llmCall } : {}),
   }
 }
@@ -667,7 +681,7 @@ export async function evaluateDecision<L extends string>(
     try {
       raw = await call.decide({ spec: call.spec, state: call.state })
     } catch (e) {
-      const { error, llmCall } = errorFrom(e)
+      const { error, llmCall } = errorFrom(e, call.state)
       return settle(call, serving, { error, llmCall })
     }
     return settle(call, serving, { result: sanitizeResult<L>(raw, serving) })
@@ -842,7 +856,7 @@ async function evaluateFields<F extends Record<string, string>>(
 
   /** Every live field failed the same way. */
   const failAll = (e: unknown) => {
-    const { error, llmCall } = errorFrom(e)
+    const { error, llmCall } = errorFrom(e, state)
     for (const k of live) out[k] = settle(callOf(k), servingOf(k), { error, llmCall })
   }
 
@@ -886,7 +900,7 @@ async function evaluateFields<F extends Record<string, string>>(
           try {
             raw = await call.decide({ spec: set.fields[k], state })
           } catch (e) {
-            const { error, llmCall } = errorFrom(e)
+            const { error, llmCall } = errorFrom(e, state)
             out[k] = settle(callOf(k), servingOf(k), { error, llmCall })
             continue
           }
@@ -978,11 +992,14 @@ function renderDefaultState(view: EventView, fn: DecideFn): string {
 /** The default window: the router's — recent user/assistant messages across
  *  turns. Soft read of the run frame for the same reason `router()` reads it:
  *  this runs at CONSTRUCTION, which is not a run. */
-function defaultDecisionView(): ViewConfig {
+function defaultDecisionView(customState: boolean): ViewConfig {
   return {
     fromLast: false,
     fromLastNTurns: (currentRunFrame()?.config ?? DEFAULT_RUNTIME_CONFIG).routerTurnWindow,
-    eventTypes: ['user_message', 'assistant_message'],
+    // A caller-supplied `state` reads the view itself, so the window must not
+    // pre-narrow it to messages — otherwise tool results (opt-in) are invisible
+    // to the very builder that asked for them.
+    ...(customState ? {} : { eventTypes: ['user_message', 'assistant_message'] as const }),
     contentTransforms: [stripThinkBlocks],
   }
 }
@@ -1022,16 +1039,11 @@ export function typedDecision<T extends TypedDecisionData, L extends string>(
   const { decide: decideFn, spec, policy, state: stateFn, ...patternConfig } = config
   assertFallbackIsALabel('typedDecision', spec, policy.fallback)
   const resolved = resolveConfig('typedDecision', {
-    viewConfig: defaultDecisionView(),
+    viewConfig: defaultDecisionView(stateFn !== undefined),
     ...patternConfig,
   })
 
   const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
-    // Drop last turn's verdict FIRST: whatever happens below, a stale one
-    // never survives.
-    const { [spec.key]: _stale, ...kept } = scope.data.decisions ?? {}
-    scope.data = { ...scope.data, decisions: kept }
-
     let state = ''
     let stateError: ErrorEventData | undefined
     try {
@@ -1125,7 +1137,10 @@ export function decisionRouter<T extends RouterData & TypedDecisionData>(
     labels,
   }
   assertFallbackIsALabel('decisionRouter', spec, policy.fallback)
-  const resolved = resolveConfig('decisionRouter', { viewConfig: defaultDecisionView(), ...rest })
+  const resolved = resolveConfig('decisionRouter', {
+    viewConfig: defaultDecisionView(false),
+    ...rest,
+  })
 
   /** Drop the routing carried over from an earlier turn — same rule, same
    *  reason as `router`'s `clearRouting`. */
@@ -1134,7 +1149,13 @@ export function decisionRouter<T extends RouterData & TypedDecisionData>(
   }
 
   const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
-    const state = renderDefaultState(view, decideFn)
+    let state = ''
+    let stateError: ErrorEventData | undefined
+    try {
+      state = renderDefaultState(view, decideFn)
+    } catch (e) {
+      stateError = { error: `decisionRouter state build failed: ${errorFrom(e).error.error}` }
+    }
     const decision = await decide(
       scope,
       { decide: decideFn, spec, state, policy, ...(shadow && { shadow: true as const }) },
@@ -1143,9 +1164,21 @@ export function decisionRouter<T extends RouterData & TypedDecisionData>(
         errorSeverity: shadow ? 'recoverable' : resolved.errorSeverity,
       },
     )
+    if (stateError) {
+      trackEvent(
+        scope,
+        'error',
+        { ...stateError, severity: shadow ? 'recoverable' : resolved.errorSeverity },
+        true,
+      )
+    }
     if (shadow) return scope
 
-    const failedFatally = decision.reason === 'error' && resolved.errorSeverity === 'irrecoverable'
+    // A state that could not be built is a failure like any other: it must not
+    // leave last turn's routing in `scope.data` (which survives the turn).
+    const failedFatally =
+      (decision.reason === 'error' || stateError !== undefined) &&
+      resolved.errorSeverity === 'irrecoverable'
     if (failedFatally) {
       clearRouting(scope)
     } else {

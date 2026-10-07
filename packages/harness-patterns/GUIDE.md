@@ -135,7 +135,8 @@ fields over one state, one `decision_made` per field.
 `decisionRouter` is `router()`'s sibling built on it: the routes are the
 labels, the verdict becomes `data.route`, and `policy.fallback` names the route
 taken when the decision abstains. Put `compactIntent` in front (it writes the
-intent the router no longer does), give conversational turns an ordinary route
+intent the router no longer does) and pass `preserveIntent: true`, or the
+router clears that intent; give conversational turns an ordinary route
 key (`conversationalRoute`) that `routes()` dispatches to a pass-through, and
 run it with `shadow: true` beside your existing `router()` to measure agreement
 before swapping. See SPEC's [Decisions](SPEC.md#decisions-typeddecision-418).

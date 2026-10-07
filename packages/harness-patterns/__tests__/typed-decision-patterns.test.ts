@@ -1038,6 +1038,335 @@ describe('decision-state-sentinel across the T2 entry points', () => {
 })
 
 // ============================================================================
+// Review round (PR #503, comment 6033934904)
+// ============================================================================
+
+const TOOL_SENTINEL = '⟦TOOL-RESULT-SECRET⟧'
+const withToolResult = (ctx: ReturnType<typeof createContext<Data>>) =>
+  ctx.events.unshift({
+    type: 'tool_result',
+    ts: 1,
+    patternId: 'x',
+    data: { tool: 'fetch_mail', result: TOOL_SENTINEL },
+  })
+/** A window that ADMITS tool results — so only the render filter stands between
+ *  them and the default state (SD-1). */
+const ADMITS_TOOLS = {
+  fromLast: false,
+  eventTypes: ['user_message', 'assistant_message', 'tool_result'],
+} as const
+
+describe('review F1 — SD-1: the default state never carries tool results', () => {
+  it('typedDecision: a tool_result the window admits is absent from the default state', async () => {
+    const { fn, calls } = fakeDecide(() => logprobResult({ yes: 0.9, no: 0.1 }))
+    const ctx = createContext<Data>('and the mail?')
+    withToolResult(ctx)
+    await runInFrame(() =>
+      runChain(ctx, [
+        typedDecision<Data, YesNo>({
+          decide: fn,
+          spec: SPEC,
+          policy: POLICY,
+          viewConfig: { ...ADMITS_TOOLS, eventTypes: [...ADMITS_TOOLS.eventTypes] },
+        }),
+      ]),
+    )
+    expect(calls[0].state).toContain('User: and the mail?')
+    expect(calls[0].state).not.toContain(TOOL_SENTINEL)
+  })
+
+  it('decisionRouter: same (it shares the renderer)', async () => {
+    const { fn, calls } = picks('web')
+    const ctx = createContext<Data>('and the mail?')
+    withToolResult(ctx)
+    await runInFrame(() =>
+      runChain(ctx, [
+        decisionRouter<Data>(ROUTES, {
+          decide: fn,
+          policy: { fallback: 'neo4j' },
+          viewConfig: { ...ADMITS_TOOLS, eventTypes: [...ADMITS_TOOLS.eventTypes] },
+        }),
+      ]),
+    )
+    expect(calls[0].state).not.toContain(TOOL_SENTINEL)
+  })
+})
+
+describe('review F2 — decisionRouter has a no-stale floor', () => {
+  const throwingView = {
+    fromLast: false,
+    contentTransforms: [
+      () => {
+        throw new Error('transform broke')
+      },
+    ],
+  }
+  const seed: Data = {
+    route: 'b',
+    intent: 'old',
+    decisions: { route: { ...STALE, key: 'route', label: 'b' } },
+  }
+
+  it('a throwing state build clears routing, replaces the verdict, records exactly one error', async () => {
+    const { fn, calls } = picks('web')
+    const ctx = createContext<Data>('q', seed)
+    await runInFrame(() =>
+      runChain(ctx, [
+        decisionRouter<Data>(ROUTES, {
+          decide: fn,
+          policy: { fallback: 'neo4j' },
+          viewConfig: throwingView,
+        }),
+      ]),
+    )
+    expect(calls).toHaveLength(0)
+    expect(ctx.data.route).toBeUndefined()
+    expect(ctx.data.intent).toBeUndefined()
+    expect(ctx.data.decisions?.route).toMatchObject({ abstained: true, reason: 'no-state' })
+    expect(ctx.data.decisions?.route).not.toMatchObject({ label: 'b' })
+    expect(ofType(ctx.events, 'error')).toHaveLength(1)
+    expect((ofType(ctx.events, 'error')[0].data as ErrorEventData).severity).toBe('irrecoverable')
+  })
+
+  it('shadow records the failure (recoverable) and touches nothing', async () => {
+    const { fn } = picks('web')
+    const ctx = createContext<Data>('q', seed)
+    await runInFrame(() =>
+      runChain(ctx, [
+        decisionRouter<Data>(ROUTES, {
+          decide: fn,
+          policy: { fallback: 'neo4j' },
+          viewConfig: throwingView,
+          shadow: true,
+        }),
+      ]),
+    )
+    expect(ctx.data).toEqual(seed)
+    expect(ofType(ctx.events, 'error')).toHaveLength(1)
+    expect((ofType(ctx.events, 'error')[0].data as ErrorEventData).severity).toBe('recoverable')
+  })
+})
+
+describe('review F3 — G1/G2 through decideFields', () => {
+  const call = (key: string) => record(key)
+  const mkAll = (extra?: Partial<DecideAllFn>) => {
+    const seen: Array<string[]> = []
+    const fn = (async (i: { spec: DecisionSetSpec<Mem> }) => {
+      seen.push(Object.keys(i.spec.fields))
+      return {
+        fields: {
+          target: logprobResult({ user: 0.9, none: 0.1 }, { method: 'jev' }),
+          kind: logprobResult({ episodic: 0.1, semantic: 0.8, trait: 0.1 }, { method: 'jev' }),
+        },
+      }
+    }) as unknown as DecideAllFn
+    Object.assign(fn, extra)
+    return { fn, seen }
+  }
+  const jointAnswer = () =>
+    logprobResult({ 'user | semantic': 0.6, 'user | episodic': 0.2, 'none | trait': 0.2 })
+  void call
+
+  it('(a) mode joint with BOTH present: decideAll is never called, decide once', async () => {
+    const { fn, calls } = fakeDecide(jointAnswer)
+    const all = mkAll()
+    await decideFields(createScope('p', {}), {
+      decide: fn,
+      decideAll: all.fn,
+      set: { ...SET, mode: 'joint' },
+      state: 's',
+      policy: SET_POLICY,
+    })
+    expect(all.seen).toHaveLength(0)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('(b) mode absent with BOTH present: decideAll once, decide never', async () => {
+    const { fn, calls } = fakeDecide(jointAnswer)
+    const all = mkAll()
+    await decideFields(createScope('p', {}), {
+      decide: fn,
+      decideAll: all.fn,
+      set: SET,
+      state: 's',
+      policy: SET_POLICY,
+    })
+    expect(all.seen).toHaveLength(1)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('(c) joint: a field refused pre-call is left out of the product spec', async () => {
+    const { fn, calls } = fakeDecide(jointAnswer, {
+      serving: (key) => ({ method: key === 'memory.store.kind' ? 'verbalized' : 'logprob' }),
+    })
+    const out = await decideFields(createScope('p', {}), {
+      decide: fn,
+      set: { ...SET, mode: 'joint' },
+      state: 's',
+      policy: {
+        target: { fallback: 'none' },
+        kind: { fallback: 'episodic', requireCalibrated: true },
+      },
+    })
+    expect(calls).toHaveLength(1)
+    expect(calls[0].spec.labels.map((l) => l.id)).toEqual(['user', 'none']) // target only
+    expect(out.kind).toMatchObject({ abstained: true, reason: 'uncalibrated' })
+  })
+
+  it("(d) decideAll.serving's calibration entry cuts apply per field", async () => {
+    const all = mkAll({
+      serving: (key) => ({
+        method: 'jev',
+        ...(key === 'memory.store.target' && { calibration: { minConfidence: 0.99 } }),
+      }),
+    })
+    const { fn } = fakeDecide(() => logprobResult({}))
+    const out = await decideFields(createScope('p', {}), {
+      decide: fn,
+      decideAll: all.fn,
+      set: SET,
+      state: 's',
+      policy: SET_POLICY,
+    })
+    expect(out.target).toMatchObject({ abstained: true, reason: 'low-confidence' })
+    expect(out.kind.abstained).toBe(false)
+  })
+
+  it("(e) joint: the SET key's serving (verbalized) + requireCalibrated makes ZERO calls, and decideAll.serving is not consulted", async () => {
+    const { fn, calls } = fakeDecide(jointAnswer, {
+      serving: (key) => (key === 'memory.store' ? { method: 'verbalized' } : {}),
+    })
+    const all = mkAll({ serving: () => ({ method: 'jev' }) })
+    const out = await decideFields(createScope('p', {}), {
+      decide: fn,
+      decideAll: all.fn,
+      set: { ...SET, mode: 'joint' },
+      state: 's',
+      policy: {
+        target: { fallback: 'none', requireCalibrated: true },
+        kind: { fallback: 'episodic', requireCalibrated: true },
+      },
+    })
+    expect(calls).toHaveLength(0)
+    expect(all.seen).toHaveLength(0)
+    expect([out.target.reason, out.kind.reason]).toEqual(['uncalibrated', 'uncalibrated'])
+  })
+
+  it('(f) a malformed spec abstains error through evaluateDecision — no throw', async () => {
+    const { fn } = fakeDecide(() => logprobResult({ yes: 1, no: 0 }))
+    const bad = { key: 'k', question: 'q', labels: undefined } as unknown as DecisionSpec<YesNo>
+    const out = await evaluateDecision({ decide: fn, spec: bad, state: 's', policy: POLICY })
+    expect(out.decision).toMatchObject({ abstained: true, reason: 'error', label: 'no' })
+    expect(out.error?.error).toMatch(/could not be scored/)
+  })
+})
+
+describe('review F4 — a partly corrupt readout is unusable, not confident', () => {
+  it.each([
+    ['NaN beside a real value', { yes: NaN, no: 0.3 }],
+    ['Infinity beside a real value', { yes: Infinity, no: 1 }],
+    ['a negative beside a real value', { yes: -0.2, no: 0.8 }],
+    ['a string beside a real value', { yes: 'x', no: 0.8 }],
+  ])('%s abstains error onto the fallback', async (_n, probs) => {
+    const { fn } = fakeDecide(() => logprobResult(probs as unknown as Record<string, number>))
+    const out = await evaluateDecision({ decide: fn, spec: SPEC, state: 's', policy: POLICY })
+    expect(out.decision).toMatchObject({ abstained: true, reason: 'error', label: 'no' })
+    expect(out.error).toBeDefined()
+  })
+
+  it('a label the readout simply does not mention is still fine (unseen → 0)', async () => {
+    const { fn } = fakeDecide(() => logprobResult({ yes: 0.9 }))
+    const out = await evaluateDecision({ decide: fn, spec: SPEC, state: 's', policy: POLICY })
+    expect(out.decision).toMatchObject({ abstained: false, label: 'yes' })
+  })
+})
+
+describe('review F5 — SD-3: a transport that echoes the state in its error', () => {
+  const S = '⟦SENTINEL-ECHOED-STATE⟧'
+  it('the message is redacted in every entry point, and capped', async () => {
+    const echo = fakeDecide(() => {
+      throw new Error(`HTTP 400 body: ${S} ${'x'.repeat(2000)}`)
+    })
+    const scope = createScope('p', {})
+    await decide(scope, { decide: echo.fn, spec: SPEC, state: S, policy: POLICY })
+    await decideFields(scope, { decide: echo.fn, set: SET, state: S, policy: SET_POLICY })
+    await decideFields(scope, {
+      decide: echo.fn,
+      set: { ...SET, mode: 'joint' },
+      state: S,
+      policy: SET_POLICY,
+    })
+    const decideAll = (async () => {
+      throw new Error(`echo ${S}`)
+    }) as unknown as DecideAllFn
+    await decideFields(scope, {
+      decide: echo.fn,
+      decideAll,
+      set: SET,
+      state: S,
+      policy: SET_POLICY,
+    })
+
+    const errors = ofType(scope.events, 'error')
+    expect(errors.length).toBeGreaterThanOrEqual(4)
+    expect(JSON.stringify(scope.events.map((e) => e.data))).not.toContain(S)
+    expect((errors[0].data as ErrorEventData).error).toContain('[state]')
+    expect((errors[0].data as ErrorEventData).error.length).toBeLessThanOrEqual(501)
+  })
+})
+
+describe('review F6 — DX', () => {
+  it('a custom `state` sees tool results with NO viewConfig supplied', async () => {
+    const { fn } = fakeDecide(() => logprobResult({ yes: 0.9, no: 0.1 }))
+    let types: string[] = []
+    const ctx = createContext<Data>('q')
+    withToolResult(ctx)
+    await runInFrame(() =>
+      runChain(ctx, [
+        typedDecision<Data, YesNo>({
+          decide: fn,
+          spec: SPEC,
+          policy: POLICY,
+          state: (view) => {
+            types = view.get().map((e) => e.type)
+            return 'custom'
+          },
+        }),
+      ]),
+    )
+    expect(types).toContain('tool_result')
+  })
+
+  it('the documented composition: an intent writer → decisionRouter({ preserveIntent: true }) → routes', async () => {
+    const { fn } = picks('web')
+    let seen: string | undefined
+    const writer = configurePattern<Data>(
+      'intent-writer',
+      async (scope) => ((scope.data = { ...scope.data, intent: 'compacted intent' }), scope),
+      { patternId: 'intent-writer' },
+    )
+    const dispatch = configurePattern<Data>(
+      'web',
+      async (scope) => ((seen = scope.data.intent), scope),
+      { patternId: 'web' },
+    )
+    const ctx = createContext<Data>('q')
+    await runInFrame(() =>
+      runChain(ctx, [
+        writer,
+        decisionRouter<Data>(ROUTES, {
+          decide: fn,
+          policy: { fallback: 'neo4j' },
+          preserveIntent: true,
+        }),
+        routes<Data>({ web: dispatch, neo4j: dispatch }),
+      ]),
+    )
+    expect(seen).toBe('compacted intent')
+  })
+})
+
+// ============================================================================
 // decision-seam-structural
 // ============================================================================
 

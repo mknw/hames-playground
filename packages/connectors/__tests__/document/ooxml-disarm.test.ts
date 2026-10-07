@@ -2948,9 +2948,7 @@ describe('#492 F2: the resolver costs CPU linear in the part', () => {
 describe('#495 review: a mechanism that reads as a KNOWN state must still resolve', () => {
   const xf495 = (numFmtId: number, fontId: number, fillId: number): string =>
     `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}"/>`
-  const cells495 = (
-    list: readonly (readonly [s: number, t: string, ref: string])[],
-  ): string =>
+  const cells495 = (list: readonly (readonly [s: number, t: string, ref: string])[]): string =>
     `<sheetData><row r="1">${list
       .map(([s, t, ref]) => `<c r="${ref}" s="${s}" t="inlineStr"><is><t>${t}</t></is></c>`)
       .join('')}</row></sheetData>`
@@ -2962,13 +2960,14 @@ describe('#495 review: a mechanism that reads as a KNOWN state must still resolv
       '<w:tcPr><w:shd w:val="clear" w:fill="000000"/></w:tcPr>' +
       `<w:p>${run('SECRETAUTOCELL')}</w:p></w:tc></w:tr></w:tbl>` +
       `<w:p>${run('AUTOWHITECONTROL')}</w:p>`
-    const out = await disarmed(docx({ body }), MIME.docx, [])
+    const out = await disarmed(docx({ body }), MIME.docx, [], 'AUTOWHITECONTROL')
     expect(out.counted).toEqual({ 'colour-contrast': 1 })
   })
 
   // Finding 2: a pptx text highlight is a background drawn over every other.
   it('a pptx text highlight is the background behind the glyph, over every other background', async () => {
-    const white = '<a:rPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:highlight><a:srgbClr val="FFFFFF"/></a:highlight></a:rPr>'
+    const white =
+      '<a:rPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:highlight><a:srgbClr val="FFFFFF"/></a:highlight></a:rPr>'
     const blackShape = '<a:solidFill><a:srgbClr val="000000"/></a:solidFill>'
     const out = await disarmed(
       pptx({
@@ -3022,8 +3021,7 @@ describe('#495 review: a mechanism that reads as a KNOWN state must still resolv
       [],
     )
     expect(out.counted).toEqual({ 'colour-contrast': 1, 'too-small': 1 })
-    const omml =
-      `<m:r><w:rPr><w:color w:val="FFFFFF"/><w:sz w:val="2"/></w:rPr><m:t>SECRETOMML</m:t></m:r>`
+    const omml = `<m:r><w:rPr><w:color w:val="FFFFFF"/><w:sz w:val="2"/></w:rPr><m:t>SECRETOMML</m:t></m:r>`
     const word = await disarmed(
       docx({ body: `${para('VISIBLE')}<w:p>${omml}</w:p>` }),
       MIME.docx,
@@ -3054,14 +3052,14 @@ describe('#495 review: a mechanism that reads as a KNOWN state must still resolv
     const body =
       `<w:p><w:pPr><w:shd w:val="clear" w:themeFill="text1"/></w:pPr>${run('SECRETTHEMEFILL', '<w:color w:val="000000"/>')}</w:p>` +
       `<w:p><w:pPr><w:shd w:val="clear" w:themeFill="background1"/></w:pPr>${run('ONTHEMEWHITE', '<w:color w:val="000000"/>')}</w:p>`
-    const out = await disarmed(docx({ body }), MIME.docx, [])
+    const out = await disarmed(docx({ body }), MIME.docx, [], 'ONTHEMEWHITE')
     expect(out.counted).toEqual({ 'colour-contrast': 1 })
   })
 
   // Finding 7: a solid shading draws its pattern colour: absent reads as black.
   it('a solid shading with an absent pattern colour draws black, never the fill', async () => {
     const body =
-      `<w:p>${run('VISIBLE')}` +
+      `<w:p>${run('VISIBLE')}</w:p>` +
       `<w:p><w:pPr><w:shd w:val="solid" w:fill="FFFFFF"/></w:pPr>${run('SECRETSOLIDNOVAL', '<w:color w:val="000000"/>')}</w:p>`
     const out = await disarmed(docx({ body }), MIME.docx, [])
     expect(out.counted).toEqual({ 'colour-contrast': 1 })
@@ -3164,7 +3162,9 @@ describe('#495 review: a mechanism that reads as a KNOWN state must still resolv
       '<a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"/></p:style>'
     const out = await disarmed(
       pptx({
-        slides: [{ shapes: shape('IDXZEROCONTROL', { id: 3, style: fillRef0 }) + shape('VISIBLE') }],
+        slides: [
+          { shapes: shape('IDXZEROCONTROL', { id: 3, style: fillRef0 }) + shape('VISIBLE') },
+        ],
       }),
       MIME.pptx,
       [],
@@ -3172,7 +3172,6 @@ describe('#495 review: a mechanism that reads as a KNOWN state must still resolv
     expect(out.counted).toEqual({})
   })
 })
-
 
 describe('#482 F7 (A11): a deleted table cell is a deletion', () => {
   it('F4: a w:tc marked w:cellDel goes with its text', async () => {

@@ -190,6 +190,8 @@ const NS = {
 } as const
 
 const MSO = 'http://schemas.microsoft.com/office/'
+/** The wps (wordprocessingShape) namespace, for text boxes (#495 F5). */
+const WPS = `${MSO}word/2010/wordprocessingShape`
 
 /**
  * The element namespaces each family understands (A9). An element in any
@@ -734,8 +736,10 @@ function disarm(
       const against = (fills: readonly string[]): readonly string[] =>
         fills.length > 0 ? fills : ['FFFFFF']
       const dxfFont = st.dxfs.some((d) => {
-        if (d.font === undefined || d.font.auto) return false
-        const rgb = toRgb(d.font, shared)
+        // Automatic renders black (#495 F1): a black automatic dxf font over a
+        // dark fill can hide the base text.
+        if (d.font === undefined) return false
+        const rgb = d.font.auto ? '000000' : toRgb(d.font, shared)
         if (rgb === undefined) return true // unresolvable: not provably visible
         const own = cellFillColours(d.fill, shared)
         if (own.unknown) return true
@@ -994,6 +998,10 @@ interface Scope {
   // ── #492: the effective-visibility resolver's scope ────────────────────
   /** The paragraph's own `w:pPr/w:shd` (#492). */
   readonly pShd?: Shd
+  /** The enclosing text box's fill, resolved (#495 F5). */
+  readonly boxBg?: { readonly unknown: boolean; readonly colours: readonly string[] }
+  /** The enclosing DrawingML table cell's (else table's) fill (#495 F3). */
+  readonly tblFill?: DFill
   /** The enclosing cell's, row's and table's `w:shd`, nearest first. */
   readonly tblFills?: readonly (readonly Shd[])[]
   /** The paragraph's own `a:pPr/a:defRPr` and its list level (#492). */
@@ -1244,6 +1252,25 @@ function visit(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[] {
         fontScale: 1,
       },
     }
+  } else if (is(el, WPS, 'wsp')) {
+    // A docx text box: its fill is a background behind the run, over the
+    // paragraph shading and the table shading beneath it (#495 F5).
+    const s: Scheme = { theme: ctx.theme }
+    const fill = drawingFill(childEl(el, WPS, 'spPr'), s)
+    if (fill.kind !== 'absent' && fill.kind !== 'none') {
+      const bg = bgColours(fill)
+      inner = { ...scope, boxBg: { unknown: bg.unknown, colours: bg.colours ?? [] } }
+    }
+  } else if (is(el, NS.a, 'tbl')) {
+    // A DrawingML table: its own fill stands behind every cell (#495 F3).
+    const s: Scheme = { theme: ctx.theme, clrMap: slideInheritanceOf(ctx).clrMap }
+    const fill = drawingFill(childEl(el, NS.a, 'tblPr'), s)
+    inner = { ...scope, tblFill: fill.kind === 'absent' ? undefined : fill }
+  } else if (is(el, NS.a, 'tc')) {
+    // A cell's own fill covers the table's (#495 F3).
+    const s: Scheme = { theme: ctx.theme, clrMap: slideInheritanceOf(ctx).clrMap }
+    const fill = drawingFill(childEl(el, NS.a, 'tcPr'), s)
+    if (fill.kind !== 'absent') inner = { ...scope, tblFill: fill }
   } else if (is(el, NS.p, 'txBody')) {
     const levels = lstLevels(childEl(el, NS.a, 'lstStyle'))
     // The body's autofit scale composes with every run's size (#492).
@@ -1383,6 +1410,14 @@ interface Shd {
   readonly val?: string
   readonly color?: string
   readonly fill?: string
+  /** The theme-named pattern colour, with its tint and shade (#495 F6). */
+  readonly themeColor?: string
+  readonly themeTint?: string
+  readonly themeShade?: string
+  /** The theme-named fill, with its tint and shade (#495 F6). */
+  readonly themeFill?: string
+  readonly themeFillTint?: string
+  readonly themeFillShade?: string
 }
 
 /** `w:color` as written, tint and shade included (#492). */
@@ -1406,6 +1441,8 @@ interface RunProps {
   readonly scale?: number
   /** `w:position`, raised or lowered text in half-points (#492). */
   readonly position?: number
+  /** `w:vertAlign`: the reduced size of super/subscript, when it applies. */
+  readonly vertScale?: number
   /** Rendering properties the resolver does not model, by local name (#492). */
   readonly unknown: ReadonlySet<string>
 }
@@ -1420,6 +1457,7 @@ interface Resolved {
   readonly shd?: Shd
   readonly scale?: number
   readonly position?: number
+  readonly vertScale?: number
   readonly unknown: ReadonlySet<string>
   /** The style's own `w:pPr/w:shd` — a background behind the run (#492). */
   readonly pShd?: Shd
@@ -1504,8 +1542,11 @@ const WORD_INERT: ReadonlySet<string> = new Set([
   'spacing',
   ...HIDING,
 ])
+// w:vertAlign is READ, not inert: superscript and subscript render at a
+// reduced size, which composes with the resolved size like w:w (#495 review).
+const VERT_ALIGN_SCALE = 0.65
 
-/** The `w:rPr` children the resolver reads for visibility (#492). */
+/** The `w:rPr` children the resolver reads for visibility (#492, #495). */
 const WORD_READ: ReadonlySet<string> = new Set([
   'color',
   'sz',
@@ -1514,6 +1555,7 @@ const WORD_READ: ReadonlySet<string> = new Set([
   'shd',
   'w',
   'position',
+  'vertAlign',
 ])
 
 /**
@@ -1535,6 +1577,12 @@ const shdOf = (shd: XmlElement | undefined): Shd | undefined =>
     val: attrOf(shd.attributes, 'val', NS.w),
     color: attrOf(shd.attributes, 'color', NS.w),
     fill: attrOf(shd.attributes, 'fill', NS.w),
+    themeColor: attrOf(shd.attributes, 'themeColor', NS.w),
+    themeTint: attrOf(shd.attributes, 'themeTint', NS.w),
+    themeShade: attrOf(shd.attributes, 'themeShade', NS.w),
+    themeFill: attrOf(shd.attributes, 'themeFill', NS.w),
+    themeFillTint: attrOf(shd.attributes, 'themeFillTint', NS.w),
+    themeFillShade: attrOf(shd.attributes, 'themeFillShade', NS.w),
   }
 
 function runProps(rPr: XmlElement | undefined): RunProps | undefined {
@@ -1549,6 +1597,7 @@ function runProps(rPr: XmlElement | undefined): RunProps | undefined {
   let shd: Shd | undefined
   let scale: number | undefined
   let position: number | undefined
+  let vertScale: number | undefined
   // Every child is a rendering property: one the resolver neither reads nor
   // can prove inert makes the run not-provably-visible (#492, fail-closed).
   for (const c of elements(rPr)) {
@@ -1559,6 +1608,11 @@ function runProps(rPr: XmlElement | undefined): RunProps | undefined {
       if (c.name === 'shd') shd = shdOf(c)
       else if (c.name === 'w') scale = int(wVal(c))
       else if (c.name === 'position') position = int(wVal(c))
+      else if (c.name === 'vertAlign') {
+        // Superscript and subscript render the glyph at a reduced size.
+        const v = wVal(c)?.toLowerCase()
+        vertScale = v === 'superscript' || v === 'subscript' ? VERT_ALIGN_SCALE : undefined
+      }
       continue
     }
     if (!WORD_INERT.has(key)) unknown.add(key)
@@ -1577,6 +1631,7 @@ function runProps(rPr: XmlElement | undefined): RunProps | undefined {
     shd,
     scale,
     position,
+    vertScale,
     unknown,
   }
 }
@@ -1623,10 +1678,9 @@ function readWordStyles(root: XmlElement): WordStyles {
 }
 
 /** Nearest first: the first level that defines it wins. */
-function nearest<K extends 'color' | 'sz' | 'szCs' | 'highlight' | 'shd' | 'scale' | 'position'>(
-  levels: readonly (Pick<RunProps, K> | undefined)[],
-  key: K,
-): RunProps[K] {
+function nearest<
+  K extends 'color' | 'sz' | 'szCs' | 'highlight' | 'shd' | 'scale' | 'position' | 'vertScale',
+>(levels: readonly (Pick<RunProps, K> | undefined)[], key: K): RunProps[K] {
   for (const l of levels) if (l?.[key] !== undefined) return l[key]
   return undefined
 }
@@ -1704,6 +1758,7 @@ function resolveStyle(styles: WordStyles, id: string): Resolved {
       shd: nearest([...direct, ...parents], 'shd'),
       scale: nearest([...direct, ...parents], 'scale'),
       position: nearest([...direct, ...parents], 'position'),
+      vertScale: nearest([...direct, ...parents], 'vertScale'),
       unknown: unknownOf([...own, ...parents]),
       pShd: nearestShd([...defs.map((d) => d.pShd), ...parents.map((p) => p.pShd)]),
       conditionalShd: [
@@ -1744,6 +1799,7 @@ function levels(styles: WordStyles, rStyles: readonly string[], scope: Scope): R
     shd: nearest(all, 'shd'),
     scale: nearest(all, 'scale'),
     position: nearest(all, 'position'),
+    vertScale: nearest(all, 'vertScale'),
     unknown: unknownOf(all),
     pShd: nearestShd(parts.map((p) => p.pShd)),
     conditionalShd: parts.flatMap((p) => p.conditionalShd),
@@ -1761,11 +1817,13 @@ function levels(styles: WordStyles, rStyles: readonly string[], scope: Scope): R
  * A run is visibly distinct only if its foreground contrasts with every
  * colour of its effective background by at least this ratio (WCAG relative
  * luminance). 1.4 keeps grey footnotes (595959 ≈ 7.0), coloured headings
- * (4F81BD ≈ 4.9), mid-grey text (A9A9A9 ≈ 2.1) and the mid-grey-on-pale-fill
- * headers real spreadsheets carry (BFBFBF/DCE6F1 ≈ 1.46) visibly distinct,
- * while white (1.0), near-white FFFFFE (1.0) and D9D9D9 (1.26) do not pass.
- * The threshold is measured against a benign corpus of ordinary Office files
- * under the owner's ~2% budget (#492 decision 1); the PR reports the rate.
+ * (4F81BD ≈ 4.9), mid-grey text (A9A9A9 ≈ 2.1), the mid-grey-on-pale-fill
+ * headers real spreadsheets carry (BFBFBF/DCE6F1 ≈ 1.46) and #D9D9D9 text
+ * (1.412) visibly distinct, while white (1.0), near-white FFFFFE (1.0) and
+ * pale greys (E0E0E0, 1.32) do not pass — the cut sits between them, at the
+ * greys around #DCDCDC. The threshold is measured against a benign corpus of
+ * ordinary Office files under the owner's ~2% budget (#492 decision 1); the
+ * PR reports the rate.
  */
 const MIN_CONTRAST = 1.4
 
@@ -1805,8 +1863,8 @@ const hex6 = (v: string | undefined): string | undefined =>
 const solid = (v: string | undefined): string | undefined =>
   v === undefined || v.toLowerCase() === 'auto' ? undefined : hex6(v.length > 6 ? v.slice(-6) : v)
 
-/** A resolved foreground: adaptive (auto), a colour, or un-modelled. */
-type Fg = { kind: 'auto' } | { kind: 'rgb'; rgb: string } | { kind: 'unknown' }
+/** A resolved foreground: a colour, or un-modelled. Automatic is a colour. */
+type Fg = { kind: 'rgb'; rgb: string } | { kind: 'unknown' }
 
 /** `w:themeColor`'s values, mapped to the theme part's slots. */
 const WORD_THEME: Readonly<Record<string, string>> = {
@@ -1835,23 +1893,43 @@ const frac = (v: string | undefined): number | undefined => {
   return Number.isFinite(n) ? n / 255 : undefined
 }
 
-/** `w:color` resolved to RGB: the theme with tint and shade, else the value. */
+/** A theme slot with its tint and shade, resolved through the theme part. */
+function themeColour(
+  slot: string,
+  tintHex: string | undefined,
+  shadeHex: string | undefined,
+  ctx: Shared,
+): string | undefined {
+  const base = ctx.theme?.get(slot) ?? THEME_DEFAULTS[slot]
+  if (base === undefined) return undefined
+  let rgb = base
+  const tint = frac(tintHex)
+  const shade = frac(shadeHex)
+  if (tint !== undefined) rgb = mix(rgb, 'white', tint)
+  if (shade !== undefined) rgb = mix(rgb, 'black', shade)
+  return rgb
+}
+
+/**
+ * `w:color` resolved to RGB. Word's Automatic — an absent colour, or `auto` —
+ * follows the theme's text colour and does NOT adapt to shading or fills
+ * (#495 review finding 1): it resolves like any other foreground and takes
+ * the contrast check.
+ */
 function wordFg(c: WordColor | undefined, ctx: Shared): Fg {
-  if (!c || (c.val === undefined && c.theme === undefined)) return { kind: 'auto' }
+  const automatic = (): Fg => ({
+    kind: 'rgb',
+    rgb: themeColour('dk1', undefined, undefined, ctx) ?? '000000',
+  })
+  if (!c || (c.val === undefined && c.theme === undefined)) return automatic()
   if (c.theme !== undefined) {
     const slot = WORD_THEME[c.theme.toLowerCase()]
     if (slot === undefined) return { kind: 'unknown' }
-    const base = ctx.theme?.get(slot) ?? THEME_DEFAULTS[slot]
-    if (base === undefined) return { kind: 'unknown' }
-    let rgb = base
-    const tint = frac(c.themeTint)
-    const shade = frac(c.themeShade)
-    if (tint !== undefined) rgb = mix(rgb, 'white', tint)
-    if (shade !== undefined) rgb = mix(rgb, 'black', shade)
-    return { kind: 'rgb', rgb }
+    const rgb = themeColour(slot, c.themeTint, c.themeShade, ctx)
+    return rgb === undefined ? { kind: 'unknown' } : { kind: 'rgb', rgb }
   }
   if (c.val === undefined) return { kind: 'unknown' }
-  if (c.val.toLowerCase() === 'auto') return { kind: 'auto' }
+  if (c.val.toLowerCase() === 'auto') return automatic()
   const rgb = solid(c.val)
   return rgb === undefined ? { kind: 'unknown' } : { kind: 'rgb', rgb }
 }
@@ -1903,26 +1981,47 @@ const WORD_SHD: ReadonlySet<string> = new Set(
 type ShdColours =
   { kind: 'none' } | { kind: 'colours'; readonly colours: readonly string[] } | { kind: 'unknown' }
 
-function shdColours(shd: Shd | undefined): ShdColours {
+function shdColours(shd: Shd | undefined, ctx: Shared): ShdColours {
   if (shd === undefined) return { kind: 'none' }
   const val = shd.val?.toLowerCase()
   // No `w:val` is the default, clear: the fill paints (real documents write
   // cell shading with no `w:val` at all). Only `nil` is nothing.
   if (val === 'nil') return { kind: 'none' }
+  // A colour the shading names: the literal, else the theme-named one
+  // (#495 F6). `auto` reads as its conventional colour in a pattern.
+  const colour = (
+    literal: string | undefined,
+    themeName: string | undefined,
+    tint: string | undefined,
+    shade: string | undefined,
+    autoIs: string | undefined,
+  ): { rgb?: string; unknown?: boolean } => {
+    const lit = solid(literal)
+    if (lit !== undefined) return { rgb: lit }
+    if (themeName === undefined) return autoIs === undefined ? {} : { rgb: autoIs }
+    const slot = WORD_THEME[themeName.toLowerCase()]
+    if (slot === undefined) return { unknown: true }
+    const rgb = themeColour(slot, tint, shade, ctx)
+    return rgb === undefined ? { unknown: true } : { rgb }
+  }
   if (val === undefined || val === 'clear') {
-    const c = solid(shd.fill)
-    return c === undefined ? { kind: 'none' } : { kind: 'colours', colours: [c] }
+    const c = colour(shd.fill, shd.themeFill, shd.themeFillTint, shd.themeFillShade, undefined)
+    if (c.unknown) return { kind: 'unknown' }
+    return c.rgb === undefined ? { kind: 'none' } : { kind: 'colours', colours: [c.rgb] }
   }
   if (val === 'solid') {
-    const c = solid(shd.color) ?? solid(shd.fill)
-    return c === undefined ? { kind: 'none' } : { kind: 'colours', colours: [c] }
+    // Word renders a solid shading's PATTERN colour: absent or `auto` is
+    // black, never the fill (#495 F7).
+    const c = colour(shd.color, shd.themeColor, shd.themeTint, shd.themeShade, '000000')
+    if (c.unknown) return { kind: 'unknown' }
+    return { kind: 'colours', colours: [c.rgb!] }
   }
   if (WORD_SHD.has(val)) {
     // A pattern: `auto` reads as its conventional colour — black dots on white.
-    return {
-      kind: 'colours',
-      colours: [solid(shd.color) ?? '000000', solid(shd.fill) ?? 'FFFFFF'],
-    }
+    const fg = colour(shd.color, shd.themeColor, shd.themeTint, shd.themeShade, '000000')
+    const bg = colour(shd.fill, shd.themeFill, shd.themeFillTint, shd.themeFillShade, 'FFFFFF')
+    if (fg.unknown || bg.unknown) return { kind: 'unknown' }
+    return { kind: 'colours', colours: [fg.rgb ?? '000000', bg.rgb ?? 'FFFFFF'] }
   }
   return { kind: 'unknown' }
 }
@@ -1942,12 +2041,27 @@ function wordBackgrounds(
   const levels: readonly (readonly Shd[])[] = [
     childEls(run, NS.w, 'rPr').flatMap((r) => childEls(r, NS.w, 'shd').map(shdOf).filter(isShd)),
     [styled?.shd, scope.pShd, styled?.pShd].filter(isShd),
-    ...((scope.tblFills ?? []) as readonly (readonly Shd[])[]),
   ]
   for (const level of levels) {
     let colours: readonly string[] | undefined
     for (const s of level) {
-      const bg = shdColours(s)
+      const bg = shdColours(s, ctx)
+      if (bg.kind === 'unknown') return { unknown: true, colours: [] }
+      if (bg.kind === 'colours' && colours === undefined) colours = bg.colours
+    }
+    if (colours !== undefined) return { unknown: false, colours }
+  }
+  // The text box the run lives in, over the table shading beneath it
+  // (#495 F5): an opaque box fill is the background, a transparent one falls
+  // through to the table levels.
+  if (scope.boxBg !== undefined) {
+    if (scope.boxBg.unknown) return { unknown: true, colours: [] }
+    if (scope.boxBg.colours.length > 0) return { unknown: false, colours: scope.boxBg.colours }
+  }
+  for (const level of (scope.tblFills ?? []) as readonly (readonly Shd[])[]) {
+    let colours: readonly string[] | undefined
+    for (const s of level) {
+      const bg = shdColours(s, ctx)
       if (bg.kind === 'unknown') return { unknown: true, colours: [] }
       if (bg.kind === 'colours' && colours === undefined) colours = bg.colours
     }
@@ -1957,7 +2071,7 @@ function wordBackgrounds(
   // still paint the band, so each of them is checked, else the page.
   const conditional: string[] = []
   for (const s of styled?.conditionalShd ?? []) {
-    const bg = shdColours(s)
+    const bg = shdColours(s, ctx)
     if (bg.kind === 'unknown') return { unknown: true, colours: [] }
     if (bg.kind === 'colours') conditional.push(...bg.colours)
   }
@@ -2013,7 +2127,7 @@ function countWordRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
   const highlight = nearest(all, 'highlight')
   let unknown = false
   let colours: readonly string[]
-  if (highlight !== undefined) {
+  if (highlight !== undefined && highlight.toLowerCase() !== 'none') {
     // The highlight, when one is resolved, is drawn over every shading level.
     const lit = HIGHLIGHT[highlight.toLowerCase()]
     if (lit === undefined) {
@@ -2038,7 +2152,7 @@ function countWordRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
   const scale = nearest(all, 'scale')
   const halfPt =
     sz !== undefined || szCs !== undefined ? Math.min(sz ?? 200, szCs ?? 200) : undefined
-  const pt = ((halfPt ?? 20) / 2) * ((scale ?? 100) / 100)
+  const pt = ((halfPt ?? 20) / 2) * ((scale ?? 100) / 100) * (nearest(all, 'vertScale') ?? 1)
   if (pt <= 1) ctx.counted.add('too-small')
 
   // A raised or lowered run beyond the bound has left the line: the layout
@@ -2243,7 +2357,11 @@ function refFill(
   ref: XmlElement | undefined,
   s: Scheme,
 ): DFill {
-  if (idx <= 0 || list === undefined || list[idx - 1] === undefined) return { kind: 'unknown' }
+  // idx 0 applies no fill style: the shape is transparent, the background
+  // beneath shows through. A missing or out-of-range scheme entry is the
+  // un-modelled case (#495 §7).
+  if (idx <= 0) return { kind: 'none' }
+  if (list === undefined || list[idx - 1] === undefined) return { kind: 'unknown' }
   const phClr = ref ? drawingClr(elements(ref)[0], s) : undefined
   return fillEl(list[idx - 1], { ...s, phClr })
 }
@@ -2517,6 +2635,27 @@ function drawingUnknown(props: XmlElement): ReadonlySet<string> {
 }
 
 /**
+ * The nearest text highlight in the chain — a background drawn behind the
+ * glyph and OVER every other background (#495 F2), exactly as `countWordRun`
+ * treats `w:highlight`. An unresolvable one is not provably any colour.
+ */
+function drawingHighlight(
+  chain: readonly (XmlElement | undefined)[],
+  s: Scheme,
+): { readonly clr?: DClr; readonly unknown: boolean } {
+  for (const props of chain) {
+    if (props === undefined) continue
+    const hl = childEl(props, NS.a, 'highlight')
+    if (hl === undefined) continue
+    const clr = drawingClr(elements(hl)[0], s)
+    if (clr.transparent) continue // paints nothing: the fill beneath shows
+    if (clr.unknown || clr.rgb === undefined) return { unknown: true }
+    return { clr, unknown: false }
+  }
+  return { unknown: false }
+}
+
+/**
  * The run's text fill: the nearest chain level that defines one. Unknowns are
  * collected over the WHOLE chain — a farther level's un-modelled property
  * applies to the run just as a nearer one's does.
@@ -2554,6 +2693,7 @@ function drawingBackgrounds(
 ): { readonly unknown: boolean; readonly colours: readonly string[] } {
   const levels: readonly DFill[] = [
     scope.shape?.fill ?? FILL_ABSENT,
+    scope.tblFill ?? FILL_ABSENT,
     scope.slideBg ?? FILL_ABSENT,
     inheritance.layout?.bg === undefined ? FILL_ABSENT : bgFill(inheritance.layout.bg, s, ctx),
     inheritance.master?.bg === undefined ? FILL_ABSENT : bgFill(inheritance.master.bg, s, ctx),
@@ -2703,23 +2843,38 @@ function countDrawingRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
   const { fill, unknown } = drawingTextFill(chain, s)
   if (unknown.size > 0 || inheritance.broken) ctx.counted.add('unknown-property')
 
-  const bg = drawingBackgrounds(scope, inheritance, s, ctx)
-  if (bg.unknown) ctx.counted.add('unknown-property')
+  // A text highlight, when one is resolved, is the background over every
+  // other background (#495 F2).
+  const highlight = drawingHighlight(chain, s)
+  const bg = highlight.unknown
+    ? { unknown: true, colours: [] }
+    : drawingBackgrounds(scope, inheritance, s, ctx)
+  if (highlight.unknown || bg.unknown) ctx.counted.add('unknown-property')
   else {
     // No fill anywhere resolves to the theme's text colour through the map.
     // No fill anywhere: PowerPoint's default text colour is the theme's tx1
     // through the master's colour map.
     const fg: DFill = fill ?? { kind: 'solid', clr: schemeClrOf('tx1', s) }
-    const visible = fgVisible(fg, bg.colours)
+    const bgColours = highlight.clr ? [highlight.clr.rgb!] : bg.colours
+    const visible = fgVisible(fg, bgColours)
     if (visible === undefined) ctx.counted.add('unknown-property')
     else if (!visible) ctx.counted.add('colour-contrast')
   }
 
-  // Size: the nearest level's `sz`, scaled by the body's autofit fontScale.
+  // Size: the nearest level's `sz`, scaled by the body's autofit fontScale
+  // and by sub/superscript's reduced render (#495, as `w:vertAlign` composes).
+  let baselineScale = 1
+  for (const props of chain) {
+    const b = props === undefined ? undefined : attrOf(props.attributes, 'baseline')
+    if (b !== undefined) {
+      baselineScale = int(b) === 0 ? 1 : VERT_ALIGN_SCALE
+      break
+    }
+  }
   for (const props of chain) {
     const raw = props === undefined ? undefined : int(attrOf(props.attributes, 'sz'))
     if (raw === undefined) continue
-    const pt = (raw / 100) * (scope.shape?.fontScale ?? 1)
+    const pt = (raw / 100) * (scope.shape?.fontScale ?? 1) * baselineScale
     if (pt <= 1) ctx.counted.add('too-small')
     break
   }
@@ -2728,7 +2883,11 @@ function countDrawingRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
 /** Count concealment for one rebuilt element (A3: counted, not dropped). */
 function count(el: XmlElement, ctx: Ctx, scope: Scope): void {
   if (is(el, NS.w, 'r') && hasText(el, NS.w)) countWordRun(el, ctx, scope)
+  else if (is(el, NS.m, 'r') && hasText(el, NS.m)) countWordRun(el, ctx, scope)
   else if (is(el, NS.a, 'r') && hasText(el, NS.a)) countDrawingRun(el, ctx, scope)
+  // A field's cached `a:t` renders with the `a:rPr` sitting on the `a:fld`
+  // (#495 F4): text-bearing, like any run.
+  else if (is(el, NS.a, 'fld') && hasText(el, NS.a)) countDrawingRun(el, ctx, scope)
   else if (ctx.role === 'sheetMain' && is(el, NS.s, 'bookViews')) {
     // Read from the compat-processed tree, so markup nesting cannot hide a
     // hidden window from the count (#482 delta F1, A10).
@@ -2799,8 +2958,9 @@ function countCell(el: XmlElement, ctx: Ctx): void {
   const bgs = fills.colours.length > 0 ? fills.colours : ['FFFFFF']
   const fails = (run: RichRun | undefined): boolean => {
     const c = run?.color
-    if (c === undefined || c.auto) return false // automatic adapts: visible
-    const rgb = toRgb(c, ctx)
+    // Excel's Automatic (Black) is fill-blind (#495 F1): absent or `auto`
+    // renders black, and takes the contrast check like any colour.
+    const rgb = c === undefined || c.auto ? '000000' : toRgb(c, ctx)
     return rgb === undefined || bgs.some((bg) => contrastRatio(rgb, bg) < MIN_CONTRAST)
   }
   // A number format's colour sections OVERRIDE the font's colour for what the
@@ -3112,7 +3272,7 @@ function readSheetStyles(root: XmlElement): SheetStyles {
         sz: Number.isFinite(sz) ? sz : undefined,
       }
     }),
-    fills: list('fills', 'fill').map((f) => cellFill(childEl(f, NS.s, 'patternFill'))),
+    fills: list('fills', 'fill').map((f) => readFillEntry(f, false)),
     palette: indexed
       ? childEls(indexed, NS.s, 'rgbColor').map((c) =>
           (attrOf(c.attributes, 'rgb') ?? '').slice(-6),
@@ -3120,24 +3280,30 @@ function readSheetStyles(root: XmlElement): SheetStyles {
       : undefined,
     dxfs: list('dxfs', 'dxf').map((d) => ({
       font: colorOf(childEl(childEl(d, NS.s, 'font'), NS.s, 'color')),
-      // Excel writes a dxf's fill colour as bgColor, so both are read:
-      // counting more is the safe direction (#482 re-check F3).
-      fill: cellFill(childEl(childEl(d, NS.s, 'fill'), NS.s, 'patternFill')),
+      // A dxf's fill carries no patternType: Excel writes its colour as
+      // bgColor, and #482 read that as solid (#482 re-check F3, #495 F8).
+      fill:
+        childEl(d, NS.s, 'fill') === undefined
+          ? undefined
+          : readFillEntry(childEl(d, NS.s, 'fill')!, true),
     })),
   }
 }
 
-/** A `patternFill` as the resolver reads it: none, solid, a pattern, unknown. */
-function cellFill(pattern: XmlElement | undefined): CellFill | undefined {
+/**
+ * A `patternFill` as the resolver reads it: none, solid, a pattern, unknown.
+ * A dxf's fill carries no `patternType` — Excel writes it that way, and #482
+ * read it as solid; the rewrite dropped that reading, and it is back (#495
+ * F8). A solid's colour is its `fgColor`, else its `bgColor`: either present
+ * resolves, and the #482 rule — counting more is the safe direction — keeps
+ * both candidates in play through `cellFillColours`.
+ */
+function cellFill(pattern: XmlElement | undefined, dxf: boolean): CellFill | undefined {
   if (!pattern) return undefined
   const type = attrOf(pattern.attributes, 'patternType')?.toLowerCase()
-  if (type === undefined || type === 'none') return { kind: 'none', colours: [] }
-  if (type === 'solid') {
-    return {
-      kind: 'solid',
-      colours: [colorOf(childEl(pattern, NS.s, 'fgColor'))].filter(isColor),
-    }
-  }
+  if (type === undefined) return dxf ? solidFill(pattern) : { kind: 'none', colours: [] }
+  if (type === 'none') return { kind: 'none', colours: [] }
+  if (type === 'solid') return solidFill(pattern)
   if (SHEET_PATTERNS.has(type)) {
     return {
       kind: 'pattern',
@@ -3149,7 +3315,28 @@ function cellFill(pattern: XmlElement | undefined): CellFill | undefined {
   return { kind: 'unknown', colours: [] }
 }
 
+/** A solid fill's colour: `fgColor` beside `bgColor` (#495 F8). */
+function solidFill(pattern: XmlElement): CellFill {
+  const candidates = [childEl(pattern, NS.s, 'fgColor'), childEl(pattern, NS.s, 'bgColor')]
+    .map(colorOf)
+    .filter(isColor)
+  if (candidates.length === 0) return { kind: 'unknown', colours: [] }
+  return { kind: 'solid', colours: candidates }
+}
+
 const isColor = (c: Color | undefined): c is Color => c !== undefined
+
+/**
+ * One fill entry (#495 F9): its patternFill, unless the entry carries more
+ * than that — an `extLst` with an `x14:fill` gradient — in which case it is
+ * not provably any colour, whatever the patternFill says.
+ */
+function readFillEntry(f: XmlElement, dxf: boolean): CellFill | undefined {
+  const pattern = childEl(f, NS.s, 'patternFill')
+  const more = elements(f).filter((c) => !is(c, NS.s, 'patternFill'))
+  if (more.length > 0) return { kind: 'unknown', colours: [] }
+  return cellFill(pattern, dxf)
+}
 
 // ============================================================================
 // Serialization

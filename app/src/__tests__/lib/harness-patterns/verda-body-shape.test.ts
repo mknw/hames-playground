@@ -61,6 +61,8 @@ const ENV = {
 const VERDA = { client: 'VerdaQwen', env: ENV }
 /** The 4B summarizer the tier routes `describe` to. Same options-bag contract. */
 const SMALL = { client: 'LocalQwenSmall', env: ENV }
+/** The 4B's one-token logprob readout (#418 T3): same server, its own client. */
+const DECIDE = { client: 'LocalQwenSmallDecide', env: ENV }
 
 type Body = {
   model?: string
@@ -145,6 +147,20 @@ const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
     'ScreenUntrustedContent',
     () => b.request.ScreenUntrustedContent('web/fetch', 'fetched page text', VERDA),
   ],
+  // The decide readout — rendered against ITS OWN client, never `LocalQwenSmall`.
+  [
+    'Decide',
+    () =>
+      b.request.Decide(
+        'state',
+        'which?',
+        [
+          { letter: 'A', description: 'first' },
+          { letter: 'B', description: 'second' },
+        ],
+        DECIDE,
+      ),
+  ],
 ]
 
 describe('private-tier request bodies', () => {
@@ -165,6 +181,7 @@ describe('private-tier request bodies', () => {
     const MODEL_OF: Record<string, string> = {
       VerdaQwen: 'Qwen/Qwen3.8-27B-FP8',
       LocalQwenSmall: 'qwen3.5-4b-instruct',
+      LocalQwenSmallDecide: 'qwen3.5-4b-instruct',
     }
     const expected = new Map<string, string>()
     for (const [role, fns] of Object.entries(SWITCHED_FUNCTIONS_BY_ROLE)) {
@@ -207,6 +224,38 @@ describe('private-tier request bodies', () => {
     expect(body.model).toBe('Qwen/Qwen3.8-27B-FP8')
     const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../../lib/settings')
     expect(body.max_tokens).toBe(CLIENT_MAX_OUTPUT_TOKENS.VerdaQwen)
+  })
+
+  it('puts the logprob request on the wire for Decide — and only for Decide', async () => {
+    // The readout's three properties, none visible in a routing assertion and
+    // all silent when lost: `logprobs`/`top_logprobs` (a rename quietly stops
+    // sending them and the adapter then THROWS at the first call, by design),
+    // and `max_tokens: 2`. NOT 1: llama-server b9190 aborts on a repeated
+    // identical prompt at 1 (local-client.baml has the account), so the pin is
+    // the value AND the inequality — a cap above a couple of tokens lets the model
+    // start explaining, and below 2 is the crash. `top_logprobs` is
+    // MAX_DECISION_LABELS: a window narrower than the label cap could never
+    // reach coverage 1.
+    const { MAX_DECISION_LABELS } = await import('@hames-ai/harness-patterns/types')
+    const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../../lib/settings')
+    const decide = (await CALLS.find(([n]) => n === 'Decide')![1]()).body.json() as Body & {
+      logprobs?: boolean
+      top_logprobs?: number
+      temperature?: number
+    }
+    expect(decide.logprobs).toBe(true)
+    expect(decide.top_logprobs).toBe(MAX_DECISION_LABELS)
+    expect(decide.max_tokens).toBe(2)
+    expect(decide.max_tokens).toBe(CLIENT_MAX_OUTPUT_TOKENS.LocalQwenSmallDecide)
+    expect(decide.temperature).toBe(0)
+    // Not vacuous, and not leaking: every OTHER function's body carries no
+    // logprobs request — a describe summary must not pay for a per-token
+    // distribution it never reads.
+    for (const [name, render] of CALLS) {
+      if (name === 'Decide') continue
+      const body = (await render()).body.json() as { logprobs?: unknown }
+      expect(body.logprobs, name).toBeUndefined()
+    }
   })
 
   it('caps the 4B at its own max_tokens, not the 27B’s', async () => {

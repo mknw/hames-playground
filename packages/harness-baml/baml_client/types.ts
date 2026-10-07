@@ -82,6 +82,12 @@ export interface CriticResult {
   
 }
 
+export interface DecideOption {
+  letter: string
+  description: string
+  
+}
+
 export interface DescribeBatchResult {
   summaries: DescribeItemSummary[]
   

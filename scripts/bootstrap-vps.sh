@@ -1209,7 +1209,7 @@ stage_env() {
   # now would not change the database — it would lock the app out of it.
   if [[ -f $ENV_FILE ]] && have_compose; then
     local vol key rc
-    for vol in hames_postgres_data:POSTGRES_PASSWORD hames_postgres_data:DATA_ENCRYPTION_KEY hames_neo4j_data:NEO4J_PASSWORD; do
+    for vol in hames_pg16_glibc_data:POSTGRES_PASSWORD hames_pg16_glibc_data:DATA_ENCRYPTION_KEY hames_postgres_data:POSTGRES_PASSWORD hames_postgres_data:DATA_ENCRYPTION_KEY hames_neo4j_data:NEO4J_PASSWORD; do
       key=${vol#*:}
       [[ -n "$(env_get "$key")" ]] && continue
       rc=0

@@ -367,7 +367,7 @@ docker compose pull && docker compose up -d   # only if the gateway image moved
 dump` + a forced Redis RDB into `backups/<timestamp>/`, verified, with 7-day
 rotation and no cloud dependency. Cron line and a restore drill:
 [`../PREVIEW.md` §9](../PREVIEW.md). Azure Disk snapshots of the three named
-volumes (`neo4j_data`, `postgres_data`, `redis_data`) are the managed
+volumes (`neo4j_data`, `pg16_glibc_data`, `redis_data`) are the managed
 alternative. These hold all conversations, the graph, and the Data Stash — and
 note that neither path captures `AUTH_SESSION_SECRET` /
 `TOKEN_ENCRYPTION_KEY`, which must be escrowed separately or the restored

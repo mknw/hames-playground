@@ -801,7 +801,10 @@ diagnosis, and nothing is reachable from outside.
   [`azure-vm.md` §7](deployment/azure-vm.md) and [`DATA_STASH.md`](DATA_STASH.md).
 - **The Postgres image changed (#419 M8).** An existing database moves onto it
   by dump-and-restore, once: [`deployment/pgvector-migration.md`](deployment/pgvector-migration.md).
-  Do not just `docker compose up` the new image over the old volume.
+  The new image runs on a NEW volume (`pg16_glibc_data`), so an `up` before the
+  migration brings up an empty database beside the old one rather than corrupting
+  it — but the app would then see no data until the restore, so follow the
+  runbook's order (dump before any `up`).
 - **Neo4j's password is set once.** `NEO4J_AUTH` is applied only when the data
   volume is empty, so changing `NEO4J_PASSWORD` in `.env` after first boot
   changes what the app sends and not what the database expects — the symptom is

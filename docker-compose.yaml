@@ -126,9 +126,13 @@ services:
     # `test · postgres` job on, so dev, compose and CI are one image
     # (postgres-image-pin.test.ts fails when they part). `withMemory` stores
     # embeddings in a `vector(1024)` column (#419) and the alpine image cannot
-    # `CREATE EXTENSION vector`. musl -> glibc changes text collation, so an
-    # EXISTING `postgres_data` volume must not be pointed at this image: move it
-    # by dump-and-restore into a fresh volume, once, with
+    # `CREATE EXTENSION vector`. musl -> glibc changes text collation, so a
+    # cluster written by the alpine image must never be mounted by this one: its
+    # b-tree indexes would return wrong rows with no warning. That is why the
+    # volume below is `pg16_glibc_data` and NOT the alpine-era `postgres_data` —
+    # a pull plus any `up -d` can then only create an EMPTY cluster, never
+    # re-point the old one. The old volume stays untouched until the owner
+    # removes it; the data moves by dump-and-restore, once, with
     # docs/deployment/pgvector-migration.md and scripts/migrate-postgres-pgvector.sh.
     # Bumping it: take the new INDEX digest, change it here and in ci.yml
     # together, and re-run the restore drill in that runbook.
@@ -142,7 +146,7 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the repo-root .env — see .env.example}
       - POSTGRES_DB=hames
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - pg16_glibc_data:/var/lib/postgresql/data
     networks:
       - app-network
     healthcheck:
@@ -341,7 +345,9 @@ networks:
 
 volumes:
   neo4j_data:
-  postgres_data:
+  # Postgres 16 on the pgvector (Debian, glibc) image. A NEW key on purpose — see
+  # the postgres service; the alpine-era `postgres_data` is deliberately gone.
+  pg16_glibc_data:
   redis_data:
   # The gateway's rendered config (derived, rewritten on every `up`).
   mcp_config:

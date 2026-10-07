@@ -32,11 +32,11 @@ before the first `docker compose up` on a machine that already has the stack.
 ### PostgreSQL
 
 - **Container**: hames-postgres
-- **Image**: `pgvector/pgvector:0.8.0-pg16-bookworm`, pinned by index digest — the same digest CI tests on. Moving an existing volume onto it is a dump-and-restore, once: [`deployment/pgvector-migration.md`](deployment/pgvector-migration.md)
+- **Image**: `pgvector/pgvector:0.8.0-pg16-bookworm`, pinned by index digest — the same digest CI tests on. The volume is `pg16_glibc_data`, a new key — the alpine-era `postgres_data` is never mounted by this image. Moving the data over is a dump-and-restore, once: [`deployment/pgvector-migration.md`](deployment/pgvector-migration.md)
 - **Ports**: 127.0.0.1:5432:5432
 - **Authentication**: `postgres` / `POSTGRES_PASSWORD` from the repo-root `.env`
 - **Default Database**: hames
-- **Data**: Persisted in `postgres_data` named volume
+- **Data**: Persisted in `pg16_glibc_data` named volume (`hames_pg16_glibc_data` on disk)
 - **Healthcheck**: `pg_isready -U postgres`
 
 ### Redis

@@ -50,6 +50,25 @@ describe('the compose Postgres is the pgvector image CI tests on', () => {
     expect(base).toMatch(PGVECTOR_PINNED)
   })
 
+  it('never mounts the alpine-era volume: a pgvector image on that cluster corrupts its indexes silently', () => {
+    // musl -> glibc: the old cluster's text indexes are wrong under this image,
+    // and nothing warns. The compose file, not the runbook, keeps them apart.
+    for (const file of ['docker-compose.yaml', 'docker-compose.prod.yaml']) {
+      const doc = parseDocument(read(file)).toJS() as {
+        services?: Record<string, { volumes?: unknown[] } | null>
+        volumes?: Record<string, unknown>
+      }
+      const mounts = (doc.services?.postgres?.volumes ?? []).map(String)
+      expect(
+        mounts.filter((m) => m.startsWith('postgres_data:')),
+        `${file}: the pgvector postgres mounts the alpine-era key`,
+      ).toEqual([])
+      expect(Object.keys(doc.volumes ?? {}), `${file} still declares postgres_data`).not.toContain(
+        'postgres_data',
+      )
+    }
+  })
+
   it('the production overlay does not swap the image', () => {
     expect(prod, 'the overlay must not set its own postgres image').toBeUndefined()
   })

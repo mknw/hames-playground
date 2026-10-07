@@ -32,14 +32,30 @@ const code = script
   .join('\n')
 
 describe('script ↔ compose', () => {
-  const volume = `${compose.name}_postgres_data`
+  const volume = `${compose.name}_pg16_glibc_data`
   const db = compose.services.postgres?.environment
     ?.find((e) => e.startsWith('POSTGRES_DB='))
     ?.slice('POSTGRES_DB='.length)
 
   it('the volume the script defaults to is the one compose creates', () => {
-    expect(Object.keys(compose.volumes)).toContain('postgres_data')
+    expect(Object.keys(compose.volumes)).toContain('pg16_glibc_data')
     expect(script).toContain(`POSTGRES_DATA_VOLUME="\${POSTGRES_DATA_VOLUME:-${volume}}"`)
+  })
+
+  it('the old cluster the script copies is the alpine-era volume, which compose no longer mounts', () => {
+    expect(Object.keys(compose.volumes)).not.toContain('postgres_data')
+    expect(script).toContain(
+      `POSTGRES_OLD_VOLUME="\${POSTGRES_OLD_VOLUME:-${compose.name}_postgres_data}"`,
+    )
+  })
+
+  it('the dump lands outside backups/, which backup-preview.sh rotates', () => {
+    const def = script.split('\n').find((l) => l.startsWith('MIGRATION_DUMP_DIR=')) ?? ''
+    expect(def).toContain('pgvector-migration-dump')
+    expect(def).not.toContain('backups')
+    expect(read('.gitignore')).toMatch(/^pgvector-migration-dump\/$/m)
+    // the rotation this keeps clear of: depth-1 directories of BACKUP_DIR
+    expect(read('scripts/backup-preview.sh')).toContain('-mindepth 1 -maxdepth 1 -type d -mtime')
   })
 
   it('the database it defaults to is the one compose creates', () => {
@@ -54,6 +70,15 @@ describe('script ↔ compose', () => {
 })
 
 describe('script contract: nothing destructive, ever', () => {
+  // The real pin is scripts/migrate-postgres-pgvector.test.sh (a docker shim that
+  // ALLOW-LISTS the calls the script may make); this is a cheap second net, and
+  // the check that CI actually runs that test.
+  it('CI runs the shim test and shellchecks the script', () => {
+    const ci = read('.github/workflows/ci.yml')
+    expect(ci).toContain('scripts/migrate-postgres-pgvector.test.sh')
+    expect(ci).toMatch(/shellcheck -x scripts\/migrate-postgres-pgvector\.sh/)
+  })
+
   it.each([
     ['volume rm / prune', /docker\s+volume\s+(rm|remove|prune)|system\s+prune/],
     ['stopping or removing containers', /compose\s+(down|stop|rm|kill)\b/],
@@ -71,6 +96,7 @@ describe('runbook ↔ compose ↔ script', () => {
   )?.[1]
 
   it('names the volume the script copies and the compose project creates', () => {
+    expect(runbook).toContain(`${compose.name}_pg16_glibc_data`)
     expect(runbook).toContain(`${compose.name}_postgres_data`)
     expect(runbook).toContain('hames_postgres_data_alpine_backup')
   })
@@ -83,8 +109,25 @@ describe('runbook ↔ compose ↔ script', () => {
     for (const mode of ['dump', 'volume-backup', 'restore']) expect(script).toContain(`${mode})`)
   })
 
-  it('the one destructive step is in the runbook, not the script', () => {
-    expect(runbook).toContain('docker volume rm hames_postgres_data')
+  it('the only destructive step is the operator typing it, AFTER a verified restore and the soak', () => {
+    const rm = runbook.indexOf('docker volume rm hames_postgres_data')
+    expect(rm).toBeGreaterThan(-1)
+    expect(rm).toBeGreaterThan(runbook.indexOf('migrate-postgres-pgvector.sh restore'))
+    expect(rm).toBeGreaterThan(runbook.indexOf('## When you are done'))
+    // never the NEW volume, and never in the sequence block
+    expect(runbook).not.toMatch(/docker volume rm \S*pg16_glibc_data/)
+    expect(runbook.slice(0, runbook.indexOf('## Rollback'))).not.toContain('docker volume rm')
+  })
+
+  it('starts the new image only after the dump, and pulls before it', () => {
+    expect(runbook.indexOf('git pull'), 'the runbook must say when to pull').toBeGreaterThan(-1)
+    expect(runbook.indexOf('docker compose up -d --wait postgres')).toBeGreaterThan(-1)
+    expect(runbook.indexOf('git pull')).toBeLessThan(
+      runbook.indexOf('migrate-postgres-pgvector.sh dump'),
+    )
+    expect(runbook.indexOf('migrate-postgres-pgvector.sh dump')).toBeLessThan(
+      runbook.indexOf('docker compose up -d --wait postgres'),
+    )
   })
 
   it('the compose digest it was written against is real, and the doc links the test that holds it', () => {
@@ -118,12 +161,24 @@ describe('the data map', () => {
     expect(r).toMatch(/NOT/)
   })
 
-  it('names the pg_dump surfaces as carrying plaintext vectors, with their retention (F10)', () => {
+  it('names the pg_dump surface as carrying plaintext vectors, with its retention (F10)', () => {
     const r = row('Postgres backups')
     expect(r).toContain('pg_dump')
     expect(r).toContain('plaintext')
     expect(r).toContain('RETENTION_DAYS')
     expect(read('scripts/backup-preview.sh')).toContain('RETENTION_DAYS="${RETENTION_DAYS:-7}"')
     expect(r).toContain('default **7**')
+  })
+
+  it('names the migration copies — dump, old volume, volume backup — with the retention they really have', () => {
+    const r = row('Postgres migration copies')
+    expect(r).toContain('pgvector-migration-dump/')
+    expect(r).toContain('hames_postgres_data')
+    expect(r).toContain('hames_postgres_data_alpine_backup')
+    // nothing rotates them: the dump is outside backups/, and the volumes are volumes
+    expect(r).toMatch(/until the owner deletes them/)
+    expect(r).not.toMatch(/\b7\b|RETENTION_DAYS/)
+    // and they cannot hold vectors: that Postgres could not store the column
+    expect(r).toMatch(/no vectors/)
   })
 })

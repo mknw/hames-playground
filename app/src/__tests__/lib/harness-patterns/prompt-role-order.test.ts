@@ -74,6 +74,8 @@
  * where the endpoint is unreachable. Live counterpart:
  * `scripts/smoke-verda.ts`.
  */
+import { readFileSync, readdirSync } from 'node:fs'
+import path from 'node:path'
 import { describe, it, expect, beforeAll } from 'vitest'
 import type {
   Attempt,
@@ -254,6 +256,19 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
 const roles = (body: Body) => (body.messages ?? []).map((m) => m.role)
 
 describe('system-role placement on an OpenAI-compatible wire', () => {
+  it('audits every function the corpus declares, not a hand-kept subset', () => {
+    const dir = path.resolve(process.cwd(), '../packages/harness-baml/baml_src')
+    const declared = readdirSync(dir)
+      .filter((f) => f.endsWith('.baml'))
+      .flatMap((f) =>
+        [...readFileSync(path.join(dir, f), 'utf8').matchAll(/^function\s+(\w+)\s*\(/gm)].map(
+          (m) => m[1],
+        ),
+      )
+    expect(declared.length).toBeGreaterThan(0)
+    expect(FUNCTIONS.map(([n]) => n).sort()).toEqual(declared.sort())
+  })
+
   it.each(FUNCTIONS)('%s puts every system message at the beginning', async (_name, render) => {
     const seq = roles((await render(OPENAI)()).body.json() as Body)
     expect(seq.length).toBeGreaterThan(0)

@@ -2,7 +2,7 @@
 "@hames-ai/harness-baml": minor
 ---
 
-**#419 slice M9 — the memory model functions.** Additive surface; no behaviour change for a caller that passes no memory.
+**#419 slice M9 — the memory model functions.** Additive surface, with one breaking change to the generated client: a direct `b.Router(…, opts)` / `b.Synthesize(…, opts)` caller now throws `BamlInvalidArgumentError` until it passes `null` before `opts` (see below). No behaviour change for a caller that passes no memory.
 
 - `ExtractMemory` and `CompactMemories` (`baml_src/memory.baml`, committed `baml_client`), both on the `describe` role: `DescribeAnthropic` on the Anthropic tier, `LocalQwenSmall` through the per-call `clientOverrideFor('describe')` spread on the private tier. `kind` is a plain string so core's deterministic acceptance, not the parser, drops an out-of-set value.
 - `createMemoryExtractAdapter()` / `createMemoryCompactAdapter()` (and their input types) — the `MemoryExtractFn` / `MemoryCompactFn` implementations, each spreading the describe override inline. They return the model's output unfiltered.

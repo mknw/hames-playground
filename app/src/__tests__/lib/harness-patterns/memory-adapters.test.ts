@@ -159,9 +159,10 @@ describe('createMemoryCompactAdapter', () => {
 describe('the trailing memory_context slot of Router and Synthesize', () => {
   // The generated functions take positional arguments and the options bag is
   // the one AFTER `memory_context`. A call that omits the new slot hands the bag
-  // to it: BAML renders the bag as the memory block and drops the collector and
-  // the tier override, with no error — and typecheck sees it only while nothing
-  // casts. So the slot is pinned at runtime, on the real call sites.
+  // to it, where BAML's argument validation rejects it
+  // (`BamlInvalidArgumentError`) before any request is sent: loud, so not a
+  // routing leak, but only when that caller runs — and typecheck sees it only
+  // while nothing casts. So the slot is pinned at runtime, on the real call sites.
   it('routeMessageOp passes null in the slot and the bag after it', async () => {
     router.mockResolvedValue({ intent: 'i', needs_tool: false, route: null, response: 'r' })
     vi.resetModules()

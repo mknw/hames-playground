@@ -221,8 +221,20 @@ describe('`serving` — what the policy layer reads BEFORE the call', () => {
       calibration: undefined,
     })
     // Anthropic tier (no frame): the resolved client is the Jev mirror, which no
-    // transport serves yet — it reports the verbalized fallback, never 'logprob'.
-    expect(decide.serving('memory.kind')).toEqual({ method: 'verbalized' })
+    // transport serves yet. It reports NOTHING — not a 'verbalized' no model will
+    // serve (review finding 4); absent means "read it from the result" (G1).
+    expect(decide.serving('memory.kind')).toEqual({})
+  })
+
+  it('reports the verbalized method only when a secondary is actually wired', async () => {
+    const { createDecideAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const wired = createDecideAdapter({ verbalized: (async () => ({})) as never })
+    expect(wired.serving('memory.kind')).toEqual({ method: 'verbalized' })
+    // …and the private-tier lock un-wires it again: nothing non-logprob is
+    // servable there, so nothing is reported.
+    expect(await onPrivateTier(async () => wired.serving('memory.kind'))).toMatchObject({
+      method: 'logprob',
+    })
   })
 
   it('reports the model limits of the role per call', async () => {

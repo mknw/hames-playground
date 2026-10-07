@@ -50,6 +50,7 @@ import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from './baml_client/inlinedbaml'
 import {
   activeCostPricing,
+  activeInferenceTier,
   activeCostRates,
   clientOverrideFor,
   decisionCalibrationFor,
@@ -1816,20 +1817,50 @@ export function topLogprobsOf(body: unknown): TopLogprob[] | undefined {
  * rejects when none is wired, and so can never make the Anthropic tier throw
  * from a logprob check.
  *
- * `hitOutputCap` is stamped `false`: `max_tokens: 1` reaches its cap by design
+ * `hitOutputCap` is stamped `false`: a two-token cap is reached by design
  * (D14), and an unstamped record would read as a truncation on every call.
  */
 export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & {
   serving: DecideServing
 } {
+  /** The single selection point: the resolved client, the transport it
+   *  names, whether the private-tier lock refuses it, and whether the transport
+   *  is actually WIRED in this build (`serving` reports only wired ones). */
+  const selectDecideTransport = () => {
+    const client = resolveClientForRole('decide')
+    const transport = decideTransportFor(client)
+    const locked = transport !== 'logprob' && activeInferenceTier() === 'verda'
+    const wired =
+      !locked && (transport === 'logprob' || (transport === 'verbalized' && !!options?.verbalized))
+    return { client, transport, locked, wired }
+  }
+
   const fn = async <L extends string>(input: DecideInput<L>): Promise<DecideResult<L>> => {
     const startTime = Date.now()
     const { spec, state } = input
     const variables = { state, question: spec.question, labels: spec.labels }
 
-    // Resolve the client FIRST and pick the transport by it (F1).
-    const client = resolveClientForRole('decide')
-    const transport = decideTransportFor(client)
+    // ONE resolver answers both "which transport?" and "which client?": the
+    // selection below and the BAML call's `clientOverrideFor('decide')` agree
+    // because `resolveClientForRole` composes the same layers in the same order
+    // (review finding 1). The transport is picked by the CLIENT (F1).
+    const { client, transport, locked } = selectDecideTransport()
+    if (locked) {
+      // THE TIER LOCK (review finding 3). Under the private tier only the
+      // logprob client may serve a decision: a verbalized secondary is, by
+      // construction, a chat model that may live at a public provider, and
+      // Jev is one. The posture invariant — no call made under the private tier
+      // may reach a public provider — must not rest on a single map line, so
+      // the refusal is here, before any request is made and without invoking
+      // the injected secondary. Fail-closed: `decide()` abstains.
+      throw decideFailure(
+        `Refusing decide transport "${transport}" for client ${client} under the private ` +
+          'inference tier: only a logprob-capable client may serve a private-tier decision, ' +
+          'and nothing was sent to any provider.',
+        variables,
+        startTime,
+      )
+    }
     if (transport === 'verbalized') {
       if (!options?.verbalized) {
         throw decideFailure(
@@ -1923,11 +1954,17 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
 
   fn.limits = () => limitsFor('decide')
   fn.serving = (key: string) => {
-    const client = resolveClientForRole('decide')
-    const method = decideTransportFor(client)
+    // Only a transport that is WIRED is reported (review finding 4): a
+    // `verbalized` method for a call no verbalized model will serve would make
+    // the policy layer abstain 'uncalibrated' and the UI show a "verbalized"
+    // chip for a call that is really an error. Absent means "read it from the
+    // result" (G1) — and with nothing wired the call rejects, which is the
+    // truthful 'error'.
+    const { client, transport, wired } = selectDecideTransport()
+    if (!wired) return {}
     return {
-      method,
-      ...(method === 'logprob' && { calibration: decisionCalibrationFor(client, key) }),
+      method: transport,
+      ...(transport === 'logprob' && { calibration: decisionCalibrationFor(client, key) }),
     }
   }
   return fn

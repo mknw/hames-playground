@@ -170,3 +170,139 @@ describe('the narrow throw: a CLAIMED logprob client that returns no logprobs', 
     )
   })
 })
+
+// ----------------------------------------------------------------------------
+// #504 review: selection is by the CLIENT, one resolver, and the private tier
+// locks every non-logprob transport.
+// ----------------------------------------------------------------------------
+
+describe('by the client, never by the tier (review findings 1, 2, 5)', () => {
+  afterEach(async () => {
+    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
+    configureConsumerClients(undefined)
+  })
+
+  it('P2 — on the Anthropic tier a consumer client in LOGPROB_CLIENTS is read for logprobs', async () => {
+    // The tier is "anthropic" (no frame) and the mirror says JevDecide, which
+    // would be verbalized. A consumer layer names the logprob client for the
+    // role; selection follows the CLIENT. Selection by tier would refuse or
+    // verbalize here (mutation O7).
+    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
+    configureConsumerClients((role) =>
+      role === 'decide' ? { client: 'LocalQwenSmallDecide' } : undefined,
+    )
+    const { createDecideAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const decide = createDecideAdapter({ verbalized: verbalizedStub as unknown as DecideFn })
+    const r = await decide({ spec: SPEC, state: 's' })
+    expect(r.method).toBe('logprob')
+    expect(requests).toBe(1)
+    expect(verbalizedStub).not.toHaveBeenCalled()
+  })
+
+  it('P1 — a per-run clientOverride is seen by the resolver: a non-logprob client sends ZERO requests', async () => {
+    // Before the fix `resolveClientForRole` skipped the run frame's per-run slot,
+    // so selection said `LocalQwenSmallDecide` (logprob) while `b.Decide` was
+    // routed to the plugged client — a request WAS sent and the guard then
+    // misdiagnosed it. One resolver: the plugged client decides the transport,
+    // and a private-tier frame refuses a non-logprob one (finding 3) before any
+    // request.
+    const clients = await import('@hames-ai/harness-baml/clients.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+    const { createDecideAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    clients.assertInferenceTier('verda')
+    const decide = createDecideAdapter({ verbalized: verbalizedStub as unknown as DecideFn })
+    await expect(
+      withRunFrame(
+        {
+          inference: {
+            tier: 'verda',
+            clientOverride: (role) =>
+              role === 'decide' ? { client: 'LocalQwenSmall' } : undefined,
+          },
+        },
+        () => decide({ spec: SPEC, state: 's' }),
+      ),
+    ).rejects.toThrow(/Refusing decide transport "verbalized"/)
+    expect(requests).toBe(0)
+    expect(verbalizedStub).not.toHaveBeenCalled()
+    // The resolver itself reports the plugged client (the root cause).
+    await withRunFrame(
+      {
+        inference: {
+          tier: 'verda',
+          clientOverride: (role) => (role === 'decide' ? { client: 'LocalQwenSmall' } : undefined),
+        },
+      },
+      async () => expect(clients.resolveClientForRole('decide')).toBe('LocalQwenSmall'),
+    )
+  })
+
+  it('O1 — the served client is checked after the call, not only the resolved one', async () => {
+    // Force the two to disagree: the resolver (spied) says the logprob client,
+    // while the call's bag names a chat client that serves a response WITH
+    // logprobs-shaped data. Without the served-client term the response would
+    // be returned as `method: 'logprob'`.
+    const clients = await import('@hames-ai/harness-baml/clients.server')
+    const spy = vi.spyOn(clients, 'resolveClientForRole').mockReturnValue('LocalQwenSmallDecide')
+    const { configureConsumerClients } = clients
+    configureConsumerClients((role) =>
+      role === 'decide' ? { client: 'LocalQwenSmall' } : undefined,
+    )
+    try {
+      const { createDecideAdapter, LLMCallError } =
+        await import('@hames-ai/harness-baml/baml-adapters.server')
+      const decide = createDecideAdapter()
+      const err = await decide({ spec: SPEC, state: 's' }).catch((e) => e)
+      expect(err).toBeInstanceOf(LLMCallError)
+      expect(String(err.message)).toMatch(/ran on LocalQwenSmall, which is not in LOGPROB_CLIENTS/)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})
+
+describe('the private-tier lock on the non-logprob branches (review finding 3)', () => {
+  afterEach(async () => {
+    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
+    configureConsumerClients(undefined)
+  })
+
+  it('P3 — a consumer mapping decide to a non-logprob client under the private tier is refused, secondary never called, zero requests', async () => {
+    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
+    configureConsumerClients((role) =>
+      role === 'decide' ? { client: 'LocalQwenSmall' } : undefined,
+    )
+    const { createDecideAdapter, LLMCallError } =
+      await import('@hames-ai/harness-baml/baml-adapters.server')
+    const decide = createDecideAdapter({ verbalized: verbalizedStub as unknown as DecideFn })
+    const err = await onPrivateTier(() => decide({ spec: SPEC, state: 's' })).catch((e) => e)
+    expect(err).toBeInstanceOf(LLMCallError)
+    expect(String(err.message)).toMatch(/under the private inference tier/)
+    expect(verbalizedStub).not.toHaveBeenCalled()
+    expect(requests).toBe(0)
+  })
+
+  it('the Jev branch refuses the same way, so T4 inherits the lock', async () => {
+    const { configureConsumerClients, JEV_CLIENTS } =
+      await import('@hames-ai/harness-baml/clients.server')
+    ;(JEV_CLIENTS as Set<string>).add('JevDecide')
+    configureConsumerClients((role) => (role === 'decide' ? { client: 'JevDecide' } : undefined))
+    try {
+      const { createDecideAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
+      const decide = createDecideAdapter()
+      await expect(onPrivateTier(() => decide({ spec: SPEC, state: 's' }))).rejects.toThrow(
+        /Refusing decide transport "jev"/,
+      )
+      expect(requests).toBe(0)
+    } finally {
+      ;(JEV_CLIENTS as Set<string>).delete('JevDecide')
+    }
+  })
+
+  it('does not lock the Anthropic tier: the injected secondary is still reachable there', async () => {
+    const { createDecideAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const decide = createDecideAdapter({ verbalized: verbalizedStub as unknown as DecideFn })
+    await decide({ spec: SPEC, state: 's' })
+    expect(verbalizedStub).toHaveBeenCalledTimes(1)
+  })
+})

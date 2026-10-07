@@ -559,7 +559,7 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   // #418 slice T3. The decide role's private-tier client: the SAME 4B and the
   // SAME `SMALL_LLM_BASE_URL` endpoint as `describe`, declared as its own
   // client (`LocalQwenSmallDecide`, local-client.baml) because a decision is a
-  // ONE-token logprob readout and a summary is a 2048-token completion. It
+  // first-token logprob readout and a summary is a 2048-token completion. It
   // rides `assertSmallModelConfigured` for free — same env var — and, like
   // `describe`, takes no cold start (a llama-server, not the scale-to-zero
   // box), so the wake hook's `client === VERDA_CLIENT_NAME` filter correctly
@@ -853,7 +853,22 @@ export function resolveClientForRole(role: BamlRole): string {
   // adds it, which falls back SAFELY: a 16 384 window and the fixed batch
   // ceiling (over-trimming, never overflowing) — see the consumer module's
   // header.
-  return consumerClients?.(role)?.client ?? verdaClientFor(role) ?? CLIENT_BY_ROLE[role]
+  //
+  // THE PER-RUN SLOT COMES FIRST, exactly as in `clientOverrideFor` (#418 T3
+  // review, finding 1). This function used to skip it, so the two disagreed
+  // whenever a host put a per-run `inference.clientOverride` in the run frame:
+  // the call went to the plugged client while the name reported — and every
+  // budget and, for `decide`, the TRANSPORT choice derived from it — still named
+  // the tier's. Two resolvers for one question is the defect; this one now
+  // answers it the same way the router of the actual call does.
+  const perRun = currentRunFrame()?.inference?.clientOverride?.(role) as
+    BamlClientOverride | undefined
+  return (
+    perRun?.client ??
+    consumerClients?.(role)?.client ??
+    verdaClientFor(role) ??
+    CLIENT_BY_ROLE[role]
+  )
 }
 
 /**

@@ -466,11 +466,17 @@ jobs:
         working-directory: .
         run: docker build --build-context root=. -f app/Dockerfile --tag hames-app:ci app
 
-      # Booting proves less than it looks: /api/health touches neither native
-      # package, so an image whose node_modules lost node-pty's .node addon or
-      # the `@boundaryml` overlay (since #469 the image's only copy of BAML)
-      # still passes the smoke test below and only fails on the first Shell tab
-      # or the first BAML call. Require them here.
+      # Booting proves less for node-pty than it looks: /api/health never
+      # requires it, so an image that lost its .node addon still passes the
+      # smoke test below and only fails on the first Shell tab. BAML is
+      # different since #480 decision (b): `src/middleware.ts` now imports
+      # `@hames-ai/harness-baml/baml_client` at module scope on purpose, so a
+      # missing `@boundaryml` overlay (since #469 the image's only copy of
+      # BAML) crashes the WHOLE PROCESS before it ever listens — "Boot it and
+      # hit /api/health" below would already catch that case. This step still
+      # earns its place: it isolates each native binding by itself, with no
+      # boot/healthcheck window and no dependence on which route a scanner
+      # happens to hit first, and the `ls` fallback names the missing file.
       # `-w /app/.output/server` is where the server bundle itself resolves from
       # (its node_modules sits beside index.mjs), not the /app the CMD runs in.
       # The listing is in the failure branch on purpose: `ls` exits 0 on an empty
@@ -497,6 +503,13 @@ jobs:
       # so a 200 there proves the server bundle's inlined package source loads
       # and runs — the runtime half of the workspace-link story the deps stage
       # canary proves at build time.
+      #
+      # Since #480 decision (b) the boot ALSO exercises BAML's native binding:
+      # `src/middleware.ts` loads `@hames-ai/harness-baml/baml_client` at module
+      # scope deliberately, so a broken binding throws before the process ever
+      # listens and this step's own loop times out and fails loudly here — a
+      # container reporting `(healthy)` while every BAML route answers 500 is
+      # exactly the failure #469 was, and the shape this decision closes.
       #
       # AUTH_REDIRECT_URI is the one variable the run is given: its origin is the
       # app's public origin, which the write check below compares against

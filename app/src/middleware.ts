@@ -10,16 +10,18 @@
  *
  * SolidStart imports this module once when the server handler graph loads,
  * before any request is served, which makes it the natural place to arm
- * process-wide background work. Four things today: the routine scheduler
+ * process-wide background work. Five things today: the routine scheduler
  * (#131) — whose tick also reconciles runs abandoned at `status='running'`, and
  * which sweeps once here at boot for exactly the rows the previous process left
  * behind (#273 D-a) — the LLM-usage recorder behind the preview header's global
- * counters, the app-side tool transport, and the dev-only inference redirect the
- * browser e2e layer reaches through.
+ * counters, the app-side tool transport, the ONE deliberate boot-time BAML load
+ * (#480 decision b, below), and the dev-only inference redirect the browser
+ * e2e layer reaches through.
  *
- * The first three are import side effects, so they cost nothing per request.
- * The fourth needs an `await`, and must not be reachable from module scope at
- * all; see below.
+ * The first three are plain import side effects, so they cost nothing per
+ * request. The fourth is also a module-scope import, and its whole point is to
+ * cost something: see below. The fifth needs an `await` and stays gated behind
+ * its own dev-only opt-in, which is unrelated to where BAML may load.
  *
  * It is also where the two PACKAGE seams are handed their host suppliers —
  * `configureNeo4j` (@hames-ai/connectors) and `configureWorkspaceStore`
@@ -37,6 +39,19 @@ import {
   devFakeInferenceUrl,
   installDevFakeInference,
 } from './lib/inference/dev-fake-inference.server'
+// The boot-time BAML load (#480 decision b). #469 was nitro BUNDLING
+// `@boundaryml/baml` wrong, not the module-scope import itself — #478 fixed
+// that (the rollup `external` in `app.config.ts`) and pinned it in CI, so the
+// reason this used to have to be a lazy `await import()` no longer holds. A
+// static import here is now deliberate: it forces the native binding to
+// resolve during the SAME module-graph load SolidStart awaits before serving
+// a request, so a broken binding (or a client/corpus version mismatch —
+// `ThrowIfVersionMismatch`) throws HERE and fails server startup — and the
+// container healthcheck — instead of the app reporting `(healthy)` while
+// every BAML route answers 500, which is the failure #469 actually was and
+// the shape that hid it. `b` is reused below for the dev-only redirect so
+// this is the only BAML import this file needs.
+import { b } from '@hames-ai/harness-baml/baml_client'
 import { getEndpoints } from './lib/config/endpoints'
 import { configureNeo4j } from '@hames-ai/connectors/neo4j/client'
 import { configureWorkspaceStore } from '@hames-ai/sandbox/workspace-store'
@@ -50,9 +65,7 @@ import { guessMimeType, isTextMime } from './lib/stash/upload-service.server'
 // makes `callTool` dispatch to them. `harness-patterns` deliberately does not
 // import `app-tools` any more — core owns the seam and the ORDER, the app owns
 // what goes on it — so this import is what puts the app's tools in reach of a
-// tool call. `browser-e2e-not-in-ci.test.ts` walks this module's static-import
-// closure, so the subtree it drags in is held to the no-BAML-at-module-scope
-// rule stated below.
+// tool call.
 import './lib/app-tools/index.server'
 
 // Stash transport seam (core-absorb PR-2): the Data Stash pipeline moved to
@@ -110,30 +123,8 @@ installUsageRecorder()
 
 /**
  * The dev-only inference redirect (`app/e2e-browser/`) — armed on the first
- * request and then already resolved for every later one.
- *
- * ## Why the `import()` is inside the handler
- *
- * Nothing in THIS MODULE'S STATIC-IMPORT CLOSURE may import `baml_client` or
- * `@boundaryml/baml` at module scope. That is the rule, and it is narrower than
- * "nothing in `src/` does" — which is simply untrue: `harness-patterns`'
- * patterns and adapters take a module-scope `Collector`, and
- * `agents/title-generator.server.ts` imports `b` itself. Those are fine
- * precisely because nothing reaches them from here.
- *
- * The house idiom for a call site that IS reachable from the entry is
- * `const { b } = await import('…/baml_client')` INSIDE an async function, which
- * is what keeps the native runtime out of the server entry chunk. The first
- * draft of this file broke that by creating the promise at module scope — nitro
- * then linked `@boundaryml/baml` into `.output/server/index.mjs` itself and the
- * production container died at boot with `Cannot find module
- * '…/@boundaryml/baml/native'` before serving a single request. `pnpm build`
- * passes either way; CI's `docker image · build · boot` job is what caught it.
- *
- * The closure is walked and pinned by
- * `src/__tests__/browser-e2e-not-in-ci.test.ts`, so adding an import here — or
- * anywhere below here — that drags BAML in fails on every push rather than only
- * in the docker job.
+ * request and then already resolved for every later one (`installed` in
+ * `dev-fake-inference.server.ts` is its own idempotency flag).
  *
  * ## Why the PACKAGE client, and not a relative one
  *
@@ -149,12 +140,16 @@ installUsageRecorder()
  * duplicate `baml_src/` is what makes the wrong module unnameable;
  * `src/__tests__/one-baml-corpus.test.ts` is what keeps it that way.
  *
- * ## Why a handler at all rather than a top-level await
+ * ## Why a handler at all rather than at module scope
  *
- * Nitro transpiles the server bundle to es2019, where top-level `await` is a
- * build error. `onRequest` is the next-best ordering guarantee and is in fact
- * sufficient: SolidStart awaits it before handling, and the first BAML call is
- * inside a request, so the redirect is provably in place before it.
+ * `installDevFakeInference` is async (it still awaits nothing today, but the
+ * contract is a Promise and `dev-fake-inference.server.ts`'s own tests call it
+ * that way), and nitro transpiles the server bundle to es2019, where a
+ * top-level `await` is a build error. `onRequest` is the next-best ordering
+ * guarantee and is in fact sufficient: SolidStart awaits it before handling,
+ * and the first BAML call is inside a request, so the redirect is provably in
+ * place before it. `b` itself is already loaded at module scope above — this
+ * hook only decides whether to REDIRECT it, which stays dev-only and opt-in.
  *
  * ## Why it costs production nothing
  *
@@ -163,8 +158,6 @@ installUsageRecorder()
  * `onRequest` and production's only per-request work is `setSecurityHeaders`,
  * `refuseServerFunctionGet` and `refuseCrossOriginStateChange`.
  */
-let fakeInferenceReady: Promise<unknown> | null = null
-
 export default createMiddleware({
   // `setSecurityHeaders` FIRST and unconditionally: it is the one hook that
   // must run in every build, and placing it ahead of the dev-only one means a
@@ -185,10 +178,7 @@ export default createMiddleware({
     ...(devFakeInferenceUrl()
       ? [
           async () => {
-            fakeInferenceReady ??= import('@hames-ai/harness-baml/baml_client').then(({ b }) =>
-              installDevFakeInference(b),
-            )
-            await fakeInferenceReady
+            await installDevFakeInference(b)
           },
         ]
       : []),

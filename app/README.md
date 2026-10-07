@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../docs/images/hames-banner-wide-dark.png">
+  <img src="../docs/images/hames-banner-wide-light.png" alt="hames: supports of a harness to which its traces are fastened. The @hames-ai packages on npm: harness-patterns, harness-baml, agents, connectors, sandbox. hames app: where harness primitives become your integrated workspace." width="880">
+</picture>
+
 # The hames app — `app/`
 
 The SolidStart application: the chat interface, the server actions, turn

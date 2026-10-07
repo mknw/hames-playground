@@ -19,8 +19,10 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 
 const extract = vi.fn()
 const compact = vi.fn()
+const router = vi.fn()
+const synthesize = vi.fn()
 vi.mock('@hames-ai/harness-baml/baml_client', () => ({
-  b: { ExtractMemory: extract, CompactMemories: compact },
+  b: { ExtractMemory: extract, CompactMemories: compact, Router: router, Synthesize: synthesize },
 }))
 // The adapters import the client relatively; the alias above and the relative
 // path resolve to the same module id, so one mock covers both.
@@ -151,5 +153,37 @@ describe('createMemoryCompactAdapter', () => {
     await expect(
       createMemoryCompactAdapter()({ kind: 'preference', members: MEMBERS }),
     ).rejects.toMatchObject({ name: 'LLMCallError' })
+  })
+})
+
+describe('the trailing memory_context slot of Router and Synthesize', () => {
+  // The generated functions take positional arguments and the options bag is
+  // the one AFTER `memory_context`. A call that omits the new slot hands the bag
+  // to it: BAML renders the bag as the memory block and drops the collector and
+  // the tier override, with no error — and typecheck sees it only while nothing
+  // casts. So the slot is pinned at runtime, on the real call sites.
+  it('routeMessageOp passes null in the slot and the bag after it', async () => {
+    router.mockResolvedValue({ intent: 'i', needs_tool: false, route: null, response: 'r' })
+    vi.resetModules()
+    const { routeMessageOp } = await import('@hames-ai/harness-baml/routing.server')
+    await routeMessageOp('q', [], [{ name: 'neo4j', description: 'd' }])
+    const args = router.mock.calls[0]
+    expect(args[3]).toBeNull()
+    expect((args[4] as { collector?: unknown }).collector).toBeDefined()
+  })
+
+  it('defaultSynthesize passes null in the slot and the bag after it', async () => {
+    synthesize.mockResolvedValue('answer')
+    vi.resetModules()
+    const { defaultSynthesize } = await import('@hames-ai/harness-baml/defaults.server')
+    await defaultSynthesize({
+      userMessage: 'q',
+      intent: 'i',
+      response: 'some result',
+      loopHistory: { iterations: [] },
+    } as never)
+    const args = synthesize.mock.calls[0]
+    expect(args[5]).toBeNull()
+    expect((args[6] as { collector?: unknown }).collector).toBeDefined()
   })
 })

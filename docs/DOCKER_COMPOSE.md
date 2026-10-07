@@ -32,11 +32,11 @@ before the first `docker compose up` on a machine that already has the stack.
 ### PostgreSQL
 
 - **Container**: hames-postgres
-- **Image**: postgres:16-alpine
+- **Image**: `pgvector/pgvector:0.8.0-pg16-bookworm`, pinned by index digest — the same digest CI tests on. The volume is `pg16_glibc_data`, a new key — the alpine-era `postgres_data` is never mounted by this image. Moving the data over is a dump-and-restore, once: [`deployment/pgvector-migration.md`](deployment/pgvector-migration.md)
 - **Ports**: 127.0.0.1:5432:5432
 - **Authentication**: `postgres` / `POSTGRES_PASSWORD` from the repo-root `.env`
 - **Default Database**: hames
-- **Data**: Persisted in `postgres_data` named volume
+- **Data**: Persisted in `pg16_glibc_data` named volume (`hames_pg16_glibc_data` on disk)
 - **Healthcheck**: `pg_isready -U postgres`
 
 ### Redis
@@ -61,6 +61,28 @@ before the first `docker compose up` on a machine that already has the stack.
   `.env` passwords filled in (`scripts/render-mcp-config.sh`)
 - **Dependencies**: Waits for Neo4j healthcheck and for `mcp-config` to exit 0
 
+### embedder (memory + Data Stash embeddings, #419 M8)
+
+- **Image**: `ghcr.io/ggml-org/llama.cpp:server`, pinned by index digest · runs
+  `llama-server --embedding` over `Qwen3-Embedding-0.6B-Q8_0.gguf`, the same
+  invocation as `make embed`
+- **Ports**: **none**. Reachable only on `app-network`, by the name `embedder`,
+  in both the base file and `docker-compose.prod.yaml` (`compose-embedder.test.ts`
+  fails on any published port). A host-run app (the systemd shape) uses its own
+  `llama-server` on 127.0.0.1:8090 instead — see
+  [`deployment/azure-vm.md` §7](deployment/azure-vm.md).
+- **Profile**: `app`, like the container app. The host dev loop keeps using
+  `make embed` and never needs this service.
+- **Weights**: `./models` mounted **read-only**; the GGUF is gitignored
+  ([`models/README.md`](../models/README.md)) and the container exits at start
+  without it. `mem_limit: 2g` is a placeholder, not a measurement.
+- **Healthcheck**: `GET /health` (503 while loading, 200 once loaded). Ordering
+  only. The app does not wait on it (`service_started`): the joint memory wake
+  probes `POST $EMBEDDINGS_LOCAL_URL/embeddings` — a real forward pass — and
+  fails open, so a slow weight load costs memory on a turn, never the turn.
+- **Live check**: `src/lib/inference/scripts/smoke-embed.ts` (header has the
+  command that runs it from inside the compose network).
+
 ### app (the SolidStart app, #197)
 
 - **Container**: hames-app · **Image**: built from `app/Dockerfile` (tagged `hames-app:local`)
@@ -69,7 +91,7 @@ before the first `docker compose up` on a machine that already has the stack.
   (`docker compose up -d app`) or `--profile app` brings it in
 - **Config**: `env_file: app/.env` (optional), with the in-network endpoints
   overridden in `environment:`
-- **Dependencies**: postgres / neo4j / redis healthy, mcp-gateway started
+- **Dependencies**: postgres / neo4j / redis healthy, mcp-gateway and embedder started
 - **Requires Compose ≥ 2.24** for the `env_file: [{path, required: false}]` long
   syntax that makes `app/.env` optional. Older Compose rejects the whole file,
   not just this service — so check `docker compose version` first if the bring-up
@@ -116,14 +138,14 @@ wrong platform; the staged copies come from the in-image install.
 
 **Endpoint rewrites** (`environment:` beats `env_file:`):
 
-| Var                             | Container value                                                  | Why                                                            |
-| ------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------- |
-| `DATABASE_URL`                  | `postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/hames` | service name, not localhost; password from the root `.env`     |
-| `NEO4J_USER` / `NEO4J_PASSWORD` | `neo4j` / `${NEO4J_PASSWORD}`                                    | the direct driver's credential, from the root `.env`           |
-| `MCP_GATEWAY_URL`               | `http://mcp-gateway:8811/mcp`                                    | same                                                           |
-| `REDIS_HOST_DIRECT`             | `redis`                                                          | Data Stash direct client (`STASH_DIRECT_REDIS=1`)              |
-| `DOC_CONVERT_URL`               | `http://doc-convert:8000`                                        | conversion sidecar                                             |
-| `EMBEDDINGS_LOCAL_URL`          | `http://host.docker.internal:8090/v1`                            | the embedder is a **host** llama-server, not a compose service |
+| Var                             | Container value                                                  | Why                                                        |
+| ------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------- |
+| `DATABASE_URL`                  | `postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/hames` | service name, not localhost; password from the root `.env` |
+| `NEO4J_USER` / `NEO4J_PASSWORD` | `neo4j` / `${NEO4J_PASSWORD}`                                    | the direct driver's credential, from the root `.env`       |
+| `MCP_GATEWAY_URL`               | `http://mcp-gateway:8811/mcp`                                    | same                                                       |
+| `REDIS_HOST_DIRECT`             | `redis`                                                          | Data Stash direct client (`STASH_DIRECT_REDIS=1`)          |
+| `DOC_CONVERT_URL`               | `http://doc-convert:8000`                                        | conversion sidecar                                         |
+| `EMBEDDINGS_LOCAL_URL`          | `http://embedder:8090/v1`                                        | the `embedder` service, by name (see below)                |
 
 The Neo4j URL needs no entry: `config/endpoints.ts` picks `bolt://neo4j:7687`
 in a production build (the `localhost` form is its `import.meta.env.DEV`

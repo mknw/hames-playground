@@ -107,7 +107,7 @@ async function renderRouter(bag: Record<string, unknown>): Promise<{ model?: str
   const { b } = await import('@hames-ai/harness-baml/baml_client')
   const render = await (
     b.request as unknown as Record<string, (...args: unknown[]) => Promise<RenderedRequest>>
-  ).Router('q', ROUTES, [...ROUTER_MESSAGES], bag as never)
+  ).Router('q', ROUTES, [...ROUTER_MESSAGES], null, bag as never)
   return render.body.json() as { model?: string }
 }
 

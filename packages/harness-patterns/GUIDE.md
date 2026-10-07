@@ -82,7 +82,7 @@ Every combinator takes patterns and returns a pattern, so they nest freely:
 | Combinator           | What it does                                                                              |
 | -------------------- | ----------------------------------------------------------------------------------------- |
 | `chain` / `harness`  | run patterns in order; `harness` is the top-level entry that stops on irrecoverable error |
-| `routes`             | dispatch on `data.route` (set by `router`); pass-through on the `'user'` route            |
+| `routes`             | dispatch on `data.route` (set by `router` or `decisionRouter`); pass-through on `'user'`  |
 | `parallel`           | run patterns concurrently, merge their event sets                                         |
 | `withReferences`     | attach the relevant results of earlier turns at pattern ingress, expandable on demand     |
 | `withInjectionGuard` | neutralize untrusted tool output before a controller reads it                             |
@@ -96,6 +96,121 @@ runner, which carry the agent's own patterns. An answer is keyed by the
 supersedes whatever was waiting, so an answer never outlives its run. See SPEC's
 [Human in the loop](SPEC.md#human-in-the-loop), and "Asking a human" below for
 the whole loop a host writes.
+
+### Deciding with probabilities
+
+`typedDecision` asks ONE closed question and returns a probability for every
+permitted label, with `margin`, `confidence` and an explicit abstain. It writes
+no text. Hand it the raw decision seam (`bamlPatterns().decide`) and a policy;
+`fallback` is required, because the verdict is what a consumer acts on and a
+failed decision must still have one:
+
+```typescript
+import { typedDecision } from '@hames-ai/harness-patterns'
+import type { DecideFn } from '@hames-ai/harness-patterns'
+
+declare const baml: { decide: DecideFn } // bamlPatterns() in a real host
+
+typedDecision({
+  decide: baml.decide,
+  spec: {
+    key: 'memory.recall',
+    question: 'Does answering the latest message need anything remembered about this user?',
+    labels: [
+      { id: 'skip', description: 'no — this conversation is enough' },
+      { id: 'recall', description: 'yes — it depends on something from before' },
+    ],
+  },
+  policy: { fallback: 'skip', minConfidence: 0.6 },
+})
+// → scope.data.decisions['memory.recall'].label — act on THIS, never on `top`
+```
+
+It never throws and always overwrites its key, failures included. Outside a
+pattern, `decide(scope, call)` is the same decision recorded on a scope you
+hold, `evaluateDecision(call)` is it with no scope at all, and
+`decideFields(scope, { decide, set, state, policy })` answers several typed
+fields over one state, one `decision_made` per field.
+
+`decisionRouter` is `router()`'s sibling built on it: the routes are the
+labels, the verdict becomes `data.route`, and `policy.fallback` names the route
+taken when the decision abstains. Put `compactIntent` in front (it writes the
+intent the router no longer does) and pass `preserveIntent: true`, or the
+router clears that intent; give conversational turns an ordinary route
+key (`conversationalRoute`) that `routes()` dispatches to a pass-through, and
+run it with `shadow: true` beside your existing `router()` to measure agreement
+before swapping. See SPEC's [Decisions](SPEC.md#decisions-typeddecision-418).
+
+### Recalling what the user told us
+
+`memoryRecall` is the recall half of persistent memory: a chain step that runs
+first and, when the latest message plausibly depends on something the user said
+before, sets `data.memories` and a formatted `data.memoryContext` for the
+responder. Core hosts no database or embedder — you inject a `MemoryStore`
+bound to the turn's owner, the raw decision seam, a query embedder and the rule
+for which tiers a turn may read:
+
+```typescript
+import { memoryRecall, harnessUsesMemory } from '@hames-ai/harness-patterns'
+import type { DecideFn, MemoryQueryEmbedder, MemoryStore } from '@hames-ai/harness-patterns'
+
+declare const store: MemoryStore // the host's database, already bound to the owner
+declare const decide: DecideFn // bamlPatterns().decide
+declare const embed: MemoryQueryEmbedder
+declare const currentUser: () => string | null
+
+const recall = memoryRecall({
+  store,
+  decide,
+  embed,
+  owner: currentUser,
+  // fail closed: an unknown tier reads the narrowest set
+  visibleTiers: (tier) => (tier === 'private' ? ['private', 'public'] : ['public']),
+})
+
+harnessUsesMemory([recall]) // true — gate the memory wake and the post-reply store on this
+```
+
+It never throws and never stops what follows it: a down store, a gate that
+abstains or a wake that has not landed all end in "attach nothing", recorded as
+a `memory_recalled` event of ids and a reason — never the memories themselves.
+A turn's memories are cleared on every exit, so a skipped turn never inherits
+the last one's. The user sees nothing either way. See SPEC's
+[Memory recall](SPEC.md#memory-recall-memoryrecall-419).
+
+### Writing what the user told us
+
+`settleMemory` is the store half: call it from your post-turn continuation,
+**await it, then save the context**, so the `memory_written` events it records
+are in the one save. It decides from the question/answer pair whether anything
+is worth keeping, extracts at most three candidates from the user's own words,
+runs them through deterministic acceptance (verbatim evidence, identifier
+closure, the injection sanitizer), and writes each in a transaction of your
+`MemoryWriteStore`. It never throws; it fails closed — an abstained, uncalibrated
+or sensitive read, a read that needs a confirmation your host cannot yet ask, an
+organisational-graph target, a failed wake: all store nothing and say why.
+
+```typescript
+import { settleMemory, harnessUsesMemory } from '@hames-ai/harness-patterns'
+import type { MemoryStoreConfig } from '@hames-ai/harness-patterns'
+
+declare const memory: MemoryStoreConfig // store, decide, extract, embed, owner, …
+declare const patterns: Parameters<typeof harnessUsesMemory>[0]
+declare const ctx: Parameters<typeof settleMemory>[0]
+declare function saveSession(ctx: unknown): Promise<void> // your host's save
+
+// in the continuation that runs after the answer was sent:
+if (harnessUsesMemory(patterns)) {
+  const report = await settleMemory(ctx, memory) // never throws
+  // report.written, report.skipped, report.compactionDue …
+}
+await saveSession(ctx) // the events are already in ctx.events
+```
+
+Your `MemoryWriteStore.transaction(fn)` must open one transaction, take the
+owner's advisory lock inside it, and **roll back and rethrow if `fn` throws** —
+that rollback is what makes a retry a no-op. See SPEC's
+[Memory store](SPEC.md#memory-store-settlememory-419).
 
 ### Asking a human
 

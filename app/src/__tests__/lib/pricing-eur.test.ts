@@ -38,6 +38,7 @@ import {
   DEFAULT_EUR_PER_USD,
   DEFAULT_VERDA_EUR_PER_HOUR,
   LOCAL_PRICED_CLIENTS,
+  PROVIDER_COST_CLIENTS,
   TIME_PRICED_CLIENT,
   estimateLlmCostEur,
 } from '../../lib/settings'
@@ -228,6 +229,21 @@ describe('attribution: the SELECTED client decides the model', () => {
     }
   })
 
+  it('every client the private tier routes a role to has a pricing basis, never "unknown"', async () => {
+    // Derived from the route map rather than listed, so a role added to the tier
+    // with a client in none of the three sets (the #418 decide readout's
+    // `LocalQwenSmallDecide` was exactly that client until it joined the local
+    // set) fails here instead of rendering a cost-unknown step in production.
+    const { VERDA_CLIENT_BY_ROLE } = await import('@hames-ai/harness-baml/clients.server')
+    const clients = new Set(Object.values(VERDA_CLIENT_BY_ROLE))
+    expect(clients).toContain('LocalQwenSmallDecide')
+    for (const name of clients) {
+      expect(estimateLlmCostEur(ONE_MTOK_EACH, name, { durationMs: 4_000 }), name).toBeDefined()
+    }
+    // The decide client shares the 4B's server with `describe`, and so its basis.
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, 'LocalQwenSmallDecide')?.basis).toBe('local')
+  })
+
   it('the local set and the two priced tables are disjoint', () => {
     // A client in two of them would price by whichever branch ran first, which
     // is exactly the silent-wrong-figure failure this suite exists for.
@@ -235,6 +251,29 @@ describe('attribution: the SELECTED client decides the model', () => {
       expect(CLIENT_PRICING[name], name).toBeUndefined()
       expect(name).not.toBe(TIME_PRICED_CLIENT)
     }
+  })
+
+  it('the provider-cost set is the fourth basis and is disjoint from the other three (#418 T4)', () => {
+    expect([...PROVIDER_COST_CLIENTS]).toEqual(['JevDecide'])
+    for (const name of PROVIDER_COST_CLIENTS) {
+      expect(CLIENT_PRICING[name], name).toBeUndefined()
+      expect(LOCAL_PRICED_CLIENTS.has(name), name).toBe(false)
+      expect(name).not.toBe(TIME_PRICED_CLIENT)
+    }
+  })
+
+  it('a provider-priced call is the reported USD × EUR_PER_USD, unknown when none was reported', () => {
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, 'JevDecide', { providerCostUsd: 0.01 })
+    expect(est).toMatchObject({ basis: 'provider' })
+    expect(est!.costEur).toBeCloseTo(0.01 * DEFAULT_EUR_PER_USD, 12)
+    expect(est!.noCacheEur).toBe(est!.costEur)
+    expect(
+      estimateLlmCostEur(ONE_MTOK_EACH, 'JevDecide', { eurPerUsd: 0.5, providerCostUsd: 0.01 })!
+        .costEur,
+    ).toBeCloseTo(0.005, 12)
+    // Tokens alone never price it: no invented per-MTok rate.
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, 'JevDecide')).toBeUndefined()
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, 'JevDecide', { providerCostUsd: -1 })).toBeUndefined()
   })
 
   it('every client in CLIENT_PRICING prices by tokens', () => {

@@ -195,6 +195,16 @@ configureInferencePolicy({
     // the highest-frequency role on the tier. So the hook keys on the CLIENT,
     // not on "the tier moved this role". No-op unless a turn armed a watch
     // (`runWithColdStartWatch`).
+    //
+    // The "does not scale to zero" half of that is now an ASSUMPTION, not a
+    // fact: #419 D20 (owner decision 6026903497 (b), rev 5) lets the 4B AND the
+    // embedder scale to zero behind the joint memory wake
+    // (`lib/inference/memory-wake.server.ts`), which starts before the chain's
+    // first pattern of an opted-in turn. This filter still keys on the client —
+    // a `LocalQwenSmall` bag gets no warming notice — so if a describe call
+    // reaches the 4B while that wake is still running, the silence is the
+    // designed shape and the wait shows up in the wake's own budget, not here.
+    // Revisit this comment when the small boxes actually deploy scale-to-zero.
     if (client === VERDA_CLIENT_NAME) noteVerdaCallStarting()
   },
 })

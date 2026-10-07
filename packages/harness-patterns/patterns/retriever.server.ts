@@ -49,6 +49,7 @@ import { trackEvent, resolveConfig } from '../context.server'
 import { currentRunFrame } from '../run-frame.server'
 import { getErrorHint } from '../error-hints'
 import { trimToFit } from '../token-budget.server'
+import { removeThinkBlocks } from '../content-transforms'
 import { LLMCallError } from '../types'
 
 assertServerOnImport()
@@ -203,9 +204,9 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
           .filter((e) => e !== lastUser)
           .map((e) => ({
             role: e.type === 'user_message' ? 'user' : 'assistant',
-            content: (
-              (e.data as UserMessageEventData | AssistantMessageEventData).content ?? ''
-            ).replace(/<think>[\s\S]*?<\/think>\s*/g, ''),
+            content: removeThinkBlocks(
+              (e.data as UserMessageEventData | AssistantMessageEventData).content ?? '',
+            ),
           }))
           .filter((m) => m.content.trim().length > 0)
         // Only rewrite when there's history to resolve against — turn 1 is

@@ -66,6 +66,7 @@ export const synthesizerGroundedScenario: Scenario = {
       TURNS,
       true,
       'The relationship count query timed out after 30s.',
+      null,
       ctx.opts('compactExecution', collector),
     )
     const checks: Check[] = []

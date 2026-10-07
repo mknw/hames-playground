@@ -65,8 +65,23 @@ export function createContext<T = Record<string, unknown>>(
   return ctx
 }
 
-/** Serialize context to JSON string */
+/** Per-turn keys that carry another store's user data (#419). Consumed inside the turn; never persisted. */
+export const TRANSIENT_DATA_KEYS = ['memories', 'memoryContext'] as const
+
+/** Serialize context to JSON string. The transient memory keys are scrubbed
+ *  unless the run is paused (a resume re-enters from the blob). */
 export function serializeContext<T>(ctx: UnifiedContext<T>): string {
+  const d = ctx.data as unknown
+  if (
+    ctx.status !== 'paused' &&
+    d &&
+    typeof d === 'object' &&
+    TRANSIENT_DATA_KEYS.some((k) => k in d)
+  ) {
+    const rest = { ...(d as Record<string, unknown>) }
+    for (const k of TRANSIENT_DATA_KEYS) delete rest[k]
+    return JSON.stringify({ ...ctx, data: rest })
+  }
   return JSON.stringify(ctx)
 }
 
@@ -281,6 +296,14 @@ export function dropHitl(events: ContextEvent[]): ContextEvent[] {
  *  Includes 'loop_recovery' for the same reason: when a controller's answer
  *  would not parse, it is the only event carrying what the model said, and a
  *  loop that then fails must not drop the record of how it got there (#437).
+ *  Includes 'decision_made' (#418) for the same family of reason, sharpened
+ *  by what it records: the audit trail of WHAT the policy layer decided and
+ *  WHY (which fallback answered, which threshold abstained). A decision is
+ *  exactly the kind of fact a retry or a later pattern re-derives
+ *  differently — dropping it under 'on-success'-with-error or 'never' leaves
+ *  a verdict in `data.decisions` whose evidence is gone. It is metadata-only
+ *  (see `DecisionMadeEventData`), so committing it always is safe under every
+ *  strategy.
  *  The two `hitl_*` types are NOT here, although they are always committed
  *  (#433): they never reach a strategy at all. The owning `runChain` commits
  *  them from the run frame's slot straight into the context, after every
@@ -293,6 +316,7 @@ const ALWAYS_COMMIT_TYPES: Set<EventType> = new Set([
   'content_sanitized',
   'warning',
   'loop_recovery',
+  'decision_made',
 ])
 
 /** Commit scope events to context based on strategy.

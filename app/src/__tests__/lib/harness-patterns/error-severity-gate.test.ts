@@ -300,6 +300,7 @@ describe('the classification map', () => {
     'router', // clears data.route, and routes() then throws one pattern later
     'routes', // "the router named a route I do not have" — nothing ran
     'chain', // the chain itself failed
+    'decisionRouter', // router's failure shape: a failed decision clears data.route (#418)
   ] as const
 
   const RECOVERABLE = [
@@ -311,6 +312,8 @@ describe('the classification map', () => {
     'judge', // advisory ranking; "no candidates" is a normal outcome
     'parallel', // per-branch; the surviving branches are what the chain is for
     'withReferences', // the inner pattern ran without curated prior results
+    'typedDecision', // never throws and always leaves a verdict — policy.fallback (#418)
+    'memoryRecall', // every failure is memories = [] and a return — it never stops what follows (#419)
   ] as const
 
   it.each(IRRECOVERABLE)('classifies %s as irrecoverable — it leaves nothing behind', (type) => {

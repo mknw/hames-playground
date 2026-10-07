@@ -74,6 +74,8 @@
  * where the endpoint is unreachable. Live counterpart:
  * `scripts/smoke-verda.ts`.
  */
+import { readFileSync, readdirSync } from 'node:fs'
+import path from 'node:path'
 import { describe, it, expect, beforeAll } from 'vitest'
 import type {
   Attempt,
@@ -85,7 +87,11 @@ import type {
 } from '@hames-ai/harness-baml/baml_client/types'
 // Leaf-file classes (describe-batch / with-references) moved to the package
 // tree — their generated types live there now.
-import type { DescribeTarget, ReferenceCandidate } from '@hames-ai/harness-baml/baml_client/types'
+import type {
+  DescribeTarget,
+  MemoryMember,
+  ReferenceCandidate,
+} from '@hames-ai/harness-baml/baml_client/types'
 // ONE corpus: `packages/harness-baml/baml_src` and the committed client it
 // generates. The app's duplicate tree is gone, so the every-function audit
 // below renders every function through the single client production itself
@@ -163,6 +169,10 @@ const ROUTES: RouteOption[] = [{ name: 'graph', description: 'Graph questions' }
 const CANDIDATES: ReferenceCandidate[] = [
   { ref_id: 'r0', tool: 'search', summary: 's', tool_args: '{}', ts_offset_s: 12 },
 ]
+const MEMBERS: MemoryMember[] = [
+  { content: 'likes tea', evidence: 'I like tea', last_seen: '2026-10-01' },
+  { content: 'likes green tea', evidence: 'green tea, always', last_seen: '2026-10-05' },
+]
 const TARGETS: DescribeTarget[] = [
   { id: 'd0', tool: 'search', tool_args: '{}', reasoning: 'r', result: 'rows' },
 ]
@@ -206,12 +216,17 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
       ),
   ],
   ['Critic', (o) => () => b.request.Critic('i', ATTEMPTS, o)],
-  ['Synthesize', (o) => () => b.request.Synthesize('q', 'i', TURNS, true, 'boom', o)],
+  [
+    'Synthesize',
+    (o) => () => b.request.Synthesize('q', 'i', TURNS, true, 'boom', 'MEMORY BLOCK', o),
+  ],
   ['Planner', (o) => () => b.request.Planner('q', 'i', TOOLS, 'CONTEXT BLOCK', o)],
-  ['Router', (o) => () => b.request.Router('q', ROUTES, HISTORY, o)],
+  ['Router', (o) => () => b.request.Router('q', ROUTES, HISTORY, 'MEMORY BLOCK', o)],
   ['CompactIntent', (o) => () => b.request.CompactIntent(HISTORY, 'latest', o)],
   ['RetrieveQuery', (o) => () => b.request.RetrieveQuery(HISTORY, 'latest', o)],
   ['ReferenceSelector', (o) => () => b.request.ReferenceSelector('i', HISTORY, CANDIDATES, o)],
+  ['ExtractMemory', (o) => () => b.request.ExtractMemory('preference', 'USER: q', 'q', o)],
+  ['CompactMemories', (o) => () => b.request.CompactMemories('preference', MEMBERS, o)],
   ['ResultDescribe', (o) => () => b.request.ResultDescribe('search', '{}', 'r', 'rows', o)],
   ['ResultDescribeBatch', (o) => () => b.request.ResultDescribeBatch(TARGETS, o)],
   ['GenerateConversationTitle', (o) => () => b.request.GenerateConversationTitle('q', o)],
@@ -219,11 +234,58 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
     'ScreenUntrustedContent',
     (o) => () => b.request.ScreenUntrustedContent('web', 'fetched page text', o),
   ],
+  // #418 T3. A system block, then a user block — the order vLLM requires and
+  // the Anthropic path would silently rewrite. The decide readout is routed to
+  // llama.cpp today, which is lenient about system placement, so the vLLM rule
+  // is exactly the one this pin must hold ahead of the day it is not.
+  [
+    'Decide',
+    (o) => () =>
+      b.request.Decide(
+        'state',
+        'which?',
+        [
+          { letter: 'A', description: 'first' },
+          { letter: 'B', description: 'second' },
+        ],
+        o,
+      ),
+  ],
+  // #418 T5. The verbalized secondary: system first, then the data and the
+  // question as a user block, with the output format INSIDE that user block —
+  // a trailing `ctx.output_format` as its own system turn is the shape the
+  // Anthropic path rewrites silently and vLLM refuses.
+  [
+    'DecideVerbalized',
+    (o) => () =>
+      b.request.DecideVerbalized(
+        'state',
+        'which?',
+        [
+          { letter: 'A', description: 'first' },
+          { letter: 'B', description: 'second' },
+        ],
+        o,
+      ),
+  ],
 ]
 
 const roles = (body: Body) => (body.messages ?? []).map((m) => m.role)
 
 describe('system-role placement on an OpenAI-compatible wire', () => {
+  it('audits every function the corpus declares, not a hand-kept subset', () => {
+    const dir = path.resolve(process.cwd(), '../packages/harness-baml/baml_src')
+    const declared = readdirSync(dir)
+      .filter((f) => f.endsWith('.baml'))
+      .flatMap((f) =>
+        [...readFileSync(path.join(dir, f), 'utf8').matchAll(/^function\s+(\w+)\s*\(/gm)].map(
+          (m) => m[1],
+        ),
+      )
+    expect(declared.length).toBeGreaterThan(0)
+    expect(FUNCTIONS.map(([n]) => n).sort()).toEqual(declared.sort())
+  })
+
   it.each(FUNCTIONS)('%s puts every system message at the beginning', async (_name, render) => {
     const seq = roles((await render(OPENAI)()).body.json() as Body)
     expect(seq.length).toBeGreaterThan(0)
@@ -233,6 +295,27 @@ describe('system-role placement on an OpenAI-compatible wire', () => {
     const firstNonSystem = seq.findIndex((r) => r !== 'system')
     expect(firstNonSystem === -1 ? [] : seq.slice(firstNonSystem)).not.toContain('system')
   })
+
+  it.each(['Router', 'Synthesize'])(
+    '%s renders its memory block as a user message after the leading system block',
+    async (name) => {
+      // The FUNCTIONS table above renders both with a populated `memory_context`
+      // — the audit is worst-case by design, and a block that sneaked in behind
+      // the conversation as a `system` message is exactly what it exists to
+      // catch. This asserts where the block LANDS: a `user` message, after the
+      // one leading `system` message.
+      const render = FUNCTIONS.find(([n]) => n === name)![1]
+      const messages = ((await render(OPENAI)()).body.json() as Body).messages as {
+        role: string
+        content: unknown
+      }[]
+      const at = messages.findIndex((m) => JSON.stringify(m.content).includes('MEMORY BLOCK'))
+      expect(at).toBeGreaterThan(0)
+      expect(messages[at].role).toBe('user')
+      expect(messages[0].role).toBe('system')
+      expect(JSON.stringify(messages[0].content)).not.toContain('MEMORY BLOCK')
+    },
+  )
 
   it('renders the actor’s conversation with the log intact, not flattened away', async () => {
     // Guards the assertion above from passing by rendering nothing: the actor

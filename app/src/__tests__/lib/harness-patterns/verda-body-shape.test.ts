@@ -61,6 +61,8 @@ const ENV = {
 const VERDA = { client: 'VerdaQwen', env: ENV }
 /** The 4B summarizer the tier routes `describe` to. Same options-bag contract. */
 const SMALL = { client: 'LocalQwenSmall', env: ENV }
+/** The 4B's one-token logprob readout (#418 T3): same server, its own client. */
+const DECIDE = { client: 'LocalQwenSmallDecide', env: ENV }
 
 type Body = {
   model?: string
@@ -131,19 +133,47 @@ const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
     () => b.request.ActorController('q', 'i', TOOLS, [], null, null, 1, 5, null, VERDA),
   ],
   ['Critic', () => b.request.Critic('i', [], VERDA)],
-  ['Synthesize', () => b.request.Synthesize('q', 'i', TURNS, false, null, VERDA)],
-  ['Router', () => b.request.Router('q', [{ name: 'search', description: 'd' }], MESSAGES, VERDA)],
+  ['Synthesize', () => b.request.Synthesize('q', 'i', TURNS, false, null, null, VERDA)],
+  [
+    'Router',
+    () => b.request.Router('q', [{ name: 'search', description: 'd' }], MESSAGES, null, VERDA),
+  ],
   ['Planner', () => b.request.Planner('q', 'i', TOOLS, null, VERDA)],
-  // The six describe functions, on the 4B — the shipped route since the flip.
+  // The eight describe functions, on the 4B — the shipped route since the flip
+  // (six of them at the flip, the two memory functions of #419 M9 since).
   ['ResultDescribe', () => b.request.ResultDescribe('search', '{}', 'r', 'rows', SMALL)],
   ['ResultDescribeBatch', () => b.request.ResultDescribeBatch(DESCRIBE_TARGETS, SMALL)],
   ['GenerateConversationTitle', () => b.request.GenerateConversationTitle('q', SMALL)],
   ['CompactIntent', () => b.request.CompactIntent(MESSAGES, 'q', SMALL)],
   ['RetrieveQuery', () => b.request.RetrieveQuery(MESSAGES, 'q', SMALL)],
   ['ReferenceSelector', () => b.request.ReferenceSelector('i', MESSAGES, CANDIDATES, SMALL)],
+  ['ExtractMemory', () => b.request.ExtractMemory('preference', 'USER: q', 'q', SMALL)],
+  [
+    'CompactMemories',
+    () =>
+      b.request.CompactMemories(
+        'preference',
+        [{ content: 'likes tea', evidence: 'I like tea', last_seen: '2026-10-01' }],
+        SMALL,
+      ),
+  ],
   [
     'ScreenUntrustedContent',
     () => b.request.ScreenUntrustedContent('web/fetch', 'fetched page text', VERDA),
+  ],
+  // The decide readout — rendered against ITS OWN client, never `LocalQwenSmall`.
+  [
+    'Decide',
+    () =>
+      b.request.Decide(
+        'state',
+        'which?',
+        [
+          { letter: 'A', description: 'first' },
+          { letter: 'B', description: 'second' },
+        ],
+        DECIDE,
+      ),
   ],
 ]
 
@@ -165,6 +195,7 @@ describe('private-tier request bodies', () => {
     const MODEL_OF: Record<string, string> = {
       VerdaQwen: 'Qwen/Qwen3.8-27B-FP8',
       LocalQwenSmall: 'qwen3.5-4b-instruct',
+      LocalQwenSmallDecide: 'qwen3.5-4b-instruct',
     }
     const expected = new Map<string, string>()
     for (const [role, fns] of Object.entries(SWITCHED_FUNCTIONS_BY_ROLE)) {
@@ -209,6 +240,38 @@ describe('private-tier request bodies', () => {
     expect(body.max_tokens).toBe(CLIENT_MAX_OUTPUT_TOKENS.VerdaQwen)
   })
 
+  it('puts the logprob request on the wire for Decide — and only for Decide', async () => {
+    // The readout's three properties, none visible in a routing assertion and
+    // all silent when lost: `logprobs`/`top_logprobs` (a rename quietly stops
+    // sending them and the adapter then THROWS at the first call, by design),
+    // and `max_tokens: 2`. NOT 1: llama-server b9190 aborts on a repeated
+    // identical prompt at 1 (local-client.baml has the account), so the pin is
+    // the value AND the inequality — a cap above a couple of tokens lets the model
+    // start explaining, and below 2 is the crash. `top_logprobs` is
+    // MAX_DECISION_LABELS: a window narrower than the label cap could never
+    // reach coverage 1.
+    const { MAX_DECISION_LABELS } = await import('@hames-ai/harness-patterns/types')
+    const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../../lib/settings')
+    const decide = (await CALLS.find(([n]) => n === 'Decide')![1]()).body.json() as Body & {
+      logprobs?: boolean
+      top_logprobs?: number
+      temperature?: number
+    }
+    expect(decide.logprobs).toBe(true)
+    expect(decide.top_logprobs).toBe(MAX_DECISION_LABELS)
+    expect(decide.max_tokens).toBe(2)
+    expect(decide.max_tokens).toBe(CLIENT_MAX_OUTPUT_TOKENS.LocalQwenSmallDecide)
+    expect(decide.temperature).toBe(0)
+    // Not vacuous, and not leaking: every OTHER function's body carries no
+    // logprobs request — a describe summary must not pay for a per-token
+    // distribution it never reads.
+    for (const [name, render] of CALLS) {
+      if (name === 'Decide') continue
+      const body = (await render()).body.json() as { logprobs?: unknown }
+      expect(body.logprobs, name).toBeUndefined()
+    }
+  })
+
   it('caps the 4B at its own max_tokens, not the 27B’s', async () => {
     // The describe flip's other half. 2 048 against the 27B's own cap is what
     // re-imposes `maxBatchItems()`'s batch-of-5 floor, so a body carrying the
@@ -223,6 +286,46 @@ describe('private-tier request bodies', () => {
     const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../../lib/settings')
     expect(body.max_tokens).toBe(CLIENT_MAX_OUTPUT_TOKENS.LocalQwenSmall)
     expect(body.max_tokens).toBeLessThan(CLIENT_MAX_OUTPUT_TOKENS.VerdaQwen)
+  })
+
+  it('carries a recalled memory block on the wire as ONE user message, and costs nothing when absent', async () => {
+    // `memory_context` is the trailing optional parameter of Router and
+    // Synthesize (#419 M9). Two properties, both silent when lost: an absent
+    // block must leave the body BYTE-IDENTICAL to the pre-memory prompt (every
+    // non-memory agent's cached prefix and prompt budget ride on that), and a
+    // present one must reach the private-tier body as DATA in a user message —
+    // never in the leading system message, where the template would be handing
+    // per-user text the instruction channel.
+    const ROUTES = [{ name: 'search', description: 'd' }]
+    const MEMORY = 'MEMTOKEN-7731: the user prefers metric units'
+    const renders: [string, (memory: string | null | undefined) => Promise<unknown>][] = [
+      [
+        'Router',
+        (m) =>
+          m === undefined
+            ? b.request.Router('q', ROUTES, MESSAGES, undefined, VERDA)
+            : b.request.Router('q', ROUTES, MESSAGES, m, VERDA),
+      ],
+      ['Synthesize', (m) => b.request.Synthesize('q', 'i', TURNS, false, null, m, VERDA)],
+    ]
+    for (const [name, render] of renders) {
+      const bodyOf = async (m: string | null | undefined) =>
+        ((await render(m)) as { body: { json(): unknown } }).body.json() as Body
+      const absent = JSON.stringify(await bodyOf(null))
+      expect(JSON.stringify(await bodyOf(undefined)), name).toBe(absent)
+      expect(absent, name).not.toContain('MEMTOKEN')
+      // …and not even the block's FRAMING: a template that rendered its header
+      // around an empty body would pass the byte-for-byte comparison above
+      // against `undefined` while still changing every non-memory prompt.
+      expect(absent, name).not.toContain('WHAT YOU REMEMBER')
+      const present = await bodyOf(MEMORY)
+      const messages = present.messages as { role: string; content: unknown }[]
+      const carrying = messages.filter((m) => JSON.stringify(m.content).includes('MEMTOKEN-7731'))
+      expect(carrying, name).toHaveLength(1)
+      expect(carrying[0].role, name).toBe('user')
+      expect(messages[0].role, name).toBe('system')
+      expect(JSON.stringify(messages[0].content), name).not.toContain('MEMTOKEN')
+    }
   })
 
   it('sends no cache_control anywhere in the body, where the Anthropic chain does', async () => {

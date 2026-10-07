@@ -50,13 +50,37 @@ import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from './baml_client/inlinedbaml'
 import {
   activeCostPricing,
+  activeInferenceTier,
   activeCostRates,
   clientOverrideFor,
+  DECIDE_DEFAULT_CLIENT,
+  onExplicitAnthropicTier,
+  decisionCalibrationFor,
+  JEV_CLIENTS,
   limitsFor,
+  LOGPROB_CLIENTS,
   maxOutputTokensFor,
+  resolveClientForRole,
 } from './clients.server'
+import {
+  calibrateLabelMass,
+  normalizeLabelMass,
+  sumLabelMass,
+  type TopLogprob,
+} from '@hames-ai/harness-patterns/patterns/typedDecision.server'
 import { notifyLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
+import { createJevTransport } from './jev-decide.server'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
+import {
+  MAX_DECISION_LABELS,
+  type DecideAllFn,
+  type DecideFn,
+  type DecideInput,
+  type DecideResult,
+  type DecisionCalibrationEntry,
+  type DecisionMethod,
+  type DecisionSetSpec,
+} from '@hames-ai/harness-patterns/types'
 import type {
   LLMCallRecord,
   ControllerFn,
@@ -1704,3 +1728,418 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
 // `createLoopControllerAdapter`, and once the tool list rides the seam they
 // took no arguments at all. Agents call `createLoopControllerAdapter()`
 // directly; the domain name was never more than a comment.
+
+// ============================================================================
+// Typed decision — the transport behind the raw `DecideFn` seam (#418, T3)
+// ============================================================================
+
+/** Which transport serves a decide call, by the RESOLVED CLIENT (F1) — never by
+ *  the tier. The table is the whole rule: a `LOGPROB_CLIENTS` member is read
+ *  for token logprobs, a `JEV_CLIENTS` member goes to the Jev REST adapter
+ *  (`jev-decide.server.ts`), anything else takes the verbalized secondary. Exported so
+ *  `decision-transport-selection` can pin the rule rather than its effects. */
+export function decideTransportFor(client: string): DecisionMethod {
+  if (LOGPROB_CLIENTS.has(client)) return 'logprob'
+  if (JEV_CLIENTS.has(client)) return 'jev'
+  return 'verbalized'
+}
+
+/** What the adapter reports about how the NEXT call for `key` will be served —
+ *  read BEFORE the call by the policy layer: the F3 gate needs the method, the
+ *  F2 cut resolution needs the method and the applied calibration entry. Per
+ *  call, like `limits()`: the tier is a slot of the run frame. */
+export type DecideServing = (key: string) => {
+  readonly method?: DecisionMethod
+  readonly calibration?: DecisionCalibrationEntry
+}
+
+export interface DecideAdapterOptions {
+  /** The transport for a client that is neither logprob-capable nor Jev — the
+   *  explicitly configured verbalized secondary (`DecideVerbalized`, slice T5).
+   *  ABSENT is a real configuration, not an oversight: the adapter then
+   *  rejects with an `LLMCallError` rather than downgrading silently, and the
+   *  policy layer turns that into a fail-closed abstain. */
+  readonly verbalized?: DecideFn
+}
+
+function decideFailure(
+  message: string,
+  variables: Record<string, unknown>,
+  startTime: number,
+  cause?: unknown,
+  functionName: 'Decide' | 'DecideVerbalized' = 'Decide',
+): LLMCallError {
+  return new LLMCallError(
+    message,
+    extractFailureLLMCallData(undefined, functionName, variables, startTime),
+    cause,
+  )
+}
+
+/**
+ * The first generated token's top-logprobs off a raw chat-completions response
+ * body, or `undefined` when the response carries none. llama.cpp and vLLM share
+ * the shape — `choices[0].logprobs.content[0].top_logprobs` — which is why one
+ * reader serves both and why the recorded fixtures of both pin it.
+ */
+export function topLogprobsOf(body: unknown): TopLogprob[] | undefined {
+  const top = (
+    body as {
+      choices?: Array<{
+        logprobs?: { content?: Array<{ top_logprobs?: unknown }> } | null
+      }>
+    }
+  )?.choices?.[0]?.logprobs?.content?.[0]?.top_logprobs
+  if (!Array.isArray(top) || top.length === 0) return undefined
+  const entries = top.filter(
+    (e): e is TopLogprob =>
+      typeof (e as TopLogprob)?.token === 'string' &&
+      typeof (e as TopLogprob)?.logprob === 'number',
+  )
+  return entries.length > 0 ? entries : undefined
+}
+
+/**
+ * `DecideFn` backed by the BAML `Decide` function (private tier) with the
+ * transport chosen by the resolved client (F1).
+ *
+ * THE LOGPROB READOUT. Labels are lettered A.. in display order and the model
+ * answers with a letter; the distribution over its FIRST token is read off the
+ * collector's raw HTTP response, every top-k variant of a letter (`B`, ` B`,
+ * `(B`) is summed as probability mass, a fitted calibration entry is applied
+ * in log space when the host fed one, and the result is renormalised.
+ * `coverage` is the mass the top-k window attributed to a label — the
+ * leftover is `1 − coverage` and `policy.minCoverage` abstains on it.
+ * `calibrated` is true exactly when a fitted entry for `(client, spec.key)`
+ * was applied: a raw softmax is a measured distribution, not a calibrated one,
+ * and a `requireCalibrated` policy on a key with no entry abstains (the case
+ * `harnessDecisionKeys` exists to warn about).
+ *
+ * THE THROW RULE IS NARROW. A client CLAIMED logprob-capable
+ * (`LOGPROB_CLIENTS`) whose response carries no logprobs throws
+ * `LLMCallError` — a misconfiguration worth failing on, never a quiet
+ * fall-through to a text answer. It is not a statement that every decide call
+ * uses `Decide`: any other client takes the injected verbalized secondary, or
+ * rejects when none is wired, and so can never make the Anthropic tier throw
+ * from a logprob check.
+ *
+ * `hitOutputCap` is stamped `false`: a two-token cap is reached by design
+ * (D14), and an unstamped record would read as a truncation on every call.
+ */
+export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & {
+  serving: DecideServing
+} {
+  /** The single selection point: the resolved client, the transport it
+   *  names, whether the private-tier lock refuses it, and whether the transport
+   *  is actually WIRED in this build (`serving` reports only wired ones). */
+  const selectDecideTransport = () => {
+    const client = resolveClientForRole('decide')
+    const transport = decideTransportFor(client)
+    const locked = transport !== 'logprob' && activeInferenceTier() === 'verda'
+    const wired =
+      !locked &&
+      (transport === 'logprob' ||
+        transport === 'jev' ||
+        (transport === 'verbalized' && !!options?.verbalized))
+    return { client, transport, locked, wired }
+  }
+
+  const fn = async <L extends string>(input: DecideInput<L>): Promise<DecideResult<L>> => {
+    const startTime = Date.now()
+    const { spec, state } = input
+    const variables = { state, question: spec.question, labels: spec.labels }
+
+    // ONE resolver answers both "which transport?" and "which client?": the
+    // selection below and the BAML call's `clientOverrideFor('decide')` agree
+    // because `resolveClientForRole` composes the same layers in the same order
+    // (review finding 1). The transport is picked by the CLIENT (F1).
+    const { client, transport, locked } = selectDecideTransport()
+    if (locked) {
+      // THE TIER LOCK (review finding 3). Under the private tier only the
+      // logprob client may serve a decision: a verbalized secondary is, by
+      // construction, a chat model that may live at a public provider, and
+      // Jev is one. The posture invariant — no call made under the private tier
+      // may reach a public provider — must not rest on a single map line, so
+      // the refusal is here, before any request is made and without invoking
+      // the injected secondary. Fail-closed: `decide()` abstains.
+      throw decideFailure(
+        `Refusing decide transport "${transport}" for client ${client} under the private ` +
+          'inference tier: only a logprob-capable client may serve a private-tier decision, ' +
+          'and nothing was sent to any provider.',
+        variables,
+        startTime,
+      )
+    }
+    if (transport === 'verbalized') {
+      if (!options?.verbalized) {
+        throw decideFailure(
+          `No decide transport for client ${client}: it is neither logprob-capable nor a Jev ` +
+            'client and no verbalized secondary is configured. Refusing rather than downgrading ' +
+            'to another provider.',
+          variables,
+          startTime,
+        )
+      }
+      return options.verbalized(input)
+    }
+    if (transport === 'jev') {
+      // The Anthropic tier's client: a REST adapter with its own LLMCallRecord
+      // and usage report. It refuses the private tier again itself.
+      return createJevTransport().decide(input)
+    }
+
+    // D13: a window of 20 top-logprobs cannot see more than 20 labels, so
+    // coverage could never reach 1 — refused before any request is made.
+    const count = spec.labels.length
+    if (count < 2 || count > MAX_DECISION_LABELS) {
+      throw decideFailure(
+        `Decision ${spec.key} has ${count} labels; the logprob readout takes 2..${MAX_DECISION_LABELS}.`,
+        variables,
+        startTime,
+      )
+    }
+    const letters = spec.labels.map((_, i) => String.fromCharCode(65 + i))
+    const options_ = spec.labels.map((l, i) => ({ letter: letters[i], description: l.description }))
+
+    const { b } = await import('./baml_client')
+    const collector = new Collector('Decide')
+    // THE SPREAD THAT ROUTES THE ROLE (`clientOverrideFor('decide')` is the
+    // only way a call reaches the private tier's client). The bag always holds
+    // `collector`, so the positional trailing slot is never an empty `{}` (#154).
+    let answer: string
+    try {
+      answer = await b.Decide(state, spec.question, options_, {
+        collector,
+        ...clientOverrideFor('decide'),
+      })
+    } catch (e) {
+      throw wrapAsLLMCallError(e, 'Decide', variables, startTime, collector)
+    }
+
+    const last = collector.last
+    const calls = (last?.calls ?? []) as CollectorCall[]
+    const selected = calls.find((c) => c.selected) ?? calls[calls.length - 1]
+    let top: TopLogprob[] | undefined
+    try {
+      top = topLogprobsOf(selected?.httpResponse?.body?.json?.())
+    } catch {
+      top = undefined // absent or malformed body — the same misconfiguration
+    }
+    const served = selected?.clientName
+    if (!top || !served || !LOGPROB_CLIENTS.has(served)) {
+      throw new LLMCallError(
+        `Decide was routed as a logprob read but ${
+          served && !LOGPROB_CLIENTS.has(served)
+            ? `ran on ${served}, which is not in LOGPROB_CLIENTS`
+            : `the response from ${served ?? client} carried no top_logprobs`
+        }. A logprob-capable client that returns none is misconfigured (a server ignoring ` +
+          '`logprobs`, a proxy stripping them); a text answer would be a guess dressed as a distribution.',
+        {
+          ...extractFailureLLMCallData(collector, 'Decide', variables, startTime),
+          hitOutputCap: false,
+        },
+      )
+    }
+
+    const entry = decisionCalibrationFor(served, spec.key)
+    const { mass, coverage } = sumLabelMass(top, letters)
+    const { probs: byLetter } = normalizeLabelMass(calibrateLabelMass(mass, entry), letters)
+    const probs = {} as Record<L, number>
+    spec.labels.forEach((l, i) => {
+      probs[l.id] = byLetter[letters[i]] ?? 0
+    })
+
+    const llmCall = extractLLMCallData(collector, 'Decide', variables, startTime, answer)
+    return {
+      probs,
+      method: 'logprob',
+      calibrated: entry !== undefined,
+      coverage,
+      ...(llmCall && { llmCall: { ...llmCall, hitOutputCap: false } }),
+    }
+  }
+
+  fn.limits = () => limitsFor('decide')
+  fn.serving = (key: string) => {
+    // Only a transport that is WIRED is reported (review finding 4): a
+    // `verbalized` method for a call no verbalized model will serve would make
+    // the policy layer abstain 'uncalibrated' and the UI show a "verbalized"
+    // chip for a call that is really an error. Absent means "read it from the
+    // result" (G1) — and with nothing wired the call rejects, which is the
+    // truthful 'error'.
+    const { client, transport, wired } = selectDecideTransport()
+    if (!wired) return {}
+    return {
+      method: transport,
+      // Jev is calibratable too: a fitted entry's own cuts win over the policy's (F2).
+      ...((transport === 'logprob' || transport === 'jev') && {
+        calibration: decisionCalibrationFor(client, key),
+      }),
+    }
+  }
+  return fn
+}
+
+/**
+ * The set-level entry (`decideFields`' `decideAll`, G2): ONE request carrying
+ * every field as its own typed question when the resolved client is Jev. Any
+ * other client has no one-call provider, so the set is served field by field
+ * through `decide` — sequentially, with the state byte-identical so the backend
+ * prefix cache serves the later passes. A failure there is set-wide (the
+ * `DecideAllFn` shape has no per-field error), which `decideFields` already
+ * handles by failing every field closed.
+ */
+export function createDecideAllAdapter(
+  decide: DecideFn & { serving?: DecideServing },
+): DecideAllFn {
+  const fn: DecideAllFn = async <F extends Record<string, string>>(input: {
+    readonly spec: DecisionSetSpec<F>
+    readonly state: string
+  }) => {
+    const client = resolveClientForRole('decide')
+    if (decideTransportFor(client) === 'jev') {
+      // The transport applies the private-tier lock itself, before any request.
+      return createJevTransport().decideAll(input)
+    }
+    const fields = {} as { [K in keyof F]: DecideResult<F[K]> }
+    for (const k of Object.keys(input.spec.fields) as Array<keyof F & string>) {
+      fields[k] = await decide({ spec: input.spec.fields[k], state: input.state })
+    }
+    return { fields }
+  }
+  fn.limits = decide.limits
+  if (decide.serving) fn.serving = decide.serving
+  return fn
+}
+
+// ============================================================================
+// Typed decision — the explicit verbalized secondary (#418, T5)
+// ============================================================================
+
+/** How far a stated distribution may sum from 1 and still be read. Looser than
+ *  Jev's 0.01 because a chat model writes its figures by hand. */
+export const VERBALIZED_MASS_TOLERANCE = 0.05
+
+/**
+ * The probabilities a chat model STATED, as a distribution over `letters` — or
+ * `undefined` when the answer is not a usable distribution, which the caller
+ * turns into an `LLMCallError`. Fails closed on the same shapes the Jev
+ * transport does (#511 R3): every listed option exactly once, each value in
+ * [0, 1], summing to 1 within {@link VERBALIZED_MASS_TOLERANCE}. An omitted
+ * option is not a stated 0, a percent scale is not a probability, and a
+ * repeated letter is ambiguous — none of them is repaired into certainty.
+ * Letters the spec does not have are ignored; what is left is renormalised
+ * only for the small rounding the tolerance allows.
+ */
+export function verbalizedProbabilities(
+  stated: ReadonlyArray<{ readonly letter: string; readonly probability: number }>,
+  letters: readonly string[],
+): Record<string, number> | undefined {
+  const mass: Record<string, number> = {}
+  for (const { letter, probability } of stated ?? []) {
+    const key = typeof letter === 'string' ? letter.trim().toUpperCase() : ''
+    if (!letters.includes(key)) continue
+    if (key in mass) return undefined // stated twice: ambiguous
+    if (
+      typeof probability !== 'number' ||
+      !Number.isFinite(probability) ||
+      probability < 0 ||
+      probability > 1
+    )
+      return undefined // out of range, incl. a percent scale
+    mass[key] = probability
+  }
+  if (letters.some((l) => !(l in mass))) return undefined // an omitted option is not a stated 0
+  const sum = letters.reduce((a, l) => a + mass[l], 0)
+  if (Math.abs(sum - 1) > VERBALIZED_MASS_TOLERANCE) return undefined
+  return normalizeLabelMass(mass, letters).probs
+}
+
+/**
+ * `DecideFn` backed by `DecideVerbalized` — the explicit SECONDARY a host
+ * injects as `createDecideAdapter({ verbalized })`. Nothing in this repo does:
+ * it is reachable only when an operator has named `DecideAnthropic` with
+ * `configureDecideSecondary` (decision G5) AND the host wired this in, so it is
+ * never a default and never a fallback — the Jev-unreachable path stays
+ * fail-closed.
+ *
+ * `method: 'verbalized'` and `calibrated: false` are CONSTANTS here, not read
+ * from the response: nothing about a stated probability was measured, so no
+ * input can make this transport report otherwise. A `requireCalibrated` policy
+ * therefore abstains on it, and a calibration entry is never applied.
+ *
+ * It carries its OWN tier lock rather than leaning on `createDecideAdapter`'s:
+ * a host composing it on the raw seam must not be able to reach a public
+ * provider from a private-tier run by skipping the adapter. The check is a
+ * positive match on the Anthropic tier, before any request.
+ */
+export function createVerbalizedDecide(): DecideFn {
+  const fn = async <L extends string>(input: DecideInput<L>): Promise<DecideResult<L>> => {
+    const startTime = Date.now()
+    const { spec, state } = input
+    const variables = { state, question: spec.question, labels: spec.labels }
+    const fail = (message: string, cause?: unknown) =>
+      decideFailure(message, variables, startTime, cause, 'DecideVerbalized')
+
+    if (!onExplicitAnthropicTier()) {
+      throw fail(
+        'Refusing the verbalized decide secondary outside the Anthropic tier: it calls a ' +
+          'public provider, and nothing was sent to any provider.',
+      )
+    }
+    // REACHABLE ONLY WHEN NAMED (G5). The role's own default is never served
+    // by the secondary: it serves a client that was RE-NAMED — by
+    // `configureDecideSecondary`, by a consumer client registered for the role,
+    // or by a per-run `clientOverride`. Belt and braces since the Jev transport
+    // exists: the default now selects Jev and never reaches this function.
+    const resolved = resolveClientForRole('decide')
+    if (resolved === DECIDE_DEFAULT_CLIENT) {
+      throw fail(
+        `The verbalized decide secondary was asked to serve ${resolved}, the role's own default: ` +
+          'it serves only a client that was re-named (configureDecideSecondary, a consumer client or a per-run override).',
+      )
+    }
+    const count = spec.labels.length
+    if (count < 2 || count > MAX_DECISION_LABELS) {
+      throw fail(
+        `Decision ${spec.key} has ${count} labels; the verbalized secondary takes 2..${MAX_DECISION_LABELS}.`,
+      )
+    }
+    const letters = spec.labels.map((_, i) => String.fromCharCode(65 + i))
+    const options = spec.labels.map((l, i) => ({ letter: letters[i], description: l.description }))
+
+    const { b } = await import('./baml_client')
+    const collector = new Collector('DecideVerbalized')
+    let stated: Array<{ letter: string; probability: number }>
+    try {
+      // Spread routes the call like every other role: on the Anthropic tier it
+      // is the operator-named secondary (or undefined → the declared
+      // `DecideAnthropic`); were the lock above ever removed, a private-tier
+      // run would land on the private tier's own client, never a public one.
+      stated = await b.DecideVerbalized(state, spec.question, options, {
+        collector,
+        ...clientOverrideFor('decide'),
+      })
+    } catch (e) {
+      throw wrapAsLLMCallError(e, 'DecideVerbalized', variables, startTime, collector)
+    }
+
+    const byLetter = verbalizedProbabilities(stated, letters)
+    if (!byLetter) {
+      throw new LLMCallError(
+        'DecideVerbalized returned no usable distribution: a usable answer states every listed ' +
+          'option exactly once, each in [0, 1], summing to 1 ± ' +
+          `${VERBALIZED_MASS_TOLERANCE}. An unusable answer is an error, not a confident zero.`,
+        extractFailureLLMCallData(collector, 'DecideVerbalized', variables, startTime),
+      )
+    }
+    const probs = {} as Record<L, number>
+    spec.labels.forEach((l, i) => {
+      probs[l.id] = byLetter[letters[i]] ?? 0
+    })
+    const llmCall = extractLLMCallData(collector, 'DecideVerbalized', variables, startTime, stated)
+    return { probs, method: 'verbalized', calibrated: false, ...(llmCall && { llmCall }) }
+  }
+  fn.limits = () => limitsFor('decide')
+  return fn
+}

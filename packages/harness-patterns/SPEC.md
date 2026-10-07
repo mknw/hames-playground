@@ -64,6 +64,9 @@ is and why it is shaped this way, start at the front page —
   - [withInjectionGuard()](#withinjectionguardconfigpattern)
   - [router()](#routerroutedescriptions-config)
   - [routes()](#routespatternmap-config)
+  - [typedDecision() and decisionRouter()](#decisions-typeddecision-418)
+  - [memoryRecall()](#memory-recall-memoryrecall-419)
+  - [settleMemory()](#memory-store-settlememory-419)
   - [judge()](#judgeevaluator-config)
   - [chain()](#chainctx-patterns-onevent)
   - [harness()](#harnesspatterns)
@@ -188,6 +191,7 @@ type EventType =
   | 'loop_recovery' // simpleLoop / actorCritic fed one failure back to the model and continued on its budget (#437)
   | 'hitl_request' // a person is asked to decide (#433) — core writes it; readHitl() derives state from it
   | 'hitl_response' // the decision on one hitl_request (#433) — core writes it
+  | 'decision_made' // one typed decision the policy layer evaluated (#418) — metadata only; the state's SIZE rides, never its text
 
 // Isolated workspace for each pattern
 interface PatternScope<T> {
@@ -217,6 +221,9 @@ interface ConfiguredPattern<T> {
 interface PatternCapabilities {
   retrievalBackends?: readonly string[] // declared by `retriever`: the backends it will query
   workspaceSync?: boolean // declared by a wrapper that gives its subtree a durable workspace
+  decisionKeys?: readonly string[] // declared by a deciding pattern (#418): the DecisionSpec keys whose calibration a host can feed
+  calibratedDecisionKeys?: readonly string[] // the subset of decisionKeys whose policy sets requireCalibrated (#418 T6): read by harnessCalibratedDecisionKeys
+  memory?: true // declared by memoryRecall (#419): read by harnessUsesMemory, the opt-in probe for the memory wake and store
 }
 ```
 
@@ -1866,6 +1873,516 @@ when minted and when deserialized; and the run's bookkeeping store admits only
 what `askHuman` could have written. `readHitl` reads only `hitl_*` events, so a
 legacy `approval_response { approved: true }` answers nothing.
 
+## Decisions (typedDecision, #418)
+
+Probability-typed decisions over a closed label set, in three layers: the
+**raw seam** (`DecideFn` → `DecideResult`) — one call, one distribution, no
+policy, frozen against the merged `classifierFromDecide` consumer, which must
+be handed the raw seam and never a policy-applying wrapper (D7); the **policy
+layer** (`patterns/typedDecision.server.ts`) — applies a `DecisionPolicy`,
+records `decision_made`, never throws; and the **transports** behind the raw
+seam (a logprob readout on the private tier, Jev on the Anthropic tier, an
+operator-named verbalized secondary — #418 T3/T4/T5).
+
+T1 carries the TYPES (`DecisionSpec` / `DecisionSetSpec` with `mode`,
+`DecisionMethod` incl. `'jev'`, `AbstainReason` incl. `'method-mismatch'`,
+`DecisionPolicy` with `thresholdMethod`, `DecisionCalibrationEntry`,
+`DecideFn` / `DecideAllFn`, `MAX_DECISION_LABELS` = 20) and the PURE scoring
+half; T2 adds the awaited wrapper (`evaluateDecision` / `decide` /
+`decideFields`), the `typedDecision` chain step and `decisionRouter`; the
+transports are harness-baml and app slices (T3–T5).
+
+The pure policy math, unit-pinned:
+
+- `sumLabelMass(top, labels)` — the logprob readout's letter-variant summing:
+  every top-k token trimmed to the letter it names (`'B'`, `' B'`, `'(B'`),
+  summed as probability mass, with `coverage` = the matched mass (the leftover
+  is `1 − coverage`).
+- `calibrateLabelMass(mass, entry)` — the host-fed calibration entry applied
+  in log space (temperature ÷, bias +, softmax). A malformed entry degrades to
+  the identity; it never throws.
+- `normalizeLabelMass(mass, labels)` — a distribution over the spec's labels:
+  unseen label 0, sum 1.
+- `preCallAbstain({ policy, state, method })` — the F3 pre-call gate:
+  `'no-state'` on an empty state; `'uncalibrated'` when `requireCalibrated`
+  and the resolved client's method is KNOWINGLY non-calibratable (a verbalized
+  secondary). Calibratable methods and unknown ones are called — the post-call
+  `calibrated` check is the honest gate there.
+- `resolveDecisionCuts(policy, entry, method)` — the F2 threshold resolution:
+  the applied calibration entry's own cuts win; otherwise the policy's apply
+  only when the serving method equals `policy.thresholdMethod ?? 'logprob'`;
+  otherwise the cut is a mismatch → the decision abstains
+  `'method-mismatch'` rather than applying a threshold tuned on another
+  distribution.
+- `scoreDecision(input)` — the pure half of `evaluateDecision`: abstain in the
+  order `no-state` → `error` → `uncalibrated` → `low-coverage` →
+  `method-mismatch` → `low-confidence` → `low-margin`; on every abstain or
+  error the label is `policy.fallback` (REQUIRED, D8) and `top` is the argmax
+  (`null` only with no distribution at all); `margin = p₁ − p₂`,
+  `confidence = (K·p_max − 1)/(K − 1)`.
+
+#### The awaited wrapper
+
+```typescript
+interface DecisionCall<L> {
+  decide: DecideFn // the raw seam
+  spec: DecisionSpec<L>
+  state: string // only its LENGTH is ever recorded
+  policy: DecisionPolicy<L>
+  shadow?: true
+}
+
+evaluateDecision(call): Promise<{ decision; event; llmCall?; error? }> // scope-free, never throws
+decide(scope, call, opts?): Promise<Decision<L>> // + records, never throws
+decideFields(scope, call, opts?): Promise<{ [K in keyof F]: Decision<F[K]> }>
+```
+
+`evaluateDecision` asks the transport what it will serve, calls the raw seam
+and scores the outcome with `scoreDecision`. It NEVER throws: a seam that
+throws, one that returns junk (not an object, no `probs`, no usable mass) and a
+pre-call refusal are all an **abstained decision whose `label` is
+`policy.fallback`**, and a throw or an unusable readout also yields an `error`
+(`kind: 'llm_call'` when the throw carried an `LLMCallError`'s record). A
+readout with ANY entry that is not a finite non-negative number is unusable as
+a whole (`reason: 'error'`) — it is never renormalised over the entries that
+survive, which would invent certainty from a corrupt distribution. The thrown
+message is **redacted of the call's `state` and capped at 500 characters**
+before it enters the `error` event, because a transport that echoes its request
+would otherwise copy the state into an event that is JSON-dumped into LLM-facing
+views (SD-3); the state survives only in `llmCall.variables`.
+
+`decide` is `evaluateDecision` + the recording: exactly ONE `decision_made`
+(`opts.trackHistory`, default `'decision_made'`; `decision.eventId` is the
+recorded event's id) and, on failure, ONE `error` (`opts.errorSeverity`,
+default `'recoverable'` — a failed decision always has a verdict, so the
+CONSUMER knows whether the turn can proceed on it). The call record
+(`llmCall`) rides exactly ONE event, so its cost is counted once: the `error`
+event when the call threw with a record, `decision_made` otherwise. Use
+`evaluateDecision` where there is a context and no scope (the post-response
+position).
+
+**`DecideFn.serving` — the adapter's contract.** The raw seam carries two
+facts `evaluateDecision` needs and the call alone cannot tell it, so a
+transport MAY expose them:
+
+```typescript
+serving?: (key: string) => { method?: DecisionMethod; calibration?: DecisionCalibrationEntry }
+```
+
+- `method` is the method of the client the call WILL be served from, resolved
+  per call from the spec key. It is what lets the F3 gate abstain a
+  `requireCalibrated` decision on a knowingly verbalized client **before** the
+  call (zero LLM calls).
+- `calibration` is the host-fed entry for (serving client, `key`). Its
+  `minConfidence` / `minMargin` WIN over the policy's static thresholds (F2).
+- **Absent `serving` removes only the pre-call shortcut, never a check.** The
+  method then comes from the result's own `method`, so the post-call
+  `'method-mismatch'` and `'uncalibrated'` abstentions still fire. A `serving`
+  that throws is treated as absent.
+
+The T3/T4 adapters fill it. `DecideAllFn` carries the same member.
+
+#### `decideFields`
+
+The owner's "ONE call, SEVERAL typed fields". The provider decides how the set
+is served:
+
+| How         | When                                                             | Calls                                                                                               |
+| ----------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `decideAll` | a one-call provider (Jev) is supplied and `set.mode !== 'joint'` | ONE request; each field a typed question                                                            |
+| joint       | `set.mode === 'joint'`                                           | ONE `decide` pass over the label **product** (ids `'a \| b \| c'`), marginalised back to each field |
+| per field   | otherwise                                                        | one `decide` pass per field, **sequential**, with a byte-identical state                            |
+
+The state prefix is byte-identical across the per-field passes, so the backend's
+prefix cache serves every pass after the first. A field whose pre-call gate
+refuses it is left out of the set call. `decideFields` records ONE
+`decision_made` PER FIELD — each has its own key, policy and calibration and
+must be independently attributable — and ONE `error` for a set-wide failure.
+`decision_made` is excluded from the progress bar's step count (app slice T6),
+so a four-field set does not add four steps.
+
+`assertDecisionSetSpec(set)` throws for a `mode: 'joint'` set whose label
+product exceeds `MAX_DECISION_LABELS` (a joint pass reads the product's mass
+from one top-k window). It is a programmer error, so it throws — call it where
+the set is declared to fail at construction; `decideFields` calls it first
+regardless, before any call.
+
+#### `typedDecision(config)`
+
+```typescript
+interface TypedDecisionConfig<L> extends PatternConfig {
+  decide: DecideFn // REQUIRED — `bamlPatterns().decide` (T3), or your own
+  spec: DecisionSpec<L>
+  policy: DecisionPolicy<L> // `fallback` must be one of the labels (checked at construction)
+  state?: (view: EventView, data) => string
+}
+interface TypedDecisionData {
+  decisions?: Record<string, Decision>
+}
+```
+
+A chain step that asks one closed question and writes the verdict to
+`scope.data.decisions[spec.key]`. It generates no text and never throws.
+**`data.decisions[spec.key]` is overwritten on EVERY exit** — success, a failed
+call, an empty state, a throwing `state` builder — because `scope.data`
+survives the turn boundary and a verdict left in place would be last turn's
+(the router and planner clear their outputs for the same reason). Other keys
+are left alone.
+
+The default `state` is the window's user messages plus FINAL assistant
+messages (the router's intermediate status lines are not part of the
+conversation), think-blocks stripped, oldest dropped to fit
+`decide.limits().contextWindow` (16 384 when the transport reports none).
+Tool results are opt-in — pass your own `state`: an assistant reply can echo
+untrusted tool content. The default view mirrors `router`'s
+(`fromLastNTurns: routerTurnWindow`) and narrows to messages; **when you pass a
+`state` and no `viewConfig`, the narrowing is dropped** (the turn window stays)
+so your builder can see `tool_result` events. It declares
+`capabilities.decisionKeys: [spec.key]`.
+
+Defaults (all three maps carry an entry for the type): `commitStrategy:
+'always'`, `trackHistory: 'decision_made'`, `errorSeverity: 'recoverable'`,
+`estimateTurns: () => 1`.
+
+#### `decisionRouter(routeDescriptions, config)`
+
+```typescript
+interface DecisionRouterConfig extends PatternConfig {
+  decide: DecideFn // REQUIRED
+  policy: DecisionPolicy<string> // `fallback` names the ROUTE taken on abstain / failure
+  conversationalRoute?: { name: string; description: string } // an ORDINARY route key
+  preserveIntent?: boolean // default false: clear data.intent
+  shadow?: boolean // record, set nothing
+}
+```
+
+The decision-typed sibling of `router()`: the routes (plus
+`conversationalRoute`) are the labels of one decision under the key `route`,
+and the verdict becomes `data.route`; pair it with `routes()`. It produces the
+ROUTE only — not the reply and not a rewritten `intent` — so compose
+`compactIntent` first (with `preserveIntent: true`) and dispatch the
+conversational route to a pass-through that the final `compactExecution`
+answers.
+
+- It **never sets `DIRECT_RESPONSE_ROUTE`**: a decision has no reply text to
+  pass through, so that sentinel would end the turn empty. A route named like
+  it is refused at construction, as are duplicate route names and a
+  `policy.fallback` that is no route.
+- `routes()` never sees an undefined route: every verdict is a label (the
+  fallback is required). A non-failure abstain (low confidence, …) continues on
+  the fallback route.
+- **Failure parity with `router`**: the default `errorSeverity` is
+  `irrecoverable`. A FAILED decision (`reason: 'error'`) clears `data.route` and
+  `data.intent` and ends the turn where it happened.
+  `errorSeverity: 'recoverable'` instead continues on `policy.fallback`.
+- A state that cannot be built is a failure like any other: routing is cleared
+  (non-shadow), the abstained `no-state` verdict is written and one `error`
+  is recorded at the pattern's severity (shadow records only).
+- `preserveIntent: false` clears `data.intent` so a conversation migrated from
+  `router()` cannot carry the old router's intent into the next loop.
+- `shadow: true` records the decision (`decision_made.shadow = true`) and sets
+  **nothing** — not `route`, `intent` or `data.decisions` — so it can run
+  beside `router()` to measure agreement. A shadow failure is always
+  `recoverable`, whatever `errorSeverity` says: it can never end a turn.
+
+Defaults: `commitStrategy: 'always'`, `trackHistory: 'decision_made'`,
+`errorSeverity: 'irrecoverable'`, `estimateTurns: () => 1`.
+
+The `decision_made` event is in `ALWAYS_COMMIT_TYPES` and renders METADATA
+ONLY into LLM-facing serializations (`key: label (p, margin)` plus the abstain
+reason — the `state` never enters the event; it survives only in the
+transport's `llmCall.variables`). `PatternCapabilities.decisionKeys` +
+`harnessDecisionKeys(patterns)` make the declared decision surface readable
+without running the harness. `calibratedDecisionKeys` +
+`harnessCalibratedDecisionKeys(patterns)` name the subset whose policy sets
+`requireCalibrated` — the keys that abstain on every call until a calibration
+entry exists — and are what a host's per-tier calibration probe warns about
+(#418 T6; `typedDecision` and `decisionRouter` declare it, and only when the
+policy requires it).
+`getEventPreview` renders `decision_made` as `key: label`, or
+`key: abstained (reason) → fallback`; never the question or the state.
+
+## Memory recall (memoryRecall, #419)
+
+The recall half of `withMemory`: a chain step that runs BEFORE routing and, when
+the user's message plausibly depends on what the system remembers about them,
+attaches the few best-matching memories to the turn. It generates no text.
+
+```typescript
+harness(
+  memoryRecall({ store, decide, embed, owner, visibleTiers, awaitWake }),
+  router(),
+  routes({/* … */}),
+  compactExecution(),
+)
+```
+
+It is shaped after `retriever`: `commitStrategy: 'always'`, `errorSeverity:
+'recoverable'`, `estimateTurns: () => 0`, its backends injected. **Core stays
+generic** — no database, no network, no embedder, no provider vocabulary (a tier
+is an opaque string, the run frame's own rule). Everything the host owns arrives
+through five REQUIRED seams:
+
+| Config                        | What it is                                                                                                                                                                                                                                                                                                                                                                      |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `store: MemoryStore`          | `count(tiers)` and `candidates({ embedding, embedSpace?, tiers })`. **No method takes an owner**: the host binds the turn's owner into the store it hands in. The recall query is EXACT — every active row of the owner in the visible tiers, each with its cosine distance, no `ORDER BY`/`LIMIT` — because BM25's document frequencies are computed over exactly that corpus. |
+| `decide: DecideFn`            | #418's RAW seam. The step applies its own `DecisionPolicy` through `evaluateDecision`; hand it `bamlPatterns().decide`, never a policy-applying wrapper.                                                                                                                                                                                                                        |
+| `embed: MemoryQueryEmbedder`  | `query(text)`, plus an optional `spaceId`. A row from another space is refused (`skipped: 'error'`), never ranked on.                                                                                                                                                                                                                                                           |
+| `owner: () => string \| null` | From the host's request context, never an argument. `null` → `skipped: 'no-user'`.                                                                                                                                                                                                                                                                                              |
+| `visibleTiers(turnTier)`      | Which stored tiers a turn of this tier may read. The rule lives where the tier vocabulary does (the app: `anthropic` sees `anthropic`; `verda` sees both). **Fail closed** for an unknown tier.                                                                                                                                                                                 |
+
+Optional: `awaitWake` (below), `tier` (default: the run frame's `inference.tier`),
+`limits` (the responder's window, for the 5% ceiling) and `settings`.
+
+### The pipeline
+
+1. **Clear** `data.memories` and `data.memoryContext` — FIRST, before anything
+   can fail. `scope.data` survives the turn boundary, so a failure that returned
+   it untouched would hand the NEXT turn this turn's memories (pin
+   `per-turn-clear`).
+2. **Owner** (`no-user`) → **switch** (`settings.enabled`, `disabled`) → **count**
+   in the turn's tiers (0 → `empty`, with no gate and no embedding paid) →
+   **query** (the latest user message; none → `no-query`).
+3. **Gate, search and wake run concurrently** under one deadline,
+   `gate.timeoutMs` (default 1500 ms), so the turn pays the slowest of the three
+   and not their sum. The gate asks `memory.recall` (`retrieve | skip`, fallback
+   `skip`) over the latest user message and the previous FINAL assistant message
+   — **never memory content**.
+4. **Rank** (`rankMemories`, `memory-ranking.server.ts`): NFKC tokenizer
+   over `\p{L}`/`\p{N}` runs with identifiers kept whole (beside their parts) and
+   small EN/NL/FR stopword lists, no stemming; BM25 (k1 1.2, b 0.75; Lucene's
+   non-negative idf) over the user's own rows; cosine similarity `s_v = 1 −
+distance`; the **floors BEFORE fusion** — a row survives a channel only if
+   `s_v ≥ τ_v`, or it shares a non-stopword query term of length ≥ 3 with
+   `idf ≥ τ_idf`; **RRF** (k = 60) over each channel's surviving ranked list,
+   ties on `s_v`, then `last_seen_at`, then id. RRF is rank-only, so a fused score
+   cannot reject garbage: floored AFTER fusion, rejected rows would take rank
+   positions from the survivors (pin `bm25-rrf-floors`).
+5. **Cap**: `maxMemories` (default 5) then `maxMemoryTokens` (default 400 via
+   `estimateTokens`, hard-capped at 5% of `limits().contextWindow`). The block
+   stops at the first row that does not fit — it never skips to a smaller,
+   lower-ranked one.
+6. **Attach** only when the gate's verdict `label` is `retrieve`. The verdict is
+   the policy's: an abstain, an error, a timeout and an out-of-set answer all
+   land on the fallback, so none attaches (pin `gate-policy`) — read `label`,
+   never `top`.
+
+`data.memories` is `RecalledMemory[]` (`{ id, kind, tier, content }`) and
+`data.memoryContext` the formatted block (`- [kind] content`, one line per
+memory, no ids) that a responder renders in its run-static part. Wiring the
+block into `router` / `compactExecution` is the host's (#419 M5/M9); this step
+only produces it.
+
+### The gate's thresholds are method-scoped (#418 F2)
+
+`gate.minConfidence` (default 0.5) and `gate.minMargin` (default 0.25) are
+fitted on `gate.thresholdMethod` (default `logprob`) and handed to the policy as
+its static cuts. On a read from another method (Jev on the Anthropic tier) they
+are NOT applied: the calibration entry `decide.serving(key)` reports for that
+client carries its own cuts, which win, and with no entry the gate abstains
+`method-mismatch` and attaches nothing. The step applies **no threshold of its
+own** on top of the policy's — a second static `margin ≥ minMargin` is exactly
+the logprob-fitted cut applied to a Jev read (pin `recall-threshold-method`).
+Every default in this section — those, `τ_v` (0.5), `τ_idf` (0.5), the 1500 ms
+budget — is an unmeasured placeholder; layer 4's `memory-recall-relevance`
+calibrates them.
+
+### The joint memory wake
+
+`awaitWake?: (budgetMs) => Promise<'awake' | 'skipped'>` is structurally the
+app's `awaitMemoryWake` (`lib/inference/memory-wake.server.ts`, #419 M13): the
+host binds it as it is and core imports no app code. The step passes it the
+gate's own budget and runs it concurrently with the gate and the search. If the
+wake reports `skipped`, or has not landed when the deadline fires, nothing is
+attached and the event records `skipped: 'waking'`; the wake itself keeps
+running, so the post-reply store and the next turn benefit. A deadline that
+fires with the wake already `awake` is `skipped: 'timeout'`. The wake is
+STARTED by the host before the chain's first pattern, and only for an agent that
+opted in — `harnessUsesMemory(patterns)` (below) is that probe.
+
+### It never stops what follows it
+
+Every failure — a throwing store or embedder, a gate that errors, an expired
+deadline, a rejecting wake, a throwing switch or owner resolver — ends in
+`memories = []` and a RETURN. Nothing is rethrown and **no `error` event is
+recorded**: an `error` is a statement about the turn (the synthesizer apologises
+for one, `settleTurn` fails an empty turn on one), and an unavailable memory is
+not one. Nor is it a `warning` — that renders a chat bubble, and the user sees
+nothing. The thrown error is `console.warn`ed, and the event records only its
+CLASS (`errorKind`): a message can quote what it was reading (pin
+`recall-never-skips-downstream`).
+
+### The `memory_recalled` event
+
+One per turn, from every exit: `{ attached, considered, survivors, tier?,
+tokens, skipped?, gate?, wake?, errorKind? }`. **IDS ONLY** — `attached` lists
+memory ids and nothing in the payload is memory content; `formatEventData`
+renders it from `skipped`/`attached.length` alone, so a field added later cannot
+reach an LLM-facing serialization by the JSON dump (pin `event-hygiene`). The
+gate's outcome rides in `gate` (label, probs, margin, confidence, abstained,
+reason, method, calibrated, `stateChars`); recall records **no separate
+`decision_made`**, and the gate's `llmCall` rides this event so its cost is
+counted once.
+
+### Memory text never rides the persisted blob (review F1)
+
+`data.memories` / `data.memoryContext` hold decrypted memory text, and `ctx.data`
+is part of the serialized session. `serializeContext` therefore drops
+`TRANSIENT_DATA_KEYS` (`memories`, `memoryContext`) unless the run is `paused`
+(a resume re-enters from the blob, so a paused blob keeps the block — short-lived,
+but the same plaintext). Without it Forget and retention would never reach the
+conversation blob or the nightly dump (pin `memory-not-in-blob`).
+
+### Cost, and what is unrecordable
+
+The gate's `llmCall` rides the `memory_recalled` event on the success path AND
+on a deadline that fires after the gate answered (pins `recall-gate-cost`). A gate
+that finishes after the event is written is unrecordable without a late mutation.
+
+### Notes
+
+- With ONE stored memory the lexical channel cannot fire (`idf(1,1) = 0.288 <
+τ_idf 0.5`): such users get semantic-only recall. M11 calibrates τ_idf.
+- `MemoryQueryEmbedder.spaceId` is REQUIRED, and the store is told `embedSpace`; a
+  mismatch throws `MemoryEmbeddingSpaceMismatch` (a string compare, since
+  `assertSameSpace` takes space objects, not ids).
+- The recalled block carries no provenance fence: the responder's render (M9) must
+  fence it.
+
+### `harnessUsesMemory(patterns)`
+
+`PatternCapabilities.memory` is declared by `memoryRecall`; `harnessUsesMemory`
+walks the (nested) graph for it. It is the ONE opt-in probe a host gates the
+memory wake and the post-reply store on, so an agent that never opted in never
+wakes the memory boxes.
+
+## Memory store (settleMemory, #419)
+
+The store half of persistent memory. After the reply, decide whether the turn
+contains something worth remembering about the user and, if so, write it. **This
+function writes persistent user data**, so every uncertain path ends in "store
+nothing" — each is named below and pinned in `__tests__/memory-store.test.ts`.
+
+```typescript
+const report = await settleMemory(ctx, {
+  store, // MemoryWriteStore — the transactional write seam, bound to the owner
+  decide, // the RAW DecideFn (this step applies its own policy)
+  decideAll, // optional one-request provider (Jev)
+  extract, // MemoryExtractFn — the `describe`-role call
+  embed, // MemoryEmbedder — query side AND documents(texts)
+  owner, // () => string | null — from the host's request context
+  tier, // () => string | undefined — default: the run frame's inference.tier
+  awaitWake, // MemoryWakeWait — the app's awaitMemoryWake, as-is
+  settings, // enabled (REQUIRED to write — absent stores nothing, D11), gate cuts, thresholds, softLimit, routineKinds, …
+})
+```
+
+### Where it runs — and why its events are not lost (review F1)
+
+`settleMemory` is a plain async function (the `compactBulkData` shape), not a
+chain step. The host starts it **from inside its post-turn continuation**
+(`compactAndSave`), which already holds the request context and the run frame,
+and **awaits it there**, so every `memory_written` is in `ctx.events` **before
+that continuation's `saveSession`**: one version-conditional save carries the
+turn's events and the memory references together. It writes into `ctx.events`
+directly and never through `trackEvent`, so `memory_written` can never reach a
+live listener — which is to say the transcript. It **never throws** and never
+touches the conversation row: a failure is a `console.warn` line (the reason,
+never the user's words) and a returned `skipped` reason.
+
+### The pipeline, and every fail-closed path
+
+| #   | Step                                                                                                                                                                                                                                         | Stops with                                                           | Pin                       |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------- |
+| 1   | owner (`null`/`''`), the user's switch (off or unreadable), the tier to stamp (none), the turn (`error`/`paused`), a question/answer pair (no `final` answer), the user message's event id (none — a retry could not be recognised)          | `no-user` `disabled` `no-tier` `turn-failed` `no-pair` `no-event-id` | `fail-closed`             |
+| 2   | the joint wake, `wakeBudgetMs` (default 180 s): `'skipped'` or a rejection                                                                                                                                                                   | `waking` — and nothing is sent to a public provider instead          | `fail-closed`             |
+| 3   | ONE `decideFields` over the window: `sensitive`, `target`, `confirm`, `kind`, each `requireCalibrated`, each with the gate cuts. Fallbacks fail closed: `sensitive → 'sensitive'`, `target → 'none'`, `confirm → 'ask'`, `kind → 'episodic'` | an abstained, failed or uncalibrated read lands on a fallback        | `seam-contract`           |
+| 4   | `sensitive` (or its fallback); `target: none`                                                                                                                                                                                                | `sensitive` `gate`                                                   | `seam-contract`           |
+| 5   | `resolveStoreRoute`: an org target ALWAYS asks (F2); a personal target skips the question only for a routine kind (default episodic/semantic/preference; `trait` always asks)                                                                | —                                                                    | `org-graph-forces-ask`    |
+| 5′  | **pre-M12**: an org target has no writer. **pre-M6**: `ask` has no confirmation mechanism                                                                                                                                                    | `org-no-writer` `no-confirmation` — store nothing and log (F4)       | `pre-m6-no-store`         |
+| 6   | extract (≤ `maxPerTurn`, default 3, read in order)                                                                                                                                                                                           | `extract-error` `no-candidates`                                      | `acceptance-rules`        |
+| 7   | embed (`documents`): a throw, a wrong count, a non-finite or ragged vector, an empty `spaceId`                                                                                                                                               | `error`                                                              | `fail-closed`             |
+| 8   | one transaction PER candidate (below)                                                                                                                                                                                                        | `failed` / `duplicates` in the report                                | `idempotency-transaction` |
+
+The step-3 `decision_made` events are recorded on the context (one per field —
+metadata and `stateChars` only, never the state), so "why was nothing stored" is
+answerable from the blob. **An abstained kind stores `episodic`**: when the
+`kind` field abstained, the extractor's claim of a longer-lived kind is not
+trusted, and uncertainty fails toward the one kind with a retention expiry.
+
+### Input isolation and the evidence rule (D9)
+
+The window is the turn's last `user_message` plus the `assistant_message` with
+`final: true` after it (`storeWindowTurns` adds earlier pairs). `tool_call`,
+`tool_result`, `controller_action`, non-final assistant text and `llmCall`
+records are **never read** (pin `input-isolation`). Because the final reply is
+itself composed from tool results, excluding tool records alone is not enough:
+**every memory's `evidence` must be a verbatim span of the CURRENT user
+message** — assistant text and earlier turns resolve references, never source.
+
+### Deterministic acceptance (`acceptCandidate`, pure)
+
+Each rule drops the candidate and names itself; nothing is repaired. In order:
+`kind` in the closed set · `shape` (one non-empty line, ≤ 280 characters) ·
+`evidence-length` (≥ 8 characters after NFKC) · `evidence-verbatim` ·
+`identifier-closure` (every URL, email, @handle, 3+-digit number and capitalised
+name — only `the user they their this that a an it` may open a sentence
+unchecked; any other sentence-initial capital is checked like every other —
+occurs as a whole
+token in a user message of the window) · `sanitizer` (`sanitizeUntrusted` reports
+zero findings on `content`, because a memory is replayed into a later prompt).
+`report.rejected` counts drops by rule id. A route that skipped confirmation on
+the gate's kind also drops a candidate whose own kind must ask (`not-routine`).
+
+### Dedupe, merge and idempotency (F9)
+
+Per candidate, in ONE transaction that the host holds under the owner's advisory
+lock (`MemoryWriteStore.transaction` — it MUST roll back on a throw):
+
+1. `nearest` memory of the same owner, tier and embedding space.
+2. **Same kind and cosine ≥ `dupSimilarity` (0.92)** → reinforce. **Related
+   (≥ `relatedSimilarity`, 0.75) preference or trait** → the `memory.merge`
+   question `same | update | distinct`, bounded by `mergeTimeoutMs`; abstain,
+   timeout or `distinct` → insert. Episodes and facts only reinforce or insert;
+   kinds and tiers never merge.
+3. Insert/reinforce/update **and the `memory_sources` row in the same
+   transaction.** `addSource` returning `{ inserted: false, memoryId }` is the primary-key
+   conflict on `(owner, eventId, ordinal)` (`ON CONFLICT DO NOTHING RETURNING`; a
+   bare INSERT would abort the transaction): the transaction is rolled back, so a retry of
+   the same event is a no-op (the reinforce is undone with it), and a crash can
+   leave neither a memory without its source nor a source without its memory.
+   `ordinal` is the candidate's index in the extractor's output.
+
+The merge question runs INSIDE the transaction (it must see the lock's world),
+which is why it has its own deadline. The thresholds are unmeasured placeholders
+for layer 4.
+
+### The `memory_written` event
+
+One per memory written, recorded after its commit:
+`{ memoryId, kind, tier, contentHash, eventId, ordinal, action }` — **never the
+content** (`contentHash` is the SHA-256 of the stored text; a reinforce hashes the
+existing memory, not the candidate). `formatEventData` renders it from `action` and
+`kind` alone (pin `event-hygiene`). The extractor's `llmCall` rides the first one **redacted**:
+`functionName`, `usage`, `metrics`, `durationMs`, `provider`, `clientName` only —
+`variables`, `promptTemplate`, `rawInput`, `rawOutput` and `parsedOutput` are the
+candidates and the window, i.e. the memory's text, and never reach the blob. A
+call that produced nothing has no event to ride and is not recorded.
+
+**Residual (host save).** "One save carries both" holds only if that save lands.
+The host's trailing save (`saveTrailingPass`) is refused while a newer turn holds
+the conversation, and `settleMemory` may sit in that continuation for the wake
+budget plus extract, embed and merge time: a user who replies in that window
+commits memories and loses their `memory_written` events. A retry repairs the
+reference — on a conflict it re-records the event (`action: 'reinforced'`, hashed
+from a `read`) when the context has none for `(eventId, ordinal)` — but nothing
+replays a turn on its own. The mechanism (wait for the claim to release, or
+reconcile `memory_sources` against events on load) is M5's, and M5 cannot land
+without an interleaving pin for it.
+
+`report.compactionDue` is true when the owner's count reaches `softLimit` (300);
+compaction itself is the next slice.
+
 ## EventView Query API
 
 Fluent API for filtering events from UnifiedContext:
@@ -2123,26 +2640,28 @@ transformed into prompt-friendly types. The table below shows which harness
 
 ### Harness EventType → BAML Input Type
 
-| Harness `EventType`  | Event Payload (TS)                                                                                                                                | BAML Type                                               | Consumed By                                                   |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------- |
-| `tool_call`          | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`)                                                                                       | `ToolCall`                                              | `LoopTurn.tool_call`, `Attempt.action`                        |
-| `tool_result`        | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`, `sanitized?`, `heldBy?`) | `ToolResult`                                            | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult` |
-| `controller_action`  | `ControllerActionEventData`                                                                                                                       | _(embedded in `LoopTurn.reasoning`)_                    | simpleLoop, actorCritic                                       |
-| `critic_result`      | `CriticResultEventData`                                                                                                                           | _(embedded in `Attempt.feedback`)_                      | actorCritic                                                   |
-| `user_message`       | `UserMessageEventData`                                                                                                                            | `Message { role, content }`                             | router (history)                                              |
-| `assistant_message`  | `AssistantMessageEventData`                                                                                                                       | `Message { role, content }`                             | router (history)                                              |
-| `pattern_enter`      | `PatternEnterEventData`                                                                                                                           | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`      |
-| `pattern_exit`       | `PatternExitEventData`                                                                                                                            | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`      |
-| `approval_request`   | _(legacy payload; its type was removed in #433 S3)_                                                                                               | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_request`, not an answer    |
-| `approval_response`  | _(legacy payload; its type was removed in #433 S3)_                                                                                               | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_response`, not an answer   |
-| `hitl_request`       | `HitlRequestEventData`                                                                                                                            | _(metadata only — kind and request id)_                 | `readHitl()` / `answerOf()` (#433)                            |
-| `hitl_response`      | `HitlResponseEventData`                                                                                                                           | _(metadata only — kind, choice and who decided)_        | `readHitl()` / `answerOf()` (#433)                            |
-| `error`              | `ErrorEventData`                                                                                                                                  | _(read via `view.hasErrors()`)_                         | compactExecution (error context), harness error handling      |
-| `reference_attached` | `ReferenceAttachedEventData`                                                                                                                      | _(not sent to BAML)_                                    | withReferences only (observability)                           |
-| `intent_compacted`   | `IntentCompactedEventData`                                                                                                                        | _(not sent to BAML)_                                    | compactIntent only (observability)                            |
-| `plan_created`       | `PlanCreatedEventData`                                                                                                                            | _(the plan reaches BAML as `plan_context` / `context`)_ | planner only; loops read `scope.data.plan`, not the event     |
-| `content_sanitized`  | `ContentSanitizedEventData`                                                                                                                       | _(metadata only — NEVER the verbatim spans)_            | withInjectionGuard only (observability + human audit)         |
-| `loop_recovery`      | `LoopRecoveryEventData` (`failure`, `error`, `tool?`, `turn`, `maxTurns`)                                                                         | _(metadata only — the turn log carries the feedback)_   | simpleLoop / actorCritic only (observability)                 |
+| Harness `EventType`  | Event Payload (TS)                                                                                                                                                                          | BAML Type                                               | Consumed By                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `tool_call`          | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`)                                                                                                                                 | `ToolCall`                                              | `LoopTurn.tool_call`, `Attempt.action`                                      |
+| `tool_result`        | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`, `sanitized?`, `heldBy?`)                                           | `ToolResult`                                            | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult`               |
+| `controller_action`  | `ControllerActionEventData`                                                                                                                                                                 | _(embedded in `LoopTurn.reasoning`)_                    | simpleLoop, actorCritic                                                     |
+| `critic_result`      | `CriticResultEventData`                                                                                                                                                                     | _(embedded in `Attempt.feedback`)_                      | actorCritic                                                                 |
+| `user_message`       | `UserMessageEventData`                                                                                                                                                                      | `Message { role, content }`                             | router (history)                                                            |
+| `assistant_message`  | `AssistantMessageEventData`                                                                                                                                                                 | `Message { role, content }`                             | router (history)                                                            |
+| `pattern_enter`      | `PatternEnterEventData`                                                                                                                                                                     | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`                    |
+| `pattern_exit`       | `PatternExitEventData`                                                                                                                                                                      | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`                    |
+| `approval_request`   | _(legacy payload; its type was removed in #433 S3)_                                                                                                                                         | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_request`, not an answer                  |
+| `approval_response`  | _(legacy payload; its type was removed in #433 S3)_                                                                                                                                         | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_response`, not an answer                 |
+| `hitl_request`       | `HitlRequestEventData`                                                                                                                                                                      | _(metadata only — kind and request id)_                 | `readHitl()` / `answerOf()` (#433)                                          |
+| `hitl_response`      | `HitlResponseEventData`                                                                                                                                                                     | _(metadata only — kind, choice and who decided)_        | `readHitl()` / `answerOf()` (#433)                                          |
+| `error`              | `ErrorEventData`                                                                                                                                                                            | _(read via `view.hasErrors()`)_                         | compactExecution (error context), harness error handling                    |
+| `reference_attached` | `ReferenceAttachedEventData`                                                                                                                                                                | _(not sent to BAML)_                                    | withReferences only (observability)                                         |
+| `intent_compacted`   | `IntentCompactedEventData`                                                                                                                                                                  | _(not sent to BAML)_                                    | compactIntent only (observability)                                          |
+| `plan_created`       | `PlanCreatedEventData`                                                                                                                                                                      | _(the plan reaches BAML as `plan_context` / `context`)_ | planner only; loops read `scope.data.plan`, not the event                   |
+| `content_sanitized`  | `ContentSanitizedEventData`                                                                                                                                                                 | _(metadata only — NEVER the verbatim spans)_            | withInjectionGuard only (observability + human audit)                       |
+| `loop_recovery`      | `LoopRecoveryEventData` (`failure`, `error`, `tool?`, `turn`, `maxTurns`)                                                                                                                   | _(metadata only — the turn log carries the feedback)_   | simpleLoop / actorCritic only (observability)                               |
+| `decision_made`      | `DecisionMadeEventData` (`key`, `labels`, `probs`, `label`, `top`, `margin`, `confidence`, `abstained`, `reason?`, `policy`, `method?`, `calibrated`, `coverage?`, `stateChars`, `shadow?`) | _(metadata only — the state's SIZE, never the text)_    | typedDecision / decisionRouter (#418); consumers read `data.decisions[key]` |
+| `memory_recalled`    | `MemoryRecalledEventData` (`attached` ids, `considered`, `survivors`, `tier?`, `tokens`, `skipped?`, `gate?`, `wake?`, `errorKind?`)                                                        | _(metadata only — IDS, never memory content)_           | memoryRecall (#419); consumers read `data.memories` / `data.memoryContext`  |
 
 ### Per-Pattern: Events Read → BAML Inputs → BAML Return
 
@@ -2466,6 +2985,8 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
     ├── compactIntent.server.ts # Rewrites latest message → scope.data.intent for router-less actors; emits intent_compacted
     ├── planner.server.ts       # Upfront decomposition → scope.data.plan (+ formatPlanContext, read by both loop patterns); emits plan_created
     ├── retriever.server.ts     # retriever() — vector-store search as a pattern
+    ├── typedDecision.server.ts # #418: the decision policy layer — the PURE half (sumLabelMass / calibrateLabelMass / normalizeLabelMass, preCallAbstain (F3), resolveDecisionCuts (F2), scoreDecision), the awaited wrapper (evaluateDecision / decide / decideFields) and the typedDecision / decisionRouter patterns
+    ├── memoryRecall.server.ts  # #419: memoryRecall() — the recall step (gate ∥ search ∥ wake, BM25 + cosine, floors before RRF, tier filter, per-turn clear, memory_recalled). The pure ranking half is ../memory-ranking.server.ts
     └── event-view.server.ts    # EventViewImpl (fluent query API, serializeCompact)
 
 packages/harness-baml/                   # The BAML companion PACKAGE (Lane A6) — EVERYTHING that touches baml_client lives here

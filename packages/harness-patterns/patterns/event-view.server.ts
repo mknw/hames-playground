@@ -22,6 +22,9 @@ import type {
   LoopRecoveryEventData,
   HitlRequestEventData,
   HitlResponseEventData,
+  DecisionMadeEventData,
+  MemoryRecalledEventData,
+  MemoryWrittenEventData,
 } from '../types'
 
 assertServerOnImport()
@@ -586,6 +589,34 @@ function formatEventData(event: ContextEvent): string {
       // outcome through the tool_result a resume substitutes, not from here.
       const data = event.data as Partial<HitlResponseEventData> | undefined
       return `decision: ${data?.kind} → ${data?.choice ?? 'none'} (${data?.by})`
+    }
+    case 'decision_made': {
+      // METADATA ONLY — never the state (#418). The state a decision was asked
+      // over can hold sanitized mail bodies or tool results (SD-3/SD-10), and
+      // the default branch below JSON-dumps the whole payload into every
+      // LLM-facing serialization; the event carries `stateChars`, the SIZE,
+      // instead. The state survives only in the transport's `llmCall.variables`.
+      // Pinned by decision-state-sentinel.
+      const data = event.data as DecisionMadeEventData
+      const pMax = Math.max(0, ...Object.values(data.probs ?? {}))
+      const head = `${data.key}: ${data.label} (p=${pMax.toFixed(3)}, margin=${data.margin.toFixed(3)})`
+      return data.abstained ? `${head} | abstained: ${data.reason ?? 'unknown'}` : head
+    }
+    case 'memory_recalled': {
+      // METADATA ONLY — never a memory's content (#419). The payload is ids and
+      // counts today; the explicit case is what keeps a field added later from
+      // reaching every LLM-facing serialization through the JSON dump below.
+      const data = event.data as MemoryRecalledEventData
+      return data.skipped
+        ? `memory recall skipped: ${data.skipped}`
+        : `memory recalled: ${data.attached?.length ?? 0} attached`
+    }
+    case 'memory_written': {
+      // METADATA ONLY — never a memory's content (#419 M2). Ids, kind, tier and
+      // a hash; the explicit case keeps a field added later out of the JSON
+      // dump below, which every LLM-facing serialization runs.
+      const data = event.data as MemoryWrittenEventData
+      return `memory ${data.action}: ${data.kind}`
     }
     case 'approval_request':
     case 'approval_response':

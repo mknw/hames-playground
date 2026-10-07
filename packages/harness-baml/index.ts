@@ -13,6 +13,10 @@ export {
   bamlPatterns,
   createCompactIntentAdapter,
   createRetrieveQueryAdapter,
+  createMemoryExtractAdapter,
+  createMemoryCompactAdapter,
+  type MemoryExtractInput,
+  type MemoryCompactInput,
   type BamlPatterns,
 } from './baml-patterns.server'
 export { defaultSynthesize, defaultSelector } from './defaults.server'
@@ -21,6 +25,12 @@ export {
   createActorControllerAdapter,
   createCriticAdapter,
   createInjectionScreen,
+  createDecideAdapter,
+  createVerbalizedDecide,
+  verbalizedProbabilities,
+  createDecideAllAdapter,
+  decideTransportFor,
+  topLogprobsOf,
   accountBamlCall,
   withUsageAccounting,
   llmCallHitOutputCap,
@@ -36,6 +46,8 @@ export {
   type LegacyActorFn,
   type PlannerFnWithLLMData,
   type DescribeBatchItem,
+  type DecideAdapterOptions,
+  type DecideServing,
 } from './baml-adapters.server'
 export { routeMessageOp } from './routing.server'
 export {
@@ -45,6 +57,14 @@ export {
   assertInferenceTier,
   activeInferenceTier,
   clientOverrideFor,
+  LOGPROB_CLIENTS,
+  JEV_CLIENTS,
+  DECIDE_SECONDARY_CLIENTS,
+  DECIDE_DEFAULT_CLIENT,
+  configureDecideSecondary,
+  type DecideSecondaryClient,
+  configureDecisionCalibration,
+  decisionCalibrationFor,
   configureConsumerClients,
   activeConsumerClients,
   resolveClientForRole,

@@ -5,10 +5,10 @@ this file is gitignored** — the weights are hundreds of MB to several GB and a
 never committed. Drop the files in by hand; the `Makefile` targets at the repo
 root do the rest.
 
-| File                             | Served by        | Port | Role                                                                                 |
-| -------------------------------- | ---------------- | ---- | ------------------------------------------------------------------------------------ |
-| `Qwen3-Embedding-0.6B-Q8_0.gguf` | `make embed`     | 8090 | Data Stash embeddings (1024-dim) — see [`docs/DATA_STASH.md`](../docs/DATA_STASH.md) |
-| `Qwen3.5-4B-Instruct-Q8_0.gguf`  | `make llm-small` | 8095 | describe/summarization role (`LocalQwenSmall`) — **not present yet**                 |
+| File                             | Served by                                                                                        | Port | Role                                                                                 |
+| -------------------------------- | ------------------------------------------------------------------------------------------------ | ---- | ------------------------------------------------------------------------------------ |
+| `Qwen3-Embedding-0.6B-Q8_0.gguf` | `make embed`, or the compose `embedder` service (mounts `./models` read-only; no published port) | 8090 | Data Stash embeddings (1024-dim) — see [`docs/DATA_STASH.md`](../docs/DATA_STASH.md) |
+| `Qwen3.5-4B-Instruct-Q8_0.gguf`  | `make llm-small`                                                                                 | 8095 | describe/summarization role (`LocalQwenSmall`) — **not present yet**                 |
 
 The chat model on port 8080 (GLM-4.7-Flash, `pnpm dev:llama`) is not served from
 here: it lives in llama.cpp's own cache, and `app/package.json` points at it

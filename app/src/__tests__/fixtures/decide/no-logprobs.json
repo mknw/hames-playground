@@ -1,0 +1,23 @@
+{
+  "server": "constructed: a server that ignores `logprobs` (no logprobs member)",
+  "response": {
+    "id": "x",
+    "object": "chat.completion",
+    "model": "qwen3.5-4b-instruct",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "A"
+        },
+        "finish_reason": "length"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 160,
+      "completion_tokens": 2,
+      "total_tokens": 162
+    }
+  }
+}

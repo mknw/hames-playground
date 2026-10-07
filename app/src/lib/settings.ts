@@ -159,6 +159,13 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   LocalGLM: 16_384,
   // = the `--ctx-size` `make llm-small` serves it with; keep the two in step.
   LocalQwenSmall: 32_768,
+  // #418 T3. The same 4B on the same server, so the same `--ctx-size`; the
+  // decide readout's state is trimmed against this (`limitsFor('decide')`).
+  LocalQwenSmallDecide: 32_768,
+  // #418 T4. Jev's documented state cap ("up to 32k tokens", state + questions):
+  // a REST adapter has no `--ctx-size` to read, so the number is the docs'.
+  // `limitsFor('decide')` reads it and the decision state trimmer trims to it.
+  JevDecide: 32_000,
   // Self-hosted (verda-client.baml) — vLLM was started with
   // `--max-model-len 131072`, so this is the server's hard ceiling on
   // prompt + completion, not a model-family marketing number. An earlier plan
@@ -177,6 +184,8 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   CriticAnthropic: 200_000,
   SynthesizerAnthropic: 200_000,
   DescribeAnthropic: 200_000,
+  // #418 T5. The decide role's explicit verbalized secondary (Sonnet 5 / 4.6, thinking off).
+  DecideAnthropic: 200_000,
 }
 
 /**
@@ -212,6 +221,13 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // Local (local-client.baml — manual wiring only, not in any chain).
   LocalGLM: 2_048,
   LocalQwenSmall: 2_048,
+  // #418 T3. `max_tokens 2`: a first-token readout (the answer letter, then
+  // EOS). 2 rather than the spec's 1 because llama-server b9190 ABORTS on a
+  // repeated identical prompt at `max_tokens: 1` — the full account is on
+  // `LocalQwenSmallDecide` in local-client.baml. A cap-hit is by design here, so
+  // the adapter stamps `hitOutputCap: false` itself (D14); otherwise
+  // `llmCallHitOutputCap` would read every call as truncated.
+  LocalQwenSmallDecide: 2,
   // Self-hosted (verda-client.baml). Mirrors the `max_tokens` declared there;
   // without this entry the truncation retry is blind on every Verda-routed
   // controller turn, which is the failure this map exists for. 4 096 rather
@@ -229,6 +245,8 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // resolveClientForRole(), which returns chain names — compactBulkData
   // derives its describe batch size here (SA-M6).
   DescribeAnthropic: 16_384, // = AnthropicHaiku45, the chain's only leaf
+  // #418 T5: the chain's weakest leaf, AnthropicSonnet46NoThink (Sonnet5NoThink is 32 768).
+  DecideAnthropic: 16_384,
 }
 
 // ============================================================================
@@ -294,7 +312,22 @@ export const CLIENT_PRICING: Record<string, { inPerMTok: number; outPerMTok: num
  * rather than a guess about the URL: a URL check would silently re-price the
  * same call differently on two hosts.
  */
-export const LOCAL_PRICED_CLIENTS: ReadonlySet<string> = new Set(['LocalQwenSmall', 'LocalGLM'])
+export const LOCAL_PRICED_CLIENTS: ReadonlySet<string> = new Set([
+  'LocalQwenSmall',
+  'LocalQwenSmallDecide',
+  'LocalGLM',
+])
+
+/**
+ * The fourth basis: clients whose price is what the PROVIDER reported on the
+ * response — Jev's `usage.cost`, which is USD (#418 T4). Output tokens are free
+ * and the docs state no per-input list price, so an invented per-MTok rate would
+ * render as a confident figure; the reported figure converts once at
+ * `EUR_PER_USD`, like every token-priced client. Neither time-priced (no
+ * duration basis, so no `≥` floor) nor unknown (the provider measured it).
+ * Disjoint from the other three sets (`pricing-eur.test.ts`).
+ */
+export const PROVIDER_COST_CLIENTS: ReadonlySet<string> = new Set(['JevDecide'])
 
 /**
  * The one BAML client billed by wall-clock rather than by token.
@@ -384,8 +417,9 @@ export interface CostEstimateEur {
  * rather than as zero — an invented figure is worse than an absent one.
  *
  * Returns undefined when:
- *  - the client is in none of {@link CLIENT_PRICING}, {@link TIME_PRICED_CLIENT}
- *    or {@link LOCAL_PRICED_CLIENTS}, or
+ *  - the client is in none of {@link CLIENT_PRICING}, {@link TIME_PRICED_CLIENT},
+ *    {@link LOCAL_PRICED_CLIENTS} or {@link PROVIDER_COST_CLIENTS}, or
+ *  - it IS provider-priced but the provider reported no cost, or
  *  - it IS time-priced but the call was not measured (`durationMs` absent).
  *    A time bill with no time is not a free call; BAML reports no duration when
  *    it measured none, and a 0 there would read as a call that cost nothing on
@@ -399,7 +433,13 @@ export interface CostEstimateEur {
 export function estimateLlmCostEur(
   tokens: TokenBuckets,
   clientName?: string,
-  opts?: { durationMs?: number; eurPerUsd?: number; eurPerHour?: number },
+  opts?: {
+    durationMs?: number
+    eurPerUsd?: number
+    eurPerHour?: number
+    /** The provider-reported cost in USD — read only for {@link PROVIDER_COST_CLIENTS}. */
+    providerCostUsd?: number
+  },
 ): CostEstimateEur | undefined {
   // Checked before the two priced paths: a locally-served call has no bill on
   // either basis, and €0.00 with a basis that says so is a different statement
@@ -407,6 +447,13 @@ export function estimateLlmCostEur(
   // fabricated saving.
   if (clientName !== undefined && LOCAL_PRICED_CLIENTS.has(clientName)) {
     return { costEur: 0, noCacheEur: 0, basis: 'local' }
+  }
+  if (clientName !== undefined && PROVIDER_COST_CLIENTS.has(clientName)) {
+    // A provider that reported no cost leaves the figure unknown: absent is not free.
+    const usd = opts?.providerCostUsd
+    if (usd === undefined || !Number.isFinite(usd) || usd < 0) return undefined
+    const costEur = usd * (opts?.eurPerUsd ?? DEFAULT_EUR_PER_USD)
+    return { costEur, noCacheEur: costEur, basis: 'provider' }
   }
   if (clientName === TIME_PRICED_CLIENT) {
     const durationMs = opts?.durationMs

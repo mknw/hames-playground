@@ -88,6 +88,43 @@ export type {
   HitlAnswer,
   HitlAnswers,
 
+  // Decisions (#418)
+  DecisionLabel,
+  DecisionSpec,
+  DecisionSetSpec,
+  DecisionMethod,
+  AbstainReason,
+  Decision,
+  DecisionPolicy,
+  DecisionCalibrationEntry,
+  DecideInput,
+  DecideResult,
+  DecideFn,
+  DecideAllFn,
+  DecideServing,
+  DecisionMadeEventData,
+
+  // Memory recall (#419)
+  MemoryKind,
+  MemoryCandidate,
+  MemoryStore,
+  MemoryExtractedCandidate,
+  MemoryExtractInput,
+  MemoryExtractFn,
+  MemoryEmbedder,
+  MemoryNeighbor,
+  MemoryInsertRow,
+  MemorySourceRow,
+  MemoryWriteTx,
+  MemoryWriteStore,
+  MemoryWriteAction,
+  MemoryWrittenEventData,
+  MemoryQueryEmbedder,
+  MemoryWakeWait,
+  MemorySkipReason,
+  MemoryGateRecord,
+  MemoryRecalledEventData,
+
   // LLM Observability
   LLMCallData,
   LLMCallRecord,
@@ -102,6 +139,7 @@ export type {
 } from './types'
 
 export { DEFAULT_TRACK_HISTORY, DEFAULT_COMMIT_STRATEGY, DEFAULT_ERROR_SEVERITY } from './types'
+export { MAX_DECISION_LABELS } from './types'
 
 // The LLM call envelope's error class is a runtime value (instanceof checks in
 // the patterns) — exported from the barrel for the first time in Lane A3.
@@ -172,6 +210,9 @@ export {
   harnessHasRedisRetriever,
   declaresWorkspaceSync,
   harnessUsesSyncWorkspace,
+  harnessDecisionKeys,
+  harnessCalibratedDecisionKeys,
+  harnessUsesMemory,
 } from './pattern-capabilities'
 
 // ============================================================================
@@ -268,6 +309,75 @@ export {
 
 // EventView
 export { EventViewImpl, createEventView } from './patterns'
+
+// Memory recall (#419): the chain step, its settings and the block formatter.
+export {
+  memoryRecall,
+  formatMemoryContext,
+  MEMORY_RECALL_KEY,
+  MEMORY_RECALL_SPEC,
+  type MemoryRecallConfig,
+  type MemoryRecallData,
+  type MemoryRecallSettings,
+  type MemoryGateSettings,
+  type MemoryRecallLabel,
+  type RecalledMemory,
+} from './patterns'
+
+// Memory store (#419 M2): the post-reply step and its pure acceptance rules. A
+// host calls `settleMemory` from inside its post-turn continuation, before it
+// saves; the acceptance rules are exported so a host can reuse them (a
+// compaction pass applies the same ones).
+export {
+  settleMemory,
+  resolveStoreRoute,
+  readStoreWindow,
+  MEMORY_STORE_SET,
+  MEMORY_STORE_KEY,
+  MEMORY_STORE_FALLBACKS,
+  MEMORY_MERGE_SPEC,
+  MEMORY_MERGE_KEY,
+  type MemoryStoreConfig,
+  type MemoryStoreSettings,
+  type MemoryStoreGateSettings,
+  type MemoryStoreSkip,
+  type MemorySettleReport,
+  type MemoryStoreFields,
+  type MemoryTarget,
+  type MemoryConfirm,
+  type MemorySensitivity,
+  type MemoryMergeLabel,
+  type RejectRule,
+  type StoreRoute,
+} from './memory-store.server'
+export {
+  acceptCandidate,
+  identifiersIn,
+  MEMORY_KINDS,
+  MAX_MEMORY_CHARS,
+  MIN_EVIDENCE_CHARS,
+  type Acceptance,
+  type AcceptanceRule,
+} from './memory-acceptance.server'
+
+// Decisions (#418): the user-facing half of the typedDecision seam. The pure
+// scoring helpers (`scoreDecision`, `sumLabelMass`, …) stay on './patterns'.
+export {
+  typedDecision,
+  decisionRouter,
+  decide,
+  decideFields,
+  evaluateDecision,
+  assertDecisionSetSpec,
+  DECISION_ROUTER_KEY,
+  type TypedDecisionConfig,
+  type TypedDecisionData,
+  type DecisionRouterConfig,
+  type DecisionCall,
+  type DecideFieldsCall,
+  type DecideOptions,
+  type EvaluatedDecision,
+} from './patterns'
 
 // ============================================================================
 // Context Helpers

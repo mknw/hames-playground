@@ -74,12 +74,29 @@ client<llm> SynthesizerAnthropic {
   }
 }
 
+// The decide role's explicit SECONDARY (#418, slice T5) — `DecideVerbalized`
+// and nothing else declares it, and it is deliberately NOT part of the
+// DescribeAnthropic block below: that chain's canonical list is "what rides
+// the cheap tier", and a decision gate must never be moved by re-pointing it.
+// Sonnet-tier with thinking off, like the controller: a structured answer
+// (a probability per option), no reasoning to expose, and no Haiku backstop on
+// structured output. Reached only when the decide role is RE-NAMED onto it —
+// `configureDecideSecondary` on the Anthropic tier, a consumer client or a
+// per-run `clientOverride` naming it; the role's default there is the Jev
+// adapter (T4), which the secondary replaces when named.
+client<llm> DecideAnthropic {
+  provider fallback
+  options {
+    strategy [AnthropicSonnet5NoThink, AnthropicSonnet46NoThink]
+  }
+}
+
 // The cheap tier — and THE canonical list of what rides it. Every other
 // mention (local-client.baml, clients.server.ts, CLAUDE.md, models/README.md)
 // points here instead of repeating a subset that goes stale; three of them
 // already had three different incomplete subsets.
 //
-// SEVEN functions declare `client DescribeAnthropic`. Six are the `describe`
+// NINE functions declare `client DescribeAnthropic`. Eight are the `describe`
 // role, all summarization-shaped:
 //
 //   ResultDescribe             describe.baml         per-tool-result summary
@@ -88,8 +105,10 @@ client<llm> SynthesizerAnthropic {
 //   CompactIntent              compact-intent.baml   cross-turn intent compaction
 //   RetrieveQuery              retrieve-query.baml   the retriever's query rewrite
 //   ReferenceSelector          with-references.baml  the citation picker
+//   ExtractMemory              memory.baml           withMemory's candidate writer (#419)
+//   CompactMemories            memory.baml           withMemory's cluster merge (#419)
 //
-// The seventh is the `screen` role, and it is NOT summarization:
+// The ninth is the `screen` role, and it is NOT summarization:
 //
 //   ScreenUntrustedContent     injection-screen.baml withInjectionGuard's opt-in
 //                                                    LLM layer
@@ -101,8 +120,8 @@ client<llm> SynthesizerAnthropic {
 // tier moved the screen deliberately (its own line in VERDA_CLIENT_BY_ROLE, its
 // own eval scenario): a deliberate move is not the accident this warns about,
 // and this block is what the Anthropic tier still runs. To move the describe
-// tier, rewrite its SIX `client DescribeAnthropic` lines individually, or
-// declare a separate chain (e.g. `DescribeLocal`) and point those six at it.
+// tier, rewrite its EIGHT `client DescribeAnthropic` lines individually, or
+// declare a separate chain (e.g. `DescribeLocal`) and point those eight at it.
 // The owned-inference flip is documented on LocalQwenSmall in local-client.baml.
 client<llm> DescribeAnthropic {
   provider fallback

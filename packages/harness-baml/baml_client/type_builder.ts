@@ -33,6 +33,8 @@ export default class TypeBuilder {
     
     CriticResult: ClassViewer<'CriticResult', "is_sufficient" | "explanation" | "suggested_approach">;
     
+    DecideOption: ClassViewer<'DecideOption', "letter" | "description">;
+    
     DescribeBatchResult: ClassViewer<'DescribeBatchResult', "summaries">;
     
     DescribeItemSummary: ClassViewer<'DescribeItemSummary', "id" | "summary">;
@@ -76,7 +78,7 @@ export default class TypeBuilder {
     constructor() {
         this.tb = new _TypeBuilder({
           classes: new Set([
-            "Attempt","ControllerAction","CriticResult","DescribeBatchResult","DescribeItemSummary","DescribeTarget","ExpandedRef","FewShot","LoopTurn","Message","PlanResult","PriorResult","ReferenceCandidate","ReferenceSelection","ReferenceSelectorResult","RouteOption","RoutingResult","ScreenVerdict","ToolCall","ToolCallRequest","ToolDescription","ToolResult",
+            "Attempt","ControllerAction","CriticResult","DecideOption","DescribeBatchResult","DescribeItemSummary","DescribeTarget","ExpandedRef","FewShot","LoopTurn","Message","PlanResult","PriorResult","ReferenceCandidate","ReferenceSelection","ReferenceSelectorResult","RouteOption","RoutingResult","ScreenVerdict","ToolCall","ToolCallRequest","ToolDescription","ToolResult",
           ]),
           enums: new Set([
             
@@ -94,6 +96,10 @@ export default class TypeBuilder {
         
         this.CriticResult = this.tb.classViewer("CriticResult", [
           "is_sufficient","explanation","suggested_approach",
+        ]);
+        
+        this.DecideOption = this.tb.classViewer("DecideOption", [
+          "letter","description",
         ]);
         
         this.DescribeBatchResult = this.tb.classViewer("DescribeBatchResult", [

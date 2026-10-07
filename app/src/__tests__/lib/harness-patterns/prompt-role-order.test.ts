@@ -219,6 +219,23 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
     'ScreenUntrustedContent',
     (o) => () => b.request.ScreenUntrustedContent('web', 'fetched page text', o),
   ],
+  // #418 T3. A system block, then a user block — the order vLLM requires and
+  // the Anthropic path would silently rewrite. The decide readout is routed to
+  // llama.cpp today, which is lenient about system placement, so the vLLM rule
+  // is exactly the one this pin must hold ahead of the day it is not.
+  [
+    'Decide',
+    (o) => () =>
+      b.request.Decide(
+        'state',
+        'which?',
+        [
+          { letter: 'A', description: 'first' },
+          { letter: 'B', description: 'second' },
+        ],
+        o,
+      ),
+  ],
 ]
 
 const roles = (body: Body) => (body.messages ?? []).map((m) => m.role)

@@ -138,3 +138,71 @@ client<llm> LocalQwenSmall {
     }
   }
 }
+
+// The decide role's logprob readout client (#418, slice T3) — the SAME 4B model
+// and the SAME endpoint as `LocalQwenSmall` (`SMALL_LLM_BASE_URL`), declared
+// as its own client because the two roles want opposite shapes of request:
+//
+//   * `Decide` is a FIRST-TOKEN readout. `logprobs true` + `top_logprobs 20` ask
+//     the server for the distribution over the FIRST generated token — the
+//     answer letter — and the adapter reads that position only (`content[0]`).
+//     20 is
+//     vLLM's default `--max-logprobs` and is `MAX_DECISION_LABELS`
+//     (harness-patterns/types.ts): a spec with more labels than the window can
+//     see is refused at construction, because coverage could never reach 1.
+//     `openai-generic` forwards an unrecognised option into the body verbatim,
+//     which is what puts `logprobs` / `top_logprobs` on the wire;
+//     `verda-body-shape.test.ts` pins both on the rendered request, because a
+//     rename quietly stops sending them and the readout then THROWS at the
+//     first call rather than degrading (`LOGPROB_CLIENTS`, baml-adapters).
+//   * `max_tokens 2`, NOT 1, and the reason is a crash, not tuning. The spec
+//     said 1 (a one-token readout), and the real `make llm-small` server
+//     (llama-server b9190, Qwen3.5-4B-Instruct-Q8_0, the Makefile's flags)
+//     ABORTS when the same prompt is sent twice with `max_tokens: 1` —
+//     `common/common.cpp:1489: failed to remove sequence 2 with p0=164, p1=-1`,
+//     then `Abort trap: 6` — so every later request, `describe` included (the
+//     box is shared), gets an empty reply. Independent of logprobs; the first
+//     call always succeeds, the repeat kills the process; found live in slice
+//     T3 (#418). `max_tokens 2` does not take that path: the model emits the
+//     letter and then EOS (`finish_reason: stop`) and `content[0]` is the same
+//     readout. The one-token constraint was never load-bearing — the adapter
+//     reads position 0 only. A repeated identical decision is ordinary (a
+//     retry, a shadow-mode rerun, an order-swap eval), so "never send the same
+//     prompt twice" was not available as a workaround. Do not lower this to 1
+//     without re-running that repeat against the real server.
+//   * `LocalQwenSmall` is a 2048-token summarizer. Folding logprobs into it
+//     would put a per-token distribution on every describe response and cap a
+//     summary at two tokens.
+//
+// WHO REACHES IT. Only the private tier: `decide: 'LocalQwenSmallDecide'` in
+// `VERDA_CLIENT_BY_ROLE`, spread into the call by `clientOverrideFor('decide')`.
+// The `Decide` function itself declares this client as its default because a
+// BAML function must declare one and this is the only logprob-capable client in
+// the corpus; on the Anthropic tier the adapter never calls `Decide` at all
+// (it selects the transport by the RESOLVED client, not by the function's
+// declaration — `createDecideAdapter`), so the declaration is never the route.
+//
+// THINKING OFF for `LocalQwenSmall`'s reasons, and one that is sharper here: a
+// reasoning block's first token is `<think>`, not the answer letter, so an
+// unsuppressed template would make the readout's coverage zero rather than
+// merely wasteful.
+//
+// Priced on the `local` basis with `LocalQwenSmall` (`LOCAL_PRICED_CLIENTS`),
+// for the same reason: the box has no marginal bill. Moving the 4B onto metered
+// infrastructure means moving BOTH clients, and `pricing-eur.test.ts` pins the
+// two together.
+client<llm> LocalQwenSmallDecide {
+  provider openai-generic
+  options {
+    base_url env.SMALL_LLM_BASE_URL
+    api_key env.SMALL_LLM_API_KEY
+    model "qwen3.5-4b-instruct"
+    max_tokens 2
+    logprobs true
+    top_logprobs 20
+    temperature 0
+    chat_template_kwargs {
+      enable_thinking false
+    }
+  }
+}

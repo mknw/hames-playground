@@ -23,7 +23,7 @@ import { toBamlError } from "@boundaryml/baml"
 import type { Checked, Check } from "./types"
 import type { partial_types } from "./partial_types"
 import type * as types from "./types"
-import type {Attempt, ControllerAction, CriticResult, DescribeBatchResult, DescribeItemSummary, DescribeTarget, ExpandedRef, FewShot, LoopTurn, Message, PlanResult, PriorResult, ReferenceCandidate, ReferenceSelection, ReferenceSelectorResult, RouteOption, RoutingResult, ScreenVerdict, ToolCall, ToolCallRequest, ToolDescription, ToolResult} from "./types"
+import type {Attempt, ControllerAction, CriticResult, DecideOption, DescribeBatchResult, DescribeItemSummary, DescribeTarget, ExpandedRef, FewShot, LoopTurn, Message, PlanResult, PriorResult, ReferenceCandidate, ReferenceSelection, ReferenceSelectorResult, RouteOption, RoutingResult, ScreenVerdict, ToolCall, ToolCallRequest, ToolDescription, ToolResult} from "./types"
 import type TypeBuilder from "./type_builder"
 
 export class LlmResponseParser {
@@ -94,6 +94,29 @@ export class LlmResponseParser {
         __baml_options__?.clientRegistry,
         __env__,
       ) as types.CriticResult
+    } catch (error) {
+      throw toBamlError(error);
+    }
+  }
+  
+  Decide(
+      llmResponse: string,
+      __baml_options__?: { tb?: TypeBuilder, clientRegistry?: ClientRegistry, env?: Record<string, string | undefined> }
+  ): string {
+    try {
+      const __rawEnv__ = __baml_options__?.env ? { ...process.env, ...__baml_options__.env } : { ...process.env };
+      const __env__: Record<string, string> = Object.fromEntries(
+        Object.entries(__rawEnv__).filter(([_, value]) => value !== undefined) as [string, string][]
+      );
+      return this.runtime.parseLlmResponse(
+        "Decide",
+        llmResponse,
+        false,
+        this.ctxManager.cloneContext(),
+        __baml_options__?.tb?.__tb(),
+        __baml_options__?.clientRegistry,
+        __env__,
+      ) as string
     } catch (error) {
       throw toBamlError(error);
     }
@@ -399,6 +422,29 @@ export class LlmStreamParser {
         __baml_options__?.clientRegistry,
         __env__,
       ) as partial_types.CriticResult
+    } catch (error) {
+      throw toBamlError(error);
+    }
+  }
+  
+  Decide(
+      llmResponse: string,
+      __baml_options__?: { tb?: TypeBuilder, clientRegistry?: ClientRegistry, env?: Record<string, string | undefined> }
+  ): string {
+    try {
+      const __rawEnv__ = __baml_options__?.env ? { ...process.env, ...__baml_options__.env } : { ...process.env };
+      const __env__: Record<string, string> = Object.fromEntries(
+        Object.entries(__rawEnv__).filter(([_, value]) => value !== undefined) as [string, string][]
+      );
+      return this.runtime.parseLlmResponse(
+        "Decide",
+        llmResponse,
+        true,
+        this.ctxManager.cloneContext(),
+        __baml_options__?.tb?.__tb(),
+        __baml_options__?.clientRegistry,
+        __env__,
+      ) as string
     } catch (error) {
       throw toBamlError(error);
     }

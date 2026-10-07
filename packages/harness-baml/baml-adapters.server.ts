@@ -52,11 +52,29 @@ import {
   activeCostPricing,
   activeCostRates,
   clientOverrideFor,
+  decisionCalibrationFor,
+  JEV_CLIENTS,
   limitsFor,
+  LOGPROB_CLIENTS,
   maxOutputTokensFor,
+  resolveClientForRole,
 } from './clients.server'
+import {
+  calibrateLabelMass,
+  normalizeLabelMass,
+  sumLabelMass,
+  type TopLogprob,
+} from '@hames-ai/harness-patterns/patterns/typedDecision.server'
 import { notifyLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
+import {
+  MAX_DECISION_LABELS,
+  type DecideFn,
+  type DecideInput,
+  type DecideResult,
+  type DecisionCalibrationEntry,
+  type DecisionMethod,
+} from '@hames-ai/harness-patterns/types'
 import type {
   LLMCallRecord,
   ControllerFn,
@@ -1704,3 +1722,213 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
 // `createLoopControllerAdapter`, and once the tool list rides the seam they
 // took no arguments at all. Agents call `createLoopControllerAdapter()`
 // directly; the domain name was never more than a comment.
+
+// ============================================================================
+// Typed decision — the transport behind the raw `DecideFn` seam (#418, T3)
+// ============================================================================
+
+/** Which transport serves a decide call, by the RESOLVED CLIENT (F1) — never by
+ *  the tier. The table is the whole rule: a `LOGPROB_CLIENTS` member is read
+ *  for token logprobs, a `JEV_CLIENTS` member goes to the Jev REST adapter
+ *  (slice T4), anything else takes the verbalized secondary. Exported so
+ *  `decision-transport-selection` can pin the rule rather than its effects. */
+export function decideTransportFor(client: string): DecisionMethod {
+  if (LOGPROB_CLIENTS.has(client)) return 'logprob'
+  if (JEV_CLIENTS.has(client)) return 'jev'
+  return 'verbalized'
+}
+
+/** What the adapter reports about how the NEXT call for `key` will be served —
+ *  read BEFORE the call by the policy layer: the F3 gate needs the method, the
+ *  F2 cut resolution needs the method and the applied calibration entry. Per
+ *  call, like `limits()`: the tier is a slot of the run frame. */
+export type DecideServing = (key: string) => {
+  readonly method?: DecisionMethod
+  readonly calibration?: DecisionCalibrationEntry
+}
+
+export interface DecideAdapterOptions {
+  /** The transport for a client that is neither logprob-capable nor Jev — the
+   *  explicitly configured verbalized secondary (`DecideVerbalized`, slice T5).
+   *  ABSENT is a real configuration, not an oversight: the adapter then
+   *  rejects with an `LLMCallError` rather than downgrading silently, and the
+   *  policy layer turns that into a fail-closed abstain. */
+  readonly verbalized?: DecideFn
+}
+
+function decideFailure(
+  message: string,
+  variables: Record<string, unknown>,
+  startTime: number,
+  cause?: unknown,
+): LLMCallError {
+  return new LLMCallError(
+    message,
+    extractFailureLLMCallData(undefined, 'Decide', variables, startTime),
+    cause,
+  )
+}
+
+/**
+ * The first generated token's top-logprobs off a raw chat-completions response
+ * body, or `undefined` when the response carries none. llama.cpp and vLLM share
+ * the shape — `choices[0].logprobs.content[0].top_logprobs` — which is why one
+ * reader serves both and why the recorded fixtures of both pin it.
+ */
+export function topLogprobsOf(body: unknown): TopLogprob[] | undefined {
+  const top = (
+    body as {
+      choices?: Array<{
+        logprobs?: { content?: Array<{ top_logprobs?: unknown }> } | null
+      }>
+    }
+  )?.choices?.[0]?.logprobs?.content?.[0]?.top_logprobs
+  if (!Array.isArray(top) || top.length === 0) return undefined
+  const entries = top.filter(
+    (e): e is TopLogprob =>
+      typeof (e as TopLogprob)?.token === 'string' &&
+      typeof (e as TopLogprob)?.logprob === 'number',
+  )
+  return entries.length > 0 ? entries : undefined
+}
+
+/**
+ * `DecideFn` backed by the BAML `Decide` function (private tier) with the
+ * transport chosen by the resolved client (F1).
+ *
+ * THE LOGPROB READOUT. Labels are lettered A.. in display order and the model
+ * answers with a letter; the distribution over its FIRST token is read off the
+ * collector's raw HTTP response, every top-k variant of a letter (`B`, ` B`,
+ * `(B`) is summed as probability mass, a fitted calibration entry is applied
+ * in log space when the host fed one, and the result is renormalised.
+ * `coverage` is the mass the top-k window attributed to a label — the
+ * leftover is `1 − coverage` and `policy.minCoverage` abstains on it.
+ * `calibrated` is true exactly when a fitted entry for `(client, spec.key)`
+ * was applied: a raw softmax is a measured distribution, not a calibrated one,
+ * and a `requireCalibrated` policy on a key with no entry abstains (the case
+ * `harnessDecisionKeys` exists to warn about).
+ *
+ * THE THROW RULE IS NARROW. A client CLAIMED logprob-capable
+ * (`LOGPROB_CLIENTS`) whose response carries no logprobs throws
+ * `LLMCallError` — a misconfiguration worth failing on, never a quiet
+ * fall-through to a text answer. It is not a statement that every decide call
+ * uses `Decide`: any other client takes the injected verbalized secondary, or
+ * rejects when none is wired, and so can never make the Anthropic tier throw
+ * from a logprob check.
+ *
+ * `hitOutputCap` is stamped `false`: `max_tokens: 1` reaches its cap by design
+ * (D14), and an unstamped record would read as a truncation on every call.
+ */
+export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & {
+  serving: DecideServing
+} {
+  const fn = async <L extends string>(input: DecideInput<L>): Promise<DecideResult<L>> => {
+    const startTime = Date.now()
+    const { spec, state } = input
+    const variables = { state, question: spec.question, labels: spec.labels }
+
+    // Resolve the client FIRST and pick the transport by it (F1).
+    const client = resolveClientForRole('decide')
+    const transport = decideTransportFor(client)
+    if (transport === 'verbalized') {
+      if (!options?.verbalized) {
+        throw decideFailure(
+          `No decide transport for client ${client}: it is neither logprob-capable nor a Jev ` +
+            'client and no verbalized secondary is configured. Refusing rather than downgrading ' +
+            'to another provider.',
+          variables,
+          startTime,
+        )
+      }
+      return options.verbalized(input)
+    }
+    if (transport === 'jev') {
+      throw decideFailure(
+        `The Jev transport for ${client} is not built into this package.`,
+        variables,
+        startTime,
+      )
+    }
+
+    // D13: a window of 20 top-logprobs cannot see more than 20 labels, so
+    // coverage could never reach 1 — refused before any request is made.
+    const count = spec.labels.length
+    if (count < 2 || count > MAX_DECISION_LABELS) {
+      throw decideFailure(
+        `Decision ${spec.key} has ${count} labels; the logprob readout takes 2..${MAX_DECISION_LABELS}.`,
+        variables,
+        startTime,
+      )
+    }
+    const letters = spec.labels.map((_, i) => String.fromCharCode(65 + i))
+    const options_ = spec.labels.map((l, i) => ({ letter: letters[i], description: l.description }))
+
+    const { b } = await import('./baml_client')
+    const collector = new Collector('Decide')
+    // THE SPREAD THAT ROUTES THE ROLE (`clientOverrideFor('decide')` is the
+    // only way a call reaches the private tier's client). The bag always holds
+    // `collector`, so the positional trailing slot is never an empty `{}` (#154).
+    let answer: string
+    try {
+      answer = await b.Decide(state, spec.question, options_, {
+        collector,
+        ...clientOverrideFor('decide'),
+      })
+    } catch (e) {
+      throw wrapAsLLMCallError(e, 'Decide', variables, startTime, collector)
+    }
+
+    const last = collector.last
+    const calls = (last?.calls ?? []) as CollectorCall[]
+    const selected = calls.find((c) => c.selected) ?? calls[calls.length - 1]
+    let top: TopLogprob[] | undefined
+    try {
+      top = topLogprobsOf(selected?.httpResponse?.body?.json?.())
+    } catch {
+      top = undefined // absent or malformed body — the same misconfiguration
+    }
+    const served = selected?.clientName
+    if (!top || !served || !LOGPROB_CLIENTS.has(served)) {
+      throw new LLMCallError(
+        `Decide was routed as a logprob read but ${
+          served && !LOGPROB_CLIENTS.has(served)
+            ? `ran on ${served}, which is not in LOGPROB_CLIENTS`
+            : `the response from ${served ?? client} carried no top_logprobs`
+        }. A logprob-capable client that returns none is misconfigured (a server ignoring ` +
+          '`logprobs`, a proxy stripping them); a text answer would be a guess dressed as a distribution.',
+        {
+          ...extractFailureLLMCallData(collector, 'Decide', variables, startTime),
+          hitOutputCap: false,
+        },
+      )
+    }
+
+    const entry = decisionCalibrationFor(served, spec.key)
+    const { mass, coverage } = sumLabelMass(top, letters)
+    const { probs: byLetter } = normalizeLabelMass(calibrateLabelMass(mass, entry), letters)
+    const probs = {} as Record<L, number>
+    spec.labels.forEach((l, i) => {
+      probs[l.id] = byLetter[letters[i]] ?? 0
+    })
+
+    const llmCall = extractLLMCallData(collector, 'Decide', variables, startTime, answer)
+    return {
+      probs,
+      method: 'logprob',
+      calibrated: entry !== undefined,
+      coverage,
+      ...(llmCall && { llmCall: { ...llmCall, hitOutputCap: false } }),
+    }
+  }
+
+  fn.limits = () => limitsFor('decide')
+  fn.serving = (key: string) => {
+    const client = resolveClientForRole('decide')
+    const method = decideTransportFor(client)
+    return {
+      method,
+      ...(method === 'logprob' && { calibration: decisionCalibrationFor(client, key) }),
+    }
+  }
+  return fn
+}

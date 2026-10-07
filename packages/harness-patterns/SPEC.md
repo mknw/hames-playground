@@ -2098,6 +2098,8 @@ without running the harness. `calibratedDecisionKeys` +
 entry exists — and are what a host's per-tier calibration probe warns about
 (#418 T6; `typedDecision` and `decisionRouter` declare it, and only when the
 policy requires it).
+`getEventPreview` renders `decision_made` as `key: label`, or
+`key: abstained (reason) → fallback`; never the question or the state.
 
 ## Memory recall (memoryRecall, #419)
 

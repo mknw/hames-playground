@@ -1440,9 +1440,10 @@ describe('ObservabilityPanel — decision_made', () => {
       label: 'semantic',
       top: 'semantic',
       margin: 0.5,
-      confidence: 0.75,
+      // K = 2: confidence = 2·0.75 − 1 = 0.5 (what `scoreDecision` produces).
+      confidence: 0.5,
       abstained: false,
-      policy: { fallback: 'semantic', minConfidence: 0.6 },
+      policy: { fallback: 'semantic', minConfidence: 0.4 },
       method: 'logprob',
       calibrated: true,
       stateChars: 1234,
@@ -1470,7 +1471,50 @@ describe('ObservabilityPanel — decision_made', () => {
     expect(widths).toEqual(['25%', '75%'])
     const cuts = [...panel.querySelectorAll<HTMLElement>('[data-role="decision-cut"]')]
     expect(cuts).toHaveLength(2)
-    expect(cuts[0].style.left).toBe('60%')
+    // minConfidence 0.4 at K = 2 is p ≥ (0.4·1 + 1)/2 = 70%, NOT 40%: the policy
+    // compares confidence = (K·p − 1)/(K − 1), the bars are probabilities.
+    expect(cuts[0].style.left).toBe('70%')
+  })
+
+  it('draws the cut at the probability equivalent of minConfidence: 80% at K = 2, c = 0.6', () => {
+    // 0.75 vs 0.25 has confidence 0.5 < 0.6, so it abstains — and the winning
+    // bar (75%) must lie LEFT of the line, or the display contradicts the chip.
+    const panel = open(
+      decision({
+        abstained: true,
+        reason: 'low-confidence',
+        top: null,
+        policy: { fallback: 'semantic', minConfidence: 0.6 },
+      }),
+    )
+    const cut = panel.querySelector<HTMLElement>('[data-role="decision-cut"]')!
+    expect(cut.style.left).toBe('80%')
+    expect(cut.title).toContain('p ≥ 80.0%')
+    expect(parseFloat(cut.style.left)).toBeGreaterThan(75)
+  })
+
+  it('draws the cut at 66.7% for K = 3, c = 0.5', () => {
+    const panel = open(
+      decision({
+        labels: [
+          { id: 'a', description: 'a' },
+          { id: 'b', description: 'b' },
+          { id: 'c', description: 'c' },
+        ],
+        probs: { a: 0.5, b: 0.3, c: 0.2 },
+        policy: { fallback: 'a', minConfidence: 0.5 },
+      }),
+    )
+    expect(panel.querySelector<HTMLElement>('[data-role="decision-cut"]')!.style.left).toBe('66.7%')
+  })
+
+  it('shows min margin beside min confidence when the policy declares one', () => {
+    const withMargin = open(
+      decision({ policy: { fallback: 'semantic', minConfidence: 0.4, minMargin: 0.3 } }),
+    )
+    expect(withMargin.textContent).toContain('min margin 0.3')
+    document.body.innerHTML = ''
+    expect(open(decision()).textContent).not.toContain('min margin')
   })
 
   it('draws no cut when the policy declares none', () => {

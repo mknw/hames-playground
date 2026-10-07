@@ -391,9 +391,13 @@ const ContentSanitizedDetail = (props: { data: ContentSanitizedEventData }) => (
  * decision was asked over (`stateChars` is the SIZE), so there is nothing here
  * to leak — the text lives only in the LLM tabs above, as every prompt does.
  *
- * The cut drawn is the policy AS DECLARED. A calibration entry's own fitted
- * cuts win at decision time (F2) but are not on the event, so a bar can sit past
- * the drawn line and still abstain; the chip's reason says which cut it was.
+ * The line is the PROBABILITY equivalent of the policy's `minConfidence` for K
+ * labels, drawn from the policy as declared. The policy compares `confidence`
+ * = (K·p − 1)/(K − 1), not p, so the bars are crossed at p* = (c·(K − 1) + 1)/K
+ * (80% at K = 2, c = 0.6). Two other cuts are NOT on the line and can abstain a
+ * bar that clears it: `minMargin` (a gap between two bars, shown in the footer
+ * instead) and a calibration entry's own fitted cuts, which win at decision time
+ * (F2) but are not on the event. The chip's reason says which cut it was.
  */
 const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
   const pct = (p: number) => `${(Math.max(0, Math.min(1, p)) * 100).toFixed(1)}%`
@@ -407,6 +411,12 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
         ? 'verbalized, uncalibrated'
         : 'uncalibrated'
   const cut = () => props.data.policy.minConfidence
+  const margin = () => props.data.policy.minMargin
+  // minConfidence as a probability: confidence = (K·p − 1)/(K − 1) ⇒ p = (c·(K − 1) + 1)/K.
+  const cutProb = () => {
+    const k = props.data.labels.length
+    return ((cut() as number) * (k - 1) + 1) / k
+  }
 
   return (
     <div flex="~ col" gap="3" data-role="decision-made">
@@ -488,13 +498,14 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
                   <Show when={cut() !== undefined}>
                     <div
                       data-role="decision-cut"
+                      title={`min confidence ${cut()} ⇒ p ≥ ${pct(cutProb())}`}
                       bg="ui-danger"
                       style={{
                         position: 'absolute',
                         top: '-2px',
                         bottom: '-2px',
                         width: '2px',
-                        left: pct(cut() as number),
+                        left: pct(cutProb()),
                       }}
                     />
                   </Show>
@@ -525,6 +536,11 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
         <Show when={cut() !== undefined}>
           <span>
             min confidence <span font="mono">{cut()}</span>
+          </span>
+        </Show>
+        <Show when={margin() !== undefined}>
+          <span>
+            min margin <span font="mono">{margin()}</span>
           </span>
         </Show>
         <span>

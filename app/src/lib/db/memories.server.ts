@@ -16,9 +16,10 @@
  * comes from the pgvector extension). That statement is the one DDL in the
  * app that can fail for an ENVIRONMENT reason rather than a schema reason:
  * the Postgres image may simply not have the extension installed (the compose
- * and CI images are plain `postgres:16` until #419 M8 moves them to
- * `pgvector/pgvector`). Running it from the shared init would take the whole
- * database down with it.
+ * image is plain `postgres:16` until #419 M8 moves it to `pgvector/pgvector`;
+ * CI's `test · postgres` service already uses the pgvector image, and the
+ * private-Postgres guidance in `docs/testing/pyramid.md` points at it too).
+ * Running it from the shared init would take the whole database down with it.
  *
  * ## The missing-extension fail policy (named, per the spec)
  *

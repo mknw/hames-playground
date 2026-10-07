@@ -74,9 +74,24 @@ const OWNER: Record<string, string> = {
   users: 'lib/auth/users.server.ts',
 }
 
-/** `FROM users`, `INTO conversations`, `UPDATE routines`, `JOIN auth_sessions`. */
+/** `FROM users`, `INTO conversations`, `UPDATE routines`, `JOIN auth_sessions`,
+ *  `DELETE FROM memory_sources`.
+ *
+ *  The scan is wider than the encrypted-content list: `ENCRYPTED_TABLES` is
+ *  what is encrypted, but the seam claim is "only the owning repositories run
+ *  SQL against the encrypted tables AND their companions" — `memory_sources`
+ *  holds no ciphertext (every column is a plaintext identifier, classified in
+ *  `memories.server.ts`'s COLUMN_CLASSIFICATION), yet it is personal data the
+ *  same fail-policy and owner-scoping rules protect, and its spec cites the
+ *  same seam. Without it here, a second module could read or write the
+ *  provenance table unnoticed (#498 review finding 1, mutation-verified:
+ *  a `DELETE FROM memory_sources` elsewhere stayed green on the narrower
+ *  scan). The read-path test below iterates `migrate-encryption`'s own
+ *  specs, which only name the content-bearing tables — so no OWNER entry
+ *  exists or is needed for the companions. */
+const SEAM_SCAN_TABLES = [...ENCRYPTED_TABLES, 'memory_sources'] as const
 const SQL_REFERENCE = new RegExp(
-  String.raw`\b(?:FROM|INTO|UPDATE|JOIN)\s+(${ENCRYPTED_TABLES.join('|')})\b`,
+  String.raw`\b(?:FROM|INTO|UPDATE|JOIN)\s+(${SEAM_SCAN_TABLES.join('|')})\b`,
   'i',
 )
 

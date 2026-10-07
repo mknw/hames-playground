@@ -63,6 +63,11 @@ export const JEV_DEFAULT_URL = 'https://openrouter.ai/api/alpha/decisions'
  *  latency, and an unbounded `fetch` has no timeout at all. */
 const JEV_TIMEOUT_MS = 30_000
 
+/** How far a field's probabilities may sit from summing to 1 before the answer
+ *  is refused (rounding is absorbed by the normalising division; a missing
+ *  label or an out-of-range value is not rounding). */
+const JEV_MASS_TOLERANCE = 0.01
+
 interface JevAnswer {
   readonly choice?: unknown
   readonly confidence?: unknown
@@ -279,15 +284,17 @@ export function createJevTransport(options: JevTransportOptions = {}): {
       const raw = {} as Record<string, number>
       for (const l of labels) {
         const p = probsIn[l.id]
-        if (p !== undefined && (typeof p !== 'number' || !Number.isFinite(p) || p < 0)) {
-          throw new LLMCallError(`Jev answered an invalid probability for "${n}.${l.id}".`, record)
+        if (typeof p !== 'number' || !Number.isFinite(p) || p < 0 || p > 1) {
+          throw new LLMCallError(`Jev answered no valid probability for "${n}.${l.id}".`, record)
         }
-        raw[l.id] = p ?? 0
-        sum += raw[l.id]
+        raw[l.id] = p
+        sum += p
       }
-      if (!(sum > 0)) {
+      // Fail CLOSED: an answer that omits a label or whose mass is not ~1 must
+      // not be renormalised into certainty — that would clear every cut.
+      if (Math.abs(sum - 1) > JEV_MASS_TOLERANCE) {
         throw new LLMCallError(
-          `Jev's probabilities for field "${n}" name none of its labels.`,
+          `Jev's probabilities for field "${n}" sum to ${sum} over its labels, not 1.`,
           record,
         )
       }

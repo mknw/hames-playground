@@ -15,7 +15,9 @@
  *   jev-cost-eur   — the provider-reported USD converts once at `EUR_PER_USD`;
  *                    the fourth pricing set (disjointness is in pricing-eur)
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createServer, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
 
 import '../../../lib/inference/config.server'
 import {
@@ -91,13 +93,33 @@ const JEV_BODY = {
 // the lock must refuse before any connection is attempted.
 process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
 process.env.VERDA_INFERENCE_API_KEY = 'unused'
-process.env.SMALL_LLM_BASE_URL = 'http://127.0.0.1:1/v1'
+
+// The BAML channel: a counting listener standing in for the private tier's 4B
+// (`SMALL_LLM_BASE_URL`). A Jev failure must send NOTHING there either — the
+// global-`fetch` count cannot see a call that rides the BAML runtime.
+let smallServer: Server
+let smallRequests = 0
+beforeAll(async () => {
+  smallServer = createServer((req, res) => {
+    req.resume()
+    req.on('end', () => {
+      smallRequests++
+      res.statusCode = 500
+      res.end('{}')
+    })
+  })
+  await new Promise<void>((r) => smallServer.listen(0, '127.0.0.1', r))
+  process.env.SMALL_LLM_API_KEY = 'unused'
+  process.env.SMALL_LLM_BASE_URL = `http://127.0.0.1:${(smallServer.address() as AddressInfo).port}/v1`
+})
+afterAll(() => new Promise<void>((r) => smallServer.close(() => r())))
 
 let requests: Array<{ url: string; init: RequestInit }> = []
 let respond: () => Promise<Response> = async () => Response.json(JEV_BODY)
 
 beforeEach(() => {
   requests = []
+  smallRequests = 0
   respond = async () => Response.json(JEV_BODY)
   process.env.OPENROUTER_API_KEY = 'or-test-key'
   delete process.env.JEV_DECISIONS_URL
@@ -163,15 +185,16 @@ describe('the wire shape — ONE request carries every field as a typed question
     expect(r.fields.recall.probs).toEqual({ yes: 0.8, no: 0.2 })
   })
 
-  it('renormalises the probabilities and reports an absent label as 0', async () => {
+  it('normalises rounding: a distribution summing to ~1 is used, not refused', async () => {
     respond = async () =>
       Response.json({
         ...JEV_BODY,
-        answers: { 'memory.recall': { type: 'choice', probabilities: { yes: 3 } } },
+        answers: { 'memory.recall': { type: 'choice', probabilities: { yes: 0.6, no: 0.395 } } },
       })
     const { decide } = await transport()
     const r = await decide({ spec: SPEC, state: 's' })
-    expect(r.probs).toEqual({ yes: 1, no: 0 })
+    expect(r.probs.yes + r.probs.no).toBeCloseTo(1, 12)
+    expect(r.probs.yes).toBeCloseTo(0.6 / 0.995, 12)
     // No confidence on the answer: not claimed calibrated.
     expect(r.calibrated).toBe(false)
   })
@@ -257,6 +280,22 @@ describe('jev-tier-lock — Jev is a public provider and may never take a privat
     expect(out.decision).toMatchObject({ abstained: true, reason: 'error', label: 'no' })
     expect(requests).toHaveLength(0)
   })
+
+  it('the deployment-default private tier (USE_VERDA_INFERENCE=1, no run frame) is refused at both layers', async () => {
+    process.env.USE_VERDA_INFERENCE = '1'
+    try {
+      const { decideAll } = await transport()
+      await expect(decideAll({ spec: SET, state: 's' })).rejects.toThrow(/private inference tier/)
+      const clients = await import('@hames-ai/harness-baml/clients.server')
+      clients.configureConsumerClients((role) =>
+        role === 'decide' ? { client: 'JevDecide' } : undefined,
+      )
+      await expect((await adapter())({ spec: SPEC, state: 's' })).rejects.toThrow(/private/)
+      expect(requests).toHaveLength(0)
+    } finally {
+      delete process.env.USE_VERDA_INFERENCE
+    }
+  })
 })
 
 describe('jev-fallback — fail closed, never a downgrade to another provider', () => {
@@ -265,6 +304,10 @@ describe('jev-fallback — fail closed, never a downgrade to another provider', 
     [
       'a non-2xx',
       async () => new Response('{"error":{"code":502,"message":"upstream"}}', { status: 502 }),
+    ],
+    [
+      'a non-2xx carrying an answer-shaped body',
+      async () => Response.json(JEV_BODY, { status: 502 }),
     ],
     ['a body that is not JSON', async () => new Response('<html>', { status: 200 })],
     [
@@ -285,6 +328,30 @@ describe('jev-fallback — fail closed, never a downgrade to another provider', 
         Response.json({
           ...JEV_BODY,
           answers: { 'memory.recall': { probabilities: { other: 1 } } },
+        }),
+    ],
+    [
+      'a label omitted (mass 0.55)',
+      async () =>
+        Response.json({
+          ...JEV_BODY,
+          answers: { 'memory.recall': { probabilities: { yes: 0.55 } } },
+        }),
+    ],
+    [
+      'mass that does not sum to 1 (0.5)',
+      async () =>
+        Response.json({
+          ...JEV_BODY,
+          answers: { 'memory.recall': { probabilities: { yes: 0.3, no: 0.2 } } },
+        }),
+    ],
+    [
+      'a probability above 1',
+      async () =>
+        Response.json({
+          ...JEV_BODY,
+          answers: { 'memory.recall': { probabilities: { yes: 3, no: 0 } } },
         }),
     ],
     [
@@ -311,8 +378,29 @@ describe('jev-fallback — fail closed, never a downgrade to another provider', 
       expect(out.decision).toMatchObject({ label: 'no', abstained: true, reason: 'error' })
       expect(out.error).toBeDefined()
       expect(requests.map((q) => q.url)).toEqual(['https://openrouter.ai/api/alpha/decisions'])
+      // … and nothing rode the BAML runtime to the private tier's 4B either.
+      expect(smallRequests).toBe(0)
     },
   )
+
+  it('a non-2xx is refused on its STATUS, even with an answer-shaped body', async () => {
+    respond = async () => Response.json(JEV_BODY, { status: 502 })
+    const out = await evaluateDecision({
+      decide: await adapter(),
+      spec: SPEC,
+      state: 's',
+      policy: { fallback: 'no' },
+    })
+    expect(out.decision).toMatchObject({ label: 'no', abstained: true, reason: 'error' })
+    expect(out.error?.error).toMatch(/HTTP 502/)
+    expect(requests).toHaveLength(1)
+  })
+
+  it('every request carries a timeout signal (an unbounded fetch has none)', async () => {
+    const { decideAll } = await transport()
+    await decideAll({ spec: SET, state: 's' })
+    expect(requests[0].init.signal).toBeInstanceOf(AbortSignal)
+  })
 
   it('a missing key is a refusal before any request', async () => {
     delete process.env.OPENROUTER_API_KEY

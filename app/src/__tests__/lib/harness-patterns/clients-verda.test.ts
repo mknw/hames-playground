@@ -405,8 +405,10 @@ describe('the switched-function set follows the routed roles', () => {
     expect([...TIER_SWITCHED_FUNCTIONS].sort()).toEqual([
       'ActorController',
       'CompactIntent',
+      'CompactMemories',
       'Critic',
       'Decide',
+      'ExtractMemory',
       'GenerateConversationTitle',
       'LoopController',
       'Planner',
@@ -423,10 +425,10 @@ describe('the switched-function set follows the routed roles', () => {
     // because it really does run on both, so excluding it would understate the
     // Anthropic window by the one call that is slowest per character.
     expect(TIER_SWITCHED_FUNCTIONS.has('ScreenUntrustedContent')).toBe(true)
-    // Fourteen: every function declared in the one `baml_src/`. The filter that reads
+    // Sixteen: every function declared in the one `baml_src/`. The filter that reads
     // this set therefore excludes nothing today, and the honest way to pin
     // that is to say so rather than to let a subset look deliberate.
-    expect(TIER_SWITCHED_FUNCTIONS.size).toBe(14)
+    expect(TIER_SWITCHED_FUNCTIONS.size).toBe(16)
   })
 
   it('lists every function that declares the describe chain, not a subset', async () => {
@@ -440,7 +442,7 @@ describe('the switched-function set follows the routed roles', () => {
     // `screen` shares the chain in BAML (the separation lives only in
     // `CLIENT_BY_ROLE`), so `injection-screen.baml` is excluded BY FILE — the
     // exclusion is the assertion, not an accounting convenience.
-    // ONE corpus: the six describe functions AND the screen are declared in
+    // ONE corpus: the eight describe functions AND the screen are declared in
     // `packages/harness-baml/baml_src`, so the scan has a single root and the
     // by-file exclusion is the only thing keeping the screen out of the six.
     const bamlDir = path.resolve(process.cwd(), '../packages/harness-baml/baml_src')
@@ -461,7 +463,7 @@ describe('the switched-function set follows the routed roles', () => {
     expect(declaringDescribe.sort()).toEqual([...SWITCHED_FUNCTIONS_BY_ROLE.describe!].sort())
     // Guard against a regex that matched nothing: the comparison above would
     // then pass only if the map were empty too.
-    expect(declaringDescribe).toHaveLength(6)
+    expect(declaringDescribe).toHaveLength(8)
   })
 
   it('is the same set whether the flag is on or off', async () => {
@@ -714,5 +716,24 @@ describe('every routed role has a wired call site', () => {
     expect(code.match(/b\.Decide\(/g) ?? []).toHaveLength(1)
     expect(callArgs(code, 'b.Decide(')).toContain("clientOverrideFor('decide')")
     expect(code.match(/clientOverrideFor\('decide'\)/g) ?? []).toHaveLength(1)
+  })
+
+  it('routes both memory functions through the describe spread, on each call', async () => {
+    // `ExtractMemory` and `CompactMemories` (#419 M9) are `describe`-role calls
+    // that carry the user's own words, so on a private-tier turn they must land
+    // on the 4B and nowhere public. The per-FILE scan above cannot guard them:
+    // `baml-patterns.server.ts` already spreads `clientOverrideFor('describe')`
+    // for two other functions, so deleting either memory call's spread would
+    // leave that file green. Pinned ON each call's argument list by balanced
+    // parens, and exactly one call site each.
+    enable()
+    const { clientOverrideFor } = await load()
+    expect(clientOverrideFor('describe')).toEqual({ client: 'LocalQwenSmall' })
+
+    const code = corpus()
+    for (const fn of ['ExtractMemory', 'CompactMemories']) {
+      expect(code.match(new RegExp(`b\\.${fn}\\(`, 'g')) ?? [], fn).toHaveLength(1)
+      expect(callArgs(code, `b.${fn}(`), fn).toContain("clientOverrideFor('describe')")
+    }
   })
 })

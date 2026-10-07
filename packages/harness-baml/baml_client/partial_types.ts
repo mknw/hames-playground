@@ -20,7 +20,7 @@ $ pnpm add @boundaryml/baml
 
 import type { Image, Audio, Pdf, Video } from "@boundaryml/baml"
 import type { Checked, Check } from "./types"
-import type {  Attempt,  ControllerAction,  CriticResult,  DecideOption,  DescribeBatchResult,  DescribeItemSummary,  DescribeTarget,  ExpandedRef,  FewShot,  LoopTurn,  Message,  PlanResult,  PriorResult,  ReferenceCandidate,  ReferenceSelection,  ReferenceSelectorResult,  RouteOption,  RoutingResult,  ScreenVerdict,  ToolCall,  ToolCallRequest,  ToolDescription,  ToolResult } from "./types"
+import type {  Attempt,  CompactedMemory,  ControllerAction,  CriticResult,  DecideOption,  DescribeBatchResult,  DescribeItemSummary,  DescribeTarget,  ExpandedRef,  ExtractedMemory,  FewShot,  LoopTurn,  MemoryMember,  Message,  PlanResult,  PriorResult,  ReferenceCandidate,  ReferenceSelection,  ReferenceSelectorResult,  RouteOption,  RoutingResult,  ScreenVerdict,  ToolCall,  ToolCallRequest,  ToolDescription,  ToolResult } from "./types"
 import type * as types from "./types"
 
 /******************************************************************************
@@ -45,6 +45,10 @@ export namespace partial_types {
       result?: string | null
       error?: string | null
       feedback?: string | null
+    }
+    export interface CompactedMemory {
+      content?: string | null
+      evidence?: string | null
     }
     /**
      * Action decision returned by loop and actor controllers
@@ -90,6 +94,11 @@ export namespace partial_types {
       ref_id?: string | null
       content?: string | null
     }
+    export interface ExtractedMemory {
+      kind?: string | null
+      content?: string | null
+      evidence?: string | null
+    }
     /**
      * A canonical example of how the agent should pick a tool for a given user request.
  * Few-shots are domain-specific — pass at config time on a per-route basis (e.g., a
@@ -112,6 +121,11 @@ export namespace partial_types {
       additional_calls?: ToolCallRequest[] | null
       tool_result?: ToolResult | null
       expansions?: ExpandedRef[] | null
+    }
+    export interface MemoryMember {
+      content?: string | null
+      evidence?: string | null
+      last_seen?: string | null
     }
     /**
      * Conversation message for history context

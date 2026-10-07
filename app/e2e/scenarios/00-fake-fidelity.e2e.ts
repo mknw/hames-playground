@@ -102,7 +102,7 @@ beforeAll(async () => {
     result: 'rows',
   }
   renderers = {
-    Router: () => rq('Router')('m', [{ name: 'neo4j', description: 'd' }], [], via),
+    Router: () => rq('Router')('m', [{ name: 'neo4j', description: 'd' }], [], null, via),
     // Ten positional parameters, then the options bag. Counting matters more
     // than it looks: an extra `null` pushes `via` past the options slot, the
     // render silently falls back to the DECLARED Anthropic chain, and the
@@ -112,7 +112,7 @@ beforeAll(async () => {
     ActorController: () =>
       rq('ActorController')('m', 'i', tools, [], null, null, null, null, null, via),
     Critic: () => rq('Critic')('i', [attempt], via),
-    Synthesize: () => rq('Synthesize')('m', 'i', [], false, null, via),
+    Synthesize: () => rq('Synthesize')('m', 'i', [], false, null, null, via),
     ResultDescribe: () => rq('ResultDescribe')('search', '{}', 'r', 'rows', via),
     ResultDescribeBatch: () =>
       rq('ResultDescribeBatch')(

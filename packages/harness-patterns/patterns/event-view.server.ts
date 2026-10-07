@@ -22,6 +22,7 @@ import type {
   LoopRecoveryEventData,
   HitlRequestEventData,
   HitlResponseEventData,
+  DecisionMadeEventData,
 } from '../types'
 
 assertServerOnImport()
@@ -586,6 +587,18 @@ function formatEventData(event: ContextEvent): string {
       // outcome through the tool_result a resume substitutes, not from here.
       const data = event.data as Partial<HitlResponseEventData> | undefined
       return `decision: ${data?.kind} → ${data?.choice ?? 'none'} (${data?.by})`
+    }
+    case 'decision_made': {
+      // METADATA ONLY — never the state (#418). The state a decision was asked
+      // over can hold sanitized mail bodies or tool results (SD-3/SD-10), and
+      // the default branch below JSON-dumps the whole payload into every
+      // LLM-facing serialization; the event carries `stateChars`, the SIZE,
+      // instead. The state survives only in the transport's `llmCall.variables`.
+      // Pinned by decision-state-sentinel.
+      const data = event.data as DecisionMadeEventData
+      const pMax = Math.max(0, ...Object.values(data.probs ?? {}))
+      const head = `${data.key}: ${data.label} (p=${pMax.toFixed(3)}, margin=${data.margin.toFixed(3)})`
+      return data.abstained ? `${head} | abstained: ${data.reason ?? 'unknown'}` : head
     }
     case 'approval_request':
     case 'approval_response':

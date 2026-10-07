@@ -507,7 +507,7 @@ export function pSlide(shapes: string, show?: string, bg?: string): string {
   )
 }
 
-/** A text shape. `cNvPr` attributes, an `a:rPr`, a placeholder, `a:bodyPr` inner XML, `p:spPr` inner XML and a `p:style` are optional. */
+/** A text shape. `cNvPr` attributes, an `a:rPr`, a placeholder (and its `idx`), `a:bodyPr` inner XML, `p:spPr` inner XML and a `p:style` are optional. */
 export function shape(
   text: string,
   opts: {
@@ -516,6 +516,7 @@ export function shape(
     rPr?: string
     xfrm?: string
     ph?: string
+    idx?: string
     bodyPr?: string
     spPr?: string
     style?: string
@@ -523,7 +524,7 @@ export function shape(
 ): string {
   return (
     `<p:sp><p:nvSpPr><p:cNvPr id="${opts.id ?? 2}" name="Shape"${opts.cNvPr ? ` ${opts.cNvPr}` : ''}/>` +
-    `<p:cNvSpPr/><p:nvPr>${opts.ph ? `<p:ph type="${opts.ph}"/>` : ''}</p:nvPr></p:nvSpPr>` +
+    `<p:cNvSpPr/><p:nvPr>${opts.ph ? `<p:ph type="${opts.ph}"${opts.idx === undefined ? '' : ` idx="${opts.idx}"`}/>` : ''}</p:nvPr></p:nvSpPr>` +
     `<p:spPr>${opts.spPr ?? opts.xfrm ?? ''}</p:spPr>${opts.style ?? ''}` +
     `<p:txBody><a:bodyPr>${opts.bodyPr ?? ''}</a:bodyPr><a:p><a:r>${opts.rPr ?? '<a:rPr lang="en-US"/>'}<a:t>${text}</a:t></a:r></a:p></p:txBody></p:sp>`
   )

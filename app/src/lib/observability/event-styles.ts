@@ -77,6 +77,7 @@ export const eventIconClasses: Record<EventType, string> = {
   // What memory recall attached, or why nothing (#419). Placeholder entry —
   // the memory UI slice owns the presentation.
   memory_recalled: 'i-material-symbols-memory-outline',
+  memory_written: 'i-material-symbols-memory-outline',
 }
 
 export const eventColors: Record<EventType, string> = {
@@ -109,4 +110,5 @@ export const eventColors: Record<EventType, string> = {
   // an LLM reasoning step that produced text or a tool call, and not the
   // orange of a control firing on hostile input
   memory_recalled: '#2dd4bf', // teal-400 — placeholder entry; #419's UI slice owns the hue
+  memory_written: '#2dd4bf', // same placeholder as memory_recalled
 }

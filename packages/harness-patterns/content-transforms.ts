@@ -12,12 +12,34 @@ import type {
   ToolResultEventData,
 } from './types'
 
+/** The cut the lazy `<think>…</think>` regex made, plus trailing whitespace, in one
+ *  pass. That regex is
+ *  polynomial on text with many `<think>` and no `</think>` (each open rescans
+ *  to the end), and assistant text is model output, so it is untrusted input. */
+export function removeThinkBlocks(text: string): string {
+  const OPEN = '<think>'
+  const CLOSE = '</think>'
+  let out = ''
+  let pos = 0
+  for (;;) {
+    const open = text.indexOf(OPEN, pos)
+    if (open < 0) break
+    const close = text.indexOf(CLOSE, open + OPEN.length)
+    // No close after this open means none after any later open either.
+    if (close < 0) break
+    out += text.slice(pos, open)
+    pos = close + CLOSE.length
+    while (pos < text.length && /\s/.test(text[pos])) pos++
+  }
+  return out + text.slice(pos)
+}
+
 /** Strip <think>...</think> chain-of-thought blocks from assistant messages.
  *  Useful for router history where reasoning tokens waste context and confuse smaller models. */
 export const stripThinkBlocks: ContentTransform = (event: ContextEvent): ContextEvent => {
   if (event.type !== 'assistant_message') return event
   const data = event.data as AssistantMessageEventData
-  const cleaned = data.content.replace(/<think>[\s\S]*?<\/think>\s*/g, '')
+  const cleaned = removeThinkBlocks(data.content)
   if (cleaned === data.content) return event // No change, return original
   return {
     ...event,

@@ -66,6 +66,7 @@ is and why it is shaped this way, start at the front page —
   - [routes()](#routespatternmap-config)
   - [typedDecision() and decisionRouter()](#decisions-typeddecision-418)
   - [memoryRecall()](#memory-recall-memoryrecall-419)
+  - [settleMemory()](#memory-store-settlememory-419)
   - [judge()](#judgeevaluator-config)
   - [chain()](#chainctx-patterns-onevent)
   - [harness()](#harnesspatterns)
@@ -2254,6 +2255,133 @@ that finishes after the event is written is unrecordable without a late mutation
 walks the (nested) graph for it. It is the ONE opt-in probe a host gates the
 memory wake and the post-reply store on, so an agent that never opted in never
 wakes the memory boxes.
+
+## Memory store (settleMemory, #419)
+
+The store half of persistent memory. After the reply, decide whether the turn
+contains something worth remembering about the user and, if so, write it. **This
+function writes persistent user data**, so every uncertain path ends in "store
+nothing" — each is named below and pinned in `__tests__/memory-store.test.ts`.
+
+```typescript
+const report = await settleMemory(ctx, {
+  store, // MemoryWriteStore — the transactional write seam, bound to the owner
+  decide, // the RAW DecideFn (this step applies its own policy)
+  decideAll, // optional one-request provider (Jev)
+  extract, // MemoryExtractFn — the `describe`-role call
+  embed, // MemoryEmbedder — query side AND documents(texts)
+  owner, // () => string | null — from the host's request context
+  tier, // () => string | undefined — default: the run frame's inference.tier
+  awaitWake, // MemoryWakeWait — the app's awaitMemoryWake, as-is
+  settings, // enabled (REQUIRED to write — absent stores nothing, D11), gate cuts, thresholds, softLimit, routineKinds, …
+})
+```
+
+### Where it runs — and why its events are not lost (review F1)
+
+`settleMemory` is a plain async function (the `compactBulkData` shape), not a
+chain step. The host starts it **from inside its post-turn continuation**
+(`compactAndSave`), which already holds the request context and the run frame,
+and **awaits it there**, so every `memory_written` is in `ctx.events` **before
+that continuation's `saveSession`**: one version-conditional save carries the
+turn's events and the memory references together. It writes into `ctx.events`
+directly and never through `trackEvent`, so `memory_written` can never reach a
+live listener — which is to say the transcript. It **never throws** and never
+touches the conversation row: a failure is a `console.warn` line (the reason,
+never the user's words) and a returned `skipped` reason.
+
+### The pipeline, and every fail-closed path
+
+| #   | Step                                                                                                                                                                                                                                         | Stops with                                                           | Pin                       |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------- |
+| 1   | owner (`null`/`''`), the user's switch (off or unreadable), the tier to stamp (none), the turn (`error`/`paused`), a question/answer pair (no `final` answer), the user message's event id (none — a retry could not be recognised)          | `no-user` `disabled` `no-tier` `turn-failed` `no-pair` `no-event-id` | `fail-closed`             |
+| 2   | the joint wake, `wakeBudgetMs` (default 180 s): `'skipped'` or a rejection                                                                                                                                                                   | `waking` — and nothing is sent to a public provider instead          | `fail-closed`             |
+| 3   | ONE `decideFields` over the window: `sensitive`, `target`, `confirm`, `kind`, each `requireCalibrated`, each with the gate cuts. Fallbacks fail closed: `sensitive → 'sensitive'`, `target → 'none'`, `confirm → 'ask'`, `kind → 'episodic'` | an abstained, failed or uncalibrated read lands on a fallback        | `seam-contract`           |
+| 4   | `sensitive` (or its fallback); `target: none`                                                                                                                                                                                                | `sensitive` `gate`                                                   | `seam-contract`           |
+| 5   | `resolveStoreRoute`: an org target ALWAYS asks (F2); a personal target skips the question only for a routine kind (default episodic/semantic/preference; `trait` always asks)                                                                | —                                                                    | `org-graph-forces-ask`    |
+| 5′  | **pre-M12**: an org target has no writer. **pre-M6**: `ask` has no confirmation mechanism                                                                                                                                                    | `org-no-writer` `no-confirmation` — store nothing and log (F4)       | `pre-m6-no-store`         |
+| 6   | extract (≤ `maxPerTurn`, default 3, read in order)                                                                                                                                                                                           | `extract-error` `no-candidates`                                      | `acceptance-rules`        |
+| 7   | embed (`documents`): a throw, a wrong count, a non-finite or ragged vector, an empty `spaceId`                                                                                                                                               | `error`                                                              | `fail-closed`             |
+| 8   | one transaction PER candidate (below)                                                                                                                                                                                                        | `failed` / `duplicates` in the report                                | `idempotency-transaction` |
+
+The step-3 `decision_made` events are recorded on the context (one per field —
+metadata and `stateChars` only, never the state), so "why was nothing stored" is
+answerable from the blob. **An abstained kind stores `episodic`**: when the
+`kind` field abstained, the extractor's claim of a longer-lived kind is not
+trusted, and uncertainty fails toward the one kind with a retention expiry.
+
+### Input isolation and the evidence rule (D9)
+
+The window is the turn's last `user_message` plus the `assistant_message` with
+`final: true` after it (`storeWindowTurns` adds earlier pairs). `tool_call`,
+`tool_result`, `controller_action`, non-final assistant text and `llmCall`
+records are **never read** (pin `input-isolation`). Because the final reply is
+itself composed from tool results, excluding tool records alone is not enough:
+**every memory's `evidence` must be a verbatim span of the CURRENT user
+message** — assistant text and earlier turns resolve references, never source.
+
+### Deterministic acceptance (`acceptCandidate`, pure)
+
+Each rule drops the candidate and names itself; nothing is repaired. In order:
+`kind` in the closed set · `shape` (one non-empty line, ≤ 280 characters) ·
+`evidence-length` (≥ 8 characters after NFKC) · `evidence-verbatim` ·
+`identifier-closure` (every URL, email, @handle, 3+-digit number and capitalised
+name — only `the user they their this that a an it` may open a sentence
+unchecked; any other sentence-initial capital is checked like every other —
+occurs as a whole
+token in a user message of the window) · `sanitizer` (`sanitizeUntrusted` reports
+zero findings on `content`, because a memory is replayed into a later prompt).
+`report.rejected` counts drops by rule id. A route that skipped confirmation on
+the gate's kind also drops a candidate whose own kind must ask (`not-routine`).
+
+### Dedupe, merge and idempotency (F9)
+
+Per candidate, in ONE transaction that the host holds under the owner's advisory
+lock (`MemoryWriteStore.transaction` — it MUST roll back on a throw):
+
+1. `nearest` memory of the same owner, tier and embedding space.
+2. **Same kind and cosine ≥ `dupSimilarity` (0.92)** → reinforce. **Related
+   (≥ `relatedSimilarity`, 0.75) preference or trait** → the `memory.merge`
+   question `same | update | distinct`, bounded by `mergeTimeoutMs`; abstain,
+   timeout or `distinct` → insert. Episodes and facts only reinforce or insert;
+   kinds and tiers never merge.
+3. Insert/reinforce/update **and the `memory_sources` row in the same
+   transaction.** `addSource` returning `{ inserted: false, memoryId }` is the primary-key
+   conflict on `(owner, eventId, ordinal)` (`ON CONFLICT DO NOTHING RETURNING`; a
+   bare INSERT would abort the transaction): the transaction is rolled back, so a retry of
+   the same event is a no-op (the reinforce is undone with it), and a crash can
+   leave neither a memory without its source nor a source without its memory.
+   `ordinal` is the candidate's index in the extractor's output.
+
+The merge question runs INSIDE the transaction (it must see the lock's world),
+which is why it has its own deadline. The thresholds are unmeasured placeholders
+for layer 4.
+
+### The `memory_written` event
+
+One per memory written, recorded after its commit:
+`{ memoryId, kind, tier, contentHash, eventId, ordinal, action }` — **never the
+content** (`contentHash` is the SHA-256 of the stored text; a reinforce hashes the
+existing memory, not the candidate). `formatEventData` renders it from `action` and
+`kind` alone (pin `event-hygiene`). The extractor's `llmCall` rides the first one **redacted**:
+`functionName`, `usage`, `metrics`, `durationMs`, `provider`, `clientName` only —
+`variables`, `promptTemplate`, `rawInput`, `rawOutput` and `parsedOutput` are the
+candidates and the window, i.e. the memory's text, and never reach the blob. A
+call that produced nothing has no event to ride and is not recorded.
+
+**Residual (host save).** "One save carries both" holds only if that save lands.
+The host's trailing save (`saveTrailingPass`) is refused while a newer turn holds
+the conversation, and `settleMemory` may sit in that continuation for the wake
+budget plus extract, embed and merge time: a user who replies in that window
+commits memories and loses their `memory_written` events. A retry repairs the
+reference — on a conflict it re-records the event (`action: 'reinforced'`, hashed
+from a `read`) when the context has none for `(eventId, ordinal)` — but nothing
+replays a turn on its own. The mechanism (wait for the claim to release, or
+reconcile `memory_sources` against events on load) is M5's, and M5 cannot land
+without an interleaving pin for it.
+
+`report.compactionDue` is true when the owner's count reaches `softLimit` (300);
+compaction itself is the next slice.
 
 ## EventView Query API
 

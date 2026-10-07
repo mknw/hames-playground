@@ -101,7 +101,13 @@ beforeAll(async () => {
     action: { reasoning: 'r', tool_name: 'search', tool_args: '{}' },
     result: 'rows',
   }
+  const options = [
+    { letter: 'A', description: 'Use tools' },
+    { letter: 'B', description: 'Just answer' },
+  ]
   renderers = {
+    Decide: () => rq('Decide')('state', 'Which route?', options, via),
+    DecideVerbalized: () => rq('DecideVerbalized')('state', 'Which route?', options, via),
     Router: () => rq('Router')('m', [{ name: 'neo4j', description: 'd' }], [], null, via),
     // Ten positional parameters, then the options bag. Counting matters more
     // than it looks: an extra `null` pushes `via` past the options slot, the
@@ -129,6 +135,35 @@ beforeAll(async () => {
 })
 
 describe('the fake recognises every BAML function', () => {
+  it('knows both decision functions even while the memory fake is outstanding', () => {
+    for (const name of ['Decide', 'DecideVerbalized']) {
+      expect(declared).toContain(name)
+      expect(ALL_BAML_FUNCTIONS).toContain(name)
+    }
+  })
+
+  it('refuses an explicit production client absent from the fake registry before networking', async () => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const options = (
+      b as unknown as {
+        bamlOptions: NonNullable<Parameters<typeof b.request.DecideVerbalized>[3]>
+      }
+    ).bamlOptions
+    // This client EXISTS in BAML, but the fake registry has never seen it.
+    // A made-up name would throw even without the guard, proving nothing.
+    await expect(
+      b.request.DecideVerbalized(
+        'state',
+        'Which route?',
+        [
+          { letter: 'A', description: 'Take' },
+          { letter: 'B', description: 'Skip' },
+        ],
+        { ...options, client: 'AnthropicSonnet46NoThink' },
+      ),
+    ).rejects.toThrow('e2e hermetic routing refused client AnthropicSonnet46NoThink')
+  })
+
   it('covers every function the classifier can name', () => {
     // Guards against the guard going vacuous: a function added to MARKERS but
     // not rendered here would never be checked.

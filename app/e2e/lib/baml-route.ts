@@ -64,7 +64,8 @@ type BamlSingleton = { bamlOptions?: unknown }
 let installed = false
 
 /**
- * Point every un-overridden BAML call at `baseUrl`.
+ * Point default calls and the named secondary at `baseUrl`; refuse any other
+ * client unless its shipped endpoint is that same fake.
  *
  * Idempotent, and deliberately not reversible: a suite that could un-install
  * the redirect could also half-install it, and "half" here means live calls.
@@ -85,6 +86,34 @@ export function installHermeticRouting(b: unknown, baseUrl: string): void {
       api_key: HERMETIC_ANTHROPIC_KEY,
       model: FAKE_ANTHROPIC_TIER_MODEL,
     })
+    // The operator-named secondary carries an explicit client override, so a
+    // primary alone cannot intercept it. Preserve its identity for the real
+    // adapter's collector while replacing only the test endpoint.
+    registry.addLlmClient('DecideAnthropic', 'openai-generic', {
+      base_url: baseUrl,
+      api_key: HERMETIC_ANTHROPIC_KEY,
+      model: FAKE_ANTHROPIC_TIER_MODEL,
+    })
+    const setPrimary = registry.setPrimary.bind(registry)
+    registry.setPrimary = (client: string) => {
+      // A name absent from this registry otherwise falls through to the
+      // production BAML declaration. Refuse it BEFORE native BAML sees it.
+      if (client !== FAKE_CLIENT && client !== 'DecideAnthropic') {
+        const endpoint =
+          client === 'VerdaQwen'
+            ? process.env.VERDA_INFERENCE_ENDPOINT
+            : client === 'LocalQwenSmall' || client === 'LocalQwenSmallDecide'
+              ? process.env.SMALL_LLM_BASE_URL
+              : undefined
+        if (endpoint !== baseUrl) {
+          throw new Error(
+            `e2e hermetic routing refused client ${client}: no fake endpoint is registered; ` +
+              'refusing to fall through to its production provider.',
+          )
+        }
+      }
+      setPrimary(client)
+    }
     registry.setPrimary(FAKE_CLIENT)
     return registry
   }

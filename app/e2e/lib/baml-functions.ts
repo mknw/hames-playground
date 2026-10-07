@@ -3,7 +3,7 @@
  *
  * The fake endpoint (`fake-llm.ts`) is an OpenAI-compatible server, and an
  * OpenAI-compatible request says nothing about which BAML function produced it:
- * there is no function name, no tag, no header. All thirteen functions arrive
+ * there is no function name, no tag, no header. All recognised functions arrive
  * at the same `POST /v1/chat/completions` looking alike apart from their text.
  * So the text is what identifies them, and this module owns that reading.
  *
@@ -14,7 +14,7 @@
  *
  * A prompt edit that moves one of these lines makes the fake stop recognising
  * that function. That failure is caught, loudly, by `00-fake-fidelity.e2e.ts`,
- * which renders all thirteen functions offline through `b.request.*` and
+ * which renders all recognised functions offline through `b.request.*` and
  * asserts each one classifies as itself — rather than by a scenario mysteriously
  * going red three files later. Fixing a red fidelity test means updating the
  * marker here, never loosening the classifier.
@@ -37,6 +37,8 @@
  *    result" rather than "wrong function".
  */
 const MARKERS = [
+  ['DecideVerbalized', 'Give your probability for EVERY option.'],
+  ['Decide', 'Reply with the single letter of the best option and NOTHING else'],
   ['Router', 'Analyze the user message and determine routing.'],
   ['ActorController', 'A critic evaluates your output. Learn from previous feedback.'],
   ['LoopController', 'Select one tool per turn. Use "Return" when you have enough information.'],

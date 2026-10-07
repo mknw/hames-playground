@@ -113,7 +113,18 @@ describe('decision-math', () => {
     const { mass, coverage } = sumLabelMass(top, ['A', 'B'])
     expect(mass.B).toBeCloseTo(0.8, 10)
     expect(mass.A).toBeCloseTo(0.15, 10)
-    // A token that merely STARTS with a letter is not that letter.
+    // A token that merely STARTS with a letter is not that letter — the
+    // prefix must end at a word boundary ('B.' counts; 'Btool' does not).
+    const bounded = sumLabelMass(
+      [
+        { token: 'B.', logprob: Math.log(0.4) },
+        { token: 'Btool', logprob: Math.log(0.3) },
+      ],
+      ['A', 'B'],
+    )
+    expect(bounded.mass.B).toBeCloseTo(0.4, 10) // 'B.' counts for 'B'
+    expect(bounded.mass).not.toHaveProperty('Btool')
+    // A token that shares a prefix with NO label is not attributed at all.
     expect(mass).not.toHaveProperty('Hello')
     // coverage = matched mass; the leftover is 1 − coverage.
     expect(coverage).toBeCloseTo(0.95, 10)
@@ -172,6 +183,31 @@ describe('decision-math', () => {
   it('breaks argmax ties by the spec array order', () => {
     const { decision } = scoreDecision(scoring({ result: resultOf({ drop: 0.5, keep: 0.5 }) }))
     expect(decision.top).toBe('keep') // 'keep' is first in KIND_SPEC.labels
+  })
+
+  it('a read exactly AT the cut passes; just below it abstains (the < boundary)', () => {
+    // 0.875 and 0.125 are exact in binary floating point, so "exactly at" is
+    // not a rounding question: K = 2 gives confidence = 0.75 and margin = 0.75
+    // EXACTLY, and the cuts are set to exactly that.
+    const at = scoreDecision(
+      scoring({
+        policy: { fallback: 'drop', minConfidence: 0.75, minMargin: 0.75 },
+        result: resultOf({ keep: 0.875, drop: 0.125 }),
+      }),
+    ).decision
+    expect(at.abstained).toBe(false)
+    expect(at.label).toBe('keep')
+
+    // Just below the cut abstains — and each cut is checked at its own
+    // boundary (here confidence fails first by the abstain order).
+    const below = scoreDecision(
+      scoring({
+        policy: { fallback: 'drop', minConfidence: 0.751, minMargin: 0.751 },
+        result: resultOf({ keep: 0.875, drop: 0.125 }),
+      }),
+    ).decision
+    expect(below.abstained).toBe(true)
+    expect(below.reason).toBe('low-confidence')
   })
 })
 

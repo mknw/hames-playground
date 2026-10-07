@@ -8,7 +8,7 @@
  * express as a static value, and the one check every test gets: no fake
  * refused a request.
  */
-import { afterEach } from 'vitest'
+import { afterAll, afterEach } from 'vitest'
 
 // Vitest's `test.env` writes strings; anything derived from them belongs here.
 // `NODE_ENV=test` is what tells `pg` and friends they are not in production.
@@ -27,11 +27,13 @@ delete process.env.USE_VERDA_INFERENCE
 // are reset, so one refusal never carries into the next test's verdict. The
 // import is dynamic so no lib module loads before the lines above have run.
 afterEach(async () => {
-  const { takeEgressAttempts } = await import('./lib/egress-backstop')
-  const attempts = await takeEgressAttempts()
-  const failures: string[] = attempts.map(
-    (attempt) => `e2e hermetic egress refused ${attempt.method} ${attempt.target}`,
-  )
+  const { assertNoUnexpectedEgress } = await import('./lib/egress-backstop')
+  const failures: string[] = []
+  try {
+    await assertNoUnexpectedEgress()
+  } catch (err) {
+    failures.push(err instanceof Error ? err.message : String(err))
+  }
   const { peekBootedApp } = await import('./lib/app')
   const app = await peekBootedApp()?.catch(() => null)
   for (const fake of app ? [app.fakeGraph, app.fakeConverter] : []) {
@@ -43,4 +45,18 @@ afterEach(async () => {
     fake.reset()
   }
   if (failures.length > 0) throw new Error(failures.join('\n'))
+})
+
+// Stacked hook order runs this after the scenario file's own afterAll hooks.
+afterAll(async () => {
+  const { assertNoUnexpectedEgress } = await import('./lib/egress-backstop')
+  try {
+    await assertNoUnexpectedEgress()
+  } catch (err) {
+    throw new Error(
+      `e2e hermetic egress refused after the last test: ${JSON.stringify(
+        err instanceof Error ? err.message : String(err),
+      )}`,
+    )
+  }
 })

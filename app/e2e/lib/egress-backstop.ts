@@ -69,3 +69,15 @@ export async function takeEgressAttempts(): Promise<EgressAttempt[]> {
     }).on('error', reject)
   })
 }
+
+/** Drain and fail even when application error handling swallowed the refusal. */
+export async function assertNoUnexpectedEgress(): Promise<void> {
+  const attempts = await takeEgressAttempts()
+  if (attempts.length > 0) {
+    throw new Error(
+      attempts
+        .map((attempt) => `e2e hermetic egress refused ${attempt.method} ${attempt.target}`)
+        .join('\n'),
+    )
+  }
+}

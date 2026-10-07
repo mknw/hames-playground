@@ -50,7 +50,7 @@ import {
   promptText,
   type ChatMessage,
 } from '../lib/baml-functions'
-import { takeEgressAttempts } from '../lib/egress-backstop'
+import { assertNoUnexpectedEgress, takeEgressAttempts } from '../lib/egress-backstop'
 import { IS_HERMETIC, VERDA_MODEL } from '../lib/mode'
 
 type Renderer = () => Promise<{ body: { json: () => unknown } }>
@@ -295,6 +295,22 @@ describe("the fake's Jev endpoint (Decisions API)", () => {
 })
 
 describe.runIf(IS_HERMETIC)('hermetic transport backstop', () => {
+  it('fails on a recorded refusal even when fetch rejection was swallowed', async () => {
+    await fetch('https://hermetic-enforce.invalid/').catch(() => {})
+    await expect(assertNoUnexpectedEgress()).rejects.toThrow('CONNECT hermetic-enforce.invalid:443')
+  })
+
+  it('enforces unexpected egress in both setup hooks', () => {
+    const setup = readFileSync(new URL('../setup.ts', import.meta.url), 'utf8')
+    for (const hook of ['afterEach', 'afterAll']) {
+      const body = setup.match(
+        new RegExp(`${hook}\\(async \\(\\) => \\{([\\s\\S]*?)^\\}\\)`, 'm'),
+      )?.[1]
+      expect(body, `${hook} hook is missing`).toBeDefined()
+      expect(body).toMatch(/await assertNoUnexpectedEgress\(\)/)
+    }
+  })
+
   const target = 'hermetic-backstop.invalid:443'
   async function registry() {
     const { ClientRegistry } = await import('@boundaryml/baml')

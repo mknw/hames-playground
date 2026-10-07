@@ -33,7 +33,6 @@ import type {
   DecisionSpec,
   DecideResult,
   ErrorEventData,
-  LLMCallRecord,
 } from '../types'
 
 assertServerOnImport()
@@ -297,7 +296,6 @@ export interface DecisionScoring<L extends string = string> {
    *  gate reads it) and the fallback for the F2 comparison when the result
    *  carries none. */
   readonly method?: DecisionMethod
-  readonly llmCall?: LLMCallRecord
   /** Set by a shadow-mode caller: recorded on the event, changes no verdict. */
   readonly shadow?: true
 }

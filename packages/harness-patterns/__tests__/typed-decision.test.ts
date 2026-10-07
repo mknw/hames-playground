@@ -536,7 +536,7 @@ describe('decision-state-sentinel', () => {
     variables: { state: SENTINEL }, // the ONE place the text survives
   }
   const { event } = scoreDecision(
-    scoring({ state: SENTINEL, result: resultOf({ keep: 0.9, drop: 0.1 }), llmCall }),
+    scoring({ state: SENTINEL, result: resultOf({ keep: 0.9, drop: 0.1 }) }),
   )
   // The event data carries the SIZE, never the text.
   expect(event.stateChars).toBe(SENTINEL.length)

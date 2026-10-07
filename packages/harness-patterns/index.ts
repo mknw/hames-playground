@@ -200,6 +200,7 @@ export {
   declaresWorkspaceSync,
   harnessUsesSyncWorkspace,
   harnessDecisionKeys,
+  harnessCalibratedDecisionKeys,
   harnessUsesMemory,
 } from './pattern-capabilities'
 

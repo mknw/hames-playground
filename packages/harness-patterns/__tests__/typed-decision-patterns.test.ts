@@ -46,7 +46,10 @@ import {
 import { configurePattern, runChain } from '@hames-ai/harness-patterns/patterns/chain.server'
 import { routes, type RouterData } from '@hames-ai/harness-patterns/patterns/router.server'
 import { createContext, createScope } from '@hames-ai/harness-patterns/context.server'
-import { harnessDecisionKeys } from '@hames-ai/harness-patterns/pattern-capabilities'
+import {
+  harnessCalibratedDecisionKeys,
+  harnessDecisionKeys,
+} from '@hames-ai/harness-patterns/pattern-capabilities'
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import {
   classifierFromDecide,
@@ -531,6 +534,33 @@ describe('decision-no-stale', () => {
       errorSeverity: 'irrecoverable',
     })
     expect(harnessDecisionKeys([r])).toEqual(['route'])
+  })
+
+  // G4 (#418 T6): the probe warns only about keys that abstain forever without
+  // an entry, so the pattern says which of its keys those are.
+  it('declares calibratedDecisionKeys only when its policy requires calibration', () => {
+    const { fn } = fakeDecide(() => logprobResult({ yes: 1, no: 0 }))
+    const plain = typedDecision<Data, YesNo>({ decide: fn, spec: SPEC, policy: POLICY })
+    const strict = typedDecision<Data, YesNo>({
+      decide: fn,
+      spec: SPEC,
+      policy: { ...POLICY, requireCalibrated: true },
+    })
+    expect(harnessCalibratedDecisionKeys([plain])).toEqual([])
+    expect(harnessCalibratedDecisionKeys([strict])).toEqual([SPEC.key])
+    // `decisionKeys` is untouched by the new field: both still declare the key.
+    expect(harnessDecisionKeys([plain, strict])).toEqual([SPEC.key])
+
+    const router = decisionRouter<Data>(
+      { a: 'A' },
+      { decide: fn, policy: { fallback: 'a', requireCalibrated: true } },
+    )
+    expect(harnessCalibratedDecisionKeys([router])).toEqual(['route'])
+    expect(
+      harnessCalibratedDecisionKeys([
+        decisionRouter<Data>({ a: 'A' }, { decide: fn, policy: { fallback: 'a' } }),
+      ]),
+    ).toEqual([])
   })
 
   it('refuses a fallback that is not one of its labels, at construction', () => {

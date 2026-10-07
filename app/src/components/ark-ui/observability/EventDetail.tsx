@@ -10,6 +10,7 @@ import type {
   ContentSanitizedEventData,
   ContextEvent,
   ControllerActionEventData,
+  DecisionMadeEventData,
   ErrorEventData,
   ToolCallEventData,
   ToolResultEventData,
@@ -381,6 +382,175 @@ const ContentSanitizedDetail = (props: { data: ContentSanitizedEventData }) => (
   </div>
 )
 
+/**
+ * Detail view for a `decision_made` event (#418) — one typed decision, drawn as
+ * the distribution it was made from: a bar per label, the policy's confidence
+ * cut across them, and chips for what the reader needs to weigh it.
+ *
+ * Metadata only, by construction: the event never carries the state the
+ * decision was asked over (`stateChars` is the SIZE), so there is nothing here
+ * to leak — the text lives only in the LLM tabs above, as every prompt does.
+ *
+ * The line is the PROBABILITY equivalent of the policy's `minConfidence` for K
+ * labels, drawn from the policy as declared. The policy compares `confidence`
+ * = (K·p − 1)/(K − 1), not p, so the bars are crossed at p* = (c·(K − 1) + 1)/K
+ * (80% at K = 2, c = 0.6). Two other cuts are NOT on the line and can abstain a
+ * bar that clears it: `minMargin` (a gap between two bars, shown in the footer
+ * instead) and a calibration entry's own fitted cuts, which win at decision time
+ * (F2) but are not on the event. The chip's reason says which cut it was.
+ */
+const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
+  const pct = (p: number) => `${(Math.max(0, Math.min(1, p)) * 100).toFixed(1)}%`
+  // `calibrated: false` on a verbalized read is the secondary's own signature;
+  // an uncalibrated LOGPROB/Jev read is still a measured distribution, so it
+  // does not get the "verbalized" word.
+  const uncalibratedChip = () =>
+    props.data.calibrated
+      ? null
+      : props.data.method === 'verbalized'
+        ? 'verbalized, uncalibrated'
+        : 'uncalibrated'
+  const cut = () => props.data.policy.minConfidence
+  const margin = () => props.data.policy.minMargin
+  // minConfidence as a probability: confidence = (K·p − 1)/(K − 1) ⇒ p = (c·(K − 1) + 1)/K.
+  const cutProb = () => {
+    const k = props.data.labels.length
+    return ((cut() as number) * (k - 1) + 1) / k
+  }
+
+  return (
+    <div flex="~ col" gap="3" data-role="decision-made">
+      <div>
+        <div text="xs ui-text-tertiary" m="b-1">
+          Decision · <span font="mono">{props.data.key}</span>
+        </div>
+        <div text="sm ui-text-primary">{props.data.question}</div>
+      </div>
+
+      <div flex="~ wrap" items="center" gap="2">
+        <span text="sm ui-accent" font="mono" data-role="decision-verdict">
+          → {props.data.label}
+        </span>
+        <Show when={props.data.abstained}>
+          <span
+            text="xs ui-danger"
+            bg="ui-danger/10"
+            p="x-1.5 y-0.5"
+            rounded="sm"
+            data-role="decision-abstained"
+          >
+            abstained{props.data.reason ? `: ${props.data.reason}` : ''}
+          </span>
+        </Show>
+        <Show when={uncalibratedChip()}>
+          {(label) => (
+            <span
+              text="xs ui-text-secondary"
+              bg="ui-bg-tertiary"
+              p="x-1.5 y-0.5"
+              rounded="sm"
+              data-role="decision-uncalibrated"
+            >
+              {label()}
+            </span>
+          )}
+        </Show>
+        <Show when={props.data.shadow}>
+          <span text="xs ui-text-secondary" bg="ui-bg-tertiary" p="x-1.5 y-0.5" rounded="sm">
+            shadow
+          </span>
+        </Show>
+      </div>
+
+      <div flex="~ col" gap="2">
+        <For each={props.data.labels}>
+          {(l) => {
+            const p = () => props.data.probs[l.id] ?? 0
+            return (
+              <div flex="~ col" gap="1" data-role="decision-label" data-label={l.id}>
+                <div flex="~" justify="between" text="xs">
+                  <span text={l.id === props.data.top ? 'ui-text-primary' : 'ui-text-secondary'}>
+                    <span font="mono">{l.id}</span>
+                    <span text="ui-text-tertiary"> — {l.description}</span>
+                  </span>
+                  <span font="mono" text="ui-text-secondary">
+                    {pct(p())}
+                  </span>
+                </div>
+                <div
+                  bg="ui-bg-tertiary"
+                  rounded="sm"
+                  h="2"
+                  style={{ position: 'relative' }}
+                  role="meter"
+                  aria-label={`${l.id} probability`}
+                  aria-valuemin={0}
+                  aria-valuemax={1}
+                  aria-valuenow={p()}
+                >
+                  <div
+                    h="2"
+                    rounded="sm"
+                    bg={l.id === props.data.top ? 'ui-accent' : 'ui-text-tertiary'}
+                    data-role="decision-bar"
+                    style={{ width: pct(p()) }}
+                  />
+                  <Show when={cut() !== undefined}>
+                    <div
+                      data-role="decision-cut"
+                      title={`min confidence ${cut()} ⇒ p ≥ ${pct(cutProb())}`}
+                      bg="ui-danger"
+                      style={{
+                        position: 'absolute',
+                        top: '-2px',
+                        bottom: '-2px',
+                        width: '2px',
+                        left: pct(cutProb()),
+                      }}
+                    />
+                  </Show>
+                </div>
+              </div>
+            )
+          }}
+        </For>
+      </div>
+
+      <div flex="~ wrap" gap="x-6 y-1" text="xs ui-text-tertiary">
+        <span>
+          confidence <span font="mono">{props.data.confidence.toFixed(3)}</span>
+        </span>
+        <span>
+          margin <span font="mono">{props.data.margin.toFixed(3)}</span>
+        </span>
+        <Show when={props.data.method}>
+          <span>
+            method <span font="mono">{props.data.method}</span>
+          </span>
+        </Show>
+        <Show when={props.data.coverage !== undefined}>
+          <span>
+            coverage <span font="mono">{props.data.coverage!.toFixed(3)}</span>
+          </span>
+        </Show>
+        <Show when={cut() !== undefined}>
+          <span>
+            min confidence <span font="mono">{cut()}</span>
+          </span>
+        </Show>
+        <Show when={margin() !== undefined}>
+          <span>
+            min margin <span font="mono">{margin()}</span>
+          </span>
+        </Show>
+        <span>
+          state <span font="mono">{props.data.stateChars.toLocaleString()}</span> chars
+        </span>
+      </div>
+    </div>
+  )
+}
+
 const GenericDetail = (props: { data: unknown }) => (
   <div>
     <div text="xs ui-text-tertiary" m="b-2">
@@ -655,6 +825,9 @@ export const EventDetailPanel = (props: {
             </Match>
             <Match when={type === 'content_sanitized'}>
               <ContentSanitizedDetail data={data as ContentSanitizedEventData} />
+            </Match>
+            <Match when={type === 'decision_made'}>
+              <DecisionMadeDetail data={data as DecisionMadeEventData} />
             </Match>
           </Switch>
         </Show>

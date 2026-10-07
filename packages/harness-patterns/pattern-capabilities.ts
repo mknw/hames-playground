@@ -76,8 +76,8 @@ export function harnessUsesSyncWorkspace<T>(patterns: ConfiguredPattern<T>[] | u
  * The decision keys declared anywhere in the (nested) pattern graph (#418,
  * D12) — the `DecisionSpec.key` values whose calibration a host can feed.
  * Deduplicated in first-seen order. The probe that consumes it (warning when
- * a `requireCalibrated` key has no calibration entry) is the host's (#418
- * T6), because the calibration store is host-fed; this walk is what makes the
+ * a `requireCalibrated` key has no calibration entry — see
+ * {@link harnessCalibratedDecisionKeys}) is the host's (#418 T6), because the calibration store is host-fed; this walk is what makes the
  * declared surface readable without running the harness.
  */
 export function harnessDecisionKeys<T>(patterns: ConfiguredPattern<T>[] | undefined): string[] {
@@ -97,6 +97,25 @@ export function harnessDecisionKeys<T>(patterns: ConfiguredPattern<T>[] | undefi
     }
   }
   return keys
+}
+
+/**
+ * The decision keys in the (nested) graph whose policy sets `requireCalibrated`
+ * (#418 T6, G4) — the keys that abstain on every call until a calibration
+ * entry exists for the serving client. A strict subset of
+ * {@link harnessDecisionKeys}, deduplicated in first-seen order; that function
+ * keeps its shape and behaviour.
+ */
+export function harnessCalibratedDecisionKeys<T>(
+  patterns: ConfiguredPattern<T>[] | undefined,
+): string[] {
+  if (!patterns || patterns.length === 0) return []
+  const keys = new Set<string>()
+  for (const pattern of patterns) {
+    for (const key of pattern.capabilities?.calibratedDecisionKeys ?? []) keys.add(key)
+    for (const key of harnessCalibratedDecisionKeys(pattern.children)) keys.add(key)
+  }
+  return [...keys]
 }
 
 /**

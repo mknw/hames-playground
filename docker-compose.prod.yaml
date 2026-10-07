@@ -112,6 +112,16 @@ services:
   doc-convert:
     ports: !override ["127.0.0.1:8000:8000"]
 
+  # The embedder (#419 M8) is the one data-tier service with NO publish at all,
+  # not even on loopback: nothing on the VM needs to reach it but the app, over
+  # the compose network, and an SSH-tunnelled operator has no use for it either.
+  # The base file declares no `ports:` for it; this restates that on its own, so
+  # a future publish added to the laptop file cannot reach a public host through
+  # the overlay (SD-18) — `!override []` replaces whatever the base carries.
+  # compose-embedder.test.ts renders both files and fails on any published port.
+  embedder:
+    ports: !override []
+
   # ---------------------------------------------------------------------------
   # App
   # ---------------------------------------------------------------------------

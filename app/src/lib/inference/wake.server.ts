@@ -423,7 +423,7 @@ async function poll(): Promise<number> {
   const started = Date.now()
   const remaining = (): number => budgetMs - (Date.now() - started)
   let attempts = 0
-  // Overwritten by the first attempt, always: `envMs` refuses a non-positive
+  // Overwritten by the first attempt, always: `wakeEnvMs` refuses a non-positive
   // budget, so the loop below runs at least once and this initializer cannot
   // reach the message. It is here because TypeScript needs one, not as a case.
   let lastReason = 'it was never asked'

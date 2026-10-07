@@ -245,10 +245,24 @@ interface MemoryWakeState {
    * (the boxes may well be up by then; the probe is the cheapest way to ask).
    */
   inFlight: Promise<void> | null
+  /**
+   * The LAST poll's settled promise, kept so a waiter arriving after the poll
+   * ended can still read its OUTCOME. It must exist, because a failed poll
+   * reaches the same cleared `inFlight` a landed one does — and a refusal
+   * rejects in MILLISECONDS (an unconfigured endpoint, a bad key, an unknown
+   * model id), long before the detached `compactAndSave` continuation asks, so
+   * D20's skip-on-rejection would be unreachable on exactly the common
+   * misconfiguration timeline if `awaitMemoryWake` could only see a poll in
+   * flight. Cleared when a new poll starts. This is outcome reporting for
+   * waiters, not retry memoisation: the START path never consults it, and a
+   * failed outcome is superseded by the next poll, not remembered by it.
+   */
+  settled: Promise<void> | null
 }
 type MemoryWakeGlobal = typeof globalThis & { [MEMORY_WAKE_KEY]?: MemoryWakeState }
 const state: MemoryWakeState = ((globalThis as MemoryWakeGlobal)[MEMORY_WAKE_KEY] ??= {
   inFlight: null,
+  settled: null,
 })
 
 /**
@@ -279,9 +293,23 @@ export async function ensureMemoryAwake(optsIn: boolean): Promise<void> {
   // target loops), not one request, exactly as in the Verda wake: every caller
   // that arrives while a poll is running attaches to it, and a burst against
   // the same sleeping box is one queue rather than N independent polls.
-  state.inFlight ??= pollTargets(requestedTargets()).finally(() => {
-    state.inFlight = null
-  })
+  if (state.inFlight === null) {
+    // A new poll supersedes the last one's outcome: the waiters it mattered to
+    // have been told, and a fresh poll must not inherit a stale 'skipped'.
+    state.settled = null
+    const done = pollTargets(requestedTargets()).finally(() => {
+      // Keep the settled poll's OUTCOME readable by late waiters (see
+      // `settled`), then clear the in-flight slot: an in-flight dedupe, not a
+      // memo.
+      state.settled = done
+      state.inFlight = null
+    })
+    // The rejection is reported through `state.settled` and through every
+    // waiter's own attach; this no-op catch is what keeps it from surfacing as
+    // an unhandled rejection in the window where nobody is waiting yet.
+    done.catch(() => {})
+    state.inFlight = done
+  }
 
   try {
     await state.inFlight
@@ -297,13 +325,13 @@ export async function ensureMemoryAwake(optsIn: boolean): Promise<void> {
 /**
  * How a waiter should proceed after attaching to the wake.
  *
- * `'awake'` — the wake landed inside the caller's budget (or no poll is in
- * flight: an earlier one already landed, and the boxes are at least not
- * mid-wake). `'skipped'` — the budget expired first, or the wake FAILED while
- * the caller waited: either way the caller attaches nothing (the gate records
- * `skipped: 'waking'`; the store writes nothing) and the turn proceeds. The
- * wake itself keeps running in the background either way, so the post-reply
- * store and the next turn benefit.
+ * `'awake'` — the wake landed inside the caller's budget (or nothing is in
+ * flight and the LAST poll landed: the boxes are at least not mid-wake).
+ * `'skipped'` — the budget expired first, the wake FAILED while the caller
+ * waited, or the last poll FAILED before the caller arrived: either way the
+ * caller attaches nothing (the gate records `skipped: 'waking'`; the store
+ * writes nothing) and the turn proceeds. The wake itself keeps running in the
+ * background either way, so the post-reply store and the next turn benefit.
  */
 export type MemoryWakeOutcome = 'awake' | 'skipped'
 
@@ -315,30 +343,48 @@ export type MemoryWakeOutcome = 'awake' | 'skipped'
  * Attaches to the poll {@link ensureMemoryAwake} started — it never starts one,
  * because the wake's whole value is that it began BEFORE the chain's first
  * pattern and has been running concurrently with routing and the gate ever
- * since. When no poll is in flight the wake has already landed (the state
- * clears when it settles), so the outcome is `'awake'` and the caller proceeds
- * — which is also what makes `settleMemory` work minutes after a successful
- * wake cleared itself.
+ * since. When no poll is in flight, the LAST poll's outcome is consulted
+ * (`state.settled`): a landed wake reads `'awake'` and the caller proceeds —
+ * which is what makes `settleMemory` work minutes after a successful wake
+ * cleared itself — while a FAILED wake still reads `'skipped'`, because D20's
+ * skip-on-rejection must survive the fast-refusal timeline: a refused wake
+ * rejects in milliseconds and clears `inFlight` long before the detached
+ * `compactAndSave` continuation asks. The failed outcome persists only until
+ * the next {@link ensureMemoryAwake} starts a fresh poll — outcome reporting
+ * for waiters, not retry memoisation.
  *
  * Never rejects and never waits past `budgetMs`: a wake that fails or stalls is
  * `'skipped'`, not an error — the same fail-open contract
  * {@link ensureMemoryAwake} gives the turn, expressed for waiters.
  */
 export async function awaitMemoryWake(budgetMs: number): Promise<MemoryWakeOutcome> {
-  const wake = state.inFlight
+  const wake = state.inFlight ?? state.settled
   if (!wake) return 'awake'
-  return Promise.race([
-    wake.then(
-      () => 'awake' as const,
-      () => 'skipped' as const,
-    ),
-    sleep(budgetMs).then(() => 'skipped' as const),
-  ])
+  // The budget timer is cleared when the wake wins, so a fast answer does not
+  // leave a `setTimeout` pending for up to `budgetMs` (180s for `settleMemory`'s
+  // use) behind a race that is already decided.
+  let budgetExpired: () => void = () => {}
+  const expired = new Promise<'skipped'>((resolve) => {
+    budgetExpired = () => resolve('skipped')
+  })
+  const timer = setTimeout(budgetExpired, budgetMs)
+  try {
+    return await Promise.race([
+      wake.then(
+        () => 'awake' as const,
+        () => 'skipped' as const,
+      ),
+      expired,
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /** Test-only: drop any shared poll so the next call starts a fresh one. */
 export function resetMemoryWake(): void {
   state.inFlight = null
+  state.settled = null
 }
 
 /**

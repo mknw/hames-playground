@@ -562,6 +562,60 @@ describe('the bounded wait both consumers attach through', () => {
     await Promise.resolve()
     expect(await awaitMemoryWake(1_000)).toBe('skipped')
   })
+
+  it("reads 'skipped' after a refused wake has settled and cleared (F1)", async () => {
+    // THE FAST-REFUSAL TIMELINE, which is the common misconfiguration case: a
+    // refusal rejects in MILLISECONDS — long before the detached
+    // `compactAndSave` continuation (settleMemory) asks. With only the
+    // in-flight slot to consult, a late waiter read 'awake' and proceeded to
+    // extract/embed against the misconfigured box; D20's skip-on-rejection
+    // was unreachable. The settled poll's outcome is what closes that gap.
+    fetchMock.mockImplementation(async () => new Response('bad key', { status: 401 }))
+    await expect(ensureMemoryAwake(true)).resolves.toBeUndefined()
+    expect(await awaitMemoryWake(1_000)).toBe('skipped')
+
+    // Outcome reporting, not retry memoisation: the next turn starts a fresh
+    // poll (it does not consult the stale failure), and a landed one reads
+    // 'awake' again.
+    fetchMock.mockImplementation(async () => ok())
+    await expect(ensureMemoryAwake(true)).resolves.toBeUndefined()
+    expect(await awaitMemoryWake(1_000)).toBe('awake')
+  })
+
+  it('clears the budget timer when the wake answers — no timer outlives an answer (F4)', async () => {
+    // The race's losing half is a `setTimeout` for up to `budgetMs` (180s for
+    // settleMemory's use); on the wake-wins path it must be cleared, not left
+    // pending behind a decided race.
+    vi.useFakeTimers()
+    await expect(ensureMemoryAwake(true)).resolves.toBeUndefined()
+    expect(await awaitMemoryWake(1_000)).toBe('awake')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('the env knobs are documented where a deployment reads them', () => {
+  it('every env var the module reads appears in .env.example (F2)', () => {
+    // The VERDA_WAKE_* block is the established precedent: a wake's tunable
+    // bounds are deployment knobs, documented with their defaults and their
+    // reasoning, not discoverable only by reading the module. Source-scan, the
+    // uno-fonts pattern: every name this module reads must have a row there.
+    const source = readFileSync(
+      path.resolve(process.cwd(), 'src/lib/inference/memory-wake.server.ts'),
+      'utf8',
+    )
+    const example = readFileSync(path.resolve(process.cwd(), '.env.example'), 'utf8')
+    const names = new Set<string>()
+    for (const m of source.matchAll(/wakeEnvMs\('([A-Z_]+)'/g)) names.add(m[1])
+    for (const m of source.matchAll(/process\.env\.([A-Z_]+)/g)) names.add(m[1])
+    for (const m of source.matchAll(/(?:envVar|keyEnvVar): '([A-Z_]+)'/g)) names.add(m[1])
+    expect(names.size).toBeGreaterThanOrEqual(8)
+    for (const name of names) {
+      expect(
+        example,
+        `${name} is read by memory-wake.server.ts but not documented in .env.example`,
+      ).toContain(name)
+    }
+  })
 })
 
 describe('fail-open: a failed wake is not the turn’s failure', () => {

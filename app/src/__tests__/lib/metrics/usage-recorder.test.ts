@@ -92,8 +92,11 @@ describe('tierOfSample — the selected client is the evidence', () => {
     for (const clientName of routed) {
       expect(tierOfSample({ functionName: 'X', clientName }), clientName).toBe('verda')
     }
-    // Not vacuous: the map really does hold more than one client.
-    expect(new Set(routed).size).toBe(2)
+    // Not vacuous: the map holds three clients — the 27B, the 4B summarizer, and
+    // (#418) the 4B's one-token decide readout — and the decide client is counted
+    // private with no edit to the recorder, which is the property above at work.
+    expect(new Set(routed).size).toBe(3)
+    expect(routed).toContain('LocalQwenSmallDecide')
   })
 
   it('attributes everything else to Anthropic, including an unnamed client', () => {
@@ -120,6 +123,9 @@ describe('the warm clock does NOT follow the tier attribution', () => {
     // pessimistic so a user is never told the box is up when it is not.
     const NOW = 1_700_000_000_000
     recordSample({ functionName: 'ResultDescribe', clientName: 'LocalQwenSmall' }, NOW)
+    expect(verdaWarmth(NOW).state).toBe('unknown')
+    // The decide readout is the same 4B on the same server: also not evidence.
+    recordSample({ functionName: 'Decide', clientName: 'LocalQwenSmallDecide' }, NOW)
     expect(verdaWarmth(NOW).state).toBe('unknown')
 
     recordSample({ functionName: 'LoopController', clientName: 'VerdaQwen' }, NOW)

@@ -53,6 +53,8 @@ import {
   activeInferenceTier,
   activeCostRates,
   clientOverrideFor,
+  DECIDE_DEFAULT_CLIENT,
+  onExplicitAnthropicTier,
   decisionCalibrationFor,
   JEV_CLIENTS,
   limitsFor,
@@ -1765,10 +1767,11 @@ function decideFailure(
   variables: Record<string, unknown>,
   startTime: number,
   cause?: unknown,
+  functionName: 'Decide' | 'DecideVerbalized' = 'Decide',
 ): LLMCallError {
   return new LLMCallError(
     message,
-    extractFailureLLMCallData(undefined, 'Decide', variables, startTime),
+    extractFailureLLMCallData(undefined, functionName, variables, startTime),
     cause,
   )
 }
@@ -2006,5 +2009,137 @@ export function createDecideAllAdapter(
   }
   fn.limits = decide.limits
   if (decide.serving) fn.serving = decide.serving
+  return fn
+}
+
+// ============================================================================
+// Typed decision — the explicit verbalized secondary (#418, T5)
+// ============================================================================
+
+/** How far a stated distribution may sum from 1 and still be read. Looser than
+ *  Jev's 0.01 because a chat model writes its figures by hand. */
+export const VERBALIZED_MASS_TOLERANCE = 0.05
+
+/**
+ * The probabilities a chat model STATED, as a distribution over `letters` — or
+ * `undefined` when the answer is not a usable distribution, which the caller
+ * turns into an `LLMCallError`. Fails closed on the same shapes the Jev
+ * transport does (#511 R3): every listed option exactly once, each value in
+ * [0, 1], summing to 1 within {@link VERBALIZED_MASS_TOLERANCE}. An omitted
+ * option is not a stated 0, a percent scale is not a probability, and a
+ * repeated letter is ambiguous — none of them is repaired into certainty.
+ * Letters the spec does not have are ignored; what is left is renormalised
+ * only for the small rounding the tolerance allows.
+ */
+export function verbalizedProbabilities(
+  stated: ReadonlyArray<{ readonly letter: string; readonly probability: number }>,
+  letters: readonly string[],
+): Record<string, number> | undefined {
+  const mass: Record<string, number> = {}
+  for (const { letter, probability } of stated ?? []) {
+    const key = typeof letter === 'string' ? letter.trim().toUpperCase() : ''
+    if (!letters.includes(key)) continue
+    if (key in mass) return undefined // stated twice: ambiguous
+    if (
+      typeof probability !== 'number' ||
+      !Number.isFinite(probability) ||
+      probability < 0 ||
+      probability > 1
+    )
+      return undefined // out of range, incl. a percent scale
+    mass[key] = probability
+  }
+  if (letters.some((l) => !(l in mass))) return undefined // an omitted option is not a stated 0
+  const sum = letters.reduce((a, l) => a + mass[l], 0)
+  if (Math.abs(sum - 1) > VERBALIZED_MASS_TOLERANCE) return undefined
+  return normalizeLabelMass(mass, letters).probs
+}
+
+/**
+ * `DecideFn` backed by `DecideVerbalized` — the explicit SECONDARY a host
+ * injects as `createDecideAdapter({ verbalized })`. Nothing in this repo does:
+ * it is reachable only when an operator has named `DecideAnthropic` with
+ * `configureDecideSecondary` (decision G5) AND the host wired this in, so it is
+ * never a default and never a fallback — the Jev-unreachable path stays
+ * fail-closed.
+ *
+ * `method: 'verbalized'` and `calibrated: false` are CONSTANTS here, not read
+ * from the response: nothing about a stated probability was measured, so no
+ * input can make this transport report otherwise. A `requireCalibrated` policy
+ * therefore abstains on it, and a calibration entry is never applied.
+ *
+ * It carries its OWN tier lock rather than leaning on `createDecideAdapter`'s:
+ * a host composing it on the raw seam must not be able to reach a public
+ * provider from a private-tier run by skipping the adapter. The check is a
+ * positive match on the Anthropic tier, before any request.
+ */
+export function createVerbalizedDecide(): DecideFn {
+  const fn = async <L extends string>(input: DecideInput<L>): Promise<DecideResult<L>> => {
+    const startTime = Date.now()
+    const { spec, state } = input
+    const variables = { state, question: spec.question, labels: spec.labels }
+    const fail = (message: string, cause?: unknown) =>
+      decideFailure(message, variables, startTime, cause, 'DecideVerbalized')
+
+    if (!onExplicitAnthropicTier()) {
+      throw fail(
+        'Refusing the verbalized decide secondary outside the Anthropic tier: it calls a ' +
+          'public provider, and nothing was sent to any provider.',
+      )
+    }
+    // REACHABLE ONLY WHEN NAMED (G5). The role's own default is never served
+    // by the secondary: it serves a client that was RE-NAMED — by
+    // `configureDecideSecondary`, by a consumer client registered for the role,
+    // or by a per-run `clientOverride`. Belt and braces since the Jev transport
+    // exists: the default now selects Jev and never reaches this function.
+    const resolved = resolveClientForRole('decide')
+    if (resolved === DECIDE_DEFAULT_CLIENT) {
+      throw fail(
+        `The verbalized decide secondary was asked to serve ${resolved}, the role's own default: ` +
+          'it serves only a client that was re-named (configureDecideSecondary, a consumer client or a per-run override).',
+      )
+    }
+    const count = spec.labels.length
+    if (count < 2 || count > MAX_DECISION_LABELS) {
+      throw fail(
+        `Decision ${spec.key} has ${count} labels; the verbalized secondary takes 2..${MAX_DECISION_LABELS}.`,
+      )
+    }
+    const letters = spec.labels.map((_, i) => String.fromCharCode(65 + i))
+    const options = spec.labels.map((l, i) => ({ letter: letters[i], description: l.description }))
+
+    const { b } = await import('./baml_client')
+    const collector = new Collector('DecideVerbalized')
+    let stated: Array<{ letter: string; probability: number }>
+    try {
+      // Spread routes the call like every other role: on the Anthropic tier it
+      // is the operator-named secondary (or undefined → the declared
+      // `DecideAnthropic`); were the lock above ever removed, a private-tier
+      // run would land on the private tier's own client, never a public one.
+      stated = await b.DecideVerbalized(state, spec.question, options, {
+        collector,
+        ...clientOverrideFor('decide'),
+      })
+    } catch (e) {
+      throw wrapAsLLMCallError(e, 'DecideVerbalized', variables, startTime, collector)
+    }
+
+    const byLetter = verbalizedProbabilities(stated, letters)
+    if (!byLetter) {
+      throw new LLMCallError(
+        'DecideVerbalized returned no usable distribution: a usable answer states every listed ' +
+          'option exactly once, each in [0, 1], summing to 1 ± ' +
+          `${VERBALIZED_MASS_TOLERANCE}. An unusable answer is an error, not a confident zero.`,
+        extractFailureLLMCallData(collector, 'DecideVerbalized', variables, startTime),
+      )
+    }
+    const probs = {} as Record<L, number>
+    spec.labels.forEach((l, i) => {
+      probs[l.id] = byLetter[letters[i]] ?? 0
+    })
+    const llmCall = extractLLMCallData(collector, 'DecideVerbalized', variables, startTime, stated)
+    return { probs, method: 'verbalized', calibrated: false, ...(llmCall && { llmCall }) }
+  }
+  fn.limits = () => limitsFor('decide')
   return fn
 }

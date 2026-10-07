@@ -425,9 +425,10 @@ describe('the switched-function set follows the routed roles', () => {
     // because it really does run on both, so excluding it would understate the
     // Anthropic window by the one call that is slowest per character.
     expect(TIER_SWITCHED_FUNCTIONS.has('ScreenUntrustedContent')).toBe(true)
-    // Sixteen: every function declared in the one `baml_src/`. The filter that reads
-    // this set therefore excludes nothing today, and the honest way to pin
-    // that is to say so rather than to let a subset look deliberate.
+    // Sixteen of the seventeen functions declared in the one `baml_src/`: every
+    // one except `DecideVerbalized` (#418 T5), which is excluded deliberately —
+    // it is refused on the private tier, never moved to it. The honest way to
+    // pin that is to say so rather than to let a subset look deliberate.
     expect(TIER_SWITCHED_FUNCTIONS.size).toBe(16)
   })
 
@@ -464,6 +465,35 @@ describe('the switched-function set follows the routed roles', () => {
     // Guard against a regex that matched nothing: the comparison above would
     // then pass only if the map were empty too.
     expect(declaringDescribe).toHaveLength(8)
+  })
+
+  it('DecideAnthropic is its own block: exactly DecideVerbalized rides it, on exactly two Sonnet NoThink leaves (#513 R5)', () => {
+    // Re-pointing another function onto this chain, or adding a leaf, is the
+    // implicit move CLAUDE.md warns about — and the chain is only safe to edit
+    // today because ONE function rides it. Comments are stripped first, so a
+    // sentence in a comment cannot satisfy or break the scan.
+    const bamlDir = path.resolve(process.cwd(), '../packages/harness-baml/baml_src')
+    const strip = (src: string) =>
+      src
+        .split('\n')
+        .filter((line) => !line.trimStart().startsWith('//'))
+        .join('\n')
+    const riders: string[] = []
+    let chain: string | undefined
+    for (const entry of readdirSync(bamlDir)) {
+      if (!entry.endsWith('.baml')) continue
+      const src = strip(readFileSync(path.join(bamlDir, entry), 'utf8'))
+      for (const m of src.matchAll(/function\s+(\w+)\s*\([^)]*\)\s*->[^{]*\{\s*client\s+(\w+)/g)) {
+        if (m[2] === 'DecideAnthropic') riders.push(m[1])
+      }
+      const c = /client<llm>\s+DecideAnthropic\s*\{[\s\S]*?strategy\s*\[([^\]]*)\]/.exec(src)
+      if (c) chain = c[1]
+    }
+    expect(riders).toEqual(['DecideVerbalized'])
+    expect(chain?.split(',').map((x) => x.trim())).toEqual([
+      'AnthropicSonnet5NoThink',
+      'AnthropicSonnet46NoThink',
+    ])
   })
 
   it('is the same set whether the flag is on or off', async () => {
@@ -715,7 +745,21 @@ describe('every routed role has a wired call site', () => {
     const code = corpus()
     expect(code.match(/b\.Decide\(/g) ?? []).toHaveLength(1)
     expect(callArgs(code, 'b.Decide(')).toContain("clientOverrideFor('decide')")
-    expect(code.match(/clientOverrideFor\('decide'\)/g) ?? []).toHaveLength(1)
+    // Two call sites in all: the readout above and, since T5, the verbalized
+    // secondary — pinned in its own test below, so neither count hides the other.
+    expect(code.match(/clientOverrideFor\('decide'\)/g) ?? []).toHaveLength(2)
+  })
+
+  it('the verbalized secondary spreads the decide override on its OWN call (defence in depth)', () => {
+    // `DecideVerbalized` declares `DecideAnthropic`, a PUBLIC provider. Its tier
+    // lock refuses a private-tier run before any request; this spread is the
+    // second line — were the lock ever removed, the call would land on the
+    // private tier's own client instead of a public one. A call with no spread
+    // reads like routing and changes nothing, so it is pinned ON the call
+    // expression, by balanced parens, exactly like `Decide`.
+    const code = corpus()
+    expect(code.match(/b\.DecideVerbalized\(/g) ?? []).toHaveLength(1)
+    expect(callArgs(code, 'b.DecideVerbalized(')).toContain("clientOverrideFor('decide')")
   })
 
   it('routes both memory functions through the describe spread, on each call', async () => {

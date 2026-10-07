@@ -293,3 +293,9 @@ export interface ToolResult {
   error?: string | null
   
 }
+
+export interface VerbalizedOption {
+  letter: string
+  probability: number
+  
+}

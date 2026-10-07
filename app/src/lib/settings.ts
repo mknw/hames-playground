@@ -184,6 +184,8 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   CriticAnthropic: 200_000,
   SynthesizerAnthropic: 200_000,
   DescribeAnthropic: 200_000,
+  // #418 T5. The decide role's explicit verbalized secondary (Sonnet 5 / 4.6, thinking off).
+  DecideAnthropic: 200_000,
 }
 
 /**
@@ -243,6 +245,8 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // resolveClientForRole(), which returns chain names — compactBulkData
   // derives its describe batch size here (SA-M6).
   DescribeAnthropic: 16_384, // = AnthropicHaiku45, the chain's only leaf
+  // #418 T5: the chain's weakest leaf, AnthropicSonnet46NoThink (Sonnet5NoThink is 32 768).
+  DecideAnthropic: 16_384,
 }
 
 // ============================================================================

@@ -20,7 +20,7 @@ $ pnpm add @boundaryml/baml
 
 import type { Image, Audio, Pdf, Video } from "@boundaryml/baml"
 import type { Checked, Check } from "./types"
-import type {  Attempt,  CompactedMemory,  ControllerAction,  CriticResult,  DecideOption,  DescribeBatchResult,  DescribeItemSummary,  DescribeTarget,  ExpandedRef,  ExtractedMemory,  FewShot,  LoopTurn,  MemoryMember,  Message,  PlanResult,  PriorResult,  ReferenceCandidate,  ReferenceSelection,  ReferenceSelectorResult,  RouteOption,  RoutingResult,  ScreenVerdict,  ToolCall,  ToolCallRequest,  ToolDescription,  ToolResult } from "./types"
+import type {  Attempt,  CompactedMemory,  ControllerAction,  CriticResult,  DecideOption,  DescribeBatchResult,  DescribeItemSummary,  DescribeTarget,  ExpandedRef,  ExtractedMemory,  FewShot,  LoopTurn,  MemoryMember,  Message,  PlanResult,  PriorResult,  ReferenceCandidate,  ReferenceSelection,  ReferenceSelectorResult,  RouteOption,  RoutingResult,  ScreenVerdict,  ToolCall,  ToolCallRequest,  ToolDescription,  ToolResult,  VerbalizedOption } from "./types"
 import type * as types from "./types"
 
 /******************************************************************************
@@ -230,5 +230,9 @@ export namespace partial_types {
       result?: string | null
       success?: boolean | null
       error?: string | null
+    }
+    export interface VerbalizedOption {
+      letter?: string | null
+      probability?: number | null
     }
 }

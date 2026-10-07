@@ -205,7 +205,7 @@ describe('what goes on the wire', () => {
     // The Verda wake's measured lesson applies to both boxes: a readiness
     // endpoint answers while the weights are still loading, wrong in both
     // directions. Only a request that makes the box produce something proves
-    // it — a 1-token completion, a one-item embedding.
+    // it — a two-token completion, a one-item embedding.
     await ensureMemoryAwake(true)
     expect(fetchMock.mock.calls[0]).toEqual([
       EMBED_URL,
@@ -221,13 +221,19 @@ describe('what goes on the wire', () => {
     }
   })
 
-  it('the 4B probe is a 1-token completion at temperature 0 (SD-10: fixed literals)', async () => {
+  it('the 4B probe is a two-token completion at temperature 0 (SD-10: fixed literals)', async () => {
+    // TWO tokens, not the Verda probe's one: llama-server (b9190, Qwen3.5-4B,
+    // coordinator finding C1, #497 comment 6033599840) aborts on the second
+    // identical prompt sent with max_tokens: 1 — `failed to remove sequence 2`
+    // — so the wake's next probe would kill the box the private tier's
+    // describe role runs on. A probe's only job is to prove a token was
+    // produced; 2 survives the crash, 1 does not.
     await ensureMemoryAwake(true)
     const init = fetchMock.mock.calls.find(([url]) => url === SMALL_URL)![1] as RequestInit
     expect(JSON.parse(init.body as string)).toEqual({
       model: SUMMARIZER_MODEL_ID,
       messages: [{ role: 'user', content: MEMORY_WAKE_PROMPT }],
-      max_tokens: 1,
+      max_tokens: 2,
       temperature: 0,
     })
   })
@@ -594,11 +600,14 @@ describe('the bounded wait both consumers attach through', () => {
 })
 
 describe('the env knobs are documented where a deployment reads them', () => {
-  it('every env var the module reads appears in .env.example (F2)', () => {
+  it('every env var the module reads appears in .env.example, inside the memory block (F2 + F5)', () => {
     // The VERDA_WAKE_* block is the established precedent: a wake's tunable
     // bounds are deployment knobs, documented with their defaults and their
     // reasoning, not discoverable only by reading the module. Source-scan, the
-    // uno-fonts pattern: every name this module reads must have a row there.
+    // uno-fonts pattern: every name this module reads must have a row there —
+    // and PLACEMENT is checked, not just containment (F5): a row that drifted
+    // above the file's own header documents nothing, and the containment scan
+    // is what let that survive once already.
     const source = readFileSync(
       path.resolve(process.cwd(), 'src/lib/inference/memory-wake.server.ts'),
       'utf8',
@@ -609,11 +618,21 @@ describe('the env knobs are documented where a deployment reads them', () => {
     for (const m of source.matchAll(/process\.env\.([A-Z_]+)/g)) names.add(m[1])
     for (const m of source.matchAll(/(?:envVar|keyEnvVar): '([A-Z_]+)'/g)) names.add(m[1])
     expect(names.size).toBeGreaterThanOrEqual(8)
+    // The wake vars live BELOW the block header; the module's other reads live
+    // anywhere in the file, as long as they have a row.
+    const blockStart = example.indexOf('# ----- Waking the memory boxes')
+    expect(blockStart).toBeGreaterThan(-1)
     for (const name of names) {
       expect(
         example,
         `${name} is read by memory-wake.server.ts but not documented in .env.example`,
       ).toContain(name)
+      if (name.startsWith('MEMORY_WAKE_')) {
+        expect(
+          example.indexOf(name),
+          `${name} must sit inside the MEMORY_WAKE block (below its header), not above it`,
+        ).toBeGreaterThan(blockStart)
+      }
     }
   })
 })

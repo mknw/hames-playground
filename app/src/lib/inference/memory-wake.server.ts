@@ -184,12 +184,26 @@ interface WakeTarget {
 }
 
 /**
- * The 4B summarizer's probe: a 1-token completion at temperature 0. The
- * cheapest request that forces the weights to load and one token out —
- * `max_tokens: 1`, not 0, because a request rejected before generation proves
+ * The 4B summarizer's probe: a two-token completion at temperature 0. The
+ * cheapest request that forces the weights to load and a token out —
+ * `max_tokens: 2`, not 0, because a request rejected before generation proves
  * nothing about readiness. The Verda module's `/v1/models` lesson applies
  * verbatim: a readiness GET answers while the weights are still loading, in
  * BOTH directions wrong.
+ *
+ * **Why 2 and not the Verda probe's 1:** llama-server (observed on b9190,
+ * Qwen3.5-4B Q8_0, the Makefile's flags — coordinator finding C1 on #419,
+ * [#497 comment 6033599840](https://github.com/mknw/hames-playground/pull/497#issuecomment-6033599840))
+ * ABORTS on the second identical prompt sent with `max_tokens: 1` —
+ * `common/common.cpp:1489: failed to remove sequence 2 with p0=164, p1=-1`,
+ * abort trap 6 — and every later request gets an empty reply. The second probe
+ * that reaches a live llama-server, whether from a poll retry or the next
+ * turn's wake, would kill the very box the private tier's `describe` role runs
+ * on. Two variants survive it, each tested on a fresh server: `max_tokens: 2`
+ * and per-request `cache_prompt: false`; the token count is the one that costs
+ * nothing, and a probe's only job is to prove a token was produced. This is a
+ * llama-server bug, not a vLLM one — the Verda probe on `wake.server.ts` keeps
+ * its `max_tokens: 1` and is out of scope here.
  */
 const SUMMARIZER: WakeTarget = {
   label: 'the 4B summarizer (SMALL_LLM_BASE_URL)',
@@ -200,7 +214,7 @@ const SUMMARIZER: WakeTarget = {
     body: {
       model: SUMMARIZER_MODEL_ID,
       messages: [{ role: 'user', content: MEMORY_WAKE_PROMPT }],
-      max_tokens: 1,
+      max_tokens: 2,
       temperature: 0,
     },
   }),

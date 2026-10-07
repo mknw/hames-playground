@@ -2914,23 +2914,71 @@ describe('#492: xlsx cells resolve through their styles, their fills and their f
 })
 
 describe('#492 F2: the resolver costs CPU linear in the part', () => {
-  it('placeholder runs resolving through layout and master cost no more than the same shapes without placeholders', async () => {
-    const ph = Array.from({ length: 1_500 }, (_, i) =>
-      shape(`s${i}`, { id: i + 2, ph: 'body' }),
-    ).join('')
-    const plain = Array.from({ length: 1_500 }, (_, i) => shape(`s${i}`, { id: i + 2 })).join('')
-    const bytes = pptx({
-      slides: [{ shapes: ph }],
-      style: {
-        layouts: [pStylePart('sldLayout', phShape(WHITE_1PT))],
-        master: pStylePart('sldMaster', '', CLR_MAP + MASTER_TXSTYLES),
-      },
-    })
-    const base = pptx({ slides: [{ shapes: plain }] })
-    const ratio =
-      (await cpuMs(() => ooxmlDisarm(bytes, MIME.pptx))) /
-      (await cpuMs(() => ooxmlDisarm(base, MIME.pptx)))
-    expect(ratio).toBeLessThan(2)
+  it('placeholder resolution through growing layout and master trees takes linear work', async () => {
+    // Count actual XML child inspections in elements()/childEls(), rather than
+    // elapsed time on a shared runner. No production instrumentation: the spy
+    // delegates every predicate unchanged and is restored even on a refusal.
+    const fixture = (n: number, placeholders: boolean): Uint8Array => {
+      const shapes = Array.from({ length: n }, (_, i) =>
+        shape(`s${i}`, { id: i + 3, ph: placeholders ? (i % 2 ? 'title' : 'body') : undefined }),
+      ).join('')
+      const padding = Array.from({ length: n }, (_, i) => shape(`pad${i}`, { id: i + 3 })).join('')
+      // Body runs inherit the layout; title runs must reach the master. Both
+      // inherited trees grow with n: re-walking either per run is quadratic.
+      return pptx({
+        slides: [{ shapes }],
+        style: {
+          layouts: [pStylePart('sldLayout', phShape(WHITE_1PT) + padding)],
+          master: pStylePart('sldMaster', phShape(WHITE_1PT, 'title') + padding, CLR_MAP),
+        },
+      })
+    }
+    const measured = async (n: number, placeholders: boolean) => {
+      const bytes = fixture(n, placeholders)
+      let inspections = 0
+      const filter = Array.prototype.filter
+      const spy = vi.spyOn(Array.prototype, 'filter').mockImplementation(function (
+        this: unknown[],
+        predicate,
+        thisArg,
+      ) {
+        return filter.call(this, (value, index, array) => {
+          if (value && typeof value === 'object' && 'children' in value && 'ns' in value) {
+            inspections++
+          }
+          return predicate.call(thisArg, value, index, array)
+        })
+      })
+      try {
+        const result = await ooxmlDisarm(bytes, MIME.pptx)
+        // A resolver that skips inheritance cannot pass the work bound.
+        expect(result.counted).toEqual(placeholders ? { 'colour-contrast': n, 'too-small': n } : {})
+      } finally {
+        spy.mockRestore()
+      }
+      expect(inspections).toBeGreaterThan(n)
+      return inspections
+    }
+    const small = await measured(64, true)
+    const large = await measured(512, true)
+    const plain = await measured(512, false)
+    // Eight times the input permits at most eight times the work (the fixed
+    // package overhead makes this conservative), not a quadratic 64 times.
+    expect(large).toBeLessThanOrEqual(small * 8)
+    // Keep the old relative bound too, now on deterministic work with the
+    // same layout/master trees present in the non-placeholder control.
+    expect(large / plain).toBeLessThan(2)
+    // The count sees only traversal through Array.prototype.filter. CPU sees
+    // the rest — a re-parse, a re-serialisation, a for..of or index-loop walk —
+    // with its bound set by the quadratic it must catch, not by runner noise:
+    // at n = 2048 linear resolution costs ~1.1x the control, a per-placeholder
+    // re-walk of either growing tree 5x and more.
+    const ph = fixture(2048, true)
+    const control = fixture(2048, false)
+    const cpu =
+      (await cpuMs(() => ooxmlDisarm(ph, MIME.pptx))) /
+      (await cpuMs(() => ooxmlDisarm(control, MIME.pptx)))
+    expect(cpu).toBeLessThan(3)
   }, 120_000)
 })
 

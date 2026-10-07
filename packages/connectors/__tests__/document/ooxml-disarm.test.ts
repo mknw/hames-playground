@@ -2264,16 +2264,20 @@ describe('#492: the resolver is fail-closed — provable visibility, by contrast
       `${run('SECRETWHITE', '<w:color w:val="FFFFFF"/>')}` +
       `${run('SECRETNEARWHITE', '<w:color w:val="FFFFFE"/>')}` +
       `${run('GREYFOOTNOTE', '<w:color w:val="595959"/>')}` +
-      `${run('BLUEHEADING', '<w:color w:val="4F81BD"/>')}</w:p>`
+      `${run('BLUEHEADING', '<w:color w:val="4F81BD"/>')}` +
+      // The boundary itself, measured: D9D9D9 is 1.412 and passes as visibly
+      // distinct; E0E0E0 is 1.32 and does not.
+      `${run('GREYD9CONTROL', '<w:color w:val="D9D9D9"/>')}` +
+      `${run('SECRETE0GREY', '<w:color w:val="E0E0E0"/>')}</w:p>`
     const out = await disarmed(docx({ body }), MIME.docx, [])
-    expect(out.counted).toEqual({ 'colour-contrast': 2 })
+    expect(out.counted).toEqual({ 'colour-contrast': 3 })
   })
 
   it('white text on a dark background is provably visible and does not count', async () => {
     const body =
-      `<w:p><w:pPr><w:shd w:val="clear" w:fill="0A0A0A"/></w:pPr>${run('VISIBLE')}` +
+      `<w:p><w:pPr><w:shd w:val="clear" w:fill="0A0A0A"/></w:pPr>` +
       `${run('WHITEONDARK', '<w:color w:val="FFFFFF"/>')}</w:p>` +
-      `<w:p>${run('BLACKONBLACK', '<w:color w:val="000000"/><w:shd w:val="clear" w:fill="000000"/>')}</w:p>` +
+      `<w:p>${run('VISIBLE')}${run('BLACKONBLACK', '<w:color w:val="000000"/><w:shd w:val="clear" w:fill="000000"/>')}</w:p>` +
       // A solid shading draws w:color, not w:fill — hiding there counts too.
       `<w:p>${run('SECRETSOLID', '<w:color w:val="000000"/><w:shd w:val="solid" w:color="000000" w:fill="auto"/>')}</w:p>` +
       // And one written with no w:val at all, the way real documents shade
@@ -2846,7 +2850,7 @@ describe('#492: xlsx cells resolve through their styles, their fills and their f
     expect(bare.counted).toEqual({ 'colour-contrast': 1 })
   })
 
-  it('an automatic font colour adapts to its fill and does not count', async () => {
+  it('an automatic font colour renders black: on a dark fill it cannot contrast', async () => {
     const out = await disarmed(
       xlsx({
         sheets: [
@@ -2854,7 +2858,7 @@ describe('#492: xlsx cells resolve through their styles, their fills and their f
             name: 'S',
             xml: cells([
               [0, 'VISIBLE', 'A1'],
-              [1, 'AUTODARK_CONTROL', 'B1'],
+              [1, 'SECRETAUTOONDARK', 'B1'],
             ]),
           },
         ],
@@ -2870,7 +2874,7 @@ describe('#492: xlsx cells resolve through their styles, their fills and their f
       MIME.xlsx,
       [],
     )
-    expect(out.counted).toEqual({})
+    expect(out.counted).toEqual({ 'colour-contrast': 1 })
   })
 
   it('the counted keys are exactly the five reasons', async () => {
@@ -2929,6 +2933,246 @@ describe('#492 F2: the resolver costs CPU linear in the part', () => {
     expect(ratio).toBeLessThan(2)
   }, 120_000)
 })
+
+// ============================================================================
+// #495 review: a mechanism that reads as a KNOWN state must still resolve
+// ============================================================================
+
+/**
+ * The security review of PR #495 proved nine bypasses in #492's own class:
+ * colour/fill/size mechanisms the resolver read as a KNOWN state — none,
+ * auto, an inert-list entry, or "the fill beneath" — instead of resolving
+ * them or counting `unknown-property`. Each pin below is one finding's
+ * probe, in the reviewer's terms: the mechanism resolves, or it counts.
+ */
+describe('#495 review: a mechanism that reads as a KNOWN state must still resolve', () => {
+  const xf495 = (numFmtId: number, fontId: number, fillId: number): string =>
+    `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}"/>`
+  const cells495 = (
+    list: readonly (readonly [s: number, t: string, ref: string])[],
+  ): string =>
+    `<sheetData><row r="1">${list
+      .map(([s, t, ref]) => `<c r="${ref}" s="${s}" t="inlineStr"><is><t>${t}</t></is></c>`)
+      .join('')}</row></sheetData>`
+
+  // Finding 1: Automatic renders black, and does not adapt to any fill.
+  it('a colourless docx run over a dark cell fill cannot contrast (Automatic is black)', async () => {
+    const body =
+      '<w:tbl><w:tblGrid><w:gridCol/></w:tblGrid><w:tr><w:tc>' +
+      '<w:tcPr><w:shd w:val="clear" w:fill="000000"/></w:tcPr>' +
+      `<w:p>${run('SECRETAUTOCELL')}</w:p></w:tc></w:tr></w:tbl>` +
+      `<w:p>${run('AUTOWHITECONTROL')}</w:p>`
+    const out = await disarmed(docx({ body }), MIME.docx, [])
+    expect(out.counted).toEqual({ 'colour-contrast': 1 })
+  })
+
+  // Finding 2: a pptx text highlight is a background drawn over every other.
+  it('a pptx text highlight is the background behind the glyph, over every other background', async () => {
+    const white = '<a:rPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:highlight><a:srgbClr val="FFFFFF"/></a:highlight></a:rPr>'
+    const blackShape = '<a:solidFill><a:srgbClr val="000000"/></a:solidFill>'
+    const out = await disarmed(
+      pptx({
+        slides: [
+          {
+            shapes:
+              shape('VISIBLE') +
+              shape('SECRETHIGHLIGHTED', { id: 3, rPr: white, spPr: blackShape }),
+          },
+        ],
+      }),
+      MIME.pptx,
+      [],
+    )
+    expect(out.counted).toEqual({ 'colour-contrast': 1 })
+  })
+
+  // Finding 3: a pptx table cell fill is the background of its text. The
+  // grey-on-grey cell counts once the fill resolves; before that its grey
+  // text read as grey-on-white, visibly distinct.
+  it('a pptx table cell fill is the background of its text', async () => {
+    const tc = (text: string, fill: string, rPr: string) =>
+      `<a:tc><a:txBody><a:bodyPr/><a:p><a:r>${rPr}<a:t>${text}</a:t></a:r></a:p></a:txBody><a:tcPr>${fill}</a:tcPr></a:tc>`
+    const table = (cells: string) =>
+      '<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="4" name="T"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>' +
+      '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr/>' +
+      `<a:tr>${cells}</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>`
+    const grey = '<a:solidFill><a:srgbClr val="333333"/></a:solidFill>'
+    const greyText = '<a:rPr><a:solidFill><a:srgbClr val="333333"/></a:solidFill></a:rPr>'
+    const out = await disarmed(
+      pptx({
+        slides: [{ shapes: shape('VISIBLE') + table(tc('SECRETTABLECELL', grey, greyText)) }],
+      }),
+      MIME.pptx,
+      [],
+    )
+    expect(out.counted).toEqual({ 'colour-contrast': 1 })
+  })
+
+  // Finding 4: a:fld and OMML m:r runs are text-bearing and count like any run.
+  it('a:fld and OMML m:r runs are text-bearing and count like any run', async () => {
+    const spWith = (inner: string) =>
+      '<p:sp><p:nvSpPr><p:cNvPr id="5" name="S"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/>' +
+      `<p:txBody><a:bodyPr/><a:p>${inner}</a:p></p:txBody></p:sp>`
+    const fld =
+      '<a:fld type="slidenum" id="{00000000-0000-0000-0000-000000000000}"><a:rPr sz="100"><a:solidFill>' +
+      '<a:srgbClr val="FFFFFF"/></a:solidFill></a:rPr><a:t>SECRETFIELD</a:t></a:fld>'
+    const out = await disarmed(
+      pptx({ slides: [{ shapes: shape('VISIBLE') + spWith(fld) }] }),
+      MIME.pptx,
+      [],
+    )
+    expect(out.counted).toEqual({ 'colour-contrast': 1, 'too-small': 1 })
+    const omml =
+      `<m:r><w:rPr><w:color w:val="FFFFFF"/><w:sz w:val="2"/></w:rPr><m:t>SECRETOMML</m:t></m:r>`
+    const word = await disarmed(
+      docx({ body: `${para('VISIBLE')}<w:p>${omml}</w:p>` }),
+      MIME.docx,
+      [],
+    )
+    expect(word.counted).toEqual({ 'colour-contrast': 1, 'too-small': 1 })
+  })
+
+  // Finding 5: a docx text box fill is the background of its text. The
+  // grey-on-grey run counts once the box's fill resolves; before that it
+  // read as grey-on-white, visibly distinct.
+  it('a docx text box fill is the background of its text', async () => {
+    const box = (fill: string, runs: string) =>
+      `<w:r><w:drawing><wp:inline><wp:docPr id="7" name="d"/><a:graphic>` +
+      '<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">' +
+      `<wps:wsp><wps:spPr>${fill}</wps:spPr><wps:txbx><w:txbxContent>${runs}</w:txbxContent></wps:txbx></wps:wsp>` +
+      '</a:graphicData></a:graphic></wp:inline></w:drawing></w:r>'
+    const grey = '<a:solidFill><a:srgbClr val="333333"/></a:solidFill>'
+    const body =
+      para('VISIBLE') +
+      `<w:p>${box(grey, `<w:p>${run('SECRETBOXTEXT', '<w:color w:val="333333"/>')}</w:p>`)}</w:p>`
+    const out = await disarmed(docx({ body }), MIME.docx, [])
+    expect(out.counted).toEqual({ 'colour-contrast': 1 })
+  })
+
+  // Finding 6: a shading's theme-named colours resolve like w:color's.
+  it('w:shd theme colours resolve through the theme like w:color theme colours', async () => {
+    const body =
+      `<w:p><w:pPr><w:shd w:val="clear" w:themeFill="text1"/></w:pPr>${run('SECRETTHEMEFILL', '<w:color w:val="000000"/>')}</w:p>` +
+      `<w:p><w:pPr><w:shd w:val="clear" w:themeFill="background1"/></w:pPr>${run('ONTHEMEWHITE', '<w:color w:val="000000"/>')}</w:p>`
+    const out = await disarmed(docx({ body }), MIME.docx, [])
+    expect(out.counted).toEqual({ 'colour-contrast': 1 })
+  })
+
+  // Finding 7: a solid shading draws its pattern colour: absent reads as black.
+  it('a solid shading with an absent pattern colour draws black, never the fill', async () => {
+    const body =
+      `<w:p>${run('VISIBLE')}` +
+      `<w:p><w:pPr><w:shd w:val="solid" w:fill="FFFFFF"/></w:pPr>${run('SECRETSOLIDNOVAL', '<w:color w:val="000000"/>')}</w:p>`
+    const out = await disarmed(docx({ body }), MIME.docx, [])
+    expect(out.counted).toEqual({ 'colour-contrast': 1 })
+  })
+
+  // Finding 8: a dxf fill with no patternType is solid, and bgColor is read.
+  it('xlsx: a dxf fill with no patternType is solid, and bgColor resolves beside fgColor', async () => {
+    // The dxf form Excel writes: bgColor only, no patternType, over a black
+    // base font — the #482 reading the rewrite dropped.
+    const dxfStyles =
+      `<styleSheet xmlns="${NS.s}"><fonts><font><color rgb="FF000000"/></font></fonts>` +
+      '<fills><fill><patternFill patternType="none"/></fill></fills>' +
+      '<cellXfs><xf numFmtId="0" fontId="0" fillId="0"/></cellXfs>' +
+      '<dxfs><dxf><fill><patternFill><bgColor rgb="FF000000"/></patternFill></fill></dxf></dxfs></styleSheet>'
+    const dxfSheet =
+      `<sheetData>${row(1, ['VISIBLE'])}</sheetData>` +
+      '<conditionalFormatting sqref="A1"><cfRule type="expression" dxfId="0" priority="1">' +
+      '<formula>TRUE()</formula></cfRule></conditionalFormatting>'
+    const dxf = await disarmed(
+      xlsx({ sheets: [{ name: 'S', xml: dxfSheet }], styles: dxfStyles }),
+      MIME.xlsx,
+      [],
+    )
+    expect(dxf.counted).toEqual({ 'colour-contrast': 1 })
+    // A base solid fill that names only its bgColor resolves that colour.
+    const base = await disarmed(
+      xlsx({
+        sheets: [
+          {
+            name: 'S',
+            xml: cells495([
+              [0, 'VISIBLE', 'A1'],
+              [1, 'SECRETBGONLY', 'B1'],
+            ]),
+          },
+        ],
+        styles: sStyles({
+          fonts: ['<font><sz val="11"/><color rgb="FF404040"/></font>'],
+          fills: [
+            '<fill><patternFill patternType="none"/></fill>',
+            '<fill><patternFill patternType="solid"><bgColor rgb="FF404040"/></patternFill></fill>',
+          ],
+          xfs: [xf495(0, 0, 0), xf495(0, 0, 1)],
+        }),
+      }),
+      MIME.xlsx,
+      [],
+    )
+    expect(base.counted).toEqual({ 'colour-contrast': 1 })
+  })
+
+  // Finding 9: a fill entry carrying more than its patternFill is not provably
+  // any colour (Excel 2010+ gradients ride in extLst as x14:fill).
+  it('xlsx: a fill entry with more than its patternFill is not provably any colour', async () => {
+    const X14 = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main'
+    const gradient =
+      `<fill><patternFill patternType="none"/><extLst><ext xmlns:x14="${X14}" uri="{78C0D931-6777-43EE-B60F-DE7C84584A24}">` +
+      '<x14:fill><x14:gradientFill><x14:stop position="0"><x14:color rgb="FF404040"/></x14:stop>' +
+      '<x14:stop position="1"><x14:color rgb="FF404040"/></x14:stop></x14:gradientFill></x14:fill>' +
+      '</ext></extLst></fill>'
+    const out = await disarmed(
+      xlsx({
+        sheets: [
+          {
+            name: 'S',
+            xml: cells495([
+              [0, 'VISIBLE', 'A1'],
+              [1, 'SECRETX14FILL', 'B1'],
+            ]),
+          },
+        ],
+        styles: sStyles({
+          fonts: ['<font><sz val="11"/><color rgb="FF404040"/></font>'],
+          fills: ['<fill><patternFill patternType="none"/></fill>', gradient],
+          xfs: [xf495(0, 0, 0), xf495(0, 0, 1)],
+        }),
+      }),
+      MIME.xlsx,
+      [],
+    )
+    expect(out.counted).toEqual({ 'unknown-property': 1 })
+  })
+
+  // The reviewer's minors: w:highlight "none" is no highlight; vertAlign
+  // composes with the size as w:w does.
+  it('w:highlight val="none" is no highlight, and vertAlign composes with the size', async () => {
+    const body =
+      `<w:p>${run('VISIBLE')}${run('NONESHADECONTROL', '<w:color w:val="000000"/><w:highlight w:val="none"/>')}</w:p>` +
+      `<w:p>${run('SECRETSUPERTINY', '<w:sz w:val="3"/><w:vertAlign w:val="superscript"/>')}${run('SUPCONTROL', '<w:sz w:val="3"/>')}</w:p>`
+    const out = await disarmed(docx({ body }), MIME.docx, [])
+    expect(out.counted).toEqual({ 'too-small': 1 })
+  })
+
+  // The reviewer's fillRef reconciliation: idx 0 applies no fill — the slide
+  // shows through — so a plain run in such a shape is not unknown-property.
+  it('a fillRef idx of 0 applies no fill: the background beneath shows through', async () => {
+    const fillRef0 =
+      '<p:style><a:lnRef idx="1"><a:schemeClr val="accent1"/></a:lnRef>' +
+      '<a:fillRef idx="0"><a:schemeClr val="accent1"/></a:fillRef>' +
+      '<a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"/></p:style>'
+    const out = await disarmed(
+      pptx({
+        slides: [{ shapes: shape('IDXZEROCONTROL', { id: 3, style: fillRef0 }) + shape('VISIBLE') }],
+      }),
+      MIME.pptx,
+      [],
+    )
+    expect(out.counted).toEqual({})
+  })
+})
+
 
 describe('#482 F7 (A11): a deleted table cell is a deletion', () => {
   it('F4: a w:tc marked w:cellDel goes with its text', async () => {

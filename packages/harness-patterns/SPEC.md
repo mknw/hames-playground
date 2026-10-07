@@ -65,6 +65,7 @@ is and why it is shaped this way, start at the front page —
   - [router()](#routerroutedescriptions-config)
   - [routes()](#routespatternmap-config)
   - [typedDecision() and decisionRouter()](#decisions-typeddecision-418)
+  - [memoryRecall()](#memory-recall-memoryrecall-419)
   - [judge()](#judgeevaluator-config)
   - [chain()](#chainctx-patterns-onevent)
   - [harness()](#harnesspatterns)
@@ -220,6 +221,7 @@ interface PatternCapabilities {
   retrievalBackends?: readonly string[] // declared by `retriever`: the backends it will query
   workspaceSync?: boolean // declared by a wrapper that gives its subtree a durable workspace
   decisionKeys?: readonly string[] // declared by a deciding pattern (#418): the DecisionSpec keys whose calibration a host can feed
+  memory?: true // declared by memoryRecall (#419): read by harnessUsesMemory, the opt-in probe for the memory wake and store
 }
 ```
 
@@ -2092,6 +2094,160 @@ transport's `llmCall.variables`). `PatternCapabilities.decisionKeys` +
 without running the harness; the per-tier calibration probe that consumes them
 is #418 T6.
 
+## Memory recall (memoryRecall, #419)
+
+The recall half of `withMemory`: a chain step that runs BEFORE routing and, when
+the user's message plausibly depends on what the system remembers about them,
+attaches the few best-matching memories to the turn. It generates no text.
+
+```typescript
+harness(
+  memoryRecall({ store, decide, embed, owner, visibleTiers, awaitWake }),
+  router(),
+  routes({/* … */}),
+  compactExecution(),
+)
+```
+
+It is shaped after `retriever`: `commitStrategy: 'always'`, `errorSeverity:
+'recoverable'`, `estimateTurns: () => 0`, its backends injected. **Core stays
+generic** — no database, no network, no embedder, no provider vocabulary (a tier
+is an opaque string, the run frame's own rule). Everything the host owns arrives
+through five REQUIRED seams:
+
+| Config                        | What it is                                                                                                                                                                                                                                                                                                                                                                      |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `store: MemoryStore`          | `count(tiers)` and `candidates({ embedding, embedSpace?, tiers })`. **No method takes an owner**: the host binds the turn's owner into the store it hands in. The recall query is EXACT — every active row of the owner in the visible tiers, each with its cosine distance, no `ORDER BY`/`LIMIT` — because BM25's document frequencies are computed over exactly that corpus. |
+| `decide: DecideFn`            | #418's RAW seam. The step applies its own `DecisionPolicy` through `evaluateDecision`; hand it `bamlPatterns().decide`, never a policy-applying wrapper.                                                                                                                                                                                                                        |
+| `embed: MemoryQueryEmbedder`  | `query(text)`, plus an optional `spaceId`. A row from another space is refused (`skipped: 'error'`), never ranked on.                                                                                                                                                                                                                                                           |
+| `owner: () => string \| null` | From the host's request context, never an argument. `null` → `skipped: 'no-user'`.                                                                                                                                                                                                                                                                                              |
+| `visibleTiers(turnTier)`      | Which stored tiers a turn of this tier may read. The rule lives where the tier vocabulary does (the app: `anthropic` sees `anthropic`; `verda` sees both). **Fail closed** for an unknown tier.                                                                                                                                                                                 |
+
+Optional: `awaitWake` (below), `tier` (default: the run frame's `inference.tier`),
+`limits` (the responder's window, for the 5% ceiling) and `settings`.
+
+### The pipeline
+
+1. **Clear** `data.memories` and `data.memoryContext` — FIRST, before anything
+   can fail. `scope.data` survives the turn boundary, so a failure that returned
+   it untouched would hand the NEXT turn this turn's memories (pin
+   `per-turn-clear`).
+2. **Owner** (`no-user`) → **switch** (`settings.enabled`, `disabled`) → **count**
+   in the turn's tiers (0 → `empty`, with no gate and no embedding paid) →
+   **query** (the latest user message; none → `no-query`).
+3. **Gate, search and wake run concurrently** under one deadline,
+   `gate.timeoutMs` (default 1500 ms), so the turn pays the slowest of the three
+   and not their sum. The gate asks `memory.recall` (`retrieve | skip`, fallback
+   `skip`) over the latest user message and the previous FINAL assistant message
+   — **never memory content**.
+4. **Rank** (`rankMemories`, `memory-ranking.server.ts`): NFKC tokenizer
+   over `\p{L}`/`\p{N}` runs with identifiers kept whole (beside their parts) and
+   small EN/NL/FR stopword lists, no stemming; BM25 (k1 1.2, b 0.75; Lucene's
+   non-negative idf) over the user's own rows; cosine similarity `s_v = 1 −
+distance`; the **floors BEFORE fusion** — a row survives a channel only if
+   `s_v ≥ τ_v`, or it shares a non-stopword query term of length ≥ 3 with
+   `idf ≥ τ_idf`; **RRF** (k = 60) over each channel's surviving ranked list,
+   ties on `s_v`, then `last_seen_at`, then id. RRF is rank-only, so a fused score
+   cannot reject garbage: floored AFTER fusion, rejected rows would take rank
+   positions from the survivors (pin `bm25-rrf-floors`).
+5. **Cap**: `maxMemories` (default 5) then `maxMemoryTokens` (default 400 via
+   `estimateTokens`, hard-capped at 5% of `limits().contextWindow`). The block
+   stops at the first row that does not fit — it never skips to a smaller,
+   lower-ranked one.
+6. **Attach** only when the gate's verdict `label` is `retrieve`. The verdict is
+   the policy's: an abstain, an error, a timeout and an out-of-set answer all
+   land on the fallback, so none attaches (pin `gate-policy`) — read `label`,
+   never `top`.
+
+`data.memories` is `RecalledMemory[]` (`{ id, kind, tier, content }`) and
+`data.memoryContext` the formatted block (`- [kind] content`, one line per
+memory, no ids) that a responder renders in its run-static part. Wiring the
+block into `router` / `compactExecution` is the host's (#419 M5/M9); this step
+only produces it.
+
+### The gate's thresholds are method-scoped (#418 F2)
+
+`gate.minConfidence` (default 0.5) and `gate.minMargin` (default 0.25) are
+fitted on `gate.thresholdMethod` (default `logprob`) and handed to the policy as
+its static cuts. On a read from another method (Jev on the Anthropic tier) they
+are NOT applied: the calibration entry `decide.serving(key)` reports for that
+client carries its own cuts, which win, and with no entry the gate abstains
+`method-mismatch` and attaches nothing. The step applies **no threshold of its
+own** on top of the policy's — a second static `margin ≥ minMargin` is exactly
+the logprob-fitted cut applied to a Jev read (pin `recall-threshold-method`).
+Every default in this section — those, `τ_v` (0.5), `τ_idf` (0.5), the 1500 ms
+budget — is an unmeasured placeholder; layer 4's `memory-recall-relevance`
+calibrates them.
+
+### The joint memory wake
+
+`awaitWake?: (budgetMs) => Promise<'awake' | 'skipped'>` is structurally the
+app's `awaitMemoryWake` (`lib/inference/memory-wake.server.ts`, #419 M13): the
+host binds it as it is and core imports no app code. The step passes it the
+gate's own budget and runs it concurrently with the gate and the search. If the
+wake reports `skipped`, or has not landed when the deadline fires, nothing is
+attached and the event records `skipped: 'waking'`; the wake itself keeps
+running, so the post-reply store and the next turn benefit. A deadline that
+fires with the wake already `awake` is `skipped: 'timeout'`. The wake is
+STARTED by the host before the chain's first pattern, and only for an agent that
+opted in — `harnessUsesMemory(patterns)` (below) is that probe.
+
+### It never stops what follows it
+
+Every failure — a throwing store or embedder, a gate that errors, an expired
+deadline, a rejecting wake, a throwing switch or owner resolver — ends in
+`memories = []` and a RETURN. Nothing is rethrown and **no `error` event is
+recorded**: an `error` is a statement about the turn (the synthesizer apologises
+for one, `settleTurn` fails an empty turn on one), and an unavailable memory is
+not one. Nor is it a `warning` — that renders a chat bubble, and the user sees
+nothing. The thrown error is `console.warn`ed, and the event records only its
+CLASS (`errorKind`): a message can quote what it was reading (pin
+`recall-never-skips-downstream`).
+
+### The `memory_recalled` event
+
+One per turn, from every exit: `{ attached, considered, survivors, tier?,
+tokens, skipped?, gate?, wake?, errorKind? }`. **IDS ONLY** — `attached` lists
+memory ids and nothing in the payload is memory content; `formatEventData`
+renders it from `skipped`/`attached.length` alone, so a field added later cannot
+reach an LLM-facing serialization by the JSON dump (pin `event-hygiene`). The
+gate's outcome rides in `gate` (label, probs, margin, confidence, abstained,
+reason, method, calibrated, `stateChars`); recall records **no separate
+`decision_made`**, and the gate's `llmCall` rides this event so its cost is
+counted once.
+
+### Memory text never rides the persisted blob (review F1)
+
+`data.memories` / `data.memoryContext` hold decrypted memory text, and `ctx.data`
+is part of the serialized session. `serializeContext` therefore drops
+`TRANSIENT_DATA_KEYS` (`memories`, `memoryContext`) unless the run is `paused`
+(a resume re-enters from the blob, so a paused blob keeps the block — short-lived,
+but the same plaintext). Without it Forget and retention would never reach the
+conversation blob or the nightly dump (pin `memory-not-in-blob`).
+
+### Cost, and what is unrecordable
+
+The gate's `llmCall` rides the `memory_recalled` event on the success path AND
+on a deadline that fires after the gate answered (pins `recall-gate-cost`). A gate
+that finishes after the event is written is unrecordable without a late mutation.
+
+### Notes
+
+- With ONE stored memory the lexical channel cannot fire (`idf(1,1) = 0.288 <
+τ_idf 0.5`): such users get semantic-only recall. M11 calibrates τ_idf.
+- `MemoryQueryEmbedder.spaceId` is REQUIRED, and the store is told `embedSpace`; a
+  mismatch throws `MemoryEmbeddingSpaceMismatch` (a string compare, since
+  `assertSameSpace` takes space objects, not ids).
+- The recalled block carries no provenance fence: the responder's render (M9) must
+  fence it.
+
+### `harnessUsesMemory(patterns)`
+
+`PatternCapabilities.memory` is declared by `memoryRecall`; `harnessUsesMemory`
+walks the (nested) graph for it. It is the ONE opt-in probe a host gates the
+memory wake and the post-reply store on, so an agent that never opted in never
+wakes the memory boxes.
+
 ## EventView Query API
 
 Fluent API for filtering events from UnifiedContext:
@@ -2370,6 +2526,7 @@ transformed into prompt-friendly types. The table below shows which harness
 | `content_sanitized`  | `ContentSanitizedEventData`                                                                                                                                                                 | _(metadata only — NEVER the verbatim spans)_            | withInjectionGuard only (observability + human audit)                       |
 | `loop_recovery`      | `LoopRecoveryEventData` (`failure`, `error`, `tool?`, `turn`, `maxTurns`)                                                                                                                   | _(metadata only — the turn log carries the feedback)_   | simpleLoop / actorCritic only (observability)                               |
 | `decision_made`      | `DecisionMadeEventData` (`key`, `labels`, `probs`, `label`, `top`, `margin`, `confidence`, `abstained`, `reason?`, `policy`, `method?`, `calibrated`, `coverage?`, `stateChars`, `shadow?`) | _(metadata only — the state's SIZE, never the text)_    | typedDecision / decisionRouter (#418); consumers read `data.decisions[key]` |
+| `memory_recalled`    | `MemoryRecalledEventData` (`attached` ids, `considered`, `survivors`, `tier?`, `tokens`, `skipped?`, `gate?`, `wake?`, `errorKind?`)                                                        | _(metadata only — IDS, never memory content)_           | memoryRecall (#419); consumers read `data.memories` / `data.memoryContext`  |
 
 ### Per-Pattern: Events Read → BAML Inputs → BAML Return
 
@@ -2694,6 +2851,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
     ├── planner.server.ts       # Upfront decomposition → scope.data.plan (+ formatPlanContext, read by both loop patterns); emits plan_created
     ├── retriever.server.ts     # retriever() — vector-store search as a pattern
     ├── typedDecision.server.ts # #418: the decision policy layer — the PURE half (sumLabelMass / calibrateLabelMass / normalizeLabelMass, preCallAbstain (F3), resolveDecisionCuts (F2), scoreDecision), the awaited wrapper (evaluateDecision / decide / decideFields) and the typedDecision / decisionRouter patterns
+    ├── memoryRecall.server.ts  # #419: memoryRecall() — the recall step (gate ∥ search ∥ wake, BM25 + cosine, floors before RRF, tier filter, per-turn clear, memory_recalled). The pure ranking half is ../memory-ranking.server.ts
     └── event-view.server.ts    # EventViewImpl (fluent query API, serializeCompact)
 
 packages/harness-baml/                   # The BAML companion PACKAGE (Lane A6) — EVERYTHING that touches baml_client lives here

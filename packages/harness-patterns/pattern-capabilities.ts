@@ -98,3 +98,16 @@ export function harnessDecisionKeys<T>(patterns: ConfiguredPattern<T>[] | undefi
   }
   return keys
 }
+
+/**
+ * True when any pattern in the (nested) graph declared the memory capability
+ * (#419) — the ONE opt-in probe. A host gates two things on it: starting the
+ * joint memory wake before the chain's first pattern (an agent that never opted
+ * in must not spend GPU seconds waking the memory boxes) and the post-reply
+ * store. `memoryRecall` declares it; `withMemory` prepends `memoryRecall`, so
+ * wrapping an agent in memory is what opts it in.
+ */
+export function harnessUsesMemory<T>(patterns: ConfiguredPattern<T>[] | undefined): boolean {
+  if (!patterns || patterns.length === 0) return false
+  return patterns.some((p) => p.capabilities?.memory === true || harnessUsesMemory(p.children))
+}

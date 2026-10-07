@@ -40,11 +40,12 @@ const ENCRYPTED_TABLES = [
   'skills',
   'hitl_requests',
   'hitl_quarantine',
+  'memories',
 ] as const
 
 /**
  * The only production modules allowed to write SQL naming those tables — the
- * five repositories that own encrypt-on-write and decrypt-on-read.
+ * repositories that own encrypt-on-write and decrypt-on-read.
  *
  * `client.server.ts` is deliberately absent: it holds the DDL bootstrap and the
  * boot gate, which name tables in `CREATE`/`ALTER` (not matched below) and, in
@@ -56,6 +57,7 @@ const SEAM_MODULES = [
   'lib/db/routines.server.ts',
   'lib/db/skills.server.ts',
   'lib/db/hitl.server.ts',
+  'lib/db/memories.server.ts',
   'lib/auth/session-store.server.ts',
   'lib/auth/users.server.ts',
 ].sort()
@@ -67,13 +69,29 @@ const OWNER: Record<string, string> = {
   skills: 'lib/db/skills.server.ts',
   hitl_requests: 'lib/db/hitl.server.ts',
   hitl_quarantine: 'lib/db/hitl.server.ts',
+  memories: 'lib/db/memories.server.ts',
   auth_sessions: 'lib/auth/session-store.server.ts',
   users: 'lib/auth/users.server.ts',
 }
 
-/** `FROM users`, `INTO conversations`, `UPDATE routines`, `JOIN auth_sessions`. */
+/** `FROM users`, `INTO conversations`, `UPDATE routines`, `JOIN auth_sessions`,
+ *  `DELETE FROM memory_sources`.
+ *
+ *  The scan is wider than the encrypted-content list: `ENCRYPTED_TABLES` is
+ *  what is encrypted, but the seam claim is "only the owning repositories run
+ *  SQL against the encrypted tables AND their companions" — `memory_sources`
+ *  holds no ciphertext (every column is a plaintext identifier, classified in
+ *  `memories.server.ts`'s COLUMN_CLASSIFICATION), yet it is personal data the
+ *  same fail-policy and owner-scoping rules protect, and its spec cites the
+ *  same seam. Without it here, a second module could read or write the
+ *  provenance table unnoticed (#498 review finding 1, mutation-verified:
+ *  a `DELETE FROM memory_sources` elsewhere stayed green on the narrower
+ *  scan). The read-path test below iterates `migrate-encryption`'s own
+ *  specs, which only name the content-bearing tables — so no OWNER entry
+ *  exists or is needed for the companions. */
+const SEAM_SCAN_TABLES = [...ENCRYPTED_TABLES, 'memory_sources'] as const
 const SQL_REFERENCE = new RegExp(
-  String.raw`\b(?:FROM|INTO|UPDATE|JOIN)\s+(${ENCRYPTED_TABLES.join('|')})\b`,
+  String.raw`\b(?:FROM|INTO|UPDATE|JOIN)\s+(${SEAM_SCAN_TABLES.join('|')})\b`,
   'i',
 )
 

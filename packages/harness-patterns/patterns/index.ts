@@ -38,6 +38,21 @@ export {
 } from './withInjectionGuard.server'
 export { withReferences, __clearReferenceCache } from './with-references.server'
 
+// Memory recall (#419 M1) — the recall chain step; ranking helpers live in
+// '../memory-ranking.server'.
+export {
+  memoryRecall,
+  formatMemoryContext,
+  MEMORY_RECALL_KEY,
+  MEMORY_RECALL_SPEC,
+  type MemoryRecallConfig,
+  type MemoryRecallData,
+  type MemoryRecallSettings,
+  type MemoryGateSettings,
+  type MemoryRecallLabel,
+  type RecalledMemory,
+} from './memoryRecall.server'
+
 // EventView
 export { EventViewImpl, createEventView } from './event-view.server'
 

@@ -104,6 +104,16 @@ export type {
   DecideServing,
   DecisionMadeEventData,
 
+  // Memory recall (#419)
+  MemoryKind,
+  MemoryCandidate,
+  MemoryStore,
+  MemoryQueryEmbedder,
+  MemoryWakeWait,
+  MemorySkipReason,
+  MemoryGateRecord,
+  MemoryRecalledEventData,
+
   // LLM Observability
   LLMCallData,
   LLMCallRecord,
@@ -190,6 +200,7 @@ export {
   declaresWorkspaceSync,
   harnessUsesSyncWorkspace,
   harnessDecisionKeys,
+  harnessUsesMemory,
 } from './pattern-capabilities'
 
 // ============================================================================
@@ -286,6 +297,20 @@ export {
 
 // EventView
 export { EventViewImpl, createEventView } from './patterns'
+
+// Memory recall (#419): the chain step, its settings and the block formatter.
+export {
+  memoryRecall,
+  formatMemoryContext,
+  MEMORY_RECALL_KEY,
+  MEMORY_RECALL_SPEC,
+  type MemoryRecallConfig,
+  type MemoryRecallData,
+  type MemoryRecallSettings,
+  type MemoryGateSettings,
+  type MemoryRecallLabel,
+  type RecalledMemory,
+} from './patterns'
 
 // Decisions (#418): the user-facing half of the typedDecision seam. The pure
 // scoring helpers (`scoreDecision`, `sumLabelMass`, …) stay on './patterns'.

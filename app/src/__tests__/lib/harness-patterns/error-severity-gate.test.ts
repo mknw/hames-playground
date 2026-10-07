@@ -313,6 +313,7 @@ describe('the classification map', () => {
     'parallel', // per-branch; the surviving branches are what the chain is for
     'withReferences', // the inner pattern ran without curated prior results
     'typedDecision', // never throws and always leaves a verdict — policy.fallback (#418)
+    'memoryRecall', // every failure is memories = [] and a return — it never stops what follows (#419)
   ] as const
 
   it.each(IRRECOVERABLE)('classifies %s as irrecoverable — it leaves nothing behind', (type) => {

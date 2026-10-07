@@ -21,6 +21,7 @@ import { createRedisBackend } from '@hames-ai/harness-patterns/retriever'
 import { withSandbox, type WithSandboxConfig } from '@hames-ai/sandbox'
 import { clientOverrideFor, type BamlRole } from '@hames-ai/harness-baml/clients.server'
 import { canonicalAgentId, getAgent } from './registry.server'
+import { probeDecisionCalibration } from '../inference/decision-probe.server'
 import { getRequestUserId, isAttendedRequest } from './request-user.server'
 import { resolveSandboxSkills } from '../skills/sandbox-skills.server'
 import {
@@ -208,6 +209,12 @@ export async function getOrBuildPatterns(
     throw err
   }
   exitBuild(sessionId)
+  // The boot probe (#418 T6): a `requireCalibrated` decision with no calibration
+  // entry on a configured tier abstains forever, silently. Warns once per
+  // (tier, key) per process, so the second conversation of an agent costs a set
+  // lookup. Not awaited and never rejects — it observes a build, it does not
+  // gate one.
+  void probeDecisionCalibration(agentId, patterns)
   // The flag names the SESSION, not one build, so it cannot be attributed to
   // whichever build settles first: while any build for this session is still
   // in flight, every result stays uncached and the flag survives for it. It is

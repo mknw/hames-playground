@@ -148,7 +148,9 @@ export interface PlanResult {
 /**
  * How a cost figure was arrived at — the UI needs this to know whether the
  * number is an estimate of a token bill, a FLOOR on a time bill, or an exact
- * €0 for a call that was served locally and has no bill at all.
+ * €0 for a call that was served locally and has no bill at all — or, on
+ * `'provider'`, the figure the provider itself reported (USD, converted once at
+ * the static rate; #418 T4).
  *
  * Defined here because it labels `EventMetrics.basis` — core owns the event
  * vocabulary it rides on. Moved from app's `settings.ts` at Step 1d: the
@@ -156,7 +158,7 @@ export interface PlanResult {
  * published tarball cannot resolve. app's `settings.ts` re-exports this
  * definition, so app-side importers are unchanged.
  */
-export type CostBasis = 'tokens' | 'time' | 'local'
+export type CostBasis = 'tokens' | 'time' | 'local' | 'provider'
 
 /** How a loop pattern handles multi-call turns (ControllerAction.additional_calls).
  *  - 'parallel'   — affordance advertised; independent calls run concurrently
@@ -964,6 +966,13 @@ export interface PatternCapabilities {
    *  control present and unreachable, exactly the shape the field exists to
    *  surface. Read by `harnessDecisionKeys` (`pattern-capabilities.ts`). */
   decisionKeys?: readonly string[]
+  /** The subset of {@link decisionKeys} whose policy sets `requireCalibrated`
+   *  (#418 T6, coordinator decision G4). `decisionKeys` says which keys exist;
+   *  this says which of them ABSTAIN FOREVER without a calibration entry, which
+   *  is the only subset a boot probe has a reason to warn about. Declared next
+   *  to the key rather than read back from `config`, because the patterns
+   *  destructure `policy` out of it. Read by `harnessCalibratedDecisionKeys`. */
+  calibratedDecisionKeys?: readonly string[]
   /** This pattern reads (or writes) the user's persistent memory (#419).
    *  Declared by `memoryRecall`; read by `harnessUsesMemory`, the ONE probe a
    *  host gates the memory wake and the post-reply store on — so an agent that

@@ -39,7 +39,10 @@ import {
 } from '@hames-ai/harness-patterns/patterns/typedDecision.server'
 import { commitEvents, createScope } from '@hames-ai/harness-patterns/context.server'
 import { createEventView } from '@hames-ai/harness-patterns/patterns/event-view.server'
-import { harnessDecisionKeys } from '@hames-ai/harness-patterns/pattern-capabilities'
+import {
+  harnessCalibratedDecisionKeys,
+  harnessDecisionKeys,
+} from '@hames-ai/harness-patterns/pattern-capabilities'
 import { MAX_DECISION_LABELS } from '@hames-ai/harness-patterns/types'
 import type {
   ConfiguredPattern,
@@ -661,6 +664,42 @@ describe('harnessDecisionKeys', () => {
   it('is empty for an undeclared graph', () => {
     expect(harnessDecisionKeys([leaf()])).toEqual([])
     expect(harnessDecisionKeys(undefined)).toEqual([])
+  })
+})
+
+describe('harnessCalibratedDecisionKeys', () => {
+  const leaf = (
+    calibratedDecisionKeys?: string[],
+    children?: ConfiguredPattern<Record<string, unknown>>[],
+  ): ConfiguredPattern<Record<string, unknown>> => ({
+    name: 'p',
+    fn: async (scope) => scope,
+    config: {},
+    ...(children && { children }),
+    ...(calibratedDecisionKeys && {
+      capabilities: { decisionKeys: calibratedDecisionKeys, calibratedDecisionKeys },
+    }),
+  })
+
+  it('collects the calibration-requiring keys through the graph, deduplicated', () => {
+    const plain: ConfiguredPattern<Record<string, unknown>> = {
+      name: 'plain',
+      fn: async (s) => s,
+      config: {},
+      capabilities: { decisionKeys: ['route'] },
+    }
+    const patterns = [leaf(['memory.store.kind']), leaf(undefined, [leaf(['document.injection'])])]
+    expect(
+      harnessCalibratedDecisionKeys([...patterns, plain, leaf(['memory.store.kind'])]),
+    ).toEqual(['memory.store.kind', 'document.injection'])
+    // A key that is merely declared is not a calibration-requiring one.
+    expect(harnessDecisionKeys([plain])).toEqual(['route'])
+    expect(harnessCalibratedDecisionKeys([plain])).toEqual([])
+  })
+
+  it('is empty for an undeclared or absent graph', () => {
+    expect(harnessCalibratedDecisionKeys([leaf()])).toEqual([])
+    expect(harnessCalibratedDecisionKeys(undefined)).toEqual([])
   })
 })
 

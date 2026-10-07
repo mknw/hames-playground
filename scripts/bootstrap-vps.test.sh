@@ -872,7 +872,7 @@ out=$(
 t "R7 boot refuses an exposed render" grep -q "WOULD REFUSE: the rendered compose config exposes more than Caddy: postgres" <<<"$out"
 
 # R8 the volume guard: a volume that exists keeps the secret it was made with.
-for vk in hames_postgres_data:POSTGRES_PASSWORD hames_postgres_data:DATA_ENCRYPTION_KEY hames_neo4j_data:NEO4J_PASSWORD; do
+for vk in hames_pg16_glibc_data:POSTGRES_PASSWORD hames_pg16_glibc_data:DATA_ENCRYPTION_KEY hames_postgres_data:POSTGRES_PASSWORD hames_postgres_data:DATA_ENCRYPTION_KEY hames_neo4j_data:NEO4J_PASSWORD; do
   vol=${vk%%:*} key=${vk#*:}
   mkdir -p "$tmproot/r8"
   cp "$good" "$tmproot/r8/.env.production.example"

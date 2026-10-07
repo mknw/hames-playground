@@ -266,7 +266,13 @@ export type CostEstimator = (
     outputTokens: number
   },
   clientName?: string,
-  opts?: { durationMs?: number; eurPerUsd?: number; eurPerHour?: number },
+  opts?: {
+    durationMs?: number
+    eurPerUsd?: number
+    eurPerHour?: number
+    /** The provider-reported call cost in USD (the fourth basis, `'provider'`). */
+    providerCostUsd?: number
+  },
 ) => CostEstimate | undefined
 
 export interface CostPricing {
@@ -401,15 +407,13 @@ const CLIENT_BY_ROLE: Record<BamlRole, string> = {
   // it in anthropic-only.baml. The accident this role guards against is still
   // live; only the private tier's deliberate move is settled.
   screen: 'DescribeAnthropic', // injection-screen.baml's declared client
-  // The Anthropic tier's decide client is the Jev REST adapter (spec §3,
-  // `CLIENT_BY_ROLE.decide = 'JevDecide'`), which slice T4 builds. It is NOT a
-  // BAML leaf and `Decide` does not declare it: this entry mirrors where the
-  // role's calls will land for budgeting and for the adapter's
-  // resolve-the-client-first selection (F1), and routes nothing. Until T4 the
-  // name is in no `JEV_CLIENTS` and no table, so an Anthropic-tier decision
-  // reaches the adapter's "no transport for this client" refusal — an honest
-  // `LLMCallError` that `decide()` turns into a fail-closed abstain — rather
-  // than a call that silently ran on a client that cannot return logprobs.
+  // The Anthropic tier's decide client is the Jev REST adapter
+  // (`jev-decide.server.ts`, #418 T4; spec §3). It is NOT a BAML leaf and
+  // `Decide` does not declare it: this entry mirrors where the role's calls land
+  // for budgeting and for the adapter's resolve-the-client-first selection (F1),
+  // and routes nothing. The name is in `JEV_CLIENTS`, so the adapter selects the
+  // Jev transport — which refuses under the private tier — and it carries its
+  // own context window (32k) and its own pricing basis (`'provider'`).
   decide: 'JevDecide',
 }
 
@@ -634,11 +638,11 @@ export const SWITCHED_FUNCTIONS_BY_ROLE: Partial<Record<BamlRole, readonly strin
  */
 export const LOGPROB_CLIENTS: ReadonlySet<string> = new Set(['LocalQwenSmallDecide'])
 
-/** The clients served by the Jev REST adapter. EMPTY until slice T4 builds
- *  `JevDecide`; declared now so the transport table is complete and
- *  `decision-transport-selection` can pin both halves of F1's selection rule
- *  against one source. */
-export const JEV_CLIENTS: ReadonlySet<string> = new Set()
+/** The clients served by the Jev REST adapter (`jev-decide.server.ts`): the
+ *  Anthropic tier's `decide` client. One source for the transport table, so
+ *  `decision-transport-selection` pins both halves of F1's selection rule
+ *  against it. Not a BAML leaf — no `.baml` file declares it. */
+export const JEV_CLIENTS: ReadonlySet<string> = new Set(['JevDecide'])
 
 /** Where the decide role lands on the Anthropic tier when nothing names
  *  anything else: the mirror's own value. Exported so the verbalized secondary

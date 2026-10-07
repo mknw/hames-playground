@@ -93,7 +93,7 @@ const ROUTED: Partial<Record<BamlRole, { from: string; to: string }>> = {
   // `describe`'s BAML chain and did not follow it onto the 4B.
   screen: { from: 'DescribeAnthropic', to: 'VerdaQwen' },
   // #418 T3: the typed-decision logprob readout. `from` is the Anthropic-tier
-  // MIRROR (the Jev REST adapter slice T4 builds — no BAML chain), `to` is the
+  // MIRROR (the Jev REST adapter, `jev-decide.server.ts` — no BAML chain), `to` is the
   // 4B's first-token readout client. The same server as `describe`, a different client.
   decide: { from: 'JevDecide', to: 'LocalQwenSmallDecide' },
 }

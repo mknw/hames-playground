@@ -28,6 +28,7 @@ export {
   createDecideAdapter,
   createVerbalizedDecide,
   verbalizedProbabilities,
+  createDecideAllAdapter,
   decideTransportFor,
   topLogprobsOf,
   accountBamlCall,

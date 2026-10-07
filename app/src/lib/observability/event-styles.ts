@@ -71,8 +71,8 @@ export const eventIconClasses: Record<EventType, string> = {
   // check glyphs as the legacy approval pair they supersede.
   hitl_request: 'i-material-symbols-pause-circle-outline',
   hitl_response: 'i-material-symbols-check-circle-outline',
-  // One typed decision the policy layer evaluated (#418). Placeholder entry —
-  // #418 T6 owns the real presentation (bars, the abstained chip).
+  // One typed decision the policy layer evaluated (#418): a rule applied to a
+  // distribution, which is what the glyph draws.
   decision_made: 'i-material-symbols-rule',
   // What memory recall attached, or why nothing (#419). Placeholder entry —
   // the memory UI slice owns the presentation.
@@ -105,6 +105,8 @@ export const eventColors: Record<EventType, string> = {
   // carried on, so not error red
   hitl_request: '#f97316', // orange-500 — the legacy approval pair's hues (#433)
   hitl_response: '#10b981', // emerald-500
-  decision_made: '#38bdf8', // sky-400 — placeholder entry; #418 T6 owns the hue
+  decision_made: '#38bdf8', // sky-400 — a measured judgement (#418): not amber, which is
+  // an LLM reasoning step that produced text or a tool call, and not the
+  // orange of a control firing on hostile input
   memory_recalled: '#2dd4bf', // teal-400 — placeholder entry; #419's UI slice owns the hue
 }

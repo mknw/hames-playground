@@ -68,14 +68,17 @@ import {
   type TopLogprob,
 } from '@hames-ai/harness-patterns/patterns/typedDecision.server'
 import { notifyLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
+import { createJevTransport } from './jev-decide.server'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
 import {
   MAX_DECISION_LABELS,
+  type DecideAllFn,
   type DecideFn,
   type DecideInput,
   type DecideResult,
   type DecisionCalibrationEntry,
   type DecisionMethod,
+  type DecisionSetSpec,
 } from '@hames-ai/harness-patterns/types'
 import type {
   LLMCallRecord,
@@ -1732,7 +1735,7 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
 /** Which transport serves a decide call, by the RESOLVED CLIENT (F1) — never by
  *  the tier. The table is the whole rule: a `LOGPROB_CLIENTS` member is read
  *  for token logprobs, a `JEV_CLIENTS` member goes to the Jev REST adapter
- *  (slice T4), anything else takes the verbalized secondary. Exported so
+ *  (`jev-decide.server.ts`), anything else takes the verbalized secondary. Exported so
  *  `decision-transport-selection` can pin the rule rather than its effects. */
 export function decideTransportFor(client: string): DecisionMethod {
   if (LOGPROB_CLIENTS.has(client)) return 'logprob'
@@ -1833,7 +1836,10 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
     const transport = decideTransportFor(client)
     const locked = transport !== 'logprob' && activeInferenceTier() === 'verda'
     const wired =
-      !locked && (transport === 'logprob' || (transport === 'verbalized' && !!options?.verbalized))
+      !locked &&
+      (transport === 'logprob' ||
+        transport === 'jev' ||
+        (transport === 'verbalized' && !!options?.verbalized))
     return { client, transport, locked, wired }
   }
 
@@ -1876,11 +1882,9 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
       return options.verbalized(input)
     }
     if (transport === 'jev') {
-      throw decideFailure(
-        `The Jev transport for ${client} is not built into this package.`,
-        variables,
-        startTime,
-      )
+      // The Anthropic tier's client: a REST adapter with its own LLMCallRecord
+      // and usage report. It refuses the private tier again itself.
+      return createJevTransport().decide(input)
     }
 
     // D13: a window of 20 top-logprobs cannot see more than 20 labels, so
@@ -1966,9 +1970,44 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
     if (!wired) return {}
     return {
       method: transport,
-      ...(transport === 'logprob' && { calibration: decisionCalibrationFor(client, key) }),
+      // Jev is calibratable too: a fitted entry's own cuts win over the policy's (F2).
+      ...((transport === 'logprob' || transport === 'jev') && {
+        calibration: decisionCalibrationFor(client, key),
+      }),
     }
   }
+  return fn
+}
+
+/**
+ * The set-level entry (`decideFields`' `decideAll`, G2): ONE request carrying
+ * every field as its own typed question when the resolved client is Jev. Any
+ * other client has no one-call provider, so the set is served field by field
+ * through `decide` — sequentially, with the state byte-identical so the backend
+ * prefix cache serves the later passes. A failure there is set-wide (the
+ * `DecideAllFn` shape has no per-field error), which `decideFields` already
+ * handles by failing every field closed.
+ */
+export function createDecideAllAdapter(
+  decide: DecideFn & { serving?: DecideServing },
+): DecideAllFn {
+  const fn: DecideAllFn = async <F extends Record<string, string>>(input: {
+    readonly spec: DecisionSetSpec<F>
+    readonly state: string
+  }) => {
+    const client = resolveClientForRole('decide')
+    if (decideTransportFor(client) === 'jev') {
+      // The transport applies the private-tier lock itself, before any request.
+      return createJevTransport().decideAll(input)
+    }
+    const fields = {} as { [K in keyof F]: DecideResult<F[K]> }
+    for (const k of Object.keys(input.spec.fields) as Array<keyof F & string>) {
+      fields[k] = await decide({ spec: input.spec.fields[k], state: input.state })
+    }
+    return { fields }
+  }
+  fn.limits = decide.limits
+  if (decide.serving) fn.serving = decide.serving
   return fn
 }
 

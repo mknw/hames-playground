@@ -257,7 +257,15 @@ The Data Stash pipeline needs an embedder. Two options:
   required** — the value is used as `` `${baseUrl}/embeddings` ``
   (`embeddings.server.ts`), and both the code default and the compose service
   include it.
+- **The container run shape** ([`PREVIEW.md`](../PREVIEW.md)) needs none of
+  the above: the compose `embedder` service (profile `app`, mounts `./models`
+  read-only) is reached by the app as `http://embedder:8090/v1` over the compose
+  network and **publishes no port at all** — not even on loopback, in the base
+  file or the production overlay. Memory text is embedded there (#419), so
+  keep it unreachable from outside; if a host-run process truly needs it, add a
+  git-ignored override binding `127.0.0.1` and nothing wider.
 - **Hosted provider** — set `EMBEDDINGS_PROVIDER` to a remote provider instead.
+  (`openrouter` sends text off the box; the memory pipeline pins `local`.)
 
 If you don't use DataStash search, you can skip this.
 
@@ -359,7 +367,7 @@ docker compose pull && docker compose up -d   # only if the gateway image moved
 dump` + a forced Redis RDB into `backups/<timestamp>/`, verified, with 7-day
 rotation and no cloud dependency. Cron line and a restore drill:
 [`../PREVIEW.md` §9](../PREVIEW.md). Azure Disk snapshots of the three named
-volumes (`neo4j_data`, `postgres_data`, `redis_data`) are the managed
+volumes (`neo4j_data`, `pg16_glibc_data`, `redis_data`) are the managed
 alternative. These hold all conversations, the graph, and the Data Stash — and
 note that neither path captures `AUTH_SESSION_SECRET` /
 `TOKEN_ENCRYPTION_KEY`, which must be escrowed separately or the restored

@@ -329,7 +329,7 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
       calibrated: false,
       probs: { take: 0.9, skip: 0.1 },
     })
-    expect(events[0].llmCall?.clientName).toBe('DecideAnthropic')
+    expect(events[0].llmCall?.clientName).toBe('AnthropicSonnet5NoThink')
     expect(
       app.fakeLlm.calls.filter((c) => c.fn === 'DecideVerbalized').map((c) => c.model),
     ).toEqual([FAKE_ANTHROPIC_TIER_MODEL])

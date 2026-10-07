@@ -50,7 +50,8 @@ import {
   promptText,
   type ChatMessage,
 } from '../lib/baml-functions'
-import { VERDA_MODEL } from '../lib/mode'
+import { takeEgressAttempts } from '../lib/egress-backstop'
+import { IS_HERMETIC, VERDA_MODEL } from '../lib/mode'
 
 type Renderer = () => Promise<{ body: { json: () => unknown } }>
 
@@ -159,9 +160,31 @@ describe('the fake recognises every BAML function', () => {
           { letter: 'A', description: 'Take' },
           { letter: 'B', description: 'Skip' },
         ],
-        { ...options, client: 'AnthropicSonnet46NoThink' },
+        { ...options, client: 'AnthropicHaiku45' },
       ),
-    ).rejects.toThrow('e2e hermetic routing refused client AnthropicSonnet46NoThink')
+    ).rejects.toThrow('e2e hermetic routing refused client AnthropicHaiku45')
+  })
+
+  it('admits the native decision chain only with its registered fake leaves', async () => {
+    const app = await bootApp()
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const request = await b.request.DecideVerbalized(
+      's',
+      'q',
+      [
+        { letter: 'A', description: 'a' },
+        { letter: 'B', description: 'b' },
+      ],
+      {
+        ...(
+          b as unknown as {
+            bamlOptions: NonNullable<Parameters<typeof b.request.DecideVerbalized>[3]>
+          }
+        ).bamlOptions,
+        client: 'DecideAnthropic',
+      },
+    )
+    expect(request.url).toBe(`${app.fakeLlm.baseUrl}/chat/completions`)
   })
 
   it('covers every function the classifier can name', () => {
@@ -268,5 +291,143 @@ describe("the fake's Jev endpoint (Decisions API)", () => {
     )
     expect(fakeLlm.calls.map((c) => c.outcome)).toEqual(['status'])
     fakeLlm.reset()
+  })
+})
+
+describe.runIf(IS_HERMETIC)('hermetic transport backstop', () => {
+  const target = 'hermetic-backstop.invalid:443'
+  async function registry() {
+    const { ClientRegistry } = await import('@boundaryml/baml')
+    const r = new ClientRegistry()
+    r.addLlmClient('E2EEgressProbe', 'openai-generic', {
+      base_url: 'https://hermetic-backstop.invalid/v1',
+      api_key: 'e2e-fake-key',
+      model: 'fake',
+    })
+    r.setPrimary('E2EEgressProbe')
+    return r
+  }
+  async function recordedRefusal(call: () => Promise<unknown>, expected = target) {
+    await expect(call()).rejects.toThrow()
+    const attempts = await takeEgressAttempts()
+    expect(attempts.length).toBeGreaterThan(0)
+    expect(attempts).toEqual(attempts.map(() => ({ method: 'CONNECT', target: expected })))
+  }
+  it('records a real BAML call with a replacing per-call registry', async () => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const r = await registry()
+    await recordedRefusal(() => b.GenerateConversationTitle('x', { clientRegistry: r }))
+  })
+  it('records Node fetch at the transport', async () => {
+    await recordedRefusal(() => fetch('https://hermetic-backstop.invalid/'))
+  })
+  it('records the consumer client layer bypass', async () => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { activateConsumerClients, defineInferenceClients } =
+      await import('@hames-ai/harness-baml/consumer-clients.server')
+    const { clientOverrideFor } = await import('@hames-ai/harness-baml/clients.server')
+    activateConsumerClients(
+      defineInferenceClients({
+        clients: [
+          {
+            name: 'E2EConsumer',
+            provider: 'openai-generic',
+            options: {
+              base_url: 'https://hermetic-backstop.invalid/v1',
+              api_key: 'e2e-fake-key',
+              model: 'fake',
+            },
+          },
+        ],
+        byRole: { describe: 'E2EConsumer' },
+      }),
+    )
+    try {
+      await recordedRefusal(() => b.GenerateConversationTitle('x', clientOverrideFor('describe')))
+    } finally {
+      activateConsumerClients(undefined)
+    }
+  })
+  it.each([true, false])('records a per-run registry bypass (named=%s)', async (named) => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { clientOverrideFor } = await import('@hames-ai/harness-baml/clients.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+    const r = await registry()
+    await withRunFrame(
+      {
+        inference: {
+          tier: 'anthropic',
+          clientOverride: () => ({
+            clientRegistry: r,
+            ...(named ? { client: 'E2EEgressProbe' } : {}),
+          }),
+        },
+      },
+      async () => {
+        await recordedRefusal(() => b.GenerateConversationTitle('x', clientOverrideFor('describe')))
+      },
+    )
+  })
+  it('records b.withOptions bypassing the singleton getter', async () => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const r = await registry()
+    await recordedRefusal(() => b.withOptions({ clientRegistry: r }).GenerateConversationTitle('x'))
+  })
+  it('records b.stream bypassing the singleton getter', async () => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const r = await registry()
+    await recordedRefusal(() =>
+      b.stream.GenerateConversationTitle('x', { clientRegistry: r }).getFinalResponse(),
+    )
+  })
+  it('observes the native defaults on unconfigured b.withOptions and b.stream', async () => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    // Offline evidence of the captured options gap; the live pins above use
+    // .invalid so even a mutated proxy cannot send a probe to a provider.
+    for (const request of [
+      await b.withOptions({}).request.GenerateConversationTitle('x'),
+      await b.streamRequest.GenerateConversationTitle('x'),
+    ]) {
+      expect(request.url).toBe('https://api.anthropic.com/v1/messages')
+    }
+  })
+  it('records a per-call env overriding an admitted private endpoint', async () => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    await recordedRefusal(() =>
+      b.GenerateConversationTitle('x', {
+        client: 'LocalQwenSmall',
+        env: { SMALL_LLM_BASE_URL: 'https://hermetic-backstop.invalid/v1' },
+      }),
+    )
+  })
+  it.each([
+    ['LocalQwenSmallDecide', 'SMALL_LLM_BASE_URL'],
+    ['LocalQwenSmall', 'SMALL_LLM_BASE_URL'],
+    ['VerdaQwen', 'VERDA_INFERENCE_ENDPOINT'],
+  ])('refuses %s when its process endpoint differs from the fake', async (client, variable) => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const original = process.env[variable]
+    process.env[variable] = 'https://e2e-not-the-fake.invalid/v1'
+    try {
+      const options = (
+        b as unknown as {
+          bamlOptions: NonNullable<Parameters<typeof b.request.Decide>[3]>
+        }
+      ).bamlOptions
+      await expect(
+        b.request.Decide(
+          's',
+          'q',
+          [
+            { letter: 'A', description: 'a' },
+            { letter: 'B', description: 'b' },
+          ],
+          { ...options, client },
+        ),
+      ).rejects.toThrow(`e2e hermetic routing refused client ${client}`)
+    } finally {
+      if (original === undefined) delete process.env[variable]
+      else process.env[variable] = original
+    }
   })
 })

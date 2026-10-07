@@ -81,24 +81,32 @@ export function installHermeticRouting(b: unknown, baseUrl: string): void {
   // which `assertHermeticRouting` below proves by observation.
   const build = (): ClientRegistry => {
     const registry = new ClientRegistry()
-    registry.addLlmClient(FAKE_CLIENT, 'openai-generic', {
-      base_url: baseUrl,
-      api_key: HERMETIC_ANTHROPIC_KEY,
-      model: FAKE_ANTHROPIC_TIER_MODEL,
-    })
-    // The operator-named secondary carries an explicit client override, so a
-    // primary alone cannot intercept it. Preserve its identity for the real
-    // adapter's collector while replacing only the test endpoint.
-    registry.addLlmClient('DecideAnthropic', 'openai-generic', {
-      base_url: baseUrl,
-      api_key: HERMETIC_ANTHROPIC_KEY,
-      model: FAKE_ANTHROPIC_TIER_MODEL,
-    })
+    const registered = new Set<string>()
+    const add = (name: string) => {
+      registry.addLlmClient(name, 'openai-generic', {
+        base_url: baseUrl,
+        api_key: HERMETIC_ANTHROPIC_KEY,
+        model: FAKE_ANTHROPIC_TIER_MODEL,
+      })
+      registered.add(name)
+    }
+    add(FAKE_CLIENT)
+    // Preserve the production fallback chain and the collector's leaf identity.
+    add('AnthropicSonnet5NoThink')
+    add('AnthropicSonnet46NoThink')
+    // F2 preserves this native chain, so F4's registered-leaf-only rule
+    // would refuse it. Admit it only while BOTH expected leaves are registered;
+    // a missing/renamed leaf closes the chain too. The transport catches any
+    // future native member that this local member list cannot see.
+    const chainRegistered =
+      registered.has('AnthropicSonnet5NoThink') && registered.has('AnthropicSonnet46NoThink')
     const setPrimary = registry.setPrimary.bind(registry)
     registry.setPrimary = (client: string) => {
       // A name absent from this registry otherwise falls through to the
       // production BAML declaration. Refuse it BEFORE native BAML sees it.
-      if (client !== FAKE_CLIENT && client !== 'DecideAnthropic') {
+      // Per-call registries replace this registry wholesale; the recording
+      // transport backstop catches those calls and per-call env overrides.
+      if (!registered.has(client) && !(client === 'DecideAnthropic' && chainRegistered)) {
         const endpoint =
           client === 'VerdaQwen'
             ? process.env.VERDA_INFERENCE_ENDPOINT

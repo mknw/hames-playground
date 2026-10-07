@@ -27,11 +27,14 @@ delete process.env.USE_VERDA_INFERENCE
 // are reset, so one refusal never carries into the next test's verdict. The
 // import is dynamic so no lib module loads before the lines above have run.
 afterEach(async () => {
+  const { takeEgressAttempts } = await import('./lib/egress-backstop')
+  const attempts = await takeEgressAttempts()
+  const failures: string[] = attempts.map(
+    (attempt) => `e2e hermetic egress refused ${attempt.method} ${attempt.target}`,
+  )
   const { peekBootedApp } = await import('./lib/app')
   const app = await peekBootedApp()?.catch(() => null)
-  if (!app) return
-  const failures: string[] = []
-  for (const fake of [app.fakeGraph, app.fakeConverter]) {
+  for (const fake of app ? [app.fakeGraph, app.fakeConverter] : []) {
     try {
       fake.assertAllMatched()
     } catch (err) {

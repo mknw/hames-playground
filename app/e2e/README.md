@@ -368,3 +368,23 @@ Write a `*.e2e.ts` under `scenarios/`. Two rules:
 And check your assertion can fail: mutate the source, watch it go red, and say
 which checks you verified that way. A green test that would stay green with the
 feature removed manufactures a coverage number.
+
+## Hermetic transport backstop (#418 T7)
+
+Hermetic runs require **Node >=24.5**, whose `NODE_USE_ENV_PROXY=1` routes Node
+fetch through the environment proxy. Older runtimes refuse at global setup.
+Before workers fork, `global-setup.ts` starts a loopback recording proxy and sets
+all upper/lowercase HTTP/HTTPS/ALL proxy variables, with only loopback addresses
+in `NO_PROXY`. The proxy returns 403 to every request and CONNECT and never opens
+an upstream socket. BAML's native HTTP client uses the same proxy. After every
+test, `setup.ts` drains the record and fails on any unexpected target, including
+calls whose application error handling swallowed the transport failure.
+
+`00-fake-fidelity` deliberately probes `hermetic-backstop.invalid:443` through
+BAML, Node fetch, consumer and per-run registries, `withOptions`, streaming, and
+per-call env. Each probe must reject **and** record that target, then consumes its
+own record. All probe hosts are `.invalid`, so mutations that disable the proxy
+fail by missing observation without reaching any provider. Global teardown prints
+the complete record, including consumed deliberate probes; a normal full run has
+no targets except those deliberate `.invalid` probes. `E2E_LIVE=verda` omits the
+backstop and skips these probes.

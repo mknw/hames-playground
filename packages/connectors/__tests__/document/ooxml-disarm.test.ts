@@ -2918,20 +2918,23 @@ describe('#492 F2: the resolver costs CPU linear in the part', () => {
     // Count actual XML child inspections in elements()/childEls(), rather than
     // elapsed time on a shared runner. No production instrumentation: the spy
     // delegates every predicate unchanged and is restored even on a refusal.
-    const measured = async (n: number, placeholders: boolean) => {
+    const fixture = (n: number, placeholders: boolean): Uint8Array => {
       const shapes = Array.from({ length: n }, (_, i) =>
         shape(`s${i}`, { id: i + 3, ph: placeholders ? (i % 2 ? 'title' : 'body') : undefined }),
       ).join('')
       const padding = Array.from({ length: n }, (_, i) => shape(`pad${i}`, { id: i + 3 })).join('')
       // Body runs inherit the layout; title runs must reach the master. Both
       // inherited trees grow with n: re-walking either per run is quadratic.
-      const bytes = pptx({
+      return pptx({
         slides: [{ shapes }],
         style: {
           layouts: [pStylePart('sldLayout', phShape(WHITE_1PT) + padding)],
           master: pStylePart('sldMaster', phShape(WHITE_1PT, 'title') + padding, CLR_MAP),
         },
       })
+    }
+    const measured = async (n: number, placeholders: boolean) => {
+      const bytes = fixture(n, placeholders)
       let inspections = 0
       const filter = Array.prototype.filter
       const spy = vi.spyOn(Array.prototype, 'filter').mockImplementation(function (
@@ -2965,7 +2968,18 @@ describe('#492 F2: the resolver costs CPU linear in the part', () => {
     // Keep the old relative bound too, now on deterministic work with the
     // same layout/master trees present in the non-placeholder control.
     expect(large / plain).toBeLessThan(2)
-  })
+    // The count sees only traversal through Array.prototype.filter. CPU sees
+    // the rest — a re-parse, a re-serialisation, a for..of or index-loop walk —
+    // with its bound set by the quadratic it must catch, not by runner noise:
+    // at n = 2048 linear resolution costs ~1.1x the control, a per-placeholder
+    // re-walk of either growing tree 5x and more.
+    const ph = fixture(2048, true)
+    const control = fixture(2048, false)
+    const cpu =
+      (await cpuMs(() => ooxmlDisarm(ph, MIME.pptx))) /
+      (await cpuMs(() => ooxmlDisarm(control, MIME.pptx)))
+    expect(cpu).toBeLessThan(3)
+  }, 120_000)
 })
 
 // ============================================================================

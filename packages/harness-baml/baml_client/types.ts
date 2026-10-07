@@ -59,6 +59,12 @@ export interface Attempt {
   
 }
 
+export interface CompactedMemory {
+  content: string
+  evidence: string
+  
+}
+
 /**
  * Action decision returned by loop and actor controllers
  */
@@ -79,6 +85,12 @@ export interface CriticResult {
   is_sufficient: boolean
   explanation: string
   suggested_approach?: string | null
+  
+}
+
+export interface DecideOption {
+  letter: string
+  description: string
   
 }
 
@@ -111,6 +123,13 @@ export interface ExpandedRef {
   
 }
 
+export interface ExtractedMemory {
+  kind: string
+  content: string
+  evidence: string
+  
+}
+
 /**
  * A canonical example of how the agent should pick a tool for a given user request.
  * Few-shots are domain-specific — pass at config time on a per-route basis (e.g., a
@@ -135,6 +154,13 @@ export interface LoopTurn {
   additional_calls?: ToolCallRequest[] | null
   tool_result?: ToolResult | null
   expansions?: ExpandedRef[] | null
+  
+}
+
+export interface MemoryMember {
+  content: string
+  evidence: string
+  last_seen: string
   
 }
 

@@ -116,7 +116,11 @@
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { currentRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
-import type { ModelLimits, CostBasis } from '@hames-ai/harness-patterns/types'
+import type {
+  ModelLimits,
+  CostBasis,
+  DecisionCalibrationEntry,
+} from '@hames-ai/harness-patterns/types'
 // TYPE-ONLY by design: this module owns the routing seam and reads the
 // consumer layer's SHAPE, while `consumer-clients.server.ts` imports the seam
 // itself. A value import here would make the consumer module load whenever the
@@ -337,11 +341,18 @@ export type BamlRole =
   | 'critic' // Critic
   | 'compactExecution' // Synthesize
   | 'router' // Router
-  // The summarization tier — SIX functions. The canonical list (and the
-  // seventh function, `screen`, that shares the chain) is on the
+  // The summarization tier — EIGHT functions (six at the 2026-08-26 flip, plus
+  // the two memory functions of #419). The canonical list (and the ninth
+  // function, `screen`, that shares the chain) is on the
   // DescribeAnthropic block in baml_src/anthropic-only.baml.
   | 'describe'
   | 'screen' // ScreenUntrustedContent (withInjectionGuard's opt-in LLM layer)
+  // The typed-decision readout (#418). ONE function, `Decide`, and — unlike
+  // every other role — its client is chosen by TRANSPORT, not just by model: a
+  // client in `LOGPROB_CLIENTS` is read for token logprobs, a `JEV_CLIENTS`
+  // member goes to the Jev REST adapter, anything else to a verbalized
+  // secondary (F1). See `createDecideAdapter`.
+  | 'decide'
 
 /** The BAML-declared client per role — the Anthropic-only chain each function
  *  declares in `baml_src/`. Keep in sync with the `client X` lines there.
@@ -390,6 +401,16 @@ const CLIENT_BY_ROLE: Record<BamlRole, string> = {
   // it in anthropic-only.baml. The accident this role guards against is still
   // live; only the private tier's deliberate move is settled.
   screen: 'DescribeAnthropic', // injection-screen.baml's declared client
+  // The Anthropic tier's decide client is the Jev REST adapter (spec §3,
+  // `CLIENT_BY_ROLE.decide = 'JevDecide'`), which slice T4 builds. It is NOT a
+  // BAML leaf and `Decide` does not declare it: this entry mirrors where the
+  // role's calls will land for budgeting and for the adapter's
+  // resolve-the-client-first selection (F1), and routes nothing. Until T4 the
+  // name is in no `JEV_CLIENTS` and no table, so an Anthropic-tier decision
+  // reaches the adapter's "no transport for this client" refusal — an honest
+  // `LLMCallError` that `decide()` turns into a fail-closed abstain — rather
+  // than a call that silently ran on a client that cannot return logprobs.
+  decide: 'JevDecide',
 }
 
 /**
@@ -525,7 +546,7 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   //
   // If `SMALL_LLM_BASE_URL` is unset the tier is REFUSED, not descaled — see
   // `assertPrivateTierConfigured` in lib/inference/config.server.ts.
-  describe: 'LocalQwenSmall', // the six summarization functions
+  describe: 'LocalQwenSmall', // the eight summarization functions
   // The composite consequence of THIS line, in the style the `planner:` entry
   // above sets: the screen now inherits the scale-to-zero LATENCY profile as
   // well as the routing. A guarded tool result can wait a 146s cold start — or
@@ -536,6 +557,15 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   // untouched by it; what the tier buys back is that no such payload leaves the
   // box. Blast radius is zero today because no agent enables the LLM screen.
   screen: 'VerdaQwen', // ScreenUntrustedContent — owner decision 2026-08-26, above
+  // #418 slice T3. The decide role's private-tier client: the SAME 4B and the
+  // SAME `SMALL_LLM_BASE_URL` endpoint as `describe`, declared as its own
+  // client (`LocalQwenSmallDecide`, local-client.baml) because a decision is a
+  // first-token logprob readout and a summary is a 2048-token completion. It
+  // rides `assertSmallModelConfigured` for free — same env var — and, like
+  // `describe`, takes no cold start (a llama-server, not the scale-to-zero
+  // box), so the wake hook's `client === VERDA_CLIENT_NAME` filter correctly
+  // ignores it. Priced on the `local` basis beside `LocalQwenSmall`.
+  decide: 'LocalQwenSmallDecide', // Decide — the logprob readout
 }
 
 /**
@@ -560,7 +590,7 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
  * The `describe` list IS the second copy of a list whose canonical home is the
  * `DescribeAnthropic` block in `baml_src/anthropic-only.baml`, and there is no
  * way around that once the role moves: this file needs the function NAMES and
- * BAML has no export of them. `clients-verda.test.ts` reads the six `client
+ * BAML has no export of them. `clients-verda.test.ts` reads the eight `client
  * DescribeAnthropic` declarations out of `baml_src/` and pins them equal to
  * this array, which is what stops the copy drifting — and, more to the point,
  * what fails if a seventh describe function is added and forgotten here, since
@@ -580,8 +610,57 @@ export const SWITCHED_FUNCTIONS_BY_ROLE: Partial<Record<BamlRole, readonly strin
     'CompactIntent',
     'RetrieveQuery',
     'ReferenceSelector',
+    'ExtractMemory',
+    'CompactMemories',
   ],
   screen: ['ScreenUntrustedContent'],
+  decide: ['Decide'],
+}
+
+/**
+ * The clients CLAIMED logprob-capable: a call routed to one of these is read
+ * for `choices[0].logprobs.content[0].top_logprobs` (the `Decide` function +
+ * `createDecideAdapter`). The claim is load-bearing and one-directional — a
+ * member whose response carries NO logprobs is a misconfiguration (a server
+ * that ignores `logprobs`, a proxy that strips them) and THROWS, because a
+ * silent fall-through to a text answer would be a verbalized guess dressed as a
+ * measured distribution (F1). It is never a statement that every decide call
+ * uses `Decide`: a client in neither this set nor {@link JEV_CLIENTS} takes the
+ * verbalized secondary and can never make a tier throw.
+ */
+export const LOGPROB_CLIENTS: ReadonlySet<string> = new Set(['LocalQwenSmallDecide'])
+
+/** The clients served by the Jev REST adapter. EMPTY until slice T4 builds
+ *  `JevDecide`; declared now so the transport table is complete and
+ *  `decision-transport-selection` can pin both halves of F1's selection rule
+ *  against one source. */
+export const JEV_CLIENTS: ReadonlySet<string> = new Set()
+
+// ----------------------------------------------------------------------------
+// Decision calibration — host-fed, keyed (clientName, spec.key) (D11)
+// ----------------------------------------------------------------------------
+
+/** The host's fitted calibration for the decide role: per serving client, per
+ *  `DecisionSpec.key`. Fed by the eval suite's `decision-calibration`
+ *  scenario (T8) through `configureDecisionCalibration`; empty until then,
+ *  which is the honest state — an uncalibrated readout says `calibrated:
+ *  false` and a `requireCalibrated` policy abstains on it. */
+export type DecisionCalibrationTable = Readonly<
+  Record<string, Readonly<Record<string, DecisionCalibrationEntry>>>
+>
+
+let decisionCalibration: DecisionCalibrationTable = {}
+
+export function configureDecisionCalibration(table: DecisionCalibrationTable): void {
+  decisionCalibration = table
+}
+
+/** The entry fitted for `(client, key)`, or undefined. */
+export function decisionCalibrationFor(
+  client: string,
+  key: string,
+): DecisionCalibrationEntry | undefined {
+  return decisionCalibration[client]?.[key]
 }
 
 /**
@@ -777,7 +856,22 @@ export function resolveClientForRole(role: BamlRole): string {
   // adds it, which falls back SAFELY: a 16 384 window and the fixed batch
   // ceiling (over-trimming, never overflowing) — see the consumer module's
   // header.
-  return consumerClients?.(role)?.client ?? verdaClientFor(role) ?? CLIENT_BY_ROLE[role]
+  //
+  // THE PER-RUN SLOT COMES FIRST, exactly as in `clientOverrideFor` (#418 T3
+  // review, finding 1). This function used to skip it, so the two disagreed
+  // whenever a host put a per-run `inference.clientOverride` in the run frame:
+  // the call went to the plugged client while the name reported — and every
+  // budget and, for `decide`, the TRANSPORT choice derived from it — still named
+  // the tier's. Two resolvers for one question is the defect; this one now
+  // answers it the same way the router of the actual call does.
+  const perRun = currentRunFrame()?.inference?.clientOverride?.(role) as
+    BamlClientOverride | undefined
+  return (
+    perRun?.client ??
+    consumerClients?.(role)?.client ??
+    verdaClientFor(role) ??
+    CLIENT_BY_ROLE[role]
+  )
 }
 
 /**

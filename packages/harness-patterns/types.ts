@@ -259,6 +259,10 @@ export type EventType =
    *  or tool results (SD-3/SD-10), so the event carries `stateChars`, the
    *  SIZE, and never the text. See `DecisionMadeEventData`. */
   | 'decision_made'
+  /** What the memory recall step did on a turn (#419): the ids it attached, or
+   *  why it attached nothing. IDS ONLY — never memory content. See
+   *  `MemoryRecalledEventData`. */
+  | 'memory_recalled'
 
 /** Accounting record for one harness step (#122): token and cost totals
  *  summed across EVERY physical API call the step made — including truncation
@@ -960,6 +964,11 @@ export interface PatternCapabilities {
    *  control present and unreachable, exactly the shape the field exists to
    *  surface. Read by `harnessDecisionKeys` (`pattern-capabilities.ts`). */
   decisionKeys?: readonly string[]
+  /** This pattern reads (or writes) the user's persistent memory (#419).
+   *  Declared by `memoryRecall`; read by `harnessUsesMemory`, the ONE probe a
+   *  host gates the memory wake and the post-reply store on — so an agent that
+   *  never opted in never wakes the memory boxes. */
+  memory?: true
 }
 
 // ============================================================================
@@ -1798,6 +1807,129 @@ export interface DecisionMadeEventData {
 }
 
 // ============================================================================
+// Memory recall (#419 M1)
+// ============================================================================
+//
+// The injected seams and event payload of the `memoryRecall` chain step. Core
+// hosts no database, no embedder and no provider vocabulary: a tier is an
+// OPAQUE string (the run frame's own rule), and the store is whatever the host
+// binds to its own owner.
+
+/** A kind of memory — the closed set the store gate also writes. */
+export type MemoryKind = 'episodic' | 'semantic' | 'preference' | 'trait'
+
+/** One stored memory as recall reads it. `distance` is the COSINE DISTANCE
+ *  between the query embedding and this row's embedding, computed by the
+ *  store (`1 - distance` is the semantic similarity `s_v`). */
+export interface MemoryCandidate {
+  readonly id: string
+  readonly kind: MemoryKind
+  /** The tier this memory was written under. Opaque to core. */
+  readonly tier: string
+  readonly content: string
+  /** The embedding space the row was embedded in. */
+  readonly embedSpace: string
+  readonly distance: number
+  readonly lastSeenAt: Date | string | number
+}
+
+/**
+ * The persistence seam recall reads through. HOST-BOUND TO ITS OWNER: no
+ * method takes a user, so a call site cannot name another one — the host binds
+ * the owner it resolved for the turn into the store it hands in (#419 spec §1).
+ *
+ * Recall's query is EXACT — every active row of the owner in the requested
+ * tiers, with its cosine distance; no `ORDER BY`/`LIMIT` — because BM25's
+ * document frequencies are computed over exactly this corpus.
+ */
+export interface MemoryStore {
+  /** How many rows of the owner's are visible in `tiers`. 0 ends recall
+   *  before any gate or embedding is paid for. */
+  count(tiers: readonly string[]): Promise<number>
+  /** Every row of the owner's in `tiers`, with its distance to `embedding`.
+   *  `embedSpace` is the space the query was embedded in; a row from another
+   *  space is returned as it is and REFUSED by recall (a distance across two
+   *  spaces is a number that means nothing). */
+  candidates(query: {
+    readonly embedding: readonly number[]
+    readonly embedSpace?: string
+    readonly tiers: readonly string[]
+  }): Promise<MemoryCandidate[]>
+}
+
+/** The query half of the embedder seam (the document half is the store's). */
+export interface MemoryQueryEmbedder {
+  /** Embed a QUERY (the model's query instruction applies). */
+  query(text: string): Promise<readonly number[]>
+  /** The embedding space this embedder produces (`embeddingSpaceId()`). */
+  readonly spaceId: string
+}
+
+/** The wake wait recall's gate shares with the host's wake — structurally
+ *  the host's `awaitMemoryWake` (the app's joint memory wake). */
+export type MemoryWakeWait = (budgetMs: number) => Promise<'awake' | 'skipped'>
+
+/** Why recall attached nothing. */
+export type MemorySkipReason =
+  /** No owner resolved for the turn. */
+  | 'no-user'
+  /** The user's memory switch is off. */
+  | 'disabled'
+  /** No memory visible in this turn's tiers (no gate, no embedding paid). */
+  | 'empty'
+  /** The turn has no user message to ask about. */
+  | 'no-query'
+  /** The joint memory wake had not landed within the gate's budget (or failed). */
+  | 'waking'
+  /** The gate answered `skip`, abstained, errored or was out-of-set. */
+  | 'gate'
+  /** The gate budget expired with the wake already up. */
+  | 'timeout'
+  /** The gate said retrieve and nothing cleared the floors. */
+  | 'no-match'
+  /** Embedding, the store, the settings read or a space mismatch failed. */
+  | 'error'
+
+/** The gate's outcome as `memory_recalled` records it — the numbers, never the
+ *  state it was asked over. (Recall records NO separate `decision_made`.) */
+export interface MemoryGateRecord {
+  readonly label: string
+  readonly top: string | null
+  readonly probs: Readonly<Record<string, number>>
+  readonly margin: number
+  readonly confidence: number
+  readonly abstained: boolean
+  readonly reason?: AbstainReason
+  readonly method?: DecisionMethod
+  readonly calibrated: boolean
+  /** The SIZE of the gate state, never the text. */
+  readonly stateChars: number
+}
+
+/** Data payload for `memory_recalled`. IDS ONLY (SD-3): a memory's content is
+ *  user data and this payload is JSON-dumped wholesale by anything that
+ *  serializes `event.data`. Pinned by `event-hygiene`. */
+export interface MemoryRecalledEventData {
+  /** The ids attached to the prompt, best first. Empty when `skipped`. */
+  readonly attached: readonly string[]
+  /** Rows read from the store (after the tier filter). */
+  readonly considered: number
+  /** Rows that cleared the floors, before the cap. */
+  readonly survivors: number
+  /** The turn's tier, as the run frame named it. */
+  readonly tier?: string
+  /** Estimated tokens of the attached block. */
+  readonly tokens: number
+  readonly skipped?: MemorySkipReason
+  readonly gate?: MemoryGateRecord
+  /** The joint wake's outcome as the gate saw it. */
+  readonly wake?: 'awake' | 'skipped'
+  /** The thrown error's CLASS, for `skipped: 'error'`. The message is logged,
+   *  not recorded: an error can quote what it was reading. */
+  readonly errorKind?: string
+}
+
+// ============================================================================
 // LLM Call Observability
 // ============================================================================
 
@@ -1986,6 +2118,9 @@ export const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory> = {
   // survives in ctx.events and the panel. `error` is always tracked anyway.
   typedDecision: 'decision_made',
   decisionRouter: 'decision_made',
+  // The recall outcome IS the deliverable (#419): which ids were attached, or
+  // why nothing was. Ids only.
+  memoryRecall: 'memory_recalled',
 }
 
 /** Default commitStrategy by pattern type */
@@ -2003,6 +2138,7 @@ export const DEFAULT_COMMIT_STRATEGY: Record<string, CommitStrategy> = {
   // (`decision_made` is in ALWAYS_COMMIT_TYPES regardless, #418).
   typedDecision: 'always',
   decisionRouter: 'always',
+  memoryRecall: 'always',
 }
 
 /**
@@ -2065,6 +2201,9 @@ export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverab
   // REQUIRED), so a failed decision is the consumer's abstain, not a hole in
   // the turn — the consumer that cannot proceed on its fallback says so itself.
   typedDecision: 'recoverable',
+  // memoryRecall NEVER stops what follows it (#419): every failure ends in
+  // `memories = []` and a return. Memory is opportunistic; the turn is not.
+  memoryRecall: 'recoverable',
   // decisionRouter has router's failure shape: a failed decision clears
   // `data.route` and `routes()` would throw on it, so it stops the turn where
   // it happened (parity with `router`; #418 D10). `errorSeverity: 'recoverable'`

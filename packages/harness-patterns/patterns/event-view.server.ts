@@ -23,6 +23,7 @@ import type {
   HitlRequestEventData,
   HitlResponseEventData,
   DecisionMadeEventData,
+  MemoryRecalledEventData,
 } from '../types'
 
 assertServerOnImport()
@@ -599,6 +600,15 @@ function formatEventData(event: ContextEvent): string {
       const pMax = Math.max(0, ...Object.values(data.probs ?? {}))
       const head = `${data.key}: ${data.label} (p=${pMax.toFixed(3)}, margin=${data.margin.toFixed(3)})`
       return data.abstained ? `${head} | abstained: ${data.reason ?? 'unknown'}` : head
+    }
+    case 'memory_recalled': {
+      // METADATA ONLY — never a memory's content (#419). The payload is ids and
+      // counts today; the explicit case is what keeps a field added later from
+      // reaching every LLM-facing serialization through the JSON dump below.
+      const data = event.data as MemoryRecalledEventData
+      return data.skipped
+        ? `memory recall skipped: ${data.skipped}`
+        : `memory recalled: ${data.attached?.length ?? 0} attached`
     }
     case 'approval_request':
     case 'approval_response':

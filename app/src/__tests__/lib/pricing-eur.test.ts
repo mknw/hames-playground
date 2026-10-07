@@ -228,6 +228,21 @@ describe('attribution: the SELECTED client decides the model', () => {
     }
   })
 
+  it('every client the private tier routes a role to has a pricing basis, never "unknown"', async () => {
+    // Derived from the route map rather than listed, so a role added to the tier
+    // with a client in none of the three sets (the #418 decide readout's
+    // `LocalQwenSmallDecide` was exactly that client until it joined the local
+    // set) fails here instead of rendering a cost-unknown step in production.
+    const { VERDA_CLIENT_BY_ROLE } = await import('@hames-ai/harness-baml/clients.server')
+    const clients = new Set(Object.values(VERDA_CLIENT_BY_ROLE))
+    expect(clients).toContain('LocalQwenSmallDecide')
+    for (const name of clients) {
+      expect(estimateLlmCostEur(ONE_MTOK_EACH, name, { durationMs: 4_000 }), name).toBeDefined()
+    }
+    // The decide client shares the 4B's server with `describe`, and so its basis.
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, 'LocalQwenSmallDecide')?.basis).toBe('local')
+  })
+
   it('the local set and the two priced tables are disjoint', () => {
     // A client in two of them would price by whichever branch ran first, which
     // is exactly the silent-wrong-figure failure this suite exists for.

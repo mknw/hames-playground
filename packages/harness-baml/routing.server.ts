@@ -66,7 +66,15 @@ export async function routeMessageOp(
   // captured in the collector and then thrown away.
   let result: Awaited<ReturnType<typeof b.Router>>
   try {
-    result = await b.Router(message, routes, history, routerOpts)
+    result = await b.Router(
+      message,
+      routes,
+      history,
+      // `memory_context` (#419 M9) — null until M5 wires the recall block
+      // through; explicit because the options bag follows it positionally.
+      null,
+      routerOpts,
+    )
   } catch (e) {
     throw wrapAsLLMCallError(e, 'Router', variables, startTime, collector)
   }

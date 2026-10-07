@@ -65,8 +65,23 @@ export function createContext<T = Record<string, unknown>>(
   return ctx
 }
 
-/** Serialize context to JSON string */
+/** Per-turn keys that carry another store's user data (#419). Consumed inside the turn; never persisted. */
+export const TRANSIENT_DATA_KEYS = ['memories', 'memoryContext'] as const
+
+/** Serialize context to JSON string. The transient memory keys are scrubbed
+ *  unless the run is paused (a resume re-enters from the blob). */
 export function serializeContext<T>(ctx: UnifiedContext<T>): string {
+  const d = ctx.data as unknown
+  if (
+    ctx.status !== 'paused' &&
+    d &&
+    typeof d === 'object' &&
+    TRANSIENT_DATA_KEYS.some((k) => k in d)
+  ) {
+    const rest = { ...(d as Record<string, unknown>) }
+    for (const k of TRANSIENT_DATA_KEYS) delete rest[k]
+    return JSON.stringify({ ...ctx, data: rest })
+  }
   return JSON.stringify(ctx)
 }
 

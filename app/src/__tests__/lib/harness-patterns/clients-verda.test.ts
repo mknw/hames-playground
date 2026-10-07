@@ -64,6 +64,7 @@ const ALL_ROLES: BamlRole[] = [
   'router',
   'describe',
   'screen',
+  'decide',
 ]
 
 /** The roles the map routes: the Anthropic chain each one leaves behind, and the
@@ -91,6 +92,10 @@ const ROUTED: Partial<Record<BamlRole, { from: string; to: string }>> = {
   // that added it is readable as what it is. Note what it did NOT do: it shares
   // `describe`'s BAML chain and did not follow it onto the 4B.
   screen: { from: 'DescribeAnthropic', to: 'VerdaQwen' },
+  // #418 T3: the typed-decision logprob readout. `from` is the Anthropic-tier
+  // MIRROR (the Jev REST adapter slice T4 builds — no BAML chain), `to` is the
+  // 4B's first-token readout client. The same server as `describe`, a different client.
+  decide: { from: 'JevDecide', to: 'LocalQwenSmallDecide' },
 }
 /** Nothing is held back any more. Kept as an empty map rather than deleted:
  *  every test below iterates it, so a future exception is added in one place
@@ -181,7 +186,7 @@ describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
     // reverted. This is the line that cannot.
     const { resolveClientForRole } = await load()
     const clients = new Set(roles(ROUTED).map(([role]) => resolveClientForRole(role)))
-    expect([...clients].sort()).toEqual(['LocalQwenSmall', 'VerdaQwen'])
+    expect([...clients].sort()).toEqual(['LocalQwenSmall', 'LocalQwenSmallDecide', 'VerdaQwen'])
     // And which side each of the two BAML-chain siblings landed on. Neither
     // value is interesting alone; the pair is the SA-M5 / SD-4 property.
     expect(resolveClientForRole('describe')).toBe('LocalQwenSmall')
@@ -400,7 +405,10 @@ describe('the switched-function set follows the routed roles', () => {
     expect([...TIER_SWITCHED_FUNCTIONS].sort()).toEqual([
       'ActorController',
       'CompactIntent',
+      'CompactMemories',
       'Critic',
+      'Decide',
+      'ExtractMemory',
       'GenerateConversationTitle',
       'LoopController',
       'Planner',
@@ -417,10 +425,10 @@ describe('the switched-function set follows the routed roles', () => {
     // because it really does run on both, so excluding it would understate the
     // Anthropic window by the one call that is slowest per character.
     expect(TIER_SWITCHED_FUNCTIONS.has('ScreenUntrustedContent')).toBe(true)
-    // Thirteen: every function declared in the one `baml_src/`. The filter that reads
+    // Sixteen: every function declared in the one `baml_src/`. The filter that reads
     // this set therefore excludes nothing today, and the honest way to pin
     // that is to say so rather than to let a subset look deliberate.
-    expect(TIER_SWITCHED_FUNCTIONS.size).toBe(13)
+    expect(TIER_SWITCHED_FUNCTIONS.size).toBe(16)
   })
 
   it('lists every function that declares the describe chain, not a subset', async () => {
@@ -434,7 +442,7 @@ describe('the switched-function set follows the routed roles', () => {
     // `screen` shares the chain in BAML (the separation lives only in
     // `CLIENT_BY_ROLE`), so `injection-screen.baml` is excluded BY FILE — the
     // exclusion is the assertion, not an accounting convenience.
-    // ONE corpus: the six describe functions AND the screen are declared in
+    // ONE corpus: the eight describe functions AND the screen are declared in
     // `packages/harness-baml/baml_src`, so the scan has a single root and the
     // by-file exclusion is the only thing keeping the screen out of the six.
     const bamlDir = path.resolve(process.cwd(), '../packages/harness-baml/baml_src')
@@ -455,7 +463,7 @@ describe('the switched-function set follows the routed roles', () => {
     expect(declaringDescribe.sort()).toEqual([...SWITCHED_FUNCTIONS_BY_ROLE.describe!].sort())
     // Guard against a regex that matched nothing: the comparison above would
     // then pass only if the map were empty too.
-    expect(declaringDescribe).toHaveLength(6)
+    expect(declaringDescribe).toHaveLength(8)
   })
 
   it('is the same set whether the flag is on or off', async () => {
@@ -536,8 +544,7 @@ describe('every routed role has a wired call site', () => {
    * extraction early and the assertion would FAIL — loud, and in the safe
    * direction.
    */
-  function screenCallArgs(code: string): string {
-    const marker = 'b.ScreenUntrustedContent('
+  function callArgs(code: string, marker: string): string {
     const start = code.indexOf(marker)
     expect(start).toBeGreaterThanOrEqual(0)
     let depth = 0
@@ -548,7 +555,7 @@ describe('every routed role has a wired call site', () => {
         if (depth === 0) return code.slice(start + marker.length, i)
       }
     }
-    throw new Error('unbalanced parentheses after b.ScreenUntrustedContent(')
+    throw new Error(`unbalanced parentheses after ${marker}`)
   }
 
   /** Every .ts under src/lib, comments stripped, as one string. */
@@ -664,7 +671,7 @@ describe('every routed role has a wired call site', () => {
     const code = corpus()
     const calls = code.match(/b\.ScreenUntrustedContent\(/g) ?? []
     expect(calls).toHaveLength(1) // one call site is what makes the next line total
-    expect(screenCallArgs(code)).toContain("clientOverrideFor('screen')")
+    expect(callArgs(code, 'b.ScreenUntrustedContent(')).toContain("clientOverrideFor('screen')")
 
     // Nothing ELSE spreads it. A second screen override would be a second
     // decision about a security control's model, made in a file nobody
@@ -687,5 +694,46 @@ describe('every routed role has a wired call site', () => {
     // Not vacuous: the same corpus carries the describe spread too, so the
     // scan is looking in a place where these literals really appear.
     expect(code).toContain("clientOverrideFor('describe')")
+  })
+
+  it('routes the decide readout through BOTH halves — map entry AND the one call site', async () => {
+    // The screen's pin, for the same reason: the map entry alone routes nothing
+    // (no call spreads it, `Decide` runs on its declared default) and the
+    // spread alone routes nothing (an unmapped role's override is `undefined`).
+    // `Decide` is the one function whose declared client is NOT the Anthropic
+    // tier's (`LocalQwenSmallDecide`, because BAML requires one and no Anthropic
+    // client returns logprobs), so a deleted spread is not a quiet fall back to
+    // Anthropic — it is a call that reaches the private tier's box without the
+    // tier having asked. Pinned ON the call expression, by balanced parens.
+    enable()
+    const { clientOverrideFor } = await load()
+    expect(clientOverrideFor('decide')).toEqual({ client: 'LocalQwenSmallDecide' })
+    // The same 4B as `describe`, a DIFFERENT client: one token with logprobs
+    // against a 2048-token completion.
+    expect(clientOverrideFor('decide')).not.toEqual({ client: 'LocalQwenSmall' })
+
+    const code = corpus()
+    expect(code.match(/b\.Decide\(/g) ?? []).toHaveLength(1)
+    expect(callArgs(code, 'b.Decide(')).toContain("clientOverrideFor('decide')")
+    expect(code.match(/clientOverrideFor\('decide'\)/g) ?? []).toHaveLength(1)
+  })
+
+  it('routes both memory functions through the describe spread, on each call', async () => {
+    // `ExtractMemory` and `CompactMemories` (#419 M9) are `describe`-role calls
+    // that carry the user's own words, so on a private-tier turn they must land
+    // on the 4B and nowhere public. The per-FILE scan above cannot guard them:
+    // `baml-patterns.server.ts` already spreads `clientOverrideFor('describe')`
+    // for two other functions, so deleting either memory call's spread would
+    // leave that file green. Pinned ON each call's argument list by balanced
+    // parens, and exactly one call site each.
+    enable()
+    const { clientOverrideFor } = await load()
+    expect(clientOverrideFor('describe')).toEqual({ client: 'LocalQwenSmall' })
+
+    const code = corpus()
+    for (const fn of ['ExtractMemory', 'CompactMemories']) {
+      expect(code.match(new RegExp(`b\\.${fn}\\(`, 'g')) ?? [], fn).toHaveLength(1)
+      expect(callArgs(code, `b.${fn}(`), fn).toContain("clientOverrideFor('describe')")
+    }
   })
 })

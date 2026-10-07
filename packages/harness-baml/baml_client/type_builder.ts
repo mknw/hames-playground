@@ -29,9 +29,13 @@ export default class TypeBuilder {
     
     Attempt: ClassViewer<'Attempt', "n" | "action" | "result" | "error" | "feedback">;
     
+    CompactedMemory: ClassViewer<'CompactedMemory', "content" | "evidence">;
+    
     ControllerAction: ClassViewer<'ControllerAction', "reasoning" | "tool_name" | "tool_args" | "additional_calls" | "status" | "is_final">;
     
     CriticResult: ClassViewer<'CriticResult', "is_sufficient" | "explanation" | "suggested_approach">;
+    
+    DecideOption: ClassViewer<'DecideOption', "letter" | "description">;
     
     DescribeBatchResult: ClassViewer<'DescribeBatchResult', "summaries">;
     
@@ -41,9 +45,13 @@ export default class TypeBuilder {
     
     ExpandedRef: ClassViewer<'ExpandedRef', "ref_id" | "content">;
     
+    ExtractedMemory: ClassViewer<'ExtractedMemory', "kind" | "content" | "evidence">;
+    
     FewShot: ClassViewer<'FewShot', "user" | "reasoning" | "tool" | "args">;
     
     LoopTurn: ClassViewer<'LoopTurn', "n" | "reasoning" | "status" | "tool_call" | "additional_calls" | "tool_result" | "expansions">;
+    
+    MemoryMember: ClassViewer<'MemoryMember', "content" | "evidence" | "last_seen">;
     
     Message: ClassViewer<'Message', "role" | "content">;
     
@@ -76,7 +84,7 @@ export default class TypeBuilder {
     constructor() {
         this.tb = new _TypeBuilder({
           classes: new Set([
-            "Attempt","ControllerAction","CriticResult","DescribeBatchResult","DescribeItemSummary","DescribeTarget","ExpandedRef","FewShot","LoopTurn","Message","PlanResult","PriorResult","ReferenceCandidate","ReferenceSelection","ReferenceSelectorResult","RouteOption","RoutingResult","ScreenVerdict","ToolCall","ToolCallRequest","ToolDescription","ToolResult",
+            "Attempt","CompactedMemory","ControllerAction","CriticResult","DecideOption","DescribeBatchResult","DescribeItemSummary","DescribeTarget","ExpandedRef","ExtractedMemory","FewShot","LoopTurn","MemoryMember","Message","PlanResult","PriorResult","ReferenceCandidate","ReferenceSelection","ReferenceSelectorResult","RouteOption","RoutingResult","ScreenVerdict","ToolCall","ToolCallRequest","ToolDescription","ToolResult",
           ]),
           enums: new Set([
             
@@ -88,12 +96,20 @@ export default class TypeBuilder {
           "n","action","result","error","feedback",
         ]);
         
+        this.CompactedMemory = this.tb.classViewer("CompactedMemory", [
+          "content","evidence",
+        ]);
+        
         this.ControllerAction = this.tb.classViewer("ControllerAction", [
           "reasoning","tool_name","tool_args","additional_calls","status","is_final",
         ]);
         
         this.CriticResult = this.tb.classViewer("CriticResult", [
           "is_sufficient","explanation","suggested_approach",
+        ]);
+        
+        this.DecideOption = this.tb.classViewer("DecideOption", [
+          "letter","description",
         ]);
         
         this.DescribeBatchResult = this.tb.classViewer("DescribeBatchResult", [
@@ -112,12 +128,20 @@ export default class TypeBuilder {
           "ref_id","content",
         ]);
         
+        this.ExtractedMemory = this.tb.classViewer("ExtractedMemory", [
+          "kind","content","evidence",
+        ]);
+        
         this.FewShot = this.tb.classViewer("FewShot", [
           "user","reasoning","tool","args",
         ]);
         
         this.LoopTurn = this.tb.classViewer("LoopTurn", [
           "n","reasoning","status","tool_call","additional_calls","tool_result","expansions",
+        ]);
+        
+        this.MemoryMember = this.tb.classViewer("MemoryMember", [
+          "content","evidence","last_seen",
         ]);
         
         this.Message = this.tb.classViewer("Message", [

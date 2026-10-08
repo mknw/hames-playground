@@ -161,6 +161,8 @@ await settleMemory(ctx, memoryStoreConfig(deps.memory), { conversationId })
 
 `enabled` is required, and both halves read the same function.
 
+Gate the post-reply call on `harnessUsesMemory(patterns)`, the same probe that gates the memory wake, so an agent that did not opt in stores nothing. **Await `settleMemory`, then save the context**: the `memory_written` events it records ride that one save. It never throws and it fails closed: an abstained, uncalibrated or sensitive read, a confirmation your host cannot yet ask, an organisational-graph target or a failed wake all store nothing and say why. Recall never throws either and never stops what follows it; its block is cleared on every turn. Your `MemoryWriteStore.transaction(fn)` must open one transaction, take the owner's advisory lock inside it, and **roll back and rethrow if `fn` throws**: that rollback is what makes a retry a no-op. See SPEC's [Memory recall](SPEC.md#memory-recall-memoryrecall-419) and [Memory store](SPEC.md#memory-store-settlememory-419).
+
 ### Asking a human
 
 A run can stop to ask the person watching it, and an answer continues it. The

@@ -58,6 +58,13 @@ function buildSynthesisInputFromView(
     errorMessage: errorView.lastError(),
   }
 
+  // `memoryRecall`'s block for THIS turn (it clears the key on every exit, so a
+  // previous turn's cannot be here). Present only when something was recalled:
+  // the second of the two patterns that author a user-visible answer (#419 D13).
+  if (typeof data.memoryContext === 'string' && data.memoryContext.trim()) {
+    input.memoryContext = data.memoryContext
+  }
+
   switch (mode) {
     case 'message':
       // Just the response string from previous pattern

@@ -37,6 +37,7 @@ import {
   listMemoriesForUser,
 } from '../../../lib/db/memories.server'
 import { closePool, query } from '../../../lib/db/client.server'
+import { createConversation, deleteConversations } from '../../../lib/db/conversations.server'
 import { ENCRYPTED_TABLES } from '../../../lib/db/migrate-encryption.server'
 import { looksEncrypted } from '../../../lib/db/crypto.server'
 
@@ -102,7 +103,7 @@ afterAll(async () => {
 describe('column classification (source scan, D2)', () => {
   const SRC = resolve(process.cwd(), 'src/lib/db/memories.server.ts')
 
-  /** Column lines of one CREATE TABLE block in the module's DDL. Type-agnostic
+  /** Column lines of CREATE TABLE and ALTER TABLE ADD COLUMN in the module's DDL. Type-agnostic
    *  on purpose: the pin must fail on ANY unclassified column, whatever type
    *  it carries — including a type that did not exist when this test was
    *  written. Only SQL constraint keywords are excluded. */
@@ -112,10 +113,14 @@ describe('column classification (source scan, D2)', () => {
     const block = ddl!.match(new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\(([\\s\\S]*?)\\);`))
     expect(block, `no CREATE TABLE block for ${table} found`).toBeTruthy()
     const constraint = /^(PRIMARY|FOREIGN|UNIQUE|CHECK|CONSTRAINT)$/i
-    return block![1]
+    const columns = block![1]
       .split('\n')
       .map((line) => line.trim().match(/^(\w+)\s+(?!\()([\w([]+)/)?.[1])
       .filter((c): c is string => c !== undefined && !constraint.test(c))
+    const added = [
+      ...ddl!.matchAll(new RegExp(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS (\\w+)`, 'g')),
+    ].map((match) => match[1]!)
+    return [...new Set([...columns, ...added])]
   }
 
   it('classifies every column of both tables, and nothing else', async () => {
@@ -275,6 +280,15 @@ describe('cascade delete', () => {
   beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
   it('deleting the user’s memories takes the provenance rows with them', async () => {
+    // A source row names a conversation that exists (#531's FK).
+    const conversationId = `conv-${tag}`
+    await createConversation({
+      id: conversationId,
+      userId: ALICE,
+      agentId: 'search',
+      title: null,
+      serializedContext: '{"events":[]}',
+    })
     const id = memoryId()
     await insertMemory({
       id,
@@ -291,7 +305,7 @@ describe('cascade delete', () => {
       eventId: `evt-${tag}-1`,
       ordinal: 0,
       memoryId: id,
-      conversationId: `conv-${tag}`,
+      conversationId,
     })
     const before = await query<{ n: number }>(
       `SELECT count(*)::int AS n FROM memory_sources WHERE memory_id = $1`,
@@ -306,5 +320,6 @@ describe('cascade delete', () => {
       [id],
     )
     expect(after.rows[0]?.n).toBe(0)
+    await deleteConversations([conversationId], ALICE)
   })
 })

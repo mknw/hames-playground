@@ -49,6 +49,7 @@ import {
 } from './baml-adapters.server'
 import { clientOverrideFor, limitsFor } from './clients.server'
 import { routeMessageOp } from './routing.server'
+import { escapeDataFence } from './data-fence'
 
 assertServerOnImport()
 
@@ -163,7 +164,11 @@ export function createMemoryExtractAdapter(): (
     const startTime = Date.now()
     const collector = new Collector('memory-extract')
     const variables = { kindHint, window, latestUser }
-    // describe role: the window is the user's own words, so on a private-tier
+    // The window holds the assistant's reply, which was composed from tool
+    // results; both strings go inside DATA fences (#419 M5a). See data-fence.ts.
+    // `variables` keeps the originals: it is the record of what was ASKED.
+    //
+    // describe role: the window carries the user's words, so on a private-tier
     // turn it moves onto the 4B with the rest of the role and never reaches a
     // public provider.
     let items: ExtractedMemory[]
@@ -171,10 +176,15 @@ export function createMemoryExtractAdapter(): (
       // The spread is INLINE in the argument list, not hoisted into a local:
       // `clients-verda.test.ts` pins it on this very call by balanced parens,
       // and a variable would read as unwired to a pin built to fail loudly.
-      items = await b.ExtractMemory(kindHint, window, latestUser, {
-        collector,
-        ...clientOverrideFor('describe'),
-      })
+      items = await b.ExtractMemory(
+        kindHint,
+        escapeDataFence(window),
+        escapeDataFence(latestUser),
+        {
+          collector,
+          ...clientOverrideFor('describe'),
+        },
+      )
     } catch (e) {
       throw wrapAsLLMCallError(e, 'ExtractMemory', variables, startTime, collector)
     }
@@ -198,10 +208,19 @@ export function createMemoryCompactAdapter(): (
     const variables = { kind, members }
     let merged: CompactedMemory
     try {
-      merged = await b.CompactMemories(kind, [...members], {
-        collector,
-        ...clientOverrideFor('describe'),
-      })
+      merged = await b.CompactMemories(
+        kind,
+        // Stored text going back inside a fence: escaped for the same reason.
+        members.map((m) => ({
+          ...m,
+          content: escapeDataFence(m.content),
+          evidence: escapeDataFence(m.evidence),
+        })),
+        {
+          collector,
+          ...clientOverrideFor('describe'),
+        },
+      )
     } catch (e) {
       throw wrapAsLLMCallError(e, 'CompactMemories', variables, startTime, collector)
     }

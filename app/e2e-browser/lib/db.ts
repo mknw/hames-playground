@@ -34,7 +34,7 @@ export async function wipeUserRows(): Promise<void> {
   const client = new pg.Client({ connectionString: TEST_DATABASE_URL })
   await client.connect()
   try {
-    for (const table of ['conversations', 'user_prefs']) {
+    for (const table of ['memories', 'conversations', 'user_prefs']) {
       try {
         await client.query(`DELETE FROM ${table} WHERE user_id = $1`, [BYPASS_USER_ID])
       } catch (err) {

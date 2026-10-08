@@ -382,6 +382,7 @@ export {
   defineChoice,
   defineScore,
   defineNoul,
+  defineDecisionSet,
   readDecision,
   typedDecision,
   decisionRouter,

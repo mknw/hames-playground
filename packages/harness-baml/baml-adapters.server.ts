@@ -75,12 +75,14 @@ import { runBamlClientCheckOnce } from './baml-version-check.server'
 import {
   MAX_DECISION_LABELS,
   type DecideAllFn,
+  type AnyDecisionSpec,
+  type MixedDecisionSet,
+  type DecisionLabelsFor,
   type DecideFn,
   type DecideInput,
   type DecideResult,
   type DecisionCalibrationEntry,
   type DecisionMethod,
-  type DecisionSetSpec,
 } from '@hames-ai/harness-patterns/types'
 import type {
   LLMCallRecord,
@@ -1997,18 +1999,28 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
 export function createDecideAllAdapter(
   decide: DecideFn & { serving?: DecideServing },
 ): DecideAllFn {
-  const fn: DecideAllFn = async <F extends Record<string, string>>(input: {
-    readonly spec: DecisionSetSpec<F>
+  const fn: DecideAllFn = async <S extends Record<string, AnyDecisionSpec>>(input: {
+    readonly spec: MixedDecisionSet<S>
     readonly state: string
   }) => {
+    // S2 widens the set seam; S3/S4 add transport support. Refuse the whole
+    // raw request before selecting a provider or handing it any mixed field.
+    for (const spec of Object.values(input.spec.fields)) {
+      if (spec.type !== undefined && spec.type !== 'choice') {
+        throw new Error(`Unsupported decision type: ${String(spec.type)}`)
+      }
+    }
     const client = resolveClientForRole('decide')
     if (decideTransportFor(client) === 'jev') {
       // The transport applies the private-tier lock itself, before any request.
       return createJevTransport().decideAll(input)
     }
-    const fields = {} as { [K in keyof F]: DecideResult<F[K]> }
-    for (const k of Object.keys(input.spec.fields) as Array<keyof F & string>) {
-      fields[k] = await decide({ spec: input.spec.fields[k], state: input.state })
+    const fields = {} as { [K in keyof S]: DecideResult<DecisionLabelsFor<S[K]>> }
+    for (const k of Object.keys(input.spec.fields) as Array<keyof S & string>) {
+      fields[k] = (await decide({
+        spec: input.spec.fields[k],
+        state: input.state,
+      })) as DecideResult<DecisionLabelsFor<S[typeof k]>>
     }
     return { fields }
   }

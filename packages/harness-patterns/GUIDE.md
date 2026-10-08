@@ -159,7 +159,7 @@ const patterns = withMemory<AgentData>({ ...deps.memory, routerMemory: 'replies-
 await settleMemory(ctx, memoryStoreConfig(deps.memory), { conversationId })
 ```
 
-`enabled` is required, and both halves read the same function. Settle re-reads it inside every candidate transaction after the owner lock; false rolls the candidate back and reports `skipped: 'disabled'`. **M7 precondition (#552):** the "turn off" and "forget all" RPCs must flip the switch off BEFORE deleting. Forget-all must use the memory pool, the same owner advisory transaction lock and lock timeout; propagate `55P03` as a retryable failure, never success.
+`enabled` is required, and both halves read the same function. Settle re-reads it inside every candidate transaction after the owner lock; false rolls the candidate back and reports `skipped: 'disabled'`. **M7 precondition (#552):** the "turn off" and "forget all" RPCs must commit the switch-off (`user_prefs.memory_enabled = false`) in its own transaction BEFORE calling the erase (`deleteAllMemoriesForUser`). An uncommitted flip is invisible to a candidate on another connection; do not wrap the erase in the flip transaction. Any erase rejection (`55P03`, a memory-pool connect timeout or `40P01`) means "not erased": leave the switch off and report the retryable failure, never success. Later writers, including M3 compaction, must re-read the switch and their inputs inside the owner-lock transaction. Forget-all must use the memory pool, the same owner advisory transaction lock and lock timeout; propagate `55P03` as a retryable failure, never success.
 
 Choose `routerMemory` on this wiring: `'routing-and-replies'` is the default and
 preserves existing calls. The router sees recalled memory and may put it into

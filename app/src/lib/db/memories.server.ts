@@ -415,8 +415,14 @@ export async function listMemoriesForUser(userId: string): Promise<MemoryRow[]> 
  * their sources are one fact. This is the erasure bottom (SD-11): the M7 RPC
  * reaches it after its own `requireUser()`, never the other way round. Takes
  * a `userId` argument, so it is NEVER a `'use server'` export (SD-13).
- * M7 must flip the switch off BEFORE deleting (#552). The owner lock waits
- * for in-flight candidates; a 55P03 is a retryable failure, never success.
+ * Both M7 RPCs ("turn off" and "forget all") must commit the switch-off
+ * (`user_prefs.memory_enabled = false`) in its own transaction BEFORE calling
+ * this erase (#552). An uncommitted flip is invisible to a candidate on another
+ * connection; do not wrap this call in the flip transaction. The owner lock
+ * waits for in-flight candidates. Any erase rejection (55P03, a memory-pool
+ * connect timeout or 40P01) means "not erased": leave the switch off and report
+ * the retryable failure, never success. Later writers, including M3 compaction,
+ * must re-read the switch and their inputs inside the owner-lock transaction.
  */
 export async function deleteAllMemoriesForUser(userId: string): Promise<number> {
   return memoryTransaction(userId, async (client) => {

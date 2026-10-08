@@ -1990,4 +1990,25 @@ describe('#552: switch-off serializes with in-flight settle', () => {
     expect(db.rows()).toHaveLength(1)
     expect(db.sources()).toHaveLength(1)
   })
+
+  it('a switch that throws under the lock writes nothing (fail closed)', async () => {
+    const db = fakeDb()
+    let reads = 0
+    const { cfg } = config({
+      db,
+      extract: fakeExtract([cand(), cand()]).fn,
+      settings: {
+        enabled: () => {
+          if (++reads > 1) throw new Error('prefs unreachable')
+          return true
+        },
+      },
+    })
+    const ctx = turn()
+    expect(await settleMemory(ctx, cfg)).toMatchObject({ written: 0 })
+    expect(reads).toBeGreaterThan(1)
+    expect(db.rows()).toEqual([])
+    expect(db.sources()).toEqual([])
+    expect(written(ctx)).toEqual([])
+  })
 })

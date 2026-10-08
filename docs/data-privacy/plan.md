@@ -123,7 +123,7 @@ Two things follow that _are_ in our control:
   2026-08-24, so no _chat_ configuration sends a prompt to Groq, OpenRouter or
   OpenAI. **One exception, stated rather than buried (#418, slice T4):** on the
   Anthropic tier the `decide` role's default client is a REST adapter to
-  TypeSafe's Jev model directly when `JEV_DECISIONS_URL` names it (there is no default endpoint) at
+  TypeSafe's Jev model directly when `JEV_DECISIONS_URL` names it (there is no default endpoint until the owner confirms the account's ZDR terms) at
   `https://api.typesafe.ai/v1/systemone` (`jev-1.13.0`;
   `packages/harness-baml/jev-decide.server.ts`). SD-10's processor map for this
   route is: consumer-supplied decision state, question instructions and option

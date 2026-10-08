@@ -64,7 +64,7 @@ CASES = [
     ('F2-key-env', '../packages/harness-baml/jev-decide.server.ts', "JEV_KEY_ENV = 'JEV_DECISIONS_API_KEY'", "JEV_KEY_ENV = 'RENAMED_DECISION_KEY'", 'structure', 'runbook:'),
     ('F2-old-key-doc', '../docs/testing/decision-calibration.md', 'JEV_DECISIONS_API_KEY', 'OPENROUTER_API_KEY', 'structure', 'runbook:'),
     ('F3-feed-atomic', FEED, '  }\n  configureDecisionCalibration(table)', '    configureDecisionCalibration(table)\n  }', 'feed', 'atomic:'),
-    ('F4-model', FEED, 'model: JEV_MODEL,', '', 'feed', 'fingerprint inputs:'),
+    ('F4-model', FEED, 'model: jevRouteModel(),', '', 'feed', 'fingerprint inputs:'),
     ('F4-prompt-files', FEED, "prompt: files['decide.baml'], client: files['local-client.baml']", "prompt: '', client: ''", 'feed', 'fingerprint inputs:'),
     ('F4-revision', FEED, '        revision,', '', 'feed', 'fingerprint inputs:'),
     ('F4-client', FEED, '        client,', '', 'feed', 'fingerprint inputs:'),

@@ -8,7 +8,11 @@ import {
   type DecisionCalibrationTable,
 } from '@hames-ai/harness-baml/clients.server'
 import { getBamlFiles } from '@hames-ai/harness-baml/baml_client/inlinedbaml'
-import { jevModelFor, parseDecisionsUrl } from '@hames-ai/harness-baml/jev-decide.server'
+import {
+  configuredDecisionsUrl,
+  jevModelFor,
+  parseDecisionsUrl,
+} from '@hames-ai/harness-baml/jev-decide.server'
 import calibrationContract from './decision-calibration-contract.json'
 
 // Metadata only at host composition. A hermetic drift pin checks the actual
@@ -27,7 +31,7 @@ export interface CalibrationArtifact {
 
 /** The model the configured Jev route sends; null when no usable route is configured (fits then never match). */
 function jevRouteModel(): string | null {
-  const url = parseDecisionsUrl(process.env.JEV_DECISIONS_URL ?? '')
+  const url = parseDecisionsUrl(configuredDecisionsUrl())
   return typeof url === 'string' ? null : jevModelFor(url.hostname)
 }
 

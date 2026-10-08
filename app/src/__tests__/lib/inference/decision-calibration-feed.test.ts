@@ -62,6 +62,12 @@ function artifact(client = 'JevDecide'): CalibrationArtifact {
 }
 
 describe('decision calibration host feed', () => {
+  it('r545-gate-fingerprint: an unset URL fingerprints the gated default route', () => {
+    vi.stubEnv('JEV_DECISIONS_URL', 'https://api.typesafe.ai/v1/systemone')
+    const direct = calibrationFingerprint('JevDecide')
+    vi.stubEnv('JEV_DECISIONS_URL', '')
+    expect(calibrationFingerprint('JevDecide')).not.toBe(direct) // gate false: no route
+  })
   it('r545-calibration: TypeSafe and OpenRouter route models invalidate each other', () => {
     process.env.JEV_DECISIONS_URL = 'https://api.typesafe.ai/v1/systemone'
     const direct = calibrationFingerprint('JevDecide')

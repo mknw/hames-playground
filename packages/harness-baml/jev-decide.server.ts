@@ -65,6 +65,10 @@ export const JEV_DEFAULT_URL = 'https://api.typesafe.ai/v1/systemone'
 /** Owner gate (#545 D): set true in its own PR once the account's ZDR terms are confirmed. */
 const TYPESAFE_DEFAULT_CONFIRMED = false
 
+/** The endpoint the transport uses: the configured URL, else the gated default ('' = none). Shared with the calibration fingerprint. */
+export const configuredDecisionsUrl = (): string =>
+  process.env.JEV_DECISIONS_URL || (TYPESAFE_DEFAULT_CONFIRMED ? JEV_DEFAULT_URL : '')
+
 /** The model id a request to `hostname` carries; the transport and the calibration fingerprint share it. */
 export const jevModelFor = (hostname: string): string =>
   hostname === 'api.typesafe.ai' ? TYPESAFE_JEV_MODEL : JEV_MODEL
@@ -222,8 +226,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     }
 
     // O4 — before the key is read: the bearer token goes only over https: or loopback.
-    const configured =
-      process.env.JEV_DECISIONS_URL || (TYPESAFE_DEFAULT_CONFIRMED ? JEV_DEFAULT_URL : '')
+    const configured = configuredDecisionsUrl()
     if (!configured) {
       throw jevFailure(
         'The Jev decide transport needs JEV_DECISIONS_URL (there is no default endpoint); no request was made.',

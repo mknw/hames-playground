@@ -9,7 +9,11 @@ import {
 } from '@hames-ai/harness-baml/clients.server'
 import { getBamlFiles } from '@hames-ai/harness-baml/baml_client/inlinedbaml'
 import { JEV_MODEL } from '@hames-ai/harness-baml/jev-decide.server'
-import { CALIBRATION_SPECS } from './decision-calibration-specs.server'
+import calibrationContract from './decision-calibration-contract.json'
+
+// Metadata only at host composition. A hermetic drift pin checks the actual
+// production exports, without pulling tool transports onto this boot path.
+const CALIBRATION_SPECS = calibrationContract.specs
 
 assertServerOnImport()
 
@@ -54,6 +58,7 @@ function refuse(): never {
  * Explicit unmeasured is an empty table, never an identity "calibration". */
 export function feedDecisionCalibration(value: unknown): void {
   if (
+    calibrationContract.revision !== CALIBRATION_REVISION ||
     !object(value) ||
     value.schemaVersion !== 1 ||
     value.contractRevision !== CALIBRATION_REVISION ||

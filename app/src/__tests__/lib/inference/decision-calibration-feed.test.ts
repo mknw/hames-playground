@@ -11,6 +11,7 @@ import {
   configureDecisionCalibration,
   decisionCalibrationFor,
 } from '@hames-ai/harness-baml/clients.server'
+import calibrationContract from '../../../lib/inference/decision-calibration-contract.json'
 import committed from '../../../lib/inference/decision-calibration.json'
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 
@@ -65,8 +66,17 @@ describe('decision calibration host feed', () => {
     expect(() => feedDecisionCalibration(missing)).toThrow()
     expect(decisionCalibrationFor('JevDecide', 'memory.merge')?.n).toBe(8)
   })
+  it('contract revision: drift refuses even an otherwise valid artifact', () => {
+    const revision = calibrationContract.revision
+    try {
+      calibrationContract.revision = 'stale'
+      expect(() => feedDecisionCalibration(artifact())).toThrow()
+    } finally {
+      calibrationContract.revision = revision
+    }
+  })
   it('fingerprint: question text and canonical label order invalidate a previous fit', () => {
-    const spec = CALIBRATION_SPECS[0] as {
+    const spec = calibrationContract.specs[0] as {
       question: string
       labels: readonly { id: string; description: string }[]
     }

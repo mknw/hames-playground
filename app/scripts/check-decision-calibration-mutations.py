@@ -23,6 +23,8 @@ CASES = [
     ('fitter', MATH, 'if (!jev) {', 'if (true) {', 'math', 'fitter:'),
     ('valid-feed', FEED, 'configureDecisionCalibration(table)', 'configureDecisionCalibration({})', 'feed', 'valid:'),
     ('missing-feed', FEED, 'export function feedDecisionCalibration(value: unknown): void {', 'export function feedDecisionCalibration(value: unknown): void { if (value === undefined) return;', 'feed', 'missing:'),
+    ('contract-metadata', 'src/lib/inference/decision-calibration-contract.json', 'Which capability should handle this request?', 'A stale route question', 'structure', 'contract drift:'),
+    ('contract-version', FEED, 'calibrationContract.revision !== CALIBRATION_REVISION ||', 'false ||', 'feed', 'contract revision:'),
     ('fingerprint', FEED, 'specs: CALIBRATION_SPECS,', 'specs: [],', 'feed', 'fingerprint:'),
     ('mismatched-feed', FEED, 'record.fingerprint !== calibrationFingerprint(client) ||', 'false ||', 'feed', 'mismatched:'),
     ('values-feed', FEED, 'cut < 0 || cut > 1', 'cut < -100 || cut > 100', 'feed', 'values:'),

@@ -1,12 +1,18 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import calibrationContract from '../../../lib/inference/decision-calibration-contract.json'
+import { CALIBRATION_REVISION } from '../../../lib/inference/decision-calibration.server'
 import { CALIBRATION_SPECS } from '../../../lib/inference/decision-calibration-specs.server'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 const read = (name: string) => readFileSync(path.resolve(process.cwd(), name), 'utf8')
 
 describe('decision calibration scenario/script structure', () => {
+  it('contract drift: metadata exactly matches current production questions and labels', () => {
+    expect(calibrationContract.revision).toBe(CALIBRATION_REVISION)
+    expect(calibrationContract.specs).toEqual(CALIBRATION_SPECS)
+  })
   it('corpus: every production key plus eval route, labelled and disjoint fit/holdout', () => {
     const fixtures = JSON.parse(read('evals/decision-calibration-fixtures.json')) as {
       items: Array<{ id: string; key: string; state: string; truth: string; split: string }>

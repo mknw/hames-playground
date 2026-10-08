@@ -105,6 +105,13 @@ Jev refuses temperature/bias, even identity values, both at the host boundary
 and in `configureDecisionCalibration` (G7). Unknown clients, keys and entry
 properties are refused.
 
+The host loads only metadata from
+`app/src/lib/inference/decision-calibration-contract.json`; a hermetic drift pin
+requires it to match every current production question export exactly. This
+keeps the host feed off the tool-transport import path. Update that versioned
+contract alongside a changed production question, and refit; a mismatched
+contract revision is refused at composition.
+
 Fingerprints bind the client name, contract revision and **all ordered question
 texts/label descriptions**, plus Jev's pinned model/G7 transport revision or the
 committed local BAML prompt and client declaration. A changed question, label

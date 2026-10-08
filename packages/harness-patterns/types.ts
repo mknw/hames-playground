@@ -266,7 +266,7 @@ export type EventType =
    *  `MemoryRecalledEventData`. */
   | 'memory_recalled'
   /** One memory the store step wrote or reinforced (#419 M2). METADATA ONLY —
-   *  ids, kind, tier and a content HASH, never the content. See
+   *  ids, kind, tier and action, never the content nor a hash of it (#541). See
    *  `MemoryWrittenEventData`. */
   | 'memory_written'
 
@@ -2106,16 +2106,15 @@ export interface MemoryWriteStore {
 /** What a stored memory's event says happened to it. */
 export type MemoryWriteAction = 'inserted' | 'reinforced' | 'updated'
 
-/** Data payload for `memory_written`. METADATA ONLY (SD-3): the content is user
- *  data, and this payload is JSON-dumped wholesale by anything that serializes
- *  `event.data`. `contentHash` is the SHA-256 of the stored content — it lets a
- *  reader tell two writes apart without holding either. Pinned by
+/** Data payload for `memory_written`. METADATA ONLY (SD-3): ids, kind, tier and
+ *  action — no content and no value derived from it. A hash of a short memory
+ *  is a confirmable fingerprint of the text, and the event outlives the memory
+ *  in every other conversation that recorded it (#541). Pinned by
  *  `event-hygiene`. */
 export interface MemoryWrittenEventData {
   readonly memoryId: string
   readonly kind: MemoryKind
   readonly tier: string
-  readonly contentHash: string
   /** The `user_message` event the memory was built from. */
   readonly eventId: string
   readonly ordinal: number

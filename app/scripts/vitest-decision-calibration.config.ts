@@ -1,0 +1,17 @@
+import { defineConfig } from 'vitest/config'
+
+// Hermetic T8 pins: no app global setup, no database, no provider calls.
+export default defineConfig({
+  test: {
+    environment: 'node',
+    include: [
+      'src/__tests__/lib/inference/decision-calibration-*.test.ts',
+      'src/__tests__/lib/inference/decision-probe.test.ts',
+      'src/__tests__/lib/harness-patterns/decide-adapter.test.ts',
+      'src/__tests__/lib/harness-patterns/decide-secondary-jev.test.ts',
+      'src/__tests__/lib/harness-patterns/jev-decide.test.ts',
+      'src/__tests__/evals-not-in-ci.test.ts',
+      '../packages/harness-patterns/__tests__/typed-decision*.test.ts',
+    ],
+  },
+})

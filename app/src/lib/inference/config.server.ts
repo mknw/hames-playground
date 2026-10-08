@@ -20,6 +20,8 @@
  * and the resolution must land in the SAME module instance, and the pin goes
  * red when they do not.
  */
+import decisionCalibrationArtifact from './decision-calibration.json'
+import { feedDecisionCalibration } from './decision-calibration.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   CLIENT_MAX_OUTPUT_TOKENS,
@@ -38,6 +40,9 @@ import {
 } from '@hames-ai/harness-baml/clients.server'
 
 assertServerOnImport()
+
+// #418 T8: validate the committed artifact at host composition, before calls.
+feedDecisionCalibration(decisionCalibrationArtifact)
 
 export type { InferenceTier } from '@hames-ai/harness-baml/clients.server'
 

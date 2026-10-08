@@ -3078,15 +3078,15 @@ describe('#517 A: placeholder lookup costs one step per run, not one per placeho
   // The #492 F2 guard's fixture has ONE placeholder key per part, and its
   // count cannot see Map iteration: neither sees a per-run scan of every
   // placeholder the layout and master declare. These pins GROW the number of
-  // distinct keys, and the runs with them, from n to 2n: a scan costs the
-  // second four times the first (#522: a ratio against a control at one size
+  // distinct keys, and the runs with them, from n to 4n: a scan costs the
+  // second sixteen times the first (#522: a ratio against a control at one size
   // let a per-run spread of every placeholder through at 1.43 and 2.06 — native
-  // Map iteration is cheap at that size), an index twice. `type="body"` misses
+  // Map iteration is cheap at that size), an index four times. `type="body"` misses
   // every key by type; `idx="0"` misses by idx as well, so each lookup path is
   // timed on its own.
-  const n = 16_000
+  const n = 8_000
   const growth = async (build: (size: number) => Uint8Array): Promise<number> => {
-    const [small, large] = [build(n), build(2 * n)]
+    const [small, large] = [build(n), build(4 * n)]
     // Untimed pass: the first fixture in a cold process pays the engine's warm-up.
     await cpuMs(() => ooxmlDisarm(small, MIME.pptx))
     return (
@@ -3118,7 +3118,7 @@ describe('#517 A: placeholder lookup costs one step per run, not one per placeho
           },
         })
       }
-      expect(await growth(doc)).toBeLessThan(2.5)
+      expect(await growth(doc)).toBeLessThan(6)
     },
     120_000,
   )
@@ -3147,7 +3147,7 @@ describe('#517 A: placeholder lookup costs one step per run, not one per placeho
         },
       })
     }
-    expect(await growth(doc)).toBeLessThan(2.5)
+    expect(await growth(doc)).toBeLessThan(6)
   }, 120_000)
 })
 
@@ -3953,5 +3953,92 @@ describe('the disarm throws instead of returning a partial package', () => {
     expect(thrown).toBeInstanceOf(DocumentRefusedError)
     expect(convert).not.toHaveBeenCalled()
     expect(sanitizeOptionFor({ error: thrown }).unavailable).toBeDefined()
+  })
+})
+
+// #522 review: the background memo is keyed by the slide part, never by a
+// layout, a master or the document — each of those keys reports hidden text
+// as removed for one slide order.
+describe('#522: a slide never reads another slide’s background memo', () => {
+  const black = `<p:bgPr>${solid('000000')}<a:effectLst/></p:bgPr>`
+  const white = bodyRun(solid('FFFFFF'))
+  it.each([false, true])(
+    'two layouts, one black, one absent (black first: %s)',
+    async (blackFirst) => {
+      const [a, b] = blackFirst
+        ? [pStylePart('sldLayout', '', '', black), pStylePart('sldLayout')]
+        : [pStylePart('sldLayout'), pStylePart('sldLayout', '', '', black)]
+      const bytes = pptx({
+        slides: [{ shapes: white }, { shapes: white }],
+        style: { layouts: [a, b], master: pStylePart('sldMaster', '', CLR_MAP) },
+      })
+      expect(await countedOf(bytes)).toEqual({ 'colour-contrast': 1 })
+    },
+  )
+  it.each([1, 2])('one layout, two colour maps (override on slide %i)', async (on) => {
+    // The layout's background is bg1: white through the master's map, black
+    // through a slide's override, so the same layout part resolves differently.
+    const ovr =
+      '<p:clrMapOvr><a:overrideClrMapping bg1="dk1" tx1="lt1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/></p:clrMapOvr>'
+    const bytes = pptx({
+      slides: [
+        { shapes: white },
+        {
+          shapes: white,
+          rels: [
+            { id: 'rIdLayout', type: RT.slideLayout, target: '../slideLayouts/slideLayout1.xml' },
+          ],
+        },
+      ],
+      style: {
+        layouts: [
+          pStylePart(
+            'sldLayout',
+            '',
+            '',
+            `<p:bgPr><a:solidFill><a:schemeClr val="bg1"/></a:solidFill><a:effectLst/></p:bgPr>`,
+          ),
+          undefined,
+        ],
+        master: pStylePart('sldMaster', '', CLR_MAP),
+      },
+    })
+    const dec = new TextDecoder()
+    const enc = new TextEncoder()
+    const patched = writeZip(
+      readZip(bytes).map((e) => ({
+        name: e.name,
+        data:
+          e.name === `ppt/slides/slide${on}.xml`
+            ? enc.encode(dec.decode(e.data).replace('</p:cSld>', `</p:cSld>${ovr}`))
+            : e.data,
+      })),
+    )
+    expect(await countedOf(patched)).toEqual({ 'colour-contrast': 1 })
+  })
+  // F2: the stop bound is ten — a ten-stop background is still read, an eleven-stop one is not.
+  it.each([
+    [10, { 'colour-contrast': 1 }],
+    [11, { 'unknown-property': 1 }],
+  ])('a layout gradient of %i white stops behind white text', async (k, want) => {
+    const stops = Array.from(
+      { length: k },
+      (_, i) => `<a:gs pos="${i * 1000}"><a:srgbClr val="FFFFFF"/></a:gs>`,
+    ).join('')
+    const bytes = pptx({
+      slides: [{ shapes: white }],
+      style: {
+        layouts: [
+          pStylePart(
+            'sldLayout',
+            '',
+            '',
+            `<p:bgPr><a:gradFill><a:gsLst>${stops}</a:gsLst></a:gradFill><a:effectLst/></p:bgPr>`,
+          ),
+        ],
+        master: pStylePart('sldMaster', '', CLR_MAP),
+      },
+    })
+    expect(await countedOf(bytes)).toEqual(want)
   })
 })

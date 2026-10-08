@@ -59,7 +59,7 @@ describe('host memory composition', () => {
   it('cached closures resolve the owner per operation and fail closed without one', async () => {
     const cfg = createHostMemoryConfig()
     for (const userId of ['alice', 'bob'])
-      await runWithRequestContext({ userId, sessionId: 'same' }, async () => {
+      await runWithRequestContext({ userId, sessionId: 'same', memoryAllowed: true }, async () => {
         expect(cfg.owner()).toBe(userId)
         await cfg.store.count(['anthropic'])
         await cfg.store.candidates({ embedding: [1], tiers: ['anthropic'] })
@@ -76,9 +76,12 @@ describe('host memory composition', () => {
     ])
     expect(getMemoryEnabled.mock.calls).toEqual([['alice'], ['bob']])
     getMemoryEnabled.mockResolvedValueOnce(false)
-    await runWithRequestContext({ userId: 'alice', sessionId: 'same' }, async () => {
-      expect(await cfg.enabled()).toBe(false)
-    })
+    await runWithRequestContext(
+      { userId: 'alice', sessionId: 'same', memoryAllowed: true },
+      async () => {
+        expect(await cfg.enabled()).toBe(false)
+      },
+    )
     expect(await cfg.enabled()).toBe(false)
     expect(() => cfg.store.count([])).toThrow('owner')
   })
@@ -88,6 +91,43 @@ describe('host memory composition', () => {
     expect(visibleMemoryTiers('future')).toEqual([])
     expect(visibleMemoryTiers(undefined)).toEqual([])
   })
+  it('the composition root wires the fail-closed tier map and the settle budget (D8, D20)', async () => {
+    const { memoryStoreConfig } =
+      await import('@hames-ai/harness-patterns/patterns/withMemory.server')
+    const cfg = agentDeps().memory!
+    expect(cfg.visibleTiers('anthropic')).toEqual(['anthropic'])
+    expect(cfg.visibleTiers('verda')).toEqual(['anthropic', 'verda'])
+    expect(cfg.visibleTiers('future')).toEqual([])
+    expect(cfg.visibleTiers(undefined)).toEqual([])
+    expect(memoryStoreConfig(cfg).settings?.wakeBudgetMs).toBe(30)
+  })
+  it.each([false, true] as const)(
+    '#553: recall and wake require the same interactive origin gate (%s)',
+    async (memoryAllowed) => {
+      const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+      const { runChain } = await import('@hames-ai/harness-patterns/patterns/chain.server')
+      const { withMemory } = await import('@hames-ai/harness-patterns/patterns/withMemory.server')
+      const cfg = agentDeps().memory!
+      const patterns = withMemory<{ memoryContext?: string; [key: string]: unknown }>(cfg)([])
+      await runWithRequestContext(
+        { userId: 'alice', sessionId: 'same', memoryAllowed },
+        async () => {
+          expect(await cfg.enabled()).toBe(memoryAllowed)
+          startTurnMemory(patterns, cfg)
+          const ctx = createContext('synthetic question')
+          await withRunFrame({ inference: { tier: 'anthropic' } }, () => runChain(ctx, patterns))
+          expect(ctx.events.find((e) => e.type === 'memory_recalled')?.data).toMatchObject({
+            attached: [],
+            skipped: memoryAllowed ? 'empty' : 'disabled',
+          })
+          expect(stores.count).toHaveBeenCalledTimes(memoryAllowed ? 1 : 0)
+          expect(stores.candidates).not.toHaveBeenCalled()
+          expect(embed).not.toHaveBeenCalled()
+          expect(ensureMemoryAwake).toHaveBeenCalledTimes(memoryAllowed ? 1 : 0)
+        },
+      )
+    },
+  )
   it('embeds query and documents explicitly locally despite a public stash setting', async () => {
     vi.stubEnv('EMBEDDINGS_PROVIDER', 'openrouter')
     const cfg = createHostMemoryConfig()
@@ -109,28 +149,34 @@ describe('host memory composition', () => {
     const leaf = configurePattern('leaf', async (scope) => scope)
     const memory = { ...leaf, capabilities: { memory: true as const } }
     const cfg = createHostMemoryConfig()
-    await runWithRequestContext({ userId: 'alice', sessionId: 'same' }, async () => {
-      expect(startTurnMemory([leaf], cfg)).toBeUndefined()
-      expect(startTurnMemory([memory])).toBeUndefined()
-      expect(ensureMemoryAwake).not.toHaveBeenCalled()
-      awaitMemoryWake.mockResolvedValueOnce('skipped')
-      expect(startTurnMemory([memory], cfg)).toBe(cfg)
-      await Promise.resolve()
-      awaitMemoryWake.mockResolvedValue('awake') // another turn cannot replace ours
-      expect(await cfg.awaitWake!(100)).toBe('skipped')
-      expect(awaitMemoryWake).toHaveBeenCalledTimes(1)
-      expect(ensureMemoryAwake).toHaveBeenCalledExactlyOnceWith(true)
-    })
+    await runWithRequestContext(
+      { userId: 'alice', sessionId: 'same', memoryAllowed: true },
+      async () => {
+        expect(startTurnMemory([leaf], cfg)).toBeUndefined()
+        expect(startTurnMemory([memory])).toBeUndefined()
+        expect(ensureMemoryAwake).not.toHaveBeenCalled()
+        awaitMemoryWake.mockResolvedValueOnce('skipped')
+        expect(startTurnMemory([memory], cfg)).toBe(cfg)
+        await Promise.resolve()
+        awaitMemoryWake.mockResolvedValue('awake') // another turn cannot replace ours
+        expect(await cfg.awaitWake!(100)).toBe('skipped')
+        expect(awaitMemoryWake).toHaveBeenCalledTimes(1)
+        expect(ensureMemoryAwake).toHaveBeenCalledExactlyOnceWith(true)
+      },
+    )
     expect(await waitForTurnMemoryWake(1)).toBe('skipped')
   })
   it('waits at most the consumer budget and fails closed on rejection', async () => {
     const { setRequestMemoryWake } = await import('../../../lib/harness-client/request-user.server')
-    await runWithRequestContext({ userId: 'alice', sessionId: 'same' }, async () => {
-      setRequestMemoryWake(new Promise(() => {}))
-      expect(await waitForTurnMemoryWake(5)).toBe('skipped')
-      setRequestMemoryWake(Promise.reject(new Error('refused')))
-      expect(await waitForTurnMemoryWake(100)).toBe('skipped')
-    })
+    await runWithRequestContext(
+      { userId: 'alice', sessionId: 'same', memoryAllowed: true },
+      async () => {
+        setRequestMemoryWake(new Promise(() => {}))
+        expect(await waitForTurnMemoryWake(5)).toBe('skipped')
+        setRequestMemoryWake(Promise.reject(new Error('refused')))
+        expect(await waitForTurnMemoryWake(100)).toBe('skipped')
+      },
+    )
   })
 })
 

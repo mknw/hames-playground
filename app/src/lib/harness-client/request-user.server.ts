@@ -36,6 +36,8 @@ export interface RequestContext {
    * other users' global skills (`agentDeps()` in `session.server.ts`).
    */
   attended?: boolean
+  /** Same origin gate as settle: interactive, or resume of an interactive run (#553). */
+  memoryAllowed?: boolean
   /** Captured at this turn's wake start; later polls cannot replace its outcome. */
   memoryWake?: Promise<'awake' | 'skipped'>
 }
@@ -83,4 +85,15 @@ export function setRequestMemoryWake(wake: Promise<'awake' | 'skipped'>): void {
 
 export function getRequestMemoryWake(): Promise<'awake' | 'skipped'> | undefined {
   return requestStore.getStore()?.memoryWake
+}
+
+/** Fail closed outside a turn or before its persisted origin has been checked. */
+export function isRequestMemoryAllowed(): boolean {
+  return requestStore.getStore()?.memoryAllowed === true
+}
+
+export function setRequestMemoryAllowed(allowed: boolean): void {
+  const ctx = requestStore.getStore()
+  if (!ctx) throw new Error('Memory policy requires a request scope')
+  ctx.memoryAllowed = allowed
 }

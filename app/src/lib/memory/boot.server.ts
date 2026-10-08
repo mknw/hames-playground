@@ -49,7 +49,16 @@ async function probe(): Promise<void> {
   } catch {
     embedder = 'unavailable'
   }
+  // Off-box is not probed by design, and is not evidence of absence: runtime
+  // memory still wakes and uses that endpoint, so it must not read as DISABLED.
+  const verdict = !schema
+    ? 'DISABLED'
+    : embedder === 'answering'
+      ? 'ENABLED'
+      : embedder === 'not-probed-off-box'
+        ? 'ENABLED (embedder not probed)'
+        : 'DISABLED'
   console.info(
-    `[memory] ${schema && embedder === 'answering' ? 'ENABLED' : 'DISABLED'}: schema/extension=${schema ? 'available' : 'unavailable'}; embedder=${embedder}; embeddingSpaceId=${space}`,
+    `[memory] ${verdict}: schema/extension=${schema ? 'available' : 'unavailable'}; embedder=${embedder}; embeddingSpaceId=${space}`,
   )
 }

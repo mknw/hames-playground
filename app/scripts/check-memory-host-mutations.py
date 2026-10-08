@@ -45,7 +45,7 @@ cases = [
     ('same-wake', C, 'const wake = getRequestMemoryWake()', 'const wake = awaitMemoryWake(memoryWakeTimeoutMs())', config, None),
     ('wake-budget', C, "timer = setTimeout(() => resolve('skipped'), budgetMs)", "timer = setTimeout(() => resolve('skipped'), 10000)", config, 'waits at most'),
     ('wake-rejection', C, "  } catch {\n    return 'skipped'", "  } catch {\n    return 'awake'", config, None),
-    ('interactive-only', T, "req.mode === 'interactive' ||\n      (req.mode === 'resume' && held.loaded?.memoryRunOrigin === 'interactive')", "true", turn, 'memory host'),
+    ('interactive-only', T, "req.mode === 'interactive' ||\n    (req.mode === 'resume' && held.loaded?.memoryRunOrigin === 'interactive')", "true", turn, 'memory host'),
     ('resume-origin', T, "held.loaded?.memoryRunOrigin === 'interactive'", "held.loaded?.memoryRunOrigin !== 'interactive'", turn, 'resume preserves'),
     ('origin-new-turn', T, "memoryRunOrigin: req.mode === 'interactive' ? 'interactive' : 'triggered'", "memoryRunOrigin: 'triggered'", turn, 'promoted action'),
     ('claimed-row-id', T, 'conversationId: req.sessionId', 'conversationId: result.context.sessionId', turn, 'starts wake before'),
@@ -60,7 +60,7 @@ cases = [
     ('boot-once', B, 'return ((globalThis as BootGlobal)[KEY] ??= probe())', 'return probe()', boot, None),
     ('boot-local-only', B, "if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))", 'if (false)', boot, None),
     ('boot-no-redirect', B, "redirect: 'error'", "redirect: 'follow'", boot, None),
-    ('boot-fail-open', B, "schema && embedder === 'answering'", 'true', boot, None),
+    ('boot-fail-open', B, 'const verdict = !schema', 'const verdict = false', boot, None),
     ('boot-hook', 'src/middleware.ts', 'void probeMemoryAtBoot()', 'void 0', boot, None),
     ('nullable-enum', 'src/lib/db/client.server.ts', 'ADD COLUMN IF NOT EXISTS memory_run_origin TEXT', "ADD COLUMN IF NOT EXISTS memory_run_origin TEXT NOT NULL DEFAULT 'interactive'", 'src/__tests__/lib/db/encryption-coverage.test.ts', None),
     ('optional-deps', '../packages/agents/types.ts', 'memory?: MemoryConfig', 'memory: MemoryConfig', None, None),
@@ -80,6 +80,32 @@ cases += [
 cases += [
     ('origin-no-backfill', 'src/lib/db/client.server.ts', "CHECK (memory_run_origin IN ('interactive', 'triggered'));", "CHECK (memory_run_origin IN ('interactive', 'triggered'));\n  UPDATE conversations SET memory_run_origin = 'interactive' WHERE memory_run_origin IS NULL;", 'src/__tests__/lib/db/encryption-coverage.test.ts', 'keeps routing enums'),
     ('origin-plaintext', 'src/lib/db/migrate-encryption.server.ts', "textColumns: ['title']", "textColumns: ['title', 'memory_run_origin']", 'src/__tests__/lib/db/encryption-coverage.test.ts', 'keeps routing enums'),
+]
+# Independent review #550, F1–F4: the prescribed mutations, one at a time.
+cases += [
+    ('M1', T, "if (event.type === 'memory_written')", 'if (false)', 'src/__tests__/lib/memory/review-550-merge.test.ts', None),
+    ('M2', T, 'fresh.events[at] = event', '', 'src/__tests__/lib/memory/review-550-merge.test.ts', None),
+    ('M3', T, "(e.data as MemoryWrittenEventData).eventId === d.eventId &&\n          (e.data as MemoryWrittenEventData).ordinal === d.ordinal", '(e.data as MemoryWrittenEventData).eventId === d.eventId', 'src/__tests__/lib/memory/review-550-merge.test.ts', None),
+    ('Z', C, 'visibleTiers: visibleMemoryTiers', "visibleTiers: () => ['anthropic', 'verda']", config, 'composition root wires'),
+    ('Z5', C, 'visibleTiers: visibleMemoryTiers', "visibleTiers: (t) => (t ? ['anthropic', 'verda'] : [])", config, 'composition root wires'),
+    ('Z4', C, 'settle: { wakeBudgetMs: memoryWakeTimeoutMs() }', 'settle: {}', config, 'composition root wires'),
+    ('F3-conjunction', B, '${verdict}', "${schema && embedder === 'answering' ? 'ENABLED' : 'DISABLED'}", boot, None),
+    ('F3-off-box-disabled', B, "? 'ENABLED (embedder not probed)'", "? 'DISABLED'", boot, None),
+    ('F3-ignore-schema', B, 'const verdict = !schema', 'const verdict = false', boot, None),
+    ('E', R, '[d.eventId, d.ordinal]', '[d.eventId, 0]', reconcile, 'keys on'),
+    ('E2', R, '[s.eventId, s.ordinal]', '[s.eventId, 0]', reconcile, 'keys on'),
+    ('F', R, 'tier: source.tier', "tier: 'verda'", reconcile, 'keys on'),
+    ('V', R, 'kind: memory.kind', "kind: 'preference'", reconcile, 'keys on'),
+    ('A', T, '!plan.stopOnly ? startTurnMemory(patterns, agentDeps().memory) : undefined', 'startTurnMemory(patterns, agentDeps().memory)', turn, 'stop-only resume of an interactive run'),
+    ('Q', B, ' || !result.vectors[0].every(Number.isFinite)', '', boot, 'non-finite vector'),
+]
+# #553 option 1: reject a supplier/wake bypass and origin broadening.
+cases += [
+    ('553-enabled', C, '      if (!isRequestMemoryAllowed()) return false', '', config, '#553'),
+    ('553-wake', C, '  if (!isRequestMemoryAllowed()) return undefined', '', config, '#553'),
+    ('553-triggered', T, "const memoryAllowed =\n    req.mode === 'interactive'", "const memoryAllowed =\n    req.mode !== 'resume'", turn, 'triggered run never wakes'),
+    ('553-resume-attended', T, "held.loaded?.memoryRunOrigin === 'interactive'", 'isAttendedRequest()', turn, 'resume preserves'),
+    ('553-resume-null', T, "held.loaded?.memoryRunOrigin === 'interactive'", "held.loaded?.memoryRunOrigin !== 'triggered'", turn, 'resume preserves'),
 ]
 if args.postgres:
     cases = [('origin-preserve-and-update', 'src/lib/db/conversations.server.ts', 'COALESCE($9, memory_run_origin)', 'COALESCE(memory_run_origin, $9)', 'src/__tests__/lib/db/conversations.test.ts', 'M5c lifted')]

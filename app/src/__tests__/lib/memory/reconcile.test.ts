@@ -66,6 +66,37 @@ describe('one-directional reconciliation', () => {
     expect(insert).not.toHaveBeenCalled()
     expect(addSource).not.toHaveBeenCalled()
   })
+  it('keys on (eventId, ordinal); kind comes from the read, tier from the source row', async () => {
+    const ctx = createContext('synthetic text')
+    ctx.events.push(
+      createEvent('memory_written', 'memory-store', {
+        memoryId: 'mem-b',
+        kind: 'preference',
+        tier: 'anthropic',
+        eventId: 'ev-user',
+        ordinal: 1,
+        action: 'inserted',
+      }),
+    )
+    sources.mockResolvedValue([
+      { eventId: 'ev-user', ordinal: 0, memoryId: 'mem-a', tier: 'anthropic' },
+      { eventId: 'ev-user', ordinal: 1, memoryId: 'mem-b', tier: 'anthropic' },
+    ])
+    read.mockResolvedValue({ kind: 'episodic', content: 'private text never copied' })
+    const repaired = await reconcileMemoryReferences(serializeContext(ctx), 'row-id', 'alice')
+    const written = deserializeContext(repaired).events.filter((e) => e.type === 'memory_written')
+    expect(written.slice(1).map((e) => e.data)).toEqual([
+      {
+        memoryId: 'mem-a',
+        kind: 'episodic',
+        tier: 'anthropic',
+        eventId: 'ev-user',
+        ordinal: 0,
+        action: 'reinforced',
+      },
+    ])
+    expect(read).toHaveBeenCalledExactlyOnceWith('mem-a')
+  })
   it('null read means erased: no event, row or source, even after a source read raced deletion', async () => {
     read.mockResolvedValue(null)
     const original = blob()

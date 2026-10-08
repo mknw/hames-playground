@@ -12,6 +12,7 @@ import { createMemoryDbStore } from '../db/memories.server'
 import { getMemoryEnabled } from '../db/user-prefs.server'
 import {
   getRequestUserId,
+  isRequestMemoryAllowed,
   getRequestMemoryWake,
   setRequestMemoryWake,
 } from '../harness-client/request-user.server'
@@ -51,6 +52,7 @@ export function createHostMemoryConfig(): MemoryConfig {
     embed: createMemoryEmbedder(),
     visibleTiers: visibleMemoryTiers,
     enabled: async () => {
+      if (!isRequestMemoryAllowed()) return false
       const id = owner()
       return id ? getMemoryEnabled(id) : false
     },
@@ -66,6 +68,7 @@ export function startTurnMemory<T>(
   patterns: ConfiguredPattern<T>[],
   memory?: MemoryConfig,
 ): MemoryConfig | undefined {
+  if (!isRequestMemoryAllowed()) return undefined
   if (!memory || !harnessUsesMemory(patterns)) return undefined
   void ensureMemoryAwake(true)
   setRequestMemoryWake(awaitMemoryWake(memoryWakeTimeoutMs()))

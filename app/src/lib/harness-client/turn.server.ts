@@ -66,6 +66,7 @@ import {
   HitlAnswerError,
   type ConfiguredPattern,
   type MemoryConfig,
+  type MemoryWrittenEventData,
   type ContextEvent,
   type HarnessResultScoped,
   type HitlDecidedBy,
@@ -85,7 +86,11 @@ import {
 import { startTurnMemory } from '../memory/config.server'
 import { settleMemory } from '@hames-ai/harness-patterns/memory-store.server'
 import { memoryStoreConfig } from '@hames-ai/harness-patterns/patterns/withMemory.server'
-import { runWithRequestContext, isAttendedRequest } from './request-user.server'
+import {
+  runWithRequestContext,
+  isAttendedRequest,
+  setRequestMemoryAllowed,
+} from './request-user.server'
 import { canonicalAgentId } from './agent-ids'
 import { amendRunFrame, withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { activeInferenceTier, assertInferenceTier } from '@hames-ai/harness-baml/clients.server'
@@ -363,6 +368,11 @@ async function runOneTurn(
   const { sessionId, userId } = req
   // Refused here, before anything runs, when another turn holds the row.
   const held = await claimTurn(req, tier)
+  // #553 option 1: recall, wake and settle share the persisted run-origin gate.
+  const memoryAllowed =
+    req.mode === 'interactive' ||
+    (req.mode === 'resume' && held.loaded?.memoryRunOrigin === 'interactive')
+  setRequestMemoryAllowed(memoryAllowed)
   // The lease is renewed for as long as this turn holds it, so a slow turn
   // keeps its conversation and only a dead process loses it.
   const renewal = setInterval(() => {
@@ -421,16 +431,7 @@ async function runOneTurn(
   // all three scopes, so it keeps them for its whole continuation (the
   // tier scope included: a detached summarization must not silently
   // change provider halfway through a turn).
-  void compactAndSave(
-    req,
-    result,
-    titleWarned,
-    saved,
-    req.mode === 'interactive' ||
-      (req.mode === 'resume' && held.loaded?.memoryRunOrigin === 'interactive')
-      ? ran.memory
-      : undefined,
-  )
+  void compactAndSave(req, result, titleWarned, saved, memoryAllowed ? ran.memory : undefined)
   return result
 }
 
@@ -1164,6 +1165,24 @@ export function mergeTrailingPass<T>(
   }
   let anchor = ours.events[savedCount - 1]?.id
   for (const event of ours.events.slice(savedCount)) {
+    // A load may have re-derived this reference from its committed source row
+    // while this save was pending (G9 Q2). One (eventId, ordinal) is one write:
+    // the settle's own record replaces the derived copy rather than joining it.
+    if (event.type === 'memory_written') {
+      const d = event.data as MemoryWrittenEventData
+      const at = fresh.events.findIndex(
+        (e) =>
+          e.type === 'memory_written' &&
+          (e.data as MemoryWrittenEventData).eventId === d.eventId &&
+          (e.data as MemoryWrittenEventData).ordinal === d.ordinal,
+      )
+      if (at !== -1) {
+        fresh.events[at] = event
+        present.add(event.id)
+        anchor = event.id
+        continue
+      }
+    }
     if (event.id === undefined || !present.has(event.id)) {
       const at = anchor === undefined ? -1 : fresh.events.findIndex((e) => e.id === anchor)
       fresh.events.splice(at === -1 ? fresh.events.length : at + 1, 0, event)

@@ -30,6 +30,7 @@ import {
   getRequestUserId,
   getRequestSessionId,
   isAttendedRequest,
+  isRequestMemoryAllowed,
 } from '../../../lib/harness-client/request-user.server'
 import { runtimeConfig } from '@hames-ai/harness-patterns/runtime-config.server'
 import { DEFAULT_SETTINGS } from '../../../lib/settings'
@@ -2291,8 +2292,13 @@ describe('memory host turns (G9)', () => {
     expect(ensureMemoryAwake).not.toHaveBeenCalled()
     expect(settleMemory).not.toHaveBeenCalled()
   })
-  it('a triggered run never settles even with memory opted in', async () => {
+  it('a triggered run never wakes, recalls or settles even with memory opted in', async () => {
     wireMemory()
+    const run = runFresh.getMockImplementation()!
+    runFresh.mockImplementationOnce(async (...args) => {
+      expect(isRequestMemoryAllowed()).toBe(false)
+      return run(...args)
+    })
     await runTurnAndPersist({
       mode: 'triggered',
       sessionId: 'run-trigger',
@@ -2303,6 +2309,7 @@ describe('memory host turns (G9)', () => {
     })
     await flush()
     expect(settleMemory).not.toHaveBeenCalled()
+    expect(ensureMemoryAwake).not.toHaveBeenCalled()
     expect(saveSession.mock.calls[0][4]).toMatchObject({ memoryRunOrigin: 'triggered' })
   })
   it.each(['interactive', 'triggered', null] as const)(
@@ -2314,12 +2321,31 @@ describe('memory host turns (G9)', () => {
         memoryRunOrigin: origin,
       })
       loadHitlAnswerRows.mockResolvedValueOnce([answerRow('req-uuid-1', 'approve')])
+      const run = resumeHarness.getMockImplementation()!
+      resumeHarness.mockImplementationOnce(async (...args) => {
+        expect(isRequestMemoryAllowed()).toBe(origin === 'interactive')
+        return run(...args)
+      })
       await runTurnAndPersist(resume())
       await flush()
+      expect(ensureMemoryAwake).toHaveBeenCalledTimes(origin === 'interactive' ? 1 : 0)
       expect(settleMemory).toHaveBeenCalledTimes(origin === 'interactive' ? 1 : 0)
       expect(saveSession.mock.calls[0][4]).not.toHaveProperty('memoryRunOrigin')
     },
   )
+  it('a stop-only resume of an interactive run starts no memory wake and settles nothing', async () => {
+    wireMemory()
+    claimSession.mockResolvedValueOnce({
+      ...claimedPaused(pausedBlob())!,
+      memoryRunOrigin: 'interactive',
+    })
+    loadHitlAnswerRows.mockResolvedValueOnce([answerRow('req-uuid-1', 'reject')])
+    await runTurnAndPersist(resume())
+    await flush()
+    expect(resumeHarness).toHaveBeenCalledTimes(1)
+    expect(ensureMemoryAwake).not.toHaveBeenCalled()
+    expect(settleMemory).not.toHaveBeenCalled()
+  })
   it('an interactive turn on a promoted action settles and records interactive origin', async () => {
     wireMemory()
     claimSession.mockResolvedValueOnce({

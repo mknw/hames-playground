@@ -52,10 +52,23 @@ describe('boot memory availability', () => {
       vi.stubEnv('EMBEDDINGS_LOCAL_URL', base)
       await probeMemoryAtBoot()
       expect(fetcher).not.toHaveBeenCalled()
-      expect(log).toHaveBeenCalledWith(expect.stringContaining('DISABLED:'))
-      expect(log).toHaveBeenCalledWith(expect.stringContaining('not-probed-off-box'))
+      expect(log).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(
+          'ENABLED (embedder not probed): schema/extension=available; embedder=not-probed-off-box;',
+        ),
+      )
     },
   )
+  it('an off-box embedder never masks a missing schema', async () => {
+    vi.stubEnv('EMBEDDINGS_LOCAL_URL', 'https://example.invalid/v1')
+    available.mockReturnValue(false)
+    await probeMemoryAtBoot()
+    expect(log).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(
+        'DISABLED: schema/extension=unavailable; embedder=not-probed-off-box;',
+      ),
+    )
+  })
   it('does not fail boot or quote content when schema and embedding fail', async () => {
     ensure.mockRejectedValueOnce(new Error('private content'))
     fetcher.mockRejectedValueOnce(new Error('secret content'))
@@ -64,6 +77,13 @@ describe('boot memory availability', () => {
       expect.stringContaining('DISABLED: schema/extension=unavailable; embedder=unavailable;'),
     )
     expect(JSON.stringify(log.mock.calls)).not.toContain('content')
+  })
+  it('a non-finite vector is not an answering embedder', async () => {
+    fetcher.mockResolvedValueOnce(
+      Response.json({ data: [{ embedding: [...Array(1023).fill(0.1), null] }] }),
+    )
+    await probeMemoryAtBoot()
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('embedder=unavailable'))
   })
   it('disabled schema and malformed vectors cannot report enabled', async () => {
     available.mockReturnValue(false)

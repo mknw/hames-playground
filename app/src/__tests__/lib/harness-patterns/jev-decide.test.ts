@@ -126,7 +126,7 @@ beforeEach(() => {
   // O2 on EVERY path: the embedding provider's key is set in every test, so a
   // fallback to it anywhere (success, error, retry) is a request carrying it.
   process.env.OPENROUTER_API_KEY = 'embedding-key'
-  delete process.env.JEV_DECISIONS_URL
+  process.env.JEV_DECISIONS_URL = 'https://api.typesafe.ai/v1/systemone'
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init: RequestInit) => {
@@ -168,6 +168,9 @@ describe('the wire shape — ONE request carries every field as a typed question
     expect(requests).toHaveLength(1)
     expect(requests[0].url).toBe('https://api.typesafe.ai/v1/systemone')
     expect(requests[0].init.method).toBe('POST')
+    expect((requests[0].init.headers as Record<string, string>)['content-type']).toBe(
+      'application/json',
+    )
     expect((requests[0].init.headers as Record<string, string>).authorization).toBe(
       'Bearer or-test-key',
     )

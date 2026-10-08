@@ -44,6 +44,11 @@ Measured on the live dev database, 2026-08-15.
 | Redis Data Stash                             | uploaded and Microsoft 365-ingested documents, chunks, embeddings                                                                                                                                                                                                                                                                             | **no**                                                                                 | **7 days** (`DEFAULT_TTL_SECONDS`)                                                                   | —        |
 | Neo4j                                        | **the staff directory**: per `Member` — `entraId`, `displayName`, `mail`, `department`, `jobTitle`, `syncedAt`                                                                                                                                                                                                                                | **no**                                                                                 | **none**                                                                                             | 49       |
 
+External decision processor (#418, SD-12): the configured `JEV_DECISIONS_URL`
+receives decision state, question instructions and option descriptions; unset,
+no decision request is made. TypeSafe (Jev) offers zero data retention to enterprise customers; without that agreement, standard retention applies.
+See finding 1 for the direct and OpenRouter routes.
+
 The Postgres column encryption is AES-256-GCM under `DATA_ENCRYPTION_KEY`
 (`app/src/lib/db/crypto.server.ts`), applied in the repository modules on write
 and read; identifiers, the lifted enums and the timestamps stay plaintext so
@@ -118,7 +123,7 @@ Two things follow that _are_ in our control:
   2026-08-24, so no _chat_ configuration sends a prompt to Groq, OpenRouter or
   OpenAI. **One exception, stated rather than buried (#418, slice T4):** on the
   Anthropic tier the `decide` role's default client is a REST adapter to
-  TypeSafe's Jev model **directly by default** at
+  TypeSafe's Jev model directly when `JEV_DECISIONS_URL` names it (there is no default endpoint until the owner confirms the account's ZDR terms) at
   `https://api.typesafe.ai/v1/systemone` (`jev-1.13.0`;
   `packages/harness-baml/jev-decide.server.ts`). SD-10's processor map for this
   route is: consumer-supplied decision state, question instructions and option
@@ -126,6 +131,10 @@ Two things follow that _are_ in our control:
   include answers and token usage; this transport records the request and
   response in `LLMCallRecord` (without the authorization header or bearer key).
   Direct responses document no `usage.cost`, so price stays unknown.
+  The request pins `jev-1.13.0` rather than the moving `jev-latest` alias because
+  T8 calibration fits are per model version; a moving alias would silently invalidate them.
+  A disabled owner gate pre-builds the default switch; it may be enabled only in
+  a separate PR after the account's enterprise ZDR agreement is confirmed.
 
   **Retention is contractual, not inferred from no-training.** TypeSafe's
   [model docs](https://docs.typesafe.ai/models) state requests and responses are
@@ -159,7 +168,7 @@ Two things follow that _are_ in our control:
   refuses an unsatisfiable provider preference.
 
   Both routes use the separate `JEV_DECISIONS_API_KEY`, without any other key
-  fallback. `JEV_DECISIONS_URL` allows only parsed HTTPS or HTTP loopback;
+  fallback. `JEV_DECISIONS_URL` allows only parsed HTTPS or HTTP loopback, and redirects are refused, so the state reaches only that host;
   failure abstains rather than retrying elsewhere. **SD-12 is preserved:**
   the private tier is refused at both adapter and transport before any request,
   with the transport refusing before the key is read. Unknown/future tiers are

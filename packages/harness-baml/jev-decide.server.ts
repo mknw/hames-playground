@@ -59,9 +59,15 @@ export const JEV_CLIENT_NAME = 'JevDecide'
 export const JEV_MODEL = 'typesafe/jev-1.13'
 export const TYPESAFE_JEV_MODEL = 'jev-1.13.0'
 
-/** The Decisions API. Overridable (`JEV_DECISIONS_URL`) so the layer-2 fake can
- *  stand in for it; read per call, like every other host-set endpoint. */
+/** TypeSafe's direct endpoint, gated until the owner confirms the account's ZDR terms. */
 export const JEV_DEFAULT_URL = 'https://api.typesafe.ai/v1/systemone'
+
+/** Owner gate (#545 D): set true in its own PR once the account's ZDR terms are confirmed. */
+const TYPESAFE_DEFAULT_CONFIRMED = false
+
+/** The model id a request to `hostname` carries; the transport and the calibration fingerprint share it. */
+export const jevModelFor = (hostname: string): string =>
+  hostname === 'api.typesafe.ai' ? TYPESAFE_JEV_MODEL : JEV_MODEL
 
 /** OpenRouter's provider preferences for this traffic: route only to endpoints with
  *  a zero-data-retention policy, and to none that may collect data. Applied
@@ -216,7 +222,16 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     }
 
     // O4 — before the key is read: the bearer token goes only over https: or loopback.
-    const endpoint = parseDecisionsUrl(process.env.JEV_DECISIONS_URL || JEV_DEFAULT_URL)
+    const configured =
+      process.env.JEV_DECISIONS_URL || (TYPESAFE_DEFAULT_CONFIRMED ? JEV_DEFAULT_URL : '')
+    if (!configured) {
+      throw jevFailure(
+        'The Jev decide transport needs JEV_DECISIONS_URL (there is no default endpoint); no request was made.',
+        variables,
+        startTime,
+      )
+    }
+    const endpoint = parseDecisionsUrl(configured)
     if (typeof endpoint === 'string') {
       throw jevFailure(
         `Refusing JEV_DECISIONS_URL: ${endpoint}; no request was made.`,
@@ -229,7 +244,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     const typeSafe = endpoint.hostname === 'api.typesafe.ai'
     const provider = openRouter ? 'openrouter' : typeSafe ? 'typesafe' : undefined
     const body = {
-      model: typeSafe ? TYPESAFE_JEV_MODEL : JEV_MODEL,
+      model: jevModelFor(endpoint.hostname),
       state,
       questions: Object.fromEntries(
         names.map((n) => [
@@ -281,6 +296,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
         headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
         body: rawInput,
         signal: AbortSignal.timeout(JEV_TIMEOUT_MS),
+        redirect: 'error',
       })
       status = res.status
       // Response bodies and fetch errors are untrusted: never persist an echoed key.
@@ -367,6 +383,12 @@ export function createJevTransport(options: JevTransportOptions = {}): {
         throw new LLMCallError(`Jev answered no probabilities for field "${n}".`, record)
       }
       const labels = spec.fields[n].labels
+      if (Object.keys(probsIn).some((k) => !labels.some((l) => l.id === k))) {
+        throw new LLMCallError(
+          `Jev answered a label outside the asked set for field "${n}".`,
+          record,
+        )
+      }
       let sum = 0
       const raw = {} as Record<string, number>
       for (const l of labels) {

@@ -2483,9 +2483,8 @@ refused before the call. Pins: `erasure-semantics`, `evidence-event-id`,
 ### The `memory_written` event
 
 One per memory written, recorded after its commit:
-`{ memoryId, kind, tier, contentHash, eventId, ordinal, action }` — **never the
-content** (`contentHash` is the SHA-256 of the stored text; a reinforce hashes the
-existing memory, not the candidate). `formatEventData` renders it from `action` and
+`{ memoryId, kind, tier, eventId, ordinal, action }` — **never the content, nor a
+hash of it** (#541). `formatEventData` renders it from `action` and
 `kind` alone (pin `event-hygiene`). The extractor's `llmCall` rides the first one **redacted**:
 `functionName`, `usage`, `metrics`, `durationMs`, `provider`, `clientName` only —
 `variables`, `promptTemplate`, `rawInput`, `rawOutput` and `parsedOutput` are the
@@ -2497,7 +2496,7 @@ The host's trailing save (`saveTrailingPass`) is refused while a newer turn hold
 the conversation, and `settleMemory` may sit in that continuation for the wake
 budget plus extract, embed and merge time: a user who replies in that window
 commits memories and loses their `memory_written` events. A retry repairs the
-reference — on a conflict it re-records the event (`action: 'reinforced'`, hashed
+reference — on a conflict it re-records the event (`action: 'reinforced'`, its `kind`
 from a `read`) when the context has none for `(eventId, ordinal)` — but nothing
 replays a turn on its own. The mechanism (wait for the claim to release, or
 reconcile `memory_sources` against events on load) is M5's, and M5 cannot land

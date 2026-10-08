@@ -320,3 +320,19 @@ look at the same thing. Then record its baseline with
 `pnpm test:e2e:browser --update-snapshots`, in a commit of its own, having looked
 at the image first — a baseline recorded in the same commit as the change that
 moved it is a baseline nobody reviewed.
+
+## Browser backend pins
+
+| Command (from `app/`)                                                      | Checks                                                                                         | When                                                                                        |
+| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `pnpm exec playwright test --config e2e-browser/pins/playwright.config.ts` | Actual dev-server fake credentials, proxy delivery, fixture enforcement, boot and final drains | `release:check`, before the browser layer; also independently, without Postgres or Chromium |
+
+Known duplication (PR #529 F4): the Node >=24.5 check and proxy environment
+are still defined in both browser setup and layer-2 setup. The shared
+`e2e/lib/egress-backstop.ts` remains read-only in this change; [follow-up #538](https://github.com/mknw/hames-playground/issues/538) tracks
+extracting `assertEnvProxyRuntime(version)` and `egressProxyEnv(url)` for both layers.
+
+The standalone `test:e2e:browser:pins` alias is deferred to
+[follow-up #539](https://github.com/mknw/hames-playground/issues/539): the existing
+CI-isolation pin refuses additional package scripts that reference this suite.
+`release:check --only browser-pins` runs this config through the release reporter.

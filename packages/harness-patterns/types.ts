@@ -679,8 +679,20 @@ export type RouteFn = {
     message: string,
     history: Array<{ role: string; content: string }>,
     routes?: Array<{ name: string; description: string }>,
+    extra?: RouteExtra,
   ): Promise<RouteMessageResult>
   limits?: () => ModelLimits
+}
+
+/** What a turn can hand the router besides the message (#419 M5a). Optional and
+ *  TRAILING, so a `RouteFn` written before it keeps its meaning. The router
+ *  passes it only when it has something to pass: a call with nothing recalled
+ *  carries no fourth argument at all. */
+export interface RouteExtra {
+  /** The block `memoryRecall` formatted for this turn (`data.memoryContext`):
+   *  background about the user, rendered as DATA — never an instruction, never
+   *  a routing signal on its own. */
+  memoryContext?: string
 }
 
 // ============================================================================
@@ -1061,6 +1073,10 @@ export interface CompactExecutionInput {
   hasError?: boolean
   /** Error message from upstream patterns */
   errorMessage?: string
+  /** The block `memoryRecall` formatted for this turn (`data.memoryContext`),
+   *  present ONLY when something was recalled (#419 M5a). Background about the
+   *  user for the synthesizer to render as DATA; never a tool result. */
+  memoryContext?: string
 }
 
 /** Custom synthesis function type */
@@ -1083,6 +1099,8 @@ export interface CompactExecutionData {
   synthesizedResponse?: string
   intent?: string
   loopHistory?: LoopHistory
+  /** Written by `memoryRecall`, cleared by it every turn; read here (#419 M5a). */
+  memoryContext?: string
 }
 
 // ============================================================================
@@ -1849,9 +1867,12 @@ export interface MemoryCandidate {
 }
 
 /**
- * The persistence seam recall reads through. HOST-BOUND TO ITS OWNER: no
- * method takes a user, so a call site cannot name another one — the host binds
- * the owner it resolved for the turn into the store it hands in (#419 spec §1).
+ * The persistence seam recall reads through. HOST-BOUND TO ITS OWNER: no method
+ * takes a user, so a call site cannot name another one. The store resolves its
+ * owner on EVERY call, from the same supplier the host passes as `owner`:
+ * patterns are built once and reused across turns, so an owner captured at
+ * construction would serve whichever request reuses them. A `null` owner
+ * refuses every method.
  *
  * Recall's query is EXACT — every active row of the owner in the requested
  * tiers, with its cosine distance; no `ORDER BY`/`LIMIT` — because BM25's
@@ -2000,11 +2021,23 @@ export interface MemoryInsertRow {
   readonly tier: string
   readonly content: string
   readonly evidence: string
+  /** The `user_message` event `evidence` quotes (#419 erasure semantics (b)).
+   *  The host stores it BESIDE the text it describes, on the memory row, and
+   *  replaces both together on `update`. Required, so every writer (M3's
+   *  compaction insert included) is a compile error without it. */
+  readonly evidenceEventId: string
   readonly embedding: readonly number[]
   readonly embedSpace: string
 }
 
-/** The provenance row: which conversation event a memory was built from. */
+/** The provenance row: which conversation event a memory was built from.
+ *
+ *  Erasure semantics (#419 owner decision (b)): a source row is NEVER removed
+ *  because a memory's text moved on. An `update` (and M3's compaction) keeps
+ *  every row that ever supported the memory, including those that no longer
+ *  support its current text, so deleting a conversation removes every memory
+ *  that EVER drew on it. A host's only legitimate deletions are the
+ *  conversation delete, the memory's own forget, and the cascade between them. */
 export interface MemorySourceRow {
   readonly memoryId: string
   readonly eventId: string
@@ -2031,12 +2064,15 @@ export interface MemoryWriteTx {
   /** Count this sighting: `evidence_count + 1`, `last_seen_at = now`. */
   reinforce(id: string): Promise<void>
   /** Replace a memory's text and vector with a newer statement of the same
-   *  fact, and count the sighting. */
+   *  fact, and count the sighting. It replaces `evidence` and
+   *  `evidenceEventId` together and DELETES NO `memory_sources` row: the rows
+   *  that supported the old text stay (decision (b), see `MemorySourceRow`). */
   update(
     id: string,
     next: {
       readonly content: string
       readonly evidence: string
+      readonly evidenceEventId: string
       readonly embedding: readonly number[]
       readonly embedSpace: string
     },

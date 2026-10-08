@@ -294,3 +294,8 @@ The #418 T8 `decision-calibration` scenario, host artifact format and owner-only
 live runbook are described in [Decision calibration](decision-calibration.md).
 Its hermetic pins do not contact a provider or a database; its live measurement
 remains an explicitly owner-triggered layer-4 run.
+## Browser backend pins
+
+| Command (from `app/`)                                                      | Checks                                                                                         | When                                                                                        |
+| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `pnpm exec playwright test --config e2e-browser/pins/playwright.config.ts` | Actual dev-server fake credentials, proxy delivery, fixture enforcement, boot and final drains | `release:check`, before the browser layer; also independently, without Postgres or Chromium |

@@ -1608,7 +1608,7 @@ export type HitlAnswers = Readonly<Record<string, HitlAnswer>>
 // Three layers: the raw seam (`DecideFn` → `DecideResult`) — one call, one
 // distribution, no policy; the policy layer (`evaluateDecision`/`decide()` →
 // `Decision`, `patterns/typedDecision.server.ts`) — applies a
-// `DecisionPolicy`, records `decision_made`, never throws; and the transport
+// `DecisionPolicy`, records `decision_made`; inference failures never throw; and the transport
 // behind the raw seam (a logprob readout on the private tier, Jev on the
 // Anthropic tier, an explicitly configured verbalized secondary). Core owns
 // the types and the pure policy math; the transports live in harness-baml and

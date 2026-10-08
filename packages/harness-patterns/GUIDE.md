@@ -185,7 +185,7 @@ supports. Confidence measures concentration, not permission to act, as
 the return type follows the declared spec. `typedDecision` refuses an unsupported
 type at construction. The in-scope and scope-free entries instead abstain
 `unsupported-type` with zero calls. A transport without `supportedTypes` remains
-choice-only, including every currently shipped transport until S3/S4 adds support.
+choice-only. Every transport shipped in this release is choice-only.
 Invalid fallback configuration throws before any inference: choice needs a label
 id, score needs a level id, and noul needs a boolean (`false` is valid). Transport
 failures still return an abstained verdict.

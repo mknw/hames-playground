@@ -1880,7 +1880,7 @@ Probability-typed decisions over a closed label set, in three layers: the
 policy, frozen against the merged `classifierFromDecide` consumer, which must
 be handed the raw seam and never a policy-applying wrapper (D7); the **policy
 layer** (`patterns/typedDecision.server.ts`) — applies a `DecisionPolicy`,
-records `decision_made`, never throws; and the **transports** behind the raw
+records `decision_made`; inference failures never throw (invalid configuration does, before any call); and the **transports** behind the raw
 seam (a logprob readout on the private tier, Jev on the Anthropic tier, an
 operator-named verbalized secondary — #418 T3/T4/T5).
 
@@ -1977,10 +1977,6 @@ Choice never writes a type. The event remains metadata only (SD-3): stateChars,
 never state. Serialization and previews render score as `key: soon (E=1.43)`
 and noul as `key: true (p=0.91)`; absent type retains the legacy choice rendering.
 
-S2 adds generic policy entry points and mixed sets. S3/S4 add transport support;
-this slice changes no BAML prompt, routing, calibration artifact or production
-choice spec. `decisionRouter` remains choice-only.
-
 S1 widens `DecideInput.spec` to accept all three specs and adds optional
 `DecideFn.supportedTypes`. An absent declaration means choice-only.
 `preCallAbstain({ spec, supportedTypes, state, policy, method })` returns
@@ -2017,9 +2013,7 @@ label id, a score fallback must be a level id, and a noul fallback must be a
 boolean, including valid `false`. The same validator runs at pattern construction
 (`typedDecision` and `decisionRouter`), and before `evaluateDecision`, `decide`
 and `decideFields` can call any transport. Every set policy is validated before
-any field is called. This coordinator-ratified S2 distinction preserves the
-never-throw contract for inference failures, rather than returning an invalid
-verdict for an invalid failure policy.
+any field is called. Inference failures still never throw. An invalid fallback is refused, because there is no valid verdict to fall back to.
 
 Joint products count choice labels, score levels in low → high order, and
 noul values in true/false order. Their size must be ≤20, including scores'
@@ -2044,7 +2038,7 @@ interface DecisionCall<S extends AnyDecisionSpec> {
   shadow?: true
 }
 
-evaluateDecision(call): Promise<{ decision; event; llmCall?; error? }> // scope-free, never throws
+evaluateDecision(call): Promise<{ decision; event; llmCall?; error? }> // scope-free; inference failures abstain
 decide(scope, call, opts?): Promise<DecisionFor<S>> // + records; inference failures abstain
 decideFields(scope, call, opts?): Promise<{ [K in keyof S]: DecisionFor<S[K]> }>
 ```
@@ -2141,7 +2135,7 @@ interface TypedDecisionData {
 ```
 
 A chain step that asks one closed question and writes the verdict to
-`scope.data.decisions[spec.key]`. It generates no text and never throws.
+`scope.data.decisions[spec.key]`. It generates no text. Invalid configuration throws at construction; a failed inference never throws.
 **`data.decisions[spec.key]` is overwritten on EVERY exit** — success, a failed
 call, an empty state, a throwing `state` builder — because `scope.data`
 survives the turn boundary and a verdict left in place would be last turn's

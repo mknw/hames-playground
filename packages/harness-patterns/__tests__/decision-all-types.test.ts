@@ -18,6 +18,7 @@ import {
   type DecideFn,
   type DecideAllFn,
   type DecisionSetSpec,
+  type MixedDecisionSet,
   type DecisionSpec,
   type ScoreDecision,
   type NoulDecision,
@@ -260,6 +261,29 @@ describe('decision-joint-product', () => {
 })
 
 describe('unsupported-type-fails-closed evaluateDecision', () => {
+  it.each(['fields', 'joint'] as const)(
+    'a choice-only decide with no decideAll is never sent a score or noul (%s)',
+    async (mode) => {
+      const calls: AnyDecisionSpec[] = []
+      const legacy = (async ({ spec }: { spec: AnyDecisionSpec }) => {
+        calls.push(spec)
+        return raw({ chat: 1 })
+      }) as DecideFn
+      const out = await decideFields(createScope('p', {}), {
+        decide: legacy,
+        set: { ...SET, mode },
+        policy: POLICY,
+        state: 's',
+      })
+      expect([out.severity.reason, out.blocked.reason]).toEqual([
+        'unsupported-type',
+        'unsupported-type',
+      ])
+      expect(calls).toHaveLength(1)
+      expect(calls[0].type).toBeUndefined()
+      expect((calls[0] as DecisionSpec).labels.map((l) => l.id)).toEqual(['chat', 'search'])
+    },
+  )
   it.each([undefined, ['choice'] as const])(
     'refuses score/noul before calling a legacy seam (%j)',
     async (support) => {
@@ -436,6 +460,7 @@ describe('decision-fallback-validation', () => {
 
 describe('decision-generic-source-compatibility', () => {
   it('retains explicit choice label generics, aliases, and the label-map set', async () => {
+    expectTypeOf(SET).toMatchTypeOf<MixedDecisionSet<typeof SET.fields>>()
     type L = 'chat' | 'search'
     const { fn } = fake()
     const call: DecisionCall<L> = { decide: fn, spec: CHOICE, policy: POLICY.route, state: 's' }
@@ -473,6 +498,17 @@ describe('decision-generic-source-compatibility', () => {
 })
 
 describe('decision-state-sentinel mixed entry points', () => {
+  it('a scorer-level throw that echoes state never reaches the error', async () => {
+    const state = 'SYNTHETIC-LASTRESORT-SENTINEL'
+    const fn = (async () => ({
+      get probs(): never {
+        throw new Error(`echo ${state}`)
+      },
+    })) as unknown as DecideFn
+    const out = await evaluateDecision({ decide: fn, spec: CHOICE, state, policy: POLICY.route })
+    expect(out.decision.reason).toBe('error')
+    expect(JSON.stringify(out)).not.toContain(state)
+  })
   it('redacts state even from echoed failure messages and all serialized views', async () => {
     const state = 'SYNTHETIC-S2-STATE-SENTINEL'
     for (const fail of [false, true]) {

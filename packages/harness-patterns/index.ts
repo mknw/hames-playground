@@ -104,6 +104,8 @@ export type {
   NoulPolicy,
   PolicyFor,
   DecisionSetSpec,
+  MixedDecisionSet,
+  DecisionLabelsFor,
   DecisionMethod,
   AbstainReason,
   Decision,

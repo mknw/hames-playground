@@ -7,7 +7,12 @@ CORE = Path('../packages/harness-patterns/patterns/typedDecision.server.ts')
 TYPES = Path('../packages/harness-patterns/types.ts')
 ADAPTER = Path('../packages/harness-baml/baml-adapters.server.ts')
 JEV = Path('../packages/harness-baml/jev-decide.server.ts')
+INDEX = Path('../packages/harness-patterns/index.ts')
 CASES = [
+    ('R1', CORE, 'supportedTypes: src.supportedTypes,', "supportedTypes: joint ? (['choice', 'score', 'noul'] as const) : src.supportedTypes,", 'never sent a score or noul'),
+    ('R2', CORE, 'supportedTypes: src.supportedTypes,', "supportedTypes: call.decideAll ? src.supportedTypes : (['choice', 'score', 'noul'] as const),", 'never sent a score or noul'),
+    ('R14', CORE, "error: `Decision '${key}' could not be scored: ${errorFrom(e, call.state).error.error}`,", "error: `Decision '${key}' could not be scored: ${e instanceof Error ? e.message : String(e)}`,", 'a scorer-level throw that echoes state'),
+    ('F4-root-export', INDEX, '  MixedDecisionSet,\n', '', 'decision-all-types.test.ts', 1, 'type'),
     ('decide-fields-mixed', CORE, '  return out\n}\n\n/**\n * Decide several', "  for (const k of keys) out[k].event.type = set.fields[keys[0]].type\n  return out\n}\n\n/**\n * Decide several", 'decide-fields-mixed'),
     ('decision-joint-product', CORE, 'n * categoricalOptions(spec).length', "n * ('labels' in spec ? spec.labels.length : 1)", 'decision-joint-product'),
     ('typed-decision-construction', CORE, "!(decideFn.supportedTypes ?? ['choice']).includes(spec.type ?? 'choice')", 'false', 'refuses unsupported'),

@@ -91,7 +91,7 @@
  * That asymmetry is not a curiosity, it is the shape of #263: `ActorController`
  * carried two late system blocks, its first attempt passed and every RETRY
  * 400'd, and actorCritic was dead on the self-hosted route with nothing red.
- * `prompt-role-order.test.ts` pins the thirteen TEMPLATES; this pins what a
+ * `prompt-role-order.test.ts` pins the declared TEMPLATES; this pins what a
  * running turn actually put on the wire, which is the half a template audit
  * cannot see.
  */
@@ -104,6 +104,7 @@ import {
   type BamlFunctionName,
   type ChatMessage,
 } from './baml-functions'
+import { MEMORY_WAKE_PROMPT } from '../../src/lib/inference/memory-wake.server'
 import { VERDA_MODEL } from './mode'
 // The wake ping's message text, imported rather than copied: this fake
 // hard-fails on a prompt it cannot classify, so a drift between the constant and
@@ -156,6 +157,8 @@ export interface FakeCall {
  *   - `true`    → the ping only, i.e. "the box will not come up"
  */
 interface FaultFilters {
+  /** Limit a fault to one BAML function, including detached memory extraction. */
+  fn?: BamlFunctionName
   /** Only requests naming this model. */
   model?: string
   /** How many matching requests the fault applies to. Unbounded when absent. */
@@ -296,6 +299,50 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       req.on('end', () => serveJev(rawJev, res))
       return
     }
+    if (req.method === 'POST' && req.url === '/v1/embeddings') {
+      let raw = ''
+      req.on('data', (chunk) => (raw += chunk))
+      req.on('end', () => {
+        let body: { model: string; input: string | string[] }
+        try {
+          body = JSON.parse(raw)
+        } catch {
+          json(res, 400, { error: { message: 'fake-llm: request body was not JSON' } })
+          return
+        }
+        const inputs = typeof body.input === 'string' ? [body.input] : body.input
+        if (
+          !Array.isArray(inputs) ||
+          inputs.length === 0 ||
+          !inputs.every((input) => typeof input === 'string')
+        ) {
+          json(res, 400, {
+            error: { message: 'fake-llm: embeddings require nonempty string input' },
+          })
+          return
+        }
+        calls.push({
+          at: Date.now() - startedAt,
+          model: body.model,
+          fn: null,
+          prompt: JSON.stringify(inputs),
+          outcome: inputs.length === 1 && inputs[0] === MEMORY_WAKE_PROMPT ? 'wake' : 'ok',
+          delayedMs: 0,
+        })
+        json(res, 200, {
+          object: 'list',
+          model: body.model,
+          data: inputs.map((_, index) => ({
+            object: 'embedding',
+            index,
+            // A unit vector keeps cosine search deterministic; lexical ranking still uses real text.
+            embedding: Array.from({ length: 1024 }, (_, i) => (i === 0 ? 1 : 0)),
+          })),
+          usage: { prompt_tokens: inputs.length, total_tokens: inputs.length },
+        })
+      })
+      return
+    }
     if (req.method !== 'POST' || !req.url?.startsWith('/v1/chat/completions')) {
       json(res, 404, { error: { message: `no fake route for ${req.method} ${req.url}` } })
       return
@@ -309,14 +356,15 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
   }
 
   /** `POST /api/alpha/decisions`: deterministic typed answers — every question
-   *  answered with its FIRST option at 0.9 and the rest sharing 0.1, and a
+   *  answered with its FIRST option at 0.9 (memory confirmation selects `skip`)
+   *  and the rest sharing 0.1, and a
    *  `usage.cost` — so a scenario asserts routing and accounting, never model
    *  quality. Honours an armed `status` fault, so a Jev 5xx is reachable. */
   function serveJev(raw: string, res: http.ServerResponse): void {
     let body: {
       model?: string
       state?: unknown
-      questions?: Record<string, { criteria?: unknown }>
+      questions?: Record<string, { criteria?: unknown; instructions?: string }>
     }
     try {
       body = JSON.parse(raw || '{}')
@@ -347,12 +395,13 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
     const answers: Record<string, unknown> = {}
     for (const [name, q] of Object.entries(body.questions ?? {})) {
       const options = Object.keys((q.criteria ?? {}) as Record<string, unknown>)
+      const chosen = q.instructions?.includes('Should a person confirm') ? 1 : 0
       const rest = options.length > 1 ? 0.1 / (options.length - 1) : 0
       answers[name] = {
         type: 'choice',
-        choice: options[0],
+        choice: options[chosen],
         confidence: 0.9,
-        probabilities: Object.fromEntries(options.map((o, i) => [o, i === 0 ? 0.9 : rest])),
+        probabilities: Object.fromEntries(options.map((o, i) => [o, i === chosen ? 0.9 : rest])),
       }
     }
     calls.push({ at: Date.now() - startedAt, model, fn: null, prompt, outcome: 'ok', delayedMs: 0 })
@@ -430,7 +479,7 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       return
     }
 
-    const fault = takeFault(model, wake)
+    const fault = takeFault(model, wake, fn)
 
     if (fault?.kind === 'status') {
       record('status', 0)
@@ -513,8 +562,13 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
     })
   }
 
-  function takeFault(model: string, wake: boolean): Fault | null {
+  function takeFault(
+    model: string,
+    wake: boolean,
+    fn: BamlFunctionName | null = null,
+  ): Fault | null {
     if (!armed) return null
+    if (armed.fault.fn && armed.fault.fn !== fn) return null
     if (armed.fault.model && armed.fault.model !== model) return null
     // Not spent, either: a fault that skips this request must still be there for
     // the next one, which is the whole point of being able to aim past the ping.
@@ -609,8 +663,22 @@ export const FAKE_TOOL_ARGS = '{"query":"MATCH (n) RETURN count(n) AS n"}'
  */
 function replyFor(fn: BamlFunctionName, prompt: string): string {
   switch (fn) {
+    case 'ExtractMemory': {
+      const evidence =
+        prompt
+          .split('LATEST USER MESSAGE (the only source for `evidence`):')[1]
+          ?.split('---BEGIN DATA---')[1]
+          ?.split('---END DATA---')[0]
+          ?.trim() ?? ''
+      return JSON.stringify([{ kind: 'episodic', content: evidence, evidence }])
+    }
+    case 'CompactMemories': {
+      const members = [...prompt.matchAll(/content: ([^\n]+)\n\s*evidence: ([^\n]+)/g)]
+      const latest = members.at(-1)
+      return JSON.stringify({ content: latest?.[1] ?? '', evidence: latest?.[2] ?? '' })
+    }
     case 'Decide':
-      return 'A'
+      return prompt.includes('Should a person confirm') ? 'B' : 'A'
 
     case 'DecideVerbalized':
       return JSON.stringify(
@@ -740,7 +808,8 @@ function decisionProbabilities(prompt: string): Array<{ token: string; probabili
   const letters = [...options.matchAll(/^\s*([A-T])\. /gm)].map((m) => m[1])
   return letters.map((token, i) => ({
     token,
-    probability: i === 0 ? 0.9 : 0.1 / (letters.length - 1),
+    probability:
+      i === (prompt.includes('Should a person confirm') ? 1 : 0) ? 0.9 : 0.1 / (letters.length - 1),
   }))
 }
 
@@ -763,7 +832,7 @@ function completion(
           logprobs: {
             content: [
               {
-                token: 'A',
+                token: content,
                 logprob: Math.log(0.9),
                 top_logprobs: probabilities.map(({ token, probability }) => ({
                   token,
@@ -786,8 +855,8 @@ function json(res: http.ServerResponse, status: number, body: unknown): void {
 }
 
 /**
- * True for the wake ping: one user message carrying the fixed literal, asking
- * for a single token.
+ * True for a wake ping: one user message carrying the fixed literal. The 27B
+ * asks for one token, the memory summarizer asks for two (#497).
  *
  * Matched on THREE fields rather than on the content alone. A scenario's own
  * prompt could contain the word by accident, and the ping's whole identity is
@@ -799,7 +868,7 @@ function isWakePing(
   body: { max_tokens?: number; messages?: ChatMessage[] },
 ): boolean {
   return (
-    body.max_tokens === 1 &&
+    (body.max_tokens === 1 || body.max_tokens === 2) &&
     (body.messages ?? []).length === 1 &&
     prompt.trim() === VERDA_WAKE_PROMPT
   )

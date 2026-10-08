@@ -88,8 +88,6 @@ export interface MemoryConfig {
   readonly enabled: () => boolean | Promise<boolean>
   /** The joint memory wake's bounded wait (`awaitMemoryWake` binds as-is). */
   readonly awaitWake?: MemoryWakeWait
-  /** The turn's tier. Default: the run frame's `inference.tier`. */
-  readonly tier?: () => string | undefined
   /** The responder's limits, for recall's 5%-of-window ceiling. */
   readonly limits?: () => ModelLimits
   /** Recall's tunables (the switch is {@link MemoryConfig.enabled}). */
@@ -98,10 +96,19 @@ export interface MemoryConfig {
   readonly settle?: Omit<MemoryStoreSettings, 'enabled'>
 }
 
+/** D11: the switch is the user's consent, and both halves read it. A config that
+ *  reaches here without one (untyped) would split them — recall reads, the store
+ *  refuses — so it is refused here, before either half exists. */
+function requireSwitch(cfg: MemoryConfig): void {
+  if (typeof cfg.enabled !== 'function')
+    throw new TypeError("withMemory: `enabled` (the user's memory switch, D11) is required")
+}
+
 /** Prepend the recall step. The patterns that follow are returned untouched. */
 export function withMemory<T extends MemoryRecallData>(
   cfg: MemoryConfig,
 ): (patterns: ConfiguredPattern<T>[]) => ConfiguredPattern<T>[] {
+  requireSwitch(cfg)
   const recall = memoryRecall<T>({
     store: cfg.store,
     decide: cfg.decide,
@@ -109,7 +116,6 @@ export function withMemory<T extends MemoryRecallData>(
     owner: cfg.owner,
     visibleTiers: cfg.visibleTiers,
     ...(cfg.awaitWake ? { awaitWake: cfg.awaitWake } : {}),
-    ...(cfg.tier ? { tier: cfg.tier } : {}),
     ...(cfg.limits ? { limits: cfg.limits } : {}),
     settings: { ...cfg.recall, enabled: cfg.enabled },
   })
@@ -118,8 +124,9 @@ export function withMemory<T extends MemoryRecallData>(
 
 /** The store half of the same config, for the host's post-reply
  *  {@link settleMemory}. Shares the owner, the embedder, the decision seam, the
- *  wake, the tier and the switch with the recall half by construction. */
+ *  wake and the switch; both halves read the turn's tier from the run frame. */
 export function memoryStoreConfig(cfg: MemoryConfig): MemoryStoreConfig {
+  requireSwitch(cfg)
   return {
     store: cfg.store,
     decide: cfg.decide,
@@ -127,7 +134,6 @@ export function memoryStoreConfig(cfg: MemoryConfig): MemoryStoreConfig {
     extract: cfg.extract,
     embed: cfg.embed,
     owner: cfg.owner,
-    ...(cfg.tier ? { tier: cfg.tier } : {}),
     ...(cfg.awaitWake ? { awaitWake: cfg.awaitWake } : {}),
     settings: { ...cfg.settle, enabled: cfg.enabled },
   }

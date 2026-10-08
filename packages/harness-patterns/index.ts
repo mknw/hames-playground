@@ -474,6 +474,7 @@ export type {
   DescribeBatchItem,
   BulkDescribeFns,
   RouteFn,
+  RouteExtra,
   RouteMessageResult,
 } from './types'
 

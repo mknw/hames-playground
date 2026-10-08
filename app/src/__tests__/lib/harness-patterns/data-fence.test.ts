@@ -39,13 +39,19 @@ describe('escapeDataFence', () => {
     expect(escapeDataFence('my BACKEND DATABASE')).toBe('my BACKEND DATABASE')
   })
 
-  it('is linear on hostile input', () => {
-    const t = Date.now()
-    escapeDataFence('BEGIN' + ' '.repeat(300_000) + 'x')
-    escapeDataFence('-'.repeat(300_000))
-    escapeDataFence('BEGIN '.repeat(50_000))
-    // Mutation (a polynomial pattern, `-{2,}\s*(BEGIN|END)\s+DATA`): seconds.
-    expect(Date.now() - t).toBeLessThan(500)
+  it('stays linear at a size where a quadratic scan finishes (and goes red)', () => {
+    // 12.5k first, as the guard's ReDoS test does: a quadratic cost falls with the
+    // square, so the canary fails fast instead of hanging the worker. At 300k
+    // (the PR's sizes) the PR's own named polynomial mutation never returns.
+    for (const n of [12_500, 50_000]) {
+      const t = performance.now()
+      escapeDataFence('BEGIN' + ' '.repeat(n) + 'x')
+      escapeDataFence('-'.repeat(n))
+      escapeDataFence('BEGIN '.repeat(Math.floor(n / 6)))
+      escapeDataFence('E\u200B'.repeat(Math.floor(n / 2)))
+      // Mutation (`-{2,}\s*\b(BEGIN|END)\s+DATA\b|…`): ~0.2s at 12.5k, ~3s at 50k.
+      expect(performance.now() - t).toBeLessThan(Math.max(150, n / 100))
+    }
   })
 })
 
@@ -67,7 +73,7 @@ describe('the rendered fence', () => {
     expect(safe).toBe(own)
   })
 
-  it('Router and Synthesize keep their own two markers around memory_context', async () => {
+  it('Router keeps its own two markers around memory_context', async () => {
     const base = markers(await text(b.request.Router('q', [], [], 'x')))
     expect(base).toBe(2)
     expect(markers(await text(b.request.Router('q', [], [], HOSTILE)))).toBeGreaterThan(base)

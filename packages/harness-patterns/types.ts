@@ -1865,9 +1865,12 @@ export interface MemoryCandidate {
 }
 
 /**
- * The persistence seam recall reads through. HOST-BOUND TO ITS OWNER: no
- * method takes a user, so a call site cannot name another one — the host binds
- * the owner it resolved for the turn into the store it hands in (#419 spec §1).
+ * The persistence seam recall reads through. HOST-BOUND TO ITS OWNER: no method
+ * takes a user, so a call site cannot name another one. The store resolves its
+ * owner on EVERY call, from the same supplier the host passes as `owner`:
+ * patterns are built once and reused across turns, so an owner captured at
+ * construction would serve whichever request reuses them. A `null` owner
+ * refuses every method.
  *
  * Recall's query is EXACT — every active row of the owner in the requested
  * tiers, with its cosine distance; no `ORDER BY`/`LIMIT` — because BM25's

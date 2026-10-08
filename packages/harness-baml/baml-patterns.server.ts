@@ -168,7 +168,7 @@ export function createMemoryExtractAdapter(): (
     // results; both strings go inside DATA fences (#419 M5a). See data-fence.ts.
     // `variables` keeps the originals: it is the record of what was ASKED.
     //
-    // describe role: the window is the user's own words, so on a private-tier
+    // describe role: the window carries the user's words, so on a private-tier
     // turn it moves onto the 4B with the rest of the role and never reaches a
     // public provider.
     let items: ExtractedMemory[]

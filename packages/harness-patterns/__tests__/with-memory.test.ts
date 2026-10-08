@@ -81,7 +81,6 @@ function memoryConfig(over: Partial<MemoryConfig> = {}): MemoryConfig {
     owner: () => 'user-1',
     visibleTiers: () => ['verda', 'anthropic'],
     enabled: () => true,
-    tier: () => 'verda',
     ...over,
   }
 }
@@ -152,7 +151,7 @@ describe('with-memory-shape', () => {
 describe('with-memory-one-switch', () => {
   it('a switch that is OFF stops recall and the store; a switch that is ON stops neither', async () => {
     for (const on of [false, true]) {
-      const cfg = memoryConfig({ enabled: () => on, tier: undefined })
+      const cfg = memoryConfig({ enabled: () => on })
       const { inputs, pattern } = synth()
       const ctx = await runWith(withMemory<Data>(cfg)([pattern]))
       expect(recalled(ctx)[0].skipped).toBe(on ? undefined : 'disabled')

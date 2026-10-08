@@ -2251,8 +2251,7 @@ that finishes after the event is written is unrecordable without a late mutation
 - `MemoryQueryEmbedder.spaceId` is REQUIRED, and the store is told `embedSpace`; a
   mismatch throws `MemoryEmbeddingSpaceMismatch` (a string compare, since
   `assertSameSpace` takes space objects, not ids).
-- The recalled block carries no provenance fence: the responder's render (M9) must
-  fence it.
+- The recalled block carries no provenance fence: the responder's template fences it (`router.baml:72`, `compact-execution.baml:55`).
 
 ### `withMemory(cfg)(patterns)` and `memoryStoreConfig(cfg)` (#419 M5a)
 
@@ -2277,16 +2276,20 @@ MemoryWriteStore` (no shared member; no method takes an owner); `decide`,
 off), so recall and store cannot disagree about it. `recall` / `settle` carry each
 half's tunables.
 
+Spec §1's `policy` is carried per half (`recall.gate`, `settle.gate`). M3 adds `compact` and `retention` as OPTIONAL fields (absent: no compaction, and the D21 default retention), so a composition root written now keeps compiling.
+
 ### The DATA fence (harness-baml, #419 M5a)
 
-`memory.baml`'s prompts and the `memory_context` blocks put text between
-`---BEGIN DATA---` and `---END DATA---`. The assistant's reply — composed from tool
-results — is among it, so `harness-baml`'s adapters pass every fenced string through
-`escapeDataFence`, which rewrites any `BEGIN DATA` / `END DATA` to `BEGIN (data
-marker removed)` and is the identity on text without one (so a verbatim `evidence`
-span stays verbatim; a user message that contains a marker fails closed). It is not
-the security control — acceptance and the sanitizer are — it removes the one way
-text could end the fence.
+`memory.baml`'s prompts, the `memory_context` blocks and `decide.baml`'s `state` put
+text between `---BEGIN DATA---` and `---END DATA---`. The assistant's reply, which is
+composed from tool results, is among that text: it is in the extractor's window and in
+the store and recall gates' state. So `harness-baml`'s adapters pass every fenced
+string through `escapeDataFence`. It rewrites each `BEGIN DATA` / `END DATA`, however it
+is spelled (see `data-fence.ts`), to `BEGIN (data marker removed)` /
+`END (data marker removed)`, and returns text without one unchanged. A verbatim
+`evidence` span therefore stays verbatim, and an evidence span that overlaps a marker
+in the user's own message fails closed. This is not the security control: acceptance
+and the sanitizer are.
 
 ### `harnessUsesMemory(patterns)`
 
@@ -3025,6 +3028,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
     ├── planner.server.ts       # Upfront decomposition → scope.data.plan (+ formatPlanContext, read by both loop patterns); emits plan_created
     ├── retriever.server.ts     # retriever() — vector-store search as a pattern
     ├── typedDecision.server.ts # #418: the decision policy layer — the PURE half (sumLabelMass / calibrateLabelMass / normalizeLabelMass, preCallAbstain (F3), resolveDecisionCuts (F2), scoreDecision), the awaited wrapper (evaluateDecision / decide / decideFields) and the typedDecision / decisionRouter patterns
+    ├── withMemory.server.ts    # #419 M5a: withMemory() + memoryStoreConfig() — one config and switch for both halves
     ├── memoryRecall.server.ts  # #419: memoryRecall() — the recall step (gate ∥ search ∥ wake, BM25 + cosine, floors before RRF, tier filter, per-turn clear, memory_recalled). The pure ranking half is ../memory-ranking.server.ts
     └── event-view.server.ts    # EventViewImpl (fluent query API, serializeCompact)
 
@@ -3034,6 +3038,7 @@ packages/harness-baml/                   # The BAML companion PACKAGE (Lane A6) 
 ├── defaults.server.ts      # defaultSynthesize (→ bamlPatterns().synthesize) + defaultSelector (→ bamlPatterns().selector) — the composition-root implementations, not pattern defaults
 ├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter (tool list rides ControllerInput.tools — L14), createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, describeToolResultsBatchOp, createInjectionScreen
 ├── clients.server.ts       # The role → client maps (CLIENT_BY_ROLE / VERDA_CLIENT_BY_ROLE), clientOverrideFor, limitsFor, the tier (the run frame's `inference` slot) — moved byte-for-byte from core (Lane A6/A-i)
+├── data-fence.ts           # #419 M5a: escapeDataFence() — neutralise known DATA marker spellings before rendering
 ├── routing.server.ts       # routeMessageOp — the router seam's composition-root implementation (`bamlPatterns().router`) (with limits())
 ├── baml-version-check.server.ts # Boot-time staleness warning for baml_client (#154)
 ├── consumer-clients.server.ts   # defineInferenceClients() / activateConsumerClients() — the bring-your-own-model seam

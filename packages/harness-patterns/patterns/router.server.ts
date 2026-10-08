@@ -52,6 +52,9 @@ export interface RouterData {
   intent?: string
   routerResponse?: string
   response?: string
+  /** Written by `memoryRecall` (#419), cleared by it every turn. The router
+   *  hands it to its `route` function when non-empty. */
+  memoryContext?: string
 }
 
 /**
@@ -154,7 +157,21 @@ export function router<T extends RouterData>(
 
       // Route the message (Lane A3: no collector is passed — the
       // implementation owns it and returns the call record on the result).
-      const result = await routeFn(userContent, history, routeArray)
+      //
+      // `memoryContext` is `memoryRecall`'s block for THIS turn (it clears it on
+      // every exit, so a stale one cannot be here). The router is one of the two
+      // patterns that author a user-visible answer (the conversational route
+      // below), which is why it gets the block at all (#419 D13). It is passed
+      // only when non-empty: no recalled memory means no fourth argument, so a
+      // `route` override that predates `RouteExtra` sees the call it always saw.
+      const memoryContext =
+        typeof scope.data.memoryContext === 'string' ? scope.data.memoryContext.trim() : ''
+      const result = await routeFn(
+        userContent,
+        history,
+        routeArray,
+        ...(memoryContext ? [{ memoryContext }] : []),
+      )
 
       // No tool needed - return conversational response directly
       if (!result.tool_call_needed) {

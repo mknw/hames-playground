@@ -34,6 +34,7 @@ import {
   wrapAsLLMCallError,
 } from './baml-adapters.server'
 import { clientOverrideFor } from './clients.server'
+import { escapeDataFence } from './data-fence'
 
 assertServerOnImport()
 
@@ -123,11 +124,12 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
       trimmedTurns,
       input.hasError ?? false,
       input.errorMessage,
-      // `memory_context` (#419 M9): the trailing BAML parameter exists, and the
-      // seam that carries a recalled block to this call is M5's wiring. Until
-      // then it is passed EXPLICITLY as null — the options bag is the argument
-      // AFTER it, and omitting it would hand the bag to the wrong parameter.
-      null,
+      // `memory_context` (#419 M9/M5a): `memoryRecall`'s block for this turn, or
+      // null when nothing was recalled. The slot is always passed — the options
+      // bag is the argument AFTER it, and omitting it would hand the bag to the
+      // wrong parameter. Escaped because the template renders it inside a DATA
+      // fence (data-fence.ts).
+      input.memoryContext ? escapeDataFence(input.memoryContext) : null,
       synthOpts,
     )
   } catch (e) {

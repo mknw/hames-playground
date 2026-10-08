@@ -699,15 +699,17 @@ function disarm(
     // read from its layout, the layout's master, or the notes master — read
     // for resolution only, never emitted (#492 decision 2). The resolver
     // runs inside rewritePart, so the context must be on `shared` first.
-    if (part.role === 'slide' || part.role === 'notesSlide') {
-      if (part.role === 'slide') {
-        resolveSlideStyle(shared, pkg, part.name, understood)
-      } else {
-        resolveNotesStyle(shared, pkg, part.name, understood)
-      }
-    }
     // Markup compatibility BEFORE any rule (A9): the rules then see what Word renders.
     const root = compat(parseXml(pkg.get(part.name)!.data), understood, removed)
+    // The slide's own `p:clrMapOvr` follows its `p:cSld`, so it is read from
+    // the root here, before the rewrite reaches a single run.
+    if (part.role === 'slide' || part.role === 'notesSlide') {
+      if (part.role === 'slide') {
+        resolveSlideStyle(shared, pkg, part.name, understood, root)
+      } else {
+        resolveNotesStyle(shared, pkg, part.name, understood, root)
+      }
+    }
     const rewritten = rewritePart(root, {
       ...shared,
       role: part.role,
@@ -1009,9 +1011,11 @@ interface Scope {
   readonly lvl?: number
   /** The enclosing shape: its placeholder, fill and autofit scale (#492). */
   readonly shape?: {
-    readonly ph?: { readonly type?: string; readonly idx?: string }
+    readonly ph?: Ph
     readonly fill?: DFill
     readonly fontScale: number
+    /** The body declares an autofit of its own; else it inherits its placeholder's. */
+    readonly autofit?: boolean
   }
   /** The slide's own background, when it has one (#492). */
   readonly slideBg?: DFill
@@ -1242,7 +1246,9 @@ function visit(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[] {
     if (fill.kind === 'absent') {
       const fillRef = childEl(childEl(el, NS.p, 'style'), NS.a, 'fillRef')
       const idx = int(attrOf(fillRef?.attributes ?? [], 'idx')) ?? 0
-      fill = fillRef ? refFill(ctx.fmtFillEls, idx, fillRef, s) : FILL_ABSENT
+      // idx 0 applies no fill style: the placeholder's inherited fill shows (LibreOffice
+      // assigns nothing for it, theme.cxx `lclGetStyleElement`), so it is no fill of its own.
+      fill = fillRef && idx > 0 ? refFill(ctx.fmtFillEls, idx, fillRef, s) : FILL_ABSENT
     }
     inner = {
       ...scope,
@@ -1274,13 +1280,15 @@ function visit(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[] {
   } else if (is(el, NS.p, 'txBody')) {
     const levels = lstLevels(childEl(el, NS.a, 'lstStyle'))
     // The body's autofit scale composes with every run's size (#492).
-    const auto = childEl(childEl(el, NS.a, 'bodyPr'), NS.a, 'normAutofit')
+    const bodyPr = childEl(el, NS.a, 'bodyPr')
+    const auto = childEl(bodyPr, NS.a, 'normAutofit')
     const fontScale = pct(attrOf(auto?.attributes ?? [], 'fontScale')) ?? 1
+    const autofit = AUTOFITS.some((n) => childEl(bodyPr, NS.a, n) !== undefined)
     inner = {
       ...scope,
       lstLevels: levels,
       defRPr: undefined,
-      shape: scope.shape ? { ...scope.shape, fontScale } : undefined,
+      shape: scope.shape ? { ...scope.shape, fontScale, autofit } : undefined,
     }
   } else if (is(el, NS.a, 'p')) {
     // The paragraph's declared level picks its list-style defaults (#482
@@ -2332,8 +2340,8 @@ function fillEl(el: XmlElement, s: Scheme): DFill {
   return { kind: 'unknown' }
 }
 
-/** The fill a container's children name — `absent` when none does. */
-function drawingFill(container: XmlElement | undefined, s: Scheme): DFill {
+/** The fill element a container's children name, when one does. */
+function fillChild(container: XmlElement | undefined): XmlElement | undefined {
   for (const c of container ? elements(container) : []) {
     if (c.ns !== NS.a) continue
     if (
@@ -2344,10 +2352,16 @@ function drawingFill(container: XmlElement | undefined, s: Scheme): DFill {
       is(c, NS.a, 'blipFill') ||
       is(c, NS.a, 'grpFill')
     ) {
-      return fillEl(c, s)
+      return c
     }
   }
-  return FILL_ABSENT
+  return undefined
+}
+
+/** The fill a container's children name — `absent` when none does. */
+function drawingFill(container: XmlElement | undefined, s: Scheme): DFill {
+  const c = fillChild(container)
+  return c === undefined ? FILL_ABSENT : fillEl(c, s)
 }
 
 /** A `p:fillRef`/`p:bgRef` into one of the theme's fill schemes, with `phClr`. */
@@ -2371,17 +2385,59 @@ function refFill(
 /** A parsed layout, master or notes master: what runs can inherit from it. */
 interface SlidesStylePart {
   /**
-   * `t\0type\0level` (type lower-cased, as the slide's is) and `i\0idx\0level`
-   * → the first placeholder's defRPr at that level: one lookup per run, where
-   * a scan of every placeholder per run was quadratic in the part (#517).
+   * Every placeholder, by `type\0idx`, by `idx` and by `type` — the FIRST in
+   * document order per key, with `dup` set when a later one shares an
+   * exact or idx key. One lookup per run (#517); a placeholder, once matched,
+   * answers for every level, so a level it lacks goes up to the master rather
+   * than to some other placeholder that has it.
    */
-  readonly phIndex: ReadonlyMap<string, XmlElement>
+  readonly byTypeIdx: ReadonlyMap<string, PhEntry>
+  readonly byIdx: ReadonlyMap<string, PhEntry>
+  readonly byType: ReadonlyMap<string, PhEntry>
   /** `txStyles` name → level → defRPr. */
   readonly byStyle: ReadonlyMap<string, ReadonlyMap<number, XmlElement>>
   /** The part's own background, as written (`p:bgPr` or `p:bgRef`). */
   readonly bg?: XmlElement
   /** The master's colour map, when this part is one. */
   readonly clrMap?: ReadonlyMap<string, string>
+  /** A layout's `p:clrMapOvr/a:overrideClrMapping`, which replaces its master's map. */
+  readonly clrMapOvr?: ReadonlyMap<string, string>
+}
+
+/** A `p:clrMap` or `a:overrideClrMapping`, as the resolver's lower-cased map. */
+function clrMapOf(el: XmlElement): ReadonlyMap<string, string> {
+  return new Map(
+    el.attributes
+      .filter((a) => a.ns === '')
+      .map((a) => [a.name.toLowerCase(), a.value.toLowerCase()]),
+  )
+}
+
+/** A slide's or layout's own colour-map override, when it declares one. */
+function clrMapOvrOf(root: XmlElement | undefined): ReadonlyMap<string, string> | undefined {
+  const ovr = childEl(childEl(root, NS.p, 'clrMapOvr'), NS.a, 'overrideClrMapping')
+  return ovr === undefined ? undefined : clrMapOf(ovr)
+}
+
+/** A placeholder as ECMA-376 reads it: see `phOf`. */
+type Ph = { readonly type: string; readonly idx: string; readonly typed: boolean }
+
+/** A style part's placeholder: its normalised type and its list-style levels. */
+interface PhEntry {
+  readonly type: string
+  readonly levels: ReadonlyMap<number, XmlElement>
+  /**
+   * What a slide placeholder inherits from it, found ONCE when the part is
+   * read: its `p:spPr` fill element, its `p:style/a:fillRef`, and its autofit
+   * scale. A per-run scan of a shared part's children is quadratic (#515).
+   */
+  readonly spFill?: XmlElement
+  readonly fillRef?: XmlElement
+  readonly fontScale?: number
+  /** Another placeholder in the part shares this entry's key. */
+  dup: boolean
+  /** Another placeholder in the part shares this entry's TYPE (LibreOffice takes the last). */
+  typeDup: boolean
 }
 
 /** A slide's or notes slide's inheritance, resolved once per part. */
@@ -2420,13 +2476,26 @@ function lstLevels(lst: XmlElement | undefined): ReadonlyMap<number, XmlElement>
 }
 
 /** Read one style part: placeholders, `txStyles`, background, colour map. */
-/** A shape's placeholder: its `type` and `idx`, when it carries one. */
-function phOf(sp: XmlElement): { readonly type?: string; readonly idx?: string } | undefined {
+/**
+ * A shape's placeholder, when it carries one, as ECMA-376 reads it: `type`
+ * defaults to `obj` and `idx` to 0, the type compares lower-cased (the schema
+ * is a token, so whitespace collapses) and the idx as the unsignedInt it
+ * denotes — `01`, `+1` and ` 1 ` are all placeholder 1. `typed` records
+ * whether a type was written: an untyped slide placeholder takes its layout
+ * placeholder's type by idx.
+ */
+function phOf(sp: XmlElement): Ph | undefined {
   for (const nv of elements(sp)) {
     if (!/^nv.*Pr$/.test(nv.name) || nv.ns !== NS.p) continue
     const ph = childEl(childEl(nv, NS.p, 'nvPr'), NS.p, 'ph')
     if (!ph) return undefined
-    return { type: attrOf(ph.attributes, 'type'), idx: attrOf(ph.attributes, 'idx') }
+    const type = attrOf(ph.attributes, 'type')
+    const idx = (attrOf(ph.attributes, 'idx') ?? '0').trim()
+    return {
+      type: (type ?? 'obj').trim().toLowerCase(),
+      idx: /^\+?\d+$/.test(idx) ? idx.replace(/^\+?0*(?=\d)/, '') : idx,
+      typed: type !== undefined,
+    }
   }
   return undefined
 }
@@ -2442,26 +2511,15 @@ function slideInheritanceOf(ctx: Ctx): SlideInheritance {
 }
 
 function readSlidesStylePart(root: XmlElement): SlidesStylePart {
-  const byPh = new Map<
-    string,
-    {
-      readonly type: string
-      readonly idx: string
-      readonly levels: ReadonlyMap<number, XmlElement>
-    }
-  >()
+  const byTypeIdx = new Map<string, PhEntry>()
+  const byIdx = new Map<string, PhEntry>()
+  const byType = new Map<string, PhEntry>()
   const byStyle = new Map<string, ReadonlyMap<number, XmlElement>>()
   let bg: XmlElement | undefined
   let clrMap: ReadonlyMap<string, string> | undefined
   const walk = (el: XmlElement): void => {
     if (is(el, NS.p, 'bg')) bg = childEl(el, NS.p, 'bgPr') ?? childEl(el, NS.p, 'bgRef')
-    if (is(el, NS.p, 'clrMap')) {
-      clrMap = new Map(
-        el.attributes
-          .filter((a) => a.ns === '')
-          .map((a) => [a.name.toLowerCase(), a.value.toLowerCase()]),
-      )
-    }
+    if (is(el, NS.p, 'clrMap')) clrMap = clrMapOf(el)
     if (is(el, NS.p, 'txStyles')) {
       for (const st of elements(el)) {
         if (st.ns === NS.p) byStyle.set(st.name, lstLevels(st))
@@ -2469,25 +2527,34 @@ function readSlidesStylePart(root: XmlElement): SlidesStylePart {
     }
     if (el.ns === NS.p && ['sp', 'pic', 'graphicFrame', 'cxnSp'].includes(el.name)) {
       const ph = phOf(el)
-      const lst = childEl(childEl(el, NS.p, 'txBody'), NS.a, 'lstStyle')
-      if (ph && lst) {
-        const type = ph.type ?? ''
-        const idx = ph.idx ?? ''
-        byPh.set(`${type}:${idx}`, { type, idx, levels: lstLevels(lst) })
+      if (ph) {
+        const lst = childEl(childEl(el, NS.p, 'txBody'), NS.a, 'lstStyle')
+        const entry: PhEntry = {
+          type: ph.type,
+          levels: lstLevels(lst),
+          spFill: fillChild(childEl(el, NS.p, 'spPr')),
+          fillRef: childEl(childEl(el, NS.p, 'style'), NS.a, 'fillRef'),
+          fontScale: autofitScale(childEl(childEl(el, NS.p, 'txBody'), NS.a, 'bodyPr')),
+          dup: false,
+          typeDup: false,
+        }
+        for (const [map, key] of [
+          [byTypeIdx, `${ph.type}\0${ph.idx}`],
+          [byIdx, ph.idx],
+        ] as const) {
+          const first = map.get(key)
+          if (first) first.dup = true
+          else map.set(key, entry)
+        }
+        const firstOfType = byType.get(ph.type)
+        if (firstOfType) firstOfType.typeDup = true
+        else byType.set(ph.type, entry)
       }
     }
     for (const c of elements(el)) walk(c)
   }
   walk(root)
-  const phIndex = new Map<string, XmlElement>()
-  for (const { type, idx, levels } of byPh.values()) {
-    for (const [level, def] of levels) {
-      for (const key of [`t\0${type.toLowerCase()}\0${level}`, `i\0${idx}\0${level}`]) {
-        if (!phIndex.has(key)) phIndex.set(key, def)
-      }
-    }
-  }
-  return { phIndex, byStyle, bg, clrMap }
+  return { byTypeIdx, byIdx, byType, byStyle, bg, clrMap, clrMapOvr: clrMapOvrOf(root) }
 }
 
 /** The content types a read-for-resolution style part must carry. */
@@ -2539,6 +2606,7 @@ function resolveSlideStyle(
   pkg: Package,
   name: string,
   understood: ReadonlySet<string>,
+  root: XmlElement,
 ): void {
   const l = readStylePart(shared, pkg, name, `${REL}slideLayout`, 'slideLayout', understood)
   let broken = l.broken === true
@@ -2552,7 +2620,12 @@ function resolveSlideStyle(
     layout: l.part,
     master,
     broken,
-    clrMap: master?.clrMap ?? new Map(Object.entries(CLR_MAP_DEFAULT)),
+    // The slide's own override, else its layout's, else the master's map.
+    clrMap:
+      clrMapOvrOf(root) ??
+      l.part?.clrMapOvr ??
+      master?.clrMap ??
+      new Map(Object.entries(CLR_MAP_DEFAULT)),
   })
 }
 
@@ -2562,12 +2635,13 @@ function resolveNotesStyle(
   pkg: Package,
   name: string,
   understood: ReadonlySet<string>,
+  root: XmlElement,
 ): void {
   const m = readStylePart(shared, pkg, name, `${REL}notesMaster`, 'notesMaster', understood)
   shared.slideStyle.set(name, {
     master: m.part,
     broken: m.broken === true,
-    clrMap: m.part?.clrMap ?? new Map(Object.entries(CLR_MAP_DEFAULT)),
+    clrMap: clrMapOvrOf(root) ?? m.part?.clrMap ?? new Map(Object.entries(CLR_MAP_DEFAULT)),
   })
 }
 
@@ -2801,30 +2875,52 @@ function fgVisible(fill: DFill, bgs: readonly string[]): boolean | undefined {
   return undefined
 }
 
-/** The layout's or master's placeholder level matching the slide shape's. */
-function phLevel(
+/** A typed placeholder's second choice in its layout (`ctrTitle` → `title`, …). */
+const PH_SECOND: Readonly<Record<string, string>> = {
+  ctrtitle: 'title',
+  subtitle: 'body',
+  obj: 'body',
+}
+
+/**
+ * The layout placeholder a slide placeholder inherits from. Exact `type`+`idx`
+ * first; an untyped placeholder then matches by idx alone. A typed one whose
+ * idx and type each find a DIFFERENT placeholder is where renderers part
+ * (LibreOffice prefers the type, python-pptx the idx), so it is ambiguous —
+ * as is any key two placeholders share — and the run counts unknown-property.
+ */
+function layoutPh(
   part: SlidesStylePart | undefined,
-  ph: { readonly type?: string; readonly idx?: string } | undefined,
-  level: number,
-): XmlElement | undefined {
-  if (!part || !ph) return undefined
-  const byType = (type: string): XmlElement | undefined => part.phIndex.get(`t\0${type}\0${level}`)
-  const type = ph.type?.toLowerCase()
-  if (type !== undefined) {
-    const direct = byType(type)
-    if (direct) return direct
-    // `ctrTitle` and `subTitle` inherit their family's placeholder.
-    if (type === 'ctrtitle') {
-      const title = byType('title')
-      if (title) return title
-    }
-    if (type === 'subtitle') {
-      const body = byType('body')
-      if (body) return body
-    }
-  }
-  if (ph.idx !== undefined) return part.phIndex.get(`i\0${ph.idx}\0${level}`)
-  return undefined
+  ph: Ph | undefined,
+): { readonly entry?: PhEntry; readonly ambiguous: boolean } {
+  if (!part || !ph) return { ambiguous: false }
+  const exact = part.byTypeIdx.get(`${ph.type}\0${ph.idx}`)
+  if (exact) return { entry: exact, ambiguous: exact.dup }
+  const byIdx = part.byIdx.get(ph.idx)
+  if (!ph.typed) return { entry: byIdx, ambiguous: byIdx?.dup ?? false }
+  const second = PH_SECOND[ph.type]
+  const byType = part.byType.get(ph.type) ?? (second ? part.byType.get(second) : undefined)
+  if (byIdx && byType && byIdx !== byType) return { entry: byType, ambiguous: true }
+  if (byIdx) return { entry: byIdx, ambiguous: byIdx.dup }
+  return { entry: byType, ambiguous: byType?.typeDup ?? false }
+}
+
+/** A layout placeholder's master placeholder: its own type, else its family's. */
+const PH_MASTER: Readonly<Record<string, string>> = {
+  ctrtitle: 'title',
+  subtitle: 'body',
+  obj: 'body',
+  chart: 'body',
+  tbl: 'body',
+  clipart: 'body',
+  dgm: 'body',
+  media: 'body',
+  pic: 'body',
+}
+
+function masterPh(part: SlidesStylePart | undefined, type: string): PhEntry | undefined {
+  const family = PH_MASTER[type]
+  return part?.byType.get(type) ?? (family ? part?.byType.get(family) : undefined)
 }
 
 /**
@@ -2832,10 +2928,9 @@ function phLevel(
  * placeholder written with no `type` is ECMA-376's default `obj`, so body
  * (#517); a shape that is no placeholder is other.
  */
-function styleNameOf(ph: { readonly type?: string } | undefined, notes: boolean): string {
+function styleNameOf(type: string | undefined, notes: boolean): string {
   if (notes) return 'notesStyle'
-  if (!ph) return 'otherStyle'
-  const type = (ph.type ?? 'obj').toLowerCase()
+  if (type === undefined) return 'otherStyle'
   if (type === 'title' || type === 'ctrtitle') return 'titleStyle'
   if (type === 'body' || type === 'obj' || type === 'subtitle') return 'bodyStyle'
   return 'otherStyle'
@@ -2854,13 +2949,45 @@ function countDrawingRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
   const level = (scope.lvl ?? 0) + 1
   const ph = scope.shape?.ph
   const s: Scheme = { theme: ctx.theme, clrMap: inheritance.clrMap }
+  const layoutMatch = layoutPh(inheritance.layout, ph)
+  if (layoutMatch.ambiguous) ctx.counted.add('unknown-property')
+  // The master placeholder is the LAYOUT placeholder's (by its type); the
+  // txStyles entry is the slide's own type, or, untyped, its layout's.
+  const masterType = ph === undefined ? undefined : (layoutMatch.entry?.type ?? ph.type)
+  const styleType = ph?.typed ? ph.type : masterType
+  const masterEntry =
+    masterType === undefined ? undefined : masterPh(inheritance.master, masterType)
+  // A placeholder with no fill of its own (neither `spPr` nor `p:style`) is
+  // filled as its layout placeholder is, else its master placeholder.
+  let bgScope = scope
+  if (scope.shape?.ph && scope.shape.fill === undefined) {
+    for (const entry of [layoutMatch.entry, masterEntry]) {
+      if (!entry) continue
+      let f = entry.spFill === undefined ? FILL_ABSENT : fillEl(entry.spFill, s)
+      // A referenced placeholder's THEME style fill: LibreOffice does not
+      // inherit it (shape.cxx `applyShapeReference` resolves the reference
+      // with no theme), PowerPoint is unmeasured — so it is unknown.
+      if (f.kind === 'absent' && entry.fillRef) {
+        const idx = int(attrOf(entry.fillRef.attributes, 'idx')) ?? 0
+        if (idx > 0) f = { kind: 'unknown' }
+      }
+      if (f.kind !== 'absent') {
+        bgScope = { ...scope, shape: { ...scope.shape, fill: f } }
+        break
+      }
+    }
+  }
+  // Likewise its autofit: the body's own, else the layout's, else the master's.
+  const fontScale = scope.shape?.autofit
+    ? scope.shape.fontScale
+    : (layoutMatch.entry?.fontScale ?? masterEntry?.fontScale ?? scope.shape?.fontScale ?? 1)
   const chain: readonly (XmlElement | undefined)[] = [
     childEl(run, NS.a, 'rPr'),
     scope.paraDefRPr,
     scope.defRPr,
-    phLevel(inheritance.layout, ph, level),
-    phLevel(inheritance.master, ph, level),
-    inheritance.master?.byStyle.get(styleNameOf(ph, notes))?.get(level),
+    layoutMatch.entry?.levels.get(level),
+    masterEntry?.levels.get(level),
+    inheritance.master?.byStyle.get(styleNameOf(styleType, notes))?.get(level),
     ctx.slideDefaults?.get(level),
   ]
   const { fill, unknown } = drawingTextFill(chain, s)
@@ -2871,7 +2998,7 @@ function countDrawingRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
   const highlight = drawingHighlight(chain, s)
   const bg = highlight.unknown
     ? { unknown: true, colours: [] }
-    : drawingBackgrounds(scope, inheritance, s, ctx)
+    : drawingBackgrounds(bgScope, inheritance, s, ctx)
   if (highlight.unknown || bg.unknown) ctx.counted.add('unknown-property')
   else {
     // No fill anywhere resolves to the theme's text colour through the map.
@@ -2897,10 +3024,20 @@ function countDrawingRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
   for (const props of chain) {
     const raw = props === undefined ? undefined : int(attrOf(props.attributes, 'sz'))
     if (raw === undefined) continue
-    const pt = (raw / 100) * (scope.shape?.fontScale ?? 1) * baselineScale
+    const pt = (raw / 100) * fontScale * baselineScale
     if (pt <= 1) ctx.counted.add('too-small')
     break
   }
+}
+
+/** A body's autofit children: any one of them is the body's own choice. */
+const AUTOFITS = ['normAutofit', 'noAutofit', 'spAutoFit'] as const
+
+/** The fontScale an `a:bodyPr`'s own autofit declares, when it declares one. */
+function autofitScale(bodyPr: XmlElement | undefined): number | undefined {
+  if (!AUTOFITS.some((n) => childEl(bodyPr, NS.a, n) !== undefined)) return undefined
+  const auto = childEl(bodyPr, NS.a, 'normAutofit')
+  return pct(attrOf(auto?.attributes ?? [], 'fontScale')) ?? 1
 }
 
 /** Count concealment for one rebuilt element (A3: counted, not dropped). */

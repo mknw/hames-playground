@@ -26,6 +26,7 @@
  *                                orphan; concurrent stores serialize
  */
 
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import {
   MEMORY_MERGE_SPEC,
@@ -82,6 +83,7 @@ interface Row {
   tier: string
   content: string
   evidence: string
+  evidenceEventId?: string
   embedding: number[]
   embedSpace: string
   evidenceCount: number
@@ -101,9 +103,18 @@ const cosine = (a: readonly number[], b: readonly number[]): number => {
  * that sees a row survive a throw is seeing a real isolation failure, not a
  * fake that forgot to roll back.
  */
-function fakeDb(opts: { failAfterInsert?: boolean; failTransaction?: boolean; seed?: Row[] } = {}) {
+function fakeDb(
+  opts: {
+    failAfterInsert?: boolean
+    failTransaction?: boolean
+    seed?: Row[]
+    /** Source rows already present: `[eventId#ordinal, memoryId, conversationId]`. */
+    seedSources?: Array<[string, string, string]>
+  } = {},
+) {
   let rows = new Map<string, Row>((opts.seed ?? []).map((r) => [r.id, { ...r }]))
-  let sources = new Map<string, string>()
+  let sources = new Map<string, string>((opts.seedSources ?? []).map(([k, m]) => [k, m]))
+  let conversations = new Map<string, string>((opts.seedSources ?? []).map(([k, , c]) => [k, c]))
   let lock: Promise<void> = Promise.resolve()
   const stats = { transactions: 0, concurrent: 0, maxConcurrent: 0, nearestTiers: [] as string[] }
 
@@ -146,6 +157,7 @@ function fakeDb(opts: { failAfterInsert?: boolean; failTransaction?: boolean; se
       const key = `${src.eventId}#${src.ordinal}`
       if (sources.has(key)) return { inserted: false as const, memoryId: sources.get(key)! }
       sources.set(key, src.memoryId)
+      conversations.set(key, src.conversationId)
       return { inserted: true as const }
     },
     async read(id) {
@@ -169,6 +181,7 @@ function fakeDb(opts: { failAfterInsert?: boolean; failTransaction?: boolean; se
       const snap = {
         rows: new Map([...rows].map(([k, v]) => [k, { ...v }])),
         sources: new Map(sources),
+        conversations: new Map(conversations),
       }
       try {
         if (opts.failTransaction) throw new Error('db down')
@@ -178,6 +191,7 @@ function fakeDb(opts: { failAfterInsert?: boolean; failTransaction?: boolean; se
       } catch (e) {
         rows = snap.rows
         sources = snap.sources
+        conversations = snap.conversations
         throw e
       } finally {
         stats.concurrent--
@@ -190,6 +204,23 @@ function fakeDb(opts: { failAfterInsert?: boolean; failTransaction?: boolean; se
     stats,
     rows: () => [...rows.values()],
     sources: () => [...sources.entries()],
+    /** Source rows with the conversation each was written under. */
+    sourceRows: () =>
+      [...sources.entries()].map(([k, m]) => [k, m, conversations.get(k)!] as const),
+    /** The erasure rule (owner decision (b)) as a host must implement it: a
+     *  conversation delete takes every memory with ANY source row there. */
+    deleteConversation(conversationId: string) {
+      const dead = new Set(
+        [...conversations].filter(([, c]) => c === conversationId).map(([k]) => sources.get(k)!),
+      )
+      for (const id of dead) rows.delete(id)
+      for (const [k, m] of [...sources]) {
+        if (dead.has(m)) {
+          sources.delete(k)
+          conversations.delete(k)
+        }
+      }
+    },
   }
 }
 
@@ -849,6 +880,256 @@ describe('acceptance-rules: dedupe and merge', () => {
     expect(report.compactionDue).toBe(true)
     const { report: r2 } = await run({ sim: 0.3, settings: { softLimit: 3 } })
     expect(r2.compactionDue).toBe(false)
+  })
+})
+
+// ============================================================================
+// erasure-semantics + merge-fails-to-keep-both (#419 owner decision (b))
+// ============================================================================
+
+describe('erasure-semantics', () => {
+  const OLD: Row = {
+    id: 'old-1',
+    kind: 'preference',
+    tier: 'verda',
+    content: 'The user prefers imperial units.',
+    evidence: 'I like imperial units',
+    evidenceEventId: 'evt-old',
+    embedding: [1, 0],
+    embedSpace: SPACE,
+    evidenceCount: 1,
+    updated: false,
+  }
+  const at = (sim: number): number[] => [sim, Math.sqrt(1 - sim * sim)]
+  /** A memory last built from conversation A, now UPDATED by a turn in B. */
+  const updatedFromB = async (settings: MemoryStoreSettings = {}) => {
+    const db = fakeDb({ seed: [OLD], seedSources: [['evt-old#0', 'old-1', 'conv-A']] })
+    const { embed } = fakeEmbed({ [CONTENT]: at(0.85) })
+    const { cfg } = config({
+      db,
+      decide: fakeDecide({ merge: 'update' }).fn,
+      embed,
+      ...withSettings(settings),
+    })
+    const ctx = turn()
+    const report = await settleMemory(ctx, cfg, { conversationId: 'conv-B' })
+    return { db, ctx, report }
+  }
+
+  it('an update keeps the source rows that no longer support the memory’s text', async () => {
+    // Mutation: in the `update` branch of settleMemory, write the newer
+    // statement as a NEW memory (verdict 'insert') — the host then has two
+    // memories and the old one's rows no longer point at the text's owner.
+    const { db, ctx } = await updatedFromB()
+    const eventId = written(ctx)[0].eventId
+    expect(db.rows()).toHaveLength(1)
+    expect(db.rows()[0]).toMatchObject({ id: 'old-1', content: CONTENT, updated: true })
+    expect(db.sourceRows()).toEqual([
+      ['evt-old#0', 'old-1', 'conv-A'], // stale: it supports the OLD text only
+      [`${eventId}#0`, 'old-1', 'conv-B'],
+    ])
+  })
+
+  it('so deleting the conversation that only supported the OLD text still removes the memory', async () => {
+    const { db } = await updatedFromB()
+    db.deleteConversation('conv-A')
+    expect(db.rows()).toEqual([])
+    expect(db.sourceRows()).toEqual([])
+  })
+
+  it('… and deleting the current conversation removes it too; an unrelated one touches nothing', async () => {
+    const one = await updatedFromB()
+    one.db.deleteConversation('conv-other')
+    expect(one.db.rows()).toHaveLength(1)
+    one.db.deleteConversation('conv-B')
+    expect(one.db.rows()).toEqual([])
+  })
+
+  it('a reinforce records the conversation too, so a later delete reaches it', async () => {
+    const db = fakeDb({ seed: [OLD] })
+    const { embed } = fakeEmbed({ [CONTENT]: at(0.97) })
+    const { cfg } = config({ db, embed })
+    await settleMemory(turn(), cfg, { conversationId: 'conv-C' })
+    expect(db.sourceRows().map((r) => r[2])).toEqual(['conv-C'])
+    db.deleteConversation('conv-C')
+    expect(db.rows()).toEqual([])
+  })
+
+  it('the write seam has NO way to remove a source row', () => {
+    // Mutation: add `removeSources(memoryId): Promise<void>` to MemoryWriteTx.
+    const src = readFileSync(new URL('../types.ts', import.meta.url), 'utf8')
+    const body = /export interface MemoryWriteTx \{([\s\S]*?)\n\}/.exec(src)?.[1] ?? ''
+    expect(body).toContain('addSource(')
+    expect(body).not.toMatch(/\b(delete|remove|move|prune|drop|clear|reassign)\w*\s*\(/i)
+  })
+})
+
+describe('evidence-event-id', () => {
+  const at = (sim: number): number[] => [sim, Math.sqrt(1 - sim * sim)]
+
+  it('an inserted memory records the event its evidence quotes', async () => {
+    // Mutation: drop `evidenceEventId: userEventId` from the insert call.
+    const { cfg, db } = config()
+    const ctx = turn()
+    await settleMemory(ctx, cfg)
+    expect(db.rows()[0].evidenceEventId).toBe(written(ctx)[0].eventId)
+    expect(db.rows()[0].evidenceEventId).toBeTruthy()
+  })
+
+  it('an update replaces evidence AND its event id together', async () => {
+    // Mutation: drop `evidenceEventId: userEventId` from the update call.
+    const db = fakeDb({
+      seed: [
+        {
+          id: 'old-1',
+          kind: 'preference',
+          tier: 'verda',
+          content: 'The user prefers imperial units.',
+          evidence: 'I like imperial units',
+          evidenceEventId: 'evt-old',
+          embedding: [1, 0],
+          embedSpace: SPACE,
+          evidenceCount: 1,
+          updated: false,
+        },
+      ],
+    })
+    const { embed } = fakeEmbed({ [CONTENT]: at(0.85) })
+    const { cfg } = config({ db, decide: fakeDecide({ merge: 'update' }).fn, embed })
+    const ctx = turn()
+    await settleMemory(ctx, cfg)
+    expect(db.rows()[0]).toMatchObject({ evidence: EVIDENCE, updated: true })
+    expect(db.rows()[0].evidenceEventId).toBe(written(ctx)[0].eventId)
+    expect(db.rows()[0].evidenceEventId).not.toBe('evt-old')
+  })
+
+  it('with an earlier pair in the window, it is the CURRENT user event, never an earlier one', async () => {
+    // Mutation: use the window's FIRST user event id instead of the current one.
+    const { cfg, db } = config(withSettings({ storeWindowTurns: 2 }))
+    const ctx = createContext('an earlier question')
+    ctx.events.push(createEvent('assistant_message', 'c', { content: 'an answer', final: true }))
+    const current = createEvent('user_message', 'harness', { content: USER_TEXT })
+    ctx.events.push(current)
+    ctx.events.push(createEvent('assistant_message', 'c', { content: 'noted', final: true }))
+    const first = ctx.events.find((e) => e.type === 'user_message')!
+    await settleMemory(ctx, cfg)
+    expect(first.id).not.toBe(current.id)
+    expect(db.rows()[0].evidenceEventId).toBe(current.id)
+  })
+})
+
+describe('merge-fails-to-keep-both', () => {
+  const seed = (): Row => ({
+    id: 'old-1',
+    kind: 'preference',
+    tier: 'verda',
+    content: 'The user prefers imperial units.',
+    evidence: 'I like imperial units',
+    embedding: [1, 0],
+    embedSpace: SPACE,
+    evidenceCount: 1,
+    updated: false,
+  })
+  const at = (sim: number): number[] => [sim, Math.sqrt(1 - sim * sim)]
+  /** The merge question answered by `answer`; everything else is confident. */
+  const withMerge = async (answer: (labels: readonly { id: string }[]) => unknown) => {
+    const db = fakeDb({ seed: [seed()] })
+    const decide = fakeDecide({}, (i) =>
+      i.spec.key === 'memory.merge' ? answer(i.spec.labels) : undefined,
+    )
+    const { embed } = fakeEmbed({ [CONTENT]: at(0.85) })
+    const { cfg } = config({ db, decide: decide.fn, embed })
+    const ctx = turn()
+    const report = await settleMemory(ctx, cfg)
+    return { db, ctx, report, decide }
+  }
+  const keptBoth = (db: ReturnType<typeof fakeDb>, report: { written: number; failed: number }) => {
+    expect(report).toMatchObject({ written: 1, failed: 0 })
+    expect(db.rows()).toHaveLength(2)
+    // The old memory is untouched: neither updated nor reinforced.
+    expect(db.rows().find((r) => r.id === 'old-1')).toMatchObject({
+      content: 'The user prefers imperial units.',
+      evidenceCount: 1,
+      updated: false,
+    })
+    expect(db.rows().find((r) => r.id !== 'old-1')?.content).toBe(CONTENT)
+  }
+
+  it('the merge key requires a calibrated read', async () => {
+    // Mutation: requireCalibrated: true → false in chooseAction's policy.
+    const { ctx } = await withMerge((l) => confident(l, 'distinct'))
+    const merge = ctx.events.find(
+      (e) => e.type === 'decision_made' && (e.data as { key: string }).key === 'memory.merge',
+    )
+    expect(
+      (merge?.data as { policy: { requireCalibrated?: boolean } }).policy.requireCalibrated,
+    ).toBe(true)
+  })
+
+  it('a confident but UNCALIBRATED `update` does not merge: both memories kept', async () => {
+    // Mutations: requireCalibrated → false; or the fallback 'distinct' → 'update'.
+    const { db, report } = await withMerge((l) => ({
+      ...confident(l, 'update'),
+      calibrated: false,
+    }))
+    keptBoth(db, report)
+  })
+
+  it('… nor does an uncalibrated `same` (it would swallow the new statement)', async () => {
+    const { db, report } = await withMerge((l) => ({ ...confident(l, 'same'), calibrated: false }))
+    keptBoth(db, report)
+  })
+
+  it('a REFUSED merge decision (the seam throws) keeps both', async () => {
+    // Mutation: the fallback 'distinct' → 'update'.
+    const db = fakeDb({ seed: [seed()] })
+    const decide = fakeDecide({}, (i) => {
+      if (i.spec.key === 'memory.merge') throw new Error('provider refused')
+      return undefined
+    })
+    const { embed } = fakeEmbed({ [CONTENT]: at(0.85) })
+    const { cfg } = config({ db, decide: decide.fn, embed })
+    const report = await settleMemory(turn(), cfg)
+    keptBoth(db, report)
+  })
+
+  it('an ABSTAINED merge decision (flat read) keeps both', async () => {
+    // Mutation: the fallback 'distinct' → 'update'.
+    const { db, report } = await withMerge(() =>
+      logprob({ same: 0.34, update: 0.33, distinct: 0.33 }),
+    )
+    keptBoth(db, report)
+  })
+
+  it('a transport serving the merge key VERBALIZED is refused before the call is paid for, and keeps both', async () => {
+    // Mutation: requireCalibrated: true → false (the pre-call refusal is the
+    // same policy bit, so the merge call is made and its `update` lands).
+    const db = fakeDb({ seed: [seed()] })
+    let mergeCalls = 0
+    const fn = (async (input: { spec: { key: string; labels: readonly { id: string }[] } }) => {
+      const merge = input.spec.key === 'memory.merge'
+      if (merge) mergeCalls++
+      return confident(
+        input.spec.labels,
+        merge
+          ? 'update'
+          : (STORES as Record<string, string>)[input.spec.key.replace('memory.store.', '')],
+      )
+    }) as unknown as DecideFn
+    Object.assign(fn, {
+      serving: (key: string) => (key === 'memory.merge' ? { method: 'verbalized' } : {}),
+    })
+    const { embed } = fakeEmbed({ [CONTENT]: at(0.85) })
+    const { cfg } = config({ db, decide: fn, embed })
+    const report = await settleMemory(turn(), cfg)
+    expect(mergeCalls).toBe(0)
+    keptBoth(db, report)
+  })
+
+  it('control: a calibrated, confident `update` still merges', async () => {
+    const { db } = await withMerge((l) => confident(l, 'update'))
+    expect(db.rows()).toHaveLength(1)
+    expect(db.rows()[0]).toMatchObject({ id: 'old-1', content: CONTENT, updated: true })
   })
 })
 

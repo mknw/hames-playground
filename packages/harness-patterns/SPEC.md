@@ -2342,8 +2342,9 @@ lock (`MemoryWriteStore.transaction` — it MUST roll back on a throw):
 1. `nearest` memory of the same owner, tier and embedding space.
 2. **Same kind and cosine ≥ `dupSimilarity` (0.92)** → reinforce. **Related
    (≥ `relatedSimilarity`, 0.75) preference or trait** → the `memory.merge`
-   question `same | update | distinct`, bounded by `mergeTimeoutMs`; abstain,
-   timeout or `distinct` → insert. Episodes and facts only reinforce or insert;
+   question `same | update | distinct`, bounded by `mergeTimeoutMs` and
+   **`requireCalibrated: true`**; uncalibrated, abstain, a refused or thrown
+   call, timeout or `distinct` → insert (both memories kept, never merged). Episodes and facts only reinforce or insert;
    kinds and tiers never merge.
 3. Insert/reinforce/update **and the `memory_sources` row in the same
    transaction.** `addSource` returning `{ inserted: false, memoryId }` is the primary-key
@@ -2356,6 +2357,41 @@ lock (`MemoryWriteStore.transaction` — it MUST roll back on a throw):
 The merge question runs INSIDE the transaction (it must see the lock's world),
 which is why it has its own deadline. The thresholds are unmeasured placeholders
 for layer 4.
+
+### Erasure semantics (owner decision (b), M2 and M3 together)
+
+Three rules, decided once for storing and for compaction:
+
+1. **A source row is never dropped because the text moved on.** An `update`
+   replaces the memory's `content`, `evidence` and vector in place (same
+   `memoryId`) and keeps EVERY `memory_sources` row, including rows that no longer
+   support the new text. `MemoryWriteTx` has no way to remove one, and a host's
+   `update` must not delete any. **Compaction (M3) inherits the rule**: when
+   it writes a merged memory it moves every member's source rows to it, **keeps
+   all of them**, and deletes only the members themselves (the cascade must
+   never take the moved rows with it). It does not prune the rows whose
+   member text the summary dropped.
+2. **Deleting a conversation removes every memory that ever drew on it:** every
+   memory with ANY `memory_sources` row in that conversation, current or stale,
+   dies together with its sources, not only memories left with no source. This
+   errs toward erasing more, deliberately; it is what rule 1 buys. The delete
+   itself is host-side (M5/M7, `memories.server.ts`): core records the
+   `conversationId` on every row it writes (insert, reinforce and update alike),
+   and the SQL pin for the cascade lives with that delete.
+3. **`evidence` names its event.** `MemoryInsertRow` and `update`'s `next` carry
+   `evidenceEventId` — the `user_message` event id the stored `evidence` is a
+   span of — and the host stores it on the memory row beside the text,
+   replacing both together on `update`. Today it always equals the turn's user
+   event (evidence is verbatim from the CURRENT message, D9); M3's merged
+   memory takes the evidence AND the `evidenceEventId` of the member whose
+   span it keeps. The field is optional in the type (additive); core always sets it.
+
+The merge question's fail-safe is part of the same decision: a merge destroys
+the older text, so `memory.merge` needs a calibrated read, and every way of not
+getting one lands on `distinct`, which inserts. Until a calibration entry exists
+for the serving client the question abstains every time, so `update` and `same`
+never fire and only the near-duplicate (≥ `dupSimilarity`) reinforce remains.
+Pins: `erasure-semantics`, `merge-fails-to-keep-both`.
 
 ### The `memory_written` event
 

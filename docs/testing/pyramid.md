@@ -289,3 +289,9 @@ edit without a red test.
 - **Concurrency between suites.** Isolation means a concurrent run cannot
   CORRUPT another; it is not a claim that anything is faster in parallel. One
   Postgres and one dev-server port are still shared resources.
+
+## Browser backend pins
+
+| Command (from `app/`)                                                      | Checks                                                                                         | When                                                                                        |
+| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `pnpm exec playwright test --config e2e-browser/pins/playwright.config.ts` | Actual dev-server fake credentials, proxy delivery, fixture enforcement, boot and final drains | `release:check`, before the browser layer; also independently, without Postgres or Chromium |

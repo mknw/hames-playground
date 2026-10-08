@@ -732,7 +732,6 @@ function disarm(
     sheetColours: new Map(),
     cellFills: new Map(),
     richSummaries: new Map(),
-    contrastUnions: new Map(),
     slideStyle: new Map(),
     styleParts: new Map(),
     styleEdges: new Map(),
@@ -1017,7 +1016,6 @@ interface Shared {
   readonly sheetColours: Map<Color, { rgb?: string }>
   readonly cellFills: Map<CellFill, { colours: readonly string[]; unknown: boolean }>
   readonly richSummaries: Map<readonly RichRun[], RichSummary>
-  readonly contrastUnions: Map<ContrastNode, Map<ContrastNode, ContrastNode>>
   readonly removed: Tally
   readonly counted: Reasons
   /** `footnote:<id>` / `endnote:<id>` for every reference the main part kept. */
@@ -1571,6 +1569,7 @@ interface WordStyles {
   readonly combined: Map<Resolved | undefined, Map<Resolved | undefined, StyleTrie>>
   readonly groups: Record<StyleType, Map<readonly string[], Resolved>>
   readonly ctx: Shared
+  readonly domain: ColourDomain
 }
 
 type StyleType = 'paragraph' | 'character' | 'table'
@@ -1767,6 +1766,10 @@ function readWordStyles(root: XmlElement, ctx: Shared): WordStyles {
     combined: new Map(),
     groups: { character: new Map(), paragraph: new Map(), table: new Map() },
     ctx,
+    domain: colourDomain(
+      [...byId.values()].flatMap((defs) => defs.flatMap((d) => d.conditionalShd)),
+      ctx,
+    ),
   }
 }
 
@@ -1846,11 +1849,11 @@ function resolveStyle(styles: WordStyles, id: string): Resolved {
         [
           compileConditional(
             defs.flatMap((d) => d.conditionalShd),
-            styles.ctx,
+            styles,
           ),
           ...new Set(parents.map((p) => p.conditionalShd)),
         ],
-        styles.ctx,
+        styles.domain,
       ),
     })
   }
@@ -1881,7 +1884,7 @@ function mergeStyles(parts: readonly Resolved[], styles: WordStyles, base?: RunP
     pShd: nearestShd(parts.map((p) => p.pShd)),
     conditionalShd: mergeConditionals(
       parts.map((p) => p.conditionalShd),
-      styles.ctx,
+      styles.domain,
     ),
   }
 }
@@ -2040,73 +2043,6 @@ function colourIndex(colours: readonly string[]): ContrastNode | undefined {
   for (const rgb of colours) index = insertColour(index, rgb)
   return index
 }
-/** Join ordered subtrees of arbitrary heights, retaining balanced shared nodes. */
-function joinIndex(
-  left: ContrastNode | undefined,
-  rgb: string,
-  light: number,
-  right: ContrastNode | undefined,
-): ContrastNode {
-  if (height(left) > height(right) + 1) {
-    const l = left!
-    return balanceIndex(indexNode(l.rgb, l.light, l.left, joinIndex(l.right, rgb, light, right)))
-  }
-  if (height(right) > height(left) + 1) {
-    const r = right!
-    return balanceIndex(indexNode(r.rgb, r.light, joinIndex(left, rgb, light, r.left), r.right))
-  }
-  return indexNode(rgb, light, left, right)
-}
-function splitIndex(
-  node: ContrastNode | undefined,
-  pivot: ContrastNode,
-): { left?: ContrastNode; right?: ContrastNode; found?: ContrastNode } {
-  if (!node) return {}
-  if (node.rgb === pivot.rgb) return { left: node.left, right: node.right, found: node }
-  if (pivot.light < node.light || (pivot.light === node.light && pivot.rgb < node.rgb)) {
-    const split = splitIndex(node.left, pivot)
-    return {
-      left: split.left,
-      right: joinIndex(split.right, node.rgb, node.light, node.right),
-      found: split.found,
-    }
-  }
-  const split = splitIndex(node.right, pivot)
-  return {
-    left: joinIndex(node.left, node.rgb, node.light, split.left),
-    right: split.right,
-    found: split.found,
-  }
-}
-function unionIndex(
-  a: ContrastNode | undefined,
-  b: ContrastNode | undefined,
-  ctx: Shared,
-): ContrastNode | undefined {
-  if (!a || a === b) return b
-  if (!b) return a
-  if (a.size < b.size) [a, b] = [b, a]
-  let pairs = ctx.contrastUnions.get(a)
-  if (!pairs) {
-    pairs = new Map()
-    ctx.contrastUnions.set(a, pairs)
-  }
-  const hit = pairs.get(b)
-  if (hit) return hit
-  // Splitting along the smaller tree exposes equal inherited subtrees. Each
-  // identity-equal pair returns immediately instead of flattening shared RGBs.
-  const split = splitIndex(a, b)
-  const left = unionIndex(split.left, b.left, ctx)
-  const right = unionIndex(split.right, b.right, ctx)
-  const result =
-    split.found === a && left === a.left && right === a.right
-      ? a
-      : left === b.left && right === b.right
-        ? b
-        : joinIndex(left, b.rgb, b.light, right)
-  pairs.set(b, result)
-  return result
-}
 /** On each side of the query luminance, contrast increases monotonically.
  * Test the adjacent RGBs with the original ratio, preserving boundary rounding. */
 function contrastFails(index: ContrastNode | undefined, rgb: string): boolean {
@@ -2128,31 +2064,139 @@ function contrastFails(index: ContrastNode | undefined, rgb: string): boolean {
     (upper !== undefined && contrastRatio(rgb, upper.rgb) < MIN_CONTRAST)
   )
 }
-interface Conditional {
-  readonly unknown: boolean
-  readonly index?: ContrastNode
+/** The styles part's conditional shading colours, sorted by luminance, fixed
+ * once the part is read: every conditional set is a persistent segment tree
+ * over these positions, so equal inherited subtrees keep one identity. */
+interface ColourDomain {
+  readonly rgbs: readonly string[]
+  readonly lights: readonly number[]
+  readonly at: ReadonlyMap<string, number>
+  readonly merged: Map<ColourSet, Map<ColourSet, ColourSet>>
 }
-function compileConditional(shds: readonly Shd[], ctx: Shared): Conditional {
-  let unknown = false
-  let index: ContrastNode | undefined
+interface ColourSet {
+  readonly left?: ColourSet
+  readonly right?: ColourSet
+}
+const PRESENT: ColourSet = {}
+function colourDomain(shds: readonly Shd[], ctx: Shared): ColourDomain {
+  const lights = new Map<string, number>()
   for (const shd of shds) {
     const result = shdColours(shd, ctx)
+    if (result.kind === 'colours')
+      for (const rgb of result.colours) if (!lights.has(rgb)) lights.set(rgb, luminance(rgb))
+  }
+  const rgbs = [...lights.keys()].sort(
+    (a, b) => lights.get(a)! - lights.get(b)! || (a < b ? -1 : a > b ? 1 : 0),
+  )
+  return {
+    rgbs,
+    lights: rgbs.map((rgb) => lights.get(rgb)!),
+    at: new Map(rgbs.map((rgb, i) => [rgb, i])),
+    merged: new Map(),
+  }
+}
+function insertSet(set: ColourSet | undefined, lo: number, hi: number, at: number): ColourSet {
+  if (hi - lo === 1) return PRESENT
+  const mid = (lo + hi) >> 1
+  if (at < mid) {
+    const left = insertSet(set?.left, lo, mid, at)
+    return left === set?.left ? set : { left, right: set?.right }
+  }
+  const right = insertSet(set?.right, mid, hi, at)
+  return right === set?.right ? set : { left: set?.left, right }
+}
+/** Union by identity: the shapes are fixed by the domain, so a subtree shared
+ * with an earlier merge is a memo hit, never re-walked. */
+function mergeSets(
+  a: ColourSet | undefined,
+  b: ColourSet | undefined,
+  lo: number,
+  hi: number,
+  domain: ColourDomain,
+): ColourSet | undefined {
+  if (!a || a === b) return b
+  if (!b || hi - lo === 1) return a
+  const hit = domain.merged.get(a)?.get(b) ?? domain.merged.get(b)?.get(a)
+  if (hit) return hit
+  const mid = (lo + hi) >> 1
+  const left = mergeSets(a.left, b.left, lo, mid, domain)
+  const right = mergeSets(a.right, b.right, mid, hi, domain)
+  const result =
+    left === a.left && right === a.right
+      ? a
+      : left === b.left && right === b.right
+        ? b
+        : { left, right }
+  let pairs = domain.merged.get(a)
+  if (!pairs) {
+    pairs = new Map()
+    domain.merged.set(a, pairs)
+  }
+  pairs.set(b, result)
+  return result
+}
+/** The greatest member below `end`, else -1; the least member at or above `start`, else -1. */
+function lastBelow(set: ColourSet | undefined, lo: number, hi: number, end: number): number {
+  if (!set || lo >= end) return -1
+  if (hi - lo === 1) return lo
+  const mid = (lo + hi) >> 1
+  const right = lastBelow(set.right, mid, hi, end)
+  return right >= 0 ? right : lastBelow(set.left, lo, mid, end)
+}
+function firstFrom(set: ColourSet | undefined, lo: number, hi: number, start: number): number {
+  if (!set || hi <= start) return -1
+  if (hi - lo === 1) return lo
+  const mid = (lo + hi) >> 1
+  const left = firstFrom(set.left, lo, mid, start)
+  return left >= 0 ? left : firstFrom(set.right, mid, hi, start)
+}
+interface Conditional {
+  readonly unknown: boolean
+  readonly set?: ColourSet
+  readonly domain?: ColourDomain
+}
+/** As `contrastFails`: the nearest member on each side of the query luminance. */
+function conditionalFails(c: Conditional, rgb: string): boolean {
+  const { set, domain } = c
+  if (!set || !domain) return false
+  const light = luminance(rgb)
+  let lo = 0
+  let hi = domain.lights.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (domain.lights[mid] < light) lo = mid + 1
+    else hi = mid
+  }
+  const lower = lastBelow(set, 0, domain.rgbs.length, lo)
+  const upper = firstFrom(set, 0, domain.rgbs.length, lo)
+  return (
+    (lower >= 0 && contrastRatio(rgb, domain.rgbs[lower]) < MIN_CONTRAST) ||
+    (upper >= 0 && contrastRatio(rgb, domain.rgbs[upper]) < MIN_CONTRAST)
+  )
+}
+function compileConditional(shds: readonly Shd[], styles: WordStyles): Conditional {
+  const domain = styles.domain
+  let unknown = false
+  let set: ColourSet | undefined
+  for (const shd of shds) {
+    const result = shdColours(shd, styles.ctx)
     unknown ||= result.kind === 'unknown'
     if (result.kind === 'colours')
-      for (const rgb of result.colours) index = insertColour(index, rgb)
+      for (const rgb of result.colours)
+        set = insertSet(set, 0, domain.rgbs.length, domain.at.get(rgb)!)
   }
-  return { unknown, index }
+  return { unknown, set, domain }
 }
-function mergeConditionals(parts: readonly Conditional[], ctx: Shared): Conditional {
+function mergeConditionals(parts: readonly Conditional[], domain: ColourDomain): Conditional {
   if (parts.length === 1) return parts[0]
   let unknown = false
-  let index: ContrastNode | undefined
+  let set: ColourSet | undefined
   for (const part of parts) {
     unknown ||= part.unknown
-    index = unionIndex(index, part.index, ctx)
+    set = mergeSets(set, part.set, 0, domain.rgbs.length, domain)
   }
   // A child without own additions carries the parent's actual summary identity.
-  return parts.find((p) => p.unknown === unknown && p.index === index) ?? { unknown, index }
+  return parts.find((p) => p.unknown === unknown && p.set === set) ?? { unknown, set, domain }
 }
 interface ShadingLevel {
   readonly unknown: boolean
@@ -2388,7 +2432,7 @@ function wordBackgrounds(
 ): {
   readonly unknown: boolean
   readonly colours: readonly string[]
-  readonly index?: ContrastNode
+  readonly conditional?: Conditional
 } {
   const levels: readonly (readonly Shd[])[] = [
     childEls(run, NS.w, 'rPr').flatMap((r) => childEls(r, NS.w, 'shd').map(shdOf).filter(isShd)),
@@ -2416,8 +2460,8 @@ function wordBackgrounds(
   }
   const conditional = styled?.conditionalShd
   if (conditional?.unknown) return { unknown: true, colours: [] }
-  return conditional?.index
-    ? { unknown: false, colours: [], index: conditional.index }
+  return conditional?.set
+    ? { unknown: false, colours: [], conditional }
     : { unknown: false, colours: [ctx.pageBg ?? 'FFFFFF'] }
 }
 
@@ -2426,7 +2470,7 @@ function compileHighlight(value: string | undefined): Highlight | undefined {
   if (value === undefined) return undefined
   const name = value.toLowerCase()
   if (name === 'none') return { kind: 'none' }
-  const rgb = HIGHLIGHT[name]
+  const rgb = Object.hasOwn(HIGHLIGHT, name) ? HIGHLIGHT[name] : undefined
   return rgb === undefined ? { kind: 'unknown' } : { kind: 'rgb', rgb }
 }
 
@@ -2477,7 +2521,7 @@ function countWordRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
   const highlight = nearest(all, 'highlight')
   let unknown = false
   let colours: readonly string[]
-  let index: ContrastNode | undefined
+  let conditional: Conditional | undefined
   if (highlight !== undefined && highlight.kind !== 'none') {
     // The highlight, when one is resolved, is drawn over every shading level.
     const lit = highlight.kind === 'rgb' ? highlight.rgb : undefined
@@ -2489,14 +2533,14 @@ function countWordRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
     const bg = wordBackgrounds(run, styled, scope, ctx)
     unknown = bg.unknown
     colours = bg.colours
-    index = bg.index
+    conditional = bg.conditional
   }
   if (unknown) {
     ctx.counted.add('unknown-property')
   } else if (
     fg.kind === 'rgb' &&
-    (index
-      ? contrastFails(index, fg.rgb)
+    (conditional
+      ? conditionalFails(conditional, fg.rgb)
       : colours.some((bg) => contrastRatio(fg.rgb, bg) < MIN_CONTRAST))
   ) {
     ctx.counted.add('colour-contrast')
@@ -2838,7 +2882,7 @@ interface SlidesStylePart {
    * answers for every level, so a level it lacks goes up to the master rather
    * than to some other placeholder that has it.
    */
-  readonly byTypeIdx: ReadonlyMap<string, PhEntry>
+  readonly byTypeIdx: ReadonlyMap<string, ReadonlyMap<string, PhEntry>>
   readonly byIdx: ReadonlyMap<string, PhEntry>
   readonly byType: ReadonlyMap<string, PhEntry>
   /** `txStyles` name → level → defRPr. */
@@ -2964,7 +3008,7 @@ function slideInheritanceOf(ctx: Ctx): SlideInheritance {
 }
 
 function readSlidesStylePart(root: XmlElement): SlidesStylePart {
-  const byTypeIdx = new Map<string, PhEntry>()
+  const byTypeIdx = new Map<string, Map<string, PhEntry>>()
   const byIdx = new Map<string, PhEntry>()
   const byType = new Map<string, PhEntry>()
   const byStyle = new Map<string, ReadonlyMap<number, XmlElement>>()
@@ -2992,8 +3036,13 @@ function readSlidesStylePart(root: XmlElement): SlidesStylePart {
           dup: false,
           typeDup: false,
         }
+        let ofType = byTypeIdx.get(ph.type)
+        if (!ofType) {
+          ofType = new Map()
+          byTypeIdx.set(ph.type, ofType)
+        }
         for (const [map, key] of [
-          [byTypeIdx, `${ph.type}\0${ph.idx}`],
+          [ofType, ph.idx],
           [byIdx, ph.idx],
         ] as const) {
           const first = map.get(key)
@@ -3460,7 +3509,7 @@ function layoutPh(
   ph: Ph | undefined,
 ): { readonly entry?: PhEntry; readonly ambiguous: boolean } {
   if (!part || !ph) return { ambiguous: false }
-  const exact = part.byTypeIdx.get(`${ph.type}\0${ph.idx}`)
+  const exact = part.byTypeIdx.get(ph.type)?.get(ph.idx)
   if (exact) return { entry: exact, ambiguous: exact.dup }
   const byIdx = part.byIdx.get(ph.idx)
   if (!ph.typed) return { entry: byIdx, ambiguous: byIdx?.dup ?? false }
@@ -3768,7 +3817,8 @@ function compileFormat(format: string, palette: readonly string[] | undefined): 
       .slice(start + 1, end)
       .trim()
       .toLowerCase()
-    let rgb: string | undefined = FORMAT_COLOURS[name.replace(/\s+/g, '')]
+    const key = name.replace(/\s+/g, '')
+    let rgb = Object.hasOwn(FORMAT_COLOURS, key) ? FORMAT_COLOURS[key] : undefined
     if (rgb === undefined) {
       const indexed = /^color\s*([1-9]\d*)$/.exec(name)
       if (indexed) rgb = hex6(palette?.[Number(indexed[1]) - 1] ?? PALETTE[Number(indexed[1]) - 1])

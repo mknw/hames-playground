@@ -5,6 +5,7 @@ No database, converters, provider calls or production observers.
 """
 from pathlib import Path
 import importlib.util
+import subprocess
 import sys
 
 spec = importlib.util.spec_from_file_location('previous', Path(__file__).with_name('check-ooxml-shared-state-mutations.py'))
@@ -48,6 +49,27 @@ def delimiter(source):
     }
 
 ''' + source[end:]
+
+
+def flatten_set(source):
+    return source + '''\nfunction flattenSet(c: Conditional): string[] {
+      const out: string[] = []
+      const walk = (s: ColourSet | undefined, lo: number, hi: number): void => {
+        if (!s) return
+        if (hi - lo === 1) { out.push(c.domain!.rgbs[lo]); return }
+        const mid = (lo + hi) >> 1
+        walk(s.left, lo, mid)
+        walk(s.right, mid, hi)
+      }
+      walk(c.set, 0, c.domain?.rgbs.length ?? 0)
+      return out
+    }\n'''
+
+
+def copy_inherited_set(source):
+    return replace(flatten_set(source), 'function mergeConditionals(parts: readonly Conditional[], domain: ColourDomain): Conditional {\n', '''function mergeConditionals(parts: readonly Conditional[], domain: ColourDomain): Conditional {
+      parts = parts.map((p) => ({ ...p, set: flattenSet(p).reduce<ColourSet | undefined>((set, rgb) => insertSet(set, 0, domain.rgbs.length, domain.at.get(rgb)!), undefined) }))
+''')
 
 
 def raw_shading_level(source):
@@ -102,7 +124,8 @@ def list_query(source, target):
 
 def extrema(source):
     a = source.index('function contrastFails(')
-    b = source.index('interface Conditional', a)
+    # The fixed-domain helpers now precede Conditional; do not delete them.
+    b = source.index('/** The styles part\'s conditional shading colours', a)
     return source[:a] + '''function contrastFails(index: ContrastNode | undefined, rgb: string): boolean {
       if (!index) return false
       let lo = index, hi = index
@@ -127,10 +150,10 @@ MUTATIONS = {
  'W5-normalize': ('W5 long literal', patch(('  let result = ctx.shadingColours.get(shd)', '  shd.val?.toLowerCase()\n  let result = ctx.shadingColours.get(shd)'))),
  'W6-raw-list': ('W6 actual work', raw_shading_level),
  'W6-late-unknown': ('W6.*reads late', patch(("    if (bg.kind === 'colours' && colours === undefined) colours = bg.colours\n  }\n  result = { unknown, colours }", "    if (bg.kind === 'colours' && colours === undefined) { colours = bg.colours; break }\n  }\n  result = { unknown, colours }"))),
- 'W7-assemble': ('W7 distinct conditional', lambda s: list_query(s,'W7')),
+ 'W7-assemble': ('W7 distinct conditional', lambda s: replace(flatten_set(s), '{ unknown: false, colours: [], conditional }', '{ unknown: false, colours: flattenSet(conditional) }')),
  'W7-extrema': ('exact index catches|small colour oracle', extrema),
  'W8-unknown-copy': ('W8-unknown propagation', raw_unknown),
- 'W8-parent-copy': ('W8-conditional propagation|W8-added-child propagation|W8 diamond', copy_inherited),
+ 'W8-parent-copy': ('W8-conditional propagation|W8-added-child propagation|W8 diamond', copy_inherited_set),
  'W8-loop': ('W8 loop retains', patch(('        f.looped = true', '        f.looped = false'))),
  'W8-depth': ('W8 depth retains', patch(('f.looped || depth > MAX_STYLE_DEPTH', 'f.looped'))),
  'W9-spread': ('W9 append-only', patch(('    bucket.push(definition)\n    byId.set(key, bucket)', '    byId.set(key, [...bucket, definition])'))),
@@ -163,9 +186,66 @@ MUTATIONS = {
  'P1-raw-lower': ('P1/P2 metadata|P1 invalid default', patch(('pkg.typeRecord(entry.name)?.lower !== ROLE_TYPE', 'type?.toLowerCase() !== ROLE_TYPE'))),
  'P2-raw-category': ('P1/P2 metadata', patch(('  const n = name.toLowerCase()', "  type?.raw.toLowerCase()\n  for (const [, re] of CATEGORIES) re.test(type?.raw.toLowerCase() ?? '')\n  const n = name.toLowerCase()"))),
  'K-delimiter': ('K delimiter', delimiter),
+ 'F1-no-merge-memo': ('#558 F1', patch(('  const hit = domain.merged.get(a)?.get(b) ?? domain.merged.get(b)?.get(a)', '  const hit: ColourSet | undefined = undefined'))),
+ 'F1-upper-only': ('#558 F1', patch(('    (lower >= 0 && contrastRatio(rgb, domain.rgbs[lower]) < MIN_CONTRAST) ||', '    false ||'))),
+ 'F1-lower-only': ('#558 F1', patch(('    (upper >= 0 && contrastRatio(rgb, domain.rgbs[upper]) < MIN_CONTRAST)\n  )\n}\nfunction compileConditional', '    false\n  )\n}\nfunction compileConditional'))),
+ 'F1-extrema': ('#558 F1', patch(('  const lower = lastBelow(set, 0, domain.rgbs.length, lo)\n  const upper = firstFrom(set, 0, domain.rgbs.length, lo)', '  const lower = firstFrom(set, 0, domain.rgbs.length, 0)\n  const upper = lastBelow(set, 0, domain.rgbs.length, domain.rgbs.length)'))),
+ 'F2-W2-upper': ('#558 F2|W2 actual work|W2.*long ID', patch(('  const paragraph =\n    scope.pStyles === undefined', '  void scope.pStyles?.[0]?.toUpperCase()\n  void scope.tblStyles?.[0]?.toUpperCase()\n  const paragraph =\n    scope.pStyles === undefined'))),
+ 'F2-W2-charcode': ('#558 F2', patch(('  const paragraph =\n    scope.pStyles === undefined', "  const shared = scope.tblStyles?.[0] ?? scope.pStyles?.[0] ?? ''\n  let h = 0\n  for (let i = 0; i < shared.length; i++) h += shared.charCodeAt(i)\n  if (h < 0) return undefined as never\n  const paragraph =\n    scope.pStyles === undefined"))),
+ 'F2-W3-upper': ('#558 F2|W3 actual work|W3 exact long', patch(('function wordFg(c: WordColor | undefined, ctx: Shared): Fg {\n', 'function wordFg(c: WordColor | undefined, ctx: Shared): Fg {\n  void c?.themeTint?.toUpperCase()\n'))),
+ 'F2-X2-upper': ('#558 F2|X2 actual work', patch(('  const format = xf.format\n', "  const format = xf.format\n  void (styles.numFmts.get(xf.numFmtId) ?? '').toUpperCase()\n"))),
+ 'F2-X2-charcode': ('#558 F2', patch(('  const format = xf.format\n', "  const format = xf.format\n  const raw = styles.numFmts.get(xf.numFmtId) ?? ''\n  let h = 0\n  for (let i = 0; i < raw.length; i++) h += raw.charCodeAt(i)\n  if (h < 0) return\n"))),
+ 'F2-P1-locale': ('#558 F2|P1 actual work', patch(('if (pkg.typeRecord(entry.name)?.lower !== ROLE_TYPE[role as keyof typeof ROLE_TYPE]) continue', 'if (pkg.typeOf(entry.name)?.toLocaleLowerCase() !== ROLE_TYPE[role as keyof typeof ROLE_TYPE]) continue'))),
+ 'F3-K-run-join': ('#558 classification', patch(('''  let trie: StyleTrie = tables.get(table) ?? { next: new Map() }
+  if (!tables.has(table)) tables.set(table, trie)
+  for (const id of rStyles) {
+    let next: StyleTrie | undefined = trie.next.get(id)
+    if (!next) {
+      next = { next: new Map() }
+      trie.next.set(id, next)
+    }
+    trie = next
+  }''', '''  const root: StyleTrie = tables.get(table) ?? { next: new Map() }
+  if (!tables.has(table)) tables.set(table, root)
+  const joined = rStyles.join(String.fromCharCode(0))
+  let trie: StyleTrie | undefined = root.next.get(joined)
+  if (!trie) {
+    trie = { next: new Map() }
+    root.next.set(joined, trie)
+  }'''))),
+ 'F4-nul-key': ('#558 classification', patch(('          [ofType, ph.idx],', '          [byTypeIdx as unknown as Map<string, PhEntry>, `${ph.type}\\0${ph.idx}`],'), ('  const exact = part.byTypeIdx.get(ph.type)?.get(ph.idx)', '  const exact = (part.byTypeIdx as unknown as Map<string, PhEntry>).get(`${ph.type}\\0${ph.idx}`)'))),
+ 'F5-prototype': ('#558 classification', patch(('  const rgb = Object.hasOwn(HIGHLIGHT, name) ? HIGHLIGHT[name] : undefined', '  const rgb = HIGHLIGHT[name]'), ('    let rgb = Object.hasOwn(FORMAT_COLOURS, key) ? FORMAT_COLOURS[key] : undefined', '    let rgb: string | undefined = FORMAT_COLOURS[key]'))),
+ 'F6-first-part': ('#558 classification|#558 F1', patch(('    set = mergeSets(set, part.set, 0, domain.rgbs.length, domain)', '    set ??= part.set'))),
+ 'F7-index-upper-only': ('#558 classification', patch(('    (lower !== undefined && contrastRatio(rgb, lower.rgb) < MIN_CONTRAST) ||\n', '    false ||\n'))),
+ 'F8-highlight-case': ('#558 classification', patch(("  const name = value.toLowerCase()\n  if (name === 'none')", "  const name = value\n  if (name === 'none')"))),
  'D1-size': ('D1 merged', previous.MUTATIONS['C1-size'][2]),
  'D1-baseline': ('D1 merged', previous.MUTATIONS['C1-baseline'][2]),
 }
 previous.MUTATIONS = {name: (NEW, pattern, mutate) for name, (pattern, mutate) in MUTATIONS.items()}
+
+
+def module_content_memo(source, field, result_type, key):
+    source += f'\nconst reviewModuleMemo = new Map<string, {result_type}>()\n'
+    return source.replace(f'ctx.{field}.get({key})', f'reviewModuleMemo.get(JSON.stringify({key}))').replace(f'ctx.{field}.set({key}, result)', f'reviewModuleMemo.set(JSON.stringify({key}), result)')
+
+
+# The review's remaining named semantic mutations, including the #492 pins
+# that the resolver-only file cannot replace. R1-R5/R13/R15/R16/R21/R22 are
+# the corresponding F2/F3/F8/F7/F6 rows above, verbatim from the review patch.
+previous.MUTATIONS.update({
+ 'R6-X4-module-content': (NEW, 'X4', lambda s: module_content_memo(s, 'sheetColours', '{rgb?: string}', 'c')),
+ 'R7-W3-module-content': (NEW, 'W3', lambda s: module_content_memo(s, 'wordColours', 'Fg', 'c')),
+ 'R8-rich-run-count': (previous.OLD, '#492', patch(('ctx.richSummaries.get(runs)', 'ctx.richSummaries.get(runs.length as never)'), ('ctx.richSummaries.set(runs, result)', 'ctx.richSummaries.set(runs.length as never, result)'))),
+ 'R9-group-first-ID': (NEW, 'W2|W10|classification', patch(('memo.get(selected)', 'memo.get(selected[0] as never)'), ('memo.set(selected, group)', 'memo.set(selected[0] as never, group)'))),
+ 'R10-Shd-fill-key': (NEW, 'W5', patch(('ctx.shadingColours.get(shd)', 'ctx.shadingColours.get(shd.fill as never)'), ('ctx.shadingColours.set(shd, result)', 'ctx.shadingColours.set(shd.fill as never, result)'))),
+ 'R11-W6-last-opaque': (NEW, 'W6', patch(("if (bg.kind === 'colours' && colours === undefined) colours = bg.colours", "if (bg.kind === 'colours') colours = bg.colours"))),
+ 'R12-P2-type-first': (NEW, 'P1/P2 metadata', patch(('Math.min(rank < 0 ? Infinity : rank, type?.categoryRank ?? Infinity)', 'type?.categoryRank ?? (rank < 0 ? Infinity : rank)'))),
+ 'R14-W1-size-gt-one': (previous.OLD, '#492', patch(('(p?.unknown.size ?? 0) > 0', '(p?.unknown.size ?? 0) > 1'), ('own.some((p) => p.unknown.size > 0)', 'own.some((p) => p.unknown.size > 1)'))),
+ 'R17-dxf-unknown-benign': (NEW, 'X3 own/empty', patch(('if (own.unknown) return true', 'if (own.unknown) return false'))),
+ 'R18-rich-first-size': (NEW, 'X1', patch(('minExplicitSize = Math.min(minExplicitSize ?? run.sz, run.sz)', 'minExplicitSize ??= run.sz'))),
+ 'R19-unresolved-rich-benign': (NEW, 'X1/X4 unresolved', patch(('if (rgb === undefined) anyUnresolvedColour = true', 'if (rgb === undefined) anyUnresolvedColour = false'))),
+ 'R20-format-plus-font': (previous.OLD, '#492', patch(('if (bgs.some((bg) => contrastFails(displayed, bg)))', 'if (fails(styles.fonts[xf.fontId]) || bgs.some((bg) => contrastFails(displayed, bg)))'))),
+ 'F1-reviewed-AVL': (NEW, '#558 F1', lambda s: subprocess.check_output(['git', 'show', '555adae6:packages/connectors/document/ooxml-disarm.server.ts'], cwd=previous.ROOT).decode()),
+})
 if __name__ == '__main__':
     sys.exit(previous.main())

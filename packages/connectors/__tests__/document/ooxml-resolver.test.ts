@@ -22,7 +22,10 @@ import {
   everything,
   MIME,
   NS,
+  P_ROOT_NS,
+  pptx as makePptx,
   RT,
+  shape,
   wStyles,
   xlsx as makeXlsx,
 } from './ooxml-fixtures'
@@ -172,6 +175,7 @@ async function measure<T>(fn: () => T | Promise<T>, exact?: string) {
     if (!v || typeof v !== 'object' || nodes.has(v)) return
     if ('conditionalShd' in v) index((v as { conditionalShd: unknown }).conditionalShd)
     if ('index' in v) index((v as { index: unknown }).index)
+    if ('set' in v) indexSet((v as { set: unknown }).set)
     if (!('light' in v) || !('rgb' in v)) return
     nodes.add(v)
     for (const name of ['rgb', 'light', 'left', 'right'] as const) {
@@ -179,6 +183,25 @@ async function measure<T>(fn: () => T | Promise<T>, exact?: string) {
       if (!descriptor || !('value' in descriptor)) continue
       const value: unknown = descriptor.value
       if (name === 'left' || name === 'right') index(value)
+      Object.defineProperty(v, name, {
+        configurable: descriptor.configurable,
+        enumerable: descriptor.enumerable,
+        get() {
+          counters.nodes++
+          return value
+        },
+      })
+    }
+  }
+  // A conditional colour set's segment-tree nodes: each child read is one node visit.
+  const indexSet = (v: unknown): void => {
+    if (!v || typeof v !== 'object' || nodes.has(v)) return
+    nodes.add(v)
+    for (const name of ['left', 'right'] as const) {
+      const descriptor = Object.getOwnPropertyDescriptor(v, name)
+      if (!descriptor || !('value' in descriptor)) continue
+      const value: unknown = descriptor.value
+      indexSet(value)
       Object.defineProperty(v, name, {
         configurable: descriptor.configurable,
         enumerable: descriptor.enumerable,
@@ -278,6 +301,26 @@ async function measure<T>(fn: () => T | Promise<T>, exact?: string) {
     if (String(this) === exact) counters.normalized++
     return lower.call(this)
   })
+  for (const method of [
+    'toUpperCase',
+    'toLocaleLowerCase',
+    'toLocaleUpperCase',
+    'normalize',
+    'trim',
+    'trimStart',
+    'trimEnd',
+    'split',
+    'match',
+    'matchAll',
+    'search',
+    'localeCompare',
+  ] as const) {
+    const original = String.prototype[method] as (...args: unknown[]) => unknown
+    patch(String.prototype, method, function (this: string, ...args: unknown[]) {
+      counters.bytes += this.length
+      return Reflect.apply(original, this, args)
+    })
+  }
   const join = Array.prototype.join
   patch(Array.prototype, 'join', function (this: unknown[], delimiter?: string) {
     const result = join.call(this, delimiter)
@@ -1721,3 +1764,236 @@ it.each(['font', 'fill', 'rich'] as const)(
     }
   },
 )
+
+/** #558 F1: a conditional summary shared by many consumers must not be re-unioned per
+ * consumer. Three layers reach the union: a combination (character x paragraph x table),
+ * a group (two pStyle IDs on one paragraph) and a style (two definitions of one ID,
+ * based on different parents). Each consumer is distinct, each operand is wide and shared. */
+function unions(layer: 'combination' | 'group' | 'style', n: number, unread = false) {
+  const hex = (v: number) => v.toString(16).padStart(6, '0').toUpperCase()
+  const wide = (id: string, base: number, type = 'paragraph') =>
+    style(
+      id,
+      '',
+      repeat(n, (j) => conditional(hex(base + j * 7))),
+      type,
+    )
+  const other = unread ? 'U' : 'T'
+  const derived = (i: number) =>
+    style(`S${i}`, '', `<w:basedOn w:val="B"/>${conditional(hex(0x800000 + i * 7))}`)
+  const p = (i: number, extra = '') =>
+    `<w:p><w:pPr><w:pStyle w:val="S${i}"/>${extra}</w:pPr>${run()}</w:p>`
+  if (layer === 'combination')
+    return word(
+      `<w:tbl><w:tblPr><w:tblStyle w:val="${other}"/></w:tblPr><w:tr><w:tc>${repeat(n, (i) => p(i))}</w:tc></w:tr></w:tbl>`,
+      wide('T', 0x100000, 'table') + wide('B', 0x400000) + repeat(n, derived),
+    )
+  if (layer === 'group')
+    return word(
+      repeat(n, (i) => p(i, `<w:pStyle w:val="${other}"/>`)),
+      wide('T', 0x100000) + wide('B', 0x400000) + repeat(n, derived),
+    )
+  return word(
+    repeat(n, (i) => p(i)),
+    wide('T', 0x100000) +
+      wide('B', 0x400000) +
+      repeat(n, (i) => derived(i) + style(`S${i}`, '', `<w:basedOn w:val="${other}"/>`)),
+  )
+}
+const minCpu = async (bytes: Uint8Array, mime: string) => {
+  await cpu(bytes, mime)
+  return Math.min(await cpu(bytes, mime), await cpu(bytes, mime), await cpu(bytes, mime))
+}
+describe('#558 F1 conditional unions across distinct consumers', () => {
+  it('the conditional query is exact on both sides, through the document', async () => {
+    // Nearest-below only, nearest-above only, a middle match, ties and no match.
+    const sets = [
+      ['000000', 'FFFFFF'],
+      ['000000', '808080', 'FFFFFF'],
+      ['DCE6F1', 'BFBFBF', '404040'],
+      ['FFFFFF'],
+    ]
+    const fgs = ['000000', '111111', '2A2A2A', '7F7F7F', '808080', 'A0A0A0', 'EEEEEE', 'FFFFFF']
+    for (const set of sets)
+      for (const fg of fgs) {
+        const bytes = word(
+          table(1, '<w:tblStyle w:val="P"/>', `<w:color w:val="${fg}"/>`),
+          style('P', '', set.map(conditional).join(''), 'table'),
+        )
+        const fails = set.some((bg) => contrastRatio(fg, bg) < 1.4)
+        expect((await ooxmlDisarm(bytes, MIME.docx)).counted).toEqual(
+          fails ? { 'colour-contrast': 1 } : {},
+        )
+      }
+  })
+  it.each(['combination', 'group', 'style'] as const)(
+    '%s: counted work and same-bytes CPU stay linear',
+    async (layer) => {
+      const active = unions(layer, 1024),
+        control = unions(layer, 1024, true)
+      expect(active.length).toBe(control.length)
+      const small = await measure(() => ooxmlDisarm(unions(layer, 512), MIME.docx))
+      const large = await measure(() => ooxmlDisarm(active, MIME.docx))
+      const unread = await measure(() => ooxmlDisarm(control, MIME.docx))
+      expect(small.result.counted).toEqual({ 'colour-contrast': 512 })
+      expect(large.result.counted).toEqual({ 'colour-contrast': 1024 })
+      // The unread control still resolves B's wide set for every S_i: only the union differs.
+      expect(unread.result.counted).toEqual({ 'colour-contrast': 1024 })
+      expect(large.work / small.work).toBeLessThan(2.85)
+      expect(large.work / unread.work).toBeLessThan(1.5)
+      expect(await minCpu(active, MIME.docx)).toBeLessThan(3 * (await minCpu(control, MIME.docx)))
+    },
+    120_000,
+  )
+})
+
+/** #558 F2: the work counters cannot see every per-consumer re-read (an index loop over
+ * a shared string's characters is invisible to any counter), so the same-bytes CPU control
+ * is ASSERTED at a size where N x L dominates parsing: #522's form, ratio < 3. */
+describe('#558 F2 asserted same-bytes CPU controls', () => {
+  it.each(['W2', 'W3', 'W4', 'W5', 'X2', 'X4', 'P1', 'P2'] as const)(
+    '%s at N = 4096 (P2: 1024 parts, under the 2000-entry archive limit)',
+    async (entry) => {
+      const n = entry === 'P2' ? 1024 : 4096
+      const active = fixture(entry, n),
+        control = fixture(entry, n, true)
+      expect(active.bytes.length).toBe(control.bytes.length)
+      expect(await minCpu(active.bytes, active.mime)).toBeLessThan(
+        3 * (await minCpu(control.bytes, control.mime)),
+      )
+    },
+    120_000,
+  )
+})
+
+/** #558 F3-F7: classification pins the review found missing (each names its mutation). */
+describe('#558 classification discriminators', () => {
+  // F3 (ruling K): the old key also joined a run's OWN IDs with U+0000, which the XML
+  // reader accepts raw in an attribute value. Mutation: R5 (trie replaced by a join).
+  it.each([false, true])(
+    'K a run sequence cannot alias one ID holding U+0000, reverse=%s',
+    async (reverse) => {
+      const nul = 'A' + String.fromCharCode(0) + 'B'
+      const white = `<w:r><w:rPr><w:rStyle w:val="${nul}"/></w:rPr><w:t>VISIBLE</w:t></w:r>`
+      const black =
+        '<w:r><w:rPr><w:rStyle w:val="A"/><w:rStyle w:val="B"/></w:rPr><w:t>VISIBLE</w:t></w:r>'
+      const styles =
+        style(nul, '<w:color w:val="FFFFFF"/>', '', 'character') +
+        style('A', '<w:color w:val="000000"/>', '', 'character') +
+        style('B', '<w:color w:val="000000"/>', '', 'character')
+      const body = `<w:p>${reverse ? white + black : black + white}</w:p>`
+      await pair(word(body, styles), word(body, styles.replace('FFFFFF', '000000')), MIME.docx, {
+        'colour-contrast': 1,
+      })
+    },
+  )
+  // F4 (ruling K, PowerPoint): a placeholder's (type, idx) is a structured key.
+  // Mutation: restore the `${ph.type}\0${ph.idx}` key at both sites.
+  it.each([String.fromCharCode(0), '_'])(
+    'pptx placeholder (type, idx) never aliases across %j',
+    async (sep) => {
+      const solidFill = (rgb: string) => `<a:solidFill><a:srgbClr val="${rgb}"/></a:solidFill>`
+      const ph = (rgb: string, idx: string, id: number) =>
+        `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="x"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="${idx}"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr><a:defRPr>${solidFill(rgb)}</a:defRPr></a:lvl1pPr></a:lstStyle><a:p/></p:txBody></p:sp>`
+      const deck = (white: string) =>
+        store(
+          makePptx({
+            slides: [{ shapes: shape('VISIBLE', { ph: `body${sep}q`, idx: '1' }) }],
+            style: {
+              layouts: [
+                `<p:sldLayout ${P_ROOT_NS}><p:cSld><p:spTree>${ph('000000', `q${sep}1`, 2) + ph(white, '1', 3)}</p:spTree></p:cSld></p:sldLayout>`,
+              ],
+            },
+          }),
+        )
+      // The slide placeholder matches no (type, idx); by idx it inherits the white level.
+      expect((await ooxmlDisarm(deck('FFFFFF'), MIME.pptx)).counted).toEqual({
+        'colour-contrast': 1,
+      })
+      expect((await ooxmlDisarm(deck('000000'), MIME.pptx)).counted).toEqual({})
+    },
+  )
+  // F5: sender-named palette lookups read own keys only. Before, `constructor` resolved
+  // to a function and threw a TypeError; #558 made the format one throw even unused.
+  it.each(['constructor', '__proto__'])(
+    'a %s name is unrecognised, never a prototype member',
+    async (name) => {
+      const other = 'x'.repeat(name.length)
+      const book = (n: string, used: boolean) =>
+        sheet(cells(1, used ? 1 : 0), sheetStyle(`[${n}]0`, font('FFFFFFFF')))
+      const counted = (bytes: Uint8Array, mime: string) =>
+        ooxmlDisarm(bytes, mime).then((out) => out.counted)
+      for (const used of [false, true])
+        await expect(counted(book(name, used), MIME.xlsx)).resolves.toEqual(
+          await counted(book(other, used), MIME.xlsx),
+        )
+      const doc = (n: string) => word(paragraph(1, 'Q', `<w:highlight w:val="${n}"/>`))
+      await expect(counted(doc(name), MIME.docx)).resolves.toEqual({ 'unknown-property': 1 })
+      await expect(counted(doc(other), MIME.docx)).resolves.toEqual({ 'unknown-property': 1 })
+    },
+  )
+  // F6: every part's and every ancestor's conditional colours are queried, not the first.
+  // Mutations: R16 (`index ??= part.index`), and its segment-tree form `set ??= part.set`.
+  it.each(['combination', 'ancestor'] as const)(
+    'conditional colours of a later %s part are still queried',
+    async (where) => {
+      const styles =
+        where === 'combination'
+          ? style('C', '', conditional('808080'), 'character') +
+            style('T', '', conditional('FFFFFF'), 'table')
+          : style('B', '', conditional('FFFFFF'), 'table') +
+            style('T', '', `<w:basedOn w:val="B"/>${conditional('808080')}`, 'table')
+      const own = `${where === 'combination' ? '<w:rStyle w:val="C"/>' : ''}<w:color w:val="FFFFFF"/>`
+      const body = table(1, '<w:tblStyle w:val="T"/>', own)
+      // White text: only the LATER part's white hides it; the first part's grey does not.
+      // The control's dark grey text is visible against both.
+      await pair(word(body, styles), word(body.replace('FFFFFF', '404040'), styles), MIME.docx, {
+        'colour-contrast': 1,
+      })
+    },
+  )
+  // F7: the exact index is tested on BOTH sides of the query, through each Excel consumer.
+  // Mutation: R15 (`contrastFails` drops its nearest-below check).
+  it.each(['format', 'rich'] as const)(
+    'X %s colours: one-sided neighbours, brute-force oracle',
+    async (via) => {
+      const sets = [
+        ['000000', 'FFFFFF'],
+        ['000000', '808080', 'FFFFFF'],
+        ['404040', 'BFBFBF', 'DCE6F1'],
+      ]
+      const bgs = ['111111', '2A2A2A', '7F7F7F', 'A0A0A0', 'EEEEEE']
+      for (const set of sets)
+        for (const bg of bgs) {
+          const palette = `<colors><indexedColors>${set.map((c) => `<rgbColor rgb="FF${c}"/>`).join('')}</indexedColors></colors>`
+          const fontRgb =
+            contrastRatio(bg, '000000') > contrastRatio(bg, 'FFFFFF') ? '000000' : 'FFFFFF'
+          const format =
+            via === 'format' ? set.map((_, i) => `[Color ${i + 1}]`).join('') + '0' : ''
+          const si =
+            via === 'rich'
+              ? `<si><t>VISIBLE</t></si><si>${set.map((c) => `<r><rPr><color rgb="FF${c}"/></rPr><t>VISIBLE</t></r>`).join('')}</si>`
+              : ''
+          const bytes = sheet(
+            via === 'rich' ? cells(1, 1, 1) : cells(1),
+            sheetStyle(format, font(`FF${fontRgb}`), fill(bg), xf(0, 0) + xf(0, 0, 164), palette),
+            si,
+          )
+          const fails = set.some((c) => contrastRatio(c, bg) < 1.4)
+          expect((await ooxmlDisarm(bytes, MIME.xlsx)).counted).toEqual(
+            fails ? { 'colour-contrast': 1 } : {},
+          )
+        }
+    },
+  )
+  // F8: valid highlight names are case-insensitive. Mutation: R13 (no lower-casing).
+  it.each(['Yellow', 'NONE', 'WHITE'])('highlight %s keeps its named meaning', async (name) => {
+    // Black on yellow is visible; white on none (the page) and on white is not.
+    const text = name === 'Yellow' ? '000000' : 'FFFFFF'
+    const body = paragraph(1, 'P', `<w:highlight w:val="${name}"/>`)
+    const styles = style('P', `<w:color w:val="${text}"/>`)
+    expect((await ooxmlDisarm(word(body, styles), MIME.docx)).counted).toEqual(
+      name === 'Yellow' ? {} : { 'colour-contrast': 1 },
+    )
+  })
+})

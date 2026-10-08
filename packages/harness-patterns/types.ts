@@ -1621,6 +1621,11 @@ export type HitlAnswers = Readonly<Record<string, HitlAnswer>>
  *  joint pass reads the product's mass from the same top-k window. */
 export const MAX_DECISION_LABELS = 20
 
+/** TypeSafe's score cap, applied on every transport: https://docs.typesafe.ai/primitives/score */
+export const MAX_SCORE_LEVELS = 10
+
+export type DecisionType = 'choice' | 'score' | 'noul'
+
 /** One label of a typed decision. `description` is the ONLY text the model
  *  sees for this label — the id is an identifier, not prose. */
 export interface DecisionLabel<L extends string = string> {
@@ -1633,10 +1638,29 @@ export interface DecisionLabel<L extends string = string> {
  *  the same everywhere. `labels` carries 2..{@link MAX_DECISION_LABELS} unique
  *  ids; array order is display order (and the scorer's tie-break order). */
 export interface DecisionSpec<L extends string = string> {
+  readonly type?: 'choice'
   readonly key: string
   readonly question: string
   readonly labels: readonly DecisionLabel<L>[]
 }
+
+/** One ordered dimension, levels low → high; ids are local verdict names. */
+export interface ScoreSpec<L extends string = string> {
+  readonly type: 'score'
+  readonly key: string
+  readonly question: string
+  readonly levels: readonly DecisionLabel<L>[]
+}
+
+/** The probability that one statement is true. */
+export interface NoulSpec {
+  readonly type: 'noul'
+  readonly key: string
+  readonly question: string
+  readonly criteria?: { readonly true: string; readonly false: string }
+}
+
+export type AnyDecisionSpec = DecisionSpec | ScoreSpec | NoulSpec
 
 /** The owner's "ONE call, SEVERAL typed fields" (D6). The PROVIDER decides how
  *  the set is served: Jev answers every field as its own typed question in ONE
@@ -1672,6 +1696,7 @@ export type AbstainReason =
   | 'low-coverage'
   | 'error'
   | 'no-state'
+  | 'unsupported-type'
   /** (F2) The serving method is not the method the static thresholds were
    *  fitted on (`policy.thresholdMethod`) and the applied calibration entry
    *  carries no cut of its own — a threshold tuned on one distribution means
@@ -1683,6 +1708,7 @@ export type AbstainReason =
  *  otherwise. `top` is the argmax, `null` only when there is no distribution
  *  at all (an error or an empty state). */
 export interface Decision<L extends string = string> {
+  readonly type?: undefined
   readonly key: string
   /** ACT ON THIS: `top` when the policy passed, else `policy.fallback`. */
   readonly label: L
@@ -1702,6 +1728,40 @@ export interface Decision<L extends string = string> {
   /** Set by the policy layer after the `decision_made` event is committed. */
   readonly eventId?: string
 }
+
+/** Backward-compatible name for the existing choice verdict. Never writes a type. */
+export type ChoiceDecision<L extends string = string> = Decision<L>
+
+export interface ScoreDecision<L extends string = string> extends Omit<
+  Decision<L>,
+  'type' | 'label' | 'margin'
+> {
+  readonly type: 'score'
+  readonly level: L
+  /** Verdict index (fallback index on abstain), NOT the rounded mean. */
+  readonly value: number
+  /** Probability-weighted level index; null only without a usable distribution. */
+  readonly expected: number | null
+}
+
+export interface NoulDecision extends Omit<
+  Decision<'true' | 'false'>,
+  'type' | 'label' | 'margin' | 'top'
+> {
+  readonly type: 'noul'
+  readonly holds: boolean
+  readonly pTrue: number | null
+}
+
+export type AnyDecision = ChoiceDecision | ScoreDecision | NoulDecision
+export type DecisionFor<S> =
+  S extends ScoreSpec<infer L>
+    ? ScoreDecision<L>
+    : S extends NoulSpec
+      ? NoulDecision
+      : S extends DecisionSpec<infer L>
+        ? ChoiceDecision<L>
+        : never
 
 /** The consumer's failure policy. `fallback` is REQUIRED (D8): the seam never
  *  throws, so a failed or abstained decision must always have a verdict to
@@ -1724,6 +1784,24 @@ export interface DecisionPolicy<L extends string = string> {
   readonly minCoverage?: number
 }
 
+/** Concentration cut on an ordered rubric; a margin has no ordinal meaning. */
+export type ScorePolicy<L extends string = string> = Omit<DecisionPolicy<L>, 'minMargin'> & {
+  readonly minMargin?: never
+}
+/** Symmetric abstain band: |2·P(true) − 1| < minConfidence. */
+export interface NoulPolicy extends Omit<DecisionPolicy, 'fallback' | 'minMargin'> {
+  readonly minMargin?: never
+  readonly fallback: boolean
+}
+export type PolicyFor<S> =
+  S extends ScoreSpec<infer L>
+    ? ScorePolicy<L>
+    : S extends NoulSpec
+      ? NoulPolicy
+      : S extends DecisionSpec<infer L>
+        ? DecisionPolicy<L>
+        : never
+
 /** Host-fed calibration for one (client, spec.key) pair. The temperature and
  *  bias are applied in log space by the logprob transport. Jev accepts fitted
  *  cuts only and refuses temperature or bias, including identity values (G7).
@@ -1745,7 +1823,7 @@ export interface DecisionCalibrationEntry {
  *  `llmCall.variables` (the prompt drill-down), and nowhere else: no event
  *  carries it. */
 export interface DecideInput<L extends string = string> {
-  readonly spec: DecisionSpec<L>
+  readonly spec: DecisionSpec<L> | ScoreSpec<L> | NoulSpec
   readonly state: string
 }
 
@@ -1769,6 +1847,8 @@ export type DecideFn = {
   <L extends string>(input: DecideInput<L>): Promise<DecideResult<L>>
   limits?: () => ModelLimits
   serving?: DecideServing
+  /** Absent means choice-only: a legacy transport must never serve a new type. */
+  readonly supportedTypes?: readonly DecisionType[]
 }
 
 /** What a transport knows about the client it WILL serve a decision from,
@@ -1809,6 +1889,11 @@ export type DecideAllFn = {
  *  one place, the transport's `llmCall.variables` (the prompt drill-down).
  *  Pinned by `decision-state-sentinel`. */
 export interface DecisionMadeEventData {
+  /** Absent means choice, including persisted events from before score/noul. */
+  type?: 'score' | 'noul'
+  expected?: number | null
+  value?: number
+  pTrue?: number | null
   key: string
   question: string
   labels: Array<{ id: string; description: string }>

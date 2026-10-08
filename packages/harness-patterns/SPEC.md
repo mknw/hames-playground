@@ -1923,6 +1923,72 @@ The pure policy math, unit-pinned:
   (`null` only with no distribution at all); `margin = p₁ − p₂`,
   `confidence = (K·p_max − 1)/(K − 1)`.
 
+#### Score and noul core contracts (#418 addendum S1)
+
+`DecisionType = 'choice' | 'score' | 'noul'`. A `DecisionSpec<L>` may omit
+`type` or declare `'choice'`; existing specs, verdicts and choice event bytes
+stay unchanged. `ScoreSpec<L>` declares `type: 'score'` and ordered `levels`
+instead of labels; `NoulSpec` declares `type: 'noul'` and optional
+`criteria: { true: string; false: string }`. `AnyDecisionSpec` is their union.
+
+`defineChoice`, `defineScore` and `defineNoul` return declarations, making no
+call. Const type parameters infer choice/score ids from literals. Choice and
+score construction checks the 2-option minimum, unique ids and respective caps:
+`MAX_DECISION_LABELS = 20`, `MAX_SCORE_LEVELS = 10`. The score cap and level
+indices `0..n−1` follow [TypeSafe's score documentation](https://docs.typesafe.ai/primitives/score).
+Naming and meaning follow [coding-agents](https://docs.typesafe.ai/introduction/coding-agents)
+and the [published skill](https://raw.githubusercontent.com/typesafe-ai/skills/main/skills/typesafe-ai/SKILL.md),
+which is documentation only.
+
+| Spec   | Verdict                        | Raw readout                        | Confidence                                 |
+| ------ | ------------------------------ | ---------------------------------- | ------------------------------------------ |
+| choice | `label`                        | `top` (argmax)                     | `(K·p_max − 1)/(K − 1)`                    |
+| score  | `level`, `value` (level index) | `top` (mode), `expected = Σ i·p_i` | `max(0, 1 − Σ p_i·abs(i−mode) / MAD_unif)` |
+| noul   | `holds`                        | `pTrue`                            | `abs(2·pTrue − 1)`                         |
+
+`MAD_unif = (1/n) Σ abs(i − (n−1)/2)`. This ordinal confidence follows
+[TypeSafe's formula](https://docs.typesafe.ai/confidence). The mode breaks ties
+by level order. `(0,.5,.5)` has expected 1.5 and confidence .25;
+`(.5,0,.5)` has expected 1 and confidence 0. A score verdict uses the mode,
+never the rounded mean. Neither `ScoreDecision` nor `NoulDecision` has a margin.
+`ChoiceDecision<L>` aliases the existing `Decision<L>` and writes no `type`.
+
+`ScorePolicy<L>` has a required level-id fallback; `NoulPolicy` has a required
+boolean fallback. Both retain `minConfidence`, `thresholdMethod`,
+`requireCalibrated`, `minCoverage`, and exclude `minMargin`. A noul cut .6
+accepts true at P(true) ≥ .8, false at ≤ .2, and falls back between them.
+`scoreScoreDecision` / `scoreNoulDecision` share the existing categorical
+normalisation and fail-closed policy checks. They compute confidence in core,
+never from provider confidence. Fitted margin cuts do not apply to these types.
+On abstain the verdict takes the fallback while raw mean/mode/P(true) survive;
+raw fields are null only without a usable distribution.
+
+`AnyDecision` is the verdict union. `DecisionFor<S>` and `PolicyFor<S>` follow
+the spec type and inferred ids. `TypedDecisionData.decisions` holds
+`Record<string, AnyDecision>`; use `readDecision(data, spec)` to read a typed
+verdict by key. It returns undefined for an absent key or a mismatched type.
+A missing stored type means choice, including old conversation blobs.
+
+New `decision_made` fields are optional: `type?: 'score' | 'noul'`,
+`expected?: number | null`, `value?: number`, `pTrue?: number | null`.
+Score events reuse labels (ordered levels), probs, label (verdict level) and top
+(mode). Noul events use true/false labels/probs and stringified boolean fallback.
+Choice never writes a type. The event remains metadata only (SD-3): stateChars,
+never state. Serialization and previews render score as `key: soon (E=1.43)`
+and noul as `key: true (p=0.91)`; absent type retains the legacy choice rendering.
+
+S2 adds generic policy entry points and mixed sets. S3/S4 add transport support;
+this slice changes no BAML prompt, routing, calibration artifact or production
+choice spec. `decisionRouter` remains choice-only.
+
+S1 widens `DecideInput.spec` to accept all three specs and adds optional
+`DecideFn.supportedTypes`. An absent declaration means choice-only.
+`preCallAbstain({ spec, supportedTypes, state, policy, method })` returns
+`no-state` first, then `unsupported-type`, then the existing calibration refusal.
+An unsupported type must not call the transport; pass `unsupportedType: true` to
+its pure scorer to record the fallback with null raw readouts. Existing adapters
+refuse score/noul directly before making any request and declare no new support.
+
 #### The awaited wrapper
 
 ```typescript
@@ -2026,7 +2092,7 @@ interface TypedDecisionConfig<L> extends PatternConfig {
   state?: (view: EventView, data) => string
 }
 interface TypedDecisionData {
-  decisions?: Record<string, Decision>
+  decisions?: Record<string, AnyDecision>
 }
 ```
 
@@ -2419,6 +2485,7 @@ the gate's kind also drops a candidate whose own kind must ask (`not-routine`).
 Per candidate, in ONE transaction that the host holds under the owner's advisory
 lock (`MemoryWriteStore.transaction` — it MUST roll back on a throw):
 
+0. Re-read `settings.enabled()` after acquiring the owner lock, inside EACH candidate's transaction and before its first write. False throws to roll that candidate back and reports `skipped: 'disabled'` (#552); the entry check alone cannot cover a switch-off during wake/extract/embed.
 1. `nearest` memory of the same owner, tier and embedding space.
 2. **Same kind and cosine ≥ `dupSimilarity` (0.92)** → reinforce. **Related
    (≥ `relatedSimilarity`, 0.75) preference or trait** → the `memory.merge`
@@ -2439,6 +2506,8 @@ which is why it has its own deadline. The thresholds are unmeasured placeholders
 for layer 4.
 
 ### Erasure semantics (owner decision (b), M2 and M3 together)
+
+**M7 precondition (#552, SD-10/SD-11):** both the "turn off" and "forget all" RPCs must **commit** the user's memory switch-off (`user_prefs.memory_enabled = false`) in its own transaction **before** calling `deleteAllMemoriesForUser`. The erase opens its own memory-pool transaction, and a candidate re-reads the switch on another connection, so a flip that is not yet committed is invisible to it. A flip inside a transaction that wraps the erase call reopens the race: a settle that takes the lock between the erase's commit and the flip's commit reads `true` and writes a memory that survives. Any rejection from the erase means "not erased" and is retryable: `55P03`, a memory-pool connect timeout (`MEMORY_POOL_MAX` is 2 and settles can hold both connections) or a `40P01`. The switch stays off and the RPC reports the failure, never success. Any later writer, such as M3 compaction, must re-read the switch and its inputs inside the owner-lock transaction, as settle does. Forget-all uses the memory pool and the same owner advisory transaction lock (`pg_advisory_xact_lock(hashtextextended('memories:' || $1, 0))`) and `lock_timeout` as candidate writes. A `55P03` must reach the RPC as a retryable failure, never success. In-flight commits before the erase are deleted; candidates acquiring the lock afterwards re-read the disabled switch and write nothing.
 
 Three rules, decided once for storing and for compaction:
 

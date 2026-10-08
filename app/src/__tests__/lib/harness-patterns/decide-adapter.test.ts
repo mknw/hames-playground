@@ -369,3 +369,26 @@ describe('jev-calibration-cuts-only (G7)', () => {
     expect(decisionCalibrationFor('LocalQwenSmallDecide', 'route')).toEqual(entry)
   })
 })
+
+// S1 guards the widened seam; S3/S4 will explicitly add type support.
+describe('S1 unsupported-type adapter backstop', () => {
+  it('all shipped raw transports remain choice-only and reject before any request', async () => {
+    const { createVerbalizedDecide } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { createJevTransport } = await import('@hames-ai/harness-baml/jev-decide.server')
+    const { defineScore, defineNoul } =
+      await import('@hames-ai/harness-patterns/patterns/typedDecision.server')
+    const score = defineScore({ key: 's', question: 'q', levels: SPEC.labels.slice(0, 2) })
+    const noul = defineNoul({ key: 'n', question: 'q' })
+    const rank = { ...SPEC, type: 'rank' } as never
+    for (const fn of [await adapter(), createVerbalizedDecide(), createJevTransport().decide]) {
+      expect(fn.supportedTypes).toBeUndefined()
+      for (const spec of [score, noul, rank]) {
+        await expect(fn({ spec, state: 'synthetic' })).rejects.toThrow('Unsupported decision type')
+        await expect(onPrivateTier(() => fn({ spec, state: 'synthetic' }))).rejects.toThrow(
+          'Unsupported decision type',
+        )
+      }
+    }
+    expect(hits).toHaveLength(0)
+  })
+})

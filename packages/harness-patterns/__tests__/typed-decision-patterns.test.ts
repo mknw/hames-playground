@@ -41,6 +41,7 @@ import {
   decisionRouter,
   evaluateDecision,
   typedDecision,
+  readDecision,
   type TypedDecisionData,
 } from '@hames-ai/harness-patterns/patterns/typedDecision.server'
 import { configurePattern, runChain } from '@hames-ai/harness-patterns/patterns/chain.server'
@@ -473,7 +474,7 @@ describe('decision-no-stale', () => {
       },
     )
     expect(ctx.data.decisions?.['other.key']).toEqual(other)
-    expect(ctx.data.decisions?.[SPEC.key]?.label).toBe('yes')
+    expect(readDecision(ctx.data, SPEC)?.label).toBe('yes')
   })
 
   it('a failed decision is recoverable by default: the chain keeps going', async () => {
@@ -1405,11 +1406,14 @@ describe('decision-seam-structural', () => {
   // compile-checked by `pnpm typecheck`: the positive line fails to compile if
   // the raw seam stops fitting, and the `@ts-expect-error` line is an error
   // itself if the policy-applying wrapper ever starts to fit.
-  const raw: DecideFn = async ({ spec }) => ({
-    probs: Object.fromEntries(spec.labels.map((l, i) => [l.id, i === 0 ? 0.97 : 0.03])) as never,
-    method: 'logprob',
-    calibrated: true,
-  })
+  const raw: DecideFn = async ({ spec }) => {
+    if (spec.type === 'score' || spec.type === 'noul') throw new Error('choice only')
+    return {
+      probs: Object.fromEntries(spec.labels.map((l, i) => [l.id, i === 0 ? 0.97 : 0.03])) as never,
+      method: 'logprob',
+      calibrated: true,
+    }
+  }
 
   it('classifierFromDecide accepts the raw seam, and requireCalibrated still abstains on an uncalibrated read', async () => {
     const good = classifierFromDecide(raw)

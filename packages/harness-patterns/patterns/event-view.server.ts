@@ -599,7 +599,12 @@ function formatEventData(event: ContextEvent): string {
       // Pinned by decision-state-sentinel.
       const data = event.data as DecisionMadeEventData
       const pMax = Math.max(0, ...Object.values(data.probs ?? {}))
-      const head = `${data.key}: ${data.label} (p=${pMax.toFixed(3)}, margin=${data.margin.toFixed(3)})`
+      const head =
+        data.type === 'score'
+          ? `${data.key}: ${data.label} (E=${data.expected?.toFixed(2) ?? 'unknown'})`
+          : data.type === 'noul'
+            ? `${data.key}: ${data.label} (p=${data.pTrue?.toFixed(2) ?? 'unknown'})`
+            : `${data.key}: ${data.label} (p=${pMax.toFixed(3)}, margin=${data.margin.toFixed(3)})`
       return data.abstained ? `${head} | abstained: ${data.reason ?? 'unknown'}` : head
     }
     case 'memory_recalled': {

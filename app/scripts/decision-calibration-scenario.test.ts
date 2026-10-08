@@ -18,6 +18,7 @@ vi.mock('@hames-ai/harness-baml/baml-adapters.server', () => ({
   createDecideAdapter:
     () =>
     async ({ spec, state: text }: DecideInput) => {
+      if (spec.type === 'score' || spec.type === 'noul') throw new Error('choice-only fixture')
       state.tiers.push(activeRunFrame().inference?.tier ?? '')
       const item = fixtures.items.find((i) => i.key === spec.key && i.state === text)!
       const wrong = spec.key === state.badKey && item.split === state.badSplit

@@ -109,6 +109,9 @@ export function parseDecisionsUrl(raw: string): URL | string {
     return 'it is not a valid URL'
   }
   if (url.username || url.password) return 'it carries credentials'
+  // A trailing dot names the same host to DNS and TLS but not to a string
+  // comparison: `openrouter.ai.` would otherwise skip the O1 preferences.
+  if (url.hostname.endsWith('.')) return 'its host ends in a dot'
   if (url.protocol === 'https:') return url
   const host = url.hostname
   const loopback =

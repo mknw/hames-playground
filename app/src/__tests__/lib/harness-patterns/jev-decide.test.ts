@@ -122,6 +122,9 @@ beforeEach(() => {
   smallRequests = 0
   respond = async () => Response.json(JEV_BODY)
   process.env.JEV_DECISIONS_API_KEY = 'or-test-key'
+  // O2 on EVERY path: the embedding provider's key is set in every test, so a
+  // fallback to it anywhere (success, error, retry) is a request carrying it.
+  process.env.OPENROUTER_API_KEY = 'embedding-key'
   delete process.env.JEV_DECISIONS_URL
   vi.stubGlobal(
     'fetch',
@@ -132,6 +135,8 @@ beforeEach(() => {
   )
 })
 afterEach(async () => {
+  delete process.env.OPENROUTER_API_KEY
+  for (const r of requests) expect(JSON.stringify(r.init.headers)).not.toContain('embedding-key')
   vi.unstubAllGlobals()
   resetLlmUsageObservers()
   const clients = await import('@hames-ai/harness-baml/clients.server')
@@ -157,6 +162,7 @@ describe('the wire shape — ONE request carries every field as a typed question
   it('sends a single POST to the Decisions API with a choice question per field', async () => {
     const { decideAll } = await transport()
     const r = await decideAll({ spec: SET, state: 'the state' })
+    expect(JSON.stringify(r)).not.toContain('or-test-key')
 
     expect(requests).toHaveLength(1)
     expect(requests[0].url).toBe('https://openrouter.ai/api/alpha/decisions')
@@ -247,6 +253,32 @@ describe('jev-privacy — OpenRouter provider preferences (O1), own key (O2), en
     expect(lastBody().provider).toEqual({ zdr: true, data_collection: 'deny' })
   })
 
+  it('O1: a subdomain of openrouter.ai gets the preferences too', async () => {
+    process.env.JEV_DECISIONS_URL = 'https://api.openrouter.ai/api/alpha/decisions'
+    const { decideAll } = await transport()
+    await decideAll({ spec: SET, state: 's' })
+    expect(lastBody().provider).toEqual({ zdr: true, data_collection: 'deny' })
+  })
+
+  it('O4: a refused URL never READS the key (reads counted on process.env)', async () => {
+    process.env.JEV_DECISIONS_URL = 'http://example.com/decisions'
+    const real = process.env
+    let keyReads = 0
+    process.env = new Proxy(real, {
+      get: (t, k) => (k === 'JEV_DECISIONS_API_KEY' && keyReads++, Reflect.get(t, k)),
+    })
+    try {
+      const { decideAll } = await transport()
+      await expect(decideAll({ spec: SET, state: 's' })).rejects.toThrow(
+        /Refusing JEV_DECISIONS_URL/,
+      )
+      expect(keyReads).toBe(0)
+      expect(requests).toHaveLength(0)
+    } finally {
+      process.env = real
+    }
+  })
+
   it('O1: no OpenRouter preferences go to a non-OpenRouter endpoint (a loopback fake)', async () => {
     process.env.JEV_DECISIONS_URL = 'http://127.0.0.1:9/api/alpha/decisions'
     const { decideAll } = await transport()
@@ -302,6 +334,8 @@ describe('jev-privacy — OpenRouter provider preferences (O1), own key (O2), en
     'https://evil.example@127.0.0.1/decisions',
     'ftp://127.0.0.1/decisions',
     'not a url',
+    'https://openrouter.ai./api/alpha/decisions',
+    'https://openrouter.ai%2e/api/alpha/decisions',
   ])('O4: %s is refused before the key is read and before any fetch', async (url) => {
     process.env.JEV_DECISIONS_URL = url
     delete process.env.JEV_DECISIONS_API_KEY // a key read first would surface as the key error
@@ -465,11 +499,15 @@ describe('jev-fallback — fail closed, never a downgrade to another provider', 
       const out = await evaluateDecision({
         decide,
         spec: SPEC,
-        state: 's',
+        // Not 's': the error message is redacted of the state, and 's' would
+        // rewrite the key itself and hide a leak.
+        state: 'the state',
         policy: { fallback: 'no' },
       })
       expect(out.decision).toMatchObject({ label: 'no', abstained: true, reason: 'error' })
       expect(out.error).toBeDefined()
+      // The bearer key never rides the error or the call record (both are persisted).
+      expect(JSON.stringify(out)).not.toContain('or-test-key')
       expect(requests.map((q) => q.url)).toEqual(['https://openrouter.ai/api/alpha/decisions'])
       // … and nothing rode the BAML runtime to the private tier's 4B either.
       expect(smallRequests).toBe(0)

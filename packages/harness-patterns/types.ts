@@ -266,7 +266,7 @@ export type EventType =
    *  `MemoryRecalledEventData`. */
   | 'memory_recalled'
   /** One memory the store step wrote or reinforced (#419 M2). METADATA ONLY —
-   *  ids, kind, tier and a content HASH, never the content. See
+   *  ids, kind, tier and action, never the content nor a hash of it (#541). See
    *  `MemoryWrittenEventData`. */
   | 'memory_written'
 

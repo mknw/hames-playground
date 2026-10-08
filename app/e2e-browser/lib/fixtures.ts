@@ -11,7 +11,8 @@
  * `finally`: a downed endpoint is not scoped to a test, and leaving it down
  * would take the rest of the run with it.
  */
-import { test as base, expect } from '@playwright/test'
+import { expect } from '@playwright/test'
+import { test as base } from './egress-fixture'
 import { FakeBackend, readHandles } from './control'
 import { wipeUserRows } from './db'
 

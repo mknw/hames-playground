@@ -10,6 +10,7 @@
  * or any other composition without special-casing.
  */
 
+import type { RouterMemory } from './withMemory.server'
 import { assertServerOnImport } from '../assert.server'
 import { LLMCallError } from '../types'
 import type {
@@ -55,6 +56,8 @@ export interface RouterData {
   /** Written by `memoryRecall` (#419), cleared by it every turn. The router
    *  hands it to its `route` function when non-empty. */
   memoryContext?: string
+  /** The developer choice written each turn by withMemory. */
+  routerMemory?: RouterMemory
 }
 
 /**
@@ -161,11 +164,14 @@ export function router<T extends RouterData>(
       // `memoryContext` is `memoryRecall`'s block for THIS turn (it clears it on
       // every exit, so a stale one cannot be here). The router is one of the two
       // patterns that author a user-visible answer (the conversational route
-      // below), which is why it gets the block at all (#419 D13). It is passed
+      // below). withMemory's replies-only choice withholds it from every router
+      // (#535); compactExecution still receives it. It is passed
       // only when non-empty: no recalled memory means no fourth argument, so a
       // `route` override that predates `RouteExtra` sees the call it always saw.
       const memoryContext =
-        typeof scope.data.memoryContext === 'string' ? scope.data.memoryContext.trim() : ''
+        scope.data.routerMemory !== 'replies-only' && typeof scope.data.memoryContext === 'string'
+          ? scope.data.memoryContext.trim()
+          : ''
       const result = await routeFn(
         userContent,
         history,

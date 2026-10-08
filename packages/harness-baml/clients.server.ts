@@ -721,8 +721,37 @@ export type DecisionCalibrationTable = Readonly<
 
 let decisionCalibration: DecisionCalibrationTable = {}
 
+/** Snapshot the fitted table; Jev clients refuse temperature or bias, including identity values. */
 export function configureDecisionCalibration(table: DecisionCalibrationTable): void {
-  decisionCalibration = table
+  const snapshot = Object.freeze(
+    Object.fromEntries(
+      Object.entries(table).map(([client, entries]) => [
+        client,
+        Object.freeze(
+          Object.fromEntries(
+            Object.entries(entries).map(([key, entry]) => {
+              if (
+                JEV_CLIENTS.has(client) &&
+                (entry.temperature !== undefined || entry.bias !== undefined)
+              ) {
+                throw new Error(
+                  `Decision calibration '${client}/${key}': Jev accepts fitted cuts only; temperature and bias are unsupported.`,
+                )
+              }
+              return [
+                key,
+                Object.freeze({
+                  ...entry,
+                  ...(entry.bias !== undefined && { bias: Object.freeze({ ...entry.bias }) }),
+                }),
+              ]
+            }),
+          ),
+        ),
+      ]),
+    ),
+  )
+  decisionCalibration = snapshot
 }
 
 /** The entry fitted for `(client, key)`, or undefined. */

@@ -1725,7 +1725,9 @@ export interface DecisionPolicy<L extends string = string> {
 }
 
 /** Host-fed calibration for one (client, spec.key) pair. The temperature and
- *  bias are applied in log space by the transport; the cuts, when present,
+ *  bias are applied in log space by the logprob transport. Jev accepts fitted
+ *  cuts only and refuses temperature or bias, including identity values (G7).
+ *  The cuts, when present,
  *  are the entry's own and WIN over the policy's static thresholds (F2) —
  *  they are fitted on the very (client, question) pair that serves the call,
  *  so they are on-distribution by construction. */
@@ -2019,11 +2021,23 @@ export interface MemoryInsertRow {
   readonly tier: string
   readonly content: string
   readonly evidence: string
+  /** The `user_message` event `evidence` quotes (#419 erasure semantics (b)).
+   *  The host stores it BESIDE the text it describes, on the memory row, and
+   *  replaces both together on `update`. Required, so every writer (M3's
+   *  compaction insert included) is a compile error without it. */
+  readonly evidenceEventId: string
   readonly embedding: readonly number[]
   readonly embedSpace: string
 }
 
-/** The provenance row: which conversation event a memory was built from. */
+/** The provenance row: which conversation event a memory was built from.
+ *
+ *  Erasure semantics (#419 owner decision (b)): a source row is NEVER removed
+ *  because a memory's text moved on. An `update` (and M3's compaction) keeps
+ *  every row that ever supported the memory, including those that no longer
+ *  support its current text, so deleting a conversation removes every memory
+ *  that EVER drew on it. A host's only legitimate deletions are the
+ *  conversation delete, the memory's own forget, and the cascade between them. */
 export interface MemorySourceRow {
   readonly memoryId: string
   readonly eventId: string
@@ -2050,12 +2064,15 @@ export interface MemoryWriteTx {
   /** Count this sighting: `evidence_count + 1`, `last_seen_at = now`. */
   reinforce(id: string): Promise<void>
   /** Replace a memory's text and vector with a newer statement of the same
-   *  fact, and count the sighting. */
+   *  fact, and count the sighting. It replaces `evidence` and
+   *  `evidenceEventId` together and DELETES NO `memory_sources` row: the rows
+   *  that supported the old text stay (decision (b), see `MemorySourceRow`). */
   update(
     id: string,
     next: {
       readonly content: string
       readonly evidence: string
+      readonly evidenceEventId: string
       readonly embedding: readonly number[]
       readonly embedSpace: string
     },

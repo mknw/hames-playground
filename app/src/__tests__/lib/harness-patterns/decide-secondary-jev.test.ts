@@ -61,7 +61,7 @@ const verbalizedStub = vi.fn(async () => ({
 beforeEach(() => {
   jevRequests = 0
   verbalizedStub.mockClear()
-  process.env.OPENROUTER_API_KEY = 'or-test-key'
+  process.env.JEV_DECISIONS_API_KEY = 'or-test-key'
   vi.stubGlobal(
     'fetch',
     vi.fn(async () => {

@@ -3378,8 +3378,11 @@ describe('#520: the inheritance routes the reviewer’s pins left open', () => {
     expect(await countedOf(deck({ slide: own('<a:normAutofit/>'), layout }))).toEqual({})
     expect(await countedOf(deck({ slide: bodyRun(), layout }))).toEqual({ 'too-small': 1 })
   })
-  it('Q1d a layout placeholder’s p:style fillRef fills the slide placeholder', async () => {
-    const theme = FMT_THEME(`${solid('FFFFFF')}${solid('000000')}`)
+  it('Q1d a layout placeholder’s p:style fillRef is unknown: LibreOffice does not inherit it', async () => {
+    // shape.cxx `applyShapeReference` takes the referenced placeholder's fill
+    // with no theme, so its fillRef never reaches the slide; PowerPoint is
+    // unmeasured. Black or white, the theme fill is not a provable background.
+    const theme = FMT_THEME(`${solid('000000')}${solid('FFFFFF')}`)
     const at = (idx: number) =>
       pptx({
         slides: [{ shapes: bodyRun(solid('FFFFFF')), bg: BLACK_BG }],
@@ -3398,9 +3401,65 @@ describe('#520: the inheritance routes the reviewer’s pins left open', () => {
         presentationRels: [{ id: 'rIdTheme', type: RT.theme, target: 'theme/theme1.xml' }],
         parts: [{ name: 'ppt/theme/theme1.xml', type: CT.theme, body: theme }],
       })
-    expect(await countedOf(at(1))).toEqual({ 'colour-contrast': 1 })
-    expect(await countedOf(at(2))).toEqual({})
+    expect(await countedOf(at(1))).toEqual({ 'unknown-property': 1 })
+    expect(await countedOf(at(2))).toEqual({ 'unknown-property': 1 })
+    // idx 0 applies no style: white on the black slide background, visible.
+    expect(await countedOf(at(0))).toEqual({})
   })
+  it('Q1e a slide placeholder’s own fillRef idx 0 is no fill: its layout placeholder’s fill shows', async () => {
+    const own0 = bodyRun(solid('FFFFFF')).replace(
+      '<p:spPr/>',
+      '<p:spPr/><p:style><a:lnRef idx="0"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="0"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"/></p:style>',
+    )
+    const at = (hex: string) =>
+      deck({ slide: own0, slideBg: BLACK_BG, layout: layPh(' type="body" idx="1"', solid(hex)) })
+    expect(await countedOf(at('FFFFFF'))).toEqual({ 'colour-contrast': 1 })
+    expect(await countedOf(at('000000'))).toEqual({})
+  })
+  it('R9 a typed placeholder whose idx misses, over two layout placeholders of its type, is unknown', async () => {
+    // LibreOffice's findPlaceholder walks the tree in reverse and takes the
+    // LAST placeholder of the type; this index keeps the first.
+    const two = lay(' type="body" idx="1"', GREY_24) + lay(' type="body" idx="3"', WHITE_1PT)
+    expect(await counted(doc(sp(' type="body" idx="7"', 'H'), two))).toEqual({
+      'unknown-property': 1,
+    })
+    expect(
+      await counted(doc(sp(' type="body" idx="7"', 'V'), lay(' type="body" idx="1"', GREY_24))),
+    ).toEqual({})
+  })
+  it('an inherited fill and autofit cost one step per run, however wide the layout placeholder', async () => {
+    // The #492 F2 guard's placeholders have an empty spPr and bodyPr, so it
+    // cannot see a per-run scan of either. Random attributes keep the zip
+    // ratio under its limit.
+    const n = 4000
+    let seed = 7
+    const rnd = (): string => ((seed = (seed * 1103515245 + 12345) >>> 0) >>> 8).toString(36)
+    const pad = (): string => Array.from({ length: n }, () => `<a:x v="${rnd()}"/>`).join('')
+    const runs = bodyRun().replace(
+      /<a:r>.*<\/a:r>/,
+      Array.from({ length: n }, (_, i) => `<a:r><a:rPr lang="en-US"/><a:t>r${i}</a:t></a:r>`).join(
+        '',
+      ),
+    )
+    const plain = (spPr: string, bodyPr: string): string =>
+      `<p:sp><p:nvSpPr><p:cNvPr id="3" name="J"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${spPr}</p:spPr>` +
+      `<p:txBody><a:bodyPr>${bodyPr}</a:bodyPr><a:p/></p:txBody></p:sp>`
+    const at = (wide: boolean): Uint8Array => {
+      const [spPr, bodyPr] = [pad(), pad()]
+      return deck({
+        slide: runs,
+        layout: wide
+          ? layPh(' type="body" idx="1"', spPr, bodyPr)
+          : layPh(' type="body" idx="1"') + plain(spPr, bodyPr),
+      })
+    }
+    const wide = at(true)
+    const narrow = at(false)
+    const ratio =
+      (await cpuMs(() => ooxmlDisarm(wide, MIME.pptx))) /
+      (await cpuMs(() => ooxmlDisarm(narrow, MIME.pptx)))
+    expect(ratio).toBeLessThan(3)
+  }, 120_000)
 })
 
 // ============================================================================

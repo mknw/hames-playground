@@ -1246,7 +1246,9 @@ function visit(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[] {
     if (fill.kind === 'absent') {
       const fillRef = childEl(childEl(el, NS.p, 'style'), NS.a, 'fillRef')
       const idx = int(attrOf(fillRef?.attributes ?? [], 'idx')) ?? 0
-      fill = fillRef ? refFill(ctx.fmtFillEls, idx, fillRef, s) : FILL_ABSENT
+      // idx 0 applies no fill style: the placeholder's inherited fill shows (LibreOffice
+      // assigns nothing for it, theme.cxx `lclGetStyleElement`), so it is no fill of its own.
+      fill = fillRef && idx > 0 ? refFill(ctx.fmtFillEls, idx, fillRef, s) : FILL_ABSENT
     }
     inner = {
       ...scope,
@@ -2338,8 +2340,8 @@ function fillEl(el: XmlElement, s: Scheme): DFill {
   return { kind: 'unknown' }
 }
 
-/** The fill a container's children name — `absent` when none does. */
-function drawingFill(container: XmlElement | undefined, s: Scheme): DFill {
+/** The fill element a container's children name, when one does. */
+function fillChild(container: XmlElement | undefined): XmlElement | undefined {
   for (const c of container ? elements(container) : []) {
     if (c.ns !== NS.a) continue
     if (
@@ -2350,10 +2352,16 @@ function drawingFill(container: XmlElement | undefined, s: Scheme): DFill {
       is(c, NS.a, 'blipFill') ||
       is(c, NS.a, 'grpFill')
     ) {
-      return fillEl(c, s)
+      return c
     }
   }
-  return FILL_ABSENT
+  return undefined
+}
+
+/** The fill a container's children name — `absent` when none does. */
+function drawingFill(container: XmlElement | undefined, s: Scheme): DFill {
+  const c = fillChild(container)
+  return c === undefined ? FILL_ABSENT : fillEl(c, s)
 }
 
 /** A `p:fillRef`/`p:bgRef` into one of the theme's fill schemes, with `phClr`. */
@@ -2418,12 +2426,18 @@ type Ph = { readonly type: string; readonly idx: string; readonly typed: boolean
 interface PhEntry {
   readonly type: string
   readonly levels: ReadonlyMap<number, XmlElement>
-  /** Its `p:spPr`, `p:style/a:fillRef` and `a:bodyPr`: a slide placeholder inherits them. */
-  readonly spPr?: XmlElement
+  /**
+   * What a slide placeholder inherits from it, found ONCE when the part is
+   * read: its `p:spPr` fill element, its `p:style/a:fillRef`, and its autofit
+   * scale. A per-run scan of a shared part's children is quadratic (#515).
+   */
+  readonly spFill?: XmlElement
   readonly fillRef?: XmlElement
-  readonly bodyPr?: XmlElement
+  readonly fontScale?: number
   /** Another placeholder in the part shares this entry's key. */
   dup: boolean
+  /** Another placeholder in the part shares this entry's TYPE (LibreOffice takes the last). */
+  typeDup: boolean
 }
 
 /** A slide's or notes slide's inheritance, resolved once per part. */
@@ -2518,10 +2532,11 @@ function readSlidesStylePart(root: XmlElement): SlidesStylePart {
         const entry: PhEntry = {
           type: ph.type,
           levels: lstLevels(lst),
-          spPr: childEl(el, NS.p, 'spPr'),
+          spFill: fillChild(childEl(el, NS.p, 'spPr')),
           fillRef: childEl(childEl(el, NS.p, 'style'), NS.a, 'fillRef'),
-          bodyPr: childEl(childEl(el, NS.p, 'txBody'), NS.a, 'bodyPr'),
+          fontScale: autofitScale(childEl(childEl(el, NS.p, 'txBody'), NS.a, 'bodyPr')),
           dup: false,
+          typeDup: false,
         }
         for (const [map, key] of [
           [byTypeIdx, `${ph.type}\0${ph.idx}`],
@@ -2531,7 +2546,9 @@ function readSlidesStylePart(root: XmlElement): SlidesStylePart {
           if (first) first.dup = true
           else map.set(key, entry)
         }
-        if (!byType.has(ph.type)) byType.set(ph.type, entry)
+        const firstOfType = byType.get(ph.type)
+        if (firstOfType) firstOfType.typeDup = true
+        else byType.set(ph.type, entry)
       }
     }
     for (const c of elements(el)) walk(c)
@@ -2884,8 +2901,8 @@ function layoutPh(
   const second = PH_SECOND[ph.type]
   const byType = part.byType.get(ph.type) ?? (second ? part.byType.get(second) : undefined)
   if (byIdx && byType && byIdx !== byType) return { entry: byType, ambiguous: true }
-  const entry = byIdx ?? byType
-  return { entry, ambiguous: entry === byIdx && (byIdx?.dup ?? false) }
+  if (byIdx) return { entry: byIdx, ambiguous: byIdx.dup }
+  return { entry: byType, ambiguous: byType?.typeDup ?? false }
 }
 
 /** A layout placeholder's master placeholder: its own type, else its family's. */
@@ -2946,10 +2963,13 @@ function countDrawingRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
   if (scope.shape?.ph && scope.shape.fill === undefined) {
     for (const entry of [layoutMatch.entry, masterEntry]) {
       if (!entry) continue
-      let f = drawingFill(entry.spPr, s)
+      let f = entry.spFill === undefined ? FILL_ABSENT : fillEl(entry.spFill, s)
+      // A referenced placeholder's THEME style fill: LibreOffice does not
+      // inherit it (shape.cxx `applyShapeReference` resolves the reference
+      // with no theme), PowerPoint is unmeasured — so it is unknown.
       if (f.kind === 'absent' && entry.fillRef) {
         const idx = int(attrOf(entry.fillRef.attributes, 'idx')) ?? 0
-        f = refFill(ctx.fmtFillEls, idx, entry.fillRef, s)
+        if (idx > 0) f = { kind: 'unknown' }
       }
       if (f.kind !== 'absent') {
         bgScope = { ...scope, shape: { ...scope.shape, fill: f } }
@@ -2960,10 +2980,7 @@ function countDrawingRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
   // Likewise its autofit: the body's own, else the layout's, else the master's.
   const fontScale = scope.shape?.autofit
     ? scope.shape.fontScale
-    : (placeholderFontScale(layoutMatch.entry) ??
-      placeholderFontScale(masterEntry) ??
-      scope.shape?.fontScale ??
-      1)
+    : (layoutMatch.entry?.fontScale ?? masterEntry?.fontScale ?? scope.shape?.fontScale ?? 1)
   const chain: readonly (XmlElement | undefined)[] = [
     childEl(run, NS.a, 'rPr'),
     scope.paraDefRPr,
@@ -3016,10 +3033,10 @@ function countDrawingRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
 /** A body's autofit children: any one of them is the body's own choice. */
 const AUTOFITS = ['normAutofit', 'noAutofit', 'spAutoFit'] as const
 
-/** The fontScale a placeholder's own `a:bodyPr` autofit declares, when it declares one. */
-function placeholderFontScale(entry: PhEntry | undefined): number | undefined {
-  if (!AUTOFITS.some((n) => childEl(entry?.bodyPr, NS.a, n) !== undefined)) return undefined
-  const auto = childEl(entry?.bodyPr, NS.a, 'normAutofit')
+/** The fontScale an `a:bodyPr`'s own autofit declares, when it declares one. */
+function autofitScale(bodyPr: XmlElement | undefined): number | undefined {
+  if (!AUTOFITS.some((n) => childEl(bodyPr, NS.a, n) !== undefined)) return undefined
+  const auto = childEl(bodyPr, NS.a, 'normAutofit')
   return pct(attrOf(auto?.attributes ?? [], 'fontScale')) ?? 1
 }
 

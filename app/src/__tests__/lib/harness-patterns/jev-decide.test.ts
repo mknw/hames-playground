@@ -1090,6 +1090,35 @@ describe('jev-supported-types same resolver', () => {
 })
 
 describe('jev mixed-set wire and support', () => {
+  it('set lock refuses an explicitly supported secondary on the private tier', async () => {
+    const { createDecideAllAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    let secondaryCalls = 0
+    const secondary: DecideFn = async () => {
+      secondaryCalls++
+      throw new Error('The locked secondary must never run')
+    }
+    Object.defineProperty(secondary, 'supportedTypes', {
+      value: ['choice', 'score', 'noul'],
+    })
+    const set = createDecideAllAdapter(secondary)
+    await withRunFrame(
+      {
+        inference: {
+          tier: 'verda',
+          clientOverride: (role) => (role === 'decide' ? { client: 'DecideAnthropic' } : undefined),
+        },
+      },
+      async () => {
+        expect(set.supportedTypes).toEqual(['choice'])
+        await expect(
+          set({ spec: { key: 'locked', fields: { score: SCORE } }, state: 'synthetic' }),
+        ).rejects.toThrow('Unsupported')
+      },
+    )
+    expect(secondaryCalls).toBe(0)
+    expect(requests).toHaveLength(0)
+  })
+
   it('serves legacy choice, score and noul together through the routed set resolver', async () => {
     const { createDecideAllAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')

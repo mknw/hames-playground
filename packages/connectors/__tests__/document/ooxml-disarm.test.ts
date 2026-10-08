@@ -4170,7 +4170,7 @@ describe('#524: shared text-property levels are evaluated once per part, not onc
           `<a:highlight><a:srgbClr val="000000">${transforms(n)}</a:srgbClr></a:highlight>`,
         ),
       }),
-      (n) => ({ 'colour-contrast': n }),
+      (n) => ({ 'unknown-property': n }),
       'timed',
     ],
     [
@@ -4179,7 +4179,7 @@ describe('#524: shared text-property levels are evaluated once per part, not onc
         layoutSpPr: `<a:solidFill><a:srgbClr val="000000">${transforms(n)}</a:srgbClr></a:solidFill>`,
         layoutLst: '',
       }),
-      (n) => ({ 'colour-contrast': n }),
+      (n) => ({ 'unknown-property': n }),
     ],
     [
       'a layout placeholder’s p:spPr solidFill, n children after the colour',
@@ -4212,7 +4212,7 @@ describe('#524: shared text-property levels are evaluated once per part, not onc
       (n) => ({
         layoutBg: `<p:bgPr><a:solidFill><a:srgbClr val="000000">${transforms(n)}</a:srgbClr></a:solidFill><a:effectLst/></p:bgPr>`,
       }),
-      (n) => ({ 'colour-contrast': n }),
+      (n) => ({ 'unknown-property': n }),
     ],
   ]
 

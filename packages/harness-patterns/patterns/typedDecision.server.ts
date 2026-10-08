@@ -24,9 +24,24 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import { DIRECT_RESPONSE_ROUTE, LLMCallError, MAX_DECISION_LABELS } from '../types'
+import {
+  DIRECT_RESPONSE_ROUTE,
+  LLMCallError,
+  MAX_DECISION_LABELS,
+  MAX_SCORE_LEVELS,
+} from '../types'
 import type {
   AbstainReason,
+  AnyDecision,
+  AnyDecisionSpec,
+  DecisionFor,
+  DecisionType,
+  ScoreSpec,
+  NoulSpec,
+  ScoreDecision,
+  NoulDecision,
+  ScorePolicy,
+  NoulPolicy,
   AssistantMessageEventData,
   ConfiguredPattern,
   ContextEvent,
@@ -60,6 +75,43 @@ import { trimToFit } from '../token-budget.server'
 import type { RouterData, Routes } from './router.server'
 
 assertServerOnImport()
+
+/** Declaration checks run where a developer writes the spec, never at inference. */
+function assertOptions(owner: string, labels: readonly DecisionLabel[], cap: number): void {
+  if (labels.length < 2 || labels.length > cap) {
+    throw new Error(`${owner}: expected 2..${cap} options, got ${labels.length}`)
+  }
+  if (new Set(labels.map((l) => l.id)).size !== labels.length) {
+    throw new Error(`${owner}: option ids must be unique`)
+  }
+}
+
+export function defineChoice<const L extends string>(spec: DecisionSpec<L>): DecisionSpec<L> {
+  assertOptions('defineChoice', spec.labels, MAX_DECISION_LABELS)
+  return spec
+}
+
+export function defineScore<const L extends string>(
+  spec: Omit<ScoreSpec<L>, 'type'>,
+): ScoreSpec<L> {
+  assertOptions('defineScore', spec.levels, MAX_SCORE_LEVELS)
+  return { ...spec, type: 'score' }
+}
+
+export function defineNoul(spec: Omit<NoulSpec, 'type'>): NoulSpec {
+  return { ...spec, type: 'noul' }
+}
+
+/** A declared spec fixes both the key and the type of a stored verdict.
+ *  Missing type is a choice, including decisions read from older blobs. */
+export function readDecision<S extends AnyDecisionSpec>(
+  data: TypedDecisionData,
+  spec: S,
+): DecisionFor<S> | undefined {
+  const d = data.decisions?.[spec.key]
+  if (!d || (d.type ?? 'choice') !== (spec.type ?? 'choice')) return undefined
+  return d as DecisionFor<S>
+}
 
 // ============================================================================
 // Readout math — the logprob transport (T3) composes these; they are here
@@ -233,11 +285,16 @@ function confidenceFromMax(pMax: number, k: number): number {
  * which consults this before calling.
  */
 export function preCallAbstain(input: {
-  readonly policy: DecisionPolicy<string>
+  readonly policy: DecisionPolicy<string> | NoulPolicy
   readonly state?: string
   readonly method?: DecisionMethod
+  readonly spec?: AnyDecisionSpec
+  readonly supportedTypes?: readonly DecisionType[]
 }): AbstainReason | null {
   if (typeof input.state !== 'string' || input.state.length === 0) return 'no-state'
+  if (input.spec && !(input.supportedTypes ?? ['choice']).includes(input.spec.type ?? 'choice')) {
+    return 'unsupported-type'
+  }
   if (input.policy.requireCalibrated === true && input.method === 'verbalized') {
     return 'uncalibrated'
   }
@@ -322,6 +379,8 @@ export interface DecisionScoring<L extends string = string> {
   readonly method?: DecisionMethod
   /** Set by a shadow-mode caller: recorded on the event, changes no verdict. */
   readonly shadow?: true
+  /** Refusal established by the caller before invoking the raw seam. */
+  readonly unsupportedType?: true
 }
 
 /** What the scorer returns: the decision plus the event data the caller
@@ -336,7 +395,7 @@ export interface ScoredDecision<L extends string = string> {
  * The pure scoring half of `evaluateDecision`: apply the policy to one
  * raw-seam outcome.
  *
- * Abstain order (first reason wins): `no-state` → `error` → `uncalibrated` →
+ * Abstain order (first reason wins): `no-state` → `unsupported-type` → `error` → `uncalibrated` →
  * `low-coverage` → `method-mismatch` → `low-confidence` → `low-margin`. On
  * every abstain or error the `label` is `policy.fallback` (REQUIRED on every
  * policy, D8 — the seam never throws and never returns without a verdict);
@@ -350,7 +409,10 @@ export interface ScoredDecision<L extends string = string> {
  * A result with no usable mass (empty, non-finite, or summing to 0) is an
  * unusable readout and abstains `'error'`, like a throw.
  */
-export function scoreDecision<L extends string>(input: DecisionScoring<L>): ScoredDecision<L> {
+function scoreCategoricalDecision<L extends string>(
+  input: DecisionScoring<L>,
+  confidenceOf?: (probs: Record<L, number>, labels: readonly L[], top: L) => number,
+): ScoredDecision<L> {
   const { spec, policy } = input
   const labels = spec.labels.map((l) => l.id)
   const k = labels.length
@@ -383,7 +445,11 @@ export function scoreDecision<L extends string>(input: DecisionScoring<L>): Scor
   const pMax = usable ? sorted[0].p : 0
   const pSecond = usable && sorted.length > 1 ? sorted[1].p : 0
   const margin = pMax - pSecond
-  const confidence = confidenceFromMax(pMax, k)
+  const confidence = confidenceOf
+    ? usable
+      ? confidenceOf(probs, labels, top as L)
+      : 0
+    : confidenceFromMax(pMax, k)
 
   // --- abstain, in order --------------------------------------------------
   const method = input.result?.method ?? input.method
@@ -394,6 +460,9 @@ export function scoreDecision<L extends string>(input: DecisionScoring<L>): Scor
     //    pre-call gate refuses before the call, so no error can race it.
     abstained = true
     reason = 'no-state'
+  } else if (input.unsupportedType === true) {
+    abstained = true
+    reason = 'unsupported-type'
   } else if (input.error || (input.result && !usable)) {
     // 2. error — the call threw, or came back with no usable distribution
     //    (empty, non-finite, or summing to zero): an unusable readout is the
@@ -487,6 +556,97 @@ export function scoreDecision<L extends string>(input: DecisionScoring<L>): Scor
   }
 
   return { decision, event }
+}
+
+/** Choice math and event bytes retain their pre-addendum shape. */
+export function scoreDecision<L extends string>(input: DecisionScoring<L>): ScoredDecision<L> {
+  return scoreCategoricalDecision(input)
+}
+
+export interface ScoreScoring<L extends string = string> extends Omit<
+  DecisionScoring<L>,
+  'spec' | 'policy'
+> {
+  readonly spec: ScoreSpec<L>
+  readonly policy: ScorePolicy<L>
+}
+export interface NoulScoring extends Omit<DecisionScoring<'true' | 'false'>, 'spec' | 'policy'> {
+  readonly spec: NoulSpec
+  readonly policy: NoulPolicy
+}
+
+/** TypeSafe's ordinal concentration, centred on the mode, not the mean.
+ *  https://docs.typesafe.ai/confidence — uniform MAD is about the scale midpoint. */
+function ordinalConfidence<L extends string>(
+  probs: Record<L, number>,
+  labels: readonly L[],
+  top: L,
+): number {
+  const mode = labels.indexOf(top)
+  const midpoint = (labels.length - 1) / 2
+  const uniformMad = labels.reduce((s, _, i) => s + Math.abs(i - midpoint), 0) / labels.length
+  const mad = labels.reduce((s, l, i) => s + probs[l] * Math.abs(i - mode), 0)
+  return Math.max(0, 1 - mad / uniformMad)
+}
+
+/** A score acts on its mode; expected remains the policy-free mean. */
+export function scoreScoreDecision<L extends string>(
+  input: ScoreScoring<L>,
+): {
+  readonly decision: ScoreDecision<L>
+  readonly event: DecisionMadeEventData
+} {
+  const scored = scoreCategoricalDecision(
+    {
+      ...input,
+      spec: { key: input.spec.key, question: input.spec.question, labels: input.spec.levels },
+      // Neither static nor fitted margin cuts apply to an ordinal concentration.
+      calibration: input.calibration && { ...input.calibration, minMargin: undefined },
+    },
+    ordinalConfidence,
+  )
+  const { label, margin: _margin, ...common } = scored.decision
+  const expected =
+    common.top === null
+      ? null
+      : input.spec.levels.reduce((s, l, i) => s + i * (common.probs[l.id] ?? 0), 0)
+  const value = input.spec.levels.findIndex((l) => l.id === label)
+  return {
+    decision: { ...common, type: 'score', level: label, value, expected },
+    event: { ...scored.event, type: 'score', value, expected },
+  }
+}
+
+/** A noul is P(true), with a symmetric confidence band around 0.5. */
+export function scoreNoulDecision(input: NoulScoring): {
+  readonly decision: NoulDecision
+  readonly event: DecisionMadeEventData
+} {
+  const scored = scoreCategoricalDecision(
+    {
+      ...input,
+      spec: {
+        key: input.spec.key,
+        question: input.spec.question,
+        labels: [
+          { id: 'true', description: input.spec.criteria?.true ?? 'Yes — the statement holds' },
+          {
+            id: 'false',
+            description: input.spec.criteria?.false ?? 'No — the statement does not hold',
+          },
+        ],
+      },
+      policy: { ...input.policy, fallback: input.policy.fallback ? 'true' : 'false' },
+      calibration: input.calibration && { ...input.calibration, minMargin: undefined },
+    },
+    (probs) => Math.abs(2 * probs.true - 1),
+  )
+  const { label, top: _top, margin: _margin, ...common } = scored.decision
+  const pTrue = scored.decision.top === null ? null : (common.probs.true ?? 0)
+  return {
+    decision: { ...common, type: 'noul', holds: label === 'true', pTrue },
+    event: { ...scored.event, type: 'noul', pTrue },
+  }
 }
 
 // ============================================================================
@@ -971,7 +1131,7 @@ export async function decideFields<F extends Record<string, string>>(
  *  turn, including failures — `scope.data` survives the turn boundary, so a
  *  decision left in place would be last turn's. */
 export interface TypedDecisionData {
-  decisions?: Record<string, Decision>
+  decisions?: Record<string, AnyDecision>
 }
 
 /** The default decision state: the window's user messages plus FINAL

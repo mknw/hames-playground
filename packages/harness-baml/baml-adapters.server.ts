@@ -1848,6 +1848,10 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
   const fn = async <L extends string>(input: DecideInput<L>): Promise<DecideResult<L>> => {
     const startTime = Date.now()
     const { spec, state } = input
+    // S1 widens the seam; S3 adds support. Refuse before resolving or calling a client.
+    if (spec.type === 'score' || spec.type === 'noul') {
+      throw new Error(`Unsupported decision type: ${spec.type}`)
+    }
     const variables = { state, question: spec.question, labels: spec.labels }
 
     // ONE resolver answers both "which transport?" and "which client?": the
@@ -2078,6 +2082,10 @@ export function createVerbalizedDecide(): DecideFn {
   const fn = async <L extends string>(input: DecideInput<L>): Promise<DecideResult<L>> => {
     const startTime = Date.now()
     const { spec, state } = input
+    // S1 widens the seam; S3 adds support. Refuse before resolving or calling a client.
+    if (spec.type === 'score' || spec.type === 'noul') {
+      throw new Error(`Unsupported decision type: ${spec.type}`)
+    }
     const variables = { state, question: spec.question, labels: spec.labels }
     const fail = (message: string, cause?: unknown) =>
       decideFailure(message, variables, startTime, cause, 'DecideVerbalized')

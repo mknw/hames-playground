@@ -24,6 +24,7 @@
  * the only sample in this suite large enough for a p95.
  */
 
+import type { LLMCallRecord } from '@hames-ai/harness-patterns'
 import { Collector } from '@boundaryml/baml'
 import type { EvalRole, EvalRouting } from './client'
 import { evalOverrideFor, expectedClientFor } from './client'
@@ -45,6 +46,8 @@ export interface Observation {
 
 export interface ScenarioContext {
   routing: EvalRouting
+  /** Adapter-owned calls (including REST): preserve serving identity and timing. */
+  recordCall: (call: LLMCallRecord) => void
   /** Options bag for a BAML call on `role`, already carrying the scenario's
    *  collector, the run's latency collector, and this run's client override.
    *  Spread it, then branch on whether it ended up empty: BAML's generated
@@ -228,7 +231,9 @@ export async function runScenario(
   // runner rather than of what each scenario remembered to hand back. BAML
   // accepts `Collector | Collector[]` and fans the record out to all of them.
   const timing = new Collector(`eval-timing-${scenario.id}`)
+  const adapterCalls: LLMCallRecord[] = []
   const ctx: ScenarioContext = {
+    recordCall: (call) => adapterCalls.push(call),
     routing,
     opts: (role, collector) => {
       // Same contract as clients.server.ts's `clientOverrideFor`: spread, then
@@ -243,10 +248,22 @@ export async function runScenario(
       scenario,
       checks,
       observations,
-      servedBy: collectors.map((c) => servedBy(c) ?? '(unreported)'),
+      servedBy: [
+        ...collectors.map((c) => servedBy(c) ?? '(unreported)'),
+        ...adapterCalls.map((c) => c.clientName ?? '(unreported)'),
+      ],
       expectedClient: expectedClientFor(routing, scenario.role),
       ms: Date.now() - started,
-      calls: callSamples(timing),
+      calls: [
+        ...callSamples(timing),
+        ...adapterCalls
+          .filter((c) => c.durationMs !== undefined)
+          .map((c) => ({
+            client: c.clientName ?? '(unreported)',
+            ms: c.durationMs!,
+            outputTokens: c.usage?.outputTokens,
+          })),
+      ],
     }
   } catch (err) {
     return {
@@ -258,7 +275,16 @@ export async function runScenario(
       ms: Date.now() - started,
       // A scenario that threw still made the calls it made before throwing —
       // and on a new client those are often the interesting ones.
-      calls: callSamples(timing),
+      calls: [
+        ...callSamples(timing),
+        ...adapterCalls
+          .filter((c) => c.durationMs !== undefined)
+          .map((c) => ({
+            client: c.clientName ?? '(unreported)',
+            ms: c.durationMs!,
+            outputTokens: c.usage?.outputTokens,
+          })),
+      ],
       error: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
     }
   }

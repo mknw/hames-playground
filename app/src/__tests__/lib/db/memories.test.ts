@@ -37,6 +37,7 @@ import {
   listMemoriesForUser,
 } from '../../../lib/db/memories.server'
 import { closePool, query } from '../../../lib/db/client.server'
+import { createConversation, deleteConversations } from '../../../lib/db/conversations.server'
 import { ENCRYPTED_TABLES } from '../../../lib/db/migrate-encryption.server'
 import { looksEncrypted } from '../../../lib/db/crypto.server'
 
@@ -275,6 +276,15 @@ describe('cascade delete', () => {
   beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
   it('deleting the user’s memories takes the provenance rows with them', async () => {
+    // A source row names a conversation that exists (#531's FK).
+    const conversationId = `conv-${tag}`
+    await createConversation({
+      id: conversationId,
+      userId: ALICE,
+      agentId: 'search',
+      title: null,
+      serializedContext: '{"events":[]}',
+    })
     const id = memoryId()
     await insertMemory({
       id,
@@ -291,7 +301,7 @@ describe('cascade delete', () => {
       eventId: `evt-${tag}-1`,
       ordinal: 0,
       memoryId: id,
-      conversationId: `conv-${tag}`,
+      conversationId,
     })
     const before = await query<{ n: number }>(
       `SELECT count(*)::int AS n FROM memory_sources WHERE memory_id = $1`,
@@ -306,5 +316,6 @@ describe('cascade delete', () => {
       [id],
     )
     expect(after.rows[0]?.n).toBe(0)
+    await deleteConversations([conversationId], ALICE)
   })
 })

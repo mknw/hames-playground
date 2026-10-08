@@ -172,3 +172,54 @@ describe('every write to a memory row carries ciphertext, and every read is owne
     expect(deleted).toBe(2)
   })
 })
+
+describe('#531: the conversation-delete erase, by the SQL it sends', () => {
+  const txSent: Sent[] = []
+  const tx = {
+    query: vi.fn(async (sql: string, params: unknown[] = []) => {
+      txSent.push({ sql: sql.replace(/\s+/g, ' ').trim(), params })
+      return { rows: [], rowCount: 3 }
+    }),
+  }
+  beforeEach(() => {
+    txSent.length = 0
+  })
+
+  it('erases WHOLE memories reached through ANY source row, owner-scoped on both tables, on the caller’s transaction', async () => {
+    const n = await repo.deleteMemoriesForConversations(['conv-a', 'conv-b'], 'user-a', tx as never)
+    expect(n).toBe(3)
+    // Nothing went through the module-level query for the erase itself.
+    expect(sent.some((s) => s.sql.startsWith('DELETE FROM memories'))).toBe(false)
+    const del = txSent.find((s) => s.sql.startsWith('DELETE FROM memories'))!
+    expect(del.params).toEqual([['conv-a', 'conv-b'], 'user-a'])
+    // The memory's owner AND the source row's owner: a foreign user's rows
+    // naming the same conversation id are never reached.
+    expect(del.sql.match(/user_id = \$2/g)).toHaveLength(2)
+    expect(del.sql).toContain('id IN (SELECT memory_id FROM memory_sources')
+    expect(del.sql).toContain('conversation_id = ANY($1)')
+    // "Only memories left with no source" is the reading decision (b) rejected.
+    expect(del.sql).not.toMatch(/NOT EXISTS|<> ALL/i)
+  })
+
+  it('bounds the lock wait for the rest of the caller’s transaction, before the erase', async () => {
+    await repo.deleteMemoriesForConversations(['conv-a'], 'user-a', tx as never)
+    expect(txSent[0]!.sql).toBe(`SET LOCAL lock_timeout = ${repo.MEMORY_LOCK_TIMEOUT_MS}`)
+  })
+
+  it('no ids: nothing sent. No pgvector: nothing to erase, and NOT an error', async () => {
+    expect(await repo.deleteMemoriesForConversations([], 'user-a', tx as never)).toBe(0)
+    expect(txSent).toHaveLength(0)
+    failOn = (sql) => sql.includes('CREATE EXTENSION')
+    expect(await repo.deleteMemoriesForConversations(['conv-a'], 'user-a', tx as never)).toBe(0)
+    expect(txSent).toHaveLength(0)
+  })
+
+  it('the DDL keeps the conversation FK NO ACTION (never CASCADE) and the evidence_event_id column', async () => {
+    await repo.ensureMemoriesSchema()
+    const ddl = sent.find((s) => s.sql.startsWith('CREATE TABLE'))!.sql
+    expect(ddl).toMatch(/FOREIGN KEY \(conversation_id\) REFERENCES conversations \(id\) NOT VALID/)
+    const fk = ddl.slice(ddl.indexOf('memory_sources_conversation_fk'))
+    expect(fk).not.toMatch(/ON DELETE CASCADE/i)
+    expect(ddl).toContain('ALTER TABLE memories ADD COLUMN IF NOT EXISTS evidence_event_id TEXT')
+  })
+})

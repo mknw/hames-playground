@@ -22,7 +22,8 @@
 import { randomBytes } from 'node:crypto'
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
-import { query } from './client.server'
+import { query, withTransaction } from './client.server'
+import { deleteMemoriesForConversations } from './memories.server'
 import type { QueryRunner } from './migrate-encryption.server'
 import { SETTINGS_BOUNDS } from '../settings'
 import {
@@ -1066,7 +1067,7 @@ export async function listConversationEvents(userId: string): Promise<Conversati
  * Delete a conversation. No-op when the id doesn't belong to the user.
  */
 export async function deleteConversation(id: string, userId: string): Promise<void> {
-  await query('DELETE FROM conversations WHERE id = $1 AND user_id = $2', [id, userId])
+  await deleteConversations([id], userId)
 }
 
 /**
@@ -1077,11 +1078,19 @@ export async function deleteConversation(id: string, userId: string): Promise<vo
  */
 export async function deleteConversations(ids: string[], userId: string): Promise<string[]> {
   if (ids.length === 0) return []
-  const { rows } = await query<{ id: string }>(
-    'DELETE FROM conversations WHERE id = ANY($1) AND user_id = $2 RETURNING id',
-    [ids, userId],
-  )
-  return rows.map((r) => r.id)
+  // ONE transaction with the memory erase (#531, owner decision (b)): every
+  // memory that ever drew on one of these conversations dies whole, and only
+  // if the conversation delete commits with it. The erase runs first — the
+  // `memory_sources` FK to conversations is NO ACTION, so the order is also
+  // what lets the row delete through.
+  return withTransaction(async (tx) => {
+    await deleteMemoriesForConversations(ids, userId, tx)
+    const { rows } = await tx.query<{ id: string }>(
+      'DELETE FROM conversations WHERE id = ANY($1) AND user_id = $2 RETURNING id',
+      [ids, userId],
+    )
+    return rows.map((r) => r.id)
+  })
 }
 
 /**

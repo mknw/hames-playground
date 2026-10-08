@@ -190,7 +190,7 @@ a numeric meter. A noul band requires a finite declared confidence in `[0,1]`;
 other declared values are marked invalid and retained in metadata. Fitted cuts
 may differ from the declared cut shown in the detail view.
 
-In this release you can declare score and noul specs, score a distribution with them and read the verdict back. `typedDecision`, `decide`, `evaluateDecision`, `decideFields` and every shipped transport still accept choice specs only, and a transport that does not list a type in `supportedTypes` is never asked it.
+In this release you can declare score and noul specs, score a distribution with them and read the verdict back. `typedDecision`, `decide`, `evaluateDecision` and `decideFields` still accept choice specs only. On the raw seam, the local logprob transport and the verbalized secondary answer all three types; the TypeSafe (Jev) transport, the Anthropic tier's default, answers choice only for now. `decide.supportedTypes` lists what the transport that would serve the call accepts, read at the moment you ask, and a type it does not list is never sent. Score levels are presented as A, B, … from lowest to highest; a noul is presented as A = true, B = false. Logprob calibration is fitted per letter; verbalized probabilities are never calibrated.
 
 `decisionRouter` is `router()`'s sibling built on it: the routes are the
 labels, the verdict becomes `data.route`, and `policy.fallback` names the route

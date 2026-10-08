@@ -176,6 +176,25 @@ describe('the transport, as served by a client an operator named', () => {
     ).rejects.toThrow(/takes 2\.\./)
     expect(hits).toHaveLength(0)
   })
+
+  it('accepts exactly MAX_DECISION_LABELS (20) choice labels', async () => {
+    await nameByoClient()
+    const { MAX_DECISION_LABELS } = await import('@hames-ai/harness-patterns/types')
+    const labels = Array.from({ length: MAX_DECISION_LABELS }, (_, i) => ({
+      id: `l${i}`,
+      description: `label ${i}`,
+    }))
+    content = JSON.stringify(
+      labels.map((_, i) => ({
+        letter: String.fromCharCode(65 + i),
+        probability: 1 / labels.length,
+      })),
+    )
+    const call = (await verbalized())({ spec: { ...SPEC, labels } as never, state: 's' })
+    await expect(call).resolves.toBeDefined()
+    const r = await call
+    expect(Object.keys(r.probs)).toHaveLength(MAX_DECISION_LABELS)
+  })
 })
 
 describe('verbalizedProbabilities (pure) — fails closed like the Jev transport (#511 R3)', () => {
@@ -348,5 +367,121 @@ describe('the declared client — DecideAnthropic', () => {
     )
     expect(src).toMatch(/function DecideVerbalized\([\s\S]*?client DecideAnthropic/)
     expect(src).not.toMatch(/client DescribeAnthropic/)
+  })
+})
+
+// S3: same categorical mapping; stated probabilities remain uncalibrated.
+describe('S3 verbalized specs', () => {
+  const score = {
+    type: 'score' as const,
+    key: 's3.score',
+    question: 'How urgent?',
+    levels: [
+      { id: 'later', description: 'A reply next month is fine' },
+      { id: 'today', description: 'A reply today is needed' },
+      { id: 'now', description: 'Work is blocked until a reply' },
+    ],
+  }
+  const noul = {
+    type: 'noul' as const,
+    key: 's3.noul',
+    question: 'The statement holds.',
+    criteria: { true: 'Custom yes', false: 'Custom no' },
+  }
+
+  it('score-order-preserved: stated letter i returns level i', async () => {
+    await nameByoClient()
+    content = stated(0.1, 0.2, 0.7)
+    const { createDecideAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const secondary = await verbalized()
+    const fn = createDecideAdapter({ verbalized: secondary })
+    expect(secondary.supportedTypes).toEqual(['choice', 'score', 'noul'])
+    expect(fn.supportedTypes).toEqual(['choice', 'score', 'noul'])
+    const r = await fn({ spec: score, state: 'synthetic' })
+    expect(r.probs).toEqual({ later: 0.1, today: 0.2, now: 0.7 })
+    const user = JSON.stringify(hits[0].messages)
+    expect(user).toContain('A. A reply next month is fine')
+    expect(user).toContain('B. A reply today is needed')
+    expect(user).toContain('C. Work is blocked until a reply')
+    expect(r.method).toBe('verbalized')
+    expect(r.calibrated).toBe(false)
+  })
+
+  it('noul-letter-mapping: A is true, B is false, including default descriptions', async () => {
+    await nameByoClient()
+    content = JSON.stringify([
+      { letter: 'A', probability: 0.8 },
+      { letter: 'B', probability: 0.2 },
+    ])
+    const fn = await verbalized()
+    const r = await fn({ spec: noul, state: 'synthetic' })
+    expect(r.probs).toEqual({ true: 0.8, false: 0.2 })
+    expect(JSON.stringify(hits[0].messages)).toContain('A. Custom yes')
+    expect(JSON.stringify(hits[0].messages)).toContain('B. Custom no')
+    await fn({ spec: { ...noul, criteria: undefined }, state: 'synthetic' })
+    expect(JSON.stringify(hits[1].messages)).toContain('A. Yes — the statement holds')
+    expect(JSON.stringify(hits[1].messages)).toContain('B. No — the statement does not hold')
+    expect(r.method).toBe('verbalized')
+    expect(r.calibrated).toBe(false)
+  })
+
+  it('new types remain uncalibrated and reject incomplete distributions', async () => {
+    await nameByoClient()
+    const { configureDecisionCalibration } = await import('@hames-ai/harness-baml/clients.server')
+    const fn = await verbalized()
+    configureDecisionCalibration({
+      ByoDecide: {
+        's3.score': { temperature: 2, bias: { A: 4 } },
+        's3.noul': { temperature: 2, bias: { A: 4 } },
+      },
+    })
+    for (const spec of [score, noul]) {
+      content =
+        spec.type === 'score'
+          ? stated(0.1, 0.2, 0.7)
+          : JSON.stringify([
+              { letter: 'A', probability: 0.8 },
+              { letter: 'B', probability: 0.2 },
+            ])
+      const r = await fn<string>({ spec, state: 'synthetic' })
+      expect(r.calibrated).toBe(false)
+      expect(r.probs[spec.type === 'score' ? 'later' : 'true']).toBe(
+        spec.type === 'score' ? 0.1 : 0.8,
+      )
+      content = '[{"letter":"A","probability":1}]'
+      await expect(fn({ spec, state: 'synthetic' })).rejects.toThrow(/no usable distribution/)
+    }
+  })
+
+  it('score/noul tier lock: raw and routed secondary make zero calls under the private tier', async () => {
+    await nameByoClient()
+    const { createDecideAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const secondary = await verbalized()
+    const fn = createDecideAdapter({ verbalized: secondary })
+    await onPrivateTier(async () => {
+      expect(fn.supportedTypes).toEqual(['choice']) // locked: choice only, and the call itself refuses
+      for (const spec of [score, noul]) {
+        await expect(secondary({ spec, state: 'synthetic' })).rejects.toThrow(
+          /outside the Anthropic tier/,
+        )
+        await expect(fn({ spec, state: 'synthetic' })).rejects.toThrow(/private inference tier/)
+      }
+    })
+    expect(hits).toHaveLength(0)
+  })
+
+  it.each([1, 11])('score transport cap refuses %i levels', async (n) => {
+    await nameByoClient()
+    const fn = await verbalized()
+    await expect(
+      fn({
+        spec: {
+          ...score,
+          levels: Array.from({ length: n }, (_, i) => ({ id: `l${i}`, description: 'd' })),
+        },
+        state: 'synthetic',
+      }),
+    ).rejects.toThrow(/2\.\.10/)
+    expect(hits).toHaveLength(0)
   })
 })

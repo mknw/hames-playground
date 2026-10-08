@@ -745,3 +745,22 @@ function writeTx(client: pg.PoolClient, userId: string): MemoryWriteTx {
   }
   return tx
 }
+
+/** Owner-scoped provenance is the only direction load reconciliation follows.
+ * Tier comes from the surviving memory, never from the conversation's current tier. */
+export async function listMemorySourcesForConversation(conversationId: string, userId: string) {
+  await ready()
+  const { rows } = await query<{
+    eventId: string
+    ordinal: number
+    memoryId: string
+    tier: MemoryTier
+  }>(
+    `SELECT s.event_id AS "eventId", s.ordinal, s.memory_id AS "memoryId", m.tier
+       FROM memory_sources s JOIN memories m ON m.id = s.memory_id AND m.user_id = $2
+      WHERE s.conversation_id = $1 AND s.user_id = $2
+      ORDER BY s.created_at, s.event_id, s.ordinal`,
+    [conversationId, userId],
+  )
+  return rows
+}

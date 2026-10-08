@@ -135,3 +135,16 @@ describe('encryption seam', () => {
     }
   })
 })
+
+// Lifted routing enums remain plaintext, including run origin (G9 Q6).
+it('keeps routing enums outside the encryption map and origin nullable without backfill', async () => {
+  const { ENCRYPTED_TABLES: specs } = await import('../../../lib/db/migrate-encryption.server')
+  const columns = specs.find((s) => s.table === 'conversations')!
+  for (const name of ['kind', 'source', 'status', 'inference_tier', 'memory_run_origin']) {
+    expect([...columns.textColumns, ...columns.jsonbColumns]).not.toContain(name)
+  }
+  const ddl = await readFile(join(SRC, 'lib/db/client.server.ts'), 'utf8')
+  expect(ddl).toMatch(/ADD COLUMN IF NOT EXISTS memory_run_origin TEXT\s+CHECK/)
+  expect(ddl).not.toMatch(/memory_run_origin TEXT[^;]*(?:DEFAULT|NOT NULL)/)
+  expect(ddl).not.toMatch(/UPDATE\s+conversations\s+SET\s+memory_run_origin/)
+})

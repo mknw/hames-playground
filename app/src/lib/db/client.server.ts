@@ -95,6 +95,11 @@ const SCHEMA_SQL = `
   -- the tier only where the user actually recorded one.
   ALTER TABLE conversations
     ADD COLUMN IF NOT EXISTS inference_tier TEXT;
+  -- Current run's origin, not conversation creation source (a promoted action
+  -- can have interactive runs). Plaintext lifted enum; NULL records no fact.
+  -- No backfill: legacy paused runs remain excluded from memory settlement.
+  ALTER TABLE conversations ADD COLUMN IF NOT EXISTS memory_run_origin TEXT
+    CHECK (memory_run_origin IN ('interactive', 'triggered'));
   -- When the user pinned this conversation to the top of the sidebar, or NULL
   -- for the overwhelming majority that are not pinned. A lifted, plaintext
   -- column for the same reason as kind/source/status: the list ORDER BY reads

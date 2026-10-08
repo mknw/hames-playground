@@ -22,6 +22,7 @@ import {
   configureDecisionCalibration,
 } from '@hames-ai/harness-baml/clients.server'
 import { readFileSync } from 'node:fs'
+import { applyFit, calibrationMetrics } from '../../../lib/inference/decision-calibration-math'
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 const fixtures = JSON.parse(readFileSync('evals/decision-calibration-fixtures.json', 'utf8'))
 afterEach(() => {
@@ -67,6 +68,145 @@ async function reports(jev = true, wrongSplit = '', probability = 0.97) {
 const parsed = (r: Awaited<ReturnType<typeof evaluateKey>>, suffix: string) =>
   JSON.parse(r.observations.find((o) => o.name.endsWith(suffix))!.value)
 describe('decision calibration behavioural report', () => {
+  it('checks: passing and holdout fakes pin all four per-key checks and details', async () => {
+    for (const jev of [true, false]) {
+      for (const wrongSplit of ['', 'holdout']) {
+        const rs = await reports(jev, wrongSplit)
+        for (const [i, r] of rs.entries()) {
+          const key = CALIBRATION_SPECS[i].key
+          const measured = parsed(r, ': held-out fitted')
+          const items = fixtures.items.filter((item: { key: string }) => item.key === key)
+          const fitCount = items.filter((item: { split: string }) => item.split === 'fit').length
+          const holdoutCount = items.length - fitCount
+          expect(r.checks).toEqual([
+            {
+              name: `${key}: nonempty fit and holdout`,
+              pass: true,
+              detail: `fit=${fitCount}; holdout=${holdoutCount}`,
+            },
+            {
+              name: `${key}: cuts have a feasible fit`,
+              pass: true,
+              detail: `${fitCount}/${fitCount} fit samples retained at accuracy floor 0.95`,
+            },
+            {
+              name: `${key}: held-out calibration`,
+              pass: wrongSplit === '',
+              detail: `ECE=${measured.ece}; ceiling=0.05`,
+            },
+            {
+              name: `${key}: held-out retained accuracy`,
+              pass: wrongSplit === '',
+              detail: JSON.stringify({ retained: measured.retained, metrics: measured.metrics }),
+            },
+          ])
+        }
+      }
+    }
+  })
+  it('checks: exact .95 retained accuracy passes the owner floor', async () => {
+    const spec = {
+      key: 'floor',
+      question: 'synthetic',
+      labels: [
+        { id: 'a', description: 'a' },
+        { id: 'b', description: 'b' },
+      ],
+    }
+    const items = Array.from({ length: 40 }, (_, i) => ({
+      id: String(i),
+      key: spec.key,
+      state: String(i),
+      truth: i === 39 ? 'b' : 'a',
+      split: i < 20 ? 'fit' : 'holdout',
+    }))
+    const decide: DecideFn = async () =>
+      ({
+        probs: { a: 0.95, b: 0.05 },
+        method: 'jev',
+        calibrated: true,
+        llmCall: { clientName: 'JevDecide', functionName: 'Decide', variables: {} },
+      }) as DecideResult
+    const r = await evaluateKey({ spec, items, decide, jev: true, client: 'JevDecide', criteria })
+    const measured = parsed(r, ': held-out fitted')
+    expect(measured.metrics.accuracy).toBe(0.95)
+    expect(r.checks.find((c) => c.name === 'floor: held-out retained accuracy')).toEqual({
+      name: 'floor: held-out retained accuracy',
+      pass: true,
+      detail: JSON.stringify({ retained: measured.retained, metrics: measured.metrics }),
+    })
+  })
+  it('moderate ECE: .8 probability at perfect accuracy reopens per-key and pooled Jev verdicts', async () => {
+    const rs = await reports(true, '', 0.8)
+    for (const r of rs) {
+      expect(parsed(r, ': held-out fitted').ece).toBeCloseTo(0.2)
+      expect(r.observations.at(-1)!.value).toMatch(/^REOPEN G7\(a\): Jev measured ECE=/)
+    }
+    const pool = pooledReport(
+      'JevDecide',
+      true,
+      rs.flatMap((r) => r.holdout),
+      criteria,
+    )
+    expect(JSON.parse(pool.observations[0].value).ece).toBeCloseTo(0.2)
+    expect(pool.observations[1].value).toMatch(/^REOPEN G7\(a\): Jev pooled measured ECE=/)
+  })
+  it('pooled fitted holdout: non-identity logprob fit supplies concatenated per-key measured samples', async () => {
+    const fitted = []
+    const raw = []
+    const returned = []
+    for (const key of ['bias-one', 'bias-two']) {
+      const spec = {
+        key,
+        question: 'synthetic bias',
+        labels: [
+          { id: 'a', description: 'a' },
+          { id: 'b', description: 'b' },
+        ],
+      }
+      const samples = [
+        ...Array.from({ length: 20 }, () => ({ truth: 'b', probs: { a: 0.6, b: 0.4 } })),
+        ...Array.from({ length: 20 }, () => ({ truth: 'a', probs: { a: 0.75, b: 0.25 } })),
+      ]
+      const items = ['fit', 'holdout'].flatMap((split) =>
+        samples.map((sample, i) => ({
+          id: `${split}-${i}`,
+          key,
+          state: String(i),
+          truth: sample.truth,
+          split,
+        })),
+      )
+      const decide: DecideFn = async ({ state }) =>
+        ({
+          probs: samples[Number(state)].probs,
+          method: 'logprob',
+          calibrated: false,
+          llmCall: { clientName: 'LocalQwenSmallDecide', functionName: 'Decide', variables: {} },
+        }) as DecideResult
+      const r = await evaluateKey({
+        spec,
+        items,
+        decide,
+        jev: false,
+        client: 'LocalQwenSmallDecide',
+        criteria,
+      })
+      expect(r.entry).not.toBeNull()
+      expect(r.entry!.bias!.B).toBeGreaterThan(0.3)
+      const measured = samples.map((sample) => applyFit(sample, ['a', 'b'], r.entry!))
+      expect(parsed(r, ': held-out fitted').ece).toBe(calibrationMetrics(measured).ece)
+      expect(r.holdout).toEqual(measured)
+      fitted.push(...measured)
+      raw.push(...samples)
+      returned.push(...r.holdout)
+    }
+    const pool = pooledReport('LocalQwenSmallDecide', false, returned, criteria)
+    const ece = JSON.parse(pool.observations[0].value).ece
+    expect(ece).toBe(calibrationMetrics(fitted).ece)
+    expect(ece).not.toBeCloseTo(calibrationMetrics(raw).ece)
+  })
+
   it('verdict: all Jev keys reopen above ceiling, never at/below it or for logprob', async () => {
     for (const r of await reports(true, 'holdout'))
       expect(r.observations.at(-1)!.value).toMatch(/^REOPEN G7\(a\): Jev measured ECE=/)
@@ -112,6 +252,11 @@ describe('decision calibration behavioural report', () => {
       }) as DecideResult
     const r = await evaluateKey({ spec, items, decide, jev: true, client: 'JevDecide', criteria })
     expect(parsed(r, ': held-out fitted').ece).toBe(0.05)
+    expect(r.checks.find((c) => c.name === 'boundary: held-out calibration')).toEqual({
+      name: 'boundary: held-out calibration',
+      pass: true,
+      detail: 'ECE=0.05; ceiling=0.05',
+    })
     expect(r.observations.at(-1)!.value).not.toContain('REOPEN')
   })
   it('holdout: reports holdout, fits fit only, retains order-swap raw label', async () => {

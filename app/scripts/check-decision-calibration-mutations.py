@@ -5,6 +5,7 @@ restored in finally, including on interruption. No database/provider setup.
 """
 from pathlib import Path
 import subprocess
+import sys
 
 MATH = 'src/lib/inference/decision-calibration-math.ts'
 FEED = 'src/lib/inference/decision-calibration.server.ts'
@@ -90,6 +91,24 @@ CASES = [
 
 ]
 
+# Delta-review-1 residuals only: --round2 selects these independently of the
+# completed earlier findings. Every case requires a real assertion failure.
+ROUND2_CASES = [
+    ('R1-heldout-check-true', REPORT, 'measured.ece <= criteria.eceCeiling,', 'true,', 'report', 'checks:'),
+    ('R1-retained-check-true', REPORT, 'retained.metrics.accuracy >= criteria.accuracyFloor', 'true', 'report', 'checks:'),
+    ('R1-pooled-check-removed', 'evals/scenarios/decision-calibration.ts', 'checks.push(...pool.checks)', '', 'scenario', 'scenario pooled check:'),
+    ('R1-retained-exact-floor', REPORT, 'retained.metrics.accuracy >= criteria.accuracyFloor', 'retained.metrics.accuracy > criteria.accuracyFloor', 'report', 'checks:'),
+    ('R1-heldout-exact-ceiling', REPORT, 'measured.ece <= criteria.eceCeiling,', 'measured.ece < criteria.eceCeiling,', 'report', 'verdict boundary:'),
+    ('R2-per-key-reopen-half', REPORT, 'jev && measured.ece > criteria.eceCeiling', 'jev && measured.ece > 0.5', 'report', 'moderate ECE:'),
+    ('R2-pooled-reopen-half', REPORT, 'jev && measured.ece > criteria.eceCeiling', 'jev && measured.ece > 0.5', 'report', 'moderate ECE:'),
+    ('R3-pooled-raw-holdout', REPORT, 'holdout: transformed,', 'holdout: holdout,', 'report', 'pooled fitted holdout:'),
+    ('R4-default-revision-x', FEED, 'revision = CALIBRATION_REVISION', 'revision = "x"', 'feed', 'fingerprint default revision:'),
+    ('R4-smoke-header-seven', SMOKE, '7. `smokeDecide()` — actual serving client, logprob method, normalized', '7. anything', 'structure', 'smoke:'),
+    ('R4-scenario-call-count', 'evals/scenarios/decision-calibration.ts', 'calls++', '', 'scenario', 'scenario artifact:'),
+    ('R1-added-nonempty-check-false', REPORT, 'fit.length > 0 && holdout.length > 0', 'false', 'report', 'checks:'),
+    ('R1-added-feasible-check-false', REPORT, 'cutFit.retained > 0,', 'false,', 'report', 'checks:'),
+]
+
 # The distribution mutation disables the whole shape guard, rather than only
 # its first clause. Extract it using its stable error line.
 def mutation(path, old, new, name):
@@ -100,13 +119,14 @@ def mutation(path, old, new, name):
         return source, source[:start] + '  if (false) {\n' + source[end:]
     if old not in source:
         raise RuntimeError(f'{name}: mutation anchor missing')
-    if name in ['F1-reopen-false', 'F1-reopen-one', 'F1-reopen-boundary']:
+    if name in ['F1-reopen-false', 'F1-reopen-one', 'F1-reopen-boundary', 'R1-heldout-check-true', 'R1-heldout-exact-ceiling', 'R2-per-key-reopen-half']:
         before, after = source.rsplit(old, 1)
         return source, before + new + after
     return source, source.replace(old, new, 1)
 
 if __name__ == '__main__':
-    for name, filename, old, new, suite, test_name in CASES:
+    cases = ROUND2_CASES if '--round2' in sys.argv else CASES + ROUND2_CASES
+    for name, filename, old, new, suite, test_name in cases:
         path = Path(filename)
         source, changed = mutation(path, old, new, name)
         try:

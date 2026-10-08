@@ -82,6 +82,9 @@ describe('decision calibration scenario/script structure', () => {
   })
   it('smoke: decide appended after screen, normalized distribution, serving client, max_tokens 2', () => {
     const smoke = read('src/lib/inference/scripts/smoke-verda.ts')
+    expect(smoke).toContain(
+      ' *   7. `smokeDecide()` — actual serving client, logprob method, normalized\n *      decision distribution and coverage on the small model.',
+    )
     expect(smoke).toMatch(/await screen\(\)\s+await smokeDecide\(\)/)
     expect(smoke).toContain('result.llmCall?.clientName !== expected')
     expect(smoke).toContain('const expected = VERDA_CLIENT_BY_ROLE.decide')

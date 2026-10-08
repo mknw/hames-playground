@@ -58,6 +58,14 @@ function artifact(client = 'JevDecide'): CalibrationArtifact {
 }
 
 describe('decision calibration host feed', () => {
+  it('fingerprint default revision: production path uses CALIBRATION_REVISION', () => {
+    for (const client of ['JevDecide', 'LocalQwenSmallDecide']) {
+      expect(calibrationFingerprint(client)).toBe(
+        calibrationFingerprint(client, CALIBRATION_REVISION),
+      )
+      expect(calibrationFingerprint(client)).not.toBe(calibrationFingerprint(client, 'other'))
+    }
+  })
   it('valid: committed unmeasured stays empty; complete measured values reach the real seam', () => {
     feedDecisionCalibration(committed)
     expect(decisionCalibrationFor('JevDecide', 'memory.merge')).toBeUndefined()

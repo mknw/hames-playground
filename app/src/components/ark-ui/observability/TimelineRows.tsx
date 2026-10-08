@@ -7,6 +7,7 @@
 import { Show } from 'solid-js'
 import type {
   ContextEvent,
+  DecisionMadeEventData,
   ToolCallEventData,
   ToolResultEventData,
 } from '@hames-ai/harness-patterns'
@@ -185,6 +186,19 @@ export const EventRow = (props: {
         <div text="xs ui-text-tertiary" font="mono">
           {patternId}
         </div>
+      </Show>
+
+      <Show when={type === 'decision_made'}>
+        <span
+          text="xs ui-accent"
+          bg="ui-accent/10"
+          p="x-1.5 y-0.5"
+          rounded="sm"
+          font="mono"
+          data-role="decision-type"
+        >
+          {(data as DecisionMadeEventData).type ?? 'choice'}
+        </span>
       </Show>
 
       {/* Preview */}

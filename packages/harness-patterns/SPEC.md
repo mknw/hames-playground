@@ -1977,13 +1977,57 @@ Choice never writes a type. The event remains metadata only (SD-3): stateChars,
 never state. Serialization and previews render score as `key: soon (E=1.43)`
 and noul as `key: true (p=0.91)`; absent type retains the legacy choice rendering.
 
+#### App observability (#418 addendum S6)
+
+The timeline preview chip names `score`, `noul`, or `choice` when the event's
+optional type is absent. Score details keep the ordered probability bars and
+add a mean marker on the level-index scale `0..labels.length−1`, at `expected`.
+The marker is a raw readout; it does not move to the mode or fallback verdict.
+A score's concentration cut has no per-bar probability equivalent, so the
+choice-only cut line and margin are not shown for scores.
+
+Noul details show one P(true) bar with the declared abstain band
+`[(1−minConfidence)/2, (1+minConfidence)/2]`; equality at either edge passes.
+The display labels this as the declared cut, since fitted cuts may differ.
+Missing/null or nonfinite raw readouts display as unknown without a numeric
+meter. Nonfinite score probabilities also display as unknown; absent
+probabilities retain their zero behavior. The noul band requires a finite
+declared confidence in `[0,1]`; other declared values show an invalid-cut
+indication without a band, preserving the raw value in metadata. Score/noul
+surfaces use a theme-aware background matched to their readout text.
+Persisted events without the new fields retain the choice bars and cuts.
+
 S1 widens `DecideInput.spec` to accept all three specs and adds optional
 `DecideFn.supportedTypes`. An absent declaration means choice-only.
 `preCallAbstain({ spec, supportedTypes, state, policy, method })` returns
 `no-state` first, then `unsupported-type`, then the existing calibration refusal.
 An unsupported type must not call the transport; pass `unsupportedType: true` to
-its pure scorer to record the fallback with null raw readouts. Existing adapters
-refuse score/noul directly before making any request and declare no new support.
+its pure scorer to record the fallback with null raw readouts. Transport support is declared by each adapter; absent support remains choice-only.
+
+#### Lettered score and noul transports (#418 addendum S3)
+
+`createDecideAdapter().supportedTypes` is a getter resolved at each read from
+the same `selectDecideTransport` / `resolveClientForRole('decide')` selection
+used by the call. The logprob transport supports choice, score and noul. Jev
+reports its own support (choice-only until S4). An injected secondary reports
+its declared support; absent means choice-only. A locked or unwired transport reports choice only, the documented absent default: a choice call still reaches that route's own refusal and abstains as the truthful `error`, and score or noul is refused before any request. This keeps the pre-call refusal truthful when a
+run frame or consumer overrides the tier's client (SD-12).
+
+Both BAML lettered transports map a score's level at index i to letter A+i,
+low → high, with the 2–10 level cap from [TypeSafe's score documentation](https://docs.typesafe.ai/primitives/score).
+A noul maps A to true, B to false; descriptions come from `criteria`, defaulting
+to “Yes — the statement holds” / “No — the statement does not hold”. Neither
+spec changes the existing BAML prompt. The logprob readout applies the existing
+letter-variant summing, per-letter temperature/bias for `(served client, key)`,
+and renormalisation; coverage remains the raw matched mass. Core computes the
+score mean and noul P(true) from the resulting categorical distribution.
+
+`createVerbalizedDecide` declares all three types but still returns
+`method: 'verbalized'`, `calibrated: false`, never applies calibration, and
+refuses incomplete or malformed stated distributions. Its positive
+Anthropic-tier lock and the routed adapter's private-tier lock run before
+requests. `LocalQwenSmallDecide` continues to use `max_tokens: 2`, including
+identical-prompt repeat tests; BAML source and generated client are unchanged.
 
 #### Generic patterns and mixed sets (#418 addendum S2)
 
@@ -2023,9 +2067,11 @@ there is one `decision_made` with that field's type per field. Jev's G8
 normalisation still serves fields rather than a product. Set failures retain
 individual typed fallbacks and one shared error/call record.
 
-This slice widens the raw set seam and adds refusal guards to the existing
-choice-only set adapters. New request bodies, type support, calibration and UI
-remain S3–S6; no production choice declaration is migrated.
+The raw set seam accepts mixed specs, while the existing set adapters remain
+choice-only and refuse unsupported fields before any request. The single-call
+logprob and verbalized transports support all three types as described above;
+a `decideAll` adapter declares its own support independently. No production
+choice declaration is migrated.
 
 #### The awaited wrapper
 

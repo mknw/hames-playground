@@ -74,8 +74,11 @@ import { escapeDataFence } from './data-fence'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
 import {
   MAX_DECISION_LABELS,
-  type DecideAllFn,
+  MAX_SCORE_LEVELS,
   type AnyDecisionSpec,
+  type DecisionLabel,
+  type DecisionType,
+  type DecideAllFn,
   type MixedDecisionSet,
   type DecisionLabelsFor,
   type DecideFn,
@@ -1802,6 +1805,29 @@ export function topLogprobsOf(body: unknown): TopLogprob[] | undefined {
   return entries.length > 0 ? entries : undefined
 }
 
+const LETTER_DECISION_TYPES = Object.freeze(['choice', 'score', 'noul'] as const)
+const CHOICE_DECISION_TYPES = Object.freeze(['choice'] as const)
+
+/** The existing BAML prompts take categorical options for every spec type.
+ *  Score letters preserve level order; noul always puts true at A, false at B.
+ *  Reject unknown runtime types instead of treating them as choices. */
+function decisionOptions(spec: AnyDecisionSpec): readonly DecisionLabel[] {
+  switch (spec.type) {
+    case undefined:
+    case 'choice':
+      return spec.labels
+    case 'score':
+      return spec.levels
+    case 'noul':
+      return [
+        { id: 'true', description: spec.criteria?.true ?? 'Yes — the statement holds' },
+        { id: 'false', description: spec.criteria?.false ?? 'No — the statement does not hold' },
+      ]
+    default:
+      throw new Error(`Unsupported decision type: ${String((spec as AnyDecisionSpec).type)}`)
+  }
+}
+
 /**
  * `DecideFn` backed by the BAML `Decide` function (private tier) with the
  * transport chosen by the resolved client (F1).
@@ -1847,14 +1873,20 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
     return { client, transport, locked, wired }
   }
 
+  const supportedTypes = (): readonly DecisionType[] => {
+    const { transport, wired } = selectDecideTransport()
+    if (!wired) return CHOICE_DECISION_TYPES
+    if (transport === 'logprob') return LETTER_DECISION_TYPES
+    if (transport === 'jev')
+      return createJevTransport().decide.supportedTypes ?? CHOICE_DECISION_TYPES
+    return options?.verbalized?.supportedTypes ?? CHOICE_DECISION_TYPES
+  }
+
   const fn = async <L extends string>(input: DecideInput<L>): Promise<DecideResult<L>> => {
     const startTime = Date.now()
     const { spec, state } = input
-    // S1 widens the seam; S3 adds support. Refuse before resolving or calling a client.
-    if (spec.type !== undefined && spec.type !== 'choice') {
-      throw new Error(`Unsupported decision type: ${String(spec.type)}`)
-    }
-    const variables = { state, question: spec.question, labels: spec.labels }
+    const labels = decisionOptions(spec)
+    const variables = { state, question: spec.question, labels }
 
     // ONE resolver answers both "which transport?" and "which client?": the
     // selection below and the BAML call's `clientOverrideFor('decide')` agree
@@ -1887,6 +1919,13 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
           startTime,
         )
       }
+      if (
+        !(options.verbalized.supportedTypes ?? CHOICE_DECISION_TYPES).includes(
+          spec.type ?? 'choice',
+        )
+      ) {
+        throw new Error(`Unsupported decision type: ${String(spec.type ?? 'choice')}`)
+      }
       return options.verbalized(input)
     }
     if (transport === 'jev') {
@@ -1897,16 +1936,17 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
 
     // D13: a window of 20 top-logprobs cannot see more than 20 labels, so
     // coverage could never reach 1 — refused before any request is made.
-    const count = spec.labels.length
-    if (count < 2 || count > MAX_DECISION_LABELS) {
+    const count = labels.length
+    const cap = spec.type === 'score' ? MAX_SCORE_LEVELS : MAX_DECISION_LABELS
+    if (count < 2 || count > cap) {
       throw decideFailure(
-        `Decision ${spec.key} has ${count} labels; the logprob readout takes 2..${MAX_DECISION_LABELS}.`,
+        `Decision ${spec.key} has ${count} labels; the logprob readout takes 2..${cap}.`,
         variables,
         startTime,
       )
     }
-    const letters = spec.labels.map((_, i) => String.fromCharCode(65 + i))
-    const options_ = spec.labels.map((l, i) => ({ letter: letters[i], description: l.description }))
+    const letters = labels.map((_, i) => String.fromCharCode(65 + i))
+    const options_ = labels.map((l, i) => ({ letter: letters[i], description: l.description }))
 
     const { b } = await import('./baml_client')
     const collector = new Collector('Decide')
@@ -1952,8 +1992,8 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
     const { mass, coverage } = sumLabelMass(top, letters)
     const { probs: byLetter } = normalizeLabelMass(calibrateLabelMass(mass, entry), letters)
     const probs = {} as Record<L, number>
-    spec.labels.forEach((l, i) => {
-      probs[l.id] = byLetter[letters[i]] ?? 0
+    labels.forEach((l, i) => {
+      probs[l.id as L] = byLetter[letters[i]] ?? 0
     })
 
     const llmCall = extractLLMCallData(collector, 'Decide', variables, startTime, answer)
@@ -1966,6 +2006,7 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
     }
   }
 
+  Object.defineProperty(fn, 'supportedTypes', { get: supportedTypes })
   fn.limits = () => limitsFor('decide')
   fn.serving = (key: string) => {
     // Only a transport that is WIRED is reported (review finding 4): a
@@ -2094,11 +2135,8 @@ export function createVerbalizedDecide(): DecideFn {
   const fn = async <L extends string>(input: DecideInput<L>): Promise<DecideResult<L>> => {
     const startTime = Date.now()
     const { spec, state } = input
-    // S1 widens the seam; S3 adds support. Refuse before resolving or calling a client.
-    if (spec.type !== undefined && spec.type !== 'choice') {
-      throw new Error(`Unsupported decision type: ${String(spec.type)}`)
-    }
-    const variables = { state, question: spec.question, labels: spec.labels }
+    const labels = decisionOptions(spec)
+    const variables = { state, question: spec.question, labels }
     const fail = (message: string, cause?: unknown) =>
       decideFailure(message, variables, startTime, cause, 'DecideVerbalized')
 
@@ -2120,14 +2158,15 @@ export function createVerbalizedDecide(): DecideFn {
           'it serves only a client that was re-named (configureDecideSecondary, a consumer client or a per-run override).',
       )
     }
-    const count = spec.labels.length
-    if (count < 2 || count > MAX_DECISION_LABELS) {
+    const count = labels.length
+    const cap = spec.type === 'score' ? MAX_SCORE_LEVELS : MAX_DECISION_LABELS
+    if (count < 2 || count > cap) {
       throw fail(
-        `Decision ${spec.key} has ${count} labels; the verbalized secondary takes 2..${MAX_DECISION_LABELS}.`,
+        `Decision ${spec.key} has ${count} labels; the verbalized secondary takes 2..${cap}.`,
       )
     }
-    const letters = spec.labels.map((_, i) => String.fromCharCode(65 + i))
-    const options = spec.labels.map((l, i) => ({ letter: letters[i], description: l.description }))
+    const letters = labels.map((_, i) => String.fromCharCode(65 + i))
+    const options = labels.map((l, i) => ({ letter: letters[i], description: l.description }))
 
     const { b } = await import('./baml_client')
     const collector = new Collector('DecideVerbalized')
@@ -2155,12 +2194,13 @@ export function createVerbalizedDecide(): DecideFn {
       )
     }
     const probs = {} as Record<L, number>
-    spec.labels.forEach((l, i) => {
-      probs[l.id] = byLetter[letters[i]] ?? 0
+    labels.forEach((l, i) => {
+      probs[l.id as L] = byLetter[letters[i]] ?? 0
     })
     const llmCall = extractLLMCallData(collector, 'DecideVerbalized', variables, startTime, stated)
     return { probs, method: 'verbalized', calibrated: false, ...(llmCall && { llmCall }) }
   }
+  Object.defineProperty(fn, 'supportedTypes', { value: LETTER_DECISION_TYPES })
   fn.limits = () => limitsFor('decide')
   return fn
 }

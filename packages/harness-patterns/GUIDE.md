@@ -181,11 +181,22 @@ not a rounded mean: a bimodal distribution can average to a level it never
 supports. Confidence measures concentration, not permission to act, as
 [TypeSafe explains](https://docs.typesafe.ai/confidence).
 
+In the app's observability timeline, the preview chip identifies the decision
+as choice, score or noul (old events default to choice). Score details show
+ordered probability bars and the raw mean on a level-index scale; noul details
+show P(true) and the declared symmetric abstain band. These readouts survive a
+fallback verdict. Missing or nonfinite readouts stay visibly unknown without
+a numeric meter. A noul band requires a finite declared confidence in `[0,1]`;
+other declared values are marked invalid and retained in metadata. Fitted cuts
+may differ from the declared cut shown in the detail view.
+
+In this release you can declare score and noul specs, score a distribution with them and read the verdict back. On the raw seam, the local logprob transport and the verbalized secondary answer all three types; the TypeSafe (Jev) transport, the Anthropic tier's default, answers choice only for now. `decide.supportedTypes` lists what the transport that would serve the call accepts, read at the moment you ask, and a type it does not list is never sent. Score levels are presented as A, B, … from lowest to highest; a noul is presented as A = true, B = false. Logprob calibration is fitted per letter; verbalized probabilities are never calibrated.
+
 `typedDecision`, `decide` and `evaluateDecision` accept all three spec types;
 the return type follows the declared spec. `typedDecision` refuses an unsupported
 type at construction. The in-scope and scope-free entries instead abstain
 `unsupported-type` with zero calls. A transport without `supportedTypes` remains
-choice-only. Every transport shipped in this release is choice-only.
+choice-only.
 Invalid fallback configuration throws before any inference: choice needs a label
 id, score needs a level id, and noul needs a boolean (`false` is valid). Transport
 failures still return an abstained verdict.

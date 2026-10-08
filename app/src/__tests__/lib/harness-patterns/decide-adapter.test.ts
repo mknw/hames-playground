@@ -287,9 +287,11 @@ describe('refusals', () => {
     serve = fixture('llamacpp-confident').response
     const labels = Array.from({ length: 20 }, (_, i) => ({ id: `l${i}`, description: `d${i}` }))
     const decide = await adapter()
-    const r = await onPrivateTier(() =>
+    const call = onPrivateTier(() =>
       decide({ spec: { key: 'k', question: 'q', labels }, state: 's' }),
     )
+    await expect(call).resolves.toBeDefined()
+    const r = await call
     expect(Object.keys(r.probs)).toHaveLength(20)
   })
 })
@@ -370,26 +372,210 @@ describe('jev-calibration-cuts-only (G7)', () => {
   })
 })
 
-// S1 guards the widened seam; S3/S4 will explicitly add type support.
-describe('S1 unsupported-type adapter backstop', () => {
-  it('all shipped raw transports remain choice-only and reject before any request', async () => {
+// Unknown runtime types still fail closed after S3 adds score/noul support.
+describe('unknown-type adapter backstop', () => {
+  it('all raw transports reject an unknown type before any request', async () => {
     const { createVerbalizedDecide } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const { createJevTransport } = await import('@hames-ai/harness-baml/jev-decide.server')
-    const { defineScore, defineNoul } =
-      await import('@hames-ai/harness-patterns/patterns/typedDecision.server')
-    const score = defineScore({ key: 's', question: 'q', levels: SPEC.labels.slice(0, 2) })
-    const noul = defineNoul({ key: 'n', question: 'q' })
     const rank = { ...SPEC, type: 'rank' } as never
     for (const fn of [await adapter(), createVerbalizedDecide(), createJevTransport().decide]) {
-      expect(fn.supportedTypes).toBeUndefined()
-      for (const spec of [score, noul, rank]) {
-        await expect(fn({ spec, state: 'synthetic' })).rejects.toThrow('Unsupported decision type')
-        await expect(onPrivateTier(() => fn({ spec, state: 'synthetic' }))).rejects.toThrow(
+      for (const spec of [rank]) {
+        await expect(fn<string>({ spec, state: 'synthetic' })).rejects.toThrow(
+          'Unsupported decision type',
+        )
+        await expect(onPrivateTier(() => fn<string>({ spec, state: 'synthetic' }))).rejects.toThrow(
           'Unsupported decision type',
         )
       }
     }
     expect(hits).toHaveLength(0)
+  })
+})
+
+// S3: every pin's executable source mutation is in check-baml-score-noul-mutations.py.
+describe('S3 lettered specs', () => {
+  const levels = ['none', 'later', 'week', 'today', 'now'].map((id) => ({
+    id,
+    description: `${id} description`,
+  }))
+  const score = { type: 'score' as const, key: 's3.score', question: 'How urgent?', levels }
+  const noul = {
+    type: 'noul' as const,
+    key: 's3.noul',
+    question: 'A statement holds.',
+    criteria: { true: 'Custom yes', false: 'Custom no' },
+  }
+
+  // Independent fixture oracle: the recordings contain these exact letter variants.
+  // Lowercase and Cyrillic lookalikes are separate tokens and do not name a label.
+  const rawMass = (name: string, letters: string[]) => {
+    const body = fixture(name).response as {
+      choices: Array<{
+        logprobs: { content: Array<{ top_logprobs: Array<{ token: string; logprob: number }> }> }
+      }>
+    }
+    const top = body.choices[0].logprobs.content[0].top_logprobs
+    return letters.map((letter) =>
+      top
+        .filter((t) => [letter, ` ${letter}`, `(${letter}`, `"${letter}`].includes(t.token))
+        .reduce((sum, t) => sum + Math.exp(t.logprob), 0),
+    )
+  }
+
+  it('score-order-preserved: letter i maps to level i in the five-letter llama.cpp fixture', async () => {
+    serve = fixture('llamacpp-score').response
+    const r = await onPrivateTier(() =>
+      adapter().then((fn) => fn({ spec: score, state: 'synthetic' })),
+    )
+    const mass = rawMass('llamacpp-score', ['A', 'B', 'C', 'D', 'E'])
+    const total = mass.reduce((a, b) => a + b, 0)
+    expect(r.coverage).toBeCloseTo(total, 12)
+    expect(total).toBeLessThan(1)
+    for (let i = 0; i < levels.length; i++)
+      expect(r.probs[levels[i].id]).toBeCloseTo(mass[i] / total, 12)
+    expect(Object.values(r.probs).reduce((a, b) => a + b, 0)).toBeCloseTo(1, 12)
+    const user = (hits[0].messages as Array<{ role: string; content: string }>).find(
+      (m) => m.role === 'user',
+    )!.content
+    for (let i = 0; i < levels.length; i++)
+      expect(user).toContain(`${String.fromCharCode(65 + i)}. ${levels[i].description}`)
+    expect(r.llmCall?.clientName).toBe('LocalQwenSmallDecide')
+    expect(hits[0].max_tokens).toBe(2)
+  })
+
+  it('noul-letter-mapping: A is true, B is false in the two-letter llama.cpp fixture', async () => {
+    serve = fixture('llamacpp-noul').response
+    const fn = await adapter()
+    const r = await onPrivateTier(() => fn({ spec: noul, state: 'synthetic' }))
+    const [a, b] = rawMass('llamacpp-noul', ['A', 'B'])
+    expect(r.probs).toEqual({ true: expect.any(Number), false: expect.any(Number) })
+    expect(r.probs.true).toBeCloseTo(a / (a + b), 12)
+    expect(r.probs.false).toBeCloseTo(b / (a + b), 12)
+    expect(r.probs.true + r.probs.false).toBeCloseTo(1, 12)
+    expect(r.coverage).toBeCloseTo(a + b, 12)
+    expect(a + b).toBeLessThan(1)
+    const user = (hits[0].messages as Array<{ role: string; content: string }>).find(
+      (m) => m.role === 'user',
+    )!.content
+    expect(user).toContain('A. Custom yes')
+    expect(user).toContain('B. Custom no')
+    await onPrivateTier(() => fn({ spec: { ...noul, criteria: undefined }, state: 'synthetic' }))
+    const defaults = JSON.stringify(hits[1].messages)
+    expect(defaults).toContain('A. Yes — the statement holds')
+    expect(defaults).toContain('B. No — the statement does not hold')
+  })
+
+  it.each([
+    ['score', score, 'llamacpp-score', ['A', 'B', 'C', 'D', 'E'], levels.map((l) => l.id)],
+    ['noul', noul, 'llamacpp-noul', ['A', 'B'], ['true', 'false']],
+  ] as const)(
+    'per-letter-calibration: %s uses letter bias and temperature, preserves raw coverage',
+    async (_name, spec, recording, letters, ids) => {
+      serve = fixture(recording).response
+      const mass = rawMass(recording, [...letters])
+      const bias = Object.fromEntries(letters.map((letter, i) => [letter, i * 0.7]))
+      const { configureDecisionCalibration } = await import('@hames-ai/harness-baml/clients.server')
+      configureDecisionCalibration({
+        LocalQwenSmallDecide: { [spec.key]: { temperature: 2, bias } },
+      })
+      const r = await onPrivateTier(() =>
+        adapter().then((fn) => fn<string>({ spec, state: 'synthetic' })),
+      )
+      const weights = mass.map((m, i) => Math.sqrt(m) * Math.exp(bias[letters[i]]))
+      const sum = weights.reduce((a, b) => a + b, 0)
+      ids.forEach((id, i) =>
+        expect(r.probs[id as keyof typeof r.probs]).toBeCloseTo(weights[i] / sum, 12),
+      )
+      expect(r.calibrated).toBe(true)
+      expect(r.coverage).toBeCloseTo(
+        mass.reduce((a, b) => a + b, 0),
+        12,
+      )
+    },
+  )
+
+  it.each([1, 11])('score transport cap refuses %i levels even without defineScore', async (n) => {
+    const fn = await adapter()
+    await expect(
+      onPrivateTier(() =>
+        fn({
+          spec: {
+            ...score,
+            levels: Array.from({ length: n }, (_, i) => ({ id: `l${i}`, description: 'd' })),
+          },
+          state: 'synthetic',
+        }),
+      ),
+    ).rejects.toThrow(/2\.\.10/)
+    expect(hits).toHaveLength(0)
+  })
+
+  it('supported-types-same-resolver: one adapter follows tier and per-run overrides at read and call time', async () => {
+    const { createVerbalizedDecide } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+    const fn = await adapter()
+    expect(fn.supportedTypes).toEqual(['choice']) // default Jev is choice-only until S4
+    await expect(fn({ spec: score, state: 'synthetic' })).rejects.toThrow(
+      'Unsupported decision type',
+    )
+    await expect(fn({ spec: noul, state: 'synthetic' })).rejects.toThrow(
+      'Unsupported decision type',
+    )
+    expect(hits).toHaveLength(0)
+    await onPrivateTier(async () => {
+      expect(fn.supportedTypes).toEqual(['choice', 'score', 'noul'])
+      expect((await fn({ spec: noul, state: 'synthetic' })).llmCall?.clientName).toBe(
+        'LocalQwenSmallDecide',
+      )
+    })
+    await withRunFrame(
+      {
+        inference: {
+          tier: 'anthropic',
+          clientOverride: (role) =>
+            role === 'decide' ? { client: 'LocalQwenSmallDecide' } : undefined,
+        },
+      },
+      async () => {
+        expect(fn.supportedTypes).toEqual(['choice', 'score', 'noul'])
+        expect((await fn({ spec: score, state: 'synthetic' })).llmCall?.clientName).toBe(
+          'LocalQwenSmallDecide',
+        )
+      },
+    )
+    await withRunFrame(
+      {
+        inference: {
+          tier: 'verda',
+          clientOverride: (role) => (role === 'decide' ? { client: 'JevDecide' } : undefined),
+        },
+      },
+      async () => {
+        expect(fn.supportedTypes).toEqual(['choice'])
+        await expect(fn({ spec: noul, state: 'synthetic' })).rejects.toThrow(
+          /private inference tier/,
+        )
+      },
+    )
+    expect(createVerbalizedDecide().supportedTypes).toEqual(['choice', 'score', 'noul'])
+  })
+
+  it('secondary-supported-types: undeclared secondary remains choice-only with zero calls for score/noul', async () => {
+    const { createDecideAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
+    const secondary = vi.fn(async () => ({ probs: {}, method: 'verbalized', calibrated: false }))
+    configureConsumerClients((role) =>
+      role === 'decide' ? { client: 'AnthropicHaiku45' } : undefined,
+    )
+    try {
+      const fn = createDecideAdapter({ verbalized: secondary as never })
+      expect(fn.supportedTypes).toEqual(['choice'])
+      for (const spec of [score, noul])
+        await expect(fn({ spec, state: 'synthetic' })).rejects.toThrow('Unsupported decision type')
+      expect(secondary).not.toHaveBeenCalled()
+    } finally {
+      configureConsumerClients(undefined)
+    }
   })
 })
 

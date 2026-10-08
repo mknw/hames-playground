@@ -149,7 +149,8 @@ async function workOf(bytes: Uint8Array, exact?: string) {
     }),
     patch(Map.prototype, 'get', function (this: Map<unknown, unknown>, key: unknown) {
       const result = get.call(this, key)
-      if (key === 'body\0' + '1' && result !== undefined) matches++
+      // A (type, idx) lookup: the per-type map's get, whatever key shape holds it.
+      if (key === 'body' && result instanceof Map) matches++
       return result
     }),
   ]
@@ -840,7 +841,7 @@ describe('#536 H placeholder match once per shape', () => {
         style: { layouts: [stylePart('sldLayout', holders.join(''))] },
       })
       const m = await workOf(bytes)
-      expect(m.matches).toBe(1)
+      expect(m.matches).toBe(2) // one per-type inspection at indexing, one resolver lookup
       expect(m.out.counted).toEqual({ 'colour-contrast': 400 })
       const ambiguous = await workOf(edit(bytes, (_, xml) => xml.replace('idx="2"', 'idx="1"')))
       expect(ambiguous.matches).toBe(2) // one duplicate-key inspection at indexing, one resolver lookup

@@ -126,7 +126,7 @@ beforeEach(() => {
   // O2 on EVERY path: the embedding provider's key is set in every test, so a
   // fallback to it anywhere (success, error, retry) is a request carrying it.
   process.env.OPENROUTER_API_KEY = 'embedding-key'
-  delete process.env.JEV_DECISIONS_URL
+  process.env.JEV_DECISIONS_URL = 'https://api.typesafe.ai/v1/systemone'
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init: RequestInit) => {
@@ -166,15 +166,17 @@ describe('the wire shape — ONE request carries every field as a typed question
     expect(JSON.stringify(r)).not.toContain('or-test-key')
 
     expect(requests).toHaveLength(1)
-    expect(requests[0].url).toBe('https://openrouter.ai/api/alpha/decisions')
+    expect(requests[0].url).toBe('https://api.typesafe.ai/v1/systemone')
     expect(requests[0].init.method).toBe('POST')
+    expect((requests[0].init.headers as Record<string, string>)['content-type']).toBe(
+      'application/json',
+    )
     expect((requests[0].init.headers as Record<string, string>).authorization).toBe(
       'Bearer or-test-key',
     )
     expect(JSON.parse(requests[0].init.body as string)).toEqual({
-      model: 'typesafe/jev-1.13',
+      model: 'jev-1.13.0',
       state: 'the state',
-      provider: { zdr: true, data_collection: 'deny' },
       questions: {
         route: {
           type: 'choice',
@@ -192,6 +194,69 @@ describe('the wire shape — ONE request carries every field as a typed question
     expect(r.fields.route.probs).toEqual({ search: 0.9, chat: 0.1 })
     expect(r.fields.recall.probs).toEqual({ yes: 0.8, no: 0.2 })
   })
+
+  it('TypeSafe: explicit endpoint uses its model and no OpenRouter-only fields, with token-only usage', async () => {
+    process.env.JEV_DECISIONS_URL = 'https://api.typesafe.ai/v1/systemone'
+    respond = async () =>
+      Response.json({
+        model: 'jev-1.13.0',
+        answers: JEV_BODY.answers,
+        usage: { input_tokens: 120, output_tokens: 34 },
+      })
+    const { createJevTransport } = await import('@hames-ai/harness-baml/jev-decide.server')
+    const result = await createJevTransport({ openRouterPreferences: { zdr: false } }).decideAll({
+      spec: SET,
+      state: 'synthetic state',
+    })
+    const body = JSON.parse(requests[0].init.body as string)
+    expect(Object.keys(body).sort()).toEqual(['model', 'questions', 'state'])
+    expect(body.model).toBe('jev-1.13.0')
+    expect(body.questions.route).toEqual({
+      type: 'choice',
+      instructions: 'Which route?',
+      criteria: { search: 'look something up', chat: 'just talk' },
+    })
+    expect(result.fields.route.llmCall).toMatchObject({
+      provider: 'typesafe',
+      usage: { inputTokens: 120, outputTokens: 34 },
+    })
+    expect(result.fields.route.llmCall?.metrics).not.toHaveProperty('costEur')
+  })
+
+  it.each(['success', 'http', 'connection'] as const)(
+    'the key is absent from records and logs even when echoed (%s)',
+    async (kind) => {
+      const logs = [vi.spyOn(console, 'log'), vi.spyOn(console, 'warn'), vi.spyOn(console, 'error')]
+      const seen: LlmUsageSample[] = []
+      observeLlmUsage((sample) => seen.push(sample))
+      respond = async () => {
+        if (kind === 'connection') throw new Error('Bearer or-test-key')
+        return Response.json(
+          { diagnostic: 'Bearer or-test-key', ...JEV_BODY },
+          { status: kind === 'http' ? 401 : 200 },
+        )
+      }
+      try {
+        const { decideAll } = await transport()
+        const result = await decideAll({ spec: SET, state: 'synthetic state' }).catch(
+          (error) => error,
+        )
+        if (kind === 'success')
+          expect(result.fields.route.llmCall.rawOutput).toContain('[redacted]')
+        else {
+          expect(result.message).toContain('[redacted]')
+          expect(result.llmCall).toBeDefined()
+          expect(result.llmCall.provider).toBe('typesafe')
+        }
+        expect(String(result.cause?.message)).not.toContain('or-test-key')
+        expect(JSON.stringify(result)).not.toContain('or-test-key')
+        expect(JSON.stringify(seen)).not.toContain('or-test-key')
+        for (const log of logs) expect(JSON.stringify(log.mock.calls)).not.toContain('or-test-key')
+      } finally {
+        for (const log of logs) log.mockRestore()
+      }
+    },
+  )
 
   it('normalises rounding: a distribution summing to ~1 is used, not refused', async () => {
     respond = async () =>
@@ -214,7 +279,7 @@ describe('the wire shape — ONE request carries every field as a typed question
     expect(requests).toHaveLength(1)
     expect(r.llmCall).toMatchObject({
       clientName: 'JevDecide',
-      provider: 'openrouter',
+      provider: 'typesafe',
       hitOutputCap: false,
     })
   })
@@ -249,15 +314,20 @@ describe('jev-privacy — OpenRouter provider preferences (O1), own key (O2), en
   const lastBody = () => JSON.parse(requests[0].init.body as string)
 
   it('O1: the body carries zero data retention AND data collection denied on OpenRouter', async () => {
+    process.env.JEV_DECISIONS_URL = 'https://openrouter.ai/api/alpha/decisions'
     const { decideAll } = await transport()
-    await decideAll({ spec: SET, state: 's' })
+    const result = await decideAll({ spec: SET, state: 's' })
+    expect(result.fields.route.llmCall?.provider).toBe('openrouter')
+    expect(lastBody().model).toBe('typesafe/jev-1.13')
     expect(lastBody().provider).toEqual({ zdr: true, data_collection: 'deny' })
   })
 
   it('O1: a subdomain of openrouter.ai gets the preferences too', async () => {
     process.env.JEV_DECISIONS_URL = 'https://api.openrouter.ai/api/alpha/decisions'
     const { decideAll } = await transport()
-    await decideAll({ spec: SET, state: 's' })
+    const result = await decideAll({ spec: SET, state: 's' })
+    expect(result.fields.route.llmCall?.provider).toBe('openrouter')
+    expect(lastBody().model).toBe('typesafe/jev-1.13')
     expect(lastBody().provider).toEqual({ zdr: true, data_collection: 'deny' })
   })
 
@@ -294,6 +364,7 @@ describe('jev-privacy — OpenRouter provider preferences (O1), own key (O2), en
   ])('O1: preferences that cannot be applied (%s) refuse BEFORE any fetch', async (_n, prefs) => {
     const { createJevTransport } = await import('@hames-ai/harness-baml/jev-decide.server')
     const { LLMCallError } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    process.env.JEV_DECISIONS_URL = 'https://openrouter.ai/api/alpha/decisions'
     const { decideAll } = createJevTransport({ openRouterPreferences: prefs })
     const err = await decideAll({ spec: SET, state: 's' }).catch((e) => e)
     expect(err).toBeInstanceOf(LLMCallError)
@@ -373,6 +444,30 @@ describe('jev-tier-lock — Jev is a public provider and may never take a privat
     )
     expect(requests).toHaveLength(0)
   })
+
+  it.each(['verda', 'unknown', 'future'])(
+    'refuses tier %s before reading the key',
+    async (tier) => {
+      const { decideAll } = await transport()
+      const real = process.env
+      let keyReads = 0
+      process.env = new Proxy(real, {
+        get: (target, key) => (
+          key === 'JEV_DECISIONS_API_KEY' && keyReads++,
+          Reflect.get(target, key)
+        ),
+      })
+      try {
+        await expect(
+          withRunFrame({ inference: { tier } }, () => decideAll({ spec: SET, state: 's' })),
+        ).rejects.toThrow(/Refusing/)
+        expect(keyReads).toBe(0)
+        expect(requests).toHaveLength(0)
+      } finally {
+        process.env = real
+      }
+    },
+  )
 
   it('a consumer mapping decide to JevDecide under the private tier is refused, zero requests', async () => {
     const clients = await import('@hames-ai/harness-baml/clients.server')
@@ -512,7 +607,7 @@ describe('jev-fallback — fail closed, never a downgrade to another provider', 
       expect(out.error).toBeDefined()
       // The bearer key never rides the error or the call record (both are persisted).
       expect(JSON.stringify(out)).not.toContain('or-test-key')
-      expect(requests.map((q) => q.url)).toEqual(['https://openrouter.ai/api/alpha/decisions'])
+      expect(requests.map((q) => q.url)).toEqual(['https://api.typesafe.ai/v1/systemone'])
       // … and nothing rode the BAML runtime to the private tier's 4B either.
       expect(smallRequests).toBe(0)
     },

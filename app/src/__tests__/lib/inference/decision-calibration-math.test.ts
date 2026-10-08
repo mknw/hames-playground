@@ -33,6 +33,65 @@ describe('decision calibration maths — synthetic known answers', () => {
     expect(calibrationMetrics([{ truth: 'a', probs: { a: 1, b: 0 } }]).ece).toBe(0)
     expect(calibrationMetrics([{ truth: 'a', probs: { a: 1, b: 0 } }]).coverage).toBeUndefined()
   })
+  it('bins: ten-bin known answers across and within boundaries', () => {
+    for (const [p, q, ece] of [
+      [0.89, 0.95, 0.53],
+      [0.81, 0.89, 0.35],
+      [0.9, 0.95, 0.425],
+    ]) {
+      expect(
+        calibrationMetrics([
+          { truth: 'a', probs: { a: p, b: 1 - p } },
+          { truth: 'b', probs: { a: q, b: 1 - q } },
+        ]).ece,
+      ).toBeCloseTo(ece)
+    }
+  })
+  it('bias-only: known shift beats every temperature-only candidate', () => {
+    const samples = [
+      ...Array.from({ length: 20 }, () => ({ truth: 'b', probs: { a: 0.6, b: 0.4 } })),
+      ...Array.from({ length: 20 }, () => ({ truth: 'a', probs: { a: 0.75, b: 0.25 } })),
+    ]
+    const entry = fitCalibration(samples, ['a', 'b'], false, 0.5)
+    expect(entry.bias!.B).toBeGreaterThan(0.3)
+    const temperatureOnly = Math.min(
+      ...Array.from(
+        { length: 1001 },
+        (_, i) =>
+          calibrationMetrics(
+            samples.map((s) => applyFit(s, ['a', 'b'], { temperature: 0.05 * 400 ** (i / 1000) })),
+          ).brier,
+      ),
+    )
+    expect(
+      calibrationMetrics(samples.map((s) => applyFit(s, ['a', 'b'], entry))).brier,
+    ).toBeLessThan(temperatureOnly)
+  })
+  it('temperature bounds: extreme fits stay within [.05,20]', () => {
+    for (const p of [0.8, 0.99]) {
+      const samples =
+        p === 0.8
+          ? [
+              { truth: 'a', probs: { a: p, b: 1 - p } },
+              { truth: 'b', probs: { a: 1 - p, b: p } },
+            ]
+          : [
+              { truth: 'a', probs: { a: p, b: 1 - p } },
+              { truth: 'b', probs: { a: p, b: 1 - p } },
+              { truth: 'a', probs: { a: 1 - p, b: p } },
+              { truth: 'b', probs: { a: 1 - p, b: p } },
+            ]
+      const entry = fitCalibration(samples, ['a', 'b'], false, 0.5)
+      expect(entry.temperature).toBeGreaterThanOrEqual(0.05)
+      expect(entry.temperature).toBeLessThanOrEqual(20)
+    }
+  })
+  it('tie-break: strictest observed confidence then margin among equal retention', () => {
+    const cuts = fitCuts([correct, wrong], 0.95)
+    expect(cuts.minConfidence).toBeCloseTo(ranked(correct).confidence)
+    expect(cuts.minMargin).toBeCloseTo(ranked(correct).margin)
+    expect(fitCuts([correct, wrong].reverse(), 0.95)).toEqual(cuts)
+  })
   it('validation: missing, malformed and non-normalized distributions refuse', () => {
     expect(() => calibrationMetrics([])).toThrow()
     for (const probs of [{ a: 1 }, { a: 1, b: 1 }, { a: NaN, b: 0 }, { a: -1, b: 2 }]) {
@@ -50,8 +109,8 @@ describe('decision calibration maths — synthetic known answers', () => {
       metrics: { accuracy: 1 },
     })
     expect(fitCuts([correct, wrong], 0.5).retained).toBe(2)
-    expect(fitCuts([wrong], 0.95).retained).toBe(0)
-    expect(retainedMetrics([wrong], { minConfidence: 1, minMargin: 1 }).metrics).toBeNull()
+    expect(fitCuts([wrong], 0.95)).toEqual({ minConfidence: 1, minMargin: 1, retained: 0 })
+    expect(retainedMetrics([wrong], fitCuts([wrong], 0.95)).metrics).toBeNull()
     expect(() => fitCuts([], 0.95)).toThrow()
     expect(() => fitCuts([correct], 2)).toThrow()
     expect(ranked(correct).confidence).toBeCloseTo(0.6)

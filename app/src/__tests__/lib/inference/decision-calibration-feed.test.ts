@@ -1,3 +1,5 @@
+import * as baml from '@hames-ai/harness-baml/baml_client/inlinedbaml'
+import * as jev from '@hames-ai/harness-baml/jev-decide.server'
 import type { DecisionCalibrationEntry } from '@hames-ai/harness-patterns'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -8,6 +10,7 @@ import {
 } from '../../../lib/inference/decision-calibration.server'
 import { CALIBRATION_SPECS } from '../../../lib/inference/decision-calibration-specs.server'
 import {
+  LOGPROB_CLIENTS,
   configureDecisionCalibration,
   decisionCalibrationFor,
 } from '@hames-ai/harness-baml/clients.server'
@@ -15,7 +18,17 @@ import calibrationContract from '../../../lib/inference/decision-calibration-con
 import committed from '../../../lib/inference/decision-calibration.json'
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 
-afterEach(() => configureDecisionCalibration({}))
+vi.mock('@hames-ai/harness-baml/baml_client/inlinedbaml', async (importOriginal) => ({
+  ...(await importOriginal<typeof baml>()),
+  getBamlFiles: vi.fn((await importOriginal<typeof baml>()).getBamlFiles),
+}))
+vi.mock('@hames-ai/harness-baml/jev-decide.server', async (importOriginal) => ({
+  ...(await importOriginal<typeof jev>()),
+}))
+afterEach(() => {
+  configureDecisionCalibration({})
+  vi.restoreAllMocks()
+})
 function artifact(client = 'JevDecide'): CalibrationArtifact {
   return {
     schemaVersion: 1,
@@ -57,6 +70,41 @@ describe('decision calibration host feed', () => {
     expect(decisionCalibrationFor('LocalQwenSmallDecide', 'memory.recall')?.temperature).toBe(2)
     feedDecisionCalibration(committed)
     expect(decisionCalibrationFor('LocalQwenSmallDecide', 'memory.recall')).toBeUndefined()
+  })
+  it('atomic: invalid second client never installs the valid first client', () => {
+    const value = artifact()
+    value.clients.LocalQwenSmallDecide = {
+      ...artifact('LocalQwenSmallDecide').clients.LocalQwenSmallDecide,
+      fingerprint: 'x',
+    }
+    expect(() => feedDecisionCalibration(value)).toThrow()
+    expect(decisionCalibrationFor('JevDecide', 'route')).toBeUndefined()
+  })
+  it('fingerprint inputs: client, revision, model, prompt and declaration affect digest', async () => {
+    const baseline = calibrationFingerprint('LocalQwenSmallDecide')
+    const files = baml.getBamlFiles()
+    for (const filename of ['decide.baml', 'local-client.baml'] as const) {
+      vi.mocked(baml.getBamlFiles).mockReturnValue({
+        ...files,
+        [filename]: files[filename] + ' changed',
+      })
+      expect(calibrationFingerprint('LocalQwenSmallDecide')).not.toBe(baseline)
+    }
+    vi.mocked(baml.getBamlFiles).mockReturnValue(files)
+    const jevBefore = calibrationFingerprint('JevDecide')
+    vi.spyOn(jev, 'JEV_MODEL', 'get').mockReturnValue('changed-model' as typeof jev.JEV_MODEL)
+    expect(calibrationFingerprint('JevDecide')).not.toBe(jevBefore)
+    expect(calibrationFingerprint('JevDecide')).not.toBe(baseline)
+    expect(
+      calibrationFingerprint('LocalQwenSmallDecide', CALIBRATION_REVISION + '-changed'),
+    ).not.toBe(baseline)
+    const clients = LOGPROB_CLIENTS as Set<string>
+    clients.add('OtherLogprob')
+    try {
+      expect(calibrationFingerprint('OtherLogprob')).not.toBe(baseline)
+    } finally {
+      clients.delete('OtherLogprob')
+    }
   })
   it('missing: absent artifact or missing required key refuses, preserves previous table', () => {
     feedDecisionCalibration(artifact())
@@ -134,6 +182,7 @@ describe('decision calibration host feed', () => {
       { bias: { A: NaN } },
       { bias: { A: 0, B: 0, C: NaN } },
       { bias: { LABEL: 0 } },
+      { bias: { A: 0, B: 0, C: 0, D: 0 } },
     ]) {
       const a = artifact('LocalQwenSmallDecide')
       a.clients.LocalQwenSmallDecide.entries = {

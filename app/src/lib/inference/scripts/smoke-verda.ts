@@ -74,6 +74,9 @@
  *      suite's `screen-on-the-tier` scenario, which grades the same two
  *      properties including on a page that tells the screen to stay quiet.
  *
+ *   7. `smokeDecide()` — actual serving client, logprob method, normalized
+ *      decision distribution and coverage on the small model.
+ *
  * Each step asserts its actual private-tier serving client, including the 4B
  * decide client in step 7. Being told the
  * flag is on is not evidence that the call went there.

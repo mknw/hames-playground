@@ -27,7 +27,7 @@ export interface CalibrationArtifact {
 
 /** Bind fits to the ordered questions/labels and transport/model contract.
  * A local prompt/client change invalidates its fits, even under the same name. */
-export function calibrationFingerprint(client: string): string {
+export function calibrationFingerprint(client: string, revision = CALIBRATION_REVISION): string {
   const files = getBamlFiles()
   const transport = JEV_CLIENTS.has(client)
     ? { method: 'jev', model: JEV_MODEL, revision: 'G7-G8-cuts-only-v1' }
@@ -39,7 +39,7 @@ export function calibrationFingerprint(client: string): string {
     .update(
       JSON.stringify({
         client,
-        revision: CALIBRATION_REVISION,
+        revision,
         specs: CALIBRATION_SPECS,
         transport,
       }),

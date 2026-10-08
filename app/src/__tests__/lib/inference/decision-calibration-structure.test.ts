@@ -1,3 +1,4 @@
+import { JEV_KEY_ENV } from '@hames-ai/harness-baml/jev-decide.server'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -49,18 +50,27 @@ describe('decision calibration scenario/script structure', () => {
     }
   })
   it('scenario: registered, held-out metrics, cuts-only Jev verdict and actual serving evidence', () => {
-    const source = read('evals/scenarios/decision-calibration.ts')
+    const source = read('src/lib/inference/decision-calibration-report.ts')
+    const scenario = read('evals/scenarios/decision-calibration.ts')
     expect(read('evals/run.ts')).toMatch(/SCENARIOS[\s\S]*decisionCalibrationScenario,/)
-    expect(source).toContain("id: 'decision-calibration'")
-    expect(source).toContain('fitCalibration(fit, labels, jev, accuracyFloor)')
+    expect(scenario).toContain("id: 'decision-calibration'")
+    expect(source).toContain('fitCalibration(fit, labels, jev, criteria.accuracyFloor)')
     expect(source).toContain('calibrationMetrics(holdout)')
     expect(source).toContain('[...spec.labels].reverse()')
     expect(source).toContain('orderSwapAgreement(pairs)')
     expect(source).toContain('read.llmCall.clientName !== client')
-    expect(source).toContain('ctx.recordCall(read.llmCall)')
+    expect(scenario).toContain('ctx.recordCall(read.llmCall)')
     expect(source).toContain('REOPEN G7(a): Jev measured ECE=')
-    expect(source).toContain('candidate artifact (owner review before commit; never auto-fed)')
-    expect(source).toContain('Owner-tunable diagnostic defaults')
+    expect(scenario).toContain('candidate artifact (owner review before commit; never auto-fed)')
+    expect(source).toContain('OWNER_TUNABLE_DEFAULTS')
+    expect(scenario).toContain('tier: calibrationTier(jev)')
+    expect(scenario).toContain('if (completeEntries(entries, CALIBRATION_SPECS))')
+    expect(scenario).toContain('pooledReport(client, jev, pooled, criteria)')
+  })
+  it('runbook: current decision-only key and privacy controls', () => {
+    const doc = read('../docs/testing/decision-calibration.md')
+    expect(doc).toContain(JEV_KEY_ENV)
+    expect(doc).not.toMatch(/OPENROUTER_API_KEY/)
   })
   it('host: composition feeds committed artifact; decide-only eval avoids unrelated preflight', () => {
     const config = read('src/lib/inference/config.server.ts')

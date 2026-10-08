@@ -5,6 +5,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: [
+      'scripts/decision-calibration-harness.test.ts',
+      'scripts/decision-calibration-scenario.test.ts',
       'src/__tests__/lib/inference/decision-calibration-*.test.ts',
       'src/__tests__/lib/inference/decision-probe.test.ts',
       'src/__tests__/lib/harness-patterns/decide-adapter.test.ts',

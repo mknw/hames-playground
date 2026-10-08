@@ -109,7 +109,9 @@ export function fitCuts(samples: readonly CalibrationSample[], targetAccuracy: n
       if (
         kept.length &&
         kept.filter((r) => r.correct).length / kept.length >= targetAccuracy &&
-        kept.length > best.retained
+        (kept.length > best.retained ||
+          (kept.length === best.retained &&
+            (c > best.minConfidence || (c === best.minConfidence && m > best.minMargin))))
       ) {
         best = { minConfidence: c, minMargin: m, retained: kept.length }
       }

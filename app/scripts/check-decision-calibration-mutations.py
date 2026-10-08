@@ -9,6 +9,7 @@ import subprocess
 MATH = 'src/lib/inference/decision-calibration-math.ts'
 FEED = 'src/lib/inference/decision-calibration.server.ts'
 SMOKE = 'src/lib/inference/scripts/smoke-verda.ts'
+REPORT = 'src/lib/inference/decision-calibration-report.ts'
 TESTS = 'src/__tests__/lib/inference/'
 CASES = [
     ('metrics', MATH, 'brier: brier / samples.length', 'brier: 0', 'math', 'metrics:'),
@@ -40,8 +41,8 @@ CASES = [
     ('extra-key', FEED, 'Object.keys(record.entries).length !== keys.length ||', 'false ||', 'feed', 'mismatched:'),
     ('policy-confidence', MATH, 'confidence: (labels.length * p - 1) / (labels.length - 1)', 'confidence: p', 'math', 'cuts:'),
     ('policy-margin', MATH, 'margin: p - labels[1][1]', 'margin: p', 'math', 'cuts:'),
-    ('heldout-fit', 'evals/scenarios/decision-calibration.ts', 'fitCalibration(fit, labels, jev, accuracyFloor)', 'fitCalibration(holdout, labels, jev, accuracyFloor)', 'structure', 'scenario:'),
-    ('g7-verdict', 'evals/scenarios/decision-calibration.ts', 'REOPEN G7(a): Jev measured ECE=', 'PASS: Jev ECE=', 'structure', 'scenario:'),
+    ('heldout-fit', REPORT, 'fitCalibration(fit, labels, jev, criteria.accuracyFloor)', 'fitCalibration(holdout, labels, jev, criteria.accuracyFloor)', 'report', 'holdout:'),
+    ('g7-verdict', REPORT, 'REOPEN G7(a): Jev measured ECE=', 'PASS: Jev ECE=', 'report', 'verdict:'),
     ('jev-refusal', '../packages/harness-baml/clients.server.ts', 'JEV_CLIENTS.has(client) &&\n                (entry.temperature', 'false &&\n                (entry.temperature', 'feed', 'Jev:'),
     ('corpus-structure', 'evals/decision-calibration-fixtures.json', '"key": "memory.merge"', '"key": "uncovered"', 'structure', 'corpus:'),
     ('scenario-structure', 'evals/run.ts', '  decisionCalibrationScenario,', '', 'structure', 'scenario:'),
@@ -49,6 +50,44 @@ CASES = [
     ('smoke-structure', SMOKE, '  await smokeDecide()', '', 'structure', 'smoke:'),
     ('smoke-evidence', SMOKE, "result.llmCall?.clientName !== expected || result.method !== 'logprob'", 'false', 'smoke', 'smoke evidence:'),
     ('smoke-distribution', SMOKE, 'probabilities.length !== 2 ||', 'false && probabilities.length !== 2 ||', 'smoke', 'smoke distribution:'),
+    ('F1-reopen-false', REPORT, 'jev && measured.ece > criteria.eceCeiling', 'jev && false', 'report', 'verdict:'),
+    ('F1-reopen-one', REPORT, 'jev && measured.ece > criteria.eceCeiling', 'jev && measured.ece > 1', 'report', 'verdict:'),
+    ('F1-accuracy-default', REPORT, 'accuracyFloor: 0.95', 'accuracyFloor: 0.5', 'report', 'defaults:'),
+    ('F1-ece-default', REPORT, 'eceCeiling: 0.05', 'eceCeiling: 0.9', 'report', 'defaults:'),
+    ('F1-holdout-leak', REPORT, 'holdout.map((s) => applyFit(s, labels, entry))', 'fit.map((s) => applyFit(s, labels, entry))', 'report', 'holdout:'),
+    ('F1-infeasible-entry', REPORT, 'entry: cutFit.retained > 0 ? entry : null', 'entry: entry', 'report', 'artifact:'),
+    ('F1-one-key-complete', REPORT, 'Object.keys(entries).length === specs.length', 'Object.keys(entries).length >= 1', 'report', 'artifact:'),
+    ('F1-tier-swap', REPORT, "jev ? 'anthropic' : 'verda'", "jev ? 'verda' : 'anthropic'", 'report', 'defaults:'),
+    ('F1-split-swap', REPORT, "item.split === 'fit'", "item.split === 'holdout'", 'report', 'holdout:'),
+    ('F1-method-ignore', REPORT, "read.method !== (jev ? 'jev' : 'logprob')", 'false', 'report', 'serving:'),
+    ('F2-key-env', '../packages/harness-baml/jev-decide.server.ts', "JEV_KEY_ENV = 'JEV_DECISIONS_API_KEY'", "JEV_KEY_ENV = 'RENAMED_DECISION_KEY'", 'structure', 'runbook:'),
+    ('F2-old-key-doc', '../docs/testing/decision-calibration.md', 'JEV_DECISIONS_API_KEY', 'OPENROUTER_API_KEY', 'structure', 'runbook:'),
+    ('F3-feed-atomic', FEED, '  }\n  configureDecisionCalibration(table)', '    configureDecisionCalibration(table)\n  }', 'feed', 'atomic:'),
+    ('F4-model', FEED, 'model: JEV_MODEL,', '', 'feed', 'fingerprint inputs:'),
+    ('F4-prompt-files', FEED, "prompt: files['decide.baml'], client: files['local-client.baml']", "prompt: '', client: ''", 'feed', 'fingerprint inputs:'),
+    ('F4-revision', FEED, '        revision,', '', 'feed', 'fingerprint inputs:'),
+    ('F4-client', FEED, '        client,', '', 'feed', 'fingerprint inputs:'),
+    ('F5-pooled-verdict', REPORT, 'REOPEN G7(a): Jev pooled measured ECE=', 'PASS: Jev pooled measured ECE=', 'report', 'pooled:'),
+    ('F5-pooled-threshold', REPORT, 'jev && measured.ece > criteria.eceCeiling', 'jev && measured.ece > 1', 'report', 'pooled:'),
+    ('F6-blank-zero', REPORT, "raw === undefined || raw.trim() === ''", 'raw === undefined', 'report', 'defaults:'),
+    ('F7-bins-five', MATH, 'Math.floor(r.p * 10)', 'Math.floor(r.p * 5)', 'math', 'bins:'),
+    ('F7-skip-bias', MATH, "['temperature', ...Object.keys(bias).slice(1)]", "['temperature']", 'math', 'bias-only:'),
+    ('F7-temperature-clamp', MATH, 'candidate.temperature < 0.05 || candidate.temperature > 20', 'false', 'math', 'temperature bounds:'),
+    ('F7-cut-tiebreak', MATH, 'kept.length > best.retained', 'kept.length >= best.retained', 'math', 'tie-break:'),
+    ('F7-reject-all-values', MATH, 'minConfidence: 1, minMargin: 1, retained: 0', 'minConfidence: 0, minMargin: 0, retained: 0', 'math', 'cuts:'),
+    ('F8-bias-count', FEED, 'Object.keys(entry.bias).length !== letters.length ||', 'false ||', 'feed', 'values:'),
+    ('F1-reopen-boundary', REPORT, 'jev && measured.ece > criteria.eceCeiling', 'jev && measured.ece >= criteria.eceCeiling', 'report', 'verdict boundary:'),
+    ('F4-prompt-only', FEED, "prompt: files['decide.baml']", "prompt: ''", 'feed', 'fingerprint inputs:'),
+    ('F4-declaration-only', FEED, "client: files['local-client.baml']", "client: ''", 'feed', 'fingerprint inputs:'),
+    ('F8-raw-label', REPORT, 'orderSwapAgreementRaw:', 'orderSwapAgreement:', 'report', 'holdout:'),
+    ('F8-harness-adapter-calls', 'evals/harness.ts', 'adapterCalls.push(call)', 'void call', 'harness', 'adapter calls:'),
+
+    ('F1-scenario-infeasible-write', 'evals/scenarios/decision-calibration.ts', 'if (report.entry) entries[spec.key] = report.entry', 'entries[spec.key] = report.entry!', 'scenario', 'scenario artifact:'),
+    ('F1-scenario-one-key-write', 'evals/scenarios/decision-calibration.ts', 'completeEntries(entries, CALIBRATION_SPECS)', 'Object.keys(entries).length >= 1', 'scenario', 'scenario artifact:'),
+    ('F1-scenario-tier-swap', 'evals/scenarios/decision-calibration.ts', 'tier: calibrationTier(jev)', "tier: jev ? 'verda' : 'anthropic'", 'scenario', 'scenario artifact:'),
+    ('F5-scenario-pooled-remove', 'evals/scenarios/decision-calibration.ts', 'observations.push(...pool.observations)', 'void pool.observations', 'scenario', 'scenario artifact:'),
+    ('F8-scenario-call-remove', 'evals/scenarios/decision-calibration.ts', 'ctx.recordCall(read.llmCall)', 'void read.llmCall', 'scenario', 'scenario artifact:'),
+
 ]
 
 # The distribution mutation disables the whole shape guard, rather than only
@@ -61,6 +100,9 @@ def mutation(path, old, new, name):
         return source, source[:start] + '  if (false) {\n' + source[end:]
     if old not in source:
         raise RuntimeError(f'{name}: mutation anchor missing')
+    if name in ['F1-reopen-false', 'F1-reopen-one', 'F1-reopen-boundary']:
+        before, after = source.rsplit(old, 1)
+        return source, before + new + after
     return source, source.replace(old, new, 1)
 
 if __name__ == '__main__':
@@ -69,7 +111,7 @@ if __name__ == '__main__':
         source, changed = mutation(path, old, new, name)
         try:
             path.write_text(changed)
-            result = subprocess.run(['pnpm', 'exec', 'vitest', 'run', '--config', 'scripts/vitest-decision-calibration.config.ts', TESTS + f'decision-calibration-{suite}.test.ts', '-t', test_name], capture_output=True, text=True)
+            result = subprocess.run(['pnpm', 'exec', 'vitest', 'run', '--config', 'scripts/vitest-decision-calibration.config.ts', (f'scripts/decision-calibration-{suite}.test.ts' if suite in ['harness', 'scenario'] else TESTS + f'decision-calibration-{suite}.test.ts'), '-t', test_name], capture_output=True, text=True)
             output = result.stdout + result.stderr
             # A loader/compiler error is NOT proof the assertion detects it.
             if result.returncode == 0 or 'AssertionError' not in output:

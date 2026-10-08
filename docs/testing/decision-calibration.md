@@ -1,15 +1,12 @@
 # Decision calibration (#418 T8)
 
-T8 is built against main `36811416`, including T1–T7 and #528's G7/G8 fixes.
-There was no calibration scenario, host feed or smoke decide step on that main.
+T8 includes merged #526 (decision transport controls) and #527 (calibrated merge gate).
 This change makes **no live run**. Jev's ECE for our questions is **unmeasured**
 until the owner runs the commands below; no value is invented here.
 
 The scenario covers the actual exported `memory.recall`, four `memory.store.*`,
 `memory.merge` and `document.injection` questions. `route` is explicitly an
-eval-only proposal: T9/T10 must refit if their question or labels differ. The
-merge question exists on main; #527's policy changes are still a separate open
-dependency. Its eventual `requireCalibrated` gate is covered by the corpus.
+eval-only proposal: T9/T10 must refit if their question or labels differ.
 No consumer, shadow step or routing map is changed here.
 
 ## Measurement and interpretation
@@ -50,7 +47,8 @@ policies. Held-out ECE and retained accuracy failing those criteria make the
 scenario red, while preserving measurements and fitted candidates.
 
 This small corpus is a reproducible diagnostic, not a population calibration
-certificate. Some per-key holdouts have only six items; ten-bin ECE is noisy
+certificate. The report also pools all 56 held-out items per client and emits an ALL verdict
+and check under the same ECE ceiling. Some per-key holdouts have only six items; ten-bin ECE is noisy
 there. The owner should expand/relabel the corpus and refit before claiming
 coverage of real traffic. Reports state this limitation.
 
@@ -127,21 +125,14 @@ client records if needed), runs the hermetic feed pins and commits it.
 
 **These commands are intentionally not run for this PR.** Run from `app/`.
 Ensure `.env` contains the intended endpoints and keys; do not paste secrets
-into the report or PR. The privacy controls of the owner's Jev-provider follow-up
-must be in place before the first live Jev run (SD-12).
-
-On the main this PR builds from, the Jev transport reads `OPENROUTER_API_KEY`
-even when `JEV_DECISIONS_URL` points elsewhere. Use a decision-provider-only
-credential under that current name and an explicitly configured owner-approved
-zero-retention Decisions-compatible HTTPS endpoint. The separate decision-key
-name, URL guard and OpenRouter zero-retention preferences from the owner's
-2026-10-08 decision are a separate dependency; update the credential name in
-these commands when that follow-up lands. Do not take this runbook as permission
-to use the transport's OpenRouter fallback without those controls.
+into the report or PR. The transport reads only `JEV_DECISIONS_API_KEY`, with no
+fallback. `JEV_DECISIONS_URL` is guarded to require HTTPS or loopback HTTP;
+OpenRouter requests carry default `zdr: true` and `data_collection: 'deny'`
+provider preferences (#526). The owner still configures the decision-only key
+and provider choice per the 2026-10-08 decision before a live run.
 
 ```sh
-# .env: JEV_DECISIONS_URL and the decision-only key under the CURRENT
-# transport's OPENROUTER_API_KEY name (see dependency above).
+# .env: JEV_DECISIONS_URL and JEV_DECISIONS_API_KEY (decision-only credential).
 USE_VERDA_INFERENCE=0 EVAL_CLIENT=default EVAL_ROLES=decide \
   EVAL_ONLY=decision-calibration pnpm eval:harness
 
@@ -190,7 +181,7 @@ pnpm lint
 ```
 
 The standalone pin config has no global database setup. It runs the new
-synthetic math/feed/structure/smoke pins and the relevant existing adapter,
+synthetic report/math/feed/structure/smoke pins and fake-adapter scenario/plumbing tests and the relevant existing adapter,
 Jev, probe, core decision and CI-exclusion pins. The smoke adapter is mocked;
 existing adapter tests serve fixtures over ephemeral loopback HTTP, never
 providers. Mutations run a single named pin, require an **assertion failure**

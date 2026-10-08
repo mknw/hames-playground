@@ -22,11 +22,17 @@ const { Pool } = pg
 let _pool: pg.Pool | null = null
 let _initPromise: Promise<void> | null = null
 
+/** The connection string every pool of this app uses — the main one here and
+ *  the memory-write pool in `memories.server.ts`, so the two can never point
+ *  at different databases. Unset: the compose Postgres on localhost, with the
+ *  repo-root .env password. */
+export function databaseUrl(): string {
+  return process.env.DATABASE_URL ?? localDatabaseUrl('hames')
+}
+
 function getPool(): pg.Pool {
   if (!_pool) {
-    // Unset: the compose Postgres on localhost, with the repo-root .env password.
-    const connectionString = process.env.DATABASE_URL ?? localDatabaseUrl('hames')
-    _pool = new Pool({ connectionString })
+    _pool = new Pool({ connectionString: databaseUrl() })
     _pool.on('error', (err) => {
       console.error('[db] idle client error:', err)
     })
@@ -308,6 +314,55 @@ export async function query<R extends pg.QueryResultRow = pg.QueryResultRow>(
   text: string,
   params?: unknown[],
 ): Promise<pg.QueryResult<R>> {
+  await ensureInit()
+  return getPool().query<R>(text, params as never[])
+}
+
+/** The slice of a pooled connection a transaction body may use. */
+export interface TxQuery {
+  query<R extends pg.QueryResultRow = pg.QueryResultRow>(
+    text: string,
+    params?: unknown[],
+  ): Promise<pg.QueryResult<R>>
+}
+
+/**
+ * Run `fn` in ONE transaction on ONE connection of the main pool: BEGIN, then
+ * COMMIT if it resolved, ROLLBACK and rethrow if it threw. The connection is
+ * released either way. For short multi-statement writes that must commit
+ * together (a conversation delete and the memories it erases); a transaction
+ * that waits on a model call belongs on `memories.server.ts`'s own pool, not
+ * here.
+ */
+export async function withTransaction<R>(fn: (tx: TxQuery) => Promise<R>): Promise<R> {
+  await ensureInit()
+  const client = await getPool().connect()
+  let broken = false
+  // See memories.server.ts transaction(): checked-out clients need their own error listener.
+  const onError = (err: Error) => {
+    broken = true
+    console.error('[db] connection lost mid-transaction:', err.message)
+  }
+  client.on('error', onError)
+  try {
+    await client.query('BEGIN')
+    const out = await fn({ query: (text, params) => client.query(text, params as never[]) })
+    await client.query('COMMIT')
+    return out
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK')
+    } catch {
+      broken = true // destroy the connection rather than return it to the pool
+    }
+    throw err
+  } finally {
+    client.off('error', onError)
+    client.release(broken)
+  }
+}
+
+async function ensureInit(): Promise<void> {
   if (!_initPromise) {
     _initPromise = initSchema().catch((err) => {
       // A transient failure (Postgres briefly unreachable) is retried on the
@@ -322,13 +377,21 @@ export async function query<R extends pg.QueryResultRow = pg.QueryResultRow>(
     })
   }
   await _initPromise
-  return getPool().query<R>(text, params as never[])
+}
+
+const _closers = new Set<() => Promise<void>>()
+
+/** Register a sibling pool (the memory-write pool) to be closed with this one. */
+export function onClosePool(closer: () => Promise<void>): void {
+  _closers.add(closer)
 }
 
 /**
- * Close the pool (test teardown only).
+ * Close the pool (test teardown only) — and every sibling pool registered
+ * through {@link onClosePool}.
  */
 export async function closePool(): Promise<void> {
+  for (const closer of _closers) await closer()
   if (_pool) {
     await _pool.end()
     _pool = null

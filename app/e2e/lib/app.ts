@@ -399,6 +399,13 @@ async function boot(): Promise<AppHandles> {
     },
 
     async wipe() {
+      // Memories first: memory_sources' FK refuses a conversation delete that
+      // would strand a source (#531); the sources cascade from memories.
+      await dbClient
+        .query('DELETE FROM memories WHERE user_id = $1', [userId])
+        .catch((err: { code?: string }) => {
+          if (err.code !== '42P01') throw err
+        })
       await dbClient.query('DELETE FROM conversations WHERE user_id = $1', [userId])
     },
   }

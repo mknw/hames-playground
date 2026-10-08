@@ -35,6 +35,9 @@ import type {
   AnyDecision,
   AnyDecisionSpec,
   DecisionFor,
+  PolicyFor,
+  MixedDecisionSet,
+  DecisionSetSpec,
   DecisionType,
   ScoreSpec,
   NoulSpec,
@@ -54,7 +57,6 @@ import type {
   DecisionMadeEventData,
   DecisionMethod,
   DecisionPolicy,
-  DecisionSetSpec,
   DecisionSpec,
   ErrorEventData,
   EventView,
@@ -660,20 +662,29 @@ export function scoreNoulDecision(input: NoulScoring): {
 
 /** One raw-seam call to evaluate: the transport, the question, the state, the
  *  consumer's policy. */
-export interface DecisionCall<L extends string = string> {
+/** A string type argument retains the legacy choice-label form. */
+type SpecFor<S extends AnyDecisionSpec | string> = [S] extends [string]
+  ? DecisionSpec<S & string>
+  : Extract<S, AnyDecisionSpec>
+
+export interface DecisionCall<S extends AnyDecisionSpec | string = DecisionSpec> {
   readonly decide: DecideFn
-  readonly spec: DecisionSpec<L>
+  readonly spec: SpecFor<S>
   /** The text the decision is asked over. Only its LENGTH is recorded. */
   readonly state: string
-  readonly policy: DecisionPolicy<L>
+  readonly policy: NoInfer<PolicyFor<SpecFor<S>>>
   /** A shadow-mode caller: recorded on the event, changes no verdict. */
   readonly shadow?: true
 }
 
 /** What {@link evaluateDecision} hands back: the verdict, the event data to
  *  record, and — when something failed — the error to record beside it. */
-export interface EvaluatedDecision<L extends string = string> {
-  readonly decision: Decision<L>
+export type EvaluatedDecision<S extends AnyDecisionSpec | string = DecisionSpec> = Evaluation<
+  DecisionFor<SpecFor<S>>
+>
+
+interface Evaluation<D extends AnyDecision> {
+  readonly decision: D
   readonly event: DecisionMadeEventData
   /** The transport's call record. Rides on the `error` event when `error.kind`
    *  is `'llm_call'` (the call threw), otherwise on `decision_made`: the record
@@ -760,72 +771,95 @@ interface Outcome<L extends string> {
 }
 
 /** Score one outcome and assemble the {@link EvaluatedDecision}. */
-function settle<L extends string>(
-  call: Pick<DecisionCall<L>, 'spec' | 'policy' | 'state' | 'shadow'>,
+function settle(
+  call: Pick<DecisionCall<AnyDecisionSpec>, 'spec' | 'policy' | 'state' | 'shadow'>,
   serving: Serving,
-  outcome: Outcome<L>,
-): EvaluatedDecision<L> {
-  const { decision, event } = scoreDecision({
-    spec: call.spec,
-    policy: call.policy,
-    state: call.state,
+  outcome: Outcome<string> & { readonly unsupportedType?: true },
+): EvaluatedDecision<AnyDecisionSpec> {
+  const input = {
+    ...call,
     result: outcome.result,
     error: outcome.error,
+    unsupportedType: outcome.unsupportedType,
     calibration: serving.calibration,
     method: serving.method,
-    shadow: call.shadow,
-  })
-  // `reason: 'error'` covers a throw AND an unusable readout; both must leave
-  // an `error` event so a consumer gating on severity has something to read.
+  }
+  // Spec and policy are correlated by DecisionCall; narrow together at this one seam.
+  const scored =
+    call.spec.type === 'score'
+      ? scoreScoreDecision(input as ScoreScoring)
+      : call.spec.type === 'noul'
+        ? scoreNoulDecision(input as NoulScoring)
+        : scoreDecision(input as DecisionScoring)
+  const { decision, event } = scored
   const error =
     outcome.error ??
     (decision.reason === 'error'
       ? { error: `Decision '${call.spec.key}' returned no usable distribution` }
       : undefined)
   const llmCall = outcome.llmCall ?? outcome.result?.llmCall
-  return { decision, event, ...(llmCall && { llmCall }), ...(error && { error }) }
+  return {
+    decision,
+    event,
+    ...(llmCall && { llmCall }),
+    ...(error && { error }),
+  } as EvaluatedDecision<AnyDecisionSpec>
 }
 
 /** The floor under "never throws": a defect in the scorer itself (a malformed
  *  spec or policy) still yields a verdict. */
-function lastResort<L extends string>(call: DecisionCall<L>, e: unknown): EvaluatedDecision<L> {
-  const fallback = (call.policy as { fallback: L }).fallback
-  const message = e instanceof Error ? e.message : String(e)
+function lastResort(
+  call: DecisionCall<AnyDecisionSpec>,
+  e: unknown,
+): EvaluatedDecision<AnyDecisionSpec> {
+  const fallback = call.policy.fallback
   const key = call.spec?.key ?? ''
+  const common = {
+    key,
+    probs: {},
+    confidence: 0,
+    abstained: true as const,
+    reason: 'error' as const,
+    calibrated: false,
+  }
+  const type = call.spec?.type
+  const value =
+    type === 'score' ? (call.spec.levels?.findIndex((l) => l.id === fallback) ?? -1) : undefined
+  const label = type === 'noul' ? String(fallback) : (fallback as string)
+  const decision =
+    type === 'score'
+      ? { ...common, type, level: fallback, value, expected: null, top: null }
+      : type === 'noul'
+        ? { ...common, type, holds: fallback, pTrue: null }
+        : { ...common, label, top: null, margin: 0 }
   return {
-    decision: {
-      key,
-      label: fallback,
-      top: null,
-      probs: {} as Decision<L>['probs'],
-      margin: 0,
-      confidence: 0,
-      abstained: true,
-      reason: 'error',
-      calibrated: false,
-    },
+    decision,
     event: {
       key,
       question: call.spec?.question ?? '',
       labels: [],
       probs: {},
-      label: fallback,
+      label,
       top: null,
       margin: 0,
       confidence: 0,
       abstained: true,
       reason: 'error',
-      policy: { fallback },
+      policy: { fallback: label },
       calibrated: false,
       stateChars: typeof call.state === 'string' ? call.state.length : 0,
+      ...(type === 'score' && { type, value, expected: null }),
+      ...(type === 'noul' && { type, pTrue: null }),
     },
-    error: { error: `Decision '${key}' could not be scored: ${message}` },
-  }
+    error: {
+      error: `Decision '${key}' could not be scored: ${errorFrom(e, call.state).error.error}`,
+    },
+  } as EvaluatedDecision<AnyDecisionSpec>
 }
 
 /**
  * Scope-free: ask the transport what it will serve, call the raw seam, apply
- * the policy, hand back what to record. NEVER throws — the seam throwing, the
+ * the policy, hand back what to record. Inference failures never throw — the seam throwing, the
  * seam returning junk and a pre-call refusal are all an abstained decision
  * whose `label` is `policy.fallback`. For work that holds a context but no
  * pattern scope (the post-response position); inside a pattern call
@@ -835,22 +869,45 @@ function lastResort<L extends string>(call: DecisionCall<L>, e: unknown): Evalua
  * transport KNOWS is non-calibratable (`decide.serving(key).method ===
  * 'verbalized'`) abstains `'uncalibrated'` without making the call at all.
  */
-export async function evaluateDecision<L extends string>(
-  call: DecisionCall<L>,
-): Promise<EvaluatedDecision<L>> {
+export function evaluateDecision<L extends string>(call: {
+  readonly decide: DecideFn
+  readonly spec: DecisionSpec<L>
+  readonly policy: DecisionPolicy<L>
+  readonly state: string
+  readonly shadow?: true
+}): Promise<EvaluatedDecision<L>>
+export function evaluateDecision<S extends AnyDecisionSpec>(
+  call: Omit<DecisionCall<S>, 'spec' | 'policy'> & {
+    readonly spec: S
+    readonly policy: NoInfer<PolicyFor<S>>
+  },
+): Promise<EvaluatedDecision<S>>
+export async function evaluateDecision(
+  call: DecisionCall<AnyDecisionSpec>,
+): Promise<EvaluatedDecision<AnyDecisionSpec>> {
+  // Invalid failure policy is a configuration error, not an inference failure.
+  assertDecisionFallback('evaluateDecision', call.spec, call.policy.fallback)
   try {
     const serving = readServing(call.decide, call.spec.key)
-    if (preCallAbstain({ policy: call.policy, state: call.state, method: serving.method })) {
-      return settle(call, serving, {})
+    const refusal = preCallAbstain({
+      policy: call.policy,
+      state: call.state,
+      method: serving.method,
+      spec: call.spec,
+      supportedTypes: call.decide.supportedTypes,
+    })
+    if (refusal) {
+      return settle(call, serving, {
+        ...(refusal === 'unsupported-type' && { unsupportedType: true }),
+      })
     }
     let raw: unknown
     try {
       raw = await call.decide({ spec: call.spec, state: call.state })
     } catch (e) {
-      const { error, llmCall } = errorFrom(e, call.state)
-      return settle(call, serving, { error, llmCall })
+      return settle(call, serving, errorFrom(e, call.state))
     }
-    return settle(call, serving, { result: sanitizeResult<L>(raw, serving) })
+    return settle(call, serving, { result: sanitizeResult<string>(raw, serving) })
   } catch (e) {
     return lastResort(call, e)
   }
@@ -859,12 +916,12 @@ export async function evaluateDecision<L extends string>(
 /** Record one evaluated decision on the scope: exactly ONE `decision_made`,
  *  and — when it failed — ONE `error`. Returns the decision stamped with the
  *  recorded event's id (absent when `trackHistory` filtered the event out). */
-function record<L extends string>(
+function record(
   scope: PatternScope<unknown>,
-  evaluated: EvaluatedDecision<L>,
+  evaluated: EvaluatedDecision<AnyDecisionSpec>,
   opts: DecideOptions,
   recordError = true,
-): Decision<L> {
+): AnyDecision {
   const errorOwnsCall = evaluated.error?.kind === 'llm_call'
   const before = scope.events.length
   trackEvent(
@@ -889,7 +946,7 @@ function record<L extends string>(
       errorOwnsCall ? evaluated.llmCall : undefined,
     )
   }
-  return eventId ? { ...evaluated.decision, eventId } : evaluated.decision
+  return (eventId ? { ...evaluated.decision, eventId } : evaluated.decision) as AnyDecision
 }
 
 /**
@@ -899,30 +956,47 @@ function record<L extends string>(
  * decision — the caller always gets a verdict to act on. This is what a
  * wrapper such as `withMemory` calls.
  */
-export async function decide<L extends string>(
+export function decide<L extends string>(
   scope: PatternScope<unknown>,
   call: DecisionCall<L>,
+  opts?: DecideOptions,
+): Promise<Decision<L>>
+export function decide<S extends AnyDecisionSpec>(
+  scope: PatternScope<unknown>,
+  call: Omit<DecisionCall<S>, 'spec' | 'policy'> & {
+    readonly spec: S
+    readonly policy: NoInfer<PolicyFor<S>>
+  },
+  opts?: DecideOptions,
+): Promise<DecisionFor<S>>
+export async function decide(
+  scope: PatternScope<unknown>,
+  call: DecisionCall<AnyDecisionSpec>,
   opts: DecideOptions = {},
-): Promise<Decision<L>> {
+): Promise<AnyDecision> {
   return record(scope, await evaluateDecision(call), opts)
 }
 
 // --- decideFields ---------------------------------------------------------
 
 /** Several typed fields over ONE state. */
-export interface DecideFieldsCall<F extends Record<string, string>> {
+type SpecsFor<F extends Record<string, string | AnyDecisionSpec>> = {
+  readonly [K in keyof F]: F[K] extends AnyDecisionSpec ? F[K] : DecisionSpec<F[K] & string>
+}
+
+export interface DecideFieldsCall<F extends Record<string, string | AnyDecisionSpec>> {
   readonly decide: DecideFn
   /** A one-call provider: the whole set is one request in fields mode.
    *  Jev also uses per-field questions in joint mode (G8). */
   readonly decideAll?: DecideAllFn
-  readonly set: DecisionSetSpec<F>
+  readonly set: MixedDecisionSet<SpecsFor<F>>
   readonly state: string
-  readonly policy: { readonly [K in keyof F]: DecisionPolicy<F[K]> }
+  readonly policy: { readonly [K in keyof F]: NoInfer<PolicyFor<SpecsFor<F>[K]>> }
 }
 
 /** The joint product's size: the number of label combinations. */
-function jointProduct(set: DecisionSetSpec<Record<string, string>>): number {
-  return Object.values(set.fields).reduce((n, spec) => n * spec.labels.length, 1)
+function jointProduct(set: MixedDecisionSet<Record<string, AnyDecisionSpec>>): number {
+  return Object.values(set.fields).reduce((n, spec) => n * categoricalOptions(spec).length, 1)
 }
 
 /**
@@ -934,7 +1008,9 @@ function jointProduct(set: DecisionSetSpec<Record<string, string>>): number {
  * construction. This standalone guard has no serving report and also refuses
  * wide Jev joint sets; `decideFields` resolves Jev to fields before calling it.
  */
-export function assertDecisionSetSpec(set: DecisionSetSpec<Record<string, string>>): void {
+export function assertDecisionSetSpec(
+  set: MixedDecisionSet<Record<string, AnyDecisionSpec>>,
+): void {
   if (set.mode !== 'joint') return
   const product = jointProduct(set)
   if (product > MAX_DECISION_LABELS) {
@@ -950,12 +1026,12 @@ const JOINT_SEP = ' | '
 
 /** The product spec a joint pass scores, and the tuple behind each product id. */
 function buildJointSpec(
-  set: DecisionSetSpec<Record<string, string>>,
+  set: MixedDecisionSet<Record<string, AnyDecisionSpec>>,
   keys: readonly string[],
 ): { spec: DecisionSpec<string>; tuples: Map<string, Record<string, string>> } {
   let combos: Array<Record<string, DecisionLabel>> = [{}]
   for (const k of keys) {
-    combos = combos.flatMap((c) => set.fields[k].labels.map((l) => ({ ...c, [k]: l })))
+    combos = combos.flatMap((c) => categoricalOptions(set.fields[k]).map((l) => ({ ...c, [k]: l })))
   }
   const tuples = new Map<string, Record<string, string>>()
   const labels: DecisionLabel[] = combos.map((c) => {
@@ -994,30 +1070,39 @@ function marginalise(
   return out
 }
 
-async function evaluateFields<F extends Record<string, string>>(
-  call: DecideFieldsCall<F>,
-): Promise<{ readonly [K in keyof F]: EvaluatedDecision<F[K]> }> {
+async function evaluateFields(
+  call: DecideFieldsCall<Record<string, AnyDecisionSpec>>,
+): Promise<Record<string, EvaluatedDecision<AnyDecisionSpec>>> {
   const { set, state } = call
-  const keys = Object.keys(set.fields) as Array<keyof F & string>
+  const keys = Object.keys(set.fields)
   const joint = set.mode === 'joint'
   const src = !joint && call.decideAll ? call.decideAll : call.decide
   const setServing = joint ? readServing(call.decide, set.key) : {}
   const servingOf = (k: string): Serving => {
-    const own = readServing(src, set.fields[k as keyof F].key)
+    const own = readServing(src, set.fields[k].key)
     return { method: own.method ?? setServing.method, calibration: own.calibration }
   }
-  const callOf = (k: keyof F & string) => ({
+  const callOf = (k: string) => ({
     spec: set.fields[k],
     policy: call.policy[k],
     state,
   })
 
-  const out: Record<string, EvaluatedDecision<string>> = {}
-  const live: Array<keyof F & string> = []
+  const out: Record<string, EvaluatedDecision<AnyDecisionSpec>> = {}
+  const live: string[] = []
   for (const k of keys) {
     const serving = servingOf(k)
-    if (preCallAbstain({ policy: call.policy[k], state, method: serving.method })) {
-      out[k] = settle(callOf(k), serving, {})
+    const refusal = preCallAbstain({
+      policy: call.policy[k],
+      state,
+      method: serving.method,
+      spec: set.fields[k],
+      supportedTypes: src.supportedTypes,
+    })
+    if (refusal) {
+      out[k] = settle(callOf(k), serving, {
+        ...(refusal === 'unsupported-type' && { unsupportedType: true }),
+      })
     } else live.push(k)
   }
 
@@ -1034,7 +1119,11 @@ async function evaluateFields<F extends Record<string, string>>(
         let raw: unknown
         let failed = false
         try {
-          raw = await call.decide({ spec, state })
+          if (!(call.decide.supportedTypes ?? ['choice']).includes('choice')) {
+            for (const k of live)
+              out[k] = settle(callOf(k), servingOf(k), { unsupportedType: true })
+            failed = true
+          } else raw = await call.decide({ spec, state })
         } catch (e) {
           failAll(e)
           failed = true
@@ -1051,7 +1140,7 @@ async function evaluateFields<F extends Record<string, string>>(
         const subset = {
           key: set.key,
           fields: Object.fromEntries(live.map((k) => [k, set.fields[k]])),
-        } as DecisionSetSpec<Record<string, string>>
+        } as MixedDecisionSet<Record<string, AnyDecisionSpec>>
         const raw: unknown = await call.decideAll({ spec: subset, state })
         const fields = isRecord(raw) && isRecord(raw.fields) ? raw.fields : {}
         for (const k of live) {
@@ -1080,7 +1169,7 @@ async function evaluateFields<F extends Record<string, string>>(
       failAll(e)
     }
   }
-  return out as { readonly [K in keyof F]: EvaluatedDecision<F[K]> }
+  return out
 }
 
 /**
@@ -1098,13 +1187,35 @@ async function evaluateFields<F extends Record<string, string>>(
  * calibration and must be independently attributable — and, when a call
  * failed, one `error` for the set. `decision_made` is excluded from the
  * progress bar's step count, so a four-field set does not add four steps.
- * Throws only for a set refused by {@link assertDecisionSetSpec}.
+ * Throws for invalid fallback configuration or a set refused by {@link assertDecisionSetSpec}.
  */
-export async function decideFields<F extends Record<string, string>>(
+export function decideFields<F extends Record<string, string>>(
   scope: PatternScope<unknown>,
-  call: DecideFieldsCall<F>,
+  call: {
+    readonly decide: DecideFn
+    readonly decideAll?: DecideAllFn
+    readonly set: DecisionSetSpec<F>
+    readonly state: string
+    readonly policy: { readonly [K in keyof F]: DecisionPolicy<F[K]> }
+  },
+  opts?: DecideOptions,
+): Promise<{ [K in keyof F]: Decision<F[K]> }>
+export function decideFields<F extends Record<string, AnyDecisionSpec>>(
+  scope: PatternScope<unknown>,
+  call: Omit<DecideFieldsCall<F>, 'set' | 'policy'> & {
+    readonly set: MixedDecisionSet<F> & { readonly fields: F }
+    readonly policy: { readonly [K in keyof F]: NoInfer<PolicyFor<F[K]>> }
+  },
+  opts?: DecideOptions,
+): Promise<{ [K in keyof F]: DecisionFor<F[K]> }>
+export async function decideFields(
+  scope: PatternScope<unknown>,
+  call: DecideFieldsCall<Record<string, AnyDecisionSpec>>,
   opts: DecideOptions = {},
-): Promise<{ [K in keyof F]: Decision<F[K]> }> {
+): Promise<Record<string, AnyDecision>> {
+  for (const k of Object.keys(call.set.fields)) {
+    assertDecisionFallback('decideFields', call.set.fields[k], call.policy[k].fallback)
+  }
   // G8: Jev serves each field as a question, even when joint was requested.
   // Resolve the mode before the product-size guard as no product is sent.
   if (call.set.mode === 'joint' && readServing(call.decide, call.set.key).method === 'jev') {
@@ -1112,11 +1223,11 @@ export async function decideFields<F extends Record<string, string>>(
   }
   assertDecisionSetSpec(call.set)
   const evaluated = await evaluateFields(call)
-  const out: Record<string, Decision<string>> = {}
+  const out: Record<string, AnyDecision> = {}
   let errorRecorded = false
   const seenCalls = new Set<LLMCallRecord>()
   for (const k of Object.keys(call.set.fields)) {
-    const ev = evaluated[k as keyof F]
+    const ev = evaluated[k]
     // A set-wide call record is shared by reference: attach it once.
     const dup = ev.llmCall !== undefined && seenCalls.has(ev.llmCall)
     if (ev.llmCall) seenCalls.add(ev.llmCall)
@@ -1125,7 +1236,7 @@ export async function decideFields<F extends Record<string, string>>(
     if (ev.error) errorRecorded = true
     out[k] = record(scope, dup ? { ...ev, llmCall: undefined } : ev, opts, !dupError)
   }
-  return out as { [K in keyof F]: Decision<F[K]> }
+  return out
 }
 
 // ============================================================================
@@ -1176,30 +1287,60 @@ function defaultDecisionView(customState: boolean): ViewConfig {
   }
 }
 
-function assertFallbackIsALabel(owner: string, spec: DecisionSpec, fallback: string): void {
-  if (!spec.labels.some((l) => l.id === fallback)) {
+/** Every spec is categorical at the raw seam, including a noul's two values. */
+function categoricalOptions(spec: AnyDecisionSpec): readonly DecisionLabel[] {
+  if (spec.type === 'score') return spec.levels
+  if (spec.type === 'noul')
+    return [
+      { id: 'true', description: spec.criteria?.true ?? 'Yes — the statement holds' },
+      { id: 'false', description: spec.criteria?.false ?? 'No — the statement does not hold' },
+    ]
+  return spec.labels
+}
+
+function assertDecisionFallback(owner: string, spec: AnyDecisionSpec, fallback: unknown): void {
+  if (spec.type === 'noul') {
+    if (typeof fallback !== 'boolean')
+      throw new Error(`${owner}: policy.fallback for '${spec.key}' must be boolean`)
+  } else if (
+    typeof fallback !== 'string' ||
+    categoricalOptions(spec)?.some((l) => l.id === fallback) === false
+  ) {
     throw new Error(
-      `${owner}: policy.fallback '${fallback}' is not one of the labels of '${spec.key}'`,
+      `${owner}: policy.fallback '${String(fallback)}' is not one of the ${spec.type === 'score' ? 'levels' : 'labels'} of '${spec.key}'`,
     )
   }
+}
+
+/** Infer each field spec once; reject an oversized categorical joint product. */
+export function defineDecisionSet<const S extends Record<string, AnyDecisionSpec>>(
+  set: MixedDecisionSet<S>,
+): MixedDecisionSet<S> {
+  assertDecisionSetSpec(set)
+  return set
 }
 
 /** What a deciding pattern declares: its key, and — when its policy requires
  *  calibration — that key again under `calibratedDecisionKeys`, so a host probe
  *  can tell a control that is merely uncalibrated from one that can never
  *  pass (G4). Absent rather than `[]` when the policy does not require it. */
-function decisionCapabilities(key: string, policy: DecisionPolicy<string>): PatternCapabilities {
+function decisionCapabilities(
+  key: string,
+  policy: Pick<DecisionPolicy, 'requireCalibrated'>,
+): PatternCapabilities {
   return {
     decisionKeys: [key],
     ...(policy.requireCalibrated === true && { calibratedDecisionKeys: [key] }),
   }
 }
 
-export interface TypedDecisionConfig<L extends string = string> extends PatternConfig {
+export interface TypedDecisionConfig<
+  S extends AnyDecisionSpec | string = DecisionSpec,
+> extends PatternConfig {
   /** REQUIRED: the raw decision seam (`bamlPatterns().decide`, or your own). */
   readonly decide: DecideFn
-  readonly spec: DecisionSpec<L>
-  readonly policy: DecisionPolicy<L>
+  readonly spec: SpecFor<S>
+  readonly policy: NoInfer<PolicyFor<SpecFor<S>>>
   /** Render the state the decision is asked over. Default: see
    *  {@link renderDefaultState} — messages only. */
   readonly state?: (view: EventView, data: Readonly<Record<string, unknown>>) => string
@@ -1207,8 +1348,8 @@ export interface TypedDecisionConfig<L extends string = string> extends PatternC
 
 /**
  * A chain step that asks one closed question and writes the verdict to
- * `scope.data.decisions[spec.key]`. It generates no text and never throws: a
- * failed decision is an abstain onto `policy.fallback`, with an `error` event
+ * `scope.data.decisions[spec.key]`. It generates no text. Construction validates configuration; a
+ * failed inference decision is an abstain onto `policy.fallback`, with an `error` event
  * (recoverable unless configured otherwise) beside the `decision_made`.
  *
  * `data.decisions[spec.key]` is overwritten on EVERY exit.
@@ -1216,11 +1357,25 @@ export interface TypedDecisionConfig<L extends string = string> extends PatternC
  * @example
  * typedDecision({ decide: baml.decide, spec: RETRIEVE, policy: { fallback: 'skip', minConfidence: 0.6 } })
  */
+export function typedDecision<T extends TypedDecisionData, S extends AnyDecisionSpec | string>(
+  config: TypedDecisionConfig<S> & { readonly spec: S },
+): ConfiguredPattern<T>
 export function typedDecision<T extends TypedDecisionData, L extends string>(
-  config: TypedDecisionConfig<L>,
+  config: Omit<TypedDecisionConfig<L>, 'spec' | 'policy'> & {
+    readonly spec: DecisionSpec<L>
+    readonly policy: DecisionPolicy<L>
+  },
+): ConfiguredPattern<T>
+export function typedDecision<T extends TypedDecisionData>(
+  config: TypedDecisionConfig<AnyDecisionSpec>,
 ): ConfiguredPattern<T> {
   const { decide: decideFn, spec, policy, state: stateFn, ...patternConfig } = config
-  assertFallbackIsALabel('typedDecision', spec, policy.fallback)
+  assertDecisionFallback('typedDecision', spec, policy.fallback)
+  if (!(decideFn.supportedTypes ?? ['choice']).includes(spec.type ?? 'choice')) {
+    throw new Error(
+      `typedDecision: unsupported decision type '${spec.type ?? 'choice'}' for '${spec.key}'`,
+    )
+  }
   const resolved = resolveConfig('typedDecision', {
     viewConfig: defaultDecisionView(stateFn !== undefined),
     ...patternConfig,
@@ -1319,7 +1474,7 @@ export function decisionRouter<T extends RouterData & TypedDecisionData>(
     question: "Which route should handle the user's latest message?",
     labels,
   }
-  assertFallbackIsALabel('decisionRouter', spec, policy.fallback)
+  assertDecisionFallback('decisionRouter', spec, policy.fallback)
   const resolved = resolveConfig('decisionRouter', {
     viewConfig: defaultDecisionView(false),
     ...rest,

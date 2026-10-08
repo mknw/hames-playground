@@ -74,6 +74,7 @@ export {
   defineChoice,
   defineScore,
   defineNoul,
+  defineDecisionSet,
   readDecision,
   scoreScoreDecision,
   scoreNoulDecision,

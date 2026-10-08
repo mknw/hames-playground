@@ -1608,7 +1608,7 @@ export type HitlAnswers = Readonly<Record<string, HitlAnswer>>
 // Three layers: the raw seam (`DecideFn` → `DecideResult`) — one call, one
 // distribution, no policy; the policy layer (`evaluateDecision`/`decide()` →
 // `Decision`, `patterns/typedDecision.server.ts`) — applies a
-// `DecisionPolicy`, records `decision_made`, never throws; and the transport
+// `DecisionPolicy`, records `decision_made`; inference failures never throw; and the transport
 // behind the raw seam (a logprob readout on the private tier, Jev on the
 // Anthropic tier, an explicitly configured verbalized secondary). Core owns
 // the types and the pure policy math; the transports live in harness-baml and
@@ -1676,6 +1676,22 @@ export interface DecisionSetSpec<F extends Record<string, string>> {
   readonly mode?: 'fields' | 'joint'
   readonly fields: { readonly [K in keyof F]: DecisionSpec<F[K]> }
 }
+
+/** Several closed questions, preserving each field's own spec and verdict type. */
+export interface MixedDecisionSet<S extends Record<string, AnyDecisionSpec>> {
+  readonly key: string
+  readonly mode?: 'fields' | 'joint'
+  readonly fields: { readonly [K in keyof S]: S[K] }
+}
+
+/** The categorical ids on the raw seam; nouls use true/false strings. */
+export type DecisionLabelsFor<S> = S extends NoulSpec
+  ? 'true' | 'false'
+  : S extends ScoreSpec<infer L>
+    ? L
+    : S extends DecisionSpec<infer L>
+      ? L
+      : never
 
 /** How the decision was read out. 'logprob' = answer-letter logprobs (the
  *  private tier); 'jev' = the hosted Jev decision model (Anthropic tier,
@@ -1872,12 +1888,21 @@ export type DecideServing = (key: string) => {
  *  no set-level `coverage` — coverage is per field, and the floors consume it
  *  there. */
 export type DecideAllFn = {
+  <S extends Record<string, AnyDecisionSpec>>(input: {
+    readonly spec: MixedDecisionSet<S>
+    readonly state: string
+  }): Promise<{
+    readonly fields: { readonly [K in keyof S]: DecideResult<DecisionLabelsFor<S[K]>> }
+  }>
+  /** Keep explicit label-map generic calls source-compatible. */
   <F extends Record<string, string>>(input: {
     readonly spec: DecisionSetSpec<F>
     readonly state: string
   }): Promise<{ readonly fields: { readonly [K in keyof F]: DecideResult<F[K]> } }>
   limits?: () => ModelLimits
   serving?: DecideServing
+  /** Absent means choice-only, independently of the single-spec transport. */
+  readonly supportedTypes?: readonly DecisionType[]
 }
 
 /** Data payload for `decision_made` — one typed decision the policy layer

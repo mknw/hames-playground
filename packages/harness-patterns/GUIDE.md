@@ -126,7 +126,7 @@ typedDecision({
 // → scope.data.decisions['memory.recall'].label — act on THIS, never on `top`
 ```
 
-It never throws and always overwrites its key, failures included. Outside a
+Inference failures abstain and always overwrite the key. An invalid fallback or unsupported transport type throws at pattern construction. Outside a
 pattern, `decide(scope, call)` is the same decision recorded on a scope you
 hold, `evaluateDecision(call)` is it with no scope at all, and
 `decideFields(scope, { decide, set, state, policy })` answers several typed
@@ -190,7 +190,70 @@ a numeric meter. A noul band requires a finite declared confidence in `[0,1]`;
 other declared values are marked invalid and retained in metadata. Fitted cuts
 may differ from the declared cut shown in the detail view.
 
-In this release you can declare score and noul specs, score a distribution with them and read the verdict back. `typedDecision`, `decide`, `evaluateDecision` and `decideFields` still accept choice specs only. On the raw seam, the local logprob transport and the verbalized secondary answer all three types; the TypeSafe (Jev) transport, the Anthropic tier's default, answers choice only for now. `decide.supportedTypes` lists what the transport that would serve the call accepts, read at the moment you ask, and a type it does not list is never sent. Score levels are presented as A, B, … from lowest to highest; a noul is presented as A = true, B = false. Logprob calibration is fitted per letter; verbalized probabilities are never calibrated.
+In this release you can declare score and noul specs, score a distribution with them and read the verdict back. On the raw seam, the local logprob transport and the verbalized secondary answer all three types; the TypeSafe (Jev) transport, the Anthropic tier's default, answers choice only for now. `decide.supportedTypes` lists what the transport that would serve the call accepts, read at the moment you ask, and a type it does not list is never sent. Score levels are presented as A, B, … from lowest to highest; a noul is presented as A = true, B = false. Logprob calibration is fitted per letter; verbalized probabilities are never calibrated.
+
+`typedDecision`, `decide` and `evaluateDecision` accept all three spec types;
+the return type follows the declared spec. `typedDecision` refuses an unsupported
+type at construction. The in-scope and scope-free entries instead abstain
+`unsupported-type` with zero calls. A transport without `supportedTypes` remains
+choice-only.
+Invalid fallback configuration throws before any inference: choice needs a label
+id, score needs a level id, and noul needs a boolean (`false` is valid). Transport
+failures still return an abstained verdict.
+
+`defineDecisionSet` infers a mixed spec map. Each field has its own policy, verdict
+and `decision_made` event. `DecisionSetSpec<F>` and explicit choice-label generics
+remain supported. With `mode: 'joint'`, core counts the product of choice labels,
+score levels and the noul's two values, refuses products above 20, makes one choice
+call, and marginalises before each field's policy. Jev still serves independent
+field questions. A one-call `decideAll` declares its own `supportedTypes`.
+
+```typescript
+import {
+  defineChoice,
+  defineScore,
+  defineNoul,
+  defineDecisionSet,
+  decideFields,
+} from '@hames-ai/harness-patterns'
+import type { DecideFn, DecideAllFn, PatternScope } from '@hames-ai/harness-patterns'
+
+declare const scope: PatternScope<unknown>
+declare const decide: DecideFn // host transport declaring all three supportedTypes
+declare const decideAll: DecideAllFn // optional one-call transport with the same support
+const severity = defineScore({
+  key: 'severity',
+  question: 'How severe is the problem?',
+  levels: [
+    { id: 'minor', description: 'Work continues normally.' },
+    { id: 'blocking', description: 'Work cannot continue.' },
+  ],
+})
+const blocked = defineNoul({ key: 'blocked', question: 'Work cannot continue.' })
+const route = defineChoice({
+  key: 'route',
+  question: 'Which route?',
+  labels: [
+    { id: 'chat', description: 'Answer directly.' },
+    { id: 'search', description: 'Search for evidence.' },
+  ],
+})
+const set = defineDecisionSet({ key: 'triage', fields: { severity, blocked, route } })
+const d = await decideFields(scope, {
+  decide,
+  decideAll,
+  set,
+  state: 'A synthetic report.',
+  policy: {
+    severity: { fallback: 'blocking' },
+    blocked: { fallback: false },
+    route: { fallback: 'chat' },
+  },
+})
+d.severity.level // 'minor' | 'blocking'
+d.blocked.holds // boolean
+d.route.label // 'chat' | 'search'
+```
 
 `decisionRouter` is `router()`'s sibling built on it: the routes are the
 labels, the verdict becomes `data.route`, and `policy.fallback` names the route

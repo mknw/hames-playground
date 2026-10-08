@@ -1880,7 +1880,7 @@ Probability-typed decisions over a closed label set, in three layers: the
 policy, frozen against the merged `classifierFromDecide` consumer, which must
 be handed the raw seam and never a policy-applying wrapper (D7); the **policy
 layer** (`patterns/typedDecision.server.ts`) — applies a `DecisionPolicy`,
-records `decision_made`, never throws; and the **transports** behind the raw
+records `decision_made`; inference failures never throw (invalid configuration does, before any call); and the **transports** behind the raw
 seam (a logprob readout on the private tier, Jev on the Anthropic tier, an
 operator-named verbalized secondary — #418 T3/T4/T5).
 
@@ -1997,10 +1997,6 @@ indication without a band, preserving the raw value in metadata. Score/noul
 surfaces use a theme-aware background matched to their readout text.
 Persisted events without the new fields retain the choice bars and cuts.
 
-S2 adds generic policy entry points and mixed sets. S3/S4 add transport support;
-this slice changes no BAML prompt, routing, calibration artifact or production
-choice spec. `decisionRouter` remains choice-only.
-
 S1 widens `DecideInput.spec` to accept all three specs and adds optional
 `DecideFn.supportedTypes`. An absent declaration means choice-only.
 `preCallAbstain({ spec, supportedTypes, state, policy, method })` returns
@@ -2033,24 +2029,68 @@ Anthropic-tier lock and the routed adapter's private-tier lock run before
 requests. `LocalQwenSmallDecide` continues to use `max_tokens: 2`, including
 identical-prompt repeat tests; BAML source and generated client are unchanged.
 
+#### Generic patterns and mixed sets (#418 addendum S2)
+
+`typedDecision`, `decide` and `evaluateDecision` are generic over
+`AnyDecisionSpec`; their verdict is `DecisionFor<S>` and their policy is
+`PolicyFor<S>`. Legacy explicit label arguments (`DecisionCall<L>`,
+`EvaluatedDecision<L>`, `TypedDecisionConfig<L>`, `decide<L>`,
+`evaluateDecision<L>` and `typedDecision<T, L>`) retain the choice form.
+`decisionRouter` stays choice-only.
+
+`MixedDecisionSet<S>` carries a spec map; `defineDecisionSet` infers it and
+checks the joint product limit at declaration. `decideFields` returns
+`{ [K in keyof S]: DecisionFor<S[K]> }` with a separately typed policy per field.
+The existing choice-label-map `DecisionSetSpec<F>` remains legal.
+
+Type support is checked before inference and before calibration refusal:
+`no-state` → `unsupported-type` → the existing gates. An absent
+`supportedTypes` means choice-only, independently on `DecideFn` and
+`DecideAllFn`. `typedDecision` throws for an unsupported type at construction;
+`evaluateDecision`, `decide` and each set field abstain with the fallback and
+null raw readouts, making zero unsupported requests. Refused fields are excluded
+from a set call; no live fields means no call. Joint mode also requires support
+for the actual product's `choice` spec.
+
+**Configuration errors throw before inference.** A choice fallback must be a
+label id, a score fallback must be a level id, and a noul fallback must be a
+boolean, including valid `false`. The same validator runs at pattern construction
+(`typedDecision` and `decisionRouter`), and before `evaluateDecision`, `decide`
+and `decideFields` can call any transport. Every set policy is validated before
+any field is called. Inference failures still never throw. An invalid fallback is refused, because there is no valid verdict to fall back to.
+
+Joint products count choice labels, score levels in low → high order, and
+noul values in true/false order. Their size must be ≤20, including scores'
+2–10 levels ([TypeSafe's definition](https://docs.typesafe.ai/primitives/score)).
+One choice readout is marginalised per field before its own scorer and policy;
+there is one `decision_made` with that field's type per field. Jev's G8
+normalisation still serves fields rather than a product. Set failures retain
+individual typed fallbacks and one shared error/call record.
+
+The raw set seam accepts mixed specs, while the existing set adapters remain
+choice-only and refuse unsupported fields before any request. The single-call
+logprob and verbalized transports support all three types as described above;
+a `decideAll` adapter declares its own support independently. No production
+choice declaration is migrated.
+
 #### The awaited wrapper
 
 ```typescript
-interface DecisionCall<L> {
+interface DecisionCall<S extends AnyDecisionSpec> {
   decide: DecideFn // the raw seam
-  spec: DecisionSpec<L>
+  spec: S
   state: string // only its LENGTH is ever recorded
-  policy: DecisionPolicy<L>
+  policy: PolicyFor<S>
   shadow?: true
 }
 
-evaluateDecision(call): Promise<{ decision; event; llmCall?; error? }> // scope-free, never throws
-decide(scope, call, opts?): Promise<Decision<L>> // + records, never throws
-decideFields(scope, call, opts?): Promise<{ [K in keyof F]: Decision<F[K]> }>
+evaluateDecision(call): Promise<{ decision; event; llmCall?; error? }> // scope-free; inference failures abstain
+decide(scope, call, opts?): Promise<DecisionFor<S>> // + records; inference failures abstain
+decideFields(scope, call, opts?): Promise<{ [K in keyof S]: DecisionFor<S[K]> }>
 ```
 
 `evaluateDecision` asks the transport what it will serve, calls the raw seam
-and scores the outcome with `scoreDecision`. It NEVER throws: a seam that
+and scores the outcome with the declared type's scorer. After validating configuration it never throws: a seam that
 throws, one that returns junk (not an object, no `probs`, no usable mass) and a
 pre-call refusal are all an **abstained decision whose `label` is
 `policy.fallback`**, and a throw or an unusable readout also yields an `error`
@@ -2129,10 +2169,10 @@ has no serving report, so it also refuses wide Jev joint sets that
 #### `typedDecision(config)`
 
 ```typescript
-interface TypedDecisionConfig<L> extends PatternConfig {
+interface TypedDecisionConfig<S extends AnyDecisionSpec> extends PatternConfig {
   decide: DecideFn // REQUIRED — `bamlPatterns().decide` (T3), or your own
-  spec: DecisionSpec<L>
-  policy: DecisionPolicy<L> // `fallback` must be one of the labels (checked at construction)
+  spec: S
+  policy: PolicyFor<S> // fallback and transport support checked at construction
   state?: (view: EventView, data) => string
 }
 interface TypedDecisionData {
@@ -2141,7 +2181,7 @@ interface TypedDecisionData {
 ```
 
 A chain step that asks one closed question and writes the verdict to
-`scope.data.decisions[spec.key]`. It generates no text and never throws.
+`scope.data.decisions[spec.key]`. It generates no text. Invalid configuration throws at construction; a failed inference never throws.
 **`data.decisions[spec.key]` is overwritten on EVERY exit** — success, a failed
 call, an empty state, a throwing `state` builder — because `scope.data`
 survives the turn boundary and a verdict left in place would be last turn's

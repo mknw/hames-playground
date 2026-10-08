@@ -37,6 +37,9 @@ import { notifyLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.se
 import {
   LLMCallError,
   type DecideAllFn,
+  type AnyDecisionSpec,
+  type MixedDecisionSet,
+  type DecisionLabelsFor,
   type DecideFn,
   type DecideInput,
   type DecideResult,
@@ -192,13 +195,19 @@ export function createJevTransport(options: JevTransportOptions = {}): {
   decideAll: DecideAllFn
   decide: DecideFn
 } {
-  const decideAll: DecideAllFn = async <F extends Record<string, string>>(input: {
-    readonly spec: DecisionSetSpec<F>
+  const decideAll: DecideAllFn = async <S extends Record<string, AnyDecisionSpec>>(input: {
+    readonly spec: MixedDecisionSet<S>
     readonly state: string
   }) => {
     const startTime = Date.now()
-    const { spec, state } = input
-    const names = Object.keys(spec.fields) as Array<keyof F & string>
+    const { state } = input
+    for (const field of Object.values(input.spec.fields)) {
+      if (field.type !== undefined && field.type !== 'choice') {
+        throw new Error(`Unsupported decision type: ${String(field.type)}`)
+      }
+    }
+    const spec = input.spec as DecisionSetSpec<Record<string, string>>
+    const names = Object.keys(spec.fields) as Array<keyof S & string>
     const variables = {
       state,
       key: spec.key,
@@ -379,7 +388,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     if (!answers) {
       throw new LLMCallError('Jev answered a body with no `answers`.', record)
     }
-    const fields = {} as { [K in keyof F]: DecideResult<F[K]> }
+    const fields = {} as { [K in keyof S]: DecideResult<DecisionLabelsFor<S[K]>> }
     for (const n of names) {
       const a = answers[n] as JevAnswer | undefined
       const probsIn = isRecord(a) && isRecord(a.probabilities) ? a.probabilities : undefined
@@ -420,7 +429,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
         // T8 verifies it for our questions (ECE).
         calibrated: typeof (a as JevAnswer).confidence === 'number',
         llmCall: record,
-      } as DecideResult<F[typeof n]>
+      } as DecideResult<DecisionLabelsFor<S[typeof n]>>
     }
     return { fields }
   }

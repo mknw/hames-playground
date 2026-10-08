@@ -10,8 +10,8 @@
  * `notifyLlmUsage`.
  *
  * ONE request carries every field of a decision set, each as its own typed
- * `choice` question; the answer carries a probability per option and a
- * confidence. No text is generated, so there is no output cap to hit.
+ * choice, score or noul question; each answer becomes a closed distribution.
+ * No text is generated, so there is no output cap to hit.
  *
  * THREE RULES, each pinned:
  *
@@ -36,14 +36,14 @@ import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { notifyLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import {
   LLMCallError,
-  type DecideAllFn,
+  MAX_SCORE_LEVELS,
   type AnyDecisionSpec,
+  type DecideAllFn,
   type MixedDecisionSet,
   type DecisionLabelsFor,
   type DecideFn,
   type DecideInput,
   type DecideResult,
-  type DecisionSetSpec,
   type EventMetrics,
   type LLMCallRecord,
 } from '@hames-ai/harness-patterns/types'
@@ -97,6 +97,9 @@ const JEV_TIMEOUT_MS = 30_000
 const JEV_MASS_TOLERANCE = 0.01
 
 interface JevAnswer {
+  readonly type?: unknown
+  readonly score?: unknown
+  readonly noul?: unknown
   readonly choice?: unknown
   readonly confidence?: unknown
   readonly probabilities?: unknown
@@ -200,21 +203,10 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     readonly state: string
   }) => {
     const startTime = Date.now()
-    const { state } = input
-    for (const field of Object.values(input.spec.fields)) {
-      if (field.type !== undefined && field.type !== 'choice') {
-        throw new Error(`Unsupported decision type: ${String(field.type)}`)
-      }
-    }
-    const spec = input.spec as DecisionSetSpec<Record<string, string>>
+    const { spec, state } = input
     const names = Object.keys(spec.fields) as Array<keyof S & string>
-    const variables = {
-      state,
-      key: spec.key,
-      fields: Object.fromEntries(
-        names.map((n) => [n, { question: spec.fields[n].question, labels: spec.fields[n].labels }]),
-      ),
-    }
+    const variables: Record<string, unknown> = { state, key: spec.key }
+
 
     // THE TIER LOCK — before any request, and without reading the key.
     if (activeInferenceTier() === 'verda') {
@@ -234,6 +226,57 @@ export function createJevTransport(options: JevTransportOptions = {}): {
         startTime,
       )
     }
+
+    // Only the permitted tier may inspect rubric descriptions or build questions.
+    variables.fields = Object.fromEntries(
+      names.map((n) => {
+        const f = spec.fields[n]
+        return [
+          n,
+          {
+            question: f.question,
+            ...(f.type === 'score'
+              ? { levels: f.levels }
+              : f.type === 'noul'
+                ? { criteria: f.criteria }
+                : { labels: f.labels }),
+          },
+        ]
+      }),
+    )
+    const questionFor = (field: AnyDecisionSpec) => {
+      switch (field.type) {
+        case undefined:
+        case 'choice':
+          return {
+            type: 'choice',
+            instructions: field.question,
+            criteria: Object.fromEntries(field.labels.map((l) => [l.id, l.description])),
+          }
+        case 'score':
+          if (field.levels.length < 2 || field.levels.length > MAX_SCORE_LEVELS) {
+            throw jevFailure('Jev scores require 2..10 levels.', variables, startTime)
+          }
+          // https://docs.typesafe.ai/primitives/score — indices are array positions;
+          // semantic level ids stay local and the provider's legend is ignored.
+          return {
+            type: 'score',
+            instructions: field.question,
+            criteria: field.levels.map((l) => l.description),
+          }
+        case 'noul':
+          // https://docs.typesafe.ai/primitives/noul — criteria is optional.
+          return {
+            type: 'noul',
+            instructions: field.question,
+            ...(field.criteria && { criteria: field.criteria }),
+          }
+        default:
+          throw new Error(`Unsupported decision type: ${String((field as AnyDecisionSpec).type)}`)
+      }
+    }
+
+    const questions = Object.fromEntries(names.map((n) => [n, questionFor(spec.fields[n])]))
 
     // O4 — before the key is read: the bearer token goes only over https: or loopback.
     const configured = configuredDecisionsUrl()
@@ -259,16 +302,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     const body = {
       model: jevModelFor(endpoint.hostname),
       state,
-      questions: Object.fromEntries(
-        names.map((n) => [
-          n,
-          {
-            type: 'choice',
-            instructions: spec.fields[n].question,
-            criteria: Object.fromEntries(spec.fields[n].labels.map((l) => [l.id, l.description])),
-          },
-        ]),
-      ),
+      questions,
       // O1: on an OpenRouter endpoint, zero data retention and data collection denied.
       ...(openRouter && {
         provider: options.openRouterPreferences ?? OPENROUTER_PRIVACY_PREFERENCES,
@@ -391,12 +425,39 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     const fields = {} as { [K in keyof S]: DecideResult<DecisionLabelsFor<S[K]>> }
     for (const n of names) {
       const a = answers[n] as JevAnswer | undefined
+      const field = spec.fields[n]
+      if (field.type === 'noul') {
+        if (
+          !isRecord(a) ||
+          a.type !== 'noul' ||
+          typeof a.noul !== 'number' ||
+          !Number.isFinite(a.noul) ||
+          a.noul < 0 ||
+          a.noul > 1
+        ) {
+          throw new LLMCallError(`Jev answered no valid noul for field "${n}".`, record)
+        }
+        fields[n] = {
+          probs: { true: a.noul, false: 1 - a.noul },
+          method: 'jev',
+          // Noul has no confidence field. Its finite, bounded probability is
+          // Jev's calibration claim; S5 measures it rather than inventing a fit.
+          calibrated: true,
+          llmCall: record,
+        } as DecideResult<DecisionLabelsFor<S[typeof n]>>
+        continue
+      }
+      const score = field.type === 'score'
+      if (score && (!isRecord(a) || a.type !== 'score')) {
+        throw new LLMCallError(`Jev answered no score for field "${n}".`, record)
+      }
       const probsIn = isRecord(a) && isRecord(a.probabilities) ? a.probabilities : undefined
       if (!probsIn) {
         throw new LLMCallError(`Jev answered no probabilities for field "${n}".`, record)
       }
-      const labels = spec.fields[n].labels
-      if (Object.keys(probsIn).some((k) => !labels.some((l) => l.id === k))) {
+      const labels = score ? field.levels : field.labels
+      const indices = labels.map((l, i) => (score ? String(i) : l.id))
+      if (Object.keys(probsIn).some((k) => !indices.includes(k))) {
         throw new LLMCallError(
           `Jev answered a label outside the asked set for field "${n}".`,
           record,
@@ -404,8 +465,8 @@ export function createJevTransport(options: JevTransportOptions = {}): {
       }
       let sum = 0
       const raw = {} as Record<string, number>
-      for (const l of labels) {
-        const p = probsIn[l.id]
+      for (const [i, l] of labels.entries()) {
+        const p = probsIn[indices[i]]
         if (typeof p !== 'number' || !Number.isFinite(p) || p < 0 || p > 1) {
           throw new LLMCallError(`Jev answered no valid probability for "${n}.${l.id}".`, record)
         }
@@ -422,6 +483,18 @@ export function createJevTransport(options: JevTransportOptions = {}): {
       }
       const probs = {} as Record<string, number>
       for (const l of labels) probs[l.id] = raw[l.id] / sum
+      if (score) {
+        const expected = labels.reduce((s, l, i) => s + i * probs[l.id], 0)
+        if (
+          typeof a?.score !== 'number' ||
+          !Number.isFinite(a.score) ||
+          a.score < 0 ||
+          a.score > labels.length - 1 ||
+          Math.abs(a.score - expected) > 0.01 * (labels.length - 1)
+        ) {
+          throw new LLMCallError(`Jev score disagrees with probabilities for field "${n}".`, record)
+        }
+      }
       fields[n] = {
         probs,
         method: 'jev',
@@ -435,8 +508,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
   }
 
   const decide: DecideFn = async <L extends string>(input: DecideInput<L>) => {
-    // S1 widens the seam; S4 adds wire support. Nothing is built or sent here.
-    if (input.spec.type !== undefined && input.spec.type !== 'choice') {
+    if (!['choice', 'score', 'noul'].includes(input.spec.type ?? 'choice')) {
       throw new Error(`Unsupported decision type: ${String(input.spec.type)}`)
     }
     const r = await decideAll({
@@ -448,6 +520,12 @@ export function createJevTransport(options: JevTransportOptions = {}): {
 
   // The state cap of the model behind the resolved client (Jev's documented
   // 32k tokens, in `MODEL_CONTEXT_WINDOWS`), read per call like every role.
+  Object.defineProperty(decide, 'supportedTypes', {
+    value: Object.freeze(['choice', 'score', 'noul'] as const),
+  })
+  Object.defineProperty(decideAll, 'supportedTypes', {
+    value: decide.supportedTypes,
+  })
   decideAll.limits = () => limitsFor('decide')
   decide.limits = () => limitsFor('decide')
   return { decideAll, decide }

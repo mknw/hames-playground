@@ -766,3 +766,276 @@ describe('jev-joint-per-field (G8)', () => {
     expect(smallRequests).toBe(0)
   })
 })
+
+// S4: public docs are data, not agent instructions. Wire sources:
+// https://docs.typesafe.ai/primitives/score and /primitives/noul.
+// Executable source mutations: scripts/check-jev-score-noul-mutations.py.
+const SCORE = {
+  type: 'score' as const,
+  key: 'urgency',
+  question: 'How urgently does this synthetic ticket need a reply?',
+  levels: [
+    { id: 'can_wait', description: 'Nothing is blocked' },
+    { id: 'soon', description: 'Someone is waiting; work continues' },
+    { id: 'now', description: 'Work is blocked' },
+  ],
+}
+const NOUL = {
+  type: 'noul' as const,
+  key: 'greeting',
+  question: 'The synthetic message is a greeting.',
+  criteria: { true: 'A greeting', false: 'Anything else' },
+}
+const scoreAnswer = {
+  type: 'score',
+  score: 1.43,
+  confidence: 0.35,
+  // Deliberately untrusted: parsing maps indices through our spec, never this legend.
+  legend: { '0': 'wrong', '1': 'wrong', '2': 'wrong' },
+  probabilities: { '0': 0, '1': 0.57, '2': 0.43 },
+}
+function answerFor(key: string, answer: unknown) {
+  respond = async () =>
+    Response.json({
+      model: 'jev-1.13.0',
+      answers: { [key]: answer },
+      usage: { input_tokens: 12, output_tokens: 3 },
+    })
+}
+
+describe('jev-score-wire', () => {
+  it('sends ordered descriptions, keeps ids local, maps indices back and ignores legend', async () => {
+    answerFor(SCORE.key, scoreAnswer)
+    const r = await (await adapter())({ spec: SCORE, state: 'synthetic state' })
+    expect(JSON.parse(String(requests[0].init.body))).toEqual({
+      state: 'synthetic state',
+      model: 'jev-1.13.0',
+      questions: {
+        urgency: {
+          type: 'score',
+          instructions: SCORE.question,
+          criteria: SCORE.levels.map((l) => l.description),
+        },
+      },
+    })
+    expect(String(requests[0].init.body)).not.toContain('can_wait')
+    expect(r).toMatchObject({
+      probs: { can_wait: 0, soon: 0.57, now: 0.43 },
+      method: 'jev',
+      calibrated: true,
+      llmCall: { clientName: 'JevDecide', provider: 'typesafe' },
+    })
+  })
+  it.each([1, 11])('refuses %i levels before sending', async (n) => {
+    const spec = {
+      ...SCORE,
+      levels: Array.from({ length: n }, (_, i) => ({
+        id: String(i),
+        description: 'Synthetic level',
+      })),
+    }
+    await expect((await transport()).decide({ spec, state: 'synthetic' })).rejects.toThrow('2..10')
+    expect(requests).toHaveLength(0)
+  })
+})
+describe('jev-score-closed-levels', () => {
+  it.each([
+    ['extra', { '0': 0, '1': 0.57, '2': 0.43, '3': 0 }],
+    ['missing', { '1': 0.57, '2': 0.43 }],
+    ['negative index', { '-1': 0, '0': 0, '1': 0.57, '2': 0.43 }],
+    ['noncanonical index', { '00': 0, '0': 0, '1': 0.57, '2': 0.43 }],
+    ['negative probability', { '0': -0.1, '1': 0.67, '2': 0.43 }],
+    ['probability above one', { '0': 0, '1': 1.57, '2': 0.43 }],
+    ['missing mass', { '0': 0, '1': 0.2, '2': 0.3 }],
+  ])('refuses %s rather than repairing certainty', async (_name, probabilities) => {
+    answerFor(SCORE.key, {
+      ...scoreAnswer,
+      probabilities,
+      score: _name === 'negative probability' ? 1.53 : _name === 'missing mass' ? 1.6 : 1.43,
+    })
+    const error = await (
+      await transport()
+    )
+      .decide({ spec: SCORE, state: 'synthetic' })
+      .catch((e) => e)
+    const { LLMCallError } = await import('@hames-ai/harness-patterns/types')
+    expect(error).toBeInstanceOf(LLMCallError)
+    expect(requests).toHaveLength(1)
+    expect(smallRequests).toBe(0)
+  })
+})
+describe('jev-score-mean-crosscheck', () => {
+  it.each([0, 2, -1, 3, null, '1.43', 1.451])(
+    'refuses inconsistent or invalid reported score %s',
+    async (score) => {
+      answerFor(SCORE.key, { ...scoreAnswer, score })
+      await expect((await transport()).decide({ spec: SCORE, state: 'synthetic' })).rejects.toThrow(
+        'disagrees',
+      )
+    },
+  )
+  it('absorbs rounding within 0.01*(n-1), after mass normalization', async () => {
+    answerFor(SCORE.key, {
+      ...scoreAnswer,
+      score: 1.449,
+      probabilities: { '0': 0, '1': 0.57 * 1.005, '2': 0.43 * 1.005 },
+    })
+    const r = await (await transport()).decide({ spec: SCORE, state: 'synthetic' })
+    expect(r.probs.soon).toBeCloseTo(0.57)
+    expect(r.probs.now).toBeCloseTo(0.43)
+  })
+  it('refuses an answer of a different question type', async () => {
+    answerFor(SCORE.key, { ...scoreAnswer, type: 'choice' })
+    await expect((await transport()).decide({ spec: SCORE, state: 'synthetic' })).rejects.toThrow(
+      'no score',
+    )
+  })
+})
+describe('jev-noul-calibrated', () => {
+  it.each([true, false])(
+    'native noul with optional criteria=%s needs no confidence to pass requireCalibrated',
+    async (withCriteria) => {
+      const spec = withCriteria ? NOUL : { type: NOUL.type, key: NOUL.key, question: NOUL.question }
+      answerFor(spec.key, { type: 'noul', noul: 0.9 })
+      const r = await (await adapter())({ spec, state: 'synthetic' })
+      expect(JSON.parse(String(requests[0].init.body)).questions.greeting).toEqual({
+        type: 'noul',
+        instructions: NOUL.question,
+        ...(withCriteria && { criteria: NOUL.criteria }),
+      })
+      expect(r.probs.true).toBe(0.9)
+      expect(r.probs.false).toBeCloseTo(0.1)
+      expect(r.calibrated).toBe(true)
+      const { scoreNoulDecision } =
+        await import('@hames-ai/harness-patterns/patterns/typedDecision.server')
+      expect(
+        scoreNoulDecision({
+          spec,
+          state: 'synthetic',
+          result: r,
+          policy: { fallback: false, requireCalibrated: true },
+        }).decision,
+      ).toMatchObject({ holds: true, abstained: false })
+    },
+  )
+  it.each([0, 0.5, 1])('accepts probability %s', async (noul) => {
+    answerFor(NOUL.key, { type: 'noul', noul })
+    expect((await (await transport()).decide({ spec: NOUL, state: 'synthetic' })).probs).toEqual({
+      true: noul,
+      false: 1 - noul,
+    })
+  })
+  it.each([-0.01, 1.01, null, '0.9'])('refuses invalid noul %s', async (noul) => {
+    answerFor(NOUL.key, { type: 'noul', noul })
+    await expect((await transport()).decide({ spec: NOUL, state: 'synthetic' })).rejects.toThrow(
+      'valid noul',
+    )
+  })
+  it('refuses a choice-shaped answer instead of silently converting it', async () => {
+    answerFor(NOUL.key, {
+      type: 'choice',
+      noul: 0.9,
+      probabilities: { true: 0.9, false: 0.1 },
+      confidence: 0.8,
+    })
+    await expect((await transport()).decide({ spec: NOUL, state: 'synthetic' })).rejects.toThrow(
+      'valid noul',
+    )
+  })
+})
+describe('jev-tier-lock score/noul', () => {
+  it.each([SCORE, NOUL])(
+    'locks $type before building a body or reading the key at both layers',
+    async (base) => {
+      const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
+      configureConsumerClients((role) => (role === 'decide' ? { client: 'JevDecide' } : undefined))
+      const t = await transport()
+      const routed = await adapter()
+      const real = process.env
+      let keyReads = 0
+      let bodyReads = 0
+      process.env = new Proxy(real, {
+        get: (target, key) => {
+          if (key === 'JEV_DECISIONS_API_KEY') keyReads++
+          return Reflect.get(target, key)
+        },
+      })
+      // Both request shapes must read instructions; count that read independently
+      // of fetch, so build-before-lock turns this pin red even without a socket.
+      const spec = {
+        ...base,
+        get question() {
+          bodyReads++
+          return base.question
+        },
+      }
+      try {
+        for (const tier of ['verda', 'unknown', 'future']) {
+          const err = await withRunFrame({ inference: { tier } }, () =>
+            t.decide({ spec, state: 'synthetic' }),
+          ).catch((e) => e)
+          expect(String(err.message)).toContain('Refusing')
+          expect(err.llmCall?.rawInput).toBeUndefined()
+        }
+        expect(bodyReads).toBe(0)
+        await expect(
+          onPrivateTier(() => routed({ spec: base, state: 'synthetic' })),
+        ).rejects.toThrow('private inference tier')
+        expect(keyReads).toBe(0)
+        expect(requests).toHaveLength(0)
+      } finally {
+        process.env = real
+      }
+    },
+  )
+})
+describe('jev-supported-types same resolver', () => {
+  it('one adapter follows Jev, an undeclared secondary, local override and locked override', async () => {
+    const { createDecideAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
+    let secondaryCalls = 0
+    const verbalized: DecideFn = async () => {
+      secondaryCalls++
+      throw new Error('Undeclared secondary must never serve a noul')
+    }
+    const fn = createDecideAdapter({ verbalized })
+    expect((await transport()).decide.supportedTypes).toEqual(['choice', 'score', 'noul'])
+    expect(fn.supportedTypes).toEqual(['choice', 'score', 'noul'])
+    answerFor(NOUL.key, { type: 'noul', noul: 0.9 })
+    expect((await fn({ spec: NOUL, state: 'synthetic' })).llmCall?.clientName).toBe('JevDecide')
+    configureConsumerClients((role) =>
+      role === 'decide' ? { client: 'DecideAnthropic' } : undefined,
+    )
+    expect(fn.supportedTypes).toEqual(['choice'])
+    await expect(fn({ spec: NOUL, state: 'synthetic' })).rejects.toThrow('Unsupported')
+    expect(secondaryCalls).toBe(0)
+    await withRunFrame(
+      {
+        inference: {
+          tier: 'anthropic',
+          clientOverride: (role) =>
+            role === 'decide' ? { client: 'LocalQwenSmallDecide' } : undefined,
+        },
+      },
+      async () => {
+        expect(fn.supportedTypes).toEqual(['choice', 'score', 'noul'])
+        expect(fn.serving?.(NOUL.key).method).toBe('logprob')
+      },
+    )
+    await withRunFrame(
+      {
+        inference: {
+          tier: 'verda',
+          clientOverride: (role) => (role === 'decide' ? { client: 'JevDecide' } : undefined),
+        },
+      },
+      async () => {
+        expect(fn.supportedTypes).toEqual(['choice'])
+        await expect(fn({ spec: SCORE, state: 'synthetic' })).rejects.toThrow(
+          'private inference tier',
+        )
+      },
+    )
+    expect(requests).toHaveLength(1)
+  })
+})

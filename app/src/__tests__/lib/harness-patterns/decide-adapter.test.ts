@@ -514,14 +514,7 @@ describe('S3 lettered specs', () => {
     const { createVerbalizedDecide } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
     const fn = await adapter()
-    expect(fn.supportedTypes).toEqual(['choice']) // default Jev is choice-only until S4
-    await expect(fn({ spec: score, state: 'synthetic' })).rejects.toThrow(
-      'Unsupported decision type',
-    )
-    await expect(fn({ spec: noul, state: 'synthetic' })).rejects.toThrow(
-      'Unsupported decision type',
-    )
-    expect(hits).toHaveLength(0)
+    expect(fn.supportedTypes).toEqual(['choice', 'score', 'noul'])
     await onPrivateTier(async () => {
       expect(fn.supportedTypes).toEqual(['choice', 'score', 'noul'])
       expect((await fn({ spec: noul, state: 'synthetic' })).llmCall?.clientName).toBe(

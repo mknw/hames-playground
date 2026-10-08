@@ -2181,7 +2181,7 @@ distance`; the **floors BEFORE fusion** — a row survives a channel only if
 memory, no ids) that a responder renders in its run-static part. Two patterns
 consume it (#419 M5a): `compactExecution` copies a non-blank `data.memoryContext`
 into `CompactExecutionInput.memoryContext` (the key is ABSENT when nothing was
-recalled), and `router` hands it to `route` as a trailing fourth argument,
+recalled), and `router` (unless `routerMemory: 'replies-only'`) hands it to `route` as a trailing fourth argument,
 `RouteExtra { memoryContext? }`, again only when non-blank — so a `route` written
 before `RouteExtra` sees the three-argument call it always saw. Neither renders
 anything itself: the BAML adapters pass the block to the trailing `memory_context`
@@ -2273,7 +2273,9 @@ await settleMemory(ctx, memoryStoreConfig(deps.memory), { conversationId })
 `withMemory` returns `[memoryRecall(cfg), ...patterns]` — an array combinator, not a
 wrapper (a wrapper would break `runChain`'s per-top-level-pattern live toggle and
 irrecoverable-error stop, and memory must reach two responders). The caller's
-patterns come back as the SAME objects. It is the whole opt-in: it adds
+patterns come back as the SAME objects with the default. With `'replies-only'`,
+each top-level function is wrapped at ingress (the config stays identical), so
+a resume that skips recall still withholds memory from routing. It is the whole opt-in: it adds
 `capabilities.memory`, which `harnessUsesMemory` reads.
 
 `MemoryConfig` is ONE object for both halves. `store` is `MemoryStore &
@@ -2284,6 +2286,33 @@ MemoryWriteStore` (no shared member; no method takes an owner); `decide`,
 `memoryStoreConfig` hands the SAME function to the store half (where absent means
 off), so recall and store cannot disagree about it. `recall` / `settle` carry each
 half's tunables.
+
+`routerMemory?: RouterMemory` is the developer's choice on this same wiring:
+
+- `'routing-and-replies'` (default, option a) preserves today's router arguments
+  and rendered prompt. The router may use recalled memory when writing `intent`.
+  A tool route's task can carry facts from earlier conversations into tool
+  arguments, for example a web-search query or a fetch. This includes tool egress
+  even when model calls stay on private infrastructure.
+- `'replies-only'` (option c) leaves the recalled block off every router prompt,
+  including nested routers. Memory reaches only reply-writing steps:
+  `compactExecution` and its `synthesize` path still receive it. The router's
+  direct conversational answer has no recalled memory, and its direct-response
+  route still skips synthesis. The current recalled block therefore cannot shape
+  a tool route's intent or tool arguments through routing. It is a per-turn boundary, not a guarantee that remembered facts never reach a tool: a fact the reply states becomes conversation history, and on a later turn the router sees that history and may put the fact into `intent`, and so into tool arguments (#548).
+
+Unknown values throw at the wiring boundary (`withMemory` and
+`memoryStoreConfig`); they never silently fall back. `RouterMemory` is the exported
+string-literal union of those two values. The choice is written on turn data by
+the prepended recall step, so callers need no extra router plumbing and the
+original pattern configs stay identical. This amends #419 D13 / decision 6:
+controllers and the planner have no direct memory-block input, but option (a)
+can carry memory indirectly through intent. Option (b), router memory for direct
+answers only with no copying into intent or route, is deferred (#544).
+
+This controls injection of the recalled block on the current turn. User text,
+ordinary conversation history (including earlier replies), and custom patterns
+that explicitly read `data.memories` are outside that boundary.
 
 Spec §1's `policy` is carried per half (`recall.gate`, `settle.gate`). M3 adds `compact` and `retention` as OPTIONAL fields (absent: no compaction, and the D21 default retention), so a composition root written now keeps compiling.
 

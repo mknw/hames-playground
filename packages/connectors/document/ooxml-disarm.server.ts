@@ -2769,17 +2769,13 @@ interface LevelMemo {
 }
 
 /**
- * The nearest text highlight among a level's own: a background drawn behind the
+ * A level's own text highlight, resolved: a background drawn behind the
  * glyph and OVER every other background (#495 F2), exactly as `countWordRun`
  * treats `w:highlight`. An unresolvable one is not provably any colour.
  */
 function highlightOf(props: XmlElement, s: Scheme): LevelEval['highlight'] {
   const hl = childEl(props, NS.a, 'highlight')
   if (hl === undefined) return undefined
-  // A level that DEFINES a highlight ends the scan, whatever it resolves
-  // to (#495 F10): transparent paints nothing — the fill beneath shows, and
-  // a farther defRPr's highlight is never inherited over the run's own —
-  // and an unresolvable one is not provably any colour.
   const clr = drawingClr(elements(hl)[0], s)
   if (clr.transparent) return { unknown: false }
   if (clr.unknown || clr.rgb === undefined) return { unknown: true }
@@ -2810,6 +2806,10 @@ function drawingHighlight(levels: readonly (LevelEval | undefined)[]): {
   readonly clr?: DClr
   readonly unknown: boolean
 } {
+  // A level that DEFINES a highlight ends the scan, whatever it resolves
+  // to (#495 F10): transparent paints nothing — the fill beneath shows, and
+  // a farther defRPr's highlight is never inherited over the run's own —
+  // and an unresolvable one is not provably any colour.
   for (const level of levels) if (level?.highlight) return level.highlight
   return { unknown: false }
 }

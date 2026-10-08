@@ -4131,6 +4131,7 @@ describe('#524: shared text-property levels are evaluated once per part, not onc
     string,
     (size: number) => Levels,
     (size: number) => Record<string, number>,
+    'timed'?,
   ][] = [
     [
       'the paragraph’s a:pPr/a:defRPr, n padding children',
@@ -4170,6 +4171,7 @@ describe('#524: shared text-property levels are evaluated once per part, not onc
         ),
       }),
       (n) => ({ 'colour-contrast': n }),
+      'timed',
     ],
     [
       'a layout placeholder’s p:spPr solidFill colour, n transforms',
@@ -4186,6 +4188,7 @@ describe('#524: shared text-property levels are evaluated once per part, not onc
         layoutLst: '',
       }),
       () => ({}),
+      'timed',
     ],
     [
       'a layout placeholder’s p:spPr gradient, n stops',
@@ -4196,11 +4199,13 @@ describe('#524: shared text-property levels are evaluated once per part, not onc
       'a layout placeholder’s defRPr text gradient, n stops',
       (n) => ({ layoutLst: lvl1(grad(n)) }),
       (n) => ({ 'unknown-property': n }),
+      'timed',
     ],
     [
       'a layout placeholder’s level, n DISTINCTLY named padding children',
       (n) => ({ layoutLst: lvl1(padNamed(n)) }),
       (n) => ({ 'unknown-property': n }),
+      'timed',
     ],
     [
       'for contrast — the layout’s p:bg colour, n transforms (#522’s memo)',
@@ -4257,6 +4262,31 @@ describe('#524: shared text-property levels are evaluated once per part, not onc
     120_000,
   )
 
+  // The count sees `filter` and `Set.add` only: a per-run walk by any other
+  // means — a memo keyed by content, the unknowns unioned into an array — leaves
+  // it at 3.9. CPU sees it, which is why #492 F2 keeps both halves. One fixture
+  // per shared path is timed (the level memo and its union, the fill memo, a
+  // colour's transforms, a text gradient) against the same bytes where no run
+  // reads them: ~1 when linear, and it holds under load where growth does not.
+  // 16n runs, so that a cheap native walk per run still clears 3 (#532 review).
+  /** The same bytes where no run reads them: the shape's lvl2pPr, which a level-1 run never reaches. */
+  const control = (o: Levels): Levels => ({
+    lst: `<a:lvl2pPr><a:defRPr>${Object.values(o).join('')}</a:defRPr></a:lvl2pPr>`,
+  })
+  it.each(FIXTURES.filter((f) => f[3] === 'timed'))(
+    '%s, timed',
+    async (_, levels) => {
+      const wide = deckOf(16 * n, levels(16 * n))
+      const base = deckOf(16 * n, control(levels(16 * n)))
+      await cpuMs(() => ooxmlDisarm(base, MIME.pptx))
+      expect(
+        (await cpuMs(() => ooxmlDisarm(wide, MIME.pptx))) /
+          (await cpuMs(() => ooxmlDisarm(base, MIME.pptx))),
+      ).toBeLessThan(3)
+    },
+    120_000,
+  )
+
   // ── The key ────────────────────────────────────────────────────────────
   // Within one part every input to a level's evaluation is constant, and
   // across parts none is: a slide's own `p:clrMapOvr` re-resolves the SAME
@@ -4288,8 +4318,11 @@ describe('#524: shared text-property levels are evaluated once per part, not onc
       run: string,
       over: Record<string, string>,
       on: 1 | 2,
+      master = pStylePart('sldMaster', '', CLR_MAP),
+      defaults?: string,
     ): Uint8Array => {
       const bytes = pptx({
+        presentationExtra: defaults,
         slides: [
           { shapes: run },
           {
@@ -4299,7 +4332,7 @@ describe('#524: shared text-property levels are evaluated once per part, not onc
             ],
           },
         ],
-        style: { layouts: [layout, undefined], master: pStylePart('sldMaster', '', CLR_MAP) },
+        style: { layouts: [layout, undefined], master },
       })
       const dec = new TextDecoder()
       const enc = new TextEncoder()
@@ -4347,6 +4380,54 @@ describe('#524: shared text-property levels are evaluated once per part, not onc
         )
         expect(
           await countedOf(twoSlides(layout, bodyRun(solid('FFFFFF')), { bg1: 'dk1' }, on)),
+        ).toEqual({ 'colour-contrast': 1 })
+      },
+    )
+    // Every shared level, not the layout's alone: a memo for ONE level moved onto
+    // its master part or onto the document is the same bypass (#532 review).
+    const tx1 = lvl1('<a:solidFill><a:schemeClr val="tx1"/></a:solidFill>')
+    it.each([
+      ['a master placeholder’s level', layPh(' type="body"', '', '', tx1), '', undefined],
+      [
+        'the master’s txStyles',
+        '',
+        `<p:txStyles><p:bodyStyle>${tx1}</p:bodyStyle></p:txStyles>`,
+        undefined,
+      ],
+      [
+        'the presentation’s defaultTextStyle',
+        '',
+        '',
+        `<p:defaultTextStyle>${tx1}</p:defaultTextStyle>`,
+      ],
+    ])('%s tx1, the override on either slide', async (_, masterPh, txStyles, defaults) => {
+      const master = pStylePart('sldMaster', masterPh, CLR_MAP + txStyles)
+      for (const on of [1, 2] as const) {
+        expect(
+          await countedOf(
+            twoSlides(pStylePart('sldLayout'), bodyRun(), { tx1: 'lt1' }, on, master, defaults),
+          ),
+        ).toEqual({ 'colour-contrast': 1 })
+      }
+    })
+    it.each([1, 2] as const)(
+      'a master placeholder’s p:spPr bg1, the override on slide %i',
+      async (on) => {
+        const master = pStylePart(
+          'sldMaster',
+          layPh(' type="body"', '<a:solidFill><a:schemeClr val="bg1"/></a:solidFill>', '', ''),
+          CLR_MAP,
+        )
+        expect(
+          await countedOf(
+            twoSlides(
+              pStylePart('sldLayout'),
+              bodyRun(solid('FFFFFF')),
+              { bg1: 'dk1' },
+              on,
+              master,
+            ),
+          ),
         ).toEqual({ 'colour-contrast': 1 })
       },
     )

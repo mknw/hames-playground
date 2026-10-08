@@ -53,6 +53,7 @@ const REPORT_DIR = path.join(APP_DIR, 'evals', 'reports')
 const SCRATCH = path.join(REPORT_DIR, '.release-check')
 const UNIT_RESULT = path.join(SCRATCH, 'unit.json')
 const E2E_RESULT = path.join(SCRATCH, 'e2e.json')
+const BROWSER_PINS_RESULT = path.join(SCRATCH, 'browser-pins.json')
 const BROWSER_RESULT = path.join(SCRATCH, 'browser.json')
 
 // ============================================================================
@@ -65,7 +66,7 @@ interface Layer {
   readonly title: string
   /** One line on what this layer can see that the one below it cannot. */
   readonly sees: string
-  /** The `pnpm` script, plus whatever it takes to make it write JSON. The two
+  /** The `pnpm` arguments, plus whatever it takes to make it write JSON. The two
    *  runners disagree about how: vitest takes `--outputFile`, Playwright has no
    *  such flag and reads `PLAYWRIGHT_JSON_OUTPUT_NAME` from the environment
    *  instead. Both are spelled out per layer rather than guessed at, because
@@ -141,6 +142,22 @@ const LAYERS: readonly Layer[] = [
     command: ['test:e2e', '--reporter=json', `--outputFile=${E2E_RESULT}`],
     resultFile: E2E_RESULT,
     parse: parseVitest,
+  },
+  {
+    id: 'browser-pins',
+    title: 'Browser backend hermeticity pins (no database or browser)',
+    sees: 'child environment, boot and final egress drains',
+    command: [
+      'exec',
+      'playwright',
+      'test',
+      '--config',
+      'e2e-browser/pins/playwright.config.ts',
+      '--reporter=json',
+    ],
+    env: { PLAYWRIGHT_JSON_OUTPUT_NAME: BROWSER_PINS_RESULT },
+    resultFile: BROWSER_PINS_RESULT,
+    parse: parsePlaywright,
   },
   {
     id: 'browser',

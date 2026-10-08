@@ -229,7 +229,7 @@ async function boot(): Promise<AppHandles> {
     // API) — pointed at the same fake, with a throwaway key, so a hermetic run
     // can neither reach OpenRouter nor spend a real key.
     process.env.JEV_DECISIONS_URL = `${fakeLlm.baseUrl.replace(/\/v1$/, '')}/api/alpha/decisions`
-    process.env.OPENROUTER_API_KEY = 'e2e-fake-key'
+    process.env.JEV_DECISIONS_API_KEY = 'e2e-fake-key'
     // Poison the real credential — see HERMETIC_ANTHROPIC_KEY.
     process.env.ANTHROPIC_API_KEY = HERMETIC_ANTHROPIC_KEY
     // The strip's control-plane probe (`verda-control-plane.server.ts`) reads
@@ -399,6 +399,13 @@ async function boot(): Promise<AppHandles> {
     },
 
     async wipe() {
+      // Memories first: memory_sources' FK refuses a conversation delete that
+      // would strand a source (#531); the sources cascade from memories.
+      await dbClient
+        .query('DELETE FROM memories WHERE user_id = $1', [userId])
+        .catch((err: { code?: string }) => {
+          if (err.code !== '42P01') throw err
+        })
       await dbClient.query('DELETE FROM conversations WHERE user_id = $1', [userId])
     },
   }

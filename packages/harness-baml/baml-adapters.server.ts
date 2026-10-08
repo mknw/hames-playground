@@ -70,6 +70,7 @@ import {
 } from '@hames-ai/harness-patterns/patterns/typedDecision.server'
 import { notifyLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import { createJevTransport } from './jev-decide.server'
+import { escapeDataFence } from './data-fence'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
 import {
   MAX_DECISION_LABELS,
@@ -1908,7 +1909,7 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
     // `collector`, so the positional trailing slot is never an empty `{}` (#154).
     let answer: string
     try {
-      answer = await b.Decide(state, spec.question, options_, {
+      answer = await b.Decide(escapeDataFence(state), spec.question, options_, {
         collector,
         ...clientOverrideFor('decide'),
       })
@@ -2116,7 +2117,7 @@ export function createVerbalizedDecide(): DecideFn {
       // is the operator-named secondary (or undefined → the declared
       // `DecideAnthropic`); were the lock above ever removed, a private-tier
       // run would land on the private tier's own client, never a public one.
-      stated = await b.DecideVerbalized(state, spec.question, options, {
+      stated = await b.DecideVerbalized(escapeDataFence(state), spec.question, options, {
         collector,
         ...clientOverrideFor('decide'),
       })

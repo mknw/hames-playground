@@ -17,7 +17,8 @@ thing either of them will ask for.
 The company is the **controller**; the data subjects are its employees using the
 assistant. Anthropic is the **processor** (it is now the only LLM provider —
 the Groq / OpenRouter / OpenAI chains and their `USE_MIXED_CHAINS` switch were
-removed 2026-08-24; see finding 1). The app is internal-only and reached through Entra
+removed 2026-08-24; one narrow exception since #418, the Anthropic tier's `decide`
+role — see finding 1). The app is internal-only and reached through Entra
 SSO, so every record is tied to a named employee — there is no anonymous use and
 no pseudonymisation anywhere in the stack.
 
@@ -100,7 +101,7 @@ single most important finding in this document.
 
 Every conversation, including the embedded mail and file content described
 above, is sent to **Anthropic's API** — and, since 2026-08-24, to no other LLM
-provider. MCP tool servers (web fetch/search, GitHub, Context7) receive whatever
+provider except the `decide` role's Anthropic-tier client, below. MCP tool servers (web fetch/search, GitHub, Context7) receive whatever
 is passed to them.
 
 Each is a processor under **Art. 28** (needs a data processing agreement) and,
@@ -114,9 +115,34 @@ Two things follow that _are_ in our control:
 - **Anthropic-only is a compliance asset**: one processor to paper rather than
   four. It is no longer a default that a switch could undo — the mixed-provider
   chains and the `USE_MIXED_CHAINS` env flag were deleted outright on
-  2026-08-24, so there is no configuration that sends a prompt to Groq,
-  OpenRouter or OpenAI. Re-introducing one is an Art. 28 / Chapter V decision,
-  not a config change.
+  2026-08-24, so no _chat_ configuration sends a prompt to Groq, OpenRouter or
+  OpenAI. **One exception, stated rather than buried (#418, slice T4):** on the
+  Anthropic tier the `decide` role's default client is a REST adapter to
+  TypeSafe's Jev model through OpenRouter's Decisions API
+  (`packages/harness-baml/jev-decide.server.ts`). It sends the _decision state_ —
+  the text a typed decision is asked about, which is whatever the consumer puts in
+  it — to OpenRouter and TypeSafe, two further third-country processors. Controls:
+  the request body carries OpenRouter's provider preferences for zero data
+  retention and data collection denied (`zdr: true`,
+  `data_collection: 'deny'`) whenever the endpoint's host is `openrouter.ai`
+  or a subdomain, and the transport **refuses to send** a body that lacks them
+  — a check on our own request, not on what OpenRouter does with it (an
+  endpoint that forwards to OpenRouter under another name gets no
+  preferences); the transport has its own API key (never the embedding
+  provider's, no fallback); `JEV_DECISIONS_URL` accepts only `https:` or a
+  loopback host; any failure abstains rather than retrying elsewhere. **The
+  private tier never reaches it**: the transport is refused under that tier at
+  two layers, before the key is read and before any request. Open, not
+  inferred: the provider documents no latency, retention or region.
+  OpenRouter's SDK reference lists an optional `provider` object on the
+  Decisions request, but whether the alpha endpoint ENFORCES it is unverified
+  — an endpoint that accepts and ignores it would serve the request with no
+  error and no signal this code can see. Even where enforced, the preferences
+  restrict routing; they are not a contract. The DPA / transfer analysis for
+  both processors has not been done. No consumer wires the role yet; this, and
+  a live check that the endpoint refuses a request whose preferences no
+  endpoint can satisfy, must be settled before the first one does. Re-introducing any other provider is an Art. 28 / Chapter V decision, not a
+  config change.
 - Whether **zero-retention / no-training-on-inputs** terms apply to the account
   materially changes the risk picture, and is a contract setting rather than a
   code one.
@@ -127,7 +153,8 @@ exists, and it now covers every role without exception.** A verda tier decision
 re-points controller / actor / critic / synthesizer / router / planner /
 describe **and the injection screen** at the company's own Qwen deployment on a
 Verda (DataCrunch) GPU (`packages/harness-baml/baml_src/verda-client.baml`). Read against the paragraph above: no
-configuration still sends a prompt to Groq, OpenRouter or OpenAI, and the new
+chat configuration still sends a prompt to Groq, OpenRouter or OpenAI (the
+`decide` exception above is Anthropic-tier only), and the new
 route moves prompts _off_ a third-country processor rather than onto one, so it
 cuts the exposure this finding is about rather than widening it. Three caveats
 belong in the same breath, because each is the kind of thing this doc exists to
@@ -306,7 +333,7 @@ questions and can start immediately; only item 4 blocks on someone else.
 | 1   | **ROPA + employee privacy notice.** One page each. Draftable from the data map above; the parts needing company input are legal basis and retention period.                                                                                                  | company input on two fields |
 | 2   | **Decide and enforce a retention period for `conversations`.** A dated sweep is a small amount of code; the number is a business decision. Resolves the asymmetry with the stash's 7 days.                                                                   | retention decision          |
 | 3   | ~~**Arm the session sweep**~~ (done — `startSessionSweepTimer`) and ~~**encrypt Graph-derived `tool_result` content**~~ (done — the whole `context` blob is encrypted, following the `user_tokens` pattern). Remaining: Redis and Neo4j are still plaintext. | —                           |
-| 4   | **Confirm DPAs and the transfer mechanism** for Anthropic — now the only LLM processor. Gates production rollout more than any code here.                                                                                                                    | counsel                     |
+| 4   | **Confirm DPAs and the transfer mechanism** for Anthropic and, before any consumer wires the Anthropic tier's `decide` role (finding 1), for OpenRouter and TypeSafe. Gates production rollout more than any code here.                                      | counsel                     |
 | 5   | **Postgres backups, with the encryption keys escrowed separately.** Now triply justified: Art. 32(1)(c), ops, and the fact that a dump without `DATA_ENCRYPTION_KEY` is unrecoverable ciphertext.                                                            | —                           |
 | 6   | **Before rollout:** works council information, and the CAO 81 purpose statement.                                                                                                                                                                             | HR / works council          |
 | 7   | Drop the dead `auth_sessions.token_cache` column.                                                                                                                                                                                                            | —                           |

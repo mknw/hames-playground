@@ -10,7 +10,9 @@
  * (the router's conversational route and `compactExecution`), so wrapping one
  * of them would not be enough either. Prepending leaves every pattern's own
  * config exactly as the caller wrote it (the `withInjectionGuard` transparency
- * rule): the patterns come back as the SAME objects.
+ * rule): configs stay identical. With the default, patterns come back as the
+ * SAME objects; replies-only wraps their ingress so a resume that skips recall
+ * still withholds memory from routing.
  *
  * It is also the whole opt-in. `memoryRecall` declares `capabilities.memory`,
  * so `harnessUsesMemory(withMemory(cfg)(patterns))` is true and
@@ -49,6 +51,8 @@ import type {
   MemoryWakeWait,
   MemoryWriteStore,
   ModelLimits,
+  PatternScope,
+  EventView,
 } from '../types'
 import type { MemoryStoreConfig, MemoryStoreSettings } from '../memory-store.server'
 import {
@@ -59,7 +63,14 @@ import {
 
 assertServerOnImport()
 
+export type RouterMemory = 'routing-and-replies' | 'replies-only'
+
 export interface MemoryConfig {
+  /** Where recalled memory may flow. Default: 'routing-and-replies': the router
+   *  may put earlier-conversation facts into intent and therefore tool arguments
+   *  (a web-search query or fetch). 'replies-only' withholds the block from every
+   *  router; compactExecution still receives it. */
+  readonly routerMemory?: RouterMemory
   /** REQUIRED: the persistence seam, bound by the host to the turn's owner. ONE
    *  object serves both halves: recall reads through {@link MemoryStore}
    *  (`count`, `candidates`) and the store step writes through
@@ -96,19 +107,27 @@ export interface MemoryConfig {
   readonly settle?: Omit<MemoryStoreSettings, 'enabled'>
 }
 
-/** D11: the switch is the user's consent, and both halves read it. A config that
- *  reaches here without one (untyped) would split them — recall reads, the store
+/** Validate the developer choice and D11: both halves read the user's switch.
+ *  A config that reaches here without one (untyped) would split them — recall
+ *  reads, the store
  *  refuses — so it is refused here, before either half exists. */
-function requireSwitch(cfg: MemoryConfig): void {
+function validateMemoryConfig(cfg: MemoryConfig): void {
+  if (
+    cfg.routerMemory !== undefined &&
+    cfg.routerMemory !== 'routing-and-replies' &&
+    cfg.routerMemory !== 'replies-only'
+  )
+    throw new TypeError('withMemory: unknown `routerMemory` value')
   if (typeof cfg.enabled !== 'function')
     throw new TypeError("withMemory: `enabled` (the user's memory switch, D11) is required")
 }
 
-/** Prepend the recall step. The patterns that follow are returned untouched. */
+/** Prepend recall; replies-only also enforces the choice at resumed ingress. */
 export function withMemory<T extends MemoryRecallData>(
   cfg: MemoryConfig,
 ): (patterns: ConfiguredPattern<T>[]) => ConfiguredPattern<T>[] {
-  requireSwitch(cfg)
+  validateMemoryConfig(cfg)
+  const routerMemory = cfg.routerMemory ?? 'routing-and-replies'
   const recall = memoryRecall<T>({
     store: cfg.store,
     decide: cfg.decide,
@@ -119,14 +138,39 @@ export function withMemory<T extends MemoryRecallData>(
     ...(cfg.limits ? { limits: cfg.limits } : {}),
     settings: { ...cfg.recall, enabled: cfg.enabled },
   })
-  return (patterns) => [recall, ...patterns]
+  const configuredRecall: ConfiguredPattern<T> = {
+    ...recall,
+    fn: async (scope, view) => {
+      const result = await recall.fn(scope, view)
+      // Set on every turn, including skips. All nested routers read the same
+      // choice; the caller's patterns and their configs stay untouched.
+      result.data = { ...result.data, routerMemory }
+      return result
+    },
+  }
+  return (patterns) => [
+    configuredRecall,
+    ...patterns.map((pattern) =>
+      routerMemory === 'replies-only'
+        ? {
+            ...pattern,
+            fn: (scope: PatternScope<T>, view: EventView) => {
+              // A resume may skip recall. Apply the developer's current choice
+              // at every top-level ingress, including re-entry from a paused blob.
+              scope.data = { ...scope.data, routerMemory }
+              return pattern.fn(scope, view)
+            },
+          }
+        : pattern,
+    ),
+  ]
 }
 
 /** The store half of the same config, for the host's post-reply
  *  {@link settleMemory}. Shares the owner, the embedder, the decision seam, the
  *  wake and the switch; both halves read the turn's tier from the run frame. */
 export function memoryStoreConfig(cfg: MemoryConfig): MemoryStoreConfig {
-  requireSwitch(cfg)
+  validateMemoryConfig(cfg)
   return {
     store: cfg.store,
     decide: cfg.decide,

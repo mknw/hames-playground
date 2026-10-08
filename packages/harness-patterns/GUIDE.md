@@ -154,12 +154,28 @@ declare const chain: ConfiguredPattern<AgentData>[] // the host's router, routes
 declare const ctx: UnifiedContext<AgentData>
 declare const conversationId: string
 
-const patterns = withMemory<AgentData>(deps.memory)(chain)
+const patterns = withMemory<AgentData>({ ...deps.memory, routerMemory: 'replies-only' })(chain)
 // after the reply, from the host's compactAndSave continuation:
 await settleMemory(ctx, memoryStoreConfig(deps.memory), { conversationId })
 ```
 
 `enabled` is required, and both halves read the same function.
+
+Choose `routerMemory` on this wiring: `'routing-and-replies'` is the default and
+preserves existing calls. The router sees recalled memory and may put it into
+`intent`: a tool route's task can carry facts from earlier conversations into tool
+arguments, for example a web-search query or a fetch, even with private model
+inference. `'replies-only'`, shown above, withholds the recalled block from every
+router, including nested routers, while `compactExecution` / `synthesize` still
+receive it for reply writing. Direct conversational router replies have no memory
+and still skip synthesis. Unknown values throw at construction. The exported
+`RouterMemory` union names both choices; no extra router configuration is needed.
+Controllers and the planner get no direct memory block; with the default they can
+receive its facts indirectly through intent (#419 D13 / decision 6, amended by
+#535). This setting controls the current recalled block; it does not remove facts
+from user text or previous replies in ordinary conversation history, or constrain
+custom patterns that explicitly read the memory data bag. Option (b), direct
+answers with memory but no copying into intent or route, is deferred (#544).
 
 Gate the post-reply call on `harnessUsesMemory(patterns)`, the same probe that gates the memory wake, so an agent that did not opt in stores nothing. **Await `settleMemory`, then save the context**: the `memory_written` events it records ride that one save. It never throws and it fails closed: an abstained, uncalibrated or sensitive read, a confirmation your host cannot yet ask, an organisational-graph target or a failed wake all store nothing and say why. Recall never throws either and never stops what follows it; its block is cleared on every turn. Your `MemoryWriteStore.transaction(fn)` must open one transaction, take the owner's advisory lock inside it, and **roll back and rethrow if `fn` throws**: that rollback is what makes a retry a no-op. See SPEC's [Memory recall](SPEC.md#memory-recall-memoryrecall-419) and [Memory store](SPEC.md#memory-store-settlememory-419).
 

@@ -96,6 +96,9 @@ const JEV_TIMEOUT_MS = 30_000
  *  label or an out-of-range value is not rounding). */
 const JEV_MASS_TOLERANCE = 0.01
 
+const JEV_DECISION_TYPES = Object.freeze(['choice', 'score', 'noul'] as const)
+const JEV_LOCKED_TYPES = Object.freeze(['choice'] as const)
+
 interface JevAnswer {
   readonly type?: unknown
   readonly score?: unknown
@@ -489,7 +492,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
           !Number.isFinite(a.score) ||
           a.score < 0 ||
           a.score > labels.length - 1 ||
-          Math.abs(a.score - expected) > 0.01 * (labels.length - 1)
+          Math.abs(a.score - expected) > 0.01 * (labels.length - 1) + 1e-9
         ) {
           throw new LLMCallError(`Jev score disagrees with probabilities for field "${n}".`, record)
         }
@@ -507,7 +510,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
   }
 
   const decide: DecideFn = async <L extends string>(input: DecideInput<L>) => {
-    if (!['choice', 'score', 'noul'].includes(input.spec.type ?? 'choice')) {
+    if (!JEV_DECISION_TYPES.includes(input.spec.type ?? 'choice')) {
       throw new Error(`Unsupported decision type: ${String(input.spec.type)}`)
     }
     const r = await decideAll({
@@ -517,14 +520,13 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     return r.fields[input.spec.key] as unknown as DecideResult<L>
   }
 
+  const supported = {
+    get: () => (onExplicitAnthropicTier() ? JEV_DECISION_TYPES : JEV_LOCKED_TYPES),
+  }
+  Object.defineProperty(decide, 'supportedTypes', supported)
+  Object.defineProperty(decideAll, 'supportedTypes', supported)
   // The state cap of the model behind the resolved client (Jev's documented
   // 32k tokens, in `MODEL_CONTEXT_WINDOWS`), read per call like every role.
-  Object.defineProperty(decide, 'supportedTypes', {
-    value: Object.freeze(['choice', 'score', 'noul'] as const),
-  })
-  Object.defineProperty(decideAll, 'supportedTypes', {
-    value: decide.supportedTypes,
-  })
   decideAll.limits = () => limitsFor('decide')
   decide.limits = () => limitsFor('decide')
   return { decideAll, decide }

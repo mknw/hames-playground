@@ -1931,6 +1931,9 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
     if (transport === 'jev') {
       // The Anthropic tier's client: a REST adapter with its own LLMCallRecord
       // and usage report. It refuses the private tier again itself.
+      if (!supportedTypes().includes(spec.type ?? 'choice')) {
+        throw new Error(`Unsupported decision type: ${String(spec.type ?? 'choice')}`)
+      }
       return createJevTransport().decide(input)
     }
 
@@ -2057,7 +2060,7 @@ export function createDecideAllAdapter(
     readonly state: string
   }) => {
     const { transport, supportedTypes } = selectSetTransport()
-    if (transport === 'jev') {
+    if (transport === 'jev' && activeInferenceTier() === 'verda') {
       // The transport locks before constructing any of the mixed questions.
       return createJevTransport().decideAll(input)
     }
@@ -2066,6 +2069,7 @@ export function createDecideAllAdapter(
         throw new Error(`Unsupported decision type: ${String(spec.type)}`)
       }
     }
+    if (transport === 'jev') return createJevTransport().decideAll(input)
     const fields = {} as { [K in keyof S]: DecideResult<DecisionLabelsFor<S[K]>> }
     for (const k of Object.keys(input.spec.fields) as Array<keyof S & string>) {
       fields[k] = (await decide({

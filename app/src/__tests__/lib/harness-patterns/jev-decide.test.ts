@@ -826,6 +826,22 @@ describe('jev-score-wire', () => {
       llmCall: { clientName: 'JevDecide', provider: 'typesafe' },
     })
   })
+  it('requires a confidence claim for score calibration', async () => {
+    const { confidence: _confidence, ...answer } = scoreAnswer
+    answerFor(SCORE.key, answer)
+    const r = await (await adapter())({ spec: SCORE, state: 'synthetic' })
+    expect(r.calibrated).toBe(false)
+    const { scoreScoreDecision } =
+      await import('@hames-ai/harness-patterns/patterns/typedDecision.server')
+    expect(
+      scoreScoreDecision({
+        spec: SCORE,
+        state: 'synthetic',
+        result: r,
+        policy: { fallback: 'now', requireCalibrated: true },
+      }).decision,
+    ).toMatchObject({ abstained: true, reason: 'uncalibrated' })
+  })
   it.each([1, 11])('refuses %i levels before sending', async (n) => {
     const spec = {
       ...SCORE,
@@ -865,15 +881,30 @@ describe('jev-score-closed-levels', () => {
   })
 })
 describe('jev-score-mean-crosscheck', () => {
-  it.each([0, 2, -1, 3, null, '1.43', 1.451])(
-    'refuses inconsistent or invalid reported score %s',
-    async (score) => {
-      answerFor(SCORE.key, { ...scoreAnswer, score })
-      await expect((await transport()).decide({ spec: SCORE, state: 'synthetic' })).rejects.toThrow(
-        'disagrees',
-      )
-    },
-  )
+  it.each([
+    ...[0, 2, -1, 3, null, '1.43', 1.451].map((score) => [
+      String(score),
+      scoreAnswer.probabilities,
+      score,
+    ]),
+    ['top-level overshoot', { '0': 0, '1': 0, '2': 1 }, 2.01],
+  ])('refuses inconsistent or invalid reported score %s', async (_name, probabilities, score) => {
+    answerFor(SCORE.key, { ...scoreAnswer, probabilities, score })
+    await expect((await transport()).decide({ spec: SCORE, state: 'synthetic' })).rejects.toThrow(
+      'disagrees',
+    )
+  })
+  it('accepts the inclusive tolerance boundary despite floating-point rounding', async () => {
+    answerFor(SCORE.key, {
+      ...scoreAnswer,
+      score: 0.71,
+      probabilities: { '0': 0.3, '1': 0.7 },
+    })
+    const spec = { ...SCORE, levels: SCORE.levels.slice(0, 2) }
+    await expect((await transport()).decide({ spec, state: 'synthetic' })).resolves.toMatchObject({
+      probs: { can_wait: 0.3, soon: 0.7 },
+    })
+  })
   it('absorbs rounding within 0.01*(n-1), after mass normalization', async () => {
     answerFor(SCORE.key, {
       ...scoreAnswer,
@@ -990,6 +1021,24 @@ describe('jev-tier-lock score/noul', () => {
   )
 })
 describe('jev-supported-types same resolver', () => {
+  it('reports choice only on a future tier and refuses score before sending', async () => {
+    const { createDecideAllAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const t = await transport()
+    const routed = await adapter()
+    const set = createDecideAllAdapter(routed)
+    await withRunFrame({ inference: { tier: 'future' } }, async () => {
+      expect(t.decide.supportedTypes).toEqual(['choice'])
+      expect(t.decideAll.supportedTypes).toEqual(['choice'])
+      expect(routed.supportedTypes).toEqual(['choice'])
+      expect(set.supportedTypes).toEqual(['choice'])
+      await expect(routed({ spec: SCORE, state: 'synthetic' })).rejects.toThrow('Unsupported')
+      await expect(
+        set({ spec: { key: 'set', fields: { score: SCORE } }, state: 'synthetic' }),
+      ).rejects.toThrow('Unsupported')
+    })
+    expect(requests).toHaveLength(0)
+  })
+
   it('one adapter follows Jev, an undeclared secondary, local override and locked override', async () => {
     const { createDecideAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')

@@ -8,7 +8,8 @@
  * express as a static value, and the one check every test gets: no fake
  * refused a request.
  */
-import { afterEach } from 'vitest'
+import { afterAll, afterEach } from 'vitest'
+import { checkAfterAll, checkAfterEach } from './lib/setup-checks'
 
 // Vitest's `test.env` writes strings; anything derived from them belongs here.
 // `NODE_ENV=test` is what tells `pg` and friends they are not in production.
@@ -25,19 +26,8 @@ delete process.env.USE_VERDA_INFERENCE
 // failed ingest, which the turn can survive, so after EVERY test a request the
 // Graph or converter fake refused fails that test. Both are checked and both
 // are reset, so one refusal never carries into the next test's verdict. The
-// import is dynamic so no lib module loads before the lines above have run.
-afterEach(async () => {
-  const { peekBootedApp } = await import('./lib/app')
-  const app = await peekBootedApp()?.catch(() => null)
-  if (!app) return
-  const failures: string[] = []
-  for (const fake of [app.fakeGraph, app.fakeConverter]) {
-    try {
-      fake.assertAllMatched()
-    } catch (err) {
-      failures.push(err instanceof Error ? err.message : String(err))
-    }
-    fake.reset()
-  }
-  if (failures.length > 0) throw new Error(failures.join('\n'))
-})
+// app import stays dynamic in the checks so it loads after the lines above.
+afterEach(checkAfterEach)
+
+// Stacked hook order runs this after the scenario file's own afterAll hooks.
+afterAll(checkAfterAll)

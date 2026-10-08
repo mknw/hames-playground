@@ -366,7 +366,7 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
   }
 
   async function serve(raw: string, res: http.ServerResponse): Promise<void> {
-    let body: { model?: string; messages?: ChatMessage[]; max_tokens?: number }
+    let body: { model?: string; messages?: ChatMessage[]; max_tokens?: number; logprobs?: boolean }
     try {
       body = JSON.parse(raw || '{}') as {
         model?: string
@@ -459,7 +459,13 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
 
     // `fn` is non-null for everything but the wake ping, which the `!wake` guard
     // above let through — it wants a token, not a parseable envelope.
-    const payload = JSON.stringify(completion(model, wake ? 'ok' : replyFor(fn!, prompt)))
+    const payload = JSON.stringify(
+      completion(
+        model,
+        wake ? 'ok' : replyFor(fn!, prompt),
+        body.logprobs === true ? decisionProbabilities(prompt) : undefined,
+      ),
+    )
 
     if (fault?.kind === 'mid-stream') {
       record('mid-stream', delayedMs)
@@ -603,6 +609,17 @@ export const FAKE_TOOL_ARGS = '{"query":"MATCH (n) RETURN count(n) AS n"}'
  */
 function replyFor(fn: BamlFunctionName, prompt: string): string {
   switch (fn) {
+    case 'Decide':
+      return 'A'
+
+    case 'DecideVerbalized':
+      return JSON.stringify(
+        decisionProbabilities(prompt).map(({ token, probability }) => ({
+          letter: token,
+          probability,
+        })),
+      )
+
     case 'Router':
       return JSON.stringify({
         intent: 'e2e intent: count the nodes',
@@ -717,13 +734,47 @@ function readBatchIds(prompt: string): string[] {
 // Wire helpers
 // ============================================================================
 
-function completion(model: string, content: string): unknown {
+/** Read only the offered options, never letters in the state or question. */
+function decisionProbabilities(prompt: string): Array<{ token: string; probability: number }> {
+  const options = prompt.slice(prompt.lastIndexOf('OPTIONS:'))
+  const letters = [...options.matchAll(/^\s*([A-T])\. /gm)].map((m) => m[1])
+  return letters.map((token, i) => ({
+    token,
+    probability: i === 0 ? 0.9 : 0.1 / (letters.length - 1),
+  }))
+}
+
+function completion(
+  model: string,
+  content: string,
+  probabilities?: Array<{ token: string; probability: number }>,
+): unknown {
   return {
     id: 'e2e-fake-completion',
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
     model,
-    choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
+    choices: [
+      {
+        index: 0,
+        message: { role: 'assistant', content },
+        finish_reason: 'stop',
+        ...(probabilities && {
+          logprobs: {
+            content: [
+              {
+                token: 'A',
+                logprob: Math.log(0.9),
+                top_logprobs: probabilities.map(({ token, probability }) => ({
+                  token,
+                  logprob: Math.log(probability),
+                })),
+              },
+            ],
+          },
+        }),
+      },
+    ],
     usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
   }
 }

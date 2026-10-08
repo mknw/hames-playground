@@ -22,18 +22,13 @@ TYPE_CASES = [
 ]
 
 
-ADAPTER = '../packages/harness-baml/baml-adapters.server.ts'
 JEV = '../packages/harness-baml/jev-decide.server.ts'
 PROJECTION = '../packages/harness-patterns/observability/projection.ts'
-GUARD = """    if (spec.type !== undefined && spec.type !== 'choice') {
-      throw new Error(`Unsupported decision type: ${String(spec.type)}`)
-    }
-"""
-ADAPTER_PIN = 'S1 unsupported-type adapter backstop'
+ADAPTER_PIN = 'unknown-type adapter backstop'
+# S3 replaces the two choice-only BAML guards with one closed type mapping.
+# Its new guard, ordering and calibration mutations live in
+# check-baml-score-noul-mutations.py; keep the unchanged Jev guard here until S4.
 CASES += [
-    ('F1-delete-private-logprob-guard', ADAPTER, GUARD, '', ADAPTER_PIN),
-    ('F2-logprob-deny-list', ADAPTER, "spec.type !== undefined && spec.type !== 'choice'", "spec.type === 'score' || spec.type === 'noul'", ADAPTER_PIN),
-    ('F2-verbalized-deny-list', ADAPTER, "spec.type !== undefined && spec.type !== 'choice'", "spec.type === 'score' || spec.type === 'noul'", ADAPTER_PIN, 2),
     ('F2-jev-deny-list', JEV, "input.spec.type !== undefined && input.spec.type !== 'choice'", "input.spec.type === 'score' || input.spec.type === 'noul'", ADAPTER_PIN),
     ('F3-drop-score-runtime-strip', CORE, 'policy: { ...input.policy, minMargin: undefined },', 'policy: input.policy,', 'rejects wider margin policies'),
     ('F4-uniform-MAD-centred-on-mode', CORE, 's + Math.abs(i - midpoint)', 's + Math.abs(i - mode)', 'score-math'),
@@ -100,7 +95,7 @@ if __name__ == '__main__':
             if name in [x[0] for x in TYPE_CASES]:
                 command = ['pnpm', 'typecheck']
             elif test == ADAPTER_PIN:
-                command = ['pnpm', 'test:run', 'src/__tests__/lib/harness-patterns/decide-adapter.test.ts', '-t', test]
+                command = ['pnpm', 'exec', 'vitest', 'run', '--config', 'scripts/vitest-decision-calibration.config.ts', 'src/__tests__/lib/harness-patterns/decide-adapter.test.ts', '-t', test]
             else:
                 command = ['pnpm', 'exec', 'vitest', 'run', '--config', '../packages/harness-patterns/vitest.config.ts', '--root', '../packages/harness-patterns', PIN, '-t', test]
             result = subprocess.run(command, capture_output=True, text=True)

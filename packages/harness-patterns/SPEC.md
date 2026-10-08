@@ -1986,8 +1986,33 @@ S1 widens `DecideInput.spec` to accept all three specs and adds optional
 `preCallAbstain({ spec, supportedTypes, state, policy, method })` returns
 `no-state` first, then `unsupported-type`, then the existing calibration refusal.
 An unsupported type must not call the transport; pass `unsupportedType: true` to
-its pure scorer to record the fallback with null raw readouts. Existing adapters
-refuse score/noul directly before making any request and declare no new support.
+its pure scorer to record the fallback with null raw readouts. Transport support is declared by each adapter; absent support remains choice-only.
+
+#### Lettered score and noul transports (#418 addendum S3)
+
+`createDecideAdapter().supportedTypes` is a getter resolved at each read from
+the same `selectDecideTransport` / `resolveClientForRole('decide')` selection
+used by the call. The logprob transport supports choice, score and noul. Jev
+reports its own support (choice-only until S4). An injected secondary reports
+its declared support; absent means choice-only. A locked or unwired transport
+reports no supported types. This keeps the pre-call refusal truthful when a
+run frame or consumer overrides the tier's client (SD-12).
+
+Both BAML lettered transports map a score's level at index i to letter A+i,
+low → high, with the 2–10 level cap from [TypeSafe's score documentation](https://docs.typesafe.ai/primitives/score).
+A noul maps A to true, B to false; descriptions come from `criteria`, defaulting
+to “Yes — the statement holds” / “No — the statement does not hold”. Neither
+spec changes the existing BAML prompt. The logprob readout applies the existing
+letter-variant summing, per-letter temperature/bias for `(served client, key)`,
+and renormalisation; coverage remains the raw matched mass. Core computes the
+score mean and noul P(true) from the resulting categorical distribution.
+
+`createVerbalizedDecide` declares all three types but still returns
+`method: 'verbalized'`, `calibrated: false`, never applies calibration, and
+refuses incomplete or malformed stated distributions. Its positive
+Anthropic-tier lock and the routed adapter's private-tier lock run before
+requests. `LocalQwenSmallDecide` continues to use `max_tokens: 2`, including
+identical-prompt repeat tests; BAML source and generated client are unchanged.
 
 #### The awaited wrapper
 

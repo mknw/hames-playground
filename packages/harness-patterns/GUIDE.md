@@ -181,7 +181,7 @@ not a rounded mean: a bimodal distribution can average to a level it never
 supports. Confidence measures concentration, not permission to act, as
 [TypeSafe explains](https://docs.typesafe.ai/confidence).
 
-In this release you can declare score and noul specs, score a distribution with them and read the verdict back. `typedDecision`, `decide`, `evaluateDecision`, `decideFields` and every shipped transport still accept choice specs only, and a transport that does not list a type in `supportedTypes` is never asked it.
+In this release you can declare score and noul specs, score a distribution with them and read the verdict back. `typedDecision`, `decide`, `evaluateDecision` and `decideFields` still accept choice specs only until S2. The logprob transport and explicit verbalized secondary now accept score and noul on the raw seam; Jev remains choice-only until S4. A transport that does not list a type in `supportedTypes` is never asked it. The routed adapter resolves that list at each read, using the same client selection as the call. Score levels map to A, B, … in order; noul maps A to true and B to false. Logprob calibration uses those letters, while verbalized probabilities remain uncalibrated.
 
 `decisionRouter` is `router()`'s sibling built on it: the routes are the
 labels, the verdict becomes `data.route`, and `policy.fallback` names the route

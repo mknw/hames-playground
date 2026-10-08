@@ -132,6 +132,57 @@ hold, `evaluateDecision(call)` is it with no scope at all, and
 `decideFields(scope, { decide, set, state, policy })` answers several typed
 fields over one state, one `decision_made` per field.
 
+The declarations `defineChoice`, `defineScore` and `defineNoul` infer ids from
+literal options. They make no call; choice and score constructors check the
+option count and unique ids. Score levels run low → high and must number 2–10,
+matching [TypeSafe's score definition](https://docs.typesafe.ai/primitives/score).
+A noul is the probability that one statement is true.
+
+| You want to know…                                                     | Type     | Verdict to act on                |
+| --------------------------------------------------------------------- | -------- | -------------------------------- |
+| whether one condition holds (one per condition when several may hold) | `noul`   | `d.holds`                        |
+| which one of several unordered options applies                        | `choice` | `d.label`                        |
+| how much of one ordered quality is present                            | `score`  | `d.level` or its index `d.value` |
+
+A yes/no written as a two-label choice still works; noul is the idiom and is a
+different Jev question type. A degree written as a choice loses its ordering:
+choice confidence treats adjacent and distant alternatives alike. Two dimensions
+in one score cannot be placed on one scale; split them. These distinctions follow
+[TypeSafe's primitive guidance](https://docs.typesafe.ai/introduction/coding-agents)
+and its [published skill](https://raw.githubusercontent.com/typesafe-ai/skills/main/skills/typesafe-ai/SKILL.md),
+read as documentation, not installed.
+
+```typescript
+import { defineScore, defineNoul, readDecision } from '@hames-ai/harness-patterns'
+import type { TypedDecisionData } from '@hames-ai/harness-patterns'
+
+const URGENCY = defineScore({
+  key: 'ticket.urgency',
+  question: 'How urgently does this message need a reply?',
+  levels: [
+    { id: 'can_wait', description: 'Nothing is blocked; a reply next week is fine.' },
+    { id: 'soon', description: 'Someone is waiting, but their work continues.' },
+    { id: 'now', description: 'Work is blocked until someone replies.' },
+  ],
+})
+const WANTS_HUMAN = defineNoul({
+  key: 'support.wants_human',
+  question: 'The user is asking to talk to a person.',
+})
+declare const data: TypedDecisionData
+const urgency = readDecision(data, URGENCY) // level: 'can_wait' | 'soon' | 'now'
+const wantsHuman = readDecision(data, WANTS_HUMAN) // holds: boolean
+```
+
+Score `expected` and noul `pTrue` are raw readouts, preserved when policy
+abstains. Act on the verdict; a consumer that thresholds the raw mean must also
+check `!abstained`. Score's verdict is the mode, with ties broken low → high,
+not a rounded mean: a bimodal distribution can average to a level it never
+supports. Confidence measures concentration, not permission to act, as
+[TypeSafe explains](https://docs.typesafe.ai/confidence).
+
+In this release you can declare score and noul specs, score a distribution with them and read the verdict back. `typedDecision`, `decide`, `evaluateDecision`, `decideFields` and every shipped transport still accept choice specs only, and a transport that does not list a type in `supportedTypes` is never asked it.
+
 `decisionRouter` is `router()`'s sibling built on it: the routes are the
 labels, the verdict becomes `data.route`, and `policy.fallback` names the route
 taken when the decision abstains. Put `compactIntent` in front (it writes the

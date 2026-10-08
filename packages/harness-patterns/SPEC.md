@@ -1923,6 +1923,72 @@ The pure policy math, unit-pinned:
   (`null` only with no distribution at all); `margin = p₁ − p₂`,
   `confidence = (K·p_max − 1)/(K − 1)`.
 
+#### Score and noul core contracts (#418 addendum S1)
+
+`DecisionType = 'choice' | 'score' | 'noul'`. A `DecisionSpec<L>` may omit
+`type` or declare `'choice'`; existing specs, verdicts and choice event bytes
+stay unchanged. `ScoreSpec<L>` declares `type: 'score'` and ordered `levels`
+instead of labels; `NoulSpec` declares `type: 'noul'` and optional
+`criteria: { true: string; false: string }`. `AnyDecisionSpec` is their union.
+
+`defineChoice`, `defineScore` and `defineNoul` return declarations, making no
+call. Const type parameters infer choice/score ids from literals. Choice and
+score construction checks the 2-option minimum, unique ids and respective caps:
+`MAX_DECISION_LABELS = 20`, `MAX_SCORE_LEVELS = 10`. The score cap and level
+indices `0..n−1` follow [TypeSafe's score documentation](https://docs.typesafe.ai/primitives/score).
+Naming and meaning follow [coding-agents](https://docs.typesafe.ai/introduction/coding-agents)
+and the [published skill](https://raw.githubusercontent.com/typesafe-ai/skills/main/skills/typesafe-ai/SKILL.md),
+which is documentation only.
+
+| Spec   | Verdict                        | Raw readout                        | Confidence                                 |
+| ------ | ------------------------------ | ---------------------------------- | ------------------------------------------ |
+| choice | `label`                        | `top` (argmax)                     | `(K·p_max − 1)/(K − 1)`                    |
+| score  | `level`, `value` (level index) | `top` (mode), `expected = Σ i·p_i` | `max(0, 1 − Σ p_i·abs(i−mode) / MAD_unif)` |
+| noul   | `holds`                        | `pTrue`                            | `abs(2·pTrue − 1)`                         |
+
+`MAD_unif = (1/n) Σ abs(i − (n−1)/2)`. This ordinal confidence follows
+[TypeSafe's formula](https://docs.typesafe.ai/confidence). The mode breaks ties
+by level order. `(0,.5,.5)` has expected 1.5 and confidence .25;
+`(.5,0,.5)` has expected 1 and confidence 0. A score verdict uses the mode,
+never the rounded mean. Neither `ScoreDecision` nor `NoulDecision` has a margin.
+`ChoiceDecision<L>` aliases the existing `Decision<L>` and writes no `type`.
+
+`ScorePolicy<L>` has a required level-id fallback; `NoulPolicy` has a required
+boolean fallback. Both retain `minConfidence`, `thresholdMethod`,
+`requireCalibrated`, `minCoverage`, and exclude `minMargin`. A noul cut .6
+accepts true at P(true) ≥ .8, false at ≤ .2, and falls back between them.
+`scoreScoreDecision` / `scoreNoulDecision` share the existing categorical
+normalisation and fail-closed policy checks. They compute confidence in core,
+never from provider confidence. Fitted margin cuts do not apply to these types.
+On abstain the verdict takes the fallback while raw mean/mode/P(true) survive;
+raw fields are null only without a usable distribution.
+
+`AnyDecision` is the verdict union. `DecisionFor<S>` and `PolicyFor<S>` follow
+the spec type and inferred ids. `TypedDecisionData.decisions` holds
+`Record<string, AnyDecision>`; use `readDecision(data, spec)` to read a typed
+verdict by key. It returns undefined for an absent key or a mismatched type.
+A missing stored type means choice, including old conversation blobs.
+
+New `decision_made` fields are optional: `type?: 'score' | 'noul'`,
+`expected?: number | null`, `value?: number`, `pTrue?: number | null`.
+Score events reuse labels (ordered levels), probs, label (verdict level) and top
+(mode). Noul events use true/false labels/probs and stringified boolean fallback.
+Choice never writes a type. The event remains metadata only (SD-3): stateChars,
+never state. Serialization and previews render score as `key: soon (E=1.43)`
+and noul as `key: true (p=0.91)`; absent type retains the legacy choice rendering.
+
+S2 adds generic policy entry points and mixed sets. S3/S4 add transport support;
+this slice changes no BAML prompt, routing, calibration artifact or production
+choice spec. `decisionRouter` remains choice-only.
+
+S1 widens `DecideInput.spec` to accept all three specs and adds optional
+`DecideFn.supportedTypes`. An absent declaration means choice-only.
+`preCallAbstain({ spec, supportedTypes, state, policy, method })` returns
+`no-state` first, then `unsupported-type`, then the existing calibration refusal.
+An unsupported type must not call the transport; pass `unsupportedType: true` to
+its pure scorer to record the fallback with null raw readouts. Existing adapters
+refuse score/noul directly before making any request and declare no new support.
+
 #### The awaited wrapper
 
 ```typescript
@@ -2026,7 +2092,7 @@ interface TypedDecisionConfig<L> extends PatternConfig {
   state?: (view: EventView, data) => string
 }
 interface TypedDecisionData {
-  decisions?: Record<string, Decision>
+  decisions?: Record<string, AnyDecision>
 }
 ```
 

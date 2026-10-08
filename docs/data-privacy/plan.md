@@ -118,31 +118,54 @@ Two things follow that _are_ in our control:
   2026-08-24, so no _chat_ configuration sends a prompt to Groq, OpenRouter or
   OpenAI. **One exception, stated rather than buried (#418, slice T4):** on the
   Anthropic tier the `decide` role's default client is a REST adapter to
-  TypeSafe's Jev model through OpenRouter's Decisions API
-  (`packages/harness-baml/jev-decide.server.ts`). It sends the _decision state_ —
-  the text a typed decision is asked about, which is whatever the consumer puts in
-  it — to OpenRouter and TypeSafe, two further third-country processors. Controls:
-  the request body carries OpenRouter's provider preferences for zero data
-  retention and data collection denied (`zdr: true`,
-  `data_collection: 'deny'`) whenever the endpoint's host is `openrouter.ai`
-  or a subdomain, and the transport **refuses to send** a body that lacks them
-  — a check on our own request, not on what OpenRouter does with it (an
-  endpoint that forwards to OpenRouter under another name gets no
-  preferences); the transport has its own API key (never the embedding
-  provider's, no fallback); `JEV_DECISIONS_URL` accepts only `https:` or a
-  loopback host; any failure abstains rather than retrying elsewhere. **The
-  private tier never reaches it**: the transport is refused under that tier at
-  two layers, before the key is read and before any request. Open, not
-  inferred: the provider documents no latency, retention or region.
-  OpenRouter's SDK reference lists an optional `provider` object on the
-  Decisions request, but whether the alpha endpoint ENFORCES it is unverified
-  — an endpoint that accepts and ignores it would serve the request with no
-  error and no signal this code can see. Even where enforced, the preferences
-  restrict routing; they are not a contract. The DPA / transfer analysis for
-  both processors has not been done. No consumer wires the role yet; this, and
-  a live check that the endpoint refuses a request whose preferences no
-  endpoint can satisfy, must be settled before the first one does. Re-introducing any other provider is an Art. 28 / Chapter V decision, not a
-  config change.
+  TypeSafe's Jev model **directly by default** at
+  `https://api.typesafe.ai/v1/systemone` (`jev-1.13.0`;
+  `packages/harness-baml/jev-decide.server.ts`). SD-10's processor map for this
+  route is: consumer-supplied decision state, question instructions and option
+  descriptions → **TypeSafe**, a further third-country processor. Responses
+  include answers and token usage; this transport records the request and
+  response in `LLMCallRecord` (without the authorization header or bearer key).
+  Direct responses document no `usage.cost`, so price stays unknown.
+
+  **Retention is contractual, not inferred from no-training.** TypeSafe's
+  [model docs](https://docs.typesafe.ai/models) state requests and responses are
+  not used for training. Its [legal page](https://docs.typesafe.ai/legal) offers
+  ZDR **for enterprise customers**, arranged through sales; this is not a
+  default, a per-request flag, or evidence ZDR is enabled for any account.
+  The [privacy policy](https://typesafe.ai/legal/privacy-policy) retains personal
+  data as reasonably necessary for services or business/commercial purposes,
+  with longer legal retention possible, and describes US hosting. The
+  [MCA §4.1–4.3](https://typesafe.ai/legal/mca) permits
+  processing customer data during the term for service/fees and in perpetuity
+  for telemetry, fraud/abuse monitoring and legal compliance; training on
+  customer data requires prior consent. MCA §10.3 also permits standard-backup retention despite deletion obligations. The
+  [DPA](https://typesafe.ai/legal/data-processing) constrains personal-data
+  processing to documented instructions and takes precedence on conflicts.
+  None supplies a fixed general request-retention duration. Confirm the
+  account's enterprise ZDR terms and processor/transfer assessment before
+  sensitive traffic or the first consumer; the code proves neither.
+
+  **OpenRouter is an explicitly configured fallback**, using
+  `JEV_DECISIONS_URL=https://openrouter.ai/api/alpha/decisions` and an
+  OpenRouter-issued decision key. That route adds **OpenRouter and TypeSafe**
+  to the processor map. On `openrouter.ai` or a subdomain the request carries
+  `provider: { zdr: true, data_collection: 'deny' }`; the transport refuses
+  bytes lacking either preference. No OpenRouter-only fields go to TypeSafe's
+  direct API. Whether the alpha Decisions endpoint enforces these preferences
+  is unverified. Routing restrictions are not a contract, and a differently
+  named proxy receives no preferences. Before using this fallback, confirm
+  both processors' terms/transfer assessments, set account ZDR-only routing
+  and data-collection deny, disable prompt logging, and verify the endpoint
+  refuses an unsatisfiable provider preference.
+
+  Both routes use the separate `JEV_DECISIONS_API_KEY`, without any other key
+  fallback. `JEV_DECISIONS_URL` allows only parsed HTTPS or HTTP loopback;
+  failure abstains rather than retrying elsewhere. **SD-12 is preserved:**
+  the private tier is refused at both adapter and transport before any request,
+  with the transport refusing before the key is read. Unknown/future tiers are
+  also refused by the transport before reading the key. Re-introducing any
+  other provider is an Art. 28 / Chapter V decision, not a config change.
+
 - Whether **zero-retention / no-training-on-inputs** terms apply to the account
   materially changes the risk picture, and is a contract setting rather than a
   code one.

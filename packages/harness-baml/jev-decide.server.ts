@@ -1,8 +1,9 @@
 /**
  * Jev decide transport — Server Only (#418, slice T4)
  *
- * The Anthropic tier's `decide` client: TypeSafe's Jev, reached through
- * OpenRouter's Decisions API (`POST /api/alpha/decisions`, `typesafe/jev-1.13`).
+ * The Anthropic tier's `decide` client: TypeSafe's Jev, reached directly at
+ * `POST https://api.typesafe.ai/v1/systemone` (`jev-1.13.0`). OpenRouter's
+ * Decisions API remains an explicitly configured fallback.
  * It is a REST adapter and not a BAML leaf, because that endpoint is not
  * chat-completions and no BAML client can speak it — which is also why it has
  * no collector: it builds its own `LLMCallRecord` and reports through
@@ -23,12 +24,13 @@
  *    abstain with the policy's fallback. Nothing is retried elsewhere — no
  *    other provider, no local 4B.
  *  - PRICE IS WHAT THE PROVIDER REPORTED (`jev-cost-eur`). `usage.cost` is USD
- *    and output tokens are free; the docs state no per-input list price, so an
- *    invented per-MTok rate would render as a confident figure. The reported
+ *    when present. TypeSafe reports token counts without a cost: keep that
+ *    unknown under this transport's provider-cost accounting. The reported
  *    USD converts once at the static `EUR_PER_USD`, like every other client.
  *
- * Open, not inferred: the Jev documentation states no latency, no retention and
- * no region. OpenRouter and TypeSafe are processors beside Anthropic.
+ * TypeSafe offers enterprise ZDR by agreement, not by request flag. No-training
+ * is a separate commitment; default retention is not zero. See SD-10 in
+ * docs/data-privacy/plan.md for the processor and retention terms.
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { notifyLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
@@ -46,6 +48,7 @@ import {
   activeCostRates,
   activeInferenceTier,
   limitsFor,
+  onExplicitAnthropicTier,
 } from './clients.server'
 
 assertServerOnImport()
@@ -54,10 +57,11 @@ assertServerOnImport()
 export const JEV_CLIENT_NAME = 'JevDecide'
 
 export const JEV_MODEL = 'typesafe/jev-1.13'
+export const TYPESAFE_JEV_MODEL = 'jev-1.13.0'
 
 /** The Decisions API. Overridable (`JEV_DECISIONS_URL`) so the layer-2 fake can
  *  stand in for it; read per call, like every other host-set endpoint. */
-export const JEV_DEFAULT_URL = 'https://openrouter.ai/api/alpha/decisions'
+export const JEV_DEFAULT_URL = 'https://api.typesafe.ai/v1/systemone'
 
 /** OpenRouter's provider preferences for this traffic: route only to endpoints with
  *  a zero-data-retention policy, and to none that may collect data. Applied
@@ -136,7 +140,6 @@ function jevFailure(
       functionName: 'Decide',
       variables,
       clientName: JEV_CLIENT_NAME,
-      provider: 'openrouter',
       durationMs: Date.now() - startTime,
       // Jev generates no text: there is no cap to have hit.
       hitOutputCap: false,
@@ -203,6 +206,15 @@ export function createJevTransport(options: JevTransportOptions = {}): {
       )
     }
 
+    // Unknown/future tiers must not inherit a public route from the default.
+    if (!onExplicitAnthropicTier()) {
+      throw jevFailure(
+        'Refusing the Jev decide transport outside the Anthropic inference tier; no request was made.',
+        variables,
+        startTime,
+      )
+    }
+
     // O4 — before the key is read: the bearer token goes only over https: or loopback.
     const endpoint = parseDecisionsUrl(process.env.JEV_DECISIONS_URL || JEV_DEFAULT_URL)
     if (typeof endpoint === 'string') {
@@ -214,8 +226,10 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     }
 
     const openRouter = isOpenRouterHost(endpoint.hostname)
+    const typeSafe = endpoint.hostname === 'api.typesafe.ai'
+    const provider = openRouter ? 'openrouter' : typeSafe ? 'typesafe' : undefined
     const body = {
-      model: JEV_MODEL,
+      model: typeSafe ? TYPESAFE_JEV_MODEL : JEV_MODEL,
       state,
       questions: Object.fromEntries(
         names.map((n) => [
@@ -243,7 +257,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
             'could not be applied; no request was made.',
           variables,
           startTime,
-          { rawInput },
+          { rawInput, provider },
         )
       }
     }
@@ -255,7 +269,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
         `The Jev decide transport needs ${JEV_KEY_ENV}; no request was made.`,
         variables,
         startTime,
-        { rawInput },
+        { rawInput, provider },
       )
     }
 
@@ -269,19 +283,20 @@ export function createJevTransport(options: JevTransportOptions = {}): {
         signal: AbortSignal.timeout(JEV_TIMEOUT_MS),
       })
       status = res.status
-      text = await res.text()
+      // Response bodies and fetch errors are untrusted: never persist an echoed key.
+      text = (await res.text()).split(apiKey).join('[redacted]')
     } catch (e) {
       throw jevFailure(
-        `Jev request failed: ${e instanceof Error ? e.message : String(e)}`,
+        `Jev request failed: ${(e instanceof Error ? e.message : String(e)).split(apiKey).join('[redacted]')}`,
         variables,
         startTime,
-        { rawInput },
-        e,
+        { rawInput, provider },
       )
     }
     if (status < 200 || status >= 300) {
       throw jevFailure(`Jev answered HTTP ${status}: ${text.slice(0, 300)}`, variables, startTime, {
         rawInput,
+        provider,
         rawOutput: text,
       })
     }
@@ -296,6 +311,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
         startTime,
         {
           rawInput,
+          provider,
           rawOutput: text,
         },
         e,
@@ -335,7 +351,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
       }),
       ...(metrics && { metrics }),
       durationMs,
-      provider: 'openrouter',
+      provider,
       clientName: JEV_CLIENT_NAME,
       hitOutputCap: false,
     }

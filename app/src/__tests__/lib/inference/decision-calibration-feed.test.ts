@@ -1,7 +1,7 @@
 import * as baml from '@hames-ai/harness-baml/baml_client/inlinedbaml'
 import * as jev from '@hames-ai/harness-baml/jev-decide.server'
 import type { DecisionCalibrationEntry } from '@hames-ai/harness-patterns'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   feedDecisionCalibration,
   calibrationFingerprint,
@@ -25,7 +25,11 @@ vi.mock('@hames-ai/harness-baml/baml_client/inlinedbaml', async (importOriginal)
 vi.mock('@hames-ai/harness-baml/jev-decide.server', async (importOriginal) => ({
   ...(await importOriginal<typeof jev>()),
 }))
+beforeEach(() => {
+  vi.stubEnv('JEV_DECISIONS_URL', 'https://api.typesafe.ai/v1/systemone')
+})
 afterEach(() => {
+  vi.unstubAllEnvs()
   configureDecisionCalibration({})
   vi.restoreAllMocks()
 })
@@ -58,6 +62,18 @@ function artifact(client = 'JevDecide'): CalibrationArtifact {
 }
 
 describe('decision calibration host feed', () => {
+  it('r545-gate-fingerprint: an unset URL fingerprints the gated default route', () => {
+    vi.stubEnv('JEV_DECISIONS_URL', 'https://api.typesafe.ai/v1/systemone')
+    const direct = calibrationFingerprint('JevDecide')
+    vi.stubEnv('JEV_DECISIONS_URL', '')
+    expect(calibrationFingerprint('JevDecide')).not.toBe(direct) // gate false: no route
+  })
+  it('r545-calibration: TypeSafe and OpenRouter route models invalidate each other', () => {
+    process.env.JEV_DECISIONS_URL = 'https://api.typesafe.ai/v1/systemone'
+    const direct = calibrationFingerprint('JevDecide')
+    process.env.JEV_DECISIONS_URL = 'https://openrouter.ai/api/alpha/decisions'
+    expect(calibrationFingerprint('JevDecide')).not.toBe(direct)
+  })
   it('fingerprint default revision: production path uses CALIBRATION_REVISION', () => {
     for (const client of ['JevDecide', 'LocalQwenSmallDecide']) {
       expect(calibrationFingerprint(client)).toBe(
@@ -100,7 +116,7 @@ describe('decision calibration host feed', () => {
     }
     vi.mocked(baml.getBamlFiles).mockReturnValue(files)
     const jevBefore = calibrationFingerprint('JevDecide')
-    vi.spyOn(jev, 'JEV_MODEL', 'get').mockReturnValue('changed-model' as typeof jev.JEV_MODEL)
+    vi.spyOn(jev, 'jevModelFor').mockReturnValue('changed-model')
     expect(calibrationFingerprint('JevDecide')).not.toBe(jevBefore)
     expect(calibrationFingerprint('JevDecide')).not.toBe(baseline)
     expect(

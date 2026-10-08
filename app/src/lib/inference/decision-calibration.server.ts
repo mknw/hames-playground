@@ -8,7 +8,11 @@ import {
   type DecisionCalibrationTable,
 } from '@hames-ai/harness-baml/clients.server'
 import { getBamlFiles } from '@hames-ai/harness-baml/baml_client/inlinedbaml'
-import { JEV_MODEL } from '@hames-ai/harness-baml/jev-decide.server'
+import {
+  configuredDecisionsUrl,
+  jevModelFor,
+  parseDecisionsUrl,
+} from '@hames-ai/harness-baml/jev-decide.server'
 import calibrationContract from './decision-calibration-contract.json'
 
 // Metadata only at host composition. A hermetic drift pin checks the actual
@@ -25,12 +29,18 @@ export interface CalibrationArtifact {
   clients: Record<string, { fingerprint: string; entries: DecisionCalibrationTable[string] }>
 }
 
+/** The model the configured Jev route sends; null when no usable route is configured (fits then never match). */
+function jevRouteModel(): string | null {
+  const url = parseDecisionsUrl(configuredDecisionsUrl())
+  return typeof url === 'string' ? null : jevModelFor(url.hostname)
+}
+
 /** Bind fits to the ordered questions/labels and transport/model contract.
  * A local prompt/client change invalidates its fits, even under the same name. */
 export function calibrationFingerprint(client: string, revision = CALIBRATION_REVISION): string {
   const files = getBamlFiles()
   const transport = JEV_CLIENTS.has(client)
-    ? { method: 'jev', model: JEV_MODEL, revision: 'G7-G8-cuts-only-v1' }
+    ? { method: 'jev', model: jevRouteModel(), revision: 'G7-G8-cuts-only-v1' }
     : LOGPROB_CLIENTS.has(client)
       ? { method: 'logprob', prompt: files['decide.baml'], client: files['local-client.baml'] }
       : undefined

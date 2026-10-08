@@ -18,6 +18,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   parseXml,
   readZip,
+  writeZip,
   ZipRefusedError,
   XML_LIMITS,
   type XmlElement,
@@ -2619,9 +2620,9 @@ describe('#492: masters and layouts are read for resolution and never emitted', 
     )
     // The body placeholder inherits the layout body placeholder's white 1-pt
     // level 1; the paragraph's own a:pPr/a:defRPr hides its run the same way.
-    // The title placeholder has no matching layout placeholder and the master
-    // has no txStyles, so it inherits nothing — its default text is visible.
-    expect(out.counted).toEqual({ 'colour-contrast': 2, 'too-small': 2 })
+    // The title placeholder (idx 0) matches the layout's only placeholder by
+    // idx, as both LibreOffice and python-pptx do, so it is hidden too (#519).
+    expect(out.counted).toEqual({ 'colour-contrast': 3, 'too-small': 3 })
   })
 
   it('a master’s txStyles resolve through the layout, and the layout wins', async () => {
@@ -3146,6 +3147,259 @@ describe('#517 B: a placeholder inherits by type whatever case its type is writt
       })
     expect(await counted(spec(WHITE_1PT))).toEqual({ 'colour-contrast': 1, 'too-small': 1 })
     expect(await counted(spec(GREY_24))).toEqual({})
+  })
+})
+
+// ============================================================================
+// #519: a slide placeholder inherits the placeholder renderers pick
+// ============================================================================
+
+/** Level 2 only: a placeholder that answers for level 2 and not level 1. */
+const GREY_24_L2 =
+  '<a:lvl2pPr><a:defRPr sz="2400"><a:solidFill><a:srgbClr val="595959"/></a:solidFill></a:defRPr></a:lvl2pPr>'
+/** A text-less style-part placeholder: raw `<p:ph …/>` attributes and an optional list style. */
+const lay = (phAttrs: string, lst: string | undefined): string =>
+  `<p:sp><p:nvSpPr><p:cNvPr id="2" name="P"/><p:cNvSpPr/><p:nvPr><p:ph${phAttrs}/></p:nvPr></p:nvSpPr>` +
+  `<p:spPr/><p:txBody><a:bodyPr/>${lst === undefined ? '' : `<a:lstStyle>${lst}</a:lstStyle>`}<a:p/></p:txBody></p:sp>`
+/** A slide shape with raw `<p:ph …/>` attributes and one run. */
+const sp = (phAttrs: string, text: string): string =>
+  `<p:sp><p:nvSpPr><p:cNvPr id="9" name="S"/><p:cNvSpPr/><p:nvPr><p:ph${phAttrs}/></p:nvPr></p:nvSpPr>` +
+  `<p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:rPr lang="en-US"/><a:t>${text}</a:t></a:r></a:p></p:txBody></p:sp>`
+const counted = async (bytes: Uint8Array) => (await ooxmlDisarm(bytes, MIME.pptx)).counted
+const doc = (slide: string, layout: string, master = '') =>
+  pptx({
+    slides: [{ shapes: slide }],
+    style: {
+      layouts: [pStylePart('sldLayout', layout)],
+      master: pStylePart('sldMaster', master, CLR_MAP),
+    },
+  })
+const HIDDEN = { 'colour-contrast': 1, 'too-small': 1 }
+
+describe('residual: a slide placeholder inherits the placeholder renderers pick', () => {
+  it('R1 exact type+idx beats the first placeholder of the type', async () => {
+    const layout = lay(' type="body" idx="1"', GREY_24) + lay(' type="body" idx="3"', WHITE_1PT)
+    expect(await counted(doc(sp(' type="body" idx="3"', 'H'), layout))).toEqual(HIDDEN)
+    expect(await counted(doc(sp(' type="body" idx="1"', 'V'), layout))).toEqual({})
+  })
+  it('R2 a level the matched placeholder lacks goes to the master, not to a sibling', async () => {
+    const layout = lay(' type="body" idx="1"', GREY_24_L2) + lay(' type="body" idx="3"', GREY_24)
+    expect(
+      await counted(doc(sp(' type="body" idx="1"', 'H'), layout, lay(' type="body"', WHITE_1PT))),
+    ).toEqual(HIDDEN)
+  })
+  it.each([
+    ['<p:ph/> vs <p:ph/>', '', ''],
+    ['<p:ph/> vs type=obj', '', ' type="obj"'],
+    ['type=obj vs <p:ph/>', ' type="obj"', ''],
+    ['idx=0 vs <p:ph/>', ' idx="0"', ''],
+    ['<p:ph/> vs idx=0', '', ' idx="0"'],
+  ])('R3 ECMA defaults (type obj, idx 0): %s', async (_, s, l) => {
+    expect(await counted(doc(sp(s, 'H'), lay(l, WHITE_1PT)))).toEqual(HIDDEN)
+  })
+  it.each(['01', '+1', ' 1 '])('R4 idx="%s" is placeholder 1', async (v) => {
+    expect(await counted(doc(sp(` idx="${v}"`, 'H'), lay(' idx="1"', WHITE_1PT)))).toEqual(HIDDEN)
+  })
+  it.each(['obj', 'pic', 'chart', 'tbl', 'clipArt', 'dgm', 'media'])(
+    'R5 a %s placeholder inherits the master body placeholder',
+    async (t) => {
+      expect(
+        await counted(doc(sp(` type="${t}" idx="13"`, 'H'), '', lay(' type="body"', WHITE_1PT))),
+      ).toEqual(HIDDEN)
+    },
+  )
+  it('R5b untyped: the layout placeholder (no list style) sends it to the master body', async () => {
+    expect(
+      await counted(
+        doc(
+          sp(' idx="13"', 'H'),
+          lay(' idx="13"', undefined),
+          lay(' type="body" idx="1"', WHITE_1PT),
+        ),
+      ),
+    ).toEqual(HIDDEN)
+  })
+  it('R6 an untyped slide placeholder takes its layout placeholder’s type, list style or not', async () => {
+    const master = lay(' type="title"', WHITE_1PT) + lay(' type="body" idx="1"', GREY_24)
+    expect(
+      await counted(doc(sp(' idx="5"', 'H'), lay(' type="title" idx="5"', undefined), master)),
+    ).toEqual(HIDDEN)
+  })
+  it('R7 untyped idx=2 takes idx=2, not the first untyped placeholder (the naive fix’s bypass)', async () => {
+    const layout = lay(' idx="1"', GREY_24) + lay(' idx="2"', WHITE_1PT)
+    expect(await counted(doc(sp(' idx="2"', 'H'), layout))).toEqual(HIDDEN)
+    // Exact obj+idx misses here (idx 2 is typed body): only the idx match finds it.
+    const typed = lay(' idx="1"', GREY_24) + lay(' type="body" idx="2"', WHITE_1PT)
+    expect(await counted(doc(sp(' idx="2"', 'H'), typed))).toEqual(HIDDEN)
+  })
+  it('R8 where renderers part (idx and type find different placeholders), the run is unknown', async () => {
+    const layout = lay(' idx="1"', GREY_24) + lay(' type="pic" idx="13"', GREY_24)
+    expect(await counted(doc(sp(' type="pic" idx="1"', 'V'), layout))).toEqual({
+      'unknown-property': 1,
+    })
+  })
+  it('R8b two placeholders sharing an idx: the run is unknown', async () => {
+    const layout = lay(' idx="1"', GREY_24) + lay(' idx="1"', WHITE_1PT)
+    expect(await counted(doc(sp(' idx="1"', 'H'), layout))).toEqual({ 'unknown-property': 1 })
+  })
+})
+
+// ============================================================================
+// #520: the slide inherits its placeholder's fill, autofit and colour map
+// ============================================================================
+
+/** A text-less style-part placeholder with its own `p:spPr` and `a:bodyPr` inner XML. */
+const layPh = (phAttrs: string, spPr = '', bodyPr = '', lst = GREY_24): string =>
+  `<p:sp><p:nvSpPr><p:cNvPr id="2" name="P"/><p:cNvSpPr/><p:nvPr><p:ph${phAttrs}/></p:nvPr></p:nvSpPr>` +
+  `<p:spPr>${spPr}</p:spPr><p:txBody><a:bodyPr>${bodyPr}</a:bodyPr><a:lstStyle>${lst}</a:lstStyle><a:p/></p:txBody></p:sp>`
+/** A slide body placeholder with one run whose `a:rPr` inner XML is given. */
+const bodyRun = (rPr = ''): string =>
+  '<p:sp><p:nvSpPr><p:cNvPr id="9" name="S"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>' +
+  `<p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:rPr lang="en-US">${rPr}</a:rPr><a:t>HIDDEN</a:t></a:r></a:p></p:txBody></p:sp>`
+const solid = (hex: string): string => `<a:solidFill><a:srgbClr val="${hex}"/></a:solidFill>`
+const countedOf = async (bytes: Uint8Array) => (await ooxmlDisarm(bytes, MIME.pptx)).counted
+/** One slide over one layout over one master; `slideAfter`/`layoutAfter` follow each `p:cSld`. */
+const deck = (o: {
+  slide: string
+  layout?: string
+  master?: string
+  slideBg?: string
+  slideAfter?: string
+  layoutAfter?: string
+}) => {
+  const bytes = pptx({
+    slides: [{ shapes: o.slide, bg: o.slideBg }],
+    style: {
+      layouts: [pStylePart('sldLayout', o.layout ?? '', o.layoutAfter ?? '')],
+      master: pStylePart('sldMaster', o.master ?? '', CLR_MAP),
+    },
+  })
+  if (!o.slideAfter) return bytes
+  const dec = new TextDecoder()
+  const enc = new TextEncoder()
+  return writeZip(
+    readZip(bytes).map((e) => ({
+      name: e.name,
+      data:
+        e.name === 'ppt/slides/slide1.xml'
+          ? enc.encode(dec.decode(e.data).replace('</p:cSld>', `</p:cSld>${o.slideAfter}`))
+          : e.data,
+    })),
+  )
+}
+const OVR = (tx1: string): string =>
+  `<p:clrMapOvr><a:overrideClrMapping bg1="lt1" tx1="${tx1}" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/></p:clrMapOvr>`
+const BLACK_BG = `<p:bgPr>${solid('000000')}<a:effectLst/></p:bgPr>`
+
+describe('the slide inherits its placeholder’s fill, autofit and colour map', () => {
+  it('Q1 a placeholder with no fill of its own is filled as its layout placeholder', async () => {
+    const run = bodyRun(solid('FFFFFF'))
+    const hidden = deck({
+      slide: run,
+      slideBg: BLACK_BG,
+      layout: layPh(' type="body" idx="1"', solid('FFFFFF')),
+    })
+    expect(await countedOf(hidden)).toEqual({ 'colour-contrast': 1 })
+    const control = deck({
+      slide: run,
+      slideBg: BLACK_BG,
+      layout: layPh(' type="body" idx="1"', solid('000000')),
+    })
+    expect(await countedOf(control)).toEqual({})
+  })
+  it('Q1b … else as its master placeholder', async () => {
+    const run = bodyRun(solid('FFFFFF'))
+    const hidden = deck({
+      slide: run,
+      slideBg: BLACK_BG,
+      master: layPh(' type="body"', solid('FFFFFF')),
+    })
+    expect(await countedOf(hidden)).toEqual({ 'colour-contrast': 1 })
+  })
+  it('Q2 a body with no autofit of its own takes its layout placeholder’s fontScale', async () => {
+    const at = (scale: string) =>
+      deck({
+        slide: bodyRun(),
+        layout: layPh(' type="body" idx="1"', '', `<a:normAutofit fontScale="${scale}"/>`),
+      })
+    expect(await countedOf(at('4000'))).toEqual({ 'too-small': 1 })
+    expect(await countedOf(at('100000'))).toEqual({})
+  })
+  it('Q3 the slide’s own clrMapOvr maps tx1', async () => {
+    const at = (tx1: string) => deck({ slide: bodyRun(), slideAfter: OVR(tx1) })
+    expect(await countedOf(at('lt1'))).toEqual({ 'colour-contrast': 1 })
+    expect(await countedOf(at('dk1'))).toEqual({})
+  })
+  it('Q3b … and so does its layout’s', async () => {
+    const at = (tx1: string) => deck({ slide: bodyRun(), layoutAfter: OVR(tx1) })
+    expect(await countedOf(at('lt1'))).toEqual({ 'colour-contrast': 1 })
+    expect(await countedOf(at('dk1'))).toEqual({})
+  })
+})
+
+describe('#520: the inheritance routes the reviewer’s pins left open', () => {
+  it('Q3c a notes slide’s own clrMapOvr maps tx1', async () => {
+    const dec = new TextDecoder()
+    const enc = new TextEncoder()
+    const at = (tx1: string) => {
+      const bytes = pptx({
+        slides: [{ shapes: shape('VISIBLE'), notes: 'HIDDENNOTES', notesPh: 'body' }],
+        style: { notesMaster: pStylePart('notesMaster', '', CLR_MAP) },
+      })
+      return writeZip(
+        readZip(bytes).map((e) => ({
+          name: e.name,
+          data: e.name.startsWith('ppt/notesSlides/notesSlide')
+            ? enc.encode(dec.decode(e.data).replace('</p:cSld>', `</p:cSld>${OVR(tx1)}`))
+            : e.data,
+        })),
+      )
+    }
+    expect(await countedOf(at('lt1'))).toEqual({ 'colour-contrast': 1 })
+    expect(await countedOf(at('dk1'))).toEqual({})
+  })
+  it('Q1c an explicit a:noFill on the slide placeholder is its own fill, and is not overridden', async () => {
+    const run = bodyRun(solid('FFFFFF')).replace('<p:spPr/>', '<p:spPr><a:noFill/></p:spPr>')
+    expect(
+      await countedOf(
+        deck({
+          slide: run,
+          slideBg: BLACK_BG,
+          layout: layPh(' type="body" idx="1"', solid('FFFFFF')),
+        }),
+      ),
+    ).toEqual({})
+  })
+  it('Q2c a body that declares its own autofit is not scaled by its placeholder’s', async () => {
+    const own = (autofit: string) =>
+      bodyRun().replace('<a:bodyPr/>', `<a:bodyPr>${autofit}</a:bodyPr>`)
+    const layout = layPh(' type="body" idx="1"', '', '<a:normAutofit fontScale="4000"/>')
+    expect(await countedOf(deck({ slide: own('<a:noAutofit/>'), layout }))).toEqual({})
+    expect(await countedOf(deck({ slide: own('<a:normAutofit/>'), layout }))).toEqual({})
+    expect(await countedOf(deck({ slide: bodyRun(), layout }))).toEqual({ 'too-small': 1 })
+  })
+  it('Q1d a layout placeholder’s p:style fillRef fills the slide placeholder', async () => {
+    const theme = FMT_THEME(`${solid('FFFFFF')}${solid('000000')}`)
+    const at = (idx: number) =>
+      pptx({
+        slides: [{ shapes: bodyRun(solid('FFFFFF')), bg: BLACK_BG }],
+        style: {
+          layouts: [
+            pStylePart(
+              'sldLayout',
+              layPh(' type="body" idx="1"').replace(
+                '<p:spPr></p:spPr>',
+                `<p:spPr/><p:style><a:lnRef idx="0"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="${idx}"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"/></p:style>`,
+              ),
+            ),
+          ],
+          master: pStylePart('sldMaster', '', CLR_MAP),
+        },
+        presentationRels: [{ id: 'rIdTheme', type: RT.theme, target: 'theme/theme1.xml' }],
+        parts: [{ name: 'ppt/theme/theme1.xml', type: CT.theme, body: theme }],
+      })
+    expect(await countedOf(at(1))).toEqual({ 'colour-contrast': 1 })
+    expect(await countedOf(at(2))).toEqual({})
   })
 })
 

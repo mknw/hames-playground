@@ -29,6 +29,22 @@ const SPEC = {
     { id: 'skip', description: 'Skip the action' },
   ],
 } as const
+const SCORE = {
+  type: 'score',
+  key: 'e2e.score',
+  question: 'How disruptive is the synthetic report?',
+  levels: [
+    { id: 'minor', description: 'Work continues normally.' },
+    { id: 'workaround', description: 'Work continues with a workaround.' },
+    { id: 'blocked', description: 'Work cannot continue.' },
+  ],
+} as const
+const NOUL = {
+  type: 'noul',
+  key: 'e2e.noul',
+  question: 'The message is a greeting.',
+  criteria: { true: 'A hello or equivalent greeting.', false: 'Anything else.' },
+} as const
 const STATE = 'E2E-DECISION-STATE-SENTINEL'
 const JEV_MODEL = 'typesafe/jev-1.13'
 function policy(tier: string) {
@@ -133,6 +149,95 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
         model: tier === 'verda' ? SMALL_MODEL : JEV_MODEL,
         outcome: 'ok',
       })
+    })
+    it('S4 streams and persists generic score/noul policy and actual clients', async () => {
+      // Identity fits are synthetic fixtures, not a production calibration claim.
+      if (tier === 'verda')
+        clients.configureDecisionCalibration({
+          LocalQwenSmallDecide: { [SCORE.key]: { temperature: 1 }, [NOUL.key]: { temperature: 1 } },
+        })
+      const id = `e2e-score-noul-${tier}`
+      const cuts = {
+        minConfidence: 0.4,
+        requireCalibrated: true,
+        thresholdMethod: policy(tier).thresholdMethod,
+      }
+      register(id, async () => [
+        patterns.typedDecision<DecisionData, typeof SCORE>({
+          decide: adapters.createDecideAdapter(),
+          spec: SCORE,
+          policy: { ...cuts, fallback: 'blocked' },
+        }),
+        patterns.typedDecision<DecisionData, typeof NOUL>({
+          decide: adapters.createDecideAdapter(),
+          spec: NOUL,
+          policy: { ...cuts, fallback: false },
+        }),
+        answer(),
+      ])
+      await app.setTier(tier)
+      const sessionId = newSessionId(id)
+      const { status, frames } = await app.runTurnOverSse({
+        sessionId,
+        agentId: id,
+        message: STATE,
+      })
+      expect(status).toBe(200)
+      expect(frames.find((f) => f.event === 'done')?.data.response).toContain(FAKE_ANSWER_MARK)
+      expect(
+        frames.filter((f) => f.event === 'message' && f.data.type === 'decision_made'),
+      ).toHaveLength(2)
+      const { row, events } = await decisions(sessionId)
+      expect(row.status).toBe('done')
+      expect(events).toHaveLength(2)
+      expect(events[0].data).toMatchObject({
+        type: 'score',
+        key: SCORE.key,
+        label: 'minor',
+        abstained: false,
+        calibrated: true,
+        policy: { ...cuts, fallback: 'blocked' },
+      })
+      expect((events[0].data as DecisionMadeEventData).expected).toBeCloseTo(0.15)
+      expect(events[1].data).toMatchObject({
+        type: 'noul',
+        key: NOUL.key,
+        label: 'true',
+        abstained: false,
+        calibrated: true,
+        policy: { ...cuts, fallback: 'false' },
+      })
+      expect((events[1].data as DecisionMadeEventData).pTrue).toBeCloseTo(0.9)
+      for (const event of events) {
+        expect(event.data).toMatchObject({ method: cuts.thresholdMethod })
+        expect(event.llmCall?.clientName).toBe(
+          tier === 'verda' ? 'LocalQwenSmallDecide' : 'JevDecide',
+        )
+        expect((event.llmCall as LLMCallRecord)?.hitOutputCap).toBe(false)
+        expect(event.llmCall?.variables).toMatchObject({ state: expect.stringContaining(STATE) })
+        expect(JSON.stringify(event.data)).not.toContain(STATE)
+      }
+      const calls = app.fakeLlm.calls.filter((c) => c.fn === 'Decide' || c.model === JEV_MODEL)
+      expect(calls).toHaveLength(2)
+      expect(calls.map((c) => c.model)).toEqual([
+        tier === 'verda' ? SMALL_MODEL : JEV_MODEL,
+        tier === 'verda' ? SMALL_MODEL : JEV_MODEL,
+      ])
+      expect(app.fakeLlm.calls.filter((c) => c.fn === 'DecideVerbalized')).toHaveLength(0)
+      if (tier === 'anthropic') {
+        expect(calls.map((c) => Object.values(JSON.parse(c.prompt).questions)[0])).toEqual([
+          {
+            type: 'score',
+            instructions: SCORE.question,
+            criteria: SCORE.levels.map((l) => l.description),
+          },
+          { type: 'noul', instructions: NOUL.question, criteria: NOUL.criteria },
+        ])
+        expect(JSON.parse(events[1].llmCall!.rawOutput!).answers[NOUL.key]).toEqual({
+          type: 'noul',
+          noul: 0.9,
+        })
+      }
     })
     it('records four fields with shared state and one Jev request', async () => {
       const id = `e2e-fields-${tier}`

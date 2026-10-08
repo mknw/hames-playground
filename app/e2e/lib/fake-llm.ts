@@ -364,7 +364,7 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
     let body: {
       model?: string
       state?: unknown
-      questions?: Record<string, { criteria?: unknown; instructions?: string }>
+      questions?: Record<string, { type?: string; criteria?: unknown; instructions?: string }>
     }
     try {
       body = JSON.parse(raw || '{}')
@@ -394,6 +394,24 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
     }
     const answers: Record<string, unknown> = {}
     for (const [name, q] of Object.entries(body.questions ?? {})) {
+      if (q.type === 'noul') {
+        answers[name] = { type: 'noul', noul: 0.9 }
+        continue
+      }
+      if (q.type === 'score') {
+        const levels = q.criteria as string[]
+        const probabilities = Object.fromEntries(
+          levels.map((_, i) => [String(i), i === 0 ? 0.9 : 0.1 / (levels.length - 1)]),
+        )
+        answers[name] = {
+          type: 'score',
+          score: levels.reduce((s, _, i) => s + i * probabilities[String(i)], 0),
+          legend: Object.fromEntries(levels.map((l, i) => [String(i), l])),
+          probabilities,
+          confidence: 0.9,
+        }
+        continue
+      }
       const options = Object.keys((q.criteria ?? {}) as Record<string, unknown>)
       const chosen = q.instructions?.includes('Should a person confirm') ? 1 : 0
       const rest = options.length > 1 ? 0.1 / (options.length - 1) : 0

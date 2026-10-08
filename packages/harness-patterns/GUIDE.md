@@ -190,7 +190,7 @@ a numeric meter. A noul band requires a finite declared confidence in `[0,1]`;
 other declared values are marked invalid and retained in metadata. Fitted cuts
 may differ from the declared cut shown in the detail view.
 
-In this release you can declare score and noul specs, score a distribution with them and read the verdict back. On the raw seam, the local logprob transport and the verbalized secondary answer all three types; the TypeSafe (Jev) transport, the Anthropic tier's default, answers choice only for now. `decide.supportedTypes` lists what the transport that would serve the call accepts, read at the moment you ask, and a type it does not list is never sent. Score levels are presented as A, B, … from lowest to highest; a noul is presented as A = true, B = false. Logprob calibration is fitted per letter; verbalized probabilities are never calibrated.
+In this release you can declare score and noul specs, score a distribution with them and read the verdict back. On the raw seam all three transports, the local logprob readout, the verbalized secondary and TypeSafe (Jev, the Anthropic tier's default), answer all three types. `decide.supportedTypes` lists what the transport that would serve the call accepts, read at the moment you ask, and a type it does not list is never sent. Score levels are presented as A, B, … from lowest to highest; a noul is presented as A = true, B = false. Logprob calibration is fitted per letter; verbalized probabilities are never calibrated.
 
 `typedDecision`, `decide` and `evaluateDecision` accept all three spec types;
 the return type follows the declared spec. `typedDecision` refuses an unsupported
@@ -254,6 +254,16 @@ d.severity.level // 'minor' | 'blocking'
 d.blocked.holds // boolean
 d.route.label // 'chat' | 'search'
 ```
+
+Jev sends scores as ordered rubric descriptions and maps its numeric level
+indices back to your level ids. It validates the complete distribution and
+cross-checks the reported mean; malformed answers fail closed. A noul returns
+P(true), without a separate confidence field: Jev's raw result still marks it
+calibrated, so a `requireCalibrated` gate can pass. This is a provider claim,
+not a measurement on your questions; fit and validate cuts before deploying
+an action gate. See [score](https://docs.typesafe.ai/primitives/score) and
+[noul](https://docs.typesafe.ai/primitives/noul). The private tier never builds
+or sends a Jev question, even when a client override names Jev.
 
 `decisionRouter` is `router()`'s sibling built on it: the routes are the
 labels, the verdict becomes `data.route`, and `policy.fallback` names the route

@@ -2009,7 +2009,7 @@ its pure scorer to record the fallback with null raw readouts. Transport support
 `createDecideAdapter().supportedTypes` is a getter resolved at each read from
 the same `selectDecideTransport` / `resolveClientForRole('decide')` selection
 used by the call. The logprob transport supports choice, score and noul. Jev
-reports its own support (choice-only until S4). An injected secondary reports
+reports its own support (choice, score and noul since S4). An injected secondary reports
 its declared support; absent means choice-only. A locked or unwired transport reports choice only, the documented absent default: a choice call still reaches that route's own refusal and abstains as the truthful `error`, and score or noul is refused before any request. This keeps the pre-call refusal truthful when a
 run frame or consumer overrides the tier's client (SD-12).
 
@@ -2067,11 +2067,36 @@ there is one `decision_made` with that field's type per field. Jev's G8
 normalisation still serves fields rather than a product. Set failures retain
 individual typed fallbacks and one shared error/call record.
 
-The raw set seam accepts mixed specs, while the existing set adapters remain
-choice-only and refuse unsupported fields before any request. The single-call
+The raw set seam and Jev set adapter accept mixed specs. Set adapters refuse
+unsupported fields before any request using the selected transport’s support. The single-call
 logprob and verbalized transports support all three types as described above;
 a `decideAll` adapter declares its own support independently. No production
 choice declaration is migrated.
+
+#### Native Jev score and noul transport (#418 addendum S4)
+
+The existing Jev transport accepts all three raw spec types. Its support is
+read by the routed adapter's per-call getter through the same transport
+selection used by calls. Both Jev tier locks precede question/body construction:
+private, unknown and future tiers cannot build or send these questions (SD-12).
+
+[TypeSafe score](https://docs.typesafe.ai/primitives/score) questions use
+`{ type: 'score', instructions: question, criteria: levels.map(l => l.description) }`.
+Criteria contain 2–10 ordered descriptions; level ids stay local. Answer
+probabilities must have exactly the canonical string indices `0..n−1`, finite
+values in `[0,1]` and mass within .01 of 1. After normalization they map back to
+the declared ids. The finite reported `score` must lie in `0..n−1` and agree
+with the normalized mean within `.01*(n−1)`; disagreement is an `LLMCallError`.
+The provider's `legend` is ignored. Score retains choice's confidence-presence
+calibration rule; policy confidence is still computed by core from probabilities.
+
+[TypeSafe noul](https://docs.typesafe.ai/primitives/noul) questions use
+`{ type: 'noul', instructions: question, criteria? }`. A finite `noul` in `[0,1]`
+becomes `{ true: p, false: 1-p }`, with `calibrated: true` without a confidence
+field, which the provider does not return for this type. This is the provider's
+claim; S5 measures calibration on our questions. New answer types must match
+the asked type. Malformed responses throw and never retry another provider;
+legacy choice requests and response handling remain unchanged.
 
 #### The awaited wrapper
 

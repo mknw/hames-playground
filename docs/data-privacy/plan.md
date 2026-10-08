@@ -123,7 +123,7 @@ Two things follow that _are_ in our control:
   2026-08-24, so no _chat_ configuration sends a prompt to Groq, OpenRouter or
   OpenAI. **One exception, stated rather than buried (#418, slice T4):** on the
   Anthropic tier the `decide` role's default client is a REST adapter to
-  TypeSafe's Jev model directly when `JEV_DECISIONS_URL` names it (there is no default endpoint until the owner confirms the account's ZDR terms) at
+  TypeSafe's Jev model directly when `JEV_DECISIONS_URL` names it (there is no default endpoint) at
   `https://api.typesafe.ai/v1/systemone` (`jev-1.13.0`;
   `packages/harness-baml/jev-decide.server.ts`). SD-10's processor map for this
   route is: consumer-supplied decision state, question instructions and option
@@ -133,8 +133,9 @@ Two things follow that _are_ in our control:
   Direct responses document no `usage.cost`, so price stays unknown.
   The request pins `jev-1.13.0` rather than the moving `jev-latest` alias because
   T8 calibration fits are per model version; a moving alias would silently invalidate them.
-  A disabled owner gate pre-builds the default switch; it may be enabled only in
-  a separate PR after the account's enterprise ZDR agreement is confirmed.
+  The deployment uses TypeSafe now by explicitly setting
+  `JEV_DECISIONS_URL=https://api.typesafe.ai/v1/systemone` with a non-enterprise
+  key; standard retention applies to that key. The package's default remains disabled.
 
   **Retention is contractual, not inferred from no-training.** TypeSafe's
   [model docs](https://docs.typesafe.ai/models) state requests and responses are
@@ -150,9 +151,9 @@ Two things follow that _are_ in our control:
   customer data requires prior consent. MCA §10.3 also permits standard-backup retention despite deletion obligations. The
   [DPA](https://typesafe.ai/legal/data-processing) constrains personal-data
   processing to documented instructions and takes precedence on conflicts.
-  None supplies a fixed general request-retention duration. Confirm the
-  account's enterprise ZDR terms and processor/transfer assessment before
-  sensitive traffic or the first consumer; the code proves neither.
+  None supplies a fixed general request-retention duration. The current
+  non-enterprise key does not activate enterprise ZDR; standard retention applies.
+  The code does not establish contractual terms or processor/transfer assessments.
 
   **OpenRouter is an explicitly configured fallback**, using
   `JEV_DECISIONS_URL=https://openrouter.ai/api/alpha/decisions` and an

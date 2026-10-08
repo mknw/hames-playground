@@ -1896,3 +1896,119 @@ describe('idempotency-transaction', () => {
     expect(db.sources()).toHaveLength(2)
   })
 })
+
+// #552: mutation — move the re-check before the wake (or remove it).
+describe('#552: switch-off serializes with in-flight settle', () => {
+  it('reads true at entry, false under the transaction lock, and rolls back', async () => {
+    const db = fakeDb()
+    let enabled = true
+    let rolledBack = false
+    const reads: boolean[] = []
+    const store: MemoryWriteStore = {
+      transaction: (fn) =>
+        db.store.transaction(async (tx) => {
+          enabled = false // acquired the lock after the click
+          try {
+            return await fn(tx)
+          } catch (err) {
+            rolledBack = true
+            throw err
+          }
+        }),
+    }
+    const { cfg } = config({
+      db,
+      store,
+      settings: {
+        enabled: () => {
+          reads.push(enabled)
+          return enabled
+        },
+      },
+    })
+    const ctx = turn()
+    expect(await settleMemory(ctx, cfg)).toMatchObject({
+      skipped: 'disabled',
+      written: 0,
+      failed: 0,
+    })
+    expect(reads).toEqual([true, false])
+    expect(rolledBack).toBe(true)
+    expect(db.rows()).toEqual([])
+    expect(db.sources()).toEqual([])
+    expect(written(ctx)).toEqual([])
+  })
+
+  it('switch-off during wake prevents this settle and any settle begun after the click', async () => {
+    let entered!: () => void
+    let release!: () => void
+    const atWake = new Promise<void>((r) => {
+      entered = r
+    })
+    const wake = new Promise<'awake'>((r) => {
+      release = () => r('awake')
+    })
+    let enabled = true
+    const { cfg, db } = config({
+      settings: { enabled: () => enabled },
+      awaitWake: async () => {
+        entered()
+        return wake
+      },
+    })
+    const ctx = turn()
+    const pending = settleMemory(ctx, cfg)
+    await atWake
+    enabled = false // M7 must do this BEFORE its forget-all delete.
+    const later = turn()
+    expect(await settleMemory(later, cfg)).toMatchObject({ skipped: 'disabled', written: 0 })
+    release()
+    expect(await pending).toMatchObject({ skipped: 'disabled', written: 0 })
+    expect(db.rows()).toEqual([])
+    expect(db.sources()).toEqual([])
+    expect(written(ctx)).toEqual([])
+    expect(written(later)).toEqual([])
+  })
+
+  it('re-checks every candidate, preserving only commits from before switch-off', async () => {
+    let enabled = true
+    const db = fakeDb()
+    let transactions = 0
+    const { cfg } = config({
+      db,
+      extract: fakeExtract([cand(), cand()]).fn,
+      settings: { enabled: () => enabled },
+      store: {
+        transaction: (fn) =>
+          db.store.transaction(async (tx) => {
+            if (++transactions === 2) enabled = false
+            return fn(tx)
+          }),
+      },
+    })
+    expect(await settleMemory(turn(), cfg)).toMatchObject({ skipped: 'disabled', written: 1 })
+    expect(db.rows()).toHaveLength(1)
+    expect(db.sources()).toHaveLength(1)
+  })
+
+  it('a switch that throws under the lock writes nothing (fail closed)', async () => {
+    const db = fakeDb()
+    let reads = 0
+    const { cfg } = config({
+      db,
+      extract: fakeExtract([cand(), cand()]).fn,
+      settings: {
+        enabled: () => {
+          if (++reads > 1) throw new Error('prefs unreachable')
+          return true
+        },
+      },
+    })
+    const ctx = turn()
+    expect(await settleMemory(ctx, cfg)).toMatchObject({ written: 0 })
+    expect(reads).toBeGreaterThan(1)
+    expect(db.rows()).toEqual([])
+    expect(db.sources()).toEqual([])
+    expect(written(ctx)).toEqual([])
+  })
+})

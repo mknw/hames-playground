@@ -3028,6 +3028,39 @@ describe('#517 A: placeholder lookup costs one step per run, not one per placeho
     },
     120_000,
   )
+  it('by type, when the run’s own type has n placeholders that lack its level', async () => {
+    // A per-type bucket scanned for the first entry with the run's level —
+    // #495's semantics, and the natural refactor of this index — is linear
+    // while the run's type has no placeholders (the cases above) and
+    // quadratic when it has n that all lack the run's level.
+    const n = 16_000
+    const runs =
+      '<p:sp><p:nvSpPr><p:cNvPr id="3" name="S"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>' +
+      '<p:spPr/><p:txBody><a:bodyPr/><a:p>' +
+      Array.from({ length: n }, (_, i) => `<a:r><a:t>r${i}</a:t></a:r>`).join('') +
+      '</a:p></p:txBody></p:sp>'
+    const part = (type: string): string =>
+      Array.from(
+        { length: n },
+        (_, k) =>
+          `<p:sp><p:nvSpPr><p:cNvPr id="${k + 5}" name="P"/><p:cNvSpPr/><p:nvPr><p:ph type="${type}" idx="${k + 2}"/></p:nvPr></p:nvSpPr>` +
+          '<p:spPr/><p:txBody><a:bodyPr/><a:lstStyle><a:lvl2pPr><a:defRPr sz="1800"/></a:lvl2pPr></a:lstStyle><a:p/></p:txBody></p:sp>',
+      ).join('')
+    const doc = (type: string): Uint8Array =>
+      pptx({
+        slides: [{ shapes: runs }],
+        style: {
+          layouts: [pStylePart('sldLayout', part(type))],
+          master: pStylePart('sldMaster', part(type), CLR_MAP),
+        },
+      })
+    const same = doc('body')
+    const other = doc('pic')
+    const ratio =
+      (await cpuMs(() => ooxmlDisarm(same, MIME.pptx))) /
+      (await cpuMs(() => ooxmlDisarm(other, MIME.pptx)))
+    expect(ratio).toBeLessThan(2)
+  }, 120_000)
 })
 
 describe('#517 B: a placeholder inherits by type whatever case its type is written in', () => {

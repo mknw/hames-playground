@@ -4042,3 +4042,393 @@ describe('#522: a slide never reads another slide’s background memo', () => {
     expect(await countedOf(bytes)).toEqual(want)
   })
 })
+
+// ============================================================================
+// #524: every text-property level the runs of a part SHARE is evaluated once
+// ============================================================================
+
+describe('#524: shared text-property levels are evaluated once per part, not once per run', () => {
+  const rnd = (seed: number): (() => string) => {
+    let s = seed
+    return () => ((s = (s * 1103515245 + 12345) >>> 0) >>> 8).toString(36)
+  }
+  /** `size` unknown children of the schema's namespace; random values keep the zip under its ratio limit. */
+  const pad = (size: number): string => {
+    const r = rnd(3)
+    return Array.from({ length: size }, () => `<a:x v="${r()}"/>`).join('')
+  }
+  /** The same, each with its OWN name: the set of distinct unknown names grows with `size`. */
+  const padNamed = (size: number): string =>
+    Array.from({ length: size }, (_, i) => `<a:x${i}/>`).join('')
+  /** `size` transforms on a colour, each a random `lumMod` in 99000–99999. */
+  const transforms = (size: number): string => {
+    const r = rnd(5)
+    return Array.from(
+      { length: size },
+      () => `<a:lumMod val="99${r().replace(/\D/g, '0').padEnd(3, '0').slice(0, 3)}"/>`,
+    ).join('')
+  }
+  /** Near-white stops: against the white page none is visible, so `fgVisible` cannot stop before the last. */
+  const stops = (size: number): string =>
+    Array.from(
+      { length: size },
+      (_, i) =>
+        `<a:gs pos="${i}"><a:srgbClr val="FFFF${(i % 256).toString(16).padStart(2, '0')}"/></a:gs>`,
+    ).join('')
+  const grad = (size: number): string =>
+    `<a:gradFill><a:gsLst>${stops(size)}</a:gsLst></a:gradFill>`
+  const lvl1 = (inner: string): string => `<a:lvl1pPr><a:defRPr>${inner}</a:defRPr></a:lvl1pPr>`
+
+  interface Levels {
+    /** The paragraph's own `a:pPr`. */
+    pPr?: string
+    /** The shape's own `a:lstStyle` content. */
+    lst?: string
+    /** The layout placeholder's `p:spPr` and `a:lstStyle` content. */
+    layoutSpPr?: string
+    layoutLst?: string
+    /** The layout's `p:bg` content. */
+    layoutBg?: string
+    /** The master placeholder's `a:lstStyle` content, and `txStyles/bodyStyle`'s. */
+    masterLst?: string
+    bodyStyle?: string
+    /** The presentation's `defaultTextStyle` content. */
+    defaults?: string
+  }
+  /** `size` runs, none with a property of its own, in one body placeholder. */
+  const deckOf = (size: number, o: Levels): Uint8Array => {
+    const runs = Array.from(
+      { length: size },
+      (_, i) => `<a:r><a:rPr lang="en-US"/><a:t>r${i}</a:t></a:r>`,
+    ).join('')
+    const body =
+      '<p:sp><p:nvSpPr><p:cNvPr id="9" name="S"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>' +
+      `<p:spPr/><p:txBody><a:bodyPr/>${o.lst ? `<a:lstStyle>${o.lst}</a:lstStyle>` : ''}<a:p>${o.pPr ?? ''}${runs}</a:p></p:txBody></p:sp>`
+    const layoutPh =
+      o.layoutSpPr !== undefined || o.layoutLst !== undefined
+        ? layPh(' type="body" idx="1"', o.layoutSpPr ?? '', '', o.layoutLst ?? '')
+        : ''
+    const masterPh = o.masterLst === undefined ? '' : layPh(' type="body"', '', '', o.masterLst)
+    const txStyles =
+      o.bodyStyle === undefined
+        ? ''
+        : `<p:txStyles><p:bodyStyle>${o.bodyStyle}</p:bodyStyle></p:txStyles>`
+    return pptx({
+      slides: [{ shapes: body }],
+      presentationExtra:
+        o.defaults === undefined
+          ? undefined
+          : `<p:defaultTextStyle>${o.defaults}</p:defaultTextStyle>`,
+      style: {
+        layouts: [pStylePart('sldLayout', layoutPh, '', o.layoutBg ?? '')],
+        master: pStylePart('sldMaster', masterPh, CLR_MAP + txStyles),
+      },
+    })
+  }
+
+  /** Every fixture names the level it pads, builds it at `size` runs, and says what the deck must count (proof the level is READ). */
+  const FIXTURES: readonly [
+    string,
+    (size: number) => Levels,
+    (size: number) => Record<string, number>,
+  ][] = [
+    [
+      'the paragraph’s a:pPr/a:defRPr, n padding children',
+      (n) => ({ pPr: `<a:pPr><a:defRPr>${pad(n)}</a:defRPr></a:pPr>` }),
+      (n) => ({ 'unknown-property': n }),
+    ],
+    [
+      'the shape’s own a:lstStyle level, n padding children',
+      (n) => ({ lst: lvl1(pad(n)) }),
+      (n) => ({ 'unknown-property': n }),
+    ],
+    [
+      'a layout placeholder’s level, n padding children',
+      (n) => ({ layoutLst: lvl1(pad(n)) }),
+      (n) => ({ 'unknown-property': n }),
+    ],
+    [
+      'a master placeholder’s level, n padding children',
+      (n) => ({ masterLst: lvl1(pad(n)) }),
+      (n) => ({ 'unknown-property': n }),
+    ],
+    [
+      'the master’s txStyles bodyStyle level, n padding children',
+      (n) => ({ bodyStyle: lvl1(pad(n)) }),
+      (n) => ({ 'unknown-property': n }),
+    ],
+    [
+      'the presentation’s defaultTextStyle level, n padding children',
+      (n) => ({ defaults: lvl1(pad(n)) }),
+      (n) => ({ 'unknown-property': n }),
+    ],
+    [
+      'a layout placeholder’s defRPr a:highlight colour, n transforms',
+      (n) => ({
+        layoutLst: lvl1(
+          `<a:highlight><a:srgbClr val="000000">${transforms(n)}</a:srgbClr></a:highlight>`,
+        ),
+      }),
+      (n) => ({ 'colour-contrast': n }),
+    ],
+    [
+      'a layout placeholder’s p:spPr solidFill colour, n transforms',
+      (n) => ({
+        layoutSpPr: `<a:solidFill><a:srgbClr val="000000">${transforms(n)}</a:srgbClr></a:solidFill>`,
+        layoutLst: '',
+      }),
+      (n) => ({ 'colour-contrast': n }),
+    ],
+    [
+      'a layout placeholder’s p:spPr solidFill, n children after the colour',
+      (n) => ({
+        layoutSpPr: `<a:solidFill><a:srgbClr val="FFFFFF"/>${pad(n)}</a:solidFill>`,
+        layoutLst: '',
+      }),
+      () => ({}),
+    ],
+    [
+      'a layout placeholder’s p:spPr gradient, n stops',
+      (n) => ({ layoutSpPr: grad(n), layoutLst: '' }),
+      (n) => ({ 'unknown-property': n }),
+    ],
+    [
+      'a layout placeholder’s defRPr text gradient, n stops',
+      (n) => ({ layoutLst: lvl1(grad(n)) }),
+      (n) => ({ 'unknown-property': n }),
+    ],
+    [
+      'a layout placeholder’s level, n DISTINCTLY named padding children',
+      (n) => ({ layoutLst: lvl1(padNamed(n)) }),
+      (n) => ({ 'unknown-property': n }),
+    ],
+    [
+      'for contrast — the layout’s p:bg colour, n transforms (#522’s memo)',
+      (n) => ({
+        layoutBg: `<p:bgPr><a:solidFill><a:srgbClr val="000000">${transforms(n)}</a:srgbClr></a:solidFill><a:effectLst/></p:bgPr>`,
+      }),
+      (n) => ({ 'colour-contrast': n }),
+    ],
+  ]
+
+  // Growing the runs, and the shared level with them, from n to 4n: a level
+  // re-read per run does the second sixteen times the work of the first, one
+  // read once four times. The work is COUNTED, not timed — XML child
+  // inspections in `elements()`/`childEls()` plus every `Set.add` — because a
+  // CPU ratio on a loaded host is a flake: this pin, written as one, failed 7
+  // of 30 runs at a load average of 24–34 on 10 cores, the #517 A pins with
+  // it. The count is exact — linear is 3.9, a per-run read 15.8 — so the bound sits close to linear.
+  const n = 1_000
+  const workOf = async (bytes: Uint8Array): Promise<number> => {
+    let work = 0
+    const filter = Array.prototype.filter
+    const add = Set.prototype.add
+    const spies = [
+      vi.spyOn(Array.prototype, 'filter').mockImplementation(function (
+        this: unknown[],
+        predicate,
+        thisArg,
+      ) {
+        return filter.call(this, (value, index, array) => {
+          if (value && typeof value === 'object' && 'children' in value && 'ns' in value) work++
+          return predicate.call(thisArg, value, index, array)
+        })
+      }),
+      vi.spyOn(Set.prototype, 'add').mockImplementation(function (this: Set<unknown>, value) {
+        work++
+        return add.call(this, value)
+      }),
+    ]
+    try {
+      await ooxmlDisarm(bytes, MIME.pptx)
+    } finally {
+      for (const spy of spies) spy.mockRestore()
+    }
+    return work
+  }
+  it.each(FIXTURES)(
+    '%s',
+    async (_, levels, want) => {
+      const [small, large] = [deckOf(n, levels(n)), deckOf(4 * n, levels(4 * n))]
+      // The level is READ: a deck that never reaches it is linear for free.
+      expect(await countedOf(small)).toEqual(want(n))
+      expect((await workOf(large)) / (await workOf(small))).toBeLessThan(5)
+    },
+    120_000,
+  )
+
+  // ── The key ────────────────────────────────────────────────────────────
+  // Within one part every input to a level's evaluation is constant, and
+  // across parts none is: a slide's own `p:clrMapOvr` re-resolves the SAME
+  // layout element's `schemeClr`. A memo on a PhEntry, a style part, `Shared`
+  // or the module answers one slide with another's colours, and the miss is
+  // hidden text reported as removed.
+  describe('the key: two slides never share an evaluation', () => {
+    const MAP = {
+      bg1: 'lt1',
+      tx1: 'dk1',
+      bg2: 'lt2',
+      tx2: 'dk2',
+      accent1: 'accent1',
+      accent2: 'accent2',
+      accent3: 'accent3',
+      accent4: 'accent4',
+      accent5: 'accent5',
+      accent6: 'accent6',
+      hlink: 'hlink',
+      folHlink: 'folHlink',
+    }
+    const ovr = (over: Record<string, string>): string =>
+      `<p:clrMapOvr><a:overrideClrMapping ${Object.entries({ ...MAP, ...over })
+        .map(([k, v]) => `${k}="${v}"`)
+        .join(' ')}/></p:clrMapOvr>`
+    /** Two slides on ONE layout; `over` is the colour-map override slide `on` carries. */
+    const twoSlides = (
+      layout: string,
+      run: string,
+      over: Record<string, string>,
+      on: 1 | 2,
+    ): Uint8Array => {
+      const bytes = pptx({
+        slides: [
+          { shapes: run },
+          {
+            shapes: run,
+            rels: [
+              { id: 'rIdLayout', type: RT.slideLayout, target: '../slideLayouts/slideLayout1.xml' },
+            ],
+          },
+        ],
+        style: { layouts: [layout, undefined], master: pStylePart('sldMaster', '', CLR_MAP) },
+      })
+      const dec = new TextDecoder()
+      const enc = new TextEncoder()
+      return writeZip(
+        readZip(bytes).map((e) => ({
+          name: e.name,
+          data:
+            e.name === `ppt/slides/slide${on}.xml`
+              ? enc.encode(dec.decode(e.data).replace('</p:cSld>', `</p:cSld>${ovr(over)}`))
+              : e.data,
+        })),
+      )
+    }
+    it.each([1, 2] as const)(
+      'a layout placeholder’s defRPr tx1, the override on slide %i',
+      async (on) => {
+        // tx1 is black through the master's map and white through the override:
+        // on a white page exactly one slide's run is hidden.
+        const layout = pStylePart(
+          'sldLayout',
+          layPh(
+            ' type="body" idx="1"',
+            '',
+            '',
+            lvl1('<a:solidFill><a:schemeClr val="tx1"/></a:solidFill>'),
+          ),
+        )
+        expect(await countedOf(twoSlides(layout, bodyRun(), { tx1: 'lt1' }, on))).toEqual({
+          'colour-contrast': 1,
+        })
+      },
+    )
+    it.each([1, 2] as const)(
+      'a layout placeholder’s p:spPr bg1, the override on slide %i',
+      async (on) => {
+        // bg1 is the white page, or black through the override, behind white text.
+        const layout = pStylePart(
+          'sldLayout',
+          layPh(
+            ' type="body" idx="1"',
+            '<a:solidFill><a:schemeClr val="bg1"/></a:solidFill>',
+            '',
+            '',
+          ),
+        )
+        expect(
+          await countedOf(twoSlides(layout, bodyRun(solid('FFFFFF')), { bg1: 'dk1' }, on)),
+        ).toEqual({ 'colour-contrast': 1 })
+      },
+    )
+    it.each([false, true])(
+      'two layouts, one level hiding and one not (hiding first: %s)',
+      async (hidingFirst) => {
+        const level = (hex: string): string =>
+          pStylePart('sldLayout', layPh(' type="body" idx="1"', '', '', lvl1(solid(hex))))
+        const [a, b] = hidingFirst ? ['FFFFFF', '000000'] : ['000000', 'FFFFFF']
+        const bytes = pptx({
+          slides: [{ shapes: bodyRun() }, { shapes: bodyRun() }],
+          style: {
+            layouts: [level(a), level(b)],
+            master: pStylePart('sldMaster', '', CLR_MAP),
+          },
+        })
+        expect(await countedOf(bytes)).toEqual({ 'colour-contrast': 1 })
+      },
+    )
+    it.each([false, true])(
+      'two layouts, one placeholder fill black and one white, behind white text (black first: %s)',
+      async (blackFirst) => {
+        const fill = (spPr: string): string =>
+          pStylePart('sldLayout', layPh(' type="body" idx="1"', spPr, '', ''))
+        const [a, b] = blackFirst
+          ? [solid('000000'), solid('FFFFFF')]
+          : [solid('FFFFFF'), solid('000000')]
+        const bytes = pptx({
+          slides: [{ shapes: bodyRun(solid('FFFFFF')) }, { shapes: bodyRun(solid('FFFFFF')) }],
+          style: {
+            layouts: [fill(a), fill(b)],
+            master: pStylePart('sldMaster', '', CLR_MAP),
+          },
+        })
+        // The white text is visible on one slide's black fill and hidden on the other's white.
+        expect(await countedOf(bytes)).toEqual({ 'colour-contrast': 1 })
+      },
+    )
+    it('two placeholders of one slide, each inheriting its own layout fill', async () => {
+      // Title fill black, body fill white, white text on both: one is hidden.
+      const white = `<a:rPr lang="en-US">${solid('FFFFFF')}</a:rPr>`
+      const layout = pStylePart(
+        'sldLayout',
+        layPh(' type="title"', solid('000000'), '', '') +
+          layPh(' type="body" idx="1"', solid('FFFFFF'), '', ''),
+      )
+      const bytes = pptx({
+        slides: [
+          {
+            shapes:
+              shape('T', { id: 3, ph: 'title', rPr: white }) +
+              shape('B', { id: 4, ph: 'body', idx: '1', rPr: white }),
+          },
+        ],
+        style: { layouts: [layout], master: pStylePart('sldMaster', '', CLR_MAP) },
+      })
+      expect(await countedOf(bytes)).toEqual({ 'colour-contrast': 1 })
+    })
+    it('two paragraphs of one shape, each with its own a:pPr/a:defRPr', async () => {
+      const para = (hex: string): string =>
+        `<a:p><a:pPr><a:defRPr>${solid(hex)}</a:defRPr></a:pPr><a:r><a:t>T</a:t></a:r></a:p>`
+      const shapes =
+        '<p:sp><p:nvSpPr><p:cNvPr id="7" name="D"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/>' +
+        `<p:txBody><a:bodyPr/>${para('FFFFFF')}${para('000000')}</p:txBody></p:sp>`
+      expect(await countedOf(pptx({ slides: [{ shapes }] }))).toEqual({ 'colour-contrast': 1 })
+    })
+  })
+
+  // ── The bound ──────────────────────────────────────────────────────────
+  // Ten stops are read, eleven are not provably any colour: this is the value,
+  // for a text fill (the bound lives in `fillEl`, shared with every background).
+  it.each([
+    [10, { 'colour-contrast': 1 }],
+    [11, { 'unknown-property': 1 }],
+  ])('a layout placeholder text gradient of %i near-white stops', async (k, want) => {
+    const bytes = pptx({
+      slides: [{ shapes: bodyRun() }],
+      style: {
+        layouts: [pStylePart('sldLayout', layPh(' type="body" idx="1"', '', '', lvl1(grad(k))))],
+        master: pStylePart('sldMaster', '', CLR_MAP),
+      },
+    })
+    expect(await countedOf(bytes)).toEqual(want)
+  })
+})

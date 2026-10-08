@@ -715,6 +715,8 @@ function disarm(
       role: part.role,
       keptIds: new Set(part.rels.map((r) => r.id)),
       part: part.name,
+      // Fresh per PART, never per document, layout or master: see `LevelMemo` (#524).
+      levelMemo: { levels: new Map(), fills: new Map() },
     })
     if (part.role === 'theme') {
       const theme = readTheme(rewritten)
@@ -985,6 +987,8 @@ interface Ctx extends Shared {
   readonly keptIds: ReadonlySet<string>
   /** This part's name, so a slide can fetch its inheritance (#492). */
   readonly part: string
+  /** The text-property levels this part's runs share, evaluated once (#524). */
+  readonly levelMemo: LevelMemo
 }
 
 interface Scope {
@@ -2315,6 +2319,9 @@ function drawingClr(el: XmlElement | undefined, s: Scheme): DClr {
   return { rgb, transparent }
 }
 
+/** More gradient stops than this are not provably any colour (#522): `fgVisible` tests every one per run. */
+const GRAD_STOPS_MAX = 10
+
 /** One fill ELEMENT (`a:solidFill`, `a:gradFill`, …), resolved. */
 function fillEl(el: XmlElement, s: Scheme): DFill {
   if (is(el, NS.a, 'noFill')) return { kind: 'none' }
@@ -2323,11 +2330,11 @@ function fillEl(el: XmlElement, s: Scheme): DFill {
     return clr.rgb === undefined && !clr.transparent ? { kind: 'unknown' } : { kind: 'solid', clr }
   }
   if (is(el, NS.a, 'gradFill')) {
-    const stops = childEls(childEl(el, NS.a, 'gsLst') ?? el, NS.a, 'gs').map((gs) =>
-      drawingClr(elements(gs)[0], s),
-    )
-    if (stops.length === 0) return { kind: 'unknown' }
-    return { kind: 'grad', stops }
+    const gs = childEls(childEl(el, NS.a, 'gsLst') ?? el, NS.a, 'gs')
+    // Bound BEFORE the stops are resolved: a wider gradient is not provably any
+    // colour, and every consumer tests each stop per run (#522, #524).
+    if (gs.length === 0 || gs.length > GRAD_STOPS_MAX) return { kind: 'unknown' }
+    return { kind: 'grad', stops: gs.map((g) => drawingClr(elements(g)[0], s)) }
   }
   if (is(el, NS.a, 'pattFill')) {
     const clr = (name: string): DClr => {
@@ -2737,48 +2744,93 @@ function drawingUnknown(props: XmlElement): ReadonlySet<string> {
   return unknown
 }
 
+/** What one `a:rPr`/`a:defRPr` level contributes to a run, evaluated once (#524). */
+interface LevelEval {
+  readonly unknown: ReadonlySet<string>
+  readonly fill: DFill
+  /** Present when the level DEFINES an `a:highlight`: what it resolves to. */
+  readonly highlight?: { readonly clr?: DClr; readonly unknown: boolean }
+}
+
 /**
- * The nearest text highlight in the chain — a background drawn behind the
+ * The levels the runs of ONE part share — its paragraphs' and shapes' own
+ * defaults, the layout's and master's placeholders and `txStyles`, the
+ * presentation's `defaultTextStyle` — each evaluated once, by element, instead
+ * of once per run (#524: O(runs × width)). Per PART, because the colour map is
+ * the slide's own (`p:clrMapOvr`): the same layout element resolves to
+ * different colours on two slides, so a memo on a `PhEntry`, a
+ * `SlidesStylePart`, `Shared` or the module would answer one slide with
+ * another's colours and report hidden text as removed.
+ */
+interface LevelMemo {
+  readonly levels: Map<XmlElement, LevelEval>
+  /** An inherited placeholder's `p:spPr` fill element, resolved. */
+  readonly fills: Map<XmlElement, DFill>
+}
+
+/**
+ * The nearest text highlight among a level's own: a background drawn behind the
  * glyph and OVER every other background (#495 F2), exactly as `countWordRun`
  * treats `w:highlight`. An unresolvable one is not provably any colour.
  */
-function drawingHighlight(
-  chain: readonly (XmlElement | undefined)[],
-  s: Scheme,
-): { readonly clr?: DClr; readonly unknown: boolean } {
-  for (const props of chain) {
-    if (props === undefined) continue
-    const hl = childEl(props, NS.a, 'highlight')
-    if (hl === undefined) continue
-    // A level that DEFINES a highlight ends the scan, whatever it resolves
-    // to (#495 F10): transparent paints nothing — the fill beneath shows, and
-    // a farther defRPr's highlight is never inherited over the run's own —
-    // and an unresolvable one is not provably any colour.
-    const clr = drawingClr(elements(hl)[0], s)
-    if (clr.transparent) return { unknown: false }
-    if (clr.unknown || clr.rgb === undefined) return { unknown: true }
-    return { clr, unknown: false }
+function highlightOf(props: XmlElement, s: Scheme): LevelEval['highlight'] {
+  const hl = childEl(props, NS.a, 'highlight')
+  if (hl === undefined) return undefined
+  // A level that DEFINES a highlight ends the scan, whatever it resolves
+  // to (#495 F10): transparent paints nothing — the fill beneath shows, and
+  // a farther defRPr's highlight is never inherited over the run's own —
+  // and an unresolvable one is not provably any colour.
+  const clr = drawingClr(elements(hl)[0], s)
+  if (clr.transparent) return { unknown: false }
+  if (clr.unknown || clr.rgb === undefined) return { unknown: true }
+  return { clr, unknown: false }
+}
+
+function evalLevel(props: XmlElement, s: Scheme): LevelEval {
+  return {
+    unknown: drawingUnknown(props),
+    fill: drawingFill(props, s),
+    highlight: highlightOf(props, s),
   }
+}
+
+/** A SHARED level, evaluated once per part; `s` is constant within one. */
+function sharedLevel(props: XmlElement | undefined, ctx: Ctx, s: Scheme): LevelEval | undefined {
+  if (props === undefined) return undefined
+  let hit = ctx.levelMemo.levels.get(props)
+  if (hit === undefined) {
+    hit = evalLevel(props, s)
+    ctx.levelMemo.levels.set(props, hit)
+  }
+  return hit
+}
+
+/** The first level, nearest first, that defines a highlight ends the scan. */
+function drawingHighlight(levels: readonly (LevelEval | undefined)[]): {
+  readonly clr?: DClr
+  readonly unknown: boolean
+} {
+  for (const level of levels) if (level?.highlight) return level.highlight
   return { unknown: false }
 }
 
 /**
- * The run's text fill: the nearest chain level that defines one. Unknowns are
+ * The run's text fill: the nearest level that defines one. Unknowns are
  * collected over the WHOLE chain — a farther level's un-modelled property
- * applies to the run just as a nearer one's does.
+ * applies to the run just as a nearer one's does. Only whether ANY level has
+ * one is read, so no set is unioned: a level with n distinctly named children
+ * would make the union O(n) per run.
  */
-function drawingTextFill(
-  chain: readonly (XmlElement | undefined)[],
-  s: Scheme,
-): { readonly fill?: DFill; readonly unknown: ReadonlySet<string> } {
-  const unknown = new Set<string>()
+function drawingTextFill(levels: readonly (LevelEval | undefined)[]): {
+  readonly fill?: DFill
+  readonly unknown: boolean
+} {
+  let unknown = false
   let fill: DFill | undefined
-  for (const props of chain) {
-    if (props) for (const u of drawingUnknown(props)) unknown.add(u)
-    if (fill === undefined) {
-      const f = drawingFill(props, s)
-      if (f.kind !== 'absent') fill = f
-    }
+  for (const level of levels) {
+    if (level === undefined) continue
+    if (level.unknown.size > 0) unknown = true
+    if (fill === undefined && level.fill.kind !== 'absent') fill = level.fill
   }
   return { fill, unknown }
 }
@@ -2834,9 +2886,6 @@ interface BgColours {
   readonly colours?: readonly string[]
 }
 
-/** More gradient stops than this are not provably any colour (#522): `fgVisible` tests every one per run. */
-const BG_STOPS_MAX = 10
-
 /** A fill as a background: the colours the text must contrast with. */
 function bgColours(fill: DFill): BgColours {
   if (fill.kind === 'absent' || fill.kind === 'none') return { unknown: false }
@@ -2846,7 +2895,6 @@ function bgColours(fill: DFill): BgColours {
     return { unknown: false, colours: [fill.clr.rgb] }
   }
   if (fill.kind === 'grad') {
-    if (fill.stops.length > BG_STOPS_MAX) return { unknown: true }
     const colours: string[] = []
     for (const stop of fill.stops) {
       if (stop.transparent || stop.unknown || stop.rgb === undefined) return { unknown: true }
@@ -2957,6 +3005,16 @@ function styleNameOf(type: string | undefined, notes: boolean): string {
   return 'otherStyle'
 }
 
+/** An inherited placeholder's fill element, resolved once per part (#524). */
+function sharedFill(el: XmlElement, ctx: Ctx, s: Scheme): DFill {
+  let hit = ctx.levelMemo.fills.get(el)
+  if (hit === undefined) {
+    hit = fillEl(el, s)
+    ctx.levelMemo.fills.set(el, hit)
+  }
+  return hit
+}
+
 /**
  * ONE computation per DrawingML run (#492): the run's fill, size and every
  * defRPr level it inherits — its paragraph's, its shape's list style at its
@@ -2984,7 +3042,7 @@ function countDrawingRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
   if (scope.shape?.ph && scope.shape.fill === undefined) {
     for (const entry of [layoutMatch.entry, masterEntry]) {
       if (!entry) continue
-      let f = entry.spFill === undefined ? FILL_ABSENT : fillEl(entry.spFill, s)
+      let f = entry.spFill === undefined ? FILL_ABSENT : sharedFill(entry.spFill, ctx, s)
       // A referenced placeholder's THEME style fill: LibreOffice does not
       // inherit it (shape.cxx `applyShapeReference` resolves the reference
       // with no theme), PowerPoint is unmeasured — so it is unknown.
@@ -3011,12 +3069,18 @@ function countDrawingRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
     inheritance.master?.byStyle.get(styleNameOf(styleType, notes))?.get(level),
     ctx.slideDefaults?.get(level),
   ]
-  const { fill, unknown } = drawingTextFill(chain, s)
-  if (unknown.size > 0 || inheritance.broken) ctx.counted.add('unknown-property')
+  // The run's own `a:rPr` is run-local; every level after it is shared by many
+  // runs and is evaluated once per part (#524).
+  const own = chain[0]
+  const evaluated = chain.map((props, i) =>
+    i === 0 ? own && evalLevel(own, s) : sharedLevel(props, ctx, s),
+  )
+  const { fill, unknown } = drawingTextFill(evaluated)
+  if (unknown || inheritance.broken) ctx.counted.add('unknown-property')
 
   // A text highlight, when one is resolved, is the background over every
   // other background (#495 F2).
-  const highlight = drawingHighlight(chain, s)
+  const highlight = drawingHighlight(evaluated)
   const bg = highlight.unknown
     ? { unknown: true, colours: [] }
     : drawingBackgrounds(bgScope, inheritance, s, ctx)

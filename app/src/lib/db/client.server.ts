@@ -338,6 +338,12 @@ export async function withTransaction<R>(fn: (tx: TxQuery) => Promise<R>): Promi
   await ensureInit()
   const client = await getPool().connect()
   let broken = false
+  // See memories.server.ts transaction(): checked-out clients need their own error listener.
+  const onError = (err: Error) => {
+    broken = true
+    console.error('[db] connection lost mid-transaction:', err.message)
+  }
+  client.on('error', onError)
   try {
     await client.query('BEGIN')
     const out = await fn({ query: (text, params) => client.query(text, params as never[]) })
@@ -351,6 +357,7 @@ export async function withTransaction<R>(fn: (tx: TxQuery) => Promise<R>): Promi
     }
     throw err
   } finally {
+    client.off('error', onError)
     client.release(broken)
   }
 }

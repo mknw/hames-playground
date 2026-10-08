@@ -103,7 +103,7 @@ afterAll(async () => {
 describe('column classification (source scan, D2)', () => {
   const SRC = resolve(process.cwd(), 'src/lib/db/memories.server.ts')
 
-  /** Column lines of one CREATE TABLE block in the module's DDL. Type-agnostic
+  /** Column lines of CREATE TABLE and ALTER TABLE ADD COLUMN in the module's DDL. Type-agnostic
    *  on purpose: the pin must fail on ANY unclassified column, whatever type
    *  it carries — including a type that did not exist when this test was
    *  written. Only SQL constraint keywords are excluded. */
@@ -113,10 +113,14 @@ describe('column classification (source scan, D2)', () => {
     const block = ddl!.match(new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\(([\\s\\S]*?)\\);`))
     expect(block, `no CREATE TABLE block for ${table} found`).toBeTruthy()
     const constraint = /^(PRIMARY|FOREIGN|UNIQUE|CHECK|CONSTRAINT)$/i
-    return block![1]
+    const columns = block![1]
       .split('\n')
       .map((line) => line.trim().match(/^(\w+)\s+(?!\()([\w([]+)/)?.[1])
       .filter((c): c is string => c !== undefined && !constraint.test(c))
+    const added = [
+      ...ddl!.matchAll(new RegExp(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS (\\w+)`, 'g')),
+    ].map((match) => match[1]!)
+    return [...new Set([...columns, ...added])]
   }
 
   it('classifies every column of both tables, and nothing else', async () => {

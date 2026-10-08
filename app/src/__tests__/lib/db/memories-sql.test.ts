@@ -175,14 +175,18 @@ describe('every write to a memory row carries ciphertext, and every read is owne
 
 describe('#531: the conversation-delete erase, by the SQL it sends', () => {
   const txSent: Sent[] = []
+  let tablesPresent = true
   const tx = {
     query: vi.fn(async (sql: string, params: unknown[] = []) => {
       txSent.push({ sql: sql.replace(/\s+/g, ' ').trim(), params })
-      return { rows: [], rowCount: 3 }
+      return sql.startsWith('SELECT to_regclass')
+        ? { rows: [{ present: tablesPresent }] }
+        : { rows: [], rowCount: 3 }
     }),
   }
   beforeEach(() => {
     txSent.length = 0
+    tablesPresent = true
   })
 
   it('erases WHOLE memories reached through ANY source row, owner-scoped on both tables, on the caller’s transaction', async () => {
@@ -203,21 +207,43 @@ describe('#531: the conversation-delete erase, by the SQL it sends', () => {
 
   it('bounds the lock wait for the rest of the caller’s transaction, before the erase', async () => {
     await repo.deleteMemoriesForConversations(['conv-a'], 'user-a', tx as never)
-    expect(txSent[0]!.sql).toBe(`SET LOCAL lock_timeout = ${repo.MEMORY_LOCK_TIMEOUT_MS}`)
+    expect(txSent[0]!.sql).toBe("SELECT to_regclass('memory_sources') IS NOT NULL AS present")
+    expect(txSent[1]!.sql).toBe(`SET LOCAL lock_timeout = ${repo.MEMORY_LOCK_TIMEOUT_MS}`)
   })
 
-  it('no ids: nothing sent. No pgvector: nothing to erase, and NOT an error', async () => {
+  it('no ids: nothing sent. No tables: only the probe, no DELETE, and NOT an error', async () => {
     expect(await repo.deleteMemoriesForConversations([], 'user-a', tx as never)).toBe(0)
     expect(txSent).toHaveLength(0)
-    failOn = (sql) => sql.includes('CREATE EXTENSION')
+    tablesPresent = false
     expect(await repo.deleteMemoriesForConversations(['conv-a'], 'user-a', tx as never)).toBe(0)
-    expect(txSent).toHaveLength(0)
+    expect(txSent).toHaveLength(1)
+    expect(txSent[0]!.sql).toBe("SELECT to_regclass('memory_sources') IS NOT NULL AS present")
+    expect(txSent.some((s) => s.sql.startsWith('DELETE'))).toBe(false)
+  })
+
+  it('erases on tx even after CREATE EXTENSION failed while the tables exist', async () => {
+    failOn = (sql) => sql.includes('CREATE EXTENSION')
+    await repo.ensureMemoriesSchema()
+    expect(repo.isMemoryAvailable()).toBe(false)
+    expect(await repo.deleteMemoriesForConversations(['conv-a'], 'user-a', tx as never)).toBe(3)
+    expect(txSent.some((s) => s.sql.startsWith('DELETE FROM memories'))).toBe(true)
   })
 
   it('the DDL keeps the conversation FK NO ACTION (never CASCADE) and the evidence_event_id column', async () => {
     await repo.ensureMemoriesSchema()
     const ddl = sent.find((s) => s.sql.startsWith('CREATE TABLE'))!.sql
-    expect(ddl).toMatch(/FOREIGN KEY \(conversation_id\) REFERENCES conversations \(id\) NOT VALID/)
+    expect(ddl).toMatch(
+      /FOREIGN KEY \(conversation_id, user_id\) REFERENCES conversations \(id, user_id\) NOT VALID/,
+    )
+    expect(ddl).toContain(
+      'CREATE UNIQUE INDEX IF NOT EXISTS conversations_id_user_key ON conversations (id, user_id)',
+    )
+    expect(ddl).toContain(
+      'CREATE INDEX IF NOT EXISTS memory_sources_conv_idx ON memory_sources (conversation_id, user_id)',
+    )
+    expect(ddl).toContain(
+      'CREATE INDEX IF NOT EXISTS memory_sources_memory_idx ON memory_sources (memory_id)',
+    )
     const fk = ddl.slice(ddl.indexOf('memory_sources_conversation_fk'))
     expect(fk).not.toMatch(/ON DELETE CASCADE/i)
     expect(ddl).toContain('ALTER TABLE memories ADD COLUMN IF NOT EXISTS evidence_event_id TEXT')

@@ -27,6 +27,7 @@ import {
   MEMORY_POOL_APPLICATION_NAME,
   MEMORY_POOL_MAX,
   createMemoryDbStore,
+  ensureMemoriesSchema,
   deleteAllMemoriesForUser,
   deleteMemoriesForConversations,
   getMemoryPool,
@@ -46,7 +47,7 @@ import { getMemoryEnabled, setStoredInferenceTier } from '../../../lib/db/user-p
 const tag = Math.random().toString(36).slice(2, 10)
 const ALICE = `m5b-alice-${tag}`
 const BOB = `m5b-bob-${tag}`
-const USERS = [ALICE, BOB, `${ALICE}-near`]
+const USERS = [ALICE, BOB, `${ALICE}-near`, `${ALICE}-crash`]
 let n = 0
 const id = (p: string) => `${p}-${tag}-${++n}`
 
@@ -124,6 +125,7 @@ beforeAll(async () => {
       `SELECT count(*)::int AS n FROM pg_available_extensions WHERE name = 'vector'`,
     )
     dbAvailable = (rows[0]?.n ?? 0) > 0
+    if (dbAvailable) await ensureMemoriesSchema()
   } catch (err) {
     dbAvailable = false
     console.warn('[memories-db-store.test] Postgres unreachable, skipping:', err)
@@ -204,14 +206,25 @@ describe('#531: conversation delete erases the memories that ever drew on it', (
     expect(await memExists(aliceMem)).toBe(false)
     expect(await memExists(bobMem)).toBe(true)
 
-    // Both users with a source row on the SAME conversation id (the FK keys on
-    // the id alone): the erase scoped to one owner leaves the other's memory.
+    // A source may name only a conversation its own owner owns.
     const shared = await conv(ALICE)
-    const sharedAlice = await memorySourcedFrom(ALICE, [shared])
-    const sharedBob = await memorySourcedFrom(BOB, [shared])
-    await withTransaction((tx) => deleteMemoriesForConversations([shared], BOB, tx))
-    expect(await memExists(sharedBob)).toBe(false)
-    expect(await memExists(sharedAlice)).toBe(true)
+    await memorySourcedFrom(ALICE, [shared])
+    await expect(
+      insertMemorySource({
+        userId: BOB,
+        eventId: id('evt'),
+        ordinal: 0,
+        memoryId: bobMem,
+        conversationId: shared,
+      }),
+    ).rejects.toMatchObject({ code: '23503' })
+    await expect(
+      createMemoryDbStore(BOB).transaction((tx) =>
+        tx.addSource({ memoryId: bobMem, eventId: id('evt'), ordinal: 0, conversationId: shared }),
+      ),
+    ).rejects.toMatchObject({ code: '23503' })
+    // Bob's rejected source can never veto Alice's delete.
+    await deleteConversation(shared, ALICE)
     // Bob's id naming ALICE's conversation never reaches Alice's rows either.
     await withTransaction((tx) => deleteMemoriesForConversations([bobConv], ALICE, tx))
     expect(await memExists(bobMem)).toBe(true)
@@ -323,7 +336,9 @@ describe('recall store (MemoryStore)', () => {
       embedding: axis(4),
       content: 'alice verda other-axis',
     })
+    const verdaCount = await createMemoryDbStore(ALICE).count(['verda'])
     const anth = await memorySourcedFrom(ALICE, [c], { tier: 'anthropic', embedding: axis(3) })
+    expect(await createMemoryDbStore(ALICE).count(['verda'])).toBe(verdaCount)
     const bobs = await memorySourcedFrom(BOB, [cb], { embedding: axis(3) })
 
     const store = createMemoryDbStore(ALICE)
@@ -507,6 +522,8 @@ describe('write store (MemoryWriteStore)', () => {
         throw new Error('boom')
       }),
     ).rejects.toThrow('boom')
+    // A pooled connection must be clean before the next successful transaction.
+    await store.transaction((tx) => tx.count())
     expect(await memExists(mid)).toBe(false)
   })
 
@@ -678,5 +695,89 @@ describe('user_prefs.memory_enabled (G9 Q3)', () => {
     expect(await getMemoryEnabled(a)).toBe(true)
     expect(await getMemoryEnabled(b)).toBe(false)
     await query(`DELETE FROM user_prefs WHERE user_id = ANY($1)`, [[a, b]])
+  })
+})
+
+// Reviewer-proposed regression pins for PR #533.
+describe('F1: a backend that ends under a checked-out connection never crashes the process', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  // Mutation: delete the per-checkout `client.on('error', …)` listener in
+  // memories.server.ts transaction() (resp. client.server.ts withTransaction):
+  // vitest reports "Uncaught Exception … 57P01 / Connection terminated
+  // unexpectedly" and the run fails.
+  it('memory pool: the write transaction rejects, and the pool still serves the next one', async () => {
+    const store = createMemoryDbStore(`${ALICE}-crash`)
+    await expect(
+      store.transaction(async (tx) => {
+        await tx.count()
+        const { rows } = await query<{ pid: number }>(
+          `SELECT pid FROM pg_stat_activity WHERE application_name = $1 AND state = 'idle in transaction'`,
+          [MEMORY_POOL_APPLICATION_NAME],
+        )
+        await query(`SELECT pg_terminate_backend($1)`, [rows[0]!.pid])
+        await new Promise((r) => setTimeout(r, 500)) // the model call
+      }),
+    ).rejects.toThrow()
+    expect(await store.transaction((tx) => tx.count())).toBeGreaterThanOrEqual(0)
+    expect(getMemoryPool().totalCount).toBeLessThanOrEqual(getMemoryPool().options.max!)
+  }, 20_000)
+
+  it('main pool: withTransaction rejects, and the pool still serves the next one', async () => {
+    await expect(
+      withTransaction(async (tx) => {
+        const { rows } = await tx.query<{ pid: number }>(`SELECT pg_backend_pid() AS pid`)
+        await query(`SELECT pg_terminate_backend($1)`, [rows[0]!.pid])
+        await new Promise((r) => setTimeout(r, 500))
+      }),
+    ).rejects.toThrow()
+    expect((await query<{ one: number }>(`SELECT 1 AS one`)).rows[0]!.one).toBe(1)
+  }, 20_000)
+})
+
+describe('F3: memory_sources is indexed for the FK check and the cascade', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  // Mutation: delete either CREATE INDEX line from MEMORY_DDL (and DROP the
+  // index in the test DB) — red.
+  it('an index leads with conversation_id, and one leads with memory_id', async () => {
+    const { rows } = await query<{ first: string }>(
+      `SELECT a.attname AS first
+         FROM pg_index i
+         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
+        WHERE i.indrelid = 'memory_sources'::regclass`,
+    )
+    const leads = rows.map((r) => r.first)
+    expect(leads).toContain('conversation_id')
+    expect(leads).toContain('memory_id')
+  })
+})
+
+describe('F5: the OUTER owner scope of the erase is DB-observable', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  // Mutation: drop `user_id = $2 AND` from the outer DELETE (or make it
+  // `(user_id = $2 OR TRUE)`, which the hermetic text pin does not see) — red.
+  it("a source row of Alice's naming Bob's memory id never lets Alice's delete erase Bob's memory", async () => {
+    const aliceConv = await conv(ALICE)
+    const bobMem = await memorySourcedFrom(BOB, [])
+    await insertMemorySource({
+      userId: ALICE,
+      eventId: id('evt'),
+      ordinal: 0,
+      memoryId: bobMem,
+      conversationId: aliceConv,
+    })
+    await deleteConversation(aliceConv, ALICE).catch(() => {}) // may refuse (the row still names A); must never erase Bob's
+    expect(await memExists(bobMem)).toBe(true)
+    await deleteAllMemoriesForUser(BOB)
+  })
+})
+
+describe('F10: the idle-in-transaction backstop is really on the memory connections', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  // Mutation: delete the pool's `options: -c idle_in_transaction_session_timeout=…` — red.
+  it('current_setting on a memory-pool connection', async () => {
+    const { rows } = await getMemoryPool().query<{ v: string }>(
+      `SELECT current_setting('idle_in_transaction_session_timeout') AS v`,
+    )
+    expect(rows[0]!.v).toBe('5min')
   })
 })

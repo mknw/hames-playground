@@ -192,7 +192,13 @@ const MEMORY_DDL = `
     PRIMARY KEY (user_id, event_id, ordinal)
   );
 
-  -- A source row must name a conversation that EXISTS (#531). NO ACTION, not
+  -- The conversation FK's check on EVERY conversation delete, the erase's
+  -- subquery and the memory_id cascade look rows up by these columns.
+  -- conversation_id leads (not spec §5's user_id): the FK check filters on it.
+  CREATE INDEX IF NOT EXISTS memory_sources_conv_idx ON memory_sources (conversation_id, user_id);
+  CREATE INDEX IF NOT EXISTS memory_sources_memory_idx ON memory_sources (memory_id);
+
+  -- A source row must name a conversation ITS OWN owner owns (#531). NO ACTION, not
   -- CASCADE, and that is the design: a cascade would drop the source rows of a
   -- deleted conversation and leave the memory standing on its other sources,
   -- which is the exact outcome owner decision (b) forbids. The conversation
@@ -204,11 +210,16 @@ const MEMORY_DDL = `
   -- has just been deleted (the insert fails, its transaction rolls back, no
   -- ghost memory). NOT VALID: new rows are checked, rows from before this
   -- constraint are not scanned (nothing wrote memory rows before M5c).
+  -- (conversation_id, user_id): a source row may only name a conversation
+  -- ITS OWN owner owns, so no user's row can veto another user's delete, and
+  -- an owner-scoped erase can only follow a conversation of that owner.
+  CREATE UNIQUE INDEX IF NOT EXISTS conversations_id_user_key ON conversations (id, user_id);
   DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'memory_sources_conversation_fk') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'memory_sources_conversation_owner_fk') THEN
+      ALTER TABLE memory_sources DROP CONSTRAINT IF EXISTS memory_sources_conversation_fk;
       ALTER TABLE memory_sources
-        ADD CONSTRAINT memory_sources_conversation_fk
-        FOREIGN KEY (conversation_id) REFERENCES conversations (id) NOT VALID;
+        ADD CONSTRAINT memory_sources_conversation_owner_fk
+        FOREIGN KEY (conversation_id, user_id) REFERENCES conversations (id, user_id) NOT VALID;
     END IF;
   END $$;
 `
@@ -431,9 +442,10 @@ export async function deleteAllMemoriesForUser(userId: string): Promise<number> 
  * touched. The `memory_sources` rows go through the memory_id FK's
  * `ON DELETE CASCADE`.
  *
- * A host without pgvector has no memory tables and nothing to erase: that is
- * NOT an error here (a conversation delete must work on a vector-less host),
- * unlike every row operation above.
+ * If the caller's transaction finds no memory tables, there is nothing to
+ * erase and this returns 0. Table existence, not the process-sticky pgvector
+ * availability mark, decides: a transient extension error must not suppress
+ * erasure of rows another process wrote.
  *
  * `SET LOCAL lock_timeout` applies to the rest of the caller's transaction,
  * the conversation DELETE included: that statement can wait on a settle that
@@ -446,8 +458,13 @@ export async function deleteMemoriesForConversations(
   tx: TxQuery,
 ): Promise<number> {
   if (conversationIds.length === 0) return 0
-  await ensureMemoriesSchema()
-  if (!_available) return 0
+  // Whether the tables EXIST, asked on the caller's transaction — not the
+  // process-sticky availability mark, which ANY `CREATE EXTENSION` error sets
+  // (a concurrent first install's unique violation, a transient outage).
+  const { rows: present } = await tx.query<{ present: boolean }>(
+    `SELECT to_regclass('memory_sources') IS NOT NULL AS present`,
+  )
+  if (!present[0]?.present) return 0
   await tx.query(`SET LOCAL lock_timeout = ${MEMORY_LOCK_TIMEOUT_MS}`)
   const { rowCount } = await tx.query(
     `DELETE FROM memories
@@ -577,6 +594,16 @@ export function createMemoryDbStore(userId: string): MemoryStore & MemoryWriteSt
       await ready()
       const client = await getMemoryPool().connect()
       let broken = false
+      // A checked-out client has no pool error listener: a backend that ends
+      // while this transaction waits on a model call (the idle-in-transaction
+      // backstop, a restart, a dropped link) would emit 'error' with nobody
+      // listening — an uncaught exception. Take it here; the next statement then
+      // rejects, the transaction fails, and the connection is never pooled again.
+      const onError = (err: Error) => {
+        broken = true
+        console.error('[memories] write connection lost mid-transaction:', err.message)
+      }
+      client.on('error', onError)
       try {
         await client.query('BEGIN')
         await client.query(`SET LOCAL lock_timeout = ${MEMORY_LOCK_TIMEOUT_MS}`)
@@ -596,6 +623,7 @@ export function createMemoryDbStore(userId: string): MemoryStore & MemoryWriteSt
         }
         throw err
       } finally {
+        client.off('error', onError)
         client.release(broken)
       }
     },

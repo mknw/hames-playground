@@ -16,7 +16,7 @@ import { compactExecution } from '@hames-ai/harness-patterns/patterns/compactExe
 import { chain, runChain } from '@hames-ai/harness-patterns/patterns/chain.server'
 import { createContext } from '@hames-ai/harness-patterns/context.server'
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
-import type { DecideFn, RouteFn } from '@hames-ai/harness-patterns/types'
+import type { ConfiguredPattern, DecideFn, RouteFn } from '@hames-ai/harness-patterns/types'
 import { b } from '@hames-ai/harness-baml/baml_client'
 import { routeMessageOp } from '@hames-ai/harness-baml/routing.server'
 import { bamlPatterns } from '@hames-ai/harness-baml/baml-patterns.server'
@@ -70,11 +70,13 @@ function config(routerMemory?: RouterMemory): MemoryConfig {
 let routerBodies: unknown[]
 let replyBodies: unknown[]
 let toolNeeded = true
+let replyText = 'synthetic reply'
 beforeEach(() => {
   vi.stubEnv('USE_VERDA_INFERENCE', '')
   routerBodies = []
   replyBodies = []
   toolNeeded = true
+  replyText = 'synthetic reply'
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(b, 'Router').mockImplementation(async (message, routes, history, memory) => {
     routerBodies.push(
@@ -94,7 +96,7 @@ beforeEach(() => {
           await b.request.Synthesize(message, intent, turns, error, errorMessage, memory, OFFLINE)
         ).body.json(),
       )
-      return 'synthetic reply'
+      return replyText
     },
   )
 })
@@ -176,11 +178,25 @@ describe('router memory setting', () => {
 
   it('refuses every unknown value at both wiring boundaries', () => {
     // Mutation: remove the runtime validation → neither throws.
-    for (const value of ['direct-answers-only', '', null, false, 1, {}]) {
+    for (const value of [
+      'direct-answers-only',
+      '',
+      null,
+      false,
+      1,
+      {},
+      ' replies-only',
+      'replies-only ',
+      'Replies-Only',
+      'REPLIES-ONLY',
+      'Routing-And-Replies',
+      'replies_only',
+    ]) {
       const cfg = { ...config(), routerMemory: value } as unknown as MemoryConfig
       expect(() => withMemory(cfg)).toThrow(/routerMemory/)
       expect(() => memoryStoreConfig(cfg)).toThrow(/routerMemory/)
     }
+    expect(() => withMemory({ ...config(), routerMemory: undefined })).not.toThrow()
   })
 
   it('overwrites the choice on every turn and does not let a stale choice override the developer', async () => {
@@ -229,9 +245,62 @@ describe('router memory setting', () => {
     expect(JSON.stringify(replyBodies)).toContain('MEMTOKEN-7731')
   })
 
+  it('option c is per-turn: a fact a reply states reaches the next turn router through history (#548)', async () => {
+    // Characterisation of the documented boundary, not an endorsement.
+    // Mutation: router DEFAULT_ROUTER_VIEW eventTypes → ['user_message'] → red.
+    replyText = 'You prefer metric units (MEMTOKEN-7731).'
+    const ctx = await run('replies-only')
+    expect(JSON.stringify(routerBodies[0])).not.toContain('MEMTOKEN-7731')
+    ctx.events.push(createContext('search for running shoes in my units').events[0])
+    const patterns = [
+      router<Record<string, unknown>>({ search: 'web search' }, { route: routeMessageOp }),
+    ]
+    await withRunFrame({}, () =>
+      runChain(ctx, withMemory<Record<string, unknown>>(config('replies-only'))(patterns)),
+    )
+    expect(JSON.stringify(routerBodies[1])).toContain('MEMTOKEN-7731')
+  })
+
+  it('default resume of a paused blob written before #546 (no routerMemory key) forwards memory like main', async () => {
+    // Mutation: router check → `scope.data.routerMemory === 'routing-and-replies'` → red.
+    const ctx = createContext<Record<string, unknown>>(MESSAGE, { memoryContext: BLOCK })
+    const patterns = withMemory<Record<string, unknown>>(config())([
+      router<Record<string, unknown>>({ search: 'web search' }, { route: routeMessageOp }),
+    ])
+    await withRunFrame({}, () => runChain(ctx, patterns, undefined, { startAt: 1 }))
+    expect(vi.mocked(b.Router).mock.calls[0][3]).toBe(BLOCK)
+  })
+
+  it('option c holds on resumed ingress at a later top-level pattern', async () => {
+    // Mutation: wrap only the first caller pattern (`i === 0`) → red.
+    const ctx = createContext<Record<string, unknown>>(MESSAGE, {
+      routerMemory: 'routing-and-replies',
+      memoryContext: BLOCK,
+    })
+    const noop: ConfiguredPattern<Record<string, unknown>> = {
+      name: 'noop',
+      fn: async (scope) => scope,
+      config: { patternId: 'noop' },
+    }
+    const patterns = withMemory<Record<string, unknown>>(config('replies-only'))([
+      noop,
+      router<Record<string, unknown>>({ search: 'web search' }, { route: routeMessageOp }),
+    ])
+    await withRunFrame({}, () => runChain(ctx, patterns, undefined, { startAt: 2 }))
+    expect(routerBodies).toHaveLength(1)
+    expect(JSON.stringify(routerBodies)).not.toContain('MEMTOKEN-7731')
+  })
+
   it('all production BAML Router calls that thread memory are in the exercised adapter', () => {
     // Mutation: add another memory-bearing Router call to baml-patterns → count fails.
-    const roots = ['packages/harness-baml', 'app/src', 'app/evals']
+    const roots = [
+      'packages/harness-baml',
+      'packages/agents',
+      'packages/connectors',
+      'packages/sandbox',
+      'app/src',
+      'app/evals',
+    ]
     const calls: Array<{ file: string; memory: string | undefined }> = []
     for (const root of roots) {
       const directory = resolve(process.cwd(), '..', root)
@@ -239,7 +308,9 @@ describe('router memory setting', () => {
         .filter(
           (path) =>
             path.endsWith('.ts') &&
-            !path.split('/').some((part) => ['baml_client', '__tests__'].includes(part)),
+            !path
+              .split('/')
+              .some((part) => ['baml_client', '__tests__', 'node_modules', 'dist'].includes(part)),
         )
         .sort()
       for (const path of paths) {

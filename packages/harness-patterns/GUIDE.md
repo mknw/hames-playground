@@ -168,7 +168,7 @@ arguments, for example a web-search query or a fetch, even with private model
 inference. `'replies-only'`, shown above, withholds the recalled block from every
 router, including nested routers, while `compactExecution` / `synthesize` still
 receive it for reply writing. Direct conversational router replies have no memory
-and still skip synthesis. Unknown values throw at construction. The exported
+and still skip synthesis. It is a per-turn boundary, not a guarantee that remembered facts never reach a tool: a fact the reply states becomes conversation history, and on a later turn the router sees that history and may put the fact into `intent`, and so into tool arguments (#548). Unknown values throw at construction. The exported
 `RouterMemory` union names both choices; no extra router configuration is needed.
 Controllers and the planner get no direct memory block; with the default they can
 receive its facts indirectly through intent (#419 D13 / decision 6, amended by

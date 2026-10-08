@@ -2299,7 +2299,7 @@ half's tunables.
   `compactExecution` and its `synthesize` path still receive it. The router's
   direct conversational answer has no recalled memory, and its direct-response
   route still skips synthesis. The current recalled block therefore cannot shape
-  a tool route's intent or tool arguments through routing.
+  a tool route's intent or tool arguments through routing. It is a per-turn boundary, not a guarantee that remembered facts never reach a tool: a fact the reply states becomes conversation history, and on a later turn the router sees that history and may put the fact into `intent`, and so into tool arguments (#548).
 
 Unknown values throw at the wiring boundary (`withMemory` and
 `memoryStoreConfig`); they never silently fall back. `RouterMemory` is the exported

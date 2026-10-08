@@ -755,7 +755,14 @@ describe('#536 F validated relationships and resolved edge index', () => {
     ).rejects.toMatchObject({ code: 'content-type' })
   })
 })
-function aliasesDeck(n: number, width: number, show?: string, unlisted = false, malformed = false) {
+function aliasesDeck(
+  n: number,
+  width: number,
+  show?: string,
+  unlisted = false,
+  malformed = false,
+  spelled = false,
+) {
   return buildPackage({
     main: {
       name: 'ppt/presentation.xml',
@@ -774,7 +781,11 @@ function aliasesDeck(n: number, width: number, show?: string, unlisted = false, 
       'ppt/presentation.xml': Array.from({ length: n }, (_, i) => ({
         id: `alias${i}`,
         type: RT.slide,
-        target: 'slides/slide1.xml',
+        // `spelled`: one part, n spellings (case-folded names, so neither the raw
+        // Target nor the resolved name is a key a cache may use).
+        target: spelled
+          ? `${'slides'.replace(/./g, (c, b: number) => ((i >> b) & 1 ? c.toUpperCase() : c))}/slide1.xml`
+          : 'slides/slide1.xml',
       })),
     },
   })
@@ -798,6 +809,12 @@ describe('#536 G completed visibility results including false', () => {
     },
     60_000,
   )
+  it.each([undefined, '0'])('show=%s aliases spelled differently scan one target', async (show) => {
+    const m = await workOf(aliasesDeck(40, 100, show, false, false, true))
+    const slideScans = [...m.scans].filter(([xml]) => xmlOf(xml).includes('<p:sld '))
+    expect(slideScans.map(([, k]) => k)).toEqual([1])
+    expect(m.out.removed.hiddenSlides ?? 0).toBe(show === '0' ? 1 : 0)
+  })
   it('unlisted aliases do not scan; distinct targets each scan; malformed input refuses', async () => {
     const unlisted = await workOf(aliasesDeck(40, 100, undefined, true))
     expect([...unlisted.scans.keys()].some((xml) => xmlOf(xml).includes('<p:sld '))).toBe(false)
@@ -830,4 +847,49 @@ describe('#536 H placeholder match once per shape', () => {
       expect(ambiguous.out.counted['unknown-property']).toBe(400)
     },
   )
+  it.each([false, true])(
+    'an untyped and a typed placeholder with one (type, idx) never share a match: %s',
+    async (reverse) => {
+      const untyped = shape('VISIBLE', { id: 3, ph: 'X', idx: '1' }).replace(' type="X"', '')
+      const typed = shape('VISIBLE', { id: 4, ph: 'obj', idx: '1' })
+      const bytes = pptx({
+        slides: [{ shapes: reverse ? typed + untyped : untyped + typed }],
+        style: {
+          layouts: [stylePart('sldLayout', ph(level(solid('FFFFFF')), '', '', 'body', '5'))],
+        },
+      })
+      // Only the typed one reaches the white body level (by type); the untyped finds no idx 1.
+      expect(await counted(bytes)).toEqual({ 'colour-contrast': 1 })
+    },
+  )
+})
+
+/** A per-run walk the counters cannot see (an index loop, Set iteration, a string hash) is
+ * quadratic at a small constant, so N runs x W children must dominate parsing to show in CPU:
+ * the shortest run and the shortest inert child, at N = W = 70 000 (about 3.2 MB stored). */
+describe('#536 per-run walk of one shared level', () => {
+  it('same-bytes CPU control at N = W = 70 000', async () => {
+    const n = 70_000
+    const deck = (unused: boolean) =>
+      pptx({
+        slides: [
+          {
+            shapes: shape('', { ph: 'body', idx: '1' }).replace(
+              /<a:p>.*<\/a:p>/,
+              `<a:p>${'<a:r><a:t>x</a:t></a:r>'.repeat(n)}</a:p>`,
+            ),
+          },
+        ],
+        style: {
+          layouts: [
+            stylePart(
+              'sldLayout',
+              ph(level('<a:latin typeface="p"/>'.repeat(n) + solid('FFFFFF'), '', unused ? 2 : 1)),
+            ),
+          ],
+        },
+      })
+    expect(await counted(deck(false))).toEqual({ 'colour-contrast': n })
+    await timed(deck(false), deck(true))
+  }, 120_000)
 })

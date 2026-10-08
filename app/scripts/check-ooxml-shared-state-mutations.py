@@ -89,7 +89,22 @@ MUTATIONS = {
     'F-cache-only': (NEW, '#536 F.*scanned', patch(('  if (cached !== undefined) return cached', ''), ('  const rel = pkg.firstInternal(source, type)', '  const rel = pkg.relsOf(source).find((r) => r.type === type && !r.external)'))),
     'G-no-true-cache': (NEW, '#536 G.*show=undefined', patch(('          shown = visibility.get(entry)', '          shown = visibility.get(entry)\n          if (shown === true) shown = undefined'))),
     'G-no-false-cache': (NEW, '#536 G.*show=0', patch(('          shown = visibility.get(entry)', '          shown = visibility.get(entry)\n          if (shown === false) shown = undefined'))),
+    # Reviewer R4 / R4b: spelling is not the ZipEntry identity.
+    'G-target-key': (NEW, '#536 G', patch(('visibility.get(entry)', 'visibility.get(rel.target)'), ('visibility.set(entry, shown)', 'visibility.set(rel.target, shown)'))),
+    'G-name-key': (NEW, '#536 G', patch(('visibility.get(entry)', 'visibility.get(name)'), ('visibility.set(entry, shown)', 'visibility.set(name, shown)'))),
     'H-run-lookup': (NEW, '#536 H', patch(('  if (hit !== undefined) return hit\n  const layoutMatch = layoutPh', '  const layoutMatch = layoutPh'))),
+    # Reviewer R5 / R5′: both separators must fail by semantics, not only the spy.
+    'H-content-key-nul': (NEW, '#536 H', patch(('ctx.levelMemo.placeholders.get(ph)', r'ctx.levelMemo.placeholders.get(`${ph.type}\0${ph.idx}`)'), ('ctx.levelMemo.placeholders.set(ph, result)', r'ctx.levelMemo.placeholders.set(`${ph.type}\0${ph.idx}`, result)'))),
+    'H-content-key': (NEW, '#536 H', patch(('ctx.levelMemo.placeholders.get(ph)', 'ctx.levelMemo.placeholders.get(`${ph.type}|${ph.idx}`)'), ('ctx.levelMemo.placeholders.set(ph, result)', 'ctx.levelMemo.placeholders.set(`${ph.type}|${ph.idx}`, result)'))),
+    # Reviewer R13: an index loop bypasses the instrumented array iterator.
+    'H-run-walk': (NEW, '#536 per-run walk', patch(('  const { fill, unknown } = drawingTextFill(evaluated)', '''  const { fill, unknown } = drawingTextFill(evaluated)
+  for (let i = 1; i < chain.length; i++) {
+    const children = chain[i]?.children
+    if (children) for (let j = 0; j < children.length; j++) {
+      const child = children[j]
+      if (typeof child !== 'string') void child.name
+    }
+  }'''))),
     '515-tree-reread': (OLD, '#492 F2:.*placeholder resolution', tree_scan),
     '521-B1-autofit-reread': (OLD, 'inherited fill and autofit cost one step per run', inherited_scan),
     '525-bg-memo': (NEW, '#536 background resolved memo retained', patch(('  inheritance.bgLevels ??=', '  inheritance.bgLevels ='))),

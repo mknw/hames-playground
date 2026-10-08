@@ -1900,7 +1900,9 @@ The pure policy math, unit-pinned:
   is `1 − coverage`).
 - `calibrateLabelMass(mass, entry)` — the host-fed calibration entry applied
   in log space (temperature ÷, bias +, softmax). A malformed entry degrades to
-  the identity; it never throws.
+  the identity; it never throws. Jev takes fitted cuts only: harness-baml's
+  `configureDecisionCalibration` throws on temperature or bias for a
+  `JEV_CLIENTS` member, even identity values (G7).
 - `normalizeLabelMass(mass, labels)` — a distribution over the spec's labels:
   unseen label 0, sum 1.
 - `preCallAbstain({ policy, state, method })` — the F3 pre-call gate:
@@ -1987,11 +1989,16 @@ The T3/T4 adapters fill it. `DecideAllFn` carries the same member.
 The owner's "ONE call, SEVERAL typed fields". The provider decides how the set
 is served:
 
-| How         | When                                                             | Calls                                                                                               |
-| ----------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `decideAll` | a one-call provider (Jev) is supplied and `set.mode !== 'joint'` | ONE request; each field a typed question                                                            |
-| joint       | `set.mode === 'joint'`                                           | ONE `decide` pass over the label **product** (ids `'a \| b \| c'`), marginalised back to each field |
-| per field   | otherwise                                                        | one `decide` pass per field, **sequential**, with a byte-identical state                            |
+| How         | When                                                                 | Calls                                                                                               |
+| ----------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `decideAll` | `decideAll` is supplied and either fields mode or Jev serves the set | ONE request; each field a typed question                                                            |
+| joint       | `set.mode === 'joint'` on other transports                           | ONE `decide` pass over the label **product** (ids `'a \| b \| c'`), marginalised back to each field |
+| per field   | otherwise                                                            | one `decide` pass per field, **sequential**, with a byte-identical state                            |
+
+Jev is detected through `decide.serving(set.key).method === 'jev'` (G1/G8),
+never a client name. Its joint mode is treated as fields before validation,
+so the product-size limit does not apply. With `decideAll`, all questions
+share one request; without it, each field uses `decide` separately.
 
 The state prefix is byte-identical across the per-field passes, so the backend's
 prefix cache serves every pass after the first. A field whose pre-call gate
@@ -2005,7 +2012,9 @@ so a four-field set does not add four steps.
 product exceeds `MAX_DECISION_LABELS` (a joint pass reads the product's mass
 from one top-k window). It is a programmer error, so it throws — call it where
 the set is declared to fail at construction; `decideFields` calls it first
-regardless, before any call.
+after resolving Jev to fields mode, before any call. The standalone guard
+has no serving report, so it also refuses wide Jev joint sets that
+`decideFields` serves as fields.
 
 #### `typedDecision(config)`
 

@@ -59,6 +59,16 @@ export const JEV_MODEL = 'typesafe/jev-1.13'
  *  stand in for it; read per call, like every other host-set endpoint. */
 export const JEV_DEFAULT_URL = 'https://openrouter.ai/api/alpha/decisions'
 
+/** OpenRouter's provider preferences for this traffic: route only to endpoints with
+ *  a zero-data-retention policy, and to none that may collect data. Applied
+ *  whenever the configured endpoint is OpenRouter (O1, #418). */
+export const OPENROUTER_PRIVACY_PREFERENCES = { zdr: true, data_collection: 'deny' } as const
+
+/** The decision transport's OWN key (O2): never the embedding provider's
+ *  `OPENROUTER_API_KEY`, and no fallback to it — a silent fallback would couple
+ *  spend limits and rotation across two purposes. */
+export const JEV_KEY_ENV = 'JEV_DECISIONS_API_KEY'
+
 /** Bounds one request. Not derived from a measurement: the docs publish no
  *  latency, and an unbounded `fetch` has no timeout at all. */
 const JEV_TIMEOUT_MS = 30_000
@@ -80,7 +90,38 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 export interface JevTransportOptions {
   /** Injection seam for tests; defaults to the global `fetch`. */
   readonly fetch?: typeof fetch
+  /** The preferences sent to an OpenRouter endpoint. Defaults to
+   *  `OPENROUTER_PRIVACY_PREFERENCES`; the transport verifies the body it is about to
+   *  send still carries zdr and a denied data collection and refuses otherwise. */
+  readonly openRouterPreferences?: Record<string, unknown>
 }
+
+/** O4: only `https:` or a loopback host may receive the bearer key. Decided on the
+ *  PARSED URL, never a string prefix, so `http://127.0.0.1.evil.example` (a public
+ *  host) and `http://127.0.0.1@evil.example` (userinfo) are not mistaken for
+ *  loopback. Credentials in the URL are refused outright. Returns the parsed URL,
+ *  or the reason it was refused. */
+export function parseDecisionsUrl(raw: string): URL | string {
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return 'it is not a valid URL'
+  }
+  if (url.username || url.password) return 'it carries credentials'
+  // A trailing dot names the same host to DNS and TLS but not to a string
+  // comparison: `openrouter.ai.` would otherwise skip the O1 preferences.
+  if (url.hostname.endsWith('.')) return 'its host ends in a dot'
+  if (url.protocol === 'https:') return url
+  const host = url.hostname
+  const loopback =
+    url.protocol === 'http:' &&
+    (host === 'localhost' || host === '[::1]' || /^127(\.\d{1,3}){3}$/.test(host))
+  return loopback ? url : 'it is neither https: nor a loopback host'
+}
+
+const isOpenRouterHost = (host: string) =>
+  host === 'openrouter.ai' || host.endsWith('.openrouter.ai')
 
 function jevFailure(
   message: string,
@@ -162,6 +203,17 @@ export function createJevTransport(options: JevTransportOptions = {}): {
       )
     }
 
+    // O4 — before the key is read: the bearer token goes only over https: or loopback.
+    const endpoint = parseDecisionsUrl(process.env.JEV_DECISIONS_URL || JEV_DEFAULT_URL)
+    if (typeof endpoint === 'string') {
+      throw jevFailure(
+        `Refusing JEV_DECISIONS_URL: ${endpoint}; no request was made.`,
+        variables,
+        startTime,
+      )
+    }
+
+    const openRouter = isOpenRouterHost(endpoint.hostname)
     const body = {
       model: JEV_MODEL,
       state,
@@ -175,13 +227,32 @@ export function createJevTransport(options: JevTransportOptions = {}): {
           },
         ]),
       ),
+      // O1: on an OpenRouter endpoint, zero data retention and data collection denied.
+      ...(openRouter && {
+        provider: options.openRouterPreferences ?? OPENROUTER_PRIVACY_PREFERENCES,
+      }),
     }
     const rawInput = JSON.stringify(body)
 
-    const apiKey = process.env.OPENROUTER_API_KEY
+    // FAIL CLOSED: read the preferences back off the exact bytes about to be sent.
+    if (openRouter) {
+      const sent = (JSON.parse(rawInput) as { provider?: Record<string, unknown> }).provider
+      if (sent?.zdr !== true || sent?.data_collection !== 'deny') {
+        throw jevFailure(
+          "Refusing the Jev decide transport: OpenRouter's zero-retention provider preferences " +
+            'could not be applied; no request was made.',
+          variables,
+          startTime,
+          { rawInput },
+        )
+      }
+    }
+
+    // O2 — its own key; the embedding provider's is never read here.
+    const apiKey = process.env[JEV_KEY_ENV]
     if (!apiKey) {
       throw jevFailure(
-        'The Jev decide transport needs OPENROUTER_API_KEY; no request was made.',
+        `The Jev decide transport needs ${JEV_KEY_ENV}; no request was made.`,
         variables,
         startTime,
         { rawInput },
@@ -191,7 +262,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     let status: number
     let text: string
     try {
-      const res = await (options.fetch ?? fetch)(process.env.JEV_DECISIONS_URL || JEV_DEFAULT_URL, {
+      const res = await (options.fetch ?? fetch)(endpoint.href, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
         body: rawInput,

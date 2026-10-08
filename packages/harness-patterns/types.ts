@@ -1707,7 +1707,9 @@ export interface DecisionPolicy<L extends string = string> {
 }
 
 /** Host-fed calibration for one (client, spec.key) pair. The temperature and
- *  bias are applied in log space by the transport; the cuts, when present,
+ *  bias are applied in log space by the logprob transport. Jev accepts fitted
+ *  cuts only and refuses temperature or bias, including identity values (G7).
+ *  The cuts, when present,
  *  are the entry's own and WIN over the policy's static thresholds (F2) —
  *  they are fitted on the very (client, question) pair that serves the call,
  *  so they are on-distribution by construction. */

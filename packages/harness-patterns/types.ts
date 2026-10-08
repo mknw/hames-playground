@@ -1785,9 +1785,12 @@ export interface DecisionPolicy<L extends string = string> {
 }
 
 /** Concentration cut on an ordered rubric; a margin has no ordinal meaning. */
-export type ScorePolicy<L extends string = string> = Omit<DecisionPolicy<L>, 'minMargin'>
+export type ScorePolicy<L extends string = string> = Omit<DecisionPolicy<L>, 'minMargin'> & {
+  readonly minMargin?: never
+}
 /** Symmetric abstain band: |2·P(true) − 1| < minConfidence. */
 export interface NoulPolicy extends Omit<DecisionPolicy, 'fallback' | 'minMargin'> {
+  readonly minMargin?: never
   readonly fallback: boolean
 }
 export type PolicyFor<S> =

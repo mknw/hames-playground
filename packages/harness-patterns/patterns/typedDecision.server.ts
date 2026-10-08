@@ -600,6 +600,7 @@ export function scoreScoreDecision<L extends string>(
     {
       ...input,
       spec: { key: input.spec.key, question: input.spec.question, labels: input.spec.levels },
+      policy: { ...input.policy, minMargin: undefined },
       // Neither static nor fitted margin cuts apply to an ordinal concentration.
       calibration: input.calibration && { ...input.calibration, minMargin: undefined },
     },
@@ -636,7 +637,11 @@ export function scoreNoulDecision(input: NoulScoring): {
           },
         ],
       },
-      policy: { ...input.policy, fallback: input.policy.fallback ? 'true' : 'false' },
+      policy: {
+        ...input.policy,
+        minMargin: undefined,
+        fallback: input.policy.fallback ? 'true' : 'false',
+      },
       calibration: input.calibration && { ...input.calibration, minMargin: undefined },
     },
     (probs) => Math.abs(2 * probs.true - 1),

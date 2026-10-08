@@ -379,10 +379,14 @@ describe('S1 unsupported-type adapter backstop', () => {
       await import('@hames-ai/harness-patterns/patterns/typedDecision.server')
     const score = defineScore({ key: 's', question: 'q', levels: SPEC.labels.slice(0, 2) })
     const noul = defineNoul({ key: 'n', question: 'q' })
+    const rank = { ...SPEC, type: 'rank' } as never
     for (const fn of [await adapter(), createVerbalizedDecide(), createJevTransport().decide]) {
       expect(fn.supportedTypes).toBeUndefined()
-      for (const spec of [score, noul]) {
+      for (const spec of [score, noul, rank]) {
         await expect(fn({ spec, state: 'synthetic' })).rejects.toThrow('Unsupported decision type')
+        await expect(onPrivateTier(() => fn({ spec, state: 'synthetic' }))).rejects.toThrow(
+          'Unsupported decision type',
+        )
       }
     }
     expect(hits).toHaveLength(0)

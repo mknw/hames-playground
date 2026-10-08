@@ -386,8 +386,8 @@ export function createJevTransport(options: JevTransportOptions = {}): {
 
   const decide: DecideFn = async <L extends string>(input: DecideInput<L>) => {
     // S1 widens the seam; S4 adds wire support. Nothing is built or sent here.
-    if (input.spec.type === 'score' || input.spec.type === 'noul') {
-      throw new Error(`Unsupported decision type: ${input.spec.type}`)
+    if (input.spec.type !== undefined && input.spec.type !== 'choice') {
+      throw new Error(`Unsupported decision type: ${String(input.spec.type)}`)
     }
     const r = await decideAll({
       spec: { key: input.spec.key, fields: { [input.spec.key]: input.spec } },

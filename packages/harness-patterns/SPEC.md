@@ -1988,9 +1988,6 @@ S1 widens `DecideInput.spec` to accept all three specs and adds optional
 An unsupported type must not call the transport; pass `unsupportedType: true` to
 its pure scorer to record the fallback with null raw readouts. Existing adapters
 refuse score/noul directly before making any request and declare no new support.
-S2 adds generic policy entry points and repeats the zero-call pin through
-`evaluateDecision`; S3/S4 add transport support. Until then `typedDecision`,
-`decide`, `evaluateDecision` and `decideFields` remain choice-only.
 
 #### The awaited wrapper
 

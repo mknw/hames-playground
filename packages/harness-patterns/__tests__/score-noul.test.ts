@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { defineChoice, defineScore, defineNoul, readDecision } from '../index'
-import type { PolicyFor, TypedDecisionData } from '../index'
+import type { PolicyFor, TypedDecisionData, DecisionPolicy, ScorePolicy } from '../index'
 import {
   preCallAbstain,
   scoreDecision,
@@ -42,6 +42,8 @@ describe('score-math', () => {
     [{ can_wait: 0.5, soon: 0, now: 0.5 }, 1, 'can_wait', 0],
     [{ can_wait: 0, soon: 0.57, now: 0.43 }, 1.43, 'soon', 0.355],
     [{ can_wait: 0, soon: 0, now: 1 }, 2, 'now', 1],
+    [{ can_wait: 0.6, soon: 0.4, now: 0 }, 0.4, 'can_wait', 0.4],
+    [{ can_wait: 0.4, soon: 0.4, now: 0.2 }, 0.8, 'can_wait', 0],
   ] as const)(
     'mean, mode (ties by order) and ordinal confidence: %j',
     (probs, mean, mode, confidence) => {
@@ -60,6 +62,32 @@ describe('score-math', () => {
       expect(d).not.toHaveProperty('label')
     },
   )
+  it('a two-level score has binary confidence', () => {
+    const spec = defineScore({ key: 'binary', question: 'q', levels: URGENCY.levels.slice(0, 2) })
+    const { decision } = scoreScoreDecision({
+      spec,
+      state: 's',
+      policy: { fallback: 'can_wait' },
+      result: result({ can_wait: 0.7, soon: 0.3, now: 0 }),
+    })
+    expect(decision.confidence).toBeCloseTo(0.4, 12)
+    expect(decision.confidence).toBeCloseTo(Math.abs(2 * 0.7 - 1), 12)
+  })
+  it('a ten-level uniform score has zero confidence', () => {
+    const spec = defineScore({
+      key: 'uniform',
+      question: 'q',
+      levels: Array.from({ length: 10 }, (_, i) => ({ id: String(i), description: 'level' })),
+    })
+    const { decision } = scoreScoreDecision({
+      spec,
+      state: 's',
+      policy: { fallback: '0' },
+      result: result(Object.fromEntries(spec.levels.map((l) => [l.id, 0.1]))),
+    })
+    expect(decision.expected).toBeCloseTo(4.5, 12)
+    expect(decision.confidence).toBeCloseTo(0, 12)
+  })
   it('keeps raw mean/mode while the verdict falls back', () => {
     const { decision: d, event } = scoreScoreDecision({
       spec: URGENCY,
@@ -113,6 +141,31 @@ describe('score/noul shared fail-closed policy', () => {
       expect(noul).toMatchObject({ holds: false, pTrue: 0.75, reason, abstained: true })
     },
   )
+
+  it('rejects wider margin policies by type and strips them at runtime', () => {
+    const policy: DecisionPolicy<'can_wait' | 'soon' | 'now'> = {
+      fallback: 'can_wait',
+      minMargin: 0.9,
+    }
+    // @ts-expect-error A wider choice policy cannot carry margin into a score.
+    const scorePolicy: ScorePolicy<'can_wait' | 'soon' | 'now'> = policy
+    const score = scoreScoreDecision({
+      spec: URGENCY,
+      state: 's',
+      policy: scorePolicy,
+      result: result({ can_wait: 0, soon: 0.9, now: 0.1 }),
+    })
+    expect(score.decision.abstained).toBe(false)
+    expect(score.event.policy).not.toHaveProperty('minMargin')
+    const noul = scoreNoulDecision({
+      spec: CONDITION,
+      state: 's',
+      policy: { fallback: false, minMargin: 0.99 } as never,
+      result: result({ true: 0.9, false: 0.1 }),
+    })
+    expect(noul.decision.abstained).toBe(false)
+    expect(noul.event.policy).not.toHaveProperty('minMargin')
+  })
 
   it('uses fitted confidence cuts and ignores fitted margin on the new types', () => {
     const score = scoreScoreDecision({
@@ -169,6 +222,32 @@ describe('noul-math', () => {
     expect(event.policy.fallback).toBe('false')
     expect(d).not.toHaveProperty('margin')
     expect(d).not.toHaveProperty('label')
+  })
+  it('holds at p = .5 with no confidence cut', () => {
+    const { decision } = scoreNoulDecision({
+      spec: CONDITION,
+      state: 's',
+      policy: { fallback: false },
+      result: result({ true: 0.5, false: 0.5 }),
+    })
+    expect(decision.holds).toBe(true)
+  })
+  it('preserves true/false criteria in label order', () => {
+    const criteria = {
+      true: 'The synthetic condition holds.',
+      false: 'The synthetic condition does not hold.',
+    }
+    const spec = defineNoul({ key: 'criteria', question: 'q', criteria })
+    const { event } = scoreNoulDecision({
+      spec,
+      state: 's',
+      policy: { fallback: false },
+      result: result({ true: 0.9, false: 0.1 }),
+    })
+    expect(event.labels).toEqual([
+      { id: 'true', description: criteria.true },
+      { id: 'false', description: criteria.false },
+    ])
   })
   it('preserves false fallback and null raw readout when no distribution exists', () => {
     expect(
@@ -292,8 +371,8 @@ describe('readDecision type inference', () => {
     const data: TypedDecisionData = { decisions: { [URGENCY.key]: d } }
     const read = readDecision(data, URGENCY)
     expectTypeOf(read!.level).toEqualTypeOf<'can_wait' | 'soon' | 'now'>()
-    expectTypeOf<PolicyFor<typeof URGENCY>>().not.toHaveProperty('minMargin')
-    expectTypeOf<PolicyFor<typeof CONDITION>>().not.toHaveProperty('minMargin')
+    expectTypeOf<PolicyFor<typeof URGENCY>['minMargin']>().toEqualTypeOf<undefined>()
+    expectTypeOf<PolicyFor<typeof CONDITION>['minMargin']>().toEqualTypeOf<undefined>()
     expect(read?.level).toBe('soon')
     expect(readDecision(data, defineNoul({ key: URGENCY.key, question: 'q' }))).toBeUndefined()
     expect(readDecision({}, URGENCY)).toBeUndefined()
@@ -354,6 +433,16 @@ describe('unsupported-type-fails-closed', () => {
       expect(noul).toMatchObject({ holds: false, pTrue: null, reason: 'unsupported-type' })
     },
   )
+  it('unsupported-type precedes a simultaneous transport error', () => {
+    const { decision } = scoreScoreDecision({
+      spec: URGENCY,
+      state: 's',
+      policy: { fallback: 'now' },
+      unsupportedType: true,
+      error: { error: 'synthetic transport failure' },
+    })
+    expect(decision.reason).toBe('unsupported-type')
+  })
   it('checks no-state first, then type before calibration, and honors declared support', () => {
     const input = {
       spec: URGENCY,

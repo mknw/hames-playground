@@ -1849,8 +1849,8 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
     const startTime = Date.now()
     const { spec, state } = input
     // S1 widens the seam; S3 adds support. Refuse before resolving or calling a client.
-    if (spec.type === 'score' || spec.type === 'noul') {
-      throw new Error(`Unsupported decision type: ${spec.type}`)
+    if (spec.type !== undefined && spec.type !== 'choice') {
+      throw new Error(`Unsupported decision type: ${String(spec.type)}`)
     }
     const variables = { state, question: spec.question, labels: spec.labels }
 
@@ -2083,8 +2083,8 @@ export function createVerbalizedDecide(): DecideFn {
     const startTime = Date.now()
     const { spec, state } = input
     // S1 widens the seam; S3 adds support. Refuse before resolving or calling a client.
-    if (spec.type === 'score' || spec.type === 'noul') {
-      throw new Error(`Unsupported decision type: ${spec.type}`)
+    if (spec.type !== undefined && spec.type !== 'choice') {
+      throw new Error(`Unsupported decision type: ${String(spec.type)}`)
     }
     const variables = { state, question: spec.question, labels: spec.labels }
     const fail = (message: string, cause?: unknown) =>

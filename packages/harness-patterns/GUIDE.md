@@ -181,20 +181,7 @@ not a rounded mean: a bimodal distribution can average to a level it never
 supports. Confidence measures concentration, not permission to act, as
 [TypeSafe explains](https://docs.typesafe.ai/confidence).
 
-S1 supplies these types, declarations, pure scorers and typed reads. The policy
-entry points and mixed sets gain score/noul execution in S2; existing transports
-remain choice-only until S3/S4 declare their support.
-
-S1 widens `DecideInput.spec` to accept all three specs and adds optional
-`DecideFn.supportedTypes`. An absent declaration means choice-only.
-`preCallAbstain({ spec, supportedTypes, state, policy, method })` returns
-`no-state` first, then `unsupported-type`, then the existing calibration refusal.
-An unsupported type must not call the transport; pass `unsupportedType: true` to
-its pure scorer to record the fallback with null raw readouts. Existing adapters
-refuse score/noul directly before making any request and declare no new support.
-S2 adds generic policy entry points and repeats the zero-call pin through
-`evaluateDecision`; S3/S4 add transport support. Until then `typedDecision`,
-`decide`, `evaluateDecision` and `decideFields` remain choice-only.
+In this release you can declare score and noul specs, score a distribution with them and read the verdict back. `typedDecision`, `decide`, `evaluateDecision`, `decideFields` and every shipped transport still accept choice specs only, and a transport that does not list a type in `supportedTypes` is never asked it.
 
 `decisionRouter` is `router()`'s sibling built on it: the routes are the
 labels, the verdict becomes `data.route`, and `policy.fallback` names the route

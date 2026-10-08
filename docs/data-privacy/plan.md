@@ -17,7 +17,8 @@ thing either of them will ask for.
 The company is the **controller**; the data subjects are its employees using the
 assistant. Anthropic is the **processor** (it is now the only LLM provider —
 the Groq / OpenRouter / OpenAI chains and their `USE_MIXED_CHAINS` switch were
-removed 2026-08-24; see finding 1). The app is internal-only and reached through Entra
+removed 2026-08-24; one narrow exception since #418, the Anthropic tier's `decide`
+role — see finding 1). The app is internal-only and reached through Entra
 SSO, so every record is tied to a named employee — there is no anonymous use and
 no pseudonymisation anywhere in the stack.
 
@@ -100,7 +101,7 @@ single most important finding in this document.
 
 Every conversation, including the embedded mail and file content described
 above, is sent to **Anthropic's API** — and, since 2026-08-24, to no other LLM
-provider. MCP tool servers (web fetch/search, GitHub, Context7) receive whatever
+provider except the `decide` role's Anthropic-tier client, below. MCP tool servers (web fetch/search, GitHub, Context7) receive whatever
 is passed to them.
 
 Each is a processor under **Art. 28** (needs a data processing agreement) and,
@@ -114,9 +115,25 @@ Two things follow that _are_ in our control:
 - **Anthropic-only is a compliance asset**: one processor to paper rather than
   four. It is no longer a default that a switch could undo — the mixed-provider
   chains and the `USE_MIXED_CHAINS` env flag were deleted outright on
-  2026-08-24, so there is no configuration that sends a prompt to Groq,
-  OpenRouter or OpenAI. Re-introducing one is an Art. 28 / Chapter V decision,
-  not a config change.
+  2026-08-24, so no _chat_ configuration sends a prompt to Groq, OpenRouter or
+  OpenAI. **One exception, stated rather than buried (#418, slice T4):** on the
+  Anthropic tier the `decide` role's default client is a REST adapter to
+  TypeSafe's Jev model through OpenRouter's Decisions API
+  (`packages/harness-baml/jev-decide.server.ts`). It sends the _decision state_ —
+  the text a typed decision is asked about, which is whatever the consumer puts in
+  it — to OpenRouter and TypeSafe, two further third-country processors. Controls:
+  the request sets OpenRouter's provider preferences for zero data retention and
+  data collection denied, and **refuses to send** if they cannot be applied; the
+  transport has its own API key (never the embedding provider's, no fallback);
+  `JEV_DECISIONS_URL` accepts only `https:` or a loopback host; any failure
+  abstains rather than retrying elsewhere. **The private tier never reaches it**:
+  the transport is refused under that tier at two layers, before the key is read
+  and before any request. Open, not inferred: the provider documents no latency,
+  retention or region, and the preferences are a request to OpenRouter that the
+  downstream endpoint honours them, not a contract; the DPA / transfer analysis
+  for both processors has not been done. No consumer wires the role yet; this
+  must be settled before the first one does. Re-introducing any other provider is
+  an Art. 28 / Chapter V decision, not a config change.
 - Whether **zero-retention / no-training-on-inputs** terms apply to the account
   materially changes the risk picture, and is a contract setting rather than a
   code one.
@@ -127,7 +144,8 @@ exists, and it now covers every role without exception.** A verda tier decision
 re-points controller / actor / critic / synthesizer / router / planner /
 describe **and the injection screen** at the company's own Qwen deployment on a
 Verda (DataCrunch) GPU (`packages/harness-baml/baml_src/verda-client.baml`). Read against the paragraph above: no
-configuration still sends a prompt to Groq, OpenRouter or OpenAI, and the new
+chat configuration still sends a prompt to Groq, OpenRouter or OpenAI (the
+`decide` exception above is Anthropic-tier only), and the new
 route moves prompts _off_ a third-country processor rather than onto one, so it
 cuts the exposure this finding is about rather than widening it. Three caveats
 belong in the same breath, because each is the kind of thing this doc exists to

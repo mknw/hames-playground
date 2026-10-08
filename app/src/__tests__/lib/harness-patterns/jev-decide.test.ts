@@ -121,7 +121,7 @@ beforeEach(() => {
   requests = []
   smallRequests = 0
   respond = async () => Response.json(JEV_BODY)
-  process.env.OPENROUTER_API_KEY = 'or-test-key'
+  process.env.JEV_DECISIONS_API_KEY = 'or-test-key'
   delete process.env.JEV_DECISIONS_URL
   vi.stubGlobal(
     'fetch',
@@ -167,6 +167,7 @@ describe('the wire shape — ONE request carries every field as a typed question
     expect(JSON.parse(requests[0].init.body as string)).toEqual({
       model: 'typesafe/jev-1.13',
       state: 'the state',
+      provider: { zdr: true, data_collection: 'deny' },
       questions: {
         route: {
           type: 'choice',
@@ -237,9 +238,96 @@ describe('the wire shape — ONE request carries every field as a typed question
   })
 })
 
+describe('jev-privacy — OpenRouter provider preferences (O1), own key (O2), endpoint scheme (O4)', () => {
+  const lastBody = () => JSON.parse(requests[0].init.body as string)
+
+  it('O1: the body carries zero data retention AND data collection denied on OpenRouter', async () => {
+    const { decideAll } = await transport()
+    await decideAll({ spec: SET, state: 's' })
+    expect(lastBody().provider).toEqual({ zdr: true, data_collection: 'deny' })
+  })
+
+  it('O1: no OpenRouter preferences go to a non-OpenRouter endpoint (a loopback fake)', async () => {
+    process.env.JEV_DECISIONS_URL = 'http://127.0.0.1:9/api/alpha/decisions'
+    const { decideAll } = await transport()
+    await decideAll({ spec: SET, state: 's' })
+    expect(lastBody()).not.toHaveProperty('provider')
+  })
+
+  it.each([
+    ['both dropped', {}],
+    ['zdr off', { zdr: false, data_collection: 'deny' }],
+    ['collection allowed', { zdr: true, data_collection: 'allow' }],
+  ])('O1: preferences that cannot be applied (%s) refuse BEFORE any fetch', async (_n, prefs) => {
+    const { createJevTransport } = await import('@hames-ai/harness-baml/jev-decide.server')
+    const { LLMCallError } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { decideAll } = createJevTransport({ openRouterPreferences: prefs })
+    const err = await decideAll({ spec: SET, state: 's' }).catch((e) => e)
+    expect(err).toBeInstanceOf(LLMCallError)
+    expect(String(err.message)).toMatch(/provider preferences could not be applied/)
+    expect(requests).toHaveLength(0)
+    expect(smallRequests).toBe(0)
+  })
+
+  it('O2: the embedding provider key is never used — no key of its own, no request', async () => {
+    delete process.env.JEV_DECISIONS_API_KEY
+    process.env.OPENROUTER_API_KEY = 'embedding-key'
+    try {
+      const { decideAll } = await transport()
+      await expect(decideAll({ spec: SET, state: 's' })).rejects.toThrow(/JEV_DECISIONS_API_KEY/)
+      expect(requests).toHaveLength(0)
+    } finally {
+      delete process.env.OPENROUTER_API_KEY
+    }
+  })
+
+  it('O2: the bearer is the decision key even when the embedding key is also set', async () => {
+    process.env.OPENROUTER_API_KEY = 'embedding-key'
+    try {
+      const { decideAll } = await transport()
+      await decideAll({ spec: SET, state: 's' })
+      expect((requests[0].init.headers as Record<string, string>).authorization).toBe(
+        'Bearer or-test-key',
+      )
+    } finally {
+      delete process.env.OPENROUTER_API_KEY
+    }
+  })
+
+  it.each([
+    'http://example.com/api/alpha/decisions',
+    'http://10.0.0.5/decisions',
+    'http://127.0.0.1.evil.example/decisions',
+    'http://127.0.0.1@evil.example/decisions',
+    'https://evil.example@127.0.0.1/decisions',
+    'ftp://127.0.0.1/decisions',
+    'not a url',
+  ])('O4: %s is refused before the key is read and before any fetch', async (url) => {
+    process.env.JEV_DECISIONS_URL = url
+    delete process.env.JEV_DECISIONS_API_KEY // a key read first would surface as the key error
+    const { decideAll } = await transport()
+    await expect(decideAll({ spec: SET, state: 's' })).rejects.toThrow(/Refusing JEV_DECISIONS_URL/)
+    expect(requests).toHaveLength(0)
+  })
+
+  it.each([
+    'https://openrouter.ai/api/alpha/decisions',
+    'https://gateway.example.com/decisions',
+    'http://localhost:8080/x',
+    'http://127.0.0.1:8080/x',
+    'http://127.4.5.6/x',
+    'http://[::1]:8080/x',
+  ])('O4: %s is accepted', async (url) => {
+    process.env.JEV_DECISIONS_URL = url
+    const { decideAll } = await transport()
+    await decideAll({ spec: SET, state: 's' })
+    expect(requests).toHaveLength(1)
+  })
+})
+
 describe('jev-tier-lock — Jev is a public provider and may never take a private-tier call', () => {
   it('the transport refuses on its own under the private tier — before reading the key or sending', async () => {
-    delete process.env.OPENROUTER_API_KEY
+    delete process.env.JEV_DECISIONS_API_KEY
     const { decideAll, decide } = await transport()
     const { LLMCallError } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const err = await onPrivateTier(() => decideAll({ spec: SET, state: 's' })).catch((e) => e)
@@ -408,7 +496,7 @@ describe('jev-fallback — fail closed, never a downgrade to another provider', 
   })
 
   it('a missing key is a refusal before any request', async () => {
-    delete process.env.OPENROUTER_API_KEY
+    delete process.env.JEV_DECISIONS_API_KEY
     const decide = await adapter()
     const out = await evaluateDecision({
       decide,

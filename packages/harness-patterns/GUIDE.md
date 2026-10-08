@@ -181,6 +181,13 @@ not a rounded mean: a bimodal distribution can average to a level it never
 supports. Confidence measures concentration, not permission to act, as
 [TypeSafe explains](https://docs.typesafe.ai/confidence).
 
+In the app's observability timeline, the preview chip identifies the decision
+as choice, score or noul (old events default to choice). Score details show
+ordered probability bars and the raw mean on a level-index scale; noul details
+show P(true) and the declared symmetric abstain band. These readouts survive a
+fallback verdict. Unknown readouts stay visibly unknown, and fitted cuts may
+differ from the declared cut shown in the detail view.
+
 In this release you can declare score and noul specs, score a distribution with them and read the verdict back. `typedDecision`, `decide`, `evaluateDecision`, `decideFields` and every shipped transport still accept choice specs only, and a transport that does not list a type in `supportedTypes` is never asked it.
 
 `decisionRouter` is `router()`'s sibling built on it: the routes are the

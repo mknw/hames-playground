@@ -391,13 +391,10 @@ const ContentSanitizedDetail = (props: { data: ContentSanitizedEventData }) => (
  * decision was asked over (`stateChars` is the SIZE), so there is nothing here
  * to leak — the text lives only in the LLM tabs above, as every prompt does.
  *
- * The line is the PROBABILITY equivalent of the policy's `minConfidence` for K
- * labels, drawn from the policy as declared. The policy compares `confidence`
- * = (K·p − 1)/(K − 1), not p, so the bars are crossed at p* = (c·(K − 1) + 1)/K
- * (80% at K = 2, c = 0.6). Two other cuts are NOT on the line and can abstain a
- * bar that clears it: `minMargin` (a gap between two bars, shown in the footer
- * instead) and a calibration entry's own fitted cuts, which win at decision time
- * (F2) but are not on the event. The chip's reason says which cut it was.
+ * Choice cuts are converted from confidence to probability. Scores instead
+ * show the raw mean on the ordered level scale; ordinal confidence has no
+ * per-bar cut. Nouls show P(true) with the declared symmetric abstain band.
+ * Fitted cuts may differ from the declared policy recorded on the event.
  */
 const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
   const pct = (p: number) => `${(Math.max(0, Math.min(1, p)) * 100).toFixed(1)}%`
@@ -462,67 +459,163 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
         </Show>
       </div>
 
-      <div flex="~ col" gap="2">
-        <For each={props.data.labels}>
-          {(l) => {
-            const p = () => props.data.probs[l.id] ?? 0
-            return (
-              <div flex="~ col" gap="1" data-role="decision-label" data-label={l.id}>
-                <div flex="~" justify="between" text="xs">
-                  <span text={l.id === props.data.top ? 'ui-text-primary' : 'ui-text-secondary'}>
-                    <span font="mono">{l.id}</span>
-                    <span text="ui-text-tertiary"> — {l.description}</span>
-                  </span>
-                  <span font="mono" text="ui-text-secondary">
-                    {pct(p())}
-                  </span>
-                </div>
+      <Show when={props.data.type === 'score'}>
+        <div flex="~ col" gap="2">
+          <div text="xs ui-text-secondary">
+            Mean (level index): {props.data.expected?.toFixed(2) ?? 'unknown'}
+          </div>
+          <Show when={props.data.expected != null && props.data.labels.length > 1}>
+            <div
+              h="2"
+              bg="ui-bg-tertiary"
+              rounded="sm"
+              relative=""
+              role="meter"
+              aria-label="Score mean (level index)"
+              aria-valuemin={0}
+              aria-valuemax={props.data.labels.length - 1}
+              aria-valuenow={props.data.expected!}
+            >
+              <div
+                data-role="decision-mean"
+                absolute=""
+                inset-y="0"
+                w="0.5"
+                bg="ui-accent"
+                style={{ left: pct(props.data.expected! / (props.data.labels.length - 1)) }}
+                aria-hidden="true"
+              />
+            </div>
+          </Show>
+          <div flex="~" justify="between" text="xs ui-text-secondary" font="mono">
+            <For each={props.data.labels}>
+              {(l, i) => (
+                <span>
+                  {i()} · {l.id}
+                </span>
+              )}
+            </For>
+          </div>
+        </div>
+      </Show>
+
+      <Show when={props.data.type === 'noul'}>
+        <div flex="~ col" gap="2">
+          <div text="xs ui-text-secondary">
+            P(true): {props.data.pTrue == null ? 'unknown' : pct(props.data.pTrue)}
+          </div>
+          <Show when={props.data.pTrue != null}>
+            <div
+              h="3"
+              bg="ui-bg-tertiary"
+              rounded="sm"
+              relative=""
+              role="meter"
+              aria-label="P(true)"
+              aria-valuemin={0}
+              aria-valuemax={1}
+              aria-valuenow={props.data.pTrue!}
+            >
+              <div
+                h="full"
+                bg="ui-accent"
+                rounded="sm"
+                data-role="decision-bar"
+                style={{ width: pct(props.data.pTrue!) }}
+              />
+              <Show when={cut() !== undefined}>
                 <div
-                  bg="ui-bg-tertiary"
-                  rounded="sm"
-                  h="2"
-                  style={{ position: 'relative' }}
-                  role="meter"
-                  aria-label={`${l.id} probability`}
-                  aria-valuemin={0}
-                  aria-valuemax={1}
-                  aria-valuenow={p()}
-                >
+                  data-role="decision-band"
+                  absolute=""
+                  inset-y="0"
+                  border="x-2 ui-danger"
+                  bg="ui-danger/10"
+                  style={{ left: pct((1 - cut()!) / 2), width: pct(cut()!) }}
+                  aria-hidden="true"
+                />
+              </Show>
+            </div>
+          </Show>
+          <Show when={cut() !== undefined}>
+            <div text="xs ui-text-secondary">
+              Declared abstain band: {pct((1 - cut()!) / 2)}–{pct((1 + cut()!) / 2)} (edges
+              accepted)
+            </div>
+          </Show>
+        </div>
+      </Show>
+
+      <Show when={props.data.type !== 'noul'}>
+        <div flex="~ col" gap="2">
+          <For each={props.data.labels}>
+            {(l) => {
+              const p = () => props.data.probs[l.id] ?? 0
+              return (
+                <div flex="~ col" gap="1" data-role="decision-label" data-label={l.id}>
+                  <div flex="~" justify="between" text="xs">
+                    <span text={l.id === props.data.top ? 'ui-text-primary' : 'ui-text-secondary'}>
+                      <span font="mono">{l.id}</span>
+                      <span text="ui-text-tertiary"> — {l.description}</span>
+                    </span>
+                    <span font="mono" text="ui-text-secondary">
+                      {pct(p())}
+                    </span>
+                  </div>
                   <div
-                    h="2"
+                    bg="ui-bg-tertiary"
                     rounded="sm"
-                    bg={l.id === props.data.top ? 'ui-accent' : 'ui-text-tertiary'}
-                    data-role="decision-bar"
-                    style={{ width: pct(p()) }}
-                  />
-                  <Show when={cut() !== undefined}>
+                    h="2"
+                    style={{ position: 'relative' }}
+                    role="meter"
+                    aria-label={`${l.id} probability`}
+                    aria-valuemin={0}
+                    aria-valuemax={1}
+                    aria-valuenow={p()}
+                  >
                     <div
-                      data-role="decision-cut"
-                      title={`min confidence ${cut()} ⇒ p ≥ ${pct(cutProb())}`}
-                      bg="ui-danger"
-                      style={{
-                        position: 'absolute',
-                        top: '-2px',
-                        bottom: '-2px',
-                        width: '2px',
-                        left: pct(cutProb()),
-                      }}
+                      h="2"
+                      rounded="sm"
+                      bg={l.id === props.data.top ? 'ui-accent' : 'ui-text-tertiary'}
+                      data-role="decision-bar"
+                      style={{ width: pct(p()) }}
                     />
-                  </Show>
+                    <Show when={props.data.type !== 'score' && cut() !== undefined}>
+                      <div
+                        data-role="decision-cut"
+                        title={`min confidence ${cut()} ⇒ p ≥ ${pct(cutProb())}`}
+                        bg="ui-danger"
+                        style={{
+                          position: 'absolute',
+                          top: '-2px',
+                          bottom: '-2px',
+                          width: '2px',
+                          left: pct(cutProb()),
+                        }}
+                      />
+                    </Show>
+                  </div>
                 </div>
-              </div>
-            )
-          }}
-        </For>
-      </div>
+              )
+            }}
+          </For>
+        </div>
+      </Show>
+
+      <Show when={props.data.type !== undefined}>
+        <div text="xs ui-text-secondary">
+          Raw readout survives fallback. Declared confidence cuts are shown; fitted cuts may differ.
+        </div>
+      </Show>
 
       <div flex="~ wrap" gap="x-6 y-1" text="xs ui-text-tertiary">
         <span>
           confidence <span font="mono">{props.data.confidence.toFixed(3)}</span>
         </span>
-        <span>
-          margin <span font="mono">{props.data.margin.toFixed(3)}</span>
-        </span>
+        <Show when={props.data.type === undefined}>
+          <span>
+            margin <span font="mono">{props.data.margin.toFixed(3)}</span>
+          </span>
+        </Show>
         <Show when={props.data.method}>
           <span>
             method <span font="mono">{props.data.method}</span>
@@ -538,7 +631,7 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
             min confidence <span font="mono">{cut()}</span>
           </span>
         </Show>
-        <Show when={margin() !== undefined}>
+        <Show when={props.data.type === undefined && margin() !== undefined}>
           <span>
             min margin <span font="mono">{margin()}</span>
           </span>

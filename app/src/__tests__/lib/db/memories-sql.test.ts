@@ -163,14 +163,9 @@ describe('every write to a memory row carries ciphertext, and every read is owne
     expect(rows[0]!.evidence).toBe('I prefer short answers')
   })
 
-  it('deleteAllMemoriesForUser: DELETE FROM memories WHERE user_id = $1, bound to the caller', async () => {
-    reply = () => ({ rows: [], rowCount: 2 })
-    const deleted = await repo.deleteAllMemoriesForUser('user-a')
-    const stmt = sent.find((s) => s.sql.startsWith('DELETE FROM memories'))!
-    expect(stmt.sql).toBe('DELETE FROM memories WHERE user_id = $1')
-    expect(stmt.params).toEqual(['user-a'])
-    expect(deleted).toBe(2)
-  })
+  // Forget-all now uses a dedicated-pool transaction (#552). Its owner scope,
+  // count and cascade are pinned on real Postgres in memories.test.ts;
+  // lock interleavings and retryable failures in memories-db-store.test.ts.
 })
 
 describe('#531: the conversation-delete erase, by the SQL it sends', () => {

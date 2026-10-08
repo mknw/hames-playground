@@ -485,6 +485,9 @@ async function claim(
   if (!r.inserted) throw new SourceConflict(r.memoryId, await tx.read(r.memoryId))
 }
 
+/** Roll back a candidate whose owner switched memory off while it waited. */
+class MemoryDisabled extends Error {}
+
 /** Thrown inside a candidate's transaction to roll it back: this candidate's
  *  provenance row exists, so it was written before. */
 class SourceConflict extends Error {
@@ -743,6 +746,9 @@ async function run(
     const embedding = vectors[i]
     try {
       const done = await store.transaction(async (tx) => {
+        // Re-read under the owner lock: wake/extract/embed may outlive a switch-off.
+        // Throw so the host rolls this candidate back.
+        if (!(await settings!.enabled!())) throw new MemoryDisabled()
         const near = await tx.nearest({ embedding, embedSpace: embed.spaceId, tier })
         const verdict = await chooseAction(cand, near, { dup, rel, mergeMs }, scope, decideFn, cut)
         const src = { eventId: userEventId, ordinal: cand.ordinal, conversationId }
@@ -799,7 +805,9 @@ async function run(
       pendingCall = undefined
       written++
     } catch (err) {
-      if (err instanceof SourceConflict) {
+      if (err instanceof MemoryDisabled) {
+        return stop('disabled', undefined, { written, duplicates, failed, route, rejected })
+      } else if (err instanceof SourceConflict) {
         duplicates++
         // The memory and its source exist; if the event that references them was
         // lost (the host's save was refused), a retry repairs the reference.

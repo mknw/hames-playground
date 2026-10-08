@@ -64,7 +64,8 @@ type BamlSingleton = { bamlOptions?: unknown }
 let installed = false
 
 /**
- * Point every un-overridden BAML call at `baseUrl`.
+ * Point default calls and the named secondary at `baseUrl`; refuse any other
+ * client unless its shipped endpoint is that same fake.
  *
  * Idempotent, and deliberately not reversible: a suite that could un-install
  * the redirect could also half-install it, and "half" here means live calls.
@@ -80,11 +81,47 @@ export function installHermeticRouting(b: unknown, baseUrl: string): void {
   // which `assertHermeticRouting` below proves by observation.
   const build = (): ClientRegistry => {
     const registry = new ClientRegistry()
-    registry.addLlmClient(FAKE_CLIENT, 'openai-generic', {
-      base_url: baseUrl,
-      api_key: HERMETIC_ANTHROPIC_KEY,
-      model: FAKE_ANTHROPIC_TIER_MODEL,
-    })
+    const registered = new Set<string>()
+    const add = (name: string) => {
+      registry.addLlmClient(name, 'openai-generic', {
+        base_url: baseUrl,
+        api_key: HERMETIC_ANTHROPIC_KEY,
+        model: FAKE_ANTHROPIC_TIER_MODEL,
+      })
+      registered.add(name)
+    }
+    add(FAKE_CLIENT)
+    // Preserve the production fallback chain and the collector's leaf identity.
+    add('AnthropicSonnet5NoThink')
+    add('AnthropicSonnet46NoThink')
+    // F2 preserves this native chain, so F4's registered-leaf-only rule
+    // would refuse it. Admit it only while BOTH expected leaves are registered;
+    // a missing/renamed leaf closes the chain too. The transport catches any
+    // future native member that this local member list cannot see.
+    const chainRegistered =
+      registered.has('AnthropicSonnet5NoThink') && registered.has('AnthropicSonnet46NoThink')
+    const setPrimary = registry.setPrimary.bind(registry)
+    registry.setPrimary = (client: string) => {
+      // A name absent from this registry otherwise falls through to the
+      // production BAML declaration. Refuse it BEFORE native BAML sees it.
+      // Per-call registries replace this registry wholesale; the recording
+      // transport backstop catches those calls and per-call env overrides.
+      if (!registered.has(client) && !(client === 'DecideAnthropic' && chainRegistered)) {
+        const endpoint =
+          client === 'VerdaQwen'
+            ? process.env.VERDA_INFERENCE_ENDPOINT
+            : client === 'LocalQwenSmall' || client === 'LocalQwenSmallDecide'
+              ? process.env.SMALL_LLM_BASE_URL
+              : undefined
+        if (endpoint !== baseUrl) {
+          throw new Error(
+            `e2e hermetic routing refused client ${client}: no fake endpoint is registered; ` +
+              'refusing to fall through to its production provider.',
+          )
+        }
+      }
+      setPrimary(client)
+    }
     registry.setPrimary(FAKE_CLIENT)
     return registry
   }

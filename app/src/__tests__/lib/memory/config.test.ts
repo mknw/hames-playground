@@ -128,6 +128,17 @@ describe('host memory composition', () => {
       )
     },
   )
+  it('#553: a request scope that never set the origin gate fails closed', async () => {
+    const cfg = agentDeps().memory!
+    const leaf = configurePattern('leaf', async (scope) => scope)
+    const memory = { ...leaf, capabilities: { memory: true as const } }
+    await runWithRequestContext({ userId: 'alice', sessionId: 'same' }, async () => {
+      expect(await cfg.enabled()).toBe(false)
+      expect(startTurnMemory([memory], cfg)).toBeUndefined()
+    })
+    expect(getMemoryEnabled).not.toHaveBeenCalled()
+    expect(ensureMemoryAwake).not.toHaveBeenCalled()
+  })
   it('embeds query and documents explicitly locally despite a public stash setting', async () => {
     vi.stubEnv('EMBEDDINGS_PROVIDER', 'openrouter')
     const cfg = createHostMemoryConfig()

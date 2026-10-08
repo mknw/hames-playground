@@ -54,6 +54,15 @@
  *     without its memory.
  *  9. One metadata-only `memory_written` per memory, after its commit.
  *
+ * ## Erasure semantics (#419 owner decision (b)) — M2 and M3 together
+ *
+ * An `update` replaces the memory's text IN PLACE and keeps every provenance
+ * row, including the ones that no longer support that text, so deleting a
+ * conversation removes every memory that ever drew on it (errs toward erasing
+ * more). `evidenceEventId` records which event the stored `evidence` quotes,
+ * and the merge question requires a calibrated read, falling back to NOT
+ * merging. SPEC.md "Erasure semantics" is the statement M3 inherits.
+ *
  * Pre-M3 nothing compacts: the report says when the owner's count reaches
  * `softLimit` (`compactionDue`) and M3 acts on it.
  */
@@ -754,6 +763,7 @@ async function run(
             tier,
             content: cand.content,
             evidence: cand.evidence,
+            evidenceEventId: userEventId,
             embedding,
             embedSpace: embed.spaceId,
           })
@@ -767,6 +777,7 @@ async function run(
             await tx.update(memoryId, {
               content: cand.content,
               evidence: cand.evidence,
+              evidenceEventId: userEventId,
               embedding,
               embedSpace: embed.spaceId,
             })
@@ -854,11 +865,18 @@ async function chooseAction(
   // Related, not a duplicate. Episodes and facts only reinforce or insert.
   if (!MERGEABLE_KINDS.includes(cand.kind)) return 'insert'
 
+  // A merge destroys the older text, so it needs a calibrated read (decision
+  // (b)). Every way of not getting one — uncalibrated, abstained, thrown,
+  // timed out — lands on `distinct`, which inserts: both memories are kept.
   const policy: DecisionPolicy<MemoryMergeLabel> = {
     fallback: 'distinct',
+    requireCalibrated: true,
     minConfidence: cut?.minConfidence ?? DEFAULT_MIN_CONFIDENCE,
     minMargin: cut?.minMargin ?? DEFAULT_MIN_MARGIN,
-    ...(cut?.thresholdMethod ? { thresholdMethod: cut.thresholdMethod } : {}),
+    // No `thresholdMethod`: the store gate's method scope must not switch the
+    // merge on. Off the logprob method these static cuts mismatch, so only a
+    // calibration entry fitted for (serving client, memory.merge) lets
+    // `update` or `same` through, on either tier.
   }
   const local: PatternScope<Record<string, never>> = {
     id: scope.id,

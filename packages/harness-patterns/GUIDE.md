@@ -143,74 +143,25 @@ before swapping. See SPEC's [Decisions](SPEC.md#decisions-typeddecision-418).
 
 ### Recalling what the user told us
 
-`memoryRecall` is the recall half of persistent memory: a chain step that runs
-first and, when the latest message plausibly depends on something the user said
-before, sets `data.memories` and a formatted `data.memoryContext` for the
-responder. Core hosts no database or embedder — you inject a `MemoryStore`
-bound to the turn's owner, the raw decision seam, a query embedder and the rule
-for which tiers a turn may read:
-
 ```typescript
-import { memoryRecall, harnessUsesMemory } from '@hames-ai/harness-patterns'
-import type { DecideFn, MemoryQueryEmbedder, MemoryStore } from '@hames-ai/harness-patterns'
+import { withMemory, memoryStoreConfig, settleMemory } from '@hames-ai/harness-patterns'
+import type { ConfiguredPattern, MemoryConfig, UnifiedContext } from '@hames-ai/harness-patterns'
 
-declare const store: MemoryStore // the host's database, already bound to the owner
-declare const decide: DecideFn // bamlPatterns().decide
-declare const embed: MemoryQueryEmbedder
-declare const currentUser: () => string | null
+type AgentData = Record<string, unknown>
+declare const deps: { memory: MemoryConfig }
+declare const chain: ConfiguredPattern<AgentData>[] // the host's router, routes and compactExecution
 
-const recall = memoryRecall({
-  store,
-  decide,
-  embed,
-  owner: currentUser,
-  // fail closed: an unknown tier reads the narrowest set
-  visibleTiers: (tier) => (tier === 'private' ? ['private', 'public'] : ['public']),
-})
+declare const ctx: UnifiedContext<AgentData>
+declare const conversationId: string
 
-harnessUsesMemory([recall]) // true — gate the memory wake and the post-reply store on this
+const patterns = withMemory<AgentData>(deps.memory)(chain)
+// after the reply, from the host's compactAndSave continuation:
+await settleMemory(ctx, memoryStoreConfig(deps.memory), { conversationId })
 ```
 
-It never throws and never stops what follows it: a down store, a gate that
-abstains or a wake that has not landed all end in "attach nothing", recorded as
-a `memory_recalled` event of ids and a reason — never the memories themselves.
-A turn's memories are cleared on every exit, so a skipped turn never inherits
-the last one's. The user sees nothing either way. See SPEC's
-[Memory recall](SPEC.md#memory-recall-memoryrecall-419).
+`enabled` is required, and both halves read the same function.
 
-### Writing what the user told us
-
-`settleMemory` is the store half: call it from your post-turn continuation,
-**await it, then save the context**, so the `memory_written` events it records
-are in the one save. It decides from the question/answer pair whether anything
-is worth keeping, extracts at most three candidates from the user's own words,
-runs them through deterministic acceptance (verbatim evidence, identifier
-closure, the injection sanitizer), and writes each in a transaction of your
-`MemoryWriteStore`. It never throws; it fails closed — an abstained, uncalibrated
-or sensitive read, a read that needs a confirmation your host cannot yet ask, an
-organisational-graph target, a failed wake: all store nothing and say why.
-
-```typescript
-import { settleMemory, harnessUsesMemory } from '@hames-ai/harness-patterns'
-import type { MemoryStoreConfig } from '@hames-ai/harness-patterns'
-
-declare const memory: MemoryStoreConfig // store, decide, extract, embed, owner, …
-declare const patterns: Parameters<typeof harnessUsesMemory>[0]
-declare const ctx: Parameters<typeof settleMemory>[0]
-declare function saveSession(ctx: unknown): Promise<void> // your host's save
-
-// in the continuation that runs after the answer was sent:
-if (harnessUsesMemory(patterns)) {
-  const report = await settleMemory(ctx, memory) // never throws
-  // report.written, report.skipped, report.compactionDue …
-}
-await saveSession(ctx) // the events are already in ctx.events
-```
-
-Your `MemoryWriteStore.transaction(fn)` must open one transaction, take the
-owner's advisory lock inside it, and **roll back and rethrow if `fn` throws** —
-that rollback is what makes a retry a no-op. See SPEC's
-[Memory store](SPEC.md#memory-store-settlememory-419).
+Gate the post-reply call on `harnessUsesMemory(patterns)`, the same probe that gates the memory wake, so an agent that did not opt in stores nothing. **Await `settleMemory`, then save the context**: the `memory_written` events it records ride that one save. It never throws and it fails closed: an abstained, uncalibrated or sensitive read, a confirmation your host cannot yet ask, an organisational-graph target or a failed wake all store nothing and say why. Recall never throws either and never stops what follows it; its block is cleared on every turn. Your `MemoryWriteStore.transaction(fn)` must open one transaction, take the owner's advisory lock inside it, and **roll back and rethrow if `fn` throws**: that rollback is what makes a retry a no-op. See SPEC's [Memory recall](SPEC.md#memory-recall-memoryrecall-419) and [Memory store](SPEC.md#memory-store-settlememory-419).
 
 ### Asking a human
 

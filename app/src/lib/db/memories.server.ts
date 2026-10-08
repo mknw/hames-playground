@@ -480,13 +480,6 @@ export async function deleteMemoriesForConversations(
 // The DB-backed stores the `withMemory` host binds (#419 M5b)
 // ============================================================================
 
-/**
- * `MemoryWriteTx.insert` / `update` carry the event id the evidence quotes
- * (owner decision (b)). Core's types gain these optional fields in #527;
- * declared here too so this module compiles against either side of that merge.
- */
-type WithEvidenceEvent = { readonly evidenceEventId?: string }
-
 /** Connections the memory-write pool may hold. Small on purpose: each one can
  *  sit idle-in-transaction across a model call (the merge decision), and a
  *  burst of settles must queue here, never starve the app's main pool. */
@@ -659,7 +652,7 @@ function writeTx(client: pg.PoolClient, userId: string): MemoryWriteTx {
       }
     },
 
-    async insert(row: MemoryInsertRow & WithEvidenceEvent) {
+    async insert(row: MemoryInsertRow) {
       await client.query(
         `INSERT INTO memories (id, user_id, kind, tier, content, evidence, embedding, embed_space, evidence_event_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8, $9)`,
@@ -703,7 +696,7 @@ function writeTx(client: pg.PoolClient, userId: string): MemoryWriteTx {
           encryptField(next.evidence),
           toVectorLiteral(next.embedding),
           next.embedSpace,
-          (next as WithEvidenceEvent).evidenceEventId ?? null,
+          next.evidenceEventId ?? null,
         ],
       )
       mustHit(r.rowCount, 'update', id)

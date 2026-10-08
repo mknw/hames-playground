@@ -90,6 +90,7 @@ async function memorySourcedFrom(
     tier: extra.tier ?? 'verda',
     content: extra.content ?? 'synthetic fact about a synthetic user',
     evidence: 'synthetic quote',
+    evidenceEventId: id('evidence-event'),
     embedding: extra.embedding ?? axis(0),
     embedSpace: SPACE,
   })
@@ -261,6 +262,7 @@ describe('#531: conversation delete erases the memories that ever drew on it', (
           tier: 'verda',
           content: 'synthetic ghost',
           evidence: 'synthetic ghost',
+          evidenceEventId: id('evidence-event'),
           embedding: axis(1),
           embedSpace: SPACE,
         })
@@ -387,6 +389,7 @@ describe('write store (MemoryWriteStore)', () => {
         tier: 'verda',
         content: 'synthetic',
         evidence: 'synthetic',
+        evidenceEventId: id('evidence-event'),
         embedding: axis(5),
         embedSpace: SPACE,
       })
@@ -446,6 +449,7 @@ describe('write store (MemoryWriteStore)', () => {
         tx.update(bobs, {
           content: 'x',
           evidence: 'x',
+          evidenceEventId: id('evidence-event'),
           embedding: axis(8),
           embedSpace: SPACE,
         }),
@@ -471,7 +475,7 @@ describe('write store (MemoryWriteStore)', () => {
         embedding: axis(9),
         embedSpace: SPACE,
         evidenceEventId: 'evt-first',
-      } as Parameters<typeof tx.insert>[0])
+      })
       await tx.addSource({ memoryId: mid, eventId: id('evt'), ordinal: 0, conversationId: c1 })
     })
     const readEvidence = async () => (await listMemoriesForUser(ALICE)).find((m) => m.id === mid)!
@@ -484,7 +488,7 @@ describe('write store (MemoryWriteStore)', () => {
         embedding: axis(9),
         embedSpace: SPACE,
         evidenceEventId: 'evt-second',
-      } as Parameters<typeof tx.update>[1])
+      })
       await tx.addSource({ memoryId: mid, eventId: id('evt'), ordinal: 0, conversationId: c2 })
     })
     const after = await readEvidence()
@@ -493,16 +497,17 @@ describe('write store (MemoryWriteStore)', () => {
     expect(after.evidenceCount).toBe(2)
     expect(await sourceCount(mid)).toBe(2) // the stale source stays (decision (b))
 
-    // An update that names no event clears the stale id rather than keeping it.
+    // The current core contract requires every update to replace the evidence event id.
     await store.transaction((tx) =>
       tx.update(mid, {
         content: 'third',
         evidence: 'third',
+        evidenceEventId: 'evt-third',
         embedding: axis(9),
         embedSpace: SPACE,
       }),
     )
-    expect((await readEvidence()).evidenceEventId).toBeNull()
+    expect((await readEvidence()).evidenceEventId).toBe('evt-third')
   })
 
   it('a throw inside the transaction rolls back every write in it', async () => {
@@ -516,6 +521,7 @@ describe('write store (MemoryWriteStore)', () => {
           tier: 'verda',
           content: 'x',
           evidence: 'x',
+          evidenceEventId: id('evidence-event'),
           embedding: axis(10),
           embedSpace: SPACE,
         })
@@ -537,6 +543,7 @@ describe('write store (MemoryWriteStore)', () => {
         tier: 'verda',
         content: 'plain synthetic sentence',
         evidence: 'plain synthetic quote',
+        evidenceEventId: id('evidence-event'),
         embedding: axis(11),
         embedSpace: SPACE,
       }),

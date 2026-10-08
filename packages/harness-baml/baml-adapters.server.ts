@@ -2040,21 +2040,31 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
 export function createDecideAllAdapter(
   decide: DecideFn & { serving?: DecideServing },
 ): DecideAllFn {
+  // Metadata and calls select through this same per-call resolver. Jev owns
+  // the one-request set; all other routes use the supplied single-field seam.
+  const selectSetTransport = () => {
+    const transport = decideTransportFor(resolveClientForRole('decide'))
+    const locked = transport !== 'logprob' && activeInferenceTier() === 'verda'
+    const supportedTypes = locked
+      ? CHOICE_DECISION_TYPES
+      : transport === 'jev'
+        ? (createJevTransport().decideAll.supportedTypes ?? CHOICE_DECISION_TYPES)
+        : (decide.supportedTypes ?? CHOICE_DECISION_TYPES)
+    return { transport, supportedTypes }
+  }
   const fn: DecideAllFn = async <S extends Record<string, AnyDecisionSpec>>(input: {
     readonly spec: MixedDecisionSet<S>
     readonly state: string
   }) => {
-    // S2 widens the set seam; S3/S4 add transport support. Refuse the whole
-    // raw request before selecting a provider or handing it any mixed field.
+    const { transport, supportedTypes } = selectSetTransport()
+    if (transport === 'jev') {
+      // The transport locks before constructing any of the mixed questions.
+      return createJevTransport().decideAll(input)
+    }
     for (const spec of Object.values(input.spec.fields)) {
-      if (spec.type !== undefined && spec.type !== 'choice') {
+      if (!supportedTypes.includes(spec.type ?? 'choice')) {
         throw new Error(`Unsupported decision type: ${String(spec.type)}`)
       }
-    }
-    const client = resolveClientForRole('decide')
-    if (decideTransportFor(client) === 'jev') {
-      // The transport applies the private-tier lock itself, before any request.
-      return createJevTransport().decideAll(input)
     }
     const fields = {} as { [K in keyof S]: DecideResult<DecisionLabelsFor<S[K]>> }
     for (const k of Object.keys(input.spec.fields) as Array<keyof S & string>) {
@@ -2065,6 +2075,9 @@ export function createDecideAllAdapter(
     }
     return { fields }
   }
+  Object.defineProperty(fn, 'supportedTypes', {
+    get: () => selectSetTransport().supportedTypes,
+  })
   fn.limits = decide.limits
   if (decide.serving) fn.serving = decide.serving
   return fn

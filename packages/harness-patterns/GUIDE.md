@@ -265,7 +265,6 @@ an action gate. See [score](https://docs.typesafe.ai/primitives/score) and
 [noul](https://docs.typesafe.ai/primitives/noul). The private tier never builds
 or sends a Jev question, even when a client override names Jev.
 
-
 `decisionRouter` is `router()`'s sibling built on it: the routes are the
 labels, the verdict becomes `data.route`, and `policy.fallback` names the route
 taken when the decision abstains. Put `compactIntent` in front (it writes the

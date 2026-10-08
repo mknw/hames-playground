@@ -207,7 +207,6 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     const names = Object.keys(spec.fields) as Array<keyof S & string>
     const variables: Record<string, unknown> = { state, key: spec.key }
 
-
     // THE TIER LOCK — before any request, and without reading the key.
     if (activeInferenceTier() === 'verda') {
       throw jevFailure(

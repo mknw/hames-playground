@@ -22,8 +22,8 @@ CASES = [
     ('fallback-noul-boolean', CORE, "typeof fallback !== 'boolean'", 'false', 'decision-fallback-validation'),
     ('fallback-level-membership', CORE, 'categoricalOptions(spec)?.some((l) => l.id === fallback) === false', 'false', 'decision-fallback-validation'),
     ('state-sentinel', CORE, '    event,\n    ...(llmCall', '    event: { ...event, state: call.state },\n    ...(llmCall', 'decision-state-sentinel mixed'),
-    ('set-adapter-refusal', ADAPTER, "if (spec.type !== undefined && spec.type !== 'choice') {", 'if (false) {', 'S2 unsupported-type set adapter backstop', 2),
-    ('jev-set-refusal', JEV, "if (field.type !== undefined && field.type !== 'choice') {", 'if (false) {', 'S2 unsupported-type set adapter backstop'),
+    ('set-adapter-refusal', ADAPTER, "if (!supportedTypes.includes(spec.type ?? 'choice')) {", 'if (false) {', 'S2 unsupported-type set adapter backstop'),
+    ('jev-set-refusal', JEV, "throw new Error(`Unsupported decision type: ${String((field as AnyDecisionSpec).type)}`)", "return { type: 'choice', instructions: field.question, choices: [] }", 'S2 unsupported-type set adapter backstop'),
     ('mixed-field-inference', CORE, 'Promise<{ [K in keyof F]: DecisionFor<F[K]> }>', 'Promise<{ [K in keyof F]: AnyDecision }>', 'decision-all-types.test.ts', 1, 'type'),
     ('legacy-choice-generics', CORE, 'export function evaluateDecision<L extends string>', 'export function evaluateDecision<L extends never>', 'decision-all-types.test.ts', 1, 'type'),
 ]

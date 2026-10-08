@@ -1039,3 +1039,64 @@ describe('jev-supported-types same resolver', () => {
     expect(requests).toHaveLength(1)
   })
 })
+
+describe('jev mixed-set wire and support', () => {
+  it('serves legacy choice, score and noul together through the routed set resolver', async () => {
+    const { createDecideAllAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
+    const fn = createDecideAllAdapter(await adapter())
+    expect(fn.supportedTypes).toEqual(['choice', 'score', 'noul'])
+    expect((await transport()).decideAll.supportedTypes).toEqual(['choice', 'score', 'noul'])
+    respond = async () =>
+      Response.json({
+        answers: {
+          legacy: {
+            type: 'choice',
+            probabilities: Object.fromEntries(SPEC.labels.map((l, i) => [l.id, i === 0 ? 1 : 0])),
+            confidence: 1,
+          },
+          score: scoreAnswer,
+          noul: { type: 'noul', noul: 0.9 },
+        },
+      })
+    const result = await fn({
+      spec: { key: 'synthetic.mixed', fields: { legacy: SPEC, score: SCORE, noul: NOUL } },
+      state: 'synthetic',
+    })
+    expect(result.fields.score.probs.soon).toBeCloseTo(0.57)
+    expect(result.fields.noul).toMatchObject({
+      probs: { true: 0.9, false: expect.closeTo(0.1) },
+      calibrated: true,
+    })
+    expect(requests).toHaveLength(1)
+    const body = JSON.parse(requests[0].init!.body as string)
+    expect(Object.values(body.questions).map((q) => (q as { type: string }).type)).toEqual([
+      'choice',
+      'score',
+      'noul',
+    ])
+    configureConsumerClients((role) =>
+      role === 'decide' ? { client: 'DecideAnthropic' } : undefined,
+    )
+    expect(fn.supportedTypes).toEqual(['choice'])
+    await expect(
+      fn({ spec: { key: 'unsupported', fields: { score: SCORE } }, state: 'synthetic' }),
+    ).rejects.toThrow('Unsupported')
+    expect(requests).toHaveLength(1)
+    await withRunFrame(
+      {
+        inference: {
+          tier: 'verda',
+          clientOverride: (role) => (role === 'decide' ? { client: 'JevDecide' } : undefined),
+        },
+      },
+      async () => {
+        expect(fn.supportedTypes).toEqual(['choice'])
+        await expect(
+          fn({ spec: { key: 'locked', fields: { score: SCORE, noul: NOUL } }, state: 'synthetic' }),
+        ).rejects.toThrow('Refusing')
+      },
+    )
+    expect(requests).toHaveLength(1)
+  })
+})

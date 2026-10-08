@@ -574,25 +574,46 @@ describe('S3 lettered specs', () => {
 
 // S2 raw set seam backstop; no new transport type is enabled before S3/S4.
 describe('S2 unsupported-type set adapter backstop', () => {
-  it('refuses mixed fields before selecting or requesting a provider', async () => {
+  it('refuses an unknown type before requesting a provider', async () => {
     const { createDecideAllAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const { createJevTransport } = await import('@hames-ai/harness-baml/jev-decide.server')
-    const { defineScore, defineNoul } =
-      await import('@hames-ai/harness-patterns/patterns/typedDecision.server')
-    const score = defineScore({ key: 's', question: 'q', levels: SPEC.labels.slice(0, 2) })
-    const noul = defineNoul({ key: 'n', question: 'q' })
     const rank = { ...SPEC, type: 'rank' } as never
     for (const fn of [createDecideAllAdapter(await adapter()), createJevTransport().decideAll]) {
-      expect(fn.supportedTypes).toBeUndefined()
-      for (const spec of [score, noul, rank]) {
-        const input = {
-          spec: { key: 'mixed', fields: { old: SPEC, added: spec } },
-          state: 'synthetic',
-        }
-        await expect(fn(input)).rejects.toThrow('Unsupported decision type')
-        await expect(onPrivateTier(() => fn(input))).rejects.toThrow('Unsupported decision type')
+      expect(fn.supportedTypes).toEqual(['choice', 'score', 'noul'])
+      const input = {
+        spec: { key: 'mixed', fields: { old: SPEC, added: rank } },
+        state: 'synthetic',
       }
+      await expect(fn(input)).rejects.toThrow('Unsupported decision type')
+      await expect(onPrivateTier(() => fn(input))).rejects.toThrow(
+        /Refusing|Unsupported decision type/,
+      )
     }
+    expect(hits).toHaveLength(0)
+  })
+  it('uses actual set support and refuses undeclared secondary types', async () => {
+    const { createDecideAllAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { defineScore, defineNoul } =
+      await import('@hames-ai/harness-patterns/patterns/typedDecision.server')
+    const { configureDecideSecondary } = await import('@hames-ai/harness-baml/clients.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+    const fn = createDecideAllAdapter(await adapter())
+    expect(fn.supportedTypes).toEqual(['choice', 'score', 'noul'])
+    const score = defineScore({ key: 's', question: 'q', levels: SPEC.labels.slice(0, 2) })
+    const noul = defineNoul({ key: 'n', question: 'q' })
+    await withRunFrame({ inference: { tier: 'anthropic' } }, async () => {
+      configureDecideSecondary('DecideAnthropic')
+      try {
+        expect(fn.supportedTypes).toEqual(['choice'])
+        for (const spec of [score, noul]) {
+          await expect(
+            fn({ spec: { key: 'mixed', fields: { added: spec } }, state: 'synthetic' }),
+          ).rejects.toThrow('Unsupported decision type')
+        }
+      } finally {
+        configureDecideSecondary(undefined)
+      }
+    })
     expect(hits).toHaveLength(0)
   })
 })

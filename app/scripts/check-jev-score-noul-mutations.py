@@ -9,6 +9,7 @@ import sys
 
 JEV = Path('../packages/harness-baml/jev-decide.server.ts')
 ADAPTER = Path('../packages/harness-baml/baml-adapters.server.ts')
+FAKE = Path('e2e/lib/fake-llm.ts')
 PIN = 'src/__tests__/lib/harness-patterns/jev-decide.test.ts'
 CASES = [
     ('jev-score-wire', JEV, "type: 'score',\n            instructions", "type: 'choice',\n            instructions", 'jev-score-wire'),
@@ -24,6 +25,9 @@ CASES = [
     ('jev-noul-bounds', JEV, 'a.noul < 0 ||\n          a.noul > 1', 'false', 'jev-noul-calibrated.*invalid noul'),
     ('jev-supported-types', JEV, "value: Object.freeze(['choice', 'score', 'noul'] as const)", "value: Object.freeze(['choice'] as const)", 'jev-supported-types'),
     ('jev-supported-types-same-resolver', ADAPTER, 'const { transport, wired } = selectDecideTransport()', "const transport = 'jev'; const wired = true", 'jev-supported-types'),
+    ('jev-set-supported-types-resolver', ADAPTER, 'get: () => selectSetTransport().supportedTypes', "get: () => ['choice', 'score', 'noul']", 'jev mixed-set wire and support'),
+    ('layer2-fake-score', FAKE, "type: 'score',\n          score:", "type: 'choice',\n          score:", 'S4 streams and persists'),
+    ('layer2-fake-noul', FAKE, "{ type: 'noul', noul: 0.9 }", "{ type: 'choice', noul: 0.9 }", 'S4 streams and persists'),
 ]
 
 if __name__ == '__main__':
@@ -46,12 +50,16 @@ if __name__ == '__main__':
             raise RuntimeError(f'{name}: expected exactly one mutation anchor')
         try:
             path.write_text(original.replace(old, new, 1))
-            result = subprocess.run(
-                ['pnpm', 'exec', 'vitest', 'run', '--config',
-                 'scripts/vitest-decision-calibration.config.ts', PIN, '-t', test],
-                capture_output=True, text=True,
-                env={**os.environ, 'BAML_LOG': 'warn',
-                     'TEST_DATABASE_URL': 'postgresql://x:x@127.0.0.1:59999/x'})
+            layer2 = path == FAKE
+            command = (['pnpm', 'test:e2e', 'e2e/scenarios/11-typed-decision.e2e.ts', '-t', test]
+                       if layer2 else ['pnpm', 'exec', 'vitest', 'run', '--config',
+                                       'scripts/vitest-decision-calibration.config.ts', PIN, '-t', test])
+            env = {**os.environ, 'BAML_LOG': 'warn', 'E2E_LIVE': '0'}
+            if not layer2:
+                env['TEST_DATABASE_URL'] = 'postgresql://x:x@127.0.0.1:59999/x'
+            elif ':59132/' not in env.get('TEST_DATABASE_URL', ''):
+                raise RuntimeError('Layer-2 mutations need the owned Postgres on 59132')
+            result = subprocess.run(command, capture_output=True, text=True, env=env)
             output = result.stdout + result.stderr
             if result.returncode == 0 or 'AssertionError' not in output:
                 print(output)

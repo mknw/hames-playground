@@ -2098,7 +2098,6 @@ claim; S5 measures calibration on our questions. New answer types must match
 the asked type. Malformed responses throw and never retry another provider;
 legacy choice requests and response handling remain unchanged.
 
-
 #### The awaited wrapper
 
 ```typescript

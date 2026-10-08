@@ -17,6 +17,7 @@ import '../../../lib/inference/config.server'
  * settings scope at all.
  */
 
+import type { MemoryConfig, MemoryStoreConfig, UnifiedContext } from '@hames-ai/harness-patterns'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -230,18 +231,22 @@ type Loaded = {
   status: string
   /** The version the turn's claim holds. */
   version: string
+  memoryRunOrigin?: 'interactive' | 'triggered' | null
 } | null
 /** The turn's load is its claim (#458): one statement takes the row and reads it. */
 const claimSession = vi.fn<(id: string, userId: string) => Promise<Loaded>>(async () => null)
 /** The end-of-turn save hands back the version it wrote. */
 const saveSession = vi.fn<(...args: unknown[]) => Promise<string | void>>(async () => 'v-saved')
-const getOrBuildPatterns = vi.fn(async (_s: string, agentId: string) => [`patterns:${agentId}`])
+const getOrBuildPatterns = vi.fn<(...args: string[]) => Promise<unknown[]>>(
+  async (_s: string, agentId: string) => [`patterns:${agentId}`],
+)
+const suppliedDeps: { memory?: MemoryConfig } = {}
 vi.mock('../../../lib/harness-client/session.server', () => ({
   claimSession,
   saveSession,
   getOrBuildPatterns,
   // The composition root's deps bag — the title generator takes it now.
-  agentDeps: () => ({}),
+  agentDeps: () => suppliedDeps,
 }))
 
 // ── db/conversations ────────────────────────────────────────────────────────
@@ -314,6 +319,18 @@ vi.mock('../../../lib/db/hitl.server', () => ({
   deleteQuarantine: (...a: unknown[]) => deleteQuarantine(...(a as [])),
 }))
 
+const ensureMemoryAwake = vi.fn(async (_opt: boolean) => {})
+const awaitMemoryWake = vi.fn(async (_budget: number): Promise<'awake' | 'skipped'> => 'awake')
+vi.mock('../../../lib/inference/memory-wake.server', () => ({
+  ensureMemoryAwake,
+  awaitMemoryWake,
+  memoryWakeTimeoutMs: () => 25,
+}))
+const settleMemory = vi.fn(
+  async (_ctx: UnifiedContext, _cfg: MemoryStoreConfig, _turn: { conversationId?: string }) => ({}),
+)
+vi.mock('@hames-ai/harness-patterns/memory-store.server', () => ({ settleMemory }))
+
 // ── title agent ─────────────────────────────────────────────────────────────
 const runFirstTurnTitleGen = vi.fn<() => Promise<string | null>>(async () => null)
 vi.mock('@hames-ai/agents/agents/title-generator.server', () => ({
@@ -345,6 +362,9 @@ let logged: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
   vi.clearAllMocks()
+  delete suppliedDeps.memory
+  settleMemory.mockImplementation(async () => ({}))
+  awaitMemoryWake.mockResolvedValue('awake')
   seenScopes.length = 0
   seenAttended.length = 0
   openedFrames.length = 0
@@ -418,6 +438,7 @@ describe('interactive turns', () => {
     expect(saveSession).toHaveBeenCalledWith('sess-1', 'user-1', 'search', 'serialized:sess-1', {
       version: 'v-seed',
       inferenceTier: 'anthropic',
+      memoryRunOrigin: 'interactive',
     })
   })
 
@@ -438,6 +459,7 @@ describe('interactive turns', () => {
     expect(saveSession).toHaveBeenCalledWith('sess-2', 'user-1', 'search', 'ctx-a+follow up', {
       version: 'v-claim',
       inferenceTier: 'anthropic',
+      memoryRunOrigin: 'interactive',
     })
   })
 
@@ -454,6 +476,7 @@ describe('interactive turns', () => {
     expect(saveSession).toHaveBeenCalledWith('sess-3', 'user-1', 'general', 'serialized:sess-3', {
       version: 'v-claim',
       inferenceTier: 'anthropic',
+      memoryRunOrigin: 'interactive',
     })
   })
 
@@ -478,6 +501,7 @@ describe('interactive turns', () => {
     expect(saveSession).toHaveBeenCalledWith('sess-legacy', 'user-1', 'sandbox', 'ctx-a+and now?', {
       version: 'v-claim',
       inferenceTier: 'anthropic',
+      memoryRunOrigin: 'interactive',
     })
   })
 
@@ -795,7 +819,7 @@ describe('interactive turns', () => {
       'user-1',
       'search',
       'serialized:sess-1',
-      { version: 'v-seed', inferenceTier: 'anthropic' },
+      { version: 'v-seed', inferenceTier: 'anthropic', memoryRunOrigin: 'interactive' },
     )
     expect(dbUpdateContextIfUnchanged).toHaveBeenCalledWith(
       'sess-1',
@@ -905,7 +929,7 @@ describe('triggered turns', () => {
       'user-1',
       'search',
       'serialized:run-1',
-      { version: 'v-trig', inferenceTier: 'anthropic' },
+      { version: 'v-trig', inferenceTier: 'anthropic', memoryRunOrigin: 'triggered' },
     )
   })
 
@@ -921,7 +945,7 @@ describe('triggered turns', () => {
       'user-1',
       'sandbox',
       'serialized:run-1',
-      { version: 'v-trig', inferenceTier: 'anthropic' },
+      { version: 'v-trig', inferenceTier: 'anthropic', memoryRunOrigin: 'triggered' },
     )
   })
 
@@ -1331,6 +1355,7 @@ describe('one turn per conversation (#458)', () => {
     expect(saveSession).toHaveBeenCalledWith('run-c', 'user-1', 'search', 'serialized:run-c', {
       version: 'v-trig',
       inferenceTier: 'anthropic',
+      memoryRunOrigin: 'triggered',
     })
   })
 
@@ -2110,5 +2135,201 @@ describe('the trailing pass after a resume (A3/Δ2)', () => {
       events: { data: Record<string, unknown> }[]
     }
     expect(merged.events[0].data.summary).toBeUndefined()
+  })
+})
+
+// #419 M5c host recipe pins. Core's acceptance/transaction pins remain real in
+// memory-store.test.ts; this seam records the exact host order and row id.
+describe('memory host turns (G9)', () => {
+  const memoryPattern = { name: 'memoryRecall', capabilities: { memory: true }, config: {} }
+  function wireMemory() {
+    suppliedDeps.memory = {
+      store: {
+        count: async () => 0,
+        candidates: async () => [],
+        transaction: async (fn) => fn({} as never),
+      },
+      owner: getRequestUserId,
+      enabled: async () => true,
+      decide: async () => {
+        throw new Error('not used by host fake')
+      },
+      extract: async () => ({ value: [] }),
+      embed: { spaceId: 'local:test:1024', query: async () => [1], documents: async () => [[1]] },
+      visibleTiers: () => ['anthropic'],
+      awaitWake: async (budget) =>
+        (await import('../../../lib/memory/config.server')).waitForTurnMemoryWake(budget),
+      settle: { wakeBudgetMs: 25 },
+    }
+    getOrBuildPatterns.mockResolvedValueOnce([memoryPattern])
+  }
+  it('starts wake before patterns, settles after stream close, then saves even a tool-less turn', async () => {
+    wireMemory()
+    compactBulkData.mockImplementationOnce(async () => {})
+    const closed = vi.fn()
+    let observed: unknown
+    settleMemory.mockImplementationOnce(async (ctx, cfg, turn) => {
+      observed = {
+        user: getRequestUserId(),
+        tier: tierScopes.value.at(-1),
+        turn,
+        wake: await cfg.awaitWake!(25),
+      }
+      ctx.events.push({
+        id: 'm1',
+        type: 'memory_written',
+        ts: 0,
+        patternId: 'memory-store',
+        data: {},
+      })
+      return {}
+    })
+    await runTurnAndPersist(interactive({ onSettled: closed }))
+    await flush()
+    expect(ensureMemoryAwake.mock.invocationCallOrder[0]).toBeLessThan(
+      runFresh.mock.invocationCallOrder[0],
+    )
+    expect(closed.mock.invocationCallOrder[0]).toBeLessThan(
+      settleMemory.mock.invocationCallOrder[0],
+    )
+    expect(observed).toEqual({
+      user: 'user-1',
+      tier: 'anthropic',
+      turn: { conversationId: 'sess-1' },
+      wake: 'awake',
+    })
+    expect(dbUpdateContextIfUnchanged).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(dbUpdateContextIfUnchanged.mock.calls[0][2]).events).toEqual([
+      expect.objectContaining({ type: 'memory_written' }),
+    ])
+    expect(saveSession.mock.calls[0][4]).toMatchObject({ memoryRunOrigin: 'interactive' })
+  })
+  it('a reply during settle can lose its trailing save; the next load repairs the committed source', async () => {
+    wireMemory()
+    compactBulkData.mockImplementationOnce(async () => {})
+    let finish!: () => void
+    const blocked = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    settleMemory.mockImplementationOnce(async (ctx) => {
+      await blocked
+      ctx.events.push({
+        id: 'lost-memory-event',
+        type: 'memory_written',
+        ts: 0,
+        patternId: 'memory-store',
+        data: {},
+      })
+      return {}
+    })
+    await runTurnAndPersist(interactive())
+    expect(dbUpdateContextIfUnchanged).not.toHaveBeenCalled()
+    const { createContext, createEvent, serializeContext, deserializeContext } =
+      await vi.importActual<typeof import('@hames-ai/harness-patterns/context.server')>(
+        '@hames-ai/harness-patterns/context.server',
+      )
+    const next = createContext('synthetic reply', undefined, 'sess-1')
+    next.events.push(createEvent('user_message', 'input', { content: 'synthetic reply' }))
+    const row = {
+      serializedContext: serializeContext(next),
+      version: 'newer-claim',
+      agentId: 'search',
+      kind: 'conversation',
+      status: 'running',
+      memoryRunOrigin: 'interactive',
+    }
+    dbLoadConversation.mockResolvedValue(row)
+    dbUpdateContextIfUnchanged.mockResolvedValue(false)
+    finish()
+    await flush()
+    expect(dbUpdateContextIfUnchanged).toHaveBeenCalledTimes(3)
+    expect(saveSession).toHaveBeenCalledTimes(1)
+    const repo = await import('../../../lib/db/memories.server')
+    const available = vi.spyOn(repo, 'isMemoryAvailable').mockReturnValue(true)
+    const sources = vi
+      .spyOn(repo, 'listMemorySourcesForConversation')
+      .mockResolvedValue([
+        { eventId: 'original-input', ordinal: 0, memoryId: 'committed-memory', tier: 'anthropic' },
+      ])
+    const store = vi.spyOn(repo, 'createMemoryDbStore').mockReturnValue({
+      transaction: async (fn: (tx: never) => Promise<unknown>) =>
+        fn({ read: async () => ({ kind: 'preference' }) } as never),
+    } as never)
+    try {
+      dbUpdateContextIfUnchanged.mockResolvedValue(true)
+      const realSession = await vi.importActual<
+        typeof import('../../../lib/harness-client/session.server')
+      >('../../../lib/harness-client/session.server')
+      const loaded = await realSession.loadSession('sess-1', 'user-1')
+      const events = deserializeContext(loaded!.serializedContext).events
+      expect(
+        events.some(
+          (e) =>
+            e.type === 'user_message' &&
+            (e.data as { content?: string }).content === 'synthetic reply',
+        ),
+      ).toBe(true)
+      expect(events.filter((e) => e.type === 'memory_written')).toHaveLength(1)
+      expect(events.find((e) => e.type === 'memory_written')!.data).toMatchObject({
+        memoryId: 'committed-memory',
+        eventId: 'original-input',
+        ordinal: 0,
+      })
+      expect(deserializeContext(dbUpdateContextIfUnchanged.mock.calls.at(-1)![2]).events).toEqual(
+        events,
+      )
+      expect(sources).toHaveBeenCalledWith('sess-1', 'user-1')
+    } finally {
+      available.mockRestore()
+      sources.mockRestore()
+      store.mockRestore()
+    }
+  })
+  it('no shipped-style agent opt-in means no memory wake or settle', async () => {
+    await runTurnAndPersist(interactive())
+    await flush()
+    expect(ensureMemoryAwake).not.toHaveBeenCalled()
+    expect(settleMemory).not.toHaveBeenCalled()
+  })
+  it('a triggered run never settles even with memory opted in', async () => {
+    wireMemory()
+    await runTurnAndPersist({
+      mode: 'triggered',
+      sessionId: 'run-trigger',
+      userId: 'user-1',
+      agentId: 'search',
+      message: 'synthetic',
+      claimVersion: 'seed-version',
+    })
+    await flush()
+    expect(settleMemory).not.toHaveBeenCalled()
+    expect(saveSession.mock.calls[0][4]).toMatchObject({ memoryRunOrigin: 'triggered' })
+  })
+  it.each(['interactive', 'triggered', null] as const)(
+    'resume preserves %s run origin and settles only interactive',
+    async (origin) => {
+      wireMemory()
+      claimSession.mockResolvedValueOnce({
+        ...claimedPaused(pausedBlob())!,
+        memoryRunOrigin: origin,
+      })
+      loadHitlAnswerRows.mockResolvedValueOnce([answerRow('req-uuid-1', 'approve')])
+      await runTurnAndPersist(resume())
+      await flush()
+      expect(settleMemory).toHaveBeenCalledTimes(origin === 'interactive' ? 1 : 0)
+      expect(saveSession.mock.calls[0][4]).not.toHaveProperty('memoryRunOrigin')
+    },
+  )
+  it('an interactive turn on a promoted action settles and records interactive origin', async () => {
+    wireMemory()
+    claimSession.mockResolvedValueOnce({
+      ...STORED!,
+      kind: 'conversation',
+      memoryRunOrigin: 'triggered',
+    })
+    await runTurnAndPersist(interactive())
+    await flush()
+    expect(settleMemory).toHaveBeenCalledTimes(1)
+    expect(saveSession.mock.calls[0][4]).toMatchObject({ memoryRunOrigin: 'interactive' })
   })
 })

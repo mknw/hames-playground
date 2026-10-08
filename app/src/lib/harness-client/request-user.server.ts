@@ -36,6 +36,8 @@ export interface RequestContext {
    * other users' global skills (`agentDeps()` in `session.server.ts`).
    */
   attended?: boolean
+  /** Captured at this turn's wake start; later polls cannot replace its outcome. */
+  memoryWake?: Promise<'awake' | 'skipped'>
 }
 
 const requestStore = new AsyncLocalStorage<RequestContext>()
@@ -70,4 +72,15 @@ export function getRequestSessionId(): string | null {
  *  False outside a request scope and whenever the scope did not say so. */
 export function isAttendedRequest(): boolean {
   return requestStore.getStore()?.attended === true
+}
+
+/** Bind the already-started poll to this request and its detached continuation. */
+export function setRequestMemoryWake(wake: Promise<'awake' | 'skipped'>): void {
+  const ctx = requestStore.getStore()
+  if (!ctx) throw new Error('Memory wake requires a request scope')
+  ctx.memoryWake = wake
+}
+
+export function getRequestMemoryWake(): Promise<'awake' | 'skipped'> | undefined {
+  return requestStore.getStore()?.memoryWake
 }

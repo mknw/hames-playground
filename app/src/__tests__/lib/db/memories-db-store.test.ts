@@ -788,3 +788,27 @@ describe('F10: the idle-in-transaction backstop is really on the memory connecti
     expect(rows[0]!.v).toBe('5min')
   })
 })
+
+describe('M5c source-derived load repair on real stores', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  it('repairs from owner-scoped committed facts, and never resurrects a memory erased with its conversation', async () => {
+    const { reconcileMemoryReferences } = await import('../../../lib/memory/reconcile.server')
+    const { createContext, serializeContext, deserializeContext } =
+      await import('@hames-ai/harness-patterns/context.server')
+    const a = await conv(ALICE)
+    const b = await conv(ALICE)
+    const mid = await memorySourcedFrom(ALICE, [a, b])
+    const blob = serializeContext(createContext('synthetic reply'))
+    expect(await reconcileMemoryReferences(blob, b, BOB)).toBe(blob)
+    const repaired = await reconcileMemoryReferences(blob, b, ALICE)
+    expect(deserializeContext(repaired).events.filter((e) => e.type === 'memory_written')).toEqual([
+      expect.objectContaining({ data: expect.objectContaining({ memoryId: mid, tier: 'verda' }) }),
+    ])
+    expect(await reconcileMemoryReferences(repaired, b, ALICE)).toBe(repaired)
+    await deleteConversation(a, ALICE)
+    expect(await reconcileMemoryReferences(repaired, b, ALICE)).toBe(repaired)
+    expect(await reconcileMemoryReferences(blob, b, ALICE)).toBe(blob)
+    expect(await memExists(mid)).toBe(false)
+    expect(await sourceCount(mid)).toBe(0)
+  })
+})

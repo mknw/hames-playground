@@ -454,3 +454,49 @@ describe('claimSession', () => {
     await expect(claimSession('s', 'u')).rejects.toThrow(/still running/)
   })
 })
+
+// M5c: a claimed load repairs its own copy, so the next turn persists it at its claim.
+it('claimSession reconciles committed memory sources without changing the claim version', async () => {
+  const repo = await import('../../../lib/db/memories.server')
+  const available = vi.spyOn(repo, 'isMemoryAvailable').mockReturnValue(true)
+  const sources = vi
+    .spyOn(repo, 'listMemorySourcesForConversation')
+    .mockResolvedValue([
+      { eventId: 'source-input', ordinal: 0, memoryId: 'surviving-memory', tier: 'verda' },
+    ])
+  const store = vi.spyOn(repo, 'createMemoryDbStore').mockReturnValue({
+    transaction: async (fn: (tx: never) => Promise<unknown>) =>
+      fn({ read: async () => ({ kind: 'preference' }) } as never),
+  } as never)
+  try {
+    claimConversation.mockResolvedValueOnce({
+      serializedContext: serializeContext(createContext('synthetic reply')),
+      agentId: 'known',
+      kind: 'conversation',
+      status: 'running',
+      version: 'held-version',
+    })
+    const result = await claimSession('claimed-row', 'owner')
+    const { deserializeContext } = await import('@hames-ai/harness-patterns/context.server')
+    expect(result!.version).toBe('held-version')
+    expect(
+      deserializeContext(result!.serializedContext).events.filter(
+        (e) => e.type === 'memory_written',
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({
+          memoryId: 'surviving-memory',
+          eventId: 'source-input',
+          ordinal: 0,
+        }),
+      }),
+    ])
+    expect(sources).toHaveBeenCalledWith('claimed-row', 'owner')
+    expect(saveConversation).not.toHaveBeenCalled()
+  } finally {
+    available.mockRestore()
+    sources.mockRestore()
+    store.mockRestore()
+  }
+})

@@ -249,3 +249,15 @@ describe('#531: the conversation-delete erase, by the SQL it sends', () => {
     expect(ddl).toContain('ALTER TABLE memories ADD COLUMN IF NOT EXISTS evidence_event_id TEXT')
   })
 })
+
+// M5c reconciliation reads source facts, never trusts a blob to restore a row.
+it('reconciliation source rows are scoped to both source and memory owner', async () => {
+  await repo.listMemorySourcesForConversation('conversation-a', 'owner-a')
+  const statement = sent.find((s) => s.sql.includes('JOIN memories m'))!
+  expect(statement.params).toEqual(['conversation-a', 'owner-a'])
+  expect(statement.sql).toContain('s.conversation_id = $1')
+  expect(statement.sql).toContain('s.user_id = $2')
+  expect(statement.sql).toContain('m.user_id = $2')
+  expect(statement.sql).toContain('s.event_id')
+  expect(statement.sql).toContain('s.ordinal')
+})

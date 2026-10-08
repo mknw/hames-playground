@@ -32,7 +32,12 @@ export interface ElementDefinition {
 }
 
 import type { ClientOverride } from '@hames-ai/harness-baml/consumer-clients.server'
-import type { ConfiguredPattern, RetrieverBackend, RetrieverData } from '@hames-ai/harness-patterns'
+import type {
+  ConfiguredPattern,
+  MemoryConfig,
+  RetrieverBackend,
+  RetrieverData,
+} from '@hames-ai/harness-patterns'
 import type { OnToolResult } from '@hames-ai/harness-patterns/types'
 import type { HarnessData } from '@hames-ai/harness-patterns/harness.server'
 import type { RouterData } from '@hames-ai/harness-patterns/patterns/router.server'
@@ -84,6 +89,8 @@ export interface SandboxAttach {
  * members are omitted when a deployment does not compose that capability.
  */
 export interface AgentDeps {
+  /** Optional host memory wiring. An agent opts in explicitly with withMemory. */
+  memory?: MemoryConfig
   /**
    * This deployment's MCP tool→namespace resolver (the app's
    * `app-tools/mcp-catalog.ts`). Passed explicitly — owner ruling B-iii makes

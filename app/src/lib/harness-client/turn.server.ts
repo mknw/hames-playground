@@ -65,6 +65,7 @@ import {
   createEvent,
   HitlAnswerError,
   type ConfiguredPattern,
+  type MemoryConfig,
   type ContextEvent,
   type HarnessResultScoped,
   type HitlDecidedBy,
@@ -81,6 +82,9 @@ import {
   type LoadedSession,
   type SessionData,
 } from './session.server'
+import { startTurnMemory } from '../memory/config.server'
+import { settleMemory } from '@hames-ai/harness-patterns/memory-store.server'
+import { memoryStoreConfig } from '@hames-ai/harness-patterns/patterns/withMemory.server'
 import { runWithRequestContext, isAttendedRequest } from './request-user.server'
 import { canonicalAgentId } from './agent-ids'
 import { amendRunFrame, withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
@@ -378,7 +382,12 @@ async function runOneTurn(
   }, TURN_CLAIM_RENEW_MS)
   renewal.unref?.()
 
-  let ran: { agentId: string; result: HarnessResultScoped<SessionData>; saved: SavedTurn }
+  let ran: {
+    agentId: string
+    result: HarnessResultScoped<SessionData>
+    saved: SavedTurn
+    memory?: MemoryConfig
+  }
   try {
     ran =
       req.mode === 'resume'
@@ -412,7 +421,16 @@ async function runOneTurn(
   // all three scopes, so it keeps them for its whole continuation (the
   // tier scope included: a detached summarization must not silently
   // change provider halfway through a turn).
-  void compactAndSave(req, result, titleWarned, saved)
+  void compactAndSave(
+    req,
+    result,
+    titleWarned,
+    saved,
+    req.mode === 'interactive' ||
+      (req.mode === 'resume' && held.loaded?.memoryRunOrigin === 'interactive')
+      ? ran.memory
+      : undefined,
+  )
   return result
 }
 
@@ -564,7 +582,7 @@ async function runAndSave(
   run: RunFn,
   tier: InferenceTier,
   held: HeldTurn,
-): Promise<{ result: HarnessResultScoped<SessionData>; saved: SavedTurn }> {
+): Promise<{ result: HarnessResultScoped<SessionData>; saved: SavedTurn; memory?: MemoryConfig }> {
   const { sessionId, userId } = req
   try {
     // WAKE THEN RUN. The self-hosted box scales to zero, so on the private tier
@@ -589,6 +607,7 @@ async function runAndSave(
     // `attended` (m8), read from the request scope `runTurnAndPersist` wrote —
     // not a second derivation.
     const patterns = await getOrBuildPatterns(sessionId, agentId)
+    const memory = startTurnMemory(patterns, agentDeps().memory)
     const result = await amendRunFrame(
       { live: req.onEvent, hitl: { attended: isAttendedRequest() } },
       () => run(patterns),
@@ -601,9 +620,10 @@ async function runAndSave(
     const version = await saveSession(sessionId, userId, agentId, result.serialized, {
       version: held.version,
       inferenceTier: tier,
+      memoryRunOrigin: req.mode === 'interactive' ? 'interactive' : 'triggered',
     })
     held.released = true
-    return { result, saved: { version, eventCount: result.context.events.length } }
+    return { result, memory, saved: { version, eventCount: result.context.events.length } }
   } catch (err) {
     console.error(`[turn] run failed for ${sessionId}:`, err)
     held.released = true
@@ -813,7 +833,12 @@ async function runResumeAndSave(
   req: Extract<TurnRequest, { mode: 'resume' }>,
   tier: InferenceTier,
   held: HeldTurn,
-): Promise<{ agentId: string; result: HarnessResultScoped<SessionData>; saved: SavedTurn }> {
+): Promise<{
+  agentId: string
+  result: HarnessResultScoped<SessionData>
+  saved: SavedTurn
+  memory?: MemoryConfig
+}> {
   const { sessionId, userId } = req
   // `claimTurn` refuses a resume that loads no session, so this is never null
   // here; the assertion keeps the type honest without a cast.
@@ -861,6 +886,7 @@ async function runResumeAndSave(
     // call, so it must not pay a cold start either.
     if (tier === 'verda' && !plan.stopOnly) await ensureVerdaAwake()
     const patterns = await getOrBuildPatterns(sessionId, loaded.agentId)
+    const memory = !plan.stopOnly ? startTurnMemory(patterns, agentDeps().memory) : undefined
     const result = await amendRunFrame(
       { live: req.onEvent, hitl: { attended: isAttendedRequest() } },
       () =>
@@ -890,6 +916,7 @@ async function runResumeAndSave(
     return {
       agentId: loaded.agentId,
       result,
+      memory,
       saved: { version, eventCount: result.context.events.length },
     }
   } catch (err) {
@@ -1008,7 +1035,14 @@ async function compactAndSave(
   result: HarnessResultScoped<SessionData>,
   mustPersist: boolean,
   saved: SavedTurn,
+  memory?: MemoryConfig,
 ): Promise<void> {
+  const before = result.context.events.length
+  if (memory) {
+    // The row id claimTurn created/claimed, never core's fresh context id.
+    await settleMemory(result.context, memoryStoreConfig(memory), { conversationId: req.sessionId })
+  }
+  mustPersist ||= result.context.events.length !== before
   let persisted = false
   const persist = async (): Promise<void> => {
     persisted = true

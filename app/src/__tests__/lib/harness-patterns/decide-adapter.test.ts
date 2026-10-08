@@ -287,9 +287,11 @@ describe('refusals', () => {
     serve = fixture('llamacpp-confident').response
     const labels = Array.from({ length: 20 }, (_, i) => ({ id: `l${i}`, description: `d${i}` }))
     const decide = await adapter()
-    const r = await onPrivateTier(() =>
+    const call = onPrivateTier(() =>
       decide({ spec: { key: 'k', question: 'q', labels }, state: 's' }),
     )
+    await expect(call).resolves.toBeDefined()
+    const r = await call
     expect(Object.keys(r.probs)).toHaveLength(20)
   })
 })
@@ -549,7 +551,7 @@ describe('S3 lettered specs', () => {
         },
       },
       async () => {
-        expect(fn.supportedTypes).toEqual([])
+        expect(fn.supportedTypes).toEqual(['choice'])
         await expect(fn({ spec: noul, state: 'synthetic' })).rejects.toThrow(
           /private inference tier/,
         )

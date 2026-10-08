@@ -10,6 +10,8 @@ ADAPTER = Path('../packages/harness-baml/baml-adapters.server.ts')
 LOGPROB = 'src/__tests__/lib/harness-patterns/decide-adapter.test.ts'
 VERBALIZED = 'src/__tests__/lib/harness-patterns/decide-verbalized.test.ts'
 CASES = [
+    ('unwired-reports-nothing', 'if (!wired) return CHOICE_DECISION_TYPES', 'if (!wired) return []', [LOGPROB, VERBALIZED], 'supported-types-same-resolver|score/noul tier lock'),
+    ('verbalized-choice-cap', "const cap = spec.type === 'score' ? MAX_SCORE_LEVELS : MAX_DECISION_LABELS", 'const cap = MAX_SCORE_LEVELS', [VERBALIZED], 'accepts exactly MAX_DECISION_LABELS', 2),
     ('score-order-preserved', 'return spec.levels', 'return [...spec.levels].reverse()', [LOGPROB, VERBALIZED], 'score-order-preserved'),
     ('noul-letter-mapping',
      """        { id: 'true', description: spec.criteria?.true ?? 'Yes — the statement holds' },

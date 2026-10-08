@@ -1994,8 +1994,7 @@ its pure scorer to record the fallback with null raw readouts. Transport support
 the same `selectDecideTransport` / `resolveClientForRole('decide')` selection
 used by the call. The logprob transport supports choice, score and noul. Jev
 reports its own support (choice-only until S4). An injected secondary reports
-its declared support; absent means choice-only. A locked or unwired transport
-reports no supported types. This keeps the pre-call refusal truthful when a
+its declared support; absent means choice-only. A locked or unwired transport reports choice only, the documented absent default: a choice call still reaches that route's own refusal and abstains as the truthful `error`, and score or noul is refused before any request. This keeps the pre-call refusal truthful when a
 run frame or consumer overrides the tier's client (SD-12).
 
 Both BAML lettered transports map a score's level at index i to letter A+i,

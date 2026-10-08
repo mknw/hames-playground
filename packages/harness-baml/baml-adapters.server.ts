@@ -1874,7 +1874,7 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
 
   const supportedTypes = (): readonly DecisionType[] => {
     const { transport, wired } = selectDecideTransport()
-    if (!wired) return []
+    if (!wired) return CHOICE_DECISION_TYPES
     if (transport === 'logprob') return LETTER_DECISION_TYPES
     if (transport === 'jev')
       return createJevTransport().decide.supportedTypes ?? CHOICE_DECISION_TYPES

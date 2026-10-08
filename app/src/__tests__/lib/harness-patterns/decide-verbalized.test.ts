@@ -176,6 +176,25 @@ describe('the transport, as served by a client an operator named', () => {
     ).rejects.toThrow(/takes 2\.\./)
     expect(hits).toHaveLength(0)
   })
+
+  it('accepts exactly MAX_DECISION_LABELS (20) choice labels', async () => {
+    await nameByoClient()
+    const { MAX_DECISION_LABELS } = await import('@hames-ai/harness-patterns/types')
+    const labels = Array.from({ length: MAX_DECISION_LABELS }, (_, i) => ({
+      id: `l${i}`,
+      description: `label ${i}`,
+    }))
+    content = JSON.stringify(
+      labels.map((_, i) => ({
+        letter: String.fromCharCode(65 + i),
+        probability: 1 / labels.length,
+      })),
+    )
+    const call = (await verbalized())({ spec: { ...SPEC, labels } as never, state: 's' })
+    await expect(call).resolves.toBeDefined()
+    const r = await call
+    expect(Object.keys(r.probs)).toHaveLength(MAX_DECISION_LABELS)
+  })
 })
 
 describe('verbalizedProbabilities (pure) — fails closed like the Jev transport (#511 R3)', () => {
@@ -440,7 +459,7 @@ describe('S3 verbalized specs', () => {
     const secondary = await verbalized()
     const fn = createDecideAdapter({ verbalized: secondary })
     await onPrivateTier(async () => {
-      expect(fn.supportedTypes).toEqual([]) // consumer override selects the public secondary
+      expect(fn.supportedTypes).toEqual(['choice']) // locked: choice only, and the call itself refuses
       for (const spec of [score, noul]) {
         await expect(secondary({ spec, state: 'synthetic' })).rejects.toThrow(
           /outside the Anthropic tier/,

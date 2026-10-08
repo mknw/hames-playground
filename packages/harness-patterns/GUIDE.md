@@ -132,6 +132,57 @@ hold, `evaluateDecision(call)` is it with no scope at all, and
 `decideFields(scope, { decide, set, state, policy })` answers several typed
 fields over one state, one `decision_made` per field.
 
+The declarations `defineChoice`, `defineScore` and `defineNoul` infer ids from
+literal options. They make no call; choice and score constructors check the
+option count and unique ids. Score levels run low → high and must number 2–10,
+matching [TypeSafe's score definition](https://docs.typesafe.ai/primitives/score).
+A noul is the probability that one statement is true.
+
+| You want to know…                                                     | Type     | Verdict to act on                |
+| --------------------------------------------------------------------- | -------- | -------------------------------- |
+| whether one condition holds (one per condition when several may hold) | `noul`   | `d.holds`                        |
+| which one of several unordered options applies                        | `choice` | `d.label`                        |
+| how much of one ordered quality is present                            | `score`  | `d.level` or its index `d.value` |
+
+A yes/no written as a two-label choice still works; noul is the idiom and is a
+different Jev question type. A degree written as a choice loses its ordering:
+choice confidence treats adjacent and distant alternatives alike. Two dimensions
+in one score cannot be placed on one scale; split them. These distinctions follow
+[TypeSafe's primitive guidance](https://docs.typesafe.ai/introduction/coding-agents)
+and its [published skill](https://raw.githubusercontent.com/typesafe-ai/skills/main/skills/typesafe-ai/SKILL.md),
+read as documentation, not installed.
+
+```typescript
+import { defineScore, defineNoul, readDecision } from '@hames-ai/harness-patterns'
+import type { TypedDecisionData } from '@hames-ai/harness-patterns'
+
+const URGENCY = defineScore({
+  key: 'ticket.urgency',
+  question: 'How urgently does this message need a reply?',
+  levels: [
+    { id: 'can_wait', description: 'Nothing is blocked; a reply next week is fine.' },
+    { id: 'soon', description: 'Someone is waiting, but their work continues.' },
+    { id: 'now', description: 'Work is blocked until someone replies.' },
+  ],
+})
+const WANTS_HUMAN = defineNoul({
+  key: 'support.wants_human',
+  question: 'The user is asking to talk to a person.',
+})
+declare const data: TypedDecisionData
+const urgency = readDecision(data, URGENCY) // level: 'can_wait' | 'soon' | 'now'
+const wantsHuman = readDecision(data, WANTS_HUMAN) // holds: boolean
+```
+
+Score `expected` and noul `pTrue` are raw readouts, preserved when policy
+abstains. Act on the verdict; a consumer that thresholds the raw mean must also
+check `!abstained`. Score's verdict is the mode, with ties broken low → high,
+not a rounded mean: a bimodal distribution can average to a level it never
+supports. Confidence measures concentration, not permission to act, as
+[TypeSafe explains](https://docs.typesafe.ai/confidence).
+
+In this release you can declare score and noul specs, score a distribution with them and read the verdict back. `typedDecision`, `decide`, `evaluateDecision`, `decideFields` and every shipped transport still accept choice specs only, and a transport that does not list a type in `supportedTypes` is never asked it.
+
 `decisionRouter` is `router()`'s sibling built on it: the routes are the
 labels, the verdict becomes `data.route`, and `policy.fallback` names the route
 taken when the decision abstains. Put `compactIntent` in front (it writes the
@@ -154,12 +205,28 @@ declare const chain: ConfiguredPattern<AgentData>[] // the host's router, routes
 declare const ctx: UnifiedContext<AgentData>
 declare const conversationId: string
 
-const patterns = withMemory<AgentData>(deps.memory)(chain)
+const patterns = withMemory<AgentData>({ ...deps.memory, routerMemory: 'replies-only' })(chain)
 // after the reply, from the host's compactAndSave continuation:
 await settleMemory(ctx, memoryStoreConfig(deps.memory), { conversationId })
 ```
 
-`enabled` is required, and both halves read the same function.
+`enabled` is required, and both halves read the same function. Settle re-reads it inside every candidate transaction after the owner lock; false rolls the candidate back and reports `skipped: 'disabled'`. **M7 precondition (#552):** the "turn off" and "forget all" RPCs must commit the switch-off (`user_prefs.memory_enabled = false`) in its own transaction BEFORE calling the erase (`deleteAllMemoriesForUser`). An uncommitted flip is invisible to a candidate on another connection; do not wrap the erase in the flip transaction. Any erase rejection (`55P03`, a memory-pool connect timeout or `40P01`) means "not erased": leave the switch off and report the retryable failure, never success. Later writers, including M3 compaction, must re-read the switch and their inputs inside the owner-lock transaction. Forget-all must use the memory pool, the same owner advisory transaction lock and lock timeout; propagate `55P03` as a retryable failure, never success.
+
+Choose `routerMemory` on this wiring: `'routing-and-replies'` is the default and
+preserves existing calls. The router sees recalled memory and may put it into
+`intent`: a tool route's task can carry facts from earlier conversations into tool
+arguments, for example a web-search query or a fetch, even with private model
+inference. `'replies-only'`, shown above, withholds the recalled block from every
+router, including nested routers, while `compactExecution` / `synthesize` still
+receive it for reply writing. Direct conversational router replies have no memory
+and still skip synthesis. It is a per-turn boundary, not a guarantee that remembered facts never reach a tool: a fact the reply states becomes conversation history, and on a later turn the router sees that history and may put the fact into `intent`, and so into tool arguments (#548). Unknown values throw at construction. The exported
+`RouterMemory` union names both choices; no extra router configuration is needed.
+Controllers and the planner get no direct memory block; with the default they can
+receive its facts indirectly through intent (#419 D13 / decision 6, amended by
+#535). This setting controls the current recalled block; it does not remove facts
+from user text or previous replies in ordinary conversation history, or constrain
+custom patterns that explicitly read the memory data bag. Option (b), direct
+answers with memory but no copying into intent or route, is deferred (#544).
 
 Gate the post-reply call on `harnessUsesMemory(patterns)`, the same probe that gates the memory wake, so an agent that did not opt in stores nothing. **Await `settleMemory`, then save the context**: the `memory_written` events it records ride that one save. It never throws and it fails closed: an abstained, uncalibrated or sensitive read, a confirmation your host cannot yet ask, an organisational-graph target or a failed wake all store nothing and say why. Recall never throws either and never stops what follows it; its block is cleared on every turn. Your `MemoryWriteStore.transaction(fn)` must open one transaction, take the owner's advisory lock inside it, and **roll back and rethrow if `fn` throws**: that rollback is what makes a retry a no-op. See SPEC's [Memory recall](SPEC.md#memory-recall-memoryrecall-419) and [Memory store](SPEC.md#memory-store-settlememory-419).
 

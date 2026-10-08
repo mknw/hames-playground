@@ -788,3 +788,123 @@ describe('F10: the idle-in-transaction backstop is really on the memory connecti
     expect(rows[0]!.v).toBe('5min')
   })
 })
+
+describe('M5c source-derived load repair on real stores', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  it('repairs from owner-scoped committed facts, and never resurrects a memory erased with its conversation', async () => {
+    const { reconcileMemoryReferences } = await import('../../../lib/memory/reconcile.server')
+    const { createContext, serializeContext, deserializeContext } =
+      await import('@hames-ai/harness-patterns/context.server')
+    const a = await conv(ALICE)
+    const b = await conv(ALICE)
+    const mid = await memorySourcedFrom(ALICE, [a, b])
+    const blob = serializeContext(createContext('synthetic reply'))
+    expect(await reconcileMemoryReferences(blob, b, BOB)).toBe(blob)
+    const repaired = await reconcileMemoryReferences(blob, b, ALICE)
+    expect(deserializeContext(repaired).events.filter((e) => e.type === 'memory_written')).toEqual([
+      expect.objectContaining({ data: expect.objectContaining({ memoryId: mid, tier: 'verda' }) }),
+    ])
+    expect(await reconcileMemoryReferences(repaired, b, ALICE)).toBe(repaired)
+    await deleteConversation(a, ALICE)
+    expect(await reconcileMemoryReferences(repaired, b, ALICE)).toBe(repaired)
+    expect(await reconcileMemoryReferences(blob, b, ALICE)).toBe(blob)
+    expect(await memExists(mid)).toBe(false)
+    expect(await sourceCount(mid)).toBe(0)
+  })
+})
+
+// #552 — real Postgres races, never a mocked SQL client.
+describe('#552: forget-all shares the candidate owner lock', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
+  it('forget-all racing an open candidate transaction leaves zero rows (mutation: remove erase lock)', async () => {
+    await deleteAllMemoriesForUser(ALICE)
+    const cid = await conv(ALICE)
+    let inserted!: () => void
+    let release!: () => void
+    const open = new Promise<void>((r) => {
+      inserted = r
+    })
+    const held = new Promise<void>((r) => {
+      release = r
+    })
+    const mid = id('race-memory')
+    const candidate = createMemoryDbStore(ALICE).transaction(async (tx) => {
+      await tx.insert({
+        id: mid,
+        kind: 'preference',
+        tier: 'verda',
+        content: 'The user prefers metric units.',
+        evidence: 'I prefer metric units',
+        evidenceEventId: id('evidence'),
+        embedding: axis(0),
+        embedSpace: SPACE,
+      })
+      await tx.addSource({ memoryId: mid, eventId: id('event'), ordinal: 0, conversationId: cid })
+      inserted()
+      await held
+    })
+    await open
+    let settled = false
+    const erase = deleteAllMemoriesForUser(ALICE).finally(() => {
+      settled = true
+    })
+    // Observe the actual lock wait, or an early erase completion under the red
+    // mutation. No timing assumption about how quickly DELETE gets scheduled.
+    let waiting = false
+    try {
+      const deadline = Date.now() + 2000
+      while (!settled && !waiting && Date.now() < deadline) {
+        const { rows } = await query<{ waiting: boolean }>(
+          `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+            WHERE application_name = $1 AND wait_event = 'advisory') AS waiting`,
+          [MEMORY_POOL_APPLICATION_NAME],
+        )
+        waiting = rows[0]!.waiting
+        if (!waiting && !settled) await new Promise((r) => setTimeout(r, 10))
+      }
+    } finally {
+      release()
+    }
+    await candidate
+    await erase
+    expect(await listMemoriesForUser(ALICE)).toEqual([])
+    expect(await sourceCount(mid)).toBe(0)
+    expect(waiting).toBe(true)
+  })
+
+  it(
+    '55P03 reaches the forget-all caller as retryable failure, never success',
+    async () => {
+      await deleteAllMemoriesForUser(ALICE)
+      const mid = await memorySourcedFrom(ALICE, [await conv(ALICE)])
+      let entered!: () => void
+      let release!: () => void
+      const open = new Promise<void>((r) => {
+        entered = r
+      })
+      const held = new Promise<void>((r) => {
+        release = r
+      })
+      const candidate = createMemoryDbStore(ALICE).transaction(async () => {
+        entered()
+        await held
+      })
+      await open
+      try {
+        // Mutation: catch 55P03 and return 0 (or remove the owner lock).
+        const error = await deleteAllMemoriesForUser(ALICE).then(
+          () => null,
+          (err: unknown) => err,
+        )
+        expect(error).toMatchObject({ code: '55P03' })
+        expect(isMemoryLockTimeout(error)).toBe(true)
+        expect(await memExists(mid)).toBe(true)
+      } finally {
+        release()
+        await candidate
+      }
+    },
+    MEMORY_LOCK_TIMEOUT_MS + 5000,
+  )
+})

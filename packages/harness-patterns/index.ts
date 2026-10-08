@@ -91,6 +91,18 @@ export type {
   // Decisions (#418)
   DecisionLabel,
   DecisionSpec,
+  DecisionType,
+  ScoreSpec,
+  NoulSpec,
+  AnyDecisionSpec,
+  ChoiceDecision,
+  ScoreDecision,
+  NoulDecision,
+  AnyDecision,
+  DecisionFor,
+  ScorePolicy,
+  NoulPolicy,
+  PolicyFor,
   DecisionSetSpec,
   DecisionMethod,
   AbstainReason,
@@ -139,7 +151,7 @@ export type {
 } from './types'
 
 export { DEFAULT_TRACK_HISTORY, DEFAULT_COMMIT_STRATEGY, DEFAULT_ERROR_SEVERITY } from './types'
-export { MAX_DECISION_LABELS } from './types'
+export { MAX_DECISION_LABELS, MAX_SCORE_LEVELS } from './types'
 
 // The LLM call envelope's error class is a runtime value (instanceof checks in
 // the patterns) — exported from the barrel for the first time in Lane A3.
@@ -325,6 +337,7 @@ export {
   withMemory,
   memoryStoreConfig,
   type MemoryConfig,
+  type RouterMemory,
 } from './patterns'
 
 // Memory store (#419 M2): the post-reply step and its pure acceptance rules. A
@@ -366,6 +379,10 @@ export {
 // Decisions (#418): the user-facing half of the typedDecision seam. The pure
 // scoring helpers (`scoreDecision`, `sumLabelMass`, …) stay on './patterns'.
 export {
+  defineChoice,
+  defineScore,
+  defineNoul,
+  readDecision,
   typedDecision,
   decisionRouter,
   decide,

@@ -599,7 +599,12 @@ function formatEventData(event: ContextEvent): string {
       // Pinned by decision-state-sentinel.
       const data = event.data as DecisionMadeEventData
       const pMax = Math.max(0, ...Object.values(data.probs ?? {}))
-      const head = `${data.key}: ${data.label} (p=${pMax.toFixed(3)}, margin=${data.margin.toFixed(3)})`
+      const head =
+        data.type === 'score'
+          ? `${data.key}: ${data.label} (E=${data.expected?.toFixed(2) ?? 'unknown'})`
+          : data.type === 'noul'
+            ? `${data.key}: ${data.label} (p=${data.pTrue?.toFixed(2) ?? 'unknown'})`
+            : `${data.key}: ${data.label} (p=${pMax.toFixed(3)}, margin=${data.margin.toFixed(3)})`
       return data.abstained ? `${head} | abstained: ${data.reason ?? 'unknown'}` : head
     }
     case 'memory_recalled': {
@@ -613,7 +618,7 @@ function formatEventData(event: ContextEvent): string {
     }
     case 'memory_written': {
       // METADATA ONLY — never a memory's content (#419 M2). Ids, kind, tier and
-      // a hash; the explicit case keeps a field added later out of the JSON
+      // action; the explicit case keeps a field added later out of the JSON
       // dump below, which every LLM-facing serialization runs.
       const data = event.data as MemoryWrittenEventData
       return `memory ${data.action}: ${data.kind}`

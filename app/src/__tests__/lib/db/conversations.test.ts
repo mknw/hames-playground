@@ -1466,3 +1466,30 @@ describe('conversation pinning', () => {
     expect((await listConversations(user)).find((r) => r.id === id)!.pinnedAt).not.toBeNull()
   })
 })
+
+describe('M5c lifted memory run origin', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  it('is nullable, changes with a new interactive run, and survives a resume save', async () => {
+    const input = {
+      id: `origin-${TEST_USER}`,
+      userId: TEST_USER,
+      agentId: 'search',
+      title: null,
+      serializedContext: '{"events":[]}',
+    }
+    await seedRow(input)
+    expect((await loadConversation(input.id, TEST_USER))!.memoryRunOrigin).toBeNull()
+    await saveTurn({ ...input, memoryRunOrigin: 'triggered' })
+    expect((await loadConversation(input.id, TEST_USER))!.memoryRunOrigin).toBe('triggered')
+    await saveTurn(input) // a resume supplies no new origin
+    expect((await loadConversation(input.id, TEST_USER))!.memoryRunOrigin).toBe('triggered')
+    await saveTurn({ ...input, memoryRunOrigin: 'interactive' })
+    expect((await loadConversation(input.id, TEST_USER))!.memoryRunOrigin).toBe('interactive')
+    await saveTurn(input)
+    expect((await loadConversation(input.id, TEST_USER))!.memoryRunOrigin).toBe('interactive')
+    await expect(
+      saveConversation({ ...input, status: 'done', version: '0', memoryRunOrigin: 'triggered' }),
+    ).rejects.toBeInstanceOf(ConversationConflictError)
+    expect((await loadConversation(input.id, TEST_USER))!.memoryRunOrigin).toBe('interactive')
+  })
+})

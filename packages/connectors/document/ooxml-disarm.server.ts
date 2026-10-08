@@ -444,6 +444,8 @@ class Package {
   private readonly files = new Map<string, ZipEntry>()
   private readonly overrides = new Map<string, string>()
   private readonly defaults = new Map<string, string>()
+  private readonly relationships = new Map<string, RawRel[]>()
+  private readonly internalByType = new Map<string, Map<string, RawRel>>()
 
   constructor(readonly entries: readonly ZipEntry[]) {
     for (const e of entries) if (!e.directory) this.files.set(fold(e.name), e)
@@ -482,21 +484,34 @@ class Package {
 
   /** A part's relationships; `''` is the package's own. */
   relsOf(source: string): RawRel[] {
+    const key = fold(source)
+    const hit = this.relationships.get(key)
+    if (hit !== undefined) return hit
     const entry = this.get(relsPartName(source))
-    if (!entry) return []
     const rels: RawRel[] = []
     const ids = new Set<string>()
-    scanPackagePart(entry, { ns: NS.rels, name: 'Relationships' }, 'Relationship', (a) => {
-      const id = attrOf(a, 'Id')
-      const type = attrOf(a, 'Type')
-      const target = attrOf(a, 'Target')
-      if (id === undefined || type === undefined || target === undefined) return
-      if (ids.has(id)) refuse('content-type', 'two relationships share one Id')
-      ids.add(id)
-      const mode = attrOf(a, 'TargetMode')
-      rels.push({ id, type, target, external: mode !== undefined && mode !== 'Internal' })
-    })
+    if (entry)
+      scanPackagePart(entry, { ns: NS.rels, name: 'Relationships' }, 'Relationship', (a) => {
+        const id = attrOf(a, 'Id')
+        const type = attrOf(a, 'Type')
+        const target = attrOf(a, 'Target')
+        if (id === undefined || type === undefined || target === undefined) return
+        if (ids.has(id)) refuse('content-type', 'two relationships share one Id')
+        ids.add(id)
+        const mode = attrOf(a, 'TargetMode')
+        rels.push({ id, type, target, external: mode !== undefined && mode !== 'Internal' })
+      })
+    const byType = new Map<string, RawRel>()
+    for (const rel of rels) if (!rel.external && !byType.has(rel.type)) byType.set(rel.type, rel)
+    this.relationships.set(key, rels)
+    this.internalByType.set(key, byType)
     return rels
+  }
+
+  /** First internal edge of the exact type, in the validated document order. */
+  firstInternal(source: string, type: string): RawRel | undefined {
+    this.relsOf(source)
+    return this.internalByType.get(fold(source))?.get(type)
   }
 }
 
@@ -606,6 +621,7 @@ function disarm(
     return part
   }
   const reasons = new Map<string, string>()
+  const visibility = new Map<ZipEntry, boolean>()
   keep(mainEntry, family.mainRole, mainType)
 
   // Which worksheets and slides the main part shows: only through the list
@@ -653,7 +669,15 @@ function disarm(
         }
       }
       if (part.role === 'slidesMain' && role === 'slide') {
-        if (!listedSlides.has(rel.id) || !slideShown(entry)) {
+        let shown: boolean | undefined
+        if (listedSlides.has(rel.id)) {
+          shown = visibility.get(entry)
+          if (shown === undefined) {
+            shown = slideShown(entry)
+            visibility.set(entry, shown)
+          }
+        }
+        if (shown !== true) {
           reasons.set(key, 'hiddenSlides')
           continue
         }
@@ -685,6 +709,8 @@ function disarm(
     noteRefs: new Set(),
     slideStyle: new Map(),
     styleParts: new Map(),
+    styleEdges: new Map(),
+    syntax: { levels: new Map(), fills: new Map(), colours: new Map(), backgrounds: new Map() },
   }
   const out = new Map<KeptPart, string>()
   const first: Role[] = ['theme', 'wordStyles', 'sheetStyles', 'sharedStrings']
@@ -715,6 +741,8 @@ function disarm(
       role: part.role,
       keptIds: new Set(part.rels.map((r) => r.id)),
       part: part.name,
+      // Fresh per PART, never per document, layout or master: see `LevelMemo` (#524).
+      levelMemo: { levels: new Map(), fills: new Map(), placeholders: new Map() },
     })
     if (part.role === 'theme') {
       const theme = readTheme(rewritten)
@@ -974,6 +1002,9 @@ interface Shared {
   readonly slideStyle: Map<string, SlideInheritance>
   /** Parsed read-for-resolution style parts, by part name (never emitted). */
   readonly styleParts: Map<string, SlidesStylePart>
+  readonly styleEdges: Map<string, Map<string, StyleEdge>>
+  /** Neutral syntax, by immutable element identity, shared by the document. */
+  readonly syntax: DrawingSyntax
   /** The theme's fill schemes, as written (#492: `fillRef`/`bgRef` resolution). */
   fmtFillEls?: readonly XmlElement[]
   fmtBgFillEls?: readonly XmlElement[]
@@ -985,6 +1016,8 @@ interface Ctx extends Shared {
   readonly keptIds: ReadonlySet<string>
   /** This part's name, so a slide can fetch its inheritance (#492). */
   readonly part: string
+  /** The text-property levels this part's runs share, evaluated once (#524). */
+  readonly levelMemo: LevelMemo
 }
 
 interface Scope {
@@ -1033,8 +1066,10 @@ interface Fields {
   readonly all: FieldStack
 }
 
-const childEl = (el: XmlElement | undefined, ns: string, name: string): XmlElement | undefined =>
-  el ? elements(el).find((c) => is(c, ns, name)) : undefined
+function childEl(el: XmlElement | undefined, ns: string, name: string): XmlElement | undefined {
+  for (const c of el?.children ?? []) if (typeof c !== 'string' && is(c, ns, name)) return c
+  return undefined
+}
 
 /** Every match, not the first: a property given twice is ambiguous, so each one is read. */
 const childEls = (el: XmlElement, ns: string, name: string): XmlElement[] =>
@@ -1242,13 +1277,13 @@ function visit(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[] {
     // The shape: its placeholder, and the fill its text sits on — its own,
     // else its `p:style/a:fillRef` through the theme's fill scheme (#492).
     const s: Scheme = { theme: ctx.theme, clrMap: slideInheritanceOf(ctx).clrMap }
-    let fill = drawingFill(childEl(el, NS.p, 'spPr'), s)
+    let fill = drawingFill(childEl(el, NS.p, 'spPr'), s, ctx.syntax)
     if (fill.kind === 'absent') {
       const fillRef = childEl(childEl(el, NS.p, 'style'), NS.a, 'fillRef')
       const idx = int(attrOf(fillRef?.attributes ?? [], 'idx')) ?? 0
       // idx 0 applies no fill style: the placeholder's inherited fill shows (LibreOffice
       // assigns nothing for it, theme.cxx `lclGetStyleElement`), so it is no fill of its own.
-      fill = fillRef && idx > 0 ? refFill(ctx.fmtFillEls, idx, fillRef, s) : FILL_ABSENT
+      fill = fillRef && idx > 0 ? refFill(ctx.fmtFillEls, idx, fillRef, s, ctx.syntax) : FILL_ABSENT
     }
     inner = {
       ...scope,
@@ -1262,7 +1297,7 @@ function visit(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[] {
     // A docx text box: its fill is a background behind the run, over the
     // paragraph shading and the table shading beneath it (#495 F5).
     const s: Scheme = { theme: ctx.theme }
-    const fill = drawingFill(childEl(el, WPS, 'spPr'), s)
+    const fill = drawingFill(childEl(el, WPS, 'spPr'), s, ctx.syntax)
     if (fill.kind !== 'absent' && fill.kind !== 'none') {
       const bg = bgColours(fill)
       inner = { ...scope, boxBg: { unknown: bg.unknown, colours: bg.colours ?? [] } }
@@ -1270,12 +1305,12 @@ function visit(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[] {
   } else if (is(el, NS.a, 'tbl')) {
     // A DrawingML table: its own fill stands behind every cell (#495 F3).
     const s: Scheme = { theme: ctx.theme, clrMap: slideInheritanceOf(ctx).clrMap }
-    const fill = drawingFill(childEl(el, NS.a, 'tblPr'), s)
+    const fill = drawingFill(childEl(el, NS.a, 'tblPr'), s, ctx.syntax)
     inner = { ...scope, tblFill: fill.kind === 'absent' ? undefined : fill }
   } else if (is(el, NS.a, 'tc')) {
     // A cell's own fill covers the table's (#495 F3).
     const s: Scheme = { theme: ctx.theme, clrMap: slideInheritanceOf(ctx).clrMap }
-    const fill = drawingFill(childEl(el, NS.a, 'tcPr'), s)
+    const fill = drawingFill(childEl(el, NS.a, 'tcPr'), s, ctx.syntax)
     if (fill.kind !== 'absent') inner = { ...scope, tblFill: fill }
   } else if (is(el, NS.p, 'txBody')) {
     const levels = lstLevels(childEl(el, NS.a, 'lstStyle'))
@@ -2268,82 +2303,179 @@ const pct = (v: string | undefined): number | undefined => {
   return Number.isFinite(n) ? n / 100000 : undefined
 }
 
-/** One DrawingML colour element, with its transforms, resolved to RGB. */
-function drawingClr(el: XmlElement | undefined, s: Scheme): DClr {
-  if (!el) return { unknown: true }
-  let rgb: string | undefined
-  if (is(el, NS.a, 'srgbClr')) rgb = hex6(attrOf(el.attributes, 'val'))
-  else if (is(el, NS.a, 'schemeClr')) {
-    const name = attrOf(el.attributes, 'val')?.toLowerCase()
-    if (name === undefined) return { unknown: true }
-    if (name === 'phclr') {
+/** Neutral descriptors contain syntax only; no slide colour map or caller phClr. */
+interface ColourSyntax {
+  readonly kind: 'rgb' | 'scheme' | 'unknown'
+  readonly value?: string
+  readonly transforms: readonly { readonly name: string; readonly value: number }[]
+}
+
+type FillSyntax =
+  | { readonly kind: 'absent' | 'none' | 'unknown' }
+  | { readonly kind: 'solid'; readonly clr: ColourSyntax }
+  | { readonly kind: 'grad'; readonly stops: readonly ColourSyntax[] }
+  | { readonly kind: 'pattern'; readonly fg: ColourSyntax; readonly bg: ColourSyntax }
+
+interface LevelSyntax {
+  readonly unknown: ReadonlySet<string>
+  readonly size?: number
+  readonly baselineScale?: number
+  readonly fill: FillSyntax
+  readonly highlight?: ColourSyntax
+}
+
+type BackgroundSyntax =
+  | { readonly kind: 'fill'; readonly fill: FillSyntax }
+  | { readonly kind: 'ref'; readonly idx: number; readonly colour?: ColourSyntax }
+
+interface DrawingSyntax {
+  readonly colours: Map<XmlElement, ColourSyntax>
+  readonly fills: Map<XmlElement, FillSyntax>
+  readonly levels: Map<XmlElement, LevelSyntax>
+  readonly backgrounds: Map<XmlElement, BackgroundSyntax>
+}
+
+// #536 entry E's owner policy: excess syntax is unknown, never a resolved colour.
+// This is separate from a document work budget (#543) and benign-corpus calibration (#523).
+const COLOUR_TRANSFORMS_MAX = 16
+const GRAD_STOPS_MAX = 10
+const COLOUR_UNKNOWN: ColourSyntax = { kind: 'unknown', transforms: [] }
+
+/** First element, without materialising siblings that no resolver reads. */
+function firstElement(el: XmlElement | undefined): XmlElement | undefined {
+  for (const c of el?.children ?? []) if (typeof c !== 'string') return c
+  return undefined
+}
+
+function compileColour(el: XmlElement | undefined, syntax?: DrawingSyntax): ColourSyntax {
+  if (el === undefined) return COLOUR_UNKNOWN
+  const hit = syntax?.colours.get(el)
+  if (hit !== undefined) return hit
+  const compile = (): ColourSyntax => {
+    // Collect only up to the first excess transform, before parsing or applying any.
+    const children: XmlElement[] = []
+    for (const c of el.children) {
+      if (typeof c === 'string') continue
+      children.push(c)
+      if (children.length > COLOUR_TRANSFORMS_MAX) return COLOUR_UNKNOWN
+    }
+    let kind: ColourSyntax['kind'] = 'rgb'
+    let value: string | undefined
+    if (is(el, NS.a, 'srgbClr')) value = hex6(attrOf(el.attributes, 'val'))
+    else if (is(el, NS.a, 'schemeClr')) {
+      kind = 'scheme'
+      value = attrOf(el.attributes, 'val')?.toLowerCase()
+    } else if (is(el, NS.a, 'sysClr')) {
+      value =
+        hex6(attrOf(el.attributes, 'lastClr')) ??
+        (attrOf(el.attributes, 'val') === 'window' ? 'FFFFFF' : undefined)
+    }
+    if (value === undefined) return COLOUR_UNKNOWN
+    const transforms: { name: string; value: number }[] = []
+    for (const t of children) {
+      if (
+        t.ns !== NS.a ||
+        !['alpha', 'tint', 'shade', 'lumMod', 'lumOff', 'satMod'].includes(t.name)
+      )
+        return COLOUR_UNKNOWN
+      const v = pct(attrOf(t.attributes, 'val'))
+      if (v === undefined) return COLOUR_UNKNOWN
+      transforms.push({ name: t.name, value: v })
+    }
+    return { kind, value, transforms }
+  }
+  const result = compile()
+  syntax?.colours.set(el, result)
+  return result
+}
+
+function resolveColour(c: ColourSyntax, s: Scheme): DClr {
+  if (c.kind === 'unknown') return { unknown: true }
+  let rgb = c.value
+  if (c.kind === 'scheme') {
+    if (c.value === 'phclr') {
       const ph = s.phClr
       if (ph === undefined) return { unknown: true }
       if (ph.rgb === undefined) return { transparent: ph.transparent, unknown: ph.unknown }
       rgb = ph.rgb
     } else {
-      const slot = s.clrMap?.get(name) ?? SCHEME_DEFAULT[name]
+      const slot = s.clrMap?.get(c.value!) ?? SCHEME_DEFAULT[c.value!]
       if (slot === undefined) return { unknown: true }
       rgb = s.theme?.get(slot) ?? THEME_DEFAULTS[slot]
-      if (rgb === undefined) return { unknown: true }
     }
-  } else if (is(el, NS.a, 'sysClr')) {
-    const val = attrOf(el.attributes, 'val')
-    rgb = hex6(attrOf(el.attributes, 'lastClr')) ?? (val === 'window' ? 'FFFFFF' : undefined)
-    if (rgb === undefined) return { unknown: true }
-  } else return { unknown: true }
+  }
   if (rgb === undefined) return { unknown: true }
-
-  // The transforms, in order; one the resolver does not model makes the colour
-  // un-resolvable, so it cannot prove the run visible.
   let transparent = false
-  for (const t of elements(el)) {
-    if (t.ns !== NS.a) return { unknown: true }
-    const v = pct(attrOf(t.attributes, 'val'))
-    if (v === undefined) return { unknown: true }
-    if (is(t, NS.a, 'alpha')) {
+  for (const t of c.transforms) {
+    const v = t.value
+    if (t.name === 'alpha') {
       if (v <= 0.05) transparent = true
-    } else if (is(t, NS.a, 'tint')) rgb = mix(rgb, 'white', v)
-    else if (is(t, NS.a, 'shade')) rgb = mix(rgb, 'black', v)
-    else if (is(t, NS.a, 'lumMod') || is(t, NS.a, 'lumOff') || is(t, NS.a, 'satMod')) {
+    } else if (t.name === 'tint') rgb = mix(rgb, 'white', v)
+    else if (t.name === 'shade') rgb = mix(rgb, 'black', v)
+    else {
       const [h, sat, l] = hslOf(rgb)
-      if (is(t, NS.a, 'lumMod')) rgb = hexOfHsl(h, sat, Math.min(1, Math.max(0, l * v)))
-      else if (is(t, NS.a, 'lumOff')) rgb = hexOfHsl(h, sat, Math.min(1, Math.max(0, l + v)))
+      if (t.name === 'lumMod') rgb = hexOfHsl(h, sat, Math.min(1, Math.max(0, l * v)))
+      else if (t.name === 'lumOff') rgb = hexOfHsl(h, sat, Math.min(1, Math.max(0, l + v)))
       else rgb = hexOfHsl(h, Math.min(1, Math.max(0, sat * v)), l)
-    } else return { unknown: true }
+    }
   }
   return { rgb, transparent }
 }
 
-/** One fill ELEMENT (`a:solidFill`, `a:gradFill`, …), resolved. */
-function fillEl(el: XmlElement, s: Scheme): DFill {
-  if (is(el, NS.a, 'noFill')) return { kind: 'none' }
-  if (is(el, NS.a, 'solidFill')) {
-    const clr = drawingClr(elements(el)[0], s)
+function drawingClr(el: XmlElement | undefined, s: Scheme, syntax?: DrawingSyntax): DClr {
+  return resolveColour(compileColour(el, syntax), s)
+}
+
+function compileFill(el: XmlElement, syntax?: DrawingSyntax): FillSyntax {
+  const hit = syntax?.fills.get(el)
+  if (hit !== undefined) return hit
+  const compile = (): FillSyntax => {
+    if (is(el, NS.a, 'noFill')) return { kind: 'none' }
+    if (is(el, NS.a, 'solidFill'))
+      return { kind: 'solid', clr: compileColour(firstElement(el), syntax) }
+    if (is(el, NS.a, 'gradFill')) {
+      const holder = childEl(el, NS.a, 'gsLst') ?? el
+      const stops: XmlElement[] = []
+      for (const c of holder.children) {
+        if (typeof c === 'string' || !is(c, NS.a, 'gs')) continue
+        stops.push(c)
+        if (stops.length > GRAD_STOPS_MAX) return { kind: 'unknown' }
+      }
+      if (stops.length === 0) return { kind: 'unknown' }
+      return { kind: 'grad', stops: stops.map((g) => compileColour(firstElement(g), syntax)) }
+    }
+    if (is(el, NS.a, 'pattFill')) {
+      const clr = (name: string): ColourSyntax =>
+        compileColour(firstElement(childEl(el, NS.a, name)), syntax)
+      return { kind: 'pattern', fg: clr('fgClr'), bg: clr('bgClr') }
+    }
+    return { kind: 'unknown' }
+  }
+  const result = compile()
+  syntax?.fills.set(el, result)
+  return result
+}
+
+function resolveFill(fill: FillSyntax, s: Scheme): DFill {
+  if (fill.kind === 'solid') {
+    const clr = resolveColour(fill.clr, s)
     return clr.rgb === undefined && !clr.transparent ? { kind: 'unknown' } : { kind: 'solid', clr }
   }
-  if (is(el, NS.a, 'gradFill')) {
-    const stops = childEls(childEl(el, NS.a, 'gsLst') ?? el, NS.a, 'gs').map((gs) =>
-      drawingClr(elements(gs)[0], s),
-    )
-    if (stops.length === 0) return { kind: 'unknown' }
-    return { kind: 'grad', stops }
-  }
-  if (is(el, NS.a, 'pattFill')) {
-    const clr = (name: string): DClr => {
-      const holder = childEl(el, NS.a, name)
-      return holder ? drawingClr(elements(holder)[0], s) : { unknown: true }
-    }
-    return { kind: 'pattern', fg: clr('fgClr'), bg: clr('bgClr') }
-  }
-  if (is(el, NS.a, 'blipFill') || is(el, NS.a, 'grpFill')) return { kind: 'unknown' }
-  return { kind: 'unknown' }
+  if (fill.kind === 'grad')
+    return { kind: 'grad', stops: fill.stops.map((c) => resolveColour(c, s)) }
+  if (fill.kind === 'pattern')
+    return { kind: 'pattern', fg: resolveColour(fill.fg, s), bg: resolveColour(fill.bg, s) }
+  return fill
+}
+
+function fillEl(el: XmlElement, s: Scheme, syntax?: DrawingSyntax): DFill {
+  return resolveFill(compileFill(el, syntax), s)
 }
 
 /** The fill element a container's children name, when one does. */
 function fillChild(container: XmlElement | undefined): XmlElement | undefined {
-  for (const c of container ? elements(container) : []) {
-    if (c.ns !== NS.a) continue
+  for (const c of container?.children ?? []) {
+    if (typeof c === 'string' || c.ns !== NS.a) continue
     if (
       is(c, NS.a, 'noFill') ||
       is(c, NS.a, 'solidFill') ||
@@ -2359,9 +2491,9 @@ function fillChild(container: XmlElement | undefined): XmlElement | undefined {
 }
 
 /** The fill a container's children name — `absent` when none does. */
-function drawingFill(container: XmlElement | undefined, s: Scheme): DFill {
+function drawingFill(container: XmlElement | undefined, s: Scheme, syntax?: DrawingSyntax): DFill {
   const c = fillChild(container)
-  return c === undefined ? FILL_ABSENT : fillEl(c, s)
+  return c === undefined ? FILL_ABSENT : fillEl(c, s, syntax)
 }
 
 /** A `p:fillRef`/`p:bgRef` into one of the theme's fill schemes, with `phClr`. */
@@ -2370,14 +2502,15 @@ function refFill(
   idx: number,
   ref: XmlElement | undefined,
   s: Scheme,
+  syntax?: DrawingSyntax,
 ): DFill {
   // idx 0 applies no fill style: the shape is transparent, the background
   // beneath shows through. A missing or out-of-range scheme entry is the
   // un-modelled case (#495 §7).
   if (idx <= 0) return { kind: 'none' }
   if (list === undefined || list[idx - 1] === undefined) return { kind: 'unknown' }
-  const phClr = ref ? drawingClr(elements(ref)[0], s) : undefined
-  return fillEl(list[idx - 1], { ...s, phClr })
+  const phClr = ref ? drawingClr(firstElement(ref), s, syntax) : undefined
+  return fillEl(list[idx - 1], { ...s, phClr }, syntax)
 }
 
 // ── Read-for-resolution style parts (#492 decision 2) ──────────────────────
@@ -2432,7 +2565,7 @@ interface PhEntry {
    * scale. A per-run scan of a shared part's children is quadratic (#515).
    */
   readonly spFill?: XmlElement
-  readonly fillRef?: XmlElement
+  readonly fillRefPositive: boolean
   readonly fontScale?: number
   /** Another placeholder in the part shares this entry's key. */
   dup: boolean
@@ -2535,11 +2668,12 @@ function readSlidesStylePart(root: XmlElement): SlidesStylePart {
       const ph = phOf(el)
       if (ph) {
         const lst = childEl(childEl(el, NS.p, 'txBody'), NS.a, 'lstStyle')
+        const ref = childEl(childEl(el, NS.p, 'style'), NS.a, 'fillRef')
         const entry: PhEntry = {
           type: ph.type,
           levels: lstLevels(lst),
           spFill: fillChild(childEl(el, NS.p, 'spPr')),
-          fillRef: childEl(childEl(el, NS.p, 'style'), NS.a, 'fillRef'),
+          fillRefPositive: (int(attrOf(ref?.attributes ?? [], 'idx')) ?? 0) > 0,
           fontScale: autofitScale(childEl(childEl(el, NS.p, 'txBody'), NS.a, 'bodyPr')),
           dup: false,
           typeDup: false,
@@ -2576,6 +2710,12 @@ const STYLE_TYPE: Readonly<Record<'slideLayout' | 'slideMaster' | 'notesMaster',
  * target is missing or mis-typed marks the chain broken, so the slide's runs
  * count `unknown-property` instead of quietly dropping the inheritance.
  */
+interface StyleEdge {
+  readonly name?: string
+  readonly part?: SlidesStylePart
+  readonly broken?: boolean
+}
+
 function readStylePart(
   shared: Shared,
   pkg: Package,
@@ -2583,9 +2723,21 @@ function readStylePart(
   type: string,
   role: 'slideLayout' | 'slideMaster' | 'notesMaster',
   understood: ReadonlySet<string>,
-): { readonly name?: string; readonly part?: SlidesStylePart; readonly broken?: boolean } {
-  const rel = pkg.relsOf(source).find((r) => r.type === type && !r.external)
-  if (rel === undefined) return {}
+): StyleEdge {
+  const sourceKey = fold(source)
+  let edges = shared.styleEdges.get(sourceKey)
+  if (edges === undefined) {
+    edges = new Map()
+    shared.styleEdges.set(sourceKey, edges)
+  }
+  const cached = edges.get(type)
+  if (cached !== undefined) return cached
+  const done = (result: StyleEdge): StyleEdge => {
+    edges.set(type, result)
+    return result
+  }
+  const rel = pkg.firstInternal(source, type)
+  if (rel === undefined) return done({})
   const target = resolveTarget(source, rel.target)
   const entry = target === undefined ? undefined : pkg.get(target)
   if (
@@ -2593,17 +2745,17 @@ function readStylePart(
     entry.directory ||
     (pkg.typeOf(entry.name) ?? '').toLowerCase() !== STYLE_TYPE[role].toLowerCase()
   ) {
-    return { broken: true }
+    return done({ broken: true })
   }
   const key = fold(entry.name)
   const hit = shared.styleParts.get(key)
-  if (hit) return { name: entry.name, part: hit }
+  if (hit) return done({ name: entry.name, part: hit })
   // Compatibility noise inside a read-only part never reaches the report:
   // a throwaway tally, since the part is counted once, as dropped.
   const root = compat(parseXml(entry.data), understood, new Tally())
   const part = readSlidesStylePart(root)
   shared.styleParts.set(key, part)
-  return { name: entry.name, part }
+  return done({ name: entry.name, part })
 }
 
 /** A slide's inheritance: its layout, the layout's master, their colour map. */
@@ -2737,48 +2889,112 @@ function drawingUnknown(props: XmlElement): ReadonlySet<string> {
   return unknown
 }
 
+/** What one `a:rPr`/`a:defRPr` level contributes to a run, evaluated once (#524). */
+interface LevelEval {
+  readonly unknown: ReadonlySet<string>
+  readonly fill: DFill
+  readonly size?: number
+  readonly baselineScale?: number
+  /** Present when the level DEFINES an `a:highlight`: what it resolves to. */
+  readonly highlight?: { readonly clr?: DClr; readonly unknown: boolean }
+}
+
 /**
- * The nearest text highlight in the chain — a background drawn behind the
- * glyph and OVER every other background (#495 F2), exactly as `countWordRun`
- * treats `w:highlight`. An unresolvable one is not provably any colour.
+ * The levels the runs of ONE part share — its paragraphs' and shapes' own
+ * defaults, the layout's and master's placeholders and `txStyles`, the
+ * presentation's `defaultTextStyle` — each evaluated once, by element, instead
+ * of once per run (#524: O(runs × width)). Per PART, because the colour map is
+ * the slide's own (`p:clrMapOvr`): the same layout element resolves to
+ * different colours on two slides, so a memo on a `PhEntry`, a
+ * `SlidesStylePart`, `Shared` or the module would answer one slide with
+ * another's colours and report hidden text as removed.
  */
-function drawingHighlight(
-  chain: readonly (XmlElement | undefined)[],
-  s: Scheme,
-): { readonly clr?: DClr; readonly unknown: boolean } {
-  for (const props of chain) {
-    if (props === undefined) continue
-    const hl = childEl(props, NS.a, 'highlight')
-    if (hl === undefined) continue
-    // A level that DEFINES a highlight ends the scan, whatever it resolves
-    // to (#495 F10): transparent paints nothing — the fill beneath shows, and
-    // a farther defRPr's highlight is never inherited over the run's own —
-    // and an unresolvable one is not provably any colour.
-    const clr = drawingClr(elements(hl)[0], s)
-    if (clr.transparent) return { unknown: false }
-    if (clr.unknown || clr.rgb === undefined) return { unknown: true }
-    return { clr, unknown: false }
+interface LevelMemo {
+  readonly levels: Map<XmlElement, LevelEval>
+  /** An inherited placeholder's `p:spPr` fill element, resolved. */
+  readonly fills: Map<XmlElement, DFill>
+  readonly placeholders: Map<Ph, PlaceholderMatch>
+}
+
+/** A level's shared syntax, compiled without the slide map or resolved colours. */
+function compileLevel(props: XmlElement, syntax: DrawingSyntax): LevelSyntax {
+  const hit = syntax.levels.get(props)
+  if (hit !== undefined) return hit
+  const fill = fillChild(props)
+  const hl = childEl(props, NS.a, 'highlight')
+  const baseline = attrOf(props.attributes, 'baseline')
+  const result: LevelSyntax = {
+    unknown: drawingUnknown(props),
+    size: int(attrOf(props.attributes, 'sz')),
+    // A present invalid baseline stops inheritance; an invalid size does not.
+    baselineScale: baseline === undefined ? undefined : int(baseline) === 0 ? 1 : VERT_ALIGN_SCALE,
+    fill: fill === undefined ? { kind: 'absent' } : compileFill(fill, syntax),
+    highlight: hl === undefined ? undefined : compileColour(firstElement(hl), syntax),
   }
+  syntax.levels.set(props, result)
+  return result
+}
+
+function evalLevel(props: XmlElement, s: Scheme, syntax: DrawingSyntax): LevelEval {
+  const level = compileLevel(props, syntax)
+  const clr = level.highlight === undefined ? undefined : resolveColour(level.highlight, s)
+  return {
+    unknown: level.unknown,
+    fill: resolveFill(level.fill, s),
+    size: level.size,
+    baselineScale: level.baselineScale,
+    highlight:
+      clr === undefined
+        ? undefined
+        : clr.transparent
+          ? { unknown: false }
+          : clr.unknown || clr.rgb === undefined
+            ? { unknown: true }
+            : { clr, unknown: false },
+  }
+}
+
+/** A SHARED level, evaluated once per part; `s` is constant within one. */
+function sharedLevel(props: XmlElement | undefined, ctx: Ctx, s: Scheme): LevelEval | undefined {
+  if (props === undefined) return undefined
+  let hit = ctx.levelMemo.levels.get(props)
+  if (hit === undefined) {
+    hit = evalLevel(props, s, ctx.syntax)
+    ctx.levelMemo.levels.set(props, hit)
+  }
+  return hit
+}
+
+/** The first level, nearest first, that defines a highlight ends the scan. */
+function drawingHighlight(levels: readonly (LevelEval | undefined)[]): {
+  readonly clr?: DClr
+  readonly unknown: boolean
+} {
+  // A level that DEFINES a highlight ends the scan, whatever it resolves
+  // to (#495 F10): transparent paints nothing — the fill beneath shows, and
+  // a farther defRPr's highlight is never inherited over the run's own —
+  // and an unresolvable one is not provably any colour.
+  for (const level of levels) if (level?.highlight) return level.highlight
   return { unknown: false }
 }
 
 /**
- * The run's text fill: the nearest chain level that defines one. Unknowns are
+ * The run's text fill: the nearest level that defines one. Unknowns are
  * collected over the WHOLE chain — a farther level's un-modelled property
- * applies to the run just as a nearer one's does.
+ * applies to the run just as a nearer one's does. Only whether ANY level has
+ * one is read, so no set is unioned: a level with n distinctly named children
+ * would make the union O(n) per run.
  */
-function drawingTextFill(
-  chain: readonly (XmlElement | undefined)[],
-  s: Scheme,
-): { readonly fill?: DFill; readonly unknown: ReadonlySet<string> } {
-  const unknown = new Set<string>()
+function drawingTextFill(levels: readonly (LevelEval | undefined)[]): {
+  readonly fill?: DFill
+  readonly unknown: boolean
+} {
+  let unknown = false
   let fill: DFill | undefined
-  for (const props of chain) {
-    if (props) for (const u of drawingUnknown(props)) unknown.add(u)
-    if (fill === undefined) {
-      const f = drawingFill(props, s)
-      if (f.kind !== 'absent') fill = f
-    }
+  for (const level of levels) {
+    if (level === undefined) continue
+    if (level.unknown.size > 0) unknown = true
+    if (fill === undefined && level.fill.kind !== 'absent') fill = level.fill
   }
   return { fill, unknown }
 }
@@ -2823,9 +3039,28 @@ function drawingBackgrounds(
 
 /** A `p:bgPr`/`p:bgRef` element, resolved with the theme's schemes. */
 function bgFill(bg: XmlElement, s: Scheme, ctx: Ctx): DFill {
-  if (is(bg, NS.p, 'bgPr')) return drawingFill(bg, s)
-  const idx = int(attrOf(bg.attributes, 'idx')) ?? 0
-  return refFill(ctx.fmtBgFillEls, Math.round(idx / 1000), bg, s)
+  let descriptor = ctx.syntax.backgrounds.get(bg)
+  if (descriptor === undefined) {
+    if (is(bg, NS.p, 'bgPr')) {
+      const fill = fillChild(bg)
+      descriptor = {
+        kind: 'fill',
+        fill: fill === undefined ? { kind: 'absent' } : compileFill(fill, ctx.syntax),
+      }
+    } else
+      descriptor = {
+        kind: 'ref',
+        idx: Math.round((int(attrOf(bg.attributes, 'idx')) ?? 0) / 1000),
+        colour: compileColour(firstElement(bg), ctx.syntax),
+      }
+    ctx.syntax.backgrounds.set(bg, descriptor)
+  }
+  if (descriptor.kind === 'fill') return resolveFill(descriptor.fill, s)
+  if (descriptor.idx <= 0) return { kind: 'none' }
+  const el = ctx.fmtBgFillEls?.[descriptor.idx - 1]
+  if (el === undefined) return { kind: 'unknown' }
+  const phClr = descriptor.colour === undefined ? undefined : resolveColour(descriptor.colour, s)
+  return fillEl(el, { ...s, phClr }, ctx.syntax)
 }
 
 /** What a background level settles: unknown, its colours, or neither (the level beneath shows). */
@@ -2833,9 +3068,6 @@ interface BgColours {
   readonly unknown: boolean
   readonly colours?: readonly string[]
 }
-
-/** More gradient stops than this are not provably any colour (#522): `fgVisible` tests every one per run. */
-const BG_STOPS_MAX = 10
 
 /** A fill as a background: the colours the text must contrast with. */
 function bgColours(fill: DFill): BgColours {
@@ -2846,7 +3078,6 @@ function bgColours(fill: DFill): BgColours {
     return { unknown: false, colours: [fill.clr.rgb] }
   }
   if (fill.kind === 'grad') {
-    if (fill.stops.length > BG_STOPS_MAX) return { unknown: true }
     const colours: string[] = []
     for (const stop of fill.stops) {
       if (stop.transparent || stop.unknown || stop.rgb === undefined) return { unknown: true }
@@ -2957,6 +3188,40 @@ function styleNameOf(type: string | undefined, notes: boolean): string {
   return 'otherStyle'
 }
 
+interface PlaceholderMatch {
+  readonly layoutMatch: ReturnType<typeof layoutPh>
+  readonly masterEntry?: PhEntry
+  readonly styleType?: string
+}
+
+function placeholderMatch(
+  ph: Ph | undefined,
+  inheritance: SlideInheritance,
+  ctx: Ctx,
+): PlaceholderMatch {
+  const hit = ph === undefined ? undefined : ctx.levelMemo.placeholders.get(ph)
+  if (hit !== undefined) return hit
+  const layoutMatch = layoutPh(inheritance.layout, ph)
+  const masterType = ph === undefined ? undefined : (layoutMatch.entry?.type ?? ph.type)
+  const result = {
+    layoutMatch,
+    masterEntry: masterType === undefined ? undefined : masterPh(inheritance.master, masterType),
+    styleType: ph?.typed ? ph.type : masterType,
+  }
+  if (ph !== undefined) ctx.levelMemo.placeholders.set(ph, result)
+  return result
+}
+
+/** An inherited placeholder's fill element, resolved once per part (#524). */
+function sharedFill(el: XmlElement, ctx: Ctx, s: Scheme): DFill {
+  let hit = ctx.levelMemo.fills.get(el)
+  if (hit === undefined) {
+    hit = fillEl(el, s, ctx.syntax)
+    ctx.levelMemo.fills.set(el, hit)
+  }
+  return hit
+}
+
 /**
  * ONE computation per DrawingML run (#492): the run's fill, size and every
  * defRPr level it inherits — its paragraph's, its shape's list style at its
@@ -2970,28 +3235,19 @@ function countDrawingRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
   const level = (scope.lvl ?? 0) + 1
   const ph = scope.shape?.ph
   const s: Scheme = { theme: ctx.theme, clrMap: inheritance.clrMap }
-  const layoutMatch = layoutPh(inheritance.layout, ph)
+  const { layoutMatch, masterEntry, styleType } = placeholderMatch(ph, inheritance, ctx)
   if (layoutMatch.ambiguous) ctx.counted.add('unknown-property')
-  // The master placeholder is the LAYOUT placeholder's (by its type); the
-  // txStyles entry is the slide's own type, or, untyped, its layout's.
-  const masterType = ph === undefined ? undefined : (layoutMatch.entry?.type ?? ph.type)
-  const styleType = ph?.typed ? ph.type : masterType
-  const masterEntry =
-    masterType === undefined ? undefined : masterPh(inheritance.master, masterType)
   // A placeholder with no fill of its own (neither `spPr` nor `p:style`) is
   // filled as its layout placeholder is, else its master placeholder.
   let bgScope = scope
   if (scope.shape?.ph && scope.shape.fill === undefined) {
     for (const entry of [layoutMatch.entry, masterEntry]) {
       if (!entry) continue
-      let f = entry.spFill === undefined ? FILL_ABSENT : fillEl(entry.spFill, s)
+      let f = entry.spFill === undefined ? FILL_ABSENT : sharedFill(entry.spFill, ctx, s)
       // A referenced placeholder's THEME style fill: LibreOffice does not
       // inherit it (shape.cxx `applyShapeReference` resolves the reference
       // with no theme), PowerPoint is unmeasured — so it is unknown.
-      if (f.kind === 'absent' && entry.fillRef) {
-        const idx = int(attrOf(entry.fillRef.attributes, 'idx')) ?? 0
-        if (idx > 0) f = { kind: 'unknown' }
-      }
+      if (f.kind === 'absent' && entry.fillRefPositive) f = { kind: 'unknown' }
       if (f.kind !== 'absent') {
         bgScope = { ...scope, shape: { ...scope.shape, fill: f } }
         break
@@ -3011,12 +3267,18 @@ function countDrawingRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
     inheritance.master?.byStyle.get(styleNameOf(styleType, notes))?.get(level),
     ctx.slideDefaults?.get(level),
   ]
-  const { fill, unknown } = drawingTextFill(chain, s)
-  if (unknown.size > 0 || inheritance.broken) ctx.counted.add('unknown-property')
+  // The run's own `a:rPr` is run-local; every level after it is shared by many
+  // runs and is evaluated once per part (#524).
+  const own = chain[0]
+  const evaluated = chain.map((props, i) =>
+    i === 0 ? own && evalLevel(own, s, ctx.syntax) : sharedLevel(props, ctx, s),
+  )
+  const { fill, unknown } = drawingTextFill(evaluated)
+  if (unknown || inheritance.broken) ctx.counted.add('unknown-property')
 
   // A text highlight, when one is resolved, is the background over every
   // other background (#495 F2).
-  const highlight = drawingHighlight(chain, s)
+  const highlight = drawingHighlight(evaluated)
   const bg = highlight.unknown
     ? { unknown: true, colours: [] }
     : drawingBackgrounds(bgScope, inheritance, s, ctx)
@@ -3034,18 +3296,10 @@ function countDrawingRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
 
   // Size: the nearest level's `sz`, scaled by the body's autofit fontScale
   // and by sub/superscript's reduced render (#495, as `w:vertAlign` composes).
-  let baselineScale = 1
-  for (const props of chain) {
-    const b = props === undefined ? undefined : attrOf(props.attributes, 'baseline')
-    if (b !== undefined) {
-      baselineScale = int(b) === 0 ? 1 : VERT_ALIGN_SCALE
-      break
-    }
-  }
-  for (const props of chain) {
-    const raw = props === undefined ? undefined : int(attrOf(props.attributes, 'sz'))
-    if (raw === undefined) continue
-    const pt = (raw / 100) * fontScale * baselineScale
+  const baselineScale = evaluated.find((l) => l?.baselineScale !== undefined)?.baselineScale ?? 1
+  for (const level of evaluated) {
+    if (level?.size === undefined) continue
+    const pt = (level.size / 100) * fontScale * baselineScale
     if (pt <= 1) ctx.counted.add('too-small')
     break
   }
@@ -3146,7 +3400,7 @@ function countCell(el: XmlElement, ctx: Ctx): void {
   }
   // A number format's colour sections OVERRIDE the font's colour for what the
   // cell displays (#492): when one is present, it is the displayed colour.
-  const displayed = formatColours(format, styles, ctx)
+  const displayed = formatColours(format, styles)
   if (displayed.length > 0) {
     if (displayed.some((colour) => bgs.some((bg) => contrastRatio(colour, bg) < MIN_CONTRAST))) {
       ctx.counted.add('colour-contrast')
@@ -3168,7 +3422,7 @@ const FORMAT_COLOURS: Readonly<Record<string, string>> = {
   yellow: 'FFFF00',
 }
 
-function formatColours(format: string, styles: SheetStyles, ctx: Shared): readonly string[] {
+function formatColours(format: string, styles: SheetStyles): readonly string[] {
   const out: string[] = []
   for (const m of format.matchAll(/\[([^\]]+)\]/g)) {
     const name = m[1].trim().toLowerCase()

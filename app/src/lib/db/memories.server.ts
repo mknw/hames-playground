@@ -415,11 +415,20 @@ export async function listMemoriesForUser(userId: string): Promise<MemoryRow[]> 
  * their sources are one fact. This is the erasure bottom (SD-11): the M7 RPC
  * reaches it after its own `requireUser()`, never the other way round. Takes
  * a `userId` argument, so it is NEVER a `'use server'` export (SD-13).
+ * Both M7 RPCs ("turn off" and "forget all") must commit the switch-off
+ * (`user_prefs.memory_enabled = false`) in its own transaction BEFORE calling
+ * this erase (#552). An uncommitted flip is invisible to a candidate on another
+ * connection; do not wrap this call in the flip transaction. The owner lock
+ * waits for in-flight candidates. Any erase rejection (55P03, a memory-pool
+ * connect timeout or 40P01) means "not erased": leave the switch off and report
+ * the retryable failure, never success. Later writers, including M3 compaction,
+ * must re-read the switch and their inputs inside the owner-lock transaction.
  */
 export async function deleteAllMemoriesForUser(userId: string): Promise<number> {
-  await ready()
-  const { rowCount } = await query(`DELETE FROM memories WHERE user_id = $1`, [userId])
-  return rowCount ?? 0
+  return memoryTransaction(userId, async (client) => {
+    const { rowCount } = await client.query(`DELETE FROM memories WHERE user_id = $1`, [userId])
+    return rowCount ?? 0
+  })
 }
 
 /**
@@ -584,42 +593,50 @@ export function createMemoryDbStore(userId: string): MemoryStore & MemoryWriteSt
     },
 
     async transaction<R>(fn: (tx: MemoryWriteTx) => Promise<R>): Promise<R> {
-      await ready()
-      const client = await getMemoryPool().connect()
-      let broken = false
-      // A checked-out client has no pool error listener: a backend that ends
-      // while this transaction waits on a model call (the idle-in-transaction
-      // backstop, a restart, a dropped link) would emit 'error' with nobody
-      // listening — an uncaught exception. Take it here; the next statement then
-      // rejects, the transaction fails, and the connection is never pooled again.
-      const onError = (err: Error) => {
-        broken = true
-        console.error('[memories] write connection lost mid-transaction:', err.message)
-      }
-      client.on('error', onError)
-      try {
-        await client.query('BEGIN')
-        await client.query(`SET LOCAL lock_timeout = ${MEMORY_LOCK_TIMEOUT_MS}`)
-        // One owner's stores (and compaction) serialize; a second waits at most
-        // lock_timeout and then fails, instead of queueing behind a model call.
-        await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
-          `memories:${userId}`,
-        ])
-        const out = await fn(writeTx(client, userId))
-        await client.query('COMMIT')
-        return out
-      } catch (err) {
-        try {
-          await client.query('ROLLBACK')
-        } catch {
-          broken = true // never return a connection in an unknown state to the pool
-        }
-        throw err
-      } finally {
-        client.off('error', onError)
-        client.release(broken)
-      }
+      return memoryTransaction(userId, (client) => fn(writeTx(client, userId)))
     },
+  }
+}
+
+/** Shared owner lock for candidate writes and forget-all; lock failures rethrow. */
+async function memoryTransaction<R>(
+  userId: string,
+  fn: (client: pg.PoolClient) => Promise<R>,
+): Promise<R> {
+  await ready()
+  const client = await getMemoryPool().connect()
+  let broken = false
+  // A checked-out client has no pool error listener: a backend that ends
+  // while this transaction waits on a model call (the idle-in-transaction
+  // backstop, a restart, a dropped link) would emit 'error' with nobody
+  // listening — an uncaught exception. Take it here; the next statement then
+  // rejects, the transaction fails, and the connection is never pooled again.
+  const onError = (err: Error) => {
+    broken = true
+    console.error('[memories] write connection lost mid-transaction:', err.message)
+  }
+  client.on('error', onError)
+  try {
+    await client.query('BEGIN')
+    await client.query(`SET LOCAL lock_timeout = ${MEMORY_LOCK_TIMEOUT_MS}`)
+    // One owner's stores (and compaction) serialize; a second waits at most
+    // lock_timeout and then fails, instead of queueing behind a model call.
+    await client.query(`SELECT pg_advisory_xact_lock(hashtextextended('memories:' || $1, 0))`, [
+      userId,
+    ])
+    const out = await fn(client)
+    await client.query('COMMIT')
+    return out
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK')
+    } catch {
+      broken = true // never return a connection in an unknown state to the pool
+    }
+    throw err
+  } finally {
+    client.off('error', onError)
+    client.release(broken)
   }
 }
 
@@ -744,4 +761,23 @@ function writeTx(client: pg.PoolClient, userId: string): MemoryWriteTx {
     },
   }
   return tx
+}
+
+/** Owner-scoped provenance is the only direction load reconciliation follows.
+ * Tier comes from the surviving memory, never from the conversation's current tier. */
+export async function listMemorySourcesForConversation(conversationId: string, userId: string) {
+  await ready()
+  const { rows } = await query<{
+    eventId: string
+    ordinal: number
+    memoryId: string
+    tier: MemoryTier
+  }>(
+    `SELECT s.event_id AS "eventId", s.ordinal, s.memory_id AS "memoryId", m.tier
+       FROM memory_sources s JOIN memories m ON m.id = s.memory_id AND m.user_id = $2
+      WHERE s.conversation_id = $1 AND s.user_id = $2
+      ORDER BY s.created_at, s.event_id, s.ordinal`,
+    [conversationId, userId],
+  )
+  return rows
 }

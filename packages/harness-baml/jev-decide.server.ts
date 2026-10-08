@@ -38,6 +38,7 @@ import {
   LLMCallError,
   type DecideAllFn,
   type DecideFn,
+  type DecideInput,
   type DecideResult,
   type DecisionSetSpec,
   type EventMetrics,
@@ -424,14 +425,11 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     return { fields }
   }
 
-  const decide: DecideFn = async <L extends string>(input: {
-    readonly spec: {
-      key: string
-      question: string
-      labels: readonly { id: L; description: string }[]
+  const decide: DecideFn = async <L extends string>(input: DecideInput<L>) => {
+    // S1 widens the seam; S4 adds wire support. Nothing is built or sent here.
+    if (input.spec.type !== undefined && input.spec.type !== 'choice') {
+      throw new Error(`Unsupported decision type: ${String(input.spec.type)}`)
     }
-    readonly state: string
-  }) => {
     const r = await decideAll({
       spec: { key: input.spec.key, fields: { [input.spec.key]: input.spec } },
       state: input.state,

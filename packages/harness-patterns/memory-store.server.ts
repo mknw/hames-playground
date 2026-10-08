@@ -67,7 +67,6 @@
  * `softLimit` (`compactionDue`) and M3 acts on it.
  */
 
-import { createHash } from 'node:crypto'
 import { assertServerOnImport } from './assert.server'
 import { createEvent, generateId } from './context.server'
 import { stripThinkBlocks } from './content-transforms'
@@ -449,8 +448,6 @@ const renderPairs = (pairs: readonly Pair[]): string =>
 // Small helpers
 // ============================================================================
 
-const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex')
-
 /** A class name, or `Error` — never the message (it can quote what it read). */
 function errorKind(e: unknown): string {
   return e instanceof Error && e.name ? e.name : 'Error'
@@ -487,6 +484,9 @@ async function claim(
   const r = await tx.addSource({ memoryId, ...src })
   if (!r.inserted) throw new SourceConflict(r.memoryId, await tx.read(r.memoryId))
 }
+
+/** Roll back a candidate whose owner switched memory off while it waited. */
+class MemoryDisabled extends Error {}
 
 /** Thrown inside a candidate's transaction to roll it back: this candidate's
  *  provenance row exists, so it was written before. */
@@ -746,17 +746,18 @@ async function run(
     const embedding = vectors[i]
     try {
       const done = await store.transaction(async (tx) => {
+        // Re-read under the owner lock: wake/extract/embed may outlive a switch-off.
+        // Throw so the host rolls this candidate back.
+        if (!(await settings!.enabled!())) throw new MemoryDisabled()
         const near = await tx.nearest({ embedding, embedSpace: embed.spaceId, tier })
         const verdict = await chooseAction(cand, near, { dup, rel, mergeMs }, scope, decideFn, cut)
         const src = { eventId: userEventId, ordinal: cand.ordinal, conversationId }
 
         let memoryId: string
         let action: MemoryWriteAction
-        let stored: string
         if (verdict === 'insert' || !near) {
           memoryId = generateId('mem')
           action = 'inserted'
-          stored = cand.content
           await tx.insert({
             id: memoryId,
             kind: cand.kind,
@@ -773,7 +774,6 @@ async function run(
           await claim(tx, memoryId, src)
           if (verdict === 'update') {
             action = 'updated'
-            stored = cand.content
             await tx.update(memoryId, {
               content: cand.content,
               evidence: cand.evidence,
@@ -783,18 +783,16 @@ async function run(
             })
           } else {
             action = 'reinforced'
-            stored = near.content
             await tx.reinforce(memoryId)
           }
         }
-        return { memoryId, action, stored }
+        return { memoryId, action }
       })
 
       const data: MemoryWrittenEventData = {
         memoryId: done.memoryId,
         kind: cand.kind,
         tier,
-        contentHash: sha256(done.stored),
         eventId: userEventId,
         ordinal: cand.ordinal,
         action: done.action,
@@ -807,7 +805,9 @@ async function run(
       pendingCall = undefined
       written++
     } catch (err) {
-      if (err instanceof SourceConflict) {
+      if (err instanceof MemoryDisabled) {
+        return stop('disabled', undefined, { written, duplicates, failed, route, rejected })
+      } else if (err instanceof SourceConflict) {
         duplicates++
         // The memory and its source exist; if the event that references them was
         // lost (the host's save was refused), a retry repairs the reference.
@@ -823,7 +823,6 @@ async function run(
               memoryId: err.memoryId,
               kind: err.existing.kind,
               tier,
-              contentHash: sha256(err.existing.content),
               eventId: userEventId,
               ordinal: cand.ordinal,
               action: 'reinforced',

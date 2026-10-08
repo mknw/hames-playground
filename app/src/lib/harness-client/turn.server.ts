@@ -65,6 +65,8 @@ import {
   createEvent,
   HitlAnswerError,
   type ConfiguredPattern,
+  type MemoryConfig,
+  type MemoryWrittenEventData,
   type ContextEvent,
   type HarnessResultScoped,
   type HitlDecidedBy,
@@ -81,7 +83,14 @@ import {
   type LoadedSession,
   type SessionData,
 } from './session.server'
-import { runWithRequestContext, isAttendedRequest } from './request-user.server'
+import { startTurnMemory } from '../memory/config.server'
+import { settleMemory } from '@hames-ai/harness-patterns/memory-store.server'
+import { memoryStoreConfig } from '@hames-ai/harness-patterns/patterns/withMemory.server'
+import {
+  runWithRequestContext,
+  isAttendedRequest,
+  setRequestMemoryAllowed,
+} from './request-user.server'
 import { canonicalAgentId } from './agent-ids'
 import { amendRunFrame, withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { activeInferenceTier, assertInferenceTier } from '@hames-ai/harness-baml/clients.server'
@@ -359,6 +368,11 @@ async function runOneTurn(
   const { sessionId, userId } = req
   // Refused here, before anything runs, when another turn holds the row.
   const held = await claimTurn(req, tier)
+  // #553 option 1: recall, wake and settle share the persisted run-origin gate.
+  const memoryAllowed =
+    req.mode === 'interactive' ||
+    (req.mode === 'resume' && held.loaded?.memoryRunOrigin === 'interactive')
+  setRequestMemoryAllowed(memoryAllowed)
   // The lease is renewed for as long as this turn holds it, so a slow turn
   // keeps its conversation and only a dead process loses it.
   const renewal = setInterval(() => {
@@ -378,7 +392,12 @@ async function runOneTurn(
   }, TURN_CLAIM_RENEW_MS)
   renewal.unref?.()
 
-  let ran: { agentId: string; result: HarnessResultScoped<SessionData>; saved: SavedTurn }
+  let ran: {
+    agentId: string
+    result: HarnessResultScoped<SessionData>
+    saved: SavedTurn
+    memory?: MemoryConfig
+  }
   try {
     ran =
       req.mode === 'resume'
@@ -412,7 +431,7 @@ async function runOneTurn(
   // all three scopes, so it keeps them for its whole continuation (the
   // tier scope included: a detached summarization must not silently
   // change provider halfway through a turn).
-  void compactAndSave(req, result, titleWarned, saved)
+  void compactAndSave(req, result, titleWarned, saved, memoryAllowed ? ran.memory : undefined)
   return result
 }
 
@@ -564,7 +583,7 @@ async function runAndSave(
   run: RunFn,
   tier: InferenceTier,
   held: HeldTurn,
-): Promise<{ result: HarnessResultScoped<SessionData>; saved: SavedTurn }> {
+): Promise<{ result: HarnessResultScoped<SessionData>; saved: SavedTurn; memory?: MemoryConfig }> {
   const { sessionId, userId } = req
   try {
     // WAKE THEN RUN. The self-hosted box scales to zero, so on the private tier
@@ -589,6 +608,7 @@ async function runAndSave(
     // `attended` (m8), read from the request scope `runTurnAndPersist` wrote —
     // not a second derivation.
     const patterns = await getOrBuildPatterns(sessionId, agentId)
+    const memory = startTurnMemory(patterns, agentDeps().memory)
     const result = await amendRunFrame(
       { live: req.onEvent, hitl: { attended: isAttendedRequest() } },
       () => run(patterns),
@@ -601,9 +621,10 @@ async function runAndSave(
     const version = await saveSession(sessionId, userId, agentId, result.serialized, {
       version: held.version,
       inferenceTier: tier,
+      memoryRunOrigin: req.mode === 'interactive' ? 'interactive' : 'triggered',
     })
     held.released = true
-    return { result, saved: { version, eventCount: result.context.events.length } }
+    return { result, memory, saved: { version, eventCount: result.context.events.length } }
   } catch (err) {
     console.error(`[turn] run failed for ${sessionId}:`, err)
     held.released = true
@@ -813,7 +834,12 @@ async function runResumeAndSave(
   req: Extract<TurnRequest, { mode: 'resume' }>,
   tier: InferenceTier,
   held: HeldTurn,
-): Promise<{ agentId: string; result: HarnessResultScoped<SessionData>; saved: SavedTurn }> {
+): Promise<{
+  agentId: string
+  result: HarnessResultScoped<SessionData>
+  saved: SavedTurn
+  memory?: MemoryConfig
+}> {
   const { sessionId, userId } = req
   // `claimTurn` refuses a resume that loads no session, so this is never null
   // here; the assertion keeps the type honest without a cast.
@@ -861,6 +887,7 @@ async function runResumeAndSave(
     // call, so it must not pay a cold start either.
     if (tier === 'verda' && !plan.stopOnly) await ensureVerdaAwake()
     const patterns = await getOrBuildPatterns(sessionId, loaded.agentId)
+    const memory = !plan.stopOnly ? startTurnMemory(patterns, agentDeps().memory) : undefined
     const result = await amendRunFrame(
       { live: req.onEvent, hitl: { attended: isAttendedRequest() } },
       () =>
@@ -890,6 +917,7 @@ async function runResumeAndSave(
     return {
       agentId: loaded.agentId,
       result,
+      memory,
       saved: { version, eventCount: result.context.events.length },
     }
   } catch (err) {
@@ -1008,7 +1036,14 @@ async function compactAndSave(
   result: HarnessResultScoped<SessionData>,
   mustPersist: boolean,
   saved: SavedTurn,
+  memory?: MemoryConfig,
 ): Promise<void> {
+  const before = result.context.events.length
+  if (memory) {
+    // The row id claimTurn created/claimed, never core's fresh context id.
+    await settleMemory(result.context, memoryStoreConfig(memory), { conversationId: req.sessionId })
+  }
+  mustPersist ||= result.context.events.length !== before
   let persisted = false
   const persist = async (): Promise<void> => {
     persisted = true
@@ -1130,6 +1165,24 @@ export function mergeTrailingPass<T>(
   }
   let anchor = ours.events[savedCount - 1]?.id
   for (const event of ours.events.slice(savedCount)) {
+    // A load may have re-derived this reference from its committed source row
+    // while this save was pending (G9 Q2). One (eventId, ordinal) is one write:
+    // the settle's own record replaces the derived copy rather than joining it.
+    if (event.type === 'memory_written') {
+      const d = event.data as MemoryWrittenEventData
+      const at = fresh.events.findIndex(
+        (e) =>
+          e.type === 'memory_written' &&
+          (e.data as MemoryWrittenEventData).eventId === d.eventId &&
+          (e.data as MemoryWrittenEventData).ordinal === d.ordinal,
+      )
+      if (at !== -1) {
+        fresh.events[at] = event
+        present.add(event.id)
+        anchor = event.id
+        continue
+      }
+    }
     if (event.id === undefined || !present.has(event.id)) {
       const at = anchor === undefined ? -1 : fresh.events.findIndex((e) => e.id === anchor)
       fresh.events.splice(at === -1 ? fresh.events.length : at + 1, 0, event)

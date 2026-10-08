@@ -32,6 +32,7 @@ afterEach(() => {
 const criteria = OWNER_TUNABLE_DEFAULTS
 function fake(jev: boolean, wrongSplit = '', probability = 0.97): DecideFn {
   return async ({ spec, state }) => {
+    if (spec.type === 'score' || spec.type === 'noul') throw new Error('choice-only fixture')
     const item = fixtures.items.find(
       (i: { key: string; state: string }) => i.key === spec.key && i.state === state,
     )
@@ -373,6 +374,8 @@ describe('decision calibration behavioural report', () => {
       }
       const seen: string[][] = []
       const decide: DecideFn = async (input) => {
+        if (input.spec.type === 'score' || input.spec.type === 'noul')
+          throw new Error('choice-only fixture')
         seen.push(input.spec.labels.map((l) => l.id))
         return fake(jev)(input)
       }

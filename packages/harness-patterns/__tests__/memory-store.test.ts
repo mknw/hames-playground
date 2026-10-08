@@ -385,7 +385,6 @@ describe('settleMemory — the one path that stores', () => {
         memoryId: db.rows()[0].id,
         kind: 'preference',
         tier: 'verda',
-        contentHash: expect.stringMatching(/^[0-9a-f]{64}$/),
         eventId: userEvent.id,
         ordinal: 0,
         action: 'inserted',
@@ -794,12 +793,15 @@ describe('acceptance-rules: dedupe and merge', () => {
     expect(decide.calls.some((c) => c.key === 'memory.merge')).toBe(false)
   })
 
-  it('a reinforce event hashes the EXISTING content, not the candidate', async () => {
-    const { ctx } = await run({ sim: 0.97 })
-    const { createHash } = await import('node:crypto')
-    expect(written(ctx)[0].contentHash).toBe(
-      createHash('sha256').update('The user prefers imperial units.').digest('hex'),
-    )
+  it('a reinforce and an update event carry the same six keys as an insert — no value derived from either text (#541)', async () => {
+    // Mutation: add a hash (under any key) to the shared memory_written literal
+    // for non-insert actions only, e.g. a spread conditional on done.action — red.
+    const keys = ['action', 'eventId', 'kind', 'memoryId', 'ordinal', 'tier']
+    const reinforced = written((await run({ sim: 0.97 })).ctx)
+    const updated = written((await run({ sim: 0.85, merge: 'update' })).ctx)
+    expect(reinforced.map((e) => e.action)).toEqual(['reinforced'])
+    expect(updated.map((e) => e.action)).toEqual(['updated'])
+    for (const ev of [...reinforced, ...updated]) expect(Object.keys(ev).sort()).toEqual(keys)
   })
 
   it('a related preference is put to the merge question: same → reinforce', async () => {
@@ -1666,12 +1668,17 @@ describe('event-hygiene', () => {
     return ctx
   }
 
-  it('memory_written carries ids, kind, tier, a hash — and no text', async () => {
+  it('memory_written carries ids, kind, tier, action — and no text', async () => {
     const ctx = await stored()
     const data = written(ctx)[0]
-    expect(Object.keys(data).sort()).toEqual(
-      ['action', 'contentHash', 'eventId', 'kind', 'memoryId', 'ordinal', 'tier'].sort(),
-    )
+    expect(Object.keys(data).sort()).toEqual([
+      'action',
+      'eventId',
+      'kind',
+      'memoryId',
+      'ordinal',
+      'tier',
+    ])
     const wire = JSON.stringify(ctx.events.filter((e) => e.type === 'memory_written'))
     expect(wire).not.toContain('zebra-pangolin')
     expect(wire).not.toContain('metric')
@@ -1756,10 +1763,17 @@ describe('memory-written-persisted', () => {
     const retry = await settleMemory(ctx, cfg)
     expect(retry).toMatchObject({ written: 0, duplicates: 1 })
     const [ev] = written(ctx)
-    expect(ev).toMatchObject({ memoryId, kind: 'preference', action: 'reinforced', ordinal: 0 })
-    expect(ev.contentHash).toBe(
-      (await import('node:crypto')).createHash('sha256').update(CONTENT).digest('hex'),
-    )
+    // Exact, like P1: the retry literal is the one the shared-site pins cannot
+    // see, so its VALUES are pinned here as well as its keys (#541).
+    const userEvent = ctx.events.find((e) => e.type === 'user_message')!
+    expect(ev).toEqual({
+      memoryId,
+      kind: 'preference',
+      tier: 'verda',
+      eventId: userEvent.id,
+      ordinal: 0,
+      action: 'reinforced',
+    })
     expect(db.rows()[0].evidenceCount).toBe(1) // still rolled back
     // And a SECOND retry, with the event present, records nothing more.
     await settleMemory(ctx, cfg)
@@ -1880,5 +1894,121 @@ describe('idempotency-transaction', () => {
     expect(db.rows()).toHaveLength(1)
     expect(db.rows()[0].evidenceCount).toBe(2)
     expect(db.sources()).toHaveLength(2)
+  })
+})
+
+// #552: mutation — move the re-check before the wake (or remove it).
+describe('#552: switch-off serializes with in-flight settle', () => {
+  it('reads true at entry, false under the transaction lock, and rolls back', async () => {
+    const db = fakeDb()
+    let enabled = true
+    let rolledBack = false
+    const reads: boolean[] = []
+    const store: MemoryWriteStore = {
+      transaction: (fn) =>
+        db.store.transaction(async (tx) => {
+          enabled = false // acquired the lock after the click
+          try {
+            return await fn(tx)
+          } catch (err) {
+            rolledBack = true
+            throw err
+          }
+        }),
+    }
+    const { cfg } = config({
+      db,
+      store,
+      settings: {
+        enabled: () => {
+          reads.push(enabled)
+          return enabled
+        },
+      },
+    })
+    const ctx = turn()
+    expect(await settleMemory(ctx, cfg)).toMatchObject({
+      skipped: 'disabled',
+      written: 0,
+      failed: 0,
+    })
+    expect(reads).toEqual([true, false])
+    expect(rolledBack).toBe(true)
+    expect(db.rows()).toEqual([])
+    expect(db.sources()).toEqual([])
+    expect(written(ctx)).toEqual([])
+  })
+
+  it('switch-off during wake prevents this settle and any settle begun after the click', async () => {
+    let entered!: () => void
+    let release!: () => void
+    const atWake = new Promise<void>((r) => {
+      entered = r
+    })
+    const wake = new Promise<'awake'>((r) => {
+      release = () => r('awake')
+    })
+    let enabled = true
+    const { cfg, db } = config({
+      settings: { enabled: () => enabled },
+      awaitWake: async () => {
+        entered()
+        return wake
+      },
+    })
+    const ctx = turn()
+    const pending = settleMemory(ctx, cfg)
+    await atWake
+    enabled = false // M7 must do this BEFORE its forget-all delete.
+    const later = turn()
+    expect(await settleMemory(later, cfg)).toMatchObject({ skipped: 'disabled', written: 0 })
+    release()
+    expect(await pending).toMatchObject({ skipped: 'disabled', written: 0 })
+    expect(db.rows()).toEqual([])
+    expect(db.sources()).toEqual([])
+    expect(written(ctx)).toEqual([])
+    expect(written(later)).toEqual([])
+  })
+
+  it('re-checks every candidate, preserving only commits from before switch-off', async () => {
+    let enabled = true
+    const db = fakeDb()
+    let transactions = 0
+    const { cfg } = config({
+      db,
+      extract: fakeExtract([cand(), cand()]).fn,
+      settings: { enabled: () => enabled },
+      store: {
+        transaction: (fn) =>
+          db.store.transaction(async (tx) => {
+            if (++transactions === 2) enabled = false
+            return fn(tx)
+          }),
+      },
+    })
+    expect(await settleMemory(turn(), cfg)).toMatchObject({ skipped: 'disabled', written: 1 })
+    expect(db.rows()).toHaveLength(1)
+    expect(db.sources()).toHaveLength(1)
+  })
+
+  it('a switch that throws under the lock writes nothing (fail closed)', async () => {
+    const db = fakeDb()
+    let reads = 0
+    const { cfg } = config({
+      db,
+      extract: fakeExtract([cand(), cand()]).fn,
+      settings: {
+        enabled: () => {
+          if (++reads > 1) throw new Error('prefs unreachable')
+          return true
+        },
+      },
+    })
+    const ctx = turn()
+    expect(await settleMemory(ctx, cfg)).toMatchObject({ written: 0 })
+    expect(reads).toBeGreaterThan(1)
+    expect(db.rows()).toEqual([])
+    expect(db.sources()).toEqual([])
+    expect(written(ctx)).toEqual([])
   })
 })

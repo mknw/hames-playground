@@ -53,7 +53,12 @@ export {
   type RecalledMemory,
 } from './memoryRecall.server'
 // withMemory (#419 M5a) — the opt-in combinator and the store half of its config.
-export { withMemory, memoryStoreConfig, type MemoryConfig } from './withMemory.server'
+export {
+  withMemory,
+  memoryStoreConfig,
+  type MemoryConfig,
+  type RouterMemory,
+} from './withMemory.server'
 
 // EventView
 export { EventViewImpl, createEventView } from './event-view.server'
@@ -66,6 +71,14 @@ export {
   decide,
   decideFields,
   assertDecisionSetSpec,
+  defineChoice,
+  defineScore,
+  defineNoul,
+  readDecision,
+  scoreScoreDecision,
+  scoreNoulDecision,
+  type ScoreScoring,
+  type NoulScoring,
   typedDecision,
   decisionRouter,
   DECISION_ROUTER_KEY,

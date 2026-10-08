@@ -1923,6 +1923,72 @@ The pure policy math, unit-pinned:
   (`null` only with no distribution at all); `margin = p₁ − p₂`,
   `confidence = (K·p_max − 1)/(K − 1)`.
 
+#### Score and noul core contracts (#418 addendum S1)
+
+`DecisionType = 'choice' | 'score' | 'noul'`. A `DecisionSpec<L>` may omit
+`type` or declare `'choice'`; existing specs, verdicts and choice event bytes
+stay unchanged. `ScoreSpec<L>` declares `type: 'score'` and ordered `levels`
+instead of labels; `NoulSpec` declares `type: 'noul'` and optional
+`criteria: { true: string; false: string }`. `AnyDecisionSpec` is their union.
+
+`defineChoice`, `defineScore` and `defineNoul` return declarations, making no
+call. Const type parameters infer choice/score ids from literals. Choice and
+score construction checks the 2-option minimum, unique ids and respective caps:
+`MAX_DECISION_LABELS = 20`, `MAX_SCORE_LEVELS = 10`. The score cap and level
+indices `0..n−1` follow [TypeSafe's score documentation](https://docs.typesafe.ai/primitives/score).
+Naming and meaning follow [coding-agents](https://docs.typesafe.ai/introduction/coding-agents)
+and the [published skill](https://raw.githubusercontent.com/typesafe-ai/skills/main/skills/typesafe-ai/SKILL.md),
+which is documentation only.
+
+| Spec   | Verdict                        | Raw readout                        | Confidence                                 |
+| ------ | ------------------------------ | ---------------------------------- | ------------------------------------------ |
+| choice | `label`                        | `top` (argmax)                     | `(K·p_max − 1)/(K − 1)`                    |
+| score  | `level`, `value` (level index) | `top` (mode), `expected = Σ i·p_i` | `max(0, 1 − Σ p_i·abs(i−mode) / MAD_unif)` |
+| noul   | `holds`                        | `pTrue`                            | `abs(2·pTrue − 1)`                         |
+
+`MAD_unif = (1/n) Σ abs(i − (n−1)/2)`. This ordinal confidence follows
+[TypeSafe's formula](https://docs.typesafe.ai/confidence). The mode breaks ties
+by level order. `(0,.5,.5)` has expected 1.5 and confidence .25;
+`(.5,0,.5)` has expected 1 and confidence 0. A score verdict uses the mode,
+never the rounded mean. Neither `ScoreDecision` nor `NoulDecision` has a margin.
+`ChoiceDecision<L>` aliases the existing `Decision<L>` and writes no `type`.
+
+`ScorePolicy<L>` has a required level-id fallback; `NoulPolicy` has a required
+boolean fallback. Both retain `minConfidence`, `thresholdMethod`,
+`requireCalibrated`, `minCoverage`, and exclude `minMargin`. A noul cut .6
+accepts true at P(true) ≥ .8, false at ≤ .2, and falls back between them.
+`scoreScoreDecision` / `scoreNoulDecision` share the existing categorical
+normalisation and fail-closed policy checks. They compute confidence in core,
+never from provider confidence. Fitted margin cuts do not apply to these types.
+On abstain the verdict takes the fallback while raw mean/mode/P(true) survive;
+raw fields are null only without a usable distribution.
+
+`AnyDecision` is the verdict union. `DecisionFor<S>` and `PolicyFor<S>` follow
+the spec type and inferred ids. `TypedDecisionData.decisions` holds
+`Record<string, AnyDecision>`; use `readDecision(data, spec)` to read a typed
+verdict by key. It returns undefined for an absent key or a mismatched type.
+A missing stored type means choice, including old conversation blobs.
+
+New `decision_made` fields are optional: `type?: 'score' | 'noul'`,
+`expected?: number | null`, `value?: number`, `pTrue?: number | null`.
+Score events reuse labels (ordered levels), probs, label (verdict level) and top
+(mode). Noul events use true/false labels/probs and stringified boolean fallback.
+Choice never writes a type. The event remains metadata only (SD-3): stateChars,
+never state. Serialization and previews render score as `key: soon (E=1.43)`
+and noul as `key: true (p=0.91)`; absent type retains the legacy choice rendering.
+
+S2 adds generic policy entry points and mixed sets. S3/S4 add transport support;
+this slice changes no BAML prompt, routing, calibration artifact or production
+choice spec. `decisionRouter` remains choice-only.
+
+S1 widens `DecideInput.spec` to accept all three specs and adds optional
+`DecideFn.supportedTypes`. An absent declaration means choice-only.
+`preCallAbstain({ spec, supportedTypes, state, policy, method })` returns
+`no-state` first, then `unsupported-type`, then the existing calibration refusal.
+An unsupported type must not call the transport; pass `unsupportedType: true` to
+its pure scorer to record the fallback with null raw readouts. Existing adapters
+refuse score/noul directly before making any request and declare no new support.
+
 #### The awaited wrapper
 
 ```typescript
@@ -2026,7 +2092,7 @@ interface TypedDecisionConfig<L> extends PatternConfig {
   state?: (view: EventView, data) => string
 }
 interface TypedDecisionData {
-  decisions?: Record<string, Decision>
+  decisions?: Record<string, AnyDecision>
 }
 ```
 
@@ -2181,7 +2247,7 @@ distance`; the **floors BEFORE fusion** — a row survives a channel only if
 memory, no ids) that a responder renders in its run-static part. Two patterns
 consume it (#419 M5a): `compactExecution` copies a non-blank `data.memoryContext`
 into `CompactExecutionInput.memoryContext` (the key is ABSENT when nothing was
-recalled), and `router` hands it to `route` as a trailing fourth argument,
+recalled), and `router` (unless `routerMemory: 'replies-only'`) hands it to `route` as a trailing fourth argument,
 `RouteExtra { memoryContext? }`, again only when non-blank — so a `route` written
 before `RouteExtra` sees the three-argument call it always saw. Neither renders
 anything itself: the BAML adapters pass the block to the trailing `memory_context`
@@ -2273,7 +2339,9 @@ await settleMemory(ctx, memoryStoreConfig(deps.memory), { conversationId })
 `withMemory` returns `[memoryRecall(cfg), ...patterns]` — an array combinator, not a
 wrapper (a wrapper would break `runChain`'s per-top-level-pattern live toggle and
 irrecoverable-error stop, and memory must reach two responders). The caller's
-patterns come back as the SAME objects. It is the whole opt-in: it adds
+patterns come back as the SAME objects with the default. With `'replies-only'`,
+each top-level function is wrapped at ingress (the config stays identical), so
+a resume that skips recall still withholds memory from routing. It is the whole opt-in: it adds
 `capabilities.memory`, which `harnessUsesMemory` reads.
 
 `MemoryConfig` is ONE object for both halves. `store` is `MemoryStore &
@@ -2284,6 +2352,33 @@ MemoryWriteStore` (no shared member; no method takes an owner); `decide`,
 `memoryStoreConfig` hands the SAME function to the store half (where absent means
 off), so recall and store cannot disagree about it. `recall` / `settle` carry each
 half's tunables.
+
+`routerMemory?: RouterMemory` is the developer's choice on this same wiring:
+
+- `'routing-and-replies'` (default, option a) preserves today's router arguments
+  and rendered prompt. The router may use recalled memory when writing `intent`.
+  A tool route's task can carry facts from earlier conversations into tool
+  arguments, for example a web-search query or a fetch. This includes tool egress
+  even when model calls stay on private infrastructure.
+- `'replies-only'` (option c) leaves the recalled block off every router prompt,
+  including nested routers. Memory reaches only reply-writing steps:
+  `compactExecution` and its `synthesize` path still receive it. The router's
+  direct conversational answer has no recalled memory, and its direct-response
+  route still skips synthesis. The current recalled block therefore cannot shape
+  a tool route's intent or tool arguments through routing. It is a per-turn boundary, not a guarantee that remembered facts never reach a tool: a fact the reply states becomes conversation history, and on a later turn the router sees that history and may put the fact into `intent`, and so into tool arguments (#548).
+
+Unknown values throw at the wiring boundary (`withMemory` and
+`memoryStoreConfig`); they never silently fall back. `RouterMemory` is the exported
+string-literal union of those two values. The choice is written on turn data by
+the prepended recall step, so callers need no extra router plumbing and the
+original pattern configs stay identical. This amends #419 D13 / decision 6:
+controllers and the planner have no direct memory-block input, but option (a)
+can carry memory indirectly through intent. Option (b), router memory for direct
+answers only with no copying into intent or route, is deferred (#544).
+
+This controls injection of the recalled block on the current turn. User text,
+ordinary conversation history (including earlier replies), and custom patterns
+that explicitly read `data.memories` are outside that boundary.
 
 Spec §1's `policy` is carried per half (`recall.gate`, `settle.gate`). M3 adds `compact` and `retention` as OPTIONAL fields (absent: no compaction, and the D21 default retention), so a composition root written now keeps compiling.
 
@@ -2390,6 +2485,7 @@ the gate's kind also drops a candidate whose own kind must ask (`not-routine`).
 Per candidate, in ONE transaction that the host holds under the owner's advisory
 lock (`MemoryWriteStore.transaction` — it MUST roll back on a throw):
 
+0. Re-read `settings.enabled()` after acquiring the owner lock, inside EACH candidate's transaction and before its first write. False throws to roll that candidate back and reports `skipped: 'disabled'` (#552); the entry check alone cannot cover a switch-off during wake/extract/embed.
 1. `nearest` memory of the same owner, tier and embedding space.
 2. **Same kind and cosine ≥ `dupSimilarity` (0.92)** → reinforce. **Related
    (≥ `relatedSimilarity`, 0.75) preference or trait** → the `memory.merge`
@@ -2410,6 +2506,8 @@ which is why it has its own deadline. The thresholds are unmeasured placeholders
 for layer 4.
 
 ### Erasure semantics (owner decision (b), M2 and M3 together)
+
+**M7 precondition (#552, SD-10/SD-11):** both the "turn off" and "forget all" RPCs must **commit** the user's memory switch-off (`user_prefs.memory_enabled = false`) in its own transaction **before** calling `deleteAllMemoriesForUser`. The erase opens its own memory-pool transaction, and a candidate re-reads the switch on another connection, so a flip that is not yet committed is invisible to it. A flip inside a transaction that wraps the erase call reopens the race: a settle that takes the lock between the erase's commit and the flip's commit reads `true` and writes a memory that survives. Any rejection from the erase means "not erased" and is retryable: `55P03`, a memory-pool connect timeout (`MEMORY_POOL_MAX` is 2 and settles can hold both connections) or a `40P01`. The switch stays off and the RPC reports the failure, never success. Any later writer, such as M3 compaction, must re-read the switch and its inputs inside the owner-lock transaction, as settle does. Forget-all uses the memory pool and the same owner advisory transaction lock (`pg_advisory_xact_lock(hashtextextended('memories:' || $1, 0))`) and `lock_timeout` as candidate writes. A `55P03` must reach the RPC as a retryable failure, never success. In-flight commits before the erase are deleted; candidates acquiring the lock afterwards re-read the disabled switch and write nothing.
 
 Three rules, decided once for storing and for compaction:
 
@@ -2454,9 +2552,8 @@ refused before the call. Pins: `erasure-semantics`, `evidence-event-id`,
 ### The `memory_written` event
 
 One per memory written, recorded after its commit:
-`{ memoryId, kind, tier, contentHash, eventId, ordinal, action }` — **never the
-content** (`contentHash` is the SHA-256 of the stored text; a reinforce hashes the
-existing memory, not the candidate). `formatEventData` renders it from `action` and
+`{ memoryId, kind, tier, eventId, ordinal, action }` — **never the content, nor a
+hash of it** (#541). `formatEventData` renders it from `action` and
 `kind` alone (pin `event-hygiene`). The extractor's `llmCall` rides the first one **redacted**:
 `functionName`, `usage`, `metrics`, `durationMs`, `provider`, `clientName` only —
 `variables`, `promptTemplate`, `rawInput`, `rawOutput` and `parsedOutput` are the
@@ -2468,7 +2565,7 @@ The host's trailing save (`saveTrailingPass`) is refused while a newer turn hold
 the conversation, and `settleMemory` may sit in that continuation for the wake
 budget plus extract, embed and merge time: a user who replies in that window
 commits memories and loses their `memory_written` events. A retry repairs the
-reference — on a conflict it re-records the event (`action: 'reinforced'`, hashed
+reference — on a conflict it re-records the event (`action: 'reinforced'`, its `kind`
 from a `read`) when the context has none for `(eventId, ordinal)` — but nothing
 replays a turn on its own. The mechanism (wait for the claim to release, or
 reconcile `memory_sources` against events on load) is M5's, and M5 cannot land

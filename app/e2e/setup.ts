@@ -9,6 +9,7 @@
  * refused a request.
  */
 import { afterAll, afterEach } from 'vitest'
+import { checkAfterAll, checkAfterEach } from './lib/setup-checks'
 
 // Vitest's `test.env` writes strings; anything derived from them belongs here.
 // `NODE_ENV=test` is what tells `pg` and friends they are not in production.
@@ -25,38 +26,8 @@ delete process.env.USE_VERDA_INFERENCE
 // failed ingest, which the turn can survive, so after EVERY test a request the
 // Graph or converter fake refused fails that test. Both are checked and both
 // are reset, so one refusal never carries into the next test's verdict. The
-// import is dynamic so no lib module loads before the lines above have run.
-afterEach(async () => {
-  const { assertNoUnexpectedEgress } = await import('./lib/egress-backstop')
-  const failures: string[] = []
-  try {
-    await assertNoUnexpectedEgress()
-  } catch (err) {
-    failures.push(err instanceof Error ? err.message : String(err))
-  }
-  const { peekBootedApp } = await import('./lib/app')
-  const app = await peekBootedApp()?.catch(() => null)
-  for (const fake of app ? [app.fakeGraph, app.fakeConverter] : []) {
-    try {
-      fake.assertAllMatched()
-    } catch (err) {
-      failures.push(err instanceof Error ? err.message : String(err))
-    }
-    fake.reset()
-  }
-  if (failures.length > 0) throw new Error(failures.join('\n'))
-})
+// app import stays dynamic in the checks so it loads after the lines above.
+afterEach(checkAfterEach)
 
 // Stacked hook order runs this after the scenario file's own afterAll hooks.
-afterAll(async () => {
-  const { assertNoUnexpectedEgress } = await import('./lib/egress-backstop')
-  try {
-    await assertNoUnexpectedEgress()
-  } catch (err) {
-    throw new Error(
-      `e2e hermetic egress refused after the last test: ${JSON.stringify(
-        err instanceof Error ? err.message : String(err),
-      )}`,
-    )
-  }
-})
+afterAll(checkAfterAll)

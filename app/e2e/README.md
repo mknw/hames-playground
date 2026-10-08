@@ -389,8 +389,9 @@ clients target local services.
 BAML, Node fetch, consumer and per-run registries, `withOptions`, streaming, and
 per-call env. Each probe must reject **and** record that target, then consumes its
 own record. An enforcement pin swallows a fetch rejection to
-`hermetic-enforce.invalid` and requires `assertNoUnexpectedEgress()` to fail;
-a source scan pins its call in both setup hooks. All probe hosts are `.invalid`,
+`hermetic-enforce.invalid` and requires both exported setup hook bodies,
+`checkAfterEach()` and `checkAfterAll()`, to reject; a source scan pins their
+exact registrations in `setup.ts`. All probe hosts are `.invalid`,
 so mutations that disable the proxy fail by missing observation without reaching
 any provider. Global teardown prints the complete record, including consumed
 deliberate probes; a normal full run has no targets except those deliberate

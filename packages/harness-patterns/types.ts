@@ -679,8 +679,20 @@ export type RouteFn = {
     message: string,
     history: Array<{ role: string; content: string }>,
     routes?: Array<{ name: string; description: string }>,
+    extra?: RouteExtra,
   ): Promise<RouteMessageResult>
   limits?: () => ModelLimits
+}
+
+/** What a turn can hand the router besides the message (#419 M5a). Optional and
+ *  TRAILING, so a `RouteFn` written before it keeps its meaning. The router
+ *  passes it only when it has something to pass: a call with nothing recalled
+ *  carries no fourth argument at all. */
+export interface RouteExtra {
+  /** The block `memoryRecall` formatted for this turn (`data.memoryContext`):
+   *  background about the user, rendered as DATA — never an instruction, never
+   *  a routing signal on its own. */
+  memoryContext?: string
 }
 
 // ============================================================================
@@ -1061,6 +1073,10 @@ export interface CompactExecutionInput {
   hasError?: boolean
   /** Error message from upstream patterns */
   errorMessage?: string
+  /** The block `memoryRecall` formatted for this turn (`data.memoryContext`),
+   *  present ONLY when something was recalled (#419 M5a). Background about the
+   *  user for the synthesizer to render as DATA; never a tool result. */
+  memoryContext?: string
 }
 
 /** Custom synthesis function type */
@@ -1083,6 +1099,8 @@ export interface CompactExecutionData {
   synthesizedResponse?: string
   intent?: string
   loopHistory?: LoopHistory
+  /** Written by `memoryRecall`, cleared by it every turn; read here (#419 M5a). */
+  memoryContext?: string
 }
 
 // ============================================================================

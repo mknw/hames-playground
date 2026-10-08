@@ -322,6 +322,9 @@ export {
   type MemoryGateSettings,
   type MemoryRecallLabel,
   type RecalledMemory,
+  withMemory,
+  memoryStoreConfig,
+  type MemoryConfig,
 } from './patterns'
 
 // Memory store (#419 M2): the post-reply step and its pure acceptance rules. A

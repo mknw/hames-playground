@@ -2169,9 +2169,14 @@ distance`; the **floors BEFORE fusion** — a row survives a channel only if
 
 `data.memories` is `RecalledMemory[]` (`{ id, kind, tier, content }`) and
 `data.memoryContext` the formatted block (`- [kind] content`, one line per
-memory, no ids) that a responder renders in its run-static part. Wiring the
-block into `router` / `compactExecution` is the host's (#419 M5/M9); this step
-only produces it.
+memory, no ids) that a responder renders in its run-static part. Two patterns
+consume it (#419 M5a): `compactExecution` copies a non-blank `data.memoryContext`
+into `CompactExecutionInput.memoryContext` (the key is ABSENT when nothing was
+recalled), and `router` hands it to `route` as a trailing fourth argument,
+`RouteExtra { memoryContext? }`, again only when non-blank — so a `route` written
+before `RouteExtra` sees the three-argument call it always saw. Neither renders
+anything itself: the BAML adapters pass the block to the trailing `memory_context`
+parameter, escaped (see the DATA fence below).
 
 ### The gate's thresholds are method-scoped (#418 F2)
 
@@ -2248,6 +2253,40 @@ that finishes after the event is written is unrecordable without a late mutation
   `assertSameSpace` takes space objects, not ids).
 - The recalled block carries no provenance fence: the responder's render (M9) must
   fence it.
+
+### `withMemory(cfg)(patterns)` and `memoryStoreConfig(cfg)` (#419 M5a)
+
+```typescript
+const patterns = withMemory<AgentData>(deps.memory)([router(...), routes({...}), compactExecution(...)])
+// after the reply, from the host's compactAndSave continuation:
+await settleMemory(ctx, memoryStoreConfig(deps.memory), { conversationId })
+```
+
+`withMemory` returns `[memoryRecall(cfg), ...patterns]` — an array combinator, not a
+wrapper (a wrapper would break `runChain`'s per-top-level-pattern live toggle and
+irrecoverable-error stop, and memory must reach two responders). The caller's
+patterns come back as the SAME objects. It is the whole opt-in: it adds
+`capabilities.memory`, which `harnessUsesMemory` reads.
+
+`MemoryConfig` is ONE object for both halves. `store` is `MemoryStore &
+MemoryWriteStore` (no shared member; no method takes an owner); `decide`,
+`extract`, `embed`, `owner`, `visibleTiers` and **`enabled`** are required.
+`enabled` is the user's switch and is required here, unlike on a bare
+`memoryRecall` (where absent means on): D11 makes memory off until enabled, and
+`memoryStoreConfig` hands the SAME function to the store half (where absent means
+off), so recall and store cannot disagree about it. `recall` / `settle` carry each
+half's tunables.
+
+### The DATA fence (harness-baml, #419 M5a)
+
+`memory.baml`'s prompts and the `memory_context` blocks put text between
+`---BEGIN DATA---` and `---END DATA---`. The assistant's reply — composed from tool
+results — is among it, so `harness-baml`'s adapters pass every fenced string through
+`escapeDataFence`, which rewrites any `BEGIN DATA` / `END DATA` to `BEGIN (data
+marker removed)` and is the identity on text without one (so a verbatim `evidence`
+span stays verbatim; a user message that contains a marker fails closed). It is not
+the security control — acceptance and the sanitizer are — it removes the one way
+text could end the fence.
 
 ### `harnessUsesMemory(patterns)`
 

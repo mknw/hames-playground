@@ -76,7 +76,7 @@ export interface TopLogprob {
  *  label id: whitespace, quotes and opening brackets — the variants the readout
  *  must treat as the same letter (`'B'`, `' B'`, `'(B'`). Trailing characters
  *  are handled by the prefix rule below, not stripped away. */
-const TOKEN_LEAD = /[\s'"({\[⟦]/
+const TOKEN_LEAD = /[\s'"({[⟦]/
 
 function trimTokenLeft(token: string): string {
   let start = 0
@@ -747,8 +747,8 @@ export async function decide<L extends string>(
 /** Several typed fields over ONE state. */
 export interface DecideFieldsCall<F extends Record<string, string>> {
   readonly decide: DecideFn
-  /** A one-call provider (Jev): when present and `set.mode !== 'joint'` the
-   *  whole set is one request. Absent → one `decide` pass per field. */
+  /** A one-call provider: the whole set is one request in fields mode.
+   *  Jev also uses per-field questions in joint mode (G8). */
   readonly decideAll?: DecideAllFn
   readonly set: DecisionSetSpec<F>
   readonly state: string
@@ -921,9 +921,9 @@ async function evaluateFields<F extends Record<string, string>>(
  * Decide several typed fields over one state — the owner's "ONE call, SEVERAL
  * typed fields". The PROVIDER decides how the set is served:
  *
- *  - `decideAll` present (and `mode !== 'joint'`): one request, every field
+ *  - `decideAll` present (fields mode, or Jev in any mode): one request, every field
  *    its own typed question;
- *  - `mode: 'joint'`: the label product scored in ONE `decide` pass and
+ *  - `mode: 'joint'` on other transports: the label product scored in ONE `decide` pass and
  *    marginalised back to each field (refused above
  *    {@link MAX_DECISION_LABELS}, see {@link assertDecisionSetSpec});
  *  - otherwise one `decide` pass per field with a byte-identical state.
@@ -939,6 +939,11 @@ export async function decideFields<F extends Record<string, string>>(
   call: DecideFieldsCall<F>,
   opts: DecideOptions = {},
 ): Promise<{ [K in keyof F]: Decision<F[K]> }> {
+  // G8: Jev serves each field as a question, even when joint was requested.
+  // Resolve the mode before the product-size guard as no product is sent.
+  if (call.set.mode === 'joint' && readServing(call.decide, call.set.key).method === 'jev') {
+    call = { ...call, set: { ...call.set, mode: 'fields' } }
+  }
   assertDecisionSetSpec(call.set)
   const evaluated = await evaluateFields(call)
   const out: Record<string, Decision<string>> = {}

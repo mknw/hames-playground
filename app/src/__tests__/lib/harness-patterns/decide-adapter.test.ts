@@ -20,6 +20,7 @@ import { readFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import path from 'node:path'
 import type { AddressInfo } from 'node:net'
+import type { DecisionCalibrationEntry } from '@hames-ai/harness-patterns/types'
 
 import '../../../lib/inference/config.server'
 
@@ -223,8 +224,9 @@ describe('`serving` — what the policy layer reads BEFORE the call', () => {
     // Anthropic tier (no frame): the resolved client is Jev (T4), which is
     // calibratable: its method, and its own fitted entry when the host fed one.
     expect(decide.serving('memory.kind')).toEqual({ method: 'jev' })
-    configureDecisionCalibration({ JevDecide: { 'memory.kind': entry } })
-    expect(decide.serving('memory.kind')).toEqual({ method: 'jev', calibration: entry })
+    const cuts = { minConfidence: 0.4 }
+    configureDecisionCalibration({ JevDecide: { 'memory.kind': cuts } })
+    expect(decide.serving('memory.kind')).toEqual({ method: 'jev', calibration: cuts })
   })
 
   it('reports nothing for a client no transport serves (review finding 4)', async () => {
@@ -288,5 +290,37 @@ describe('refusals', () => {
       decide({ spec: { key: 'k', question: 'q', labels }, state: 's' }),
     )
     expect(Object.keys(r.probs)).toHaveLength(20)
+  })
+})
+
+// G7: mutation — remove the Jev temperature/bias refusal in the setter.
+describe('jev-calibration-cuts-only (G7)', () => {
+  it.each<DecisionCalibrationEntry>([{ temperature: 1 }, { bias: {} }, { bias: { yes: 0 } }])(
+    'refuses unsupported calibration %j for every Jev client',
+    async (entry) => {
+      const { configureDecisionCalibration, decisionCalibrationFor, JEV_CLIENTS } =
+        await import('@hames-ai/harness-baml/clients.server')
+      for (const client of JEV_CLIENTS) {
+        const cuts = { minConfidence: 0.4, minMargin: 0.2 }
+        configureDecisionCalibration({ [client]: { route: cuts } })
+        expect(() => configureDecisionCalibration({ [client]: { route: entry } })).toThrow(
+          /cuts only/,
+        )
+        expect(decisionCalibrationFor(client, 'route')).toEqual(cuts)
+      }
+    },
+  )
+
+  it('accepts cuts for Jev and temperature/bias for other clients', async () => {
+    const { configureDecisionCalibration, decisionCalibrationFor, JEV_CLIENTS } =
+      await import('@hames-ai/harness-baml/clients.server')
+    for (const client of JEV_CLIENTS) {
+      const cuts = { minConfidence: 0.4, minMargin: 0.2 }
+      expect(() => configureDecisionCalibration({ [client]: { route: cuts } })).not.toThrow()
+      expect(decisionCalibrationFor(client, 'route')).toEqual(cuts)
+    }
+    const entry = { temperature: 2, bias: { yes: 0.1 } }
+    configureDecisionCalibration({ LocalQwenSmallDecide: { route: entry } })
+    expect(decisionCalibrationFor('LocalQwenSmallDecide', 'route')).toEqual(entry)
   })
 })

@@ -722,6 +722,16 @@ export type DecisionCalibrationTable = Readonly<
 let decisionCalibration: DecisionCalibrationTable = {}
 
 export function configureDecisionCalibration(table: DecisionCalibrationTable): void {
+  for (const [client, entries] of Object.entries(table)) {
+    if (!JEV_CLIENTS.has(client)) continue
+    for (const [key, entry] of Object.entries(entries)) {
+      if (entry.temperature !== undefined || entry.bias !== undefined) {
+        throw new Error(
+          `Decision calibration '${client}/${key}': Jev accepts fitted cuts only; temperature and bias are unsupported.`,
+        )
+      }
+    }
+  }
   decisionCalibration = table
 }
 

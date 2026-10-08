@@ -1444,3 +1444,48 @@ describe('decision-seam-structural', () => {
     expect(typeof wrapped).toBe('function')
   })
 })
+
+// G8: mutation — remove Jev's mode normalisation; or apply it to every method.
+describe('decision-joint-serving (G8)', () => {
+  it.each(['logprob', 'verbalized', undefined] as const)(
+    'keeps the joint product on non-Jev serving %s even with decideAll supplied',
+    async (method) => {
+      const { fn, calls } = fakeDecide(
+        () => logprobResult({ 'user | semantic': 1 }),
+        method ? { serving: () => ({ method }) } : undefined,
+      )
+      let allCalls = 0
+      const decideAll = (async () => {
+        allCalls++
+        return { fields: {} }
+      }) as DecideAllFn
+      const out = await decideFields(createScope('p', {}), {
+        decide: fn,
+        decideAll,
+        set: { ...SET, mode: 'joint' },
+        state: 's',
+        policy: SET_POLICY,
+      })
+      expect(allCalls).toBe(0)
+      expect(calls).toHaveLength(1)
+      expect(calls[0].spec.labels).toHaveLength(6)
+      expect(calls[0].spec.labels.map((label) => label.id)).toContain('user | semantic')
+      expect([out.target.label, out.kind.label]).toEqual(['user', 'semantic'])
+    },
+  )
+
+  it('Jev ignores joint product limits and keeps field questions when no decideAll is supplied', async () => {
+    const fields = Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`f${i}`, SPEC]))
+    const { fn, calls } = fakeDecide(() => logprobResult({ yes: 1, no: 0 }, { method: 'jev' }), {
+      serving: () => ({ method: 'jev' }),
+    })
+    await decideFields(createScope('p', {}), {
+      decide: fn,
+      set: { key: 'wide', fields, mode: 'joint' },
+      state: 's',
+      policy: Object.fromEntries(Object.keys(fields).map((key) => [key, POLICY])),
+    })
+    expect(calls).toHaveLength(5)
+    expect(calls.map((call) => call.spec)).toEqual(Object.values(fields))
+  })
+})

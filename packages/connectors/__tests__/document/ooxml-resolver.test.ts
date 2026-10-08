@@ -1586,3 +1586,138 @@ it('#551 X1 varying XF configurations cannot move SI compilation into a tuple mi
   expect(large.work / small.work).toBeLessThan(2.85)
   await pair(bytes, create(n, true), MIME.xlsx, { 'colour-contrast': n, 'too-small': n })
 })
+
+it.each([
+  'character',
+  'paragraph',
+  'table',
+  'defaults',
+  'ancestor',
+  'paragraph-scope',
+  'cell',
+  'row',
+  'table-scope',
+  'conditional',
+] as const)(
+  '#551 W5 long shared shading at %s parses once with full paired disposition',
+  async (source) => {
+    const n = 64,
+      exact = '0'.repeat(32000) + 'FF'
+    const shade = `<w:shd w:val="clear" w:themeFill="background1" w:themeFillShade="${exact}"/>`
+    let body = paragraph(n),
+      styles = style('P', shade)
+    if (source === 'character') {
+      body = paragraph(n, 'Q', '<w:rStyle w:val="P"/>')
+      styles = style('P', shade, '', 'character')
+    }
+    if (source === 'paragraph') styles = style('P', '', `<w:pPr>${shade}</w:pPr>`)
+    if (source === 'table') {
+      body = table(n, '<w:tblStyle w:val="P"/>')
+      styles = style('P', shade, '', 'table')
+    }
+    if (source === 'defaults') {
+      body = paragraph(n, 'Q')
+      styles = `<w:docDefaults><w:rPrDefault><w:rPr>${shade}</w:rPr></w:rPrDefault></w:docDefaults>`
+    }
+    if (source === 'ancestor') styles = style('B', shade) + style('P', '', '<w:basedOn w:val="B"/>')
+    if (source === 'paragraph-scope') {
+      body = paragraph(n, 'Q').replace('</w:pPr>', shade + '</w:pPr>')
+      styles = ''
+    }
+    if (source === 'cell' || source === 'row' || source === 'table-scope') {
+      body = table(n, shade, '', source === 'cell' ? 'tc' : source === 'row' ? 'tr' : 'tbl')
+      styles = ''
+    }
+    if (source === 'conditional') {
+      body = table(n, '<w:tblStyle w:val="P"/>')
+      styles = style('P', '', `<w:tblStylePr><w:pPr>${shade}</w:pPr></w:tblStylePr>`, 'table')
+    }
+    const bytes = word(body, styles),
+      result = await measure(() => ooxmlDisarm(bytes, MIME.docx), exact)
+    expect(result.parses).toBe(1)
+    await pair(
+      bytes,
+      edit(bytes, (xml) => xml.replace(exact, '0'.repeat(32000) + '00')),
+      MIME.docx,
+      { 'colour-contrast': n },
+    )
+  },
+)
+
+it.each(['character', 'paragraph', 'table', 'defaults', 'ancestor'] as const)(
+  '#551 W3 long theme/literal names at %s resolve once including negative results',
+  async (source) => {
+    for (const field of ['themeColor', 'val']) {
+      const n = 64,
+        exact = 'X'.repeat(32000),
+        colour = `<w:color w:${field}="${exact}"/>`
+      let body = paragraph(n),
+        styles = style('P', colour)
+      if (source === 'character') {
+        body = paragraph(n, 'Q', '<w:rStyle w:val="P"/>')
+        styles = style('P', colour, '', 'character')
+      }
+      if (source === 'table') {
+        body = table(n, '<w:tblStyle w:val="P"/>')
+        styles = style('P', colour, '', 'table')
+      }
+      if (source === 'defaults') {
+        body = paragraph(n, 'Q')
+        styles = `<w:docDefaults><w:rPrDefault><w:rPr>${colour}</w:rPr></w:rPrDefault></w:docDefaults>`
+      }
+      if (source === 'ancestor')
+        styles = style('B', colour) + style('P', '', '<w:basedOn w:val="B"/>')
+      const bytes = word(body, styles),
+        result = await measure(() => ooxmlDisarm(bytes, MIME.docx), exact)
+      expect(result.normalized).toBe(field === 'themeColor' ? 1 : 2)
+      await pair(
+        bytes,
+        edit(bytes, (xml) => xml.replace('w:color ', 'w:kern  ')),
+        MIME.docx,
+        { 'unknown-property': n },
+      )
+    }
+  },
+)
+
+it.each(['font', 'fill', 'rich'] as const)(
+  '#551 X4 %s independently long indexed/theme/tint fields resolve once with paired disposition',
+  async (source) => {
+    for (const field of ['indexed', 'theme', 'tint']) {
+      const n = 64,
+        dark = source === 'fill'
+      const exact =
+        '0'.repeat(32000) +
+        (field === 'tint' ? '.0' : field === 'theme' ? (dark ? '1' : '0') : dark ? '0' : '1')
+      const colour = `<color ${field}="${exact}"${field === 'tint' ? ` rgb="FF${dark ? '000000' : 'FFFFFF'}"` : ''}/>`
+      let styles = sheetStyle(),
+        si = '',
+        active = cells(n),
+        control = cells(n, 0)
+      if (source === 'font')
+        styles = sheetStyle(
+          '',
+          font() + `<font>${colour}</font>`,
+          '<fill><patternFill patternType="none"/></fill>',
+          xf() + xf(1),
+        )
+      if (source === 'fill')
+        styles = sheetStyle(
+          '',
+          font(),
+          '<fill><patternFill patternType="none"/></fill>' +
+            `<fill><patternFill patternType="solid">${colour.replace('<color ', '<fgColor ')}</patternFill></fill>`,
+          xf() + xf(0, 1),
+        )
+      if (source === 'rich') {
+        si = `<si><t>VISIBLE</t></si><si><r><rPr>${colour}</rPr><t>VISIBLE</t></r></si>`
+        active = cells(n, 1, 1)
+        control = cells(n, 1, 0)
+      }
+      const bytes = sheet(active, styles, si),
+        result = await measure(() => ooxmlDisarm(bytes, MIME.xlsx), exact)
+      expect(result.parses).toBe(1)
+      await pair(bytes, sheet(control, styles, si), MIME.xlsx, { 'colour-contrast': n })
+    }
+  },
+)

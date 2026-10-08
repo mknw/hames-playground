@@ -2370,8 +2370,12 @@ function refFill(
 
 /** A parsed layout, master or notes master: what runs can inherit from it. */
 interface SlidesStylePart {
-  /** Placeholder key `type:idx` (either side may be empty) → level → defRPr. */
-  readonly byPh: ReadonlyMap<string, ReadonlyMap<number, XmlElement>>
+  /**
+   * `t\0type\0level` (type lower-cased, as the slide's is) and `i\0idx\0level`
+   * → the first placeholder's defRPr at that level: one lookup per run, where
+   * a scan of every placeholder per run was quadratic in the part (#517).
+   */
+  readonly phIndex: ReadonlyMap<string, XmlElement>
   /** `txStyles` name → level → defRPr. */
   readonly byStyle: ReadonlyMap<string, ReadonlyMap<number, XmlElement>>
   /** The part's own background, as written (`p:bgPr` or `p:bgRef`). */
@@ -2438,7 +2442,14 @@ function slideInheritanceOf(ctx: Ctx): SlideInheritance {
 }
 
 function readSlidesStylePart(root: XmlElement): SlidesStylePart {
-  const byPh = new Map<string, ReadonlyMap<number, XmlElement>>()
+  const byPh = new Map<
+    string,
+    {
+      readonly type: string
+      readonly idx: string
+      readonly levels: ReadonlyMap<number, XmlElement>
+    }
+  >()
   const byStyle = new Map<string, ReadonlyMap<number, XmlElement>>()
   let bg: XmlElement | undefined
   let clrMap: ReadonlyMap<string, string> | undefined
@@ -2459,12 +2470,24 @@ function readSlidesStylePart(root: XmlElement): SlidesStylePart {
     if (el.ns === NS.p && ['sp', 'pic', 'graphicFrame', 'cxnSp'].includes(el.name)) {
       const ph = phOf(el)
       const lst = childEl(childEl(el, NS.p, 'txBody'), NS.a, 'lstStyle')
-      if (ph && lst) byPh.set(`${ph.type ?? ''}:${ph.idx ?? ''}`, lstLevels(lst))
+      if (ph && lst) {
+        const type = ph.type ?? ''
+        const idx = ph.idx ?? ''
+        byPh.set(`${type}:${idx}`, { type, idx, levels: lstLevels(lst) })
+      }
     }
     for (const c of elements(el)) walk(c)
   }
   walk(root)
-  return { byPh, byStyle, bg, clrMap }
+  const phIndex = new Map<string, XmlElement>()
+  for (const { type, idx, levels } of byPh.values()) {
+    for (const [level, def] of levels) {
+      for (const key of [`t\0${type.toLowerCase()}\0${level}`, `i\0${idx}\0${level}`]) {
+        if (!phIndex.has(key)) phIndex.set(key, def)
+      }
+    }
+  }
+  return { phIndex, byStyle, bg, clrMap }
 }
 
 /** The content types a read-for-resolution style part must carry. */
@@ -2785,12 +2808,7 @@ function phLevel(
   level: number,
 ): XmlElement | undefined {
   if (!part || !ph) return undefined
-  const byType = (type: string): XmlElement | undefined => {
-    for (const [key, levels] of part.byPh) {
-      if (key.startsWith(`${type}:`) && levels.get(level)) return levels.get(level)
-    }
-    return undefined
-  }
+  const byType = (type: string): XmlElement | undefined => part.phIndex.get(`t\0${type}\0${level}`)
   const type = ph.type?.toLowerCase()
   if (type !== undefined) {
     const direct = byType(type)
@@ -2805,18 +2823,19 @@ function phLevel(
       if (body) return body
     }
   }
-  if (ph.idx !== undefined) {
-    for (const [key, levels] of part.byPh) {
-      if (key.endsWith(`:${ph.idx}`) && levels.get(level)) return levels.get(level)
-    }
-  }
+  if (ph.idx !== undefined) return part.phIndex.get(`i\0${ph.idx}\0${level}`)
   return undefined
 }
 
-/** A placeholder's `txStyles` name: title, body, other — or notes. */
-function styleNameOf(ph: { readonly type?: string }, notes: boolean): string {
+/**
+ * A placeholder's `txStyles` name: title, body, other — or notes. A
+ * placeholder written with no `type` is ECMA-376's default `obj`, so body
+ * (#517); a shape that is no placeholder is other.
+ */
+function styleNameOf(ph: { readonly type?: string } | undefined, notes: boolean): string {
   if (notes) return 'notesStyle'
-  const type = ph.type?.toLowerCase()
+  if (!ph) return 'otherStyle'
+  const type = (ph.type ?? 'obj').toLowerCase()
   if (type === 'title' || type === 'ctrtitle') return 'titleStyle'
   if (type === 'body' || type === 'obj' || type === 'subtitle') return 'bodyStyle'
   return 'otherStyle'
@@ -2841,7 +2860,7 @@ function countDrawingRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
     scope.defRPr,
     phLevel(inheritance.layout, ph, level),
     phLevel(inheritance.master, ph, level),
-    inheritance.master?.byStyle.get(styleNameOf(ph ?? {}, notes))?.get(level),
+    inheritance.master?.byStyle.get(styleNameOf(ph, notes))?.get(level),
     ctx.slideDefaults?.get(level),
   ]
   const { fill, unknown } = drawingTextFill(chain, s)

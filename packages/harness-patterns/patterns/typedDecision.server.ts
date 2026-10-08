@@ -766,7 +766,8 @@ function jointProduct(set: DecisionSetSpec<Record<string, string>>): number {
  * `mode: 'joint'` scores the label PRODUCT in one pass from the same top-k
  * window a single spec reads, so a product above {@link MAX_DECISION_LABELS}
  * cannot be read out faithfully. Call it where the set is declared to fail at
- * construction; `decideFields` calls it first regardless.
+ * construction. This standalone guard has no serving report and also refuses
+ * wide Jev joint sets; `decideFields` resolves Jev to fields before calling it.
  */
 export function assertDecisionSetSpec(set: DecisionSetSpec<Record<string, string>>): void {
   if (set.mode !== 'joint') return

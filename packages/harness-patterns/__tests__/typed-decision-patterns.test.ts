@@ -1489,3 +1489,26 @@ describe('decision-joint-serving (G8)', () => {
     expect(calls.map((call) => call.spec)).toEqual(Object.values(fields))
   })
 })
+
+// G8 review finding 3: mutation — assign call.set.mode in place instead of copying.
+describe('decision-joint-serving frozen set', () => {
+  it('leaves the frozen caller set in joint mode after Jev serves per-field questions', async () => {
+    const set = Object.freeze({ ...SET, mode: 'joint' as const })
+    const { fn, calls } = fakeDecide(
+      bySpec({
+        'memory.store.target': { user: 1, none: 0 },
+        'memory.store.kind': { episodic: 0, semantic: 1, trait: 0 },
+      }),
+      { serving: () => ({ method: 'jev' }) },
+    )
+    const out = await decideFields(createScope('p', {}), {
+      decide: fn,
+      set,
+      state: 's',
+      policy: SET_POLICY,
+    })
+    expect(set.mode).toBe('joint')
+    expect(calls).toHaveLength(2)
+    expect([out.target.label, out.kind.label]).toEqual(['user', 'semantic'])
+  })
+})

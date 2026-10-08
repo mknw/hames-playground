@@ -440,10 +440,21 @@ interface RawRel {
   readonly external: boolean
 }
 
+interface ContentType {
+  readonly raw: string
+  readonly lower: string
+  readonly categoryRank: number
+}
+function contentType(raw: string): ContentType {
+  const lower = raw.toLowerCase()
+  const rank = CATEGORIES.findIndex(([, re]) => re.test(lower))
+  return { raw, lower, categoryRank: rank < 0 ? Infinity : rank }
+}
+
 class Package {
   private readonly files = new Map<string, ZipEntry>()
-  private readonly overrides = new Map<string, string>()
-  private readonly defaults = new Map<string, string>()
+  private readonly overrides = new Map<string, ContentType>()
+  private readonly defaults = new Map<string, ContentType>()
   private readonly relationships = new Map<string, RawRel[]>()
   private readonly internalByType = new Map<string, Map<string, RawRel>>()
 
@@ -456,7 +467,7 @@ class Package {
       const type = attrOf(a, 'ContentType')
       if (part === undefined || type === undefined) return
       if (this.overrides.has(fold(part))) refuse('content-type', 'a part with two declared types')
-      this.overrides.set(fold(part), type)
+      this.overrides.set(fold(part), contentType(type))
     })
     scanPackagePart(ct, { ns: NS.ct, name: 'Types' }, 'Default', (a) => {
       const ext = attrOf(a, 'Extension')
@@ -464,7 +475,7 @@ class Package {
       if (ext === undefined || type === undefined) return
       if (this.defaults.has(ext.toLowerCase()))
         refuse('content-type', 'an extension declared twice')
-      this.defaults.set(ext.toLowerCase(), type)
+      this.defaults.set(ext.toLowerCase(), contentType(type))
     })
   }
 
@@ -474,6 +485,10 @@ class Package {
 
   /** The part's declared content type, as written (an Override, else its extension's Default). */
   typeOf(name: string): string | undefined {
+    return this.typeRecord(name)?.raw
+  }
+
+  typeRecord(name: string): ContentType | undefined {
     const base = name.slice(name.lastIndexOf('/') + 1)
     const dot = base.lastIndexOf('.')
     return (
@@ -555,9 +570,13 @@ const CATEGORIES: readonly (readonly [string, RegExp])[] = [
   ['properties', /^docprops\//],
 ]
 
-function categoryOf(name: string, type: string | undefined): string {
-  const [n, t] = [name.toLowerCase(), (type ?? '').toLowerCase()]
-  return CATEGORIES.find(([, re]) => re.test(n) || re.test(t))?.[0] ?? 'otherParts'
+function categoryOf(name: string, type: ContentType | undefined): string {
+  const n = name.toLowerCase()
+  const rank = CATEGORIES.findIndex(([, re]) => re.test(n))
+  return (
+    CATEGORIES[Math.min(rank < 0 ? Infinity : rank, type?.categoryRank ?? Infinity)]?.[0] ??
+    'otherParts'
+  )
 }
 
 // ============================================================================
@@ -608,7 +627,7 @@ function disarm(
     refuse('no-main-part', 'the main part is missing')
   }
   const mainType = pkg.typeOf(mainEntry.name)
-  if (mainType?.toLowerCase() !== family.mainType) {
+  if (pkg.typeRecord(mainEntry.name)?.lower !== family.mainType) {
     refuse('content-type', "the main part's type is not the declared type")
   }
 
@@ -622,7 +641,7 @@ function disarm(
   }
   const reasons = new Map<string, string>()
   const visibility = new Map<ZipEntry, boolean>()
-  keep(mainEntry, family.mainRole, mainType)
+  keep(mainEntry, family.mainRole, mainType!)
 
   // Which worksheets and slides the main part shows: only through the list
   // that names them, a depth-2 entry under its depth-1 list (A12). A
@@ -659,7 +678,7 @@ function disarm(
       const entry = name === undefined ? undefined : pkg.get(name)
       if (!entry || entry.directory) continue
       const type = pkg.typeOf(entry.name)
-      if (type?.toLowerCase() !== ROLE_TYPE[role as keyof typeof ROLE_TYPE]) continue
+      if (pkg.typeRecord(entry.name)?.lower !== ROLE_TYPE[role as keyof typeof ROLE_TYPE]) continue
       const key = fold(entry.name)
 
       if (part.role === 'sheetMain' && role === 'worksheet') {
@@ -696,7 +715,7 @@ function disarm(
     if (e.directory || isRelsPart(e.name)) continue
     const key = fold(e.name)
     if (kept.has(key) || key === '[content_types].xml') continue
-    removed.add(reasons.get(key) ?? categoryOf(e.name, pkg.typeOf(e.name)))
+    removed.add(reasons.get(key) ?? categoryOf(e.name, pkg.typeRecord(e.name)))
   }
 
   // Rewrite the kept parts. What the rules read comes first — the theme and
@@ -707,6 +726,12 @@ function disarm(
     removed,
     counted,
     noteRefs: new Set(),
+    wordColours: new Map(),
+    shadingColours: new Map(),
+    shadingLevels: new Map(),
+    sheetColours: new Map(),
+    cellFills: new Map(),
+    richSummaries: new Map(),
     slideStyle: new Map(),
     styleParts: new Map(),
     styleEdges: new Map(),
@@ -750,7 +775,7 @@ function disarm(
       shared.fmtFillEls ??= theme.fillEls
       shared.fmtBgFillEls ??= theme.bgFillEls
     }
-    if (part.role === 'wordStyles') shared.wordStyles = readWordStyles(rewritten)
+    if (part.role === 'wordStyles') shared.wordStyles = readWordStyles(rewritten, shared)
     if (part.role === 'sheetStyles') {
       shared.sheetStyles = readSheetStyles(rewritten)
       // A conditional format can turn text invisible, counted for the part
@@ -762,6 +787,8 @@ function disarm(
       const fontRgbs = st.fonts
         .flatMap((f) => (f.color && !f.color.auto ? [toRgb(f.color, shared)] : []))
         .filter((rgb): rgb is string => rgb !== undefined)
+      const baseFillIndex = colourIndex(baseFills.length ? baseFills : ['FFFFFF'])
+      const baseFontIndex = colourIndex(fontRgbs)
       const fails = (fg: string, bg: string): boolean => contrastRatio(fg, bg) < MIN_CONTRAST
       const against = (fills: readonly string[]): readonly string[] =>
         fills.length > 0 ? fills : ['FFFFFF']
@@ -774,13 +801,12 @@ function disarm(
         const own = cellFillColours(d.fill, shared)
         if (own.unknown) return true
         return (
-          against(own.colours).some((bg) => fails(rgb, bg)) ||
-          against(baseFills).some((bg) => fails(rgb, bg))
+          against(own.colours).some((bg) => fails(rgb, bg)) || contrastFails(baseFillIndex, rgb)
         )
       })
       const dxfFill = st.dxfs.some((d) => {
         const fills = cellFillColours(d.fill, shared).colours
-        return fills.length > 0 && fontRgbs.some((fg) => fills.some((bg) => fails(fg, bg)))
+        return fills.length > 0 && fills.some((bg) => contrastFails(baseFontIndex, bg))
       })
       if (dxfFont || dxfFill) counted.add('colour-contrast')
     }
@@ -984,6 +1010,12 @@ function carry(carried: readonly XmlAttribute[], children: readonly Node[]): Nod
 // ============================================================================
 
 interface Shared {
+  readonly wordColours: Map<WordColor | undefined, Fg>
+  readonly shadingColours: Map<Shd, ShdColours>
+  readonly shadingLevels: Map<readonly Shd[], ShadingLevel>
+  readonly sheetColours: Map<Color, { rgb?: string }>
+  readonly cellFills: Map<CellFill, { colours: readonly string[]; unknown: boolean }>
+  readonly richSummaries: Map<readonly RichRun[], RichSummary>
   readonly removed: Tally
   readonly counted: Reasons
   /** `footnote:<id>` / `endnote:<id>` for every reference the main part kept. */
@@ -1038,7 +1070,7 @@ interface Scope {
   /** The enclosing DrawingML table cell's (else table's) fill (#495 F3). */
   readonly tblFill?: DFill
   /** The enclosing cell's, row's and table's `w:shd`, nearest first. */
-  readonly tblFills?: readonly (readonly Shd[])[]
+  readonly tblFills?: readonly ShadingLevel[]
   /** The paragraph's own `a:pPr/a:defRPr` and its list level (#492). */
   readonly paraDefRPr?: XmlElement
   readonly lvl?: number
@@ -1250,12 +1282,18 @@ function visit(el: XmlElement, ctx: Ctx, fields: Fields, scope: Scope): Node[] {
       ...scope,
       tblStyles: wVals(el, 'tblPr', 'tblStyle'),
       // The table's shading is the farthest background level of them all.
-      tblFills: [shdLevel(el, 'tblPr'), ...(scope.tblFills ?? [])],
+      tblFills: [compileShadingLevel(shdLevel(el, 'tblPr'), ctx), ...(scope.tblFills ?? [])],
     }
   } else if (is(el, NS.w, 'tr')) {
-    inner = { ...scope, tblFills: [shdLevel(el, 'trPr'), ...(scope.tblFills ?? [])] }
+    inner = {
+      ...scope,
+      tblFills: [compileShadingLevel(shdLevel(el, 'trPr'), ctx), ...(scope.tblFills ?? [])],
+    }
   } else if (is(el, NS.w, 'tc')) {
-    inner = { ...scope, tblFills: [shdLevel(el, 'tcPr'), ...(scope.tblFills ?? [])] }
+    inner = {
+      ...scope,
+      tblFills: [compileShadingLevel(shdLevel(el, 'tcPr'), ctx), ...(scope.tblFills ?? [])],
+    }
   } else if (is(el, NS.w, 'footnote') || is(el, NS.w, 'endnote')) {
     inner = { ...scope, separator: separatorNote(el) }
   } else if (is(el, NS.p, 'sld') || is(el, NS.p, 'notes')) {
@@ -1477,7 +1515,7 @@ interface RunProps {
   readonly sz?: number
   readonly szCs?: number
   /** `w:highlight/@w:val` (#482 re-check F1). */
-  readonly highlight?: string
+  readonly highlight?: Highlight
   /** `w:shd` on the run's own properties (#492). */
   readonly shd?: Shd
   /** `w:w` character scale, in percent (#492). */
@@ -1496,16 +1534,16 @@ interface Resolved {
   readonly color?: WordColor
   readonly sz?: number
   readonly szCs?: number
-  readonly highlight?: string
+  readonly highlight?: Highlight
   readonly shd?: Shd
   readonly scale?: number
   readonly position?: number
   readonly vertScale?: number
-  readonly unknown: ReadonlySet<string>
+  readonly unknown: boolean
   /** The style's own `w:pPr/w:shd` — a background behind the run (#492). */
   readonly pShd?: Shd
   /** Its conditional formattings' `w:pPr/w:shd`s (#492). */
-  readonly conditionalShd: readonly Shd[]
+  readonly conditionalShd: Conditional
 }
 
 interface StyleDef {
@@ -1528,7 +1566,10 @@ interface WordStyles {
   /** Per lower-cased id, over its whole `basedOn` chain. */
   readonly resolved: Map<string, Resolved & { readonly depth: number }>
   /** Per (rStyles, pStyles, tblStyles) key. */
-  readonly combined: Map<string, Resolved>
+  readonly combined: Map<Resolved | undefined, Map<Resolved | undefined, StyleTrie>>
+  readonly groups: Record<StyleType, Map<readonly string[], Resolved>>
+  readonly ctx: Shared
+  readonly domain: ColourDomain
 }
 
 type StyleType = 'paragraph' | 'character' | 'table'
@@ -1670,7 +1711,7 @@ function runProps(rPr: XmlElement | undefined): RunProps | undefined {
     },
     sz: int(wVal(childEl(rPr, NS.w, 'sz'))),
     szCs: int(wVal(childEl(rPr, NS.w, 'szCs'))),
-    highlight: wVal(childEl(rPr, NS.w, 'highlight')),
+    highlight: compileHighlight(wVal(childEl(rPr, NS.w, 'highlight'))),
     shd,
     scale,
     position,
@@ -1679,7 +1720,7 @@ function runProps(rPr: XmlElement | undefined): RunProps | undefined {
   }
 }
 
-function readWordStyles(root: XmlElement): WordStyles {
+function readWordStyles(root: XmlElement, ctx: Shared): WordStyles {
   const byId = new Map<string, StyleDef[]>()
   const defaults: Record<StyleType, string[]> = { paragraph: [], character: [], table: [] }
   for (const s of elements(root)) {
@@ -1687,22 +1728,22 @@ function readWordStyles(root: XmlElement): WordStyles {
     const id = attrOf(s.attributes, 'styleId', NS.w)
     if (id === undefined) continue
     const key = id.toLowerCase()
-    byId.set(key, [
-      ...(byId.get(key) ?? []),
-      {
-        basedOn: wVal(childEl(s, NS.w, 'basedOn')),
-        rPr: runProps(childEl(s, NS.w, 'rPr')),
-        pShd: shdOf(childEl(childEl(s, NS.w, 'pPr'), NS.w, 'shd')),
-        conditional: elements(s)
-          .filter((c) => is(c, NS.w, 'tblStylePr'))
-          .map((c) => runProps(childEl(c, NS.w, 'rPr')))
-          .filter((p): p is RunProps => p !== undefined),
-        conditionalShd: elements(s)
-          .filter((c) => is(c, NS.w, 'tblStylePr'))
-          .map((c) => shdOf(childEl(childEl(c, NS.w, 'pPr'), NS.w, 'shd')))
-          .filter((s2): s2 is Shd => s2 !== undefined),
-      },
-    ])
+    const definition: StyleDef = {
+      basedOn: wVal(childEl(s, NS.w, 'basedOn')),
+      rPr: runProps(childEl(s, NS.w, 'rPr')),
+      pShd: shdOf(childEl(childEl(s, NS.w, 'pPr'), NS.w, 'shd')),
+      conditional: elements(s)
+        .filter((c) => is(c, NS.w, 'tblStylePr'))
+        .map((c) => runProps(childEl(c, NS.w, 'rPr')))
+        .filter((p): p is RunProps => p !== undefined),
+      conditionalShd: elements(s)
+        .filter((c) => is(c, NS.w, 'tblStylePr'))
+        .map((c) => shdOf(childEl(childEl(c, NS.w, 'pPr'), NS.w, 'shd')))
+        .filter((s2): s2 is Shd => s2 !== undefined),
+    }
+    const bucket = byId.get(key) ?? []
+    bucket.push(definition)
+    byId.set(key, bucket)
     const type = attrOf(s.attributes, 'type', NS.w)
     const isDefault = attrOf(s.attributes, 'default', NS.w)
     if (
@@ -1717,7 +1758,19 @@ function readWordStyles(root: XmlElement): WordStyles {
   const docDefaults = runProps(
     childEl(childEl(childEl(root, NS.w, 'docDefaults'), NS.w, 'rPrDefault'), NS.w, 'rPr'),
   )
-  return { byId, docDefaults, defaults, resolved: new Map(), combined: new Map() }
+  return {
+    byId,
+    docDefaults,
+    defaults,
+    resolved: new Map(),
+    combined: new Map(),
+    groups: { character: new Map(), paragraph: new Map(), table: new Map() },
+    ctx,
+    domain: colourDomain(
+      [...byId.values()].flatMap((defs) => defs.flatMap((d) => d.conditionalShd)),
+      ctx,
+    ),
+  }
 }
 
 /** Nearest first: the first level that defines it wins. */
@@ -1726,18 +1779,6 @@ function nearest<
 >(levels: readonly (Pick<RunProps, K> | undefined)[], key: K): RunProps[K] {
   for (const l of levels) if (l?.[key] !== undefined) return l[key]
   return undefined
-}
-
-/**
- * The union of every level's un-modelled properties (#492): an inherited
- * un-modelled property applies to the run just as a direct one does.
- */
-const unknownOf = (
-  levels: readonly (Pick<RunProps, 'unknown'> | undefined)[],
-): ReadonlySet<string> => {
-  const all = new Set<string>()
-  for (const l of levels) for (const u of l?.unknown ?? []) all.add(u)
-  return all
 }
 
 /** Nearest over a chain of paragraph shadings. */
@@ -1802,38 +1843,34 @@ function resolveStyle(styles: WordStyles, id: string): Resolved {
       scale: nearest([...direct, ...parents], 'scale'),
       position: nearest([...direct, ...parents], 'position'),
       vertScale: nearest([...direct, ...parents], 'vertScale'),
-      unknown: unknownOf([...own, ...parents]),
+      unknown: own.some((p) => p.unknown.size > 0) || parents.some((p) => p.unknown),
       pShd: nearestShd([...defs.map((d) => d.pShd), ...parents.map((p) => p.pShd)]),
-      conditionalShd: [
-        ...defs.flatMap((d) => d.conditionalShd),
-        ...parents.flatMap((p) => p.conditionalShd),
-      ],
+      conditionalShd: mergeConditionals(
+        [
+          compileConditional(
+            defs.flatMap((d) => d.conditionalShd),
+            styles,
+          ),
+          ...new Set(parents.map((p) => p.conditionalShd)),
+        ],
+        styles.domain,
+      ),
     })
   }
   return memo.get(start)!
 }
 
-/** What the styles give a run in this scope — memoized per combination. */
-function levels(styles: WordStyles, rStyles: readonly string[], scope: Scope): Resolved {
-  const key = `${rStyles.join('\u0000')}|${scope.pStyles?.join('\u0000') ?? '\u0001'}|${scope.tblStyles?.join('\u0000') ?? '\u0001'}`
-  const hit = styles.combined.get(key)
-  if (hit) return hit
-  const named = (ids: readonly string[], type: StyleType) =>
-    ids.length > 0 ? ids : styles.defaults[type]
-  const parts: Resolved[] = [...named(rStyles, 'character').map((id) => resolveStyle(styles, id))]
-  if (scope.pStyles !== undefined) {
-    parts.push(...named(scope.pStyles, 'paragraph').map((id) => resolveStyle(styles, id)))
-  }
-  if (scope.tblStyles !== undefined) {
-    parts.push(...named(scope.tblStyles, 'table').map((id) => resolveStyle(styles, id)))
-  }
-  const base = styles.docDefaults
+interface StyleTrie {
+  readonly next: Map<string, StyleTrie>
+  result?: Resolved
+}
+
+function mergeStyles(parts: readonly Resolved[], styles: WordStyles, base?: RunProps): Resolved {
   const hides = {} as Record<Hiding, boolean>
-  for (const prop of HIDING) {
+  for (const prop of HIDING)
     hides[prop] = parts.some((p) => p.hides[prop]) || base?.on.get(prop) === true
-  }
   const all = [...parts, base]
-  const combined: Resolved = {
+  return {
     hides,
     color: nearest(all, 'color'),
     sz: nearest(all, 'sz'),
@@ -1843,12 +1880,60 @@ function levels(styles: WordStyles, rStyles: readonly string[], scope: Scope): R
     scale: nearest(all, 'scale'),
     position: nearest(all, 'position'),
     vertScale: nearest(all, 'vertScale'),
-    unknown: unknownOf(all),
+    unknown: parts.some((p) => p.unknown) || (base?.unknown.size ?? 0) > 0,
     pShd: nearestShd(parts.map((p) => p.pShd)),
-    conditionalShd: parts.flatMap((p) => p.conditionalShd),
+    conditionalShd: mergeConditionals(
+      parts.map((p) => p.conditionalShd),
+      styles.domain,
+    ),
   }
-  styles.combined.set(key, combined)
-  return combined
+}
+
+function styleGroup(styles: WordStyles, ids: readonly string[], type: StyleType): Resolved {
+  const selected = ids.length ? ids : styles.defaults[type]
+  const memo = styles.groups[type]
+  let group = memo.get(selected)
+  if (!group) {
+    group = mergeStyles(
+      selected.map((id) => resolveStyle(styles, id)),
+      styles,
+    )
+    memo.set(selected, group)
+  }
+  return group
+}
+
+/** Shared scopes are opaque identity tokens; the run's own sequence uses a trie.
+ * Undefined scopes remain distinct from present empty scopes selecting defaults. */
+function levels(styles: WordStyles, rStyles: readonly string[], scope: Scope): Resolved {
+  const paragraph =
+    scope.pStyles === undefined ? undefined : styleGroup(styles, scope.pStyles, 'paragraph')
+  const table =
+    scope.tblStyles === undefined ? undefined : styleGroup(styles, scope.tblStyles, 'table')
+  let tables = styles.combined.get(paragraph)
+  if (!tables) {
+    tables = new Map()
+    styles.combined.set(paragraph, tables)
+  }
+  let trie: StyleTrie = tables.get(table) ?? { next: new Map() }
+  if (!tables.has(table)) tables.set(table, trie)
+  for (const id of rStyles) {
+    let next: StyleTrie | undefined = trie.next.get(id)
+    if (!next) {
+      next = { next: new Map() }
+      trie.next.set(id, next)
+    }
+    trie = next
+  }
+  if (!trie.result) {
+    const character = styleGroup(styles, rStyles, 'character')
+    trie.result = mergeStyles(
+      [character, paragraph, table].filter((p): p is Resolved => p !== undefined),
+      styles,
+      styles.docDefaults,
+    )
+  }
+  return trie.result
 }
 
 // ============================================================================
@@ -1883,6 +1968,253 @@ const luminance = (hex: string): number =>
 export const contrastRatio = (a: string, b: string): number => {
   const [l1, l2] = [luminance(a), luminance(b)]
   return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05)
+}
+
+/** Persistent AVL index. Shared inherited trees stay shared; a union visits only
+ * the smaller operand and memoizes by identity within this document. */
+interface ContrastNode {
+  readonly rgb: string
+  readonly light: number
+  readonly left?: ContrastNode
+  readonly right?: ContrastNode
+  readonly height: number
+  readonly size: number
+}
+const height = (n: ContrastNode | undefined) => n?.height ?? 0
+const indexSize = (n: ContrastNode | undefined) => n?.size ?? 0
+function indexNode(
+  rgb: string,
+  light: number,
+  left?: ContrastNode,
+  right?: ContrastNode,
+): ContrastNode {
+  return {
+    rgb,
+    light,
+    left,
+    right,
+    height: 1 + Math.max(height(left), height(right)),
+    size: 1 + indexSize(left) + indexSize(right),
+  }
+}
+function rotateLeft(n: ContrastNode): ContrastNode {
+  const r = n.right!
+  return indexNode(r.rgb, r.light, indexNode(n.rgb, n.light, n.left, r.left), r.right)
+}
+function rotateRight(n: ContrastNode): ContrastNode {
+  const l = n.left!
+  return indexNode(l.rgb, l.light, l.left, indexNode(n.rgb, n.light, l.right, n.right))
+}
+function balanceIndex(n: ContrastNode): ContrastNode {
+  if (height(n.left) - height(n.right) > 1) {
+    const left = n.left!
+    return rotateRight(
+      height(left.left) < height(left.right)
+        ? indexNode(n.rgb, n.light, rotateLeft(left), n.right)
+        : n,
+    )
+  }
+  if (height(n.right) - height(n.left) > 1) {
+    const right = n.right!
+    return rotateLeft(
+      height(right.right) < height(right.left)
+        ? indexNode(n.rgb, n.light, n.left, rotateRight(right))
+        : n,
+    )
+  }
+  return n
+}
+function insertColour(
+  n: ContrastNode | undefined,
+  rgb: string,
+  light = luminance(rgb),
+): ContrastNode {
+  if (!n) return indexNode(rgb, light)
+  if (rgb === n.rgb) return n
+  if (light < n.light || (light === n.light && rgb < n.rgb)) {
+    const left = insertColour(n.left, rgb, light)
+    return left === n.left ? n : balanceIndex(indexNode(n.rgb, n.light, left, n.right))
+  }
+  const right = insertColour(n.right, rgb, light)
+  return right === n.right ? n : balanceIndex(indexNode(n.rgb, n.light, n.left, right))
+}
+function colourIndex(colours: readonly string[]): ContrastNode | undefined {
+  let index: ContrastNode | undefined
+  for (const rgb of colours) index = insertColour(index, rgb)
+  return index
+}
+/** On each side of the query luminance, contrast increases monotonically.
+ * Test the adjacent RGBs with the original ratio, preserving boundary rounding. */
+function contrastFails(index: ContrastNode | undefined, rgb: string): boolean {
+  const light = luminance(rgb)
+  let lower: ContrastNode | undefined
+  let upper: ContrastNode | undefined
+  let node = index
+  while (node) {
+    if (node.light < light) {
+      lower = node
+      node = node.right
+    } else {
+      upper = node
+      node = node.left
+    }
+  }
+  return (
+    (lower !== undefined && contrastRatio(rgb, lower.rgb) < MIN_CONTRAST) ||
+    (upper !== undefined && contrastRatio(rgb, upper.rgb) < MIN_CONTRAST)
+  )
+}
+/** The styles part's conditional shading colours, sorted by luminance, fixed
+ * once the part is read: every conditional set is a persistent segment tree
+ * over these positions, so equal inherited subtrees keep one identity. */
+interface ColourDomain {
+  readonly rgbs: readonly string[]
+  readonly lights: readonly number[]
+  readonly at: ReadonlyMap<string, number>
+  readonly merged: Map<ColourSet, Map<ColourSet, ColourSet>>
+}
+interface ColourSet {
+  readonly left?: ColourSet
+  readonly right?: ColourSet
+}
+const PRESENT: ColourSet = {}
+function colourDomain(shds: readonly Shd[], ctx: Shared): ColourDomain {
+  const lights = new Map<string, number>()
+  for (const shd of shds) {
+    const result = shdColours(shd, ctx)
+    if (result.kind === 'colours')
+      for (const rgb of result.colours) if (!lights.has(rgb)) lights.set(rgb, luminance(rgb))
+  }
+  const rgbs = [...lights.keys()].sort(
+    (a, b) => lights.get(a)! - lights.get(b)! || (a < b ? -1 : a > b ? 1 : 0),
+  )
+  return {
+    rgbs,
+    lights: rgbs.map((rgb) => lights.get(rgb)!),
+    at: new Map(rgbs.map((rgb, i) => [rgb, i])),
+    merged: new Map(),
+  }
+}
+function insertSet(set: ColourSet | undefined, lo: number, hi: number, at: number): ColourSet {
+  if (hi - lo === 1) return PRESENT
+  const mid = (lo + hi) >> 1
+  if (at < mid) {
+    const left = insertSet(set?.left, lo, mid, at)
+    return left === set?.left ? set : { left, right: set?.right }
+  }
+  const right = insertSet(set?.right, mid, hi, at)
+  return right === set?.right ? set : { left: set?.left, right }
+}
+/** Union by identity: the shapes are fixed by the domain, so a subtree shared
+ * with an earlier merge is a memo hit, never re-walked. */
+function mergeSets(
+  a: ColourSet | undefined,
+  b: ColourSet | undefined,
+  lo: number,
+  hi: number,
+  domain: ColourDomain,
+): ColourSet | undefined {
+  if (!a || a === b) return b
+  if (!b || hi - lo === 1) return a
+  const hit = domain.merged.get(a)?.get(b) ?? domain.merged.get(b)?.get(a)
+  if (hit) return hit
+  const mid = (lo + hi) >> 1
+  const left = mergeSets(a.left, b.left, lo, mid, domain)
+  const right = mergeSets(a.right, b.right, mid, hi, domain)
+  const result =
+    left === a.left && right === a.right
+      ? a
+      : left === b.left && right === b.right
+        ? b
+        : { left, right }
+  let pairs = domain.merged.get(a)
+  if (!pairs) {
+    pairs = new Map()
+    domain.merged.set(a, pairs)
+  }
+  pairs.set(b, result)
+  return result
+}
+/** The greatest member below `end`, else -1; the least member at or above `start`, else -1. */
+function lastBelow(set: ColourSet | undefined, lo: number, hi: number, end: number): number {
+  if (!set || lo >= end) return -1
+  if (hi - lo === 1) return lo
+  const mid = (lo + hi) >> 1
+  const right = lastBelow(set.right, mid, hi, end)
+  return right >= 0 ? right : lastBelow(set.left, lo, mid, end)
+}
+function firstFrom(set: ColourSet | undefined, lo: number, hi: number, start: number): number {
+  if (!set || hi <= start) return -1
+  if (hi - lo === 1) return lo
+  const mid = (lo + hi) >> 1
+  const left = firstFrom(set.left, lo, mid, start)
+  return left >= 0 ? left : firstFrom(set.right, mid, hi, start)
+}
+interface Conditional {
+  readonly unknown: boolean
+  readonly set?: ColourSet
+  readonly domain?: ColourDomain
+}
+/** As `contrastFails`: the nearest member on each side of the query luminance. */
+function conditionalFails(c: Conditional, rgb: string): boolean {
+  const { set, domain } = c
+  if (!set || !domain) return false
+  const light = luminance(rgb)
+  let lo = 0
+  let hi = domain.lights.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (domain.lights[mid] < light) lo = mid + 1
+    else hi = mid
+  }
+  const lower = lastBelow(set, 0, domain.rgbs.length, lo)
+  const upper = firstFrom(set, 0, domain.rgbs.length, lo)
+  return (
+    (lower >= 0 && contrastRatio(rgb, domain.rgbs[lower]) < MIN_CONTRAST) ||
+    (upper >= 0 && contrastRatio(rgb, domain.rgbs[upper]) < MIN_CONTRAST)
+  )
+}
+function compileConditional(shds: readonly Shd[], styles: WordStyles): Conditional {
+  const domain = styles.domain
+  let unknown = false
+  let set: ColourSet | undefined
+  for (const shd of shds) {
+    const result = shdColours(shd, styles.ctx)
+    unknown ||= result.kind === 'unknown'
+    if (result.kind === 'colours')
+      for (const rgb of result.colours)
+        set = insertSet(set, 0, domain.rgbs.length, domain.at.get(rgb)!)
+  }
+  return { unknown, set, domain }
+}
+function mergeConditionals(parts: readonly Conditional[], domain: ColourDomain): Conditional {
+  if (parts.length === 1) return parts[0]
+  let unknown = false
+  let set: ColourSet | undefined
+  for (const part of parts) {
+    unknown ||= part.unknown
+    set = mergeSets(set, part.set, 0, domain.rgbs.length, domain)
+  }
+  // A child without own additions carries the parent's actual summary identity.
+  return parts.find((p) => p.unknown === unknown && p.set === set) ?? { unknown, set, domain }
+}
+interface ShadingLevel {
+  readonly unknown: boolean
+  readonly colours?: readonly string[]
+}
+function compileShadingLevel(shds: readonly Shd[], ctx: Shared): ShadingLevel {
+  let result = ctx.shadingLevels.get(shds)
+  if (result) return result
+  let unknown = false
+  let colours: readonly string[] | undefined
+  for (const shd of shds) {
+    const bg = shdColours(shd, ctx)
+    unknown ||= bg.kind === 'unknown'
+    if (bg.kind === 'colours' && colours === undefined) colours = bg.colours
+  }
+  result = { unknown, colours }
+  ctx.shadingLevels.set(shds, result)
+  return result
 }
 
 /** Mix a hex colour toward white or black by a fraction (0–1). */
@@ -1960,6 +2292,14 @@ function themeColour(
  * the contrast check.
  */
 function wordFg(c: WordColor | undefined, ctx: Shared): Fg {
+  let result = ctx.wordColours.get(c)
+  if (!result) {
+    result = evaluateWordFg(c, ctx)
+    ctx.wordColours.set(c, result)
+  }
+  return result
+}
+function evaluateWordFg(c: WordColor | undefined, ctx: Shared): Fg {
   const automatic = (): Fg => ({
     kind: 'rgb',
     rgb: themeColour('dk1', undefined, undefined, ctx) ?? '000000',
@@ -2025,6 +2365,15 @@ type ShdColours =
   { kind: 'none' } | { kind: 'colours'; readonly colours: readonly string[] } | { kind: 'unknown' }
 
 function shdColours(shd: Shd | undefined, ctx: Shared): ShdColours {
+  if (!shd) return { kind: 'none' }
+  let result = ctx.shadingColours.get(shd)
+  if (!result) {
+    result = evaluateShading(shd, ctx)
+    ctx.shadingColours.set(shd, result)
+  }
+  return result
+}
+function evaluateShading(shd: Shd | undefined, ctx: Shared): ShdColours {
   if (shd === undefined) return { kind: 'none' }
   const val = shd.val?.toLowerCase()
   // No `w:val` is the default, clear: the fill paints (real documents write
@@ -2080,7 +2429,11 @@ function wordBackgrounds(
   styled: Resolved | undefined,
   scope: Scope,
   ctx: Ctx,
-): { readonly unknown: boolean; readonly colours: readonly string[] } {
+): {
+  readonly unknown: boolean
+  readonly colours: readonly string[]
+  readonly conditional?: Conditional
+} {
   const levels: readonly (readonly Shd[])[] = [
     childEls(run, NS.w, 'rPr').flatMap((r) => childEls(r, NS.w, 'shd').map(shdOf).filter(isShd)),
     [styled?.shd, scope.pShd, styled?.pShd].filter(isShd),
@@ -2101,27 +2454,24 @@ function wordBackgrounds(
     if (scope.boxBg.unknown) return { unknown: true, colours: [] }
     if (scope.boxBg.colours.length > 0) return { unknown: false, colours: scope.boxBg.colours }
   }
-  for (const level of (scope.tblFills ?? []) as readonly (readonly Shd[])[]) {
-    let colours: readonly string[] | undefined
-    for (const s of level) {
-      const bg = shdColours(s, ctx)
-      if (bg.kind === 'unknown') return { unknown: true, colours: [] }
-      if (bg.kind === 'colours' && colours === undefined) colours = bg.colours
-    }
-    if (colours !== undefined) return { unknown: false, colours }
+  for (const level of scope.tblFills ?? []) {
+    if (level.unknown) return { unknown: true, colours: [] }
+    if (level.colours !== undefined) return { unknown: false, colours: level.colours }
   }
-  // Nothing opaque: the conditional formattings of an active table style can
-  // still paint the band, so each of them is checked, else the page.
-  const conditional: string[] = []
-  for (const s of styled?.conditionalShd ?? []) {
-    const bg = shdColours(s, ctx)
-    if (bg.kind === 'unknown') return { unknown: true, colours: [] }
-    if (bg.kind === 'colours') conditional.push(...bg.colours)
-  }
-  return {
-    unknown: false,
-    colours: conditional.length > 0 ? conditional : [ctx.pageBg ?? 'FFFFFF'],
-  }
+  const conditional = styled?.conditionalShd
+  if (conditional?.unknown) return { unknown: true, colours: [] }
+  return conditional?.set
+    ? { unknown: false, colours: [], conditional }
+    : { unknown: false, colours: [ctx.pageBg ?? 'FFFFFF'] }
+}
+
+type Highlight = { kind: 'none' } | { kind: 'unknown' } | { kind: 'rgb'; rgb: string }
+function compileHighlight(value: string | undefined): Highlight | undefined {
+  if (value === undefined) return undefined
+  const name = value.toLowerCase()
+  if (name === 'none') return { kind: 'none' }
+  const rgb = Object.hasOwn(HIGHLIGHT, name) ? HIGHLIGHT[name] : undefined
+  return rgb === undefined ? { kind: 'unknown' } : { kind: 'rgb', rgb }
 }
 
 /** `w:highlight`'s fixed named palette. */
@@ -2161,7 +2511,8 @@ function countWordRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
     ? levels(ctx.wordStyles, wVals(run, 'rPr', 'rStyle'), scope)
     : undefined
   const all = [...direct, styled]
-  if (unknownOf(all).size > 0) ctx.counted.add('unknown-property')
+  if (direct.some((p) => (p?.unknown.size ?? 0) > 0) || styled?.unknown === true)
+    ctx.counted.add('unknown-property')
 
   const fg = wordFg(nearest(all, 'color'), ctx)
   if (fg.kind === 'unknown') ctx.counted.add('unknown-property')
@@ -2170,9 +2521,10 @@ function countWordRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
   const highlight = nearest(all, 'highlight')
   let unknown = false
   let colours: readonly string[]
-  if (highlight !== undefined && highlight.toLowerCase() !== 'none') {
+  let conditional: Conditional | undefined
+  if (highlight !== undefined && highlight.kind !== 'none') {
     // The highlight, when one is resolved, is drawn over every shading level.
-    const lit = HIGHLIGHT[highlight.toLowerCase()]
+    const lit = highlight.kind === 'rgb' ? highlight.rgb : undefined
     if (lit === undefined) {
       unknown = true
       colours = []
@@ -2181,10 +2533,16 @@ function countWordRun(run: XmlElement, ctx: Ctx, scope: Scope): void {
     const bg = wordBackgrounds(run, styled, scope, ctx)
     unknown = bg.unknown
     colours = bg.colours
+    conditional = bg.conditional
   }
   if (unknown) {
     ctx.counted.add('unknown-property')
-  } else if (fg.kind === 'rgb' && colours.some((bg) => contrastRatio(fg.rgb, bg) < MIN_CONTRAST)) {
+  } else if (
+    fg.kind === 'rgb' &&
+    (conditional
+      ? conditionalFails(conditional, fg.rgb)
+      : colours.some((bg) => contrastRatio(fg.rgb, bg) < MIN_CONTRAST))
+  ) {
     ctx.counted.add('colour-contrast')
   }
 
@@ -2524,7 +2882,7 @@ interface SlidesStylePart {
    * answers for every level, so a level it lacks goes up to the master rather
    * than to some other placeholder that has it.
    */
-  readonly byTypeIdx: ReadonlyMap<string, PhEntry>
+  readonly byTypeIdx: ReadonlyMap<string, ReadonlyMap<string, PhEntry>>
   readonly byIdx: ReadonlyMap<string, PhEntry>
   readonly byType: ReadonlyMap<string, PhEntry>
   /** `txStyles` name → level → defRPr. */
@@ -2650,7 +3008,7 @@ function slideInheritanceOf(ctx: Ctx): SlideInheritance {
 }
 
 function readSlidesStylePart(root: XmlElement): SlidesStylePart {
-  const byTypeIdx = new Map<string, PhEntry>()
+  const byTypeIdx = new Map<string, Map<string, PhEntry>>()
   const byIdx = new Map<string, PhEntry>()
   const byType = new Map<string, PhEntry>()
   const byStyle = new Map<string, ReadonlyMap<number, XmlElement>>()
@@ -2678,8 +3036,13 @@ function readSlidesStylePart(root: XmlElement): SlidesStylePart {
           dup: false,
           typeDup: false,
         }
+        let ofType = byTypeIdx.get(ph.type)
+        if (!ofType) {
+          ofType = new Map()
+          byTypeIdx.set(ph.type, ofType)
+        }
         for (const [map, key] of [
-          [byTypeIdx, `${ph.type}\0${ph.idx}`],
+          [ofType, ph.idx],
           [byIdx, ph.idx],
         ] as const) {
           const first = map.get(key)
@@ -3146,7 +3509,7 @@ function layoutPh(
   ph: Ph | undefined,
 ): { readonly entry?: PhEntry; readonly ambiguous: boolean } {
   if (!part || !ph) return { ambiguous: false }
-  const exact = part.byTypeIdx.get(`${ph.type}\0${ph.idx}`)
+  const exact = part.byTypeIdx.get(ph.type)?.get(ph.idx)
   if (exact) return { entry: exact, ambiguous: exact.dup }
   const byIdx = part.byIdx.get(ph.idx)
   if (!ph.typed) return { entry: byIdx, ambiguous: byIdx?.dup ?? false }
@@ -3362,16 +3725,8 @@ function countCell(el: XmlElement, ctx: Ctx): void {
   const styles = ctx.sheetStyles!
   const xf = styles.xfs[int(attrOf(el.attributes, 's')) ?? 0]
   if (!xf) return
-  const format = styles.numFmts.get(xf.numFmtId) ?? ''
-  // `;;;` once empty literals, `[…]` codes and whitespace are gone (A10): only
-  // `;` left, or nothing left but an empty literal. A bare `[h]` is not hidden.
-  const bare = format
-    .replace(/""/g, '')
-    .replace(/\[[^\]]*\]/g, '')
-    .replace(/\s/g, '')
-  if (/^;*$/.test(bare) && (bare !== '' || format.includes('""'))) {
-    ctx.counted.add('hidden-flag')
-  }
+  const format = xf.format
+  if (format.hidden) ctx.counted.add('hidden-flag')
   const v = childEl(el, NS.s, 'v')
   const runs: readonly RichRun[] =
     attrOf(el.attributes, 't') === 's'
@@ -3379,8 +3734,9 @@ function countCell(el: XmlElement, ctx: Ctx): void {
       : richRuns(childEl(el, NS.s, 'is'))
   // The size family: the cell's font and each rich run's own, which inherits
   // the cell font's size when it declares none (#492).
+  const rich = compileRich(runs, ctx)
   const cellSz = styles.fonts[xf.fontId]?.sz
-  if ((cellSz ?? 11) <= 1 || runs.some((r) => (r.sz ?? cellSz ?? 11) <= 1)) {
+  if ((cellSz ?? 11) <= 1 || (rich.minExplicitSize !== undefined && rich.minExplicitSize <= 1)) {
     ctx.counted.add('too-small')
   }
   // The colour family: the cell's fill, then the font and each rich run
@@ -3400,12 +3756,16 @@ function countCell(el: XmlElement, ctx: Ctx): void {
   }
   // A number format's colour sections OVERRIDE the font's colour for what the
   // cell displays (#492): when one is present, it is the displayed colour.
-  const displayed = formatColours(format, styles)
-  if (displayed.length > 0) {
-    if (displayed.some((colour) => bgs.some((bg) => contrastRatio(colour, bg) < MIN_CONTRAST))) {
+  const displayed = format.displayedColourIndex
+  if (displayed) {
+    if (bgs.some((bg) => contrastFails(displayed, bg))) {
       ctx.counted.add('colour-contrast')
     }
-  } else if (fails(styles.fonts[xf.fontId]) || runs.some(fails)) {
+  } else if (
+    fails(styles.fonts[xf.fontId]) ||
+    rich.anyUnresolvedColour ||
+    bgs.some((bg) => contrastFails(rich.colourIndex, bg))
+  ) {
     ctx.counted.add('colour-contrast')
   }
 }
@@ -3422,22 +3782,50 @@ const FORMAT_COLOURS: Readonly<Record<string, string>> = {
   yellow: 'FFFF00',
 }
 
-function formatColours(format: string, styles: SheetStyles): readonly string[] {
-  const out: string[] = []
-  for (const m of format.matchAll(/\[([^\]]+)\]/g)) {
-    const name = m[1].trim().toLowerCase()
-    const fixed = FORMAT_COLOURS[name.replace(/\s+/g, '')]
-    if (fixed !== undefined) {
-      out.push(fixed)
-      continue
-    }
-    const indexed = /^color\s*([1-9]\d*)$/.exec(name)
-    if (indexed) {
-      const rgb = hex6(styles.palette?.[Number(indexed[1]) - 1] ?? PALETTE[Number(indexed[1]) - 1])
-      if (rgb !== undefined) out.push(rgb)
-    }
+interface FormatDescriptor {
+  readonly hidden: boolean
+  readonly displayedColourIndex?: ContrastNode
+}
+/** Completed spans are consumed once; an unmatched suffix ends the search.
+ * Nested opening brackets are body characters, matching the former regexes. */
+function bracketSpans(format: string, visit: (start: number, end: number) => void): void {
+  let cursor = 0
+  while (cursor < format.length) {
+    const start = format.indexOf('[', cursor)
+    if (start < 0) break
+    const end = format.indexOf(']', start + 1)
+    if (end < 0) break
+    visit(start, end)
+    cursor = end + 1
   }
-  return out
+}
+function compileFormat(format: string, palette: readonly string[] | undefined): FormatDescriptor {
+  const unquoted = format.replace(/""/g, '')
+  const chunks: string[] = []
+  let cursor = 0
+  bracketSpans(unquoted, (start, end) => {
+    chunks.push(unquoted.slice(cursor, start))
+    cursor = end + 1
+  })
+  chunks.push(unquoted.slice(cursor))
+  const bare = chunks.join('').replace(/\s/g, '')
+  const hidden = /^;*$/.test(bare) && (bare !== '' || format.includes('""'))
+  let displayedColourIndex: ContrastNode | undefined
+  bracketSpans(format, (start, end) => {
+    if (end === start + 1) return
+    const name = format
+      .slice(start + 1, end)
+      .trim()
+      .toLowerCase()
+    const key = name.replace(/\s+/g, '')
+    let rgb = Object.hasOwn(FORMAT_COLOURS, key) ? FORMAT_COLOURS[key] : undefined
+    if (rgb === undefined) {
+      const indexed = /^color\s*([1-9]\d*)$/.exec(name)
+      if (indexed) rgb = hex6(palette?.[Number(indexed[1]) - 1] ?? PALETTE[Number(indexed[1]) - 1])
+    }
+    if (rgb !== undefined) displayedColourIndex = insertColour(displayedColourIndex, rgb)
+  })
+  return { hidden, displayedColourIndex }
 }
 
 function countOffSlide(spTree: XmlElement, ctx: Ctx): void {
@@ -3514,7 +3902,12 @@ const SHEET_PATTERNS: ReadonlySet<string> = new Set([
 
 interface SheetStyles {
   readonly numFmts: ReadonlyMap<number, string>
-  readonly xfs: readonly { numFmtId: number; fontId: number; fillId: number }[]
+  readonly xfs: readonly {
+    numFmtId: number
+    fontId: number
+    fillId: number
+    format: FormatDescriptor
+  }[]
   /** Each font's own colour and size; automatic when it declares none. */
   readonly fonts: readonly RichRun[]
   /** The fills, by id: nothing, solid, a pattern, or un-modelled. */
@@ -3527,6 +3920,18 @@ interface SheetStyles {
 
 /** A cell fill's colours, resolved to RGB; unknown when a mechanism is un-modelled. */
 function cellFillColours(
+  fill: CellFill | undefined,
+  ctx: Shared,
+): { readonly colours: readonly string[]; readonly unknown: boolean } {
+  if (fill === undefined) return { colours: [], unknown: false }
+  let result = ctx.cellFills.get(fill)
+  if (!result) {
+    result = evaluateCellFill(fill, ctx)
+    ctx.cellFills.set(fill, result)
+  }
+  return result
+}
+function evaluateCellFill(
   fill: CellFill | undefined,
   ctx: Shared,
 ): { readonly colours: readonly string[]; readonly unknown: boolean } {
@@ -3602,6 +4007,14 @@ function readTheme(root: XmlElement): {
 }
 
 function toRgb(c: Color, ctx: Shared): string | undefined {
+  let result = ctx.sheetColours.get(c)
+  if (!result) {
+    result = { rgb: evaluateRgb(c, ctx) }
+    ctx.sheetColours.set(c, result)
+  }
+  return result.rgb
+}
+function evaluateRgb(c: Color, ctx: Shared): string | undefined {
   let rgb: string | undefined
   if (c.rgb !== undefined) rgb = hex6(c.rgb.slice(-6))
   else if (c.indexed !== undefined) {
@@ -3678,6 +4091,28 @@ function richRuns(si: XmlElement | undefined): readonly RichRun[] {
   return childEls(si, NS.s, 'r').map(richRun)
 }
 
+interface RichSummary {
+  readonly minExplicitSize?: number
+  readonly anyUnresolvedColour: boolean
+  readonly colourIndex?: ContrastNode
+}
+function compileRich(runs: readonly RichRun[], ctx: Shared): RichSummary {
+  let result = ctx.richSummaries.get(runs)
+  if (result) return result
+  let minExplicitSize: number | undefined
+  let anyUnresolvedColour = false
+  let colourIndex: ContrastNode | undefined
+  for (const run of runs) {
+    if (run.sz !== undefined) minExplicitSize = Math.min(minExplicitSize ?? run.sz, run.sz)
+    const rgb = run.color === undefined || run.color.auto ? '000000' : toRgb(run.color, ctx)
+    if (rgb === undefined) anyUnresolvedColour = true
+    else colourIndex = insertColour(colourIndex, rgb)
+  }
+  result = { minExplicitSize, anyUnresolvedColour, colourIndex }
+  ctx.richSummaries.set(runs, result)
+  return result
+}
+
 function readSharedStrings(root: XmlElement): readonly (readonly RichRun[])[] {
   return childEls(root, NS.s, 'si').map(richRuns)
 }
@@ -3693,12 +4128,19 @@ function readSheetStyles(root: XmlElement): SheetStyles {
     return container ? childEls(container, NS.s, item) : []
   }
   const indexed = childEl(childEl(root, NS.s, 'colors'), NS.s, 'indexedColors')
+  const palette = indexed
+    ? childEls(indexed, NS.s, 'rgbColor').map((c) => (attrOf(c.attributes, 'rgb') ?? '').slice(-6))
+    : undefined
+  const formats = new Map<number, FormatDescriptor>()
+  for (const [id, raw] of numFmts) formats.set(id, compileFormat(raw, palette))
+  const emptyFormat = compileFormat('', palette)
   return {
     numFmts,
     xfs: list('cellXfs', 'xf').map((x) => ({
       numFmtId: num(attrOf(x.attributes, 'numFmtId')),
       fontId: num(attrOf(x.attributes, 'fontId')),
       fillId: num(attrOf(x.attributes, 'fillId')),
+      format: formats.get(num(attrOf(x.attributes, 'numFmtId'))) ?? emptyFormat,
     })),
     fonts: list('fonts', 'font').map((f) => {
       const sz = Number.parseFloat(attrOf(childEl(f, NS.s, 'sz')?.attributes ?? [], 'val') ?? '')
@@ -3708,11 +4150,7 @@ function readSheetStyles(root: XmlElement): SheetStyles {
       }
     }),
     fills: list('fills', 'fill').map((f) => readFillEntry(f, false)),
-    palette: indexed
-      ? childEls(indexed, NS.s, 'rgbColor').map((c) =>
-          (attrOf(c.attributes, 'rgb') ?? '').slice(-6),
-        )
-      : undefined,
+    palette,
     dxfs: list('dxfs', 'dxf').map((d) => ({
       font: colorOf(childEl(childEl(d, NS.s, 'font'), NS.s, 'color')),
       // A dxf's fill carries no patternType: Excel writes its colour as

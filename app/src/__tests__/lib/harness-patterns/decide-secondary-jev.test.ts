@@ -62,6 +62,7 @@ beforeEach(() => {
   jevRequests = 0
   verbalizedStub.mockClear()
   process.env.JEV_DECISIONS_API_KEY = 'or-test-key'
+  vi.stubEnv('JEV_DECISIONS_URL', 'https://openrouter.ai/api/alpha/decisions')
   vi.stubGlobal(
     'fetch',
     vi.fn(async () => {
@@ -72,6 +73,7 @@ beforeEach(() => {
 })
 afterEach(async () => {
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
   const clients = await import('@hames-ai/harness-baml/clients.server')
   clients.configureDecideSecondary(undefined)
 })

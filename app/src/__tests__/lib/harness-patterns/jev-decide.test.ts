@@ -427,6 +427,9 @@ describe('jev-fallback — fail closed, never a downgrade to another provider', 
       'a non-2xx',
       async () => new Response('{"error":{"code":502,"message":"upstream"}}', { status: 502 }),
     ],
+    // A rejected key is the error path a fallback to another key would take.
+    ['a 401 (key rejected)', async () => new Response('{"error":{"code":401}}', { status: 401 })],
+    ['a 403 (key refused)', async () => new Response('{"error":{"code":403}}', { status: 403 })],
     [
       'a non-2xx carrying an answer-shaped body',
       async () => Response.json(JEV_BODY, { status: 502 }),

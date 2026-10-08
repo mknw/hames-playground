@@ -21,10 +21,11 @@ import type { AddressInfo } from 'node:net'
 
 import '../../../lib/inference/config.server'
 import {
+  decideFields,
   evaluateDecision,
   typedDecision,
 } from '@hames-ai/harness-patterns/patterns/typedDecision.server'
-import { createContext } from '@hames-ai/harness-patterns/context.server'
+import { createScope, createContext } from '@hames-ai/harness-patterns/context.server'
 import { runChain } from '@hames-ai/harness-patterns/patterns/chain.server'
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import {
@@ -509,5 +510,35 @@ describe('jev-cost-eur — the provider-reported USD converts at EUR_PER_USD', (
     const r = await decide({ spec: SPEC, state: 's' })
     expect(r.llmCall!.metrics!.costEur).toBeUndefined()
     expect(r.llmCall!.metrics!.inputUncachedTokens).toBe(120)
+  })
+})
+
+// G8: mutation — restore the product by removing Jev's mode normalisation.
+describe('jev-joint-per-field (G8)', () => {
+  it('joint mode sends N questions together in one decideAll request, never the label product', async () => {
+    const { createDecideAdapter, createDecideAllAdapter } =
+      await import('@hames-ai/harness-baml/baml-adapters.server')
+    const decide = createDecideAdapter()
+    const scope = createScope('p', {})
+    const out = await decideFields(scope, {
+      decide,
+      decideAll: createDecideAllAdapter(decide),
+      set: { ...SET, mode: 'joint' },
+      state: 'Synthetic test state',
+      policy: { route: { fallback: 'chat' }, recall: { fallback: 'no' } },
+    })
+    expect(requests).toHaveLength(1)
+    const body = JSON.parse(String(requests[0].init.body))
+    expect(Object.keys(body.questions)).toEqual(['route', 'recall'])
+    for (const [name, field] of Object.entries(SET.fields)) {
+      expect(body.questions[name]).toEqual({
+        type: 'choice',
+        instructions: field.question,
+        criteria: Object.fromEntries(field.labels.map((label) => [label.id, label.description])),
+      })
+    }
+    expect([out.route.label, out.recall.label]).toEqual(['search', 'yes'])
+    expect(scope.events.filter((event) => event.type === 'decision_made')).toHaveLength(2)
+    expect(smallRequests).toBe(0)
   })
 })

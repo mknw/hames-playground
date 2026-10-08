@@ -2000,9 +2000,9 @@ export interface MemoryInsertRow {
   readonly evidence: string
   /** The `user_message` event `evidence` quotes (#419 erasure semantics (b)).
    *  The host stores it BESIDE the text it describes, on the memory row, and
-   *  replaces both together on `update`. Core always sets it; optional only so
-   *  a row built before it existed still typechecks. */
-  readonly evidenceEventId?: string
+   *  replaces both together on `update`. Required, so every writer (M3's
+   *  compaction insert included) is a compile error without it. */
+  readonly evidenceEventId: string
   readonly embedding: readonly number[]
   readonly embedSpace: string
 }
@@ -2049,7 +2049,7 @@ export interface MemoryWriteTx {
     next: {
       readonly content: string
       readonly evidence: string
-      readonly evidenceEventId?: string
+      readonly evidenceEventId: string
       readonly embedding: readonly number[]
       readonly embedSpace: string
     },

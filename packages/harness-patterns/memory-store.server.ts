@@ -873,7 +873,10 @@ async function chooseAction(
     requireCalibrated: true,
     minConfidence: cut?.minConfidence ?? DEFAULT_MIN_CONFIDENCE,
     minMargin: cut?.minMargin ?? DEFAULT_MIN_MARGIN,
-    ...(cut?.thresholdMethod ? { thresholdMethod: cut.thresholdMethod } : {}),
+    // No `thresholdMethod`: the store gate's method scope must not switch the
+    // merge on. Off the logprob method these static cuts mismatch, so only a
+    // calibration entry fitted for (serving client, memory.merge) lets
+    // `update` or `same` through, on either tier.
   }
   const local: PatternScope<Record<string, never>> = {
     id: scope.id,

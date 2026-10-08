@@ -955,12 +955,63 @@ describe('erasure-semantics', () => {
     expect(db.rows()).toEqual([])
   })
 
-  it('the write seam has NO way to remove a source row', () => {
-    // Mutation: add `removeSources(memoryId): Promise<void>` to MemoryWriteTx.
+  it('the write seam has NO way to remove or re-point a source row', () => {
+    // Mutations: add removeSources( / replaceSources( / unlinkSource( / setSources(
+    // to MemoryWriteTx, as a method or as a property; add a `sources?:` key to
+    // update's `next`; add a second parameter to addSource.
     const src = readFileSync(new URL('../types.ts', import.meta.url), 'utf8')
     const body = /export interface MemoryWriteTx \{([\s\S]*?)\n\}/.exec(src)?.[1] ?? ''
-    expect(body).toContain('addSource(')
-    expect(body).not.toMatch(/\b(delete|remove|move|prune|drop|clear|reassign)\w*\s*\(/i)
+    const code = body.replace(/\/\*\*[\s\S]*?\*\//g, '')
+    // An ALLOW-list: any new member is a deliberate edit of this pin (M3's move of
+    // the members' rows included), never a name a deny-list missed.
+    const members = [...code.matchAll(/^ {2}(?:readonly\s+)?(\w+)\??\s*[:(<]/gm)].map((m) => m[1])
+    expect(members.sort()).toEqual([
+      'addSource',
+      'count',
+      'insert',
+      'nearest',
+      'read',
+      'reinforce',
+      'update',
+    ])
+    const next = /\bupdate\(\s*id: string,\s*next: \{([\s\S]*?)\}/.exec(code)?.[1] ?? ''
+    expect([...next.matchAll(/readonly (\w+)\??:/g)].map((m) => m[1]).sort()).toEqual([
+      'content',
+      'embedSpace',
+      'embedding',
+      'evidence',
+      'evidenceEventId',
+    ])
+    expect(code).toMatch(/\baddSource\(\s*src: MemorySourceRow,?\s*\)/)
+  })
+
+  it('an update that throws after its source claim rolls back: no new source row, old text intact', async () => {
+    // Mutation: swallow the update's failure (`await tx.update(...).catch(() => undefined)`).
+    const base = fakeDb({ seed: [OLD], seedSources: [['evt-old#0', 'old-1', 'conv-A']] })
+    const store: MemoryWriteStore = {
+      transaction: (fn) =>
+        base.store.transaction((tx) =>
+          fn({
+            ...tx,
+            update: async () => {
+              throw new Error('update failed')
+            },
+          }),
+        ),
+    }
+    const { embed } = fakeEmbed({ [CONTENT]: at(0.85) })
+    const { cfg } = config({ db: base, store, decide: fakeDecide({ merge: 'update' }).fn, embed })
+    const report = await settleMemory(turn(), cfg, { conversationId: 'conv-B' })
+    expect(report).toMatchObject({ written: 0, failed: 1 })
+    expect(base.rows()).toEqual([
+      expect.objectContaining({
+        id: 'old-1',
+        content: OLD.content,
+        evidenceEventId: 'evt-old',
+        updated: false,
+      }),
+    ])
+    expect(base.sourceRows()).toEqual([['evt-old#0', 'old-1', 'conv-A']])
   })
 })
 
@@ -1016,6 +1067,21 @@ describe('evidence-event-id', () => {
     expect(first.id).not.toBe(current.id)
     expect(db.rows()[0].evidenceEventId).toBe(current.id)
   })
+
+  it('an event id in the extractor OUTPUT never reaches the row: the model cannot pick the event', async () => {
+    // Mutation: carry the candidate's own `evidenceEventId` through acceptance to the insert.
+    const forged = {
+      ...cand(),
+      evidenceEventId: 'evt-forged',
+      eventId: 'evt-forged',
+    } as MemoryExtractedCandidate
+    const { cfg, db } = config({ extract: fakeExtract([forged]).fn })
+    const ctx = turn()
+    await settleMemory(ctx, cfg)
+    const current = ctx.events.find((e) => e.type === 'user_message')!.id
+    expect(db.rows()[0].evidenceEventId).toBe(current)
+    expect(db.sources()[0][0]).toBe(`${current}#0`)
+  })
 })
 
 describe('merge-fails-to-keep-both', () => {
@@ -1054,6 +1120,31 @@ describe('merge-fails-to-keep-both', () => {
     })
     expect(db.rows().find((r) => r.id !== 'old-1')?.content).toBe(CONTENT)
   }
+
+  it('a gate cut fitted for Jev does NOT enable the merge: no memory.merge calibration, both kept', async () => {
+    // Mutation: the merge policy inherits `settings.gate.thresholdMethod` again
+    // (the spread in chooseAction) → the calibrated Jev `update` merges.
+    const db = fakeDb({ seed: [seed()] })
+    const decide = fakeDecide({}, (i) => ({
+      ...confident(
+        i.spec.labels,
+        i.spec.key === 'memory.merge'
+          ? 'update'
+          : (STORES as Record<string, string>)[i.spec.key.replace('memory.store.', '')],
+      ),
+      method: 'jev',
+      calibrated: true,
+    }))
+    const { embed } = fakeEmbed({ [CONTENT]: at(0.85) })
+    const { cfg } = config({
+      db,
+      decide: decide.fn,
+      embed,
+      ...withSettings({ gate: { thresholdMethod: 'jev' } }),
+    })
+    const report = await settleMemory(turn(), cfg)
+    keptBoth(db, report)
+  })
 
   it('the merge key requires a calibrated read', async () => {
     // Mutation: requireCalibrated: true → false in chooseAction's policy.

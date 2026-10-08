@@ -2485,6 +2485,7 @@ the gate's kind also drops a candidate whose own kind must ask (`not-routine`).
 Per candidate, in ONE transaction that the host holds under the owner's advisory
 lock (`MemoryWriteStore.transaction` — it MUST roll back on a throw):
 
+0. Re-read `settings.enabled()` after acquiring the owner lock, inside EACH candidate's transaction and before its first write. False throws to roll that candidate back and reports `skipped: 'disabled'` (#552); the entry check alone cannot cover a switch-off during wake/extract/embed.
 1. `nearest` memory of the same owner, tier and embedding space.
 2. **Same kind and cosine ≥ `dupSimilarity` (0.92)** → reinforce. **Related
    (≥ `relatedSimilarity`, 0.75) preference or trait** → the `memory.merge`
@@ -2505,6 +2506,8 @@ which is why it has its own deadline. The thresholds are unmeasured placeholders
 for layer 4.
 
 ### Erasure semantics (owner decision (b), M2 and M3 together)
+
+**M7 precondition (#552, SD-10/SD-11):** both the "turn off" and "forget all" RPCs must **commit** the user's memory switch-off (`user_prefs.memory_enabled = false`) in its own transaction **before** calling `deleteAllMemoriesForUser`. The erase opens its own memory-pool transaction, and a candidate re-reads the switch on another connection, so a flip that is not yet committed is invisible to it. A flip inside a transaction that wraps the erase call reopens the race: a settle that takes the lock between the erase's commit and the flip's commit reads `true` and writes a memory that survives. Any rejection from the erase means "not erased" and is retryable: `55P03`, a memory-pool connect timeout (`MEMORY_POOL_MAX` is 2 and settles can hold both connections) or a `40P01`. The switch stays off and the RPC reports the failure, never success. Any later writer, such as M3 compaction, must re-read the switch and its inputs inside the owner-lock transaction, as settle does. Forget-all uses the memory pool and the same owner advisory transaction lock (`pg_advisory_xact_lock(hashtextextended('memories:' || $1, 0))`) and `lock_timeout` as candidate writes. A `55P03` must reach the RPC as a retryable failure, never success. In-flight commits before the erase are deleted; candidates acquiring the lock afterwards re-read the disabled switch and write nothing.
 
 Three rules, decided once for storing and for compaction:
 

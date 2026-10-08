@@ -69,6 +69,8 @@ export type ConversationStatus = 'running' | 'paused' | 'done' | 'error'
  */
 export type StoredInferenceTier = string | null
 
+export type MemoryRunOrigin = 'interactive' | 'triggered'
+
 export interface ConversationRow {
   id: string
   userId: string
@@ -104,6 +106,7 @@ export interface ConversationRow {
    * says nothing about what was said.
    */
   hitlEndedAt: Date | null
+  memoryRunOrigin: MemoryRunOrigin | null
 }
 
 export interface ConversationListItem {
@@ -137,6 +140,7 @@ interface DbRow {
   updated_at: Date
   version: string
   hitl_ended_at: Date | null
+  memory_run_origin: MemoryRunOrigin | null
 }
 
 interface DbListRow {
@@ -153,7 +157,7 @@ interface DbListRow {
 
 /** Every column a {@link ConversationRow} is built from, for a SELECT or a RETURNING. */
 const ROW_COLUMNS =
-  'id, user_id, agent_id, title, context, kind, source, status, inference_tier, created_at, updated_at, context_version::text AS version, hitl_ended_at'
+  'id, user_id, agent_id, title, context, kind, source, status, inference_tier, created_at, updated_at, context_version::text AS version, hitl_ended_at, memory_run_origin'
 
 function rowToConversation(row: DbRow): ConversationRow {
   return {
@@ -170,6 +174,7 @@ function rowToConversation(row: DbRow): ConversationRow {
     updatedAt: row.updated_at,
     version: row.version,
     hitlEndedAt: row.hitl_ended_at ?? null,
+    memoryRunOrigin: row.memory_run_origin ?? null,
   }
 }
 
@@ -452,6 +457,8 @@ export interface SaveConversationInput {
   /** The version the turn's claim holds — {@link claimConversation} or
    *  {@link createConversation}. */
   version: string
+  /** Omit on resume to preserve the paused run's origin. */
+  memoryRunOrigin?: MemoryRunOrigin | null
 }
 
 /**
@@ -479,7 +486,8 @@ export async function saveConversation(input: SaveConversationInput): Promise<st
        updated_at      = NOW(),
        context_version = ${NEXT_VERSION},
        turn_claimed_at = NULL,
-       hitl_ended_at   = NULL
+       hitl_ended_at   = NULL,
+       memory_run_origin = COALESCE($9, memory_run_origin)
      WHERE id = $1 AND user_id = $2 AND context_version = $8
      RETURNING context_version::text AS version`,
     [
@@ -491,6 +499,7 @@ export async function saveConversation(input: SaveConversationInput): Promise<st
       input.status,
       input.inferenceTier ?? null,
       input.version,
+      input.memoryRunOrigin ?? null,
     ],
   )
   if (rows.length > 0) return rows[0].version

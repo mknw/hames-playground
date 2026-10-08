@@ -67,6 +67,7 @@ import './lib/app-tools/index.server'
 // runs when the stash path is actually reached, exactly where the
 // gateway-vs-direct choice always used to be made.
 import './lib/redis-direct.server'
+import { probeMemoryAtBoot } from './lib/memory/boot.server'
 import { composeSecret } from './lib/config/compose-credentials.server'
 
 // Neo4j config seam (design S5, #225 PR-3): the driver's connection is handed
@@ -107,6 +108,7 @@ configureWorkspaceStore({
 // timer or a second usage listener that would double-count every LLM call.
 startRoutineScheduler()
 installUsageRecorder()
+void probeMemoryAtBoot()
 
 /**
  * The dev-only inference redirect (`app/e2e-browser/`) — armed on the first

@@ -38,42 +38,72 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   // `lib/env.ts#TEST_DATABASE_URL` for what sharing it cost.
   await provisionDatabase(TEST_DATABASE_URL)
 
-  const backend = await startBackend()
-
-  const backstop = await startEgressBackstop()
-  // Workers drain this loopback control endpoint after every test.
-  process.env.E2E_EGRESS_BACKSTOP = backstop.url
-  const server = await startDevServer(APP_PORT, browserServerEnv(backend, backstop.url)).catch(
-    async (err: unknown) => {
-      await backend.stop()
-      await backstop.close()
-      throw err
-    },
-  )
-
-  try {
-    await wipeUserRows()
-    await runPreflight(backend, server.url)
-    await warmTheClientBundle(server.url)
-    await assertNoUnexpectedEgress()
-    await wipeUserRows()
-  } catch (err) {
-    await server.stop()
-    await backend.stop()
-    await backstop.close()
-    throw err
-  }
-
+  const handles = await bootBrowserBackend()
   mkdirSync(path.dirname(HANDLES_FILE), { recursive: true })
   writeFileSync(
     HANDLES_FILE,
-    JSON.stringify({ appUrl: server.url, controlUrl: backend.controlUrl }, null, 2),
+    JSON.stringify({ appUrl: handles.server.url, controlUrl: handles.backend.controlUrl }, null, 2),
   )
+  return () => finishBrowserBackend(handles)
+}
 
-  return async () => {
+/** The real setup and the cheap pins traverse the same spawn and drain sequence. */
+export async function bootBrowserBackend(
+  options: {
+    env?: Record<string, string | undefined>
+    warm?: (backend: Awaited<ReturnType<typeof startBackend>>, url: string) => Promise<void>
+  } = {},
+) {
+  assertBrowserProxyRuntime(process.versions.node)
+  const backend = await startBackend()
+  const backstop = await startEgressBackstop()
+  process.env.E2E_EGRESS_BACKSTOP = backstop.url
+  const server = await startDevServer(APP_PORT, {
+    ...browserServerEnv(backend, backstop.url),
+    ...options.env,
+  }).catch(async (err: unknown) => {
+    try {
+      await backend.stop()
+    } finally {
+      try {
+        await assertNoUnexpectedEgress()
+      } finally {
+        await backstop.close()
+      }
+    }
+    throw err
+  })
+  const handles = { backend, backstop, server }
+  try {
+    if (options.warm) await options.warm(backend, server.url)
+    else {
+      await wipeUserRows()
+      await runPreflight(backend, server.url)
+      await warmTheClientBundle(server.url)
+    }
+    await assertNoUnexpectedEgress()
+    if (!options.warm) await wipeUserRows()
+    return handles
+  } catch (err) {
+    await finishBrowserBackend(handles)
+    throw err
+  }
+}
+
+/** Stop both processes and always drain evidence before closing the recorder. */
+export async function finishBrowserBackend({
+  server,
+  backend,
+  backstop,
+}: Awaited<ReturnType<typeof bootBrowserBackend>>): Promise<void> {
+  try {
     try {
       await server.stop()
+    } finally {
       await backend.stop()
+    }
+  } finally {
+    try {
       await assertNoUnexpectedEgress()
     } finally {
       await backstop.close()
@@ -126,6 +156,8 @@ export function browserServerEnv(
     // ---- The fakes ---------------------------------------------------------
     MCP_GATEWAY_URL: backend.gateway.url,
     JEV_DECISIONS_URL: backend.llm.baseUrl.replace(/\/v1$/, '') + '/api/alpha/decisions',
+    JEV_DECISIONS_API_KEY: 'e2e-browser-fake-key',
+    // Poison any other OpenRouter consumer too; Jev reads its dedicated key.
     OPENROUTER_API_KEY: 'e2e-browser-fake-key',
     HTTP_PROXY: backstopUrl,
     HTTPS_PROXY: backstopUrl,

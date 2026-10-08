@@ -2981,6 +2981,93 @@ describe('#492 F2: the resolver costs CPU linear in the part', () => {
       (await cpuMs(() => ooxmlDisarm(control, MIME.pptx)))
     expect(cpu).toBeLessThan(3)
   }, 120_000)
+
+  // #522: the layout's and master's backgrounds are SHARED by every run on the
+  // slide. The fixture above has empty backgrounds, so it cannot see a per-run
+  // scan of one (nor of a gradient's stops). Each pin pads the shared
+  // background and compares it with the SAME padding in a non-placeholder
+  // shape's `p:spPr` — the work is parsed either way, only the per-run read
+  // differs. Random attributes keep the zip ratio under its limit.
+  describe('#522: a shared layout/master background is evaluated once, not once per run', () => {
+    const n = 4000
+    const rnd = (seed: number): (() => string) => {
+      let s = seed
+      return () => ((s = (s * 1103515245 + 12345) >>> 0) >>> 8).toString(36)
+    }
+    // Every stop is bright, so black text contrasts with each: `fgVisible` can
+    // only stop early at the end of the list, which is the scan being pinned.
+    const hex = (i: number): string =>
+      `F${((i * 2654435761) >>> 8).toString(16).padStart(5, '0').slice(-5)}`
+    const runs = (): string =>
+      bodyRun().replace(
+        /<a:r>.*<\/a:r>/,
+        Array.from(
+          { length: n },
+          (_, i) => `<a:r><a:rPr lang="en-US"/><a:t>r${i}</a:t></a:r>`,
+        ).join(''),
+      )
+    /** `before` children, then a white solid fill: the padding precedes the fill, so it is walked to reach it. */
+    const widePr = (): string => {
+      const r = rnd(11)
+      return `<p:bgPr>${Array.from({ length: n }, () => `<a:x v="${r()}"/>`).join('')}${solid('FFFFFF')}<a:effectLst/></p:bgPr>`
+    }
+    const wideGrad = (): string => {
+      const stops = Array.from(
+        { length: n },
+        (_, i) => `<a:gs pos="${i}"><a:srgbClr val="${hex(i + 1)}"/></a:gs>`,
+      ).join('')
+      return `<p:bgPr><a:gradFill><a:gsLst>${stops}</a:gsLst></a:gradFill><a:effectLst/></p:bgPr>`
+    }
+    /** The padding as a non-placeholder shape's `p:spPr`, which no run reads. */
+    const control = (bgPr: string): string =>
+      `<p:sp><p:nvSpPr><p:cNvPr id="3" name="J"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${bgPr.replace(/<\/?p:bgPr>|<a:effectLst\/>/g, '')}</p:spPr>` +
+      '<p:txBody><a:bodyPr/><a:p/></p:txBody></p:sp>'
+    const at = (where: 'layout' | 'master' | 'control', bgPr: string): Uint8Array =>
+      pptx({
+        slides: [{ shapes: runs() }],
+        style: {
+          layouts: [
+            pStylePart(
+              'sldLayout',
+              where === 'control' ? control(bgPr) : '',
+              '',
+              where === 'layout' ? bgPr : '',
+            ),
+          ],
+          master: pStylePart('sldMaster', '', CLR_MAP, where === 'master' ? bgPr : ''),
+        },
+      })
+    const ratioOf = async (where: 'layout' | 'master', bgPr: string): Promise<number> => {
+      const padded = at(where, bgPr)
+      const base = at('control', bgPr)
+      // Whichever fixture runs first in a cold process pays the engine's
+      // warm-up: take it on an untimed pass so the ratio compares like with like.
+      await cpuMs(() => ooxmlDisarm(base, MIME.pptx))
+      const a = await cpuMs(() => ooxmlDisarm(padded, MIME.pptx))
+      const b = await cpuMs(() => ooxmlDisarm(base, MIME.pptx))
+      return a / b
+    }
+    it.each(['master', 'layout'] as const)(
+      'a wide %s p:bgPr',
+      async (where) => {
+        const bgPr = widePr()
+        expect(await ratioOf(where, bgPr)).toBeLessThan(3)
+        // The padded fill resolves (white page, default black text: distinct).
+        expect(await countedOf(at(where, bgPr))).toEqual({})
+      },
+      120_000,
+    )
+    it.each(['layout', 'master'] as const)(
+      'a %s gradient with n stops',
+      async (where) => {
+        const bgPr = wideGrad()
+        expect(await ratioOf(where, bgPr)).toBeLessThan(3)
+        // Over the stop bound it is not provably any colour: counted, not scanned.
+        expect(await countedOf(at(where, bgPr))).toEqual({ 'unknown-property': n })
+      },
+      120_000,
+    )
+  })
 })
 
 // ============================================================================
@@ -2990,42 +3077,48 @@ describe('#492 F2: the resolver costs CPU linear in the part', () => {
 describe('#517 A: placeholder lookup costs one step per run, not one per placeholder', () => {
   // The #492 F2 guard's fixture has ONE placeholder key per part, and its
   // count cannot see Map iteration: neither sees a per-run scan of every
-  // placeholder the layout and master declare. This pin grows the number of
-  // distinct keys against a control that declares as many placeholders under
-  // one shared key — a scan costs the first n times more, an index nothing.
-  // `type="body"` misses every key by type; `idx="0"` misses by idx as well,
-  // so each lookup path is timed on its own.
+  // placeholder the layout and master declare. These pins GROW the number of
+  // distinct keys, and the runs with them, from n to 4n: a scan costs the
+  // second sixteen times the first (#522: a ratio against a control at one size
+  // let a per-run spread of every placeholder through at 1.43 and 2.06 — native
+  // Map iteration is cheap at that size), an index four times. `type="body"` misses
+  // every key by type; `idx="0"` misses by idx as well, so each lookup path is
+  // timed on its own.
+  const n = 8_000
+  const growth = async (build: (size: number) => Uint8Array): Promise<number> => {
+    const [small, large] = [build(n), build(4 * n)]
+    // Untimed pass: the first fixture in a cold process pays the engine's warm-up.
+    await cpuMs(() => ooxmlDisarm(small, MIME.pptx))
+    return (
+      (await cpuMs(() => ooxmlDisarm(large, MIME.pptx))) /
+      (await cpuMs(() => ooxmlDisarm(small, MIME.pptx)))
+    )
+  }
   it.each([
     ['by type', undefined],
     ['by type, then by idx', '0'],
   ])(
     '%s: however many placeholders the layout declares',
     async (_, idx) => {
-      const n = 16_000
-      const runs = Array.from({ length: n }, (_, i) =>
-        shape(`s${i}`, { id: i + 3, ph: 'body', idx }),
-      ).join('')
-      const part = (keyed: boolean): string =>
-        Array.from(
-          { length: n },
+      const doc = (size: number): Uint8Array => {
+        const runs = Array.from({ length: size }, (_, i) =>
+          shape(`s${i}`, { id: i + 3, ph: 'body', idx }),
+        ).join('')
+        const part = Array.from(
+          { length: size },
           (_, k) =>
-            `<p:sp><p:nvSpPr><p:cNvPr id="${k + 5}" name="P"/><p:cNvSpPr/><p:nvPr><p:ph type="pic"${keyed ? ` idx="${k + 1}"` : ''}/></p:nvPr></p:nvSpPr>` +
+            `<p:sp><p:nvSpPr><p:cNvPr id="${k + 5}" name="P"/><p:cNvSpPr/><p:nvPr><p:ph type="pic" idx="${k + 1}"/></p:nvPr></p:nvSpPr>` +
             '<p:spPr/><p:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr><a:defRPr sz="1800"/></a:lvl1pPr></a:lstStyle><a:p/></p:txBody></p:sp>',
         ).join('')
-      const doc = (keyed: boolean): Uint8Array =>
-        pptx({
+        return pptx({
           slides: [{ shapes: runs }],
           style: {
-            layouts: [pStylePart('sldLayout', part(keyed))],
-            master: pStylePart('sldMaster', part(keyed), CLR_MAP),
+            layouts: [pStylePart('sldLayout', part)],
+            master: pStylePart('sldMaster', part, CLR_MAP),
           },
         })
-      const distinct = doc(true)
-      const shared = doc(false)
-      const ratio =
-        (await cpuMs(() => ooxmlDisarm(distinct, MIME.pptx))) /
-        (await cpuMs(() => ooxmlDisarm(shared, MIME.pptx)))
-      expect(ratio).toBeLessThan(2)
+      }
+      expect(await growth(doc)).toBeLessThan(6)
     },
     120_000,
   )
@@ -3034,33 +3127,27 @@ describe('#517 A: placeholder lookup costs one step per run, not one per placeho
     // #495's semantics, and the natural refactor of this index — is linear
     // while the run's type has no placeholders (the cases above) and
     // quadratic when it has n that all lack the run's level.
-    const n = 16_000
-    const runs =
-      '<p:sp><p:nvSpPr><p:cNvPr id="3" name="S"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>' +
-      '<p:spPr/><p:txBody><a:bodyPr/><a:p>' +
-      Array.from({ length: n }, (_, i) => `<a:r><a:t>r${i}</a:t></a:r>`).join('') +
-      '</a:p></p:txBody></p:sp>'
-    const part = (type: string): string =>
-      Array.from(
-        { length: n },
+    const doc = (size: number): Uint8Array => {
+      const runs =
+        '<p:sp><p:nvSpPr><p:cNvPr id="3" name="S"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>' +
+        '<p:spPr/><p:txBody><a:bodyPr/><a:p>' +
+        Array.from({ length: size }, (_, i) => `<a:r><a:t>r${i}</a:t></a:r>`).join('') +
+        '</a:p></p:txBody></p:sp>'
+      const part = Array.from(
+        { length: size },
         (_, k) =>
-          `<p:sp><p:nvSpPr><p:cNvPr id="${k + 5}" name="P"/><p:cNvSpPr/><p:nvPr><p:ph type="${type}" idx="${k + 2}"/></p:nvPr></p:nvSpPr>` +
+          `<p:sp><p:nvSpPr><p:cNvPr id="${k + 5}" name="P"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="${k + 2}"/></p:nvPr></p:nvSpPr>` +
           '<p:spPr/><p:txBody><a:bodyPr/><a:lstStyle><a:lvl2pPr><a:defRPr sz="1800"/></a:lvl2pPr></a:lstStyle><a:p/></p:txBody></p:sp>',
       ).join('')
-    const doc = (type: string): Uint8Array =>
-      pptx({
+      return pptx({
         slides: [{ shapes: runs }],
         style: {
-          layouts: [pStylePart('sldLayout', part(type))],
-          master: pStylePart('sldMaster', part(type), CLR_MAP),
+          layouts: [pStylePart('sldLayout', part)],
+          master: pStylePart('sldMaster', part, CLR_MAP),
         },
       })
-    const same = doc('body')
-    const other = doc('pic')
-    const ratio =
-      (await cpuMs(() => ooxmlDisarm(same, MIME.pptx))) /
-      (await cpuMs(() => ooxmlDisarm(other, MIME.pptx)))
-    expect(ratio).toBeLessThan(2)
+    }
+    expect(await growth(doc)).toBeLessThan(6)
   }, 120_000)
 })
 
@@ -3866,5 +3953,92 @@ describe('the disarm throws instead of returning a partial package', () => {
     expect(thrown).toBeInstanceOf(DocumentRefusedError)
     expect(convert).not.toHaveBeenCalled()
     expect(sanitizeOptionFor({ error: thrown }).unavailable).toBeDefined()
+  })
+})
+
+// #522 review: the background memo is keyed by the slide part, never by a
+// layout, a master or the document — each of those keys reports hidden text
+// as removed for one slide order.
+describe('#522: a slide never reads another slide’s background memo', () => {
+  const black = `<p:bgPr>${solid('000000')}<a:effectLst/></p:bgPr>`
+  const white = bodyRun(solid('FFFFFF'))
+  it.each([false, true])(
+    'two layouts, one black, one absent (black first: %s)',
+    async (blackFirst) => {
+      const [a, b] = blackFirst
+        ? [pStylePart('sldLayout', '', '', black), pStylePart('sldLayout')]
+        : [pStylePart('sldLayout'), pStylePart('sldLayout', '', '', black)]
+      const bytes = pptx({
+        slides: [{ shapes: white }, { shapes: white }],
+        style: { layouts: [a, b], master: pStylePart('sldMaster', '', CLR_MAP) },
+      })
+      expect(await countedOf(bytes)).toEqual({ 'colour-contrast': 1 })
+    },
+  )
+  it.each([1, 2])('one layout, two colour maps (override on slide %i)', async (on) => {
+    // The layout's background is bg1: white through the master's map, black
+    // through a slide's override, so the same layout part resolves differently.
+    const ovr =
+      '<p:clrMapOvr><a:overrideClrMapping bg1="dk1" tx1="lt1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/></p:clrMapOvr>'
+    const bytes = pptx({
+      slides: [
+        { shapes: white },
+        {
+          shapes: white,
+          rels: [
+            { id: 'rIdLayout', type: RT.slideLayout, target: '../slideLayouts/slideLayout1.xml' },
+          ],
+        },
+      ],
+      style: {
+        layouts: [
+          pStylePart(
+            'sldLayout',
+            '',
+            '',
+            `<p:bgPr><a:solidFill><a:schemeClr val="bg1"/></a:solidFill><a:effectLst/></p:bgPr>`,
+          ),
+          undefined,
+        ],
+        master: pStylePart('sldMaster', '', CLR_MAP),
+      },
+    })
+    const dec = new TextDecoder()
+    const enc = new TextEncoder()
+    const patched = writeZip(
+      readZip(bytes).map((e) => ({
+        name: e.name,
+        data:
+          e.name === `ppt/slides/slide${on}.xml`
+            ? enc.encode(dec.decode(e.data).replace('</p:cSld>', `</p:cSld>${ovr}`))
+            : e.data,
+      })),
+    )
+    expect(await countedOf(patched)).toEqual({ 'colour-contrast': 1 })
+  })
+  // F2: the stop bound is ten — a ten-stop background is still read, an eleven-stop one is not.
+  it.each([
+    [10, { 'colour-contrast': 1 }],
+    [11, { 'unknown-property': 1 }],
+  ])('a layout gradient of %i white stops behind white text', async (k, want) => {
+    const stops = Array.from(
+      { length: k },
+      (_, i) => `<a:gs pos="${i * 1000}"><a:srgbClr val="FFFFFF"/></a:gs>`,
+    ).join('')
+    const bytes = pptx({
+      slides: [{ shapes: white }],
+      style: {
+        layouts: [
+          pStylePart(
+            'sldLayout',
+            '',
+            '',
+            `<p:bgPr><a:gradFill><a:gsLst>${stops}</a:gsLst></a:gradFill><a:effectLst/></p:bgPr>`,
+          ),
+        ],
+        master: pStylePart('sldMaster', '', CLR_MAP),
+      },
+    })
+    expect(await countedOf(bytes)).toEqual(want)
   })
 })

@@ -2447,6 +2447,12 @@ interface SlideInheritance {
   /** The chain could not be read: every run on the part counts unknown-property. */
   readonly broken: boolean
   readonly clrMap: ReadonlyMap<string, string>
+  /**
+   * The layout's and master's backgrounds as colours, filled on the first run
+   * that reaches them. Both are shared by every run on the part, so reading
+   * them per run is O(runs × width) (#522).
+   */
+  bgLevels?: readonly BgColours[]
 }
 
 /** A standard colour map, for a master without one. */
@@ -2792,18 +2798,25 @@ function drawingBackgrounds(
   s: Scheme,
   ctx: Ctx,
 ): { readonly unknown: boolean; readonly colours: readonly string[] } {
-  const levels: readonly DFill[] = [
-    scope.shape?.fill ?? FILL_ABSENT,
-    scope.tblFill ?? FILL_ABSENT,
-    scope.slideBg ?? FILL_ABSENT,
-    inheritance.layout?.bg === undefined ? FILL_ABSENT : bgFill(inheritance.layout.bg, s, ctx),
-    inheritance.master?.bg === undefined ? FILL_ABSENT : bgFill(inheritance.master.bg, s, ctx),
-  ]
-  for (const level of levels) {
-    if (level.kind === 'absent' || level.kind === 'none') continue
-    const bg = bgColours(level)
-    if (bg.unknown) return { unknown: true, colours: [] }
-    if (bg.colours !== undefined) return { unknown: false, colours: bg.colours }
+  // The shape, table and slide levels are run-local or part-local already; the
+  // layout's and master's are shared by every run, so they are read from a memo
+  // filled once per part (#522).
+  const settled = (bg: BgColours) =>
+    bg.unknown
+      ? { unknown: true, colours: [] as readonly string[] }
+      : bg.colours === undefined
+        ? undefined
+        : { unknown: false, colours: bg.colours }
+  for (const fill of [scope.shape?.fill, scope.tblFill, scope.slideBg]) {
+    const hit = settled(bgColours(fill ?? FILL_ABSENT))
+    if (hit) return hit
+  }
+  inheritance.bgLevels ??= [inheritance.layout?.bg, inheritance.master?.bg].map((bg) =>
+    bgColours(bg === undefined ? FILL_ABSENT : bgFill(bg, s, ctx)),
+  )
+  for (const level of inheritance.bgLevels) {
+    const hit = settled(level)
+    if (hit) return hit
   }
   return { unknown: false, colours: ['FFFFFF'] }
 }
@@ -2815,17 +2828,25 @@ function bgFill(bg: XmlElement, s: Scheme, ctx: Ctx): DFill {
   return refFill(ctx.fmtBgFillEls, Math.round(idx / 1000), bg, s)
 }
 
-/** A fill as a background: the colours the text must contrast with. */
-function bgColours(fill: DFill): {
+/** What a background level settles: unknown, its colours, or neither (the level beneath shows). */
+interface BgColours {
   readonly unknown: boolean
   readonly colours?: readonly string[]
-} {
+}
+
+/** More gradient stops than this are not provably any colour (#522): `fgVisible` tests every one per run. */
+const BG_STOPS_MAX = 10
+
+/** A fill as a background: the colours the text must contrast with. */
+function bgColours(fill: DFill): BgColours {
+  if (fill.kind === 'absent' || fill.kind === 'none') return { unknown: false }
   if (fill.kind === 'solid') {
     if (fill.clr.transparent) return { unknown: false }
     if (fill.clr.rgb === undefined || fill.clr.unknown) return { unknown: true }
     return { unknown: false, colours: [fill.clr.rgb] }
   }
   if (fill.kind === 'grad') {
+    if (fill.stops.length > BG_STOPS_MAX) return { unknown: true }
     const colours: string[] = []
     for (const stop of fill.stops) {
       if (stop.transparent || stop.unknown || stop.rgb === undefined) return { unknown: true }

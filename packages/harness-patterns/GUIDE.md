@@ -159,7 +159,7 @@ const patterns = withMemory<AgentData>({ ...deps.memory, routerMemory: 'replies-
 await settleMemory(ctx, memoryStoreConfig(deps.memory), { conversationId })
 ```
 
-`enabled` is required, and both halves read the same function.
+`enabled` is required, and both halves read the same function. Settle re-reads it inside every candidate transaction after the owner lock; false rolls the candidate back and reports `skipped: 'disabled'`. **M7 precondition (#552):** the "turn off" and "forget all" RPCs must flip the switch off BEFORE deleting. Forget-all must use the memory pool, the same owner advisory transaction lock and lock timeout; propagate `55P03` as a retryable failure, never success.
 
 Choose `routerMemory` on this wiring: `'routing-and-replies'` is the default and
 preserves existing calls. The router sees recalled memory and may put it into

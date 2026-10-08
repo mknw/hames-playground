@@ -415,11 +415,14 @@ export async function listMemoriesForUser(userId: string): Promise<MemoryRow[]> 
  * their sources are one fact. This is the erasure bottom (SD-11): the M7 RPC
  * reaches it after its own `requireUser()`, never the other way round. Takes
  * a `userId` argument, so it is NEVER a `'use server'` export (SD-13).
+ * M7 must flip the switch off BEFORE deleting (#552). The owner lock waits
+ * for in-flight candidates; a 55P03 is a retryable failure, never success.
  */
 export async function deleteAllMemoriesForUser(userId: string): Promise<number> {
-  await ready()
-  const { rowCount } = await query(`DELETE FROM memories WHERE user_id = $1`, [userId])
-  return rowCount ?? 0
+  return memoryTransaction(userId, async (client) => {
+    const { rowCount } = await client.query(`DELETE FROM memories WHERE user_id = $1`, [userId])
+    return rowCount ?? 0
+  })
 }
 
 /**
@@ -584,42 +587,50 @@ export function createMemoryDbStore(userId: string): MemoryStore & MemoryWriteSt
     },
 
     async transaction<R>(fn: (tx: MemoryWriteTx) => Promise<R>): Promise<R> {
-      await ready()
-      const client = await getMemoryPool().connect()
-      let broken = false
-      // A checked-out client has no pool error listener: a backend that ends
-      // while this transaction waits on a model call (the idle-in-transaction
-      // backstop, a restart, a dropped link) would emit 'error' with nobody
-      // listening — an uncaught exception. Take it here; the next statement then
-      // rejects, the transaction fails, and the connection is never pooled again.
-      const onError = (err: Error) => {
-        broken = true
-        console.error('[memories] write connection lost mid-transaction:', err.message)
-      }
-      client.on('error', onError)
-      try {
-        await client.query('BEGIN')
-        await client.query(`SET LOCAL lock_timeout = ${MEMORY_LOCK_TIMEOUT_MS}`)
-        // One owner's stores (and compaction) serialize; a second waits at most
-        // lock_timeout and then fails, instead of queueing behind a model call.
-        await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
-          `memories:${userId}`,
-        ])
-        const out = await fn(writeTx(client, userId))
-        await client.query('COMMIT')
-        return out
-      } catch (err) {
-        try {
-          await client.query('ROLLBACK')
-        } catch {
-          broken = true // never return a connection in an unknown state to the pool
-        }
-        throw err
-      } finally {
-        client.off('error', onError)
-        client.release(broken)
-      }
+      return memoryTransaction(userId, (client) => fn(writeTx(client, userId)))
     },
+  }
+}
+
+/** Shared owner lock for candidate writes and forget-all; lock failures rethrow. */
+async function memoryTransaction<R>(
+  userId: string,
+  fn: (client: pg.PoolClient) => Promise<R>,
+): Promise<R> {
+  await ready()
+  const client = await getMemoryPool().connect()
+  let broken = false
+  // A checked-out client has no pool error listener: a backend that ends
+  // while this transaction waits on a model call (the idle-in-transaction
+  // backstop, a restart, a dropped link) would emit 'error' with nobody
+  // listening — an uncaught exception. Take it here; the next statement then
+  // rejects, the transaction fails, and the connection is never pooled again.
+  const onError = (err: Error) => {
+    broken = true
+    console.error('[memories] write connection lost mid-transaction:', err.message)
+  }
+  client.on('error', onError)
+  try {
+    await client.query('BEGIN')
+    await client.query(`SET LOCAL lock_timeout = ${MEMORY_LOCK_TIMEOUT_MS}`)
+    // One owner's stores (and compaction) serialize; a second waits at most
+    // lock_timeout and then fails, instead of queueing behind a model call.
+    await client.query(`SELECT pg_advisory_xact_lock(hashtextextended('memories:' || $1, 0))`, [
+      userId,
+    ])
+    const out = await fn(client)
+    await client.query('COMMIT')
+    return out
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK')
+    } catch {
+      broken = true // never return a connection in an unknown state to the pool
+    }
+    throw err
+  } finally {
+    client.off('error', onError)
+    client.release(broken)
   }
 }
 

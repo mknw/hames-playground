@@ -2419,6 +2419,7 @@ the gate's kind also drops a candidate whose own kind must ask (`not-routine`).
 Per candidate, in ONE transaction that the host holds under the owner's advisory
 lock (`MemoryWriteStore.transaction` — it MUST roll back on a throw):
 
+0. Re-read `settings.enabled()` after acquiring the owner lock, inside EACH candidate's transaction and before its first write. False throws to roll that candidate back and reports `skipped: 'disabled'` (#552); the entry check alone cannot cover a switch-off during wake/extract/embed.
 1. `nearest` memory of the same owner, tier and embedding space.
 2. **Same kind and cosine ≥ `dupSimilarity` (0.92)** → reinforce. **Related
    (≥ `relatedSimilarity`, 0.75) preference or trait** → the `memory.merge`
@@ -2439,6 +2440,8 @@ which is why it has its own deadline. The thresholds are unmeasured placeholders
 for layer 4.
 
 ### Erasure semantics (owner decision (b), M2 and M3 together)
+
+**M7 precondition (#552, SD-10/SD-11):** both the "turn off" and "forget all" RPCs must flip the user's memory switch off **BEFORE** deleting. Forget-all uses the memory pool and the same owner advisory transaction lock (`pg_advisory_xact_lock(hashtextextended('memories:' || $1, 0))`) and `lock_timeout` as candidate writes. A `55P03` must reach the RPC as a retryable failure, never success. In-flight commits before the erase are deleted; candidates acquiring the lock afterwards re-read the disabled switch and write nothing.
 
 Three rules, decided once for storing and for compaction:
 

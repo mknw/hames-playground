@@ -225,6 +225,8 @@ async function boot(): Promise<AppHandles> {
     // controller call as the 27B's.
     process.env.SMALL_LLM_BASE_URL = fakeLlm.baseUrl
     process.env.SMALL_LLM_API_KEY = 'e2e-fake-key'
+    process.env.EMBEDDINGS_LOCAL_URL = fakeLlm.baseUrl
+    process.env.EMBEDDINGS_LOCAL_API_KEY = 'e2e-fake-key'
     // The Anthropic tier's decide transport (Jev, via OpenRouter's Decisions
     // API) — pointed at the same fake, with a throwaway key, so a hermetic run
     // can neither reach OpenRouter nor spend a real key.

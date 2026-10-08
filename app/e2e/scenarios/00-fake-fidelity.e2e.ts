@@ -108,6 +108,25 @@ beforeAll(async () => {
     { letter: 'B', description: 'Just answer' },
   ]
   renderers = {
+    ExtractMemory: () =>
+      rq('ExtractMemory')(
+        'episodic',
+        'User: I prefer concise replies.',
+        'I prefer concise replies.',
+        via,
+      ),
+    CompactMemories: () =>
+      rq('CompactMemories')(
+        'episodic',
+        [
+          {
+            content: 'I prefer concise replies.',
+            evidence: 'I prefer concise replies.',
+            last_seen: '2026-01-01',
+          },
+        ],
+        via,
+      ),
     Decide: () => rq('Decide')('state', 'Which route?', options, via),
     DecideVerbalized: () => rq('DecideVerbalized')('state', 'Which route?', options, via),
     Router: () => rq('Router')('m', [{ name: 'neo4j', description: 'd' }], [], null, via),
@@ -137,8 +156,9 @@ beforeAll(async () => {
 })
 
 describe('the fake recognises every BAML function', () => {
-  it('knows both decision functions even while the memory fake is outstanding', () => {
-    for (const name of ['Decide', 'DecideVerbalized']) {
+  it('knows all seventeen functions including memory and decisions', () => {
+    expect(declared).toHaveLength(17)
+    for (const name of ['Decide', 'DecideVerbalized', 'ExtractMemory', 'CompactMemories']) {
       expect(declared).toContain(name)
       expect(ALL_BAML_FUNCTIONS).toContain(name)
     }
@@ -446,5 +466,50 @@ describe.runIf(IS_HERMETIC)('hermetic transport backstop', () => {
       if (original === undefined) delete process.env[variable]
       else process.env[variable] = original
     }
+  })
+})
+
+describe.runIf(IS_HERMETIC)('memory fake wire fidelity', () => {
+  it('serves deterministic 1024-dimensional OpenAI embeddings for single and batched input', async () => {
+    const app = await bootApp()
+    const { createMemoryEmbedder } = await import('../../src/lib/memory/embedder.server')
+    const embedder = createMemoryEmbedder()
+    const documents = await embedder.documents(['synthetic garden', 'synthetic path'])
+    expect(documents).toHaveLength(2)
+    for (const vector of documents) {
+      expect(vector).toHaveLength(1024)
+      expect(vector.every(Number.isFinite)).toBe(true)
+      expect(vector.some((value) => value !== 0)).toBe(true)
+    }
+    expect(await embedder.documents(['synthetic garden'])).toEqual([documents[0]])
+    expect(await embedder.query('synthetic garden')).toHaveLength(1024)
+    const response = await fetch(`${app.fakeLlm.baseUrl}/embeddings`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'synthetic', input: 'synthetic garden' }),
+    })
+    expect(await response.json()).toMatchObject({
+      object: 'list',
+      model: 'synthetic',
+      data: [{ object: 'embedding', index: 0, embedding: documents[0] }],
+      usage: { prompt_tokens: 1, total_tokens: 1 },
+    })
+  })
+  it('parses both new functions through the real BAML client', async () => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const evidence = 'I prefer concise synthetic notes.'
+    expect(await b.ExtractMemory('episodic', `User: ${evidence}`, evidence)).toEqual([
+      { kind: 'episodic', content: evidence, evidence },
+    ])
+    expect(
+      await b.CompactMemories('episodic', [
+        {
+          content: 'I prefer synthetic notes.',
+          evidence: 'synthetic notes',
+          last_seen: '2026-01-01',
+        },
+        { content: evidence, evidence, last_seen: '2026-01-02' },
+      ]),
+    ).toEqual({ content: evidence, evidence })
   })
 })

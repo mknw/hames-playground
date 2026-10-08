@@ -1977,6 +1977,26 @@ Choice never writes a type. The event remains metadata only (SD-3): stateChars,
 never state. Serialization and previews render score as `key: soon (E=1.43)`
 and noul as `key: true (p=0.91)`; absent type retains the legacy choice rendering.
 
+#### App observability (#418 addendum S6)
+
+The timeline preview chip names `score`, `noul`, or `choice` when the event's
+optional type is absent. Score details keep the ordered probability bars and
+add a mean marker on the level-index scale `0..labels.length−1`, at `expected`.
+The marker is a raw readout; it does not move to the mode or fallback verdict.
+A score's concentration cut has no per-bar probability equivalent, so the
+choice-only cut line and margin are not shown for scores.
+
+Noul details show one P(true) bar with the declared abstain band
+`[(1−minConfidence)/2, (1+minConfidence)/2]`; equality at either edge passes.
+The display labels this as the declared cut, since fitted cuts may differ.
+Missing/null or nonfinite raw readouts display as unknown without a numeric
+meter. Nonfinite score probabilities also display as unknown; absent
+probabilities retain their zero behavior. The noul band requires a finite
+declared confidence in `[0,1]`; other declared values show an invalid-cut
+indication without a band, preserving the raw value in metadata. Score/noul
+surfaces use a theme-aware background matched to their readout text.
+Persisted events without the new fields retain the choice bars and cuts.
+
 S2 adds generic policy entry points and mixed sets. S3/S4 add transport support;
 this slice changes no BAML prompt, routing, calibration artifact or production
 choice spec. `decisionRouter` remains choice-only.

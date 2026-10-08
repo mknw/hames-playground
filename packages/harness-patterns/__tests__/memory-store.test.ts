@@ -1082,6 +1082,30 @@ describe('evidence-event-id', () => {
     expect(db.rows()[0].evidenceEventId).toBe(current)
     expect(db.sources()[0][0]).toBe(`${current}#0`)
   })
+
+  it('the event id is REQUIRED on both writer shapes: a writer that omits it does not compile', () => {
+    // Mutation: make `evidenceEventId` optional again on MemoryInsertRow or on
+    // update's `next` — `pnpm typecheck` then fails (TS2578, unused directive).
+    type UpdateNext = Parameters<MemoryWriteTx['update']>[1]
+    // @ts-expect-error evidenceEventId is required on an inserted row
+    const row: MemoryInsertRow = {
+      id: 'mem-x',
+      kind: 'preference',
+      tier: 'verda',
+      content: CONTENT,
+      evidence: EVIDENCE,
+      embedding: [1, 0],
+      embedSpace: SPACE,
+    }
+    // @ts-expect-error evidenceEventId is required on an update
+    const next: UpdateNext = {
+      content: CONTENT,
+      evidence: EVIDENCE,
+      embedding: [1, 0],
+      embedSpace: SPACE,
+    }
+    expect([row.id, next.content]).toEqual(['mem-x', CONTENT])
+  })
 })
 
 describe('merge-fails-to-keep-both', () => {

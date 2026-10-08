@@ -189,3 +189,9 @@ structural checks first). Two rules:
 - **A scenario with zero checks fails.** `scenarioPassed()` enforces it, because
   a green cell that asserts nothing is worse than a red one — it manufactures a
   coverage number.
+
+`decision-calibration` (#418 T8) measures decide per client × key with disjoint
+fit/holdout splits. Jev takes cuts only (G7). Use `EVAL_ONLY=decision-calibration`
+and `EVAL_ROLES=decide`; the exact commands, diagnostic defaults and reviewed
+artifact feed are in [the owner runbook](../../docs/testing/decision-calibration.md).
+No live measurement was made while building T8.

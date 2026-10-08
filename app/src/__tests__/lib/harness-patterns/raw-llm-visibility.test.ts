@@ -169,9 +169,13 @@ describe('adapters: a failed BAML call carries rawOutput through the throw', () 
     // A real Collector: the adapter reads `.last`, and BAML never populated it
     // here, so this also pins that the wrap survives an EMPTY collector — the
     // caller still gets `functionName` + `variables` to render.
-    const err = await routeMessageOp('hi', [], undefined, new RealCollector('router')).catch(
-      (e) => e,
-    )
+    const err = await routeMessageOp(
+      'hi',
+      [],
+      undefined,
+      undefined,
+      new RealCollector('router'),
+    ).catch((e) => e)
     expect(err).toBeInstanceOf(LLMCallError)
     expect((err as InstanceType<typeof LLMCallError>).llmCall.functionName).toBe('Router')
   })

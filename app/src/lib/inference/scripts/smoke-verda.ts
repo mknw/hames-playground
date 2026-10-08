@@ -402,6 +402,7 @@ async function router(): Promise<void> {
       { name: 'neo4j', description: 'Query the knowledge graph.' },
       { name: 'web_search', description: 'Search the public web.' },
     ],
+    undefined,
     collector,
   )
   console.log(`   ${Date.now() - t0}ms · served by ${servedBy(collector)}`)

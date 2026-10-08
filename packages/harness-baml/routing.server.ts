@@ -8,7 +8,8 @@ import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { Collector } from '@boundaryml/baml'
 import { extractLLMCallData, wrapAsLLMCallError } from './baml-adapters.server'
 import { clientOverrideFor, limitsFor } from './clients.server'
-import type { RouteMessageResult, RouteFn } from '@hames-ai/harness-patterns/types'
+import type { RouteMessageResult, RouteFn, RouteExtra } from '@hames-ai/harness-patterns/types'
+import { escapeDataFence } from './data-fence'
 
 assertServerOnImport()
 
@@ -40,6 +41,7 @@ export async function routeMessageOp(
   message: string,
   history: Array<{ role: string; content: string }>,
   routes: Array<{ name: string; description: string }> = DEFAULT_ROUTES,
+  extra?: RouteExtra,
   passedCollector?: Collector,
 ): Promise<RouteMessageResult> {
   const b = await getBAML()
@@ -70,9 +72,11 @@ export async function routeMessageOp(
       message,
       routes,
       history,
-      // `memory_context` (#419 M9) — null until M5 wires the recall block
-      // through; explicit because the options bag follows it positionally.
-      null,
+      // `memory_context` (#419 M9/M5a) — `memoryRecall`'s block for this turn
+      // (the router passes `extra` only when something was recalled), else
+      // null; explicit because the options bag follows it positionally.
+      // Escaped: the template renders it inside a DATA fence (data-fence.ts).
+      extra?.memoryContext ? escapeDataFence(extra.memoryContext) : null,
       routerOpts,
     )
   } catch (e) {

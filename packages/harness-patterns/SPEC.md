@@ -1989,7 +1989,12 @@ choice-only cut line and margin are not shown for scores.
 Noul details show one P(true) bar with the declared abstain band
 `[(1−minConfidence)/2, (1+minConfidence)/2]`; equality at either edge passes.
 The display labels this as the declared cut, since fitted cuts may differ.
-Missing/null raw readouts display as unknown rather than a zero marker/bar.
+Missing/null or nonfinite raw readouts display as unknown without a numeric
+meter. Nonfinite score probabilities also display as unknown; absent
+probabilities retain their zero behavior. The noul band requires a finite
+declared confidence in `[0,1]`; other declared values show an invalid-cut
+indication without a band, preserving the raw value in metadata. Score/noul
+surfaces use a theme-aware background matched to their readout text.
 Persisted events without the new fields retain the choice bars and cuts.
 
 S2 adds generic policy entry points and mixed sets. S3/S4 add transport support;

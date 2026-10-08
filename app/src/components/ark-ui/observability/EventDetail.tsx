@@ -408,6 +408,9 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
         ? 'verbalized, uncalibrated'
         : 'uncalibrated'
   const cut = () => props.data.policy.minConfidence
+  const validCut = () => Number.isFinite(cut()) && cut()! >= 0 && cut()! <= 1
+  const finiteMean = () => Number.isFinite(props.data.expected)
+  const finitePTrue = () => Number.isFinite(props.data.pTrue)
   const margin = () => props.data.policy.minMargin
   // minConfidence as a probability: confidence = (K·p − 1)/(K − 1) ⇒ p = (c·(K − 1) + 1)/K.
   const cutProb = () => {
@@ -462,9 +465,9 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
       <Show when={props.data.type === 'score'}>
         <div flex="~ col" gap="2">
           <div text="xs ui-text-secondary">
-            Mean (level index): {props.data.expected?.toFixed(2) ?? 'unknown'}
+            Mean (level index): {finiteMean() ? props.data.expected!.toFixed(2) : 'unknown'}
           </div>
-          <Show when={props.data.expected != null && props.data.labels.length > 1}>
+          <Show when={finiteMean() && props.data.labels.length > 1}>
             <div
               h="2"
               bg="ui-bg-tertiary"
@@ -502,9 +505,9 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
       <Show when={props.data.type === 'noul'}>
         <div flex="~ col" gap="2">
           <div text="xs ui-text-secondary">
-            P(true): {props.data.pTrue == null ? 'unknown' : pct(props.data.pTrue)}
+            P(true): {finitePTrue() ? pct(props.data.pTrue!) : 'unknown'}
           </div>
-          <Show when={props.data.pTrue != null}>
+          <Show when={finitePTrue()}>
             <div
               h="3"
               bg="ui-bg-tertiary"
@@ -523,7 +526,7 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
                 data-role="decision-bar"
                 style={{ width: pct(props.data.pTrue!) }}
               />
-              <Show when={cut() !== undefined}>
+              <Show when={validCut()}>
                 <div
                   data-role="decision-band"
                   absolute=""
@@ -536,10 +539,15 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
               </Show>
             </div>
           </Show>
-          <Show when={cut() !== undefined}>
+          <Show when={validCut()}>
             <div text="xs ui-text-secondary">
               Declared abstain band: {pct((1 - cut()!) / 2)}–{pct((1 + cut()!) / 2)} (edges
               accepted)
+            </div>
+          </Show>
+          <Show when={cut() !== undefined && !validCut()}>
+            <div text="xs ui-text-secondary" data-role="decision-invalid-cut">
+              Invalid declared confidence cut: {String(cut())}; abstain band unavailable.
             </div>
           </Show>
         </div>
@@ -550,6 +558,7 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
           <For each={props.data.labels}>
             {(l) => {
               const p = () => props.data.probs[l.id] ?? 0
+              const available = () => props.data.type !== 'score' || Number.isFinite(p())
               return (
                 <div flex="~ col" gap="1" data-role="decision-label" data-label={l.id}>
                   <div flex="~" justify="between" text="xs">
@@ -558,42 +567,44 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
                       <span text="ui-text-tertiary"> — {l.description}</span>
                     </span>
                     <span font="mono" text="ui-text-secondary">
-                      {pct(p())}
+                      {available() ? pct(p()) : 'unknown'}
                     </span>
                   </div>
-                  <div
-                    bg="ui-bg-tertiary"
-                    rounded="sm"
-                    h="2"
-                    style={{ position: 'relative' }}
-                    role="meter"
-                    aria-label={`${l.id} probability`}
-                    aria-valuemin={0}
-                    aria-valuemax={1}
-                    aria-valuenow={p()}
-                  >
+                  <Show when={available()}>
                     <div
-                      h="2"
+                      bg="ui-bg-tertiary"
                       rounded="sm"
-                      bg={l.id === props.data.top ? 'ui-accent' : 'ui-text-tertiary'}
-                      data-role="decision-bar"
-                      style={{ width: pct(p()) }}
-                    />
-                    <Show when={props.data.type !== 'score' && cut() !== undefined}>
+                      h="2"
+                      style={{ position: 'relative' }}
+                      role="meter"
+                      aria-label={`${l.id} probability`}
+                      aria-valuemin={0}
+                      aria-valuemax={1}
+                      aria-valuenow={p()}
+                    >
                       <div
-                        data-role="decision-cut"
-                        title={`min confidence ${cut()} ⇒ p ≥ ${pct(cutProb())}`}
-                        bg="ui-danger"
-                        style={{
-                          position: 'absolute',
-                          top: '-2px',
-                          bottom: '-2px',
-                          width: '2px',
-                          left: pct(cutProb()),
-                        }}
+                        h="2"
+                        rounded="sm"
+                        bg={l.id === props.data.top ? 'ui-accent' : 'ui-text-tertiary'}
+                        data-role="decision-bar"
+                        style={{ width: pct(p()) }}
                       />
-                    </Show>
-                  </div>
+                      <Show when={props.data.type !== 'score' && cut() !== undefined}>
+                        <div
+                          data-role="decision-cut"
+                          title={`min confidence ${cut()} ⇒ p ≥ ${pct(cutProb())}`}
+                          bg="ui-danger"
+                          style={{
+                            position: 'absolute',
+                            top: '-2px',
+                            bottom: '-2px',
+                            width: '2px',
+                            left: pct(cutProb()),
+                          }}
+                        />
+                      </Show>
+                    </div>
+                  </Show>
                 </div>
               )
             }}
@@ -829,7 +840,11 @@ export const EventDetailPanel = (props: {
       style={{
         position: 'absolute',
         inset: '0',
-        'background-color': 'rgba(13, 17, 23, 0.95)',
+        'background-color':
+          type === 'decision_made' &&
+          ['score', 'noul'].includes((data as DecisionMadeEventData).type ?? '')
+            ? 'var(--ui-bg-secondary)'
+            : 'rgba(13, 17, 23, 0.95)',
         'backdrop-filter': 'blur(4px)',
         'z-index': '50',
         display: 'flex',

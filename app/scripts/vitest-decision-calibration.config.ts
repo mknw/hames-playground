@@ -21,6 +21,7 @@ export default defineConfig({
       'src/__tests__/lib/harness-patterns/gateway-management-tools.test.ts',
       'src/__tests__/lib/harness-patterns/truncation-retry.test.ts',
       '../packages/harness-patterns/__tests__/typed-decision*.test.ts',
+      '../packages/harness-patterns/__tests__/decision-all-types.test.ts',
     ],
   },
 })

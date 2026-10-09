@@ -8,7 +8,7 @@ import {
   LOGPROB_CLIENTS,
 } from '@hames-ai/harness-baml/clients.server'
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
-import type { DecisionCalibrationEntry, DecideFn } from '@hames-ai/harness-patterns'
+import type { DecisionCalibrationEntry, DecideFn, DecisionType } from '@hames-ai/harness-patterns'
 import { expectedClientFor } from '../client'
 import { type Scenario, type Observation, type Check } from '../harness'
 import fixtures from '../decision-calibration-fixtures.json'
@@ -46,16 +46,16 @@ export const decisionCalibrationScenario: Scenario = {
         name: 'fit mode',
         value: jev
           ? 'CUTS ONLY (G7); temperature/bias forbidden. Cuts cannot change all-sample ECE.'
-          : 'temperature + per-letter bias + confidence/margin cuts',
+          : 'temperature + per-letter bias: choice Brier, score RPS, noul log loss; confidence cuts (choice also margin)',
       },
       {
         name: 'corpus',
-        value: `${fixtures.revision}; disjoint predeclared fit/holdout; eval-only route; production recall/store/merge/injection questions`,
+        value: `${fixtures.revision}; disjoint predeclared fit/holdout; eval-only route, eval.noul and eval.score; production recall/store/merge/injection questions`,
       },
     ]
     const checks: Check[] = []
     const entries: Record<string, DecisionCalibrationEntry> = {}
-    const pooled: CalibrationSample[] = []
+    const pooled: Record<DecisionType, CalibrationSample[]> = { choice: [], score: [], noul: [] }
     let calls = 0
     await withRunFrame(
       {
@@ -79,14 +79,16 @@ export const decisionCalibrationScenario: Scenario = {
           const report = await evaluateKey({ spec, items, decide, jev, client, criteria })
           observations.push(...report.observations)
           checks.push(...report.checks)
-          pooled.push(...report.holdout)
+          pooled[spec.type ?? 'choice'].push(...report.holdout)
           if (report.entry) entries[spec.key] = report.entry
         }
       },
     )
-    const pool = pooledReport(client, jev, pooled, criteria)
-    observations.push(...pool.observations)
-    checks.push(...pool.checks)
+    for (const type of ['choice', 'score', 'noul'] as const) {
+      const pool = pooledReport(client, jev, pooled[type], criteria, type)
+      observations.push(...pool.observations)
+      checks.push(...pool.checks)
+    }
     if (completeEntries(entries, CALIBRATION_SPECS)) {
       const artifact: CalibrationArtifact = {
         schemaVersion: 1,

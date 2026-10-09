@@ -11,7 +11,7 @@ import {
   completeEntries,
   pooledReport,
 } from '../../../lib/inference/decision-calibration-report'
-import { CALIBRATION_SPECS } from '../../../lib/inference/decision-calibration-specs.server'
+import { CALIBRATION_SPECS as ALL_CALIBRATION_SPECS } from '../../../lib/inference/decision-calibration-specs.server'
 import {
   feedDecisionCalibration,
   calibrationFingerprint,
@@ -22,8 +22,15 @@ import {
   configureDecisionCalibration,
 } from '@hames-ai/harness-baml/clients.server'
 import { readFileSync } from 'node:fs'
-import { applyFit, calibrationMetrics } from '../../../lib/inference/decision-calibration-math'
+import {
+  applyFit,
+  calibrationMetrics,
+  calibrationLabels,
+} from '../../../lib/inference/decision-calibration-math'
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
+const CALIBRATION_SPECS = ALL_CALIBRATION_SPECS.filter(
+  (s) => s.type !== 'score' && s.type !== 'noul',
+)
 const fixtures = JSON.parse(readFileSync('evals/decision-calibration-fixtures.json', 'utf8'))
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -32,18 +39,14 @@ afterEach(() => {
 const criteria = OWNER_TUNABLE_DEFAULTS
 function fake(jev: boolean, wrongSplit = '', probability = 0.97): DecideFn {
   return async ({ spec, state }) => {
-    if (spec.type === 'score' || spec.type === 'noul') throw new Error('choice-only fixture')
+    const labels = calibrationLabels(spec)
     const item = fixtures.items.find(
       (i: { key: string; state: string }) => i.key === spec.key && i.state === state,
     )
-    const top =
-      item.split === wrongSplit ? spec.labels.find((l) => l.id !== item.truth)!.id : item.truth
+    const top = item.split === wrongSplit ? labels.find((l) => l !== item.truth)! : item.truth
     return {
       probs: Object.fromEntries(
-        spec.labels.map((l) => [
-          l.id,
-          l.id === top ? probability : (1 - probability) / (spec.labels.length - 1),
-        ]),
+        labels.map((l) => [l, l === top ? probability : (1 - probability) / (labels.length - 1)]),
       ),
       method: jev ? 'jev' : 'logprob',
       calibrated: jev,
@@ -52,9 +55,9 @@ function fake(jev: boolean, wrongSplit = '', probability = 0.97): DecideFn {
     } as DecideResult
   }
 }
-async function reports(jev = true, wrongSplit = '', probability = 0.97) {
+async function reports(jev = true, wrongSplit = '', probability = 0.97, all = false) {
   return Promise.all(
-    CALIBRATION_SPECS.map((spec) =>
+    (all ? ALL_CALIBRATION_SPECS : CALIBRATION_SPECS).map((spec) =>
       evaluateKey({
         spec,
         items: fixtures.items.filter((i: { key: string }) => i.key === spec.key),
@@ -300,11 +303,11 @@ describe('decision calibration behavioural report', () => {
     expect(completeEntries(entries, CALIBRATION_SPECS)).toBe(false)
     for (const jev of [true, false]) {
       const client = jev ? 'JevDecide' : 'LocalQwenSmallDecide'
-      const rs = await reports(jev)
+      const rs = await reports(jev, '', 0.97, true)
       for (let i = 0; i < rs.length; i++) {
         expect(rs[i].entry).not.toBeNull()
-        entries[CALIBRATION_SPECS[i].key] = rs[i].entry!
-        expect(completeEntries(entries, CALIBRATION_SPECS)).toBe(i === 7)
+        entries[ALL_CALIBRATION_SPECS[i].key] = rs[i].entry!
+        expect(completeEntries(entries, ALL_CALIBRATION_SPECS)).toBe(i === 9)
         if (jev) {
           expect(rs[i].entry).not.toHaveProperty('temperature')
           expect(rs[i].entry).not.toHaveProperty('bias')
@@ -328,7 +331,7 @@ describe('decision calibration behavioural report', () => {
       criteria,
     )
     expect(JSON.parse(pool.observations[0].value).n).toBe(56)
-    expect(pool.observations[0].name).toBe('JevDecide × ALL: held-out pooled')
+    expect(pool.observations[0].name).toBe('JevDecide × ALL (choice): held-out pooled')
     expect(pool.observations[1].value).toMatch(/^REOPEN G7\(a\): Jev pooled measured ECE=/)
     expect(pool.checks[0].pass).toBe(false)
     const samples = (await reports(true, '', 1)).flatMap((r) => r.holdout)

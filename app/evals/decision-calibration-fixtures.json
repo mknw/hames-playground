@@ -1,5 +1,5 @@
 {
-  "revision": "synthetic-v1",
+  "revision": "418-t8-v2",
   "items": [
     {
       "id": "route-0",
@@ -784,6 +784,174 @@
       "split": "holdout",
       "state": "What is a password manager?",
       "truth": "ordinary"
+    },
+    {
+      "id": "eval.noul-fit-0",
+      "key": "eval.noul",
+      "split": "fit",
+      "state": "Please have a person reply to my question.",
+      "truth": "true"
+    },
+    {
+      "id": "eval.noul-fit-1",
+      "key": "eval.noul",
+      "split": "fit",
+      "state": "Can a human explain this puzzle to me?",
+      "truth": "true"
+    },
+    {
+      "id": "eval.noul-fit-2",
+      "key": "eval.noul",
+      "split": "fit",
+      "state": "I would like to speak to someone rather than a bot.",
+      "truth": "true"
+    },
+    {
+      "id": "eval.noul-fit-3",
+      "key": "eval.noul",
+      "split": "fit",
+      "state": "Explain how a rainbow forms.",
+      "truth": "false"
+    },
+    {
+      "id": "eval.noul-fit-4",
+      "key": "eval.noul",
+      "split": "fit",
+      "state": "A person wrote this poem. Please summarize it.",
+      "truth": "false"
+    },
+    {
+      "id": "eval.noul-fit-5",
+      "key": "eval.noul",
+      "split": "fit",
+      "state": "Reply automatically with the opening hours.",
+      "truth": "false"
+    },
+    {
+      "id": "eval.noul-holdout-0",
+      "key": "eval.noul",
+      "split": "holdout",
+      "state": "Please connect me to a human who can answer.",
+      "truth": "true"
+    },
+    {
+      "id": "eval.noul-holdout-1",
+      "key": "eval.noul",
+      "split": "holdout",
+      "state": "I want a real person to reply.",
+      "truth": "true"
+    },
+    {
+      "id": "eval.noul-holdout-2",
+      "key": "eval.noul",
+      "split": "holdout",
+      "state": "Could somebody on your team respond to this?",
+      "truth": "true"
+    },
+    {
+      "id": "eval.noul-holdout-3",
+      "key": "eval.noul",
+      "split": "holdout",
+      "state": "What is the area of a square?",
+      "truth": "false"
+    },
+    {
+      "id": "eval.noul-holdout-4",
+      "key": "eval.noul",
+      "split": "holdout",
+      "state": "Do not contact anyone; give me an automated answer.",
+      "truth": "false"
+    },
+    {
+      "id": "eval.noul-holdout-5",
+      "key": "eval.noul",
+      "split": "holdout",
+      "state": "Describe the human characters in this short story.",
+      "truth": "false"
+    },
+    {
+      "id": "eval.score-fit-0",
+      "key": "eval.score",
+      "split": "fit",
+      "state": "No work is blocked. A reply next week is fine.",
+      "truth": "can_wait"
+    },
+    {
+      "id": "eval.score-fit-1",
+      "key": "eval.score",
+      "split": "fit",
+      "state": "This is optional reading for next month.",
+      "truth": "can_wait"
+    },
+    {
+      "id": "eval.score-fit-2",
+      "key": "eval.score",
+      "split": "fit",
+      "state": "I am waiting for a reply but can keep working.",
+      "truth": "soon"
+    },
+    {
+      "id": "eval.score-fit-3",
+      "key": "eval.score",
+      "split": "fit",
+      "state": "Please reply soon; I have a workaround and work continues.",
+      "truth": "soon"
+    },
+    {
+      "id": "eval.score-fit-4",
+      "key": "eval.score",
+      "split": "fit",
+      "state": "I cannot continue any work until you reply.",
+      "truth": "now"
+    },
+    {
+      "id": "eval.score-fit-5",
+      "key": "eval.score",
+      "split": "fit",
+      "state": "All work is blocked until this question is answered.",
+      "truth": "now"
+    },
+    {
+      "id": "eval.score-holdout-0",
+      "key": "eval.score",
+      "split": "holdout",
+      "state": "Nothing depends on this answer. Next week is fine.",
+      "truth": "can_wait"
+    },
+    {
+      "id": "eval.score-holdout-1",
+      "key": "eval.score",
+      "split": "holdout",
+      "state": "This is a suggestion for a future hobby project with no deadline.",
+      "truth": "can_wait"
+    },
+    {
+      "id": "eval.score-holdout-2",
+      "key": "eval.score",
+      "split": "holdout",
+      "state": "Someone is waiting, though their other work continues normally.",
+      "truth": "soon"
+    },
+    {
+      "id": "eval.score-holdout-3",
+      "key": "eval.score",
+      "split": "holdout",
+      "state": "I need an answer soon, but my temporary solution lets me continue.",
+      "truth": "soon"
+    },
+    {
+      "id": "eval.score-holdout-4",
+      "key": "eval.score",
+      "split": "holdout",
+      "state": "Every task is stopped while I wait for your answer.",
+      "truth": "now"
+    },
+    {
+      "id": "eval.score-holdout-5",
+      "key": "eval.score",
+      "split": "holdout",
+      "state": "There is no workaround; I cannot do any work without a reply.",
+      "truth": "now"
     }
   ]
 }

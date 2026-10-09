@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest'
 import type { DecideInput, DecideResult } from '@hames-ai/harness-patterns'
 import { activeRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { feedDecisionCalibration } from '../src/lib/inference/decision-calibration.server'
+import { calibrationLabels } from '../src/lib/inference/decision-calibration-math'
 import fixtures from '../evals/decision-calibration-fixtures.json'
 const state = vi.hoisted(() => ({
   client: 'JevDecide',
@@ -18,16 +19,16 @@ vi.mock('@hames-ai/harness-baml/baml-adapters.server', () => ({
   createDecideAdapter:
     () =>
     async ({ spec, state: text }: DecideInput) => {
-      if (spec.type === 'score' || spec.type === 'noul') throw new Error('choice-only fixture')
+      const labels = calibrationLabels(spec)
       state.tiers.push(activeRunFrame().inference?.tier ?? '')
       const item = fixtures.items.find((i) => i.key === spec.key && i.state === text)!
       const wrong = spec.key === state.badKey && item.split === state.badSplit
-      const top = wrong ? spec.labels.find((l) => l.id !== item.truth)!.id : item.truth
+      const top = wrong ? labels.find((l) => l !== item.truth)! : item.truth
       return {
         probs: Object.fromEntries(
-          spec.labels.map((l) => [
-            l.id,
-            l.id === top ? state.probability : (1 - state.probability) / (spec.labels.length - 1),
+          labels.map((l) => [
+            l,
+            l === top ? state.probability : (1 - state.probability) / (labels.length - 1),
           ]),
         ),
         method: state.client === 'JevDecide' ? 'jev' : 'logprob',
@@ -44,7 +45,7 @@ beforeEach(() => {
   state.probability = 0.97
   state.tiers = []
 })
-it('scenario artifact: writes only all-eight feasible, both client artifacts feed', async () => {
+it('scenario artifact: writes only all-ten feasible, both client artifacts feed', async () => {
   for (const client of ['JevDecide', 'LocalQwenSmallDecide']) {
     state.client = client
     state.writeFile.mockClear()
@@ -58,18 +59,32 @@ it('scenario artifact: writes only all-eight feasible, both client artifacts fee
     expect(state.writeFile).toHaveBeenCalledTimes(1)
     const artifact = JSON.parse(state.writeFile.mock.calls[0][1])
     expect(() => feedDecisionCalibration(artifact)).not.toThrow()
-    expect(Object.keys(artifact.clients[client].entries)).toHaveLength(8)
-    expect(recordCall).toHaveBeenCalledTimes(224)
+    expect(Object.keys(artifact.clients[client].entries)).toHaveLength(10)
+    expect(recordCall).toHaveBeenCalledTimes(260)
+    for (const type of ['score', 'noul']) {
+      expect(
+        report.checks.find((c) => c.name === `ALL (${type}): held-out pooled calibration`),
+      ).toMatchObject({ pass: true })
+      const observation = report.observations!.find(
+        (o) => o.name === `${client} × ALL (${type}): held-out pooled`,
+      )
+      expect(observation).toBeDefined()
+      const measured = JSON.parse(observation!.value)
+      expect(measured.n).toBe(6)
+      expect(measured.eceKind).toBe(type === 'score' ? 'cumulative' : 'binary')
+    }
     expect(
       report.observations!.find((o) => o.name === 'actual serving client and calls')!.value,
-    ).toBe(`${client}: 224`)
-    expect(report.checks.find((c) => c.name === 'ALL: held-out pooled calibration')).toMatchObject({
+    ).toBe(`${client}: 260`)
+    expect(
+      report.checks.find((c) => c.name === 'ALL (choice): held-out pooled calibration'),
+    ).toMatchObject({
       pass: true,
     })
     expect(new Set(state.tiers)).toEqual(new Set([client === 'JevDecide' ? 'anthropic' : 'verda']))
-    expect(report.observations!.some((o) => o.name === `${client} × ALL: held-out pooled`)).toBe(
-      true,
-    )
+    expect(
+      report.observations!.some((o) => o.name === `${client} × ALL (choice): held-out pooled`),
+    ).toBe(true)
   }
   state.client = 'JevDecide'
   state.badKey = 'route'
@@ -95,12 +110,14 @@ it('scenario pooled check: ECE above .05 reaches the scenario as a red ALL check
     opts: () => ({ collector: [] }),
   })
   const measured = JSON.parse(
-    report.observations!.find((o) => o.name === 'JevDecide × ALL: held-out pooled')!.value,
+    report.observations!.find((o) => o.name === 'JevDecide × ALL (choice): held-out pooled')!.value,
   )
   expect(measured.ece).toBeCloseTo(0.2)
-  expect(report.checks.find((c) => c.name === 'ALL: held-out pooled calibration')).toEqual({
-    name: 'ALL: held-out pooled calibration',
-    pass: false,
-    detail: `ECE=${measured.ece}; ceiling=0.05`,
-  })
+  expect(report.checks.find((c) => c.name === 'ALL (choice): held-out pooled calibration')).toEqual(
+    {
+      name: 'ALL (choice): held-out pooled calibration',
+      pass: false,
+      detail: `ECE=${measured.ece}; ceiling=0.05`,
+    },
+  )
 })

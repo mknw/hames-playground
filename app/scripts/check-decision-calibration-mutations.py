@@ -110,6 +110,13 @@ ROUND2_CASES = [
 ]
 
 S5_CASES = [
+    ('noul-fit-zero-mass', MATH, 'Math.max(LOG_LOSS_FIT_FLOOR, s.probs[s.truth])', 's.probs[s.truth]', 'types', 'noul-fit-zero-mass:'),
+    ('score-mae-sign', MATH, 'mae += Math.abs(', 'mae += (', 'types', 'rps-math:'),
+    ('typed-cut-margin', MATH, 'const margins = type ? [0] : [0, ...rows.map((r) => r.margin)]', 'const margins = [0, ...rows.map((r) => r.margin)]', 'types', 'type-cuts:'),
+    ('score-rubric-pool', MATH, "(type === 'score' && JSON.stringify(s.levels) !== JSON.stringify(samples[0].levels))", 'false', 'types', 'cumulative-ece:'),
+    ('score-brier-divisor', MATH, "(type === 'noul' ? 2 : 1)", '(type ? 2 : 1)', 'types', 'rps-math:'),
+    ('choice-pool-label', REPORT, 'const group = `ALL (${type})`', "const group = type === 'choice' ? 'ALL' : `ALL (${type})`", 'types', 'type-pool-gates:'),
+    ('score-verdict-exact', REPORT, "; exact accuracy=${retained.metrics?.exactAccuracy ?? 'N/A (none retained)'}", '', 'types', 'score-retained-within-one:'),
     ('type-closed-distribution', MATH, 'ordered.length !== Object.keys(sample.probs).length ||', 'false ||', 'types', 'type-validation:'),
     ('type-truth-validation', MATH, '!labels.some(([label]) => label === sample.truth) ||', 'false ||', 'types', 'type-validation:'),
     ('rps-math', MATH, 'rps: rps / samples.length', 'rps: brier / samples.length', 'types', 'rps-math:'),
@@ -121,7 +128,7 @@ S5_CASES = [
     ('score-concentration', MATH, '? ordinalConfidence', '? (labels.length * p - 1) / (labels.length - 1)', 'types', 'type-confidence:'),
     ('score-within-one-cut', MATH, "type === 'score' ? r.withinOneCorrect : r.correct", 'r.correct', 'types', 'type-cuts:'),
     ('score-fitting-loss', MATH, "samples[0].type === 'score' ? m.rps!", "samples[0].type === 'score' ? m.brier", 'types', 'type-fitting-loss:'),
-    ('noul-fitting-loss', MATH, "samples[0].type === 'noul' ? m.logLoss!", "samples[0].type === 'noul' ? m.brier", 'types', 'type-fitting-loss:'),
+    ('noul-fitting-loss', MATH, "if (samples[0].type === 'noul')", "if (false)", 'types', 'type-fitting-loss:'),
     ('feed-refuses-margin-on-score-noul', FEED, "if (spec.type !== 'choice' && Object.hasOwn(entry, 'minMargin')) refuse()", "if (false) refuse()", 'feed', 'feed-refuses-margin-on-score-noul:'),
     ('feed-type-bias', FEED, 'Object.keys(entry.bias).length !== letters.length ||', 'false ||', 'feed', 'feed-type-bias:'),
     ('fingerprint-includes-type', FEED, 'specs: CALIBRATION_SPECS,', 'specs: CALIBRATION_SPECS.map(({ type: _type, ...spec }) => spec),', 'feed', 'fingerprint-includes-type:'),

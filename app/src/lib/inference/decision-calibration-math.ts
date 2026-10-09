@@ -271,10 +271,20 @@ export function fitCalibration(
   }
 }
 
-/** Fit the proper loss for the declared type, never the cut concentration. */
+const LOG_LOSS_FIT_FLOOR = 1e-12
+/** Fit the proper loss for the declared type, never the cut concentration. A
+ * zero-mass gold read is a constant term no transform can change; clipping it
+ * keeps it from erasing the fit of every other sample. Reports stay unclipped. */
 function fittingLoss(samples: readonly CalibrationSample[]): number {
   const m = calibrationMetrics(samples)
-  return samples[0].type === 'score' ? m.rps! : samples[0].type === 'noul' ? m.logLoss! : m.brier
+  if (samples[0].type === 'noul')
+    return (
+      samples.reduce(
+        (sum, s) => sum - Math.log(Math.max(LOG_LOSS_FIT_FLOOR, s.probs[s.truth])),
+        0,
+      ) / samples.length
+    )
+  return samples[0].type === 'score' ? m.rps! : m.brier
 }
 
 export function calibrationLabels(spec: AnyDecisionSpec): readonly string[] {

@@ -331,7 +331,7 @@ describe('decision calibration behavioural report', () => {
       criteria,
     )
     expect(JSON.parse(pool.observations[0].value).n).toBe(56)
-    expect(pool.observations[0].name).toBe('JevDecide × ALL: held-out pooled')
+    expect(pool.observations[0].name).toBe('JevDecide × ALL (choice): held-out pooled')
     expect(pool.observations[1].value).toMatch(/^REOPEN G7\(a\): Jev pooled measured ECE=/)
     expect(pool.checks[0].pass).toBe(false)
     const samples = (await reports(true, '', 1)).flatMap((r) => r.holdout)

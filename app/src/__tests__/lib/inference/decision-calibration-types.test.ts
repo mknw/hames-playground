@@ -49,6 +49,9 @@ describe('S5 calibration by type — known answers', () => {
       withinOneAccuracy: 1,
     })
     expect(metrics([score([0, 0, 1])])).toMatchObject({ rps: 1, mae: 2, withinOneAccuracy: 0 })
+    expect(metrics([score([0.6, 0.4, 0], 'now')]).mae).toBeCloseTo(1.6)
+    expect(metrics([score([0, 0, 1], 'can_wait'), score([1, 0, 0], 'now')]).mae).toBe(2)
+    expect(metrics([score([0, 0, 1])]).brier).toBe(2)
     const m = metrics([score([0.2, 0.5, 0.3], 'soon')])
     expect(m.rps).toBeCloseTo(0.065)
     expect(m.mae).toBeCloseTo(0.1)
@@ -75,6 +78,17 @@ describe('S5 calibration by type — known answers', () => {
     expect(metrics([score([0.2, 0.5, 0.3], 'soon')]).ece).toBeCloseTo(0.25)
     expect(metrics([score([0, 1, 0], 'soon')]).ece).toBe(0)
     expect(() => metrics([noul(0.8), score([0.2, 0.5, 0.3])])).toThrow(/pool/)
+    expect(() =>
+      metrics([
+        score([0.2, 0.5, 0.3]),
+        {
+          type: 'score',
+          levels: ['a', 'b', 'c', 'd'],
+          truth: 'a',
+          probs: { a: 0.25, b: 0.25, c: 0.25, d: 0.25 },
+        },
+      ]),
+    ).toThrow(/pool/)
   })
   it('type-confidence: diagnostic cuts use the same confidence and tie-break as core', () => {
     for (const s of [score([0, 0.5, 0.5]), score([0.5, 0, 0.5]), score([0.2, 0.5, 0.3])]) {
@@ -112,6 +126,9 @@ describe('S5 calibration by type — known answers', () => {
   it('type-cuts: score maximises within-one, noul exact, neither fits margin', () => {
     const samples = [score([0, 1, 0]), score([0, 0, 1])]
     expect(fitCuts(samples, 0.95)).toEqual({ minConfidence: 1, retained: 0 }) // same confidence, incompatible truths
+    expect(fitCuts([score([0.5, 0.45, 0.05], 'now'), score([0.35, 0, 0.65], 'now')], 0.95)).toEqual(
+      { minConfidence: 1, retained: 0 },
+    )
     const adjacent = [score([0, 1, 0])]
     expect(fitCuts(adjacent, 0.95)).toEqual({ minConfidence: 1, retained: 1 })
     expect(retainedMetrics(adjacent, { minConfidence: 1 })).toMatchObject({
@@ -127,6 +144,22 @@ describe('S5 calibration by type — known answers', () => {
       minConfidence: Math.abs(2 * 0.8 - 1),
       n: 1,
     })
+  })
+  it('noul-fit-zero-mass: zero gold mass does not erase the other samples fit', () => {
+    const base = [
+      noul(0.9, 'false'),
+      noul(0.9, 'false'),
+      noul(0.8, 'false'),
+      noul(0.85),
+      noul(0.3, 'false'),
+    ]
+    const samples = [...base, noul(0)]
+    const fitted = fitCalibration(samples, ['true', 'false'], false, 0.5)
+    expect({ temperature: fitted.temperature, bias: fitted.bias }).not.toEqual({
+      temperature: 1,
+      bias: { A: 0, B: 0 },
+    })
+    expect(calibrationMetrics(samples).logLoss).toBe(Infinity)
   })
   it('type-fitting-loss: deterministic score RPS and noul log loss minima', () => {
     // Mixed, nonseparable probabilities distinguish ordinal/log-loss from Brier optima.
@@ -238,6 +271,9 @@ describe('S5 type reports and coordinator ruling', () => {
       true,
     )
     expect(r.result.entry).not.toBeNull()
+    const verdict = r.result.observations.find((o) => o.name.endsWith(': VERDICT'))!.value
+    expect(verdict).toContain('exact accuracy=0')
+    expect(verdict).toContain('within-one accuracy=1')
   })
   it('infinite-log-loss-report: zero probability is explicitly Infinity rather than unknown null', async () => {
     const r = await report('noul', 0)
@@ -251,17 +287,20 @@ describe('S5 type reports and coordinator ruling', () => {
     }
   })
   it('type-pool-gates: separate ECE labels and red gates, no mixed overall ECE', async () => {
-    for (const type of ['score', 'noul'] as const) {
-      const r = await report(type)
-      const pool = pooledReport('JevDecide', true, r.result.holdout, criteria, type)
+    for (const type of ['choice', 'score', 'noul'] as const) {
+      const samples =
+        type === 'choice'
+          ? [{ truth: 'a', probs: { a: 0.8, b: 0.2 } }]
+          : (await report(type)).result.holdout
+      const pool = pooledReport('JevDecide', true, samples, criteria, type)
       expect(pool.observations[0].name).toContain(`ALL (${type})`)
       expect(JSON.parse(pool.observations[0].value).eceKind).toBe(
-        type === 'score' ? 'cumulative' : 'binary',
+        type === 'score' ? 'cumulative' : type === 'noul' ? 'binary' : 'top-label',
       )
       expect(pool.checks[0].pass).toBe(false)
       expect(pool.observations[1].value).toContain('REOPEN G7(a)')
       expect(pool.observations[1].value).toContain(
-        type === 'score' ? 'cumulative ECE' : 'binary ECE',
+        type === 'score' ? 'cumulative ECE' : type === 'noul' ? 'binary ECE' : 'top-label ECE',
       )
     }
     expect(() =>

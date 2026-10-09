@@ -69,7 +69,7 @@ export function pooledReport(
   criteria: Criteria,
   type: DecisionType = 'choice',
 ) {
-  const group = type === 'choice' ? 'ALL' : `ALL (${type})`
+  const group = `ALL (${type})`
   if (!samples.length)
     return {
       observations: [{ name: `${client} × ${group}: held-out pooled`, value: 'no data' }],
@@ -173,10 +173,13 @@ export async function evaluateKey({
   const cutFit = fitCuts(transformedFit, criteria.accuracyFloor)
   const measured = calibrationMetrics(transformed)
   const retained = retainedMetrics(transformed, entry)
-  const accuracyKind =
-    spec.type === 'score' ? 'within-one accuracy (exact accuracy reported beside it)' : 'accuracy'
+  const accuracyKind = spec.type === 'score' ? 'within-one accuracy' : 'accuracy'
   const retainedAccuracy =
     spec.type === 'score' ? retained.metrics?.withinOneAccuracy : retained.metrics?.accuracy
+  const scoreAccuracy =
+    spec.type === 'score'
+      ? `retained within-one accuracy=${retainedAccuracy ?? 'N/A (none retained)'}; exact accuracy=${retained.metrics?.exactAccuracy ?? 'N/A (none retained)'}`
+      : undefined
   observations.push(
     {
       name: `${client} × ${spec.key}: held-out raw`,
@@ -211,8 +214,8 @@ export async function evaluateKey({
       name: `${client} × ${spec.key}: VERDICT`,
       value:
         jev && measured.ece > criteria.eceCeiling
-          ? `REOPEN G7(a): Jev measured ECE=${measured.ece}; exceeds ${criteria.eceCeiling}. Cuts alone cannot correct all-sample calibration. ${measured.eceKind} ECE. Owner decision required.`
-          : `Held-out ECE=${measured.ece} ${measured.ece <= criteria.eceCeiling ? 'within' : 'exceeds'} diagnostic ceiling ${criteria.eceCeiling}; ${measured.eceKind} ECE; retained ${accuracyKind}=${retainedAccuracy ?? 'N/A (none retained)'}.`,
+          ? `REOPEN G7(a): Jev measured ECE=${measured.ece}; exceeds ${criteria.eceCeiling}. Cuts alone cannot correct all-sample calibration. ${measured.eceKind} ECE. Owner decision required.${scoreAccuracy ? ` ${scoreAccuracy}.` : ''}`
+          : `Held-out ECE=${measured.ece} ${measured.ece <= criteria.eceCeiling ? 'within' : 'exceeds'} diagnostic ceiling ${criteria.eceCeiling}; ${measured.eceKind} ECE; ${scoreAccuracy ?? `retained ${accuracyKind}=${retainedAccuracy ?? 'N/A (none retained)'}`}.`,
     },
   )
   checks.push(

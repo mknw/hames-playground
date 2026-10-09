@@ -76,13 +76,15 @@ it('scenario artifact: writes only all-ten feasible, both client artifacts feed'
     expect(
       report.observations!.find((o) => o.name === 'actual serving client and calls')!.value,
     ).toBe(`${client}: 260`)
-    expect(report.checks.find((c) => c.name === 'ALL: held-out pooled calibration')).toMatchObject({
+    expect(
+      report.checks.find((c) => c.name === 'ALL (choice): held-out pooled calibration'),
+    ).toMatchObject({
       pass: true,
     })
     expect(new Set(state.tiers)).toEqual(new Set([client === 'JevDecide' ? 'anthropic' : 'verda']))
-    expect(report.observations!.some((o) => o.name === `${client} × ALL: held-out pooled`)).toBe(
-      true,
-    )
+    expect(
+      report.observations!.some((o) => o.name === `${client} × ALL (choice): held-out pooled`),
+    ).toBe(true)
   }
   state.client = 'JevDecide'
   state.badKey = 'route'
@@ -108,12 +110,14 @@ it('scenario pooled check: ECE above .05 reaches the scenario as a red ALL check
     opts: () => ({ collector: [] }),
   })
   const measured = JSON.parse(
-    report.observations!.find((o) => o.name === 'JevDecide × ALL: held-out pooled')!.value,
+    report.observations!.find((o) => o.name === 'JevDecide × ALL (choice): held-out pooled')!.value,
   )
   expect(measured.ece).toBeCloseTo(0.2)
-  expect(report.checks.find((c) => c.name === 'ALL: held-out pooled calibration')).toEqual({
-    name: 'ALL: held-out pooled calibration',
-    pass: false,
-    detail: `ECE=${measured.ece}; ceiling=0.05`,
-  })
+  expect(report.checks.find((c) => c.name === 'ALL (choice): held-out pooled calibration')).toEqual(
+    {
+      name: 'ALL (choice): held-out pooled calibration',
+      pass: false,
+      detail: `ECE=${measured.ece}; ceiling=0.05`,
+    },
+  )
 })

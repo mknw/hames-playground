@@ -42,7 +42,7 @@ infinite log loss, rendered as `"Infinity"` rather than JSON null.
 The confidence-cut sweep uses 0, .25, .5, .75, .9 and 1. Coverage and its sample
 count remain absent/zero for Jev.
 
-Pools are **separate by type**: the existing choice `ALL` pool has its unchanged
+Pools are **separate by type**: the existing choice `ALL (choice)` pool has its unchanged
 56 holdouts; `ALL (score)` and `ALL (noul)` have six each, using their own ECE
 above. Each pool has its own red/green gate against `EVAL_DECISION_ECE`; an
 empty pool says `no data` and fails. There is no cross-type overall ECE.

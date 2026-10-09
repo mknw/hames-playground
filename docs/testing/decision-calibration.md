@@ -7,33 +7,53 @@ until the owner runs the commands below; no value is invented here.
 The scenario covers the actual exported `memory.recall`, four `memory.store.*`,
 `memory.merge` and `document.injection` questions. `route` is explicitly an
 eval-only proposal: T9/T10 must refit if their question or labels differ.
+`eval.noul` and `eval.score` are also eval-only, with no production consumer.
+They use neutral synthetic requests: asking for a human reply and urgency on
+three concrete levels. No existing two-label choice migrates to noul (Q6).
 No consumer, shadow step or routing map is changed here.
 
 ## Measurement and interpretation
 
 `app/evals/decision-calibration-fixtures.json` is a versioned synthetic corpus:
-112 labelled items, 56 fit and 56 holdout, all eight keys, every label in both
-splits. States are distinct across splits per key. Each item is read in canonical
-and reversed option order: **224 decision requests per client**. These are
-single-question calls even on Jev; batching and latency under batching are not
-measured here. The option swap compares label IDs, not positions. Swapped reads
-never fit. The report records each serving client from the adapter's actual
-`llmCall`, and refuses absent/mismatched evidence; it also retains call timing.
+**136 labelled items, 68 fit and 68 holdout**, ten keys, every answer in both
+splits, revision `418-t8-v2`. The original eight choice keys retain their 112
+items unchanged. Each new key has six fit and six holdout items. States are
+distinct across splits per key. A score gold is a level id; rubric gold is
+noisier than choice gold, so exact accuracy is always reported beside within-one.
 
-Fits use only the predeclared fit split. Held-out raw and fitted accuracy,
-multiclass Brier (sum of squared label errors, range 0–2), ten-bin equal-width
-ECE (top-label `p_max` versus correctness), mean label coverage (logprob only),
-raw order-swap agreement, and selective retention/accuracy/ECE are reported per
-client × key. ECE is **not** computed from the chance-recentred policy confidence.
-The confidence-cut sweep uses 0, .25, .5, .75, .9 and 1. Coverage and the number
-of coverage samples remain absent/zero for Jev.
+Choice and score items are read in canonical and reversed option/level order,
+mapped back by semantic id before comparison. Swaps never fit. **Noul gets one
+native read per item**, with order-swap agreement explicitly `N/A (native noul
+has no option order)`: N/A never counts as agreement or a pass. This makes
+**260 decision requests per client** (224 choice, 24 score, 12 noul). Jev still
+uses single-question calls; batching performance is not measured. The report
+requires the actual serving `llmCall` client and method, and retains timing.
+
+| Type   | Fit loss and proper score                                          | ECE (ten equal-width bins)                                       | Accuracy and cuts                                                                                     |
+| ------ | ------------------------------------------------------------------ | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| choice | Multiclass Brier: sum squared errors, range 0–2                    | Top-label `p_max` versus correctness                             | Exact accuracy; confidence and margin cuts                                                            |
+| noul   | Binary Brier `(p-y)²`; fit binary log loss `-log(P(gold))`         | P(true) versus observed frequency of true                        | Exact `holds` accuracy; confidence cut only (symmetric band)                                          |
+| score  | Normalized RPS `Σ(F_k-O_k)²/(n-1)` over the n−1 ordinal thresholds | P(level ≥ k) versus observed frequency, averaged over thresholds | MAE of expected index; exact and within-one mode accuracy; confidence cut only, within-one ≥ .95 (Q8) |
+
+Reports label `eceKind` as `top-label`, `binary` or `cumulative`. Score ECE never
+uses its ordinal concentration statistic; neither choice nor noul ECE uses
+chance-recentred policy confidence. Zero probability on a true outcome has
+infinite log loss, rendered as `"Infinity"` rather than JSON null.
+The confidence-cut sweep uses 0, .25, .5, .75, .9 and 1. Coverage and its sample
+count remain absent/zero for Jev.
+
+Pools are **separate by type**: the existing choice `ALL` pool has its unchanged
+56 holdouts; `ALL (score)` and `ALL (noul)` have six each, using their own ECE
+above. Each pool has its own red/green gate against `EVAL_DECISION_ECE`; an
+empty pool says `no data` and fails. There is no cross-type overall ECE.
 
 For logprob clients a bounded deterministic coordinate search minimises fit
-Brier over temperature and letter bias. Letter A is the fixed reference bias;
+the type's loss above over temperature and letter bias. Letter A is the fixed reference bias;
 other biases are additive in log space. Temperature is constrained to .05–20.
 The evaluation transform follows production `calibrateLabelMass`. Cut fitting
-checks observed confidence/margin boundaries and maximises retained samples
-subject to **95% empirical fit accuracy**. No feasible retained sample means no
+checks observed confidence boundaries (and margin for choice only) and maximises retained samples
+subject to **95% empirical fit accuracy for choice/noul**, or **within-one
+accuracy ≥ 95% for score, with exact accuracy reported beside it** (Q8). No feasible retained sample means no
 complete candidate is emitted, rather than representing reject-all with cuts
 that could still admit a certain wrong prediction.
 
@@ -46,9 +66,10 @@ and .05 ECE ceiling are **owner-tunable diagnostic defaults under G10**, via
 policies. Held-out ECE and retained accuracy failing those criteria make the
 scenario red, while preserving measurements and fitted candidates.
 
-This small corpus is a reproducible diagnostic, not a population calibration
-certificate. The report also pools all 56 held-out items per client and emits an ALL verdict
-and check under the same ECE ceiling. Some per-key holdouts have only six items; ten-bin ECE is noisy
+**Spike rule:** S5 cut defaults are diagnostics until the owner live run (G10),
+even though S3 already completed the real local 4B score/noul spike. S5 lands
+before the owner TypeSafe T8 run (Q7). This small corpus is a reproducible
+diagnostic, not a population calibration certificate. Some per-key holdouts have only six items; ten-bin ECE is noisy
 there. The owner should expand/relabel the corpus and refit before claiming
 coverage of real traffic. Reports state this limitation.
 
@@ -63,7 +84,7 @@ Its initial committed value is intentionally:
 ```json
 {
   "schemaVersion": 1,
-  "contractRevision": "418-t8-v1",
+  "contractRevision": "418-t8-v2",
   "status": "unmeasured",
   "clients": {}
 }
@@ -94,26 +115,35 @@ A measured candidate uses the same envelope with `status: "measured"` and:
 ```
 
 This is an **illustration of the `clients` field**, not a loadable artifact:
-every client must have all eight question keys. Clients may be measured and
+every client must have all ten question keys. Clients may be measured and
 committed separately; an absent client's table remains empty. Every entry needs
-finite cuts in [0,1], positive integer fit sample count and valid timestamp.
+a finite confidence cut in [0,1]; choice additionally requires a finite margin cut
+in [0,1], while score/noul refuse any `minMargin` property (even undefined).
+Every entry also needs a positive integer fit sample count and valid timestamp.
 Logprob entries additionally require positive finite `temperature` and a finite
-bias for **every canonical answer letter** (`A`, `B`, etc.), not semantic IDs.
+bias for **every canonical answer letter** (`A`, `B`, etc.), not semantic IDs:
+all score level letters, exactly A and B for noul.
 Jev refuses temperature/bias, even identity values, both at the host boundary
 and in `configureDecisionCalibration` (G7). Unknown clients, keys and entry
 properties are refused.
 
 The host loads only metadata from
 `app/src/lib/inference/decision-calibration-contract.json`; a hermetic drift pin
-requires it to match every current production question export exactly. This
+requires it to match every current production question export, normalizing
+absent type to `choice` only in this metadata. The contract declares `type` for
+every spec and `levels` / optional `criteria` in place of `labels` for new types. This
 keeps the host feed off the tool-transport import path. Update that versioned
 contract alongside a changed production question, and refit; a mismatched
 contract revision is refused at composition.
 
 Fingerprints bind the client name, contract revision and **all ordered question
-texts/label descriptions**, plus Jev's pinned model/G7 transport revision or the
+types, texts, label/level descriptions and noul criteria**, plus Jev's pinned model/G7 transport revision or the
 committed local BAML prompt and client declaration. A changed question, label
 order, local model or request flags invalidates the measured artifact. A
+key changing type is a contract revision bump (Q10), while lookup stays
+`(client, key)` and `schemaVersion` stays 1. Adding the two eval keys changes
+every client fingerprint; all v1 measured artifacts need a refit. The committed
+artifact stays unmeasured with empty clients; no measured values land in S5. A
 server replacing weights under the same model alias is outside this source
 fingerprint: the operator must invalidate/refit then. Changing the corpus or
 fitter semantics requires a contract revision bump. Candidate files are written
@@ -132,14 +162,21 @@ provider preferences (#526). The owner still configures the decision-only key
 and provider choice per the 2026-10-08 decision before a live run.
 
 ```sh
-# .env: JEV_DECISIONS_URL and JEV_DECISIONS_API_KEY (decision-only credential).
-USE_VERDA_INFERENCE=0 EVAL_CLIENT=default EVAL_ROLES=decide \
+# .env holds JEV_DECISIONS_API_KEY (decision-only credential), never printed.
+# Direct TypeSafe leg: includes native score and noul plus unchanged choices.
+JEV_DECISIONS_URL=https://api.typesafe.ai/v1/systemone \
+  USE_VERDA_INFERENCE=0 EVAL_CLIENT=default EVAL_ROLES=decide \
   EVAL_ONLY=decision-calibration pnpm eval:harness
 
-# .env: SMALL_LLM_BASE_URL ends in /v1; SMALL_LLM_API_KEY as appropriate.
+# Owner starts tracked make llm-small flags from repo root, on an isolated port:
+# make llm-small LLM_SMALL_PORT=18095
+# Stop that owned foreground server with Ctrl-C (or kill its PID, never pkill).
+# .env holds SMALL_LLM_API_KEY as appropriate; no credentials printed.
+# Local 4B leg: includes ordered score and A=true/B=false noul.
 # USE_VERDA_INFERENCE=0 avoids waking/refusing the unrelated 27B at import;
 # the scenario opens a private run frame for the selected decide client.
-USE_VERDA_INFERENCE=0 EVAL_CLIENT=tier EVAL_ROLES=decide \
+SMALL_LLM_BASE_URL=http://127.0.0.1:18095/v1 \
+  USE_VERDA_INFERENCE=0 EVAL_CLIENT=tier EVAL_ROLES=decide \
   EVAL_ONLY=decision-calibration pnpm eval:harness
 
 # Owner-tunable diagnostics, same commands with these additional variables:
@@ -162,8 +199,8 @@ USE_VERDA_INFERENCE=1 pnpm dlx tsx --env-file=.env \
   src/lib/inference/scripts/smoke-verda.ts
 ```
 
-Jev evaluation costs 224 provider requests per client run; the actual bill is
-provider-reported. The private evaluation costs 224 small-model calls, with no
+Jev evaluation costs 260 provider requests per client run; the actual bill is
+provider-reported. The private evaluation costs 260 small-model calls, with no
 27B calls in the decide-only command; the deployment's GPU time/scale-to-zero
 cost still belongs to the owner. The adapter's local pricing basis is not proof
 that hosted GPU time is free. The smoke can incur cold-start plus GPU runtime.
@@ -175,6 +212,7 @@ From `app/`:
 
 ```sh
 pnpm exec vitest run --config scripts/vitest-decision-calibration.config.ts
+python3 scripts/check-decision-calibration-mutations.py --s5
 python3 scripts/check-decision-calibration-mutations.py
 pnpm typecheck
 pnpm lint
@@ -188,3 +226,14 @@ providers. Mutations run a single named pin, require an **assertion failure**
 (compiler/loader failures do not count), and restore source in `finally`.
 The PR body records each mutation and its observed result. The eval remains
 outside CI's collection graph and no CI job invokes `eval:harness`.
+
+## Public type sources (read as documentation only)
+
+Naming and primitive intent follow [TypeSafe coding agents](https://docs.typesafe.ai/introduction/coding-agents)
+and the [published skill](https://raw.githubusercontent.com/typesafe-ai/skills/main/skills/typesafe-ai/SKILL.md),
+read-only data, never installed. [Score](https://docs.typesafe.ai/primitives/score)
+defines 2–10 independently described low-to-high levels, a probability-weighted
+index and string index probabilities. [Noul](https://docs.typesafe.ai/primitives/noul)
+is P(true), without a separate confidence; [confidence](https://docs.typesafe.ai/confidence)
+defines ordinal concentration and suggests `abs(2p-1)` for noul. These define
+what is measured, rather than granting permission to act.

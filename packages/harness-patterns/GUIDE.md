@@ -181,6 +181,17 @@ not a rounded mean: a bimodal distribution can average to a level it never
 supports. Confidence measures concentration, not permission to act, as
 [TypeSafe explains](https://docs.typesafe.ai/confidence).
 
+The app's T8 calibration run measures each type on synthetic fit/holdout splits.
+Score fits RPS and uses a confidence cut at within-one accuracy ≥95%, with exact
+accuracy beside it; noul fits log loss and uses a confidence band. Choice keeps
+its Brier/confidence/margin fitting. Reliability is cumulative ECE for score,
+binary P(true) ECE for noul, and top-label ECE for choice, reported in separate
+pools. Noul option-order agreement is N/A. These owner-tunable cut defaults
+remain diagnostics until the owner live run; the committed artifact is
+unmeasured. A key changing type requires a contract revision bump and refit.
+The [runbook](../../docs/testing/decision-calibration.md) includes the owner's
+TypeSafe and local 4B commands and artifact validation rules.
+
 In the app's observability timeline, the preview chip identifies the decision
 as choice, score or noul (old events default to choice). Score details show
 ordered probability bars and the raw mean on a level-index scale; noul details

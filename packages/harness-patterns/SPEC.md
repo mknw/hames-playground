@@ -1977,6 +1977,30 @@ Choice never writes a type. The event remains metadata only (SD-3): stateChars,
 never state. Serialization and previews render score as `key: soon (E=1.43)`
 and noul as `key: true (p=0.91)`; absent type retains the legacy choice rendering.
 
+#### Host calibration by type (#418 addendum S5 / T8)
+
+The app's T8 contract `418-t8-v2` declares each key's type and ordered
+labels/levels or noul criteria; `(client, key)` remains the calibration lookup.
+All specs participate in the source fingerprint. A type change requires a
+contract revision bump and refit. The artifact envelope remains schema 1;
+score/noul entries refuse margin cuts, and logprob entries need every canonical
+letter bias (A/B for noul). Jev takes cuts only for every type.
+
+Choice fits multiclass Brier and confidence/margin cuts. Score fits normalized
+RPS and confidence cuts at owner-tunable within-one accuracy ≥95%, reporting
+exact accuracy and expected-index MAE beside it. Noul fits binary log loss,
+reports binary Brier, and fits confidence cuts only. ECE is ten-bin top-label
+for choice, binary P(true) for noul, cumulative threshold reliability for score.
+The app reports/gates each type's pool separately; no data cannot pass, and no
+cross-type overall ECE exists. Noul order swap is explicitly N/A; choice/score
+swaps compare semantic ids with the canonical rubric retained for metrics.
+
+`eval.noul` and `eval.score` are synthetic eval-only keys; production choice
+specs and event bytes stay unchanged. Adding them invalidates all v1 fits, so
+S5 precedes the owner TypeSafe live run. The committed artifact remains
+unmeasured with empty clients. **S5 cut defaults are diagnostics until the
+owner live run (spike rule/G10)**. See the [host runbook](../../docs/testing/decision-calibration.md).
+
 #### App observability (#418 addendum S6)
 
 The timeline preview chip names `score`, `noul`, or `choice` when the event's

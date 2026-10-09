@@ -15,10 +15,10 @@ TESTS = 'src/__tests__/lib/inference/'
 CASES = [
     ('metrics', MATH, 'brier: brier / samples.length', 'brier: 0', 'math', 'metrics:'),
     ('accuracy', MATH, 'accuracy: correct / samples.length', 'accuracy: 0', 'math', 'metrics:'),
-    ('ece', MATH, 'ece: bins.reduce((sum, b) => sum + Math.abs(b.correct - b.p), 0) / samples.length', 'ece: 0', 'math', 'metrics:'),
+    ('ece', MATH, ': bins.reduce((sum, b) => sum + Math.abs(b.correct - b.p), 0) / samples.length', ': 0', 'math', 'metrics:'),
     ('coverage', MATH, 'coverage.reduce((a, b) => a + b, 0) / coverage.length', '0', 'math', 'metrics:'),
     ('validation', MATH, "throw new Error('Invalid calibration distribution')", 'return { top: "a", p: 1, correct: true, confidence: 1, margin: 1 }', 'math', 'validation:'),
-    ('cuts', MATH, 'kept.filter((r) => r.correct).length / kept.length >= targetAccuracy', 'true', 'math', 'cuts:'),
+    ('cuts', MATH, 'kept.filter((r) => (type === \'score\' ? r.withinOneCorrect : r.correct)).length /\n          kept.length >=\n          targetAccuracy', 'true', 'math', 'cuts:'),
     ('order-swap', MATH, 'ranked(a).top === ranked(b).top', 'true', 'math', 'order-swap:'),
     ('transform', MATH, 'Math.log(s.probs[label]) / (entry.temperature ?? 1)', 'Math.log(s.probs[label])', 'math', 'transform:'),
     ('bias', MATH, '(entry.bias?.[String.fromCharCode(65 + i)] ?? 0)', '0', 'math', 'transform:'),
@@ -40,7 +40,7 @@ CASES = [
     ('temperature-range', FEED, 'entry.temperature <= 0 ||', 'false ||', 'feed', 'values:'),
     ('bias-finite', FEED, '!Number.isFinite((entry.bias as Record<string, number>)[l])', 'false', 'feed', 'values:'),
     ('extra-key', FEED, 'Object.keys(record.entries).length !== keys.length ||', 'false ||', 'feed', 'mismatched:'),
-    ('policy-confidence', MATH, 'confidence: (labels.length * p - 1) / (labels.length - 1)', 'confidence: p', 'math', 'cuts:'),
+    ('policy-confidence', MATH, ': (labels.length * p - 1) / (labels.length - 1)', ': p', 'math', 'cuts:'),
     ('policy-margin', MATH, 'margin: p - labels[1][1]', 'margin: p', 'math', 'cuts:'),
     ('heldout-fit', REPORT, 'fitCalibration(fit, labels, jev, criteria.accuracyFloor)', 'fitCalibration(holdout, labels, jev, criteria.accuracyFloor)', 'report', 'holdout:'),
     ('g7-verdict', REPORT, 'REOPEN G7(a): Jev measured ECE=', 'PASS: Jev ECE=', 'report', 'verdict:'),
@@ -95,9 +95,9 @@ CASES = [
 # completed earlier findings. Every case requires a real assertion failure.
 ROUND2_CASES = [
     ('R1-heldout-check-true', REPORT, 'measured.ece <= criteria.eceCeiling,', 'true,', 'report', 'checks:'),
-    ('R1-retained-check-true', REPORT, 'retained.metrics.accuracy >= criteria.accuracyFloor', 'true', 'report', 'checks:'),
+    ('R1-retained-check-true', REPORT, 'retainedAccuracy >= criteria.accuracyFloor', 'true', 'report', 'checks:'),
     ('R1-pooled-check-removed', 'evals/scenarios/decision-calibration.ts', 'checks.push(...pool.checks)', '', 'scenario', 'scenario pooled check:'),
-    ('R1-retained-exact-floor', REPORT, 'retained.metrics.accuracy >= criteria.accuracyFloor', 'retained.metrics.accuracy > criteria.accuracyFloor', 'report', 'checks:'),
+    ('R1-retained-exact-floor', REPORT, 'retainedAccuracy >= criteria.accuracyFloor', 'retainedAccuracy > criteria.accuracyFloor', 'report', 'checks:'),
     ('R1-heldout-exact-ceiling', REPORT, 'measured.ece <= criteria.eceCeiling,', 'measured.ece < criteria.eceCeiling,', 'report', 'verdict boundary:'),
     ('R2-per-key-reopen-half', REPORT, 'jev && measured.ece > criteria.eceCeiling', 'jev && measured.ece > 0.5', 'report', 'moderate ECE:'),
     ('R2-pooled-reopen-half', REPORT, 'jev && measured.ece > criteria.eceCeiling', 'jev && measured.ece > 0.5', 'report', 'moderate ECE:'),
@@ -107,6 +107,32 @@ ROUND2_CASES = [
     ('R4-scenario-call-count', 'evals/scenarios/decision-calibration.ts', 'calls++', '', 'scenario', 'scenario artifact:'),
     ('R1-added-nonempty-check-false', REPORT, 'fit.length > 0 && holdout.length > 0', 'false', 'report', 'checks:'),
     ('R1-added-feasible-check-false', REPORT, 'cutFit.retained > 0,', 'false,', 'report', 'checks:'),
+]
+
+S5_CASES = [
+    ('type-closed-distribution', MATH, 'ordered.length !== Object.keys(sample.probs).length ||', 'false ||', 'types', 'type-validation:'),
+    ('type-truth-validation', MATH, '!labels.some(([label]) => label === sample.truth) ||', 'false ||', 'types', 'type-validation:'),
+    ('rps-math', MATH, 'rps: rps / samples.length', 'rps: brier / samples.length', 'types', 'rps-math:'),
+    ('score-mae', MATH, 'mae: mae / samples.length', 'mae: 0', 'types', 'rps-math:'),
+    ('noul-binary-brier', MATH, "(type === 'noul' ? 2 : 1)", '1', 'types', 'noul-binary-ece:'),
+    ('noul-log-loss', MATH, 'logLoss: logLoss / samples.length', 'logLoss: 0', 'types', 'noul-binary-ece:'),
+    ('noul-binary-ece', MATH, '? binaryEce(binaryRows)', '? bins.reduce((sum, b) => sum + Math.abs(b.correct - b.p), 0) / samples.length', 'types', 'noul-binary-ece:'),
+    ('cumulative-ece', MATH, '? cumulativeRows.reduce((sum, rows) => sum + binaryEce(rows), 0) / cumulativeRows.length', '? binaryEce(samples.map((s) => [ranked(s).confidence, Number(ranked(s).correct)]))', 'types', 'cumulative-ece:'),
+    ('score-concentration', MATH, '? ordinalConfidence', '? (labels.length * p - 1) / (labels.length - 1)', 'types', 'type-confidence:'),
+    ('score-within-one-cut', MATH, "type === 'score' ? r.withinOneCorrect : r.correct", 'r.correct', 'types', 'type-cuts:'),
+    ('score-fitting-loss', MATH, "samples[0].type === 'score' ? m.rps!", "samples[0].type === 'score' ? m.brier", 'types', 'type-fitting-loss:'),
+    ('noul-fitting-loss', MATH, "samples[0].type === 'noul' ? m.logLoss!", "samples[0].type === 'noul' ? m.brier", 'types', 'type-fitting-loss:'),
+    ('feed-refuses-margin-on-score-noul', FEED, "if (spec.type !== 'choice' && Object.hasOwn(entry, 'minMargin')) refuse()", "if (false) refuse()", 'feed', 'feed-refuses-margin-on-score-noul:'),
+    ('feed-type-bias', FEED, 'Object.keys(entry.bias).length !== letters.length ||', 'false ||', 'feed', 'feed-type-bias:'),
+    ('fingerprint-includes-type', FEED, 'specs: CALIBRATION_SPECS,', 'specs: CALIBRATION_SPECS.map(({ type: _type, ...spec }) => spec),', 'feed', 'fingerprint-includes-type:'),
+    ('fingerprint-level-criteria', FEED, 'specs: CALIBRATION_SPECS,', 'specs: CALIBRATION_SPECS.map(({ key, question, type }) => ({ key, question, type })),', 'feed', 'fingerprint-type-details:'),
+    ('noul-counted-as-agreeing', REPORT, "? 'N/A (native noul has no option order)'", '? 1', 'types', 'noul counted as agreeing:'),
+    ('empty-pool-passes', REPORT, "false, 'no data'", "true, 'no data'", 'types', 'empty pool passes:'),
+    ('type-pool-gate', REPORT, 'measured.ece <= criteria.eceCeiling,', 'true,', 'types', 'type-pool-gates:'),
+    ('score-retained-exact', REPORT, "? retained.metrics?.withinOneAccuracy", '? retained.metrics?.accuracy', 'types', 'score-retained-within-one:'),
+    ('score-swap-remove', REPORT, 'levels: [...spec.levels].reverse()', 'levels: spec.levels', 'types', 'score swap:'),
+    ('logloss-json-null', REPORT, "? String(v)", '? null', 'types', 'infinite-log-loss-report:'),
+    ('scenario-type-pool-removed', 'evals/scenarios/decision-calibration.ts', "['choice', 'score', 'noul'] as const", "['choice'] as const", 'scenario', 'scenario artifact:'),
 ]
 
 # The distribution mutation disables the whole shape guard, rather than only
@@ -125,7 +151,7 @@ def mutation(path, old, new, name):
     return source, source.replace(old, new, 1)
 
 if __name__ == '__main__':
-    cases = ROUND2_CASES if '--round2' in sys.argv else CASES + ROUND2_CASES
+    cases = S5_CASES if '--s5' in sys.argv else ROUND2_CASES if '--round2' in sys.argv else CASES + ROUND2_CASES + S5_CASES
     for name, filename, old, new, suite, test_name in cases:
         path = Path(filename)
         source, changed = mutation(path, old, new, name)

@@ -13,15 +13,17 @@ import {
   jevModelFor,
   parseDecisionsUrl,
 } from '@hames-ai/harness-baml/jev-decide.server'
+import type { AnyDecisionSpec } from '@hames-ai/harness-patterns'
+import { calibrationLabels } from './decision-calibration-math'
 import calibrationContract from './decision-calibration-contract.json'
 
 // Metadata only at host composition. A hermetic drift pin checks the actual
 // production exports, without pulling tool transports onto this boot path.
-const CALIBRATION_SPECS = calibrationContract.specs
+const CALIBRATION_SPECS = calibrationContract.specs as readonly AnyDecisionSpec[]
 
 assertServerOnImport()
 
-export const CALIBRATION_REVISION = '418-t8-v1'
+export const CALIBRATION_REVISION = '418-t8-v2'
 export interface CalibrationArtifact {
   schemaVersion: 1
   contractRevision: string
@@ -113,7 +115,10 @@ export function feedDecisionCalibration(value: unknown): void {
         !Number.isFinite(Date.parse(entry.fittedAt))
       )
         refuse()
-      for (const cut of [entry.minConfidence, entry.minMargin])
+      if (spec.type !== 'choice' && Object.hasOwn(entry, 'minMargin')) refuse()
+      for (const cut of spec.type === 'choice'
+        ? [entry.minConfidence, entry.minMargin]
+        : [entry.minConfidence])
         if (typeof cut !== 'number' || !Number.isFinite(cut) || cut < 0 || cut > 1) refuse()
       if (JEV_CLIENTS.has(client) && (entry.temperature !== undefined || entry.bias !== undefined))
         refuse()
@@ -125,7 +130,7 @@ export function feedDecisionCalibration(value: unknown): void {
           !object(entry.bias)
         )
           refuse()
-        const letters = spec.labels.map((_, i) => String.fromCharCode(65 + i))
+        const letters = calibrationLabels(spec).map((_, i) => String.fromCharCode(65 + i))
         if (
           Object.keys(entry.bias).length !== letters.length ||
           letters.some(

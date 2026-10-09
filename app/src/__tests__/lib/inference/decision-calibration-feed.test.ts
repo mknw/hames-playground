@@ -15,6 +15,7 @@ import {
   decisionCalibrationFor,
 } from '@hames-ai/harness-baml/clients.server'
 import calibrationContract from '../../../lib/inference/decision-calibration-contract.json'
+import { calibrationLabels } from '../../../lib/inference/decision-calibration-math'
 import committed from '../../../lib/inference/decision-calibration.json'
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 
@@ -46,12 +47,14 @@ function artifact(client = 'JevDecide'): CalibrationArtifact {
             s.key,
             {
               minConfidence: 0.6,
-              minMargin: 0.3,
+              ...((s.type ?? 'choice') === 'choice' && { minMargin: 0.3 }),
               n: 8,
               fittedAt: '2026-10-08T00:00:00Z',
               ...(client !== 'JevDecide' && {
                 temperature: 2,
-                bias: Object.fromEntries(s.labels.map((_, i) => [String.fromCharCode(65 + i), 0])),
+                bias: Object.fromEntries(
+                  calibrationLabels(s).map((_, i) => [String.fromCharCode(65 + i), 0]),
+                ),
               }),
             },
           ]),
@@ -232,4 +235,78 @@ describe('decision calibration host feed', () => {
       )
     }
   })
+})
+
+it('feed-refuses-margin-on-score-noul: any margin property refuses atomically on both clients', () => {
+  for (const client of ['JevDecide', 'LocalQwenSmallDecide']) {
+    for (const key of ['eval.score', 'eval.noul']) {
+      const value = artifact(client)
+      const entries = value.clients[client].entries as Record<string, DecisionCalibrationEntry>
+      expect(() => feedDecisionCalibration(value)).not.toThrow()
+      expect(decisionCalibrationFor(client, key)).not.toHaveProperty('minMargin')
+      for (const minMargin of [0, 0.4, undefined]) {
+        entries[key] = { ...entries[key], minMargin }
+        expect(() => feedDecisionCalibration(value)).toThrow()
+        expect(decisionCalibrationFor(client, key)).not.toHaveProperty('minMargin')
+      }
+    }
+  }
+})
+it('feed-type-bias: score needs every level letter, noul precisely A and B', () => {
+  for (const [key, invalid] of [
+    [
+      'eval.score',
+      [
+        { A: 0, B: 0 },
+        { A: 0, B: 0, C: 0, D: 0 },
+        { A: 0, B: 0, C: NaN },
+      ],
+    ],
+    ['eval.noul', [{ A: 0 }, { A: 0, B: 0, C: 0 }, { true: 0, false: 0 }]],
+  ] as const) {
+    for (const bias of invalid) {
+      const value = artifact('LocalQwenSmallDecide')
+      const entries = value.clients.LocalQwenSmallDecide.entries as Record<
+        string,
+        DecisionCalibrationEntry
+      >
+      entries[key] = { ...entries[key], bias: Object.fromEntries(Object.entries(bias)) }
+      expect(() => feedDecisionCalibration(value)).toThrow()
+    }
+  }
+})
+it('fingerprint-includes-type: old fit invalidated by type alone, envelope remains v1', () => {
+  expect(committed).toEqual({
+    schemaVersion: 1,
+    contractRevision: '418-t8-v2',
+    status: 'unmeasured',
+    clients: {},
+  })
+  const spec = calibrationContract.specs[0]
+  const type = spec.type
+  const value = artifact()
+  const before = calibrationFingerprint('LocalQwenSmallDecide')
+  try {
+    // Drop only the discriminant: same key/question/options/revision.
+    delete (spec as { type?: string }).type
+    expect(calibrationFingerprint('LocalQwenSmallDecide')).not.toBe(before)
+    expect(calibrationFingerprint('JevDecide')).not.toBe(value.clients.JevDecide.fingerprint)
+    expect(() => feedDecisionCalibration(value)).toThrow()
+  } finally {
+    spec.type = type
+  }
+})
+it('fingerprint-type-details: changed level order or noul criteria invalidates fit', () => {
+  for (const key of ['eval.score', 'eval.noul']) {
+    const spec = calibrationContract.specs.find((s) => s.key === key)!
+    const original = { ...spec }
+    const before = calibrationFingerprint('LocalQwenSmallDecide')
+    try {
+      if (spec.type === 'score') spec.levels = [...spec.levels!].reverse()
+      else spec.criteria = { ...spec.criteria!, true: 'Changed true criterion' }
+      expect(calibrationFingerprint('LocalQwenSmallDecide')).not.toBe(before)
+    } finally {
+      Object.assign(spec, original)
+    }
+  }
 })

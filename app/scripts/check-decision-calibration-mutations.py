@@ -110,6 +110,7 @@ ROUND2_CASES = [
 ]
 
 S5_CASES = [
+    ('score-verdict-normal-branch', REPORT, "${scoreAccuracy ?? `retained ${accuracyKind}=${retainedAccuracy ?? 'N/A (none retained)'}`}", "retained ${accuracyKind}=${retainedAccuracy ?? 'N/A (none retained)'}", 'types', 'score-verdict-normal-branch:'),
     ('noul-fit-zero-mass', MATH, 'Math.max(LOG_LOSS_FIT_FLOOR, s.probs[s.truth])', 's.probs[s.truth]', 'types', 'noul-fit-zero-mass:'),
     ('score-mae-sign', MATH, 'mae += Math.abs(', 'mae += (', 'types', 'rps-math:'),
     ('typed-cut-margin', MATH, 'const margins = type ? [0] : [0, ...rows.map((r) => r.margin)]', 'const margins = [0, ...rows.map((r) => r.margin)]', 'types', 'type-cuts:'),

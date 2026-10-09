@@ -246,6 +246,32 @@ async function report(type: 'score' | 'noul', p = 0.8) {
   }
 }
 describe('S5 type reports and coordinator ruling', () => {
+  it('score-verdict-normal-branch: the non-REOPEN score verdict carries both accuracies', async () => {
+    const items = ['fit', 'holdout'].map((split) => ({
+      id: split,
+      key: EVAL_SCORE_SPEC.key,
+      split,
+      state: split,
+      truth: 'soon',
+    }))
+    const decide = (async () =>
+      ({
+        probs: { can_wait: 0, soon: 0.2, now: 0.8 },
+        method: 'logprob',
+        calibrated: true,
+        llmCall: { clientName: 'LocalQwenSmallDecide', functionName: 'Decide', variables: {} },
+      }) as DecideResult) as DecideFn
+    const r = await evaluateKey({
+      spec: EVAL_SCORE_SPEC,
+      items,
+      decide,
+      jev: false,
+      client: 'LocalQwenSmallDecide',
+      criteria,
+    })
+    const verdict = r.observations.find((o) => o.name.endsWith(': VERDICT'))!.value
+    expect(verdict).toMatch(/^Held-out ECE=.*; retained within-one accuracy=1; exact accuracy=1\.$/)
+  })
   it('noul counted as agreeing: native read once, agreement explicitly N/A, no denominator', async () => {
     const r = await report('noul')
     expect(r.seen).toEqual([EVAL_NOUL_SPEC, EVAL_NOUL_SPEC])

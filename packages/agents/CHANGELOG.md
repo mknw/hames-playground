@@ -1,5 +1,38 @@
 # @hames-ai/agents
 
+## 0.3.0
+
+### Minor Changes
+
+- 9451b77: Add optional MemoryConfig to AgentDeps so hosts can supply memory without opting any agent in.
+
+### Patch Changes
+
+- Updated dependencies [b52215c]
+- Updated dependencies [6970e8b]
+- Updated dependencies [bcf7ab4]
+- Updated dependencies [220e794]
+- Updated dependencies [fa529f0]
+- Updated dependencies [d65f08e]
+- Updated dependencies [6e4a7ce]
+- Updated dependencies [ab78dea]
+- Updated dependencies [e6543b1]
+- Updated dependencies [f97fd50]
+- Updated dependencies [a12c8d0]
+- Updated dependencies [5efffdf]
+- Updated dependencies [b52215c]
+- Updated dependencies [ffc87ba]
+- Updated dependencies [08ff54f]
+- Updated dependencies [0405113]
+- Updated dependencies [5f377c5]
+- Updated dependencies [459122e]
+- Updated dependencies [1acfe23]
+- Updated dependencies [f13bb7d]
+- Updated dependencies [b82d37d]
+- Updated dependencies [22ff7c3]
+  - @hames-ai/harness-patterns@0.3.0
+  - @hames-ai/harness-baml@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes

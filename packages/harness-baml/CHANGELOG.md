@@ -1,5 +1,58 @@
 # @hames-ai/harness-baml
 
+## 0.3.0
+
+### Minor Changes
+
+- bcf7ab4: Support native Jev score and noul questions with closed distributions, score mean validation and noul calibration semantics. Keep tier locks before question construction and report support through the existing per-call transport resolver.
+- d65f08e: **#419 slice M9 — the memory model functions.** Additive surface, with one breaking change to the generated client: a direct `b.Router(…, opts)` / `b.Synthesize(…, opts)` caller now throws `BamlInvalidArgumentError` until it passes `null` before `opts` (see below). No behaviour change for a caller that passes no memory.
+  
+  - `ExtractMemory` and `CompactMemories` (`baml_src/memory.baml`, committed `baml_client`), both on the `describe` role: `DescribeAnthropic` on the Anthropic tier, `LocalQwenSmall` through the per-call `clientOverrideFor('describe')` spread on the private tier. `kind` is a plain string so core's deterministic acceptance, not the parser, drops an out-of-set value.
+  - `createMemoryExtractAdapter()` / `createMemoryCompactAdapter()` (and their input types) — the `MemoryExtractFn` / `MemoryCompactFn` implementations, each spreading the describe override inline. They return the model's output unfiltered.
+  - `Router` and `Synthesize` gain a trailing optional `memory_context`, rendered only when non-null as a user-role block after the leading system block. **Positional**: the options bag moved one slot right, so a direct `b.Router(…, opts)` / `b.Synthesize(…, opts)` caller must now pass `null` before `opts`. In-repo callers are updated.
+  - `SWITCHED_FUNCTIONS_BY_ROLE.describe` lists the two new functions, so `TIER_SWITCHED_FUNCTIONS` is sixteen.
+- e6543b1: **#419 slice M5a — `withMemory`, `memory_context` threading, and the DATA-fence escape.** Core + BAML only; no app change.
+  
+  - `@hames-ai/harness-patterns`: `withMemory(cfg)(patterns)` returns `[memoryRecall(cfg), ...patterns]` (the opt-in; the patterns come back as the same objects) and `memoryStoreConfig(cfg)` derives the store half from the same `MemoryConfig`, so recall and `settleMemory` share one owner, embedder, decision seam, wake and **switch** (`enabled` is required). `CompactExecutionInput.memoryContext?` (set from `data.memoryContext` only when non-blank) and `RouteFn`'s trailing `extra?: RouteExtra` (the router passes it only when non-blank). Additive: a `route`/`synthesize` written before them is called exactly as before when nothing is recalled.
+  - `@hames-ai/harness-baml`: `routeMessageOp` and `defaultSynthesize` pass the block to the trailing BAML `memory_context` parameter. **Breaking for a direct caller of `routeMessageOp`:** its optional collector moved from the fourth parameter to the fifth (`routeMessageOp(message, history, routes, extra, collector)`) so it satisfies `RouteFn`; pass `undefined` for `extra`. New `escapeDataFence` (`@hames-ai/harness-baml/data-fence`): every string the adapters put inside a `---BEGIN DATA---` fence (the extractor's window and latest user message, the compactor's members, the `memory_context` blocks, and the `Decide`/`DecideVerbalized` state) has any fence marker neutralised, so assistant text composed from tool results cannot end the fence. No `.baml` change, so no regenerated client.
+- a12c8d0: Support ordered score levels and noul true/false decisions in the logprob readout and explicit verbalized secondary. Advertise supported decision types from the resolved transport per call; preserve per-letter calibration, coverage and the private-tier locks.
+- 1acfe23: **#418 slice T3 — the typed-decision readout: `Decide`, the private-tier `LocalQwenSmallDecide` client, and `createDecideAdapter()`.** Additive: a new `decide` role, no existing role or client moves.
+  
+  - `baml_src/decide.baml`: `Decide(state, question, options) -> string` — one question, lettered options, a one-letter answer whose first-token DISTRIBUTION is the product. `LocalQwenSmallDecide` (`local-client.baml`) is the 4B on the same `SMALL_LLM_BASE_URL` endpoint as `describe`, with `logprobs` / `top_logprobs 20` / `max_tokens 2` / thinking off. `max_tokens` is 2 and not the spec's 1 because the real llama-server (b9190) aborts when the same prompt is sent twice at `max_tokens: 1` — the account is on the client. The regenerated `baml_client` is committed.
+  - `createDecideAdapter()` (`baml-adapters.server.ts`): resolves the role's client first and picks the transport by the CLIENT (F1) — `LOGPROB_CLIENTS` → the logprob readout, `JEV_CLIENTS` → the Jev adapter (slice T4; the set is empty here), anything else → an injected `verbalized` secondary, or an `LLMCallError` when none is wired (never a silent downgrade). The readout sums every top-k variant of a letter, applies a host-fed calibration entry in log space, renormalises, reports `coverage` (the matched mass), stamps `hitOutputCap: false` (D14), and throws only for a client CLAIMED logprob-capable that returns none. `calibrated` is true exactly when a fitted entry for `(client, spec.key)` was applied. It also fills `serving(key)` — the method and applied calibration entry the policy layer reads before the call.
+  - `clients.server.ts`: `BamlRole` gains `decide`; `VERDA_CLIENT_BY_ROLE.decide = 'LocalQwenSmallDecide'`, `SWITCHED_FUNCTIONS_BY_ROLE.decide = ['Decide']`, the Anthropic-tier mirror `CLIENT_BY_ROLE.decide = 'JevDecide'` (slice T4 builds the client); new exports `LOGPROB_CLIENTS`, `JEV_CLIENTS`, `configureDecisionCalibration` / `decisionCalibrationFor`.
+- f13bb7d: **#418 slice T4 — the Jev transport: the Anthropic tier's `decide` client.** Additive.
+  
+  - `harness-baml`: `jev-decide.server.ts` — `createJevTransport()`, a REST adapter for OpenRouter's Decisions API (`typesafe/jev-1.13`) answering a whole decision set in ONE request (`decideAll`) or a single spec (`decide`), `method: 'jev'`, with its own `LLMCallRecord` and `notifyLlmUsage`. Refuses the private tier (a public provider), and fails closed — a connection error, non-2xx or malformed answer is an `LLMCallError`, never a retry elsewhere. `JEV_CLIENTS` now holds `JevDecide`; `createDecideAdapter` routes it to the transport and `serving()` reports `jev` with its calibration entry; new `createDecideAllAdapter(decide)` is the set-level entry (`decideFields`' `decideAll`). `CostEstimator`'s options gain `providerCostUsd`.
+  - `harness-patterns`: `CostBasis` gains `'provider'` — the figure the provider reported (USD, converted once at the static `EUR_PER_USD`). A new union member: a host exhaustively switching on `CostBasis` needs a branch.
+- b82d37d: **#418 slice T5 — the explicit verbalized secondary: `DecideVerbalized`, `DecideAnthropic`, `createVerbalizedDecide()`, `configureDecideSecondary()`.** Additive; with nothing configured, behaviour is unchanged.
+  
+  - `baml_src/decide.baml`: `DecideVerbalized(state, question, options) -> VerbalizedOption[]` — a chat model states a probability per option. `anthropic-only.baml`: `DecideAnthropic`, its own Sonnet-tier, thinking-off chain (not in the `DescribeAnthropic` block). The regenerated `baml_client` is committed.
+  - `createVerbalizedDecide()` (`baml-adapters.server.ts`): the injectable secondary for `createDecideAdapter({ verbalized })`. `method: 'verbalized'` and `calibrated: false` are constants, so a `requireCalibrated` policy abstains on it; a response with no usable probability is an `LLMCallError`, never a confident distribution. It carries its own tier lock (positive match on the Anthropic tier) and refuses to serve the role's default client, so it answers only a client an operator named.
+  - `clients.server.ts`: `configureDecideSecondary('DecideAnthropic' | undefined)` — validated, applied on a positive match of the Anthropic tier, and read through one function by both `resolveClientForRole('decide')` and `clientOverrideFor('decide')`. New exports `DECIDE_SECONDARY_CLIENTS`, `DECIDE_DEFAULT_CLIENT`, `DecideSecondaryClient`, `verbalizedProbabilities`.
+  - Fix round 1 (#513 review): the setting and the factory's lock read the run frame's raw tier (`onExplicitAnthropicTier`), so an unrecognised frame tier is not the Anthropic tier; `verbalizedProbabilities` fails closed on omitted, repeated, out-of-range or mis-summed answers (`VERBALIZED_MASS_TOLERANCE`).
+
+### Patch Changes
+
+- 6970e8b: The Jev decide transport (#418 O1–O4): on an OpenRouter endpoint the request carries `provider: { zdr: true, data_collection: 'deny' }` and refuses to send a request that lacks them; it reads its own key, `JEV_DECISIONS_API_KEY`, never `OPENROUTER_API_KEY`; `JEV_DECISIONS_URL` must parse to `https:` or a loopback host, and is refused before the key is read.
+- 220e794: Support TypeSafe's direct Jev API with its pinned native model ID and no OpenRouter-only fields. Require an explicit `JEV_DECISIONS_URL`: unset, decisions abstain before the key is read, with the TypeSafe default switch pre-built behind a disabled owner gate. Explicit configuration can use TypeSafe now with a non-enterprise key, under standard retention. Keep OpenRouter as an explicit alternative with zero-retention and data-collection-denied preferences, preserve separate credentials and the private-tier lock, refuse redirects and labels outside the asked set, and bind calibration fingerprints to the configured route's model through the transport's shared endpoint lookup, including the gated default when enabled.
+- b52215c: Reject temperature and bias calibration for Jev clients instead of silently ignoring them; fitted confidence and margin cuts remain supported. Store a frozen snapshot of the validated table, including entries and bias, so caller mutation cannot bypass validation.
+- Updated dependencies [b52215c]
+- Updated dependencies [fa529f0]
+- Updated dependencies [6e4a7ce]
+- Updated dependencies [ab78dea]
+- Updated dependencies [e6543b1]
+- Updated dependencies [f97fd50]
+- Updated dependencies [5efffdf]
+- Updated dependencies [ffc87ba]
+- Updated dependencies [08ff54f]
+- Updated dependencies [0405113]
+- Updated dependencies [5f377c5]
+- Updated dependencies [459122e]
+- Updated dependencies [f13bb7d]
+- Updated dependencies [22ff7c3]
+  - @hames-ai/harness-patterns@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes

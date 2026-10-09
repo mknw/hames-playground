@@ -1,5 +1,36 @@
 # @hames-ai/connectors
 
+## 0.3.0
+
+### Patch Changes
+
+- 84536cf: `ooxmlDisarm`'s pptx placeholder resolver (#517).
+  
+  - **Linear lookup.** A run's layout and master placeholder used to be found by scanning every placeholder the part declares, so a slide of n runs over a layout of m distinct placeholders cost O(n·m) CPU: about 17 s for a 599 KB file at n = m = 32,000. Each style part is now indexed once when it is read, and each run is one lookup.
+  - **Concealment coverage.** A placeholder whose type is written in camelCase — `ctrTitle`, `subTitle`, `sldNum`, `clipArt`, `sldImg` — never matched its layout, master or notes-master placeholder by type, so text hidden through that inheritance (white at 1 pt, for example) was not counted and the document reported `hiddenContent: 'removed'`. Types now match whatever their case, and such text counts as `colour-contrast` and `too-small`. In the same class, a placeholder written with no `type` — ECMA-376's default `obj`, the stock content placeholder — now takes its master's `bodyStyle` rather than `otherStyle`, so text that `bodyStyle` hides counts too.
+- bfef4f4: `ooxmlDisarm` no longer reports hidden pptx placeholder text as removed when it is inherited through a route the resolver did not read. A slide placeholder now matches its layout placeholder by exact type and idx first, with ECMA-376's defaults (`type` obj, `idx` 0) and unsignedInt idx spellings; a level the matched placeholder lacks goes up to the master rather than to a sibling; the master placeholder is found through the layout placeholder's type family; and a match renderers disagree on is counted `unknown-property`. A placeholder with no fill or autofit of its own now inherits both from its layout and master placeholder, and a slide's, notes slide's or layout's `p:clrMapOvr` replaces the master's colour map. A fill inherited only through a layout placeholder's `p:style` `fillRef`, and a typed placeholder that matches several layout placeholders of its type, count `unknown-property`, because renderers disagree. (#519, #520)
+- b42161e: `ooxmlDisarm` no longer costs CPU quadratic in a pptx slide's run count when its layout's or master's `p:bg` is wide. The layout's and master's backgrounds are shared by every run on the slide and were re-evaluated once per run; they are now resolved once per slide part. A gradient background with more than 10 stops (any level: shape, table, slide, layout, master, or a docx text box) counts `unknown-property` rather than being tested against every run. (#522)
+- 9aff2a5: `ooxmlDisarm` no longer costs CPU quadratic in a pptx slide's run count when a text-property level its runs share is wide. The paragraph's, shape's, layout placeholder's, master placeholder's, master `txStyles` and presentation `defaultTextStyle` levels, and an inherited placeholder's `p:spPr` fill, were re-evaluated once per run; each is now evaluated once per slide part. A gradient with more than 10 stops, wherever it is read (a text fill, a shape or placeholder fill, a background), counts `unknown-property` rather than having its stops resolved and tested against every run. (#524)
+- 40fac56: Compile shared Word and Excel visibility inputs once per document and use exact indexed contrast queries, removing repeated style, shading, string, number-format and content-type work. Separate Word cascade identities so delimiter-containing style IDs cannot conceal a white run through a cache collision.
+  
+  Use fixed-domain persistent conditional colour sets to keep unions across distinct consumers bounded in memory and work. Separate PowerPoint placeholder type/index identities (a pre-existing sibling of ruling K), and treat inherited prototype names as unrecognised highlights and number-format colours.
+- b729a82: Compile shared PowerPoint formatting once per document while resolving colours per slide, bound colour transforms to sixteen and gradients to ten stops, and cache shared relationships and slide visibility scans.
+- Updated dependencies [b52215c]
+- Updated dependencies [fa529f0]
+- Updated dependencies [6e4a7ce]
+- Updated dependencies [ab78dea]
+- Updated dependencies [e6543b1]
+- Updated dependencies [f97fd50]
+- Updated dependencies [5efffdf]
+- Updated dependencies [ffc87ba]
+- Updated dependencies [08ff54f]
+- Updated dependencies [0405113]
+- Updated dependencies [5f377c5]
+- Updated dependencies [459122e]
+- Updated dependencies [f13bb7d]
+- Updated dependencies [22ff7c3]
+  - @hames-ai/harness-patterns@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes

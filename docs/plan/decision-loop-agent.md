@@ -1,6 +1,6 @@
 # General Agent as a Decision Loop (Plan)
 
-> **Status: design, not built. Round 2.** This replaces round 1's "patternTool inside a `simpleLoop`" core. Round 1 is in git history as `docs/plan/pattern-tools.md`; its two reviews are on [#507](https://github.com/mknw/hames-playground/issues/507). The shape below is the owner's (2026-10-13). This doc says how it works, what each piece sees, and what it still owes. Nothing is dispatched until the owner signs off. The owner calls that remain are on #507, not repeated here.
+> **Status: design, not built. Round 2.** This replaces round 1's "patternTool inside a `simpleLoop`" core. Round 1 is in git history as `docs/plan/pattern-tools.md`; its two reviews are on [#507](https://github.com/mknw/hames-playground/issues/507). The shape below is the owner's (2026-10-13). This doc says how it works, what each piece sees, and what it still owes. Nothing is dispatched until the owner signs off. Every call raised in round 2 was ruled in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323) (2026-10-13, owner-delegated); the conditions are folded in below and summarised in [Rulings](#rulings-g12).
 
 ## The problem, in one paragraph
 
@@ -128,17 +128,17 @@ A child that ends with an `error` event, or that throws (for example a sandbox t
 
 The child's own `error` events stay inside its `pattern_enter`/`pattern_exit`, but they are recorded as `recoverable` in the merged copy. Without that, `runChain`'s stop rule would end the whole turn on a child's `irrecoverable` error (architecture review §2a).
 
-| Situation                                                | Behaviour                                                                                                                                                                                                                                                              |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A route fails                                            | Recorded as failed. The loop decides again.                                                                                                                                                                                                                            |
-| `maxIterations` reached (default 6)                      | The loop stops as if `done`. The synthesizer answers from what exists and says the work is partial.                                                                                                                                                                    |
-| The decide call itself fails                             | On the **first** iteration, the turn ends with a visible error: nothing ran, so synthesizing would silently answer without the agent's tools. On a later iteration, the loop stops as if `done`, and the error is recorded for the synthesizer. Owner call N3 on #507. |
-| The decide transport is unconfigured on the private tier | Refused per #418 G11, and treated like the first-iteration case: a visible error, never a fall-back.                                                                                                                                                                   |
+| Situation                                                | Behaviour                                                                                                                                                                                                                                                                                                                                                                |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A route fails                                            | Recorded as failed. The loop decides again.                                                                                                                                                                                                                                                                                                                              |
+| `maxIterations` reached (default 6)                      | The loop stops as if `done`. The synthesizer answers from what exists and says the work is partial.                                                                                                                                                                                                                                                                      |
+| The decide call itself fails                             | On the **first** iteration, the turn ends with a visible error: nothing ran, so synthesizing would silently answer without the agent's tools. On a later iteration, the loop stops as if `done`, and the error is recorded for the synthesizer. Ruled N3 in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323): never a silent fallback. |
+| The decide transport is unconfigured on the private tier | Refused per #418 G11, and treated like the first-iteration case: a visible error, never a fall-back.                                                                                                                                                                                                                                                                     |
 
 ## Routes, and how tools are grouped
 
 - **`read-documents` is its own route** rather than a tool inside `info_ag`. The retriever is a pattern, not an MCP tool. Putting it in `simpleLoop`'s tool list would need round 1's `patternTool` primitive. The redis server's `search_redis_documents` cannot stand in for it: it is not scoped to the conversation, so the model could name another conversation's keys (the same reason `graph_file_ingest` takes its session from the request). As a route it needs nothing new, and `harnessHasRedisRetriever` still finds it through `children`.
-- **`info_ag` holds Neo4j reads and web tools.** That grouping is the owner's. It puts untrusted web text and a Cypher tool in one loop, which is #241's exposure (owner call S-a on #507).
+- **`info_ag` holds Neo4j reads and web tools.** That grouping is the owner's. It puts untrusted web text and a Cypher tool in one loop, which is #241's exposure (ruled S-a in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323): the agent slice waits for #241's procedure allow-list).
 - **`doc_ag` holds the Microsoft 365 tools, inside a sandbox.** `graph_file_ingest` is in its allowlist, because this agent can read what it ingests.
 
 ## Where memory, guards and the sandbox sit
@@ -167,13 +167,13 @@ Recall, wake and settle still run only on interactive turns (#553).
 2. The decisions model runs `office-data` twice.
 3. A separate ingest route.
 
-Recommend (1). This is owner call N4 on #507.
+Ruled N4 in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323): fix (1). It is a core change, so it gets its own slice and its own review.
 
 ### Untrusted content on the way up
 
 A route output never passes the `callTool` chokepoint. `decisionLoop` records it directly, and it then reaches two places: the decisions model's state and the next child's `plan_context`, which is an instruction-adjacent slot. So `decisionLoop` passes each `result` and `reasoning` through `currentRunFrame()?.guard?.sanitize(…)` before recording it, under the orchestrator-level guard. It builds them only from the child's committed (already sanitized) events, never from a file or a transport read. A pin feeds a known injection string through a child, and expects a neutralized record plus a `content_sanitized` event.
 
-`spotlight: 'always'` on that guard fences everything handed up (owner call S-c on #507).
+`spotlight: 'always'` on that guard fences everything handed up (ruled S-c in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323)).
 
 ## Data between routes
 
@@ -198,10 +198,30 @@ The fix is small and stated as a slice item: `thread` mode honours `viewConfig.f
   - It becomes cheaper to fix than in round 1: `decisionLoop`'s history is its own compact route-output events, so on resume it can rebuild its iterations from this run's records instead of re-deciding.
   - v1 keeps the round-1 rule: no gated tool inside any route, pinned by allowlist names rather than a `children` walk (architecture review §5.3).
   - No production code pauses today.
-- **P2 — The stuck-run reaper.** Its 25-call bound assumes one loop per turn. This shape is up to 6 iterations of up to 15-call children. Arithmetic: 6 × 15 + 6 decisions + 1 synthesis = 97. The architecture review's fix applies unchanged: reap on a dead turn lease, with an age backstop. This is owner call A1.
-- **P3 — The injection boundary.** As stated in [the guards section](#where-memory-guards-and-the-sandbox-sit), plus #241: `info_ag` holds web text and Cypher together. This is owner call S-a.
-- **P4 — Pseudonymisation** on the materialisation path, unchanged from round 1. It depends on `graph-pseudonymisation.md`'s Q1, Q2, Q3 and Q5. The file path carries real bytes too, which is owner call S-f.
+- **P2 — The stuck-run reaper.** Its 25-call bound assumes one loop per turn. This shape is up to 6 iterations of up to 15-call children. Arithmetic: 6 × 15 + 6 decisions + 1 synthesis = 97. The architecture review's fix applies unchanged: reap on a dead turn lease, with an age backstop. Ruled A1 in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323): the age bound is a named constant with its justification beside it.
+- **P3 — The injection boundary.** As stated in [the guards section](#where-memory-guards-and-the-sandbox-sit), plus #241: `info_ag` holds web text and Cypher together. Ruled S-a in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323): the agent slice waits for #241's procedure allow-list. Residual risk: `LOAD CSV` survives a procedure allow-list; closing it needs an egress policy on the Neo4j container.
+- **P4 — Pseudonymisation** on the materialisation path, unchanged from round 1. It depends on `graph-pseudonymisation.md`'s Q1, Q2, Q3 and Q5. The file path carries real bytes too. Ruled S-f in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323): the `graph_file_ingest` → `/work/in` path is pseudonymised as well, and stays off until wired.
 - **P5 — The decisions model on the private tier.** Per #418 G11, private-tier decisions go to a separately configured systemone URL (the self-hosted shim another lane serves), and are refused when it is unset. Until it is served, this agent works on the Anthropic tier only, and shows a visible error on the private tier.
+
+## Rulings (G12)
+
+All 11 round-2 calls and the 3 departures from the sketch were accepted as recommended in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323). The conditions that bind the slices:
+
+- **A1, the reaper.** Reap on a dead turn lease. The age backstop is a named constant with its justification beside it.
+- **A3, route failures.** A failed route is a failed output, and the loop decides again. The next decision's state shows it as a failure, never as an empty success.
+- **S-a, #241.** The agent slice waits for #241's procedure allow-list. Residual risk, recorded in these words: `LOAD CSV` survives the allow-list.
+- **S-c, spotlight.** `spotlight: 'always'` on the guard around the orchestrator.
+- **S-d, the screen.** Fail-closed for this agent (#206 D1): a screen that cannot run blocks the route output from reaching the next decision.
+- **S-e, derived files.** They persist as the deliverable, and verbatim copies stay blocked by the hash check. Persisted files leave the sandbox only through the existing owner-scoped `/work` ⇄ DataStash sync, never a new path. This applies once materialisation is built.
+- **S-f, pseudonymisation.** The `graph_file_ingest` → `/work/in` path is pseudonymised too, and stays off until wired.
+- **N1, the decision state.** As in [What the decisions model sees](#what-the-decisions-model-sees-each-iteration), with no memory. On the Anthropic tier the state goes to the systemone provider like any other Anthropic-tier call. On the private tier it goes only to the self-hosted shim (#418 G11).
+- **N2, the handoff.** `handoff.lastN` defaults to 2, counted in iterations.
+- **N3, decide failure.** It ends the turn visibly on iteration 1, and stops as `done` with the answer marked partial on a later iteration.
+- **N4, re-hydration.** `withSandbox` re-hydrates after a stash-storing tool call in its scope. This is its own slice, with its own review.
+- **N5, the iteration bound.** `maxIterations` defaults to 6. At the bound the loop stops as `done`, with the answer marked partial.
+- **The three departures:** the retriever is its own route; `doc_ag` is the sketch's second form; `done` is a choice, so the synthesizer answers once.
+
+The round-1 reviewers' terms (architecture 6068693140, security 6068708025) bind the delta review. Nothing is built before that review converges.
 
 ## Later: directed-graph utilities
 
@@ -229,12 +249,12 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
    - `children` and `estimateTurns`, the latter meaning iterations, not N × child.
 2. **`compactExecution` `thread` mode** reads `fromPatterns`, pinned on the nested shape.
 3. **The agent**: `general-next`, its guards, and the walk pin, with an app-path e2e over the synthetic case. Gated on P2, P3 and P5.
-4. **`withSandbox` re-hydrate on stash write** (call N4).
+4. **`withSandbox` re-hydrate on stash write** (N4). A core change with its own review.
 5. **Materialisation**, gated on P4.
 6. **Resume from route records** (P1), only when a gate is wanted inside a route.
 
 ## See also
 
-- #507: the diagnosis, both round-1 reviews, and this round's owner calls.
+- #507: the diagnosis, both round-1 reviews, and this round's calls and their rulings (G12).
 - #418 G11 (the decisions client) · #419 (memory) · #241 (Neo4j) · #446 (the reaper) · ADR-0005 · ADR-0009
 - [`sandbox.md`](sandbox.md) · [`graph-pseudonymisation.md`](graph-pseudonymisation.md) · [`packages/harness-patterns/SPEC.md`](../../packages/harness-patterns/SPEC.md)

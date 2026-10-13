@@ -170,6 +170,7 @@ Source-level index: see [app/README.md](../app/README.md#documentation-index).
 - `docker-compose.prod.yaml` — production overlay for the preview VM (loopback binds, `${VAR:?}` credentials, Caddy); selected via `COMPOSE_FILE` in the repo-root `.env` — see [PREVIEW.md](PREVIEW.md)
 - `.env.production.example` — every production environment variable, one line of why each; copy to the repo-root `.env`
 - `configs/Caddyfile` — TLS termination + reverse proxy for the preview (hostname arrives as `$APP_DOMAIN`)
+- `deploy/modal/` — the private tier's small models (Qwen3.5-4B summarizer + the H2O-Lightning decision LoRA behind its `systemone` shim) as one scale-to-zero Modal container; generic app tracked, instance values in git-ignored `*.local.*` (ADR-0008) — see its [README](../deploy/modal/README.md)
 - `configs/mcp-config.yaml` — MCP server connection params
 - `configs/custom-catalog.yaml` — custom MCP server definitions (Docker image-based)
 - `configs/action-tokens.yaml` — Bearer secret → userId map for `POST /api/agents/:id` (git-ignored; see `template.action-tokens.yaml` and [AGENT_TRIGGER.md](AGENT_TRIGGER.md))

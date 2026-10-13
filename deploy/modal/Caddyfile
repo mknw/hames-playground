@@ -1,0 +1,53 @@
+# The ONLY thing reachable on the box's public port (8080). vLLM (:8000) and the
+# shim (:8741) bind loopback inside the container, so this file is the whole
+# public surface; `modal-pins.test.ts` pins its route list.
+#
+# Why a route list and not a pass-through: vLLM runs with VLLM_SERVER_DEV_MODE=1
+# (sleep mode needs it), which registers /sleep, /wake_up, /collective_rpc and
+# the cache-control routes, none of which `--api-key` protects. And the raw
+# /v1/completions + /tokenize routes the shim uses are for the shim, not for
+# clients. Anything not listed below is a 404 before it reaches a model.
+#
+# Why no `log` block: Modal ships stdout/stderr to US-stored logs. Caddy writes
+# no access log unless asked, and this file never asks.
+
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	# Summarizer: the app's `LocalQwenSmall` client, OpenAI chat-completions.
+	@summarize path /v1/chat/completions /v1/models
+	handle @summarize {
+		reverse_proxy 127.0.0.1:8000 {
+			# Modal's proxy already authenticated this request. Whether it
+			# forwards the bearer token is undocumented; the upstream never
+			# needs it, so it is dropped either way.
+			header_up -Authorization
+			flush_interval -1
+		}
+	}
+
+	# Decisions: the shim's systemone API, and its /health (which re-checks
+	# that vLLM still serves the adapter under its name).
+	@decide path /v1/systemone /health
+	handle @decide {
+		reverse_proxy 127.0.0.1:8741 {
+			header_up -Authorization
+		}
+	}
+
+	# Boot facts written by the supervisor once the box is ready: whether this
+	# container restored from a snapshot, how long each phase took, and that the
+	# adapter check passed. Reading it never touches a model.
+	handle /status {
+		root * /run/hames
+		rewrite * /status.json
+		file_server
+	}
+
+	handle {
+		respond 404
+	}
+}

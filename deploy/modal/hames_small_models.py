@@ -118,11 +118,14 @@ def _env(name: str, default: str | None = None) -> str:
         return value
     if default is not None:
         return default
-    # Only the operator's machine has deploy.local.env; inside the container the
-    # module is imported again, with none of these set, and must not refuse.
+    # Only the operator's machine has deploy.local.env. Modal imports this module
+    # again in the image build and in every container, with none of these set;
+    # there the decorator's values are never sent anywhere (the deployed
+    # definition already holds the real ones), but `@app.server` still rejects
+    # an empty `routing_region`, so the stand-in must be non-empty.
     if modal.is_local():
         raise SystemExit(f"{name} is required (see deploy.env.example); refusing to deploy.")
-    return ""
+    return "unset-in-container"
 
 
 COMPUTE_REGION = _env("HAMES_MODAL_COMPUTE_REGION")

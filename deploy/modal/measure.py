@@ -55,7 +55,8 @@ DECISION_REQUEST = {
 def call(base: str, token: str, method: str, path: str, body: dict | None = None, timeout: float = 60):
     data = json.dumps(body).encode() if body is not None else None
     request = urllib.request.Request(base + path, data=data, method=method)
-    request.add_header("Authorization", f"Bearer {token}")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
     request.add_header("Content-Type", "application/json")
     started = time.monotonic()
     try:
@@ -63,7 +64,11 @@ def call(base: str, token: str, method: str, path: str, body: dict | None = None
             raw = response.read()
             return response.status, (json.loads(raw) if raw else {}), time.monotonic() - started
     except urllib.error.HTTPError as error:
-        return error.code, {}, time.monotonic() - started
+        try:
+            body = json.loads(error.read() or b"{}")
+        except ValueError:  # Modal's own 503 page while the box starts is not JSON
+            body = {}
+        return error.code, body, time.monotonic() - started
 
 
 def containers_up() -> int | None:

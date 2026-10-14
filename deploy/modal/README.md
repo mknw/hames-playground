@@ -11,11 +11,14 @@ uv run modal token new                       # once per machine; opens the brows
 uv run --env-file deploy.local.env modal deploy hames_small_models.py
 ```
 
-`modal deploy` prints the URL. Create a Proxy Token in Modal's dashboard (Settings → Proxy Tokens), put `wk-….ws-…` and the URL into `deploy.local.env`, then:
+`modal deploy` prints the URL (the `….modal.direct` one). Create a Proxy Token in Modal's dashboard (Settings → Proxy Tokens), put `wk-….ws-…` and the URL into `deploy.local.env`, then:
 
 ```bash
+uv run --env-file deploy.local.env smoke.py                 # both models, in the app's request shapes: PASS/FAIL
 uv run --env-file deploy.local.env measure.py --samples 3   # cold starts + warm calls, synthetic inputs
 ```
+
+`smoke.py` passing is the signal the app can be pointed at the box: the summarizer answers `LocalQwenSmall`'s exact body, every decision answer parses the way the app's systemone transport parses it, and the closed routes and the image-URL lock are checked on the live box rather than only in the file.
 
 No `uv`? `nix run nixpkgs#uv -- …` works in place of `uv …`.
 
@@ -59,6 +62,7 @@ Modal pins compute and routing to the configured regions and never moves a pinne
 
 - The image and the snapshot hold public weights (Apache-2.0, pinned to a commit and a hash), code, and the synthetic warm-up state. No request has run before the snapshot is taken, by construction.
 - Request and response bodies are proxied to the container and not stored by Modal.
+- Outbound requests: none on a request's behalf. vLLM reads no images (`--limit-mm-per-prompt` 0 refuses an image part before anything is fetched), and the shim, whose pinned config enables an image path that would fetch an image named by URL, runs with its own `LIGHTNING_IMAGE_URLS=off` lock.
 - Logs: vLLM 0.30 does not log requests unless asked (`--enable-log-requests` is never passed); its dev-mode default of logging exception stacks is turned off (`--no-log-error-stack`); uvicorn's access log is off; Caddy writes no access log; the shim's stderr passes through an allow-list that reduces any traceback to its exception class.
 
 Those are mechanisms. Whether Modal is an acceptable processor for the private tier, and whether a narrow EU region satisfies a residency requirement when Modal does not publish which country backs it, are the operator's decisions. The pointers: Modal's trust center (DPA, subprocessors), `modal.com/docs/guide/data-residency`, and Modal themselves for the country question.
@@ -91,6 +95,7 @@ The deploy above serves synthetic data. Pointing a real user's `.env` at the URL
 | `hames_small_models.py`    | yes     | the Modal app: image pins, boot sequence, server shape |
 | `Caddyfile`                | yes     | the public route list                                  |
 | `ops.py`, `measure.py`     | yes     | operator commands; the measurement run                 |
+| `smoke.py`                 | yes     | the pass/fail check before the app is pointed at it    |
 | `deploy.env.example`       | yes     | every instance variable, documented                    |
 | `deploy.local.env`         | **no**  | this deployment's regions, URL and proxy token         |
 | `measurements.local.jsonl` | **no**  | `measure.py` output                                    |

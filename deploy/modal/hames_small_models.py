@@ -292,6 +292,15 @@ def _shim_argv() -> list[str]:
     ]
 
 
+# The pinned serve_config.json turns the shim's image path on, and that path
+# FETCHES an image named by URL (a top-level image field, or an image part inside
+# a structured `state`) from the public internet before vLLM sees it. This box
+# reads no images (`--limit-mm-per-prompt` 0 refuses them before vLLM fetches
+# anything), so the shim's own lock turns that egress off: such a request is a
+# 422 and nothing leaves the container.
+SHIM_ENV = {"LIGHTNING_IMAGE_URLS": "off"}
+
+
 def _reference_logprobs(model: str) -> dict[str, float]:
     status, body = _http(
         "POST",
@@ -371,7 +380,9 @@ class SmallModels:
         if status != 200 or not {SUMMARIZER_MODEL, DECIDER_MODEL} <= served:
             raise RuntimeError(f"vLLM serves {sorted(served)}, not both {SUMMARIZER_MODEL!r} and {DECIDER_MODEL!r}")
 
-        self.shim = subprocess.Popen(_shim_argv(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self.shim = subprocess.Popen(
+            _shim_argv(), env={**os.environ, **SHIM_ENV}, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+        )
         threading.Thread(
             target=_forward_shim_stderr, args=(self.shim.stdout, self.shim_dropped), daemon=True
         ).start()

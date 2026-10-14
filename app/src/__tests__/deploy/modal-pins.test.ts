@@ -22,6 +22,9 @@
  *      `--disable-uvicorn-access-log`, never `--enable-log-requests` /
  *      `--enable-log-outputs`), the LoRA flags, the app's model alias, and a
  *      loopback bind; the server is deployed with `unauthenticated=False`.
+ *      Nothing in the box fetches an image URL a request names: vLLM reads no
+ *      images, and the shim (whose pinned config turns its URL-fetching image
+ *      path on) is started with its documented `LIGHTNING_IMAGE_URLS=off` lock.
  *   4. Everything baked into the image or a snapshot is pinned public state:
  *      a commit hash for each Hub repo, a sha256 per card file, a sha512 for
  *      Caddy — and the warm-up prompts are string LITERALS in the file, not
@@ -114,6 +117,14 @@ describe('deploy/modal: the server shape and the vLLM argv', () => {
     }
     expect(app).toMatch(/SUMMARIZER_MODEL = "qwen3\.5-4b-instruct"/)
     expect(app).toMatch(/"--host", "127\.0\.0\.1", "--port", str\(SHIM_PORT\)/)
+  })
+
+  it('lets nothing fetch an image URL: vLLM reads no images, the shim refuses image URLs', () => {
+    expect(vllmArgv).toContain('"--limit-mm-per-prompt", json.dumps({"image": 0, "video": 0})')
+    expect(app).toMatch(/^SHIM_ENV = \{"LIGHTNING_IMAGE_URLS": "off"\}$/m)
+    expect(app).toMatch(
+      /subprocess\.Popen\(\s*_shim_argv\(\), env=\{\*\*os\.environ, \*\*SHIM_ENV\}/,
+    )
   })
 
   it('enables dev mode (sleep needs it) — which is why the route list above exists', () => {

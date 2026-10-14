@@ -27,7 +27,7 @@ const orchestrator = decisionLoop(
     'read-documents': { pattern: retrieve, description: 'Search documents already in this conversation' },
     think: { pattern: think, description: 'Decide the steps before acting' },
   },
-  { decide, done: 'Enough has been done to answer', handoff: { lastN: 2 }, maxIterations: 6, patternId: 'orchestrator' },
+  { decide, answer: 'Generate the answer for the user now, from the conversation and any results so far', handoff: { lastN: 2 }, maxIterations: 6, patternId: 'orchestrator' },
 )
 
 agent = withMemory(deps.memory)([orchestrator, compactExecution({ mode: 'thread', patternId: 'response-synth', viewConfig: { fromPatterns: ['orchestrator'], fromLastNTurns: 1 } })])
@@ -37,14 +37,14 @@ There are three differences from the owner's sketch, each argued below:
 
 - the retriever is its own route rather than a tool inside `info_ag` (see [Routes](#routes-and-how-tools-are-grouped));
 - `doc_ag` takes the sketch's second form (see [Sandbox](#where-memory-guards-and-the-sandbox-sit));
-- `skip_to_synthesizer` is a terminal choice, `done`, not a route that runs the synthesizer (see [Done](#done)).
+- `skip_to_synthesizer` is a terminal choice, `answer`, not a route that runs the synthesizer (see [Answer](#answer)). G12 calls it `done`; it is renamed `answer` on review, because "generate the answer for the user" is what the option does, and that is the description the decisions model reads.
 
 ## The new piece: `decisionLoop`
 
 This is the one new pattern. It is a loop over `routes` in which a **decisions model** picks the next route each time round. One iteration:
 
-1. **Build the state** (below) and ask one `choice` question: "Which step should run next?" The options are the route names plus `done`, each with its description. The model answers one label, with its probability. It submits no arguments.
-2. **If `done`**, stop. The top-level synthesizer runs next.
+1. **Build the state** (below) and ask one `choice` question: "Which step should run next?" The options are the route names plus `answer`, each with its description. The model answers one label, with its probability. It submits no arguments.
+2. **If `answer`**, stop. The top-level synthesizer runs next.
 3. **Otherwise run that route's pattern** in a child scope, given the task described below.
 4. **Record what the route produced** as a route output (below), then go to 1.
 
@@ -65,9 +65,9 @@ Assistant: …
 User: <latest message>
 
 This turn so far:
-1. info-retrieval — done
-2. think — done
-3. read-documents — failed: no documents matched
+1. info-retrieval — succeeded (simpleLoop: 3 turns, 4 tool calls, 0 errors, 21s)
+2. think — succeeded (plan: 3 steps)
+3. read-documents — failed: no documents matched (searched 12 documents, 0 matches)
 
 Latest results (most recent last):
 [think] Plan: 1) find the spreadsheet … 2) …
@@ -75,9 +75,16 @@ Latest results (most recent last):
 ```
 
 - **The conversation window** is `routerTurnWindow` turns, the same as `decisionRouter`'s default.
-- **"This turn so far"** lists **every** iteration of this turn in one line each: route and status. This is what lets the model see that it is going round in circles.
+- **"This turn so far"** lists **every** iteration of this turn in one line each: route, status and **stats**. This is what lets the model see that it is going round in circles.
+  - The stats are counted by code from the child's events: turns or attempts used against the child's own bound, tool calls, errors and wall time; for the retriever, documents searched and matches.
+  - A route that hit its own bound (for example the sandbox actor using all its attempts) reads differently from one that finished early, even when both report success.
+  - Together with the last N full outputs below, this is the information the decision rests on (review, 2026-10-14).
 - **"Latest results"** shows the **last N** route outputs in full (result + reasoning, below).
 - **Trimming.** The whole block is trimmed oldest-first to the decide window, as the default state is.
+- **Caching.** The state is **append-only within a turn**: conversation first, then iterations in order. A provider prefix cache could therefore reuse everything but the tail.
+  - On the Anthropic tier the decide call goes to the systemone provider, not to an Anthropic model. That transport records no cache reads (`jev-decide.server.ts:180-182`), and the provider documents no prompt cache, so there is nothing to switch on today.
+  - The prompts that grow and do run on Anthropic models are the children's. Their handoff rides `plan_context`, which renders in the run-static tier 2 behind the #122 `cache_control` breakpoints. So within one child run the handoff is cached after its first call, and across iterations the system block and tier 1 stay byte-identical.
+  - Nothing new is needed for v1. Measure the cache-read share on a multi-iteration turn before designing more.
 - **What is left out.** The route descriptions are not in the state: they are the question's options. Memory is not in the state either (see [Memory](#where-memory-guards-and-the-sandbox-sit)).
 
 Route outputs are untrusted: they carry what the agents read on the web or in mail. They enter the state only as **sanitized** text (see [When a route fails and other boundaries](#untrusted-content-on-the-way-up)), fenced by the guard's spotlight.
@@ -87,9 +94,27 @@ Route outputs are untrusted: they carry what the agents read on the web or in ma
 The router passes no arguments, so a child gets:
 
 - **its instruction: the user's latest message.** `decisionLoop` leaves `data.intent` unset, so `simpleLoop` and `actorCritic` fall back to the last user message, as they already do (`simpleLoop.server.ts:381`, `actorCritic.server.ts:293`). The retriever already searches with that message.
-- **its context: the existing `plan_context` channel.** `decisionLoop` writes the child's `data.plan` as two blocks: the latest `think` plan, if there is one, and the last N route outputs. `simpleLoop` and `actorCritic` already render `data.plan` as the controller's `plan_context` (`simpleLoop.server.ts:322`, `actorCritic.server.ts:139`; planner contract `planner.server.ts:20-29`). So no BAML signature changes.
+- **its context: the existing `plan_context` channel.** `decisionLoop` writes the child's `data.plan` as three blocks:
+  - the latest `think` plan, if there is one;
+  - **this turn's earlier steps**: the same one-line-per-iteration list, with stats, that the decisions model sees. With it, a child can tell which part of the plan it is being asked to do (review, 2026-10-14);
+  - the last N route outputs in full. `simpleLoop` and `actorCritic` already render `data.plan` as the controller's `plan_context` (`simpleLoop.server.ts:322`, `actorCritic.server.ts:139`; planner contract `planner.server.ts:20-29`). So no BAML signature changes.
+
+A **cursor** along the plan, marking the current step, is a v2 idea. v1 relies on the child reading the plan against the steps already done.
 
 The child's `data` is built fresh: the plan block plus what the child pattern needs. It **excludes** `memories` and `memoryContext` (security review §4). **Nothing the child writes to `data` flows back** (architecture review §2). Only the route output does.
+
+### How data from one route reaches the next
+
+There are four channels, from cheapest to richest:
+
+1. **The handoff.** The last N outputs, capped, in the next child's `plan_context` (above). It works for every route kind and costs nothing extra.
+2. **Earlier tool results in full: `withReferences`.** `withReferences` does **not** connect to the Data Stash. It runs an LLM selector (`ReferenceSelector`, the `describe` role) over the `tool_result` events the wrapped pattern can see, and attaches the relevant ones to the inner loop's `turns_previous_runs` (`with-references.server.ts:1-10`). It is the way for `info_ag` to reuse, say, Cypher rows that `info-retrieval` fetched two iterations ago without fetching them again: wrap `info_ag` as `withReferences(…)(simpleLoop(…))`, as `retriever-agent` already wraps its loops.
+   - The catch: a child's events reach `ctx.events` only when the top-level pattern commits. So `decisionLoop` must give each child a view of this turn's earlier children: the synthetic view `chain()` builds (`chain.server.ts:331-335`), with its `dropHitl`.
+   - Without that view, `withReferences` would see earlier turns but not earlier iterations of this one. That is slice 1's job, and it is pinned.
+3. **The Data Stash, for documents.** Documents uploaded by the user or ingested by an agent are reached through the `read-documents` route. Its output then rides the handoff, and the full matches can be picked up through channel 2.
+   - `info_ag` itself has no stash tool, deliberately. The only existing one, the redis server's search, is not scoped to the conversation.
+   - If searching the stash _inside_ `info_ag`'s loop proves necessary, the way to do it is a conversation-scoped app tool that takes its session from the request, the way `graph_file_ingest` does. That is not a new route.
+4. **Files, for the sandbox.** Stash → `/work/in` on entry, with the re-hydrate fix (N4), and materialisation once P4 is met ([Data between routes](#data-between-routes)). `withSandbox` needs neither channel 2 nor channel 3.
 
 ### "Last N route outputs", and where N lives
 
@@ -99,7 +124,7 @@ The same N serves both readers: the decisions model's "Latest results", and the 
 
 ### What a route returns: result + reasoning
 
-Each iteration records one **route output**: `{ route, status: 'done' | 'failed', result, reasoning }`. It is built by code from the child's committed events, not by a model call. So there is no new LLM role, and the tier rule has nothing to route.
+Each iteration records one **route output**: `{ route, status: 'succeeded' | 'failed', stats, result, reasoning }`. It is built by code from the child's committed events, not by a model call. So there is no new LLM role, and the tier rule has nothing to route.
 
 | Route kind        | `result`                                                                                                                                                   | `reasoning`                                                      |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
@@ -110,15 +135,23 @@ Each iteration records one **route output**: `{ route, status: 'done' | 'failed'
 
 `result` is capped (e.g. 2,000 characters, with the excess replaced by a marker). Each route kind has a default extractor, so a developer writes none. The record is stored as a `controller_action` / `tool_result` pair under the loop's own `patternId`. That is the shape `compactExecution`'s thread mode already reads, so synthesis needs no new event type (see [Synthesis](#synthesis)).
 
-### Done
+### Answer
 
-`done` is a choice option, not a route. It runs nothing: the loop ends and the top-level `compactExecution` answers.
+`answer` is a choice option, not a route. It runs nothing: the loop ends and the top-level `compactExecution` answers. It is available on **every** iteration, including the first, before any route has run. So a message the conversation already answers gets a reply straight away, from the conversation alone.
 
-This differs from the sketch's `skip_to_synthesizer: synthesizer(…)` route, because a synthesizer both inside the loop and after it would answer twice. A conversational message ("thanks!") is one `done` decision followed by synthesis: two calls, the first a one-token decision.
+This differs from the sketch's `skip_to_synthesizer: synthesizer(…)` route, because a synthesizer both inside the loop and after it would answer twice. A conversational message ("thanks!") is one `answer` decision followed by synthesis: two calls, the first a one-token decision.
 
 ### The `think` route
 
 `think` is the existing `planner`. It reads the conversation and the handoff, and writes `data.plan` (`planner.server.ts`). It produces text only and runs no tool. Its plan appears in the next state and in every following child's `plan_context`, until a later `think` replaces it.
+
+**The planner needs a map of the agent.** It is given one, built at construction from the route table and the `children` introspection the capability probes already walk:
+
+- each route, with its description;
+- the tools each route's pattern can call, its allowlist plus `withSandbox`'s in-VM tools by name;
+- what each group is for, as one or two high-level capability lines declared beside the route's description ("read and write Microsoft 365 files; run Python over them").
+
+It reaches the BAML `Planner` through its existing optional `context` argument (`planner.baml:24-29`), so no signature changes. It is static per agent, so it is built once and is cache-friendly. This map is the first concrete instance of the later directed-graph representation ([below](#later-directed-graph-utilities)): the same nodes, edges and capability labels, rendered as text for a model.
 
 That is how "thinking the next step" is a route: the decisions model chooses to think when the next step is unclear, and pays for the planner call only then.
 
@@ -128,12 +161,12 @@ A child that ends with an `error` event, or that throws (for example a sandbox t
 
 The child's own `error` events stay inside its `pattern_enter`/`pattern_exit`, but they are recorded as `recoverable` in the merged copy. Without that, `runChain`'s stop rule would end the whole turn on a child's `irrecoverable` error (architecture review §2a).
 
-| Situation                                                | Behaviour                                                                                                                                                                                                                                                                                                                                                                |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| A route fails                                            | Recorded as failed. The loop decides again.                                                                                                                                                                                                                                                                                                                              |
-| `maxIterations` reached (default 6)                      | The loop stops as if `done`. The synthesizer answers from what exists and says the work is partial.                                                                                                                                                                                                                                                                      |
-| The decide call itself fails                             | On the **first** iteration, the turn ends with a visible error: nothing ran, so synthesizing would silently answer without the agent's tools. On a later iteration, the loop stops as if `done`, and the error is recorded for the synthesizer. Ruled N3 in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323): never a silent fallback. |
-| The decide transport is unconfigured on the private tier | Refused per #418 G11, and treated like the first-iteration case: a visible error, never a fall-back.                                                                                                                                                                                                                                                                     |
+| Situation                                                | Behaviour                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A route fails                                            | Recorded as failed. The loop decides again.                                                                                                                                                                                                                                                                                                                                |
+| `maxIterations` reached (default 6)                      | The loop stops as if `answer`. The synthesizer answers from what exists and says the work is partial.                                                                                                                                                                                                                                                                      |
+| The decide call itself fails                             | On the **first** iteration, the turn ends with a visible error: nothing ran, so synthesizing would silently answer without the agent's tools. On a later iteration, the loop stops as if `answer`, and the error is recorded for the synthesizer. Ruled N3 in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323): never a silent fallback. |
+| The decide transport is unconfigured on the private tier | Refused per #418 G11, and treated like the first-iteration case: a visible error, never a fall-back.                                                                                                                                                                                                                                                                       |
 
 ## Routes, and how tools are grouped
 
@@ -216,16 +249,16 @@ All 11 round-2 calls and the 3 departures from the sketch were accepted as recom
 - **S-f, pseudonymisation.** The `graph_file_ingest` → `/work/in` path is pseudonymised too, and stays off until wired.
 - **N1, the decision state.** As in [What the decisions model sees](#what-the-decisions-model-sees-each-iteration), with no memory. On the Anthropic tier the state goes to the systemone provider like any other Anthropic-tier call. On the private tier it goes only to the self-hosted shim (#418 G11).
 - **N2, the handoff.** `handoff.lastN` defaults to 2, counted in iterations.
-- **N3, decide failure.** It ends the turn visibly on iteration 1, and stops as `done` with the answer marked partial on a later iteration.
+- **N3, decide failure.** It ends the turn visibly on iteration 1, and stops as `answer` with the answer marked partial on a later iteration.
 - **N4, re-hydration.** `withSandbox` re-hydrates after a stash-storing tool call in its scope. This is its own slice, with its own review.
-- **N5, the iteration bound.** `maxIterations` defaults to 6. At the bound the loop stops as `done`, with the answer marked partial.
-- **The three departures:** the retriever is its own route; `doc_ag` is the sketch's second form; `done` is a choice, so the synthesizer answers once.
+- **N5, the iteration bound.** `maxIterations` defaults to 6. At the bound the loop stops as `answer`, with the answer marked partial.
+- **The three departures:** the retriever is its own route; `doc_ag` is the sketch's second form; `answer` (`done` in G12) is a choice, so the synthesizer answers once.
 
 The round-1 reviewers' terms (architecture 6068693140, security 6068708025) bind the delta review. Nothing is built before that review converges.
 
 ## Later: directed-graph utilities
 
-The owner named a later step: utilities that instantiate loops, agents, harnesses and orchestrators from a directed graph (cycles allowed). `decisionLoop` is the first concrete node type such a graph would need: a node whose outgoing edges are chosen by a decision. The route-output record is the edge payload. Designing the DG layer waits until this agent has run.
+The owner named a later step: utilities that instantiate loops, agents, harnesses and orchestrators from a directed graph (cycles allowed). `decisionLoop` is the first concrete node type such a graph would need: a node whose outgoing edges are chosen by a decision. The route-output record is the edge payload, and the planner's agent map is the graph rendered as text, so the DG layer should generate that map rather than sit beside a second description of the same agent. Designing the DG layer waits until this agent has run.
 
 ## Rollout
 
@@ -242,7 +275,9 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
 1. **`decisionLoop` in core**, which includes:
    - the iteration;
    - the custom state;
-   - the route-output record and per-kind extractors;
+   - the route-output record, its stats and the per-kind extractors;
+   - each child's synthetic view of this turn's earlier children, with `dropHitl` (for `withReferences`);
+   - the planner's agent map;
    - sanitizing on the way up;
    - failure capture and severity downgrade;
    - `maxIterations`;

@@ -267,3 +267,91 @@ describe('the dialog', () => {
     expect(q('memory-proposal-dialog')!.textContent).toContain('could not be saved right now')
   })
 })
+
+describe('#579 review 6 and 2: selection and the bound answer', () => {
+  const open = async () => {
+    render(() => <MemoryProposalPrompt sessionId="s1" settledTick={0} />)
+    await tick()
+    fireEvent.click(q('memory-proposal-review')!)
+    await tick()
+  }
+  const boxes = () => [
+    ...q('memory-proposal-dialog')!.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+  ]
+
+  // MUTATION: key the unchecked set by the bare ref → the next proposal opens
+  // with the same items unchecked → red.
+  it('one proposal’s unchecked items do not carry over to the next, which reuses the same refs', async () => {
+    await open()
+    fireEvent.click(boxes()[1])
+    await tick()
+    expect(boxes().map((b) => b.checked)).toEqual([true, false])
+    fireEvent.keyDown(q('memory-proposal-dialog')!, { key: 'Escape' })
+    await tick()
+    // the next proposal arrives (another turn), with the same positional refs
+    listMemoryProposals.mockResolvedValue([{ ...view(), requestId: 'req-2' }])
+    window.dispatchEvent(new Event('focus'))
+    await tick()
+    fireEvent.click(q('memory-proposal-review')!)
+    await tick()
+    expect(boxes().map((b) => b.checked)).toEqual([true, true])
+  })
+
+  // MUTATION: leave the selection and the other button live after a refused
+  // save → a different answer can be sent over a bound one → red.
+  it('after a refused save the SAME answer is retried: the other button and the boxes lock', async () => {
+    answerMemoryProposal.mockResolvedValueOnce({ outcome: 'conflict' })
+    await open()
+    fireEvent.click(boxes()[1])
+    await tick()
+    fireEvent.click(q('memory-proposal-save')!)
+    await tick()
+    expect((q('memory-proposal-discard') as HTMLButtonElement).disabled).toBe(true)
+    expect(boxes().every((b) => b.disabled)).toBe(true)
+    expect(boxes().map((b) => b.checked)).toEqual([true, false])
+    answerMemoryProposal.mockResolvedValueOnce({ outcome: 'saved', written: 1, stale: 0 })
+    listMemoryProposals.mockResolvedValue([])
+    fireEvent.click(q('memory-proposal-save')!)
+    await tick()
+    expect(answerMemoryProposal).toHaveBeenLastCalledWith('s1', 'req-1', {
+      choice: 'save',
+      flags: { i0: true, i1: false },
+    })
+  })
+
+  it('a discard that conflicted locks the save button instead', async () => {
+    answerMemoryProposal.mockResolvedValueOnce({ outcome: 'conflict' })
+    await open()
+    fireEvent.click(q('memory-proposal-discard')!)
+    await tick()
+    expect((q('memory-proposal-save') as HTMLButtonElement).disabled).toBe(true)
+    expect((q('memory-proposal-discard') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  // MUTATION: ignore `recorded` → after a reload the person can send a different answer → red.
+  it('a proposal the server says is already answered offers only that answer, with its selection', async () => {
+    listMemoryProposals.mockResolvedValue([
+      { ...view(), recorded: { choice: 'save', flags: { i0: true, i1: false } } },
+    ])
+    await open()
+    expect(boxes().map((b) => [b.checked, b.disabled])).toEqual([
+      [true, true],
+      [false, true],
+    ])
+    expect((q('memory-proposal-discard') as HTMLButtonElement).disabled).toBe(true)
+    expect((q('memory-proposal-save') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it.each([
+    ['already-answered', 'already answered'],
+    ['full', 'memory is full'],
+  ])('%s is said in words', async (outcome, words) => {
+    answerMemoryProposal.mockResolvedValue({ outcome })
+    await open()
+    // `already-answered` closes the dialog and re-reads; the answered one is gone
+    if (outcome === 'already-answered') listMemoryProposals.mockResolvedValue([])
+    fireEvent.click(q('memory-proposal-save')!)
+    await tick()
+    expect(document.body.textContent).toContain(words)
+  })
+})

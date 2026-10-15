@@ -39,8 +39,6 @@
 const MARKERS = [
   ['ExtractMemory', 'You write down what a USER has told an assistant about themselves'],
   ['CompactMemories', 'You merge several stored memories about one USER into a single memory.'],
-  ['DecideVerbalized', 'Give your probability for EVERY option.'],
-  ['Decide', 'Reply with the single letter of the best option and NOTHING else'],
   ['Router', 'Analyze the user message and determine routing.'],
   ['ActorController', 'A critic evaluates your output. Learn from previous feedback.'],
   ['LoopController', 'Select one tool per turn. Use "Return" when you have enough information.'],

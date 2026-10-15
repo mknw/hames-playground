@@ -48,7 +48,7 @@ export function createHostMemoryConfig(): MemoryConfig {
       transaction: (fn) => store().transaction(fn),
     },
     decide,
-    decideAll: createDecideAllAdapter(decide),
+    decideAll: createDecideAllAdapter(),
     extract: createMemoryExtractAdapter(),
     embed: createMemoryEmbedder(),
     visibleTiers: visibleMemoryTiers,
@@ -67,12 +67,17 @@ export function createHostMemoryConfig(): MemoryConfig {
 
 /** Start before any pattern, then capture THIS poll while it is still current.
  * Later turns may start another poll; a late settle must retain this outcome. */
-export function startTurnMemory<T>(
+export async function startTurnMemory<T>(
   patterns: ConfiguredPattern<T>[],
   memory?: MemoryConfig,
-): MemoryConfig | undefined {
+): Promise<MemoryConfig | undefined> {
   if (!isRequestMemoryAllowed()) return undefined
   if (!memory || !harnessUsesMemory(patterns)) return undefined
+  try {
+    if (!(await memory.enabled())) return undefined
+  } catch {
+    return undefined
+  }
   void ensureMemoryAwake(true)
   setRequestMemoryWake(awaitMemoryWake(memoryWakeTimeoutMs()))
   return memory

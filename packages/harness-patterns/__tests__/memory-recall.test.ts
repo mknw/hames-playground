@@ -13,10 +13,8 @@
  *                                  skip or a failure
  *   recall-never-skips-downstream— a throwing store/embedder/gate still runs the
  *                                  next pattern, with no `error` event (#398)
- *   gate-policy                  — abstain / timeout / error / out-of-set /
+ *   gate-outcome                 — timeout / error / out-of-set /
  *                                  `skip` attach nothing and record why
- *   recall-threshold-method (F2) — a logprob-fitted cut is never applied to a
- *                                  Jev read; the Jev entry's own cuts apply
  *   event-hygiene                — no memory content in `serialize()`, either
  *                                  `serializeCompact()` branch or the event
  *   recall-wake                  — the wake shares the gate's budget: `waking`,
@@ -110,12 +108,12 @@ const embedder = (spaceId: string = SPACE) => ({
   spaceId,
 })
 
-const logprob = (probs: Record<string, number>, extra: Partial<DecideResult> = {}) =>
-  ({ probs, method: 'logprob', calibrated: true, ...extra }) as DecideResult
+const answer = (probs: Record<string, number>, extra: Partial<DecideResult> = {}) =>
+  ({ probs, method: 'jev', calibrated: true, ...extra }) as DecideResult
 
 function fakeDecide(
   answer: (input: { state: string }) => unknown,
-  extras: Pick<DecideFn, 'serving' | 'limits'> = {},
+  extras: Pick<DecideFn, 'limits'> = {},
 ) {
   const calls: Array<{ spec: { key: string }; state: string }> = []
   const fn = (async (input: { spec: { key: string }; state: string }) => {
@@ -125,7 +123,7 @@ function fakeDecide(
   Object.assign(fn, extras)
   return { fn, calls }
 }
-const retrieves = () => fakeDecide(() => logprob({ retrieve: 0.9, skip: 0.1 }))
+const retrieves = () => fakeDecide(() => answer({ retrieve: 0.9, skip: 0.1 }))
 
 const visibleTiers = (t: string | undefined) =>
   t === 'verda' ? ['verda', 'anthropic'] : ['anthropic']
@@ -509,8 +507,15 @@ describe('per-turn-clear', () => {
   const cases: Array<[string, Partial<MemoryRecallConfig>]> = [
     ['no owner', { owner: () => null }],
     ['switch off', { settings: { enabled: () => false } }],
-    ['the gate says skip', { decide: fakeDecide(() => logprob({ retrieve: 0.1, skip: 0.9 })).fn }],
-    ['the gate abstains', { decide: fakeDecide(() => logprob({ retrieve: 0.55, skip: 0.45 })).fn }],
+    ['the gate says skip', { decide: fakeDecide(() => answer({ retrieve: 0.1, skip: 0.9 })).fn }],
+    [
+      'the gate fails',
+      {
+        decide: fakeDecide(() => {
+          throw new Error('offline')
+        }).fn,
+      },
+    ],
     ['an empty store', { store: fakeStore([]).store }],
     ['nothing clears the floors', { store: fakeStore([mem('x', 'unrelated', 0.1)]).store }],
     ['the store throws', { store: fakeStore(TWO_TIERS, { throwOn: 'candidates' }).store }],
@@ -601,31 +606,9 @@ describe('gate-policy', () => {
     expect(recalled(ctx)[0].attached).toEqual([])
   }
 
-  it('an abstain (low confidence) attaches nothing — though its argmax is retrieve', async () => {
-    const ctx = await run(
-      config({ decide: fakeDecide(() => logprob({ retrieve: 0.55, skip: 0.45 })).fn }),
-    )
-    nothingAttached(ctx)
-    expect(recalled(ctx)[0]).toMatchObject({
-      skipped: 'gate',
-      gate: { abstained: true, top: 'retrieve', label: 'skip', reason: 'low-confidence' },
-    })
-  })
-
-  it('a low margin abstains', async () => {
-    const ctx = await run(
-      config({
-        decide: fakeDecide(() => logprob({ retrieve: 0.7, skip: 0.3 })).fn,
-        settings: { gate: { minConfidence: 0.1, minMargin: 0.6 } },
-      }),
-    )
-    nothingAttached(ctx)
-    expect(recalled(ctx)[0].gate?.reason).toBe('low-margin')
-  })
-
   it('a decided skip attaches nothing', async () => {
     const ctx = await run(
-      config({ decide: fakeDecide(() => logprob({ retrieve: 0.05, skip: 0.95 })).fn }),
+      config({ decide: fakeDecide(() => answer({ retrieve: 0.05, skip: 0.95 })).fn }),
     )
     nothingAttached(ctx)
     expect(recalled(ctx)[0]).toMatchObject({
@@ -644,7 +627,7 @@ describe('gate-policy', () => {
   })
 
   it('an out-of-set label attaches nothing', async () => {
-    const ctx = await run(config({ decide: fakeDecide(() => logprob({ bogus: 1 })).fn }))
+    const ctx = await run(config({ decide: fakeDecide(() => answer({ bogus: 1 })).fn }))
     nothingAttached(ctx)
     expect(recalled(ctx)[0].skipped).toBe('gate')
   })
@@ -660,59 +643,6 @@ describe('gate-policy', () => {
     const ctx = await run(config())
     expect(typesOf(ctx.events)).not.toContain('decision_made')
     expect(typesOf(ctx.events)).toContain('memory_recalled')
-  })
-})
-
-// ============================================================================
-// recall-threshold-method (#418 F2)
-// ============================================================================
-
-describe('recall-threshold-method', () => {
-  const jev = (probs: Record<string, number>) => logprobLike(probs, 'jev')
-  function logprobLike(probs: Record<string, number>, method: 'jev' | 'logprob') {
-    return { probs, method, calibrated: true } as DecideResult
-  }
-
-  it('the Jev entry’s OWN cuts apply — a logprob-fitted static cut is never applied to a Jev read', async () => {
-    // margin 0.2 / confidence 0.2: below the static 0.5 / 0.25, above the
-    // entry's own 0.1 / 0.1.
-    const d = fakeDecide(() => jev({ retrieve: 0.6, skip: 0.4 }), {
-      serving: () => ({ method: 'jev', calibration: { minConfidence: 0.1, minMargin: 0.1 } }),
-    })
-    const ctx = await run(config({ decide: d.fn }))
-    expect(ctx.data.memories!.length).toBeGreaterThan(0)
-    expect(recalled(ctx)[0].gate).toMatchObject({ method: 'jev', abstained: false })
-  })
-
-  it('with NO entry for the serving method, the gate abstains method-mismatch', async () => {
-    const d = fakeDecide(() => jev({ retrieve: 0.99, skip: 0.01 }), {
-      serving: () => ({ method: 'jev' }),
-    })
-    const ctx = await run(config({ decide: d.fn }))
-    expect(ctx.data.memories).toEqual([])
-    expect(recalled(ctx)[0]).toMatchObject({
-      skipped: 'gate',
-      gate: { abstained: true, reason: 'method-mismatch', method: 'jev' },
-    })
-  })
-
-  it('the same absent-serving mismatch is caught after the call, from the result', async () => {
-    const d = fakeDecide(() => jev({ retrieve: 0.99, skip: 0.01 }))
-    const ctx = await run(config({ decide: d.fn }))
-    expect(recalled(ctx)[0].gate?.reason).toBe('method-mismatch')
-  })
-
-  it('a logprob read still honours the static cuts', async () => {
-    const weak = fakeDecide(() => logprobLike({ retrieve: 0.6, skip: 0.4 }, 'logprob'))
-    const ctx = await run(config({ decide: weak.fn }))
-    expect(ctx.data.memories).toEqual([])
-    expect(recalled(ctx)[0].gate?.reason).toBe('low-confidence')
-  })
-
-  it('a host whose static cuts were fitted on Jev says so, and they apply to Jev', async () => {
-    const d = fakeDecide(() => jev({ retrieve: 0.9, skip: 0.1 }))
-    const ctx = await run(config({ decide: d.fn, settings: { gate: { thresholdMethod: 'jev' } } }))
-    expect(ctx.data.memories!.length).toBeGreaterThan(0)
   })
 })
 
@@ -754,7 +684,7 @@ describe('recall-wake', () => {
     const order: string[] = []
     const d = fakeDecide(async () => {
       order.push('gate')
-      return logprob({ retrieve: 0.9, skip: 0.1 })
+      return answer({ retrieve: 0.9, skip: 0.1 })
     })
     const base = fakeStore(TWO_TIERS).store
     await run(
@@ -817,7 +747,7 @@ describe('event-hygiene', () => {
 
   it('the skipped branches are clean too', async () => {
     const ctx = await run(
-      config({ store: fakeStore(rows).store, decide: fakeDecide(() => logprob({ skip: 1 })).fn }),
+      config({ store: fakeStore(rows).store, decide: fakeDecide(() => answer({ skip: 1 })).fn }),
       { prior: OLDER_TURN },
     )
     for (const surface of everySurface(ctx as never)) expect(surface).not.toContain(SENTINEL)
@@ -895,7 +825,7 @@ describe('memory-not-in-blob', () => {
 
 describe('recall-gate-cost', () => {
   const CALL = { functionName: 'Decide', variables: {}, rawOutput: 'A' }
-  const costly = () => fakeDecide(() => logprob({ retrieve: 0.9, skip: 0.1 }, { llmCall: CALL }))
+  const costly = () => fakeDecide(() => answer({ retrieve: 0.9, skip: 0.1 }, { llmCall: CALL }))
   const callOf = (ctx: { events: ContextEvent[] }) =>
     ctx.events.find((e) => e.type === 'memory_recalled')?.llmCall
 
@@ -950,7 +880,7 @@ describe('review F6', () => {
   })
 
   it('a previous reply larger than the gate’s window is dropped, the user message kept', async () => {
-    const d = fakeDecide(() => logprob({ retrieve: 0.9, skip: 0.1 }), {
+    const d = fakeDecide(() => answer({ retrieve: 0.9, skip: 0.1 }), {
       limits: () => ({ contextWindow: 4_200 }),
     })
     await run(config({ decide: d.fn }), {
@@ -1034,5 +964,19 @@ describe('review F6', () => {
     const avgdl = (4 + 3 + 8) / 3
     const expected = (idf(n, 1) * 1 * 2.2) / (1 + 1.2 * (1 - 0.75 + (0.75 * dl) / avgdl))
     expect(a.lexical).toBeCloseTo(expected, 10)
+  })
+})
+
+describe('G11 memory endpoint verdict', () => {
+  it('attaches on a narrow retrieve verdict without calibration or a confidence cut', async () => {
+    const ctx = await run(
+      config({
+        decide: fakeDecide(() =>
+          answer({ retrieve: 0.501, skip: 0.499 }, { calibrated: false, confidence: 0.001 }),
+        ).fn,
+      }),
+    )
+    expect(ctx.data.memories!.map((m) => m.id).sort()).toEqual(['a1', 'v1'])
+    expect(recalled(ctx)[0].gate?.probs).toEqual({ retrieve: 0.501, skip: 0.499 })
   })
 })

@@ -44,6 +44,8 @@ const ENV_KEYS = [
   'VERDA_INFERENCE_ENDPOINT',
   'VERDA_INFERENCE_API_KEY',
   'SMALL_LLM_BASE_URL',
+  'SMALL_LLM_DECISIONS_URL',
+  'SMALL_LLM_API_KEY',
   'EUR_PER_USD',
   'VERDA_EUR_PER_HOUR',
   'SMALL_LLM_EUR_PER_HOUR',
@@ -55,6 +57,8 @@ function enable(): void {
   process.env.USE_VERDA_INFERENCE = '1'
   process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+  process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
 }
 
@@ -123,6 +127,8 @@ describe('the configuration the host registers is the configuration the resoluti
     // 'anthropic' while the scope says 'verda' catches it.
     process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
     process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+    process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+    process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
     const clients = await loadWired()
 

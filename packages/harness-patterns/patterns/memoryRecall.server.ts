@@ -36,7 +36,7 @@
  *    user message and the previous FINAL assistant message — never memory
  *    content.
  * 4. Rank ({@link rankMemories}): BM25 + cosine, floors before fusion, RRF, cap.
- * 5. Attach only when the gate said `retrieve` and its policy passed.
+ * 5. Attach only when the gate said `retrieve` with a usable answer.
  *
  * ## It never stops what follows it
  *
@@ -48,18 +48,6 @@
  * `memory_recalled` event: its ids, or why there are none. The user sees
  * nothing.
  *
- * ## The gate's thresholds are METHOD-SCOPED (#418 F2)
- *
- * `gate.minConfidence` / `gate.minMargin` are fitted on the logprob path. They
- * are handed to `evaluateDecision` as the policy's static cuts with
- * `thresholdMethod` naming what they were fitted on, so on a read from another
- * method (Jev on the Anthropic tier) they are NOT applied: the calibration
- * entry the transport reports for that client carries its own cuts, which win,
- * and with no entry the gate abstains `method-mismatch` and attaches nothing.
- * This file applies NO threshold of its own on top — a second static
- * `margin ≥ minMargin` here is exactly the logprob-fitted cut applied to a Jev
- * read, which is the defect the method scope exists to prevent. Pinned by
- * `recall-threshold-method`.
  */
 
 import { assertServerOnImport } from '../assert.server'
@@ -68,8 +56,6 @@ import type {
   ConfiguredPattern,
   Decision,
   DecideFn,
-  DecisionMethod,
-  DecisionPolicy,
   DecisionSpec,
   EventView,
   MemoryCandidate,
@@ -99,8 +85,7 @@ assertServerOnImport()
 // The decision
 // ============================================================================
 
-/** The recall gate's decision key — what layer 4 calibrates and what a
- *  calibration entry is keyed on. */
+/** The recall question's decision key. */
 export const MEMORY_RECALL_KEY = 'memory.recall'
 
 export type MemoryRecallLabel = 'retrieve' | 'skip'
@@ -131,18 +116,10 @@ export const MEMORY_RECALL_SPEC: DecisionSpec<MemoryRecallLabel> = {
 // Configuration
 // ============================================================================
 
-/** The recall gate's tunables. EVERY default here is an UNMEASURED placeholder:
- *  layer 4's `memory-recall-relevance` calibrates them (and the method-scoped
- *  cuts), and nothing in this file claims otherwise. */
+/** The deadline shared by recall's gate, search and wake. */
 export interface MemoryGateSettings {
   /** Budget for the gate, the search AND the wake, concurrently. Default 1500. */
   readonly timeoutMs?: number
-  /** Static confidence cut, fitted on `thresholdMethod`. Default 0.5. */
-  readonly minConfidence?: number
-  /** Static margin cut, fitted on `thresholdMethod`. Default 0.25. */
-  readonly minMargin?: number
-  /** The method the static cuts were fitted on. Default `'logprob'` (#418 F2). */
-  readonly thresholdMethod?: DecisionMethod
 }
 
 /** How recall searches and caps. UNMEASURED placeholders, as above. */
@@ -165,7 +142,7 @@ export interface MemoryRecallConfig extends PatternConfig {
   /** REQUIRED: the persistence seam, bound by the host to the turn's owner. */
   readonly store: MemoryStore
   /** REQUIRED: the RAW decision seam (`bamlPatterns().decide`), never a
-   *  policy-applying wrapper — this step applies its own policy. */
+   *  wrapper. */
   readonly decide: DecideFn
   /** REQUIRED: embeds the query. */
   readonly embed: MemoryQueryEmbedder
@@ -203,8 +180,6 @@ export interface RecalledMemory {
 }
 
 const DEFAULT_GATE_TIMEOUT_MS = 1500
-const DEFAULT_MIN_CONFIDENCE = 0.5
-const DEFAULT_MIN_MARGIN = 0.25
 const DEFAULT_MIN_SEMANTIC = 0.5
 const DEFAULT_MIN_IDF = 0.5
 const DEFAULT_MAX_MEMORIES = 5
@@ -284,7 +259,7 @@ function toMs(v: Date | string | number): number {
 
 function gateRecord(d: Decision<MemoryRecallLabel>, stateChars: number): MemoryGateRecord {
   return {
-    label: d.label,
+    label: d.label ?? 'skip',
     top: d.top,
     probs: d.probs as Record<string, number>,
     margin: d.margin,
@@ -321,12 +296,6 @@ export function memoryRecall<T extends MemoryRecallData>(
 
   const gate = settings?.gate ?? {}
   const budgetMs = gate.timeoutMs ?? DEFAULT_GATE_TIMEOUT_MS
-  const policy: DecisionPolicy<MemoryRecallLabel> = {
-    fallback: 'skip',
-    minConfidence: gate.minConfidence ?? DEFAULT_MIN_CONFIDENCE,
-    minMargin: gate.minMargin ?? DEFAULT_MIN_MARGIN,
-    ...(gate.thresholdMethod ? { thresholdMethod: gate.thresholdMethod } : {}),
-  }
   const maxMemories = settings?.maxMemories ?? DEFAULT_MAX_MEMORIES
   const maxTokens = settings?.maxMemoryTokens ?? DEFAULT_MAX_MEMORY_TOKENS
 
@@ -400,7 +369,6 @@ export function memoryRecall<T extends MemoryRecallData>(
         decide,
         spec: MEMORY_RECALL_SPEC,
         state: query.state,
-        policy,
       }).then((e) => (gateDone = e))
       const searchP = (async () => {
         const embedding = await embed.query(query.latest)
@@ -443,10 +411,7 @@ export function memoryRecall<T extends MemoryRecallData>(
         )
         return skip('error', { errorKind: errorKind(search.err) })
       }
-      // Only a decided `retrieve` attaches. An abstain, an error or an
-      // out-of-set label all land on the fallback (`skip`) — and the policy
-      // already ruled on the thresholds, method-scoped. NOTHING is re-checked
-      // here against a static cut.
+      // Only an answered `retrieve` attaches; a failed call attaches nothing.
       if (evaluated.decision.label !== 'retrieve') return skip('gate')
 
       // The tier filter, enforced HERE as well as asked of the store: a store

@@ -172,3 +172,32 @@ describe('general agent — compactExecution view scope', () => {
     expect(view.errors().count()).toBe(1)
   })
 })
+
+it('general opts into memory only when its host supplies the shared config', async () => {
+  const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
+  const { harnessUsesMemory } = await import('@hames-ai/harness-patterns')
+  const memory = {
+    owner: () => 'synthetic-owner',
+    enabled: () => false,
+    store: { count: vi.fn(), candidates: vi.fn(), transaction: vi.fn() },
+    decide: vi.fn(),
+    extract: vi.fn(),
+    embed: vi.fn(),
+    visibleTiers: () => ['verda'],
+    limits: { contextWindow: 32000, maxOutputTokens: 2048 },
+  }
+  const withConfig = await generalAgent.createPatterns('memory-general', {
+    ...degradedDeps,
+    memory: memory as never,
+  })
+  expect(harnessUsesMemory(withConfig)).toBe(true)
+  expect(withConfig.map((p) => p.name)).toEqual([
+    'memoryRecall',
+    'planner',
+    'simpleLoop',
+    'compactExecution',
+  ])
+  expect(
+    harnessUsesMemory(await generalAgent.createPatterns('no-memory-general', degradedDeps)),
+  ).toBe(false)
+})

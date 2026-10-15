@@ -48,6 +48,7 @@ import type {
   MemoryConfirmSeam,
   MemoryEmbedder,
   MemoryExtractFn,
+  MemoryRetention,
   MemoryStore,
   MemoryWakeWait,
   MemoryWriteStore,
@@ -56,6 +57,8 @@ import type {
   EventView,
 } from '../types'
 import type { MemoryStoreConfig, MemoryStoreSettings } from '../memory-store.server'
+import { memoryRetention } from '../memory-compaction-pure.server'
+import type { MemoryCompactionConfig } from '../memory-compaction.server'
 import {
   memoryRecall,
   type MemoryRecallData,
@@ -67,6 +70,12 @@ assertServerOnImport()
 export type RouterMemory = 'routing-and-replies' | 'replies-only'
 
 export interface MemoryConfig {
+  /** Optional M3 maintenance; absent preserves the existing recall/store wiring.
+   *  Store must share the owner's lock with the existing write seam. */
+  readonly compact?: Pick<MemoryCompactionConfig, 'compact' | 'store' | 'assertTier' | 'settings'>
+  /** D21: per-kind days after last sighting; null persists. Default episodic
+   *  180 days, other kinds persist. Used by the optional compaction pass. */
+  readonly retention?: MemoryRetention
   /** Where recalled memory may flow. Default: 'routing-and-replies': the router
    *  may put earlier-conversation facts into intent and therefore tool arguments
    *  (a web-search query or fetch). 'replies-only' withholds the block from every
@@ -117,6 +126,7 @@ export interface MemoryConfig {
  *  reads, the store
  *  refuses — so it is refused here, before either half exists. */
 function validateMemoryConfig(cfg: MemoryConfig): void {
+  memoryRetention(cfg.retention)
   if (
     cfg.routerMemory !== undefined &&
     cfg.routerMemory !== 'routing-and-replies' &&
@@ -185,6 +195,34 @@ export function memoryStoreConfig(cfg: MemoryConfig): MemoryStoreConfig {
     owner: cfg.owner,
     ...(cfg.awaitWake ? { awaitWake: cfg.awaitWake } : {}),
     ...(cfg.confirm ? { confirm: cfg.confirm } : {}),
-    settings: { ...cfg.settle, enabled: cfg.enabled },
+    settings: {
+      ...cfg.settle,
+      ...(cfg.compact?.settings?.softLimit !== undefined
+        ? { softLimit: cfg.compact.settings.softLimit }
+        : {}),
+      ...(cfg.compact?.settings?.hardLimit !== undefined
+        ? { hardLimit: cfg.compact.settings.hardLimit }
+        : {}),
+      enabled: cfg.enabled,
+    },
+  }
+}
+
+/** Optional third half of the same config, for the host's post-reply pass. */
+export function memoryCompactionConfig(cfg: MemoryConfig): MemoryCompactionConfig | undefined {
+  validateMemoryConfig(cfg)
+  if (!cfg.compact) return undefined
+  return {
+    ...cfg.compact,
+    owner: cfg.owner,
+    enabled: cfg.enabled,
+    decide: cfg.decide,
+    embed: cfg.embed,
+    retention: cfg.retention,
+    settings: {
+      ...cfg.compact.settings,
+      softLimit: cfg.compact.settings?.softLimit ?? cfg.settle?.softLimit,
+      hardLimit: cfg.compact.settings?.hardLimit ?? cfg.settle?.hardLimit,
+    },
   }
 }

@@ -298,10 +298,8 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       json(res, 200, { list: [] })
       return
     }
-    // The Anthropic tier's decide transport (#418 T4): OpenRouter's Decisions
-    // API, a different wire format from chat-completions. Pointed here by
-    // `JEV_DECISIONS_URL` in `app.ts`, so a hermetic run never reaches the real one.
-    if (req.method === 'POST' && req.url?.startsWith('/api/alpha/decisions')) {
+    // Both decision tiers use the systemone request and response format.
+    if (req.method === 'POST' && req.url === '/v1/systemone') {
       let rawJev = ''
       req.on('data', (chunk) => (rawJev += chunk))
       req.on('end', () => serveJev(rawJev, res))
@@ -363,7 +361,7 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
     })
   }
 
-  /** `POST /api/alpha/decisions`: deterministic typed answers — every question
+  /** `POST /v1/systemone`: deterministic typed answers — every question
    *  answered with its FIRST option at 0.9 (memory confirmation selects `skip`)
    *  and the rest sharing 0.1, and a
    *  `usage.cost` — so a scenario asserts routing and accounting, never model
@@ -441,7 +439,7 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
   }
 
   async function serve(raw: string, res: http.ServerResponse): Promise<void> {
-    let body: { model?: string; messages?: ChatMessage[]; max_tokens?: number; logprobs?: boolean }
+    let body: { model?: string; messages?: ChatMessage[]; max_tokens?: number }
     try {
       body = JSON.parse(raw || '{}') as {
         model?: string
@@ -534,13 +532,7 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
 
     // `fn` is non-null for everything but the wake ping, which the `!wake` guard
     // above let through — it wants a token, not a parseable envelope.
-    const payload = JSON.stringify(
-      completion(
-        model,
-        wake ? 'ok' : replyFor(fn!, prompt),
-        body.logprobs === true ? decisionProbabilities(prompt) : undefined,
-      ),
-    )
+    const payload = JSON.stringify(completion(model, wake ? 'ok' : replyFor(fn!, prompt)))
 
     if (fault?.kind === 'mid-stream') {
       record('mid-stream', delayedMs)
@@ -707,17 +699,6 @@ function replyFor(fn: BamlFunctionName, prompt: string): string {
       const latest = members.at(-1)
       return JSON.stringify({ content: latest?.[1] ?? '', evidence: latest?.[2] ?? '' })
     }
-    case 'Decide':
-      return prompt.includes('Should a person confirm') ? (confirmIndex === 1 ? 'B' : 'A') : 'A'
-
-    case 'DecideVerbalized':
-      return JSON.stringify(
-        decisionProbabilities(prompt).map(({ token, probability }) => ({
-          letter: token,
-          probability,
-        })),
-      )
-
     case 'Router':
       return JSON.stringify({
         intent: 'e2e intent: count the nodes',
@@ -832,30 +813,13 @@ function readBatchIds(prompt: string): string[] {
 // Wire helpers
 // ============================================================================
 
-/** Read only the offered options, never letters in the state or question. */
 /** Which answer the fake gives the memory store's "Should a person confirm"
  *  question: 1 = `skip` (the default — a routine memory is written straight
  *  through), 0 = `ask` (it is proposed to the person, #419 M6). Set per
  *  scenario by `memoryConfirm()`, restored by `reset()`. */
 let confirmIndex = 1
 
-function decisionProbabilities(prompt: string): Array<{ token: string; probability: number }> {
-  const options = prompt.slice(prompt.lastIndexOf('OPTIONS:'))
-  const letters = [...options.matchAll(/^\s*([A-T])\. /gm)].map((m) => m[1])
-  return letters.map((token, i) => ({
-    token,
-    probability:
-      i === (prompt.includes('Should a person confirm') ? confirmIndex : 0)
-        ? 0.9
-        : 0.1 / (letters.length - 1),
-  }))
-}
-
-function completion(
-  model: string,
-  content: string,
-  probabilities?: Array<{ token: string; probability: number }>,
-): unknown {
+function completion(model: string, content: string): unknown {
   return {
     id: 'e2e-fake-completion',
     object: 'chat.completion',
@@ -866,20 +830,6 @@ function completion(
         index: 0,
         message: { role: 'assistant', content },
         finish_reason: 'stop',
-        ...(probabilities && {
-          logprobs: {
-            content: [
-              {
-                token: content,
-                logprob: Math.log(0.9),
-                top_logprobs: probabilities.map(({ token, probability }) => ({
-                  token,
-                  logprob: Math.log(probability),
-                })),
-              },
-            ],
-          },
-        }),
       },
     ],
     usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },

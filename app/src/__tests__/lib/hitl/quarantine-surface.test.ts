@@ -77,6 +77,8 @@ describe('the quarantine is out of every agent\u2019s reach (A7)', () => {
       'lib/hitl/actions.server.ts',
       // #419 M6: the memory proposals' payload rows, held and offered by host
       // code behind its own gated RPC door (confirm-actions → proposals).
+      // M7's erase RPCs purge the pending proposals with the memories.
+      'lib/memory/actions.server.ts',
       'lib/memory/confirm-actions.server.ts',
       'lib/memory/proposals.server.ts',
     ])

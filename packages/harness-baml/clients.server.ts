@@ -116,11 +116,7 @@
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { currentRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
-import type {
-  ModelLimits,
-  CostBasis,
-  DecisionCalibrationEntry,
-} from '@hames-ai/harness-patterns/types'
+import type { ModelLimits, CostBasis } from '@hames-ai/harness-patterns/types'
 // TYPE-ONLY by design: this module owns the routing seam and reads the
 // consumer layer's SHAPE, while `consumer-clients.server.ts` imports the seam
 // itself. A value import here would make the consumer module load whenever the
@@ -354,11 +350,7 @@ export type BamlRole =
   // DescribeAnthropic block in baml_src/anthropic-only.baml.
   | 'describe'
   | 'screen' // ScreenUntrustedContent (withInjectionGuard's opt-in LLM layer)
-  // The typed-decision readout (#418). ONE function, `Decide`, and — unlike
-  // every other role — its client is chosen by TRANSPORT, not just by model: a
-  // client in `LOGPROB_CLIENTS` is read for token logprobs, a `JEV_CLIENTS`
-  // member goes to the Jev REST adapter, anything else to a verbalized
-  // secondary (F1). See `createDecideAdapter`.
+  // The systemone decision transport.
   | 'decide'
 
 /** The BAML-declared client per role — the Anthropic-only chain each function
@@ -408,13 +400,7 @@ const CLIENT_BY_ROLE: Record<BamlRole, string> = {
   // it in anthropic-only.baml. The accident this role guards against is still
   // live; only the private tier's deliberate move is settled.
   screen: 'DescribeAnthropic', // injection-screen.baml's declared client
-  // The Anthropic tier's decide client is the Jev REST adapter
-  // (`jev-decide.server.ts`, #418 T4; spec §3). It is NOT a BAML leaf and
-  // `Decide` does not declare it: this entry mirrors where the role's calls land
-  // for budgeting and for the adapter's resolve-the-client-first selection (F1),
-  // and routes nothing. The name is in `JEV_CLIENTS`, so the adapter selects the
-  // Jev transport — which refuses under the private tier — and it carries its
-  // own context window (32k) and its own pricing basis (`'provider'`).
+  // Public systemone transport; no BAML leaf.
   decide: 'JevDecide',
 }
 
@@ -557,15 +543,8 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   // untouched by it; what the tier buys back is that no such payload leaves the
   // box. Blast radius is zero today because no agent enables the LLM screen.
   screen: 'VerdaQwen', // ScreenUntrustedContent — owner decision 2026-08-26, above
-  // #418 slice T3. The decide role's private-tier client: the SAME 4B and the
-  // SAME `SMALL_LLM_BASE_URL` endpoint as `describe`, declared as its own
-  // client (`LocalQwenSmallDecide`, local-client.baml) because a decision is a
-  // first-token logprob readout and a summary is a 2048-token completion. It
-  // rides `assertSmallModelConfigured` for free — same env var — and, like
-  // `describe`, takes no cold start (a llama-server, not the scale-to-zero
-  // box), so the wake hook's `client === VERDA_CLIENT_NAME` filter correctly
-  // ignores it. Priced on the `local` basis beside `LocalQwenSmall`.
-  decide: 'LocalQwenSmallDecide', // Decide — the logprob readout
+  // Private systemone URL; never the public endpoint or its key.
+  decide: 'PrivateSystemOne',
 }
 
 /**
@@ -614,148 +593,15 @@ export const SWITCHED_FUNCTIONS_BY_ROLE: Partial<Record<BamlRole, readonly strin
     'CompactMemories',
   ],
   screen: ['ScreenUntrustedContent'],
-  // `DecideVerbalized` (T5) is deliberately NOT listed: this map is "what a tier
-  // decision re-points", and the verbalized secondary is refused on the private
-  // tier rather than moved to it. It still spreads `clientOverrideFor('decide')`
-  // as defence in depth (clients-verda pins it).
   decide: ['Decide'],
 }
 
-/**
- * The clients CLAIMED logprob-capable: a call routed to one of these is read
- * for `choices[0].logprobs.content[0].top_logprobs` (the `Decide` function +
- * `createDecideAdapter`). The claim is load-bearing and one-directional — a
- * member whose response carries NO logprobs is a misconfiguration (a server
- * that ignores `logprobs`, a proxy that strips them) and THROWS, because a
- * silent fall-through to a text answer would be a verbalized guess dressed as a
- * measured distribution (F1). It is never a statement that every decide call
- * uses `Decide`: a client in neither this set nor {@link JEV_CLIENTS} takes the
- * verbalized secondary and can never make a tier throw.
- */
-export const LOGPROB_CLIENTS: ReadonlySet<string> = new Set(['LocalQwenSmallDecide'])
-
-/** The clients served by the Jev REST adapter (`jev-decide.server.ts`): the
- *  Anthropic tier's `decide` client. One source for the transport table, so
- *  `decision-transport-selection` pins both halves of F1's selection rule
- *  against it. Not a BAML leaf — no `.baml` file declares it. */
-export const JEV_CLIENTS: ReadonlySet<string> = new Set(['JevDecide'])
-
-/** Where the decide role lands on the Anthropic tier when nothing names
- *  anything else: the mirror's own value. Exported so the verbalized secondary
- *  can refuse to serve it — the secondary is for a role an operator RE-NAMED,
- *  never for the default (slice T5). */
-export const DECIDE_DEFAULT_CLIENT: string = CLIENT_BY_ROLE.decide
-
-/** The clients an operator may name as the decide role's explicit secondary
- *  (slice T5, decision G5). One member: `DecideAnthropic`, the chain
- *  `DecideVerbalized` declares. It is in neither `LOGPROB_CLIENTS` nor
- *  `JEV_CLIENTS`, so the adapter's selection by the resolved client sends it to
- *  the verbalized transport — the whole mechanism. */
-export const DECIDE_SECONDARY_CLIENTS = ['DecideAnthropic'] as const
-export type DecideSecondaryClient = (typeof DECIDE_SECONDARY_CLIENTS)[number]
-
-let decideSecondary: DecideSecondaryClient | undefined
-
-/**
- * Name the decide role's verbalized secondary, or clear it with `undefined`
- * (the default, and exactly main's behaviour). Operator config, fed once at the
- * composition root beside the other `configure*` accessors; nothing in this
- * repo calls it.
- *
- * VALIDATED: anything but a member of {@link DECIDE_SECONDARY_CLIENTS} or
- * `undefined` throws here, at configuration, never on a turn — a typo that
- * silently changed where a memory-write gate's decisions land is the failure
- * this guards.
- *
- * It applies on the Anthropic tier ONLY (see {@link decideSecondaryFor}); the
- * private tier ignores it, so naming it can never move a private-tier call.
- */
-export function configureDecideSecondary(client: DecideSecondaryClient | undefined): void {
-  if (client !== undefined && !DECIDE_SECONDARY_CLIENTS.includes(client)) {
-    throw new Error(
-      `configureDecideSecondary: ${JSON.stringify(client)} is not a decide secondary — ` +
-        `the only one is ${DECIDE_SECONDARY_CLIENTS.map((c) => `'${c}'`).join(', ')} (or undefined to clear).`,
-    )
-  }
-  decideSecondary = client
-}
-
-/** G5 condition 1: true only when the run is EXPLICITLY on the Anthropic tier — the
+/** True only when the run is EXPLICITLY on the Anthropic tier — the
  *  frame's RAW tier when one is set (an unrecognised value is not the Anthropic tier,
  *  although `activeInferenceTier()` narrows it to the default), else the default. */
 export function onExplicitAnthropicTier(): boolean {
   const framed = currentRunFrame()?.inference?.tier
   return (framed ?? tierPolicy.defaultTier()) === 'anthropic'
-}
-
-/**
- * THE ONE READ of the secondary setting — `resolveClientForRole` and
- * `clientOverrideFor` both come through here, so the transport the adapter
- * selects and the client the call is routed to cannot disagree (G5 condition
- * 2). A POSITIVE match on the Anthropic tier, named explicitly: any other tier —
- * the private one, an unknown one, a future one — ignores the setting, because
- * "not verda" would extend a public-provider route to every tier nobody has
- * reviewed yet.
- */
-function decideSecondaryFor(role: BamlRole): DecideSecondaryClient | undefined {
-  if (role !== 'decide' || decideSecondary === undefined) return undefined
-  return onExplicitAnthropicTier() ? decideSecondary : undefined
-}
-
-// ----------------------------------------------------------------------------
-// Decision calibration — host-fed, keyed (clientName, spec.key) (D11)
-// ----------------------------------------------------------------------------
-
-/** The host's fitted calibration for the decide role: per serving client, per
- *  `DecisionSpec.key`. Fed by the eval suite's `decision-calibration`
- *  scenario (T8) through `configureDecisionCalibration`; empty until then,
- *  which is the honest state — an uncalibrated readout says `calibrated:
- *  false` and a `requireCalibrated` policy abstains on it. */
-export type DecisionCalibrationTable = Readonly<
-  Record<string, Readonly<Record<string, DecisionCalibrationEntry>>>
->
-
-let decisionCalibration: DecisionCalibrationTable = {}
-
-/** Snapshot the fitted table; Jev clients refuse temperature or bias, including identity values. */
-export function configureDecisionCalibration(table: DecisionCalibrationTable): void {
-  const snapshot = Object.freeze(
-    Object.fromEntries(
-      Object.entries(table).map(([client, entries]) => [
-        client,
-        Object.freeze(
-          Object.fromEntries(
-            Object.entries(entries).map(([key, entry]) => {
-              if (
-                JEV_CLIENTS.has(client) &&
-                (entry.temperature !== undefined || entry.bias !== undefined)
-              ) {
-                throw new Error(
-                  `Decision calibration '${client}/${key}': Jev accepts fitted cuts only; temperature and bias are unsupported.`,
-                )
-              }
-              return [
-                key,
-                Object.freeze({
-                  ...entry,
-                  ...(entry.bias !== undefined && { bias: Object.freeze({ ...entry.bias }) }),
-                }),
-              ]
-            }),
-          ),
-        ),
-      ]),
-    ),
-  )
-  decisionCalibration = snapshot
-}
-
-/** The entry fitted for `(client, key)`, or undefined. */
-export function decisionCalibrationFor(
-  client: string,
-  key: string,
-): DecisionCalibrationEntry | undefined {
-  return decisionCalibration[client]?.[key]
 }
 
 /**
@@ -903,12 +749,7 @@ export function clientOverrideFor(role: BamlRole): BamlClientOverride | undefine
   if (consumerBag) return consumerBag
 
   const client = verdaClientFor(role)
-  if (!client) {
-    // The decide role's operator-named secondary (G5): an explicit bag, so the
-    // client the call takes is the one `resolveClientForRole` reports.
-    const secondary = decideSecondaryFor(role)
-    return secondary ? { client: secondary } : undefined
-  }
+  if (!client) return undefined
   // A bag naming a private-tier client is a call about to take the override —
   // #274 wrote this hook when the `router` still answered on Anthropic, so the
   // first bag of a turn belonged to the controller; the 2026-08-26 widening put
@@ -970,7 +811,6 @@ export function resolveClientForRole(role: BamlRole): string {
     perRun?.client ??
     consumerClients?.(role)?.client ??
     verdaClientFor(role) ??
-    decideSecondaryFor(role) ??
     CLIENT_BY_ROLE[role]
   )
 }

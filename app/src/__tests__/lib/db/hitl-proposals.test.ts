@@ -16,6 +16,9 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 }))
 
 import {
+  canonicalAnswer,
+  claimHitlProposalAnswer,
+  releaseHitlProposalAnswer,
   closeHitlRows,
   deleteHitlProposalsForUser,
   deleteHitlRowsForConversations,
@@ -26,6 +29,7 @@ import {
   sweepExpiredHitl,
 } from '../../../lib/db/hitl.server'
 import { closePool, query, withTransaction } from '../../../lib/db/client.server'
+import { getMemoryEnabled } from '../../../lib/db/user-prefs.server'
 import { looksEncrypted } from '../../../lib/db/crypto.server'
 
 const SUFFIX = Math.random().toString(36).slice(2, 10)
@@ -41,12 +45,22 @@ beforeAll(async () => {
     dbAvailable = false
   }
   stopHitlSweepTimer()
+  // `user_prefs` is created lazily by its own module; ask it to.
+  if (dbAvailable) await getMemoryEnabled('schema-probe')
+  if (dbAvailable) for (const u of ['alice', 'bob', 'carol', 'dave']) await setSwitch(u, true)
 })
 afterAll(async () => {
   if (!dbAvailable) return
   await query('DELETE FROM hitl_requests WHERE session_id LIKE $1', [`test-prop-%-${SUFFIX}`])
   await closePool()
 })
+
+const setSwitch = (user: string, on: boolean) =>
+  query(
+    `INSERT INTO user_prefs (user_id, memory_enabled) VALUES ($1, $2)
+     ON CONFLICT (user_id) DO UPDATE SET memory_enabled = EXCLUDED.memory_enabled`,
+    [user, on],
+  )
 
 const put = (n: string, over: Partial<Parameters<typeof putHitlProposal>[0]> = {}) =>
   putHitlProposal({
@@ -162,5 +176,125 @@ describe('proposal rows', () => {
       [rid('f2'), rid('f3')],
     ])
     expect(rows).toHaveLength(2)
+  })
+
+  // #579 review 1. MUTATION: drop the `WHERE EXISTS (… memory_enabled)` → a hold
+  // that lands after switch-off + erase leaves a readable proposal → red.
+  it('a hold while memory is OFF inserts nothing and throws, so the hook takes the proposal back', async () => {
+    await setSwitch('erin', false)
+    await expect(put('off', { userId: 'erin' })).rejects.toThrow(/memory is off/)
+    expect(await getHitlProposal(rid('off'), 'erin')).toBeNull()
+    const { rows } = await query('SELECT 1 FROM hitl_requests WHERE request_id = $1', [rid('off')])
+    expect(rows).toEqual([])
+    await setSwitch('erin', true)
+    await put('off', { userId: 'erin' })
+    expect(await getHitlProposal(rid('off'), 'erin')).not.toBeNull()
+  })
+
+  it('a user with no preferences row at all is OFF', async () => {
+    await expect(put('norow', { userId: 'nobody-' + SUFFIX })).rejects.toThrow(/memory is off/)
+  })
+})
+
+describe('the bound answer (#579 review 2)', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+  const save = { choice: 'save', flags: { i0: true, i1: false } }
+  const claim = (
+    n: string,
+    answer: { choice: string; flags?: Record<string, boolean> } = save,
+    user = 'alice',
+  ) =>
+    claimHitlProposalAnswer({
+      requestId: rid(n),
+      userId: user,
+      sessionId: sid(n),
+      kind: 'memory.confirm',
+      answer,
+    })
+
+  // MUTATION: drop `AND status = 'pending'` from the claim → a second answer
+  // overwrites the first → red.
+  it('the first answer wins: a second claim is refused and reads back the first', async () => {
+    await put('c1')
+    expect(await claim('c1')).toEqual({ claimed: true })
+    expect(await claim('c1', { choice: 'discard' })).toEqual({ claimed: false, recorded: save })
+    expect(await claim('c1')).toEqual({ claimed: false, recorded: save })
+  })
+
+  // MUTATION: drop the owner / session fence from the claim → red.
+  it('is owner- and session-fenced: another user, or another conversation, binds nothing', async () => {
+    await put('c2')
+    expect(await claim('c2', save, 'bob')).toEqual({ claimed: false, recorded: null })
+    expect(
+      await claimHitlProposalAnswer({
+        requestId: rid('c2'),
+        userId: 'alice',
+        sessionId: 'another-session',
+        kind: 'memory.confirm',
+        answer: save,
+      }),
+    ).toEqual({ claimed: false, recorded: null })
+    expect(await claim('c2')).toEqual({ claimed: true })
+  })
+
+  // MUTATION: store the answer in plaintext → red.
+  it('holds the answer as ciphertext, and the answering row is still readable for the retry', async () => {
+    await put('c3')
+    await claim('c3')
+    const { rows } = await query<{ answer: string; status: string }>(
+      'SELECT answer, status FROM hitl_requests WHERE request_id = $1',
+      [rid('c3')],
+    )
+    expect(rows[0].status).toBe('answering')
+    expect(looksEncrypted(rows[0].answer)).toBe(true)
+    expect(rows[0].answer).not.toContain('save')
+    const row = await getHitlProposal(rid('c3'), 'alice')
+    expect(row).toMatchObject({ status: 'answering', answer: save })
+    expect((await listHitlProposals(sid('c3'), 'alice', 'memory.confirm'))[0].status).toBe(
+      'answering',
+    )
+  })
+
+  // MUTATION: release without the `status = 'answering'` fence → red.
+  it('a release gives a bound answer back, and only to its owner', async () => {
+    await put('c4')
+    await claim('c4')
+    await releaseHitlProposalAnswer(rid('c4'), 'bob')
+    expect((await getHitlProposal(rid('c4'), 'alice'))!.status).toBe('answering')
+    await releaseHitlProposalAnswer(rid('c4'), 'alice')
+    expect(await getHitlProposal(rid('c4'), 'alice')).toMatchObject({
+      status: 'pending',
+      answer: null,
+    })
+    expect(await claim('c4', { choice: 'discard' })).toEqual({ claimed: true })
+  })
+
+  // MUTATION: leave 'answering' out of the sweep → an expired bound answer keeps its payload → red.
+  it('the expiry sweep purges an answering row like a pending one', async () => {
+    await put('c5', { expiresAt: new Date(Date.now() - 5_000) })
+    // payload already gone: only the STATUS clause of the sweep can pick it up
+    await query(
+      `UPDATE hitl_requests SET status = 'answering', payload = NULL WHERE request_id = $1`,
+      [rid('c5')],
+    )
+    await sweepExpiredHitl()
+    const { rows } = await query<{ payload: string | null; status: string }>(
+      'SELECT payload, status FROM hitl_requests WHERE request_id = $1',
+      [rid('c5')],
+    )
+    expect(rows[0]).toEqual({ payload: null, status: 'expired' })
+  })
+
+  // MUTATION: sort nothing → the same answer in another key order reads as different → red.
+  it('"the same answer" is a byte comparison of a canonical form', () => {
+    expect(canonicalAnswer({ choice: 'save', flags: { i1: false, i0: true } })).toBe(
+      canonicalAnswer({ choice: 'save', flags: { i0: true, i1: false } }),
+    )
+    expect(canonicalAnswer({ choice: 'save', flags: { i0: true } })).not.toBe(
+      canonicalAnswer({ choice: 'save', flags: { i0: false } }),
+    )
+    expect(canonicalAnswer({ choice: 'discard' })).toBe(
+      canonicalAnswer({ choice: 'discard', flags: {} }),
+    )
   })
 })

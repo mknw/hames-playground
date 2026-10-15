@@ -59,8 +59,18 @@ vi.mock('../../../lib/db/conversations.server', () => ({
 }))
 
 // ---- the proposal rows ------------------------------------------------------
-type Held = { sessionId: string; kind: string; payload: unknown; expiresAt: Date; userId: string }
+type Held = {
+  sessionId: string
+  kind: string
+  payload: unknown
+  expiresAt: Date
+  userId: string
+  status?: 'pending' | 'answering'
+  answer?: { choice: string; flags?: Record<string, boolean> } | null
+}
 const held = new Map<string, Held>()
+const claims: unknown[] = []
+const releases: string[] = []
 const closeHitlRows = vi.fn(async (ids: readonly string[], user: string, status: string) => {
   for (const id of ids) {
     const h = held.get(id)
@@ -87,8 +97,39 @@ vi.mock('../../../lib/db/hitl.server', async () => {
             kind: h.kind,
             expiresAt: h.expiresAt,
             payload: h.payload,
+            status: h.status ?? 'pending',
+            answer: h.answer ?? null,
           }
         : null
+    },
+    // The real statement's semantics: pending → answering, once, fenced.
+    claimHitlProposalAnswer: async (i: {
+      requestId: string
+      userId: string
+      sessionId: string
+      answer: { choice: string; flags?: Record<string, boolean> }
+    }) => {
+      claims.push(i.answer)
+      const h = held.get(i.requestId)
+      if (
+        h &&
+        h.userId === i.userId &&
+        h.sessionId === i.sessionId &&
+        (h.status ?? 'pending') === 'pending'
+      ) {
+        h.status = 'answering'
+        h.answer = i.answer
+        return { claimed: true }
+      }
+      return { claimed: false, recorded: h?.status === 'answering' ? (h.answer ?? null) : null }
+    },
+    releaseHitlProposalAnswer: async (id: string, user: string) => {
+      releases.push(id)
+      const h = held.get(id)
+      if (h && h.userId === user && h.status === 'answering') {
+        h.status = 'pending'
+        h.answer = null
+      }
     },
     listHitlProposals: async (sid: string, user: string, kind: string) =>
       [...held]
@@ -99,6 +140,8 @@ vi.mock('../../../lib/db/hitl.server', async () => {
           kind: h.kind,
           expiresAt: h.expiresAt,
           payload: h.payload,
+          status: h.status ?? 'pending',
+          answer: h.answer ?? null,
         })),
     closeHitlRows: (...a: [readonly string[], string, string]) => closeHitlRows(...a),
   }
@@ -115,9 +158,13 @@ let mems: Map<string, Mem>
 let sources: Map<string, string>
 let memoryOn = true
 let storeFails = false
+/** Fail every transaction after this many have run (null: never). */
+let storeFailsAfter: number | null = null
+let txRuns = 0
 const storeFor = (): MemoryWriteStore => ({
   async transaction(fn) {
     if (storeFails) throw new Error('db down')
+    if (storeFailsAfter !== null && txRuns++ >= storeFailsAfter) throw new Error('db down')
     if (rowMovesOnDuringWrite && row) row = { ...row, version: 'v-newer' }
     const snap = {
       mems: new Map([...mems].map(([k, v]) => [k, { ...v }])),
@@ -167,8 +214,10 @@ const { createMemoryConfirmSeam, listMemoryProposalsFor, answerMemoryProposalFor
 // ---- a proposed turn, made by the real settle ------------------------------
 const SAID = 'I always prefer metric units, and my team is called Aurora.'
 const confident = (labels: readonly { id: string }[], label: string) => ({
-  probs: Object.fromEntries(labels.map((l) => [l.id, l.id === label ? 0.94 : 0.02])),
-  method: 'logprob',
+  probs: Object.fromEntries(
+    labels.map((l) => [l.id, l.id === label ? 0.94 : 0.06 / Math.max(1, labels.length - 1)]),
+  ),
+  method: 'jev',
   calibrated: true,
 })
 const decide = (
@@ -238,10 +287,14 @@ beforeEach(() => {
   casOk = true
   rowMovesOnDuringWrite = false
   held.clear()
+  claims.length = 0
+  releases.length = 0
   mems = new Map()
   sources = new Map()
   memoryOn = true
   storeFails = false
+  storeFailsAfter = null
+  txRuns = 0
   space = 'space/1024'
 })
 
@@ -320,7 +373,6 @@ describe('pr-display', () => {
 
   it('is another user’s nothing: no conversation, no proposals', async () => {
     await propose()
-    loadConversation.mockResolvedValueOnce(null)
     expect(await listMemoryProposalsFor('mallory', 's1')).toEqual([])
   })
 
@@ -548,7 +600,8 @@ describe('pr-single-use', () => {
 
     casOk = true
     const retry = await answerMemoryProposalFor('alice', 's1', id, 'save')
-    expect(retry).toEqual({ outcome: 'saved', written: 0, stale: 0 })
+    // reported as what the answer put in memory: both items, as duplicates
+    expect(retry).toEqual({ outcome: 'saved', written: 2, stale: 0 })
     expect(memories()).toEqual(afterFirst)
     expect([...mems.values()].every((m) => m.count === 1)).toBe(true)
     // the retry re-recorded the references the first save never landed
@@ -629,5 +682,226 @@ describe('pr-fail-closed', () => {
     await expect(answerMemoryProposalFor('alice', 's1', requestId(), 'save')).rejects.toThrow(
       'pool exhausted',
     )
+  })
+})
+
+// ============================================================================
+// #579 fix round 1
+// ============================================================================
+
+describe('review 2: the answer is bound BEFORE the write', () => {
+  // RV1. MUTATION: drop `claimHitlProposalAnswer` (or let a different answer
+  // continue) → "Don't save" is recorded over two written memories → red.
+  it('RV1 · a refused save, then "Don\'t save": the first answer stands and the second writes and records nothing', async () => {
+    await propose()
+    const id = requestId()
+    casOk = false
+    expect(await answerMemoryProposalFor('alice', 's1', id, 'save')).toEqual({
+      outcome: 'conflict',
+    })
+    casOk = true
+    expect(await answerMemoryProposalFor('alice', 's1', id, 'discard')).toEqual({
+      outcome: 'already-answered',
+    })
+    expect(responses()).toEqual([])
+    // the memories written under the bound save are still there, and the save can be finished
+    expect(memories()).toHaveLength(2)
+    expect(await answerMemoryProposalFor('alice', 's1', id, 'save')).toEqual({
+      outcome: 'saved',
+      written: 2,
+      stale: 0,
+    })
+    expect(responses()).toEqual([expect.objectContaining({ choice: 'save' })])
+  })
+
+  // RV2. MUTATION: compare only the choice, not the flags → the unchecked item stays written → red.
+  it('RV2 · a refused save of both, then a save of one: the second is a different answer', async () => {
+    await propose()
+    const id = requestId()
+    casOk = false
+    await answerMemoryProposalFor('alice', 's1', id, 'save')
+    casOk = true
+    expect(
+      await answerMemoryProposalFor('alice', 's1', id, {
+        choice: 'save',
+        flags: { i0: true, i1: false },
+      }),
+    ).toEqual({ outcome: 'already-answered' })
+    expect(responses()).toEqual([])
+  })
+
+  // RV3. MUTATION: drop the claim → both run, "discard" is recorded, both memories written → red.
+  it('RV3 · two answers at once from one version: exactly one is bound, the other writes nothing', async () => {
+    await propose()
+    const id = requestId()
+    const [a, b] = await Promise.all([
+      answerMemoryProposalFor('alice', 's1', id, 'save'),
+      answerMemoryProposalFor('alice', 's1', id, 'discard'),
+    ])
+    const outcomes = [a.outcome, b.outcome].sort()
+    expect(outcomes).toContain('already-answered')
+    const bound = claims[0] as { choice: string }
+    // whoever won, the record and the memories agree
+    if (bound.choice === 'save') expect(memories()).toHaveLength(2)
+    else expect(memories()).toEqual([])
+    for (const r of responses()) expect(r.choice).toBe(bound.choice)
+  })
+
+  // MUTATION: byte-compare nothing (accept any recorded answer) → red (RV1/RV2); and
+  // key order must not matter.
+  it('a retry of the same answer is the same answer whatever order its flags came in', async () => {
+    await propose()
+    const id = requestId()
+    casOk = false
+    await answerMemoryProposalFor('alice', 's1', id, {
+      choice: 'save',
+      flags: { i0: true, i1: false },
+    })
+    casOk = true
+    const out = await answerMemoryProposalFor('alice', 's1', id, {
+      choice: 'save',
+      flags: { i1: false, i0: true },
+    })
+    expect(out).toEqual({ outcome: 'saved', written: 1, stale: 0 })
+  })
+
+  // MUTATION: report `written` only → a retry says "Saved 0." → red.
+  it('a retry reports what the answer put in memory, duplicates included', async () => {
+    await propose()
+    const id = requestId()
+    casOk = false
+    await answerMemoryProposalFor('alice', 's1', id, 'save')
+    casOk = true
+    expect(await answerMemoryProposalFor('alice', 's1', id, 'save')).toMatchObject({
+      outcome: 'saved',
+      written: 2,
+    })
+  })
+
+  // MUTATION: never release → a refusal before any write makes "Don't save" impossible → red.
+  it.each([
+    ['memory off', () => (memoryOn = false), 'memory-off'],
+    ['another embedding space', () => (space = 'other/768'), 'unavailable'],
+    ['a failing store', () => (storeFails = true), 'failed'],
+  ])(
+    '%s before any write gives the answer back, so the person can still decline',
+    async (_n, setup, outcome) => {
+      await propose()
+      const id = requestId()
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+      try {
+        setup()
+        expect((await answerMemoryProposalFor('alice', 's1', id, 'save')).outcome).toBe(outcome)
+      } finally {
+        warn.mockRestore()
+      }
+      expect(releases).toEqual([id])
+      expect(held.get(id)!.status).toBe('pending')
+      memoryOn = true
+      storeFails = false
+      expect((await answerMemoryProposalFor('alice', 's1', id, 'discard')).outcome).toBe(
+        'discarded',
+      )
+    },
+  )
+
+  // MUTATION: release unconditionally → the bound save is dropped after writes → red (RV1 with a failure).
+  it('a failure AFTER some item was written keeps the answer bound', async () => {
+    await propose()
+    const id = requestId()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      storeFailsAfter = 1 // the first item commits, the second fails
+      const out = await answerMemoryProposalFor('alice', 's1', id, 'save')
+      expect(out.outcome).toBe('failed')
+    } finally {
+      storeFailsAfter = null
+      warn.mockRestore()
+    }
+    expect(releases).toEqual([])
+    expect(held.get(id)!.status).toBe('answering')
+    expect(await answerMemoryProposalFor('alice', 's1', id, 'discard')).toEqual({
+      outcome: 'already-answered',
+    })
+  })
+
+  it('an approval at M3’s hard limit writes nothing, says full, and gives the answer back', async () => {
+    await propose()
+    const id = requestId()
+    for (let i = 0; i < 400; i++)
+      mems.set(`x${i}`, { id: `x${i}`, kind: 'semantic', content: `c${i}`, count: 1 })
+    expect(await answerMemoryProposalFor('alice', 's1', id, 'save')).toEqual({ outcome: 'full' })
+    expect(memories()).toHaveLength(400)
+    expect(held.get(id)!.status).toBe('pending')
+  })
+
+  it('the popup is told which answer is bound', async () => {
+    await propose()
+    const id = requestId()
+    casOk = false
+    await answerMemoryProposalFor('alice', 's1', id, {
+      choice: 'save',
+      flags: { i0: true, i1: false },
+    })
+    casOk = true
+    const [view] = await listMemoryProposalsFor('alice', 's1')
+    expect(view.recorded).toEqual({ choice: 'save', flags: { i0: true, i1: false } })
+  })
+})
+
+describe('review 1: erased or switched-off memory offers nothing', () => {
+  // RV4. MUTATION: drop the switch read from the list → the text is shown after "Forget everything" → red.
+  it('RV4 · with memory off the list is empty, whatever a row still holds', async () => {
+    await propose()
+    memoryOn = false
+    expect(await listMemoryProposalsFor('alice', 's1')).toEqual([])
+  })
+
+  it('RV5 · and an answer after off-and-on-again cannot save a purged proposal', async () => {
+    await propose()
+    const id = requestId()
+    held.delete(id) // the erase purged the row
+    memoryOn = true
+    expect(await answerMemoryProposalFor('alice', 's1', id, 'save')).toEqual({
+      outcome: 'unavailable',
+    })
+    expect(memories()).toEqual([])
+  })
+})
+
+describe('review 5: nothing to find costs no blob load', () => {
+  // MUTATION: load the conversation first → red.
+  it('a list with no row loads neither the switch nor the conversation', async () => {
+    await propose()
+    held.clear()
+    loadConversation.mockClear()
+    expect(await listMemoryProposalsFor('alice', 's1')).toEqual([])
+    expect(loadConversation).not.toHaveBeenCalled()
+  })
+})
+
+describe('review 7: the session cross-checks', () => {
+  // MUTATION: drop `row.sessionId !== sessionId` → red.
+  it('a row held under another conversation is unavailable, even for the same owner', async () => {
+    await propose()
+    const id = requestId()
+    held.set(id, { ...held.get(id)!, sessionId: 's2' })
+    expect(await answerMemoryProposalFor('alice', 's1', id, 'save')).toEqual({
+      outcome: 'unavailable',
+    })
+    expect(memories()).toEqual([])
+    expect(claims).toEqual([])
+  })
+
+  // MUTATION: drop `payload.conversationId !== sessionId` → red.
+  it('a payload built for another conversation is unavailable', async () => {
+    await propose()
+    const id = requestId()
+    const h = held.get(id)!
+    held.set(id, { ...h, payload: { ...(h.payload as object), conversationId: 's2' } })
+    expect(await answerMemoryProposalFor('alice', 's1', id, 'save')).toEqual({
+      outcome: 'unavailable',
+    })
+    expect(memories()).toEqual([])
   })
 })

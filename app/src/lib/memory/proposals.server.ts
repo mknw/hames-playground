@@ -59,10 +59,13 @@ import {
 } from '@hames-ai/harness-patterns/memory-store.server'
 import { loadConversation, updateConversationContextIfUnchanged } from '../db/conversations.server'
 import {
+  canonicalAnswer,
+  claimHitlProposalAnswer,
   closeHitlRows,
   getHitlProposal,
   listHitlProposals,
   putHitlProposal,
+  releaseHitlProposalAnswer,
   type HitlAnswerValue,
 } from '../db/hitl.server'
 import { createMemoryDbStore } from '../db/memories.server'
@@ -107,6 +110,10 @@ export interface MemoryProposalItemView {
 
 export interface MemoryProposalView {
   readonly requestId: string
+  /** Set when a person's answer is already BOUND to this proposal and only its
+   *  effects are unfinished (a refused save). The popup then offers that same
+   *  answer again and nothing else (#579 review 2). */
+  readonly recorded?: { readonly choice: string; readonly flags: Readonly<Record<string, boolean>> }
   /** ms since epoch, or null for none. */
   readonly expiresAt: number | null
   readonly items: readonly MemoryProposalItemView[]
@@ -124,6 +131,15 @@ export async function listMemoryProposalsFor(
   userId: string,
   sessionId: string,
 ): Promise<MemoryProposalView[]> {
+  // The cheap, indexed read first: the popup polls on every settle and every
+  // window focus in every conversation, and nearly all of those find nothing —
+  // that must not cost a decrypt of the whole blob (#579 review 5).
+  const rows = await listHitlProposals(sessionId, userId, MEMORY_CONFIRM_KIND)
+  if (rows.length === 0) return []
+  // A proposal is memory text the person has not agreed to keep. With memory
+  // off — "Forget everything" and the switch both leave it off — it is not
+  // offered, whatever a row still holds (#579 review 1).
+  if (!(await getMemoryEnabled(userId))) return []
   const conv = await loadConversation(sessionId, userId)
   if (!conv) return []
   let ctx = deserializeContext(conv.serializedContext)
@@ -150,7 +166,6 @@ export async function listMemoryProposalsFor(
   )
   if (open.size === 0) return []
 
-  const rows = await listHitlProposals(sessionId, userId, MEMORY_CONFIRM_KIND)
   const views: MemoryProposalView[] = []
   for (const row of rows) {
     if (!open.has(row.requestId)) continue
@@ -158,6 +173,9 @@ export async function listMemoryProposalsFor(
     if (!payload || payload.conversationId !== sessionId) continue
     views.push({
       requestId: row.requestId,
+      ...(row.status === 'answering' && row.answer
+        ? { recorded: { choice: row.answer.choice, flags: row.answer.flags ?? {} } }
+        : {}),
       expiresAt: row.expiresAt ? row.expiresAt.getTime() : null,
       items: payload.items.map((i): MemoryProposalItemView => {
         const effect =
@@ -190,6 +208,9 @@ export type MemoryAnswerOutcome =
   | {
       readonly outcome:
         | 'unknown-request'
+        /** Someone (another tab, another request) answered first and chose
+         *  differently: that answer stands, this one writes nothing. */
+        | 'already-answered'
         | 'expired'
         | 'invalid-choice'
         | 'unavailable-option'
@@ -201,6 +222,8 @@ export type MemoryAnswerOutcome =
         | 'unavailable'
         /** The user's memory switch is off: nothing was written or answered. */
         | 'memory-off'
+        /** The owner is at M3's hard limit: nothing was written or answered. */
+        | 'full'
         /** A write failed: nothing was answered; the same answer may be retried. */
         | 'failed'
         /** The conversation moved on (a turn is running, or it was saved):
@@ -260,6 +283,30 @@ export async function answerMemoryProposalFor(
   }
   const [decided] = accepted
 
+  // FIRST ANSWER WINS, BEFORE ANY WRITE (#579 review 2). Without this a refused
+  // save leaves the writes of answer A standing while answer B is recorded, and
+  // two concurrent answers each write. The row binds one answer; a retry of that
+  // same answer may finish it, nothing else may.
+  const bound = { choice: decided.choice, flags: { ...decided.flags } }
+  const claim = await claimHitlProposalAnswer({
+    requestId,
+    userId,
+    sessionId,
+    kind: MEMORY_CONFIRM_KIND,
+    answer: bound,
+  })
+  if (!claim.claimed) {
+    if (!claim.recorded || canonicalAnswer(claim.recorded) !== canonicalAnswer(bound)) {
+      return { outcome: 'already-answered' }
+    }
+  }
+  // Nothing was written under this answer: give it back, so a refusal before
+  // any write cannot turn "Don't save" into `already-answered`.
+  const release = () =>
+    releaseHitlProposalAnswer(requestId, userId).catch((err: unknown) =>
+      console.warn('[memory] bound answer not released:', err),
+    )
+
   let written = 0
   let stale = 0
   if (decided.choice === MEMORY_CONFIRM_SAVE) {
@@ -277,11 +324,33 @@ export async function answerMemoryProposalFor(
           .map(([ref]) => ref),
       },
     )
-    if (report.skipped === 'disabled') return { outcome: 'memory-off' }
-    if (report.skipped) return { outcome: 'unavailable' }
-    if (report.items.some((i) => i.outcome === 'failed')) return { outcome: 'failed' }
-    written = report.written
-    stale = report.items.filter((i) => i.outcome === 'stale').length
+    // Whether anything is already written under this answer (an item written
+    // now, or by an earlier attempt of the same answer).
+    const effects = report.items.some((i) => i.outcome === 'written' || i.outcome === 'duplicate')
+    if (report.skipped === 'disabled') {
+      if (!effects) await release()
+      return { outcome: 'memory-off' }
+    }
+    if (report.skipped) {
+      await release()
+      return { outcome: 'unavailable' }
+    }
+    if (report.items.some((i) => i.outcome === 'failed')) {
+      if (!effects) await release()
+      return { outcome: 'failed' }
+    }
+    // M3's hard limit refused every item and nothing is written: say so, and
+    // give the answer back so the person can decline or make room and retry.
+    if (!effects && report.items.some((i) => i.outcome === 'full')) {
+      await release()
+      return { outcome: 'full' }
+    }
+    // `written` counts what this answer put in memory, a retry's duplicates
+    // included, so a retry does not report "Saved 0."
+    written = report.items.filter(
+      (i) => i.outcome === 'written' || i.outcome === 'duplicate',
+    ).length
+    stale = report.items.filter((i) => i.outcome === 'stale' || i.outcome === 'full').length
   }
 
   // ONE save: the person's answer and the references to what it wrote.

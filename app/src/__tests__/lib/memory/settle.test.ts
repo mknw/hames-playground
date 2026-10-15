@@ -20,9 +20,12 @@ const choices: Record<string, string> = {
 }
 const decide = (async ({ spec }: { spec: { key: string; labels: readonly { id: string }[] } }) => ({
   probs: Object.fromEntries(
-    spec.labels.map((l) => [l.id, l.id === choices[spec.key.split('.').at(-1)!] ? 0.94 : 0.001]),
+    spec.labels.map((l) => [
+      l.id,
+      l.id === choices[spec.key.split('.').at(-1)!] ? 0.94 : (1 - 0.94) / (spec.labels.length - 1),
+    ]),
   ),
-  method: 'logprob',
+  method: 'jev',
   calibrated: true,
 })) as DecideFn
 function fixture() {

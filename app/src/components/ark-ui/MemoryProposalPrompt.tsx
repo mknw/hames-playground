@@ -47,7 +47,16 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
   const [open, setOpen] = createSignal(false)
   const [busy, setBusy] = createSignal(false)
   const [notice, setNotice] = createSignal<string | null>(null)
+  // Keyed by `${requestId}:${ref}`: the refs (`i0`, `i1`) repeat across
+  // proposals, and one proposal's unchecked items must not open the next one
+  // unchecked (#579 review 6).
   const [unchecked, setUnchecked] = createSignal<ReadonlySet<string>>(new Set())
+  const itemKey = (requestId: string, ref: string) => `${requestId}:${ref}`
+  /** After a refused or failed save the answer is bound server-side: only that
+   *  same answer may be retried (#579 review 2). */
+  const [retrying, setRetrying] = createSignal<{ requestId: string; choice: string } | null>(null)
+  const bound = (p: MemoryProposalView): string | null =>
+    p.recorded?.choice ?? (retrying()?.requestId === p.requestId ? retrying()!.choice : null)
 
   let alive = true
   let timers: ReturnType<typeof setTimeout>[] = []
@@ -80,6 +89,8 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
         setProposals([])
         setOpen(false)
         setNotice(null)
+        setUnchecked(new Set<string>())
+        setRetrying(null)
         void refresh(sessionId)
         if (tick === 0) return
         PROPOSAL_POLL_MS.forEach((ms) =>
@@ -101,12 +112,14 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
 
   const current = () => proposals()[0]
   const itemCount = () => proposals().reduce((n, p) => n + p.items.length, 0)
-  const selected = (p: MemoryProposalView) => p.items.filter((i) => !unchecked().has(i.ref))
+  const isChecked = (p: MemoryProposalView, ref: string): boolean =>
+    p.recorded ? p.recorded.flags[ref] !== false : !unchecked().has(itemKey(p.requestId, ref))
+  const selected = (p: MemoryProposalView) => p.items.filter((i) => isChecked(p, i.ref))
 
-  const toggle = (ref: string, checked: boolean) => {
+  const toggle = (requestId: string, ref: string, checked: boolean) => {
     const next = new Set(unchecked())
-    if (checked) next.delete(ref)
-    else next.add(ref)
+    if (checked) next.delete(itemKey(requestId, ref))
+    else next.add(itemKey(requestId, ref))
     setUnchecked(next)
   }
 
@@ -121,7 +134,7 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
           ? await answerMemoryProposal(props.sessionId, p.requestId, 'discard')
           : await answerMemoryProposal(props.sessionId, p.requestId, {
               choice: 'save',
-              flags: Object.fromEntries(p.items.map((i) => [i.ref, !unchecked().has(i.ref)])),
+              flags: Object.fromEntries(p.items.map((i) => [i.ref, isChecked(p, i.ref)])),
             })
       switch (result.outcome) {
         case 'saved':
@@ -139,13 +152,21 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
           return
         case 'conflict':
         case 'failed':
+          // The answer may already be bound: lock to it, keep the selection.
+          setRetrying({ requestId: p.requestId, choice })
           setNotice('That could not be saved right now. Please try again.')
+          return
+        case 'already-answered':
+          setNotice('That suggestion was already answered, so nothing changed.')
+          break
+        case 'full':
+          setNotice('Your memory is full, so nothing was saved. Forget something and try again.')
           return
         default:
           setNotice('This suggestion is no longer available.')
       }
       setOpen(false)
-      setUnchecked(new Set<string>())
+      setRetrying(null)
       await refresh(props.sessionId)
     } catch {
       setNotice('That could not be saved right now. Please try again.')
@@ -186,8 +207,8 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
               setOpen(true)
             }}
             p="x-2 y-0.5"
-            text="xs ui-accent"
-            bg="ui-accent/10 hover:ui-accent/20"
+            text="xs ui-text-primary"
+            bg="transparent hover:ui-bg-hover"
             border="1 ui-accent/50"
             rounded="md"
             cursor="pointer"
@@ -264,8 +285,11 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
                     {(item) => (
                       <li border="1 ui-border-secondary" rounded="md" p="3" bg="ui-bg-tertiary">
                         <Checkbox.Root
-                          checked={!unchecked().has(item.ref)}
-                          onCheckedChange={(d) => toggle(item.ref, d.checked === true)}
+                          checked={isChecked(p(), item.ref)}
+                          disabled={bound(p()) !== null}
+                          onCheckedChange={(d) =>
+                            toggle(p().requestId, item.ref, d.checked === true)
+                          }
                           data-testid={`memory-proposal-item-${item.ref}`}
                           flex="~"
                           gap="2"
@@ -295,8 +319,8 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
                           <div flex="~ col" gap="1" style={{ 'min-width': 0 }}>
                             <Checkbox.Label text="sm ui-text-primary">
                               <span
-                                text="xs ui-accent"
-                                bg="ui-accent/10"
+                                text="xs ui-text-primary"
+                                border="1 ui-accent/50"
                                 p="x-1.5 y-0.5"
                                 rounded="sm"
                                 font="mono"
@@ -306,7 +330,7 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
                               </span>
                               {item.content}
                             </Checkbox.Label>
-                            <span text="xs ui-text-tertiary">
+                            <span text="xs ui-text-secondary">
                               from your message: “{item.evidence}”
                             </span>
                             <span text="xs ui-text-secondary">
@@ -334,7 +358,7 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
                 type="button"
                 data-testid="memory-proposal-discard"
                 onClick={() => void answer('discard')}
-                disabled={busy()}
+                disabled={busy() || (!!current() && ['save'].includes(bound(current()!) ?? ''))}
                 p="x-3 y-1.5"
                 text="xs ui-text-secondary"
                 bg="transparent hover:ui-bg-hover"
@@ -349,7 +373,12 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
                 data-testid="memory-proposal-save"
                 cyber-button=""
                 onClick={() => void answer('save')}
-                disabled={busy() || !current() || selected(current()!).length === 0}
+                disabled={
+                  busy() ||
+                  !current() ||
+                  bound(current()!) === 'discard' ||
+                  selected(current()!).length === 0
+                }
                 p="x-3 y-1.5"
                 text="xs"
               >

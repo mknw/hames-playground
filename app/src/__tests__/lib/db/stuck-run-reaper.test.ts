@@ -264,12 +264,9 @@ describe('the reap statement', () => {
     expect(DECISION_LOOP_MAX_ITERATIONS).toBe(Number(n5![1]))
   })
 
-  it('tripwire: goes red the day core exports decisionLoop, so the mirror gets swapped', async () => {
+  it("is core's own constant, not a copy (S1 exports it)", async () => {
     const core = await import('@hames-ai/harness-patterns')
-    expect(
-      Object.keys(core),
-      'S1 landed: import its maxIterations default instead of DECISION_LOOP_MAX_ITERATIONS',
-    ).not.toContain('decisionLoop')
+    expect(DECISION_LOOP_MAX_ITERATIONS).toBe(core.DECISION_LOOP_MAX_ITERATIONS)
   })
 
   it('reaps a dead lease far sooner than the backstop, and the lease outlives a missed renewal', () => {

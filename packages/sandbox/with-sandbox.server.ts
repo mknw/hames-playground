@@ -32,6 +32,7 @@ import {
   type SandboxSkill,
   type SandboxSkillsResolver,
 } from './skills'
+import { V0_IN_VM_SERVERS } from './types'
 import type { ComputeBackend, McpTransport, RootfsId, RuntimeConfig } from './types'
 import type {
   ConfiguredPattern,
@@ -43,6 +44,11 @@ import type {
 } from '@hames-ai/harness-patterns/types'
 
 assertServerOnImport()
+
+/** Every in-VM tool a sandbox exposes, by its exposed (`sandbox_`-prefixed) name. */
+const IN_VM_TOOL_NAMES: readonly string[] = V0_IN_VM_SERVERS.flatMap((server) =>
+  Object.values(server.tools),
+)
 
 /**
  * Run `fn` with this VM's in-VM MCP transport scoped to it.
@@ -355,18 +361,28 @@ export function withSandbox(config?: WithSandboxConfig) {
       )
     }
 
-    // The capability this wrapper DECLARES, in core's own vocabulary. Core does
-    // not know what a sandbox is (see the `runWithSandbox` note above); what it
-    // knows is that some pattern's subtree runs against a workspace that
-    // outlives its container, and `PatternCapabilities.workspaceSync` is the
+    // The capabilities this wrapper DECLARES, in core's own vocabulary. Core
+    // does not know what a sandbox is (see the `runWithSandbox` note above);
+    // what it knows is that some pattern's subtree runs against a workspace
+    // that outlives its container, and `PatternCapabilities.workspaceSync` is the
     // typed field it owns for saying so. The annotation is what makes this
     // package fail to compile if core renames the field — the
     // `sandboxSyncWorkspace` config key it replaced was a string both sides
     // declared independently, so a rename typechecked in both packages and
     // silently turned Shell hydration off.
-    const capabilities: PatternCapabilities | undefined = willSyncWorkspace
-      ? { workspaceSync: true }
-      : undefined
+    //
+    // `tools` (#507) is the in-VM surface by exact name, so a planner's agent
+    // map can say what a sandboxed route can DO. It is the curated registry's
+    // static list, not a probe of a live VM: the names are the contract, and the
+    // transport refuses anything else at call time. It is MERGED over the
+    // wrapped pattern's own declaration rather than replacing it, because this
+    // wrapper's own `capabilities` shadows the one `...pattern` would otherwise
+    // inherit.
+    const capabilities: PatternCapabilities = {
+      ...pattern.capabilities,
+      tools: [...new Set([...(pattern.capabilities?.tools ?? []), ...IN_VM_TOOL_NAMES])],
+      ...(willSyncWorkspace ? { workspaceSync: true } : {}),
+    }
 
     const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
       // The per-call defaults were read from the app's request-scoped settings
@@ -429,7 +445,7 @@ export function withSandbox(config?: WithSandboxConfig) {
       // which broke that transparency for exactly the agents that need the
       // capability, and did it through a cast that hid the key from both
       // packages' compilers.
-      ...(capabilities ? { capabilities } : {}),
+      capabilities,
     }
   }
 }

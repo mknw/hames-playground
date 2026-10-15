@@ -981,6 +981,12 @@ export interface PatternCapabilities {
    *  host gates the memory wake and the post-reply store on — so an agent that
    *  never opted in never wakes the memory boxes. */
   memory?: true
+  /** Tool names this pattern can call, by exact name: a loop's allowlist, or the
+   *  in-VM tools a sandbox wrapper provides. Declared by `simpleLoop`,
+   *  `actorCritic` and `withSandbox`; read by `collectToolNames` to build the
+   *  planner's agent map (#507). It describes what a model is OFFERED — the
+   *  allowlist is still enforced by the loop itself, at call time. */
+  tools?: readonly string[]
 }
 
 // ============================================================================
@@ -2355,6 +2361,11 @@ export const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory> = {
   // The recall outcome IS the deliverable (#419): which ids were attached, or
   // why nothing was. Ids only.
   memoryRecall: 'memory_recalled',
+  // The loop's own record IS the deliverable (#507): each decision, and one
+  // controller_action / tool_result pair per route it ran, which is the shape
+  // compactExecution's thread mode reads. The children's events are merged by
+  // the loop itself and do not pass through this filter.
+  decisionLoop: ['decision_made', 'controller_action', 'tool_result'],
 }
 
 /** Default commitStrategy by pattern type */
@@ -2373,6 +2384,8 @@ export const DEFAULT_COMMIT_STRATEGY: Record<string, CommitStrategy> = {
   typedDecision: 'always',
   decisionRouter: 'always',
   memoryRecall: 'always',
+  // Every decision and route record must stay explainable on a failed turn.
+  decisionLoop: 'always',
 }
 
 /**
@@ -2441,6 +2454,13 @@ export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverab
   // it happened (parity with `router`; #418 D10). `errorSeverity: 'recoverable'`
   // permits the consumer to handle a missing route.
   decisionRouter: 'irrecoverable',
+  // decisionLoop classifies each failure at the EVENT, because the same pattern
+  // has both kinds: a decision that fails on the FIRST iteration means nothing
+  // ran and synthesizing would answer without the agent's tools, so that error
+  // is stamped irrecoverable and ends the turn; a failed route, a later failed
+  // decision and the iteration bound leave something to answer from, so they
+  // are recoverable (#507, N3/N5). The pattern-level value is the latter.
+  decisionLoop: 'recoverable',
   // ---------------------------------------------------------------------------
   // The FIVE best-effort types were unlisted until #273 D-d, and therefore
   // inherited `resolveConfig`'s `'irrecoverable'` fallback; the three that

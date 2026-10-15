@@ -200,6 +200,7 @@ export function createInjectionGuard(
           report = {
             ...report,
             screenReason: `screen unavailable: ${err instanceof Error ? err.message : String(err)}`,
+            screenUnavailable: true,
           }
         }
       }

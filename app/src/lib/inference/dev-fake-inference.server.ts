@@ -65,6 +65,7 @@
  */
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import { ClientRegistry } from '@boundaryml/baml'
 
 assertServerOnImport()
 
@@ -103,22 +104,20 @@ let installed = false
  * Idempotent, and deliberately not reversible: a redirect that could be
  * un-installed could also be half-installed, and "half" here means live calls.
  *
- * ASYNC, and `ClientRegistry` is imported inside rather than at the top of this
- * module, for a reason that is not style: a static `@boundaryml/baml` import
- * here reaches the server ENTRY chunk through `src/middleware.ts`, and nitro
- * then links the native runtime into `.output/server/index.mjs` — where a
- * production container dies at boot with `Cannot find module
- * '…/@boundaryml/baml/native'` before serving a request. Nothing else in
- * `src/` imports BAML at module scope either (`const { b } = await import(…)`
- * is the house idiom); this module has to follow it, and `pnpm build` will not
- * tell you when it stops. CI's `docker image · build · boot` job is what does.
+ * `ClientRegistry` is a plain top-of-file import now (#480 decision b):
+ * `src/middleware.ts` already loads BAML at module scope, deliberately, so
+ * this module following it costs nothing it did not already cost. It used to
+ * import `ClientRegistry` lazily, inside this function, specifically to keep
+ * `@boundaryml/baml` out of the server ENTRY chunk — see `middleware.ts`'s own
+ * header for why that is no longer the rule. Still `async` because the
+ * contract is a Promise (this module's own tests, and the one caller in
+ * `middleware.ts`, both await it).
  */
 export async function installDevFakeInference(b: unknown): Promise<boolean> {
   const baseUrl = devFakeInferenceUrl()
   if (!baseUrl) return false
   if (installed) return true
 
-  const { ClientRegistry } = await import('@boundaryml/baml')
   const build = (): InstanceType<typeof ClientRegistry> => {
     const registry = new ClientRegistry()
     registry.addLlmClient(DEV_FAKE_CLIENT, 'openai-generic', {

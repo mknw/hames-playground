@@ -60,8 +60,8 @@
  * more). `evidenceEventId` records which event the stored `evidence` quotes,
  * and a failed merge call keeps both memories. SPEC.md "Erasure semantics" is the statement M3 inherits.
  *
- * Pre-M3 nothing compacts: the report says when the owner's count reaches
- * `softLimit` (`compactionDue`) and M3 acts on it.
+ * This step reports `compactionDue` at `softLimit`; the host may opt into M3
+ * with `compactMemory` before its save. Inserts also enforce M3's hard cap.
  */
 
 import { assertServerOnImport } from './assert.server'
@@ -247,6 +247,8 @@ export interface MemoryStoreSettings {
   readonly wakeBudgetMs?: number
   /** T_soft: the owner's count from which compaction is due. Default 300. */
   readonly softLimit?: number
+  /** M3 ceiling (default 400). Optional host eviction reclaims episodic rows. */
+  readonly hardLimit?: number
   /** Kinds a personal memory may be written from WITHOUT a confirmation, when
    *  the gate says `skip`. Default episodic, semantic, preference — `trait` always
    *  asks. */
@@ -298,6 +300,7 @@ export type MemoryStoreSkip =
   /** Every candidate failed deterministic acceptance, or none came back. */
   | 'no-candidates'
   | 'error'
+  | 'full'
 
 /** Why a candidate was dropped: an acceptance rule, or `not-routine` (the route
  *  skipped confirmation for the gate's kind and this candidate's kind must ask). */
@@ -442,7 +445,7 @@ function logStop(reason: string, extra = ''): void {
 /** The extractor's call record without what it carried: `variables`,
  *  `promptTemplate`, `rawInput`, `rawOutput` and `parsedOutput` are the
  *  candidates and the window — the memory's text. Cost attribution survives. */
-function redactCall(call: LLMCallRecord | undefined): LLMCallRecord | undefined {
+export function redactCall(call: LLMCallRecord | undefined): LLMCallRecord | undefined {
   if (!call) return undefined
   return {
     functionName: call.functionName,
@@ -468,6 +471,7 @@ async function claim(
 
 /** Roll back a candidate whose owner switched memory off while it waited. */
 class MemoryDisabled extends Error {}
+class MemoryFull extends Error {}
 
 /** Thrown inside a candidate's transaction to roll it back: this candidate's
  *  provenance row exists, so it was written before. */
@@ -709,6 +713,7 @@ async function run(
   let written = 0
   let duplicates = 0
   let failed = 0
+  let full = false
   let pendingCall: LLMCallRecord | undefined = llmCall
 
   for (let i = 0; i < accepted.length; i++) {
@@ -726,6 +731,15 @@ async function run(
         let memoryId: string
         let action: MemoryWriteAction
         if (verdict === 'insert' || !near) {
+          const hard = settings?.hardLimit ?? 400
+          if (!Number.isSafeInteger(hard) || hard < 1) throw new Error('invalid memory hard limit')
+          const count = await tx.count()
+          if (!Number.isSafeInteger(count) || count < 0) throw new MemoryFull()
+          if (count >= hard && tx.evictOldestEpisodes) {
+            await tx.evictOldestEpisodes(count - hard + 1)
+          }
+          const after = await tx.count()
+          if (!Number.isSafeInteger(after) || after < 0 || after >= hard) throw new MemoryFull()
           memoryId = generateId('mem')
           action = 'inserted'
           await tx.insert({
@@ -775,7 +789,11 @@ async function run(
       pendingCall = undefined
       written++
     } catch (err) {
-      if (err instanceof MemoryDisabled) {
+      if (err instanceof MemoryFull) {
+        full = true
+        logStop('full')
+        continue
+      } else if (err instanceof MemoryDisabled) {
         return stop('disabled', undefined, { written, duplicates, failed, route, rejected })
       } else if (err instanceof SourceConflict) {
         duplicates++
@@ -806,8 +824,8 @@ async function run(
     }
   }
 
-  let compactionDue = false
-  if (written > 0) {
+  let compactionDue = full
+  if (written > 0 && !full) {
     try {
       const n = await store.transaction((tx) => tx.count())
       compactionDue = n >= (settings?.softLimit ?? DEFAULT_SOFT_LIMIT)
@@ -815,7 +833,15 @@ async function run(
       // the count is advice for M3; a failure here changes nothing written
     }
   }
-  return { written, duplicates, failed, route, rejected, compactionDue }
+  return {
+    written,
+    duplicates,
+    failed,
+    route,
+    rejected,
+    compactionDue,
+    ...(full ? { skipped: 'full' as const } : {}),
+  }
 }
 
 /** Reinforce a near-duplicate; ask the merge question of a related preference or

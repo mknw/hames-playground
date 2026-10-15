@@ -120,6 +120,12 @@ export type {
   MemoryExtractInput,
   MemoryExtractFn,
   MemoryEmbedder,
+  MemoryRetention,
+  MemoryCompactionRow,
+  MemoryCompactInput,
+  MemoryCompactFn,
+  MemoryCompactionStore,
+  MemoryCompactionTx,
   MemoryNeighbor,
   MemoryInsertRow,
   MemorySourceRow,
@@ -369,6 +375,24 @@ export {
   type Acceptance,
   type AcceptanceRule,
 } from './memory-acceptance.server'
+export {
+  DEFAULT_MEMORY_RETENTION,
+  memoryRetention,
+  expiredMemories,
+  clusterMemories,
+  acceptCompaction,
+} from './memory-compaction-pure.server'
+export {
+  compactMemory,
+  MEMORY_COMPACT_SPEC,
+  sweepMemories,
+  startMemorySweep,
+  type MemoryCompactionConfig,
+  type MemoryCompactionSettings,
+  type MemoryCompactionReport,
+  type MemorySweepJob,
+} from './memory-compaction.server'
+export { memoryCompactionConfig } from './patterns/withMemory.server'
 
 // Decisions (#418): the user-facing typed systemone decision seam.
 export {

@@ -31,7 +31,7 @@ import {
 } from '../settings'
 import { eurPerUsdRate, verdaEurPerHour } from '../cost-rates.server'
 import { VERDA_CLIENT_NAME } from './verda-activity.server'
-import { noteVerdaCallStarting } from './cold-start.server'
+import { noteBoxCallStarting } from './cold-start.server'
 import {
   configureCostPricing,
   configureCostRates,
@@ -180,7 +180,7 @@ export function assertPrivateTierConfigured(): void {
 // `tier.server.ts` → here. The wake hook reproduces the filter the old
 // `clientOverrideFor` carried inline — the seam announces WHICH private-tier
 // client is about to be called; which of them scales to zero and owes the user
-// a countdown is host knowledge (VERDA_CLIENT_NAME), so the filter lives here.
+// a countdown is host knowledge, so the two-box filter lives here.
 // ============================================================================
 
 configureModelTables({
@@ -192,25 +192,8 @@ configureInferencePolicy({
   defaultTier: () => (verdaInferenceEnabled() ? 'verda' : 'anthropic'),
   assertTierReachable: assertPrivateTierConfigured,
   onPrivateCallStart: (client: string) => {
-    // The client test arrived with the describe flip: the private tier is two
-    // models, and `LocalQwenSmall` does not scale to zero — it is a
-    // llama-server somebody is running. A bag naming it is a call that will
-    // answer in milliseconds, and announcing "starting GPU, ~146 seconds" in
-    // front of it would be a countdown for a wait nobody is paying, fired from
-    // the highest-frequency role on the tier. So the hook keys on the CLIENT,
-    // not on "the tier moved this role". No-op unless a turn armed a watch
-    // (`runWithColdStartWatch`).
-    //
-    // The "does not scale to zero" half of that is now an ASSUMPTION, not a
-    // fact: #419 D20 (owner decision 6026903497 (b), rev 5) lets the 4B AND the
-    // embedder scale to zero behind the joint memory wake
-    // (`lib/inference/memory-wake.server.ts`), which starts before the chain's
-    // first pattern of an opted-in turn. This filter still keys on the client —
-    // a `LocalQwenSmall` bag gets no warming notice — so if a describe call
-    // reaches the 4B while that wake is still running, the silence is the
-    // designed shape and the wait shows up in the wake's own budget, not here.
-    // Revisit this comment when the small boxes actually deploy scale-to-zero.
-    if (client === VERDA_CLIENT_NAME) noteVerdaCallStarting()
+    if (client === VERDA_CLIENT_NAME) noteBoxCallStarting('verda')
+    if (client === 'LocalQwenSmall') noteBoxCallStarting('small')
   },
 })
 

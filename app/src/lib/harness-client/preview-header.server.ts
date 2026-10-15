@@ -39,7 +39,7 @@ import {
   type VerdaControlPlaneProbe,
 } from '../inference/verda-control-plane.server'
 import { coldStartEstimate } from '../inference/cold-start.server'
-import { ensureVerdaAwake } from '../inference/wake.server'
+import { ensurePrivateTierAwake } from '../inference/wake.server'
 import { ACTIVE_WINDOW_MINUTES, countActiveUsers } from '../db/conversations.server'
 import { getUsageToday, type UsageToday } from '../metrics/preview-counters.server'
 import { tierLatency, type TierLatency } from '../metrics/call-latency.server'
@@ -226,7 +226,7 @@ export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
  *
  * The header's cold indicator is the only place a person can act on the box's
  * state rather than wait for it, and this is the whole of that action. It
- * reuses `ensureVerdaAwake` rather than issuing a wake of its own, which is not
+ * reuses `ensurePrivateTierAwake` rather than issuing a wake of its own, which is not
  * a tidiness point — three properties a second wake path would each have to
  * re-earn come from being the SAME call the turn runner makes:
  *
@@ -234,7 +234,7 @@ export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
  *    a `globalThis` symbol inside that module, so a user who clicks and then
  *    sends a message, or two users on the same box, share one request instead of
  *    queueing two cold starts on a single replica.
- *  - **A click on a warm box is free.** `ensureVerdaAwake` returns on
+ *  - **A click on a warm box is free.** `ensurePrivateTierAwake` returns on
  *    `verdaProvenWarm` without touching the network, so the button cannot bill
  *    GPU seconds for a box that is already up.
  *  - **The measurement stays honest.** Only the caller that STARTED the ping
@@ -251,7 +251,7 @@ export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
 export async function igniteVerdaBox(): Promise<PreviewHeaderState> {
   await requireUser()
   // Same refusal as the tier switch, for the same reason: without an endpoint
-  // there is nothing to start, and `ensureVerdaAwake` would otherwise fail on a
+  // there is nothing to start, and `ensurePrivateTierAwake` would otherwise fail on a
   // `fetch` to an empty URL — an error about a malformed request rather than
   // about an unconfigured deployment.
   if (!verdaConfigured()) {
@@ -261,6 +261,6 @@ export async function igniteVerdaBox(): Promise<PreviewHeaderState> {
         'app/.env.example).',
     )
   }
-  await ensureVerdaAwake()
+  await ensurePrivateTierAwake()
   return getPreviewHeaderState()
 }

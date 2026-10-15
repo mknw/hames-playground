@@ -29,10 +29,10 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 
 // The wake notice is mocked so the composition root's registered
 // `onPrivateCallStart` filter is OBSERVABLE: a private-tier call on the
-// scale-to-zero client announces itself; a call on the 4B summarizer does not.
-const noteVerdaCallStarting = vi.fn()
+// client announces the matching box, including the 4B summarizer.
+const noteBoxCallStarting = vi.fn()
 vi.mock('../../../lib/inference/cold-start.server', () => ({
-  noteVerdaCallStarting: (...args: unknown[]) => noteVerdaCallStarting(...args),
+  noteBoxCallStarting: (...args: unknown[]) => noteBoxCallStarting(...args),
 }))
 
 const CLIENTS = '@hames-ai/harness-baml/clients.server'
@@ -61,7 +61,7 @@ beforeEach(() => {
   saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]))
   for (const k of ENV_KEYS) delete process.env[k]
   vi.resetModules()
-  noteVerdaCallStarting.mockClear()
+  noteBoxCallStarting.mockClear()
 })
 
 afterEach(() => {
@@ -109,7 +109,7 @@ describe('the configuration the host registers is the configuration the resoluti
       })
       // The hook fired for the scale-to-zero client — the composition root's
       // registered filter announced the call to the cold-start module.
-      expect(noteVerdaCallStarting).toHaveBeenCalled()
+      expect(noteBoxCallStarting).toHaveBeenCalled()
     })
   })
 
@@ -133,13 +133,13 @@ describe('the configuration the host registers is the configuration the resoluti
     expect(clients.activeInferenceTier()).toBe('anthropic')
   })
 
-  it('the 4B summarizer takes the override but never the GPU countdown — the filter is host-side', async () => {
+  it('the 4B summarizer takes the override and announces its own box', async () => {
     enable()
     const clients = await loadWired()
 
     await clients.runWithInferenceTier('verda', async () => {
       expect(clients.clientOverrideFor('describe')).toEqual({ client: 'LocalQwenSmall' })
-      expect(noteVerdaCallStarting).not.toHaveBeenCalled()
+      expect(noteBoxCallStarting).toHaveBeenCalledWith('small')
     })
   })
 

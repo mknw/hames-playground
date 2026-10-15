@@ -261,6 +261,11 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
   const startedAt = Date.now()
 
   const handler: http.RequestListener = (req, res) => {
+    // The small box has a truthful, generation-free readiness endpoint.
+    if (req.method === 'GET' && req.url === '/health') {
+      json(res, 200, { status: 'ok' })
+      return
+    }
     if (req.method === 'GET' && req.url?.startsWith('/v1/models')) {
       // The Verda smoke script re-reads the served model id from here rather
       // than trusting the client declaration; the preflight does the same, so

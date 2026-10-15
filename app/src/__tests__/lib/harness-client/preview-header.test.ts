@@ -72,7 +72,15 @@ import {
   igniteVerdaBox,
 } from '../../../lib/harness-client/preview-header.server'
 import { noteCallLatency, resetCallLatency } from '../../../lib/metrics/call-latency.server'
-import { resetVerdaWake, VERDA_WAKE_FAILED } from '../../../lib/inference/wake.server'
+import {
+  resetSmallActivity,
+  noteSmallCallCompleted,
+} from '../../../lib/inference/cold-start.server'
+import {
+  resetSmallWake,
+  resetVerdaWake,
+  VERDA_WAKE_FAILED,
+} from '../../../lib/inference/wake.server'
 import {
   noteVerdaCallCompleted,
   resetVerdaActivity,
@@ -148,6 +156,8 @@ beforeEach(() => {
   })
   resetCallLatency()
   resetVerdaWake()
+  resetSmallWake()
+  resetSmallActivity()
   resetVerdaActivity()
   // The wake ping is a hand-rolled `fetch`; stubbing it is what keeps this file
   // hermetic while still exercising the real `ensureVerdaAwake`, which is the
@@ -165,6 +175,8 @@ let fetchMock: ReturnType<typeof vi.fn>
 afterEach(() => {
   vi.unstubAllGlobals()
   resetVerdaWake()
+  resetSmallWake()
+  resetSmallActivity()
   resetVerdaActivity()
   for (const k of ENV_KEYS) {
     if (saved[k] === undefined) delete process.env[k]
@@ -390,7 +402,7 @@ describe('igniteVerdaBox', () => {
 
     const state = await igniteVerdaBox()
 
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
     // The ping stamps the warm clock, so the strip's next render has a number
     // to count down — which is the point of the button. `ready` is the display
     // state that completion evidence earns, whatever the probe said.
@@ -405,11 +417,11 @@ describe('igniteVerdaBox', () => {
     // this action calls the SAME `ensureVerdaAwake` the turn runner does; a
     // second wake path would not inherit it.
     configureVerda()
-    let release: () => void = () => {}
+    const releases: (() => void)[] = []
     fetchMock.mockImplementation(
       () =>
-        new Promise<Response>(
-          (resolve) => (release = () => resolve(new Response('{}', { status: 200 }))),
+        new Promise<Response>((resolve) =>
+          releases.push(() => resolve(new Response('{}', { status: 200 }))),
         ),
     )
 
@@ -419,11 +431,11 @@ describe('igniteVerdaBox', () => {
     // two of them short of the line this test is about and pass for the wrong
     // reason. After this, all three have had every chance to send a request.
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
 
-    release()
+    releases.forEach((release) => release())
     await Promise.all(clicks)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   it('is a no-op on a box that is already up', async () => {
@@ -431,6 +443,7 @@ describe('igniteVerdaBox', () => {
     // returns on `verdaProvenWarm` before touching the network.
     configureVerda()
     noteVerdaCallCompleted()
+    noteSmallCallCompleted()
 
     const state = await igniteVerdaBox()
 
@@ -463,9 +476,12 @@ describe('igniteVerdaBox', () => {
     // being told and a spinner running out a budget on a one-line
     // misconfiguration.
     configureVerda()
-    fetchMock.mockResolvedValue(new Response('unknown model', { status: 400 }))
+    fetchMock.mockImplementation(
+      async (url: string) =>
+        new Response('unknown model', { status: url.includes('/small/') ? 200 : 400 }),
+    )
 
     await expect(igniteVerdaBox()).rejects.toThrow(VERDA_WAKE_FAILED)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })

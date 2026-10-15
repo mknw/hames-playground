@@ -192,6 +192,67 @@ const HISTORY_KEY = Symbol.for('hames-app.cold-start-history')
 type HistoryGlobal = typeof globalThis & { [HISTORY_KEY]?: number[] }
 const history: number[] = ((globalThis as HistoryGlobal)[HISTORY_KEY] ??= [])
 
+export type WakeBox = 'verda' | 'small'
+/** Snapshot restores measured 21–31s; an estimate, separate from the first-boot budget. */
+export const SMALL_COLD_START_FALLBACK_MS = 30_000
+// Between sub-second warm health checks and the fastest measured cold start (21s).
+export const SMALL_COLD_START_PLAUSIBILITY_FLOOR_MS = 10_000
+/** The small box releases its GPU after 120s idle. */
+export const DEFAULT_SMALL_LLM_SCALEDOWN_SECONDS = 120
+const SMALL_KEY = Symbol.for('hames-app.small-cold-start')
+interface SmallState {
+  lastCompletedAt: number | null
+  history: number[]
+}
+const small = ((globalThis as typeof globalThis & { [SMALL_KEY]?: SmallState })[SMALL_KEY] ??= {
+  lastCompletedAt: null,
+  history: [],
+})
+
+export function smallScaledownSeconds(): number {
+  const value = Math.floor(
+    Number(process.env.SMALL_LLM_SCALEDOWN_SECONDS ?? DEFAULT_SMALL_LLM_SCALEDOWN_SECONDS),
+  )
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_SMALL_LLM_SCALEDOWN_SECONDS
+}
+export function noteSmallCallCompleted(at = Date.now()): void {
+  small.lastCompletedAt = at
+}
+export function smallProvenWarm(now = Date.now()): boolean {
+  return (
+    small.lastCompletedAt !== null && now - small.lastCompletedAt < smallScaledownSeconds() * 1000
+  )
+}
+export function resetSmallActivity(): void {
+  small.lastCompletedAt = null
+}
+export function resetSmallColdStartHistory(): void {
+  small.history.length = 0
+}
+export function smallColdStartEstimate(): ColdStartEstimate {
+  return estimateFor('small')
+}
+function estimateFor(box: WakeBox): ColdStartEstimate {
+  const values = box === 'verda' ? history : small.history
+  const measured = percentileMs(values, 0.5)
+  return measured === null
+    ? {
+        estimateMs: box === 'verda' ? COLD_START_FALLBACK_MS : SMALL_COLD_START_FALLBACK_MS,
+        basis: 'default',
+        samples: 0,
+      }
+    : { estimateMs: measured, basis: 'measured', samples: values.length }
+}
+
+/** The larger outstanding wait owns the countdown, including its actual basis. */
+function pendingEstimate(now: number): ColdStartEstimate {
+  const estimates = [
+    ...(!verdaProvenWarm(now) ? [estimateFor('verda')] : []),
+    ...(!smallProvenWarm(now) ? [estimateFor('small')] : []),
+  ]
+  return estimates.reduce((a, b) => (b.estimateMs > a.estimateMs ? b : a))
+}
+
 /** What the notice carries to the browser. */
 export interface ColdStartEstimate {
   /** Expected total wait, in milliseconds. Always a positive number — the
@@ -255,16 +316,8 @@ export type ColdStartListener = (estimate: ColdStartEstimate) => void
 
 interface TurnWatch {
   notify: ColdStartListener
-  /** Set once {@link noteVerdaCallStarting} has fired, so one turn cannot
-   *  announce two cold starts (the second verda-bound call of a turn is on a
-   *  box the first one woke). */
   fired: boolean
-  /** True only when the box was PROVABLY cold — see the module docstring. A
-   *  fired-but-unrecordable watch shows the notice and measures nothing. */
-  recordable: boolean
-  /** Set once the wait has been measured, so a turn contributes at most one
-   *  reading to the history. */
-  settled: boolean
+  boxes: Partial<Record<WakeBox, { recordable: boolean; settled: boolean }>>
 }
 
 const watchStore = new AsyncLocalStorage<TurnWatch>()
@@ -283,7 +336,7 @@ export function runWithColdStartWatch<T>(
   listener: ColdStartListener,
   fn: () => Promise<T>,
 ): Promise<T> {
-  return watchStore.run({ notify: listener, fired: false, recordable: false, settled: false }, fn)
+  return watchStore.run({ notify: listener, fired: false, boxes: {} }, fn)
 }
 
 /**
@@ -295,24 +348,20 @@ export function runWithColdStartWatch<T>(
  * answer. The throw is logged rather than swallowed.
  */
 export function noteVerdaCallStarting(now: number = Date.now()): void {
+  noteBoxCallStarting('verda', now)
+}
+
+export function noteBoxCallStarting(box: WakeBox, now = Date.now()): void {
   const watch = watchStore.getStore()
-  if (!watch || watch.fired) return
-  if (verdaProvenWarm(now)) return
-
-  const last = verdaLastCallCompletedAt()
+  if (!watch || watch.boxes[box]) return
+  if (box === 'verda' ? verdaProvenWarm(now) : smallProvenWarm(now)) return
+  const last = box === 'verda' ? verdaLastCallCompletedAt() : small.lastCompletedAt
+  const seconds = box === 'verda' ? verdaScaledownSeconds() : smallScaledownSeconds()
+  watch.boxes[box] = { recordable: last !== null && now - last >= seconds * 1000, settled: false }
+  if (watch.fired) return
   watch.fired = true
-  // Evidence of coldness, not merely absence of evidence of warmth: this
-  // process watched a call to the box finish, and the CONFIGURED scale-down
-  // window has elapsed since. `verdaWarmth` cannot answer this — its `starting`
-  // state collapses "went cold" and "never seen" into one word, and only the
-  // first may enter the history. Read this for exactly what it says: the
-  // configured window is not the deployment's, and a second instance sees only
-  // its own traffic, so this is a necessary condition and not a sufficient one.
-  // `noteColdStartMeasured`'s plausibility floor is what covers the gap.
-  watch.recordable = last !== null && now - last >= verdaScaledownSeconds() * 1000
-
   try {
-    watch.notify(coldStartEstimate())
+    watch.notify(pendingEstimate(now))
   } catch (err) {
     console.error('[cold-start] the warming listener threw; the turn is unaffected:', err)
   }
@@ -329,9 +378,20 @@ export function noteVerdaCallStarting(now: number = Date.now()): void {
  * already in flight passes `undefined` rather than its own fragment of the wait.
  */
 export function settleColdStart(durationMs: number | undefined): void {
-  const watch = watchStore.getStore()
-  if (!watch || !watch.fired || watch.settled) return
-  watch.settled = true
-  if (!watch.recordable || durationMs === undefined) return
-  noteColdStartMeasured(durationMs)
+  settleBoxColdStart('verda', durationMs)
+}
+
+export function settleBoxColdStart(box: WakeBox, durationMs: number | undefined): void {
+  const watched = watchStore.getStore()?.boxes[box]
+  if (!watched || watched.settled) return
+  watched.settled = true
+  if (!watched.recordable || durationMs === undefined) return
+  if (box === 'verda') {
+    noteColdStartMeasured(durationMs)
+    return
+  }
+  if (!Number.isFinite(durationMs) || durationMs < SMALL_COLD_START_PLAUSIBILITY_FLOOR_MS) return
+  small.history.push(durationMs)
+  if (small.history.length > COLD_START_WINDOW)
+    small.history.splice(0, small.history.length - COLD_START_WINDOW)
 }

@@ -355,9 +355,9 @@ describe('the clamp keeps the stuck-run reaper honest', () => {
   it('no declarable budget can outlive the reaper threshold derived from the bounds', async () => {
     const { resolveTurnBudget, SETTINGS_BOUNDS } = await import('../../../lib/settings')
 
-    // `MAX_SEQUENTIAL_LLM_CALLS` (lib/db/conversations.server.ts) is computed as
+    // `DECISION_LOOP_WORST_CALLS` (lib/db/conversations.server.ts) is computed from
     // max(maxToolTurns ceiling, 2 × maxRetries ceiling) + overhead, and
-    // `STUCK_RUN_TIMEOUT_MINUTES` follows from it. That derivation is only true
+    // `HUNG_TURN_BACKSTOP_MINUTES` follows from it. That derivation is only true
     // if nothing can actually RUN more rounds than the ceiling it reads — which
     // is exactly what an unclamped call-site literal could do. A run that
     // outlasts the threshold is marked `error` while it is still working.

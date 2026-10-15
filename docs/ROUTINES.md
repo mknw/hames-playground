@@ -72,30 +72,38 @@ Each tick lists enabled routines, asks the registry `nextDueAt()`, and fires
 what's due. One bad routine is logged and skipped; the sweep continues.
 
 **The tick has a second job** (#273 D-a): it reconciles abandoned runs —
-conversations still at `status='running'` whose last write is older than
-`STUCK_RUN_TIMEOUT_MINUTES` become `error`, so a row whose process died mid-turn
+conversations still at `status='running'` that hold no live turn lease
+(`turn_claimed_at` not renewed within `TURN_CLAIM_TTL_SECONDS`), or that have run
+past `HUNG_TURN_BACKSTOP_MINUTES`, become `error` (#507 P2), so a row whose process died mid-turn
 stops claiming to be working. It runs here because this is the only periodic
 wake-up the server has, and ALSO once at arming, since the rows to reconcile are
 usually the previous process's. The two halves are independent: a reap that
 fails (a database that is not up yet at boot) is logged and the routines still
 fire.
 
-**The threshold is derived, not chosen** (#278 F3). A running row gets no write
-between the pre-seed and the final save, so "no state change" cannot tell a slow
-turn from a dead process and the only protection a live turn has is that the
-threshold outlasts it. The arithmetic is on the constant in
-`lib/db/conversations.server.ts`: the tool loop at `SETTINGS_BOUNDS`' ceiling
-plus the single-call patterns around it (25 calls), times the **180s** per-call
-timeout, times a 1.2 margin — **90 minutes**. The 20 minutes it replaces was
-exactly two of the 600s per-call ceilings in force at the time, which is what
-CLAUDE.md measures a burst into a sleeping box spending in ONE turn; a 21-minute
-live turn was duly reaped. The number tightens on its own when the per-call
-ceiling drops, and did: #279 took that ceiling from 600s to 180s and this
-threshold from five hours to 90 minutes, with no edit here. The wake #279 puts
-in front of a turn — a poll since 2026-08-27, for up to **600s** — is the one
-term outside the product and is covered by the margin: 75 + 10 = **85 minutes
-against 90**, 5 minutes clear, which `stuck-run-reaper.test.ts` pins against the
-real constant.
+**The liveness test is the turn lease; the age is a backstop** (#507 P2, G12
+A1). A live turn renews `turn_claimed_at` every 30s, so "no live lease" is "no
+turn is holding this row" — the same predicate `claimConversation` uses to take a
+row over. A dead turn is reaped within about two minutes plus a tick, and a live
+long turn is never reaped on its age, so no agent's composition decides whether
+an ordinary abandoned row is reconciled. (Until #507 P2 the test was an age bound
+on the longest legitimate turn, 90 minutes — derived because a running row gets no
+write mid-turn, and a 21-minute live turn was once reaped under a 20-minute
+threshold, #278 F3.)
+
+**The backstop is derived, not chosen.** What the lease cannot see is a process
+that is alive, renewing and never finishing; for that,
+`HUNG_TURN_BACKSTOP_MINUTES` (`lib/db/conversations.server.ts`, arithmetic beside
+it) bounds the longest legitimate `decisionLoop` turn: 6 iterations × (1 decision plus
+the worse child loop, 20 calls) + 1 synthesis + 5 chain-overhead calls = **132
+calls** × the 180s per-call timeout = 396 min, plus tool time (6 × 15 rounds × the
+60s tool cap = 90 min) and the 12-minute private-tier wake, times a 1.2 margin —
+**598 minutes**. The design doc's own count is 97 calls (children counted as the
+15-round `simpleLoop`, no chain overhead); that is pinned as a floor in
+`stuck-run-reaper.test.ts`, and the larger figure is used because the 20-call
+`actorCritic` child and the chain-overhead calls were already in the bound this
+replaces. The number tightens on its own when a term does, and each mirrored term
+(the wake, the tool cap, the per-call timeout) is held against its declaration.
 
 **What the reap is visible AS** is honest data at rest, not a spinner stopping —
 a live run's spinner is `session-registry`'s per-tab `isProcessing` signal,

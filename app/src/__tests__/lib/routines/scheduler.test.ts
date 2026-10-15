@@ -22,7 +22,7 @@ vi.mock('../../../lib/routines/dispatch.server', () => ({ fireRoutine }))
 const reapStuckConversations = vi.fn<() => Promise<string[]>>(async () => [])
 vi.mock('../../../lib/db/conversations.server', () => ({
   reapStuckConversations,
-  STUCK_RUN_TIMEOUT_MINUTES: 20,
+  HUNG_TURN_BACKSTOP_MINUTES: 20,
 }))
 
 const {

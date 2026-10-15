@@ -41,7 +41,7 @@
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { listEnabledRoutines, type RoutineRow } from '../db/routines.server'
-import { reapStuckConversations, STUCK_RUN_TIMEOUT_MINUTES } from '../db/conversations.server'
+import { reapStuckConversations, HUNG_TURN_BACKSTOP_MINUTES } from '../db/conversations.server'
 import { nextDueAt } from './triggers'
 import { fireRoutine } from './dispatch.server'
 
@@ -116,8 +116,8 @@ export async function sweepStuckRuns(): Promise<string[]> {
     const reaped = await reapStuckConversations()
     if (reaped.length > 0) {
       console.warn(
-        `[routines] reconciled ${reaped.length} run(s) stuck at 'running' for more than ` +
-          `${STUCK_RUN_TIMEOUT_MINUTES}m to 'error': ${reaped.join(', ')}`,
+        `[routines] reconciled ${reaped.length} run(s) stuck at 'running' to 'error' — no live ` +
+          `turn lease, or running past the ${HUNG_TURN_BACKSTOP_MINUTES}m backstop: ${reaped.join(', ')}`,
       )
     }
     return reaped

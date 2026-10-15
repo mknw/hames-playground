@@ -71,6 +71,15 @@ no longer the only layer — but it is the one that covers everything the
 application-level key does not: the Neo4j store, the Data Stash volume, the
 `backups/` directory and `.env` itself.
 
+Neo4j is isolated on `neo4j-internal` (`internal: true`, IPv4 gateway mode `isolated`); only `neo4j-relay`
+shares it. HTTP/Bolt loopback publishes belong to the relay, and container
+consumers use `neo4j-relay`, keeping Neo4j off `app-network` (#241 G13).
+Plugins are baked into the image; CSV file URLs and APOC file imports stay off.
+Before recreating the stack, take a Neo4j dump using the currently running
+image. The first `docker compose up -d` after adopting G13 moves an older store
+to 5.26.32; that store-format move cannot be undone.
+See the [opt-in egress check](testing/neo4j-egress.md).
+
 ## 2. Firewall — network security group
 
 Open exactly three inbound ports:
@@ -198,7 +207,7 @@ allow-list say the same thing and nobody has to reconcile them later:
 # configs/template.mcp-config.yaml (that is the development set).
 neo4j-cypher:
   enabled: true
-  uri: bolt://neo4j:7687
+  uri: bolt://neo4j-relay:7687
   username: neo4j
   password: ${NEO4J_PASSWORD} # filled from .env by the `mcp-config` render service
   database: neo4j
@@ -679,10 +688,10 @@ docker compose exec -T postgres dropdb -U postgres restorecheck
 #    a typo here would silently seed an empty one and fail further down.
 docker volume create neo4j_restorecheck
 docker run --rm --user root -v neo4j_restorecheck:/data -v "$PWD/$BK":/backups \
-  --entrypoint sh neo4j:5.26 -c \
+  --entrypoint sh hames-neo4j:local -c \
   'neo4j-admin database load neo4j --from-path=/backups --overwrite-destination=true'
 docker run -d --name neo4j-restorecheck -v neo4j_restorecheck:/data \
-  -e NEO4J_AUTH=neo4j/restorecheck neo4j:5.26
+  -e NEO4J_AUTH=neo4j/restorecheck hames-neo4j:local
 # Poll rather than guess: a fixed `sleep 30` is short on a busy box (~45 s was
 # needed once) and the resulting timeout reads as a bad backup. Bounded at 2
 # min, so a genuinely broken restore stops instead of spinning.

@@ -54,6 +54,9 @@ app needs at runtime, so it works on a plain VPS or an Azure VM identically —
    redis-stack :6379 (DataStash)   │ mounts docker.sock, spawns 1 container/MCP-server
 ```
 
+The Neo4j ports in the diagram belong to `neo4j-relay`, which forwards into
+Neo4j's isolated internal network (#241 G13); Neo4j itself publishes no ports.
+
 **Why this guide runs the UI on the host:** it shells out to `docker run -d --rm …`
 for compute sandboxes (`docker-backend.server.ts:291`) and uses `node-pty` for the
 Shell terminal, and a host `systemd` service gives it a native `docker` CLI and a
@@ -178,8 +181,9 @@ services:
     ports: ["127.0.0.1:5432:5432"]
     environment: ["POSTGRES_PASSWORD=<STRONG_PW>"]
   neo4j:
-    ports: ["127.0.0.1:7474:7474", "127.0.0.1:7687:7687"]
     environment: ["NEO4J_AUTH=neo4j/<STRONG_PW>"]
+  neo4j-relay:
+    ports: ["127.0.0.1:7474:7474", "127.0.0.1:7687:7687"]
   redis:
     ports: ["127.0.0.1:6379:6379"]
   mcp-gateway:
@@ -189,6 +193,19 @@ services:
 
 The UI reaches all of these over `localhost`, so loopback binding is transparent
 to the app and closes the exposure.
+
+Neo4j itself has no published ports and sits only on `neo4j-internal`
+(`internal: true`, IPv4 gateway mode `isolated`), with `neo4j-relay` as its only peer (#241 G13). The relay
+publishes HTTP/Bolt on loopback for the host app and SSH tunnels; container
+consumers use `neo4j-relay`. APOC and n10s are installed during image build,
+so startup needs no egress. CSV file URLs and APOC file imports are disabled.
+Before recreating the stack, take a Neo4j dump using the currently running
+image. The first `docker compose up -d` after adopting G13 moves an older store
+to 5.26.32; that store-format move cannot be undone. Docker Engine 28+ is
+required for the isolated bridge (see [Docker Compose](../DOCKER_COMPOSE.md)).
+After adopting G13, the owner must recreate their own stack once with
+`docker compose up -d`. The opt-in isolation check and red mutation are in
+[Neo4j egress check](../testing/neo4j-egress.md).
 
 ## 5. Bring up the backing tier
 

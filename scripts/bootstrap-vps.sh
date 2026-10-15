@@ -60,6 +60,7 @@ readonly F2B_JAIL="/etc/fail2ban/jail.local"
 readonly MANAGED_BY="Managed by scripts/bootstrap-vps.sh"
 readonly COMPOSE_FILES="docker-compose.yaml:docker-compose.prod.yaml"
 readonly COMPOSE_PROFILE="app"
+readonly MIN_ENGINE="28.0.0" # Neo4j's isolated bridge gateway mode needs it
 readonly MIN_COMPOSE="2.24.0" # docker-compose.prod.yaml's `!override` needs it
 # Docker's apt signing key (docs.docker.com/engine/install/ubuntu).
 readonly DOCKER_GPG_FPR="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
@@ -1150,7 +1151,7 @@ stage_checkout() {
 # are exactly the servers docker-compose.prod.yaml's --servers allow-list names.
 neo4j-cypher:
   enabled: true
-  uri: bolt://neo4j:7687
+  uri: bolt://neo4j-relay:7687
   username: neo4j
   password: ${NEO4J_PASSWORD} # filled from .env by the `mcp-config` render service
   database: neo4j
@@ -1407,10 +1408,23 @@ stage_images() {
   fi
 }
 
+# Refuse an old or unverified daemon before compose can create any service.
+# Existing installations are not upgraded automatically by stage_docker.
+assert_engine_supported() {
+  local v
+  v=$(sudo docker version --format '{{.Server.Version}}' 2>/dev/null) || v=""
+  if [[ ! $v =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+].*)?$ ]] || ! version_ge "$v" "$MIN_ENGINE"; then
+    refuse "Docker Engine ${v:-unavailable} is unsupported; need >= $MIN_ENGINE for Neo4j's isolated gateway mode. Upgrade the Engine before deploying; no compose services were started"
+    return 0
+  fi
+  ok "Docker Engine $v (>= $MIN_ENGINE for isolated gateway mode)"
+}
+
 stage_boot() {
   banner "11/13 boot — docker compose up -d (base + prod overlay, profile app)"
   # Every gate below runs before anything starts. A real run stops at the
   # first one that fails; a dry run reports all of them.
+  assert_engine_supported
   assert_gateway_pinned
   local problems missing
   if [[ -f $ENV_FILE ]]; then

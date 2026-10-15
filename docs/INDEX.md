@@ -289,3 +289,5 @@ hames-playground/
 ├── Makefile                     # `make embed` :8090 · `make llm-small` :8095
 └── docker-compose.yaml
 ```
+
+- [`testing/neo4j-egress.md`](testing/neo4j-egress.md) — Neo4j relay isolation, digest provenance and opt-in Docker green/red evidence (#241 G13).

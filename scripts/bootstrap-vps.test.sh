@@ -81,6 +81,10 @@ cat >"$tmproot/bin/docker" <<'SHIM'
 # No daemon. Unless a case sets SHIM_COMPOSE_JSON (a rendered config) or
 # SHIM_COMPOSE=1, `have_compose` is false, so the static paths run.
 args=" $* "
+if [[ $args == *" version "* && $args != *" compose "* ]]; then
+  echo "29.2.1"
+  exit 0
+fi
 if [[ $args == *" compose "* ]]; then
   [[ -n ${SHIM_COMPOSE_JSON:-}${SHIM_COMPOSE:-} ]] || exit 1
   [[ $args == *" version "* ]] && { echo "2.30.0"; exit 0; }

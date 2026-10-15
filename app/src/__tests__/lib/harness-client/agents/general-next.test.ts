@@ -21,7 +21,7 @@ import {
   type CompactExecutionInput,
   type MemoryConfig,
 } from '@hames-ai/harness-patterns'
-import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox'
+import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
 import { MCP_TOOL_CATALOG, mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
 
@@ -39,7 +39,16 @@ const GRAPH = [
   'graph_file_ingest',
 ]
 const INFO = ['get_neo4j_schema', 'read_neo4j_cypher', 'search', 'fetch', 'fetch_content']
-const SANDBOX = V0_IN_VM_SERVERS.flatMap((s) => Object.values(s.tools))
+// Explicit names are P1's reviewed ungated surface. A registry addition must
+// fail this pin instead of silently widening both actual and expected lists.
+const SANDBOX = [
+  'sandbox_read',
+  'sandbox_write',
+  'sandbox_edit',
+  'sandbox_list',
+  'sandbox_search',
+  'sandbox_bash',
+]
 const gateway = vi.hoisted(() => ({ names: [] as string[], result: 'synthetic result' as unknown }))
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
   Client: class {
@@ -202,6 +211,9 @@ describe('general-next composition', () => {
     const patterns = await agent.createPatterns('synthetic-session', deps)
     const all = walk(patterns)
     const actor = all.find((p) => p.name === 'actorCritic')!
+    expect(V0_IN_VM_SERVERS.flatMap((s) => Object.values(s.tools)).sort()).toEqual(
+      [...SANDBOX].sort(),
+    )
     expect([...actor.capabilities!.tools!].sort()).toEqual(
       GRAPH.filter((n) => n !== 'graph_file_ingest').sort(),
     )

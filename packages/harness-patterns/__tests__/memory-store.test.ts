@@ -1143,18 +1143,6 @@ describe('merge-fails-to-keep-both', () => {
     updated: false,
   })
   const at = (sim: number): number[] => [sim, Math.sqrt(1 - sim * sim)]
-  /** The merge question answered by `answer`; everything else is confident. */
-  const withMerge = async (answer: (labels: readonly { id: string }[]) => unknown) => {
-    const db = fakeDb({ seed: [seed()] })
-    const decide = fakeDecide({}, (i) =>
-      i.spec.key === 'memory.merge' ? answer(i.spec.labels) : undefined,
-    )
-    const { embed } = fakeEmbed({ [CONTENT]: at(0.85) })
-    const { cfg } = config({ db, decide: decide.fn, embed })
-    const ctx = turn()
-    const report = await settleMemory(ctx, cfg)
-    return { db, ctx, report, decide }
-  }
   const keptBoth = (db: ReturnType<typeof fakeDb>, report: { written: number; failed: number }) => {
     expect(report).toMatchObject({ written: 1, failed: 0 })
     expect(db.rows()).toHaveLength(2)

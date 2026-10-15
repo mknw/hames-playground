@@ -142,12 +142,16 @@ describe('malformed raw XML stays fail-closed', () => {
   })
 
   it.each([
-    ['ppt/slides/slide1.xml', 'body_q', 'body\0q'],
+    ['word/styles.xml', 'Normal', 'Nor\0mal'],
     ['ppt/slideLayouts/slideLayout1.xml', 'q_1', 'q\u00001'],
   ])('propagates parseXml refusal from %s even after ZIP validation', async (part, from, to) => {
     // Isolate both production parseXml call sites from readZip's earlier
     // validation, so a future catch-and-continue at either site turns red.
-    const entries = readZip(deck('_', '_')).map((entry) =>
+    const bytes =
+      part === 'word/styles.xml'
+        ? docx({ body: para('VISIBLE'), styles: wStyles(DOCX_STYLES_NORMAL) })
+        : deck('_', '_')
+    const entries = readZip(bytes).map((entry) =>
       entry.name === part
         ? {
             ...entry,
@@ -157,7 +161,11 @@ describe('malformed raw XML stays fail-closed', () => {
     )
     const reader = vi.spyOn(zip, 'readZip').mockReturnValue(entries)
     try {
-      expect(await refusalOf(ooxmlDisarm(new Uint8Array(), MIME.pptx))).toBe('xml-malformed')
+      expect(
+        await refusalOf(
+          ooxmlDisarm(new Uint8Array(), part === 'word/styles.xml' ? MIME.docx : MIME.pptx),
+        ),
+      ).toBe('xml-malformed')
     } finally {
       reader.mockRestore()
     }

@@ -3,6 +3,7 @@
  * isolated construction/resolution probes; shipped exports do not change. */
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
+import * as zip from '@hames-ai/harness-patterns/stash/zip.server'
 import {
   parseXml,
   readZip,
@@ -1868,6 +1869,49 @@ describe('#558 F2 asserted same-bytes CPU controls', () => {
 
 /** #558 F3-F7: classification pins the review found missing (each names its mutation). */
 describe('#558 classification discriminators', () => {
+  // F2 / #559: bypass only the tokenizer's XML Char boundary, leaving the
+  // resolver to distinguish structural keys. Fixtures contain legal U+E000.
+  const resolverNul = () => {
+    const parse = zip.parseXml
+    const decode = (el: XmlElement): XmlElement => ({
+      ...el,
+      attributes: el.attributes.map((a) => ({ ...a, value: a.value.replace(/\ue000/g, '\0') })),
+      children: el.children.map((c) => (typeof c === 'string' ? c : decode(c))),
+    })
+    return vi.spyOn(zip, 'parseXml').mockImplementation((...args) => decode(parse(...args)))
+  }
+
+  // MUTATION R5: replace the Word trie path by rStyles.join('\0').
+  it.each([false, true])(
+    'Word resolver keeps style sequences distinct, reverse=%s',
+    async (reverse) => {
+      const id = 'A\ue000B'
+      const white = `<w:r><w:rPr><w:rStyle w:val="${id}"/></w:rPr><w:t>VISIBLE</w:t></w:r>`
+      const black =
+        '<w:r><w:rPr><w:rStyle w:val="A"/><w:rStyle w:val="B"/></w:rPr><w:t>VISIBLE</w:t></w:r>'
+      const styles =
+        style(id, '<w:color w:val="FFFFFF"/>', '', 'character') +
+        style('A', '<w:color w:val="000000"/>', '', 'character') +
+        style('B', '<w:color w:val="000000"/>', '', 'character')
+      const body = `<w:p>${reverse ? white + black : black + white}</w:p>`
+      const parser = resolverNul()
+      try {
+        for (const [definitions, counted] of [
+          [styles, { 'colour-contrast': 1 }],
+          [styles.replace('FFFFFF', '000000'), {}],
+        ] as const) {
+          const out = await ooxmlDisarm(
+            makeDocx({ body, styles: wStyles(definitions), stored: true }),
+            MIME.docx,
+          )
+          expect(out.counted).toEqual(counted)
+        }
+      } finally {
+        parser.mockRestore()
+      }
+    },
+  )
+
   // #559: XML Char now refuses the raw NUL before the ruling K resolver.
   // MUTATION: drop the tokenizer raw-character check; both refusals turn red.
   it.each([false, true])('refuses raw U+0000 in Word style IDs, reverse=%s', async (reverse) => {
@@ -1891,7 +1935,7 @@ describe('#558 classification discriminators', () => {
   // F4 (ruling K, PowerPoint): a placeholder's (type, idx) is a structured key.
   // #559 MUTATION: drop the raw-character check for NUL; force refusal for
   // the legal separator control. Each branch turns red under its mutation.
-  it.each([String.fromCharCode(0), '_'])(
+  it.each([String.fromCharCode(0), '_', '\ue000'])(
     'pptx placeholder (type, idx) never aliases across %j',
     async (sep) => {
       const solidFill = (rgb: string) => `<a:solidFill><a:srgbClr val="${rgb}"/></a:solidFill>`
@@ -1914,11 +1958,18 @@ describe('#558 classification discriminators', () => {
         }
         return
       }
-      // The slide placeholder matches no (type, idx); by idx it inherits the white level.
-      expect((await ooxmlDisarm(deck('FFFFFF'), MIME.pptx)).counted).toEqual({
-        'colour-contrast': 1,
-      })
-      expect((await ooxmlDisarm(deck('000000'), MIME.pptx)).counted).toEqual({})
+      // MUTATION: restore `${ph.type}\0${ph.idx}` at insertion and lookup.
+      // U+E000 becomes NUL only after tokenization; raw-NUL refusal stays pinned above.
+      const parser = sep === '\ue000' ? resolverNul() : undefined
+      try {
+        // The slide matches no (type, idx); by idx it inherits the white level.
+        expect((await ooxmlDisarm(deck('FFFFFF'), MIME.pptx)).counted).toEqual({
+          'colour-contrast': 1,
+        })
+        expect((await ooxmlDisarm(deck('000000'), MIME.pptx)).counted).toEqual({})
+      } finally {
+        parser?.mockRestore()
+      }
     },
   )
   // F5: sender-named palette lookups read own keys only. Before, `constructor` resolved

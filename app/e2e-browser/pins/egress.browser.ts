@@ -47,7 +47,7 @@ test.describe('layer-3 dev server transport', () => {
     const previousKey = process.env.OPENROUTER_API_KEY
     const previousUrl = process.env.JEV_DECISIONS_URL
     process.env.OPENROUTER_API_KEY = 'sk-or-parent-synthetic-key'
-    process.env.JEV_DECISIONS_URL = 'https://parent-decisions.invalid/api/alpha/decisions'
+    process.env.JEV_DECISIONS_URL = 'https://parent-decisions.invalid/v1/systemone'
     const env = browserServerEnv(backend, backstop.url)
     env.NODE_OPTIONS = `--import=${fileURLToPath(new URL('./dev-server-probe.mjs', import.meta.url))}`
     env.E2E_BROWSER_PROBE_FILE = report
@@ -77,7 +77,7 @@ test.describe('layer-3 dev server transport', () => {
   test('explicit fake Jev URL and key win in the dev server process', async () => {
     const observed = await probe()
     expect(observed.pid).not.toBe(process.pid)
-    expect(observed.jevUrl).toBe(backend.llm.baseUrl.replace(/\/v1$/, '') + '/api/alpha/decisions')
+    expect(observed.jevUrl).toBe(backend.llm.baseUrl + '/systemone')
     expect(observed.jevKey).toBe('e2e-browser-fake-key')
     expect(observed.key).toBe('e2e-browser-fake-key')
   })

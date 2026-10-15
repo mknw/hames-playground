@@ -60,12 +60,16 @@ const ENV_KEYS = [
   'VERDA_INFERENCE_ENDPOINT',
   'VERDA_INFERENCE_API_KEY',
   'SMALL_LLM_BASE_URL',
+  'SMALL_LLM_DECISIONS_URL',
+  'SMALL_LLM_API_KEY',
 ] as const
 let saved: Record<string, string | undefined>
 
 function configureVerda(): void {
   process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+  process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
 }
 

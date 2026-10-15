@@ -382,41 +382,11 @@ const ContentSanitizedDetail = (props: { data: ContentSanitizedEventData }) => (
   </div>
 )
 
-/**
- * Detail view for a `decision_made` event (#418) — one typed decision, drawn as
- * the distribution it was made from: a bar per label, the policy's confidence
- * cut across them, and chips for what the reader needs to weigh it.
- *
- * Metadata only, by construction: the event never carries the state the
- * decision was asked over (`stateChars` is the SIZE), so there is nothing here
- * to leak — the text lives only in the LLM tabs above, as every prompt does.
- *
- * Choice cuts are converted from confidence to probability. Scores instead
- * show the raw mean on the ordered level scale; ordinal confidence has no
- * per-bar cut. Nouls show P(true) with the declared symmetric abstain band.
- * Fitted cuts may differ from the declared policy recorded on the event.
- */
+/** Endpoint probabilities, score means and noul readouts. */
 const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
   const pct = (p: number) => `${(Math.max(0, Math.min(1, p)) * 100).toFixed(1)}%`
-  // `calibrated: false` on a verbalized read is the secondary's own signature;
-  // an uncalibrated LOGPROB/Jev read is still a measured distribution, so it
-  // does not get the "verbalized" word.
-  const uncalibratedChip = () =>
-    props.data.calibrated
-      ? null
-      : props.data.method === 'verbalized'
-        ? 'verbalized, uncalibrated'
-        : 'uncalibrated'
-  const cut = () => props.data.policy.minConfidence
-  const validCut = () => Number.isFinite(cut()) && cut()! >= 0 && cut()! <= 1
   const finiteMean = () => Number.isFinite(props.data.expected)
   const finitePTrue = () => Number.isFinite(props.data.pTrue)
-  const margin = () => props.data.policy.minMargin
-  // minConfidence as a probability: confidence = (K·p − 1)/(K − 1) ⇒ p = (c·(K − 1) + 1)/K.
-  const cutProb = () => {
-    const k = props.data.labels.length
-    return ((cut() as number) * (k - 1) + 1) / k
-  }
 
   return (
     <div flex="~ col" gap="3" data-role="decision-made">
@@ -439,21 +409,8 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
             rounded="sm"
             data-role="decision-abstained"
           >
-            abstained{props.data.reason ? `: ${props.data.reason}` : ''}
+            failed{props.data.reason ? `: ${props.data.reason}` : ''}
           </span>
-        </Show>
-        <Show when={uncalibratedChip()}>
-          {(label) => (
-            <span
-              text="xs ui-text-secondary"
-              bg="ui-bg-tertiary"
-              p="x-1.5 y-0.5"
-              rounded="sm"
-              data-role="decision-uncalibrated"
-            >
-              {label()}
-            </span>
-          )}
         </Show>
         <Show when={props.data.shadow}>
           <span text="xs ui-text-secondary" bg="ui-bg-tertiary" p="x-1.5 y-0.5" rounded="sm">
@@ -526,28 +483,6 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
                 data-role="decision-bar"
                 style={{ width: pct(props.data.pTrue!) }}
               />
-              <Show when={validCut()}>
-                <div
-                  data-role="decision-band"
-                  absolute=""
-                  inset-y="0"
-                  border="x-2 ui-danger"
-                  bg="ui-danger/10"
-                  style={{ left: pct((1 - cut()!) / 2), width: pct(cut()!) }}
-                  aria-hidden="true"
-                />
-              </Show>
-            </div>
-          </Show>
-          <Show when={validCut()}>
-            <div text="xs ui-text-secondary">
-              Declared abstain band: {pct((1 - cut()!) / 2)}–{pct((1 + cut()!) / 2)} (edges
-              accepted)
-            </div>
-          </Show>
-          <Show when={cut() !== undefined && !validCut()}>
-            <div text="xs ui-text-secondary" data-role="decision-invalid-cut">
-              Invalid declared confidence cut: {String(cut())}; abstain band unavailable.
             </div>
           </Show>
         </div>
@@ -589,20 +524,6 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
                         data-role="decision-bar"
                         style={{ width: pct(p()) }}
                       />
-                      <Show when={props.data.type !== 'score' && cut() !== undefined}>
-                        <div
-                          data-role="decision-cut"
-                          title={`min confidence ${cut()} ⇒ p ≥ ${pct(cutProb())}`}
-                          bg="ui-danger"
-                          style={{
-                            position: 'absolute',
-                            top: '-2px',
-                            bottom: '-2px',
-                            width: '2px',
-                            left: pct(cutProb()),
-                          }}
-                        />
-                      </Show>
                     </div>
                   </Show>
                 </div>
@@ -612,15 +533,9 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
         </div>
       </Show>
 
-      <Show when={props.data.type !== undefined}>
-        <div text="xs ui-text-secondary">
-          Raw readout survives fallback. Declared confidence cuts are shown; fitted cuts may differ.
-        </div>
-      </Show>
-
       <div flex="~ wrap" gap="x-6 y-1" text="xs ui-text-tertiary">
         <span>
-          confidence <span font="mono">{props.data.confidence.toFixed(3)}</span>
+          confidence <span font="mono">{props.data.confidence?.toFixed(3) ?? 'unknown'}</span>
         </span>
         <Show when={props.data.type === undefined}>
           <span>
@@ -632,21 +547,7 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
             method <span font="mono">{props.data.method}</span>
           </span>
         </Show>
-        <Show when={props.data.coverage !== undefined}>
-          <span>
-            coverage <span font="mono">{props.data.coverage!.toFixed(3)}</span>
-          </span>
-        </Show>
-        <Show when={cut() !== undefined}>
-          <span>
-            min confidence <span font="mono">{cut()}</span>
-          </span>
-        </Show>
-        <Show when={props.data.type === undefined && margin() !== undefined}>
-          <span>
-            min margin <span font="mono">{margin()}</span>
-          </span>
-        </Show>
+
         <span>
           state <span font="mono">{props.data.stateChars.toLocaleString()}</span> chars
         </span>

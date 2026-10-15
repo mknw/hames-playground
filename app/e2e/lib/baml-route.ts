@@ -91,26 +91,17 @@ export function installHermeticRouting(b: unknown, baseUrl: string): void {
       registered.add(name)
     }
     add(FAKE_CLIENT)
-    // Preserve the production fallback chain and the collector's leaf identity.
-    add('AnthropicSonnet5NoThink')
-    add('AnthropicSonnet46NoThink')
-    // F2 preserves this native chain, so F4's registered-leaf-only rule
-    // would refuse it. Admit it only while BOTH expected leaves are registered;
-    // a missing/renamed leaf closes the chain too. The transport catches any
-    // future native member that this local member list cannot see.
-    const chainRegistered =
-      registered.has('AnthropicSonnet5NoThink') && registered.has('AnthropicSonnet46NoThink')
     const setPrimary = registry.setPrimary.bind(registry)
     registry.setPrimary = (client: string) => {
       // A name absent from this registry otherwise falls through to the
       // production BAML declaration. Refuse it BEFORE native BAML sees it.
       // Per-call registries replace this registry wholesale; the recording
       // transport backstop catches those calls and per-call env overrides.
-      if (!registered.has(client) && !(client === 'DecideAnthropic' && chainRegistered)) {
+      if (!registered.has(client)) {
         const endpoint =
           client === 'VerdaQwen'
             ? process.env.VERDA_INFERENCE_ENDPOINT
-            : client === 'LocalQwenSmall' || client === 'LocalQwenSmallDecide'
+            : client === 'LocalQwenSmall'
               ? process.env.SMALL_LLM_BASE_URL
               : undefined
         if (endpoint !== baseUrl) {

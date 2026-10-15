@@ -35,8 +35,6 @@ export default class TypeBuilder {
     
     CriticResult: ClassViewer<'CriticResult', "is_sufficient" | "explanation" | "suggested_approach">;
     
-    DecideOption: ClassViewer<'DecideOption', "letter" | "description">;
-    
     DescribeBatchResult: ClassViewer<'DescribeBatchResult', "summaries">;
     
     DescribeItemSummary: ClassViewer<'DescribeItemSummary', "id" | "summary">;
@@ -79,14 +77,12 @@ export default class TypeBuilder {
     
     ToolResult: ClassViewer<'ToolResult', "tool" | "result" | "success" | "error">;
     
-    VerbalizedOption: ClassViewer<'VerbalizedOption', "letter" | "probability">;
-    
     
 
     constructor() {
         this.tb = new _TypeBuilder({
           classes: new Set([
-            "Attempt","CompactedMemory","ControllerAction","CriticResult","DecideOption","DescribeBatchResult","DescribeItemSummary","DescribeTarget","ExpandedRef","ExtractedMemory","FewShot","LoopTurn","MemoryMember","Message","PlanResult","PriorResult","ReferenceCandidate","ReferenceSelection","ReferenceSelectorResult","RouteOption","RoutingResult","ScreenVerdict","ToolCall","ToolCallRequest","ToolDescription","ToolResult","VerbalizedOption",
+            "Attempt","CompactedMemory","ControllerAction","CriticResult","DescribeBatchResult","DescribeItemSummary","DescribeTarget","ExpandedRef","ExtractedMemory","FewShot","LoopTurn","MemoryMember","Message","PlanResult","PriorResult","ReferenceCandidate","ReferenceSelection","ReferenceSelectorResult","RouteOption","RoutingResult","ScreenVerdict","ToolCall","ToolCallRequest","ToolDescription","ToolResult",
           ]),
           enums: new Set([
             
@@ -108,10 +104,6 @@ export default class TypeBuilder {
         
         this.CriticResult = this.tb.classViewer("CriticResult", [
           "is_sufficient","explanation","suggested_approach",
-        ]);
-        
-        this.DecideOption = this.tb.classViewer("DecideOption", [
-          "letter","description",
         ]);
         
         this.DescribeBatchResult = this.tb.classViewer("DescribeBatchResult", [
@@ -196,10 +188,6 @@ export default class TypeBuilder {
         
         this.ToolResult = this.tb.classViewer("ToolResult", [
           "tool","result","success","error",
-        ]);
-        
-        this.VerbalizedOption = this.tb.classViewer("VerbalizedOption", [
-          "letter","probability",
         ]);
         
         

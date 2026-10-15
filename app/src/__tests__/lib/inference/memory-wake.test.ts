@@ -134,7 +134,7 @@ function quiet<T>(p: Promise<T>): Promise<T | Error> {
 describe('the embedder is the only memory wake target on either tier', () => {
   it('requests ONLY the embedder on an anthropic-tier turn', async () => {
     // The 4B serves decide/describe under the private tier only; an
-    // Anthropic-tier turn gates through calibrated Jev and describes through
+    // Anthropic-tier turn gates through Jev and describes through
     // the Anthropic chain. Requesting the 4B there would push the joint
     // promise past the gate's 1500ms budget on a turn that only needed the
     // embedder — a spurious `skipped: 'waking'` — and wake a box the turn

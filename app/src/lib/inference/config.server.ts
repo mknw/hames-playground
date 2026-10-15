@@ -20,11 +20,10 @@
  * and the resolution must land in the SAME module instance, and the pin goes
  * red when they do not.
  */
-import decisionCalibrationArtifact from './decision-calibration.json'
-import { feedDecisionCalibration } from './decision-calibration.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { CLIENT_MAX_OUTPUT_TOKENS, MODEL_CONTEXT_WINDOWS, estimateLlmCostEur } from '../settings'
 import { eurPerUsdRate, verdaEurPerHour, smallLlmEurPerHour } from '../cost-rates.server'
+import { parseDecisionsUrl } from '@hames-ai/harness-baml/jev-decide.server'
 import { VERDA_CLIENT_NAME } from './verda-activity.server'
 import { noteBoxCallStarting } from './cold-start.server'
 import {
@@ -36,9 +35,6 @@ import {
 } from '@hames-ai/harness-baml/clients.server'
 
 assertServerOnImport()
-
-// #418 T8: validate the committed artifact at host composition, before calls.
-feedDecisionCalibration(decisionCalibrationArtifact)
 
 export type { InferenceTier } from '@hames-ai/harness-baml/clients.server'
 
@@ -117,11 +113,9 @@ export function assertVerdaConfigured(): void {
  * to keep it off, and doing it on the role that is handed tool results verbatim
  * (SD-10). "It still works" is not the property being protected.
  *
- * `SMALL_LLM_API_KEY` is deliberately NOT required. llama-server authenticates
- * nothing, so a local `make llm-small` has no key to set; `openai-generic` sends
- * the header regardless and a remote endpoint that checks one fails loudly on
- * its own with a 401. Demanding it here would refuse the tier for the common
- * local case.
+ * `SMALL_LLM_API_KEY` is not required by this summarizer-only check because
+ * local llama-server can run without authentication. The whole private tier
+ * requires it in `assertPrivateTierConfigured` for the systemone bearer key.
  *
  * The URL is checked for the `/v1` suffix for `assertVerdaConfigured`'s reason:
  * BAML hands `base_url` to `openai-generic` verbatim, so a root URL 404s every
@@ -151,12 +145,12 @@ export function assertSmallModelConfigured(): void {
 /**
  * Throws unless EVERY endpoint the private tier needs is configured.
  *
- * The tier is two models (see `VERDA_CLIENT_BY_ROLE`), so its configuration is
- * a conjunction and this is the only function that says so. Every gate on the
+ * The tier requires the 27B endpoint, the summarizer endpoint and the systemone
+ * decisions endpoint (see `VERDA_CLIENT_BY_ROLE`); this function checks their
+ * configuration together. Every gate on the
  * tier — the module-load check below, `assertInferenceTier('verda')` (through
  * the seam's registered `assertTierReachable`), and `verdaConfigured()`'s
- * "may a user pick this?" — goes through here, so adding a third model to the
- * tier is one edit rather than three.
+ * "may a user pick this?" — goes through here.
  *
  * The two halves stay separately callable on purpose: `scripts/smoke-verda.ts`
  * exercises only the 27B roles and must not be refused for a summarizer it never
@@ -165,6 +159,31 @@ export function assertSmallModelConfigured(): void {
 export function assertPrivateTierConfigured(): void {
   assertVerdaConfigured()
   assertSmallModelConfigured()
+  const raw = process.env.SMALL_LLM_DECISIONS_URL
+  if (!raw)
+    throw new Error(
+      'The private inference tier requires SMALL_LLM_DECISIONS_URL; refusing to send a decision to any other endpoint.',
+    )
+  const endpoint = parseDecisionsUrl(raw)
+  if (typeof endpoint === 'string' || endpoint.pathname !== '/v1/systemone') {
+    throw new Error(
+      'SMALL_LLM_DECISIONS_URL must be a full https: or loopback URL ending in /v1/systemone.',
+    )
+  }
+  if (
+    endpoint.hostname === 'api.typesafe.ai' ||
+    endpoint.hostname === 'openrouter.ai' ||
+    endpoint.hostname.endsWith('.openrouter.ai')
+  ) {
+    throw new Error(
+      'Refusing SMALL_LLM_DECISIONS_URL: it names a public systemone provider; no request was made.',
+    )
+  }
+  if (!process.env.SMALL_LLM_API_KEY) {
+    throw new Error(
+      'The private inference tier requires SMALL_LLM_API_KEY; refusing to open the tier without its systemone bearer key.',
+    )
+  }
 }
 
 // ============================================================================
@@ -209,7 +228,11 @@ configureCostRates({ eurPerUsd: eurPerUsdRate, verdaEurPerHour })
 // scale-to-zero box price as a floor instead of being dropped.
 configureCostPricing({
   estimate: estimateLlmCostEur,
-  timePricedClients: { [VERDA_CLIENT_NAME]: verdaEurPerHour, LocalQwenSmall: smallLlmEurPerHour },
+  timePricedClients: {
+    [VERDA_CLIENT_NAME]: verdaEurPerHour,
+    LocalQwenSmall: smallLlmEurPerHour,
+    PrivateSystemOne: smallLlmEurPerHour,
+  },
 })
 
 // Checked once, at module load, and only when the flag is on: a misconfigured
@@ -230,8 +253,8 @@ if (verdaInferenceEnabled()) assertPrivateTierConfigured()
  * not. Reaching for this one where the assert belongs is how the fail-closed
  * posture below would quietly become a fall-through to Anthropic.
  *
- * It asks about BOTH endpoints, because the tier needs both (the 27B and the
- * 4B summarizer). A deployment with only the 27B configured therefore leaves the
+ * It checks all three endpoints and their required keys: the 27B, the
+ * summarizer and systemone decisions. A deployment with only the 27B configured therefore leaves the
  * switch's private position DISABLED and defaults every user to Anthropic — a
  * whole-tier decision the operator can see, rather than a tier that works until
  * the first tool result needs summarizing.

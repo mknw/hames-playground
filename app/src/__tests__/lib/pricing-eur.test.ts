@@ -77,7 +77,11 @@ const ONE_MTOK_EACH = {
 
 describe('the time-priced client mapping', () => {
   it('contains exactly the metered clients and their default rates', async () => {
-    expect(TIME_PRICED_CLIENTS).toEqual({ [VERDA_CLIENT_NAME]: 1.819, LocalQwenSmall: 1.54 })
+    expect(TIME_PRICED_CLIENTS).toEqual({
+      [VERDA_CLIENT_NAME]: 1.819,
+      LocalQwenSmall: 1.54,
+      PrivateSystemOne: 1.54,
+    })
   })
 
   it('keeps every time-priced client out of the token and local sets', () => {
@@ -133,27 +137,28 @@ describe('token pricing → EUR', () => {
 })
 
 describe('time pricing → EUR', () => {
-  it('prices a 2-second small summary at €1.54/h and accepts an explicit rate', () => {
-    expect(DEFAULT_SMALL_LLM_EUR_PER_HOUR).toBe(1.54)
-    const est = estimateLlmCostEur(ONE_MTOK_EACH, 'LocalQwenSmall', { durationMs: 2_000 })!
-    expect(est.basis).toBe('time')
-    expect(est.costEur).toBeCloseTo((1.54 * 2) / 3600, 12)
-    expect(est.timeRate).toEqual({ eurPerHour: 1.54, durationMs: 2_000 })
-    expect(est.noCacheEur).toBe(est.costEur)
-    expect(
-      estimateLlmCostEur(NO_TOKENS, 'LocalQwenSmall', {
-        durationMs: 2_000,
-        eurPerHour: 3,
-      })!.costEur,
-    ).toBeCloseTo((3 * 2) / 3600, 12)
-  })
-
-  it.each([undefined, Number.NaN, -1])(
-    'leaves an unmeasured small summary unknown (%s)',
-    (durationMs) => {
-      expect(estimateLlmCostEur(ONE_MTOK_EACH, 'LocalQwenSmall', { durationMs })).toBeUndefined()
+  it.each(['LocalQwenSmall', 'PrivateSystemOne'])(
+    'prices %s at €1.54/h and accepts an explicit rate',
+    (client) => {
+      expect(DEFAULT_SMALL_LLM_EUR_PER_HOUR).toBe(1.54)
+      const est = estimateLlmCostEur(ONE_MTOK_EACH, client, { durationMs: 2_000 })!
+      expect(est.basis).toBe('time')
+      expect(est.costEur).toBeCloseTo((1.54 * 2) / 3600, 12)
+      expect(est.timeRate).toEqual({ eurPerHour: 1.54, durationMs: 2_000 })
+      expect(est.noCacheEur).toBe(est.costEur)
+      expect(
+        estimateLlmCostEur(NO_TOKENS, client, {
+          durationMs: 2_000,
+          eurPerHour: 3,
+        })!.costEur,
+      ).toBeCloseTo((3 * 2) / 3600, 12)
     },
   )
+
+  it.each(['LocalQwenSmall', 'PrivateSystemOne'])('leaves unmeasured %s cost unknown', (client) => {
+    for (const durationMs of [undefined, Number.NaN, -1])
+      expect(estimateLlmCostEur(ONE_MTOK_EACH, client, { durationMs })).toBeUndefined()
+  })
 
   it('is €/h × wall-clock, and tokens do not enter it', () => {
     const oneHour = estimateLlmCostEur(NO_TOKENS, VERDA_CLIENT_NAME, {
@@ -252,17 +257,17 @@ describe('attribution: the SELECTED client decides the model', () => {
 
   it('every client the private tier routes a role to has a pricing basis, never "unknown"', async () => {
     // Derived from the route map rather than listed, so a role added to the tier
-    // with a client in none of the three sets (the #418 decide readout's
-    // `LocalQwenSmallDecide` was exactly that client until it joined the local
-    // set) fails here instead of rendering a cost-unknown step in production.
+    // with a client in none of the four sets fails here.
     const { VERDA_CLIENT_BY_ROLE } = await import('@hames-ai/harness-baml/clients.server')
     const clients = new Set(Object.values(VERDA_CLIENT_BY_ROLE))
-    expect(clients).toContain('LocalQwenSmallDecide')
+    expect(clients).toContain('PrivateSystemOne')
     for (const name of clients) {
       expect(estimateLlmCostEur(ONE_MTOK_EACH, name, { durationMs: 4_000 }), name).toBeDefined()
     }
-    // The decide path retains its existing local basis.
-    expect(estimateLlmCostEur(ONE_MTOK_EACH, 'LocalQwenSmallDecide')?.basis).toBe('local')
+    // The private systemone client shares the metered small box.
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, 'PrivateSystemOne', { durationMs: 4000 })?.basis).toBe(
+      'time',
+    )
   })
 
   it('the local set and the two priced tables are disjoint', () => {

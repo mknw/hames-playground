@@ -691,6 +691,64 @@ describe('XML parts', () => {
   })
 })
 
+// #559: all XML entry points share the same well-formedness boundary.
+// MUTATION: delete the raw-character check; every forbidden-character pin is red.
+describe('XML 1.0 raw characters', () => {
+  const forbidden = [
+    ...Array.from({ length: 0x20 }, (_, code) => code).filter(
+      (code) => ![0x9, 0xa, 0xd].includes(code),
+    ),
+    0xfffe,
+    0xffff,
+    0xd800,
+    0xdbff,
+    0xdc00,
+    0xdfff,
+  ]
+  const positions = {
+    attribute: (c: string) => `<a b="x${c}y"/>`,
+    text: (c: string) => `<a>x${c}y</a>`,
+    elementName: (c: string) => `<a${c}b/>`,
+    attributeName: (c: string) => `<a b${c}c="x"/>`,
+    endTag: (c: string) => `<a></a${c}>`,
+    comment: (c: string) => `<a><!--x${c}y--></a>`,
+    cdata: (c: string) => `<a><![CDATA[x${c}y]]></a>`,
+    instruction: (c: string) => `<?pi x${c}y?><a/>`,
+    declaration: (c: string) => `<?xml version="1.0" x="${c}"?><a/>`,
+    outsideRoot: (c: string) => `<a/>${c}`,
+  }
+  for (const [position, xml] of Object.entries(positions)) {
+    it.each(forbidden)(`refuses raw U+%i in ${position}`, (code) => {
+      const input = xml(String.fromCharCode(code))
+      for (const parse of [() => parseXml(input), () => scanXml(input, () => {})]) {
+        expect(parse).toThrowError('an illegal XML character')
+        expect(refusalOf(parse)).toBe('xml-malformed')
+      }
+      // UTF-8 cannot encode lone surrogates; TextEncoder replaces them.
+      if (code < 0xd800 || code > 0xdfff) {
+        expect(refusalOf(() => parseXml(enc.encode(input)))).toBe('xml-malformed')
+        expect(refusalOf(() => readZip(xmlZip(input)))).toBe('xml-malformed')
+      }
+    })
+  }
+
+  // MUTATION: remove the Unicode regex flag (rejects valid surrogate pairs),
+  // or include tab/LF/CR in the forbidden range; this control turns red.
+  it('accepts tab, LF, CR, XML Char boundaries and astral characters', () => {
+    const value = '\t\n\r' + String.fromCodePoint(0x20, 0xd7ff, 0xe000, 0xfffd, 0x10000, 0x10ffff)
+    const xml = `<?xml version="1.0"?><a b="${value}">${value}<![CDATA[${value}]]></a>`
+    for (const input of [xml, enc.encode(xml)]) {
+      const root = parseXml(input)
+      expect(root.attributes[0].value).toBe(value.replace(/[\t\n\r]/g, ' '))
+      expect(root.children).toEqual([value, value])
+      const visit = vi.fn()
+      scanXml(input, visit)
+      expect(visit).toHaveBeenCalledTimes(1)
+    }
+    expect(readZip(xmlZip(xml))).toHaveLength(1)
+  })
+})
+
 describe('parseXml', () => {
   const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 

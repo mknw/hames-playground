@@ -522,10 +522,11 @@ Two values can supply it, and one rule picks between them
 - **A declared budget is clamped to `SETTINGS_BOUNDS`** (`[1, 15]` for
   `maxToolTurns`), which a call-site literal otherwise bypasses. Load-bearing,
   not hygiene: the stuck-run reaper derives the longest turn the app may
-  legitimately run from that ceiling (`MAX_SEQUENTIAL_LLM_CALLS`,
-  `lib/db/conversations.server.ts`), so an agent pinning `maxTurns: 40` would
-  not raise the threshold — it would make an honest turn outlast it and be
-  reaped mid-flight. Raising a budget past the ceiling is therefore a deliberate
+  legitimately run from that ceiling for its age backstop
+  (`HUNG_TURN_BACKSTOP_MINUTES`, `lib/db/conversations.server.ts`; the reaper's
+  primary test is the turn lease), so an agent pinning `maxTurns: 40` would
+  not raise the backstop — it would make an honest, renewing turn outlast it and
+  be reaped mid-flight. Raising a budget past the ceiling is therefore a deliberate
   edit to the bound (and so to the reaper), never a side effect of one agent's
   config. The floor matters too: a declared `0` used to run zero rounds and
   record nothing at all.

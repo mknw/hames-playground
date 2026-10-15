@@ -174,3 +174,12 @@ describe('setStoredInferenceTier', () => {
     expect(params[0]).toBe("user-'; DROP TABLE user_prefs; --")
   })
 })
+
+it('persists the memory switch independently and leaves the tier seed untouched', async () => {
+  const { setMemoryEnabledForUser } = await import('../../../lib/db/user-prefs.server')
+  await setMemoryEnabledForUser('synthetic-owner', false)
+  const { sql, params } = lastRealQuery()
+  expect(params).toEqual(['synthetic-owner', false])
+  expect(sql).toContain('memory_enabled = EXCLUDED.memory_enabled')
+  expect(sql).not.toContain('inference_tier')
+})

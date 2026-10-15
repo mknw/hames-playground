@@ -144,3 +144,13 @@ export async function getMemoryEnabled(userId: string): Promise<boolean> {
   )
   return rows[0]?.memory_enabled === true
 }
+
+/** Commit independently before erasure: later writers must observe the switch. */
+export async function setMemoryEnabledForUser(userId: string, enabled: boolean): Promise<void> {
+  await ensureSchema()
+  await query(
+    `INSERT INTO user_prefs (user_id, memory_enabled) VALUES ($1, $2)
+     ON CONFLICT (user_id) DO UPDATE SET memory_enabled = EXCLUDED.memory_enabled, updated_at = NOW()`,
+    [userId, enabled],
+  )
+}

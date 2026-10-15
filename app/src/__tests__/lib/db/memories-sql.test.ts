@@ -25,14 +25,20 @@ interface Sent {
 const sent: Sent[] = []
 let failOn: (sql: string) => boolean = () => false
 let reply: (sql: string) => { rows: unknown[]; rowCount?: number } = () => ({ rows: [] })
+const mockQuery = async (sql: string, params: unknown[] = []) => {
+  if (failOn(sql)) throw new Error(`mocked db failure for: ${sql.trim().slice(0, 40)}`)
+  sent.push({ sql: sql.replace(/\s+/g, ' ').trim(), params })
+  return reply(sql)
+}
 vi.mock('../../../lib/db/client.server', () => ({
   databaseUrl: () => 'postgresql://x:x@127.0.0.1:59999/x',
   onClosePool: vi.fn(),
-  query: vi.fn(async (sql: string, params: unknown[] = []) => {
-    if (failOn(sql)) throw new Error(`mocked db failure for: ${sql.trim().slice(0, 40)}`)
-    sent.push({ sql: sql.replace(/\s+/g, ' ').trim(), params })
-    return reply(sql)
-  }),
+  SCHEMA_LOCK_KEY: 'hames:schema-init',
+  query: vi.fn(mockQuery),
+  // The ensure runs in one transaction (#592); the mock's "transaction" is the same recorder.
+  withTransaction: vi.fn(async (fn: (tx: { query: typeof mockQuery }) => unknown) =>
+    fn({ query: mockQuery }),
+  ),
 }))
 
 const repo = await import('../../../lib/db/memories.server')
@@ -50,21 +56,37 @@ const insert = () =>
     embedSpace: 'qwen3-0.6b',
   })
 
+/** A database with pgvector installed and no recorded memory DDL hash. */
+const defaultReply = (sql: string) =>
+  /FROM pg_extension|schema_meta|pg_available_extensions/.test(sql) &&
+  !/INSERT INTO schema_meta/.test(sql)
+    ? { rows: /FROM pg_extension/.test(sql) ? [{ '?column?': 1 }] : [], rowCount: 1 }
+    : { rows: [], rowCount: 1 }
+
+/** Schema-ensure statements keep their default answers; `fn` answers everything else. */
+const dataReply = (fn: (sql: string) => { rows: unknown[]; rowCount?: number }) => (sql: string) =>
+  /pg_extension|pg_available_extensions|schema_meta|pg_advisory/.test(sql)
+    ? defaultReply(sql)
+    : fn(sql)
+
 beforeEach(() => {
   sent.length = 0
   failOn = () => false
-  reply = () => ({ rows: [], rowCount: 1 })
+  reply = defaultReply
   repo.resetMemoriesSchemaForTests()
 })
 
 describe('the missing-extension fail policy', () => {
+  const noVector = (sql: string) =>
+    /FROM pg_extension|pg_available_extensions/.test(sql) ? { rows: [] } : defaultReply(sql)
+
   it('disables memory, not the database: ensure resolves, no DDL runs, ops get a named error', async () => {
-    failOn = (sql) => sql.includes('CREATE EXTENSION')
+    reply = noVector
     // The ensure must NOT reject — the environment, not a fault.
     await expect(repo.ensureMemoriesSchema()).resolves.toBeUndefined()
     expect(repo.isMemoryAvailable()).toBe(false)
-    // The tables were never attempted: the `vector` type would not resolve.
-    expect(sent.filter((s) => s.sql.startsWith('CREATE TABLE'))).toHaveLength(0)
+    // Neither the extension nor the tables were attempted.
+    expect(sent.filter((s) => /^CREATE (TABLE|EXTENSION)/.test(s.sql))).toHaveLength(0)
 
     await expect(insert()).rejects.toMatchObject({ name: 'MemoryUnavailableError' })
     await expect(repo.listMemoriesForUser('user-a')).rejects.toMatchObject({
@@ -73,12 +95,11 @@ describe('the missing-extension fail policy', () => {
     await expect(repo.deleteAllMemoriesForUser('user-a')).rejects.toMatchObject({
       name: 'MemoryUnavailableError',
     })
-    // And the policy never opened the tables' DDL to get there.
     expect(sent.filter((s) => s.sql.startsWith('CREATE TABLE'))).toHaveLength(0)
   })
 
-  it('is sticky within the process — a retry does not re-run CREATE EXTENSION per operation', async () => {
-    failOn = (sql) => sql.includes('CREATE EXTENSION')
+  it('is sticky within the process — a retry does not re-check the catalog per operation', async () => {
+    reply = noVector
     await repo.ensureMemoriesSchema()
     const afterFirst = sent.length
     await repo.ensureMemoriesSchema()
@@ -86,27 +107,93 @@ describe('the missing-extension fail policy', () => {
     expect(sent.length).toBe(afterFirst)
   })
 
+  it('a role that may not CREATE EXTENSION disables memory (the environment, sticky)', async () => {
+    reply = (sql) =>
+      /FROM pg_extension/.test(sql)
+        ? { rows: [] }
+        : /pg_available_extensions/.test(sql)
+          ? { rows: [{}] }
+          : defaultReply(sql)
+    failOn = (sql) => {
+      if (!sql.includes('CREATE EXTENSION')) return false
+      throw Object.assign(new Error('permission denied to create extension'), { code: '42501' })
+    }
+    await expect(repo.ensureMemoriesSchema()).resolves.toBeUndefined()
+    expect(repo.isMemoryAvailable()).toBe(false)
+  })
+
+  // A 42501 anywhere but CREATE EXTENSION (a table owner, schema_meta) is a fault, not the environment.
+  it('a privilege refusal on the DDL rejects and is not sticky', async () => {
+    failOn = (sql) => {
+      if (!sql.trim().startsWith('CREATE TABLE')) return false
+      throw Object.assign(new Error('must be owner of table conversations'), { code: '42501' })
+    }
+    await expect(repo.ensureMemoriesSchema()).rejects.toThrow(/must be owner/)
+    expect(repo.isMemoryAvailable()).toBe(false)
+    failOn = () => false
+    await expect(repo.ensureMemoriesSchema()).resolves.toBeUndefined()
+    expect(repo.isMemoryAvailable()).toBe(true)
+  })
+
+  // #592: any OTHER failure (a lost CREATE EXTENSION race is a unique violation) is
+  // not "no pgvector": it rejects, is not sticky, and the next call retries.
+  it('a CREATE EXTENSION failure that is not a privilege refusal rejects and retries', async () => {
+    reply = (sql) =>
+      /FROM pg_extension/.test(sql)
+        ? { rows: [] }
+        : /pg_available_extensions/.test(sql)
+          ? { rows: [{}] }
+          : defaultReply(sql)
+    failOn = (sql) => sql.includes('CREATE EXTENSION')
+    await expect(repo.ensureMemoriesSchema()).rejects.toThrow(/mocked db failure/)
+    expect(repo.isMemoryAvailable()).toBe(false)
+    failOn = () => false
+    await expect(repo.ensureMemoriesSchema()).resolves.toBeUndefined()
+    expect(repo.isMemoryAvailable()).toBe(true)
+  })
+
   it('a DDL failure (not the extension) still rejects and retries on the next call', async () => {
     failOn = (sql) => sql.trim().startsWith('CREATE TABLE')
     await expect(repo.ensureMemoriesSchema()).rejects.toThrow(/mocked db failure for: CREATE TABLE/)
-    // The rejected memo was dropped, so a later ensure re-attempts — the same
-    // transient-failure contract client.server.ts's own ensure keeps.
     failOn = () => false
     await expect(repo.ensureMemoriesSchema()).resolves.toBeUndefined()
     expect(repo.isMemoryAvailable()).toBe(true)
   })
 })
 
-describe('the ensure sends the extension first, then the DDL', () => {
-  it('CREATE EXTENSION precedes one DDL statement naming both tables', async () => {
+describe('the ensure takes the schema lock first, then the extension, then the DDL', () => {
+  it('lock precedes everything; one DDL statement names both tables and records its hash', async () => {
     await repo.ensureMemoriesSchema()
-    expect(sent[0]?.sql).toBe('CREATE EXTENSION IF NOT EXISTS vector')
+    // Isolation pinned first (the waiter's snapshot must postdate the lock grant), then the lock.
+    expect(sent[0]?.sql).toBe('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+    expect(sent[1]?.sql).toContain('pg_advisory_xact_lock')
+    expect(sent[1]?.params).toEqual(['hames:schema-init'])
     const ddl = sent.filter((s) => s.sql.startsWith('CREATE TABLE'))
     expect(ddl).toHaveLength(1)
     expect(ddl[0]!.sql).toContain('CREATE TABLE IF NOT EXISTS memories')
     expect(ddl[0]!.sql).toContain('CREATE TABLE IF NOT EXISTS memory_sources')
+    expect(sent.some((s) => s.sql.startsWith('INSERT INTO schema_meta'))).toBe(true)
     // Spec §5: no tsvector, no ANN index in v1 — recall is exact by construction.
     expect(sent.some((s) => /tsvector|hnsw|ivfflat/i.test(s.sql))).toBe(false)
+  })
+
+  it('the DDL is bounded by lock_timeout, set inside the transaction before it runs', async () => {
+    await repo.ensureMemoriesSchema()
+    const at = (re: RegExp) => sent.findIndex((x) => re.test(x.sql))
+    expect(at(/^SET LOCAL lock_timeout = \d+$/)).toBeGreaterThan(at(/pg_advisory_xact_lock/))
+    expect(at(/^SET LOCAL lock_timeout/)).toBeLessThan(at(/^CREATE TABLE IF NOT EXISTS memories/))
+  })
+
+  it('shares the lock key with client.server.ts instead of repeating the literal', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync('src/lib/db/memories.server.ts', 'utf8')
+    expect(src).not.toContain('hames:schema-init')
+    expect(src).toMatch(/SCHEMA_LOCK_KEY,\s*\n\s*withTransaction/)
+  })
+
+  it('an extension already installed is never CREATEd again', async () => {
+    await repo.ensureMemoriesSchema()
+    expect(sent.some((s) => s.sql.includes('CREATE EXTENSION'))).toBe(false)
   })
 })
 
@@ -139,7 +226,7 @@ describe('every write to a memory row carries ciphertext, and every read is owne
 
   it('listMemoriesForUser: WHERE user_id, and decrypts with table.column labels', async () => {
     const { encryptField } = await import('../../../lib/db/crypto.server')
-    reply = () => ({
+    reply = dataReply(() => ({
       rows: [
         {
           id: 'mem-1',
@@ -155,9 +242,11 @@ describe('every write to a memory row carries ciphertext, and every read is owne
           last_seen_at: new Date(0),
         },
       ],
-    })
+    }))
     const rows = await repo.listMemoriesForUser('user-a')
-    const readStmt = sent.find((s) => s.sql.startsWith('SELECT'))!
+    const readStmt = sent.find(
+      (s) => s.sql.startsWith('SELECT') && s.sql.includes('FROM memories'),
+    )!
     expect(readStmt.sql).toContain('WHERE user_id = $1')
     expect(readStmt.params).toEqual(['user-a'])
     expect(rows).toHaveLength(1)
@@ -218,8 +307,9 @@ describe('#531: the conversation-delete erase, by the SQL it sends', () => {
     expect(txSent.some((s) => s.sql.startsWith('DELETE'))).toBe(false)
   })
 
-  it('erases on tx even after CREATE EXTENSION failed while the tables exist', async () => {
-    failOn = (sql) => sql.includes('CREATE EXTENSION')
+  it('erases on tx even after the extension was found missing while the tables exist', async () => {
+    reply = (sql) =>
+      /pg_extension|pg_available_extensions/.test(sql) ? { rows: [] } : defaultReply(sql)
     await repo.ensureMemoriesSchema()
     expect(repo.isMemoryAvailable()).toBe(false)
     expect(await repo.deleteMemoriesForConversations(['conv-a'], 'user-a', tx as never)).toBe(3)
@@ -290,7 +380,7 @@ describe('M7 row erase and access export', () => {
   it('exports decrypted contents, evidence, vectors and all provenance only for the owner', async () => {
     const { encryptField } = await import('../../../lib/db/crypto.server')
     const source = { event_id: 'synthetic-event', conversation_id: 'synthetic-conversation' }
-    reply = (sql) =>
+    reply = dataReply((sql) =>
       sql.includes('SELECT m.*')
         ? {
             rows: [
@@ -303,7 +393,8 @@ describe('M7 row erase and access export', () => {
               },
             ],
           }
-        : { rows: [] }
+        : { rows: [] },
+    )
     const out = await repo.exportMemoryDataForUser('synthetic-owner')
     expect(out).toEqual([
       {

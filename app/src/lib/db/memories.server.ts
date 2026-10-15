@@ -25,8 +25,9 @@
  *
  * **A missing extension disables memory, not the database.** Concretely:
  *
- * - {@link ensureMemoriesSchema} attempts `CREATE EXTENSION` first. If it
- *   fails, the reason is logged once, the module marks memory **unavailable
+ * - {@link ensureMemoriesSchema} checks the catalog for the extension first
+ *   (creating it when offered, under the schema lock — #592). If it is absent
+ *   (or the role may not create it), the reason is logged once, the module marks memory **unavailable
  *   for this process**, and the promise still RESOLVES — nothing throws out
  *   of the ensure, and no `CREATE TABLE` is attempted (the `vector` type
  *   would not resolve anyway).
@@ -35,8 +36,8 @@
  *   so a caller (the recall step, the store pipeline) can tell "memory is
  *   switched off here" apart from a storage fault, per the spec's rule that
  *   memory is opportunistic: its failure must never fail the turn.
- * - The mark is deliberately STICKY for the process: retrying would re-run
- *   `CREATE EXTENSION` (and re-log the failure) on every memory operation,
+ * - The mark is deliberately STICKY for the process: retrying would re-check the
+ *   catalog (and re-log the reason) on every memory operation,
  *   which on a vector-less host is one log line per recalled turn. A restart
  *   after installing the extension retries naturally. Tests reset the mark
  *   with {@link resetMemoriesSchemaForTests}.
@@ -76,6 +77,7 @@
  * conversation deletes run in their own transaction
  * ({@link deleteMemoriesForConversations}, #531).
  */
+import { createHash } from 'node:crypto'
 import pg from 'pg'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type {
@@ -88,7 +90,14 @@ import type {
   MemoryWriteTx,
 } from '@hames-ai/harness-patterns/types'
 import { decryptField, encryptField } from './crypto.server'
-import { databaseUrl, onClosePool, query, type TxQuery } from './client.server'
+import {
+  databaseUrl,
+  onClosePool,
+  query,
+  SCHEMA_LOCK_KEY,
+  withTransaction,
+  type TxQuery,
+} from './client.server'
 
 assertServerOnImport()
 
@@ -240,35 +249,124 @@ export class MemoryUnavailableError extends Error {
 let _ensurePromise: Promise<void> | null = null
 let _available = false
 
+/** `schema_meta` key under which the applied {@link MEMORY_DDL} hash is recorded (#592). */
+const MEMORY_DDL_HASH_KEY = 'memory_ddl_hash'
+const MEMORY_DDL_HASH = createHash('sha256').update(MEMORY_DDL).digest('hex')
+/** Every relation the DDL creates by name — what the skip path re-checks. */
+const MEMORY_RELATIONS = [
+  ...MEMORY_DDL.matchAll(/CREATE (?:UNIQUE )?(?:TABLE|INDEX) IF NOT EXISTS (\w+)/g),
+].map((m) => m[1])
+
+/** SQLSTATE `insufficient_privilege`. */
+const INSUFFICIENT_PRIVILEGE = '42501'
+
+/** `CREATE EXTENSION vector` was refused for lack of privilege — the environment, not a fault. The ONLY
+ *  failure of the ensure that is a sticky memory-off; a 42501 anywhere else (a table owner, `schema_meta`) rejects. */
+class ExtensionPrivilegeError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause })
+    this.name = 'ExtensionPrivilegeError'
+  }
+}
+
 /**
- * Create the extension and both tables, once per process. Resolves whatever
- * the extension verdict was — a missing extension is the environment, not an
- * error (the fail policy, above). Only a failure of the DDL itself rejects,
- * and that rejects with a reset promise, so a transient outage retries on the
- * next call exactly like `client.server.ts`'s own ensure does.
+ * Create the extension and both tables, once per process, serialised across
+ * processes (#592). Resolves whatever the extension verdict was — a missing
+ * extension is the environment, not an error (the fail policy, above). Only a
+ * failure of the DDL itself rejects, and that rejects with a reset promise, so
+ * a transient outage retries on the next call exactly like `client.server.ts`'s
+ * own ensure does.
+ *
+ * One transaction behind the same `pg_advisory_xact_lock` as the main schema
+ * init (#585). Under it:
+ * - "unavailable" is decided by the catalog (`pg_extension`, then
+ *   `pg_available_extensions`), never by an error. `CREATE EXTENSION IF NOT
+ *   EXISTS` loses a race with a unique violation, and treating that as "no
+ *   pgvector" disabled memory for the whole process. An error here other than
+ *   a privilege refusal REJECTS (not sticky; the next call retries).
+ * - the DDL is skipped when `schema_meta` records the current hash AND every
+ *   relation it names exists (catalog lookups, no table lock), because its
+ *   `ALTER TABLE memories` (ACCESS EXCLUSIVE) and `CREATE UNIQUE INDEX ON
+ *   conversations` (SHARE) queue behind open transactions even when they
+ *   change nothing — and everything else then queues behind them.
+ * `MEMORY_DDL` must stay idempotent and additive-only, as `SCHEMA_SQL` must.
+ * Recovery from drift the relation check cannot see:
+ * `DELETE FROM schema_meta WHERE key = 'memory_ddl_hash'`, then restart.
  */
 export async function ensureMemoriesSchema(): Promise<void> {
   if (!_ensurePromise) {
     _ensurePromise = (async () => {
+      let available: boolean
       try {
-        await query('CREATE EXTENSION IF NOT EXISTS vector')
+        available = await withTransaction(applyMemorySchema)
       } catch (err) {
-        // Fail policy: memory off, database stays up, one log line, sticky.
-        _available = false
+        if (!(err instanceof ExtensionPrivilegeError)) throw err
         console.warn(
-          '[memories] memory is disabled: `CREATE EXTENSION vector` failed. ' +
+          '[memories] memory is disabled: this role may not `CREATE EXTENSION vector`. ' +
             `${err instanceof Error ? err.message : String(err)}`,
         )
-        return
+        available = false
       }
-      await query(MEMORY_DDL)
-      _available = true
+      _available = available
     })().catch((err) => {
       _ensurePromise = null // allow retry on next call
       throw err
     })
   }
   return _ensurePromise
+}
+
+/** The transaction body of {@link ensureMemoriesSchema}; resolves whether memory is available. */
+async function applyMemorySchema(tx: TxQuery): Promise<boolean> {
+  // Explicit, like `applySchema`: under REPEATABLE READ / SERIALIZABLE the snapshot would
+  // predate the lock grant and the waiter would miss the winner's extension, hash and FK.
+  await tx.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+  await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [SCHEMA_LOCK_KEY])
+  const installed = await tx.query(`SELECT 1 FROM pg_extension WHERE extname = 'vector'`)
+  if (installed.rows.length === 0) {
+    const offered = await tx.query(`SELECT 1 FROM pg_available_extensions WHERE name = 'vector'`)
+    if (offered.rows.length === 0) {
+      // Fail policy: memory off, database stays up, one log line, sticky.
+      console.warn(
+        '[memories] memory is disabled: the pgvector extension is not installed on this Postgres.',
+      )
+      return false
+    }
+    try {
+      await tx.query('CREATE EXTENSION IF NOT EXISTS vector')
+    } catch (err) {
+      if ((err as { code?: string } | null)?.code === INSUFFICIENT_PRIVILEGE) {
+        throw new ExtensionPrivilegeError(err)
+      }
+      throw err
+    }
+  }
+  const recorded = await tx.query(`SELECT value FROM schema_meta WHERE key = $1`, [
+    MEMORY_DDL_HASH_KEY,
+  ])
+  let current = recorded.rows[0]?.value === MEMORY_DDL_HASH
+  if (current) {
+    const present = await tx.query(
+      `SELECT bool_and(to_regclass(n) IS NOT NULL)
+          AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'memory_sources_conversation_owner_fk') AS ok
+         FROM unnest($1::text[]) AS n`,
+      [MEMORY_RELATIONS],
+    )
+    current = present.rows[0]?.ok === true
+  }
+  if (!current) {
+    // This transaction holds the schema lock every fresh process's init waits on: the DDL's
+    // ACCESS EXCLUSIVE on `memories` queues behind a memory write transaction (up to
+    // MEMORY_IDLE_IN_TX_TIMEOUT_MS), so bound it. 55P03 rejects, is not sticky, and retries.
+    await tx.query(`SET LOCAL lock_timeout = ${MEMORY_LOCK_TIMEOUT_MS}`)
+    await tx.query(MEMORY_DDL)
+    await tx.query(
+      `INSERT INTO schema_meta (key, value) VALUES ($1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [MEMORY_DDL_HASH_KEY, MEMORY_DDL_HASH],
+    )
+  }
+  return true
 }
 
 /** Whether the last ensure found the extension and created the tables. */
@@ -288,7 +386,7 @@ async function ready(): Promise<void> {
   if (!_available) {
     // The ensure logged the reason already; this is the named error callers
     // branch on.
-    throw new MemoryUnavailableError(new Error('CREATE EXTENSION vector did not succeed'))
+    throw new MemoryUnavailableError(new Error('the pgvector extension is not available'))
   }
 }
 

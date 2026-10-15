@@ -77,9 +77,20 @@
  *     deployment is unreachable either.
  *
  * One endpoint that can be fast on a cold box and hung on a wakeable one is not a
- * readiness signal in either direction. The only probe that proves the model is
- * loaded is one that makes the model produce something, which is why this module
- * treats a `/models` result as diagnostics and never as a decision.
+ * readiness signal in either direction. On the 27B, the only probe that proves
+ * the model is loaded is one that makes it produce something, which is why
+ * this module treats a `/models` result as diagnostics and never as a decision.
+ *
+ * ## The second box
+ *
+ * The small box uses `GET <base without /v1>/health`: its post-restore checks
+ * gate the 200 on readiness. The local llama.cpp server also answers 503 while
+ * loading and 200 once ready. A cold ingress answers 503 immediately rather
+ * than holding the request, so polling health covers the snapshot restore
+ * without generating tokens. The `/v1/models` lesson above does not transfer
+ * to this endpoint: it has a different readiness contract. The 27B must keep
+ * its completion probe. Copying that probe onto the small box would also risk
+ * the llama-server crash on repeated `max_tokens: 1` completions.
  *
  * ## Which failures are retried, and which end it on the spot
  *
@@ -344,6 +355,13 @@ interface WakeTarget {
   completed: () => void
   request: () => { url: string; init: RequestInit }
 }
+/**
+ * One poll shared by its current subscribers. Each subscriber leaves in its
+ * `finally`; the last one to leave aborts and drains an unsettled poll before
+ * returning, so a failed parallel wake leaves no orphan request or timer.
+ * Subscribers still attached keep the poll alive. A settled poll has already
+ * cleared its own slot, so leaving it neither aborts it nor clears a newer one.
+ */
 interface Flight {
   promise: Promise<number>
   controller: AbortController
@@ -362,9 +380,21 @@ function createWake(target: WakeTarget) {
     reset: () => {
       state.inFlight = null
     },
+    /**
+     * Ensure this box is up before real calls. Only proven warmth skips the
+     * poll; unknown state pays a probe rather than risking a silent cold wait.
+     * Inside a turn's watch, announce BEFORE the first attempt so the warming
+     * frame lands inside the wait. Without a watch, remain silent and still wait.
+     * Reject on refusal or budget expiry; the caller must end the turn visibly.
+     */
     async ensure(now = Date.now(), signal?: AbortSignal): Promise<void> {
       if (target.provenWarm(now)) return
       noteBoxCallStarting(target.box, now)
+      // The dedupe wraps the WHOLE loop, not one attempt: concurrent turns
+      // share a single poll rather than hammering one replica. Creation and
+      // publication are synchronous, with no await that could interleave them.
+      // Only the starter owns the total duration. A joiner waited a fragment
+      // of that cold start and must settle its watch without inventing a reading.
       const mine = state.inFlight === null
       if (!state.inFlight) {
         const controller = new AbortController()
@@ -384,6 +414,9 @@ function createWake(target: WakeTarget) {
       })
       try {
         const duration = await Promise.race([flight.promise, cancelled])
+        // Settle in the CALLER's async context. Inside the shared promise this
+        // would settle only its starter's AsyncLocalStorage watch, leaving the
+        // joiners armed to misrecord their first fast BAML call as a cold start.
         settleBoxColdStart(target.box, mine ? duration : undefined)
       } finally {
         signal?.removeEventListener('abort', onAbort)
@@ -401,12 +434,15 @@ function createWake(target: WakeTarget) {
 
 const verdaWake = createWake({
   box: 'verda',
-  failed: VERDA_WAKE_FAILED,
+  failed: `${VERDA_WAKE_FAILED} (the 27B, VERDA_INFERENCE_ENDPOINT)`,
   timeout: verdaWakeTimeoutMs,
   attemptTimeout: verdaWakeAttemptTimeoutMs,
   interval: verdaWakePollIntervalMs,
   provenWarm: verdaProvenWarm,
   completed: noteVerdaCallCompleted,
+  // Endpoint and key were checked at private-tier entry. Read them per call,
+  // not at module load, so a script setting env before importing a pattern is
+  // seen here too; a wake must use the same host configuration as the real call.
   request: () => ({
     url: `${(process.env.VERDA_INFERENCE_ENDPOINT ?? '').replace(/\/$/, '')}/chat/completions`,
     init: {
@@ -418,6 +454,9 @@ const verdaWake = createWake({
       body: JSON.stringify({
         model: VERDA_MODEL_ID,
         messages: [{ role: 'user', content: VERDA_WAKE_PROMPT }],
+        // The cheapest completion that still forces the weights to load. Not
+        // zero: some servers reject `max_tokens: 0` before generation, which
+        // proves nothing about readiness.
         max_tokens: 1,
         temperature: 0,
       }),
@@ -543,7 +582,7 @@ async function poll(target: WakeTarget, signal: AbortSignal): Promise<number> {
       (target.box === 'verda'
         ? 'slow — the longest start measured on it is about 6 minutes (2026-08-27) — but this is '
         : 'slow — a first boot after redeploy was measured at 577s — but this is ') +
-      `past the ${Math.round(budgetMs / 1000)}s this wake is given. ${target.box === 'verda' ? 'Box: 27B. ' : ''}${NO_FALLBACK}`,
+      `past the ${Math.round(budgetMs / 1000)}s this wake is given. ${NO_FALLBACK}`,
   )
 }
 
@@ -585,9 +624,7 @@ async function attempt(
         detail ? ` — ${detail.slice(0, 300)}` : ''
       }`
       if (isRefusal(res.status)) {
-        throw new WakeRefused(
-          `${target.failed}: it ${said}. ${target.box === 'verda' ? 'Box: 27B. ' : ''}${NO_FALLBACK}`,
-        )
+        throw new WakeRefused(`${target.failed}: it ${said}. ${NO_FALLBACK}`)
       }
       return said
     }

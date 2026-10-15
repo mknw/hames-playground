@@ -234,9 +234,9 @@ export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
  *    a `globalThis` symbol inside that module, so a user who clicks and then
  *    sends a message, or two users on the same box, share one request instead of
  *    queueing two cold starts on a single replica.
- *  - **A click on a warm box is free.** `ensurePrivateTierAwake` returns on
- *    `verdaProvenWarm` without touching the network, so the button cannot bill
- *    GPU seconds for a box that is already up.
+ *  - **A click on warm boxes is free.** `ensurePrivateTierAwake` returns without
+ *    touching the network only when BOTH boxes are proven warm; a warm 27B
+ *    with an expired small clock costs one `GET /health`, which bills no generation.
  *  - **The measurement stays honest.** Only the caller that STARTED the ping
  *    records its duration, and the plausibility floor still applies, so a click
  *    cannot enter a four-second no-op into the cold-start history the chat's

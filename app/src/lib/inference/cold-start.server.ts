@@ -316,7 +316,12 @@ export type ColdStartListener = (estimate: ColdStartEstimate) => void
 
 interface TurnWatch {
   notify: ColdStartListener
+  /** Set once any box announces, so one turn emits only one warming frame. */
   fired: boolean
+  /** Per-box evidence and settlement, independent of the turn's single notice.
+   *  `recordable` requires PROVEN coldness; a fired-but-unrecordable watch
+   *  shows the notice and measures nothing. `settled` limits each box to one
+   *  reading per turn, including joiners that settle without a duration. */
   boxes: Partial<Record<WakeBox, { recordable: boolean; settled: boolean }>>
 }
 
@@ -355,6 +360,12 @@ export function noteBoxCallStarting(box: WakeBox, now = Date.now()): void {
   const watch = watchStore.getStore()
   if (!watch || watch.boxes[box]) return
   if (box === 'verda' ? verdaProvenWarm(now) : smallProvenWarm(now)) return
+  // Evidence of coldness, not merely absence of evidence of warmth: this
+  // process saw this box answer, then its CONFIGURED scale-down window elapsed.
+  // Unknown activity can justify a notice but never a measurement. The window
+  // may differ from the deployment's, and another instance sees other traffic,
+  // so this is necessary, not sufficient: each box's plausibility floor covers
+  // that gap before the reading can enter its history.
   const last = box === 'verda' ? verdaLastCallCompletedAt() : small.lastCompletedAt
   const seconds = box === 'verda' ? verdaScaledownSeconds() : smallScaledownSeconds()
   watch.boxes[box] = { recordable: last !== null && now - last >= seconds * 1000, settled: false }

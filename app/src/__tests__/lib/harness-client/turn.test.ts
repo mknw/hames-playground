@@ -1221,42 +1221,39 @@ describe('what the header learns from a turn', () => {
     expect(ensurePrivateTierAwake).not.toHaveBeenCalled()
   })
 
-  it.each(['27B', 'small model'])(
-    'ends the turn when %s does not wake, and releases the gauge',
-    async (box) => {
-      // THE VISIBLE-FAILURE HALF of #273 D-b. A wake that fails must not fall
-      // through to the harness (same 146s wait, now against a 180s timeout) and
-      // must not fall back to Anthropic (confidential prompts to the provider the
-      // tier exists to avoid). It throws, the throw reaches the SSE route's `catch`
-      // as an `error` frame, and the in-flight gauge is still released — otherwise
-      // one dead deployment pins the header to "answering" for the life of the
-      // process.
-      resolveConversationTier.mockResolvedValue('verda')
-      ensurePrivateTierAwake.mockRejectedValueOnce(
-        new Error(`the private ${box} box did not wake; nothing was sent to any other provider.`),
-      )
+  it('ends the turn when the private tier does not wake, and releases the gauge', async () => {
+    // THE VISIBLE-FAILURE HALF of #273 D-b. A wake that fails must not fall
+    // through to the harness (same 146s wait, now against a 180s timeout) and
+    // must not fall back to Anthropic (confidential prompts to the provider the
+    // tier exists to avoid). It throws, the throw reaches the SSE route's `catch`
+    // as an `error` frame, and the in-flight gauge is still released — otherwise
+    // one dead deployment pins the header to "answering" for the life of the
+    // process.
+    resolveConversationTier.mockResolvedValue('verda')
+    ensurePrivateTierAwake.mockRejectedValueOnce(
+      new Error('the private tier did not wake; nothing was sent to any other provider.'),
+    )
 
-      await expect(runTurnAndPersist(interactive())).rejects.toThrow(
-        `the private ${box} box did not wake; nothing was sent to any other provider.`,
-      )
+    await expect(runTurnAndPersist(interactive())).rejects.toThrow(
+      'the private tier did not wake; nothing was sent to any other provider.',
+    )
 
-      // And the harness never started — a partially-run turn on a box that is not
-      // there is the outcome this ordering exists to prevent.
-      expect(getOrBuildPatterns).not.toHaveBeenCalled()
-      expect(beginVerdaTurn).toHaveBeenCalledTimes(1)
-      expect(endVerdaTurn).toHaveBeenCalledTimes(1)
-      // AND THE ROW IS NOT LEFT SPINNING. The wake moved inside `runAndSave`'s try
-      // for this: a first message that cannot wake the box leaves an errored
-      // conversation in the sidebar, the same as a first BAML call that fails
-      // (#105's property), rather than a row stuck at 'running' or no row at all.
-      expect(dbCreateConversation).toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'sess-1', status: 'running' }),
-      )
-      expect(dbReleaseConversationClaim).toHaveBeenCalledWith('sess-1', 'user-1', 'v-seed', {
-        failed: true,
-      })
-    },
-  )
+    // And the harness never started — a partially-run turn on a box that is not
+    // there is the outcome this ordering exists to prevent.
+    expect(getOrBuildPatterns).not.toHaveBeenCalled()
+    expect(beginVerdaTurn).toHaveBeenCalledTimes(1)
+    expect(endVerdaTurn).toHaveBeenCalledTimes(1)
+    // AND THE ROW IS NOT LEFT SPINNING. The wake moved inside `runAndSave`'s try
+    // for this: a first message that cannot wake the box leaves an errored
+    // conversation in the sidebar, the same as a first BAML call that fails
+    // (#105's property), rather than a row stuck at 'running' or no row at all.
+    expect(dbCreateConversation).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'sess-1', status: 'running' }),
+    )
+    expect(dbReleaseConversationClaim).toHaveBeenCalledWith('sess-1', 'user-1', 'v-seed', {
+      failed: true,
+    })
+  })
 
   it('flips a TRIGGERED run out of running when the box does not wake', async () => {
     // The path with no chat to show an error in, and the one the review proved by

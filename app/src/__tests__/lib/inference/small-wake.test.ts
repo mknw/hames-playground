@@ -200,6 +200,7 @@ describe('small box wake', () => {
     )
     const wake = quiet(ensurePrivateTierAwake())
     await vi.advanceTimersByTimeAsync(100)
+    expect(String(await wake)).toContain('VERDA_INFERENCE_ENDPOINT')
     expect(String(await wake)).toContain('27B')
     expect(String(await wake)).toContain(NO_FALLBACK)
     expect(vi.getTimerCount()).toBe(0)

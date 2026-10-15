@@ -574,8 +574,8 @@ function planTurn(
  * `getOrBuildPatterns` so the private tier's first act is still to get the box
  * up rather than to build patterns against a gateway while the GPU sleeps. The
  * announcement seam is unchanged: `runTurnAndPersist` still opens the cold-start
- * watch around all of this, so `ensurePrivateTierAwake`'s `noteVerdaCallStarting` sees
- * the listener and the `warming` frame still lands INSIDE the wait.
+ * watch around all of this, so `ensurePrivateTierAwake` calls `noteBoxCallStarting`
+ * once per box; each sees the listener and the `warming` frame still lands INSIDE the wait.
  */
 async function runAndSave(
   req: TurnRequest,

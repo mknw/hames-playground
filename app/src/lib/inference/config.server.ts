@@ -33,6 +33,7 @@ import { eurPerUsdRate, verdaEurPerHour } from '../cost-rates.server'
 import { VERDA_CLIENT_NAME } from './verda-activity.server'
 import { noteBoxCallStarting } from './cold-start.server'
 import {
+  VERDA_CLIENT_BY_ROLE,
   configureCostPricing,
   configureCostRates,
   configureInferencePolicy,
@@ -192,8 +193,15 @@ configureInferencePolicy({
   defaultTier: () => (verdaInferenceEnabled() ? 'verda' : 'anthropic'),
   assertTierReachable: assertPrivateTierConfigured,
   onPrivateCallStart: (client: string) => {
+    // Key on the resolved CLIENT, not every role in the private tier. The 4B
+    // describe client now scales to zero too, so it owes a notice just like the
+    // 27B; use the role map so a rename cannot silently drop that notice. This
+    // hook only announces inside a turn's watch; it does not wake either box.
+    // LocalQwenSmallDecide keeps its separate readout and existing notice
+    // policy: this change enrolls describe, not every client sharing its host.
+    // Changing the decide transport or its failure policy is a separate change.
     if (client === VERDA_CLIENT_NAME) noteBoxCallStarting('verda')
-    if (client === 'LocalQwenSmall') noteBoxCallStarting('small')
+    if (client === VERDA_CLIENT_BY_ROLE.describe) noteBoxCallStarting('small')
   },
 })
 

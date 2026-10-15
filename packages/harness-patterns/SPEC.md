@@ -523,10 +523,11 @@ Two values can supply it, and one rule picks between them
 - **A declared budget is clamped to `SETTINGS_BOUNDS`** (`[1, 15]` for
   `maxToolTurns`), which a call-site literal otherwise bypasses. Load-bearing,
   not hygiene: the stuck-run reaper derives the longest turn the app may
-  legitimately run from that ceiling (`MAX_SEQUENTIAL_LLM_CALLS`,
-  `lib/db/conversations.server.ts`), so an agent pinning `maxTurns: 40` would
-  not raise the threshold — it would make an honest turn outlast it and be
-  reaped mid-flight. Raising a budget past the ceiling is therefore a deliberate
+  legitimately run from that ceiling for its age backstop
+  (`HUNG_TURN_BACKSTOP_MINUTES`, `lib/db/conversations.server.ts`; the reaper's
+  primary test is the turn lease), so an agent pinning `maxTurns: 40` would
+  not raise the backstop — it would make an honest, renewing turn outlast it and
+  be reaped mid-flight. Raising a budget past the ceiling is therefore a deliberate
   edit to the bound (and so to the reaper), never a side effect of one agent's
   config. The floor matters too: a declared `0` used to run zero rounds and
   record nothing at all.
@@ -1180,6 +1181,20 @@ compactExecution({ mode: 'thread', patternId: 'response-synth', synthesize: baml
 compactExecution({ mode: 'message', synthesize: baml.synthesize }) // Receives only response string
 compactExecution({ mode: 'response', synthesize: baml.synthesize }) // Receives { data, response } object
 compactExecution({ mode: 'thread', synthesize: baml.synthesize }) // Receives full loop history
+
+// Thread mode reads the LAST pattern to enter. Name the patterns instead with
+// `viewConfig.fromPatterns` and it reads EVERY execution of the named patterns
+// within the view's turn window (the caller's `fromLastNTurns`, else the
+// current turn), in log order; duplicate names are ignored. Use this when the
+// loop sits inside a wrapper whose children run in nested views (the last
+// pattern to enter is then a child, and the wrapper's own records are what you
+// want). `fromPatterns: []` means unset. A name absent from the run yields no
+// history, and synthesis drops to `response` mode.
+compactExecution({
+  mode: 'thread',
+  viewConfig: { fromPatterns: ['orchestrator'], fromLastNTurns: 1 },
+  synthesize: baml.synthesize,
+})
 
 // Custom synthesis function
 compactExecution({

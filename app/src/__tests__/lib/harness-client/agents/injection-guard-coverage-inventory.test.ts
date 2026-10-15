@@ -340,10 +340,8 @@ describe('roll-up across every agent', () => {
   })
 
   it('only general-next enables the optional LLM screen', async () => {
-    // `screen` is off everywhere, so the semantic layer is currently dead code
-    // in production — which is worth knowing before reading the screen-gate
-    // findings in `injection-guard-assumptions.test.ts` as a live exposure.
-    // They describe what happens the moment an agent turns it on.
+    // The candidate is the first screen opt-in; the other agents keep their
+    // existing policy. Its semantic layer is part of the S3 composition pins.
     for (const { file } of AGENT_MODULES) {
       const src = readFileSync(join(AGENTS_DIR, file), 'utf8')
       expect(/\bscreen\s*:/.test(src)).toBe(file === 'general-next.server.ts')
@@ -351,9 +349,8 @@ describe('roll-up across every agent', () => {
   })
 
   it('only general-next overrides spotlight; no agent disables a rule', async () => {
-    // Every guarded agent takes the defaults: `spotlight: 'on-detection'`, the
-    // full corpus. So the per-leaf fencing and the false-positive costs
-    // measured in the assumptions suite are what production actually pays.
+    // The candidate takes S-c's always spotlight; the other agents keep
+    // on-detection. Every agent retains the full deterministic corpus.
     for (const { file } of AGENT_MODULES) {
       const src = readFileSync(join(AGENTS_DIR, file), 'utf8')
       expect(/\bspotlight\s*:/.test(src)).toBe(file === 'general-next.server.ts')

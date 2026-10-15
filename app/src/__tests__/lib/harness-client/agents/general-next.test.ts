@@ -22,7 +22,7 @@ import {
   type MemoryConfig,
 } from '@hames-ai/harness-patterns'
 import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox'
-import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
+import { MCP_TOOL_CATALOG, mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
@@ -38,7 +38,7 @@ const GRAPH = [
   'graph_files_shared',
   'graph_file_ingest',
 ]
-const INFO = ['get_neo4j_schema', 'read_neo4j_cypher', 'search', 'fetch']
+const INFO = ['get_neo4j_schema', 'read_neo4j_cypher', 'search', 'fetch', 'fetch_content']
 const SANDBOX = V0_IN_VM_SERVERS.flatMap((s) => Object.values(s.tools))
 const gateway = vi.hoisted(() => ({ names: [] as string[], result: 'synthetic result' as unknown }))
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
@@ -207,6 +207,15 @@ describe('general-next composition', () => {
     )
     const loop = all.find((p) => p.name === 'simpleLoop')!
     expect([...loop.capabilities!.tools!].sort()).toEqual([...INFO].sort())
+    expect(
+      Object.entries(MCP_TOOL_CATALOG)
+        .filter(
+          ([name, namespace]) =>
+            ['web', 'neo4j'].includes(namespace) && name !== 'write_neo4j_cypher',
+        )
+        .map(([name]) => name)
+        .sort(),
+    ).toEqual([...INFO].sort())
     expect(loop.config).toMatchObject({ rememberPriorTurns: false, returnStyle: 'answer' })
     const references = all.find((p) => p.name.startsWith('withReferences('))!
     expect(references.config).toMatchObject({

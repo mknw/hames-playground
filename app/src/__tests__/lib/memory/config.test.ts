@@ -113,7 +113,7 @@ describe('host memory composition', () => {
         { userId: 'alice', sessionId: 'same', memoryAllowed },
         async () => {
           expect(await cfg.enabled()).toBe(memoryAllowed)
-          startTurnMemory(patterns, cfg)
+          await startTurnMemory(patterns, cfg)
           const ctx = createContext('synthetic question')
           await withRunFrame({ inference: { tier: 'anthropic' } }, () => runChain(ctx, patterns))
           expect(ctx.events.find((e) => e.type === 'memory_recalled')?.data).toMatchObject({
@@ -134,7 +134,7 @@ describe('host memory composition', () => {
     const memory = { ...leaf, capabilities: { memory: true as const } }
     await runWithRequestContext({ userId: 'alice', sessionId: 'same' }, async () => {
       expect(await cfg.enabled()).toBe(false)
-      expect(startTurnMemory([memory], cfg)).toBeUndefined()
+      expect(await startTurnMemory([memory], cfg)).toBeUndefined()
     })
     expect(getMemoryEnabled).not.toHaveBeenCalled()
     expect(ensureMemoryAwake).not.toHaveBeenCalled()
@@ -163,11 +163,11 @@ describe('host memory composition', () => {
     await runWithRequestContext(
       { userId: 'alice', sessionId: 'same', memoryAllowed: true },
       async () => {
-        expect(startTurnMemory([leaf], cfg)).toBeUndefined()
-        expect(startTurnMemory([memory])).toBeUndefined()
+        expect(await startTurnMemory([leaf], cfg)).toBeUndefined()
+        expect(await startTurnMemory([memory])).toBeUndefined()
         expect(ensureMemoryAwake).not.toHaveBeenCalled()
         awaitMemoryWake.mockResolvedValueOnce('skipped')
-        expect(startTurnMemory([memory], cfg)).toBe(cfg)
+        expect(await startTurnMemory([memory], cfg)).toBe(cfg)
         await Promise.resolve()
         awaitMemoryWake.mockResolvedValue('awake') // another turn cannot replace ours
         expect(await cfg.awaitWake!(100)).toBe('skipped')
@@ -201,3 +201,23 @@ it('shipped agent factories have no withMemory opt-in', async () => {
     )
   }
 })
+
+it.each(['disabled', 'throw'] as const)(
+  'memory-wake-optin: no box wakes when the user setting is %s',
+  async (setting) => {
+    const cfg = createHostMemoryConfig()
+    const leaf = configurePattern('leaf', async (scope) => scope)
+    const memory = { ...leaf, capabilities: { memory: true as const } }
+    if (setting === 'disabled') getMemoryEnabled.mockResolvedValueOnce(false)
+    else getMemoryEnabled.mockRejectedValueOnce(new Error('preference unavailable'))
+    await runWithRequestContext(
+      { userId: 'alice', sessionId: 'same', memoryAllowed: true },
+      async () => {
+        expect(await startTurnMemory([memory], cfg)).toBeUndefined()
+        expect(ensureMemoryAwake).not.toHaveBeenCalled()
+        expect(awaitMemoryWake).not.toHaveBeenCalled()
+        expect(await waitForTurnMemoryWake(1)).toBe('skipped')
+      },
+    )
+  },
+)

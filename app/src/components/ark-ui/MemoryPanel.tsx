@@ -18,6 +18,7 @@ export function MemoryPanel() {
   const [busy, setBusy] = createSignal(false)
   const [error, setError] = createSignal('')
   const [confirmOpen, setConfirmOpen] = createSignal(false)
+  const [confirmSwitchOff, setConfirmSwitchOff] = createSignal(false)
   const rows = () => data()?.memories.filter((row) => kind() === 'all' || row.kind === kind()) ?? []
   async function run(action: () => Promise<unknown>) {
     setBusy(true)
@@ -87,7 +88,12 @@ export function MemoryPanel() {
               ring="2 transparent focus-within:ui-accent"
               checked={state().enabled}
               disabled={busy()}
-              onCheckedChange={(d) => void run(() => setMemoryEnabled(d.checked))}
+              onCheckedChange={(d) => {
+                if (!d.checked && state().memories.length > 0) {
+                  setConfirmSwitchOff(true)
+                  setConfirmOpen(true)
+                } else void run(() => setMemoryEnabled(d.checked))
+              }}
               flex="~"
               items="center"
               gap="2"
@@ -102,7 +108,12 @@ export function MemoryPanel() {
               >
                 <Switch.Thumb text="ui-accent">{state().enabled ? 'On' : 'Off'}</Switch.Thumb>
               </Switch.Control>
-              <Switch.HiddenInput />
+              <Switch.HiddenInput
+                onChange={(event) => {
+                  // Keep the native checkbox on the persisted value while confirmation is pending.
+                  event.currentTarget.checked = state().enabled
+                }}
+              />
             </Switch.Root>
             <div flex="~ wrap" gap="2">
               <button
@@ -117,7 +128,10 @@ export function MemoryPanel() {
                 cyber-button
                 ring="2 transparent focus-visible:ui-accent"
                 disabled={busy() || state().memories.length === 0}
-                onClick={() => setConfirmOpen(true)}
+                onClick={() => {
+                  setConfirmSwitchOff(false)
+                  setConfirmOpen(true)
+                }}
               >
                 Forget everything
               </button>
@@ -135,12 +149,8 @@ export function MemoryPanel() {
                       value={value}
                       p="2"
                       text="ui-text-primary"
-                      border="b-2 ui-border-primary"
+                      border="b-2 transparent data-[selected]:ui-accent"
                       ring="2 transparent focus-visible:ui-accent"
-                      style={{
-                        'border-bottom-color':
-                          kind() === value ? 'var(--ui-accent)' : 'transparent',
-                      }}
                     >
                       {value}
                     </Tabs.Trigger>
@@ -161,13 +171,13 @@ export function MemoryPanel() {
                               flex="~ col"
                               gap="2"
                             >
-                              <p style={{ 'white-space': 'pre-wrap' }}>{row.content}</p>
+                              <p whitespace="pre-wrap">{row.content}</p>
                               <p text="xs ui-text-secondary">
                                 {row.kind} · {row.tier} · First seen{' '}
                                 {new Date(row.createdAt).toLocaleDateString()} · Last seen{' '}
                                 {new Date(row.lastSeenAt).toLocaleDateString()}
                               </p>
-                              <Show when={row.compactedFrom > 0}>
+                              <Show when={row.compactedFrom > 1}>
                                 <p text="xs ui-text-secondary">Merged from {row.compactedFrom}</p>
                               </Show>
                               <For each={row.sourceConversationIds}>
@@ -214,10 +224,10 @@ export function MemoryPanel() {
           if (!busy()) setConfirmOpen(d.open)
         }}
       >
-        <Dialog.Backdrop position="fixed" style={{ inset: '0' }} bg="ui-bg-primary/80" z="50" />
+        <Dialog.Backdrop position="fixed" inset="0" bg="ui-bg-primary/80" z="50" />
         <Dialog.Positioner
           position="fixed"
-          style={{ inset: '0' }}
+          inset="0"
           flex="~"
           items="center"
           justify="center"
@@ -233,7 +243,9 @@ export function MemoryPanel() {
             flex="~ col"
             gap="4"
           >
-            <Dialog.Title>Forget everything?</Dialog.Title>
+            <Dialog.Title>
+              {confirmSwitchOff() ? 'Turn memory off and forget everything?' : 'Forget everything?'}
+            </Dialog.Title>
             <Dialog.Description>
               This deletes all your saved memories and turns memory off. Recorded prompts and
               backups remain.
@@ -250,12 +262,15 @@ export function MemoryPanel() {
               cyber-button
               ring="2 transparent focus-visible:ui-accent"
               disabled={busy()}
-              onClick={() =>
+              onClick={() => {
+                const action = confirmSwitchOff()
+                  ? () => setMemoryEnabled(false)
+                  : forgetAllMemories
                 void run(async () => {
-                  await forgetAllMemories()
+                  await action()
                   setConfirmOpen(false)
                 })
-              }
+              }}
             >
               Confirm forget everything
             </button>

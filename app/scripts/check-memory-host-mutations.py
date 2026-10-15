@@ -66,7 +66,8 @@ cases = [
     ('optional-deps', '../packages/agents/types.ts', 'memory?: MemoryConfig', 'memory: MemoryConfig', None, None),
 ]
 cases += [
-    ('wake-before-pattern', T, 'const memory = startTurnMemory(patterns, agentDeps().memory)', 'const memory = undefined; setTimeout(() => startTurnMemory(patterns, agentDeps().memory), 0)', turn, 'starts wake before'),
+    ('wake-disabled-user', C, 'if (!(await memory.enabled())) return undefined', 'await memory.enabled()', config, 'memory-wake-optin'),
+    ('wake-before-pattern', T, 'const memory = await startTurnMemory(patterns, agentDeps().memory)', 'const memory = undefined; setTimeout(() => startTurnMemory(patterns, agentDeps().memory), 0)', turn, 'starts wake before'),
     ('settle-after-close', T, 'req.onSettled?.()', 'setTimeout(() => req.onSettled?.(), 0)', turn, 'starts wake before'),
     ('delete-refusal-failed', '../packages/harness-patterns/memory-store.server.ts', 'failed++', 'duplicates++', 'src/__tests__/lib/memory/settle.test.ts', 'delete refusal'),
     ('wake-skips-store', '../packages/harness-patterns/memory-store.server.ts', "if (outcome !== 'awake') return stop('waking')", 'void outcome', 'src/__tests__/lib/memory/settle.test.ts', 'rejected or skipped'),
@@ -96,7 +97,7 @@ cases += [
     ('E2', R, '[s.eventId, s.ordinal]', '[s.eventId, 0]', reconcile, 'keys on'),
     ('F', R, 'tier: source.tier', "tier: 'verda'", reconcile, 'keys on'),
     ('V', R, 'kind: memory.kind', "kind: 'preference'", reconcile, 'keys on'),
-    ('A', T, '!plan.stopOnly ? startTurnMemory(patterns, agentDeps().memory) : undefined', 'startTurnMemory(patterns, agentDeps().memory)', turn, 'stop-only resume of an interactive run'),
+    ('A', T, '!plan.stopOnly ? await startTurnMemory(patterns, agentDeps().memory) : undefined', 'await startTurnMemory(patterns, agentDeps().memory)', turn, 'stop-only resume of an interactive run'),
     ('Q', B, ' || !result.vectors[0].every(Number.isFinite)', '', boot, 'non-finite vector'),
 ]
 # #553 option 1: reject a supplier/wake bypass and origin broadening.

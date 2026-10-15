@@ -608,7 +608,7 @@ async function runAndSave(
     // `attended` (m8), read from the request scope `runTurnAndPersist` wrote —
     // not a second derivation.
     const patterns = await getOrBuildPatterns(sessionId, agentId)
-    const memory = startTurnMemory(patterns, agentDeps().memory)
+    const memory = await startTurnMemory(patterns, agentDeps().memory)
     const result = await amendRunFrame(
       { live: req.onEvent, hitl: { attended: isAttendedRequest() } },
       () => run(patterns),
@@ -887,7 +887,7 @@ async function runResumeAndSave(
     // call, so it must not pay a cold start either.
     if (tier === 'verda' && !plan.stopOnly) await ensureVerdaAwake()
     const patterns = await getOrBuildPatterns(sessionId, loaded.agentId)
-    const memory = !plan.stopOnly ? startTurnMemory(patterns, agentDeps().memory) : undefined
+    const memory = !plan.stopOnly ? await startTurnMemory(patterns, agentDeps().memory) : undefined
     const result = await amendRunFrame(
       { live: req.onEvent, hitl: { attended: isAttendedRequest() } },
       () =>

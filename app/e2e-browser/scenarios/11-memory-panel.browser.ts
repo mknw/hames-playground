@@ -31,7 +31,7 @@ for (const theme of ['dark', 'light'] as const) {
       const vector = JSON.stringify(Array.from({ length: 1024 }, (_, i) => (i === 0 ? 1 : 0)))
       for (const [id, content, merged] of [
         ['m7-first', 'I prefer synthetic examples', 3],
-        ['m7-second', 'I prefer concise replies', 0],
+        ['m7-second', 'I prefer concise replies', 1],
       ] as const) {
         await client.query(
           `INSERT INTO memories (id, user_id, kind, tier, content, evidence, embedding, embed_space, compacted_from)
@@ -46,6 +46,7 @@ for (const theme of ['dark', 'light'] as const) {
     await page.getByRole('tab', { name: 'Memory', exact: true }).click()
     await expect(panel.getByText('I prefer synthetic examples', { exact: true })).toBeVisible()
     await expect(panel.getByText('Merged from 3')).toBeVisible()
+    await expect(panel.getByText('Merged from 1', { exact: true })).toHaveCount(0)
     await expect(panel.getByText(/Forget deletes rows/)).toBeVisible()
     const downloadPromise = page.waitForEvent('download')
     await panel.getByRole('button', { name: 'Export my memories (Art. 15)' }).click()
@@ -64,6 +65,37 @@ for (const theme of ['dark', 'light'] as const) {
     await page.keyboard.press('Escape')
     await expect(dialog).toHaveCount(0)
     await expect(panel.getByText('I prefer concise replies', { exact: true })).toBeVisible()
+    await toggle.click()
+    const switchDialog = page.getByRole('dialog', {
+      name: 'Turn memory off and forget everything?',
+    })
+    await expect(switchDialog).toBeVisible()
+    await switchDialog.getByRole('button', { name: 'Cancel' }).click()
+    await expect(switchDialog).toHaveCount(0)
+    await expect(toggle).toBeChecked()
+    await expect(panel.getByText('I prefer concise replies', { exact: true })).toBeVisible()
+    await toggle.click()
+    await switchDialog.getByRole('button', { name: 'Confirm forget everything' }).click()
+    await expect(switchDialog).toHaveCount(0)
+    await expect(panel.getByText('No saved memories.')).toBeVisible()
+    await expect(toggle).not.toBeChecked()
+    await toggle.check()
+    await expect(toggle).toBeChecked()
+    await expect(toggle).toBeEnabled()
+    const reseed = new pg.Client({ connectionString: TEST_DATABASE_URL })
+    await reseed.connect()
+    try {
+      await reseed.query(
+        `INSERT INTO memories (id, user_id, kind, tier, content, evidence, embedding, embed_space)
+         VALUES ('m7-third', $1, 'preference', 'verda', 'Synthetic again', 'Synthetic again', $2::vector, 'synthetic')`,
+        [BYPASS_USER_ID, JSON.stringify(Array.from({ length: 1024 }, (_, i) => (i === 0 ? 1 : 0)))],
+      )
+    } finally {
+      await reseed.end()
+    }
+    await page.reload()
+    await page.getByRole('tab', { name: 'Memory', exact: true }).click()
+    await expect(panel.getByText('Synthetic again', { exact: true })).toBeVisible()
     await panel.getByRole('button', { name: 'Forget everything', exact: true }).click()
     await dialog.getByRole('button', { name: 'Confirm forget everything' }).click()
     await expect(dialog).toHaveCount(0)

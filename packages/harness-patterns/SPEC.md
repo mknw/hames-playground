@@ -1697,6 +1697,25 @@ by type: `trackHistory ['decision_made', 'controller_action', 'tool_result']`,
 `commitStrategy 'always'`, `errorSeverity 'recoverable'` (the first-iteration
 failure is stamped at the event).
 
+The reference host's `general-next` composition (#507 S3) uses this loop beside
+`general`, without changing the default agent. Its `orchestrator` chooses among
+`office-data` (guarded Microsoft 365 tools and an office sandbox),
+`info-retrieval` (guarded Neo4j reads and web), `read-documents` (the guarded
+Redis retriever, pattern id `retriever`) and `think` (the planner). The web
+route wraps `withReferences` in `withPseudonymisedInputs`, admits only the
+`retriever` sibling plus its own results, and disables independent prior-turn
+results. The orchestrator declares `decision_loop_output`, `spotlight: 'always'`
+and a role-resolved screen; a screen outage follows the marker-only policy
+above. Its thread synthesizer reads this turn's `orchestrator` records.
+
+M7's optional `withMemory` opt-in lives on `general-next`: only synthesis
+receives recalled memory, while decisions and children receive none. The
+private tier refuses an unconfigured `SMALL_LLM_DECISIONS_URL` visibly, with
+no provider fallback. Until P4, the office allowlist withholds
+`graph_file_ingest` by exact name and declares no turn-results materialisation
+capability. Layer-1 composition pins and the layer-2 graph-count conversation
+live in the host; this composition adds no core public API.
+
 ### `judge(evaluator, config?)`
 
 Evaluation pattern that scores or classifies pattern output. Used for quality gates.

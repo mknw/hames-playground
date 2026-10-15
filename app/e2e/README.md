@@ -20,6 +20,16 @@ stream to Postgres. Only the external services are substituted: the inference
 endpoint, the MCP gateway, the document converter, and (for the scenarios that
 install it) Microsoft Graph.
 
+Scenario 12 runs the registered `general-next` candidate against W4's runnable
+graph-count case: two systemone choices, the actual guarded info route, one
+synthesis, SSE and persistence. It also pins the visible error when the private
+decisions shim is unconfigured. This scenario uses the explicit Anthropic tier
+for its successful leg; S7's private input/egress boundary is layer-1 evidence.
+It exercises no P4 file path and boots no sandbox. The test boot mirrors the
+namespace registration normally performed by middleware, without importing the
+production tool transport. The inference fake selects this knowledge route once
+and then `answer`, based on the recorded iteration in its request state.
+
 ## Why it exists
 
 The gap it closes is the one #263 fell into. `ActorController` was rendering a
@@ -237,9 +247,9 @@ to be complete. Add to it when you add a scenario that leaves something out.
   `triggered`; only `interactive` runs here. So the triggered runner's
   pre-seeded-row path (`POST /api/agents/:id`, a routine) is untraversed. A
   paused run's resume has no turn mode yet (#433 S7), so it is untraversed too.
-- **The injection screen, at all.** No agent in this repo enables the opt-in LLM
-  screen, so no scenario here makes a `ScreenUntrustedContent` call — the fake
-  can answer one (`injection_detected: false`) but nothing asks. The fake router
+- **Injection-screen quality.** Scenario 12 runs `general-next`'s screen against
+  the fake's clean verdict and pins that the calls occur. It does not grade
+  classification. The fake router in the older scenarios
   also deliberately picks `neo4j`, so the search agent's guarded `web` route is
   never taken; a conversation scenario should not double as an injection-guard
   scenario. The gap did not close when `screen` joined the tier on 2026-08-26 —
@@ -261,8 +271,9 @@ to be complete. Add to it when you add a scenario that leaves something out.
   says nothing about an unauthenticated caller being refused. That stays
   `SD-13`'s own tests' job.
 - **Graph tools in a turn, and the Data Stash they store into.** Scenario 10
-  calls the Graph tools directly and through `callTool`, not from a turn, and no
-  agent here is given them. `graph_file_ingest` stores through a Data Stash
+  calls the Graph tools directly and through `callTool`. Scenario 12 offers
+  them to `general-next` but selects the Neo4j route; neither executes Graph
+  inside a turn. `graph_file_ingest` stores through a Data Stash
   bridge, and this suite has no stash backend, so `installGraphTools` refuses a
   store by name unless a scenario passes its own `stash`.
 - **Whether the Graph fixtures still look like Graph.** The router's shapes are

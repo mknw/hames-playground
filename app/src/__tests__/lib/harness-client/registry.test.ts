@@ -51,6 +51,9 @@ vi.mock('@hames-ai/agents/agents/search.server', () => ({
 vi.mock('@hames-ai/agents/agents/general.server', () => ({
   generalAgent: stubAgent('general'),
 }))
+vi.mock('@hames-ai/agents/agents/general-next.server', () => ({
+  generalNextAgent: stubAgent('general-next', { usesSandbox: true }),
+}))
 vi.mock('@hames-ai/agents/agents/sandbox.server', () => ({
   sandboxAgent: stubAgent('sandbox', { usesSandbox: true }),
 }))

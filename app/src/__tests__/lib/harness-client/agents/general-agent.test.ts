@@ -173,7 +173,7 @@ describe('general agent — compactExecution view scope', () => {
   })
 })
 
-it('general opts into memory only when its host supplies the shared config', async () => {
+it('general no longer opts into memory after M7 moves to general-next', async () => {
   const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
   const { harnessUsesMemory } = await import('@hames-ai/harness-patterns')
   const memory = {
@@ -190,13 +190,8 @@ it('general opts into memory only when its host supplies the shared config', asy
     ...degradedDeps,
     memory: memory as never,
   })
-  expect(harnessUsesMemory(withConfig)).toBe(true)
-  expect(withConfig.map((p) => p.name)).toEqual([
-    'memoryRecall',
-    'planner',
-    'simpleLoop',
-    'compactExecution',
-  ])
+  expect(harnessUsesMemory(withConfig)).toBe(false)
+  expect(withConfig.map((p) => p.name)).toEqual(['planner', 'simpleLoop', 'compactExecution'])
   expect(
     harnessUsesMemory(await generalAgent.createPatterns('no-memory-general', degradedDeps)),
   ).toBe(false)

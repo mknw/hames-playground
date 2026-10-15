@@ -433,7 +433,16 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
         continue
       }
       const options = Object.keys((q.criteria ?? {}) as Record<string, unknown>)
-      const chosen = q.instructions?.includes('Should a person confirm') ? confirmIndex : 0
+      // S3's graph-count conversation: choose the knowledge route once, then
+      // answer from its record. Other decision scenarios retain their policy.
+      const chosen =
+        name === 'next_step' && options.includes('info-retrieval')
+          ? options.indexOf(
+              String(body.state).includes('1. info-retrieval —') ? 'answer' : 'info-retrieval',
+            )
+          : q.instructions?.includes('Should a person confirm')
+            ? confirmIndex
+            : 0
       const rest = options.length > 1 ? 0.1 / (options.length - 1) : 0
       answers[name] = {
         type: 'choice',
@@ -741,7 +750,9 @@ function replyFor(fn: BamlFunctionName, prompt: string): string {
       }
       return JSON.stringify({
         reasoning: 'Query the graph for a node count.',
-        tool_name: pickTool(prompt),
+        tool_name: prompt.includes('How many Project nodes are in the knowledge graph?')
+          ? 'read_neo4j_cypher'
+          : pickTool(prompt),
         tool_args: FAKE_TOOL_ARGS,
         status: 'Querying the graph',
         is_final: false,

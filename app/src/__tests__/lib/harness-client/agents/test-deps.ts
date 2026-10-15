@@ -24,6 +24,7 @@ import type {
   RetrieverBackend,
 } from '@hames-ai/harness-patterns'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
+import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
 
 /** Fake backend for `retriever({ backends })` — `name: 'redis'` so the
  *  pattern's `capabilities.retrievalBackends` declaration (and therefore
@@ -40,9 +41,14 @@ export const testAgentDeps: AgentDeps = {
   createRedisBackend: () => stubBackend,
   withSandbox: (config) => (pattern: ConfiguredPattern<AgentData>) => {
     const willSync = config.syncWorkspace === true && config.id !== undefined
-    const capabilities: PatternCapabilities | undefined = willSync
-      ? { workspaceSync: true }
-      : undefined
+    const capabilities: PatternCapabilities = {
+      ...pattern.capabilities,
+      tools: [
+        ...(pattern.capabilities?.tools ?? []),
+        ...V0_IN_VM_SERVERS.flatMap((s) => Object.values(s.tools)),
+      ],
+      ...(willSync ? { workspaceSync: true } : {}),
+    }
     return {
       ...pattern,
       name: `withSandbox(${pattern.name})`,

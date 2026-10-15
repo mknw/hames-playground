@@ -8,7 +8,7 @@ name: hames
 #   * Every `ports:` entry is bound to 127.0.0.1. A bare `5432:5432` publishes
 #     on 0.0.0.0, i.e. to the LAN/café Wi-Fi, and on Linux Docker's iptables
 #     rules bypass `ufw` for those publishes. Containers are unaffected: they
-#     reach each other by service name over `app-network`, never through a
+#     reach each other by service name (Neo4j through `neo4j-relay`), never through a
 #     published port.
 #   * The two database passwords are `${VAR:?}` substitutions read from the
 #     repo-ROOT `.env` (Compose's substitution source — not `app/.env`). A
@@ -19,19 +19,21 @@ name: hames
 
 services:
   neo4j:
-    image: neo4j:5.26
+    build: ./docker/neo4j
+    image: hames-neo4j:local
     container_name: hames-neo4j
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:7474:7474"
-      - "127.0.0.1:7687:7687"
     environment:
       - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD in the repo-root .env — see .env.example}
-      - NEO4J_PLUGINS=["apoc", "n10s"]
+      # Plugins are baked into the image: runtime downloads cannot cross the
+      # internal network. File reads fail closed independently of the network.
+      - NEO4J_dbms_security_allow__csv__import__from__file__urls=false
+      - NEO4J_apoc_import_file_enabled=false
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*,n10s.*
     volumes:
       - neo4j_data:/data
     networks:
-      - app-network
+      - neo4j-internal
     healthcheck:
       test:
         [
@@ -41,6 +43,34 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # Only this fixed-destination TCP relay shares Neo4j's internal network.
+  # It accepts HTTP/Bolt inbound; it provides no HTTP proxy or IP forwarding.
+  neo4j-relay:
+    # Registry index bytes verified against Docker-Content-Digest (G13 runbook).
+    init: true
+    image: alpine/socat@sha256:fb3862c949af7c79996d0e514ee96128644d840835ed5368eeecb14a869de361
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        socat TCP-LISTEN:7474,fork,reuseaddr TCP:neo4j:7474 &
+        socat TCP-LISTEN:7687,fork,reuseaddr TCP:neo4j:7687 &
+        wait -n
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    sysctls:
+      net.ipv4.ip_forward: "0"
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    networks:
+      - neo4j-internal
+      - app-network
 
   mcp-config:
     # One-shot: renders configs/mcp-config.yaml's ${NEO4J_PASSWORD} placeholder
@@ -115,8 +145,8 @@ services:
     networks:
       - app-network
     depends_on:
-      neo4j:
-        condition: service_healthy
+      neo4j-relay:
+        condition: service_started
       mcp-config:
         condition: service_completed_successfully
 
@@ -286,7 +316,7 @@ services:
       # in-network rewrites of app/.env's host-facing defaults, with the
       # passwords folded in from the same root-.env variables the databases
       # read. The Neo4j URL needs no entry: config/endpoints.ts resolves
-      # bolt://neo4j:7687 in a production build (the localhost form is the
+      # bolt://neo4j-relay:7687 in a production build (the localhost form is the
       # `import.meta.env.DEV` branch) — only the credential is supplied here.
       - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the repo-root .env — see .env.example}@postgres:5432/hames
       - NEO4J_USER=neo4j
@@ -317,8 +347,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      neo4j:
-        condition: service_healthy
+      neo4j-relay:
+        condition: service_started
       redis:
         condition: service_healthy
       mcp-gateway:
@@ -340,6 +370,10 @@ services:
     # it too; nothing to restate here.
 
 networks:
+  neo4j-internal:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
   app-network:
     driver: bridge
 

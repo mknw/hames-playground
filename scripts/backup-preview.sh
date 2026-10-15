@@ -68,7 +68,7 @@ POSTGRES_USER="${POSTGRES_USER:-postgres}"
 # Must match the neo4j service's image in docker-compose.yaml: the dump runs in
 # a throwaway container against the stopped store, and a newer Neo4j would try
 # to upgrade the store format rather than read it.
-NEO4J_IMAGE="${NEO4J_IMAGE:-neo4j:5.26}"
+NEO4J_IMAGE="${NEO4J_IMAGE:-hames-neo4j:local}"
 NEO4J_DATA_VOLUME="${NEO4J_DATA_VOLUME:-hames_neo4j_data}"
 # How many times to poll Neo4j's healthcheck after the dump before declaring
 # the graph down. Iterations, not seconds: each one is a `docker compose ps`

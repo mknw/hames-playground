@@ -79,6 +79,11 @@ them as-is; a plain `node dist/index.js` does not. Anything that calls a model t
 | [Attaching a sandbox workspace](./attaching-a-sandbox-workspace.md) | Keeping `/work` files between sessions — plugging in a workspace store, `syncWorkspace`, and keeping each user's files separate                                       |
 | [Bring your own provider or model](./own-provider-or-model.md)      | The shipped agents calling a model you supply — a different provider or a self-hosted endpoint — without touching prompts                                             |
 
+**Running the app rather than building on the packages?** One page is for operators:
+[Serving the small models on Modal](./serving-the-small-models-on-modal.md) puts the private
+tier's summarizer and decision model on a GPU that scales to zero, from setting up a Modal
+account to pointing the app at it.
+
 ### Examples directory
 
 Every complete page above also ships its code as one file, under

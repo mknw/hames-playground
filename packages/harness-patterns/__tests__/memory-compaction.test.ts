@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   acceptCompaction,
@@ -45,10 +45,12 @@ describe('compaction-pure', () => {
   it('F9/F10: documents routing, deletion audit and uncancelled late calls explicitly', () => {
     const spec = readFileSync(new URL('../SPEC.md', import.meta.url), 'utf8')
     const types = readFileSync(new URL('../types.ts', import.meta.url), 'utf8')
-    const changeset = readFileSync(
-      new URL('../../../.changeset/memory-core-compaction.md', import.meta.url),
-      'utf8',
-    )
+    // `changeset version` consumes the changeset file and moves its text into the
+    // targeted package's CHANGELOG.md, so the release branch only has the latter.
+    const changesetUrl = new URL('../../../.changeset/memory-core-compaction.md', import.meta.url)
+    const changeset = existsSync(changesetUrl)
+      ? readFileSync(changesetUrl, 'utf8')
+      : readFileSync(new URL('../CHANGELOG.md', import.meta.url), 'utf8')
     expect(types).toContain('company-run only on the private')
     expect(spec).toContain('company-run only on the private tier')
     expect(spec).toContain('Expiry/eviction ids and absorbed-member ids/counts')

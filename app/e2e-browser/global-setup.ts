@@ -155,7 +155,7 @@ export function browserServerEnv(
 
     // ---- The fakes ---------------------------------------------------------
     MCP_GATEWAY_URL: backend.gateway.url,
-    JEV_DECISIONS_URL: backend.llm.baseUrl.replace(/\/v1$/, '') + '/api/alpha/decisions',
+    JEV_DECISIONS_URL: backend.llm.baseUrl + '/systemone',
     JEV_DECISIONS_API_KEY: 'e2e-browser-fake-key',
     // Poison any other OpenRouter consumer too; Jev reads its dedicated key.
     OPENROUTER_API_KEY: 'e2e-browser-fake-key',
@@ -185,6 +185,7 @@ export function browserServerEnv(
     // from the 27B's. The API key is optional in production (llama-server
     // authenticates nothing) and set here only for symmetry with the 27B.
     SMALL_LLM_BASE_URL: backend.llm.baseUrl,
+    SMALL_LLM_DECISIONS_URL: backend.llm.baseUrl + '/systemone',
     SMALL_LLM_API_KEY: 'e2e-browser-fake-key',
     // ---- The deployment CONTROL PLANE ---------------------------------------
     // The header strip asks api.verda.com how many replicas the deployment has

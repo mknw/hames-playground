@@ -32,6 +32,11 @@ import {
   resetLlmUsageObservers,
 } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import { resetVerdaActivity, verdaWarmth } from '../../../lib/inference/verda-activity.server'
+import {
+  noteSmallCallCompleted,
+  resetSmallActivity,
+  smallProvenWarm,
+} from '../../../lib/inference/cold-start.server'
 import { resetCallLatency, tierLatency } from '../../../lib/metrics/call-latency.server'
 import type { EventMetrics } from '@hames-ai/harness-patterns/types'
 // Namespace import: the tier map is read as DATA here, to prove the recorder
@@ -51,6 +56,7 @@ beforeEach(async () => {
   addUsage.mockReset()
   addUsage.mockResolvedValue(undefined)
   resetVerdaActivity()
+  resetSmallActivity()
   resetCallLatency()
   await flushUsage() // drain anything a previous case left pending
   addUsage.mockReset()
@@ -96,7 +102,7 @@ describe('tierOfSample — the selected client is the evidence', () => {
     // (#418) the 4B's one-token decide readout — and the decide client is counted
     // private with no edit to the recorder, which is the property above at work.
     expect(new Set(routed).size).toBe(3)
-    expect(routed).toContain('LocalQwenSmallDecide')
+    expect(routed).toContain('PrivateSystemOne')
   })
 
   it('attributes everything else to Anthropic, including an unnamed client', () => {
@@ -125,11 +131,35 @@ describe('the warm clock does NOT follow the tier attribution', () => {
     recordSample({ functionName: 'ResultDescribe', clientName: 'LocalQwenSmall' }, NOW)
     expect(verdaWarmth(NOW).state).toBe('unknown')
     // The decide readout is the same 4B on the same server: also not evidence.
-    recordSample({ functionName: 'Decide', clientName: 'LocalQwenSmallDecide' }, NOW)
+    recordSample({ functionName: 'Decide', clientName: 'PrivateSystemOne' }, NOW)
     expect(verdaWarmth(NOW).state).toBe('unknown')
 
     recordSample({ functionName: 'LoopController', clientName: 'VerdaQwen' }, NOW)
     expect(verdaWarmth(NOW).state).toBe('warm')
+  })
+})
+
+describe('the small warm clock requires metrics', () => {
+  it('refreshes an expired clock when a describe sample spent tokens', () => {
+    const now = Date.now()
+    noteSmallCallCompleted(now - 200_000)
+    expect(smallProvenWarm(now)).toBe(false)
+    recordSample(
+      {
+        functionName: 'DescribeToolResult',
+        clientName: 'LocalQwenSmall',
+        metrics: metrics(),
+      },
+      now,
+    )
+    expect(smallProvenWarm(now)).toBe(true)
+  })
+
+  it('leaves an expired clock cold when the sample has no metrics', () => {
+    const now = Date.now()
+    noteSmallCallCompleted(now - 200_000)
+    recordSample({ functionName: 'DescribeToolResult', clientName: 'LocalQwenSmall' }, now)
+    expect(smallProvenWarm(now)).toBe(false)
   })
 })
 

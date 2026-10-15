@@ -33,10 +33,8 @@
  *     rejected wake, stops it. Nothing is ever sent to a public provider
  *     instead.
  *  3. ONE `decideFields` over the question/answer pair (O2): `sensitive`,
- *     `target`, `confirm`, `kind`. Fallbacks fail CLOSED (D15) and every field
- *     requires a calibrated read, so an abstained, failed or uncalibrated read
- *     lands on `sensitive` / `none` / `ask` / `episodic`.
- *  4. `sensitive` (including its fallback) stops. `target: none` stops.
+ *     `target`, `confirm`, `kind`. Endpoint verdicts decide; failed calls store nothing.
+ *  4. `sensitive` or an unanswered sensitivity question stops. `target: none` stops.
  *  5. `resolveStoreRoute`: an organisational-graph outcome ALWAYS asks (F2),
  *     whatever `confirm` said; a personal one may skip the question only for a
  *     routine kind. **Pre-M12 there is no graph writer and pre-M6 there is no
@@ -60,8 +58,7 @@
  * row, including the ones that no longer support that text, so deleting a
  * conversation removes every memory that ever drew on it (errs toward erasing
  * more). `evidenceEventId` records which event the stored `evidence` quotes,
- * and the merge question requires a calibrated read, falling back to NOT
- * merging. SPEC.md "Erasure semantics" is the statement M3 inherits.
+ * and a failed merge call keeps both memories. SPEC.md "Erasure semantics" is the statement M3 inherits.
  *
  * Pre-M3 nothing compacts: the report says when the owner's count reaches
  * `softLimit` (`compactionDue`) and M3 acts on it.
@@ -80,8 +77,6 @@ import type {
   ContextEvent,
   DecideAllFn,
   DecideFn,
-  DecisionMethod,
-  DecisionPolicy,
   DecisionSetSpec,
   DecisionSpec,
   LLMCallRecord,
@@ -124,7 +119,7 @@ export interface MemoryStoreFields extends Record<string, string> {
  * The store gate: ONE set, four typed fields over one state. The label
  * descriptions are the only text the model sees for each label, so they carry
  * the whole criterion. Product 3·2·4·2 = 48 exceeds the joint cap, so the set
- * is served as fields (Jev: one request; logprob: one pass per field).
+ * is served as independent systemone questions in one request.
  */
 export const MEMORY_STORE_SET: DecisionSetSpec<MemoryStoreFields> = {
   key: MEMORY_STORE_KEY,
@@ -230,22 +225,10 @@ export const MEMORY_MERGE_SPEC: DecisionSpec<MemoryMergeLabel> = {
 // Configuration
 // ============================================================================
 
-/** The store gate's cuts. UNMEASURED placeholders — layer 4's
- *  `memory-store-gate` calibrates them (and the method-scoped cuts). */
-export interface MemoryStoreGateSettings {
-  /** Default 0.5. */
-  readonly minConfidence?: number
-  /** Default 0.25. */
-  readonly minMargin?: number
-  /** The method the static cuts were fitted on. Default `'logprob'` (#418 F2). */
-  readonly thresholdMethod?: DecisionMethod
-}
-
 export interface MemoryStoreSettings {
   /** The user's memory switch. REQUIRED for a write: absent → nothing is stored
    *  (D11, off until the user enables it). A throw stops the store. */
   readonly enabled?: () => boolean | Promise<boolean>
-  readonly gate?: MemoryStoreGateSettings
   /** Question/answer pairs the gate and the extractor see. Default 1. */
   readonly storeWindowTurns?: number
   /** Candidates read from one extraction. Default 3. */
@@ -257,7 +240,7 @@ export interface MemoryStoreSettings {
    *  question. Default 0.75. UNMEASURED. */
   readonly relatedSimilarity?: number
   /** The merge question runs inside the transaction (it must see the lock's
-   *  world), so it is bounded: past this it abstains and the candidate inserts.
+   *  world), so it is bounded: past this the candidate inserts.
    *  Default 10 000 ms. */
   readonly mergeTimeoutMs?: number
   /** How long to wait on the joint wake. Default 180 000 ms. */
@@ -273,7 +256,7 @@ export interface MemoryStoreSettings {
 export interface MemoryStoreConfig {
   /** REQUIRED: the write seam, bound by the host to the turn's owner. */
   readonly store: MemoryWriteStore
-  /** REQUIRED: the RAW decision seam — this step applies its own policy. */
+  /** REQUIRED: the systemone decision seam. */
   readonly decide: DecideFn
   /** The one-request provider (Jev), when the host has one. */
   readonly decideAll?: DecideAllFn
@@ -342,13 +325,11 @@ const DEFAULT_REL_SIMILARITY = 0.75
 const DEFAULT_MERGE_TIMEOUT_MS = 10_000
 const DEFAULT_WAKE_BUDGET_MS = 180_000
 const DEFAULT_SOFT_LIMIT = 300
-const DEFAULT_MIN_CONFIDENCE = 0.5
-const DEFAULT_MIN_MARGIN = 0.25
 const DEFAULT_ROUTINE_KINDS: readonly MemoryKind[] = ['episodic', 'semantic', 'preference']
 /** Kinds whose related candidates are put to the merge question. */
 const MERGEABLE_KINDS: readonly MemoryKind[] = ['preference', 'trait']
 
-/** The fail-closed fallbacks (D15): an uncertain read stores nothing, asks, and
+/** Error defaults (D15): a failed read stores nothing, asks, and
  *  takes the least durable kind. */
 export const MEMORY_STORE_FALLBACKS = {
   target: 'none',
@@ -614,14 +595,6 @@ async function run(
   }
 
   // --- 3. the gate ---------------------------------------------------------
-  const cut = settings?.gate
-  const policyFor = <L extends string>(fallback: L): DecisionPolicy<L> => ({
-    fallback,
-    requireCalibrated: true,
-    minConfidence: cut?.minConfidence ?? DEFAULT_MIN_CONFIDENCE,
-    minMargin: cut?.minMargin ?? DEFAULT_MIN_MARGIN,
-    ...(cut?.thresholdMethod ? { thresholdMethod: cut.thresholdMethod } : {}),
-  })
   let gateWindow = 16_384
   try {
     const w = decideFn.limits?.().contextWindow
@@ -640,28 +613,25 @@ async function run(
       ...(decideAll ? { decideAll } : {}),
       set: MEMORY_STORE_SET,
       state,
-      policy: {
-        target: policyFor<MemoryTarget>(MEMORY_STORE_FALLBACKS.target),
-        confirm: policyFor<MemoryConfirm>(MEMORY_STORE_FALLBACKS.confirm),
-        kind: policyFor<MemoryKind>(MEMORY_STORE_FALLBACKS.kind),
-        sensitive: policyFor<MemorySensitivity>(MEMORY_STORE_FALLBACKS.sensitive),
-      },
     },
     { trackHistory: 'decision_made', errorSeverity: 'recoverable' },
   )
 
   flushDecisions(ctx, scope)
-  // Anything but a calibrated, confident `ordinary` is `sensitive`.
+  // Only an answered `ordinary` may proceed.
   if (decided.sensitive.label !== 'ordinary') return stop('sensitive')
-  if (decided.target.label === 'none') return stop('gate')
+  if (decided.target.label === null || decided.target.label === 'none') return stop('gate')
 
   const route = resolveStoreRoute(
     {
       target: decided.target.label,
       // A kind nobody established is not a PROVABLY routine one (D7/F2): when the
-      // kind read abstained, the question is asked whatever `confirm` said.
-      confirm: decided.kind.abstained ? 'ask' : decided.confirm.label,
-      kind: decided.kind.label,
+      // kind call failed, the question is asked whatever `confirm` said.
+      confirm:
+        decided.kind.reason === 'error'
+          ? 'ask'
+          : (decided.confirm.label ?? MEMORY_STORE_FALLBACKS.confirm),
+      kind: decided.kind.label ?? MEMORY_STORE_FALLBACKS.kind,
     },
     settings?.routineKinds ?? DEFAULT_ROUTINE_KINDS,
   )
@@ -674,7 +644,7 @@ async function run(
   let extracted: Awaited<ReturnType<MemoryExtractFn>>
   try {
     extracted = await extract({
-      kindHint: decided.kind.label,
+      kindHint: decided.kind.label ?? MEMORY_STORE_FALLBACKS.kind,
       window: renderPairs(gatePairs),
       latestUser: current.user,
     })
@@ -690,7 +660,7 @@ async function run(
   const routine = settings?.routineKinds ?? DEFAULT_ROUTINE_KINDS
   const userMessages = window.pairs.map((p) => p.user)
   // A kind the gate was not sure of is stored as the one kind that expires.
-  const uncertainKind = decided.kind.abstained
+  const uncertainKind = decided.kind.reason === 'error'
   const accepted: Array<{ ordinal: number; kind: MemoryKind; content: string; evidence: string }> =
     []
   raw.forEach((candidate, ordinal) => {
@@ -750,7 +720,7 @@ async function run(
         // Throw so the host rolls this candidate back.
         if (!(await settings!.enabled!())) throw new MemoryDisabled()
         const near = await tx.nearest({ embedding, embedSpace: embed.spaceId, tier })
-        const verdict = await chooseAction(cand, near, { dup, rel, mergeMs }, scope, decideFn, cut)
+        const verdict = await chooseAction(cand, near, { dup, rel, mergeMs }, scope, decideFn)
         const src = { eventId: userEventId, ordinal: cand.ordinal, conversationId }
 
         let memoryId: string
@@ -856,7 +826,6 @@ async function chooseAction(
   t: { dup: number; rel: number; mergeMs: number },
   scope: PatternScope<Record<string, never>>,
   decideFn: DecideFn,
-  cut: MemoryStoreGateSettings | undefined,
 ): Promise<'insert' | 'reinforce' | 'update'> {
   if (!near || near.kind !== cand.kind) return 'insert'
   if (!(near.similarity >= t.rel)) return 'insert'
@@ -864,19 +833,7 @@ async function chooseAction(
   // Related, not a duplicate. Episodes and facts only reinforce or insert.
   if (!MERGEABLE_KINDS.includes(cand.kind)) return 'insert'
 
-  // A merge destroys the older text, so it needs a calibrated read (decision
-  // (b)). Every way of not getting one — uncalibrated, abstained, thrown,
-  // timed out — lands on `distinct`, which inserts: both memories are kept.
-  const policy: DecisionPolicy<MemoryMergeLabel> = {
-    fallback: 'distinct',
-    requireCalibrated: true,
-    minConfidence: cut?.minConfidence ?? DEFAULT_MIN_CONFIDENCE,
-    minMargin: cut?.minMargin ?? DEFAULT_MIN_MARGIN,
-    // No `thresholdMethod`: the store gate's method scope must not switch the
-    // merge on. Off the logprob method these static cuts mismatch, so only a
-    // calibration entry fitted for (serving client, memory.merge) lets
-    // `update` or `same` through, on either tier.
-  }
+  // Failed or timed-out merge decisions keep both memories.
   const local: PatternScope<Record<string, never>> = {
     id: scope.id,
     events: [],
@@ -889,14 +846,13 @@ async function chooseAction(
       decide: decideFn,
       spec: MEMORY_MERGE_SPEC,
       state: `Existing memory: ${near.content}\nNew statement: ${cand.content}`,
-      policy,
     }).then((d) => {
       scope.events.push(
         ...local.events.map((e) =>
           e.llmCall ? { ...e, llmCall: redactCall(e.llmCall as LLMCallRecord) } : e,
         ),
       )
-      return d.label
+      return d.label ?? 'distinct'
     }),
     new Promise<MemoryMergeLabel>((resolve) => {
       timer = setTimeout(() => resolve('distinct'), t.mergeMs)

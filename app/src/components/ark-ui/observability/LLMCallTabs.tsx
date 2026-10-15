@@ -65,7 +65,8 @@ function stepCost(
   // `basis` is enough here (it names the last priced attempt) because a step
   // that mixed a local call with a billed one has a non-zero figure and falls
   // through to the token/floor branches, which describe the part that cost
-  // something. Owner decision 2026-08-26 — see `LOCAL_PRICED_CLIENTS`.
+  // something. `LOCAL_PRICED_CLIENTS` includes LocalGLM; the metered
+  // LocalQwenSmall summarizer takes the time-priced branch above.
   if (!isFloor && m.basis === 'local' && cost.costEur === 0) {
     return {
       eur: 0,

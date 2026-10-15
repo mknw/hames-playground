@@ -100,7 +100,7 @@ import type { InferenceTier } from '../inference/config.server'
 import { resolveConversationTier } from '../inference/tier.server'
 import { beginVerdaTurn, endVerdaTurn } from '../inference/verda-activity.server'
 import { runWithColdStartWatch, type ColdStartEstimate } from '../inference/cold-start.server'
-import { ensureVerdaAwake } from '../inference/wake.server'
+import { ensurePrivateTierAwake } from '../inference/wake.server'
 import { recordTurn } from '../metrics/usage-recorder.server'
 import type { HarnessSettings } from '../settings'
 import { runFirstTurnTitleGen } from '@hames-ai/agents/agents/title-generator.server'
@@ -574,8 +574,8 @@ function planTurn(
  * `getOrBuildPatterns` so the private tier's first act is still to get the box
  * up rather than to build patterns against a gateway while the GPU sleeps. The
  * announcement seam is unchanged: `runTurnAndPersist` still opens the cold-start
- * watch around all of this, so `ensureVerdaAwake`'s `noteVerdaCallStarting` sees
- * the listener and the `warming` frame still lands INSIDE the wait.
+ * watch around all of this, so `ensurePrivateTierAwake` calls `noteBoxCallStarting`
+ * once per box; each sees the listener and the `warming` frame still lands INSIDE the wait.
  */
 async function runAndSave(
   req: TurnRequest,
@@ -595,7 +595,7 @@ async function runAndSave(
     // THROWS, which is what ends the turn as a visible error rather than handing
     // the harness a box that is not there — see the SSE route's `catch`, and the
     // `catch` below for the row.
-    if (tier === 'verda') await ensureVerdaAwake()
+    if (tier === 'verda') await ensurePrivateTierAwake()
     // THE LISTENER'S SCOPE IS THIS RUN, not the turn — see the frame opened in
     // `runTurnAndPersist`. Amending it here rather than filling the turn frame's
     // slot is what keeps the title agent and the detached compaction, both
@@ -885,7 +885,7 @@ async function runResumeAndSave(
     // WAKE THEN RUN — the same rule as `runAndSave`, minus the stop-only
     // case (A5): a resume whose answers all stop the run makes no model
     // call, so it must not pay a cold start either.
-    if (tier === 'verda' && !plan.stopOnly) await ensureVerdaAwake()
+    if (tier === 'verda' && !plan.stopOnly) await ensurePrivateTierAwake()
     const patterns = await getOrBuildPatterns(sessionId, loaded.agentId)
     const memory = !plan.stopOnly ? await startTurnMemory(patterns, agentDeps().memory) : undefined
     const result = await amendRunFrame(

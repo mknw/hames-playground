@@ -54,6 +54,8 @@ const ENV_KEYS = [
   // 4B `LocalQwenSmall`, which is reached through this variable, and a private
   // tier without it is refused rather than descaled (see the fail-closed block).
   'SMALL_LLM_BASE_URL',
+  'SMALL_LLM_DECISIONS_URL',
+  'SMALL_LLM_API_KEY',
 ] as const
 
 const ALL_ROLES: BamlRole[] = [
@@ -92,10 +94,8 @@ const ROUTED: Partial<Record<BamlRole, { from: string; to: string }>> = {
   // that added it is readable as what it is. Note what it did NOT do: it shares
   // `describe`'s BAML chain and did not follow it onto the 4B.
   screen: { from: 'DescribeAnthropic', to: 'VerdaQwen' },
-  // #418 T3: the typed-decision logprob readout. `from` is the Anthropic-tier
-  // MIRROR (the Jev REST adapter, `jev-decide.server.ts` — no BAML chain), `to` is the
-  // 4B's first-token readout client. The same server as `describe`, a different client.
-  decide: { from: 'JevDecide', to: 'LocalQwenSmallDecide' },
+  // The public and private systemone clients.
+  decide: { from: 'JevDecide', to: 'PrivateSystemOne' },
 }
 /** Nothing is held back any more. Kept as an empty map rather than deleted:
  *  every test below iterates it, so a future exception is added in one place
@@ -115,6 +115,8 @@ function enable(): void {
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
   // BOTH endpoints. The tier is two models, so a fixture with one describes a
   // deployment this build refuses — which is its own test, below.
+  process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+  process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
 }
 
@@ -186,7 +188,7 @@ describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
     // reverted. This is the line that cannot.
     const { resolveClientForRole } = await load()
     const clients = new Set(roles(ROUTED).map(([role]) => resolveClientForRole(role)))
-    expect([...clients].sort()).toEqual(['LocalQwenSmall', 'LocalQwenSmallDecide', 'VerdaQwen'])
+    expect([...clients].sort()).toEqual(['LocalQwenSmall', 'PrivateSystemOne', 'VerdaQwen'])
     // And which side each of the two BAML-chain siblings landed on. Neither
     // value is interesting alone; the pair is the SA-M5 / SD-4 property.
     expect(resolveClientForRole('describe')).toBe('LocalQwenSmall')
@@ -425,10 +427,7 @@ describe('the switched-function set follows the routed roles', () => {
     // because it really does run on both, so excluding it would understate the
     // Anthropic window by the one call that is slowest per character.
     expect(TIER_SWITCHED_FUNCTIONS.has('ScreenUntrustedContent')).toBe(true)
-    // Sixteen of the seventeen functions declared in the one `baml_src/`: every
-    // one except `DecideVerbalized` (#418 T5), which is excluded deliberately —
-    // it is refused on the private tier, never moved to it. The honest way to
-    // pin that is to say so rather than to let a subset look deliberate.
+    // The fifteen BAML functions and the systemone call move with the tier.
     expect(TIER_SWITCHED_FUNCTIONS.size).toBe(16)
   })
 
@@ -465,35 +464,6 @@ describe('the switched-function set follows the routed roles', () => {
     // Guard against a regex that matched nothing: the comparison above would
     // then pass only if the map were empty too.
     expect(declaringDescribe).toHaveLength(8)
-  })
-
-  it('DecideAnthropic is its own block: exactly DecideVerbalized rides it, on exactly two Sonnet NoThink leaves (#513 R5)', () => {
-    // Re-pointing another function onto this chain, or adding a leaf, is the
-    // implicit move CLAUDE.md warns about — and the chain is only safe to edit
-    // today because ONE function rides it. Comments are stripped first, so a
-    // sentence in a comment cannot satisfy or break the scan.
-    const bamlDir = path.resolve(process.cwd(), '../packages/harness-baml/baml_src')
-    const strip = (src: string) =>
-      src
-        .split('\n')
-        .filter((line) => !line.trimStart().startsWith('//'))
-        .join('\n')
-    const riders: string[] = []
-    let chain: string | undefined
-    for (const entry of readdirSync(bamlDir)) {
-      if (!entry.endsWith('.baml')) continue
-      const src = strip(readFileSync(path.join(bamlDir, entry), 'utf8'))
-      for (const m of src.matchAll(/function\s+(\w+)\s*\([^)]*\)\s*->[^{]*\{\s*client\s+(\w+)/g)) {
-        if (m[2] === 'DecideAnthropic') riders.push(m[1])
-      }
-      const c = /client<llm>\s+DecideAnthropic\s*\{[\s\S]*?strategy\s*\[([^\]]*)\]/.exec(src)
-      if (c) chain = c[1]
-    }
-    expect(riders).toEqual(['DecideVerbalized'])
-    expect(chain?.split(',').map((x) => x.trim())).toEqual([
-      'AnthropicSonnet5NoThink',
-      'AnthropicSonnet46NoThink',
-    ])
   })
 
   it('is the same set whether the flag is on or off', async () => {
@@ -606,7 +576,9 @@ describe('every routed role has a wired call site', () => {
     expect(routed.length).toBeGreaterThanOrEqual(3)
 
     const code = corpus()
-    const unwired = routed.filter((role) => !code.includes(`clientOverrideFor('${role}')`))
+    const unwired = routed.filter(
+      (role) => role !== 'decide' && !code.includes(`clientOverrideFor('${role}')`),
+    )
     expect(unwired).toEqual([])
   })
 
@@ -724,42 +696,6 @@ describe('every routed role has a wired call site', () => {
     // Not vacuous: the same corpus carries the describe spread too, so the
     // scan is looking in a place where these literals really appear.
     expect(code).toContain("clientOverrideFor('describe')")
-  })
-
-  it('routes the decide readout through BOTH halves — map entry AND the one call site', async () => {
-    // The screen's pin, for the same reason: the map entry alone routes nothing
-    // (no call spreads it, `Decide` runs on its declared default) and the
-    // spread alone routes nothing (an unmapped role's override is `undefined`).
-    // `Decide` is the one function whose declared client is NOT the Anthropic
-    // tier's (`LocalQwenSmallDecide`, because BAML requires one and no Anthropic
-    // client returns logprobs), so a deleted spread is not a quiet fall back to
-    // Anthropic — it is a call that reaches the private tier's box without the
-    // tier having asked. Pinned ON the call expression, by balanced parens.
-    enable()
-    const { clientOverrideFor } = await load()
-    expect(clientOverrideFor('decide')).toEqual({ client: 'LocalQwenSmallDecide' })
-    // The same 4B as `describe`, a DIFFERENT client: one token with logprobs
-    // against a 2048-token completion.
-    expect(clientOverrideFor('decide')).not.toEqual({ client: 'LocalQwenSmall' })
-
-    const code = corpus()
-    expect(code.match(/b\.Decide\(/g) ?? []).toHaveLength(1)
-    expect(callArgs(code, 'b.Decide(')).toContain("clientOverrideFor('decide')")
-    // Two call sites in all: the readout above and, since T5, the verbalized
-    // secondary — pinned in its own test below, so neither count hides the other.
-    expect(code.match(/clientOverrideFor\('decide'\)/g) ?? []).toHaveLength(2)
-  })
-
-  it('the verbalized secondary spreads the decide override on its OWN call (defence in depth)', () => {
-    // `DecideVerbalized` declares `DecideAnthropic`, a PUBLIC provider. Its tier
-    // lock refuses a private-tier run before any request; this spread is the
-    // second line — were the lock ever removed, the call would land on the
-    // private tier's own client instead of a public one. A call with no spread
-    // reads like routing and changes nothing, so it is pinned ON the call
-    // expression, by balanced parens, exactly like `Decide`.
-    const code = corpus()
-    expect(code.match(/b\.DecideVerbalized\(/g) ?? []).toHaveLength(1)
-    expect(callArgs(code, 'b.DecideVerbalized(')).toContain("clientOverrideFor('decide')")
   })
 
   it('routes both memory functions through the describe spread, on each call', async () => {

@@ -47,7 +47,7 @@ export function createHostMemoryConfig(): MemoryConfig {
       transaction: (fn) => store().transaction(fn),
     },
     decide,
-    decideAll: createDecideAllAdapter(decide),
+    decideAll: createDecideAllAdapter(),
     extract: createMemoryExtractAdapter(),
     embed: createMemoryEmbedder(),
     visibleTiers: visibleMemoryTiers,

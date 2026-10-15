@@ -297,8 +297,8 @@ export function dropHitl(events: ContextEvent[]): ContextEvent[] {
  *  would not parse, it is the only event carrying what the model said, and a
  *  loop that then fails must not drop the record of how it got there (#437).
  *  Includes 'decision_made' (#418) for the same family of reason, sharpened
- *  by what it records: the audit trail of WHAT the policy layer decided and
- *  WHY (which fallback answered, which threshold abstained). A decision is
+ *  by what it records: the endpoint verdict and full probabilities, or a
+ *  recorded failure. A decision is
  *  exactly the kind of fact a retry or a later pattern re-derives
  *  differently — dropping it under 'on-success'-with-error or 'never' leaves
  *  a verdict in `data.decisions` whose evidence is gone. It is metadata-only

@@ -56,7 +56,7 @@ function config(routerMemory?: RouterMemory): MemoryConfig {
     },
     decide: (async () => ({
       probs: { retrieve: 1, skip: 0 },
-      method: 'logprob',
+      method: 'jev',
       calibrated: true,
     })) as DecideFn,
     extract: async () => ({ value: [] }),

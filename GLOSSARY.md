@@ -64,7 +64,7 @@ back to the uncompacted input rather than failing the turn.
 **Memory compaction** — the optional `compactMemory` maintenance pass for
 `withMemory` (#419 M3). It expires memories at configured per-kind retention,
 clusters within tier/kind/embedding space, and replaces a cluster only after a
-calibrated merge decision and deterministic acceptance. The transaction keeps
+an endpoint merge verdict and deterministic acceptance. Each merge transaction keeps
 every provenance row and the newest member's evidence event id. A daily sweep
 retries eligible owners; only episodic rows may be evicted at the hard cap.
 

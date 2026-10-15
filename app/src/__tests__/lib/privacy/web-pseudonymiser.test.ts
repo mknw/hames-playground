@@ -428,7 +428,10 @@ describe('fix round 1 Critical and High regressions', () => {
     async (channel) => {
       const header = `From: ${EXTERNAL.name} <${EXTERNAL.address}>\ncc: <${DIRECTORY.mail}>`
       const ctx = createContext<Data>('Research this subject')
-      if (channel === 'view') ctx.events.push(result('header', MAIL, header))
+      if (channel === 'view')
+        ctx.events.push(
+          result('header', { ...MAIL, body: { content: header } }, 'Message received'),
+        )
       const scope = createScope<Data>('probe', {
         [WEB_ROSTER_INPUT]: { payloads: [MAIL], steps: 'Steps so far:\n1. doc — succeeded' },
         plan: { reasoning: '', plan: channel === 'plan' ? header : 'Research', n_steps: 1 },

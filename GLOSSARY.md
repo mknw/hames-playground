@@ -153,3 +153,10 @@ promoted to a regular conversation the moment a user interacts with it. See
 scheduling layer over the action path rather than a second way to run an agent:
 when a routine's trigger fires, its run lands as an ordinary action row marked
 `source='routine'`. See [`docs/ROUTINES.md`](docs/ROUTINES.md).
+
+**general-next Eval** — #507's conversation acceptance catalogue and opt-in runner,
+under `app/evals/general-next/`. Compares the candidate with the current `general`
+baseline on the private tier alone. Scripted inference proves wiring; live model
+behaviour is separate evidence. Shares one conservative USD spend ledger across
+scenarios, stops at 80% of the configured cap and reports P4-gated cases explicitly.
+See [the runner guide](app/evals/general-next/README.md).

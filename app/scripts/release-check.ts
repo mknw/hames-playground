@@ -184,6 +184,10 @@ const LAYERS: readonly Layer[] = [
  */
 const LIVE_STEPS_STILL_OWED = [
   {
+    what: '`pnpm eval:general-next --live` on the **private** tier, after the PM’s “S3 merged: go”',
+    why: 'whole-conversation model behaviour and the computed candidate flip gate; synthetic tool edges do not certify upload, sandbox execution or file-ingest integration',
+  },
+  {
     what: '`pnpm eval:harness` on the **Anthropic** tier (the baseline report)',
     why: 'grades the workflows against a real provider; the only thing that reads model quality at all',
   },

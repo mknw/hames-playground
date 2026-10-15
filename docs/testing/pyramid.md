@@ -302,3 +302,15 @@ The opt-in [Neo4j egress check](neo4j-egress.md) (#241 G13) requires Docker
 and is outside the hermetic layers and default CI. Its layer-1 topology pins
 run in CI; its green/red packet evidence runs only in a throwaway `g13-test`
 project.
+
+## #507 general-next acceptance eval
+
+The [conversation Eval](../../app/evals/general-next/README.md) lives in the existing
+`app/evals` suite and stays outside CI. Its scripted inference mode is hermetic
+wiring evidence; it does not replace layer 2's real app-upload/sandbox integration.
+Its `--live` mode belongs to layer 4, runs the private tier alone, and remains gated
+on the coordinator's “S3 merged: go” message. The USD cap defaults to 20 (maximum
+25), with an 80% stop threshold, observer cost per scenario and an additional
+wall-clock floor for both private GPU boxes. Pure cap, precondition and trace-check
+logic is tested in layer 1. The [catalogue](../../app/evals/general-next/SCENARIOS.md)
+keeps P4 file-path cases visibly gated; no default-agent flip is part of this slice.

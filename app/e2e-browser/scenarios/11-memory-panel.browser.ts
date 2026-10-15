@@ -62,6 +62,13 @@ for (const theme of ['dark', 'light'] as const) {
     await panel.getByRole('button', { name: 'Forget everything', exact: true }).click()
     const dialog = page.getByRole('dialog', { name: 'Forget everything?' })
     await expect(dialog).toBeVisible()
+    // Visible is not armed: Ark attaches its Escape handler and moves focus in one
+    // animation frame AFTER opening (`trackDismissableElement(…, { defer: true })`),
+    // and an Escape pressed in that gap reaches no handler (#593). Focus inside the
+    // dialog is the observable end of that deferred work.
+    await expect
+      .poll(() => page.evaluate(() => !!document.activeElement?.closest('[role="dialog"]')))
+      .toBe(true)
     await page.keyboard.press('Escape')
     await expect(dialog).toHaveCount(0)
     await expect(panel.getByText('I prefer concise replies', { exact: true })).toBeVisible()

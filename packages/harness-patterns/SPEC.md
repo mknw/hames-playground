@@ -1493,6 +1493,7 @@ interface DecisionLoopRoute<T> {
 
 interface DecisionLoopConfig extends PatternConfig {
   decide: DecideFn // REQUIRED — the raw decision seam
+  patternId: string // REQUIRED here (inherited as optional): matched across turns
   answer: string // the description of the `answer` option
   handoff?: { lastN?: number } // outputs shown in full, in ITERATIONS; default 2
   maxIterations?: number // default DECISION_LOOP_MAX_ITERATIONS (6)
@@ -1526,7 +1527,7 @@ with (a) every event of a sibling it may not see physically removed, so not even
 and (b) the loop's own route records removed, since they carry copies of those
 results. `siblingResults` names the patternIds it may see; **the default is none**
 (a route sees its own work, committed non-route events and the handoff text), and
-an id no route's pattern emits under is refused at construction. Visibility is per patternId, so two routes that emit under one id (or a route under the loop's own id) are refused at construction too: they would read each other's events. The user's
+an id no route's pattern emits under is refused at construction. Visibility is per patternId, so two routes that emit under one id (or a route under the loop's own id) are refused at construction too: they would read each other's events. Events are also hidden by the ROUTE they were emitted inside (every child is bracketed by an enter/exit carrying the route name), so a pattern rebuilt each turn with a generated `patternId` cannot leak an earlier turn's work; for the same reason `patternId` is REQUIRED on the loop itself (its records and withheld ids are matched by it across turns). The user's
 message is not a route event and always stays. Child `data` is built fresh:
 the latest sanitized plan (`data.plan`), the separately headed handoff
 (`data.handoff`) and, for a planner route only, the agent map (`data.agentMap`).

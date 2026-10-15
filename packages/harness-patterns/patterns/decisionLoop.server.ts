@@ -265,6 +265,19 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     )
   }
 
+  // Route names whose earlier work each route may see: itself, and any route
+  // that owns a patternId it lists in `siblingResults`.
+  const visibleRoutes = new Map(
+    names.map((n) => [
+      n,
+      new Set(
+        names.filter(
+          (r) => r === n || (routes[n].siblingResults ?? []).some((id) => owned.get(r)!.has(id)),
+        ),
+      ),
+    ]),
+  )
+
   const labels: DecisionLabel[] = [
     ...names.map((id) => ({ id, description: routes[id].description })),
     { id: DECISION_LOOP_ANSWER, description: answer },
@@ -276,6 +289,15 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
   }
   const optionIds = labels.map((l) => l.id)
   const agentMap = buildAgentMap(routes)
+
+  // Records and withheld ids are matched by the loop's own patternId, and a
+  // loop is built anew every turn: a generated id changes each time, so turn 2
+  // would not recognise turn 1's records or withheld events. Refused, not guessed.
+  if (patternConfig.patternId === undefined) {
+    throw new Error(
+      "decisionLoop: an explicit patternId is required — the loop's records and the ids a screen outage withheld are matched by it across turns, and a generated id differs every time the agent is built",
+    )
+  }
 
   const resolved = resolveConfig('decisionLoop', {
     viewConfig: decisionWindowView(false),
@@ -443,17 +465,42 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
       const route = routes[label]
       const pattern = route.pattern
       const childId = pattern.config.patternId ?? pattern.name
-      const enter = createEvent('pattern_enter', childId, { pattern: pattern.name, route: label })
+      const enter = createEvent('pattern_enter', childId, {
+        pattern: pattern.name,
+        route: label,
+        decisionLoop: loopId,
+      })
       scope.events.push(enter)
       emitLive(enter)
 
       const hide = hidden.get(label)!
+      const all = [...outerCtx.events, ...scope.events]
+      // By ROUTE NAME as well as by id: every child is bracketed by an enter
+      // (carrying this loop's id and the route) and an exit, and a pattern built
+      // without an explicit patternId emitted an id no current route owns, so in
+      // a later turn an id-only filter would let a hidden route's old events
+      // through. Everything inside the bracket of a route this child may not see
+      // is hidden, whatever id it was emitted under.
+      const mayRead = visibleRoutes.get(label)!
+      const bracketHidden = new Set<ContextEvent>()
+      let open: { route: string; id: string } | undefined
+      for (const e of all) {
+        const d = e.data as { decisionLoop?: string; route?: string } | undefined
+        if (e.type === 'pattern_enter' && d?.decisionLoop === loopId && d.route !== undefined) {
+          open = { route: d.route, id: e.patternId }
+        } else if (open && e.type === 'pattern_exit' && e.patternId === open.id) {
+          open = undefined
+        } else if (open && !mayRead.has(open.route)) {
+          bracketHidden.add(e)
+        }
+      }
       const syntheticCtx: UnifiedContext = {
         ...outerCtx,
-        events: [...outerCtx.events, ...scope.events].filter(
+        events: all.filter(
           (e) =>
             e.patternId !== loopId &&
             (e.id === undefined || !withheld.has(e.id)) &&
+            !bracketHidden.has(e) &&
             (!hide.has(e.patternId) || e.type === 'pattern_enter' || e.type === 'pattern_exit'),
         ),
       }

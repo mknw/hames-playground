@@ -1803,6 +1803,117 @@ describe('decisionLoop — fix round 1', () => {
     expect(expandTurn.tool_result?.success).toBe(false)
   })
 
+  // Delta 1, 7(b-i). MUTATION: delete the explicit-patternId check.
+  it('refuses a loop with no explicit patternId: records and withheld ids are matched by it across turns', () => {
+    const { decide } = scriptedDecide(['answer'])
+    expect(() =>
+      decisionLoop<Data>({ a: route(returning('a-p', 'x')) }, { decide, answer: 'Answer now' }),
+    ).toThrow(/explicit patternId/)
+  })
+
+  // Delta 1, 7(b-ii). MUTATION: withhold only the outage iteration's tool_result ids.
+  it('an outage withholds EVERY event of the iteration, not only its tool_result', async () => {
+    const { decide } = scriptedDecide(['retr', 'later', 'answer'])
+    const leaf = fake('retriever', 'retr-p', (s) => {
+      trackEvent(s, 'controller_action', returnAction('x', 'RETURN-AFTER-UNCLEARED-READ'), true)
+      trackEvent(
+        s,
+        'tool_result',
+        {
+          tool: 'retriever',
+          success: true,
+          result: {
+            query: 'q',
+            backends: [],
+            references: [],
+            matches: [{ backend: 'r', id: 'h', content: RAW_HIT }],
+          },
+        },
+        true,
+      )
+      s.events.push(
+        createEvent('content_sanitized', 'retr-p', {
+          tool: 't',
+          namespace: 'n',
+          findings: [
+            {
+              rule: 'r',
+              description: 'd',
+              layer: 'instruction',
+              match: 'HUMAN-ONLY-SPAN',
+              offset: 0,
+              replacement: '',
+            },
+          ],
+          neutralized: true,
+          spotlighted: false,
+          scanned: 1,
+        }),
+      )
+    })
+    let dump = ''
+    const later = fake('simpleLoop', 'later-p', (s, view) => {
+      dump = JSON.stringify(view.unfiltered().get())
+      trackEvent(s, 'controller_action', returnAction('ok'), true)
+    })
+    await run([
+      guarded(
+        build({ retr: route(leaf), later: route(later, { siblingResults: ['retr-p'] }) }, decide),
+        { screen: outageThenUp() },
+      ),
+    ])
+    for (const needle of [RAW_HIT, 'RETURN-AFTER-UNCLEARED-READ', 'HUMAN-ONLY-SPAN']) {
+      expect(dump).not.toContain(needle)
+    }
+  })
+
+  // Delta 1, item 10. MUTATION: drop the enter/exit-bracket attribution.
+  it('hides a route`s earlier-TURN events by route name when the rebuilt patterns carry generated ids', async () => {
+    const SECRET_MAIL = 'TURN-ONE-MAIL-BODY'
+    const anon = (kind: string, produce: Produce) =>
+      configurePattern<Data>(kind, async (scope, view) => {
+        await produce(scope, view)
+        return scope
+      })
+    const buildTurn = (dumps: string[], script: string[]) =>
+      build(
+        {
+          office: route(
+            anon('actorCritic', (s) => {
+              trackEvent(
+                s,
+                'tool_result',
+                { tool: 'read_mail', result: SECRET_MAIL, success: true },
+                true,
+              )
+            }),
+          ),
+          info: route(
+            anon('simpleLoop', (s, view) => {
+              dumps.push(JSON.stringify(view.unfiltered().get()))
+              trackEvent(s, 'controller_action', returnAction('ok'), true)
+            }),
+            { siblingResults: [] },
+          ),
+        },
+        scriptedDecide(script).decide,
+      )
+    const dumps: string[] = []
+    const ctx = await run([buildTurn(dumps, ['office', 'info', 'answer'])])
+    ctx.events.push({
+      id: 'u2',
+      type: 'user_message',
+      ts: Date.now() + 5,
+      patternId: 'harness',
+      data: { content: 'next' },
+    })
+    ctx.status = 'running'
+    await runInFrame(() => runChain(ctx, [buildTurn(dumps, ['info', 'answer'])]))
+    expect(dumps).toHaveLength(2)
+    expect(dumps[0]).not.toContain(SECRET_MAIL) // same turn: by id
+    expect(dumps[1]).not.toContain(SECRET_MAIL) // later turn, ids regenerated: by route name
+  })
+
   // Finding 9. MUTATION: delete the warning.
   it('warns once when no guard in the run declares decision_loop_output; not when one does', async () => {
     const warn = vi.mocked(console.warn)

@@ -7,134 +7,14 @@
  * painted and announced without taking focus, Review moves focus into the dialog,
  * Escape decides nothing, and the painted dialog passes axe in both palettes.
  */
-import pg from 'pg'
 import AxeBuilder from '@axe-core/playwright'
 import { test, expect } from '../lib/fixtures'
 import { open } from '../lib/chat'
-import { BYPASS_USER_ID, TEST_DATABASE_URL } from '../lib/env'
+import { rowStatus as rowStatusOf, savedMemories, seedProposal } from '../lib/memory-fixtures'
 
 const REQUEST = '3b1f6c1e-2f55-4f0e-9d0f-6a0b9d8f4e11'
 
-async function seed(id: string): Promise<void> {
-  const client = new pg.Client({ connectionString: TEST_DATABASE_URL })
-  await client.connect()
-  try {
-    const eventId = `ev-${id}`
-    const events = [
-      {
-        id: eventId,
-        type: 'user_message',
-        ts: 1,
-        patternId: 'harness',
-        data: { content: 'I prefer synthetic examples, and my team is Aurora.' },
-      },
-      {
-        id: `${eventId}-a`,
-        type: 'assistant_message',
-        ts: 2,
-        patternId: 'compactExecution',
-        data: { content: 'Noted.', final: true },
-      },
-      {
-        id: `${eventId}-r`,
-        type: 'hitl_request',
-        ts: 3,
-        patternId: 'memory-store',
-        data: {
-          v: 1,
-          requestId: REQUEST,
-          runId: eventId,
-          key: `memory.confirm:${eventId}`,
-          kind: 'memory.confirm',
-          question: 'Save these to memory?',
-          options: [
-            {
-              id: 'save',
-              label: 'Save selected',
-              flags: [
-                { id: 'i0', label: 'Item 1', default: true },
-                { id: 'i1', label: 'Item 2', default: true },
-              ],
-            },
-            { id: 'discard', label: "Don't save", unattended: true, tone: 'caution' },
-          ],
-          defaultOption: 'save',
-          unattended: 'park',
-          summary: { items: 2, kinds: 'preference,semantic' },
-          blocking: false,
-          expiresAt: Date.now() + 3_600_000,
-        },
-      },
-    ]
-    const context = { sessionId: id, status: 'done', input: '', data: {}, createdAt: 1, events }
-    await client.query(
-      `INSERT INTO conversations (id, user_id, agent_id, context) VALUES ($1, $2, 'search', $3::jsonb)`,
-      [id, BYPASS_USER_ID, JSON.stringify(context)],
-    )
-    const vector = Array.from({ length: 1024 }, (_, i) => (i === 0 ? 1 : 0))
-    const payload = {
-      v: 1,
-      tier: 'verda',
-      embedSpace: 'synthetic',
-      eventId,
-      conversationId: id,
-      items: [
-        {
-          ref: 'i0',
-          ordinal: 0,
-          kind: 'preference',
-          content: 'The user prefers synthetic examples.',
-          evidence: 'I prefer synthetic examples',
-          embedding: vector,
-          dedupe: 'new',
-        },
-        {
-          ref: 'i1',
-          ordinal: 1,
-          kind: 'semantic',
-          content: 'The user’s team is Aurora.',
-          evidence: 'my team is Aurora',
-          embedding: vector,
-          dedupe: 'new',
-        },
-      ],
-    }
-    await client.query(
-      `INSERT INTO hitl_requests (request_id, user_id, session_id, run_id, kind, status, blocks_run, expires_at, payload)
-       VALUES ($1, $2, $3, $4, 'memory.confirm', 'pending', FALSE, NOW() + INTERVAL '1 hour', $5)`,
-      [REQUEST, BYPASS_USER_ID, id, eventId, JSON.stringify(payload)],
-    )
-  } finally {
-    await client.end()
-  }
-}
-
-async function rowStatus(): Promise<string | undefined> {
-  const client = new pg.Client({ connectionString: TEST_DATABASE_URL })
-  await client.connect()
-  try {
-    const { rows } = await client.query<{ status: string }>(
-      'SELECT status FROM hitl_requests WHERE request_id = $1',
-      [REQUEST],
-    )
-    return rows[0]?.status
-  } finally {
-    await client.end()
-  }
-}
-
-async function savedMemories(): Promise<number> {
-  const client = new pg.Client({ connectionString: TEST_DATABASE_URL })
-  await client.connect()
-  try {
-    const { rows } = await client.query('SELECT 1 FROM memories WHERE user_id = $1', [
-      BYPASS_USER_ID,
-    ])
-    return rows.length
-  } finally {
-    await client.end()
-  }
-}
+const rowStatus = () => rowStatusOf(REQUEST)
 
 for (const theme of ['dark', 'light'] as const) {
   test(`a prepared memory is confirmed, not saved by surprise, in ${theme}`, async ({
@@ -152,7 +32,7 @@ for (const theme of ['dark', 'light'] as const) {
     await expect(toggle).toBeEnabled()
 
     const id = `e2e-m6-prompt-${theme}`
-    await seed(id)
+    await seedProposal(id, REQUEST)
     await page.goto(`${appUrl}/?c=${id}`)
 
     // ---- the notice: announced, painted, and focus stays where it was -------

@@ -77,7 +77,7 @@ describe('ToolCallDisplay — collapsed header', () => {
 
   it("labels pending and failed calls in the user's terms", () => {
     const pending = render(() => <ToolCallDisplay toolCall={call({ status: 'pending' })} />)
-    expect(header(pending.container).textContent).toContain('Awaiting approval')
+    expect(header(pending.container).textContent).toContain('Awaiting decision')
     pending.unmount()
 
     const failed = render(() => <ToolCallDisplay toolCall={call({ status: 'error' })} />)

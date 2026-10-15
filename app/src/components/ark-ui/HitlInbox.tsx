@@ -14,30 +14,55 @@ import { useNavigate } from '@solidjs/router'
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js'
 import { listMemoryInbox } from '~/lib/memory/confirm-actions.server'
 import type { MemoryInboxEntry } from '~/lib/memory/proposals.server'
-import { inboxVersion, requestReview } from '~/lib/hitl/review-store'
+import { erasedVersion, inboxVersion, requestReview } from '~/lib/hitl/review-store'
 import { CONVERSATION_PARAM } from '~/lib/share-link'
 
 /** A background re-read: the prompt's own polling is per conversation, so a
  *  proposal raised in one you are not viewing is found here. */
 export const INBOX_POLL_MS = 60_000
 
+/** A window focus re-reads at most this often: the prompt's own focus read
+ *  already tells the inbox when something CHANGED, so the inbox's is only for
+ *  conversations the prompt is not looking at (#589 F3). */
+export const INBOX_FOCUS_MIN_GAP_MS = 15_000
+
 export function HitlInbox() {
   const navigate = useNavigate()
   const [entries, setEntries] = createSignal<readonly MemoryInboxEntry[]>([])
+  /** Reads are sequenced: an older response never overwrites a newer state, and
+   *  an erase voids every read begun before it (#589 F1/F3). */
+  let latest = 0
+  let lastRead = 0
 
   const refresh = async () => {
+    const mine = ++latest
+    lastRead = Date.now()
     try {
-      setEntries(await listMemoryInbox())
+      const found = await listMemoryInbox()
+      if (mine === latest) setEntries(found)
     } catch {
       // Unreadable is empty, never a fabricated count.
-      setEntries([])
+      if (mine === latest) setEntries([])
     }
   }
 
   createEffect(on(inboxVersion, () => void refresh()))
+  // Erased or switched off: the rows go NOW, then the server is asked again.
+  createEffect(
+    on(
+      erasedVersion,
+      () => {
+        setEntries([])
+        void refresh() // bumps `latest`: any read begun before the erase is void
+      },
+      { defer: true },
+    ),
+  )
   onMount(() => {
     const timer = setInterval(() => void refresh(), INBOX_POLL_MS)
-    const onFocus = () => void refresh()
+    const onFocus = () => {
+      if (Date.now() - lastRead >= INBOX_FOCUS_MIN_GAP_MS) void refresh()
+    }
     window.addEventListener('focus', onFocus)
     onCleanup(() => {
       clearInterval(timer)

@@ -133,17 +133,29 @@ export async function listMemoryProposalsFor(
   userId: string,
   sessionId: string,
 ): Promise<MemoryProposalView[]> {
+  return (await readMemoryProposals(userId, sessionId, { switchChecked: false })).views
+}
+
+/** The list plus the conversation's title, from ONE blob load. `switchChecked`
+ *  says the caller has already read the memory switch for this owner, so the
+ *  inbox does not pay it once per conversation (#589 F3). */
+async function readMemoryProposals(
+  userId: string,
+  sessionId: string,
+  opts: { switchChecked: boolean },
+): Promise<{ views: MemoryProposalView[]; title: string | null }> {
+  const none = { views: [], title: null }
   // The cheap, indexed read first: the popup polls on every settle and every
   // window focus in every conversation, and nearly all of those find nothing —
   // that must not cost a decrypt of the whole blob (#579 review 5).
   const rows = await listHitlProposals(sessionId, userId, MEMORY_CONFIRM_KIND)
-  if (rows.length === 0) return []
+  if (rows.length === 0) return none
   // A proposal is memory text the person has not agreed to keep. With memory
   // off — "Forget everything" and the switch both leave it off — it is not
   // offered, whatever a row still holds (#579 review 1).
-  if (!(await getMemoryEnabled(userId))) return []
+  if (!opts.switchChecked && !(await getMemoryEnabled(userId))) return none
   const conv = await loadConversation(sessionId, userId)
-  if (!conv) return []
+  if (!conv) return none
   let ctx = deserializeContext(conv.serializedContext)
   if (readHitl(ctx).pending.length === 0) {
     const closed = expireHitl(conv.serializedContext, Date.now())
@@ -166,7 +178,7 @@ export async function listMemoryProposalsFor(
       .filter((r) => r.kind === MEMORY_CONFIRM_KIND)
       .map((r) => r.requestId),
   )
-  if (open.size === 0) return []
+  if (open.size === 0) return none
 
   const views: MemoryProposalView[] = []
   for (const row of rows) {
@@ -193,7 +205,7 @@ export async function listMemoryProposalsFor(
       }),
     })
   }
-  return views
+  return { views, title: conv.title ? displayText(conv.title) : null }
 }
 
 /** One row of the header inbox: a conversation with a proposal waiting. Display
@@ -223,14 +235,12 @@ export async function listMemoryInboxFor(userId: string): Promise<MemoryInboxEnt
   const sessionIds = await listProposalSessionIds(userId, MEMORY_CONFIRM_KIND, MEMORY_INBOX_LIMIT)
   const entries: MemoryInboxEntry[] = []
   for (const sessionId of sessionIds) {
-    const views = await listMemoryProposalsFor(userId, sessionId)
-    if (views.length === 0) continue
-    const conv = await loadConversation(sessionId, userId)
+    const { views, title } = await readMemoryProposals(userId, sessionId, { switchChecked: true })
     for (const v of views) {
       entries.push({
         sessionId,
         requestId: v.requestId,
-        title: conv?.title ? displayText(conv.title) : null,
+        title,
         itemCount: v.items.length,
         expiresAt: v.expiresAt,
       })

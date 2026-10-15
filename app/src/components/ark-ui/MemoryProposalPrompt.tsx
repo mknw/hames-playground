@@ -9,6 +9,9 @@
  * the reply — and again when the window regains focus or the conversation
  * changes. No push channel.
  *
+ * (The card sits at the end of the transcript, not under the message that produced
+ * the proposal as spec §7.2 draws it: the payload records the conversation, not
+ * a message id — a deliberate deviation under the option-A ruling, #589 F8.)
  * A toast and a quiet card appear (#433 S8); the shared `HitlDialog` opens only on
  * "Review" (the toast, the card or the header inbox), never by itself —
  * an unrequested focus change while someone reads the answer would fail the
@@ -23,7 +26,13 @@
 import { createToaster, Toast, Toaster } from '@ark-ui/solid/toast'
 import { createEffect, createSignal, on, onCleanup, onMount, Show } from 'solid-js'
 import { HitlDialog } from './HitlDialog'
-import { clearReview, notifyInboxChanged, reviewTarget } from '~/lib/hitl/review-store'
+import {
+  clearReview,
+  erasedVersion,
+  notifyInboxChanged,
+  requestReview,
+  reviewTarget,
+} from '~/lib/hitl/review-store'
 import { answerMemoryProposal, listMemoryProposals } from '~/lib/memory/confirm-actions.server'
 import type { MemoryProposalView } from '~/lib/memory/proposals.server'
 
@@ -60,6 +69,14 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
   const toaster = createToaster({ placement: 'bottom-end', max: 1, overlap: false })
   let seen = new Set<string>()
   let baselined = false
+  /** Bumped on a conversation switch and on an erase: a read that began before
+   *  either must not repaint what they cleared (#589 F1/F3). */
+  let generation = 0
+  /** The ids last shown, joined: the inbox is told only when THIS changes. */
+  let shownKey = ''
+  /** The conversation whose first read has completed (success or failure) —
+   *  what decides a pending review ask for it (#589 F4). */
+  const [settledFor, setSettledFor] = createSignal<string | null>(null)
 
   let alive = true
   let timers: ReturnType<typeof setTimeout>[] = []
@@ -73,9 +90,10 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
   })
 
   const refresh = async (sessionId: string): Promise<number> => {
+    const gen = generation
     try {
       const found = await listMemoryProposals(sessionId)
-      if (alive && sessionId === props.sessionId) {
+      if (alive && sessionId === props.sessionId && gen === generation) {
         const fresh = found.filter((p) => !seen.has(p.requestId))
         found.forEach((p) => seen.add(p.requestId))
         if (baselined && fresh.length > 0) {
@@ -85,16 +103,28 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
             title: 'Save to memory?',
             description: `${n} ${n === 1 ? 'item' : 'items'}`,
             duration: 10_000,
-            action: { label: 'Review', onClick: () => setOpen(true) },
+            // The same open path as the card and the inbox, for the request this
+            // toast announced (#589 F5).
+            action: {
+              label: 'Review',
+              onClick: () => requestReview({ sessionId, requestId: fresh[0].requestId }),
+            },
           })
         }
         baselined = true
         setProposals(found)
-        notifyInboxChanged()
+        const key = found.map((p) => p.requestId).join(',')
+        if (key !== shownKey) {
+          shownKey = key
+          notifyInboxChanged()
+        }
+        setSettledFor(sessionId)
       }
       return found.length
     } catch {
-      // An unreadable list is no notice, never a fabricated one.
+      // An unreadable list is no notice, never a fabricated one. A failed read
+      // still settles a pending review ask (it is dropped, not kept for later).
+      if (alive && sessionId === props.sessionId && gen === generation) setSettledFor(sessionId)
       return 0
     }
   }
@@ -105,9 +135,16 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
       () => [props.sessionId, props.settledTick] as const,
       ([sessionId, tick]) => {
         clearTimers()
+        generation++
         setProposals([])
         seen = new Set()
         baselined = false
+        shownKey = ''
+        setSettledFor(null)
+        // A toast belongs to the conversation that raised it (#589 F5), and a
+        // review ask for another conversation is dropped here (#589 F4).
+        toaster.dismiss()
+        if (reviewTarget() && reviewTarget()!.sessionId !== sessionId) clearReview()
         setOpen(false)
         setNotice(null)
         setUnchecked(new Set<string>())
@@ -133,16 +170,40 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
 
   const current = () => proposals()[0]
 
-  // The header inbox asks for a request by id. Open it once it is in THIS
-  // conversation's list; a request that is not (answered meanwhile, erased)
-  // simply never matches and the ask is dropped on the next conversation.
+  // Memory erased or switched off (#589 F1): every surface holding memory text
+  // goes at once, before any round trip, and a read already in flight is void.
+  createEffect(
+    on(
+      erasedVersion,
+      () => {
+        generation++
+        setProposals([])
+        seen = new Set()
+        shownKey = ''
+        setOpen(false)
+        setNotice(null)
+        setRetrying(null)
+        setUnchecked(new Set<string>())
+        toaster.dismiss()
+        clearReview()
+        void refresh(props.sessionId)
+      },
+      { defer: true },
+    ),
+  )
+
+  // The header inbox and the toast ask for a request by id. It opens once it is
+  // in THIS conversation's list. The ask is decided by the conversation's first
+  // completed read: found → open; not found (answered meanwhile, erased, read
+  // failed) → dropped, so a later arrival can never open a modal nobody asked
+  // for (#589 F4).
   createEffect(() => {
     const t = reviewTarget()
-    if (!t || t.sessionId !== props.sessionId) return
+    if (!t || t.sessionId !== props.sessionId || settledFor() !== props.sessionId) return
     const at = proposals().findIndex((p) => p.requestId === t.requestId)
+    clearReview()
     if (at < 0) return
     if (at > 0) setProposals([proposals()[at], ...proposals().filter((_, i) => i !== at)])
-    clearReview()
     setNotice(null)
     setOpen(true)
   })
@@ -266,13 +327,66 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
 
       <Toaster toaster={toaster}>
         {(toast) => (
-          <Toast.Root data-testid="memory-proposal-toast">
-            <Toast.Title>{toast().title}</Toast.Title>
-            <Toast.Description>{toast().description}</Toast.Description>
+          <Toast.Root
+            data-testid="memory-proposal-toast"
+            bg="ui-bg-secondary"
+            border="1 ui-border-primary"
+            rounded="lg"
+            shadow="lg"
+            p="3"
+            flex="~"
+            items="center"
+            gap="3"
+            style={{ 'min-width': '16rem' }}
+          >
+            <span
+              class="i-material-symbols-bookmark-add-outline"
+              w="5"
+              h="5"
+              text="ui-accent"
+              aria-hidden="true"
+            />
+            <div flex="~ col" style={{ flex: 1 }}>
+              <Toast.Title text="sm ui-text-primary" font="medium">
+                {toast().title}
+              </Toast.Title>
+              <Toast.Description text="xs ui-text-secondary">
+                {toast().description}
+              </Toast.Description>
+            </div>
             <Show when={toast().action}>
-              {(action) => <Toast.ActionTrigger>{action().label}</Toast.ActionTrigger>}
+              {(action) => (
+                <Toast.ActionTrigger
+                  p="x-2 y-0.5"
+                  text="xs ui-text-primary"
+                  bg="transparent hover:ui-bg-hover"
+                  border="1 ui-accent/50"
+                  rounded="md"
+                  cursor="pointer"
+                >
+                  {action().label}
+                </Toast.ActionTrigger>
+              )}
             </Show>
-            <Toast.CloseTrigger aria-label="Dismiss">×</Toast.CloseTrigger>
+            <Toast.CloseTrigger
+              aria-label="Dismiss"
+              flex="~"
+              items="center"
+              justify="center"
+              w="6"
+              h="6"
+              rounded="md"
+              bg="transparent hover:ui-bg-hover"
+              cursor="pointer"
+            >
+              <span
+                class="i-material-symbols-close"
+                w="4"
+                h="4"
+                text="ui-text-secondary"
+                aria-hidden="true"
+              />
+            </Toast.CloseTrigger>
           </Toast.Root>
         )}
       </Toaster>

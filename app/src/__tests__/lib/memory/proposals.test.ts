@@ -257,7 +257,10 @@ vi.mock('../../../lib/db/memories.server', () => ({
   createMemoryDbStore: (_user: string, opts?: { inTransaction?: (tx: never) => Promise<void> }) =>
     storeFor(opts),
 }))
-vi.mock('../../../lib/db/user-prefs.server', () => ({ getMemoryEnabled: async () => memoryOn }))
+const switchReads = vi.fn()
+vi.mock('../../../lib/db/user-prefs.server', () => ({
+  getMemoryEnabled: async () => (switchReads(), memoryOn),
+}))
 let space = 'space/1024'
 vi.mock('../../../lib/memory/embedder.server', () => ({
   createMemoryEmbedder: () => ({ spaceId: space }),
@@ -353,6 +356,7 @@ beforeEach(() => {
   memoryOn = true
   convTitle = null
   sessionIdReads.length = 0
+  switchReads.mockClear()
   storeFails = false
   storeFailsAfter = null
   txRuns = 0
@@ -473,6 +477,16 @@ describe('inbox (#433 S8): the proposals waiting across conversations', () => {
     ])
     expect(JSON.stringify(entries)).not.toContain('metric units.')
     expect(JSON.stringify(entries)).not.toContain('Aurora')
+  })
+
+  // F3. MUTATION: load the conversation again for its title / re-read the switch per conversation → red.
+  it('F3: costs one blob load per conversation and one switch read in all', async () => {
+    await propose()
+    loadConversation.mockClear()
+    switchReads.mockClear()
+    await listMemoryInboxFor('alice')
+    expect(loadConversation).toHaveBeenCalledTimes(1)
+    expect(switchReads).toHaveBeenCalledTimes(1)
   })
 
   it('is empty with memory off, and reads nothing at all', async () => {

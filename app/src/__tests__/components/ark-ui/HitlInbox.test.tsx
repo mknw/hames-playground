@@ -22,8 +22,8 @@ vi.mock('@solidjs/router', () => ({ useNavigate: () => navigate }))
 
 const { render, fireEvent } = await import('@solidjs/testing-library')
 const { HitlInbox } = await import('../../../components/ark-ui/HitlInbox')
-const { reviewTarget, clearReview, notifyInboxChanged } =
-  await import('../../../lib/hitl/review-store')
+const reviewStore = await import('../../../lib/hitl/review-store')
+const { reviewTarget, clearReview, notifyInboxChanged } = reviewStore
 
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms))
 const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`)
@@ -112,5 +112,61 @@ describe('a row', () => {
     expect(reviewTarget()).toEqual({ sessionId: 's 2/x', requestId: 'req-2' })
     expect(navigate).toHaveBeenCalledWith('/?c=s%202%2Fx')
     expect(listMemoryInbox).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('#589 fix round 1', () => {
+  const { notifyMemoryErased } = reviewStore
+
+  // F1. MUTATION: drop the erase effect → the badge stays until the 60s poll → red.
+  it('F1: erasing memory empties the inbox at once, before any read returns', async () => {
+    listMemoryInbox.mockResolvedValue([entry()])
+    render(() => <HitlInbox />)
+    await tick()
+    expect(q('hitl-inbox-trigger')).not.toBeNull()
+    listMemoryInbox.mockReturnValue(new Promise(() => undefined))
+    notifyMemoryErased()
+    await tick(0)
+    expect(q('hitl-inbox-trigger')).toBeNull()
+  })
+
+  // F3. MUTATION: drop the `mine === latest` check → the older answer wins → red.
+  it('F3: an older response never overwrites a newer one', async () => {
+    let first!: (v: unknown) => void
+    listMemoryInbox.mockReturnValueOnce(new Promise((r) => (first = r)))
+    render(() => <HitlInbox />)
+    await tick()
+    listMemoryInbox.mockResolvedValueOnce([])
+    notifyInboxChanged()
+    await tick()
+    first([entry()])
+    await tick()
+    expect(q('hitl-inbox-trigger')).toBeNull()
+  })
+
+  // F1/F3. MUTATION: drop `latest++` in the erase effect → a read begun before the erase repaints the rows → red.
+  it('F1: a read begun before an erase cannot repaint the rows', async () => {
+    let early!: (v: unknown) => void
+    listMemoryInbox.mockReturnValueOnce(new Promise((r) => (early = r)))
+    render(() => <HitlInbox />)
+    await tick()
+    listMemoryInbox.mockResolvedValueOnce([])
+    notifyMemoryErased()
+    await tick()
+    early([entry()])
+    await tick()
+    expect(q('hitl-inbox-trigger')).toBeNull()
+  })
+
+  // F3. MUTATION: drop the min-gap check → every focus is a read → red.
+  it('F3: a window focus right after a read does not read again', async () => {
+    listMemoryInbox.mockResolvedValue([entry()])
+    render(() => <HitlInbox />)
+    await tick()
+    const reads = listMemoryInbox.mock.calls.length
+    fireEvent.focus(window)
+    fireEvent.focus(window)
+    await tick()
+    expect(listMemoryInbox.mock.calls.length).toBe(reads)
   })
 })

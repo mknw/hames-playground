@@ -56,7 +56,8 @@ export type TurnState =
   | { status: 'idle' }
   | { status: 'streaming'; runningTool: string | null }
   /** The run paused on human-in-the-loop requests (#433). `requestIds` name the
-   *  ones the run waits on; the card, toast and inbox read them from the server. */
+   *  ones the run waits on — a HINT with no consumer outside tests today: the
+   *  card, toast and inbox read the authoritative set from the server. */
   | { status: 'awaiting-decision'; requestIds: readonly string[] }
   | { status: 'done' }
   | { status: 'error'; message: string }

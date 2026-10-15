@@ -5,7 +5,7 @@
  * Renders SEPARATELY from message content for clear visual distinction.
  *
  * States:
- * - pending: Yellow indicator, shows Approve/Reject buttons
+ * - pending: Yellow indicator (decisions are the HITL card's and dialog's, #433 S8)
  * - executed: Green indicator, shows query + results
  * - error: Red indicator, shows error message
  */
@@ -50,7 +50,7 @@ export const ToolCallDisplay = (props: ToolCallDisplayProps) => {
       case 'executed':
         return 'Executed'
       case 'pending':
-        return 'Awaiting approval'
+        return 'Awaiting decision'
       case 'error':
         return 'Failed'
       default:

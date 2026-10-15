@@ -31,3 +31,14 @@ export { inboxVersion }
 export const notifyInboxChanged = (): void => {
   setInboxVersion((v) => v + 1)
 }
+
+const [erasedVersion, setErasedVersion] = createSignal(0)
+
+/** Bumped when the person erased memory or switched it off (#589 F1). Separate
+ *  from `inboxVersion` on purpose: the prompt bumps that on every read, so a
+ *  prompt subscribed to it would loop. Everything holding memory text on screen
+ *  (card, dialog, toast, inbox rows, a pending review ask) drops it here. */
+export { erasedVersion }
+export const notifyMemoryErased = (): void => {
+  setErasedVersion((v) => v + 1)
+}

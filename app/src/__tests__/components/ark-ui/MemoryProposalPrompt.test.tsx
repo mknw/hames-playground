@@ -9,6 +9,24 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+// The real toaster, observed: what is CREATED and DISMISSED is the contract
+// (the DOM shows at most one toast, so a count of nodes cannot tell once from twice).
+const toastSpy = vi.hoisted(() => ({ create: vi.fn(), dismiss: vi.fn() }))
+vi.mock('@ark-ui/solid/toast', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@ark-ui/solid/toast')>()
+  return {
+    ...real,
+    createToaster: (props: Parameters<typeof real.createToaster>[0]) => {
+      const t = real.createToaster(props)
+      const create = t.create.bind(t)
+      const dismiss = t.dismiss.bind(t)
+      t.create = ((o: never) => (toastSpy.create(o), create(o))) as typeof t.create
+      t.dismiss = ((id?: string) => (toastSpy.dismiss(id), dismiss(id))) as typeof t.dismiss
+      return t
+    },
+  }
+})
+
 const listMemoryProposals = vi.fn()
 const answerMemoryProposal = vi.fn()
 vi.mock('~/lib/memory/confirm-actions.server', () => ({
@@ -47,6 +65,8 @@ const view = (items = 2) => ({
 })
 
 beforeEach(() => {
+  toastSpy.create.mockClear()
+  toastSpy.dismiss.mockClear()
   listMemoryProposals.mockReset()
   answerMemoryProposal.mockReset()
   listMemoryProposals.mockResolvedValue([view()])
@@ -358,7 +378,7 @@ describe('#579 review 6 and 2: selection and the bound answer', () => {
 })
 
 describe('the toast and the inbox hand-off (#433 S8)', () => {
-  const { requestReview, reviewTarget, clearReview } = reviewStore
+  const { requestReview, reviewTarget } = reviewStore
 
   // MUTATION: toast on the first read too → a proposal already on screen when the chat opened toasts → red.
   it('toasts a proposal that ARRIVES after the chat opened, once, and not one already there', async () => {
@@ -405,11 +425,203 @@ describe('the toast and the inbox hand-off (#433 S8)', () => {
     render(() => <MemoryProposalPrompt sessionId="s-here" settledTick={0} />)
     await tick()
     expect(q('memory-proposal-dialog')).toBeNull()
-    expect(reviewTarget()).not.toBeNull()
-    clearReview()
+    // dropped on arrival in a different conversation (#589 F4)
+    expect(reviewTarget()).toBeNull()
     requestReview({ sessionId: 's-here', requestId: 'nope' })
     await tick()
     expect(q('memory-proposal-dialog')).toBeNull()
-    clearReview()
+    expect(reviewTarget()).toBeNull()
+  })
+})
+
+describe('#589 fix round 1', () => {
+  const { requestReview, reviewTarget, notifyMemoryErased, inboxVersion } = reviewStore
+  const arrive = async (sid: string) => {
+    vi.useFakeTimers()
+    listMemoryProposals.mockResolvedValue([])
+    const [tickN, setTick] = createSignal(0)
+    const r = render(() => <MemoryProposalPrompt sessionId={sid} settledTick={tickN()} />)
+    await vi.advanceTimersByTimeAsync(0)
+    setTick(1)
+    await vi.advanceTimersByTimeAsync(0)
+    listMemoryProposals.mockResolvedValue([view()])
+    await vi.advanceTimersByTimeAsync(PROPOSAL_POLL_MS[0])
+    return r
+  }
+
+  // F2 · B13. MUTATION: `const fresh = found` (drop the seen filter) → red.
+  it('F2: one proposal is CREATED as a toast once, however often it is read again', async () => {
+    await arrive('s-once')
+    expect(toastSpy.create).toHaveBeenCalledTimes(1)
+    fireEvent.focus(window)
+    await vi.advanceTimersByTimeAsync(0)
+    fireEvent.focus(window)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(toastSpy.create).toHaveBeenCalledTimes(1)
+  })
+
+  // F2 · B4. MUTATION: append `fresh[0].items[0].content` to the description → red.
+  it('F2: the toast carries a count and nothing the person said', async () => {
+    await arrive('s-counts')
+    const made = JSON.stringify(
+      (({ title, description }) => ({ title, description }))(toastSpy.create.mock.calls[0][0]),
+    )
+    const painted = q('memory-proposal-toast')!.textContent!
+    for (const text of [made, painted]) {
+      expect(text).not.toMatch(/metric|Aurora|Borealis|prefer|team/)
+    }
+    expect(painted).toContain('2 items')
+  })
+
+  // F2 · B15. MUTATION: make the toast's Review a no-op → red.
+  it('F2/F5: the toast’s Review opens the dialog on the request it announced', async () => {
+    await arrive('s-review')
+    expect(q('memory-proposal-dialog')).toBeNull()
+    const action = q('memory-proposal-toast')!.querySelector<HTMLElement>(
+      '[data-part="action-trigger"]',
+    )!
+    fireEvent.click(action)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(q('memory-proposal-dialog')).not.toBeNull()
+    expect(document.querySelectorAll('[role="dialog"]').length).toBe(1)
+  })
+
+  // F5. MUTATION: drop `toaster.dismiss()` from the switch effect → red.
+  it('F5: a conversation switch dismisses the toast and the ask it carried', async () => {
+    vi.useFakeTimers()
+    const [sid, setSid] = createSignal('s-a')
+    listMemoryProposals.mockResolvedValue([])
+    const [tickN, setTick] = createSignal(0)
+    render(() => <MemoryProposalPrompt sessionId={sid()} settledTick={tickN()} />)
+    await vi.advanceTimersByTimeAsync(0)
+    setTick(1)
+    await vi.advanceTimersByTimeAsync(0)
+    listMemoryProposals.mockResolvedValue([view()])
+    await vi.advanceTimersByTimeAsync(PROPOSAL_POLL_MS[0])
+    expect(toastSpy.create).toHaveBeenCalledTimes(1)
+    toastSpy.dismiss.mockClear()
+    setSid('s-b')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(toastSpy.dismiss).toHaveBeenCalled()
+  })
+
+  // F2 · B14. MUTATION: drop `notifyInboxChanged()` → red; always call it → the identical-read assertion is red.
+  it('F2/F3: the inbox is told when the pending set CHANGED, and only then', async () => {
+    render(() => <MemoryProposalPrompt sessionId="s-notify" settledTick={0} />)
+    await tick()
+    const afterFirst = inboxVersion()
+    expect(afterFirst).toBeGreaterThan(0)
+    fireEvent.focus(window)
+    await tick()
+    fireEvent.focus(window)
+    await tick()
+    expect(inboxVersion()).toBe(afterFirst)
+    listMemoryProposals.mockResolvedValue([])
+    fireEvent.focus(window)
+    await tick()
+    expect(inboxVersion()).toBeGreaterThan(afterFirst)
+  })
+
+  // F2 · B7 (inherited from M6). MUTATION: close while busy → red.
+  it('F2: Escape while an answer is in flight leaves the dialog open', async () => {
+    answerMemoryProposal.mockReturnValue(new Promise(() => undefined))
+    render(() => <MemoryProposalPrompt sessionId="s-busy" settledTick={0} />)
+    await tick()
+    fireEvent.click(q('memory-proposal-review')!)
+    await tick()
+    fireEvent.click(q('memory-proposal-save')!)
+    await tick()
+    fireEvent.keyDown(q('memory-proposal-dialog')!, { key: 'Escape' })
+    await tick()
+    expect(q('memory-proposal-dialog')).not.toBeNull()
+  })
+
+  // F4. MUTATION: keep the target after the first read finds nothing → red.
+  it('F4: an ask whose request is not there is DROPPED, not kept for a later arrival', async () => {
+    vi.useFakeTimers()
+    listMemoryProposals.mockResolvedValue([])
+    requestReview({ sessionId: 's-drop', requestId: 'req-1' })
+    const [tickN, setTick] = createSignal(0)
+    render(() => <MemoryProposalPrompt sessionId="s-drop" settledTick={tickN()} />)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(reviewTarget()).toBeNull()
+    setTick(1)
+    await vi.advanceTimersByTimeAsync(0)
+    listMemoryProposals.mockResolvedValue([view()])
+    await vi.advanceTimersByTimeAsync(PROPOSAL_POLL_MS[0])
+    expect(q('memory-proposal-notice')).not.toBeNull()
+    expect(q('memory-proposal-dialog')).toBeNull()
+  })
+
+  it('F4: a failed read drops the ask too', async () => {
+    listMemoryProposals.mockRejectedValue(new Error('offline'))
+    requestReview({ sessionId: 's-fail', requestId: 'req-1' })
+    render(() => <MemoryProposalPrompt sessionId="s-fail" settledTick={0} />)
+    await tick()
+    expect(reviewTarget()).toBeNull()
+  })
+
+  // F4. MUTATION: drop the `clearReview()` in the switch effect → red.
+  it('F4: choosing another conversation drops an ask made for a different one', async () => {
+    const [sid, setSid] = createSignal('s-first')
+    listMemoryProposals.mockReturnValue(new Promise(() => undefined))
+    render(() => <MemoryProposalPrompt sessionId={sid()} settledTick={0} />)
+    await tick()
+    requestReview({ sessionId: 's-target', requestId: 'req-1' })
+    await tick()
+    expect(reviewTarget()).not.toBeNull()
+    setSid('s-other')
+    await tick()
+    expect(reviewTarget()).toBeNull()
+  })
+
+  // F1. MUTATION: drop the erase effect from the prompt → red.
+  it('F1: erasing memory clears the card, the dialog, the toast and a pending ask, with no timer advanced', async () => {
+    await arrive('s-erase')
+    fireEvent.click(q('memory-proposal-review')!)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(q('memory-proposal-dialog')).not.toBeNull()
+    requestReview({ sessionId: 's-erase', requestId: 'req-1' })
+    listMemoryProposals.mockResolvedValue([])
+    toastSpy.dismiss.mockClear()
+    notifyMemoryErased()
+    await vi.advanceTimersByTimeAsync(50)
+    expect(q('memory-proposal-notice')).toBeNull()
+    expect(q('memory-proposal-dialog')).toBeNull()
+    expect(toastSpy.dismiss).toHaveBeenCalled()
+    expect(reviewTarget()).toBeNull()
+  })
+
+  // F1. MUTATION: drop the generation check → a read begun before the erase repaints the card → red.
+  it('F1: a read already in flight when memory is erased cannot repaint it', async () => {
+    let resolve!: (v: unknown) => void
+    listMemoryProposals.mockReturnValue(new Promise((r) => (resolve = r)))
+    render(() => <MemoryProposalPrompt sessionId="s-inflight" settledTick={0} />)
+    await tick()
+    listMemoryProposals.mockResolvedValue([])
+    notifyMemoryErased()
+    await tick()
+    resolve([view()])
+    await tick()
+    expect(q('memory-proposal-notice')).toBeNull()
+  })
+})
+
+describe('#589 fix round 1: every model-derived field is a text node', () => {
+  // MUTATION (run for each): render `previous` / `kind` through innerHTML → red.
+  it('F2/F8: previous and kind carrying markup stay inert text', async () => {
+    const v = view()
+    v.items[1].previous = '<img src=x onerror=alert(1)>'
+    v.items[1].kind = '<b>bold</b>'
+    listMemoryProposals.mockResolvedValue([v])
+    render(() => <MemoryProposalPrompt sessionId="s-inert" settledTick={0} />)
+    await tick()
+    fireEvent.click(q('memory-proposal-review')!)
+    await tick()
+    const dialog = q('memory-proposal-dialog')!
+    expect(dialog.querySelector('img')).toBeNull()
+    expect(dialog.querySelector('b')).toBeNull()
+    expect(dialog.textContent).toContain('<img src=x onerror=alert(1)>')
+    expect(dialog.textContent).toContain('<b>bold</b>')
   })
 })

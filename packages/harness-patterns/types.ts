@@ -316,7 +316,8 @@ export interface EventMetrics {
   rates?: { inPerMTok: number; outPerMTok: number }
   /** €/h and the measured wall-clock it was applied to, SUMMED over the step's
    *  time-priced attempts, so it describes the same seconds `costEur` charged
-   *  for rather than the last attempt's alone. */
+   *  for rather than the last attempt's alone. Like `basis`, `eurPerHour` is
+   *  the last time-priced attempt's rate; mixed-rate steps have no single rate. */
   timeRate?: { eurPerHour: number; durationMs: number }
   /** @deprecated Pre-EUR stamp, in USD. Events persisted before the currency
    *  fix carry this instead of `costEur`; the folds convert it at the DEFAULT

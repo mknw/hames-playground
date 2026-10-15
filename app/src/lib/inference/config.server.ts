@@ -23,13 +23,8 @@
 import decisionCalibrationArtifact from './decision-calibration.json'
 import { feedDecisionCalibration } from './decision-calibration.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
-import {
-  CLIENT_MAX_OUTPUT_TOKENS,
-  MODEL_CONTEXT_WINDOWS,
-  TIME_PRICED_CLIENT,
-  estimateLlmCostEur,
-} from '../settings'
-import { eurPerUsdRate, verdaEurPerHour } from '../cost-rates.server'
+import { CLIENT_MAX_OUTPUT_TOKENS, MODEL_CONTEXT_WINDOWS, estimateLlmCostEur } from '../settings'
+import { eurPerUsdRate, verdaEurPerHour, smallLlmEurPerHour } from '../cost-rates.server'
 import { VERDA_CLIENT_NAME } from './verda-activity.server'
 import { noteBoxCallStarting } from './cold-start.server'
 import {
@@ -205,14 +200,17 @@ configureInferencePolicy({
   },
 })
 
-configureCostRates({ eurPerUsd: eurPerUsdRate, verdaEurPerHour: verdaEurPerHour })
+configureCostRates({ eurPerUsd: eurPerUsdRate, verdaEurPerHour })
 
 // The cost ESTIMATOR stays host-side (its CLIENT_PRICING table is app pricing
 // config beside the client-safe UI that renders it — SA-C2 family); the
 // package's `computeEventMetrics` calls it through the seam. The time-priced
-// client name rides along: it is what makes a usage-less attempt on the
+// client-to-rate mapping rides along: it is what makes a usage-less attempt on the
 // scale-to-zero box price as a floor instead of being dropped.
-configureCostPricing({ estimate: estimateLlmCostEur, timePricedClient: TIME_PRICED_CLIENT })
+configureCostPricing({
+  estimate: estimateLlmCostEur,
+  timePricedClients: { [VERDA_CLIENT_NAME]: verdaEurPerHour, LocalQwenSmall: smallLlmEurPerHour },
+})
 
 // Checked once, at module load, and only when the flag is on: a misconfigured
 // endpoint should fail loudly and closed rather than surface as a 404 mid-

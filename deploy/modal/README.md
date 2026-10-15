@@ -82,6 +82,38 @@ uv run modal app logs <app-name>
 
 Any HTTP request, a `GET /health` included, starts a cold container; `ops.py status` is the one that does not.
 
+## Reference measurements
+
+Taken on 2026-10-15 with the defaults above (one L4, 2 cores, 24 GiB) in a narrow EU region, synthetic inputs only. "Cold start" is what the app's wake sees: first request to first `200` through the public URL, polled every 5 s, so each figure is up to 5 s high.
+
+**Cold start**
+
+| Path                                                                                        | Readings                                  |
+| ------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| From the snapshot (`measure.py`, three samples)                                             | 21.1 s, 26.7 s, 26.7 s                    |
+| From the snapshot (`smoke.py`, two runs)                                                    | 26.3 s, 31.4 s                            |
+| Without a snapshot: the box's own boot until both models are warm and checked (two deploys) | 388 s, 398 s (vLLM ready at 378 s, 388 s) |
+| First request after a deploy: that boot, then the snapshot is saved and restored            | about 8–10 minutes                        |
+| Inside the box after a restore: `/wake_up` plus the post-restore checks                     | 1.94 s, 2.32 s, 2.21 s                    |
+
+The no-snapshot row comes from first boots, which run exactly the `HAMES_MODAL_SNAPSHOT=0` path plus a 4 s sleep step; no separate `SNAPSHOT=0` deploy was measured.
+
+**Warm calls** (`measure.py`, same three samples)
+
+| Call                                                        | Readings                                          |
+| ----------------------------------------------------------- | ------------------------------------------------- |
+| Summarize a 400-row synthetic tool result, 67 output tokens | 4.99 s, 4.78 s, 5.07 s                            |
+| Decide, two questions: client / shim-reported               | 1.01 s / 591 ms, 0.81 s / 519 ms, 0.85 s / 615 ms |
+| Summarize a one-line input (`smoke.py`)                     | 1.10–1.20 s                                       |
+
+**Post-restore drift** (probability; the bound is 0.1)
+
+| Restore       | Summarizer       | Decision adapter                      |
+| ------------- | ---------------- | ------------------------------------- |
+| Five restores | 0.0 on every one | 0.001, 0.0006, 0.0129, 0.0143, 0.0016 |
+
+Scale to zero after the last request took about 2 minutes, as configured.
+
 ## Cost
 
 Billed while a container exists: boot, the snapshot creation, serving, and the scaledown window after the last request. Per Modal's list prices, an L4 with 2 cores and 24 GiB pinned to a narrow EU region is about $1.8 per active hour, $0 at zero containers. Set a workspace spend limit in Modal's dashboard before the first deploy; `HAMES_MODAL_MAX_CONTAINERS=1` caps the box at one replica.

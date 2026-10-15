@@ -254,73 +254,91 @@ Extractors and the later materialiser must never read `content_sanitized` event 
 
 ### Pseudonymisation guard on the web route
 
-Ruled in [G14](https://github.com/mknw/hames-playground/issues/507#issuecomment-6191473862). `info_ag` is the one route whose tools can send text out of our environment, as a `web_search` query or a `fetch` URL, which is a GET to a public host. The guard makes sure the model composing those arguments never sees a real identity taken from earlier results. It is an extra, outbound-facing filter, and the injection guard stays as it is.
+Ruled in [G14](https://github.com/mknw/hames-playground/issues/507#issuecomment-6191473862); revised for delta review 2 (PR #566, comment 6192033926, D1–D6). `info_ag` is the one route whose tools can send text out of our environment, as a `web_search` query or a `fetch` URL, which is a GET to a public host. The guard makes sure the model composing those arguments never sees a real identity taken from earlier results. It is an extra, outbound-facing filter, and the injection guard stays as it is.
 
 **Where it sits.** It is a core wrapper, `withPseudonymisedInputs`, directly around `withReferences` inside `info_ag`, as in [the shape](#the-shape).
 
-- **The pseudonymiser is injected, not imported.** It lives app-side (`app/src/lib/privacy/pseudonymise.ts`, #160: roster-based, no model), and core cannot import the app. So the composition root passes it in through a new optional `AgentDeps` field, `pseudonymiseForWeb`. That is the same seam `withReferences`' required `selector` uses.
-- **Private tier only.** The wrapper applies on a positive match of the run frame's raw tier (the private tier). On every other tier it passes the view through unchanged, because G14 defers that tier.
+- **The pseudonymiser is injected, not imported.** It lives app-side (`app/src/lib/privacy/pseudonymise.ts`, #160: roster-based, no model), and core cannot import the app. The host supplies it as a new optional `AgentDeps` field, `pseudonymiseForWeb`, the same way it supplies `deps.memory` (`packages/agents/types.ts:91-93`). The agent passes it to the wrapper's config. (`withReferences`' `selector` is a field of that pattern's own config, not an `AgentDeps` seam.)
+- **When it applies: every run except one explicitly on the Anthropic tier (D2).** The wrapper applies **unless the run frame's raw tier is exactly `'anthropic'`**. That is the mirror of `onExplicitAnthropicTier` (`packages/harness-baml/clients.server.ts:689-692`), and it errs toward protecting.
+  - A positive match on the private tier would miss two kinds of run that still route privately. One is a frame with no tier slot: a script or background job, for which routing falls back to the deployment default (`clients.server.ts:840-866`). The other is an unrecognised value, which routing narrows to that same default.
+  - Core cannot read the deployment default itself, because the tier policy lives in `harness-baml`.
+  - Turns on the turn path always fill the slot, so an Anthropic-tier conversation is unaffected. A frameless run on an Anthropic-default deployment is pseudonymised needlessly, which is the safe error.
+  - G14 defers the Anthropic tier, so there the wrapper passes everything through unchanged.
 
-**What it sees and rewrites.** Before the inner pattern runs, the wrapper rebuilds the view it hands inward, as `chain()` builds a child's view (`chain.server.ts:331-335`). Every event the route did not produce in this invocation is passed through `apply(value, table)` (`pseudonymise.ts:368`). That covers:
+**What it rewrites: the view and the child's handoff data (D1).** Before the inner pattern runs, the wrapper does two things. Both feed one roster and one table.
 
-- earlier siblings' `tool_result`s (`retriever`, earlier `info`);
-- earlier turns' events;
-- the plan and earlier-step blocks of the child's `plan_context` handoff, including the capped summaries of `doc_ag`'s output (R1 flow 1).
+1. **It rebuilds the view it hands inward**, as `chain()` builds a child's view (`chain.server.ts:331-335`). Every event the route did not produce in this invocation goes through `apply(value, table)` (`pseudonymise.ts:368`): earlier siblings' `tool_result`s (`retriever`, earlier `info`) and earlier turns' events. `withReferences` passes that view straight to the loop (`with-references.server.ts:304`), and expansion reads `view.fromAll()` (`simpleLoop.server.ts:503`). So selector previews and `expandPreviousResult` payloads are both covered.
+2. **It rewrites the plan and handoff fields of the child's `data`.** The handoff is not an event. It lives in the child's `scope.data` and is rendered into `plan_context` from there (`simpleLoop.server.ts:322`), so a view rewrite never reaches it. That covers the latest `think` plan, the earlier-step lines, and the capped result bodies, including `doc_ag`'s summaries (R1 flow 1).
 
-The one exception is the **latest user message**. It is the user's own request, not something "from prior routes".
+The one exception is the **latest user message**. It is the user's own request, not something "from prior routes". The rewritten copies exist only in that view and that child `data`: `ctx.events` and the stored conversation are untouched.
 
-Selector previews and `expandPreviousResult`'s full payloads are both read from this rewritten view, so the expansion path is covered without a second hook. The rewritten copies exist only in that view: `ctx.events` and the stored conversation are untouched.
+**The roster, including identities the route never sees (D1).** A capped summary carries no labelled Graph fields. And the `doc` events that do carry them are, by design, outside `info_ag`'s context. So a roster built only from what `info_ag` can see would leave an external mail correspondent who is not a directory member in clear in the handoff. The roster is therefore the union of three sources:
 
-**The roster, and why there is no table to keep.**
+- **what is being rewritten:** `extractRoster` (`graph-roster.ts:193`) over the payloads in the view;
+- **what is behind the handoff:** `decisionLoop` built every record it hands to `info_ag`, so it holds their source `tool_result`s, `doc_ag`'s mail results included. It passes those payloads **as roster input only**, in a child-data key that no adapter renders. The wrapper reads that key, builds the roster, and deletes the key before the inner pattern runs. Those payloads are never shown to `info_ag`, and the sibling restriction on its context still holds;
+- **the tenant directory:** `rosterFromDirectory`, merged with `mergeRosters` (`org-roster.ts:89, 143`) and read from Neo4j `Member` nodes through `org-graph/roster-source.server.ts`. This is what catches a colleague named only in prose.
 
-- **The roster** is `extractRoster` over the payloads being rewritten (Graph's labelled identity fields, `graph-roster.ts:193`), merged by `mergeRosters` with the tenant directory (`rosterFromDirectory`, `org-roster.ts:89, 143`, read through `org-graph/roster-source.server.ts`). The directory is what catches a colleague named only in prose.
-- **One table per invocation**, so a person has the same placeholder across every reference that route sees. It is built in memory and dropped when the invocation ends: never stored, never reversed.
-- **Placeholders stay placeholders.** They appear in `info_ag`'s output and in its route-output record. The synthesizer answers with whatever names it has from the other routes.
+The table is built in memory, one per invocation, and dropped when the invocation ends: never stored, never reversed. Placeholders stay placeholders in `info_ag`'s output and in its route-output record. The synthesizer answers with whatever names it has from the other routes.
 
-**What it does not catch.** A person named only in prose who is not a directory member (a customer, a supplier, a private individual). Non-person private data such as project names or amounts is not in the roster at all. The outgoing check below shares both limits, because it uses the same roster.
+**Placeholder numbering across invocations (review note).** `buildTable` numbers placeholders by roster position, so `PERSON_1` in an earlier `info` output (already pseudonymised, and left alone by a later `apply`) can name a different person from `PERSON_1` in a later invocation. Merging the directory **first**, in its fixed order, keeps colleagues' numbers stable across invocations. External identities are numbered after them in first-seen order and can still collide. That can confuse the model, but leaks nothing. A per-invocation placeholder prefix would remove it, but that changes `pseudonymise.ts`, so it is left as a known limitation.
 
-**Failure mode: withhold, never pass in clear.** The guard fails closed when:
+**What it does not catch.**
 
+- A person named only in prose who is in neither the directory nor any source payload's labelled fields, such as a customer named only in a mail body.
+- Non-person private data, such as project names or amounts. It is not in the roster at all.
+- The outgoing check below matches **URL-decoded literals only**, so initials, re-spellings and other encodings pass it (D4).
+
+**Failure mode: withhold, never pass in clear.** On every run the wrapper applies to, it fails closed when:
+
+- **no pseudonymiser was supplied (D3).** `pseudonymiseForWeb` is optional because Anthropic-only deployments do not need it, but absent is never pass-through. The tier is known only per run, so this is enforced at run time, not at construction;
 - building the roster or the table throws;
 - the directory cannot be read;
-- the directory reads as empty while the deployment has not declared that it has none. An empty roster is silent non-protection.
+- the directory reads as empty when the deployment did not declare that it has none.
+  - **The declaration (D4)** is a constructor argument on the app's factory: `createWebPseudonymiser({ directory: 'required' | 'none' })`, default `'required'`.
+  - `'none'` is only for a deployment without an org graph.
+  - The argument is set in code at the composition root, never by an env var, so relaxing the check is a reviewed line.
 
 When it fails closed:
 
 - no references are attached;
 - the handoff to `info_ag` keeps only the one-line route / status / stats list, and drops the plan text and every result body;
+- every web call in that invocation is refused (below);
 - a `warning` records "earlier results withheld: privacy filter unavailable".
 
-The route still runs on the user's message. It is not a turn error.
+The route still runs, on the user's message and the Neo4j reads. It is not a turn error.
+
+**A consequence to state (D4).** The directory comes from Neo4j. So an outage of Neo4j, or of the relay in front of it, refuses every private-tier web call until it recovers.
 
 **Outgoing-argument check: recommended, as the second half of the same guard.** The input rewrite cannot cover what `info_ag` fetches **itself** in this invocation. Free-form Cypher can return a colleague's row, and the next turn of the same loop can put that name into a search query.
 
-So, while the wrapper's scope is open:
-
-- **The check.** It installs a pre-dispatch check at the `callTool` chokepoint, amended into the run frame the way `withInjectionGuard` installs its sanitizer. Every `web`-namespace call (`fetch`, `web_search`, …) has its arguments, URL-decoded, matched against the same roster's literals.
+- **The check.** It is a pre-dispatch check at the `callTool` chokepoint. Every `web`-namespace call (`fetch`, `web_search`, …) has its arguments URL-decoded and matched against the same roster's literals.
+- **Its slot (D4).** It rides a new named run-frame slot, `egressChecks`.
+  - `amendRunFrame` copies slots field by field (`run-frame.server.ts:279-289`), so the slot needs its own merge rule. A nested amend **concatenates** with the open frame's checks, never replaces them. Every check runs, and any one denial denies the call.
+  - That is the union rule guards follow, applied to a list, as `transports` already concatenates.
 - **A match denies the call.** The model gets a recoverable tool failure ("the query contained a private identity; rephrase without it"). This counts as a failed dispatch, not a turn error.
 - **Literals in the latest user message are allowed.** A person the user named and asked to search for is the user's call. The owner can tighten this default.
-- **No roster, no web calls.** If the roster could not be built, every web call in that invocation is refused rather than checked against nothing.
+- **No roster, no web calls.** In every fail-closed case above, every web call in that invocation is refused rather than checked against nothing.
 
-This is consistent with ADR-0006. The input half is a rewrite of the view before any model reads it, not a pre- or post-check. The outgoing half acts at the tool chokepoint, which is where that record says guards belong.
+This is consistent with ADR-0006. The input half rewrites the view and data a child receives, before any model reads them; it is not a pre- or post-check. The outgoing half acts at the tool chokepoint, which is where that record says guards belong.
 
-**What wiring it decides.** `app/src/__tests__/lib/privacy/egress-wiring.test.ts` is a tripwire that fails on the first production import of `lib/privacy/`. It asks for the wiring commit to delete it and state how Q1–Q3 of `graph-pseudonymisation.md` went. Under G14:
+**What wiring it decides, and narrowing the tripwire (D5).** `app/src/__tests__/lib/privacy/egress-wiring.test.ts` fails on the first production import of `lib/privacy/`, and its own header asks the wiring commit to delete it. **Narrow it instead.** Rewrite it to allow exactly one production import site, the composition root that builds `pseudonymiseForWeb`, and to fail on any other. Otherwise nothing would flag the next import, such as the S-f file path or an Anthropic-tier hook that G14 defers. The wiring commit states how Q1–Q3 of `graph-pseudonymisation.md` went under G14:
 
-- **Q1, the hook.** It is this route's input view plus its outgoing web arguments. Nothing else.
+- **Q1, the hook.** This route's input view and handoff data, plus its outgoing web arguments. Nothing else.
 - **Q2, what the store holds.** Unchanged: the stored conversation keeps what it holds today.
 - **Q3, the table.** None is kept. It lives for one invocation and is never stored or reversed.
-
-Q5, stable pseudonyms, is answered by the per-invocation table, because nothing outlives the invocation.
 
 **Pins (layer 1).** Each of these is checked by mutation:
 
 - a synthetic Graph payload and a directory member named only in prose both reach the inner controller as placeholders, through both previews and expansion;
-- the latest user message reaches it unchanged;
-- a roster or table failure attaches nothing and puts no result body in the handoff;
-- a web call whose URL carries a percent-encoded roster address is denied;
-- on a non-private tier the wrapper is a pass-through.
+- **(D1)** a synthetic mail result in `doc_ag` from an external sender who is not in the directory reaches `info_ag`'s rendered `plan_context` as a placeholder, and the roster-source key is absent from the inner pattern's `data`. Mutation: rewrite the view only, and this pin fails;
+- the latest user message reaches the inner controller unchanged;
+- **(D2)** a frame with no tier slot, and one with an unrecognised tier value, both get the rewrite. A frame whose raw tier is exactly `'anthropic'` is a pass-through;
+- **(D3)** on a private-tier run with no `pseudonymiseForWeb`, nothing is attached, no result body is in the handoff, and a web call is refused;
+- a roster or table failure, and an unreadable or undeclared-empty directory, each attach nothing and refuse web calls;
+- a web call whose URL carries a percent-encoded roster address is denied, and a nested `egressChecks` amend keeps the outer check;
+- **(D5)** a second production import of `lib/privacy/` fails the narrowed tripwire.
 
-Mutations: drop the `apply` call; skip the expansion path; delete the outgoing check.
+Mutations: drop the `apply` call; skip the data rewrite; skip the expansion path; turn the tier rule back into a positive private-tier match; let a missing pseudonymiser pass through; delete the outgoing check; make a nested `egressChecks` replace instead of concatenate.
 
 ## Data between routes
 
@@ -366,7 +384,7 @@ All 11 round-2 calls and the 3 departures from the sketch were accepted as recom
 - **N3, decide failure.** It ends the turn visibly on iteration 1, and stops as `answer` with the answer marked partial on a later iteration.
 - **N4, re-hydration.** `withSandbox` re-hydrates after a stash-storing tool call in its scope. This is its own slice, with its own review.
 - **N5, the iteration bound.** `maxIterations` defaults to 6. At the bound the loop stops as `answer`, with the answer marked partial.
-- **G14 (2026-10-15), pseudonymisation.** An outbound filter around `withReferences` on the web route (`info_ag`), on the private tier only, with no table kept and no reverse. A roster that cannot be built withholds the references; they are never passed in clear. Designed in [Pseudonymisation guard on the web route](#pseudonymisation-guard-on-the-web-route).
+- **G14 (2026-10-15), pseudonymisation.** An outbound filter around `withReferences` on the web route (`info_ag`), on the private tier only, with no table kept and no reverse. The filter applies unless a run is explicitly on the Anthropic tier, and it covers the handoff data as well as the view. A roster that cannot be built withholds the references; they are never passed in clear. Designed in [Pseudonymisation guard on the web route](#pseudonymisation-guard-on-the-web-route).
 - **The three departures:** the retriever is its own route; `doc_ag` is the sketch's second form; `answer` (`done` in G12) is a choice, so the synthesizer answers once.
 
 The round-1 reviewers' terms (architecture 6068693140, security 6068708025) bind the delta review. Nothing is built before that review converges.
@@ -409,7 +427,7 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
 4. **`withSandbox` re-hydrate on stash write** (N4). A core change with its own review.
 5. **Materialisation and enabling the file path**, gated on P4. The pseudonymiser-valued option has no boolean form. Include a source-scan pin that no env var can enable materialisation; pin entry/exit wipes and the verbatim-hash promotion block; pin that the materialiser never reads `content_sanitized` data with the same two-event fixture as slice 1. Only after file-path pseudonymisation and N4 are wired may `graph_file_ingest` enter the effective allowlist and its file path run. These deterministic pins belong to layer 1.
 6. **Resume from route records** (P1), only when a gate is wanted inside a route.
-7. **The web-route pseudonymisation guard ([G14](https://github.com/mknw/hames-playground/issues/507#issuecomment-6191473862)).** `withPseudonymisedInputs` and the `callTool` outgoing check in core; `AgentDeps.pseudonymiseForWeb` supplied by the app from `lib/privacy/`; deletion of the `egress-wiring` tripwire in the same commit, with Q1–Q3 as stated in [the section](#pseudonymisation-guard-on-the-web-route). The pins listed there belong to layer 1. On the private tier, slice 3's `info_ag` ships only with this guard in place.
+7. **The web-route pseudonymisation guard ([G14](https://github.com/mknw/hames-playground/issues/507#issuecomment-6191473862)).** `withPseudonymisedInputs` (rewriting the view and the child's plan/handoff data) and the `callTool` outgoing check on a new concatenating `egressChecks` run-frame slot, in core; `decisionLoop` passing the handoff's source payloads as roster input; `AgentDeps.pseudonymiseForWeb` built by the app's `createWebPseudonymiser` from `lib/privacy/`; the `egress-wiring` tripwire **narrowed** to that one import site, not deleted, with Q1–Q3 stated in the commit as in [the section](#pseudonymisation-guard-on-the-web-route). The pins listed there belong to layer 1. On the private tier, slice 3's `info_ag` ships only with this guard in place.
 
 ## See also
 

@@ -1,0 +1,86 @@
+# general-next conversation Eval (#507 W4)
+
+[SCENARIOS.md](SCENARIOS.md) records the 16 acceptance scenarios. This extends the
+existing role-level compatibility evals with whole conversations: run the shipped
+package agent through `harness` / `continueSession`, then check tool order, routes,
+termination, facts, artifacts and retrieval locators. Each scenario has its own file.
+
+**Private tier only**, per the owner amendment of 2026-10-15. `general` runs the
+baseline cases beside the selected candidate. The default agent is unchanged.
+No live run or default-flip evidence was produced in this PR.
+
+```bash
+# All scripts run from app/. --list imports no agent and reads no credentials.
+corepack pnpm eval:general-next --list
+# Once S3 exists: free, scripted inference and synthetic tools. No .env is loaded.
+corepack pnpm eval:general-next
+EVAL_GENERAL_AGENT=general corepack pnpm eval:general-next
+# ONLY after the coordinator's actual “S3 merged: go” message:
+EVAL_GENERAL_GO='S3 merged: go' corepack pnpm eval:general-next --live
+```
+
+| Variable               | Default        | Meaning                                                                                                                                                                                       |
+| ---------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EVAL_GENERAL_AGENT`   | `general-next` | Package agent ID; its `agents/<id>.server.ts` module exports an `AgentDefinition` with that ID. No hardcoded candidate import or registry change. Missing modules fail rather than fall back. |
+| `EVAL_ONLY`            | all            | Comma-separated scenario IDs; unknown IDs fail before setup. A filtered run cannot establish the flip gate.                                                                                   |
+| `EVAL_GENERAL_CAP_USD` | `20`           | Positive USD cap; anything above `25` is refused. The conservative stop threshold is **80%** of this amount (`16` by default), shared across baseline and candidate scenarios.                |
+| `EVAL_GENERAL_GO`      | unset          | Acknowledges the coordinator's go message; required in addition to `--live`. It is an operator attestation, never permission inferred from S3 appearing in the tree.                          |
+
+The runner writes one JSON report under `evals/reports`, including each scenario's
+status, checks, agent, tier, observer cost, infrastructure floor and call count.
+Gated and unrun scenarios have explicit rows; none are counted as passes. Every
+finished scenario checkpoints the report. A synchronous process exit from the
+usage observer checkpoints an interrupted scenario and prevents retries or a final
+synthesis after the stop condition; throwing from an observer would be swallowed
+by the shared notifier. A timer also stops private wall-clock spend during long
+requests. Missing or unknown observed cost stops the run, as does any serving
+client outside `VerdaQwen`, `LocalQwenSmall` and `PrivateSystemOne`.
+
+The observer prices completed calls, so the final in-flight call can overshoot the
+80% threshold and even the configured cap. The report adds a separate conservative
+private-infrastructure line: elapsed scenario seconds (including setup and endpoint
+wake waits) × (`VERDA_EUR_PER_HOUR` + `SMALL_LLM_EUR_PER_HOUR`), converted to USD at
+the same static `EUR_PER_USD` used by the observer. Observer call-time cost is also
+counted, deliberately overcounting overlap. Infrastructure remains a floor because
+scale-down tails, provider rounding and unobserved infrastructure are not measured;
+this is not an invoice ceiling. Both cap and stop threshold appear in every report.
+
+## Execution boundaries and pending evidence
+
+Hermetic mode poisons public-provider credentials, redirects the private endpoints
+to a loopback fake before importing the agent, and installs a recording dead-end
+HTTP proxy for non-loopback requests. No Anthropic-tier run exists. Live mode reads
+**this worktree's `app/.env` file**, checks remote HTTPS URLs and `/v1` versus
+`/v1/systemone` paths, then installs the same private role map used in production.
+It refuses a missing/stale small-model URL or key before inference; refresh a stale
+worktree copy from `/Users/mknw/Code/kg-agent/app/.env` without printing key values,
+and escalate if the required values are absent. The runner does not copy or print
+credentials. The owner local embedder at `127.0.0.1:8090` must answer `/health`;
+otherwise escalate. Never start another embedder.
+
+Both modes isolate all tool dependencies with synthetic fixtures. The builtin driver
+uses a memory-only stash, a keyword retrieval backend and a scripted `fixture-write`
+sandbox command. It executes no generated code and makes no real Graph, Neo4j or
+Redis request; the gateway is a loopback fake. Artifact and markdown-index checks
+prove the **dependency contract**, not Office rendering, numerical Python/Excel
+execution, vector search quality, app-upload HTTP integration or containment.
+Those integration claims remain owed to app-path evidence using synthetic documents
+seeded through the app's upload path and the shipped sandbox. The driver interface
+allows those integrations to be supplied independently. The final injected
+`AgentDeps.pseudonymiseForWeb` field/factory wiring is not available on this base;
+per coordinator instruction it lands with S3. This PR does not invent that contract
+or claim that the absent `general-next` has run. Scripted inference checks
+wiring only: hermetic green does not certify model behaviour or authorize a flip.
+P4 scenarios are always reported as gated while the file path is withheld; no env
+switch enables `graph_file_ingest` or materialisation.
+
+The acceptance gate after S3 is: all `must` scenarios and the unchanged `general`
+baseline pass on the **private tier**, with all expected scenarios present and live
+model evidence. `should` / `nice` outcomes remain visible. No scenario can pass
+with zero checks. A separate default-flip draft is prepared only after that evidence.
+
+The pure ledger, preconditions and trace checks live under `src/lib/eval-support`
+so ordinary hermetic unit tests can exercise them without importing the eval runner.
+The existing `evals-not-in-ci` pin remains unchanged; neither this script nor the
+role evals run in CI. No public package API changed, so this PR needs no package
+changeset or core SPEC/GUIDE update.

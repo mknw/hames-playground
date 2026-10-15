@@ -189,3 +189,13 @@ structural checks first). Two rules:
 - **A scenario with zero checks fails.** `scenarioPassed()` enforces it, because
   a green cell that asserts nothing is worse than a red one — it manufactures a
   coverage number.
+
+## Conversation acceptance scenarios
+
+[#507's general-next Eval](general-next/README.md) is a separate opt-in runner in
+this suite. It adds a 16-scenario catalogue, the current `general` baseline,
+conversation-level checks and a shared spend ledger. The owner amended this eval
+to the **private tier only**; the role compatibility scenarios above retain their
+existing routing. Its default inference is hermetic, so its free scripted results
+must be distinguished from billed model evidence. `--live` remains gated on the
+coordinator's “S3 merged: go” instruction and worktree `.env` preconditions.

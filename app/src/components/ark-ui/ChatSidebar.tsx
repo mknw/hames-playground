@@ -173,7 +173,8 @@ export function rowFlashClass(completion?: CompletionMark): string {
  * no client-side stream, so their persisted `status` is the freshest signal we
  * have). A live run in THIS browser is indicated by the per-row progress strip
  * instead — see {@link progressPercent} — which is why a conversation takes no
- * badge for `running`, `paused` or `done`.
+ * badge for `running` or `done`. A `paused` conversation does (#433 S8): nothing is
+ * running in ANY browser, so no strip can say it is waiting on a person.
  *
  * **`error` is the exception, and it is the one that matters at rest** (F4 on
  * #278). A conversation row that ended badly — a turn that failed, or one the
@@ -189,10 +190,15 @@ export function rowFlashClass(completion?: CompletionMark): string {
  * Pure so the precedence rules can be unit-tested without rendering.
  */
 export type RowIndicator =
-  'running' | 'error' | 'action-error' | 'action-paused' | 'action-done' | 'none'
+  'running' | 'error' | 'paused' | 'action-error' | 'action-paused' | 'action-done' | 'none'
 
 export function rowIndicator(args: { kind: ThreadKind; status: ThreadStatus }): RowIndicator {
-  if (args.kind !== 'action') return args.status === 'error' ? 'error' : 'none'
+  if (args.kind !== 'action') {
+    if (args.status === 'error') return 'error'
+    // A conversation waiting on a decision (#433 S8): the same glyph an action row
+    // wears, because the person's next move is identical — open it and decide.
+    return args.status === 'paused' ? 'paused' : 'none'
+  }
   if (args.status === 'running') return 'running'
   if (args.status === 'error') return 'action-error'
   if (args.status === 'paused') return 'action-paused'
@@ -395,6 +401,19 @@ const StatusBadge = (props: { indicator: RowIndicator }) => (
         title="Awaiting approval"
         role="img"
         aria-label="Awaiting approval"
+        class="i-material-symbols-pause-circle-outline"
+        w="3.5"
+        h="3.5"
+        text="amber-500"
+        style={{ 'flex-shrink': 0 }}
+      />
+    </Match>
+    {/* A conversation waiting on a person (#433 S8) — the same glyph, its own words. */}
+    <Match when={props.indicator === 'paused'}>
+      <span
+        title="Waiting for your decision"
+        role="img"
+        aria-label="Waiting for your decision"
         class="i-material-symbols-pause-circle-outline"
         w="3.5"
         h="3.5"

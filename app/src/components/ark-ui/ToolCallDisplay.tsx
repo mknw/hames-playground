@@ -16,8 +16,6 @@ import type { ToolCallInfo } from './types'
 
 interface ToolCallDisplayProps {
   toolCall: ToolCallInfo
-  onApprove?: () => void
-  onReject?: () => void
 }
 
 export const ToolCallDisplay = (props: ToolCallDisplayProps) => {
@@ -188,64 +186,6 @@ export const ToolCallDisplay = (props: ToolCallDisplayProps) => {
                 >
                   {props.toolCall.error}
                 </pre>
-              </div>
-            </Show>
-
-            {/* Approval buttons (for pending writes) */}
-            <Show when={props.toolCall.status === 'pending'}>
-              <div flex="~" gap="2" m="t-2">
-                <button
-                  onClick={() => props.onApprove?.()}
-                  p="x-4 y-2"
-                  text="sm ui-text-primary"
-                  bg="green-600/20 hover:green-600/30"
-                  border="1 green-500/50"
-                  rounded="md"
-                  cursor="pointer"
-                  transition="all"
-                  font="medium"
-                  flex="~"
-                  items="center"
-                  gap="1"
-                >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <path d="M20 6L9 17l-5-5" />
-                  </svg>
-                  Approve
-                </button>
-                <button
-                  onClick={() => props.onReject?.()}
-                  p="x-4 y-2"
-                  text="sm ui-text-primary"
-                  bg="red-600/20 hover:red-600/30"
-                  border="1 red-500/50"
-                  rounded="md"
-                  cursor="pointer"
-                  transition="all"
-                  font="medium"
-                  flex="~"
-                  items="center"
-                  gap="1"
-                >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <path d="M18 6L6 18M6 6l12 12" />
-                  </svg>
-                  Reject
-                </button>
               </div>
             </Show>
           </div>

@@ -64,6 +64,7 @@ import {
   closeHitlRows,
   getHitlProposal,
   listHitlProposals,
+  listProposalSessionIds,
   putHitlProposal,
   releaseHitlProposalAnswer,
   requireAnsweringBinding,
@@ -193,6 +194,49 @@ export async function listMemoryProposalsFor(
     })
   }
   return views
+}
+
+/** One row of the header inbox: a conversation with a proposal waiting. Display
+ *  text only — the title is the person's own, but the count and ids are all the
+ *  inbox needs, so no memory text rides here. */
+export interface MemoryInboxEntry {
+  readonly sessionId: string
+  readonly requestId: string
+  readonly title: string | null
+  readonly itemCount: number
+  readonly expiresAt: number | null
+}
+
+/** How many conversations one inbox read opens. Each costs a blob decrypt. */
+export const MEMORY_INBOX_LIMIT = 20
+
+/**
+ * The caller's pending memory proposals across conversations (#433 S8). The
+ * same gates as the per-conversation list, because it IS that list per
+ * conversation: memory off → nothing; a proposal the blob no longer has open,
+ * an expired one, a purged payload → absent. Erased rows disappear with their
+ * rows; nothing is cached.
+ */
+export async function listMemoryInboxFor(userId: string): Promise<MemoryInboxEntry[]> {
+  // The switch first: with memory off nothing is offered, and nothing is read.
+  if (!(await getMemoryEnabled(userId))) return []
+  const sessionIds = await listProposalSessionIds(userId, MEMORY_CONFIRM_KIND, MEMORY_INBOX_LIMIT)
+  const entries: MemoryInboxEntry[] = []
+  for (const sessionId of sessionIds) {
+    const views = await listMemoryProposalsFor(userId, sessionId)
+    if (views.length === 0) continue
+    const conv = await loadConversation(sessionId, userId)
+    for (const v of views) {
+      entries.push({
+        sessionId,
+        requestId: v.requestId,
+        title: conv?.title ? displayText(conv.title) : null,
+        itemCount: v.items.length,
+        expiresAt: v.expiresAt,
+      })
+    }
+  }
+  return entries
 }
 
 /** What became of one answer. The client renders `outcome`; nothing here quotes

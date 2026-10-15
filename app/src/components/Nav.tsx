@@ -1,6 +1,7 @@
 import { Show } from 'solid-js'
 import { useLocation } from '@solidjs/router'
 import { UserMenu } from '~/components/ark-ui/UserMenu'
+import { HitlInbox } from '~/components/ark-ui/HitlInbox'
 import { ThemeSwitcher } from '~/components/ark-ui/ThemeSwitcher'
 import { PreviewHeaderStrip } from '~/components/ark-ui/PreviewHeaderStrip'
 import { isPublicRoute, SHARE_ROUTE_PREFIX } from '~/lib/share-link'
@@ -49,6 +50,9 @@ export default function Nav() {
           </Show>
         </li>
         <li flex items-center gap-3 m="l-auto">
+          <Show when={!onPublicRoute()}>
+            <HitlInbox />
+          </Show>
           <Show when={!onSharePage()}>
             <a
               href={onDashboard() ? '/' : '/dashboard'}

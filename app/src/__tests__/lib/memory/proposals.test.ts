@@ -39,8 +39,9 @@ import type {
 
 // ---- the conversation row ---------------------------------------------------
 let row: { serializedContext: string; version: string } | null
+let convTitle: string | null = null
 const loadConversation = vi.fn(async (..._a: unknown[]) =>
-  row ? { ...row, id: 's1', userId: 'alice' } : null,
+  row ? { ...row, id: 's1', userId: 'alice', title: convTitle } : null,
 )
 let casOk = true
 /** A turn that saved the row while the answer was writing memories. */
@@ -69,6 +70,7 @@ type Held = {
   answer?: { choice: string; flags?: Record<string, boolean> } | null
 }
 const held = new Map<string, Held>()
+const sessionIdReads: string[] = []
 const claims: unknown[] = []
 const releases: string[] = []
 const closeHitlRows = vi.fn(async (ids: readonly string[], user: string, status: string) => {
@@ -158,6 +160,16 @@ vi.mock('../../../lib/db/hitl.server', async () => {
         throw new Error('[hitl] the proposal answer is no longer bound')
       }
     },
+    listProposalSessionIds: async (user: string, kind: string, limit: number) => (
+      sessionIdReads.push(user),
+      [
+        ...new Set(
+          [...held.values()]
+            .filter((h) => h.userId === user && h.kind === kind)
+            .map((h) => h.sessionId),
+        ),
+      ].slice(0, limit)
+    ),
     listHitlProposals: async (sid: string, user: string, kind: string) =>
       [...held]
         .filter(([, h]) => h.sessionId === sid && h.userId === user && h.kind === kind)
@@ -251,8 +263,12 @@ vi.mock('../../../lib/memory/embedder.server', () => ({
   createMemoryEmbedder: () => ({ spaceId: space }),
 }))
 
-const { createMemoryConfirmSeam, listMemoryProposalsFor, answerMemoryProposalFor } =
-  await import('../../../lib/memory/proposals.server')
+const {
+  createMemoryConfirmSeam,
+  listMemoryProposalsFor,
+  answerMemoryProposalFor,
+  listMemoryInboxFor,
+} = await import('../../../lib/memory/proposals.server')
 
 // ---- a proposed turn, made by the real settle ------------------------------
 const SAID = 'I always prefer metric units, and my team is called Aurora.'
@@ -335,6 +351,8 @@ beforeEach(() => {
   mems = new Map()
   sources = new Map()
   memoryOn = true
+  convTitle = null
+  sessionIdReads.length = 0
   storeFails = false
   storeFailsAfter = null
   txRuns = 0
@@ -435,6 +453,49 @@ describe('pr-display', () => {
     ])
     expect(closeHitlRows).toHaveBeenCalledWith([id], 'alice', 'expired')
     expect(expireHitl(row!.serializedContext, Date.now())).toBeNull()
+  })
+})
+
+describe('inbox (#433 S8): the proposals waiting across conversations', () => {
+  // MUTATION: drop the memory-switch check in listMemoryInboxFor → a switched-off memory's proposals are listed → red.
+  it('lists one entry per open proposal, with a count and a stripped title, never memory text', async () => {
+    await propose()
+    convTitle = 'Metric\u202E units\u200B'
+    const entries = await listMemoryInboxFor('alice')
+    expect(entries).toEqual([
+      {
+        sessionId: 's1',
+        requestId: requestId(),
+        title: 'Metric units',
+        itemCount: 2,
+        expiresAt: expect.any(Number),
+      },
+    ])
+    expect(JSON.stringify(entries)).not.toContain('metric units.')
+    expect(JSON.stringify(entries)).not.toContain('Aurora')
+  })
+
+  it('is empty with memory off, and reads nothing at all', async () => {
+    await propose()
+    memoryOn = false
+    loadConversation.mockClear()
+    expect(await listMemoryInboxFor('alice')).toEqual([])
+    expect(sessionIdReads).toEqual([])
+    expect(loadConversation).not.toHaveBeenCalled()
+  })
+
+  // MUTATION: list rows without asking the blob (skip listMemoryProposalsFor) → a ghost row is listed → red.
+  it('lists only what the blob holds open, and nothing for another owner', async () => {
+    await propose()
+    held.set('ghost', { ...[...held.values()][0], userId: 'alice' })
+    expect((await listMemoryInboxFor('alice')).map((e) => e.requestId)).toEqual([requestId()])
+    expect(await listMemoryInboxFor('mallory')).toEqual([])
+  })
+
+  it('an answered proposal leaves the inbox (erased ones disappear)', async () => {
+    await propose()
+    await answerMemoryProposalFor('alice', 's1', requestId(), 'discard')
+    expect(await listMemoryInboxFor('alice')).toEqual([])
   })
 })
 

@@ -9,7 +9,8 @@
  * the reply — and again when the window regains focus or the conversation
  * changes. No push channel.
  *
- * A quiet notice appears; the dialog opens only on "Review", never by itself —
+ * A toast and a quiet card appear (#433 S8); the shared `HitlDialog` opens only on
+ * "Review" (the toast, the card or the header inbox), never by itself —
  * an unrequested focus change while someone reads the answer would fail the
  * accessibility checklist and teach people to dismiss it. Escape or the
  * backdrop closes the dialog and DECIDES NOTHING: the notice stays.
@@ -19,9 +20,10 @@
  * has already stripped what a text node cannot defend against (`displayText`).
  * What this component sends back is a choice id and one flag per item.
  */
-import { Checkbox } from '@ark-ui/solid/checkbox'
-import { Dialog } from '@ark-ui/solid/dialog'
-import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js'
+import { createToaster, Toast, Toaster } from '@ark-ui/solid/toast'
+import { createEffect, createSignal, on, onCleanup, onMount, Show } from 'solid-js'
+import { HitlDialog } from './HitlDialog'
+import { clearReview, notifyInboxChanged, reviewTarget } from '~/lib/hitl/review-store'
 import { answerMemoryProposal, listMemoryProposals } from '~/lib/memory/confirm-actions.server'
 import type { MemoryProposalView } from '~/lib/memory/proposals.server'
 
@@ -35,12 +37,6 @@ export interface MemoryProposalPromptProps {
 /** When to look again after a turn settles: the store step runs after the reply
  *  and may wait on a box that is starting. Stops at the first proposal. */
 export const PROPOSAL_POLL_MS = [2_000, 8_000, 30_000] as const
-
-const EFFECT_COPY = {
-  new: 'New memory',
-  reinforces: 'Already remembered',
-  updates: 'Replaces an older memory',
-} as const
 
 export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
   const [proposals, setProposals] = createSignal<readonly MemoryProposalView[]>([])
@@ -58,6 +54,13 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
   const bound = (p: MemoryProposalView): string | null =>
     p.recorded?.choice ?? (retrying()?.requestId === p.requestId ? retrying()!.choice : null)
 
+  // The toast says a proposal ARRIVED; it is never raised for one already on
+  // screen when the conversation opened (that is the card's job), nor twice for
+  // the same request.
+  const toaster = createToaster({ placement: 'bottom-end', max: 1, overlap: false })
+  let seen = new Set<string>()
+  let baselined = false
+
   let alive = true
   let timers: ReturnType<typeof setTimeout>[] = []
   const clearTimers = () => {
@@ -72,7 +75,23 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
   const refresh = async (sessionId: string): Promise<number> => {
     try {
       const found = await listMemoryProposals(sessionId)
-      if (alive && sessionId === props.sessionId) setProposals(found)
+      if (alive && sessionId === props.sessionId) {
+        const fresh = found.filter((p) => !seen.has(p.requestId))
+        found.forEach((p) => seen.add(p.requestId))
+        if (baselined && fresh.length > 0) {
+          const n = fresh.reduce((sum, p) => sum + p.items.length, 0)
+          toaster.create({
+            type: 'info',
+            title: 'Save to memory?',
+            description: `${n} ${n === 1 ? 'item' : 'items'}`,
+            duration: 10_000,
+            action: { label: 'Review', onClick: () => setOpen(true) },
+          })
+        }
+        baselined = true
+        setProposals(found)
+        notifyInboxChanged()
+      }
       return found.length
     } catch {
       // An unreadable list is no notice, never a fabricated one.
@@ -87,6 +106,8 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
       ([sessionId, tick]) => {
         clearTimers()
         setProposals([])
+        seen = new Set()
+        baselined = false
         setOpen(false)
         setNotice(null)
         setUnchecked(new Set<string>())
@@ -111,6 +132,20 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
   })
 
   const current = () => proposals()[0]
+
+  // The header inbox asks for a request by id. Open it once it is in THIS
+  // conversation's list; a request that is not (answered meanwhile, erased)
+  // simply never matches and the ask is dropped on the next conversation.
+  createEffect(() => {
+    const t = reviewTarget()
+    if (!t || t.sessionId !== props.sessionId) return
+    const at = proposals().findIndex((p) => p.requestId === t.requestId)
+    if (at < 0) return
+    if (at > 0) setProposals([proposals()[at], ...proposals().filter((_, i) => i !== at)])
+    clearReview()
+    setNotice(null)
+    setOpen(true)
+  })
   const itemCount = () => proposals().reduce((n, p) => n + p.items.length, 0)
   const isChecked = (p: MemoryProposalView, ref: string): boolean =>
     p.recorded ? p.recorded.flags[ref] !== false : !unchecked().has(itemKey(p.requestId, ref))
@@ -229,165 +264,30 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
         </p>
       </Show>
 
-      {/* `lazyMount unmountOnExit`, positioned inline: see ShareConversationButton. */}
-      <Dialog.Root
+      <Toaster toaster={toaster}>
+        {(toast) => (
+          <Toast.Root data-testid="memory-proposal-toast">
+            <Toast.Title>{toast().title}</Toast.Title>
+            <Toast.Description>{toast().description}</Toast.Description>
+            <Show when={toast().action}>
+              {(action) => <Toast.ActionTrigger>{action().label}</Toast.ActionTrigger>}
+            </Show>
+            <Toast.CloseTrigger aria-label="Dismiss">×</Toast.CloseTrigger>
+          </Toast.Root>
+        )}
+      </Toaster>
+      <HitlDialog
         open={open()}
-        onOpenChange={(d) => {
-          // Closing decides nothing: the notice stays until a choice is made.
-          if (!d.open && !busy()) setOpen(false)
-        }}
-        lazyMount
-        unmountOnExit
-      >
-        <Dialog.Backdrop
-          style={{
-            position: 'fixed',
-            inset: '0',
-            'z-index': '40',
-            background: 'rgba(0, 0, 0, 0.5)',
-          }}
-        />
-        <Dialog.Positioner
-          style={{
-            position: 'fixed',
-            inset: '0',
-            'z-index': '50',
-            display: 'flex',
-            'align-items': 'center',
-            'justify-content': 'center',
-          }}
-        >
-          <Dialog.Content
-            data-testid="memory-proposal-dialog"
-            bg="ui-bg-secondary"
-            border="1 ui-border-primary"
-            rounded="lg"
-            shadow="2xl"
-            p="5"
-            m="4"
-            style={{ 'max-width': '34rem', width: '100%', 'max-height': '90vh', overflow: 'auto' }}
-          >
-            <Dialog.Title text="sm ui-text-primary" font="medium">
-              Save to memory?
-            </Dialog.Title>
-            <Dialog.Description
-              text="xs ui-text-secondary"
-              m="t-2"
-              style={{ 'line-height': '1.5' }}
-            >
-              These were taken from what you said. Nothing is saved until you choose.
-            </Dialog.Description>
-
-            <Show when={current()}>
-              {(p) => (
-                <ul m="t-4" p="0" flex="~ col" gap="3" style={{ 'list-style': 'none' }}>
-                  <For each={p().items}>
-                    {(item) => (
-                      <li border="1 ui-border-secondary" rounded="md" p="3" bg="ui-bg-tertiary">
-                        <Checkbox.Root
-                          checked={isChecked(p(), item.ref)}
-                          disabled={bound(p()) !== null}
-                          onCheckedChange={(d) =>
-                            toggle(p().requestId, item.ref, d.checked === true)
-                          }
-                          data-testid={`memory-proposal-item-${item.ref}`}
-                          flex="~"
-                          gap="2"
-                          items="start"
-                        >
-                          <Checkbox.Control
-                            w="4"
-                            h="4"
-                            m="t-0.5"
-                            flex="~"
-                            items="center"
-                            justify="center"
-                            border="1 ui-border-primary"
-                            rounded="sm"
-                            style={{ 'flex-shrink': 0 }}
-                          >
-                            <Checkbox.Indicator>
-                              <span
-                                class="i-material-symbols-check-small"
-                                w="4"
-                                h="4"
-                                text="ui-accent"
-                                aria-hidden="true"
-                              />
-                            </Checkbox.Indicator>
-                          </Checkbox.Control>
-                          <div flex="~ col" gap="1" style={{ 'min-width': 0 }}>
-                            <Checkbox.Label text="sm ui-text-primary">
-                              <span
-                                text="xs ui-text-primary"
-                                border="1 ui-accent/50"
-                                p="x-1.5 y-0.5"
-                                rounded="sm"
-                                font="mono"
-                                m="r-2"
-                              >
-                                {item.kind}
-                              </span>
-                              {item.content}
-                            </Checkbox.Label>
-                            <span text="xs ui-text-secondary">
-                              from your message: “{item.evidence}”
-                            </span>
-                            <span text="xs ui-text-secondary">
-                              {EFFECT_COPY[item.effect]}
-                              <Show when={item.previous}>{(prev) => <>: “{prev()}”</>}</Show>
-                            </span>
-                          </div>
-                          <Checkbox.HiddenInput />
-                        </Checkbox.Root>
-                      </li>
-                    )}
-                  </For>
-                </ul>
-              )}
-            </Show>
-
-            <Show when={notice()}>
-              <p text="xs ui-danger" m="t-3" role="alert">
-                {notice()}
-              </p>
-            </Show>
-
-            <div flex="~" gap="2" justify="end" m="t-4">
-              <button
-                type="button"
-                data-testid="memory-proposal-discard"
-                onClick={() => void answer('discard')}
-                disabled={busy() || (!!current() && ['save'].includes(bound(current()!) ?? ''))}
-                p="x-3 y-1.5"
-                text="xs ui-text-secondary"
-                bg="transparent hover:ui-bg-hover"
-                border="1 ui-border-secondary"
-                rounded="md"
-                cursor="pointer"
-              >
-                Don't save
-              </button>
-              <button
-                type="button"
-                data-testid="memory-proposal-save"
-                cyber-button=""
-                onClick={() => void answer('save')}
-                disabled={
-                  busy() ||
-                  !current() ||
-                  bound(current()!) === 'discard' ||
-                  selected(current()!).length === 0
-                }
-                p="x-3 y-1.5"
-                text="xs"
-              >
-                Save selected
-              </button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Positioner>
-      </Dialog.Root>
+        onClose={() => setOpen(false)}
+        proposal={current()}
+        busy={busy()}
+        notice={notice()}
+        isChecked={isChecked}
+        bound={bound}
+        selectedCount={current() ? selected(current()!).length : 0}
+        onToggle={toggle}
+        onAnswer={(choice) => void answer(choice)}
+      />
     </>
   )
 }

@@ -21,6 +21,7 @@ const { createSignal } = await import('solid-js')
 const { MemoryProposalPrompt, PROPOSAL_POLL_MS } =
   await import('../../../components/ark-ui/MemoryProposalPrompt')
 
+const reviewStore = await import('../../../lib/hitl/review-store')
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms))
 const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`)
 const view = (items = 2) => ({
@@ -353,5 +354,62 @@ describe('#579 review 6 and 2: selection and the bound answer', () => {
     fireEvent.click(q('memory-proposal-save')!)
     await tick()
     expect(document.body.textContent).toContain(words)
+  })
+})
+
+describe('the toast and the inbox hand-off (#433 S8)', () => {
+  const { requestReview, reviewTarget, clearReview } = reviewStore
+
+  // MUTATION: toast on the first read too → a proposal already on screen when the chat opened toasts → red.
+  it('toasts a proposal that ARRIVES after the chat opened, once, and not one already there', async () => {
+    vi.useFakeTimers()
+    listMemoryProposals.mockResolvedValue([])
+    const [tickN, setTick] = createSignal(0)
+    render(() => <MemoryProposalPrompt sessionId="s-toast" settledTick={tickN()} />)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(q('memory-proposal-toast')).toBeNull()
+    setTick(1)
+    await vi.advanceTimersByTimeAsync(0)
+    listMemoryProposals.mockResolvedValue([view()])
+    await vi.advanceTimersByTimeAsync(PROPOSAL_POLL_MS[0])
+    const toast = q('memory-proposal-toast')!
+    expect(toast.textContent).toContain('Save to memory?')
+    expect(toast.textContent).toContain('2 items')
+    // the toast never opens the dialog by itself
+    expect(q('memory-proposal-dialog')).toBeNull()
+    // a re-read of the same proposal does not toast again
+    fireEvent.focus(window)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(document.querySelectorAll('[data-testid="memory-proposal-toast"]').length).toBe(1)
+  })
+
+  it('does not toast a proposal that was already on screen at load', async () => {
+    render(() => <MemoryProposalPrompt sessionId="s-load" settledTick={0} />)
+    await tick()
+    expect(q('memory-proposal-notice')).not.toBeNull()
+    expect(q('memory-proposal-toast')).toBeNull()
+  })
+
+  // MUTATION: ignore the review target → the inbox's Review does nothing → red.
+  it('opens the dialog on the request the inbox asked for, and consumes the ask', async () => {
+    requestReview({ sessionId: 's-inbox', requestId: 'req-1' })
+    render(() => <MemoryProposalPrompt sessionId="s-inbox" settledTick={0} />)
+    await tick()
+    expect(q('memory-proposal-dialog')).not.toBeNull()
+    expect(reviewTarget()).toBeNull()
+  })
+
+  // MUTATION: drop the sessionId comparison → an ask for another chat opens this one's dialog → red.
+  it('an ask for another conversation, or an unknown request, opens nothing', async () => {
+    requestReview({ sessionId: 'elsewhere', requestId: 'req-1' })
+    render(() => <MemoryProposalPrompt sessionId="s-here" settledTick={0} />)
+    await tick()
+    expect(q('memory-proposal-dialog')).toBeNull()
+    expect(reviewTarget()).not.toBeNull()
+    clearReview()
+    requestReview({ sessionId: 's-here', requestId: 'nope' })
+    await tick()
+    expect(q('memory-proposal-dialog')).toBeNull()
+    clearReview()
   })
 })

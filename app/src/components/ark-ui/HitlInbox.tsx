@@ -1,0 +1,131 @@
+/**
+ * Header inbox — what is waiting on the person, across conversations (#433 S8).
+ *
+ * Lists the pending memory proposals (`listMemoryInbox`: owner from the
+ * session, memory-off and erased proposals already absent server-side).
+ * Choosing a row hands the request id to the conversation's prompt
+ * (`requestReview`) and navigates there; the shared `HitlDialog` opens once
+ * that conversation has loaded. The row shows a count and the conversation
+ * title only — memory text is shown in the dialog, as text, and nowhere else.
+ * Nothing is decided here.
+ */
+import { Menu } from '@ark-ui/solid/menu'
+import { useNavigate } from '@solidjs/router'
+import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js'
+import { listMemoryInbox } from '~/lib/memory/confirm-actions.server'
+import type { MemoryInboxEntry } from '~/lib/memory/proposals.server'
+import { inboxVersion, requestReview } from '~/lib/hitl/review-store'
+import { CONVERSATION_PARAM } from '~/lib/share-link'
+
+/** A background re-read: the prompt's own polling is per conversation, so a
+ *  proposal raised in one you are not viewing is found here. */
+export const INBOX_POLL_MS = 60_000
+
+export function HitlInbox() {
+  const navigate = useNavigate()
+  const [entries, setEntries] = createSignal<readonly MemoryInboxEntry[]>([])
+
+  const refresh = async () => {
+    try {
+      setEntries(await listMemoryInbox())
+    } catch {
+      // Unreadable is empty, never a fabricated count.
+      setEntries([])
+    }
+  }
+
+  createEffect(on(inboxVersion, () => void refresh()))
+  onMount(() => {
+    const timer = setInterval(() => void refresh(), INBOX_POLL_MS)
+    const onFocus = () => void refresh()
+    window.addEventListener('focus', onFocus)
+    onCleanup(() => {
+      clearInterval(timer)
+      window.removeEventListener('focus', onFocus)
+    })
+  })
+
+  const review = (e: MemoryInboxEntry) => {
+    requestReview({ sessionId: e.sessionId, requestId: e.requestId })
+    navigate(`/?${CONVERSATION_PARAM}=${encodeURIComponent(e.sessionId)}`)
+  }
+
+  return (
+    <Show when={entries().length > 0}>
+      <Menu.Root>
+        <Menu.Trigger
+          data-testid="hitl-inbox-trigger"
+          aria-label={`Waiting on you: ${entries().length}`}
+          title="Waiting on you"
+          flex="~"
+          items="center"
+          justify="center"
+          w="10"
+          h="10"
+          rounded="full"
+          bg="cyber-800/20 hover:cyber-700/30"
+          border="1 cyber-700/50"
+          cursor="pointer"
+          style={{ position: 'relative' }}
+        >
+          <span
+            class="i-material-symbols-inbox-outline"
+            w="5"
+            h="5"
+            text="ui-accent"
+            aria-hidden="true"
+          />
+          <span
+            data-testid="hitl-inbox-count"
+            aria-hidden="true"
+            bg="ui-accent"
+            text="xs ui-bg-primary"
+            rounded="full"
+            p="x-1"
+            style={{
+              position: 'absolute',
+              top: '-2px',
+              right: '-2px',
+              'min-width': '1rem',
+              'text-align': 'center',
+              'line-height': '1rem',
+            }}
+          >
+            {entries().length}
+          </span>
+        </Menu.Trigger>
+        <Menu.Positioner>
+          <Menu.Content
+            data-testid="hitl-inbox-menu"
+            bg="ui-bg-secondary"
+            border="1 ui-border-primary"
+            rounded="lg"
+            shadow="lg"
+            p="y-1"
+            z="50"
+            style={{ 'min-width': '16rem' }}
+          >
+            <For each={entries()}>
+              {(e) => (
+                <Menu.Item
+                  value={e.requestId}
+                  onClick={() => review(e)}
+                  data-testid="hitl-inbox-item"
+                  flex="~ col"
+                  p="x-3 y-2"
+                  cursor="pointer"
+                  bg="hover:ui-bg-hover"
+                >
+                  <span text="sm ui-text-primary">
+                    Save to memory? {e.itemCount} {e.itemCount === 1 ? 'item' : 'items'}
+                  </span>
+                  <span text="xs ui-text-secondary">{e.title ?? 'Untitled conversation'}</span>
+                </Menu.Item>
+              )}
+            </For>
+          </Menu.Content>
+        </Menu.Positioner>
+      </Menu.Root>
+    </Show>
+  )
+}

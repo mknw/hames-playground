@@ -15,6 +15,7 @@ import {
 } from '../global-setup'
 import { APP_PORT } from '../lib/env'
 import { startEgressBackstop } from '../../e2e/lib/egress-backstop'
+import { JEV_DECISIONS_PATH } from '../../e2e/lib/fake-llm'
 
 // Each lifecycle pin closes its recorder. Do not pool control sockets across
 // ephemeral backstop lifetimes: the next drain must open a fresh connection.
@@ -77,7 +78,7 @@ test.describe('layer-3 dev server transport', () => {
   test('explicit fake Jev URL and key win in the dev server process', async () => {
     const observed = await probe()
     expect(observed.pid).not.toBe(process.pid)
-    expect(observed.jevUrl).toBe(backend.llm.baseUrl + '/systemone')
+    expect(observed.jevUrl).toBe(new URL(JEV_DECISIONS_PATH, backend.llm.baseUrl).href)
     expect(observed.jevKey).toBe('e2e-browser-fake-key')
     expect(observed.key).toBe('e2e-browser-fake-key')
   })

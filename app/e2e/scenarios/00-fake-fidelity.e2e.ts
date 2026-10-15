@@ -261,7 +261,21 @@ describe("the fake's Jev endpoint (Decisions API)", () => {
     expect(r.fields.route.method).toBe('jev')
     expect(r.fields.route.probs.search).toBeCloseTo(0.9, 9)
     expect(r.fields.route.llmCall?.metrics?.basis).toBe('provider')
-    expect(fakeLlm.calls.map((c) => [c.model, c.outcome])).toEqual([['typesafe/jev-1.13', 'ok']])
+    expect(fakeLlm.calls.map((c) => [c.model, c.outcome, c.endpoint])).toEqual([
+      ['typesafe/jev-1.13', 'ok', 'jev'],
+    ])
+  })
+
+  it('records the private decide client under the private endpoint', async () => {
+    const { fakeLlm } = await bootApp()
+    fakeLlm.reset()
+    const { createJevTransport } = await import('@hames-ai/harness-baml/jev-decide.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+    const r = await withRunFrame({ inference: { tier: 'verda' } }, () =>
+      createJevTransport().decideAll({ spec: SET, state: 's' }),
+    )
+    expect(r.fields.route.llmCall?.clientName).toBe('PrivateSystemOne')
+    expect(fakeLlm.calls.map((c) => c.endpoint)).toEqual(['private'])
   })
 
   it('an armed status fault is a Jev error the transport fails closed on', async () => {

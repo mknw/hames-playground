@@ -231,12 +231,16 @@ describe.runIf(IS_HERMETIC)('scenario 10: memory through real turns', () => {
           (call) => call.model === (tier === 'verda' ? SMALL_MODEL : FAKE_ANTHROPIC_TIER_MODEL),
         ),
       ).toBe(true)
+      // Decisions are told apart by the endpoint that served them, never the
+      // model id: both systemone clients send the same compatibility id (#584).
+      const decided = app.fakeLlm.calls.filter((call) => call.endpoint)
+      expect(decided.length).toBeGreaterThan(0)
+      expect([...new Set(decided.map((call) => call.endpoint))]).toEqual([
+        tier === 'verda' ? 'private' : 'jev',
+      ])
       if (tier === 'verda') {
         expect(
-          app.fakeLlm.calls.filter(
-            (call) =>
-              call.model === 'typesafe/jev-1.13' || call.model === FAKE_ANTHROPIC_TIER_MODEL,
-          ),
+          app.fakeLlm.calls.filter((call) => call.model === FAKE_ANTHROPIC_TIER_MODEL),
         ).toEqual([])
       }
       expect(await takeEgressAttempts()).toEqual([])

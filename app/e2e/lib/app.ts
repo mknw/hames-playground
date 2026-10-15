@@ -28,7 +28,7 @@ import {
   TURN_TIMEOUT_MS,
   WAKE_ATTEMPT_TIMEOUT_MS,
 } from './mode'
-import { startFakeLlm, type FakeLlm } from './fake-llm'
+import { JEV_DECISIONS_PATH, startFakeLlm, type FakeLlm } from './fake-llm'
 import { startFakeGateway, type FakeGateway } from './fake-gateway'
 import { startFakeConverter, type FakeConverter } from './fake-converter'
 import { createFakeGraph, composeGraphTools, type FakeGraph } from './fake-graph'
@@ -227,7 +227,7 @@ async function boot(): Promise<AppHandles> {
     process.env.SMALL_LLM_API_KEY = 'e2e-fake-key'
     process.env.EMBEDDINGS_LOCAL_URL = fakeLlm.baseUrl
     process.env.EMBEDDINGS_LOCAL_API_KEY = 'e2e-fake-key'
-    process.env.JEV_DECISIONS_URL = `${fakeLlm.baseUrl}/systemone`
+    process.env.JEV_DECISIONS_URL = new URL(JEV_DECISIONS_PATH, fakeLlm.baseUrl).href
     process.env.JEV_DECISIONS_API_KEY = 'e2e-fake-key'
     process.env.SMALL_LLM_DECISIONS_URL = `${fakeLlm.baseUrl}/systemone`
     // Poison the real credential — see HERMETIC_ANTHROPIC_KEY.

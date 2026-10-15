@@ -40,7 +40,7 @@ describe('getEndpoints', () => {
 
     expect(getEndpoints()).toEqual({
       mcpGateway: 'http://mcp-gateway:3000/mcp',
-      neo4j: { http: 'http://neo4j:7474', bolt: 'bolt://neo4j:7687' },
+      neo4j: { http: 'http://neo4j-relay:7474', bolt: 'bolt://neo4j-relay:7687' },
     })
   })
 })
@@ -90,8 +90,8 @@ describe('Neo4j env overrides', () => {
 
     env.DEV = false
     expect(getEndpoints().neo4j).toEqual({
-      http: 'http://neo4j:7474',
-      bolt: 'bolt://neo4j:7687',
+      http: 'http://neo4j-relay:7474',
+      bolt: 'bolt://neo4j-relay:7687',
     })
   })
 

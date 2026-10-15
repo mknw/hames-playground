@@ -33,21 +33,26 @@ The MCP Gateway is Docker's tool for managing and running MCP (Model Context Pro
 └───────┘└──────┘└──────┘              └────────┘
 ```
 
+The Neo4j box above is reached through `neo4j-relay` on ports 7474/7687.
+Neo4j joins only `neo4j-internal` (`internal: true`); the relay is its only
+peer and joins `app-network` for gateway clients. Neo4j cannot initiate
+connections to the gateway, other backend services or public URLs (#241 G13).
+
 No MCP server reaches the app's Postgres: agents get no database access (see
 [Postgres](#postgres) below). The app reads and writes Postgres itself, through
 its repositories, never through the gateway.
 
 ### Registered Servers
 
-| Server                | Title           | Tools                                                                        | Auth                 | Backend         |
-| --------------------- | --------------- | ---------------------------------------------------------------------------- | -------------------- | --------------- |
-| `neo4j-cypher`        | Neo4j Cypher    | `get_neo4j_schema`, `read_neo4j_cypher` (writes off, see below)              | Password (hardcoded) | neo4j container |
-| `fetch`               | Fetch           | `fetch`                                                                      | None                 | -               |
-| `web_search`          | DuckDuckGo      | `search`, `fetch_content`                                                    | None                 | -               |
-| `context7`            | Context7        | `resolve-library-id`, `get-library-docs`                                     | None                 | -               |
-| `rust-mcp-filesystem` | Rust Filesystem | `read_text_file`, `write_file`, `edit_file`, `search_files`, +10 more        | None (volume mounts) | -               |
-| `memory`              | Memory          | `create_entities`, `create_relations`, `search_nodes`, `read_graph`, +5 more | None (volume)        | -               |
-| `redis`               | Redis           | `get`, `set`, `delete`, `hget`, `hset`, `lpush`, `sadd`, `zadd`, +24 more    | Password (hardcoded) | redis container |
+| Server                | Title           | Tools                                                                        | Auth                 | Backend                      |
+| --------------------- | --------------- | ---------------------------------------------------------------------------- | -------------------- | ---------------------------- |
+| `neo4j-cypher`        | Neo4j Cypher    | `get_neo4j_schema`, `read_neo4j_cypher` (writes off, see below)              | Password (hardcoded) | neo4j-relay → isolated neo4j |
+| `fetch`               | Fetch           | `fetch`                                                                      | None                 | -                            |
+| `web_search`          | DuckDuckGo      | `search`, `fetch_content`                                                    | None                 | -                            |
+| `context7`            | Context7        | `resolve-library-id`, `get-library-docs`                                     | None                 | -                            |
+| `rust-mcp-filesystem` | Rust Filesystem | `read_text_file`, `write_file`, `edit_file`, `search_files`, +10 more        | None (volume mounts) | -                            |
+| `memory`              | Memory          | `create_entities`, `create_relations`, `search_nodes`, `read_graph`, +5 more | None (volume)        | -                            |
+| `redis`               | Redis           | `get`, `set`, `delete`, `hget`, `hset`, `lpush`, `sadd`, `zadd`, +24 more    | Password (hardcoded) | redis container              |
 
 ### Configuration Strategy
 

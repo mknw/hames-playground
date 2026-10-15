@@ -11,7 +11,9 @@ The stack runs as one Docker Compose project, `hames`:
 - **doc-convert**: document → markdown sidecar for the Data Stash
 - **app**: the SolidStart app itself — opt-in via the `app` profile (#197)
 
-All services communicate via a shared bridge network (`app-network`). Every
+Neo4j sits only on `neo4j-internal` (`internal: true`), with `neo4j-relay` as
+its only peer. Other services use `app-network` and reach Neo4j through that
+fixed-destination HTTP/Bolt relay. Every
 published port is bound to `127.0.0.1`, and the two database passwords come from
 the repo-root `.env` — see [Credentials and existing volumes](#credentials-and-existing-volumes)
 before the first `docker compose up` on a machine that already has the stack.
@@ -21,11 +23,13 @@ before the first `docker compose up` on a machine that already has the stack.
 ### Neo4j
 
 - **Container**: hames-neo4j
-- **Ports** (loopback only):
+- **Network**: `neo4j-internal` only; no published ports and no outbound network access
+- **Ports via neo4j-relay** (loopback only):
   - 127.0.0.1:7474 (HTTP browser interface)
   - 127.0.0.1:7687 (Bolt protocol)
 - **Authentication**: `neo4j` / `NEO4J_PASSWORD` from the repo-root `.env`
-- **Plugins**: APOC, n10s
+- **Plugins**: APOC and n10s, baked into `docker/neo4j/Dockerfile` before isolation; no runtime downloads
+- **File imports**: `dbms.security.allow_csv_import_from_file_urls=false` and `apoc.import.file.enabled=false`
 - **Data**: Persisted in the `neo4j_data` named volume
 - **Healthcheck**: Validates HTTP endpoint on port 7474
 
@@ -59,7 +63,7 @@ before the first `docker compose up` on a machine that already has the stack.
 - **Config**: reads the RENDERED `/mcp/rendered/config.yaml`, written by the
   one-shot `mcp-config` service from `configs/mcp-config.yaml` with the root
   `.env` passwords filled in (`scripts/render-mcp-config.sh`)
-- **Dependencies**: Waits for Neo4j healthcheck and for `mcp-config` to exit 0
+- **Dependencies**: Waits for neo4j-relay (which waits for Neo4j health) and for `mcp-config` to exit 0
 
 ### embedder (memory + Data Stash embeddings, #419 M8)
 
@@ -91,7 +95,7 @@ before the first `docker compose up` on a machine that already has the stack.
   (`docker compose up -d app`) or `--profile app` brings it in
 - **Config**: `env_file: app/.env` (optional), with the in-network endpoints
   overridden in `environment:`
-- **Dependencies**: postgres / neo4j / redis healthy, mcp-gateway and embedder started
+- **Dependencies**: postgres / redis healthy, neo4j-relay started (after Neo4j is healthy), mcp-gateway and embedder started
 - **Requires Compose ≥ 2.24** for the `env_file: [{path, required: false}]` long
   syntax that makes `app/.env` optional. Older Compose rejects the whole file,
   not just this service — so check `docker compose version` first if the bring-up
@@ -147,7 +151,7 @@ wrong platform; the staged copies come from the in-image install.
 | `DOC_CONVERT_URL`               | `http://doc-convert:8000`                                        | conversion sidecar                                         |
 | `EMBEDDINGS_LOCAL_URL`          | `http://embedder:8090/v1`                                        | the `embedder` service, by name (see below)                |
 
-The Neo4j URL needs no entry: `config/endpoints.ts` picks `bolt://neo4j:7687`
+The Neo4j URL needs no entry: `config/endpoints.ts` picks `bolt://neo4j-relay:7687`
 in a production build (the `localhost` form is its `import.meta.env.DEV`
 branch); only the credential is supplied.
 
@@ -223,7 +227,7 @@ All MCP configuration files are located in the `configs/` directory:
 
    ```yaml
    neo4j-cypher:
-     uri: bolt://neo4j:7687 # Uses Docker service name
+     uri: bolt://neo4j-relay:7687 # Uses Docker service name
      username: neo4j
      password: ${NEO4J_PASSWORD} # filled from the root .env by `mcp-config`
      database: neo4j
@@ -259,10 +263,12 @@ All MCP configuration files are located in the `configs/` directory:
 ### Service Networking
 
 - Use Docker service names for inter-container communication (not `host.docker.internal`)
-  - Neo4j: `neo4j:7687` (bolt) / `neo4j:7474` (http)
+  - Neo4j: `neo4j-relay:7687` (bolt) / `neo4j-relay:7474` (http)
   - PostgreSQL: `postgres:5432`
   - Redis: `redis:6379`
-- All services are accessible on the `app-network` bridge network
+- Neo4j is reachable only through `neo4j-relay`; only the relay joins both networks
+- The relay forwards to fixed Neo4j ports, with IP forwarding disabled and no capabilities
+- Other services are accessible on the `app-network` bridge network
 - MCP servers spawned by the gateway also join this network to reach backends
 
 ### Published ports are loopback-only
@@ -270,7 +276,7 @@ All MCP configuration files are located in the `configs/` directory:
 Every `ports:` entry in `docker-compose.yaml` is `127.0.0.1:<host>:<container>`,
 so `localhost:5432`, `localhost:7474` etc. work from your machine and nothing is
 reachable from the LAN. Container-to-container traffic is unaffected: it goes
-over `app-network` by service name and never touches a published port. The one
+over `app-network` by service name (through `neo4j-relay` for Neo4j) and never touches a published port. The one
 thing this changes is a container reaching a compose service through
 `host.docker.internal` or the host's IP — on Linux, `host-gateway` cannot reach
 a port bound to 127.0.0.1. Nothing in the repo does that today; use the service

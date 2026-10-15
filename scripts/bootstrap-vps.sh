@@ -1150,7 +1150,7 @@ stage_checkout() {
 # are exactly the servers docker-compose.prod.yaml's --servers allow-list names.
 neo4j-cypher:
   enabled: true
-  uri: bolt://neo4j:7687
+  uri: bolt://neo4j-relay:7687
   username: neo4j
   password: ${NEO4J_PASSWORD} # filled from .env by the `mcp-config` render service
   database: neo4j

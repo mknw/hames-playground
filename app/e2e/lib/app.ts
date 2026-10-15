@@ -227,11 +227,9 @@ async function boot(): Promise<AppHandles> {
     process.env.SMALL_LLM_API_KEY = 'e2e-fake-key'
     process.env.EMBEDDINGS_LOCAL_URL = fakeLlm.baseUrl
     process.env.EMBEDDINGS_LOCAL_API_KEY = 'e2e-fake-key'
-    // The Anthropic tier's decide transport (Jev, via OpenRouter's Decisions
-    // API) — pointed at the same fake, with a throwaway key, so a hermetic run
-    // can neither reach OpenRouter nor spend a real key.
-    process.env.JEV_DECISIONS_URL = `${fakeLlm.baseUrl.replace(/\/v1$/, '')}/api/alpha/decisions`
+    process.env.JEV_DECISIONS_URL = `${fakeLlm.baseUrl}/systemone`
     process.env.JEV_DECISIONS_API_KEY = 'e2e-fake-key'
+    process.env.SMALL_LLM_DECISIONS_URL = `${fakeLlm.baseUrl}/systemone`
     // Poison the real credential — see HERMETIC_ANTHROPIC_KEY.
     process.env.ANTHROPIC_API_KEY = HERMETIC_ANTHROPIC_KEY
     // The strip's control-plane probe (`verda-control-plane.server.ts`) reads
@@ -395,6 +393,9 @@ async function boot(): Promise<AppHandles> {
       const activity = await import('../../src/lib/inference/verda-activity.server')
       const wake = await import('../../src/lib/inference/wake.server')
       activity.resetVerdaActivity()
+      const coldStart = await import('../../src/lib/inference/cold-start.server')
+      coldStart.resetSmallActivity()
+      wake.resetSmallWake()
       // And drop any ping still parked on the shared symbol, so a scenario that
       // just failed one does not attach to its rejected promise.
       wake.resetVerdaWake()

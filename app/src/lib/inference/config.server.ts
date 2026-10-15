@@ -20,19 +20,14 @@
  * and the resolution must land in the SAME module instance, and the pin goes
  * red when they do not.
  */
-import decisionCalibrationArtifact from './decision-calibration.json'
-import { feedDecisionCalibration } from './decision-calibration.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
-import {
-  CLIENT_MAX_OUTPUT_TOKENS,
-  MODEL_CONTEXT_WINDOWS,
-  TIME_PRICED_CLIENT,
-  estimateLlmCostEur,
-} from '../settings'
-import { eurPerUsdRate, verdaEurPerHour } from '../cost-rates.server'
+import { CLIENT_MAX_OUTPUT_TOKENS, MODEL_CONTEXT_WINDOWS, estimateLlmCostEur } from '../settings'
+import { eurPerUsdRate, verdaEurPerHour, smallLlmEurPerHour } from '../cost-rates.server'
+import { parseDecisionsUrl } from '@hames-ai/harness-baml/jev-decide.server'
 import { VERDA_CLIENT_NAME } from './verda-activity.server'
-import { noteVerdaCallStarting } from './cold-start.server'
+import { noteBoxCallStarting } from './cold-start.server'
 import {
+  VERDA_CLIENT_BY_ROLE,
   configureCostPricing,
   configureCostRates,
   configureInferencePolicy,
@@ -40,9 +35,6 @@ import {
 } from '@hames-ai/harness-baml/clients.server'
 
 assertServerOnImport()
-
-// #418 T8: validate the committed artifact at host composition, before calls.
-feedDecisionCalibration(decisionCalibrationArtifact)
 
 export type { InferenceTier } from '@hames-ai/harness-baml/clients.server'
 
@@ -121,11 +113,9 @@ export function assertVerdaConfigured(): void {
  * to keep it off, and doing it on the role that is handed tool results verbatim
  * (SD-10). "It still works" is not the property being protected.
  *
- * `SMALL_LLM_API_KEY` is deliberately NOT required. llama-server authenticates
- * nothing, so a local `make llm-small` has no key to set; `openai-generic` sends
- * the header regardless and a remote endpoint that checks one fails loudly on
- * its own with a 401. Demanding it here would refuse the tier for the common
- * local case.
+ * `SMALL_LLM_API_KEY` is not required by this summarizer-only check because
+ * local llama-server can run without authentication. The whole private tier
+ * requires it in `assertPrivateTierConfigured` for the systemone bearer key.
  *
  * The URL is checked for the `/v1` suffix for `assertVerdaConfigured`'s reason:
  * BAML hands `base_url` to `openai-generic` verbatim, so a root URL 404s every
@@ -155,12 +145,12 @@ export function assertSmallModelConfigured(): void {
 /**
  * Throws unless EVERY endpoint the private tier needs is configured.
  *
- * The tier is two models (see `VERDA_CLIENT_BY_ROLE`), so its configuration is
- * a conjunction and this is the only function that says so. Every gate on the
+ * The tier requires the 27B endpoint, the summarizer endpoint and the systemone
+ * decisions endpoint (see `VERDA_CLIENT_BY_ROLE`); this function checks their
+ * configuration together. Every gate on the
  * tier — the module-load check below, `assertInferenceTier('verda')` (through
  * the seam's registered `assertTierReachable`), and `verdaConfigured()`'s
- * "may a user pick this?" — goes through here, so adding a third model to the
- * tier is one edit rather than three.
+ * "may a user pick this?" — goes through here.
  *
  * The two halves stay separately callable on purpose: `scripts/smoke-verda.ts`
  * exercises only the 27B roles and must not be refused for a summarizer it never
@@ -169,6 +159,31 @@ export function assertSmallModelConfigured(): void {
 export function assertPrivateTierConfigured(): void {
   assertVerdaConfigured()
   assertSmallModelConfigured()
+  const raw = process.env.SMALL_LLM_DECISIONS_URL
+  if (!raw)
+    throw new Error(
+      'The private inference tier requires SMALL_LLM_DECISIONS_URL; refusing to send a decision to any other endpoint.',
+    )
+  const endpoint = parseDecisionsUrl(raw)
+  if (typeof endpoint === 'string' || endpoint.pathname !== '/v1/systemone') {
+    throw new Error(
+      'SMALL_LLM_DECISIONS_URL must be a full https: or loopback URL ending in /v1/systemone.',
+    )
+  }
+  if (
+    endpoint.hostname === 'api.typesafe.ai' ||
+    endpoint.hostname === 'openrouter.ai' ||
+    endpoint.hostname.endsWith('.openrouter.ai')
+  ) {
+    throw new Error(
+      'Refusing SMALL_LLM_DECISIONS_URL: it names a public systemone provider; no request was made.',
+    )
+  }
+  if (!process.env.SMALL_LLM_API_KEY) {
+    throw new Error(
+      'The private inference tier requires SMALL_LLM_API_KEY; refusing to open the tier without its systemone bearer key.',
+    )
+  }
 }
 
 // ============================================================================
@@ -180,7 +195,7 @@ export function assertPrivateTierConfigured(): void {
 // `tier.server.ts` → here. The wake hook reproduces the filter the old
 // `clientOverrideFor` carried inline — the seam announces WHICH private-tier
 // client is about to be called; which of them scales to zero and owes the user
-// a countdown is host knowledge (VERDA_CLIENT_NAME), so the filter lives here.
+// a countdown is host knowledge, so the two-box filter lives here.
 // ============================================================================
 
 configureModelTables({
@@ -192,36 +207,33 @@ configureInferencePolicy({
   defaultTier: () => (verdaInferenceEnabled() ? 'verda' : 'anthropic'),
   assertTierReachable: assertPrivateTierConfigured,
   onPrivateCallStart: (client: string) => {
-    // The client test arrived with the describe flip: the private tier is two
-    // models, and `LocalQwenSmall` does not scale to zero — it is a
-    // llama-server somebody is running. A bag naming it is a call that will
-    // answer in milliseconds, and announcing "starting GPU, ~146 seconds" in
-    // front of it would be a countdown for a wait nobody is paying, fired from
-    // the highest-frequency role on the tier. So the hook keys on the CLIENT,
-    // not on "the tier moved this role". No-op unless a turn armed a watch
-    // (`runWithColdStartWatch`).
-    //
-    // The "does not scale to zero" half of that is now an ASSUMPTION, not a
-    // fact: #419 D20 (owner decision 6026903497 (b), rev 5) lets the 4B AND the
-    // embedder scale to zero behind the joint memory wake
-    // (`lib/inference/memory-wake.server.ts`), which starts before the chain's
-    // first pattern of an opted-in turn. This filter still keys on the client —
-    // a `LocalQwenSmall` bag gets no warming notice — so if a describe call
-    // reaches the 4B while that wake is still running, the silence is the
-    // designed shape and the wait shows up in the wake's own budget, not here.
-    // Revisit this comment when the small boxes actually deploy scale-to-zero.
-    if (client === VERDA_CLIENT_NAME) noteVerdaCallStarting()
+    // Key on the resolved CLIENT, not every role in the private tier. The 4B
+    // describe client now scales to zero too, so it owes a notice just like the
+    // 27B; use the role map so a rename cannot silently drop that notice. This
+    // hook only announces inside a turn's watch; it does not wake either box.
+    // LocalQwenSmallDecide keeps its separate readout and existing notice
+    // policy: this change enrolls describe, not every client sharing its host.
+    // Changing the decide transport or its failure policy is a separate change.
+    if (client === VERDA_CLIENT_NAME) noteBoxCallStarting('verda')
+    if (client === VERDA_CLIENT_BY_ROLE.describe) noteBoxCallStarting('small')
   },
 })
 
-configureCostRates({ eurPerUsd: eurPerUsdRate, verdaEurPerHour: verdaEurPerHour })
+configureCostRates({ eurPerUsd: eurPerUsdRate, verdaEurPerHour })
 
 // The cost ESTIMATOR stays host-side (its CLIENT_PRICING table is app pricing
 // config beside the client-safe UI that renders it — SA-C2 family); the
 // package's `computeEventMetrics` calls it through the seam. The time-priced
-// client name rides along: it is what makes a usage-less attempt on the
+// client-to-rate mapping rides along: it is what makes a usage-less attempt on the
 // scale-to-zero box price as a floor instead of being dropped.
-configureCostPricing({ estimate: estimateLlmCostEur, timePricedClient: TIME_PRICED_CLIENT })
+configureCostPricing({
+  estimate: estimateLlmCostEur,
+  timePricedClients: {
+    [VERDA_CLIENT_NAME]: verdaEurPerHour,
+    LocalQwenSmall: smallLlmEurPerHour,
+    PrivateSystemOne: smallLlmEurPerHour,
+  },
+})
 
 // Checked once, at module load, and only when the flag is on: a misconfigured
 // endpoint should fail loudly and closed rather than surface as a 404 mid-
@@ -241,8 +253,8 @@ if (verdaInferenceEnabled()) assertPrivateTierConfigured()
  * not. Reaching for this one where the assert belongs is how the fail-closed
  * posture below would quietly become a fall-through to Anthropic.
  *
- * It asks about BOTH endpoints, because the tier needs both (the 27B and the
- * 4B summarizer). A deployment with only the 27B configured therefore leaves the
+ * It checks all three endpoints and their required keys: the 27B, the
+ * summarizer and systemone decisions. A deployment with only the 27B configured therefore leaves the
  * switch's private position DISABLED and defaults every user to Anthropic — a
  * whole-tier decision the operator can see, rather than a tier that works until
  * the first tool result needs summarizing.

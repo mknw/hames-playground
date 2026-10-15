@@ -523,7 +523,9 @@ describe('which failures are retried, and which end it on the spot', () => {
       async () => new Response(JSON.stringify({ error: 'unknown model' }), { status: 400 }),
     )
     const err = (await quiet(ensureVerdaAwake())) as Error
-    expect(err.message).toMatch(/did not wake: it answered HTTP 400/)
+    expect(err.message).toContain(
+      'did not wake (the 27B, VERDA_INFERENCE_ENDPOINT): it answered HTTP 400',
+    )
     expect(err.message).toContain('unknown model')
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
@@ -531,7 +533,9 @@ describe('which failures are retried, and which end it on the spot', () => {
   it('stops DEAD on a 401 — a bad key is not a cold box', async () => {
     fetchMock.mockImplementation(async () => new Response('bad key', { status: 401 }))
     const err = (await quiet(ensureVerdaAwake())) as Error
-    expect(err.message).toMatch(/did not wake: it answered HTTP 401/)
+    expect(err.message).toContain(
+      'did not wake (the 27B, VERDA_INFERENCE_ENDPOINT): it answered HTTP 401',
+    )
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 

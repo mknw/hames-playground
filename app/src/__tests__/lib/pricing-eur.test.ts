@@ -37,11 +37,13 @@ import {
   CLIENT_PRICING,
   DEFAULT_EUR_PER_USD,
   DEFAULT_VERDA_EUR_PER_HOUR,
+  DEFAULT_SMALL_LLM_EUR_PER_HOUR,
   LOCAL_PRICED_CLIENTS,
   PROVIDER_COST_CLIENTS,
-  TIME_PRICED_CLIENT,
+  TIME_PRICED_CLIENTS,
   estimateLlmCostEur,
 } from '../../lib/settings'
+import { VERDA_CLIENT_NAME } from '../../lib/inference/verda-activity.server'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -73,18 +75,21 @@ const ONE_MTOK_EACH = {
   outputTokens: 1_000_000,
 }
 
-describe('the time-priced client is the same one everything else means by "verda"', () => {
-  it('TIME_PRICED_CLIENT equals VERDA_CLIENT_NAME', async () => {
-    const { VERDA_CLIENT_NAME } = await import('../../lib/inference/verda-activity.server')
-    // Two literals in two files (settings.ts must stay client-safe, the warm
-    // clock is server-only). A rename that moved only one of them would put the
-    // box silently back on per-token pricing — which is a €0 figure, because it
-    // has no CLIENT_PRICING entry.
-    expect(TIME_PRICED_CLIENT).toBe(VERDA_CLIENT_NAME)
+describe('the time-priced client mapping', () => {
+  it('contains exactly the metered clients and their default rates', async () => {
+    expect(TIME_PRICED_CLIENTS).toEqual({
+      [VERDA_CLIENT_NAME]: 1.819,
+      LocalQwenSmall: 1.54,
+      PrivateSystemOne: 1.54,
+    })
   })
 
-  it('is deliberately absent from the per-token table', () => {
-    expect(CLIENT_PRICING[TIME_PRICED_CLIENT]).toBeUndefined()
+  it('keeps every time-priced client out of the token and local sets', () => {
+    for (const name of Object.keys(TIME_PRICED_CLIENTS)) {
+      expect(CLIENT_PRICING[name], name).toBeUndefined()
+      expect(LOCAL_PRICED_CLIENTS.has(name), name).toBe(false)
+    }
+    expect(LOCAL_PRICED_CLIENTS.has('LocalGLM')).toBe(true)
   })
 })
 
@@ -132,8 +137,31 @@ describe('token pricing → EUR', () => {
 })
 
 describe('time pricing → EUR', () => {
+  it.each(['LocalQwenSmall', 'PrivateSystemOne'])(
+    'prices %s at €1.54/h and accepts an explicit rate',
+    (client) => {
+      expect(DEFAULT_SMALL_LLM_EUR_PER_HOUR).toBe(1.54)
+      const est = estimateLlmCostEur(ONE_MTOK_EACH, client, { durationMs: 2_000 })!
+      expect(est.basis).toBe('time')
+      expect(est.costEur).toBeCloseTo((1.54 * 2) / 3600, 12)
+      expect(est.timeRate).toEqual({ eurPerHour: 1.54, durationMs: 2_000 })
+      expect(est.noCacheEur).toBe(est.costEur)
+      expect(
+        estimateLlmCostEur(NO_TOKENS, client, {
+          durationMs: 2_000,
+          eurPerHour: 3,
+        })!.costEur,
+      ).toBeCloseTo((3 * 2) / 3600, 12)
+    },
+  )
+
+  it.each(['LocalQwenSmall', 'PrivateSystemOne'])('leaves unmeasured %s cost unknown', (client) => {
+    for (const durationMs of [undefined, Number.NaN, -1])
+      expect(estimateLlmCostEur(ONE_MTOK_EACH, client, { durationMs })).toBeUndefined()
+  })
+
   it('is €/h × wall-clock, and tokens do not enter it', () => {
-    const oneHour = estimateLlmCostEur(NO_TOKENS, TIME_PRICED_CLIENT, {
+    const oneHour = estimateLlmCostEur(NO_TOKENS, VERDA_CLIENT_NAME, {
       durationMs: 3_600_000,
       eurPerHour: 1.819,
     })!
@@ -141,7 +169,7 @@ describe('time pricing → EUR', () => {
     expect(oneHour.costEur).toBeCloseTo(1.819, 9)
 
     // Same duration, a huge token count: identical cost. Tokens are free.
-    const withTokens = estimateLlmCostEur(ONE_MTOK_EACH, TIME_PRICED_CLIENT, {
+    const withTokens = estimateLlmCostEur(ONE_MTOK_EACH, VERDA_CLIENT_NAME, {
       durationMs: 3_600_000,
       eurPerHour: 1.819,
     })!
@@ -150,25 +178,25 @@ describe('time pricing → EUR', () => {
 
   it('prices a realistic call in fractions of a cent', () => {
     // The measured 4.1s single-call latency at the default rate.
-    const est = estimateLlmCostEur(ONE_MTOK_EACH, TIME_PRICED_CLIENT, { durationMs: 4_100 })!
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, VERDA_CLIENT_NAME, { durationMs: 4_100 })!
     expect(est.costEur).toBeCloseTo((4.1 / 3600) * DEFAULT_VERDA_EUR_PER_HOUR, 12)
     expect(est.timeRate).toEqual({ eurPerHour: DEFAULT_VERDA_EUR_PER_HOUR, durationMs: 4_100 })
   })
 
   it('defaults to €1.819/h', () => {
     expect(DEFAULT_VERDA_EUR_PER_HOUR).toBe(1.819)
-    const est = estimateLlmCostEur(NO_TOKENS, TIME_PRICED_CLIENT, { durationMs: 3_600_000 })!
+    const est = estimateLlmCostEur(NO_TOKENS, VERDA_CLIENT_NAME, { durationMs: 3_600_000 })!
     expect(est.costEur).toBeCloseTo(1.819, 9)
   })
 
   it('offers no caching savings — caching cannot save wall-clock', () => {
-    const est = estimateLlmCostEur(ONE_MTOK_EACH, TIME_PRICED_CLIENT, { durationMs: 5_000 })!
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, VERDA_CLIENT_NAME, { durationMs: 5_000 })!
     expect(est.noCacheEur).toBe(est.costEur)
     expect(est.rates).toBeUndefined()
   })
 
   it('an idle box costs nothing: zero duration is zero, not a minimum charge', () => {
-    const est = estimateLlmCostEur(NO_TOKENS, TIME_PRICED_CLIENT, { durationMs: 0 })!
+    const est = estimateLlmCostEur(NO_TOKENS, VERDA_CLIENT_NAME, { durationMs: 0 })!
     expect(est.costEur).toBe(0)
     expect(est.basis).toBe('time')
   })
@@ -177,16 +205,14 @@ describe('time pricing → EUR', () => {
     // A time bill with no time is not a free call. BAML reports no duration when
     // it measured none, and a 0 here would render as "this call cost nothing" on
     // a box that was demonstrably awake to answer it.
-    expect(estimateLlmCostEur(ONE_MTOK_EACH, TIME_PRICED_CLIENT)).toBeUndefined()
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, VERDA_CLIENT_NAME)).toBeUndefined()
     expect(
-      estimateLlmCostEur(ONE_MTOK_EACH, TIME_PRICED_CLIENT, { durationMs: undefined }),
+      estimateLlmCostEur(ONE_MTOK_EACH, VERDA_CLIENT_NAME, { durationMs: undefined }),
     ).toBeUndefined()
     expect(
-      estimateLlmCostEur(ONE_MTOK_EACH, TIME_PRICED_CLIENT, { durationMs: Number.NaN }),
+      estimateLlmCostEur(ONE_MTOK_EACH, VERDA_CLIENT_NAME, { durationMs: Number.NaN }),
     ).toBeUndefined()
-    expect(
-      estimateLlmCostEur(ONE_MTOK_EACH, TIME_PRICED_CLIENT, { durationMs: -1 }),
-    ).toBeUndefined()
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, VERDA_CLIENT_NAME, { durationMs: -1 })).toBeUndefined()
   })
 })
 
@@ -205,7 +231,7 @@ describe('attribution: the SELECTED client decides the model', () => {
   })
 
   it('a time-priced client never gets token pricing, however many tokens it moved', () => {
-    const est = estimateLlmCostEur(ONE_MTOK_EACH, TIME_PRICED_CLIENT, { durationMs: 1_000 })!
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, VERDA_CLIENT_NAME, { durationMs: 1_000 })!
     expect(est.basis).toBe('time')
     expect(est.rates).toBeUndefined()
     // Nothing anywhere near a per-MTok figure.
@@ -231,17 +257,17 @@ describe('attribution: the SELECTED client decides the model', () => {
 
   it('every client the private tier routes a role to has a pricing basis, never "unknown"', async () => {
     // Derived from the route map rather than listed, so a role added to the tier
-    // with a client in none of the three sets (the #418 decide readout's
-    // `LocalQwenSmallDecide` was exactly that client until it joined the local
-    // set) fails here instead of rendering a cost-unknown step in production.
+    // with a client in none of the four sets fails here.
     const { VERDA_CLIENT_BY_ROLE } = await import('@hames-ai/harness-baml/clients.server')
     const clients = new Set(Object.values(VERDA_CLIENT_BY_ROLE))
-    expect(clients).toContain('LocalQwenSmallDecide')
+    expect(clients).toContain('PrivateSystemOne')
     for (const name of clients) {
       expect(estimateLlmCostEur(ONE_MTOK_EACH, name, { durationMs: 4_000 }), name).toBeDefined()
     }
-    // The decide client shares the 4B's server with `describe`, and so its basis.
-    expect(estimateLlmCostEur(ONE_MTOK_EACH, 'LocalQwenSmallDecide')?.basis).toBe('local')
+    // The private systemone client shares the metered small box.
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, 'PrivateSystemOne', { durationMs: 4000 })?.basis).toBe(
+      'time',
+    )
   })
 
   it('the local set and the two priced tables are disjoint', () => {
@@ -249,7 +275,7 @@ describe('attribution: the SELECTED client decides the model', () => {
     // is exactly the silent-wrong-figure failure this suite exists for.
     for (const name of LOCAL_PRICED_CLIENTS) {
       expect(CLIENT_PRICING[name], name).toBeUndefined()
-      expect(name).not.toBe(TIME_PRICED_CLIENT)
+      expect(Object.hasOwn(TIME_PRICED_CLIENTS, name), name).toBe(false)
     }
   })
 
@@ -258,7 +284,7 @@ describe('attribution: the SELECTED client decides the model', () => {
     for (const name of PROVIDER_COST_CLIENTS) {
       expect(CLIENT_PRICING[name], name).toBeUndefined()
       expect(LOCAL_PRICED_CLIENTS.has(name), name).toBe(false)
-      expect(name).not.toBe(TIME_PRICED_CLIENT)
+      expect(Object.hasOwn(TIME_PRICED_CLIENTS, name), name).toBe(false)
     }
   })
 
@@ -286,14 +312,39 @@ describe('attribution: the SELECTED client decides the model', () => {
 })
 
 describe('the env overrides (cost-rates.server.ts)', () => {
-  const saved = { usd: process.env.EUR_PER_USD, verda: process.env.VERDA_EUR_PER_HOUR }
+  const saved = {
+    usd: process.env.EUR_PER_USD,
+    verda: process.env.VERDA_EUR_PER_HOUR,
+    small: process.env.SMALL_LLM_EUR_PER_HOUR,
+  }
 
   afterEach(() => {
     if (saved.usd === undefined) delete process.env.EUR_PER_USD
     else process.env.EUR_PER_USD = saved.usd
     if (saved.verda === undefined) delete process.env.VERDA_EUR_PER_HOUR
     else process.env.VERDA_EUR_PER_HOUR = saved.verda
+    if (saved.small === undefined) delete process.env.SMALL_LLM_EUR_PER_HOUR
+    else process.env.SMALL_LLM_EUR_PER_HOUR = saved.small
     vi.restoreAllMocks()
+  })
+
+  it('reads the small GPU rate per call with positive finite validation', async () => {
+    const { smallLlmEurPerHour } = await import('../../lib/cost-rates.server')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (const raw of [undefined, '', '   ']) {
+      if (raw === undefined) delete process.env.SMALL_LLM_EUR_PER_HOUR
+      else process.env.SMALL_LLM_EUR_PER_HOUR = raw
+      expect(smallLlmEurPerHour()).toBe(1.54)
+    }
+    for (const raw of ['2.5', '3']) {
+      process.env.SMALL_LLM_EUR_PER_HOUR = raw
+      expect(smallLlmEurPerHour()).toBe(Number(raw))
+    }
+    for (const raw of ['0', '-1', 'free', 'NaN', 'Infinity']) {
+      process.env.SMALL_LLM_EUR_PER_HOUR = raw
+      expect(smallLlmEurPerHour(), raw).toBe(1.54)
+    }
+    expect(warn).toHaveBeenCalledTimes(5)
   })
 
   it('reads both rates, per call, so a host change needs no rebuild', async () => {

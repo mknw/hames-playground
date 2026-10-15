@@ -1759,6 +1759,12 @@ export function decideTransportFor(client: string): DecisionMethod {
   return 'verbalized'
 }
 
+/** Mirror the public transports' positive Anthropic lock, including raw
+ *  unknown/future frame tiers that `activeInferenceTier()` narrows to a default. */
+function decideTransportLocked(transport: DecisionMethod): boolean {
+  return transport !== 'logprob' && !onExplicitAnthropicTier()
+}
+
 /** What the adapter reports about how the NEXT call for `key` will be served —
  *  read BEFORE the call by the policy layer: the F3 gate needs the method, the
  *  F2 cut resolution needs the method and the applied calibration entry. Per
@@ -1868,12 +1874,12 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
   serving: DecideServing
 } {
   /** The single selection point: the resolved client, the transport it
-   *  names, whether the private-tier lock refuses it, and whether the transport
+   *  names, whether the tier lock refuses it, and whether the transport
    *  is actually WIRED in this build (`serving` reports only wired ones). */
   const selectDecideTransport = () => {
     const client = resolveClientForRole('decide')
     const transport = decideTransportFor(client)
-    const locked = transport !== 'logprob' && activeInferenceTier() === 'verda'
+    const locked = decideTransportLocked(transport)
     const wired =
       !locked &&
       (transport === 'logprob' ||
@@ -1903,7 +1909,7 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
     // (review finding 1). The transport is picked by the CLIENT (F1).
     const { client, transport, locked } = selectDecideTransport()
     if (locked) {
-      // THE TIER LOCK (review finding 3). Under the private tier only the
+      // THE TIER LOCK (review finding 3, #564). Outside Anthropic only the
       // logprob client may serve a decision: a verbalized secondary is, by
       // construction, a chat model that may live at a public provider, and
       // Jev is one. The posture invariant — no call made under the private tier
@@ -1911,8 +1917,8 @@ export function createDecideAdapter(options?: DecideAdapterOptions): DecideFn & 
       // the refusal is here, before any request is made and without invoking
       // the injected secondary. Fail-closed: `decide()` abstains.
       throw decideFailure(
-        `Refusing decide transport "${transport}" for client ${client} under the private ` +
-          'inference tier: only a logprob-capable client may serve a private-tier decision, ' +
+        `Refusing decide transport "${transport}" for client ${client} outside the Anthropic ` +
+          'inference tier: public transports cannot serve here, including under the private inference tier, ' +
           'and nothing was sent to any provider.',
         variables,
         startTime,
@@ -2056,7 +2062,7 @@ export function createDecideAllAdapter(
   // the one-request set; all other routes use the supplied single-field seam.
   const selectSetTransport = () => {
     const transport = decideTransportFor(resolveClientForRole('decide'))
-    const locked = transport !== 'logprob' && activeInferenceTier() === 'verda'
+    const locked = decideTransportLocked(transport)
     const supportedTypes = locked
       ? CHOICE_DECISION_TYPES
       : transport === 'jev'

@@ -1031,7 +1031,7 @@ describe('jev-supported-types same resolver', () => {
       expect(t.decideAll.supportedTypes).toEqual(['choice'])
       expect(routed.supportedTypes).toEqual(['choice'])
       expect(set.supportedTypes).toEqual(['choice'])
-      await expect(routed({ spec: SCORE, state: 'synthetic' })).rejects.toThrow('Unsupported')
+      await expect(routed({ spec: SCORE, state: 'synthetic' })).rejects.toThrow('Refusing')
       await expect(
         set({ spec: { key: 'set', fields: { score: SCORE } }, state: 'synthetic' }),
       ).rejects.toThrow('Unsupported')

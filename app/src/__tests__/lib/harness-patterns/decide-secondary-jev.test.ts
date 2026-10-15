@@ -129,3 +129,71 @@ describe('setting named, private tier — ignored; neither the secondary nor Jev
     expect(jevRequests).toBe(0)
   })
 })
+
+describe('#564 — non-logprob routes mirror the transport’s positive Anthropic lock', () => {
+  it.each(['future', 'unknown', 'verda'])(
+    'the set selector masks an independently supplied seam’s types under tier %s',
+    async (tier) => {
+      vi.stubEnv('USE_VERDA_INFERENCE', '0')
+      const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+      const { createDecideAllAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
+      const supplied = Object.assign(vi.fn(), {
+        supportedTypes: ['choice', 'score', 'noul'] as const,
+      }) as DecideFn
+      const decideAll = createDecideAllAdapter(supplied)
+      await withRunFrame(
+        {
+          inference: {
+            tier,
+            clientOverride: (role) =>
+              role === 'decide' ? { client: 'AnthropicHaiku45' } : undefined,
+          },
+        },
+        async () => {
+          expect(decideAll.supportedTypes).toEqual(['choice'])
+        },
+      )
+      expect(supplied).not.toHaveBeenCalled()
+      expect(jevRequests).toBe(0)
+    },
+  )
+
+  it.each(['future', 'unknown', 'verda'])(
+    'reports locked single and set routes truthfully under tier %s with zero requests',
+    async (tier) => {
+      vi.stubEnv('USE_VERDA_INFERENCE', '0')
+      const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+      const { createDecideAdapter, createDecideAllAdapter } =
+        await import('@hames-ai/harness-baml/baml-adapters.server')
+      const secondary = Object.assign(verbalizedStub, {
+        supportedTypes: ['choice', 'score', 'noul'] as const,
+      })
+      const decide = createDecideAdapter({ verbalized: secondary as unknown as DecideFn })
+      const decideAll = createDecideAllAdapter(decide)
+      const clients =
+        tier === 'verda'
+          ? ['JevDecide', 'AnthropicHaiku45']
+          : [undefined, 'JevDecide', 'AnthropicHaiku45']
+      for (const client of clients) {
+        await withRunFrame(
+          {
+            inference: {
+              tier,
+              clientOverride: (role) => (role === 'decide' && client ? { client } : undefined),
+            },
+          },
+          async () => {
+            expect(decide.serving('k')).toEqual({})
+            expect(decideAll.serving!('k')).toEqual({})
+            expect(decide.supportedTypes).toEqual(['choice'])
+            expect(decideAll.supportedTypes).toEqual(['choice'])
+            await expect(decide({ spec: SPEC, state: 'synthetic' })).rejects.toThrow(/Refusing/)
+            await expect(decideAll({ spec: SET, state: 'synthetic' })).rejects.toThrow(/Refusing/)
+          },
+        )
+      }
+      expect(jevRequests).toBe(0)
+      expect(verbalizedStub).not.toHaveBeenCalled()
+    },
+  )
+})

@@ -245,15 +245,18 @@ export async function getConversationOwner(id: string): Promise<string | null> {
 //     should its process turn out to be alive after all — is refused instead
 //     of landing over the new turn's work.
 //
-// Why a renewed lease and not the stuck-run reaper's status-plus-age check:
-// that threshold is a bound on the LONGEST LEGITIMATE TURN (90 minutes, see
-// {@link STUCK_RUN_TIMEOUT_MINUTES}), because with no heartbeat "nothing has
-// been written" cannot tell a slow turn from a dead process. Used as a lock
-// expiry it would refuse every conversation whose turn died in a deploy or a
-// restart for an hour and a half. The renewal is that heartbeat, which lets
-// the expiry measure "is the holder alive" instead of "how long can a turn
-// be" — and keeps the lock out of `status` and `updated_at`, both of which
-// mean something else to the sidebar, the reaper and the active-user count.
+// Why the lease, and not the stuck-run reaper's old status-plus-age check, is
+// the liveness signal: that check was a bound on the LONGEST LEGITIMATE TURN,
+// because with no heartbeat "nothing has been written" cannot tell a slow turn
+// from a dead process. Used as a lock expiry it would have refused every
+// conversation whose turn died in a deploy or a restart for hours. The renewal
+// is that heartbeat, which lets the expiry measure "is the holder alive"
+// instead of "how long can a turn be" — and keeps the lock out of `status` and
+// `updated_at`, both of which mean something else to the sidebar and the
+// active-user count. The reaper now reads the SAME lease ({@link NO_LIVE_CLAIM},
+// so it and a taking-over turn can never disagree about "dead") and keeps the
+// age bound only as {@link HUNG_TURN_BACKSTOP_MINUTES}, for a process that is
+// alive, renewing, and never finishing (#507 P2).
 
 /**
  * How long a claim survives without a renewal. Four renewal intervals, so a
@@ -802,106 +805,176 @@ export async function backfillConversationInferenceTier(run: QueryRunner): Promi
 export const PER_CALL_TIMEOUT_MINUTES = 3
 
 /**
- * The most sequential LLM calls one turn can make, on the longest chain a
- * BROWSER can ask for.
- *
- * `SETTINGS_BOUNDS.maxToolTurns[1]` is the tool loop's ceiling and it is
- * client-settable (`SettingsPanel`, clamped server-side), so the reachable
- * bound is the ceiling and not the default of 5. `CHAIN_OVERHEAD_CALLS` covers
- * the single-call patterns a registered chain wraps around that loop — router,
- * compactIntent, planner, compactExecution — plus one spare, because the count
- * is a property of whichever agent is registered and a new one must not
- * silently invalidate the arithmetic.
- *
- * `actorCritic` is the other loop shape and is bounded by
- * `SETTINGS_BOUNDS.maxRetries[1]` at an actor call plus a critic call per
- * attempt; `Math.max` takes whichever loop is worse rather than assuming.
+ * Calls a single-loop chain around its loop: router, compactIntent, planner,
+ * compactExecution — plus one spare, because the count is a property of
+ * whichever agent is registered and a new one must not silently invalidate the
+ * arithmetic.
  */
 export const CHAIN_OVERHEAD_CALLS = 5
-const MAX_SEQUENTIAL_LLM_CALLS =
-  Math.max(SETTINGS_BOUNDS.maxToolTurns[1], 2 * SETTINGS_BOUNDS.maxRetries[1]) +
-  CHAIN_OVERHEAD_CALLS
 
 /**
- * How long a row may sit at `status='running'` with NO write of its own before
- * the sweep below calls it abandoned.
- *
- * **Derived, not chosen** — the arithmetic is right here because the previous
- * value was not supported by its own stated rationale. A running row is not
- * touched again between the pre-seed and the final `saveSession`, so there is
- * no mid-turn heartbeat and "no state change" cannot distinguish a slow turn
- * from a dead process. The ONLY protection a live turn has is that this
- * threshold outlasts it, which makes the number a bound and not a preference:
- *
- *     worst legitimate turn = MAX_SEQUENTIAL_LLM_CALLS × PER_CALL_TIMEOUT_MINUTES
- *                           = (max(maxToolTurns 15, 2 × maxRetries 10) + 5) × 3 min
- *                           =  25 calls × 3 min = 75 min
- *     threshold             = ceil(worst × MARGIN 1.2) = 90 min
- *
- * **Every term is read from where it lives**, which is the property that makes
- * this survive an edit somewhere else: the two loop bounds come from the
- * exported {@link SETTINGS_BOUNDS}, so widening a slider lengthens this with no
- * edit here, and {@link PER_CALL_TIMEOUT_MINUTES} mirrors the client's
- * `request_timeout_ms` under a source-scan pin. The pin in
- * `stuck-run-reaper.test.ts` imports all three rather than restating them —
- * local copies there were what made the last ceiling change fail with a
- * *misleading* message (N1 on #278): 90 minutes is the right answer at a
- * 3-minute ceiling, and a test holding a stale 250 accused it of being unsafe.
- *
- * The value it replaces was 20 minutes, and 20 minutes is exactly 2 × the 600s
- * per-call ceiling then in force — while CLAUDE.md's own measurement of a burst
- * into a sleeping box is that ceiling being hit *twice in one turn* (controller,
- * then synthesizer). It was therefore a coin flip on the shape it was written
- * against, and a 21-minute turn was in fact reaped out from under itself in
- * review: the reap wrote `error`, the turn later wrote its own outcome over it,
- * and in between the row lied and `sweepStuckRuns` logged an abandonment that
- * had not happened. The owner's "~20 min" was policy intent — reap STUCK runs,
- * never live ones — and the intent is what this honours; the number was never
- * the thing being asked for.
- *
- * **The wake is the one term not in the product, and it fits.** #279 parks a
- * turn on a wake before its first LLM call, for up to
- * `DEFAULT_VERDA_WAKE_TIMEOUT_MS` (600s since 2026-08-27, when the single ping
- * became a poll — `lib/inference/wake.server.ts`), and the row is pre-seeded
- * before that wait — so the worst legitimate turn is really 75 + 10 =
- * **85 minutes against a 90-minute threshold**, 5 minutes clear. It is folded
- * into the margin rather than added as a term because it is bounded, once per
- * turn (concurrent turns share one ping) and two orders of magnitude below the
- * chain; `stuck-run-reaper.test.ts` pins the inequality against the real
- * constant so a longer wake fails here rather than shortening a live turn's
- * protection in silence.
- *
- * **The margin is 1.2, and the wake above is the only other thing it absorbs.**
- * It is not slack for an unaccounted term: every term in the product is a hard
- * ceiling the app enforces, and the margin exists so that a turn sitting at the
- * bound is not racing the sweep.
- *
- * The cost of the larger number is bounded and small: an abandoned row is
- * reconciled later, and nothing else changes — reaping was never what a WAITING
- * user sees (a live run's spinner is `session-registry`'s per-tab
- * `isProcessing` signal, which a reload clears whatever the row says). What the
- * reap buys is honest data at rest, and honest data late beats a wrong status
- * early.
- *
- * It tightens when the per-call ceiling does, and has once already: see
- * {@link PER_CALL_TIMEOUT_MINUTES}, which #279 took from 10 minutes to 3 and
- * this expression from 300 minutes to 90, with no other edit.
+ * The most LLM calls one loop can make, on the longest chain a BROWSER can ask
+ * for. `SETTINGS_BOUNDS.maxToolTurns[1]` is the tool loop's ceiling (one
+ * controller call per round) and `actorCritic` is bounded by
+ * `SETTINGS_BOUNDS.maxRetries[1]` at one actor call plus one critic call per
+ * attempt. Both come from the exported bounds, so widening a slider lengthens
+ * the backstop with no edit here. Unlike the actor, the critic has no parse
+ * retry.
  */
-const STUCK_RUN_MARGIN = 1.2
-export const STUCK_RUN_TIMEOUT_MINUTES = Math.ceil(
-  MAX_SEQUENTIAL_LLM_CALLS * PER_CALL_TIMEOUT_MINUTES * STUCK_RUN_MARGIN,
+export const ATTEMPTS_PER_CONTROLLER_CALL = 2
+
+/**
+ * One REQUEST is what the per-call timeout bounds, and a logical controller,
+ * actor or planner call can make two: `createLoopControllerAdapter`,
+ * `createActorControllerAdapter` and `createPlannerAdapter` each re-ask ONCE
+ * when a completion is truncated at its output cap or empty
+ * (`planParseRetry`, `packages/harness-baml/baml-adapters.server.ts`). On the
+ * private tier a full-cap first attempt (~158 s) still fits inside the 180 s
+ * `request_timeout_ms`, so the retry is reachable and the worst call is two
+ * timeouts' worth, not one (#597 review finding 1).
+ */
+const WORST_LOOP_REQUESTS = Math.max(
+  SETTINGS_BOUNDS.maxToolTurns[1] * ATTEMPTS_PER_CONTROLLER_CALL,
+  SETTINGS_BOUNDS.maxRetries[1] * (ATTEMPTS_PER_CONTROLLER_CALL + 1),
 )
 
 /**
- * Reconcile abandoned runs: every row still at `status='running'` whose last
- * write is older than {@link STUCK_RUN_TIMEOUT_MINUTES} becomes `'error'`.
- * Returns the ids it changed (for the caller's log and for tests).
+ * `decisionLoop`'s iteration default (N5 on #507, `maxIterations: 6`). A MIRROR
+ * of the ruling, held against the design doc's N5 line and by a tripwire that
+ * goes red the day core exports `decisionLoop` (`stuck-run-reaper.test.ts`):
+ * import its default then, instead of this copy.
+ */
+export const DECISION_LOOP_MAX_ITERATIONS = 6
+
+/**
+ * The wall-clock cap of one tool call: the MCP SDK's
+ * `DEFAULT_REQUEST_TIMEOUT_MSEC` (60 000 ms), which covers `client.callTool` in
+ * `mcp-client.server.ts` and the sandbox backend. Pinned against the SDK's own
+ * export. (The sandbox's `defaultTimeoutSec` is NOT this cap: it is written into
+ * the runtime config and never read by a backend.)
+ */
+export const TOOL_CALL_TIMEOUT_MINUTES = 1
+
+/**
+ * The longest a turn is parked on the private tier's wake before its first call:
+ * the larger of `DEFAULT_VERDA_WAKE_TIMEOUT_MS` (600 s) and
+ * `DEFAULT_SMALL_LLM_WAKE_TIMEOUT_MS` (720 s). The two boxes wake in PARALLEL, so
+ * it is the max and not the sum. A mirror — `lib/inference/wake.server.ts` pulls
+ * in the whole transport stack, which this module must not — pinned against both
+ * defaults in `stuck-run-reaper.test.ts`. A host that raises either env override
+ * by more than the margin has to raise the backstop with it (`.env.example`).
+ */
+export const WAKE_ALLOWANCE_MINUTES = 12
+
+/**
+ * The LLM requests the `decisionLoop` agent (#507) makes in its worst
+ * legitimate turn on the private tier, and the arithmetic behind
+ * {@link HUNG_TURN_BACKSTOP_MINUTES}:
+ *
+ *     per iteration  = 1 decision + the worst child loop
+ *                    = 1 + max(15 rounds × 2 attempts, 10 attempts × (2 actor + 1 critic))
+ *                    = 1 + 30 = 31 requests
+ *     turn           = 6 iterations × 31 + 1 synthesis + (5 chain overhead + 1 planner retry)
+ *                    = 193 requests
+ *
+ * The `decide` call is a single request (a systemone client with no parse
+ * retry) and is counted at the same 3-minute budget, which is conservative.
+ *
+ * **That is not the 97 in the design doc, and the difference is stated rather
+ * than hidden.** The doc's P2 counts LOGICAL calls with a child as the 15-round
+ * `simpleLoop` and no chain overhead: 6 × 15 + 6 decisions + 1 synthesis =
+ * **97 calls**. This counts requests, in the worse child shape (`actorCritic`),
+ * with the chain-overhead calls the bound it replaces already carried. Both
+ * computations stand: 97 is pinned as a FLOOR the backstop must exceed, 193 is
+ * the value used.
+ */
+export const DECISION_LOOP_WORST_REQUESTS =
+  DECISION_LOOP_MAX_ITERATIONS * (1 + WORST_LOOP_REQUESTS) + 1 + (CHAIN_OVERHEAD_CALLS + 1)
+
+/**
+ * How long a row may sit at `status='running'` **while its turn lease is still
+ * being renewed** before the sweep below calls it hung. It is a BACKSTOP and
+ * not the reaper's liveness test: a dead process is caught in
+ * {@link TURN_CLAIM_TTL_SECONDS} by the lease, so no composition's arithmetic
+ * decides whether an ordinary dead turn is reaped. What this bounds is the one
+ * case the lease cannot see — a process that is alive, renewing, and never
+ * finishing — and for that a live long turn should not be reaped before it could
+ * legitimately end, so the number is a bound on the longest legitimate turn.
+ *
+ * **Derived, not chosen** (G12 A1 on #507), for the PRIVATE tier:
+ *
+ *     LLM time     = DECISION_LOOP_WORST_REQUESTS × PER_CALL_TIMEOUT_MINUTES
+ *                  = 193 requests × 3 min                       = 579 min
+ *     tool time    = 6 iterations × 15 rounds × 1 min tool cap  =  90 min
+ *     wake         = WAKE_ALLOWANCE_MINUTES                     =  12 min
+ *     worst turn                                                = 681 min
+ *     backstop     = ceil(worst × MARGIN 1.2)                   = 818 min
+ *
+ * **It is a bound on the private tier only.** The Anthropic tier declares no
+ * `request_timeout_ms` on any leaf, and Haiku carries `retry_policy Constant`
+ * (3 retries), so no per-call ceiling exists there to multiply.
+ *
+ * **Not every term is a hard ceiling the app enforces**, and the arithmetic does
+ * not pretend so. Uncounted, because nothing bounds them: a `'sequential'` tool
+ * batch runs k calls per round (the 4-call cap is in the prompt only); app-side
+ * Graph tools `fetch` with no signal; `SandboxScheduler.allocate` waits with no
+ * timeout; and a read-only gateway reconnect re-runs a call once. The cost of
+ * the backstop reaping a turn that outlives it anyway is bounded and
+ * self-healing: the reap writes only `status` (and logs it, on its own line),
+ * and the turn's own save overwrites it.
+ *
+ * **The clock is `updated_at`**, which other writes also bump
+ * (`updateConversationTitle`, `promoteConversation`), so this measures time since
+ * the row's last write, not strictly time at `running`.
+ *
+ * It tightens when a term does — the per-call ceiling, a slider bound, the
+ * iteration default — with no edit here, and `stuck-run-reaper.test.ts` holds
+ * each mirrored term against its declaration.
+ */
+const STUCK_RUN_MARGIN = 1.2
+export const HUNG_TURN_BACKSTOP_MINUTES = Math.ceil(
+  (DECISION_LOOP_WORST_REQUESTS * PER_CALL_TIMEOUT_MINUTES +
+    DECISION_LOOP_MAX_ITERATIONS * SETTINGS_BOUNDS.maxToolTurns[1] * TOOL_CALL_TIMEOUT_MINUTES +
+    WAKE_ALLOWANCE_MINUTES) *
+    STUCK_RUN_MARGIN,
+)
+
+/**
+ * One row the reap changed. `leaseDead: false` means the BACKSTOP fired on a
+ * lease that was still being renewed — the only reap a running process will
+ * later overwrite, and an anomaly (a turn alive for hours), so the caller logs
+ * it apart from the ordinary dead-lease reap.
+ */
+export interface ReapedRun {
+  id: string
+  leaseDead: boolean
+}
+
+/**
+ * Reconcile abandoned runs: every row at `status='running'` that either holds
+ * **no live turn lease** or has sat at `running` past
+ * {@link HUNG_TURN_BACKSTOP_MINUTES} becomes `'error'`. Returns the rows it
+ * changed, each with which branch fired (for the caller's log and for tests).
  *
  * The rows this exists for are the ones no code path will ever finish: the
  * process died mid-turn, so the `catch` in `turn.server.ts#runAndSave` that
  * normally flips a failed row out of `running` (sf-M2/sf-M3) never ran. Such a
  * row claims to be working and is not, which is the same dishonesty the
  * app-path e2e suite exists to forbid — just at rest rather than in a turn.
+ *
+ * **The lease is the liveness test (#507 P2, G12 A1).** A turn renews
+ * `turn_claimed_at` every {@link TURN_CLAIM_RENEW_MS} for as long as it lives;
+ * {@link NO_LIVE_CLAIM} — the predicate `claimConversation` itself uses to take
+ * a row over — is therefore "no turn is holding this". Reusing it means the
+ * reaper and a taking-over turn cannot disagree about "dead", and no write to
+ * `updated_at` (which {@link countActiveUsers} reads as activity) is needed. A
+ * live long turn keeps its renewed lease and is not reaped at any age short of
+ * the backstop; a dead one is reaped within one lease plus one sweep tick.
+ * Both seeders of a `running` row (`createConversation`, behind the interactive
+ * pre-seed and `seedActionRow`) take the claim in the INSERT, so a running row
+ * with no live lease is never a turn between seed and claim. A NULL claim
+ * counts as dead: that is a row seeded before the lease existed, or one whose
+ * turn threw and released before any save.
  *
  * **What it is NOT is "a spinner nothing can clear"** — an earlier version of
  * this docstring said that and it was wrong (F4 on #278). A live run's spinner
@@ -910,59 +983,59 @@ export const STUCK_RUN_TIMEOUT_MINUTES = Math.ceil(
  * row says. What the reap actually buys is honest data AT REST — a
  * `kind='action'` row's badge, the row's own status wherever it is read, and a
  * conversation that no longer reports itself as running to anything that asks.
- * `rowIndicator` shows a conversation's `error` since F4, so the correction is
- * "a reaped row now says so", not "a spinner stops".
  *
  * **Multi-instance safe, and it has to be, because nothing elects a leader.**
  * Every input is in the database:
  *
- *   - the freshness test is `updated_at` against the DATABASE's `NOW()`, so two
- *     app instances agree on the deadline even with skewed host clocks, and an
+ *   - both freshness tests are against the DATABASE's `NOW()`, so two app
+ *     instances agree on the deadline even with skewed host clocks, and an
  *     instance that just booted judges another instance's rows correctly — it
- *     holds no memory of which turns are live, and must not, since its own
- *     in-flight set says nothing about anyone else's;
+ *     holds no memory of which turns are live, and must not;
  *   - `status = 'running'` in the WHERE clause is the claim. Postgres takes a
- *     row lock per UPDATE, so two concurrent sweeps serialize: the first flips
- *     the row and the second no longer matches it, which is why `RETURNING`
- *     reports each reaped row to exactly one sweeper and the sweep is
- *     idempotent rather than merely repeatable.
+ *     row lock per UPDATE and re-evaluates the WHERE after the lock, so two
+ *     concurrent sweeps serialize (the second no longer matches), and a turn
+ *     that claims the row between the sweep's read and write makes the lease
+ *     live again and is left alone — `RETURNING` reports each reaped row to
+ *     exactly one sweeper and the sweep is idempotent rather than repeatable.
  *
- * The one interleaving left is a turn that outlives the threshold: it is reaped
- * mid-flight and then overwrites the reap with its own outcome. That is the
- * threshold's job to prevent, not this statement's — see the constant.
+ * **The one interleaving left** is a process that is alive but stalled past the
+ * lease (a blocked event loop): it is reaped, then renews and later saves its
+ * own outcome over the reap. The reap writes only `status` — never `context`,
+ * `context_version` or the claim — so nothing is lost: the save lands at the
+ * version the turn holds and states the truth, and a turn that was in fact
+ * taken over is refused by the version as before.
  *
  * Cross-user by design (no `user_id` scope): this is a process-wide sweep, not
  * a request, and an abandoned row is abandoned whoever owns it. It reads and
- * writes only plaintext columns — `status`, `updated_at`, and `id` for the
- * report — so no key is needed and no `context` blob is touched. Like
- * {@link countActiveUsers}, it lives here because this module owns SQL against
- * `conversations` (`encryption-coverage.test.ts` pins that nothing else does).
+ * writes only plaintext columns — `status`, `turn_claimed_at`, `updated_at`,
+ * and `id` for the report — so no key is needed and no `context` blob is
+ * touched. Like {@link countActiveUsers}, it lives here because this module
+ * owns SQL against `conversations` (`encryption-coverage.test.ts` pins that
+ * nothing else does).
  *
  * `paused` is deliberately untouched: an approval gate waits for a person, for
  * as long as that takes, and reaping one would discard resumable work.
  *
  * **`updated_at` is left alone**, which is the one place this write differs
- * from every other write in this module. Two reasons, both about what the
- * column means: it is the app's record of "this user did something"
- * ({@link countActiveUsers} reads exactly that, per poll, per tab), and a sweep
- * is not something the user did — bumping it would report every reaped
- * conversation's owner as active. It is also what the sidebar renders as "x
- * ago", where the abandonment time is the honest answer and the reap time is
- * not. Nothing depends on it advancing here: the idempotence above comes from
- * `status`, not from the timestamp.
+ * from every other write in this module: it is the app's record of "this user
+ * did something" ({@link countActiveUsers}, per poll, per tab), and a sweep is
+ * not something the user did. It is also what the sidebar renders as "x ago",
+ * where the abandonment time is the honest answer. Nothing depends on it
+ * advancing here: the idempotence above comes from `status`.
  */
-export async function reapStuckConversations(): Promise<string[]> {
-  // The interval is a constant, never a caller value — inlined for the same
+export async function reapStuckConversations(): Promise<ReapedRun[]> {
+  // Both intervals are constants, never caller values — inlined for the same
   // reason `countActiveUsers` inlines its window (readability over
   // `make_interval` with a bound parameter).
-  const { rows } = await query<{ id: string }>(
+  const { rows } = await query<{ id: string; lease_dead: boolean }>(
     `UPDATE conversations
         SET status = 'error'
       WHERE status = 'running'
-        AND updated_at < NOW() - INTERVAL '${STUCK_RUN_TIMEOUT_MINUTES} minutes'
-      RETURNING id`,
+        AND (${NO_LIVE_CLAIM}
+             OR updated_at < NOW() - INTERVAL '${HUNG_TURN_BACKSTOP_MINUTES} minutes')
+      RETURNING id, ${NO_LIVE_CLAIM} AS lease_dead`,
   )
-  return rows.map((r) => r.id)
+  return rows.map((r) => ({ id: r.id, leaseDead: r.lease_dead }))
 }
 
 /**

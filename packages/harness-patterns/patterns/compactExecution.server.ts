@@ -33,6 +33,8 @@ function buildSynthesisInputFromView(
   view: EventView,
   data: CompactExecutionData,
   errorTurnWindow: number,
+  /** The caller's own `viewConfig.fromPatterns`, when it declared any. */
+  scopedToPatterns: boolean,
 ): CompactExecutionInput {
   // Get user message
   const userMessage = view.fromAll().ofType('user_message').last(1).get()[0]
@@ -78,9 +80,24 @@ function buildSynthesisInputFromView(
       break
 
     case 'thread': {
-      // Get tool events from view for thread reconstruction
-      const toolEvents = view.fromLastPattern().tools().get()
-      const actionEvents = view.fromLastPattern().actions().get()
+      // Which events are the thread. By default, the last pattern to enter. A
+      // caller that NAMED its patterns (`viewConfig.fromPatterns`) has already
+      // scoped `view` to them, and that scope is the answer: `fromLastPattern()`
+      // would AND a second filter onto it, and under a wrapper whose children
+      // run in nested views (`decisionLoop`) the last pattern to enter is the
+      // last CHILD — outside the named set — so the read came back empty and
+      // the synthesizer silently dropped to `response` mode (#507 S2). The
+      // named patterns' records are the thread; the children's internal
+      // traces, tagged with their own ids, stay out.
+      // `fromLastPattern()` also bounded the read to one execution; a pattern
+      // scope is not a turn scope (see `errorView`), so the named read gets the
+      // same turn bound the error read has: the caller's window when it gave
+      // one, else the current turn.
+      const threadView = scopedToPatterns
+        ? view.fromLastNTurns(errorTurnWindow)
+        : view.fromLastPattern()
+      const toolEvents = threadView.tools().get()
+      const actionEvents = threadView.actions().get()
 
       // Build loop history from events if available
       if (toolEvents.length > 0 || actionEvents.length > 0) {
@@ -99,7 +116,7 @@ function buildSynthesisInputFromView(
         let openExpected = 0
         let openReceived = 0
 
-        for (const event of view.fromLastPattern().get()) {
+        for (const event of threadView.get()) {
           if (event.type === 'controller_action') {
             const actionData = event.data as { action: import('../types').ControllerAction }
             unpaired.add(iterations.length)
@@ -247,6 +264,7 @@ export function compactExecution<T extends CompactExecutionData>(
         view,
         scope.data,
         resolved.viewConfig?.fromLastNTurns ?? 1,
+        (resolved.viewConfig?.fromPatterns?.length ?? 0) > 0,
       )
 
       // Validate thread mode

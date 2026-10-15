@@ -278,7 +278,7 @@ const directRunner: QueryRunner = (text, params) =>
   getPool().query(text, params as never[]) as never
 
 /** The `pg_advisory_xact_lock` key every schema initialiser takes first (#585). */
-const SCHEMA_LOCK_KEY = 'hames:schema-init'
+export const SCHEMA_LOCK_KEY = 'hames:schema-init'
 
 /** What a recorded schema must equal for the DDL to be skipped: the hash of
  *  the SQL itself, so an edit to `SCHEMA_SQL` can never be forgotten. */

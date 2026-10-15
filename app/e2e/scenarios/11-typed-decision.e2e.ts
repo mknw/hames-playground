@@ -130,6 +130,7 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
       expect(calls[0]).toMatchObject({
         model: JEV_MODEL,
         outcome: 'ok',
+        endpoint: tier === 'verda' ? 'private' : 'jev',
       })
     })
     it('streams and persists score/noul probabilities and actual clients', async () => {

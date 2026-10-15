@@ -227,7 +227,7 @@ async function boot(): Promise<AppHandles> {
     process.env.SMALL_LLM_API_KEY = 'e2e-fake-key'
     process.env.EMBEDDINGS_LOCAL_URL = fakeLlm.baseUrl
     process.env.EMBEDDINGS_LOCAL_API_KEY = 'e2e-fake-key'
-    process.env.JEV_DECISIONS_URL = `${fakeLlm.baseUrl}/systemone`
+    process.env.JEV_DECISIONS_URL = `${fakeLlm.baseUrl}/jev/systemone`
     process.env.JEV_DECISIONS_API_KEY = 'e2e-fake-key'
     process.env.SMALL_LLM_DECISIONS_URL = `${fakeLlm.baseUrl}/systemone`
     // Poison the real credential — see HERMETIC_ANTHROPIC_KEY.

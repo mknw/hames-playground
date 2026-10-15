@@ -116,6 +116,10 @@ import { VERDA_WAKE_PROMPT } from '../../src/lib/inference/wake.server'
 // Recorded traffic
 // ============================================================================
 
+/** Path of the public (Anthropic-tier) decision endpoint; the private one is
+ *  `/v1/systemone`, which `SMALL_LLM_DECISIONS_URL` is required to end in. */
+export const JEV_DECISIONS_PATH = '/v1/jev/systemone'
+
 /** One request the fake served, as scenarios read it back. */
 export interface FakeCall {
   /** Wall-clock ms since the fake started, for ordering and latency reads. */
@@ -134,7 +138,14 @@ export interface FakeCall {
   outcome: 'ok' | 'wake' | 'unrecognised' | 'status' | 'mid-stream' | 'bad-role-order'
   /** Milliseconds the fake deliberately withheld the response. */
   delayedMs: number
+  /** Which decision endpoint served a systemone call (`jev` is the public
+   *  Anthropic-tier one, `private` is `SMALL_LLM_DECISIONS_URL`). The request's
+   *  `model` field cannot say: both clients send the same compatibility id. */
+  endpoint?: DecisionEndpoint
 }
+
+/** The two systemone targets the fake serves, told apart by PATH. */
+export type DecisionEndpoint = 'jev' | 'private'
 
 // ============================================================================
 // Faults
@@ -299,10 +310,12 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       return
     }
     // Both decision tiers use the systemone request and response format.
-    if (req.method === 'POST' && req.url === '/v1/systemone') {
+    const decisionEndpoint =
+      req.url === '/v1/systemone' ? 'private' : req.url === JEV_DECISIONS_PATH ? 'jev' : null
+    if (req.method === 'POST' && decisionEndpoint) {
       let rawJev = ''
       req.on('data', (chunk) => (rawJev += chunk))
-      req.on('end', () => serveJev(rawJev, res))
+      req.on('end', () => serveJev(rawJev, res, decisionEndpoint))
       return
     }
     if (req.method === 'POST' && req.url === '/v1/embeddings') {
@@ -366,7 +379,7 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
    *  and the rest sharing 0.1, and a
    *  `usage.cost` — so a scenario asserts routing and accounting, never model
    *  quality. Honours an armed `status` fault, so a Jev 5xx is reachable. */
-  function serveJev(raw: string, res: http.ServerResponse): void {
+  function serveJev(raw: string, res: http.ServerResponse, endpoint: DecisionEndpoint): void {
     let body: {
       model?: string
       state?: unknown
@@ -389,6 +402,7 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
         prompt,
         outcome: 'status',
         delayedMs: 0,
+        endpoint,
       })
       json(res, fault.status, {
         error: {
@@ -428,7 +442,15 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
         probabilities: Object.fromEntries(options.map((o, i) => [o, i === chosen ? 0.9 : rest])),
       }
     }
-    calls.push({ at: Date.now() - startedAt, model, fn: null, prompt, outcome: 'ok', delayedMs: 0 })
+    calls.push({
+      at: Date.now() - startedAt,
+      model,
+      fn: null,
+      prompt,
+      outcome: 'ok',
+      delayedMs: 0,
+      endpoint,
+    })
     json(res, 200, {
       id: 'gen-dec-e2e-fake',
       model,

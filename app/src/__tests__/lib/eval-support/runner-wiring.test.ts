@@ -1,9 +1,39 @@
 /** Structural pins for the opt-in runner: CI never imports or executes it. */
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { parseEnv } from 'node:util'
+import { runInNewContext } from 'node:vm'
 import { it, expect } from 'vitest'
+import { assertLivePreconditions } from '../../../lib/eval-support/live-preconditions'
 const read = (file: string) => readFileSync(resolve(file), 'utf8')
 const run = () => read('evals/general-next/run.ts')
+it.each([
+  ['EMBEDDINGS_PROVIDER', 'openrouter', 'EMBEDDINGS_PROVIDER'],
+  ['EMBEDDINGS_LOCAL_URL', 'https://embed.example.invalid/v1', 'owner local embedder'],
+])(
+  'validates inherited %s in the runner preflight when absent from dotenv',
+  (key, value, error) => {
+    // Execute only the real preflight block with synthetic inputs: no runner import,
+    // credentials, gateway connection or inference request.
+    const preflight = /if \(live\) \{([\s\S]*?)\n {2}\} else \{/.exec(run())?.[1]
+    expect(preflight).toBeDefined()
+    const deployed = [
+      'VERDA_INFERENCE_ENDPOINT=https://verda.example.invalid/v1',
+      'SMALL_LLM_BASE_URL=https://small.example.invalid/v1',
+      'SMALL_LLM_DECISIONS_URL=https://small.example.invalid/v1/systemone',
+      'VERDA_INFERENCE_API_KEY=synthetic',
+      'SMALL_LLM_API_KEY=synthetic',
+    ].join('\n')
+    expect(() =>
+      runInNewContext(preflight!, {
+        parseEnv,
+        readFileSync: () => deployed,
+        process: { env: { [key]: value, EVAL_GENERAL_GO: 'S3 merged: go' } },
+        assertLivePreconditions,
+      }),
+    ).toThrow(error)
+  },
+)
 it('awaits production wake after starting the scenario clock, fails and stops without fallback', () => {
   const s = run()
   expect(s.indexOf('started = Date.now()')).toBeLessThan(

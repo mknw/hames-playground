@@ -63,9 +63,13 @@ async function main() {
   }
   let takeEgressAttempts: (() => Promise<Array<{ target: string }>>) | undefined
   if (live) {
-    // The .env FILE is authoritative: inherited variables cannot mask a stale copy.
+    // Validate the effective environment, including inherited settings absent from .env.
     const deployed = parseEnv(readFileSync('.env', 'utf8'))
-    assertLivePreconditions({ ...deployed, EVAL_GENERAL_GO: process.env.EVAL_GENERAL_GO })
+    assertLivePreconditions({
+      ...process.env,
+      ...deployed,
+      EVAL_GENERAL_GO: process.env.EVAL_GENERAL_GO,
+    })
     Object.assign(process.env, deployed)
   } else {
     assertProxyNode()

@@ -304,6 +304,60 @@ describe('hydrateWorkspace', () => {
       expect(fs.get('/work/in/data.csv')).toBe('a,b\n99,edited-in-vm')
     })
 
+    // #599 F2. Mutation: push ids from the `skipped` / missing-body branch too,
+    // or drop the `present`/`hidden` pushes.
+    it('accounts for exactly the documents that are in /work/in or deliberately not wanted there', async () => {
+      vi.mocked(listDocuments).mockResolvedValue([
+        meta('new', 'new.csv', 3),
+        meta('there', 'there.csv', 2),
+        { ...meta('hid', 'hid.csv', 1), hidden: true },
+        meta('gone', 'gone.csv', 4),
+      ] as never)
+      vi.mocked(getDocument).mockImplementation(async (_s, id) =>
+        id === 'gone' ? null : (doc(id, `${id}.csv`, 'x') as never),
+      )
+      const { transport, fs } = makeFsTransport()
+      fs.set('/work/in/there.csv', 'already')
+
+      const r = await hydrateWorkspace(transport, 's')
+
+      expect([...r.accounted].sort()).toEqual(['hid', 'new', 'there'])
+      expect(r.skipped.map((f) => f.filename)).toEqual(['gone.csv'])
+    })
+
+    // #507 N4: re-hydration can now run mid-turn on a filename a tool chose, so
+    // the only path it may write is /work/in/<basename>, for ONE session.
+    // Mutation: write `${WORK_IN_DIR}/${meta.filename}` instead of the basename.
+    it('writes only /work/in/<basename>, whatever path the stored filename carries', async () => {
+      vi.mocked(listDocuments).mockResolvedValue([
+        meta('t1', '../../etc/cron.d/evil', 1),
+        meta('t2', '/work/out/planted.csv', 2),
+      ] as never)
+      vi.mocked(getDocument).mockImplementation(async (_s, id) => doc(id, 'x', 'payload') as never)
+
+      const { transport, fs } = makeFsTransport()
+      await hydrateWorkspace(transport, 's')
+
+      const written = [...fs.keys()].filter((k) => !k.includes('.hydrate'))
+      expect(written.length).toBeGreaterThan(0)
+      for (const path of written) {
+        expect(path).toMatch(/^\/work\/in\/[^/]+$/)
+      }
+      expect(fs.has('/work/out/planted.csv')).toBe(false)
+    })
+
+    // Mutation: list or fetch under a different session id than the one given.
+    it('lists and reads only the session it was asked to hydrate', async () => {
+      vi.mocked(listDocuments).mockResolvedValue([meta('d1', 'data.csv', 1)] as never)
+      vi.mocked(getDocument).mockResolvedValue(doc('d1', 'data.csv', 'a') as never)
+
+      const { transport } = makeFsTransport()
+      await hydrateWorkspace(transport, 'session-A')
+
+      expect(vi.mocked(listDocuments).mock.calls.map((c) => c[0])).toEqual(['session-A'])
+      expect(vi.mocked(getDocument).mock.calls.map((c) => c[0])).toEqual(['session-A'])
+    })
+
     it('lands the NEWEST document when two reduce to the same basename', async () => {
       // Same filename uploaded twice: both are absent, so one write wins. It is
       // the newer upload, not whichever the store listed last.

@@ -18,7 +18,7 @@
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { trackEvent } from '@hames-ai/harness-patterns/context.server'
-import { amendRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
+import { amendRunFrame, type RunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { DEFAULT_SANDBOX_SETTINGS } from './settings'
 import { AttachmentTable } from './attachment-table.server'
 import { DockerBackend } from './docker-backend.server'
@@ -41,6 +41,7 @@ import type {
   PatternCapabilities,
   PatternScope,
   EventView,
+  ToolCallResult,
 } from '@hames-ai/harness-patterns/types'
 
 assertServerOnImport()
@@ -626,20 +627,133 @@ function reportWorkspaceFailure<T>(
   step: 'hydrate' | 'snapshot' | 'promote',
   sessionId: string,
   err: unknown,
+  opts: { withholdDetail?: boolean } = {},
 ): void {
   const detail = err instanceof Error ? err.message : String(err)
   const message = WORKSPACE_FAILURE_MESSAGE[step]
+  // The server log always carries the raw detail. The EVENT is what the
+  // synthesizer's `lastError()` reads, so where the detail holds stash-derived
+  // text (a stored filename) it is withheld from the event: a document's name is
+  // attacker-controlled and an error event is not passed through the guard
+  // (#599 review F1).
   console.error(`[sandbox] ${step} failed for session ${sessionId}: ${detail}`)
   trackEvent(
     scope,
     'error',
     {
-      error: `sandbox workspace ${step} failed: ${detail}`,
+      error: opts.withholdDetail
+        ? `sandbox workspace ${step} failed (details withheld; see the server log)`
+        : `sandbox workspace ${step} failed: ${detail}`,
       severity: 'recoverable',
       hint: message,
     } as ErrorEventData,
     true,
   )
+}
+
+/**
+ * Re-hydrate `/work/in` after a tool call in this scope stored a stash document
+ * (#507 N4). `/work/in` is otherwise filled once, on entry, so a file ingested
+ * mid-run — `graph_file_ingest` — is in the stash and not on disk until the
+ * route is entered again, and the actor is told the file exists that it cannot
+ * open.
+ *
+ * TIMING: EAGER, on the storing call itself — dispatch and stash write → guard →
+ * this scope's after-call hook → `hydrateWorkspace` → the result returns to the
+ * caller. Not on a later call: a restore deferred to the next non-sandbox call
+ * would leave the sandbox read that follows an ingest stale, or never run when
+ * the actor returns straight after it.
+ *
+ * Two run-frame seams, both concatenating: an observer on core's `storeDocument`
+ * and an after-call hook. The observer records, per `callId`, the ids of
+ * documents stored under THIS sandbox's own `sessionId` (a write to any other
+ * conversation's stash is heard and ignored); the hook of that same call takes
+ * its ids and restores. Pending writes belong to the call that made them, so a
+ * nested `sandbox_*` call, a parallel storing call or an unrelated lookup can
+ * neither consume them nor inherit their failure, and every storing call awaits
+ * and receives its own restore outcome (#599 review F3).
+ *
+ * Failure policy, named: FAIL CLOSED. The call stored its document; unless a
+ * strict read says each stored document is now accounted for in `/work/in`
+ * (`hydrateWorkspace`'s `accounted` ids — an empty listing proves nothing), the
+ * call's result becomes a FIXED failure text and an `error` event with the
+ * detail withheld. The raw detail (which may carry stash filenames) goes to the
+ * server log only; and since `callTool` guards the replacement as well, neither
+ * path can carry stash-derived text to the model (#599 review F1).
+ *
+ * LIFETIME: the callbacks are inherited by anything created inside the scope —
+ * a detached promise outlives `AsyncLocalStorage.run`. `close()` marks the scope
+ * closed, after which both callbacks are inert, and drains a restore already in
+ * flight; `runWithIdAttachment` calls it before it releases the attachment
+ * (#599 review F4).
+ */
+const RESTORE_FAILED =
+  'The document was stored in the Data Stash but could not be copied into /work/in. ' +
+  'It is NOT available to the sandbox. Do not repeat the call; tell the user the file ' +
+  'could not be loaded.'
+
+interface RestoreScope {
+  frame: RunFrame
+  close(): Promise<void>
+}
+
+function restoreAfterStashWrite<T>(
+  transport: McpTransport,
+  scope: PatternScope<T>,
+  sessionId: string,
+): RestoreScope {
+  let closed = false
+  const pending = new Map<string, Set<string>>()
+  let queue: Promise<unknown> = Promise.resolve()
+  const restore = async (ids: Set<string>): Promise<ToolCallResult | void> => {
+    if (closed) return
+    try {
+      const { skipped, accounted } = await hydrateWorkspace(transport, sessionId)
+      const seen = new Set(accounted)
+      const unaccounted = [...ids].filter((id) => !seen.has(id))
+      if (skipped.length === 0 && unaccounted.length === 0) return
+      throw new Error(
+        `${skipped.length} file(s) not restored: ` +
+          skipped.map((f) => `${f.filename} (${f.error})`).join(', ') +
+          (unaccounted.length > 0
+            ? ` ${unaccounted.length} stored document(s) not found by the restore: ${unaccounted.join(', ')}`
+            : ''),
+      )
+    } catch (err) {
+      reportWorkspaceFailure(scope, 'hydrate', sessionId, err, { withholdDetail: true })
+      return { success: false, data: null, error: RESTORE_FAILED }
+    }
+  }
+  return {
+    frame: {
+      stashWriteObservers: [
+        (write) => {
+          if (closed || write.sessionId !== sessionId || write.callId === undefined) return
+          let ids = pending.get(write.callId)
+          if (!ids) pending.set(write.callId, (ids = new Set()))
+          ids.add(write.documentId)
+        },
+      ],
+      afterToolCall: [
+        ({ id, name }) => {
+          // The VM's own tools never store a stash document: skipped outright,
+          // and without touching anything pending for the call that wraps them.
+          if (closed || name.startsWith('sandbox_')) return Promise.resolve()
+          const ids = pending.get(id)
+          if (!ids) return Promise.resolve()
+          pending.delete(id)
+          const next = queue.then(() => restore(ids))
+          queue = next.catch(() => {})
+          return next
+        },
+      ],
+    },
+    async close() {
+      closed = true
+      pending.clear()
+      await queue
+    },
+  }
 }
 
 async function runWithIdAttachment<T>(
@@ -715,9 +829,13 @@ async function runWithIdAttachment<T>(
       } catch (err) {
         reportWorkspaceFailure(scope, 'snapshot', sessionId, err)
       }
+      const restoring = restoreAfterStashWrite(att.transport, scope, sessionId)
       try {
-        return await pattern.fn(scope, view)
+        return await amendRunFrame(restoring.frame, () => pattern.fn(scope, view))
       } finally {
+        // Before promotion and before the attachment is released: nothing
+        // inherited from the pattern may restore into it from here on (F4).
+        await restoring.close()
         if (baseline) {
           try {
             const { skipped } = await promoteOutputs(att.transport, sessionId, baseline)

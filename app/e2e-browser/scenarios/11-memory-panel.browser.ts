@@ -19,7 +19,7 @@ for (const theme of ['dark', 'light'] as const) {
     await expect(panel.getByText('No saved memories.')).toBeVisible()
     const toggle = panel.getByRole('checkbox', { name: 'Memory enabled' })
     await expect(toggle).not.toBeChecked()
-    await toggle.check()
+    await toggle.press('Space')
     await expect(toggle).toBeChecked()
     await expect(toggle).toBeEnabled()
 
@@ -65,7 +65,7 @@ for (const theme of ['dark', 'light'] as const) {
     await page.keyboard.press('Escape')
     await expect(dialog).toHaveCount(0)
     await expect(panel.getByText('I prefer concise replies', { exact: true })).toBeVisible()
-    await toggle.click()
+    await toggle.press('Space')
     const switchDialog = page.getByRole('dialog', {
       name: 'Turn memory off and forget everything?',
     })
@@ -74,12 +74,12 @@ for (const theme of ['dark', 'light'] as const) {
     await expect(switchDialog).toHaveCount(0)
     await expect(toggle).toBeChecked()
     await expect(panel.getByText('I prefer concise replies', { exact: true })).toBeVisible()
-    await toggle.click()
+    await toggle.press('Space')
     await switchDialog.getByRole('button', { name: 'Confirm forget everything' }).click()
     await expect(switchDialog).toHaveCount(0)
     await expect(panel.getByText('No saved memories.')).toBeVisible()
     await expect(toggle).not.toBeChecked()
-    await toggle.check()
+    await toggle.press('Space')
     await expect(toggle).toBeChecked()
     await expect(toggle).toBeEnabled()
     const reseed = new pg.Client({ connectionString: TEST_DATABASE_URL })

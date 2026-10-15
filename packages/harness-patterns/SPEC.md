@@ -192,7 +192,7 @@ type EventType =
   | 'loop_recovery' // simpleLoop / actorCritic fed one failure back to the model and continued on its budget (#437)
   | 'hitl_request' // a person is asked to decide (#433) — core writes it; readHitl() derives state from it
   | 'hitl_response' // the decision on one hitl_request (#433) — core writes it
-  | 'decision_made' // one typed decision the policy layer evaluated (#418) — metadata only; the state's SIZE rides, never its text
+  | 'decision_made' // one typed systemone decision (#418) — metadata only; the state's SIZE rides, never its text
 
 // Isolated workspace for each pattern
 interface PatternScope<T> {
@@ -222,8 +222,7 @@ interface ConfiguredPattern<T> {
 interface PatternCapabilities {
   retrievalBackends?: readonly string[] // declared by `retriever`: the backends it will query
   workspaceSync?: boolean // declared by a wrapper that gives its subtree a durable workspace
-  decisionKeys?: readonly string[] // declared by a deciding pattern (#418): the DecisionSpec keys whose calibration a host can feed
-  calibratedDecisionKeys?: readonly string[] // the subset of decisionKeys whose policy sets requireCalibrated (#418 T6): read by harnessCalibratedDecisionKeys
+  decisionKeys?: readonly string[] // declared by a deciding pattern (#418): the declared DecisionSpec keys
   memory?: true // declared by memoryRecall (#419): read by harnessUsesMemory, the opt-in probe for the memory wake and store
 }
 ```
@@ -1876,440 +1875,49 @@ legacy `approval_response { approved: true }` answers nothing.
 
 ## Decisions (typedDecision, #418)
 
-Probability-typed decisions over a closed label set, in three layers: the
-**raw seam** (`DecideFn` → `DecideResult`) — one call, one distribution, no
-policy, frozen against the merged `classifierFromDecide` consumer, which must
-be handed the raw seam and never a policy-applying wrapper (D7); the **policy
-layer** (`patterns/typedDecision.server.ts`) — applies a `DecisionPolicy`,
-records `decision_made`; inference failures never throw (invalid configuration does, before any call); and the **transports** behind the raw
-seam (a logprob readout on the private tier, Jev on the Anthropic tier, an
-operator-named verbalized secondary — #418 T3/T4/T5).
+`typedDecision` is a systemone client. It accepts `AnyDecisionSpec`: `choice`
+for unordered options, `score` for ordered levels, or `noul` for whether a
+statement holds. The endpoint's probabilities pass through untouched. To offer
+“none of these”, include that option in the question's choices.
 
-T1 carries the TYPES (`DecisionSpec` / `DecisionSetSpec` with `mode`,
-`DecisionMethod` incl. `'jev'`, `AbstainReason` incl. `'method-mismatch'`,
-`DecisionPolicy` with `thresholdMethod`, `DecisionCalibrationEntry`,
-`DecideFn` / `DecideAllFn`, `MAX_DECISION_LABELS` = 20) and the PURE scoring
-half; T2 adds the awaited wrapper (`evaluateDecision` / `decide` /
-`decideFields`), the `typedDecision` chain step and `decisionRouter`; the
-transports are harness-baml and app slices (T3–T5).
+`defineChoice`, `defineScore` and `defineNoul` infer option ids from literal
+specs; `defineDecisionSet` groups typed fields over one state. `DecideFn` is the
+single-question seam; `DecideAllFn` answers a set in one request.
+`createDecideAdapter()` and `createDecideAllAdapter()` provide these seams.
+`evaluateDecision` evaluates without a scope, `decide` records on a scope, and
+`decideFields` returns the typed fields and records one `decision_made` per
+field. Request failures remain errors; consumers must handle failure before
+acting on a verdict.
 
-The pure policy math, unit-pinned:
+`typedDecision({ decide, spec, state? })` writes the current result to
+`data.decisions[spec.key]`. `readDecision(data, spec)` reads the result with its
+spec's type. Choice exposes `label`; score exposes `level`, `value` and
+`expected`; noul exposes `holds` and `pTrue`. The step writes no reply text.
+The default state contains user messages and final assistant messages; tool
+results require an explicit state builder. State is bounded by the serving
+client's context window.
 
-- `sumLabelMass(top, labels)` — the logprob readout's letter-variant summing:
-  every top-k token trimmed to the letter it names (`'B'`, `' B'`, `'(B'`),
-  summed as probability mass, with `coverage` = the matched mass (the leftover
-  is `1 − coverage`).
-- `calibrateLabelMass(mass, entry)` — the host-fed calibration entry applied
-  in log space (temperature ÷, bias +, softmax). A malformed entry degrades to
-  the identity; it never throws. Jev takes fitted cuts only: harness-baml's
-  `configureDecisionCalibration` throws on temperature or bias for a
-  `JEV_CLIENTS` member, even identity values (G7).
-- `normalizeLabelMass(mass, labels)` — a distribution over the spec's labels:
-  unseen label 0, sum 1.
-- `preCallAbstain({ policy, state, method })` — the F3 pre-call gate:
-  `'no-state'` on an empty state; `'uncalibrated'` when `requireCalibrated`
-  and the resolved client's method is KNOWINGLY non-calibratable (a verbalized
-  secondary). Calibratable methods and unknown ones are called — the post-call
-  `calibrated` check is the honest gate there.
-- `resolveDecisionCuts(policy, entry, method)` — the F2 threshold resolution:
-  the applied calibration entry's own cuts win; otherwise the policy's apply
-  only when the serving method equals `policy.thresholdMethod ?? 'logprob'`;
-  otherwise the cut is a mismatch → the decision abstains
-  `'method-mismatch'` rather than applying a threshold tuned on another
-  distribution.
-- `scoreDecision(input)` — the pure half of `evaluateDecision`: abstain in the
-  order `no-state` → `error` → `uncalibrated` → `low-coverage` →
-  `method-mismatch` → `low-confidence` → `low-margin`; on every abstain or
-  error the label is `policy.fallback` (REQUIRED, D8) and `top` is the argmax
-  (`null` only with no distribution at all); `margin = p₁ − p₂`,
-  `confidence = (K·p_max − 1)/(K − 1)`.
+`decisionRouter` uses its routes as choice options and writes the selected route
+to `data.route`. Compose `compactIntent` first and use `preserveIntent: true`
+when the route needs a rewritten intent. `conversationalRoute` is an ordinary
+route key. `shadow: true` records the decision without changing routing.
+A failed router clears routing and follows its configured error severity.
 
-#### Score and noul core contracts (#418 addendum S1)
+The transport is `packages/harness-baml/jev-decide.server.ts`. The recorded
+client is `JevDecide` on the Anthropic tier, configured by `JEV_DECISIONS_URL`
+and `JEV_DECISIONS_API_KEY`. On the private tier it is `PrivateSystemOne`,
+configured by the full `SMALL_LLM_DECISIONS_URL` ending in `/v1/systemone` and
+`SMALL_LLM_API_KEY`. An unset private URL refuses the request; the private tier
+never falls through to the public endpoint. A client that does not match the
+tier is refused before a request. `PrivateSystemOne` uses measured call time
+at `SMALL_LLM_EUR_PER_HOUR`; public cost uses reported usage and stays unknown
+when the endpoint supplies no cost.
 
-`DecisionType = 'choice' | 'score' | 'noul'`. A `DecisionSpec<L>` may omit
-`type` or declare `'choice'`; existing specs, verdicts and choice event bytes
-stay unchanged. `ScoreSpec<L>` declares `type: 'score'` and ordered `levels`
-instead of labels; `NoulSpec` declares `type: 'noul'` and optional
-`criteria: { true: string; false: string }`. `AnyDecisionSpec` is their union.
-
-`defineChoice`, `defineScore` and `defineNoul` return declarations, making no
-call. Const type parameters infer choice/score ids from literals. Choice and
-score construction checks the 2-option minimum, unique ids and respective caps:
-`MAX_DECISION_LABELS = 20`, `MAX_SCORE_LEVELS = 10`. The score cap and level
-indices `0..n−1` follow [TypeSafe's score documentation](https://docs.typesafe.ai/primitives/score).
-Naming and meaning follow [coding-agents](https://docs.typesafe.ai/introduction/coding-agents)
-and the [published skill](https://raw.githubusercontent.com/typesafe-ai/skills/main/skills/typesafe-ai/SKILL.md),
-which is documentation only.
-
-| Spec   | Verdict                        | Raw readout                        | Confidence                                 |
-| ------ | ------------------------------ | ---------------------------------- | ------------------------------------------ |
-| choice | `label`                        | `top` (argmax)                     | `(K·p_max − 1)/(K − 1)`                    |
-| score  | `level`, `value` (level index) | `top` (mode), `expected = Σ i·p_i` | `max(0, 1 − Σ p_i·abs(i−mode) / MAD_unif)` |
-| noul   | `holds`                        | `pTrue`                            | `abs(2·pTrue − 1)`                         |
-
-`MAD_unif = (1/n) Σ abs(i − (n−1)/2)`. This ordinal confidence follows
-[TypeSafe's formula](https://docs.typesafe.ai/confidence). The mode breaks ties
-by level order. `(0,.5,.5)` has expected 1.5 and confidence .25;
-`(.5,0,.5)` has expected 1 and confidence 0. A score verdict uses the mode,
-never the rounded mean. Neither `ScoreDecision` nor `NoulDecision` has a margin.
-`ChoiceDecision<L>` aliases the existing `Decision<L>` and writes no `type`.
-
-`ScorePolicy<L>` has a required level-id fallback; `NoulPolicy` has a required
-boolean fallback. Both retain `minConfidence`, `thresholdMethod`,
-`requireCalibrated`, `minCoverage`, and exclude `minMargin`. A noul cut .6
-accepts true at P(true) ≥ .8, false at ≤ .2, and falls back between them.
-`scoreScoreDecision` / `scoreNoulDecision` share the existing categorical
-normalisation and fail-closed policy checks. They compute confidence in core,
-never from provider confidence. Fitted margin cuts do not apply to these types.
-On abstain the verdict takes the fallback while raw mean/mode/P(true) survive;
-raw fields are null only without a usable distribution.
-
-`AnyDecision` is the verdict union. `DecisionFor<S>` and `PolicyFor<S>` follow
-the spec type and inferred ids. `TypedDecisionData.decisions` holds
-`Record<string, AnyDecision>`; use `readDecision(data, spec)` to read a typed
-verdict by key. It returns undefined for an absent key or a mismatched type.
-A missing stored type means choice, including old conversation blobs.
-
-New `decision_made` fields are optional: `type?: 'score' | 'noul'`,
-`expected?: number | null`, `value?: number`, `pTrue?: number | null`.
-Score events reuse labels (ordered levels), probs, label (verdict level) and top
-(mode). Noul events use true/false labels/probs and stringified boolean fallback.
-Choice never writes a type. The event remains metadata only (SD-3): stateChars,
-never state. Serialization and previews render score as `key: soon (E=1.43)`
-and noul as `key: true (p=0.91)`; absent type retains the legacy choice rendering.
-
-#### Host calibration by type (#418 addendum S5 / T8)
-
-The app's T8 contract `418-t8-v2` declares each key's type and ordered
-labels/levels or noul criteria; `(client, key)` remains the calibration lookup.
-All specs participate in the source fingerprint. A type change requires a
-contract revision bump and refit. The artifact envelope remains schema 1;
-score/noul entries refuse margin cuts, and logprob entries need every canonical
-letter bias (A/B for noul). Jev takes cuts only for every type.
-
-Choice fits multiclass Brier and confidence/margin cuts. Score fits normalized
-RPS and confidence cuts at owner-tunable within-one accuracy ≥95%, reporting
-exact accuracy and expected-index MAE beside it. Noul fits binary log loss,
-reports binary Brier, and fits confidence cuts only. ECE is ten-bin top-label
-for choice, binary P(true) for noul, cumulative threshold reliability for score.
-The app reports/gates each type's pool separately; no data cannot pass, and no
-cross-type overall ECE exists. Noul order swap is explicitly N/A; choice/score
-swaps compare semantic ids with the canonical rubric retained for metrics.
-
-`eval.noul` and `eval.score` are synthetic eval-only keys; production choice
-specs and event bytes stay unchanged. Adding them invalidates all v1 fits, so
-S5 precedes the owner TypeSafe live run. The committed artifact remains
-unmeasured with empty clients. **S5 cut defaults are diagnostics until the
-owner live run (spike rule/G10)**. See the [host runbook](../../docs/testing/decision-calibration.md).
-
-#### App observability (#418 addendum S6)
-
-The timeline preview chip names `score`, `noul`, or `choice` when the event's
-optional type is absent. Score details keep the ordered probability bars and
-add a mean marker on the level-index scale `0..labels.length−1`, at `expected`.
-The marker is a raw readout; it does not move to the mode or fallback verdict.
-A score's concentration cut has no per-bar probability equivalent, so the
-choice-only cut line and margin are not shown for scores.
-
-Noul details show one P(true) bar with the declared abstain band
-`[(1−minConfidence)/2, (1+minConfidence)/2]`; equality at either edge passes.
-The display labels this as the declared cut, since fitted cuts may differ.
-Missing/null or nonfinite raw readouts display as unknown without a numeric
-meter. Nonfinite score probabilities also display as unknown; absent
-probabilities retain their zero behavior. The noul band requires a finite
-declared confidence in `[0,1]`; other declared values show an invalid-cut
-indication without a band, preserving the raw value in metadata. Score/noul
-surfaces use a theme-aware background matched to their readout text.
-Persisted events without the new fields retain the choice bars and cuts.
-
-S1 widens `DecideInput.spec` to accept all three specs and adds optional
-`DecideFn.supportedTypes`. An absent declaration means choice-only.
-`preCallAbstain({ spec, supportedTypes, state, policy, method })` returns
-`no-state` first, then `unsupported-type`, then the existing calibration refusal.
-An unsupported type must not call the transport; pass `unsupportedType: true` to
-its pure scorer to record the fallback with null raw readouts. Transport support is declared by each adapter; absent support remains choice-only.
-
-#### Lettered score and noul transports (#418 addendum S3)
-
-`createDecideAdapter().supportedTypes` is a getter resolved at each read from
-the same `selectDecideTransport` / `resolveClientForRole('decide')` selection
-used by the call. The logprob transport supports choice, score and noul. Jev
-reports its own support (choice, score and noul since S4). An injected secondary reports
-its declared support; absent means choice-only. A locked or unwired transport reports choice only, the documented absent default: a choice call still reaches that route's own refusal and abstains as the truthful `error`, and score or noul is refused before any request. This keeps the pre-call refusal truthful when a
-run frame or consumer overrides the tier's client (SD-12).
-
-Both BAML lettered transports map a score's level at index i to letter A+i,
-low → high, with the 2–10 level cap from [TypeSafe's score documentation](https://docs.typesafe.ai/primitives/score).
-A noul maps A to true, B to false; descriptions come from `criteria`, defaulting
-to “Yes — the statement holds” / “No — the statement does not hold”. Neither
-spec changes the existing BAML prompt. The logprob readout applies the existing
-letter-variant summing, per-letter temperature/bias for `(served client, key)`,
-and renormalisation; coverage remains the raw matched mass. Core computes the
-score mean and noul P(true) from the resulting categorical distribution.
-
-`createVerbalizedDecide` declares all three types but still returns
-`method: 'verbalized'`, `calibrated: false`, never applies calibration, and
-refuses incomplete or malformed stated distributions. Its positive
-Anthropic-tier lock and the routed adapter's private-tier lock run before
-requests. `LocalQwenSmallDecide` continues to use `max_tokens: 2`, including
-identical-prompt repeat tests; BAML source and generated client are unchanged.
-
-#### Generic patterns and mixed sets (#418 addendum S2)
-
-`typedDecision`, `decide` and `evaluateDecision` are generic over
-`AnyDecisionSpec`; their verdict is `DecisionFor<S>` and their policy is
-`PolicyFor<S>`. Legacy explicit label arguments (`DecisionCall<L>`,
-`EvaluatedDecision<L>`, `TypedDecisionConfig<L>`, `decide<L>`,
-`evaluateDecision<L>` and `typedDecision<T, L>`) retain the choice form.
-`decisionRouter` stays choice-only.
-
-`MixedDecisionSet<S>` carries a spec map; `defineDecisionSet` infers it and
-checks the joint product limit at declaration. `decideFields` returns
-`{ [K in keyof S]: DecisionFor<S[K]> }` with a separately typed policy per field.
-The existing choice-label-map `DecisionSetSpec<F>` remains legal.
-
-Type support is checked before inference and before calibration refusal:
-`no-state` → `unsupported-type` → the existing gates. An absent
-`supportedTypes` means choice-only, independently on `DecideFn` and
-`DecideAllFn`. `typedDecision` throws for an unsupported type at construction;
-`evaluateDecision`, `decide` and each set field abstain with the fallback and
-null raw readouts, making zero unsupported requests. Refused fields are excluded
-from a set call; no live fields means no call. Joint mode also requires support
-for the actual product's `choice` spec.
-
-**Configuration errors throw before inference.** A choice fallback must be a
-label id, a score fallback must be a level id, and a noul fallback must be a
-boolean, including valid `false`. The same validator runs at pattern construction
-(`typedDecision` and `decisionRouter`), and before `evaluateDecision`, `decide`
-and `decideFields` can call any transport. Every set policy is validated before
-any field is called. Inference failures still never throw. An invalid fallback is refused, because there is no valid verdict to fall back to.
-
-Joint products count choice labels, score levels in low → high order, and
-noul values in true/false order. Their size must be ≤20, including scores'
-2–10 levels ([TypeSafe's definition](https://docs.typesafe.ai/primitives/score)).
-One choice readout is marginalised per field before its own scorer and policy;
-there is one `decision_made` with that field's type per field. Jev's G8
-normalisation still serves fields rather than a product. Set failures retain
-individual typed fallbacks and one shared error/call record.
-
-The raw set seam and Jev set adapter accept mixed specs. Set adapters refuse
-unsupported fields before any request using the selected transport’s support. The single-call
-logprob and verbalized transports support all three types as described above;
-a `decideAll` adapter declares its own support independently. No production
-choice declaration is migrated.
-
-#### Native Jev score and noul transport (#418 addendum S4)
-
-The existing Jev transport accepts all three raw spec types. Its support is
-read by the routed adapter's per-call getter through the same transport
-selection used by calls. Both Jev tier locks precede question/body construction:
-private, unknown and future tiers cannot build or send these questions (SD-12).
-
-[TypeSafe score](https://docs.typesafe.ai/primitives/score) questions use
-`{ type: 'score', instructions: question, criteria: levels.map(l => l.description) }`.
-Criteria contain 2–10 ordered descriptions; level ids stay local. Answer
-probabilities must have exactly the canonical string indices `0..n−1`, finite
-values in `[0,1]` and mass within .01 of 1. After normalization they map back to
-the declared ids. The finite reported `score` must lie in `0..n−1` and agree
-with the normalized mean within `.01*(n−1)`; disagreement is an `LLMCallError`.
-The provider's `legend` is ignored. Score retains choice's confidence-presence
-calibration rule; policy confidence is still computed by core from probabilities.
-
-[TypeSafe noul](https://docs.typesafe.ai/primitives/noul) questions use
-`{ type: 'noul', instructions: question, criteria? }`. A finite `noul` in `[0,1]`
-becomes `{ true: p, false: 1-p }`, with `calibrated: true` without a confidence
-field, which the provider does not return for this type. This is the provider's
-claim; S5 measures calibration on our questions. New answer types must match
-the asked type. Malformed responses throw and never retry another provider;
-legacy choice requests and response handling remain unchanged.
-
-#### The awaited wrapper
-
-```typescript
-interface DecisionCall<S extends AnyDecisionSpec> {
-  decide: DecideFn // the raw seam
-  spec: S
-  state: string // only its LENGTH is ever recorded
-  policy: PolicyFor<S>
-  shadow?: true
-}
-
-evaluateDecision(call): Promise<{ decision; event; llmCall?; error? }> // scope-free; inference failures abstain
-decide(scope, call, opts?): Promise<DecisionFor<S>> // + records; inference failures abstain
-decideFields(scope, call, opts?): Promise<{ [K in keyof S]: DecisionFor<S[K]> }>
-```
-
-`evaluateDecision` asks the transport what it will serve, calls the raw seam
-and scores the outcome with the declared type's scorer. After validating configuration it never throws: a seam that
-throws, one that returns junk (not an object, no `probs`, no usable mass) and a
-pre-call refusal are all an **abstained decision whose `label` is
-`policy.fallback`**, and a throw or an unusable readout also yields an `error`
-(`kind: 'llm_call'` when the throw carried an `LLMCallError`'s record). A
-readout with ANY entry that is not a finite non-negative number is unusable as
-a whole (`reason: 'error'`) — it is never renormalised over the entries that
-survive, which would invent certainty from a corrupt distribution. The thrown
-message is **redacted of the call's `state` and capped at 500 characters**
-before it enters the `error` event, because a transport that echoes its request
-would otherwise copy the state into an event that is JSON-dumped into LLM-facing
-views (SD-3); the state survives only in `llmCall.variables`.
-
-`decide` is `evaluateDecision` + the recording: exactly ONE `decision_made`
-(`opts.trackHistory`, default `'decision_made'`; `decision.eventId` is the
-recorded event's id) and, on failure, ONE `error` (`opts.errorSeverity`,
-default `'recoverable'` — a failed decision always has a verdict, so the
-CONSUMER knows whether the turn can proceed on it). The call record
-(`llmCall`) rides exactly ONE event, so its cost is counted once: the `error`
-event when the call threw with a record, `decision_made` otherwise. Use
-`evaluateDecision` where there is a context and no scope (the post-response
-position).
-
-**`DecideFn.serving` — the adapter's contract.** The raw seam carries two
-facts `evaluateDecision` needs and the call alone cannot tell it, so a
-transport MAY expose them:
-
-```typescript
-serving?: (key: string) => { method?: DecisionMethod; calibration?: DecisionCalibrationEntry }
-```
-
-- `method` is the method of the client the call WILL be served from, resolved
-  per call from the spec key. It is what lets the F3 gate abstain a
-  `requireCalibrated` decision on a knowingly verbalized client **before** the
-  call (zero LLM calls).
-- `calibration` is the host-fed entry for (serving client, `key`). Its
-  `minConfidence` / `minMargin` WIN over the policy's static thresholds (F2).
-- **Absent `serving` removes only the pre-call shortcut, never a check.** The
-  method then comes from the result's own `method`, so the post-call
-  `'method-mismatch'` and `'uncalibrated'` abstentions still fire. A `serving`
-  that throws is treated as absent.
-
-The T3/T4 adapters fill it. `DecideAllFn` carries the same member.
-
-#### `decideFields`
-
-The owner's "ONE call, SEVERAL typed fields". The provider decides how the set
-is served:
-
-| How         | When                                                                 | Calls                                                                                               |
-| ----------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `decideAll` | `decideAll` is supplied and either fields mode or Jev serves the set | ONE request; each field a typed question                                                            |
-| joint       | `set.mode === 'joint'` on other transports                           | ONE `decide` pass over the label **product** (ids `'a \| b \| c'`), marginalised back to each field |
-| per field   | otherwise                                                            | one `decide` pass per field, **sequential**, with a byte-identical state                            |
-
-Jev is detected through `decide.serving(set.key).method === 'jev'` (G1/G8),
-never a client name. Its joint mode is treated as fields before validation,
-so the product-size limit does not apply. With `decideAll`, all questions
-share one request; without it, each field uses `decide` separately.
-
-The state prefix is byte-identical across the per-field passes, so the backend's
-prefix cache serves every pass after the first. A field whose pre-call gate
-refuses it is left out of the set call. `decideFields` records ONE
-`decision_made` PER FIELD — each has its own key, policy and calibration and
-must be independently attributable — and ONE `error` for a set-wide failure.
-`decision_made` is excluded from the progress bar's step count (app slice T6),
-so a four-field set does not add four steps.
-
-`assertDecisionSetSpec(set)` throws for a `mode: 'joint'` set whose label
-product exceeds `MAX_DECISION_LABELS` (a joint pass reads the product's mass
-from one top-k window). It is a programmer error, so it throws — call it where
-the set is declared to fail at construction; `decideFields` calls it first
-after resolving Jev to fields mode, before any call. The standalone guard
-has no serving report, so it also refuses wide Jev joint sets that
-`decideFields` serves as fields.
-
-#### `typedDecision(config)`
-
-```typescript
-interface TypedDecisionConfig<S extends AnyDecisionSpec> extends PatternConfig {
-  decide: DecideFn // REQUIRED — `bamlPatterns().decide` (T3), or your own
-  spec: S
-  policy: PolicyFor<S> // fallback and transport support checked at construction
-  state?: (view: EventView, data) => string
-}
-interface TypedDecisionData {
-  decisions?: Record<string, AnyDecision>
-}
-```
-
-A chain step that asks one closed question and writes the verdict to
-`scope.data.decisions[spec.key]`. It generates no text. Invalid configuration throws at construction; a failed inference never throws.
-**`data.decisions[spec.key]` is overwritten on EVERY exit** — success, a failed
-call, an empty state, a throwing `state` builder — because `scope.data`
-survives the turn boundary and a verdict left in place would be last turn's
-(the router and planner clear their outputs for the same reason). Other keys
-are left alone.
-
-The default `state` is the window's user messages plus FINAL assistant
-messages (the router's intermediate status lines are not part of the
-conversation), think-blocks stripped, oldest dropped to fit
-`decide.limits().contextWindow` (16 384 when the transport reports none).
-Tool results are opt-in — pass your own `state`: an assistant reply can echo
-untrusted tool content. The default view mirrors `router`'s
-(`fromLastNTurns: routerTurnWindow`) and narrows to messages; **when you pass a
-`state` and no `viewConfig`, the narrowing is dropped** (the turn window stays)
-so your builder can see `tool_result` events. It declares
-`capabilities.decisionKeys: [spec.key]`.
-
-Defaults (all three maps carry an entry for the type): `commitStrategy:
-'always'`, `trackHistory: 'decision_made'`, `errorSeverity: 'recoverable'`,
-`estimateTurns: () => 1`.
-
-#### `decisionRouter(routeDescriptions, config)`
-
-```typescript
-interface DecisionRouterConfig extends PatternConfig {
-  decide: DecideFn // REQUIRED
-  policy: DecisionPolicy<string> // `fallback` names the ROUTE taken on abstain / failure
-  conversationalRoute?: { name: string; description: string } // an ORDINARY route key
-  preserveIntent?: boolean // default false: clear data.intent
-  shadow?: boolean // record, set nothing
-}
-```
-
-The decision-typed sibling of `router()`: the routes (plus
-`conversationalRoute`) are the labels of one decision under the key `route`,
-and the verdict becomes `data.route`; pair it with `routes()`. It produces the
-ROUTE only — not the reply and not a rewritten `intent` — so compose
-`compactIntent` first (with `preserveIntent: true`) and dispatch the
-conversational route to a pass-through that the final `compactExecution`
-answers.
-
-- It **never sets `DIRECT_RESPONSE_ROUTE`**: a decision has no reply text to
-  pass through, so that sentinel would end the turn empty. A route named like
-  it is refused at construction, as are duplicate route names and a
-  `policy.fallback` that is no route.
-- `routes()` never sees an undefined route: every verdict is a label (the
-  fallback is required). A non-failure abstain (low confidence, …) continues on
-  the fallback route.
-- **Failure parity with `router`**: the default `errorSeverity` is
-  `irrecoverable`. A FAILED decision (`reason: 'error'`) clears `data.route` and
-  `data.intent` and ends the turn where it happened.
-  `errorSeverity: 'recoverable'` instead continues on `policy.fallback`.
-- A state that cannot be built is a failure like any other: routing is cleared
-  (non-shadow), the abstained `no-state` verdict is written and one `error`
-  is recorded at the pattern's severity (shadow records only).
-- `preserveIntent: false` clears `data.intent` so a conversation migrated from
-  `router()` cannot carry the old router's intent into the next loop.
-- `shadow: true` records the decision (`decision_made.shadow = true`) and sets
-  **nothing** — not `route`, `intent` or `data.decisions` — so it can run
-  beside `router()` to measure agreement. A shadow failure is always
-  `recoverable`, whatever `errorSeverity` says: it can never end a turn.
-
-Defaults: `commitStrategy: 'always'`, `trackHistory: 'decision_made'`,
-`errorSeverity: 'irrecoverable'`, `estimateTurns: () => 1`.
-
-The `decision_made` event is in `ALWAYS_COMMIT_TYPES` and renders METADATA
-ONLY into LLM-facing serializations (`key: label (p, margin)` plus the abstain
-reason — the `state` never enters the event; it survives only in the
-transport's `llmCall.variables`). `PatternCapabilities.decisionKeys` +
-`harnessDecisionKeys(patterns)` make the declared decision surface readable
-without running the harness. `calibratedDecisionKeys` +
-`harnessCalibratedDecisionKeys(patterns)` name the subset whose policy sets
-`requireCalibrated` — the keys that abstain on every call until a calibration
-entry exists — and are what a host's per-tier calibration probe warns about
-(#418 T6; `typedDecision` and `decisionRouter` declare it, and only when the
-policy requires it).
-`getEventPreview` renders `decision_made` as `key: label`, or
-`key: abstained (reason) → fallback`; never the question or the state.
+`decision_made` remains in `ALWAYS_COMMIT_TYPES`. It carries decision metadata,
+the probabilities and `stateChars`, never the state text. The call record
+carries usage and the recorded client. `PatternCapabilities.decisionKeys` and
+`harnessDecisionKeys(patterns)` expose declared keys without running the
+harness. Timeline previews show the decision type and verdict.
 
 ## Memory recall (memoryRecall, #419)
 
@@ -2335,7 +1943,7 @@ through five REQUIRED seams:
 | Config                        | What it is                                                                                                                                                                                                                                                                                                                                                                      |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `store: MemoryStore`          | `count(tiers)` and `candidates({ embedding, embedSpace?, tiers })`. **No method takes an owner**: the host binds the turn's owner into the store it hands in. The recall query is EXACT — every active row of the owner in the visible tiers, each with its cosine distance, no `ORDER BY`/`LIMIT` — because BM25's document frequencies are computed over exactly that corpus. |
-| `decide: DecideFn`            | #418's RAW seam. The step applies its own `DecisionPolicy` through `evaluateDecision`; hand it `bamlPatterns().decide`, never a policy-applying wrapper.                                                                                                                                                                                                                        |
+| `decide: DecideFn`            | The systemone decision seam; the step uses the endpoint verdict through `evaluateDecision`.                                                                                                                                                                                                                                                                                     |
 | `embed: MemoryQueryEmbedder`  | `query(text)`, plus an optional `spaceId`. A row from another space is refused (`skipped: 'error'`), never ranked on.                                                                                                                                                                                                                                                           |
 | `owner: () => string \| null` | From the host's request context, never an argument. `null` → `skipped: 'no-user'`.                                                                                                                                                                                                                                                                                              |
 | `visibleTiers(turnTier)`      | Which stored tiers a turn of this tier may read. The rule lives where the tier vocabulary does (the app: `anthropic` sees `anthropic`; `verda` sees both). **Fail closed** for an unknown tier.                                                                                                                                                                                 |
@@ -2371,10 +1979,8 @@ distance`; the **floors BEFORE fusion** — a row survives a channel only if
    `estimateTokens`, hard-capped at 5% of `limits().contextWindow`). The block
    stops at the first row that does not fit — it never skips to a smaller,
    lower-ranked one.
-6. **Attach** only when the gate's verdict `label` is `retrieve`. The verdict is
-   the policy's: an abstain, an error, a timeout and an out-of-set answer all
-   land on the fallback, so none attaches (pin `gate-policy`) — read `label`,
-   never `top`.
+6. **Attach** only when the endpoint verdict `label` is `retrieve`. A failed
+   call, timeout or out-of-set answer attaches nothing.
 
 `data.memories` is `RecalledMemory[]` (`{ id, kind, tier, content }`) and
 `data.memoryContext` the formatted block (`- [kind] content`, one line per
@@ -2386,20 +1992,6 @@ recalled), and `router` (unless `routerMemory: 'replies-only'`) hands it to `rou
 before `RouteExtra` sees the three-argument call it always saw. Neither renders
 anything itself: the BAML adapters pass the block to the trailing `memory_context`
 parameter, escaped (see the DATA fence below).
-
-### The gate's thresholds are method-scoped (#418 F2)
-
-`gate.minConfidence` (default 0.5) and `gate.minMargin` (default 0.25) are
-fitted on `gate.thresholdMethod` (default `logprob`) and handed to the policy as
-its static cuts. On a read from another method (Jev on the Anthropic tier) they
-are NOT applied: the calibration entry `decide.serving(key)` reports for that
-client carries its own cuts, which win, and with no entry the gate abstains
-`method-mismatch` and attaches nothing. The step applies **no threshold of its
-own** on top of the policy's — a second static `margin ≥ minMargin` is exactly
-the logprob-fitted cut applied to a Jev read (pin `recall-threshold-method`).
-Every default in this section — those, `τ_v` (0.5), `τ_idf` (0.5), the 1500 ms
-budget — is an unmeasured placeholder; layer 4's `memory-recall-relevance`
-calibrates them.
 
 ### The joint memory wake
 
@@ -2433,9 +2025,9 @@ tokens, skipped?, gate?, wake?, errorKind? }`. **IDS ONLY** — `attached` lists
 memory ids and nothing in the payload is memory content; `formatEventData`
 renders it from `skipped`/`attached.length` alone, so a field added later cannot
 reach an LLM-facing serialization by the JSON dump (pin `event-hygiene`). The
-gate's outcome rides in `gate` (label, probs, margin, confidence, abstained,
-reason, method, calibrated, `stateChars`); recall records **no separate
-`decision_made`**, and the gate's `llmCall` rides this event so its cost is
+gate's result rides in `gate` (verdict, probabilities, failure metadata and
+`stateChars`); recall records **no separate `decision_made`**, and the gate's
+`llmCall` rides this event so its cost is
 counted once.
 
 ### Memory text never rides the persisted blob (review F1)
@@ -2514,11 +2106,11 @@ This controls injection of the recalled block on the current turn. User text,
 ordinary conversation history (including earlier replies), and custom patterns
 that explicitly read `data.memories` are outside that boundary.
 
-Spec §1's `policy` is carried per half (`recall.gate`, `settle.gate`). M3 adds `compact` and `retention` as OPTIONAL fields (absent: no compaction, and the D21 default retention), so a composition root written now keeps compiling.
+M3 adds `compact` and `retention` as OPTIONAL fields (absent: no compaction, and the D21 default retention), so a composition root written now keeps compiling.
 
 ### The DATA fence (harness-baml, #419 M5a)
 
-`memory.baml`'s prompts, the `memory_context` blocks and `decide.baml`'s `state` put
+`memory.baml`'s prompts and the `memory_context` blocks put
 text between `---BEGIN DATA---` and `---END DATA---`. The assistant's reply, which is
 composed from tool results, is among that text: it is in the extractor's window and in
 the store and recall gates' state. So `harness-baml`'s adapters pass every fenced
@@ -2546,14 +2138,14 @@ nothing" — each is named below and pinned in `__tests__/memory-store.test.ts`.
 ```typescript
 const report = await settleMemory(ctx, {
   store, // MemoryWriteStore — the transactional write seam, bound to the owner
-  decide, // the RAW DecideFn (this step applies its own policy)
+  decide, // the systemone decision seam
   decideAll, // optional one-request provider (Jev)
   extract, // MemoryExtractFn — the `describe`-role call
   embed, // MemoryEmbedder — query side AND documents(texts)
   owner, // () => string | null — from the host's request context
   tier, // () => string | undefined — default: the run frame's inference.tier
   awaitWake, // MemoryWakeWait — the app's awaitMemoryWake, as-is
-  settings, // enabled (REQUIRED to write — absent stores nothing, D11), gate cuts, thresholds, softLimit, routineKinds, …
+  settings, // enabled (REQUIRED to write — absent stores nothing, D11), softLimit, routineKinds, …
 })
 ```
 
@@ -2572,23 +2164,21 @@ never the user's words) and a returned `skipped` reason.
 
 ### The pipeline, and every fail-closed path
 
-| #   | Step                                                                                                                                                                                                                                         | Stops with                                                           | Pin                       |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------- |
-| 1   | owner (`null`/`''`), the user's switch (off or unreadable), the tier to stamp (none), the turn (`error`/`paused`), a question/answer pair (no `final` answer), the user message's event id (none — a retry could not be recognised)          | `no-user` `disabled` `no-tier` `turn-failed` `no-pair` `no-event-id` | `fail-closed`             |
-| 2   | the joint wake, `wakeBudgetMs` (default 180 s): `'skipped'` or a rejection                                                                                                                                                                   | `waking` — and nothing is sent to a public provider instead          | `fail-closed`             |
-| 3   | ONE `decideFields` over the window: `sensitive`, `target`, `confirm`, `kind`, each `requireCalibrated`, each with the gate cuts. Fallbacks fail closed: `sensitive → 'sensitive'`, `target → 'none'`, `confirm → 'ask'`, `kind → 'episodic'` | an abstained, failed or uncalibrated read lands on a fallback        | `seam-contract`           |
-| 4   | `sensitive` (or its fallback); `target: none`                                                                                                                                                                                                | `sensitive` `gate`                                                   | `seam-contract`           |
-| 5   | `resolveStoreRoute`: an org target ALWAYS asks (F2); a personal target skips the question only for a routine kind (default episodic/semantic/preference; `trait` always asks)                                                                | —                                                                    | `org-graph-forces-ask`    |
-| 5′  | **pre-M12**: an org target has no writer. **pre-M6**: `ask` has no confirmation mechanism                                                                                                                                                    | `org-no-writer` `no-confirmation` — store nothing and log (F4)       | `pre-m6-no-store`         |
-| 6   | extract (≤ `maxPerTurn`, default 3, read in order)                                                                                                                                                                                           | `extract-error` `no-candidates`                                      | `acceptance-rules`        |
-| 7   | embed (`documents`): a throw, a wrong count, a non-finite or ragged vector, an empty `spaceId`                                                                                                                                               | `error`                                                              | `fail-closed`             |
-| 8   | one transaction PER candidate (below)                                                                                                                                                                                                        | `failed` / `duplicates` in the report                                | `idempotency-transaction` |
+| #   | Step                                                                                                                                                                                                                                | Stops with                                                           | Pin                       |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------- |
+| 1   | owner (`null`/`''`), the user's switch (off or unreadable), the tier to stamp (none), the turn (`error`/`paused`), a question/answer pair (no `final` answer), the user message's event id (none — a retry could not be recognised) | `no-user` `disabled` `no-tier` `turn-failed` `no-pair` `no-event-id` | `fail-closed`             |
+| 2   | the joint wake, `wakeBudgetMs` (default 180 s): `'skipped'` or a rejection                                                                                                                                                          | `waking` — and nothing is sent to a public provider instead          | `fail-closed`             |
+| 3   | ONE `decideFields` over the window: `sensitive`, `target`, `confirm`, `kind`, using endpoint verdicts                                                                                                                               | a failed gate stores nothing                                         | `seam-contract`           |
+| 4   | `sensitive`; `target: none`                                                                                                                                                                                                         | `sensitive` `gate`                                                   | `seam-contract`           |
+| 5   | `resolveStoreRoute`: an org target ALWAYS asks (F2); a personal target skips the question only for a routine kind (default episodic/semantic/preference; `trait` always asks)                                                       | —                                                                    | `org-graph-forces-ask`    |
+| 5′  | **pre-M12**: an org target has no writer. **pre-M6**: `ask` has no confirmation mechanism                                                                                                                                           | `org-no-writer` `no-confirmation` — store nothing and log (F4)       | `pre-m6-no-store`         |
+| 6   | extract (≤ `maxPerTurn`, default 3, read in order)                                                                                                                                                                                  | `extract-error` `no-candidates`                                      | `acceptance-rules`        |
+| 7   | embed (`documents`): a throw, a wrong count, a non-finite or ragged vector, an empty `spaceId`                                                                                                                                      | `error`                                                              | `fail-closed`             |
+| 8   | one transaction PER candidate (below)                                                                                                                                                                                               | `failed` / `duplicates` in the report                                | `idempotency-transaction` |
 
 The step-3 `decision_made` events are recorded on the context (one per field —
 metadata and `stateChars` only, never the state), so "why was nothing stored" is
-answerable from the blob. **An abstained kind stores `episodic`**: when the
-`kind` field abstained, the extractor's claim of a longer-lived kind is not
-trusted, and uncertainty fails toward the one kind with a retention expiry.
+answerable from the blob. A failed gate cannot authorize a write; a failed kind read requires confirmation and uses `episodic` if a write proceeds.
 
 ### Input isolation and the evidence rule (D9)
 
@@ -2623,9 +2213,9 @@ lock (`MemoryWriteStore.transaction` — it MUST roll back on a throw):
 1. `nearest` memory of the same owner, tier and embedding space.
 2. **Same kind and cosine ≥ `dupSimilarity` (0.92)** → reinforce. **Related
    (≥ `relatedSimilarity`, 0.75) preference or trait** → the `memory.merge`
-   question `same | update | distinct`, bounded by `mergeTimeoutMs` and
-   **`requireCalibrated: true`**; uncalibrated, abstain, a refused or thrown
-   call, timeout or `distinct` → insert (both memories kept, never merged). Episodes and facts only reinforce or insert;
+   question `same | update | distinct`, bounded by `mergeTimeoutMs`. The endpoint
+   verdict determines the action; a failed, refused or timed-out call, or
+   `distinct`, inserts separately (both memories kept, never merged). Episodes and facts only reinforce or insert;
    kinds and tiers never merge.
 3. Insert/reinforce/update **and the `memory_sources` row in the same
    transaction.** `addSource` returning `{ inserted: false, memoryId }` is the primary-key
@@ -2636,8 +2226,7 @@ lock (`MemoryWriteStore.transaction` — it MUST roll back on a throw):
    `ordinal` is the candidate's index in the extractor's output.
 
 The merge question runs INSIDE the transaction (it must see the lock's world),
-which is why it has its own deadline. The thresholds are unmeasured placeholders
-for layer 4.
+which is why it has its own deadline.
 
 ### Erasure semantics (owner decision (b), M2 and M3 together)
 
@@ -2669,19 +2258,9 @@ Three rules, decided once for storing and for compaction:
    memory takes the evidence AND the `evidenceEventId` of the member whose
    span it keeps. The field is required in the type, so a writer that omits it does not compile.
 
-The merge question's fail-safe is part of the same decision: a merge destroys
-the older text, so `memory.merge` needs a calibrated read, and every way of not
-getting one lands on `distinct`, which inserts. Its static cuts carry no
-`thresholdMethod` (they never inherit `settings.gate`'s), so they apply only to
-a logprob read: on either tier, only a calibration entry fitted for (serving
-client, `memory.merge`) lets `update` or `same` through. Until one exists the
-question abstains every time — `uncalibrated` on the private tier's logprob
-client, `method-mismatch` on Jev, the Anthropic tier's client, whose read is
-calibrated by its own `confidence` claim (D8/D19) but whose cuts are not fitted
-— and only the near-duplicate (≥ `dupSimilarity`) reinforce remains. Jev is
-still called, and billed, for each such question; only a verbalized client is
-refused before the call. Pins: `erasure-semantics`, `evidence-event-id`,
-`merge-fails-to-keep-both`.
+The merge question uses the endpoint verdict. Failure, refusal or timeout
+keeps both memories by inserting separately. An `update` retains every source
+row under the erasure rules above.
 
 ### The `memory_written` event
 
@@ -2749,9 +2328,11 @@ gets `MEMORY_COMPACT_SPEC` (`memory.compact.merge`, `merge | keep`). This is a
 separate spec from M2's unchanged `MEMORY_MERGE_SPEC` (`same | update | distinct`),
 as ruled by the coordinator for M3.
 
-The policy requires calibration and falls back to `keep`. Static cuts carry no
-method override: a Jev read needs fitted cuts for this **new** key. Uncalibrated,
-refused, abstained or failed reads never merge. Each cluster has a 10-second
+Following G11 and the store step, compaction uses the endpoint verdict through
+`evaluateDecision`, with the `jev`-only seam. No calibration requirement,
+threshold policy or policy fallback is added. Only a usable `merge` verdict
+can proceed; `keep`, unavailable, refused, abstained or failed reads keep rows.
+This supersedes M3's earlier requireCalibrated/fitted-cut contract. Each cluster has a 10-second
 budget across tier validation, decision, summary and embedding. A late result
 has no write continuation. This timeout only stops waiting: the current seams
 have no abort signal, so late decision/summary/embedding calls can continue after
@@ -3102,28 +2683,28 @@ transformed into prompt-friendly types. The table below shows which harness
 
 ### Harness EventType → BAML Input Type
 
-| Harness `EventType`  | Event Payload (TS)                                                                                                                                                                          | BAML Type                                               | Consumed By                                                                 |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `tool_call`          | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`)                                                                                                                                 | `ToolCall`                                              | `LoopTurn.tool_call`, `Attempt.action`                                      |
-| `tool_result`        | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`, `sanitized?`, `heldBy?`)                                           | `ToolResult`                                            | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult`               |
-| `controller_action`  | `ControllerActionEventData`                                                                                                                                                                 | _(embedded in `LoopTurn.reasoning`)_                    | simpleLoop, actorCritic                                                     |
-| `critic_result`      | `CriticResultEventData`                                                                                                                                                                     | _(embedded in `Attempt.feedback`)_                      | actorCritic                                                                 |
-| `user_message`       | `UserMessageEventData`                                                                                                                                                                      | `Message { role, content }`                             | router (history)                                                            |
-| `assistant_message`  | `AssistantMessageEventData`                                                                                                                                                                 | `Message { role, content }`                             | router (history)                                                            |
-| `pattern_enter`      | `PatternEnterEventData`                                                                                                                                                                     | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`                    |
-| `pattern_exit`       | `PatternExitEventData`                                                                                                                                                                      | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`                    |
-| `approval_request`   | _(legacy payload; its type was removed in #433 S3)_                                                                                                                                         | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_request`, not an answer                  |
-| `approval_response`  | _(legacy payload; its type was removed in #433 S3)_                                                                                                                                         | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_response`, not an answer                 |
-| `hitl_request`       | `HitlRequestEventData`                                                                                                                                                                      | _(metadata only — kind and request id)_                 | `readHitl()` / `answerOf()` (#433)                                          |
-| `hitl_response`      | `HitlResponseEventData`                                                                                                                                                                     | _(metadata only — kind, choice and who decided)_        | `readHitl()` / `answerOf()` (#433)                                          |
-| `error`              | `ErrorEventData`                                                                                                                                                                            | _(read via `view.hasErrors()`)_                         | compactExecution (error context), harness error handling                    |
-| `reference_attached` | `ReferenceAttachedEventData`                                                                                                                                                                | _(not sent to BAML)_                                    | withReferences only (observability)                                         |
-| `intent_compacted`   | `IntentCompactedEventData`                                                                                                                                                                  | _(not sent to BAML)_                                    | compactIntent only (observability)                                          |
-| `plan_created`       | `PlanCreatedEventData`                                                                                                                                                                      | _(the plan reaches BAML as `plan_context` / `context`)_ | planner only; loops read `scope.data.plan`, not the event                   |
-| `content_sanitized`  | `ContentSanitizedEventData`                                                                                                                                                                 | _(metadata only — NEVER the verbatim spans)_            | withInjectionGuard only (observability + human audit)                       |
-| `loop_recovery`      | `LoopRecoveryEventData` (`failure`, `error`, `tool?`, `turn`, `maxTurns`)                                                                                                                   | _(metadata only — the turn log carries the feedback)_   | simpleLoop / actorCritic only (observability)                               |
-| `decision_made`      | `DecisionMadeEventData` (`key`, `labels`, `probs`, `label`, `top`, `margin`, `confidence`, `abstained`, `reason?`, `policy`, `method?`, `calibrated`, `coverage?`, `stateChars`, `shadow?`) | _(metadata only — the state's SIZE, never the text)_    | typedDecision / decisionRouter (#418); consumers read `data.decisions[key]` |
-| `memory_recalled`    | `MemoryRecalledEventData` (`attached` ids, `considered`, `survivors`, `tier?`, `tokens`, `skipped?`, `gate?`, `wake?`, `errorKind?`)                                                        | _(metadata only — IDS, never memory content)_           | memoryRecall (#419); consumers read `data.memories` / `data.memoryContext`  |
+| Harness `EventType`  | Event Payload (TS)                                                                                                                                | BAML Type                                               | Consumed By                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `tool_call`          | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`)                                                                                       | `ToolCall`                                              | `LoopTurn.tool_call`, `Attempt.action`                                      |
+| `tool_result`        | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`, `sanitized?`, `heldBy?`) | `ToolResult`                                            | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult`               |
+| `controller_action`  | `ControllerActionEventData`                                                                                                                       | _(embedded in `LoopTurn.reasoning`)_                    | simpleLoop, actorCritic                                                     |
+| `critic_result`      | `CriticResultEventData`                                                                                                                           | _(embedded in `Attempt.feedback`)_                      | actorCritic                                                                 |
+| `user_message`       | `UserMessageEventData`                                                                                                                            | `Message { role, content }`                             | router (history)                                                            |
+| `assistant_message`  | `AssistantMessageEventData`                                                                                                                       | `Message { role, content }`                             | router (history)                                                            |
+| `pattern_enter`      | `PatternEnterEventData`                                                                                                                           | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`                    |
+| `pattern_exit`       | `PatternExitEventData`                                                                                                                            | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`                    |
+| `approval_request`   | _(legacy payload; its type was removed in #433 S3)_                                                                                               | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_request`, not an answer                  |
+| `approval_response`  | _(legacy payload; its type was removed in #433 S3)_                                                                                               | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_response`, not an answer                 |
+| `hitl_request`       | `HitlRequestEventData`                                                                                                                            | _(metadata only — kind and request id)_                 | `readHitl()` / `answerOf()` (#433)                                          |
+| `hitl_response`      | `HitlResponseEventData`                                                                                                                           | _(metadata only — kind, choice and who decided)_        | `readHitl()` / `answerOf()` (#433)                                          |
+| `error`              | `ErrorEventData`                                                                                                                                  | _(read via `view.hasErrors()`)_                         | compactExecution (error context), harness error handling                    |
+| `reference_attached` | `ReferenceAttachedEventData`                                                                                                                      | _(not sent to BAML)_                                    | withReferences only (observability)                                         |
+| `intent_compacted`   | `IntentCompactedEventData`                                                                                                                        | _(not sent to BAML)_                                    | compactIntent only (observability)                                          |
+| `plan_created`       | `PlanCreatedEventData`                                                                                                                            | _(the plan reaches BAML as `plan_context` / `context`)_ | planner only; loops read `scope.data.plan`, not the event                   |
+| `content_sanitized`  | `ContentSanitizedEventData`                                                                                                                       | _(metadata only — NEVER the verbatim spans)_            | withInjectionGuard only (observability + human audit)                       |
+| `loop_recovery`      | `LoopRecoveryEventData` (`failure`, `error`, `tool?`, `turn`, `maxTurns`)                                                                         | _(metadata only — the turn log carries the feedback)_   | simpleLoop / actorCritic only (observability)                               |
+| `decision_made`      | `DecisionMadeEventData` (typed verdict, endpoint probabilities, failure metadata, `stateChars`, `shadow?`)                                        | _(metadata only — the state's SIZE, never the text)_    | typedDecision / decisionRouter (#418); consumers read `data.decisions[key]` |
+| `memory_recalled`    | `MemoryRecalledEventData` (`attached` ids, `considered`, `survivors`, `tier?`, `tokens`, `skipped?`, `gate?`, `wake?`, `errorKind?`)              | _(metadata only — IDS, never memory content)_           | memoryRecall (#419); consumers read `data.memories` / `data.memoryContext`  |
 
 ### Per-Pattern: Events Read → BAML Inputs → BAML Return
 
@@ -3447,7 +3028,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
     ├── compactIntent.server.ts # Rewrites latest message → scope.data.intent for router-less actors; emits intent_compacted
     ├── planner.server.ts       # Upfront decomposition → scope.data.plan (+ formatPlanContext, read by both loop patterns); emits plan_created
     ├── retriever.server.ts     # retriever() — vector-store search as a pattern
-    ├── typedDecision.server.ts # #418: the decision policy layer — the PURE half (sumLabelMass / calibrateLabelMass / normalizeLabelMass, preCallAbstain (F3), resolveDecisionCuts (F2), scoreDecision), the awaited wrapper (evaluateDecision / decide / decideFields) and the typedDecision / decisionRouter patterns
+    ├── typedDecision.server.ts # typed systemone evaluation, recording, typedDecision and decisionRouter
     ├── withMemory.server.ts    # #419 M5a: withMemory() + memoryStoreConfig() — one config and switch for both halves
     ├── memoryRecall.server.ts  # #419: memoryRecall() — the recall step (gate ∥ search ∥ wake, BM25 + cosine, floors before RRF, tier filter, per-turn clear, memory_recalled). The pure ranking half is ../memory-ranking.server.ts
     └── event-view.server.ts    # EventViewImpl (fluent query API, serializeCompact)

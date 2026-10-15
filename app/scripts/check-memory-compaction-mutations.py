@@ -1,7 +1,7 @@
 """#576 fix round 1: isolated assertion mutations; restores every file.
 
 Run from app/: python3 scripts/check-memory-compaction-mutations.py /tmp/m3-results
-No DB, Docker or live providers. Author A1-A22 reproduce the published table.
+No DB, Docker or live providers. Author A1-A22 reproduce the published table; A9/A10 migrate to G11 equivalents.
 Only eight reviewer mutations were enumerated publicly; R1-R19 reconstruct the
 named controls and finding pins, NOT a claim to possess the reviewer's harness.
 The coordinator approved this reconstruction; the reviewer owns the delta rerun.
@@ -30,8 +30,8 @@ CASES = [
  ('A6-evidence', PURE, 'if (value.evidence !== latest.evidence) return false', 'if (false) return false', ''),
  ('A7-default-retention', PURE, 'episodic: 180,', 'episodic: 181,', ''),
  ('A8-override-retention', PURE, 'const retention = memoryRetention(cfg)', 'const retention = memoryRetention()', ''),
- ('A9-calibrated', CORE, 'requireCalibrated: true', 'requireCalibrated: false', ''),
- ('A10-fallback', CORE, "fallback: 'keep'", "fallback: 'merge'", ''),
+ ('A9-G11-no-calibration-policy', CORE, "if (d.decision.label !== 'merge' || d.decision.abstained) return kept", "if (!d.decision.calibrated || d.decision.label !== 'merge' || d.decision.abstained) return kept", ''),
+ ('A10-G11-keep-on-error', CORE, "if (d.decision.label !== 'merge' || d.decision.abstained) return kept", "if (false) return kept", ''),
  ('A11-evidence-id', CORE, 'evidenceEventId: latest.evidenceEventId,', "evidenceEventId: 'wrong-event',", ''),
  ('A12-retention-clock', CORE, 'lastSeenAt: latest.lastSeenAt,', 'lastSeenAt: now,', ''),
  ('A13-source-count', CORE, ') !== row.sources.length', ') === -1', ''),

@@ -222,7 +222,7 @@ function database(seed: MemoryCompactionRow[]) {
 
 const merges = (async () => ({
   probs: { merge: 0.99, keep: 0.01 },
-  method: 'logprob',
+  method: 'jev',
   calibrated: true,
   llmCall: {
     functionName: 'Decide',
@@ -454,7 +454,7 @@ describe('compaction transaction', () => {
     let on = true
     const decide = vi.fn(async () => {
       on = false
-      return { probs: { merge: 0, keep: 1 }, method: 'logprob' as const, calibrated: true }
+      return { probs: { merge: 0, keep: 1 }, method: 'jev' as const, calibrated: true }
     })
     await compactMemory(ctx, { ...cfg, enabled: () => on, decide: decide as DecideFn })
     expect(decide).toHaveBeenCalledTimes(1)
@@ -515,18 +515,29 @@ describe('compaction transaction', () => {
     },
   )
 
-  it('uncalibrated, method-mismatched, keep, invalid and thrown decisions all keep both', async () => {
+  it('G11: compaction uses the endpoint merge verdict without calibration or threshold policy', async () => {
+    const { cfg, ctx, db } = config()
+    const decide = (async () => ({
+      probs: { merge: 0.501, keep: 0.499 },
+      method: 'jev',
+      calibrated: false,
+      confidence: 0.002,
+    })) as DecideFn
+    expect(await compactMemory(ctx, { ...cfg, decide })).toMatchObject({ merged: 1, remaining: 1 })
+    expect(db.rows()).toHaveLength(1)
+  })
+
+  it('G11: keep, invalid, unavailable and thrown endpoint decisions keep both', async () => {
     for (const result of [
-      { probs: { merge: 1, keep: 0 }, method: 'logprob', calibrated: false },
-      { probs: { merge: 1, keep: 0 }, method: 'jev', calibrated: true },
-      { probs: { merge: 0, keep: 1 }, method: 'logprob', calibrated: true },
-      { probs: { merge: NaN, keep: 0 }, method: 'logprob', calibrated: true },
+      { probs: { merge: 0, keep: 1 }, method: 'jev', calibrated: true },
+      { probs: { merge: NaN, keep: 0 }, method: 'jev', calibrated: true },
+      undefined,
       null,
     ]) {
       const { cfg, db, ctx } = config()
       const compact = vi.fn(cfg.compact)
       const decide = (async () => {
-        if (!result) throw Error('OLD-SENTINEL')
+        if (result === null) throw Error('OLD-SENTINEL')
         return result
       }) as DecideFn
       expect(await compactMemory(ctx, { ...cfg, decide, compact })).toMatchObject({
@@ -537,7 +548,7 @@ describe('compaction transaction', () => {
       expect(compact).not.toHaveBeenCalled()
       expect(JSON.stringify(ctx.events)).not.toContain('OLD-SENTINEL')
       expect(ctx.events.find((e) => e.type === 'decision_made')?.data).toMatchObject({
-        label: 'keep',
+        label: result?.probs.merge === 0 ? 'keep' : null,
       })
     }
     expect(MEMORY_COMPACT_SPEC.labels.map((l) => l.id)).toEqual(['merge', 'keep'])
@@ -665,7 +676,7 @@ describe('maintenance retention and hard cap', () => {
         await tx.insert(row('ep1', { kind: 'episodic', lastSeenAt: NOW }))
         await tx.insert(row('ep2', { kind: 'episodic', lastSeenAt: NOW }))
       })
-      return { probs: { merge: 0, keep: 1 }, method: 'logprob', calibrated: true }
+      return { probs: { merge: 0, keep: 1 }, method: 'jev', calibrated: true }
     }) as DecideFn
     expect(await compactMemory(ctx, { ...cfg, decide })).toMatchObject({ evicted: 1, remaining: 3 })
     expect(db.rows()).toHaveLength(3)
@@ -705,7 +716,7 @@ describe('maintenance retention and hard cap', () => {
     const { cfg, ctx, db } = config(seed)
     const decide = (async () => ({
       probs: { merge: 0, keep: 1 },
-      method: 'logprob',
+      method: 'jev',
       calibrated: true,
     })) as DecideFn
     expect(

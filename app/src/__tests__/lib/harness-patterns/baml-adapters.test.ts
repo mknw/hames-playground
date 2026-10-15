@@ -61,10 +61,18 @@ async function withVerdaTier<T>(fn: () => Promise<T>): Promise<T> {
   const clients = await import('@hames-ai/harness-baml/clients.server')
   // BOTH endpoints: the private tier is the 27B plus the 4B summarizer, and a
   // scope naming it without the second is refused outright (2026-08-26).
-  const KEYS = ['VERDA_INFERENCE_ENDPOINT', 'VERDA_INFERENCE_API_KEY', 'SMALL_LLM_BASE_URL']
+  const KEYS = [
+    'VERDA_INFERENCE_ENDPOINT',
+    'VERDA_INFERENCE_API_KEY',
+    'SMALL_LLM_BASE_URL',
+    'SMALL_LLM_DECISIONS_URL',
+    'SMALL_LLM_API_KEY',
+  ]
   const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]))
   process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+  process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
   try {
     // The tier is a SLOT of the run frame since #374, and the fail-closed

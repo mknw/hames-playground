@@ -813,14 +813,14 @@ describe('Z5 [F14]: classifierFromDecide', () => {
     const classify = classifierFromDecide(
       decideReturning({
         probs: { clean: 0.99, suspicious: 0.01 },
-        method: 'verbalized',
+        method: 'jev',
         calibrated: false,
       }),
     )
     expect(await classify({ text: 'x' })).toEqual({
       suspicious: true,
       abstained: true,
-      method: 'verbalized',
+      method: 'jev',
       calibrated: false,
     })
   })
@@ -829,14 +829,14 @@ describe('Z5 [F14]: classifierFromDecide', () => {
     const classify = classifierFromDecide(
       decideReturning({
         probs: { clean: 0.95, suspicious: 0.05 },
-        method: 'logprob',
+        method: 'jev',
         calibrated: true,
       }),
     )
     expect(await classify({ text: 'x' })).toEqual({
       suspicious: false,
       abstained: false,
-      method: 'logprob',
+      method: 'jev',
       calibrated: true,
     })
   })
@@ -845,7 +845,7 @@ describe('Z5 [F14]: classifierFromDecide', () => {
     const classify = classifierFromDecide(
       decideReturning({
         probs: { clean: 0.85, suspicious: 0.15 },
-        method: 'logprob',
+        method: 'jev',
         calibrated: true,
       }),
     )
@@ -856,7 +856,7 @@ describe('Z5 [F14]: classifierFromDecide', () => {
     const classify = classifierFromDecide(
       decideReturning({
         probs: { clean: 0.02, suspicious: 0.98 },
-        method: 'logprob',
+        method: 'jev',
         calibrated: true,
       }),
     )
@@ -871,7 +871,7 @@ describe('Z5 [F14]: classifierFromDecide', () => {
     const malformed = classifierFromDecide(
       decideReturning({
         probs: { clean: Number.NaN, suspicious: 0 },
-        method: 'logprob',
+        method: 'jev',
         calibrated: true,
       }),
     )
@@ -881,7 +881,7 @@ describe('Z5 [F14]: classifierFromDecide', () => {
   it('asks the decision seam its own fixed question, with the chunk as the state', async () => {
     const decide = vi.fn(async () => ({
       probs: { clean: 1, suspicious: 0 },
-      method: 'logprob',
+      method: 'jev',
       calibrated: true,
     }))
     await classifierFromDecide(decide)({ text: 'the chunk' })

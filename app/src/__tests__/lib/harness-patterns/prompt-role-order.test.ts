@@ -234,40 +234,6 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
     'ScreenUntrustedContent',
     (o) => () => b.request.ScreenUntrustedContent('web', 'fetched page text', o),
   ],
-  // #418 T3. A system block, then a user block — the order vLLM requires and
-  // the Anthropic path would silently rewrite. The decide readout is routed to
-  // llama.cpp today, which is lenient about system placement, so the vLLM rule
-  // is exactly the one this pin must hold ahead of the day it is not.
-  [
-    'Decide',
-    (o) => () =>
-      b.request.Decide(
-        'state',
-        'which?',
-        [
-          { letter: 'A', description: 'first' },
-          { letter: 'B', description: 'second' },
-        ],
-        o,
-      ),
-  ],
-  // #418 T5. The verbalized secondary: system first, then the data and the
-  // question as a user block, with the output format INSIDE that user block —
-  // a trailing `ctx.output_format` as its own system turn is the shape the
-  // Anthropic path rewrites silently and vLLM refuses.
-  [
-    'DecideVerbalized',
-    (o) => () =>
-      b.request.DecideVerbalized(
-        'state',
-        'which?',
-        [
-          { letter: 'A', description: 'first' },
-          { letter: 'B', description: 'second' },
-        ],
-        o,
-      ),
-  ],
 ]
 
 const roles = (body: Body) => (body.messages ?? []).map((m) => m.role)

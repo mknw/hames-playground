@@ -36,7 +36,7 @@ const privateRow: MemoryCandidate = {
 const retrieves = (async () =>
   ({
     probs: { retrieve: 0.9, skip: 0.1 },
-    method: 'logprob',
+    method: 'jev',
     calibrated: true,
   }) as DecideResult) as unknown as DecideFn
 

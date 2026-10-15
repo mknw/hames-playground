@@ -60,9 +60,8 @@ client<llm> AnthropicSonnet46 {
 // controller re-running a search it had just run while already holding the
 // answer. Full data and the per-prompt output comparison: #139.
 //
-// Used by ControllerAnthropic (the simpleLoop tool loop) and, since #418 T5,
-// by DecideAnthropic (the verbalized decide secondary — structured output, no
-// reasoning to expose). The measurement above is the CONTROLLER's. Everything
+// Used by ControllerAnthropic (the simpleLoop tool loop). The measurement
+// above is the CONTROLLER's. Everything
 // else keeps thinking, deliberately: the actor, router, critic and compactExecution are
 // unmeasured, and the actor in particular is the deepest loop we run.
 //

@@ -5,8 +5,8 @@
 // through the per-call `clientOverrideFor('describe')` spread. The role is the
 // owner's: memory runs on BOTH tiers (D19), and a verda-tier turn must not send
 // the user's words to a public provider (no call made under the private tier
-// may). Neither function is a gate — the store/merge DECISIONS are `Decide`
-// readouts (#418); these only WRITE the text once a decision has said to.
+// may). Neither function is a gate — the store/merge decisions are systemone decisions
+// (#418); these only WRITE the text once a decision has said to.
 //
 // WHAT THESE PROMPTS DO NOT DO is as deliberate as what they do: they enforce
 // nothing. Every rule below ("evidence is a verbatim span", "no new names or
@@ -23,7 +23,8 @@
 // never a tool call. The assistant reply is itself composed FROM tool results,
 // so it is allowed to resolve a reference ("that one") and is never a source:
 // evidence must come from LATEST USER MESSAGE. Everything the model reads is
-// fenced and labelled DATA for the same reason `Decide` fences `state`: the
+// fenced and labelled DATA to separate content from instructions, as a
+// systemone decision separates its state from its question. The
 // fence is not the security control (the acceptance rules and the sanitizer
 // are), it is the cheapest way to stop a small model from obeying text in the
 // message instead of reporting on it.
@@ -110,7 +111,7 @@ function ExtractMemory(
 // CompactMemories — fold a cluster of near-duplicate memories into one.
 //
 // The caller has ALREADY decided the cluster should merge (`merge | keep` is a
-// `Decide` readout) and orders `members` oldest first. What is left is to
+// systemone decision) and orders `members` oldest first. What is left is to
 // write the one line that replaces them, and the one hard part is
 // contradiction: when two members disagree the user changed their mind, and the
 // MOST RECENT member is the one that is true now. Deterministic acceptance

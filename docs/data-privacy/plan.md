@@ -44,7 +44,7 @@ Measured on the live dev database, 2026-08-15.
 | Redis Data Stash                             | uploaded and Microsoft 365-ingested documents, chunks, embeddings                                                                                                                                                                                                                                                                             | **no**                                                                                 | **7 days** (`DEFAULT_TTL_SECONDS`)                                                                   | —        |
 | Neo4j                                        | **the staff directory**: per `Member` — `entraId`, `displayName`, `mail`, `department`, `jobTitle`, `syncedAt`                                                                                                                                                                                                                                | **no**                                                                                 | **none**                                                                                             | 49       |
 
-External decision processor (#418, SD-12): the configured `JEV_DECISIONS_URL`
+External decision processor (#418, SD-12): on the Anthropic tier, `JEV_DECISIONS_URL`
 receives decision state, question instructions and option descriptions; unset,
 no decision request is made. TypeSafe (Jev) offers zero data retention to enterprise customers; without that agreement, standard retention applies.
 See finding 1 for the direct and OpenRouter routes.
@@ -132,7 +132,7 @@ Two things follow that _are_ in our control:
   response in `LLMCallRecord` (without the authorization header or bearer key).
   Direct responses document no `usage.cost`, so price stays unknown.
   The request pins `jev-1.13.0` rather than the moving `jev-latest` alias because
-  T8 calibration fits are per model version; a moving alias would silently invalidate them.
+  the configured request uses a fixed model version.
   The deployment uses TypeSafe now by explicitly setting
   `JEV_DECISIONS_URL=https://api.typesafe.ai/v1/systemone` with a non-enterprise
   key; standard retention applies to that key. The package's default remains disabled.
@@ -170,10 +170,12 @@ Two things follow that _are_ in our control:
 
   Both routes use the separate `JEV_DECISIONS_API_KEY`, without any other key
   fallback. `JEV_DECISIONS_URL` allows only parsed HTTPS or HTTP loopback, and redirects are refused, so the state reaches only that host;
-  failure abstains rather than retrying elsewhere. **SD-12 is preserved:**
-  the private tier is refused at both adapter and transport before any request,
-  with the transport refusing before the key is read. Unknown/future tiers are
-  also refused by the transport before reading the key. Re-introducing any
+  failure is reported without retrying elsewhere. **SD-12 is preserved:**
+  the private tier resolves to `PrivateSystemOne` and reads only
+  `SMALL_LLM_DECISIONS_URL` plus `SMALL_LLM_API_KEY`. The URL is a full endpoint
+  ending in `/v1/systemone`; an unset value refuses the call without a public
+  fallback. Unknown tiers or a client inconsistent with the tier are refused
+  before a request (`packages/harness-baml/jev-decide.server.ts`). Re-introducing any
   other provider is an Art. 28 / Chapter V decision, not a config change.
 
 - Whether **zero-retention / no-training-on-inputs** terms apply to the account

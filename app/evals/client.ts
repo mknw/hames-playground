@@ -92,11 +92,7 @@ const PRODUCTION_ROLE: Record<EvalRole, BamlRole> = {
   planner: 'planner',
   describe: 'describe',
   screen: 'screen',
-  // #418 T3: declared so the record stays total over `BamlRole`, and left OUT
-  // of `DEFAULT_ROUTED_ROLES` below on purpose — `EVAL_CLIENT=<chat client>`
-  // would point the logprob readout at a client that returns none, which the
-  // adapter refuses. Its scenario (`decision-calibration`, slice T8) names the
-  // role explicitly via `EVAL_ROLES=decide`.
+  // Systemone uses its own transport and URL, independently of chat overrides.
   decide: 'decide',
 }
 

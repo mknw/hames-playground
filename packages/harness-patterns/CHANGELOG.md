@@ -2,6 +2,8 @@
 
 ## 0.3.0
 
+> The published 0.3.0 tarball also contains #579 (memory confirmation, M6) and #583, merged after the tag; they are described under the next release.
+
 ### Minor Changes
 
 - e5fc954: Add the optional core memory compaction pass, deterministic clustering and acceptance, configurable per-kind retention, and a daily sweep seam.

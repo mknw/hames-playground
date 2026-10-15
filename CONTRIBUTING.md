@@ -43,10 +43,11 @@ bump to any one bumps all five. While the family is at `0.x`:
    updated `CHANGELOG.md`s.
 3. Merging that PR makes the same workflow tag the merge commit —
    `@hames-ai/<pkg>@<version>` for each package plus a repo-level `v<version>`.
-4. **Publishing is manual** and done by the maintainer, on the tagged `main`:
+4. **Publishing is manual** and done by the maintainer, from the release tag, not `main`
+   (`prepublishOnly` refuses unless HEAD is exactly `@hames-ai/<pkg>@<version>`):
 
    ```sh
-   git checkout main && git pull --tags
+   git fetch --tags && git checkout @hames-ai/harness-patterns@<version>
    pnpm install --frozen-lockfile
    pnpm -r publish
    ```

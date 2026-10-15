@@ -2,6 +2,8 @@
 
 ## 0.3.0
 
+> The published 0.3.0 tarball also contains #579 (memory confirmation, M6) and #583, merged after the tag; they are described under the next release. The one file of this package that differs from the tag is `README.md` (Neo4j egress wording, #241 G13).
+
 ### Minor Changes
 
 - fb4fac8: Opt the General agent into persistent memory when the host supplies `AgentDeps.memory`. Recall and storage continue to honor the user's memory switch.

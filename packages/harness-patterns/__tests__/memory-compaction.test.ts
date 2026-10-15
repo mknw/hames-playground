@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   acceptCompaction,
@@ -41,6 +42,25 @@ const row = (id: string, next: Partial<MemoryCompactionRow> = {}): MemoryCompact
 afterEach(() => vi.useRealTimers())
 
 describe('compaction-pure', () => {
+  it('F9/F10: documents routing, deletion audit and uncancelled late calls explicitly', () => {
+    const spec = readFileSync(new URL('../SPEC.md', import.meta.url), 'utf8')
+    const types = readFileSync(new URL('../types.ts', import.meta.url), 'utf8')
+    const changeset = readFileSync(
+      new URL('../../../.changeset/memory-core-compaction.md', import.meta.url),
+      'utf8',
+    )
+    expect(types).toContain('company-run only on the private')
+    expect(spec).toContain('company-run only on the private tier')
+    expect(spec).toContain('Expiry/eviction ids and absorbed-member ids/counts')
+    expect(spec).toContain('are deliberately not context events in M3')
+    expect(spec).toContain(
+      '`retention.episodic` is `null`: persistence exempts expiry, not D4 capacity',
+    )
+    expect(spec).toContain('have no abort signal')
+    expect(spec).toContain('Their late call records are not attached to the context')
+    expect(changeset).toContain('`settleMemory` now refuses insertion at `hardLimit` (default 400)')
+  })
+
   it('single-link includes bridge members and is independent of input order', () => {
     const a = row('a', { embedding: [1, 0] })
     const b = row('b', { embedding: [0, 1] })
@@ -236,6 +256,210 @@ function config(seed = [row('a'), row('b', { lastSeenAt: 2 * DAY })]) {
 }
 
 describe('compaction transaction', () => {
+  it('F6: stops at target after one of two mergeable pairs', async () => {
+    const { cfg, db, ctx } = config([
+      row('a'),
+      row('b'),
+      row('c', { kind: 'semantic' }),
+      row('d', { kind: 'semantic' }),
+    ])
+    const decide = vi.fn(merges)
+    expect(
+      await compactMemory(ctx, {
+        ...cfg,
+        decide,
+        settings: { softLimit: 3, target: 3, hardLimit: 10 },
+      }),
+    ).toMatchObject({ merged: 1, remaining: 3 })
+    expect(decide).toHaveBeenCalledOnce()
+    expect(db.rows()).toHaveLength(3)
+  })
+
+  it('F7: a positive known-tier host guard refuses unknown tiers before inference', async () => {
+    const { cfg, ctx, db } = config([row('a', { tier: 'future' }), row('b', { tier: 'future' })])
+    const decide = vi.fn(merges)
+    const assertReachableTier = vi.fn()
+    const guide = readFileSync(new URL('../GUIDE.md', import.meta.url), 'utf8')
+    const recipe = guide
+      .match(/const assertTier = [\s\S]*?\n```/)![0]
+      .replace(/\n```$/, '')
+      .replace(': string', '')
+    // Execute the published host recipe with the real host function's permissive
+    // unknown-tier contract represented by a spy; never call a provider.
+    const assertTier = new Function('assertInferenceTier', `${recipe}; return assertTier`)(
+      assertReachableTier,
+    )
+
+    await compactMemory(ctx, { ...cfg, assertTier, decide })
+    expect(decide).not.toHaveBeenCalled()
+    expect(assertReachableTier).not.toHaveBeenCalled()
+    expect(db.rows()).toHaveLength(2)
+  })
+
+  it('F1: expiry remains committed when a later merge fails', async () => {
+    const { cfg, db, ctx } = config([row('expired', { kind: 'episodic' }), row('a'), row('b')])
+    db.fail('move')
+    expect(await compactMemory(ctx, cfg)).toMatchObject({ expired: 1, merged: 0, skipped: 'error' })
+    expect(db.rows().map((m) => m.id)).toEqual(['a', 'b'])
+    expect(ctx.events.filter((e) => e.patternId === 'memory-compaction')).toEqual([])
+  })
+
+  it('F1: concurrent owner transactions finish while inference is pending', async () => {
+    const { cfg, db, ctx } = config()
+    let release!: () => void
+    let entered!: () => void
+    const started = new Promise<void>((r) => {
+      entered = r
+    })
+    const decision = new Promise<void>((r) => {
+      release = r
+    })
+    const pending = compactMemory(ctx, {
+      ...cfg,
+      decide: async (i) => {
+        entered()
+        await decision
+        return merges(i)
+      },
+    })
+    await started
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const free = await Promise.race([
+      db.store.transaction(async () => true),
+      new Promise<boolean>((r) => {
+        timer = setTimeout(() => r(false), 50)
+      }),
+    ])
+    clearTimeout(timer)
+    release()
+    await pending
+    expect(free).toBe(true)
+  })
+
+  it.each([
+    'content',
+    'evidence',
+    'evidenceEventId',
+    'lastSeenAt',
+    'compactedFrom',
+    'sources',
+    'deleted',
+  ] as const)('F1: changed snapshot member (%s) is kept', async (field) => {
+    const { cfg, db, ctx } = config()
+    await compactMemory(ctx, {
+      ...cfg,
+      compact: async (input) => {
+        await db.store.transaction(async (tx) => {
+          const original = db.rows()[0]
+          await tx.delete([original.id])
+          if (field !== 'deleted')
+            await tx.insert({
+              ...original,
+              ...(field === 'sources'
+                ? { sources: [...original.sources, { ...original.sources[0], ordinal: 1 }] }
+                : field === 'lastSeenAt' || field === 'compactedFrom'
+                  ? { [field]: original[field] + 1 }
+                  : { [field]: original[field] + ' changed' }),
+            })
+        })
+        return cfg.compact(input)
+      },
+    })
+    expect(db.rows().some((m) => m.id.startsWith('mem_'))).toBe(false)
+    expect(ctx.events.filter((e) => e.type === 'memory_written')).toEqual([])
+  })
+
+  it('F3: bad provenance is counted and kept while unrelated D21 expiry commits', async () => {
+    const { cfg, db, ctx } = config([
+      row('bad', { sources: [] }),
+      row('expired', { kind: 'episodic' }),
+    ])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(await compactMemory(ctx, cfg)).toMatchObject({
+        expired: 1,
+        unverifiable: 1,
+        kept: 1,
+        remaining: 1,
+      })
+      expect(db.rows().map((m) => m.id)).toEqual(['bad'])
+      expect(warn).toHaveBeenCalledWith('[memory-compaction]', 'unverifiable-provenance')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('F5: keeps a 2x default-cap single-link chain whole, without inference', async () => {
+    const seed = Array.from({ length: 16 }, (_, i) =>
+      row(String(i).padStart(2, '0'), {
+        embedding: [Math.cos(i * 0.1), Math.sin(i * 0.1)],
+      }),
+    )
+    const { cfg, db, ctx } = config(seed)
+    const decide = vi.fn(merges)
+    expect(
+      await compactMemory(ctx, {
+        ...cfg,
+        decide,
+        settings: { softLimit: 2, target: 1, hardLimit: 100 },
+      }),
+    ).toMatchObject({ merged: 0, kept: 1 })
+    expect(decide).not.toHaveBeenCalled()
+    expect(db.rows()).toEqual(seed)
+    const allowed = config(seed.slice(0, 3))
+    expect(
+      await compactMemory(allowed.ctx, {
+        ...allowed.cfg,
+        settings: { ...allowed.cfg.settings, maxClusterSize: 2 },
+      }),
+    ).toMatchObject({ merged: 0, kept: 1 })
+  })
+
+  it('F6: a mergeable pair below softLimit never reaches decide', async () => {
+    const { cfg, ctx } = config()
+    const decide = vi.fn(merges)
+    await compactMemory(ctx, { ...cfg, decide, settings: { softLimit: 3, target: 1 } })
+    expect(decide).not.toHaveBeenCalled()
+  })
+
+  it('F6: stale embedding space never reaches decide', async () => {
+    const { cfg, ctx } = config([
+      row('a', { embedSpace: 'stale' }),
+      row('b', { embedSpace: 'stale' }),
+    ])
+    const decide = vi.fn(merges)
+    await compactMemory(ctx, { ...cfg, decide })
+    expect(decide).not.toHaveBeenCalled()
+  })
+
+  it('F6: NFKC is applied to the stored summary', async () => {
+    const { cfg, ctx, db } = config()
+    await compactMemory(ctx, {
+      ...cfg,
+      compact: async () => ({ value: { content: content.replace('user', 'ｕｓｅｒ'), evidence } }),
+    })
+    expect(db.rows()).toHaveLength(1)
+    expect(db.rows()[0].content).toBe(content)
+  })
+
+  it('P2: stops before the next decision when keep flips the switch off', async () => {
+    const { cfg, ctx } = config([
+      row('a'),
+      row('b'),
+      row('c', { kind: 'semantic' }),
+      row('d', { kind: 'semantic' }),
+      row('e', { kind: 'trait' }),
+      row('f', { kind: 'trait' }),
+    ])
+    let on = true
+    const decide = vi.fn(async () => {
+      on = false
+      return { probs: { merge: 0, keep: 1 }, method: 'logprob' as const, calibrated: true }
+    })
+    await compactMemory(ctx, { ...cfg, enabled: () => on, decide: decide as DecideFn })
+    expect(decide).toHaveBeenCalledTimes(1)
+  })
+
   it('writes newest evidence and accumulated counts, moves ALL sources before deleting members, and records metadata after commit', async () => {
     const old = row('a', {
       content: 'OLD-SENTINEL',
@@ -434,6 +658,19 @@ describe('compaction transaction', () => {
 })
 
 describe('maintenance retention and hard cap', () => {
+  it('F1: final eviction counts fresh rows added during inference', async () => {
+    const { cfg, ctx, db } = config()
+    const decide = (async () => {
+      await db.store.transaction(async (tx) => {
+        await tx.insert(row('ep1', { kind: 'episodic', lastSeenAt: NOW }))
+        await tx.insert(row('ep2', { kind: 'episodic', lastSeenAt: NOW }))
+      })
+      return { probs: { merge: 0, keep: 1 }, method: 'logprob', calibrated: true }
+    }) as DecideFn
+    expect(await compactMemory(ctx, { ...cfg, decide })).toMatchObject({ evicted: 1, remaining: 3 })
+    expect(db.rows()).toHaveLength(3)
+  })
+
   it('expires below soft limit without calling inference, and reads per-kind overrides', async () => {
     const seed = [
       row('ep', { kind: 'episodic' }),
@@ -494,14 +731,14 @@ describe('maintenance retention and hard cap', () => {
           throw Error()
         },
       },
-      { settings: { softLimit: 1, target: 1 } },
+      { settings: { softLimit: 1, target: 2 } },
       { retention: { episodic: -1 } },
       { now: () => NaN },
     ]) {
       expect((await compactMemory(ctx, { ...cfg, ...over })).skipped).toBeDefined()
     }
     const broken = config([row('a', { evidenceEventId: 'missing' }), row('b')])
-    expect(await compactMemory(broken.ctx, broken.cfg)).toMatchObject({ skipped: 'error' })
+    expect(await compactMemory(broken.ctx, broken.cfg)).toMatchObject({ unverifiable: 1, kept: 1 })
     expect(broken.db.rows()).toHaveLength(2)
     expect(db.order).toEqual([])
   })
@@ -528,7 +765,7 @@ describe('daily sweep', () => {
     expect(persist).toHaveBeenCalledOnce()
   })
 
-  it('starts only when asked, waits a day, never overlaps and stops during an active sweep', async () => {
+  it('runs on start, repeats daily, never overlaps and stops during an active sweep', async () => {
     vi.useFakeTimers()
     let finish!: () => void
     const jobs = vi.fn(async function* () {
@@ -539,9 +776,7 @@ describe('daily sweep', () => {
     })
     const stop = startMemorySweep(jobs)
     expect(jobs).not.toHaveBeenCalled()
-    await vi.advanceTimersByTimeAsync(DAY - 1)
-    expect(jobs).not.toHaveBeenCalled()
-    await vi.advanceTimersByTimeAsync(1)
+    await vi.advanceTimersByTimeAsync(0)
     expect(jobs).toHaveBeenCalledOnce()
     await vi.advanceTimersByTimeAsync(2 * DAY)
     expect(jobs).toHaveBeenCalledOnce()
@@ -554,8 +789,11 @@ describe('daily sweep', () => {
       throw Error()
     })
     const stopAgain = startMemorySweep(again)
-    await vi.advanceTimersByTimeAsync(DAY)
-    await vi.advanceTimersByTimeAsync(DAY)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(again).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(DAY - 1)
+    expect(again).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
     expect(again).toHaveBeenCalledTimes(2)
     stopAgain()
     expect(vi.getTimerCount()).toBe(0)

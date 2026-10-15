@@ -2139,7 +2139,8 @@ export interface MemoryCompactInput {
   }[]
 }
 
-/** No transport in core. The host supplies a company-run summarizer. Its output
+/** No transport in core. The host supplies a tier-routed summarizer, company-run only on the private
+ *  tier (DescribeAnthropic on the Anthropic tier). Its output
  *  is untrusted, and all deterministic checks run before any write. */
 export type MemoryCompactFn = (
   input: MemoryCompactInput,

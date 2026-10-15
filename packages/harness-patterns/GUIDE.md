@@ -328,26 +328,52 @@ Gate the post-reply call on `harnessUsesMemory(patterns)`, the same probe that g
 Add `compact: { compact: summarize, store: compactionStore, assertTier }` to
 `MemoryConfig` to opt into M3. `memoryCompactionConfig(cfg)` returns the derived
 maintenance config, or `undefined` without that opt-in. After settle reports
-`compactionDue`, await `compactMemory(ctx, derived)` before the same context save.
+`compactionDue` (including a refused full-store insertion), await `compactMemory(ctx, derived)` before the same context save.
 Core adds no app calls or timer. The host's owner-bound compaction store must
 use the same advisory lock, memory pool and lock timeout as settle and erasure,
 roll back on any throw, move all member provenance before deleting members,
-and return exact move/deletion counts. `assertTier` must refuse unknown or
-unavailable tiers before inference; no fallback is allowed.
+and return exact move/deletion counts. Expiry commits in a short transaction;
+each cluster's inference runs outside every transaction, then a short merge
+transaction re-reads the switch and all members (including their source set).
+Changed members are kept. Each merge commits independently and publishes its
+events after commit; a final short transaction handles fresh-count eviction.
+The switch is also re-read before every cluster, including after `keep`.
+`assertTier` must refuse unknown or unavailable tiers before inference; no
+fallback is allowed. For the later app wiring slice, wrap the reachability check:
+
+```typescript
+// Supplied by the app from @hames-ai/harness-baml/clients.server:
+declare const assertInferenceTier: (tier: 'anthropic' | 'verda') => void
+
+const assertTier = (tier: string) => {
+  if (tier !== 'anthropic' && tier !== 'verda') throw new TypeError('unknown memory tier')
+  assertInferenceTier(tier)
+}
+```
+
+Passing `assertInferenceTier` bare does not reject unknown strings. Core tiers
+are opaque; this positive allowlist is a binding host requirement, not app wiring
+supplied by M3. The summarizer is tier-routed, company-run only on the private
+tier. The default unmeasured `maxClusterSize: 8` keeps oversize clusters whole
+and unmerged, without splitting or calling a model. The cluster timeout stops
+waiting; it cannot abort in-flight calls or attach their late usage to context.
 
 Retention lives at `cfg.retention`, per kind in days after last sighting: episodic
 180 by default, the other kinds `null` (persist). For example,
 `{ episodic: 90, preference: 365, trait: null }`. Compaction keeps the newest
 last-seen date, so it cannot restart the retention clock. A refused or
 uncalibrated merge keeps all members. Only episodes may be evicted at the hard
-cap. Settle refuses growth with `full` if its host cannot reclaim episodic space;
+cap, even when episodic retention is `null`. Settle refuses an insertion with
+`full` and `compactionDue: true` if its host cannot reclaim episodic space; it
+continues later candidates, so
 existing reinforces/updates do not consume capacity. The optional transaction
 method `evictOldestEpisodes(n)` is the host capability for that reclamation.
 
 For the daily retry/expiry pass, supply an async iterable of `MemorySweepJob`s
 (context, config, persist) to `sweepMemories`, or start its opt-in daily timer
 with `startMemorySweep(jobsSupplier)` and retain the returned stop function.
-The timer unrefs itself and never overlaps sweeps. Hosts enumerate enabled
+The timer runs once at startup (zero delay), then daily after each completion;
+it unrefs itself and never overlaps sweeps. Hosts enumerate enabled
 owners, supply fresh owner-bound seams, and persist each context after its pass.
 See SPEC's [Memory compaction](SPEC.md#memory-compaction-419-m3) for transaction,
 acceptance, event and fail-closed contracts.

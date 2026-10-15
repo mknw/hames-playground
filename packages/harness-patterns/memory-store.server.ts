@@ -743,6 +743,7 @@ async function run(
   let written = 0
   let duplicates = 0
   let failed = 0
+  let full = false
   let pendingCall: LLMCallRecord | undefined = llmCall
 
   for (let i = 0; i < accepted.length; i++) {
@@ -819,7 +820,9 @@ async function run(
       written++
     } catch (err) {
       if (err instanceof MemoryFull) {
-        return stop('full', undefined, { written, duplicates, failed, route, rejected })
+        full = true
+        logStop('full')
+        continue
       } else if (err instanceof MemoryDisabled) {
         return stop('disabled', undefined, { written, duplicates, failed, route, rejected })
       } else if (err instanceof SourceConflict) {
@@ -851,8 +854,8 @@ async function run(
     }
   }
 
-  let compactionDue = false
-  if (written > 0) {
+  let compactionDue = full
+  if (written > 0 && !full) {
     try {
       const n = await store.transaction((tx) => tx.count())
       compactionDue = n >= (settings?.softLimit ?? DEFAULT_SOFT_LIMIT)
@@ -860,7 +863,15 @@ async function run(
       // the count is advice for M3; a failure here changes nothing written
     }
   }
-  return { written, duplicates, failed, route, rejected, compactionDue }
+  return {
+    written,
+    duplicates,
+    failed,
+    route,
+    rejected,
+    compactionDue,
+    ...(full ? { skipped: 'full' as const } : {}),
+  }
 }
 
 /** Reinforce a near-duplicate; ask the merge question of a related preference or

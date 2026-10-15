@@ -361,6 +361,39 @@ const withSettings = (s: MemoryStoreSettings): Partial<MemoryStoreConfig> => ({ 
 // ============================================================================
 
 describe('settleMemory — the one path that stores', () => {
+  it('M3 full refuses only insertion and still writes a later reinforcement', async () => {
+    const { cfg, db } = config({
+      extract: async () => ({
+        value: [
+          { kind: 'preference', content: CONTENT, evidence: EVIDENCE, ordinal: 0 },
+          { kind: 'preference', content: CONTENT + ' always.', evidence: EVIDENCE, ordinal: 1 },
+        ],
+      }),
+    })
+    let calls = 0
+    const store: MemoryWriteStore = {
+      transaction: (fn) =>
+        db.store.transaction((tx) =>
+          fn({
+            ...tx,
+            count: async () => 400,
+            nearest: async () =>
+              ++calls === 1
+                ? null
+                : { id: 'existing', kind: 'preference', content: CONTENT, similarity: 1 },
+            reinforce: async () => {},
+          }),
+        ),
+    }
+    const ctx = turn()
+    expect(await settleMemory(ctx, { ...cfg, store })).toMatchObject({
+      skipped: 'full',
+      compactionDue: true,
+      written: 1,
+    })
+    expect(written(ctx).map((m) => m.action)).toEqual(['reinforced'])
+  })
+
   it('M3 hard cap: a store without eviction refuses growth at 400 and reports full', async () => {
     const { cfg, db } = config()
     const store: MemoryWriteStore = {
@@ -368,6 +401,7 @@ describe('settleMemory — the one path that stores', () => {
     }
     expect(await settleMemory(turn(), { ...cfg, store })).toMatchObject({
       skipped: 'full',
+      compactionDue: true,
       written: 0,
     })
     expect(db.rows()).toEqual([])

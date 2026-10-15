@@ -2705,7 +2705,8 @@ replays a turn on its own. The mechanism (wait for the claim to release, or
 reconcile `memory_sources` against events on load) is M5's, and M5 cannot land
 without an interleaving pin for it.
 
-`report.compactionDue` is true when the owner's count reaches `softLimit` (300);
+`report.compactionDue` is true when the owner's count reaches `softLimit` (300)
+or an insertion is refused at `hardLimit`;
 the host may then call the optional M3 pass before saving the context.
 
 ## Memory compaction (#419 M3)
@@ -2735,11 +2736,15 @@ await save(ctx)
 
 The compaction settings' soft/hard thresholds override the settle settings in
 both derived configs; otherwise settle's settings supply them. Default
-`T_soft = 300`, target 240 (0.8 times soft), `T_hard = 400`. Invalid limits
-fail closed. One transaction takes the **same owner advisory lock** as settle
-and erasure, uses the host's dedicated memory pool/lock timeout, rechecks the
-committed switch, and reads fresh rows with complete source provenance. Expiry
-runs first, even below the soft threshold. Above it, each multi-member cluster
+`T_soft = 300`, target 240 (0.8 times soft), `T_hard = 400`. Target may equal
+soft, but cannot exceed it. Invalid limits fail closed. A short transaction
+takes the **same owner advisory lock** as settle and erasure, uses the host's
+dedicated memory pool/lock timeout, rechecks the committed switch, lists and
+verifies rows, then expires due rows and commits, even below the soft threshold.
+Unverifiable provenance excludes only those rows from merging; the report counts
+`unverifiable` rows (also counted as kept) and logs `unverifiable-provenance`.
+Owner scope and a valid last-seen timestamp suffice for expiry. At the soft
+threshold or above, each eligible multi-member cluster
 gets `MEMORY_COMPACT_SPEC` (`memory.compact.merge`, `merge | keep`). This is a
 separate spec from M2's unchanged `MEMORY_MERGE_SPEC` (`same | update | distinct`),
 as ruled by the coordinator for M3.
@@ -2748,31 +2753,54 @@ The policy requires calibration and falls back to `keep`. Static cuts carry no
 method override: a Jev read needs fitted cuts for this **new** key. Uncalibrated,
 refused, abstained or failed reads never merge. Each cluster has a 10-second
 budget across tier validation, decision, summary and embedding. A late result
-has no write continuation. The host's required `assertTier` runs before any
+has no write continuation. This timeout only stops waiting: the current seams
+have no abort signal, so late decision/summary/embedding calls can continue after
+the pass or switch-off. Their late call records are not attached to the context;
+transport-level usage observers, if supplied by the host, remain independent.
+Inference runs outside every owner-locked transaction against the committed
+snapshot. The switch is re-read before EVERY cluster, including after a `keep`,
+and off stops further clusters. The host's required `assertTier` runs before any
 inference, inside the partition's own run-frame tier; unavailable partitions
-are kept. A nested call amends the frame; a sweep outside a turn opens one.
+are kept. The app wiring slice MUST positively allow only `anthropic` and
+`verda` before delegating to `assertInferenceTier`; passing that function bare
+is insufficient because it does not reject unknown strings. Core treats tiers
+as opaque and relies on this injected host contract. A nested call amends the frame; a sweep outside a turn opens one.
 This seam is exclusively personal memory: organisational-graph targets never
 enter it and still require the existing confirmation path.
 
-After acceptance and a fresh document embedding, insert the merged row with
+After acceptance and a fresh document embedding, a short transaction locks,
+rechecks the switch and re-lists rows. Every member must still be unchanged
+(id, content, evidence, evidenceEventId, lastSeenAt, compactedFrom, source set,
+and the remaining row fields); otherwise keep the cluster. Source ordering is
+irrelevant. Then insert the merged row with
 its evidence id, move **all** sources (including stale contributors), then
 delete members in that same transaction. Source-move/deletion counts must
 match. `compactedFrom` sums the members' counts; creation takes the oldest
 date and last-seen takes the newest, so compaction cannot renew retention.
-A write failure rolls back the entire pass. The already-durable original user
+A write failure rolls back only that merge; earlier expiry and merges stay committed.
+Each merge publishes its events after its own commit, before the next cluster. The already-durable original user
 event remains the evidence event; M3 introduces no outbox or event-storage seam
 (coordinator ruling Q2). The switch is checked again after inference, before
 writing. Context events cross only after commit: metadata-only decisions and
 `memory_written` with action `inserted` for the new row. Call records retain
 usage/identity only, with all prompt/output text redacted. Persist the context
 after awaiting the pass, as for settle; the existing host-save/reconciliation
-obligations still apply.
+obligations still apply. Expiry/eviction ids and absorbed-member ids/counts
+are deliberately not context events in M3; aggregate expiry/eviction/merge
+counts live in the returned report only. The new row's `memory_written` action
+remains `inserted`. Hosts needing a durable maintenance audit must persist the
+report separately; context alone cannot reconstruct deletions.
 
+A final short transaction locks, rechecks the switch and re-counts fresh rows.
 At or above the hard threshold, deterministic eviction removes only the oldest
 episodic rows (last-seen/id order), stopping below the threshold. Other kinds
-are never evicted silently. If the remaining rows still fill it, the report
+are never evicted silently. This capacity eviction still removes episodes when
+`retention.episodic` is `null`: persistence exempts expiry, not D4 capacity.
+If the remaining rows still fill it, the report
 sets `full` and logs `full`. Settle now checks capacity before an **insertion**,
-under its candidate transaction, and returns `full` when there is no room.
+under its candidate transaction, and refuses only that insertion when there is
+no room. It continues later candidates, reports `skipped: full` and
+`compactionDue: true`, even if a later reinforce/update succeeds.
 Existing reinforcements and updates can proceed because they add no row.
 The optional `MemoryWriteTx.evictOldestEpisodes(n)` lets a host reclaim space
 in that same transaction; an absent/ineffective capability refuses growth,
@@ -2782,8 +2810,8 @@ is changed to supply the capability in this slice.
 `sweepMemories(jobs)` consumes host-supplied, owner-bound `MemorySweepJob`s
 (context, config, persist). It runs maintenance and then persists each context;
 a job failure is logged without content and does not stop the next owner.
-`startMemorySweep(jobsSupplier)` schedules this daily with a self-unref'ing
-timer, returning a stop function. It never runs on import, never overlaps
+`startMemorySweep(jobsSupplier)` schedules an immediate startup sweep (zero-delay
+timer), then daily with a self-unref'ing timer, returning a stop function. It never runs on import, never overlaps
 sweeps, and reschedules after completion. The host supplies the owner directory
 and starts it once; M3 installs no app timer. Daily expiry runs for enabled
 owners below `T_soft` too, while over-threshold owners retry compaction.
@@ -2791,13 +2819,17 @@ owners below `T_soft` too, while over-threshold owners retry compaction.
 `MemoryCompactFn` is the injected summarizer seam. It matches the landed M9
 adapter: `{ kind, members: [{ content, evidence, last_seen }] }`, oldest first,
 returning `{ value: { content, evidence }, call? }`. Member text is untrusted
-data; the host must isolate it from instructions and use company-run inference.
+data; the host must isolate it from instructions and use tier-routed inference,
+company-run only on the private tier (the Anthropic tier uses DescribeAnthropic).
 Core contains no transport or provider fallback.
 
 `clusterMemories` is pure, exact greedy single-link clustering (default cosine
 threshold 0.85, **unmeasured**). Bridge members join all linked clusters. Tier,
 kind and embedding space each partition the corpus; malformed/zero vectors
 remain singletons. Stable last-seen/id order makes input order irrelevant.
+`maxClusterSize` defaults to 8 (**unmeasured**); oversize clusters stay whole
+and unmerged (fail closed), with no decision call and no splitting. This bounds
+destructive compression; acceptance does not prove semantic fact preservation.
 
 `acceptCompaction` reuses M2's length, identifier-closure and zero-sanitizer
 checks against the members' content and evidence. The kind cannot change, and

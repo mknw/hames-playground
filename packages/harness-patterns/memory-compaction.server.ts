@@ -55,6 +55,8 @@ export interface MemoryCompactionSettings {
   readonly clusterSimilarity?: number
   /** Bounds the decision, summary and embedding together, per cluster. Default 10s. */
   readonly timeoutMs?: number
+  /** Unmeasured default 8; larger clusters are kept, never split. */
+  readonly maxClusterSize?: number
 }
 
 export interface MemoryCompactionConfig {
@@ -74,6 +76,7 @@ export interface MemoryCompactionConfig {
 
 export interface MemoryCompactionReport {
   readonly expired: number
+  readonly unverifiable: number
   readonly merged: number
   readonly kept: number
   readonly evicted: number
@@ -87,20 +90,23 @@ function limits(cfg: MemoryCompactionSettings = {}) {
     target = cfg.target ?? Math.floor(soft * 0.8),
     hard = cfg.hardLimit ?? 400
   const timeout = cfg.timeoutMs ?? 10_000
+  const maxClusterSize = cfg.maxClusterSize ?? 8
   if (
     ![soft, target, hard].every((n) => Number.isSafeInteger(n) && n > 0) ||
-    target >= soft ||
+    target > soft ||
     hard < soft ||
     !Number.isFinite(timeout) ||
-    timeout <= 0
+    timeout <= 0 ||
+    !Number.isSafeInteger(maxClusterSize) ||
+    maxClusterSize < 2
   )
     throw new TypeError('invalid memory compaction limits')
   // Validate even an empty corpus.
   clusterMemories([], cfg.clusterSimilarity)
-  return { soft, target, hard, timeout }
+  return { soft, target, hard, timeout, maxClusterSize }
 }
 
-const warning = () => console.warn('[memory-compaction] maintenance failed; unverifiable rows kept')
+const warning = (kind = 'maintenance-error') => console.warn('[memory-compaction]', kind)
 
 /** Timeout has no write continuation: even a late result can only resolve data. */
 async function bounded<T>(fn: () => Promise<T>, ms: number): Promise<T | undefined> {
@@ -148,15 +154,27 @@ async function remove(tx: MemoryCompactionTx, rows: readonly MemoryCompactionRow
     throw new Error('memory deletion count mismatch')
 }
 
-/** NEVER throws into the host's post-reply continuation. Each transaction reads
- *  fresh inputs and the user's committed switch under the owner advisory lock.
- *  Failed inference keeps the members; a failed write rolls the WHOLE pass back. */
+/** Compare the committed member and its source SET, independent of source order. */
+function unchanged(a: MemoryCompactionRow, b: MemoryCompactionRow): boolean {
+  const snapshot = (m: MemoryCompactionRow) =>
+    JSON.stringify({
+      ...m,
+      sources: m.sources
+        .map((s) => JSON.stringify([s.memoryId, s.eventId, s.ordinal, s.conversationId]))
+        .sort(),
+    })
+  return snapshot(a) === snapshot(b)
+}
+
+/** Inference never holds an owner lock. Expiry, each merge and final eviction
+ *  commit independently; a failed merge cannot undo earlier committed work. */
 export async function compactMemory(
   ctx: UnifiedContext,
   cfg: MemoryCompactionConfig,
 ): Promise<MemoryCompactionReport> {
-  const empty: MemoryCompactionReport = {
+  const report = {
     expired: 0,
+    unverifiable: 0,
     merged: 0,
     kept: 0,
     evicted: 0,
@@ -164,54 +182,78 @@ export async function compactMemory(
     full: false,
   }
   try {
-    if (!cfg.owner()) return { ...empty, skipped: 'no-user' }
-    if (!(await cfg.enabled())) return { ...empty, skipped: 'disabled' }
+    if (!cfg.owner()) return { ...report, skipped: 'no-user' }
+    if (!(await cfg.enabled())) return { ...report, skipped: 'disabled' }
     const l = limits(cfg.settings)
     memoryRetention(cfg.retention)
     const now = cfg.now?.() ?? Date.now()
     if (!Number.isFinite(now)) throw new TypeError('invalid memory clock')
-    const committed = await cfg.store.transaction(async (tx) => {
-      if (!(await cfg.enabled()))
-        return { report: { ...empty, skipped: 'disabled' as const }, events: [] }
-      let rows = [...(await tx.list())]
-      if (!verifiable(rows)) throw new Error('unverifiable memory snapshot')
-      const events: ContextEvent[] = []
+    const snapshot = await cfg.store.transaction(async (tx) => {
+      if (!(await cfg.enabled())) return undefined
+      const rows = [...(await tx.list())]
       const expired = expiredMemories(rows, now, cfg.retention)
+      const verified = rows.filter(
+        (m) => verifiable([m]) && rows.filter((r) => r.id === m.id).length === 1,
+      )
       await remove(tx, expired)
-      const expiredIds = new Set(expired.map((m) => m.id))
-      rows = rows.filter((m) => !expiredIds.has(m.id))
-      let merged = 0,
-        kept = 0
-      if (rows.length >= l.soft) {
-        for (const members of clusterMemories(rows, cfg.settings?.clusterSimilarity)) {
-          if (rows.length <= l.target) break
-          if (members.length < 2 || members[0].embedSpace !== cfg.embed.spaceId) continue
-          const tier = members[0].tier
-          let result: Awaited<ReturnType<typeof prepare>> | undefined
-          try {
-            result = await withRunFrame({}, () =>
-              amendRunFrame({ inference: { tier }, live: () => {} }, () =>
-                bounded(async () => {
-                  await cfg.assertTier(tier)
-                  return prepare(cfg, members)
-                }, l.timeout),
-              ),
-            )
-          } catch {
-            warning()
-            result = undefined
-          }
-          if (!result) {
-            kept++
-            continue
-          }
-          events.push(...result.events)
-          if (!result.candidate) {
-            kept++
-            continue
-          }
-          // Switch-off may commit during inference; rollback even earlier merges.
+      const ids = new Set(expired.map((m) => m.id))
+      return {
+        rows: rows.filter((m) => !ids.has(m.id)),
+        verified: verified.filter((m) => !ids.has(m.id)),
+        expired: expired.length,
+      }
+    })
+    if (!snapshot) return { ...report, skipped: 'disabled' }
+    report.expired = snapshot.expired
+    report.remaining = snapshot.rows.length
+    const verified = snapshot.verified
+    report.unverifiable = snapshot.rows.length - verified.length
+    report.kept = report.unverifiable
+    if (report.unverifiable) warning('unverifiable-provenance')
+    if (snapshot.rows.length >= l.soft) {
+      for (const members of clusterMemories(verified, cfg.settings?.clusterSimilarity)) {
+        if (report.remaining <= l.target) break
+        if (members.length < 2 || members[0].embedSpace !== cfg.embed.spaceId) continue
+        if (members.length > l.maxClusterSize) {
+          report.kept++
+          continue
+        }
+        // Including KEEP: no later cluster may send text after switch-off.
+        if (!(await cfg.enabled())) return { ...report, skipped: 'disabled' }
+        const tier = members[0].tier
+        let result: Awaited<ReturnType<typeof prepare>> | undefined
+        try {
+          result = await withRunFrame({}, () =>
+            amendRunFrame({ inference: { tier }, live: () => {} }, () =>
+              bounded(async () => {
+                await cfg.assertTier(tier)
+                return prepare(cfg, members)
+              }, l.timeout),
+            ),
+          )
+        } catch {
+          warning('inference-error')
+        }
+        if (!result) {
+          report.kept++
+          continue
+        }
+        if (!result.candidate) {
+          ctx.events.push(...result.events)
+          report.kept++
+          continue
+        }
+        const candidate = result.candidate
+        const committed = await cfg.store.transaction(async (tx) => {
           if (!(await cfg.enabled())) throw new Error('memory disabled during compaction')
+          const fresh = [...(await tx.list())]
+          if (
+            !members.every((m) => {
+              const matches = fresh.filter((r) => r.id === m.id)
+              return matches.length === 1 && unchanged(m, matches[0])
+            })
+          )
+            return undefined
           const latest = members[members.length - 1]
           const id = generateId('mem')
           const compactedFrom = members.reduce((n, m) => n + m.compactedFrom, 0)
@@ -220,10 +262,10 @@ export async function compactMemory(
             id,
             kind: latest.kind,
             tier,
-            content: result.candidate.content,
+            content: candidate.content,
             evidence: latest.evidence,
             evidenceEventId: latest.evidenceEventId,
-            embedding: result.candidate.embedding,
+            embedding: candidate.embedding,
             embedSpace: cfg.embed.spaceId,
             compactedFrom,
             createdAt: Math.min(...members.map((m) => m.createdAt)),
@@ -242,8 +284,9 @@ export async function compactMemory(
             throw new Error('memory provenance move incomplete')
           await remove(tx, members)
           const removed = new Set(members.map((m) => m.id))
-          rows = [...rows.filter((m) => !removed.has(m.id)), row]
+          const remaining = fresh.length - removed.size + 1
           const src = latest.sources.find((s) => s.eventId === latest.evidenceEventId)!
+          const events: ContextEvent[] = [...result.events]
           events.push(
             createEvent(
               'memory_written',
@@ -256,14 +299,24 @@ export async function compactMemory(
                 ordinal: src.ordinal,
                 action: 'inserted',
               },
-              redactCall(result.candidate.call),
+              redactCall(candidate.call),
             ),
           )
-          merged++
+
+          return { events, remaining }
+        })
+        if (!committed) {
+          report.kept++
+          continue
         }
+        ctx.events.push(...committed.events)
+        report.merged++
+        report.remaining = committed.remaining
       }
-      // Deterministic D4 eviction is independent of an uncertain merge. Only
-      // episodes may be evicted, oldest sighting first, until below T_hard.
+    }
+    const final = await cfg.store.transaction(async (tx) => {
+      if (!(await cfg.enabled())) return undefined
+      const rows = [...(await tx.list())]
       const evicted =
         rows.length >= l.hard
           ? rows
@@ -272,20 +325,16 @@ export async function compactMemory(
               .slice(0, rows.length - l.hard + 1)
           : []
       await remove(tx, evicted)
-      const remaining = rows.length - evicted.length
-      const full = remaining >= l.hard
-      if (full) console.warn('[memory-compaction] full')
-      return {
-        report: { expired: expired.length, merged, kept, evicted: evicted.length, remaining, full },
-        events,
-      }
+      return { evicted: evicted.length, remaining: rows.length - evicted.length }
     })
-    // Events cross the commit boundary only after the durable rows did.
-    ctx.events.push(...committed.events)
-    return committed.report
+    if (!final) return { ...report, skipped: 'disabled' }
+    Object.assign(report, final)
+    report.full = report.remaining >= l.hard
+    if (report.full) warning('full')
+    return report
   } catch {
     warning()
-    return { ...empty, skipped: 'error' }
+    return { ...report, skipped: 'error' }
   }
 }
 
@@ -354,7 +403,7 @@ export async function sweepMemories(jobs: AsyncIterable<MemorySweepJob>): Promis
 export function startMemorySweep(jobs: () => AsyncIterable<MemorySweepJob>): () => void {
   let stopped = false
   let timer: ReturnType<typeof setTimeout>
-  const schedule = () => {
+  const schedule = (delay = 86_400_000) => {
     timer = setTimeout(async () => {
       try {
         await sweepMemories(jobs())
@@ -362,10 +411,10 @@ export function startMemorySweep(jobs: () => AsyncIterable<MemorySweepJob>): () 
         warning()
       }
       if (!stopped) schedule()
-    }, 86_400_000)
+    }, delay)
     timer.unref?.()
   }
-  schedule()
+  schedule(0)
   return () => {
     stopped = true
     clearTimeout(timer)

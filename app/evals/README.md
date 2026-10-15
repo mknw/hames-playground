@@ -190,12 +190,6 @@ structural checks first). Two rules:
   a green cell that asserts nothing is worse than a red one — it manufactures a
   coverage number.
 
-`decision-calibration` (#418 T8) measures decide per client × key with disjoint
-fit/holdout splits. Jev takes cuts only (G7). Use `EVAL_ONLY=decision-calibration`
-and `EVAL_ROLES=decide`; the exact commands, diagnostic defaults and reviewed
-artifact feed are in [the owner runbook](../../docs/testing/decision-calibration.md).
-No live measurement was made while building T8.
-
 The `418-t8-v2` corpus adds eval-only `eval.noul` (human reply requested) and
 `eval.score` (three-level reply urgency). These are neutral synthetic examples,
 not production gates. Rubric gold is noisier than choice gold: the report keeps

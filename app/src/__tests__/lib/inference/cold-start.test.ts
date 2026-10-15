@@ -84,6 +84,7 @@ beforeEach(() => {
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
   // The private tier's second endpoint (the 4B summarizer `describe` runs on).
   // Needed only so a 'verda' frame is allowed to open at all.
+  process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
   process.env.SMALL_LLM_BASE_URL = 'https://e2e.invalid/small/v1'
 })
 
@@ -92,6 +93,7 @@ afterEach(() => {
   resetVerdaActivity()
   delete process.env.VERDA_INFERENCE_ENDPOINT
   delete process.env.VERDA_INFERENCE_API_KEY
+  delete process.env.SMALL_LLM_DECISIONS_URL
   delete process.env.SMALL_LLM_BASE_URL
   delete process.env.USE_VERDA_INFERENCE
   delete process.env.VERDA_SCALEDOWN_SECONDS

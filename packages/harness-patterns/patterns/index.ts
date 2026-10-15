@@ -63,9 +63,7 @@ export {
 // EventView
 export { EventViewImpl, createEventView } from './event-view.server'
 
-// Decisions (#418) — the policy layer: the pure scoring half (T1), the awaited
-// wrapper (`evaluateDecision` / `decide` / `decideFields`) and the
-// `typedDecision` / `decisionRouter` patterns (T2).
+// Typed systemone decisions and recording.
 export {
   evaluateDecision,
   decide,
@@ -76,10 +74,6 @@ export {
   defineNoul,
   defineDecisionSet,
   readDecision,
-  scoreScoreDecision,
-  scoreNoulDecision,
-  type ScoreScoring,
-  type NoulScoring,
   typedDecision,
   decisionRouter,
   DECISION_ROUTER_KEY,
@@ -90,16 +84,6 @@ export {
   type TypedDecisionConfig,
   type TypedDecisionData,
   type DecisionRouterConfig,
-  sumLabelMass,
-  calibrateLabelMass,
-  normalizeLabelMass,
-  preCallAbstain,
-  resolveDecisionCuts,
-  scoreDecision,
-  type TopLogprob,
-  type ResolvedCut,
-  type DecisionScoring,
-  type ScoredDecision,
 } from './typedDecision.server'
 
 // Re-export config types from main types

@@ -741,8 +741,7 @@ export const DOCUMENT_CLASSIFIER_POLICY: DocumentClassifierPolicy = Object.freez
 /**
  * Build tier 1 from the decision seam. Abstains — and so answers
  * `suspicious` — when the call throws, the distribution is malformed, the
- * readout is not calibrated for this question (the Anthropic tier's
- * verbalized fallback never is, #418 path c), or confidence is under the bar.
+ * readout is not calibrated for this question, or confidence is under the bar.
  */
 export function classifierFromDecide(
   decide: DocumentDecideFn,

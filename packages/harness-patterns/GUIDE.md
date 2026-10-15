@@ -99,191 +99,47 @@ the whole loop a host writes.
 
 ### Deciding with probabilities
 
-`typedDecision` asks ONE closed question and returns a probability for every
-permitted label, with `margin`, `confidence` and an explicit abstain. It writes
-no text. Hand it the raw decision seam (`bamlPatterns().decide`) and a policy;
-`fallback` is required, because the verdict is what a consumer acts on and a
-failed decision must still have one:
+`typedDecision` asks a typed systemone question and records the endpoint's
+probabilities untouched. Use `choice` for unordered options, `score` for ordered
+levels and `noul` for whether a statement holds. Include “none of these” as a
+choice option when it is a valid answer.
 
 ```typescript
-import { typedDecision } from '@hames-ai/harness-patterns'
+import { defineChoice, typedDecision } from '@hames-ai/harness-patterns'
 import type { DecideFn } from '@hames-ai/harness-patterns'
 
-declare const baml: { decide: DecideFn } // bamlPatterns() in a real host
-
-typedDecision({
-  decide: baml.decide,
-  spec: {
-    key: 'memory.recall',
-    question: 'Does answering the latest message need anything remembered about this user?',
-    labels: [
-      { id: 'skip', description: 'no — this conversation is enough' },
-      { id: 'recall', description: 'yes — it depends on something from before' },
-    ],
-  },
-  policy: { fallback: 'skip', minConfidence: 0.6 },
-})
-// → scope.data.decisions['memory.recall'].label — act on THIS, never on `top`
-```
-
-Inference failures abstain and always overwrite the key. An invalid fallback or unsupported transport type throws at pattern construction. Outside a
-pattern, `decide(scope, call)` is the same decision recorded on a scope you
-hold, `evaluateDecision(call)` is it with no scope at all, and
-`decideFields(scope, { decide, set, state, policy })` answers several typed
-fields over one state, one `decision_made` per field.
-
-The declarations `defineChoice`, `defineScore` and `defineNoul` infer ids from
-literal options. They make no call; choice and score constructors check the
-option count and unique ids. Score levels run low → high and must number 2–10,
-matching [TypeSafe's score definition](https://docs.typesafe.ai/primitives/score).
-A noul is the probability that one statement is true.
-
-| You want to know…                                                     | Type     | Verdict to act on                |
-| --------------------------------------------------------------------- | -------- | -------------------------------- |
-| whether one condition holds (one per condition when several may hold) | `noul`   | `d.holds`                        |
-| which one of several unordered options applies                        | `choice` | `d.label`                        |
-| how much of one ordered quality is present                            | `score`  | `d.level` or its index `d.value` |
-
-A yes/no written as a two-label choice still works; noul is the idiom and is a
-different Jev question type. A degree written as a choice loses its ordering:
-choice confidence treats adjacent and distant alternatives alike. Two dimensions
-in one score cannot be placed on one scale; split them. These distinctions follow
-[TypeSafe's primitive guidance](https://docs.typesafe.ai/introduction/coding-agents)
-and its [published skill](https://raw.githubusercontent.com/typesafe-ai/skills/main/skills/typesafe-ai/SKILL.md),
-read as documentation, not installed.
-
-```typescript
-import { defineScore, defineNoul, readDecision } from '@hames-ai/harness-patterns'
-import type { TypedDecisionData } from '@hames-ai/harness-patterns'
-
-const URGENCY = defineScore({
-  key: 'ticket.urgency',
-  question: 'How urgently does this message need a reply?',
-  levels: [
-    { id: 'can_wait', description: 'Nothing is blocked; a reply next week is fine.' },
-    { id: 'soon', description: 'Someone is waiting, but their work continues.' },
-    { id: 'now', description: 'Work is blocked until someone replies.' },
-  ],
-})
-const WANTS_HUMAN = defineNoul({
-  key: 'support.wants_human',
-  question: 'The user is asking to talk to a person.',
-})
-declare const data: TypedDecisionData
-const urgency = readDecision(data, URGENCY) // level: 'can_wait' | 'soon' | 'now'
-const wantsHuman = readDecision(data, WANTS_HUMAN) // holds: boolean
-```
-
-Score `expected` and noul `pTrue` are raw readouts, preserved when policy
-abstains. Act on the verdict; a consumer that thresholds the raw mean must also
-check `!abstained`. Score's verdict is the mode, with ties broken low → high,
-not a rounded mean: a bimodal distribution can average to a level it never
-supports. Confidence measures concentration, not permission to act, as
-[TypeSafe explains](https://docs.typesafe.ai/confidence).
-
-The app's T8 calibration run measures each type on synthetic fit/holdout splits.
-Score fits RPS and uses a confidence cut at within-one accuracy ≥95%, with exact
-accuracy beside it; noul fits log loss and uses a confidence band. Choice keeps
-its Brier/confidence/margin fitting. Reliability is cumulative ECE for score,
-binary P(true) ECE for noul, and top-label ECE for choice, reported in separate
-pools. Noul option-order agreement is N/A. These owner-tunable cut defaults
-remain diagnostics until the owner live run; the committed artifact is
-unmeasured. A key changing type requires a contract revision bump and refit.
-The [runbook](../../docs/testing/decision-calibration.md) includes the owner's
-TypeSafe and local 4B commands and artifact validation rules.
-
-In the app's observability timeline, the preview chip identifies the decision
-as choice, score or noul (old events default to choice). Score details show
-ordered probability bars and the raw mean on a level-index scale; noul details
-show P(true) and the declared symmetric abstain band. These readouts survive a
-fallback verdict. Missing or nonfinite readouts stay visibly unknown without
-a numeric meter. A noul band requires a finite declared confidence in `[0,1]`;
-other declared values are marked invalid and retained in metadata. Fitted cuts
-may differ from the declared cut shown in the detail view.
-
-In this release you can declare score and noul specs, score a distribution with them and read the verdict back. On the raw seam all three transports, the local logprob readout, the verbalized secondary and TypeSafe (Jev, the Anthropic tier's default), answer all three types. `decide.supportedTypes` lists what the transport that would serve the call accepts, read at the moment you ask, and a type it does not list is never sent. Score levels are presented as A, B, … from lowest to highest; a noul is presented as A = true, B = false. Logprob calibration is fitted per letter; verbalized probabilities are never calibrated.
-
-`typedDecision`, `decide` and `evaluateDecision` accept all three spec types;
-the return type follows the declared spec. `typedDecision` refuses an unsupported
-type at construction. The in-scope and scope-free entries instead abstain
-`unsupported-type` with zero calls. A transport without `supportedTypes` remains
-choice-only.
-Invalid fallback configuration throws before any inference: choice needs a label
-id, score needs a level id, and noul needs a boolean (`false` is valid). Transport
-failures still return an abstained verdict.
-
-`defineDecisionSet` infers a mixed spec map. Each field has its own policy, verdict
-and `decision_made` event. `DecisionSetSpec<F>` and explicit choice-label generics
-remain supported. With `mode: 'joint'`, core counts the product of choice labels,
-score levels and the noul's two values, refuses products above 20, makes one choice
-call, and marginalises before each field's policy. Jev still serves independent
-field questions. A one-call `decideAll` declares its own `supportedTypes`.
-
-```typescript
-import {
-  defineChoice,
-  defineScore,
-  defineNoul,
-  defineDecisionSet,
-  decideFields,
-} from '@hames-ai/harness-patterns'
-import type { DecideFn, DecideAllFn, PatternScope } from '@hames-ai/harness-patterns'
-
-declare const scope: PatternScope<unknown>
-declare const decide: DecideFn // host transport declaring all three supportedTypes
-declare const decideAll: DecideAllFn // optional one-call transport with the same support
-const severity = defineScore({
-  key: 'severity',
-  question: 'How severe is the problem?',
-  levels: [
-    { id: 'minor', description: 'Work continues normally.' },
-    { id: 'blocking', description: 'Work cannot continue.' },
-  ],
-})
-const blocked = defineNoul({ key: 'blocked', question: 'Work cannot continue.' })
+declare const decide: DecideFn // createDecideAdapter() in a host
 const route = defineChoice({
   key: 'route',
-  question: 'Which route?',
+  question: 'Which route answers this message?',
   labels: [
     { id: 'chat', description: 'Answer directly.' },
     { id: 'search', description: 'Search for evidence.' },
   ],
 })
-const set = defineDecisionSet({ key: 'triage', fields: { severity, blocked, route } })
-const d = await decideFields(scope, {
-  decide,
-  decideAll,
-  set,
-  state: 'A synthetic report.',
-  policy: {
-    severity: { fallback: 'blocking' },
-    blocked: { fallback: false },
-    route: { fallback: 'chat' },
-  },
-})
-d.severity.level // 'minor' | 'blocking'
-d.blocked.holds // boolean
-d.route.label // 'chat' | 'search'
+typedDecision({ decide, spec: route })
 ```
 
-Jev sends scores as ordered rubric descriptions and maps its numeric level
-indices back to your level ids. It validates the complete distribution and
-cross-checks the reported mean; malformed answers fail closed. A noul returns
-P(true), without a separate confidence field: Jev's raw result still marks it
-calibrated, so a `requireCalibrated` gate can pass. This is a provider claim,
-not a measurement on your questions; fit and validate cuts before deploying
-an action gate. See [score](https://docs.typesafe.ai/primitives/score) and
-[noul](https://docs.typesafe.ai/primitives/noul). The private tier never builds
-or sends a Jev question, even when a client override names Jev.
+`readDecision(data, spec)` reads a typed result by key. Choice exposes `label`,
+score exposes `level`, `value` and `expected`, and noul exposes `holds` and
+`pTrue`. Handle a failed result before acting on its verdict.
 
-`decisionRouter` is `router()`'s sibling built on it: the routes are the
-labels, the verdict becomes `data.route`, and `policy.fallback` names the route
-taken when the decision abstains. Put `compactIntent` in front (it writes the
-intent the router no longer does) and pass `preserveIntent: true`, or the
-router clears that intent; give conversational turns an ordinary route
-key (`conversationalRoute`) that `routes()` dispatches to a pass-through, and
-run it with `shadow: true` beside your existing `router()` to measure agreement
-before swapping. See SPEC's [Decisions](SPEC.md#decisions-typeddecision-418).
+Outside a pattern, `evaluateDecision` evaluates without a scope, `decide`
+records on a scope, and `decideFields` answers the fields of a
+`defineDecisionSet`, recording one `decision_made` per field. Pass
+`createDecideAllAdapter(decide)` for a set in one request.
+
+`decisionRouter` writes the selected route to `data.route`. Put `compactIntent`
+in front and pass `preserveIntent: true` when routing needs that intent.
+`conversationalRoute` is an ordinary route key; `shadow: true` records a decision
+without changing the route. Request failures follow the pattern's error severity.
+
+The Anthropic tier records `JevDecide` and uses `JEV_DECISIONS_URL` plus
+`JEV_DECISIONS_API_KEY`. The private tier records `PrivateSystemOne` and uses
+`SMALL_LLM_DECISIONS_URL` (the full URL ending in `/v1/systemone`) plus
+`SMALL_LLM_API_KEY`. An unset private URL refuses the call; there is no public
+fallback. The private client is time-priced at `SMALL_LLM_EUR_PER_HOUR`.
+See SPEC's [Decisions](SPEC.md#decisions-typeddecision-418).
 
 ### Recalling what the user told us
 
@@ -321,7 +177,7 @@ from user text or previous replies in ordinary conversation history, or constrai
 custom patterns that explicitly read the memory data bag. Option (b), direct
 answers with memory but no copying into intent or route, is deferred (#544).
 
-Gate the post-reply call on `harnessUsesMemory(patterns)`, the same probe that gates the memory wake, so an agent that did not opt in stores nothing. **Await `settleMemory`, then save the context**: the `memory_written` events it records ride that one save. It never throws and it fails closed: an abstained, uncalibrated or sensitive read, a confirmation your host cannot yet ask, an organisational-graph target or a failed wake all store nothing and say why. Recall never throws either and never stops what follows it; its block is cleared on every turn. Your `MemoryWriteStore.transaction(fn)` must open one transaction, take the owner's advisory lock inside it, and **roll back and rethrow if `fn` throws**: that rollback is what makes a retry a no-op. See SPEC's [Memory recall](SPEC.md#memory-recall-memoryrecall-419) and [Memory store](SPEC.md#memory-store-settlememory-419).
+Gate the post-reply call on `harnessUsesMemory(patterns)`, the same probe that gates the memory wake, so an agent that did not opt in stores nothing. **Await `settleMemory`, then save the context**: the `memory_written` events it records ride that one save. It never throws and it fails closed: a failed or sensitive read, a confirmation your host cannot yet ask, an organisational-graph target or a failed wake all store nothing and say why. Recall never throws either and never stops what follows it; its block is cleared on every turn. Your `MemoryWriteStore.transaction(fn)` must open one transaction, take the owner's advisory lock inside it, and **roll back and rethrow if `fn` throws**: that rollback is what makes a retry a no-op. See SPEC's [Memory recall](SPEC.md#memory-recall-memoryrecall-419) and [Memory store](SPEC.md#memory-store-settlememory-419).
 
 ### Asking a human
 

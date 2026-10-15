@@ -1,5 +1,4 @@
-/** #418 T7: real decisions, turn runner, SSE and persistence. Test-only agents
- * opt in through the existing in-process registry; production waits for T9/T10. */
+/** Systemone decisions through the turn runner, SSE and persistence. */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import type {
   ConfiguredPattern,
@@ -10,14 +9,13 @@ import type {
 import type { SessionData } from '../../src/lib/harness-client/session.server'
 import { bootApp, eventsOfType, newSessionId, type AppHandles } from '../lib/app'
 import { FAKE_ANSWER_MARK } from '../lib/fake-llm'
-import { FAKE_ANTHROPIC_TIER_MODEL, IS_HERMETIC, SMALL_MODEL, TIERS } from '../lib/mode'
+import { IS_HERMETIC, TIERS } from '../lib/mode'
 
 type DecisionData = SessionData &
   import('@hames-ai/harness-patterns/patterns/typedDecision.server').TypedDecisionData
 
 let app: AppHandles
 let adapters: typeof import('@hames-ai/harness-baml/baml-adapters.server')
-let clients: typeof import('@hames-ai/harness-baml/clients.server')
 let patterns: typeof import('@hames-ai/harness-patterns/patterns/typedDecision.server')
 let registerAgent: typeof import('../../src/lib/harness-client/registry.server').registerAgent
 let answer: () => ConfiguredPattern<SessionData>
@@ -47,13 +45,6 @@ const NOUL = {
 } as const
 const STATE = 'E2E-DECISION-STATE-SENTINEL'
 const JEV_MODEL = 'typesafe/jev-1.13'
-function policy(tier: string) {
-  return {
-    fallback: 'skip',
-    minConfidence: 0.4,
-    thresholdMethod: tier === 'verda' ? ('logprob' as const) : ('jev' as const),
-  }
-}
 function register(id: string, createPatterns: () => Promise<ConfiguredPattern<SessionData>[]>) {
   registerAgent({
     id,
@@ -75,7 +66,6 @@ async function decisions(sessionId: string) {
 beforeAll(async () => {
   app = await bootApp()
   adapters = await import('@hames-ai/harness-baml/baml-adapters.server')
-  clients = await import('@hames-ai/harness-baml/clients.server')
   patterns = await import('@hames-ai/harness-patterns/patterns/typedDecision.server')
   ;({ registerAgent } = await import('../../src/lib/harness-client/registry.server'))
   const { compactExecution } =
@@ -87,12 +77,8 @@ beforeAll(async () => {
 })
 beforeEach(() => {
   app.fakeLlm.reset()
-  clients.configureDecideSecondary(undefined)
-  clients.configureDecisionCalibration({})
 })
 afterAll(async () => {
-  clients.configureDecideSecondary(undefined)
-  clients.configureDecisionCalibration({})
   await app.wipe()
 })
 describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
@@ -106,7 +92,6 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
         patterns.typedDecision<DecisionData, string>({
           decide: adapters.createDecideAdapter(),
           spec: SPEC,
-          policy: policy(tier),
         }),
         answer(),
       ])
@@ -130,48 +115,33 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
         key: SPEC.key,
         label: 'take',
         abstained: false,
-        method: tier === 'verda' ? 'logprob' : 'jev',
-        calibrated: tier !== 'verda',
+        method: 'jev',
       })
       expect((event.data as DecisionMadeEventData).probs.take).toBeCloseTo(0.9)
-      expect(event.llmCall?.clientName).toBe(
-        tier === 'verda' ? 'LocalQwenSmallDecide' : 'JevDecide',
-      )
+      expect(event.llmCall?.clientName).toBe(tier === 'verda' ? 'PrivateSystemOne' : 'JevDecide')
       expect((event.llmCall as LLMCallRecord)?.hitOutputCap).toBe(false)
       expect(event.llmCall?.variables).toMatchObject({ state: expect.stringContaining(STATE) })
       expect(JSON.stringify(event.data)).not.toContain(STATE)
       expect(eventsOfType(row.serializedContext, 'assistant_message').at(-1)?.content).toContain(
         FAKE_ANSWER_MARK,
       )
-      const calls = app.fakeLlm.calls.filter((c) => c.fn === 'Decide' || c.model === JEV_MODEL)
+      const calls = app.fakeLlm.calls.filter((c) => c.model === JEV_MODEL)
       expect(calls).toHaveLength(1)
       expect(calls[0]).toMatchObject({
-        model: tier === 'verda' ? SMALL_MODEL : JEV_MODEL,
+        model: JEV_MODEL,
         outcome: 'ok',
       })
     })
-    it('S4 streams and persists generic score/noul policy and actual clients', async () => {
-      // Identity fits are synthetic fixtures, not a production calibration claim.
-      if (tier === 'verda')
-        clients.configureDecisionCalibration({
-          LocalQwenSmallDecide: { [SCORE.key]: { temperature: 1 }, [NOUL.key]: { temperature: 1 } },
-        })
+    it('streams and persists score/noul probabilities and actual clients', async () => {
       const id = `e2e-score-noul-${tier}`
-      const cuts = {
-        minConfidence: 0.4,
-        requireCalibrated: true,
-        thresholdMethod: policy(tier).thresholdMethod,
-      }
       register(id, async () => [
         patterns.typedDecision<DecisionData, typeof SCORE>({
           decide: adapters.createDecideAdapter(),
           spec: SCORE,
-          policy: { ...cuts, fallback: 'blocked' },
         }),
         patterns.typedDecision<DecisionData, typeof NOUL>({
           decide: adapters.createDecideAdapter(),
           spec: NOUL,
-          policy: { ...cuts, fallback: false },
         }),
         answer(),
       ])
@@ -195,8 +165,6 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
         key: SCORE.key,
         label: 'minor',
         abstained: false,
-        calibrated: true,
-        policy: { ...cuts, fallback: 'blocked' },
       })
       expect((events[0].data as DecisionMadeEventData).expected).toBeCloseTo(0.15)
       expect(events[1].data).toMatchObject({
@@ -204,49 +172,37 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
         key: NOUL.key,
         label: 'true',
         abstained: false,
-        calibrated: true,
-        policy: { ...cuts, fallback: 'false' },
       })
       expect((events[1].data as DecisionMadeEventData).pTrue).toBeCloseTo(0.9)
       for (const event of events) {
-        expect(event.data).toMatchObject({ method: cuts.thresholdMethod })
-        expect(event.llmCall?.clientName).toBe(
-          tier === 'verda' ? 'LocalQwenSmallDecide' : 'JevDecide',
-        )
+        expect(event.llmCall?.clientName).toBe(tier === 'verda' ? 'PrivateSystemOne' : 'JevDecide')
         expect((event.llmCall as LLMCallRecord)?.hitOutputCap).toBe(false)
         expect(event.llmCall?.variables).toMatchObject({ state: expect.stringContaining(STATE) })
         expect(JSON.stringify(event.data)).not.toContain(STATE)
       }
-      const calls = app.fakeLlm.calls.filter((c) => c.fn === 'Decide' || c.model === JEV_MODEL)
+      const calls = app.fakeLlm.calls.filter((c) => c.model === JEV_MODEL)
       expect(calls).toHaveLength(2)
-      expect(calls.map((c) => c.model)).toEqual([
-        tier === 'verda' ? SMALL_MODEL : JEV_MODEL,
-        tier === 'verda' ? SMALL_MODEL : JEV_MODEL,
+      expect(calls.map((c) => c.model)).toEqual([JEV_MODEL, JEV_MODEL])
+      expect(calls.map((c) => Object.values(JSON.parse(c.prompt).questions)[0])).toEqual([
+        {
+          type: 'score',
+          instructions: SCORE.question,
+          criteria: SCORE.levels.map((l) => l.description),
+        },
+        { type: 'noul', instructions: NOUL.question, criteria: NOUL.criteria },
       ])
-      expect(app.fakeLlm.calls.filter((c) => c.fn === 'DecideVerbalized')).toHaveLength(0)
-      if (tier === 'anthropic') {
-        expect(calls.map((c) => Object.values(JSON.parse(c.prompt).questions)[0])).toEqual([
-          {
-            type: 'score',
-            instructions: SCORE.question,
-            criteria: SCORE.levels.map((l) => l.description),
-          },
-          { type: 'noul', instructions: NOUL.question, criteria: NOUL.criteria },
-        ])
-        expect(JSON.parse(events[1].llmCall!.rawOutput!).answers[NOUL.key]).toEqual({
-          type: 'noul',
-          noul: 0.9,
-        })
-      }
+      expect(JSON.parse(events[1].llmCall!.rawOutput!).answers[NOUL.key]).toEqual({
+        type: 'noul',
+        noul: 0.9,
+      })
     })
-    it('records four fields with shared state and one Jev request', async () => {
+    it('records four fields with shared state and one systemone request', async () => {
       const id = `e2e-fields-${tier}`
       register(id, async () => {
         const decide = adapters.createDecideAdapter()
         const step = patterns.typedDecision<DecisionData, string>({
           decide,
           spec: SPEC,
-          policy: policy(tier),
         })
         step.fn = async (scope) => {
           const fields = Object.fromEntries(
@@ -255,9 +211,8 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
           await patterns.decideFields(scope, {
             decide,
             decideAll: adapters.createDecideAllAdapter(decide),
-            set: { key: 'e2e.fields', mode: 'fields', fields },
+            set: { key: 'e2e.fields', fields },
             state: STATE,
-            policy: Object.fromEntries(Object.keys(fields).map((name) => [name, policy(tier)])),
           })
           return scope
         }
@@ -274,19 +229,11 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
         'e2e.four',
       ])
       expect(events.every((e) => !(e.data as DecisionMadeEventData).abstained)).toBe(true)
-      const calls = app.fakeLlm.calls.filter((c) => c.fn === 'Decide' || c.model === JEV_MODEL)
-      expect(calls).toHaveLength(tier === 'verda' ? 4 : 1)
-      if (tier === 'verda') {
-        const states = calls.map(
-          (c) => c.prompt.split('---BEGIN DATA---')[1].split('---END DATA---')[0],
-        )
-        expect(new Set(states).size).toBe(1)
-        expect(states[0]).toContain(STATE)
-      } else {
-        const body = JSON.parse(calls[0].prompt)
-        expect(body.state).toBe(STATE)
-        expect(Object.keys(body.questions)).toEqual(['one', 'two', 'three', 'four'])
-      }
+      const calls = app.fakeLlm.calls.filter((c) => c.model === JEV_MODEL)
+      expect(calls).toHaveLength(1)
+      const body = JSON.parse(calls[0].prompt)
+      expect(body.state).toBe(STATE)
+      expect(Object.keys(body.questions)).toEqual(['one', 'two', 'three', 'four'])
     })
   })
   it('keeps a gated post-reply decision on the private turn frame (D16)', async () => {
@@ -308,7 +255,6 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
             decide: adapters.createDecideAdapter(),
             spec: SPEC,
             state: STATE,
-            policy: policy('verda'),
           })
         })()
         return result
@@ -319,20 +265,19 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
     try {
       const result = await app.runTurn(newSessionId('post-reply'), STATE, 'e2e-post-reply')
       expect(result.response).toContain(FAKE_ANSWER_MARK)
-      expect(app.fakeLlm.calls.filter((c) => c.fn === 'Decide')).toHaveLength(0)
+      expect(app.fakeLlm.calls.filter((c) => c.model === JEV_MODEL)).toHaveLength(0)
       await app.setTier('anthropic')
       release()
       const evaluated = await trailing
       expect(evaluated.decision).toMatchObject({
         label: 'take',
         abstained: false,
-        method: 'logprob',
+        method: 'jev',
       })
-      expect(evaluated.llmCall?.clientName).toBe('LocalQwenSmallDecide')
-      expect(app.fakeLlm.calls.filter((c) => c.fn === 'Decide').map((c) => c.model)).toEqual([
-        SMALL_MODEL,
+      expect(evaluated.llmCall?.clientName).toBe('PrivateSystemOne')
+      expect(app.fakeLlm.calls.filter((c) => c.model === JEV_MODEL).map((c) => c.model)).toEqual([
+        JEV_MODEL,
       ])
-      expect(app.fakeLlm.calls.filter((c) => c.model === JEV_MODEL)).toEqual([])
     } finally {
       release()
       await trailing
@@ -342,7 +287,7 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
     register('e2e-decision-router-error', async () => [
       patterns.decisionRouter(
         { take: 'Take action', skip: 'Skip action' },
-        { decide: adapters.createDecideAdapter(), policy: policy('anthropic') },
+        { decide: adapters.createDecideAdapter() },
       ),
       answer(),
     ])
@@ -357,23 +302,18 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
     expect(frames.find((f) => f.event === 'done')?.data.status).toBe('error')
     const { row, events } = await decisions(sessionId)
     expect(row.status).toBe('error')
-    expect(events[0].data).toMatchObject({ abstained: true, reason: 'error', label: 'skip' })
+    expect(events[0].data).toMatchObject({ reason: 'error', label: null })
     expect(eventsOfType(row.serializedContext, 'error')).toEqual(
       expect.arrayContaining([expect.objectContaining({ severity: 'irrecoverable' })]),
     )
     expect(app.fakeLlm.calls.filter((c) => c.model === JEV_MODEL)).toHaveLength(1)
-    expect(
-      app.fakeLlm.calls.filter(
-        (c) => c.fn === 'Decide' || c.fn === 'DecideVerbalized' || c.fn === 'Synthesize',
-      ),
-    ).toEqual([])
+    expect(app.fakeLlm.calls.filter((c) => c.fn === 'Synthesize')).toEqual([])
   })
-  it('a Jev 500 abstains a recoverable gate and preserves the answer', async () => {
+  it('a systemone 500 records no verdict and preserves the answer', async () => {
     register('e2e-decision-gate-error', async () => [
       patterns.typedDecision<DecisionData, string>({
         decide: adapters.createDecideAdapter(),
         spec: SPEC,
-        policy: policy('anthropic'),
       }),
       answer(),
     ])
@@ -385,59 +325,10 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
     )
     const { row, events } = await decisions(sessionId)
     expect(row.status).toBe('done')
-    expect(events[0].data).toMatchObject({ abstained: true, reason: 'error', label: 'skip' })
+    expect(events[0].data).toMatchObject({ reason: 'error', label: null })
     expect(eventsOfType(row.serializedContext, 'error')).toEqual(
       expect.arrayContaining([expect.objectContaining({ severity: 'recoverable' })]),
     )
     expect(app.fakeLlm.calls.filter((c) => c.model === JEV_MODEL)).toHaveLength(1)
-    expect(
-      app.fakeLlm.calls.filter((c) => c.fn === 'Decide' || c.fn === 'DecideVerbalized'),
-    ).toEqual([])
-  })
-  it('persists the explicitly named verbalized secondary as uncalibrated', async () => {
-    clients.configureDecideSecondary('DecideAnthropic')
-    register('e2e-verbalized', async () => [
-      patterns.typedDecision<DecisionData, string>({
-        decide: adapters.createDecideAdapter({ verbalized: adapters.createVerbalizedDecide() }),
-        spec: SPEC,
-        policy: { fallback: 'skip', thresholdMethod: 'verbalized', minConfidence: 0.4 },
-      }),
-      answer(),
-    ])
-    await app.setTier('anthropic')
-    const sessionId = newSessionId('verbalized')
-    // Offline preflight BEFORE a socket is opened: a named override bypasses
-    // the registry's primary unless that client is registered as well.
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
-    const options = (
-      b as unknown as {
-        bamlOptions: NonNullable<Parameters<typeof b.request.DecideVerbalized>[3]>
-      }
-    ).bamlOptions
-    const request = await b.request.DecideVerbalized(
-      STATE,
-      SPEC.question,
-      SPEC.labels.map((label, i) => ({
-        letter: String.fromCharCode(65 + i),
-        description: label.description,
-      })),
-      { ...options, client: 'DecideAnthropic' },
-    )
-    expect(request.url).toBe(`${app.fakeLlm.baseUrl}/chat/completions`)
-    expect(request.body.json()).toMatchObject({ model: FAKE_ANTHROPIC_TIER_MODEL })
-    await app.runTurn(sessionId, STATE, 'e2e-verbalized')
-    const { events } = await decisions(sessionId)
-    expect(events[0].data).toMatchObject({
-      label: 'take',
-      abstained: false,
-      method: 'verbalized',
-      calibrated: false,
-      probs: { take: 0.9, skip: 0.1 },
-    })
-    expect(events[0].llmCall?.clientName).toBe('AnthropicSonnet5NoThink')
-    expect(
-      app.fakeLlm.calls.filter((c) => c.fn === 'DecideVerbalized').map((c) => c.model),
-    ).toEqual([FAKE_ANTHROPIC_TIER_MODEL])
-    expect(app.fakeLlm.calls.filter((c) => c.model === JEV_MODEL || c.fn === 'Decide')).toEqual([])
   })
 })

@@ -89,6 +89,7 @@ const ENV_KEYS = [
   // asks about both — so a fixture that configures only the 27B leaves the
   // switch's private position DISABLED.
   'SMALL_LLM_BASE_URL',
+  'SMALL_LLM_DECISIONS_URL',
   // Cleared per test and restored after, so the wake's own defaults apply
   // everywhere except where a case sets its budget deliberately — see
   // `shortWakeBudget`.
@@ -104,6 +105,7 @@ let saved: Record<string, string | undefined>
 function configureVerda(): void {
   process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
 }
 

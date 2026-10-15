@@ -35,6 +35,7 @@ const ENV_KEYS = [
   // The private tier needs the 4B summarizer too (2026-08-26); the preview
   // default reads `verdaConfigured()`, which asks about both endpoints.
   'SMALL_LLM_BASE_URL',
+  'SMALL_LLM_DECISIONS_URL',
 ] as const
 let saved: Record<string, string | undefined>
 
@@ -44,6 +45,7 @@ let saved: Record<string, string | undefined>
 function configureVerda(): void {
   process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
 }
 
@@ -109,6 +111,7 @@ describe('defaultInferenceTier — the owner’s preview decision', () => {
     // must not silently descale it back onto the 27B — so it is not offered at
     // all. This is the half a one-endpoint fixture used to hide.
     configureVerda()
+    delete process.env.SMALL_LLM_DECISIONS_URL
     delete process.env.SMALL_LLM_BASE_URL
     expect(defaultInferenceTier()).toBe('anthropic')
   })

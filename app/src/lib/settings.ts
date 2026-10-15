@@ -159,9 +159,7 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   LocalGLM: 16_384,
   // = the `--ctx-size` `make llm-small` serves it with; keep the two in step.
   LocalQwenSmall: 32_768,
-  // #418 T3. The same 4B on the same server, so the same `--ctx-size`; the
-  // decide readout's state is trimmed against this (`limitsFor('decide')`).
-  LocalQwenSmallDecide: 32_768,
+  PrivateSystemOne: 32_768,
   // #418 T4. Jev's documented state cap ("up to 32k tokens", state + questions):
   // a REST adapter has no `--ctx-size` to read, so the number is the docs'.
   // `limitsFor('decide')` reads it and the decision state trimmer trims to it.
@@ -184,8 +182,6 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   CriticAnthropic: 200_000,
   SynthesizerAnthropic: 200_000,
   DescribeAnthropic: 200_000,
-  // #418 T5. The decide role's explicit verbalized secondary (Sonnet 5 / 4.6, thinking off).
-  DecideAnthropic: 200_000,
 }
 
 /**
@@ -221,13 +217,6 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // Local (local-client.baml — manual wiring only, not in any chain).
   LocalGLM: 2_048,
   LocalQwenSmall: 2_048,
-  // #418 T3. `max_tokens 2`: a first-token readout (the answer letter, then
-  // EOS). 2 rather than the spec's 1 because llama-server b9190 ABORTS on a
-  // repeated identical prompt at `max_tokens: 1` — the full account is on
-  // `LocalQwenSmallDecide` in local-client.baml. A cap-hit is by design here, so
-  // the adapter stamps `hitOutputCap: false` itself (D14); otherwise
-  // `llmCallHitOutputCap` would read every call as truncated.
-  LocalQwenSmallDecide: 2,
   // Self-hosted (verda-client.baml). Mirrors the `max_tokens` declared there;
   // without this entry the truncation retry is blind on every Verda-routed
   // controller turn, which is the failure this map exists for. 4 096 rather
@@ -245,8 +234,6 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // resolveClientForRole(), which returns chain names — compactBulkData
   // derives its describe batch size here (SA-M6).
   DescribeAnthropic: 16_384, // = AnthropicHaiku45, the chain's only leaf
-  // #418 T5: the chain's weakest leaf, AnthropicSonnet46NoThink (Sonnet5NoThink is 32 768).
-  DecideAnthropic: 16_384,
 }
 
 // ============================================================================
@@ -291,11 +278,8 @@ export const CLIENT_PRICING: Record<string, { inPerMTok: number; outPerMTok: num
 
 /** LocalGLM has no marginal per-call bill. Attribution follows the selected
  * client, never its URL. The metered summarizer is in TIME_PRICED_CLIENTS.
- * LocalQwenSmallDecide still reads €0.00 on that metered box: a known under-count pending its removal. */
-export const LOCAL_PRICED_CLIENTS: ReadonlySet<string> = new Set([
-  'LocalQwenSmallDecide',
-  'LocalGLM',
-])
+ */
+export const LOCAL_PRICED_CLIENTS: ReadonlySet<string> = new Set(['LocalGLM'])
 
 /**
  * The fourth basis: clients whose price is what the PROVIDER reported on the
@@ -355,6 +339,7 @@ export const DEFAULT_SMALL_LLM_EUR_PER_HOUR = 1.54
 export const TIME_PRICED_CLIENTS: Readonly<Record<string, number>> = {
   VerdaQwen: DEFAULT_VERDA_EUR_PER_HOUR,
   LocalQwenSmall: DEFAULT_SMALL_LLM_EUR_PER_HOUR,
+  PrivateSystemOne: DEFAULT_SMALL_LLM_EUR_PER_HOUR,
 }
 
 /** Token buckets one call was billed on. */

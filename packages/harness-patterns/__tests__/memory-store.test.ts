@@ -10,9 +10,8 @@
  *   acceptance-rules           — kind, shape, verbatim evidence, identifier
  *                                closure, sanitizer, maxPerTurn, dedupe/merge,
  *                                the `episodic` kind fallback
- *   seam-contract              — a fake `DecideFn`; `requireCalibrated`
- *                                abstains on a verbalized read, and an abstained
- *                                read of ANY field stores nothing
+ *   seam-contract              — a fake `DecideFn`; failed fields keep their
+ *                                safe error outcomes
  *   event-hygiene              — no memory content in `memory_written`,
  *                                `serialize()` or either `serializeCompact()`
  *   memory-written-persisted   — the events are in the context when
@@ -224,8 +223,8 @@ function fakeDb(
   }
 }
 
-const logprob = (probs: Record<string, number>, extra: Partial<DecideResult> = {}) =>
-  ({ probs, method: 'logprob', calibrated: true, ...extra }) as DecideResult
+const answer = (probs: Record<string, number>, extra: Partial<DecideResult> = {}) =>
+  ({ probs, method: 'jev', calibrated: true, ...extra }) as DecideResult
 
 /** The labels the gate answers by default: a personal, routine, ordinary
  *  preference — the ONE combination that stores today. */
@@ -242,7 +241,7 @@ type Answers = { [K in keyof typeof STORES]?: string }
 /** A confident, calibrated read of `label` over the spec's labels. */
 function confident(labels: readonly { id: string }[], label: string): DecideResult {
   const rest = (1 - 0.94) / Math.max(1, labels.length - 1)
-  return logprob(Object.fromEntries(labels.map((l) => [l.id, l.id === label ? 0.94 : rest])))
+  return answer(Object.fromEntries(labels.map((l) => [l.id, l.id === label ? 0.94 : rest])))
 }
 
 function fakeDecide(
@@ -361,37 +360,6 @@ const withSettings = (s: MemoryStoreSettings): Partial<MemoryStoreConfig> => ({ 
 // ============================================================================
 
 describe('settleMemory — the one path that stores', () => {
-  it('a confident, calibrated, ordinary, routine personal preference is written', async () => {
-    const { cfg, db } = config()
-    const ctx = turn()
-    const report = await settleMemory(ctx, cfg)
-
-    expect(report).toMatchObject({ written: 1, duplicates: 0, failed: 0, compactionDue: false })
-    expect(report.skipped).toBeUndefined()
-    expect(db.rows()).toHaveLength(1)
-    expect(db.rows()[0]).toMatchObject({
-      kind: 'preference',
-      tier: 'verda',
-      content: CONTENT,
-      evidence: EVIDENCE,
-      embedSpace: SPACE,
-      evidenceCount: 1,
-    })
-    // The provenance row is keyed on the USER MESSAGE's event id.
-    const userEvent = ctx.events.find((e) => e.type === 'user_message')!
-    expect(db.sources()).toEqual([[`${userEvent.id}#0`, db.rows()[0].id]])
-    expect(written(ctx)).toEqual([
-      {
-        memoryId: db.rows()[0].id,
-        kind: 'preference',
-        tier: 'verda',
-        eventId: userEvent.id,
-        ordinal: 0,
-        action: 'inserted',
-      },
-    ])
-  })
-
   it('stamps the tier from the run frame when none is configured', async () => {
     const { cfg, db } = config({ tier: undefined })
     await withRunFrame({ inference: { tier: 'anthropic' } }, () => settleMemory(turn(), cfg))
@@ -421,7 +389,6 @@ describe('settleMemory — the one path that stores', () => {
     expect([f.target, f.confirm, f.kind, f.sensitive].map((s) => s.labels.length)).toEqual([
       3, 2, 4, 2,
     ])
-    expect(MEMORY_STORE_SET.mode).toBeUndefined()
     expect(MEMORY_MERGE_SPEC.labels.map((l) => l.id)).toEqual(['same', 'update', 'distinct'])
   })
 })
@@ -657,41 +624,6 @@ describe('acceptance-rules', () => {
     expect(db.sources()[0][0]).toMatch(/#1$/)
   })
 
-  it('kind fallback is episodic: a kind the gate was unsure of is stored as the expiring one', async () => {
-    // The kind field abstains (a flat read); the extractor claims `trait`.
-    const decide = fakeDecide({}, (i) =>
-      i.spec.key === 'memory.store.kind'
-        ? logprob({ episodic: 0.26, semantic: 0.25, preference: 0.25, trait: 0.24 })
-        : undefined,
-    )
-    const { cfg, db } = config({
-      decide: decide.fn,
-      extract: fakeExtract([cand({ kind: 'trait' })]).fn,
-    })
-    const ctx = turn()
-    await settleMemory(ctx, cfg)
-    expect(MEMORY_STORE_FALLBACKS.kind).toBe('episodic')
-  })
-
-  it('H1: a flat kind read plus a confident confirm = skip ASKS — nothing is stored before M6', async () => {
-    const flatKind = fakeDecide({}, (i) =>
-      i.spec.key === 'memory.store.kind'
-        ? logprob({ episodic: 0.26, semantic: 0.25, preference: 0.25, trait: 0.24 })
-        : undefined,
-    )
-    const { cfg, db, extract } = config({
-      decide: flatKind.fn,
-      extract: fakeExtract([cand({ kind: 'trait' })]).fn,
-    })
-    const ctx = turn()
-    const report = await settleMemory(ctx, cfg)
-    expect(report.skipped).toBe('no-confirmation')
-    expect(report.route).toEqual({ target: 'personal_memory', confirm: 'ask' })
-    expect(db.rows()).toEqual([])
-    expect(extract.fn).not.toHaveBeenCalled()
-    expect(written(ctx)).toEqual([])
-  })
-
   it('a confident kind is the extractor’s kind — the hint steers, it does not bind', async () => {
     const { cfg, db } = config({ extract: fakeExtract([cand({ kind: 'semantic' })]).fn })
     await settleMemory(turn(), cfg)
@@ -736,7 +668,7 @@ describe('acceptance-rules: dedupe and merge', () => {
     const db = fakeDb({ seed: [seed(opts.seed)] })
     const decide = fakeDecide({ merge: opts.merge }, (i) =>
       opts.mergeAbstains && i.spec.key === 'memory.merge'
-        ? logprob({ same: 0.34, update: 0.33, distinct: 0.33 })
+        ? answer({ same: 0.34, update: 0.33, distinct: 0.33 })
         : undefined,
     )
     const { embed } = fakeEmbed({ [CONTENT]: at(opts.sim) })
@@ -826,15 +758,6 @@ describe('acceptance-rules: dedupe and merge', () => {
   it('… distinct → inserted beside it', async () => {
     const { db } = await run({ sim: 0.85, merge: 'distinct' })
     expect(db.rows()).toHaveLength(2)
-  })
-
-  it('… an ABSTAINED merge inserts (never merges on a flat read)', async () => {
-    const { db } = await run({ sim: 0.85, mergeAbstains: true })
-    expect(db.rows()).toHaveLength(2)
-    expect(db.rows().find((r) => r.id === 'old-1')).toMatchObject({
-      evidenceCount: 1,
-      updated: false,
-    })
   })
 
   it('a merge question that never answers is bounded: it inserts', async () => {
@@ -1147,56 +1070,6 @@ describe('merge-fails-to-keep-both', () => {
     expect(db.rows().find((r) => r.id !== 'old-1')?.content).toBe(CONTENT)
   }
 
-  it('a gate cut fitted for Jev does NOT enable the merge: no memory.merge calibration, both kept', async () => {
-    // Mutation: the merge policy inherits `settings.gate.thresholdMethod` again
-    // (the spread in chooseAction) → the calibrated Jev `update` merges.
-    const db = fakeDb({ seed: [seed()] })
-    const decide = fakeDecide({}, (i) => ({
-      ...confident(
-        i.spec.labels,
-        i.spec.key === 'memory.merge'
-          ? 'update'
-          : (STORES as Record<string, string>)[i.spec.key.replace('memory.store.', '')],
-      ),
-      method: 'jev',
-      calibrated: true,
-    }))
-    const { embed } = fakeEmbed({ [CONTENT]: at(0.85) })
-    const { cfg } = config({
-      db,
-      decide: decide.fn,
-      embed,
-      ...withSettings({ gate: { thresholdMethod: 'jev' } }),
-    })
-    const report = await settleMemory(turn(), cfg)
-    keptBoth(db, report)
-  })
-
-  it('the merge key requires a calibrated read', async () => {
-    // Mutation: requireCalibrated: true → false in chooseAction's policy.
-    const { ctx } = await withMerge((l) => confident(l, 'distinct'))
-    const merge = ctx.events.find(
-      (e) => e.type === 'decision_made' && (e.data as { key: string }).key === 'memory.merge',
-    )
-    expect(
-      (merge?.data as { policy: { requireCalibrated?: boolean } }).policy.requireCalibrated,
-    ).toBe(true)
-  })
-
-  it('a confident but UNCALIBRATED `update` does not merge: both memories kept', async () => {
-    // Mutations: requireCalibrated → false; or the fallback 'distinct' → 'update'.
-    const { db, report } = await withMerge((l) => ({
-      ...confident(l, 'update'),
-      calibrated: false,
-    }))
-    keptBoth(db, report)
-  })
-
-  it('… nor does an uncalibrated `same` (it would swallow the new statement)', async () => {
-    const { db, report } = await withMerge((l) => ({ ...confident(l, 'same'), calibrated: false }))
-    keptBoth(db, report)
-  })
-
   it('a REFUSED merge decision (the seam throws) keeps both', async () => {
     // Mutation: the fallback 'distinct' → 'update'.
     const db = fakeDb({ seed: [seed()] })
@@ -1209,45 +1082,6 @@ describe('merge-fails-to-keep-both', () => {
     const report = await settleMemory(turn(), cfg)
     keptBoth(db, report)
   })
-
-  it('an ABSTAINED merge decision (flat read) keeps both', async () => {
-    // Mutation: the fallback 'distinct' → 'update'.
-    const { db, report } = await withMerge(() =>
-      logprob({ same: 0.34, update: 0.33, distinct: 0.33 }),
-    )
-    keptBoth(db, report)
-  })
-
-  it('a transport serving the merge key VERBALIZED is refused before the call is paid for, and keeps both', async () => {
-    // Mutation: requireCalibrated: true → false (the pre-call refusal is the
-    // same policy bit, so the merge call is made and its `update` lands).
-    const db = fakeDb({ seed: [seed()] })
-    let mergeCalls = 0
-    const fn = (async (input: { spec: { key: string; labels: readonly { id: string }[] } }) => {
-      const merge = input.spec.key === 'memory.merge'
-      if (merge) mergeCalls++
-      return confident(
-        input.spec.labels,
-        merge
-          ? 'update'
-          : (STORES as Record<string, string>)[input.spec.key.replace('memory.store.', '')],
-      )
-    }) as unknown as DecideFn
-    Object.assign(fn, {
-      serving: (key: string) => (key === 'memory.merge' ? { method: 'verbalized' } : {}),
-    })
-    const { embed } = fakeEmbed({ [CONTENT]: at(0.85) })
-    const { cfg } = config({ db, decide: fn, embed })
-    const report = await settleMemory(turn(), cfg)
-    expect(mergeCalls).toBe(0)
-    keptBoth(db, report)
-  })
-
-  it('control: a calibrated, confident `update` still merges', async () => {
-    const { db } = await withMerge((l) => confident(l, 'update'))
-    expect(db.rows()).toHaveLength(1)
-    expect(db.rows()[0]).toMatchObject({ id: 'old-1', content: CONTENT, updated: true })
-  })
 })
 
 // ============================================================================
@@ -1255,55 +1089,6 @@ describe('merge-fails-to-keep-both', () => {
 // ============================================================================
 
 describe('seam-contract', () => {
-  it('requireCalibrated: a VERBALIZED read abstains and nothing is stored', async () => {
-    const verbalized = fakeDecide(
-      {},
-      (i) =>
-        ({
-          probs: Object.fromEntries(
-            i.spec.labels.map((l) => [
-              l.id,
-              l.id === (STORES as Record<string, string>)[i.spec.key.replace('memory.store.', '')]
-                ? 0.97
-                : 0.01,
-            ]),
-          ),
-          method: 'verbalized',
-          calibrated: false,
-        }) as DecideResult,
-    )
-    const { cfg, db, extract } = config({ decide: verbalized.fn })
-    const ctx = turn()
-    const report = await settleMemory(ctx, cfg)
-    expect(db.rows()).toEqual([])
-    expect(extract.fn).not.toHaveBeenCalled()
-    expect(report.skipped).toBe('sensitive')
-    for (const e of ctx.events.filter((e) => e.type === 'decision_made')) {
-      expect(e.data).toMatchObject({ abstained: true, reason: 'uncalibrated' })
-    }
-  })
-
-  it('a transport that says calibrated: false on a logprob read abstains too', async () => {
-    const { cfg, db } = config({
-      decide: fakeDecide(
-        {},
-        (i) =>
-          confident(
-            i.spec.labels,
-            (STORES as Record<string, string>)[i.spec.key.replace('memory.store.', '')],
-          ) && {
-            ...confident(
-              i.spec.labels,
-              (STORES as Record<string, string>)[i.spec.key.replace('memory.store.', '')],
-            ),
-            calibrated: false,
-          },
-      ).fn,
-    })
-    await settleMemory(turn(), cfg)
-    expect(db.rows()).toEqual([])
-  })
-
   it('a decision seam that THROWS is a stop, not a throw, and not a store', async () => {
     const boom = (async () => {
       throw new Error('jev down')
@@ -1315,72 +1100,22 @@ describe('seam-contract', () => {
     expect(ctx.events.some((e) => e.type === 'error')).toBe(true)
   })
 
-  it('sensitive abstain stores nothing (F3): the fallback is `sensitive`, not `ordinary`', async () => {
-    expect(MEMORY_STORE_FALLBACKS.sensitive).toBe('sensitive')
-    const flat = fakeDecide({}, (i) =>
-      i.spec.key === 'memory.store.sensitive'
-        ? logprob({ ordinary: 0.5, sensitive: 0.5 })
-        : undefined,
-    )
-    const { cfg, db, extract } = config({ decide: flat.fn })
-    const report = await settleMemory(turn(), cfg)
-    expect(report.skipped).toBe('sensitive')
-    expect(db.rows()).toEqual([])
-    expect(extract.fn).not.toHaveBeenCalled()
-  })
-
   it('a confidently sensitive message stores nothing', async () => {
     const { cfg, db } = config({ decide: fakeDecide({ sensitive: 'sensitive' }).fn })
     expect((await settleMemory(turn(), cfg)).skipped).toBe('sensitive')
     expect(db.rows()).toEqual([])
   })
 
-  it('target none, and a low-confidence target, store nothing', async () => {
-    const none = config({ decide: fakeDecide({ target: 'none' }).fn })
-    expect((await settleMemory(turn(), none.cfg)).skipped).toBe('gate')
-    expect(none.db.rows()).toEqual([])
-
-    const unsure = config({
-      decide: fakeDecide({}, (i) =>
-        i.spec.key === 'memory.store.target'
-          ? logprob({ personal_memory: 0.4, organizational_graph: 0.3, none: 0.3 })
-          : undefined,
-      ).fn,
-    })
-    const r = await settleMemory(turn(), unsure.cfg)
-    expect(r.skipped).toBe('gate')
-    expect(unsure.db.rows()).toEqual([])
-  })
-
   it('an abstained confirm falls back to `ask`, which (pre-M6) stores nothing', async () => {
     expect(MEMORY_STORE_FALLBACKS.confirm).toBe('ask')
     const { cfg, db } = config({
       decide: fakeDecide({}, (i) =>
-        i.spec.key === 'memory.store.confirm' ? logprob({ ask: 0.5, skip: 0.5 }) : undefined,
+        i.spec.key === 'memory.store.confirm' ? answer({ ask: 0.5, skip: 0.5 }) : undefined,
       ).fn,
     })
     const r = await settleMemory(turn(), cfg)
     expect(r.skipped).toBe('no-confirmation')
     expect(db.rows()).toEqual([])
-  })
-
-  it('the cuts are the gate’s own: a looser minConfidence lets a 0.6 read through', async () => {
-    const mild = fakeDecide({}, (i) => {
-      const want = (STORES as Record<string, string>)[i.spec.key.replace('memory.store.', '')]
-      const rest = 0.4 / Math.max(1, i.spec.labels.length - 1)
-      return logprob(
-        Object.fromEntries(i.spec.labels.map((l) => [l.id, l.id === want ? 0.6 : rest])),
-      )
-    })
-    const strict = config({ decide: mild.fn, ...withSettings({ gate: { minConfidence: 0.9 } }) })
-    await settleMemory(turn(), strict.cfg)
-    expect(strict.db.rows()).toEqual([])
-    const loose = config({
-      decide: mild.fn,
-      ...withSettings({ gate: { minConfidence: 0.1, minMargin: 0.01 } }),
-    })
-    await settleMemory(turn(), loose.cfg)
-    expect(loose.db.rows()).toHaveLength(1)
   })
 })
 
@@ -2010,5 +1745,25 @@ describe('#552: switch-off serializes with in-flight settle', () => {
     expect(db.rows()).toEqual([])
     expect(db.sources()).toEqual([])
     expect(written(ctx)).toEqual([])
+  })
+})
+
+describe('G11 memory endpoint verdicts', () => {
+  it('stores a narrow ordinary verdict without calibration or a confidence cut', async () => {
+    const decide = fakeDecide({}, (i) =>
+      i.spec.key === 'memory.store.sensitive'
+        ? answer({ ordinary: 0.501, sensitive: 0.499 }, { calibrated: false, confidence: 0.001 })
+        : undefined,
+    )
+    const { cfg, db } = config({ decide: decide.fn })
+    const ctx = turn()
+    const report = await settleMemory(ctx, cfg)
+    expect(report.written).toBe(1)
+    expect(db.rows()[0].content).toBe(CONTENT)
+    const event = ctx.events.find(
+      (e) =>
+        e.type === 'decision_made' && (e.data as { key: string }).key === 'memory.store.sensitive',
+    )
+    expect((event?.data as { probs: unknown }).probs).toEqual({ ordinary: 0.501, sensitive: 0.499 })
   })
 })

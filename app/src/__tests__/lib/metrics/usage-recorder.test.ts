@@ -96,7 +96,7 @@ describe('tierOfSample — the selected client is the evidence', () => {
     // (#418) the 4B's one-token decide readout — and the decide client is counted
     // private with no edit to the recorder, which is the property above at work.
     expect(new Set(routed).size).toBe(3)
-    expect(routed).toContain('LocalQwenSmallDecide')
+    expect(routed).toContain('PrivateSystemOne')
   })
 
   it('attributes everything else to Anthropic, including an unnamed client', () => {
@@ -125,7 +125,7 @@ describe('the warm clock does NOT follow the tier attribution', () => {
     recordSample({ functionName: 'ResultDescribe', clientName: 'LocalQwenSmall' }, NOW)
     expect(verdaWarmth(NOW).state).toBe('unknown')
     // The decide readout is the same 4B on the same server: also not evidence.
-    recordSample({ functionName: 'Decide', clientName: 'LocalQwenSmallDecide' }, NOW)
+    recordSample({ functionName: 'Decide', clientName: 'PrivateSystemOne' }, NOW)
     expect(verdaWarmth(NOW).state).toBe('unknown')
 
     recordSample({ functionName: 'LoopController', clientName: 'VerdaQwen' }, NOW)

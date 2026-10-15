@@ -39,6 +39,7 @@ const ENV_KEYS = [
   // saved/restored too, because one test deletes it to pin that it is NOT
   // required, and a leaked deletion would change another file's outcome.
   'SMALL_LLM_BASE_URL',
+  'SMALL_LLM_DECISIONS_URL',
   'SMALL_LLM_API_KEY',
 ] as const
 
@@ -66,6 +67,7 @@ let saved: Record<string, string | undefined>
 function configureEndpointOnly(): void {
   process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
 }
 
@@ -322,6 +324,7 @@ describe('the verda position fails closed when the endpoint is unset', () => {
     // Same reason as the 27B's: BAML hands `base_url` to openai-generic
     // verbatim, so a root URL 404s every describe call mid-conversation.
     configureEndpointOnly()
+    process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small'
     const { runWithInferenceTier } = await load()
 

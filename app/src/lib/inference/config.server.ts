@@ -20,11 +20,10 @@
  * and the resolution must land in the SAME module instance, and the pin goes
  * red when they do not.
  */
-import decisionCalibrationArtifact from './decision-calibration.json'
-import { feedDecisionCalibration } from './decision-calibration.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { CLIENT_MAX_OUTPUT_TOKENS, MODEL_CONTEXT_WINDOWS, estimateLlmCostEur } from '../settings'
 import { eurPerUsdRate, verdaEurPerHour, smallLlmEurPerHour } from '../cost-rates.server'
+import { parseDecisionsUrl } from '@hames-ai/harness-baml/jev-decide.server'
 import { VERDA_CLIENT_NAME } from './verda-activity.server'
 import { noteVerdaCallStarting } from './cold-start.server'
 import {
@@ -35,9 +34,6 @@ import {
 } from '@hames-ai/harness-baml/clients.server'
 
 assertServerOnImport()
-
-// #418 T8: validate the committed artifact at host composition, before calls.
-feedDecisionCalibration(decisionCalibrationArtifact)
 
 export type { InferenceTier } from '@hames-ai/harness-baml/clients.server'
 
@@ -164,6 +160,17 @@ export function assertSmallModelConfigured(): void {
 export function assertPrivateTierConfigured(): void {
   assertVerdaConfigured()
   assertSmallModelConfigured()
+  const raw = process.env.SMALL_LLM_DECISIONS_URL
+  if (!raw)
+    throw new Error(
+      'The private inference tier requires SMALL_LLM_DECISIONS_URL; refusing to send a decision to any other endpoint.',
+    )
+  const endpoint = parseDecisionsUrl(raw)
+  if (typeof endpoint === 'string' || endpoint.pathname !== '/v1/systemone') {
+    throw new Error(
+      'SMALL_LLM_DECISIONS_URL must be a full https: or loopback URL ending in /v1/systemone.',
+    )
+  }
 }
 
 // ============================================================================
@@ -218,7 +225,11 @@ configureCostRates({ eurPerUsd: eurPerUsdRate, verdaEurPerHour })
 // scale-to-zero box price as a floor instead of being dropped.
 configureCostPricing({
   estimate: estimateLlmCostEur,
-  timePricedClients: { [VERDA_CLIENT_NAME]: verdaEurPerHour, LocalQwenSmall: smallLlmEurPerHour },
+  timePricedClients: {
+    [VERDA_CLIENT_NAME]: verdaEurPerHour,
+    LocalQwenSmall: smallLlmEurPerHour,
+    PrivateSystemOne: smallLlmEurPerHour,
+  },
 })
 
 // Checked once, at module load, and only when the flag is on: a misconfigured

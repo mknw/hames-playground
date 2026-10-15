@@ -21,11 +21,10 @@ import type { AddressInfo } from 'node:net'
 
 import '../../../lib/inference/config.server'
 import {
-  decideFields,
   evaluateDecision,
   typedDecision,
 } from '@hames-ai/harness-patterns/patterns/typedDecision.server'
-import { createScope, createContext } from '@hames-ai/harness-patterns/context.server'
+import { createContext } from '@hames-ai/harness-patterns/context.server'
 import { runChain } from '@hames-ai/harness-patterns/patterns/chain.server'
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import {
@@ -33,7 +32,7 @@ import {
   resetLlmUsageObservers,
   type LlmUsageSample,
 } from '@hames-ai/harness-patterns/llm-usage-observer.server'
-import type { DecideFn, DecisionSetSpec, DecisionSpec } from '@hames-ai/harness-patterns/types'
+import type { DecisionSetSpec, DecisionSpec } from '@hames-ai/harness-patterns/types'
 import { DEFAULT_EUR_PER_USD } from '../../../lib/settings'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -122,6 +121,7 @@ beforeEach(() => {
   requests = []
   smallRequests = 0
   respond = async () => Response.json(JEV_BODY)
+  process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
   process.env.JEV_DECISIONS_API_KEY = 'or-test-key'
   // O2 on EVERY path: the embedding provider's key is set in every test, so a
   // fallback to it anywhere (success, error, retry) is a request carrying it.
@@ -258,7 +258,7 @@ describe('the wire shape — ONE request carries every field as a typed question
     },
   )
 
-  it('normalises rounding: a distribution summing to ~1 is used, not refused', async () => {
+  it('preserves rounding: probabilities are passed through unchanged', async () => {
     respond = async () =>
       Response.json({
         ...JEV_BODY,
@@ -266,8 +266,8 @@ describe('the wire shape — ONE request carries every field as a typed question
       })
     const { decide } = await transport()
     const r = await decide({ spec: SPEC, state: 's' })
-    expect(r.probs.yes + r.probs.no).toBeCloseTo(1, 12)
-    expect(r.probs.yes).toBeCloseTo(0.6 / 0.995, 12)
+    expect(r.probs.yes + r.probs.no).toBeCloseTo(0.995, 12)
+    expect(r.probs.yes).toBe(0.6)
     // No confidence on the answer: not claimed calibrated.
     expect(r.calibrated).toBe(false)
   })
@@ -282,31 +282,6 @@ describe('the wire shape — ONE request carries every field as a typed question
       provider: 'typesafe',
       hitOutputCap: false,
     })
-  })
-
-  it('the set-level adapter makes ONE request on Jev and one pass per field on any other client', async () => {
-    const { createDecideAdapter, createDecideAllAdapter } =
-      await import('@hames-ai/harness-baml/baml-adapters.server')
-    const all = createDecideAllAdapter(createDecideAdapter())
-    await all({ spec: SET, state: 's' })
-    expect(requests).toHaveLength(1)
-
-    const clients = await import('@hames-ai/harness-baml/clients.server')
-    clients.configureConsumerClients((role) =>
-      role === 'decide' ? { client: 'AnthropicHaiku45' } : undefined,
-    )
-    const calls: string[] = []
-    const stub = (async (i: { spec: DecisionSpec }) => {
-      calls.push(i.spec.key)
-      return {
-        probs: { yes: 1, no: 0, search: 1, chat: 0 },
-        method: 'verbalized',
-        calibrated: false,
-      }
-    }) as unknown as DecideFn
-    await createDecideAllAdapter(stub)({ spec: SET, state: 's' })
-    expect(calls).toEqual(['route', 'memory.recall'])
-    expect(requests).toHaveLength(1) // nothing more went to Jev
   })
 })
 
@@ -432,15 +407,19 @@ describe('jev-privacy — OpenRouter provider preferences (O1), own key (O2), en
 })
 
 describe('jev-tier-lock — Jev is a public provider and may never take a private-tier call', () => {
+  beforeEach(async () => {
+    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
+    configureConsumerClients((role) => (role === 'decide' ? { client: 'JevDecide' } : undefined))
+  })
   it('the transport refuses on its own under the private tier — before reading the key or sending', async () => {
     delete process.env.JEV_DECISIONS_API_KEY
     const { decideAll, decide } = await transport()
     const { LLMCallError } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const err = await onPrivateTier(() => decideAll({ spec: SET, state: 's' })).catch((e) => e)
     expect(err).toBeInstanceOf(LLMCallError)
-    expect(String(err.message)).toMatch(/Refusing the Jev decide transport under the private/)
+    expect(String(err.message)).toMatch(/Refusing systemone client/)
     await expect(onPrivateTier(() => decide({ spec: SPEC, state: 's' }))).rejects.toThrow(
-      /private inference tier/,
+      /inference tier/,
     )
     expect(requests).toHaveLength(0)
   })
@@ -478,11 +457,11 @@ describe('jev-tier-lock — Jev is a public provider and may never take a privat
       await import('@hames-ai/harness-baml/baml-adapters.server')
     const decide = createDecideAdapter()
     await expect(onPrivateTier(() => decide({ spec: SPEC, state: 's' }))).rejects.toThrow(
-      /Refusing decide transport "jev"/,
+      /Refusing systemone client/,
     )
     await expect(
       onPrivateTier(() => createDecideAllAdapter(decide)({ spec: SET, state: 's' })),
-    ).rejects.toThrow(/private inference tier/)
+    ).rejects.toThrow(/inference tier/)
     expect(requests).toHaveLength(0)
   })
 
@@ -492,10 +471,8 @@ describe('jev-tier-lock — Jev is a public provider and may never take a privat
       role === 'decide' ? { client: 'JevDecide' } : undefined,
     )
     const decide = await adapter()
-    const out = await onPrivateTier(() =>
-      evaluateDecision({ decide, spec: SPEC, state: 's', policy: { fallback: 'no' } }),
-    )
-    expect(out.decision).toMatchObject({ abstained: true, reason: 'error', label: 'no' })
+    const out = await onPrivateTier(() => evaluateDecision({ decide, spec: SPEC, state: 's' }))
+    expect(out.decision).toMatchObject({ abstained: true, reason: 'error', label: null })
     expect(requests).toHaveLength(0)
   })
 
@@ -503,12 +480,12 @@ describe('jev-tier-lock — Jev is a public provider and may never take a privat
     process.env.USE_VERDA_INFERENCE = '1'
     try {
       const { decideAll } = await transport()
-      await expect(decideAll({ spec: SET, state: 's' })).rejects.toThrow(/private inference tier/)
+      await expect(decideAll({ spec: SET, state: 's' })).rejects.toThrow(/inference tier/)
       const clients = await import('@hames-ai/harness-baml/clients.server')
       clients.configureConsumerClients((role) =>
         role === 'decide' ? { client: 'JevDecide' } : undefined,
       )
-      await expect((await adapter())({ spec: SPEC, state: 's' })).rejects.toThrow(/private/)
+      await expect((await adapter())({ spec: SPEC, state: 's' })).rejects.toThrow(/inference tier/)
       expect(requests).toHaveLength(0)
     } finally {
       delete process.env.USE_VERDA_INFERENCE
@@ -601,9 +578,8 @@ describe('jev-fallback — fail closed, never a downgrade to another provider', 
         // Not 's': the error message is redacted of the state, and 's' would
         // rewrite the key itself and hide a leak.
         state: 'the state',
-        policy: { fallback: 'no' },
       })
-      expect(out.decision).toMatchObject({ label: 'no', abstained: true, reason: 'error' })
+      expect(out.decision).toMatchObject({ label: null, abstained: true, reason: 'error' })
       expect(out.error).toBeDefined()
       // The bearer key never rides the error or the call record (both are persisted).
       expect(JSON.stringify(out)).not.toContain('or-test-key')
@@ -619,9 +595,8 @@ describe('jev-fallback — fail closed, never a downgrade to another provider', 
       decide: await adapter(),
       spec: SPEC,
       state: 's',
-      policy: { fallback: 'no' },
     })
-    expect(out.decision).toMatchObject({ label: 'no', abstained: true, reason: 'error' })
+    expect(out.decision).toMatchObject({ label: null, abstained: true, reason: 'error' })
     expect(out.error?.error).toMatch(/HTTP 502/)
     expect(requests).toHaveLength(1)
   })
@@ -639,7 +614,6 @@ describe('jev-fallback — fail closed, never a downgrade to another provider', 
       decide,
       spec: SPEC,
       state: 's',
-      policy: { fallback: 'no' },
     })
     expect(out.decision).toMatchObject({ abstained: true, reason: 'error' })
     expect(requests).toHaveLength(0)
@@ -651,7 +625,7 @@ describe('jev-fallback — fail closed, never a downgrade to another provider', 
     respond = async () =>
       Response.json({ answers: {}, usage: { input_tokens: 9, output_tokens: 0, cost: 0.001 } })
     const decide = await adapter()
-    await evaluateDecision({ decide, spec: SPEC, state: 's', policy: { fallback: 'no' } })
+    await evaluateDecision({ decide, spec: SPEC, state: 's' })
     expect(seen).toHaveLength(1)
     expect(seen[0].clientName).toBe('JevDecide')
   })
@@ -682,9 +656,7 @@ describe('jev-limits — the 32k state cap', () => {
         data: { content: `${i}:${old}` },
       })),
     )
-    await withRunFrame({}, () =>
-      runChain(ctx, [typedDecision({ decide, spec: SPEC, policy: { fallback: 'no' } })]),
-    )
+    await withRunFrame({}, () => runChain(ctx, [typedDecision({ decide, spec: SPEC })]))
     expect(requests).toHaveLength(1)
     const state = JSON.parse(requests[0].init.body as string).state as string
     // Trimmed to the 32k window (≈ 4 chars/token), not shipped whole …
@@ -734,36 +706,6 @@ describe('jev-cost-eur — the provider-reported USD converts at EUR_PER_USD', (
     const r = await decide({ spec: SPEC, state: 's' })
     expect(r.llmCall!.metrics!.costEur).toBeUndefined()
     expect(r.llmCall!.metrics!.inputUncachedTokens).toBe(120)
-  })
-})
-
-// G8: mutation — restore the product by removing Jev's mode normalisation.
-describe('jev-joint-per-field (G8)', () => {
-  it('joint mode sends N questions together in one decideAll request, never the label product', async () => {
-    const { createDecideAdapter, createDecideAllAdapter } =
-      await import('@hames-ai/harness-baml/baml-adapters.server')
-    const decide = createDecideAdapter()
-    const scope = createScope('p', {})
-    const out = await decideFields(scope, {
-      decide,
-      decideAll: createDecideAllAdapter(decide),
-      set: { ...SET, mode: 'joint' },
-      state: 'Synthetic test state',
-      policy: { route: { fallback: 'chat' }, recall: { fallback: 'no' } },
-    })
-    expect(requests).toHaveLength(1)
-    const body = JSON.parse(String(requests[0].init.body))
-    expect(Object.keys(body.questions)).toEqual(['route', 'recall'])
-    for (const [name, field] of Object.entries(SET.fields)) {
-      expect(body.questions[name]).toEqual({
-        type: 'choice',
-        instructions: field.question,
-        criteria: Object.fromEntries(field.labels.map((label) => [label.id, label.description])),
-      })
-    }
-    expect([out.route.label, out.recall.label]).toEqual(['search', 'yes'])
-    expect(scope.events.filter((event) => event.type === 'decision_made')).toHaveLength(2)
-    expect(smallRequests).toBe(0)
   })
 })
 
@@ -825,22 +767,6 @@ describe('jev-score-wire', () => {
       calibrated: true,
       llmCall: { clientName: 'JevDecide', provider: 'typesafe' },
     })
-  })
-  it('requires a confidence claim for score calibration', async () => {
-    const { confidence: _confidence, ...answer } = scoreAnswer
-    answerFor(SCORE.key, answer)
-    const r = await (await adapter())({ spec: SCORE, state: 'synthetic' })
-    expect(r.calibrated).toBe(false)
-    const { scoreScoreDecision } =
-      await import('@hames-ai/harness-patterns/patterns/typedDecision.server')
-    expect(
-      scoreScoreDecision({
-        spec: SCORE,
-        state: 'synthetic',
-        result: r,
-        policy: { fallback: 'now', requireCalibrated: true },
-      }).decision,
-    ).toMatchObject({ abstained: true, reason: 'uncalibrated' })
   })
   it.each([1, 11])('refuses %i levels before sending', async (n) => {
     const spec = {
@@ -922,9 +848,9 @@ describe('jev-score-mean-crosscheck', () => {
     )
   })
 })
-describe('jev-noul-calibrated', () => {
+describe('jev-noul', () => {
   it.each([true, false])(
-    'native noul with optional criteria=%s needs no confidence to pass requireCalibrated',
+    'native noul with optional criteria=%s preserves the endpoint probability',
     async (withCriteria) => {
       const spec = withCriteria ? NOUL : { type: NOUL.type, key: NOUL.key, question: NOUL.question }
       answerFor(spec.key, { type: 'noul', noul: 0.9 })
@@ -937,16 +863,6 @@ describe('jev-noul-calibrated', () => {
       expect(r.probs.true).toBe(0.9)
       expect(r.probs.false).toBeCloseTo(0.1)
       expect(r.calibrated).toBe(true)
-      const { scoreNoulDecision } =
-        await import('@hames-ai/harness-patterns/patterns/typedDecision.server')
-      expect(
-        scoreNoulDecision({
-          spec,
-          state: 'synthetic',
-          result: r,
-          policy: { fallback: false, requireCalibrated: true },
-        }).decision,
-      ).toMatchObject({ holds: true, abstained: false })
     },
   )
   it.each([0, 0.5, 1])('accepts probability %s', async (noul) => {
@@ -1011,7 +927,7 @@ describe('jev-tier-lock score/noul', () => {
         expect(bodyReads).toBe(0)
         await expect(
           onPrivateTier(() => routed({ spec: base, state: 'synthetic' })),
-        ).rejects.toThrow('private inference tier')
+        ).rejects.toThrow('inference tier')
         expect(keyReads).toBe(0)
         expect(requests).toHaveLength(0)
       } finally {
@@ -1020,161 +936,168 @@ describe('jev-tier-lock score/noul', () => {
     },
   )
 })
-describe('jev-supported-types same resolver', () => {
-  it('reports choice only on a future tier and refuses score before sending', async () => {
-    const { createDecideAllAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const t = await transport()
-    const routed = await adapter()
-    const set = createDecideAllAdapter(routed)
-    await withRunFrame({ inference: { tier: 'future' } }, async () => {
-      expect(t.decide.supportedTypes).toEqual(['choice'])
-      expect(t.decideAll.supportedTypes).toEqual(['choice'])
-      expect(routed.supportedTypes).toEqual(['choice'])
-      expect(set.supportedTypes).toEqual(['choice'])
-      await expect(routed({ spec: SCORE, state: 'synthetic' })).rejects.toThrow('Unsupported')
-      await expect(
-        set({ spec: { key: 'set', fields: { score: SCORE } }, state: 'synthetic' }),
-      ).rejects.toThrow('Unsupported')
-    })
-    expect(requests).toHaveLength(0)
-  })
 
-  it('one adapter follows Jev, an undeclared secondary, local override and locked override', async () => {
-    const { createDecideAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
-    let secondaryCalls = 0
-    const verbalized: DecideFn = async () => {
-      secondaryCalls++
-      throw new Error('Undeclared secondary must never serve a noul')
-    }
-    const fn = createDecideAdapter({ verbalized })
-    expect((await transport()).decide.supportedTypes).toEqual(['choice', 'score', 'noul'])
-    expect(fn.supportedTypes).toEqual(['choice', 'score', 'noul'])
-    answerFor(NOUL.key, { type: 'noul', noul: 0.9 })
-    expect((await fn({ spec: NOUL, state: 'synthetic' })).llmCall?.clientName).toBe('JevDecide')
-    configureConsumerClients((role) =>
-      role === 'decide' ? { client: 'DecideAnthropic' } : undefined,
-    )
-    expect(fn.supportedTypes).toEqual(['choice'])
-    await expect(fn({ spec: NOUL, state: 'synthetic' })).rejects.toThrow('Unsupported')
-    expect(secondaryCalls).toBe(0)
-    await withRunFrame(
-      {
-        inference: {
-          tier: 'anthropic',
-          clientOverride: (role) =>
-            role === 'decide' ? { client: 'LocalQwenSmallDecide' } : undefined,
-        },
-      },
-      async () => {
-        expect(fn.supportedTypes).toEqual(['choice', 'score', 'noul'])
-        expect(fn.serving?.(NOUL.key).method).toBe('logprob')
-      },
-    )
-    await withRunFrame(
-      {
-        inference: {
-          tier: 'verda',
-          clientOverride: (role) => (role === 'decide' ? { client: 'JevDecide' } : undefined),
-        },
-      },
-      async () => {
-        expect(fn.supportedTypes).toEqual(['choice'])
-        await expect(fn({ spec: SCORE, state: 'synthetic' })).rejects.toThrow(
-          'private inference tier',
-        )
-      },
-    )
-    expect(requests).toHaveLength(1)
-  })
-})
-
-describe('jev mixed-set wire and support', () => {
-  it('set lock refuses an explicitly supported secondary on the private tier', async () => {
-    const { createDecideAllAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    let secondaryCalls = 0
-    const secondary: DecideFn = async () => {
-      secondaryCalls++
-      throw new Error('The locked secondary must never run')
-    }
-    Object.defineProperty(secondary, 'supportedTypes', {
-      value: ['choice', 'score', 'noul'],
-    })
-    const set = createDecideAllAdapter(secondary)
-    await withRunFrame(
-      {
-        inference: {
-          tier: 'verda',
-          clientOverride: (role) => (role === 'decide' ? { client: 'DecideAnthropic' } : undefined),
-        },
-      },
-      async () => {
-        expect(set.supportedTypes).toEqual(['choice'])
-        await expect(
-          set({ spec: { key: 'locked', fields: { score: SCORE } }, state: 'synthetic' }),
-        ).rejects.toThrow('Unsupported')
-      },
-    )
-    expect(secondaryCalls).toBe(0)
-    expect(requests).toHaveLength(0)
-  })
-
-  it('serves legacy choice, score and noul together through the routed set resolver', async () => {
-    const { createDecideAllAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
-    const fn = createDecideAllAdapter(await adapter())
-    expect(fn.supportedTypes).toEqual(['choice', 'score', 'noul'])
-    expect((await transport()).decideAll.supportedTypes).toEqual(['choice', 'score', 'noul'])
+describe('G11 private systemone routing', () => {
+  it('posts every question to the private full URL with its Bearer key and records time cost', async () => {
+    const { createDecideAllAdapter, createDecideAdapter } =
+      await import('@hames-ai/harness-baml/baml-adapters.server')
+    process.env.SMALL_LLM_API_KEY = 'private-test-key'
+    const savedRate = process.env.SMALL_LLM_EUR_PER_HOUR
+    process.env.SMALL_LLM_EUR_PER_HOUR = '3.6'
+    const now = vi.spyOn(Date, 'now').mockReturnValueOnce(1000).mockReturnValue(3000)
     respond = async () =>
       Response.json({
         answers: {
-          legacy: {
+          pick: {
             type: 'choice',
-            probabilities: Object.fromEntries(SPEC.labels.map((l, i) => [l.id, i === 0 ? 1 : 0])),
-            confidence: 1,
+            choice: 'yes',
+            confidence: 0.6,
+            probabilities: { yes: 0.6, no: 0.395 },
           },
           score: scoreAnswer,
-          noul: { type: 'noul', noul: 0.9 },
+          noul: { type: 'noul', noul: 0.7 },
+        },
+        usage: { input_tokens: 42, latency_ms: 12 },
+      })
+    try {
+      const result = await onPrivateTier(() =>
+        createDecideAllAdapter(createDecideAdapter())({
+          spec: { key: 'private-mixed', fields: { pick: SPEC, score: SCORE, noul: NOUL } },
+          state: 'Synthetic state only.',
+        }),
+      )
+      expect(requests).toHaveLength(1)
+      expect(requests[0].url).toBe(process.env.SMALL_LLM_DECISIONS_URL)
+      expect(requests[0].init.headers).toMatchObject({ authorization: 'Bearer private-test-key' })
+      const body = JSON.parse(String(requests[0].init.body))
+      expect(body).toMatchObject({
+        state: 'Synthetic state only.',
+        model: 'typesafe/jev-1.13',
+        questions: {
+          pick: {
+            type: 'choice',
+            instructions: SPEC.question,
+            criteria: { yes: 'needs memory', no: 'does not' },
+          },
+          score: {
+            type: 'score',
+            instructions: SCORE.question,
+            criteria: SCORE.levels.map((l) => l.description),
+          },
+          noul: { type: 'noul', instructions: NOUL.question, criteria: NOUL.criteria },
         },
       })
-    const result = await fn({
-      spec: { key: 'synthetic.mixed', fields: { legacy: SPEC, score: SCORE, noul: NOUL } },
-      state: 'synthetic',
+      expect(body.provider).toBeUndefined()
+      expect(result.fields.pick.probs).toEqual({ yes: 0.6, no: 0.395 })
+      expect(result.fields.pick.confidence).toBe(0.6)
+      expect(result.fields.noul.probs.true).toBe(0.7)
+      expect(result.fields.score.probs).toEqual(
+        Object.fromEntries(
+          SCORE.levels.map((l, i) => [
+            l.id,
+            scoreAnswer.probabilities[String(i) as '0' | '1' | '2'],
+          ]),
+        ),
+      )
+      expect(result.fields.pick.llmCall).toMatchObject({
+        clientName: 'PrivateSystemOne',
+        durationMs: 2000,
+        usage: { inputTokens: 42 },
+        metrics: { basis: 'time' },
+      })
+      expect(result.fields.pick.llmCall?.metrics?.costEur).toBeCloseTo((3.6 * 2) / 3600, 12)
+    } finally {
+      now.mockRestore()
+      if (savedRate === undefined) delete process.env.SMALL_LLM_EUR_PER_HOUR
+      else process.env.SMALL_LLM_EUR_PER_HOUR = savedRate
+    }
+  })
+
+  it('refuses an unset private URL before reading either key and never falls through to the public URL', async () => {
+    delete process.env.SMALL_LLM_DECISIONS_URL
+    const { assertPrivateTierConfigured } = await import('../../../lib/inference/config.server')
+    expect(() => assertPrivateTierConfigured()).toThrow('SMALL_LLM_DECISIONS_URL')
+    const real = process.env
+    let reads = 0
+    process.env = new Proxy(real, {
+      get(target, key) {
+        if (key === 'SMALL_LLM_API_KEY' || key === 'JEV_DECISIONS_API_KEY') reads++
+        return Reflect.get(target, key)
+      },
     })
-    expect(result.fields.score.probs.soon).toBeCloseTo(0.57)
-    expect(result.fields.noul).toMatchObject({
-      probs: { true: 0.9, false: expect.closeTo(0.1) },
-      calibrated: true,
-    })
-    expect(requests).toHaveLength(1)
-    const body = JSON.parse(requests[0].init!.body as string)
-    expect(Object.values(body.questions).map((q) => (q as { type: string }).type)).toEqual([
-      'choice',
-      'score',
-      'noul',
-    ])
-    configureConsumerClients((role) =>
-      role === 'decide' ? { client: 'DecideAnthropic' } : undefined,
-    )
-    expect(fn.supportedTypes).toEqual(['choice'])
+    try {
+      const fn = await adapter()
+      await expect(
+        withRunFrame({ inference: { tier: 'verda' } }, () =>
+          fn({ spec: SPEC, state: 'Synthetic.' }),
+        ),
+      ).rejects.toThrow('SMALL_LLM_DECISIONS_URL')
+      expect(requests).toHaveLength(0)
+      expect(reads).toBe(0)
+    } finally {
+      process.env = real
+    }
+  })
+
+  it('refuses a private run whose resolved client is public before any public request', async () => {
+    const fn = await adapter()
     await expect(
-      fn({ spec: { key: 'unsupported', fields: { score: SCORE } }, state: 'synthetic' }),
-    ).rejects.toThrow('Unsupported')
-    expect(requests).toHaveLength(1)
-    await withRunFrame(
-      {
-        inference: {
-          tier: 'verda',
-          clientOverride: (role) => (role === 'decide' ? { client: 'JevDecide' } : undefined),
-        },
-      },
-      async () => {
-        expect(fn.supportedTypes).toEqual(['choice'])
-        await expect(
-          fn({ spec: { key: 'locked', fields: { score: SCORE, noul: NOUL } }, state: 'synthetic' }),
-        ).rejects.toThrow('Refusing')
-      },
+      withRunFrame(
+        { inference: { tier: 'verda', clientOverride: () => ({ client: 'JevDecide' }) } },
+        () => fn({ spec: SPEC, state: 'Synthetic.' }),
+      ),
+    ).rejects.toThrow('Refusing')
+    expect(requests).toHaveLength(0)
+  })
+
+  it('keeps Anthropic decisions on the public URL and public key when a private URL is configured', async () => {
+    const fn = await adapter()
+    const result = await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
+      fn({ spec: SPEC, state: 'Synthetic.' }),
     )
     expect(requests).toHaveLength(1)
+    expect(requests[0].url).toBe(process.env.JEV_DECISIONS_URL)
+    expect(requests[0].init.headers).toMatchObject({ authorization: 'Bearer or-test-key' })
+    expect(result.llmCall?.clientName).toBe('JevDecide')
+  })
+
+  it.each([
+    'http://public.example/v1/systemone',
+    'https://user:secret@private.example/v1/systemone',
+    'https://private.example/v1',
+    'http://127.0.0.1.evil.example/v1/systemone',
+  ])('refuses invalid private URL %s at both configuration and transport', async (url) => {
+    process.env.SMALL_LLM_DECISIONS_URL = url
+    const { assertPrivateTierConfigured } = await import('../../../lib/inference/config.server')
+    expect(() => assertPrivateTierConfigured()).toThrow('SMALL_LLM_DECISIONS_URL')
+    const fn = await adapter()
+    await expect(
+      withRunFrame({ inference: { tier: 'verda' } }, () => fn({ spec: SPEC, state: 'Synthetic.' })),
+    ).rejects.toThrow('SMALL_LLM_DECISIONS_URL')
+    expect(requests).toHaveLength(0)
+  })
+})
+
+describe('G11 attempted private calls remain time priced on failure', () => {
+  it('records measured time for an attempted private request that fails', async () => {
+    respond = async () => {
+      throw new Error('synthetic connection failure')
+    }
+    const now = vi.spyOn(Date, 'now').mockReturnValueOnce(1000).mockReturnValue(3000)
+    try {
+      const fn = await adapter()
+      const error = await onPrivateTier(() => fn({ spec: SPEC, state: 'Synthetic.' })).catch(
+        (e) => e,
+      )
+      expect(error.llmCall).toMatchObject({
+        clientName: 'PrivateSystemOne',
+        durationMs: 2000,
+        metrics: { basis: 'time' },
+      })
+      expect(error.llmCall.metrics.costEur).toBeGreaterThan(0)
+      expect(requests).toHaveLength(1)
+    } finally {
+      now.mockRestore()
+    }
   })
 })

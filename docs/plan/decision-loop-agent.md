@@ -119,10 +119,10 @@ There are four channels, from cheapest to richest:
 So the selection is declared on the child, independently per child:
 
 - **`withReferences`' own config.** `source: ['retrieve', 'info']` limits candidates to those siblings' patterns (`with-references.server.ts:200-210`). `viewConfig: { fromLastNTurns: 1 }` limits them to this turn. `decisionLoop` runs once per turn, so "this turn" is "this invocation".
-- **A tool-level filter.** "Only results from tool `x`" is **not** expressible today. `source` names patterns, and `ViewConfig` has no tool filter (`types.ts:399-419`). Slice 1 adds `tools?: string[]` to `WithReferencesConfig`, filtering candidates on their `tool` before selection. It is the narrowest place for it: a `ViewConfig` tool filter would also hide the matching `tool_call` that the candidate's `tool_args` are read from (`with-references.server.ts:101-117`).
+- **No tool-level filter (owner, 2026-10-15).** The sibling's name in `source` is enough to define what a search may draw on, so `WithReferencesConfig` gains no `tools` option. One is added only if a privacy case needs it.
 - **A decisions-model selector.** It is a second `SelectorFn` through the existing required `selector` seam, not a second pattern. Tracked in #570.
 
-**These filters are also a privacy control.** `doc_ag`'s results are mail and files. Attached to `info_ag`, which holds web tools, they can become search queries or fetched URLs (SD-1). So `info_ag`'s `source` excludes `doc` unless the owner rules otherwise. The handoff carries a capped summary of `doc_ag`'s output to every route as well; that is the same flow at a smaller size, and it is owner call R1 on PR #566.
+**`source` is also a privacy control.** `doc_ag`'s results are mail and files. Attached to `info_ag`, which holds web tools, they can become search queries or fetched URLs (SD-1). So `info_ag`'s `source` excludes `doc` unless the owner rules otherwise. The handoff carries a capped summary of `doc_ag`'s output to every route as well; that is the same flow at a smaller size, and it is owner call R1 on PR #566. R1 is **pending**: the owner is first confirming with the coordinator whether pseudonymisation works now.
 
 **Data Stash or `withReferences`: every case in this agent.** The boundary: **the stash holds documents (bytes), and a route reads them through a stash-connected step. `withReferences` re-uses earlier tool results, for a loop that has no stash connection.**
 
@@ -300,7 +300,6 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
    - the custom state;
    - the route-output record, its stats and the per-kind extractors;
    - each child's synthetic context of this turn's earlier children, with `dropHitl`, and its view built from its own `viewConfig`;
-   - `tools?: string[]` on `WithReferencesConfig`, filtering candidates by tool name;
    - the planner's agent map;
    - sanitizing on the way up;
    - failure capture and severity downgrade;

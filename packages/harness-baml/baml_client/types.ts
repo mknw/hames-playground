@@ -88,12 +88,6 @@ export interface CriticResult {
   
 }
 
-export interface DecideOption {
-  letter: string
-  description: string
-  
-}
-
 export interface DescribeBatchResult {
   summaries: DescribeItemSummary[]
   
@@ -291,11 +285,5 @@ export interface ToolResult {
   result: string
   success: boolean
   error?: string | null
-  
-}
-
-export interface VerbalizedOption {
-  letter: string
-  probability: number
   
 }

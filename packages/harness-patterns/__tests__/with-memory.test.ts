@@ -57,8 +57,7 @@ const row: MemoryCandidate = {
 }
 
 const decideAs = (probs: Record<string, number>) =>
-  (async () =>
-    ({ probs, method: 'logprob', calibrated: true }) as DecideResult) as unknown as DecideFn
+  (async () => ({ probs, method: 'jev', calibrated: true }) as DecideResult) as unknown as DecideFn
 const retrieves = decideAs({ retrieve: 0.9, skip: 0.1 })
 const skips = decideAs({ retrieve: 0.1, skip: 0.9 })
 

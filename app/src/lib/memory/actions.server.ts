@@ -9,6 +9,8 @@ import {
   listMemoriesForUser,
 } from '../db/memories.server'
 import { getMemoryEnabled, setMemoryEnabledForUser } from '../db/user-prefs.server'
+import { deleteHitlProposalsForUser } from '../db/hitl.server'
+import { MEMORY_CONFIRM_KIND } from '@hames-ai/harness-patterns/memory-store.server'
 
 // Local and unexported: every export of this module is browser-reachable.
 async function requireUser(): Promise<{ id: string }> {
@@ -35,13 +37,20 @@ export async function forgetAllMemories() {
   // #552: this commit must precede the erase transaction. Failure leaves OFF.
   await setMemoryEnabledForUser(user.id, false)
   await deleteAllMemoriesForUser(user.id)
+  // Pending proposals are memory text the person never agreed to keep (#579
+  // review 1): erased with the rest. Same failure policy as the erase above:
+  // a rejection leaves the switch OFF and reports the retryable failure.
+  await deleteHitlProposalsForUser(user.id, MEMORY_CONFIRM_KIND)
 }
 
 export async function setMemoryEnabled(enabled: boolean) {
   const user = await requireUser()
   if (typeof enabled !== 'boolean') throw new Error('Memory enabled must be a boolean')
   await setMemoryEnabledForUser(user.id, enabled)
-  if (!enabled) await deleteAllMemoriesForUser(user.id)
+  if (!enabled) {
+    await deleteAllMemoriesForUser(user.id)
+    await deleteHitlProposalsForUser(user.id, MEMORY_CONFIRM_KIND)
+  }
 }
 
 export async function exportMyMemories() {

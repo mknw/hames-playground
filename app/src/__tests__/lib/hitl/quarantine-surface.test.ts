@@ -57,8 +57,8 @@ describe('the quarantine is out of every agent\u2019s reach (A7)', () => {
     expect(catalog).not.toMatch(/quarantine|hitl/i)
 
     // And the app's tool surface never imports the quarantine's repository:
-    // the only importers are the HITL modules and the turn runner, both host
-    // code an agent cannot invoke.
+    // the only importers are the HITL modules, the turn runner and the memory
+    // confirmation modules, all host code an agent cannot invoke.
     const offenders: string[] = []
     const walk = async (dir: string): Promise<void> => {
       for (const entry of await readdir(dir, { withFileTypes: true })) {
@@ -75,6 +75,12 @@ describe('the quarantine is out of every agent\u2019s reach (A7)', () => {
     expect(offenders.sort()).toEqual([
       'lib/harness-client/turn.server.ts',
       'lib/hitl/actions.server.ts',
+      // #419 M6: the memory proposals' payload rows, held and offered by host
+      // code behind its own gated RPC door (confirm-actions → proposals).
+      // M7's erase RPCs purge the pending proposals with the memories.
+      'lib/memory/actions.server.ts',
+      'lib/memory/confirm-actions.server.ts',
+      'lib/memory/proposals.server.ts',
     ])
   })
 })

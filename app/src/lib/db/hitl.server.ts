@@ -18,7 +18,7 @@
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { decryptFieldOrNull, encryptFieldOrNull } from './crypto.server'
-import { query } from './client.server'
+import { query, withTransaction, type TxQuery } from './client.server'
 
 assertServerOnImport()
 
@@ -205,6 +205,305 @@ export async function closeHitlRows(
 }
 
 // ============================================================================
+// Proposals (#433 S11, #419 M6)
+// ============================================================================
+//
+// A proposal's payload — the memory text a person has not yet agreed to keep —
+// waits here, encrypted, under its request id. It is NEVER authoritative: the
+// proposal is two events in the conversation blob (ADR-0009), and the RPC that
+// lists or applies one derives that from the blob first. A row with no open
+// proposal in the blob is simply never offered.
+
+/** One open proposal's row, decoded. */
+export interface HitlProposalRow {
+  readonly requestId: string
+  readonly sessionId: string
+  readonly kind: string
+  readonly expiresAt: Date | null
+  /** The payload the proposing hook held; `null` once purged. Untyped here —
+   *  the memory module parses it (`parseMemoryProposalPayload`). */
+  readonly payload: unknown
+  /** `answering`: a person's answer is BOUND (first answer wins, before any
+   *  write) and its effects are not all recorded yet; only a retry of that same
+   *  answer may finish it. */
+  readonly status: 'pending' | 'answering'
+  /** The bound answer while `answering`. */
+  readonly answer: StoredAnswer | null
+}
+
+/**
+ * Hold a proposal's payload under its request id, `pending`. The row's owner is
+ * the caller's; an existing row of the same id is left alone (`DO NOTHING`):
+ * request ids are fresh UUIDs, so a conflict is a bug or a replay, and a replay
+ * must not swap the payload a person is about to approve.
+ */
+export async function putHitlProposal(input: {
+  readonly requestId: string
+  readonly userId: string
+  readonly sessionId: string
+  readonly kind: string
+  readonly runId: string | null
+  readonly expiresAt: Date
+  readonly payload: unknown
+}): Promise<void> {
+  // Only while the user's memory switch is ON, decided by the INSERT itself: a
+  // switch-off plus erase that lands between the hook's own check and this hold
+  // must not leave a readable proposal behind (#579 review 1). Zero rows is a
+  // refusal either way, so the hook takes its request back.
+  const { rowCount } = await query(
+    `INSERT INTO hitl_requests
+       (request_id, user_id, session_id, run_id, kind, status, blocks_run, expires_at, payload)
+     SELECT $1, $2, $3, $4, $5, 'pending', FALSE, $6, $7
+      WHERE EXISTS (SELECT 1 FROM user_prefs WHERE user_id = $2 AND memory_enabled)
+     ON CONFLICT (request_id) DO NOTHING`,
+    [
+      input.requestId,
+      input.userId,
+      input.sessionId,
+      input.runId,
+      input.kind,
+      input.expiresAt,
+      encryptJson(input.payload),
+    ],
+  )
+  if (!rowCount) {
+    throw new Error(
+      '[hitl] the proposal was not held: its request id is already held, or memory is off',
+    )
+  }
+}
+
+/**
+ * One OPEN proposal of the caller's: `pending`, not past `expires_at`, with its
+ * payload still held. Owner-scoped, so someone else's request id is the same
+ * `null` as an unknown one.
+ */
+export async function getHitlProposal(
+  requestId: string,
+  userId: string,
+): Promise<HitlProposalRow | null> {
+  const { rows } = await query<Record<string, unknown>>(
+    `SELECT request_id, session_id, kind, expires_at, payload, status, answer
+       FROM hitl_requests
+      WHERE request_id = $1 AND user_id = $2 AND status IN ('pending', 'answering')
+        AND blocks_run = FALSE AND payload IS NOT NULL
+        AND (expires_at IS NULL OR expires_at > NOW())`,
+    [requestId, userId],
+  )
+  return rows.length === 0 ? null : toProposalRow(rows[0])
+}
+
+/** The caller's open proposals of one kind in one conversation, oldest first. */
+export async function listHitlProposals(
+  sessionId: string,
+  userId: string,
+  kind: string,
+): Promise<HitlProposalRow[]> {
+  const { rows } = await query<Record<string, unknown>>(
+    `SELECT request_id, session_id, kind, expires_at, payload, status, answer
+       FROM hitl_requests
+      WHERE session_id = $1 AND user_id = $2 AND kind = $3 AND status IN ('pending', 'answering')
+        AND blocks_run = FALSE AND payload IS NOT NULL
+        AND (expires_at IS NULL OR expires_at > NOW())
+      ORDER BY created_at, request_id`,
+    [sessionId, userId, kind],
+  )
+  return rows.map(toProposalRow)
+}
+
+function toProposalRow(r: Record<string, unknown>): HitlProposalRow {
+  return {
+    requestId: r.request_id as string,
+    sessionId: r.session_id as string,
+    kind: r.kind as string,
+    expiresAt: (r.expires_at as Date | null) ?? null,
+    payload: decryptJson(r.payload as string | null, 'hitl_requests.payload'),
+    status: r.status === 'answering' ? 'answering' : 'pending',
+    answer:
+      (decryptJson(r.answer as string | null, 'hitl_requests.answer') as StoredAnswer | null) ??
+      null,
+  }
+}
+
+/** Canonical form of an answer, so "the same answer" is a byte comparison:
+ *  the choice, and the flags with their keys sorted. */
+export function canonicalAnswer(a: StoredAnswer): string {
+  return JSON.stringify({
+    choice: a.choice,
+    flags: Object.fromEntries(Object.entries(a.flags ?? {}).sort(([x], [y]) => (x < y ? -1 : 1))),
+  })
+}
+
+/**
+ * Bind the person's answer to a proposal BEFORE anything is written (#579
+ * review 2): first answer wins on the row, the primitive `recordHitlAnswer` uses
+ * for blocking requests. `pending → answering` in one fenced statement.
+ *
+ * - `claimed: true` — this answer is now THE answer; the caller writes and saves.
+ * - `claimed: false` — someone answered first. `recorded` is what they chose; the
+ *   caller continues only for a byte-equal retry and refuses anything else.
+ *
+ * Nothing about the conversation blob here: the row decides who answered first,
+ * the blob is still the record of the outcome (ADR-0009).
+ */
+export async function claimHitlProposalAnswer(input: {
+  readonly requestId: string
+  readonly userId: string
+  readonly sessionId: string
+  readonly kind: string
+  readonly answer: StoredAnswer
+}): Promise<{ claimed: true } | { claimed: false; recorded: StoredAnswer | null }> {
+  const { rowCount } = await query(
+    `UPDATE hitl_requests
+        SET status = 'answering', answer = $5, answered_at = NOW(), updated_at = NOW()
+      WHERE request_id = $1 AND user_id = $2 AND session_id = $3 AND kind = $4
+        AND status = 'pending' AND blocks_run = FALSE`,
+    [
+      input.requestId,
+      input.userId,
+      input.sessionId,
+      input.kind,
+      encryptFieldOrNull(JSON.stringify(input.answer)),
+    ],
+  )
+  if ((rowCount ?? 0) > 0) return { claimed: true }
+  const { rows } = await query<{ answer: string | null }>(
+    `SELECT answer FROM hitl_requests
+      WHERE request_id = $1 AND user_id = $2 AND session_id = $3 AND status = 'answering'`,
+    [input.requestId, input.userId, input.sessionId],
+  )
+  return {
+    claimed: false,
+    recorded:
+      rows.length === 0
+        ? null
+        : (decryptJson(rows[0].answer, 'hitl_requests.answer') as StoredAnswer | null),
+  }
+}
+
+/**
+ * Give a bound answer back (`answering → pending`) ONLY when nothing is written
+ * under it, so a refusal before any write (memory switched off, payload
+ * unusable, a failed first write) does not turn "Don't save" into
+ * `already-answered` (#579 review 2a).
+ *
+ * "Nothing is written" is decided HERE, by the database, never from one
+ * attempt's report: an earlier attempt of the same answer (the retry after a
+ * refused save), or a concurrent one, may already have written. One proposal is
+ * exactly one `event_id` (the user message it was built from), and
+ * `(user_id, event_id, ordinal)` is `memory_sources`' primary key, so a row for
+ * that event IS a write under this proposal.
+ *
+ * Two statements in one transaction, on purpose. The first takes the row lock:
+ * a write transaction that re-checked the binding holds it `FOR SHARE` until it
+ * commits, so this waits for it. The second then runs with a FRESH statement
+ * snapshot, so its `NOT EXISTS` sees what that write committed — a single
+ * `UPDATE … WHERE NOT EXISTS` would keep the snapshot it started with across the
+ * lock wait and could not.
+ *
+ * `bound` is the answer the caller claimed or matched; the release is refused
+ * unless it is still the one bound (same canonical form), so an attempt cannot
+ * undo a DIFFERENT answer's claim.
+ *
+ * Returns whether the answer was given back.
+ */
+export async function releaseHitlProposalAnswer(
+  requestId: string,
+  userId: string,
+  eventId: string,
+  bound: StoredAnswer,
+): Promise<boolean> {
+  return withTransaction(async (tx) => {
+    const { rows } = await tx.query<{ answer: string | null }>(
+      `SELECT answer FROM hitl_requests
+        WHERE request_id = $1 AND user_id = $2 AND status = 'answering'
+          FOR UPDATE`,
+      [requestId, userId],
+    )
+    if (rows.length === 0) return false
+    // Only the answer that is bound NOW may give it back: after a release and a
+    // re-claim by another answer (D4) the row is `answering` for someone else,
+    // and this attempt's refusal is not that answer's to undo.
+    const recorded = decryptJson(rows[0].answer, 'hitl_requests.answer') as StoredAnswer | null
+    if (!recorded || canonicalAnswer(recorded) !== canonicalAnswer(bound)) return false
+    const { rowCount } = await tx.query(
+      `UPDATE hitl_requests
+          SET status = 'pending', answer = NULL, answered_at = NULL, updated_at = NOW()
+        WHERE request_id = $1 AND user_id = $2 AND status = 'answering'
+          AND NOT EXISTS (SELECT 1 FROM memory_sources WHERE user_id = $2 AND event_id = $3)`,
+      [requestId, userId, eventId],
+    )
+    return (rowCount ?? 0) > 0
+  })
+}
+
+/**
+ * Inside a memory write transaction, BEFORE the item is written: THIS answer is
+ * still the one bound to the proposal, and hold the row `FOR SHARE` until the
+ * transaction ends. A release (above) therefore either ran first — and this
+ * throws, so nothing is written under a released answer — or waits for this
+ * write to commit and then sees it (#579 review 2a, D3: two concurrent submits).
+ *
+ * It compares the ANSWER, not just the status (D4): between an attempt's claim
+ * and its first write a sibling can release and a different answer ("Don't
+ * save") can claim the row again, which is `answering` all the same. The answer
+ * is stored as randomised ciphertext, so the comparison is made here, on the
+ * decrypted answer of the row this statement has locked, against `bound` — the
+ * answer this attempt claimed or matched.
+ */
+export async function requireAnsweringBinding(
+  tx: TxQuery,
+  requestId: string,
+  userId: string,
+  bound: StoredAnswer,
+): Promise<void> {
+  const { rows } = await tx.query<{ answer: string | null }>(
+    `SELECT answer FROM hitl_requests
+      WHERE request_id = $1 AND user_id = $2 AND status = 'answering'
+        FOR SHARE`,
+    [requestId, userId],
+  )
+  const recorded =
+    rows.length === 0
+      ? null
+      : (decryptJson(rows[0].answer, 'hitl_requests.answer') as StoredAnswer | null)
+  if (!recorded || canonicalAnswer(recorded) !== canonicalAnswer(bound)) {
+    throw new Error('[hitl] the proposal answer is no longer bound')
+  }
+}
+
+/**
+ * Erase every proposal row of the given conversations — the conversation
+ * delete's half (it runs in that delete's transaction, so the two commit
+ * together). A proposal's payload is memory text the person never agreed to
+ * keep; deleting the conversation it came from must take it too.
+ */
+export async function deleteHitlRowsForConversations(
+  conversationIds: readonly string[],
+  userId: string,
+  tx: TxQuery,
+): Promise<void> {
+  if (conversationIds.length === 0) return
+  await tx.query(`DELETE FROM hitl_requests WHERE user_id = $1 AND session_id = ANY($2)`, [
+    userId,
+    [...conversationIds],
+  ])
+}
+
+/**
+ * Erase every pending proposal of one kind for a user — "forget everything"'s
+ * half. Takes a `userId`, so it is NEVER a `'use server'` export (SD-13): the
+ * RPC that reaches it passed its own `requireUser()` first.
+ */
+export async function deleteHitlProposalsForUser(userId: string, kind: string): Promise<number> {
+  const { rowCount } = await query(
+    `DELETE FROM hitl_requests WHERE user_id = $1 AND kind = $2 AND blocks_run = FALSE`,
+    [userId, kind],
+  )
+  return rowCount ?? 0
+}
+
+// ============================================================================
 // The quarantine (F2)
 // ============================================================================
 
@@ -311,7 +610,7 @@ export async function sweepExpiredHitl(): Promise<{ quarantine: number; payloads
     `UPDATE hitl_requests
         SET payload = NULL, status = 'expired', updated_at = NOW()
       WHERE expires_at <= NOW()
-        AND (payload IS NOT NULL OR status IN ('pending', 'answered'))`,
+        AND (payload IS NOT NULL OR status IN ('pending', 'answering', 'answered'))`,
   )
   return { quarantine: gone.rowCount ?? 0, payloads: purged.rowCount ?? 0 }
 }

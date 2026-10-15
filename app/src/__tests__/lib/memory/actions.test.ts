@@ -8,7 +8,14 @@ const mocks = vi.hoisted(() => ({
   enabled: vi.fn(),
   set: vi.fn(),
   export: vi.fn(),
+  purge: vi.fn(),
 }))
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
+  assertServerOnImport: vi.fn(),
+  assertServer: vi.fn(),
+  ServerOnlyError: class ServerOnlyError extends Error {},
+}))
+vi.mock('../../../lib/db/hitl.server', () => ({ deleteHitlProposalsForUser: mocks.purge }))
 vi.mock('../../../lib/auth/server', () => ({ getAuthenticatedUser: mocks.auth }))
 vi.mock('../../../lib/auth/dev-bypass', () => ({
   isBypassEnabled: mocks.bypass,
@@ -34,6 +41,46 @@ beforeEach(() => {
     { content: 'Synthetic preference', embedding: '[0.1]', sources: [] },
   ])
 })
+describe('#579 review 1: erasure takes the pending proposals too', () => {
+  // MUTATION: drop the purge from either RPC → a pending proposal's text
+  // survives "Forget everything" / switching off, readable and saveable → red.
+  it.each([
+    ['forget all', () => rpc.forgetAllMemories()],
+    ['turn off', () => rpc.setMemoryEnabled(false)],
+  ])('%s purges the caller’s memory proposals AFTER the memories are erased', async (_, invoke) => {
+    const order: string[] = []
+    mocks.set.mockImplementation(async () => void order.push('off'))
+    mocks.erase.mockImplementation(async () => void order.push('erase'))
+    mocks.purge.mockImplementation(async () => void order.push('purge'))
+    await invoke()
+    expect(order).toEqual(['off', 'erase', 'purge'])
+    expect(mocks.purge).toHaveBeenCalledExactlyOnceWith('synthetic-owner', 'memory.confirm')
+  })
+
+  // MUTATION: swallow the purge failure → success is reported with the text still held → red.
+  it.each([
+    ['forget all', () => rpc.forgetAllMemories()],
+    ['turn off', () => rpc.setMemoryEnabled(false)],
+  ])(
+    '%s reports a failed purge as a retryable failure, leaving the switch OFF',
+    async (_, invoke) => {
+      mocks.purge.mockRejectedValue(new Error('retry purge'))
+      await expect(invoke()).rejects.toThrow('retry purge')
+      expect(mocks.set).toHaveBeenCalledExactlyOnceWith('synthetic-owner', false)
+    },
+  )
+
+  // MUTATION: purge on switch-ON as well → harmless but wrong; and a failed
+  // erase must not reach the purge (the order the #552 policy fixes).
+  it('turning memory ON purges nothing, and a failed erase never reaches the purge', async () => {
+    await rpc.setMemoryEnabled(true)
+    expect(mocks.purge).not.toHaveBeenCalled()
+    mocks.erase.mockRejectedValue(new Error('retry erase'))
+    await expect(rpc.forgetAllMemories()).rejects.toThrow('retry erase')
+    expect(mocks.purge).not.toHaveBeenCalled()
+  })
+})
+
 describe('memory RPC ownership and erase ordering', () => {
   it('scopes every operation to the authenticated principal', async () => {
     expect(await rpc.listMyMemories()).toEqual({ enabled: false, memories: [] })

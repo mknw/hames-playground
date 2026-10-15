@@ -464,3 +464,186 @@ describe.runIf(IS_HERMETIC)('scenario 10: memory through real turns', () => {
     })
   })
 })
+
+// ============================================================================
+// #419 M6: the confirmation of a memory, through real turns and the real modules
+// ============================================================================
+
+describe.runIf(IS_HERMETIC)(
+  'scenario 10b: a memory is proposed, then saved only by an approval',
+  () => {
+    let proposals: typeof import('../../src/lib/memory/proposals.server')
+    beforeAll(async () => {
+      proposals = await import('../../src/lib/memory/proposals.server')
+    })
+    const proposalRows = async (id: string) =>
+      (
+        await db.query<{ request_id: string; status: string; payload: string | null }>(
+          `SELECT request_id, status, payload FROM hitl_requests WHERE session_id = $1`,
+          [id],
+        )
+      ).rows
+    const proposedTurn = async (label: string) => {
+      const id = newSessionId(label)
+      app.fakeLlm.memoryConfirm('ask')
+      await app.runTurn(id, MESSAGE, AGENT)
+      const row = await waitFor(
+        () => app.readRow(id),
+        (r) => !!r && eventsOfType(r.serializedContext, 'hitl_request').length > 0,
+      )
+      return {
+        id,
+        requestId: String(eventsOfType(row!.serializedContext, 'hitl_request')[0].requestId),
+      }
+    }
+
+    describe.each(TIERS)('on %s', (tier) => {
+      beforeEach(async () => {
+        await app.setTier(tier)
+        await enabled(true)
+      })
+
+      it('an ask proposes: nothing is written, the text is held encrypted and never rides the blob', async () => {
+        const { id, requestId } = await proposedTurn('confirm-propose')
+        expect(await stored()).toEqual([])
+        const blob = (await app.readRow(id))!.serializedContext
+        expect(eventsOfType(blob, 'memory_written')).toEqual([])
+        expect(eventsOfType(blob, 'hitl_request')).toEqual([
+          expect.objectContaining({ kind: 'memory.confirm', blocking: false, requestId }),
+        ])
+        // the memory text is in the held payload (ciphertext) and nowhere in the blob
+        expect(JSON.stringify(eventsOfType(blob, 'hitl_request'))).not.toContain(
+          'synthetic gardens',
+        )
+        const [held] = await proposalRows(id)
+        expect(held.status).toBe('pending')
+        expect(held.payload).not.toBeNull()
+        expect(held.payload).not.toContain('synthetic gardens')
+
+        const [view] = await proposals.listMemoryProposalsFor(app.userId, id)
+        expect(view.requestId).toBe(requestId)
+        expect(view.items.map((i) => [i.kind, i.content, i.effect])).toEqual([
+          ['episodic', MESSAGE, 'new'],
+        ])
+        expect(await takeEgressAttempts()).toEqual([])
+      })
+
+      it('Save writes the item, records the person and the write in ONE saved context, and closes the row', async () => {
+        const { id, requestId } = await proposedTurn('confirm-save')
+        const out = await proposals.answerMemoryProposalFor(app.userId, id, requestId, 'save')
+        expect(out).toEqual({ outcome: 'saved', written: 1, stale: 0 })
+        expect(await stored()).toEqual([
+          expect.objectContaining({ tier, content: MESSAGE, evidence: MESSAGE }),
+        ])
+        const blob = (await app.readRow(id))!.serializedContext
+        expect(eventsOfType(blob, 'hitl_response')).toEqual([
+          expect.objectContaining({
+            requestId,
+            choice: 'save',
+            by: 'person',
+            principal: app.userId,
+          }),
+        ])
+        expect(eventsOfType(blob, 'memory_written')).toEqual([
+          expect.objectContaining({ tier, action: 'inserted' }),
+        ])
+        expect(await proposalRows(id)).toEqual([
+          expect.objectContaining({ request_id: requestId, status: 'applied', payload: null }),
+        ])
+        // an answered proposal is gone from the list and cannot be answered twice
+        expect(await proposals.listMemoryProposalsFor(app.userId, id)).toEqual([])
+        expect(await proposals.answerMemoryProposalFor(app.userId, id, requestId, 'save')).toEqual({
+          outcome: 'unknown-request',
+        })
+        expect(await stored()).toHaveLength(1)
+        expect(await takeEgressAttempts()).toEqual([])
+      })
+
+      it("Don't save writes nothing and still closes the proposal", async () => {
+        const { id, requestId } = await proposedTurn('confirm-discard')
+        expect(
+          await proposals.answerMemoryProposalFor(app.userId, id, requestId, 'discard'),
+        ).toEqual({ outcome: 'discarded' })
+        expect(await stored()).toEqual([])
+        const blob = (await app.readRow(id))!.serializedContext
+        expect(eventsOfType(blob, 'hitl_response')).toEqual([
+          expect.objectContaining({ choice: 'discard', by: 'person' }),
+        ])
+        expect(eventsOfType(blob, 'memory_written')).toEqual([])
+      })
+
+      it('a turn in flight refuses the answer (a conflict), and the retry after it saves once', async () => {
+        const { id, requestId } = await proposedTurn('confirm-conflict')
+        const claimed = await conversations.claimConversation(id, app.userId)
+        expect(claimed).not.toBeNull()
+        try {
+          expect(
+            await proposals.answerMemoryProposalFor(app.userId, id, requestId, 'save'),
+          ).toEqual({
+            outcome: 'conflict',
+          })
+        } finally {
+          await conversations.releaseConversationClaim(id, app.userId, claimed!.version)
+        }
+        // the write that ran before the refused save is idempotent: the retry
+        // finds its provenance row, writes nothing twice and records the reference
+        expect(await stored()).toHaveLength(1)
+        expect(await proposals.answerMemoryProposalFor(app.userId, id, requestId, 'save')).toEqual({
+          outcome: 'saved',
+          written: 1, // reported as what the answer put in memory (a duplicate of the first write)
+          stale: 0,
+        })
+        expect(await stored()).toHaveLength(1)
+        expect((await stored())[0].evidenceCount ?? 1).toBe(1)
+        expect(
+          eventsOfType((await app.readRow(id))!.serializedContext, 'memory_written'),
+        ).toHaveLength(1)
+      })
+
+      it('a user who switched memory off in the meantime saves nothing, and may still decline', async () => {
+        const { id, requestId } = await proposedTurn('confirm-off')
+        await enabled(false)
+        expect(await proposals.answerMemoryProposalFor(app.userId, id, requestId, 'save')).toEqual({
+          outcome: 'memory-off',
+        })
+        expect(await stored()).toEqual([])
+        expect(
+          await proposals.answerMemoryProposalFor(app.userId, id, requestId, 'discard'),
+        ).toEqual({ outcome: 'discarded' })
+      })
+
+      it('another user can neither see nor answer it', async () => {
+        const { id, requestId } = await proposedTurn('confirm-foreign')
+        expect(await proposals.listMemoryProposalsFor('someone-else', id)).toEqual([])
+        expect(
+          await proposals.answerMemoryProposalFor('someone-else', id, requestId, 'save'),
+        ).toEqual({
+          outcome: 'unknown-request',
+        })
+        expect(await stored()).toEqual([])
+      })
+
+      it('deleting the conversation takes the held payload with it', async () => {
+        const { id } = await proposedTurn('confirm-delete')
+        expect(await proposalRows(id)).toHaveLength(1)
+        await conversations.deleteConversation(id, app.userId)
+        expect(await proposalRows(id)).toEqual([])
+      })
+    })
+
+    it('the org target still never proposes and never writes, with the seam wired', async () => {
+      // The fake gate answers `personal_memory`; the org outcome is pinned at
+      // layer 1 (`m6-org-never-proposes`). Here: no proposal row exists for a
+      // turn whose gate said `skip` — a routine memory is written straight through.
+      await app.setTier('verda')
+      await enabled(true)
+      app.fakeLlm.memoryConfirm('skip')
+      const id = newSessionId('confirm-skip')
+      await app.runTurn(id, MESSAGE, AGENT)
+      await settled(id)
+      expect(await stored()).toHaveLength(1)
+      expect(await proposalRows(id)).toEqual([])
+      expect(eventsOfType((await app.readRow(id))!.serializedContext, 'hitl_request')).toEqual([])
+    })
+  },
+)

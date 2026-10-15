@@ -1825,6 +1825,46 @@ never lists a pending request. It returns the new blob with the `expired` and
 Superseding and expiring never choose for the person (P4): both record
 `choice: null`, and neither re-enters a pattern.
 
+### Proposals: `proposeToHuman` and `answerProposal` (#433 S11)
+
+A **proposal** is a request raised from **outside a run** — a post-reply hook
+such as `settleMemory` — so it is non-blocking: it pauses nothing, resumes
+nothing and holds no tool result. It is still two events in the context
+(ADR-0009), a `hitl_request` with `blocking: false` and, later, the person's
+`hitl_response`, and it differs from a blocking request in one way: it
+**outlives the turn that raised it**. `readHitl` windows to the current run and
+never lists one; `readProposals(ctx, now?)` reads the whole log.
+
+```ts
+proposeToHuman(ctx, request, { attended, patternId? }): HitlOutcome
+readProposals(ctx, now?): readonly HitlRequestEventData[]
+answerProposal(ctx, answers, { principal?, now?, patternId? }): readonly AnsweredProposal[]
+```
+
+- **`proposeToHuman`** validates like `askHuman` (a refusal names
+  `proposeToHuman`). A proposal this log already holds for the same kind, key
+  and option set is **not raised again**: still open returns `pending`; answered
+  or closed by expiry returns `answered` with what was recorded (`choice: null`
+  for expiry). Otherwise it records a request with a UUID v4 id and the open
+  frame's tier. With nobody there (`attended: false`) and a rule other than
+  `park`, the rule decides and an `unattended` response is recorded beside it.
+  It writes straight into `ctx.events` and never reaches a live listener.
+- **`answerProposal`** binds an answer to a proposal that is **open**: not a
+  blocking request, not answered, not closed, not past due (`unknown-request`,
+  `expired`), with a choice that is an available option of **that request
+  event** and flags that are that option's (the checks a resume applies). Every
+  answer is checked before any is recorded; a refusal throws `HitlAnswerError`
+  (message prefix `answerProposal`) and leaves the context byte-identical.
+  Answers may cover only some of the open proposals. `principal` is the host's;
+  `by` is always `'person'`. It decides nothing about what an answer **does**:
+  the host writes (or declines to write) what the proposal described and records
+  the answer in the **same version-checked save** as that outcome.
+- **`expireHitl`** already closes an expired proposal wherever it sits (m6).
+
+Payloads stay out of events: a proposal's `summary` and option labels carry
+counts and closed-set values only, because the request outlives the payload the
+host purges on close (F20b). The memory consumer is below.
+
 ### Properties (P1–P6)
 
 **P1 · Pause binding.** An answer resumes only the pause it was issued for. It
@@ -2175,7 +2215,7 @@ never the user's words) and a returned `skipped` reason.
 | 3   | ONE `decideFields` over the window: `sensitive`, `target`, `confirm`, `kind`, using endpoint verdicts                                                                                                                               | a failed gate stores nothing                                         | `seam-contract`           |
 | 4   | `sensitive`; `target: none`                                                                                                                                                                                                         | `sensitive` `gate`                                                   | `seam-contract`           |
 | 5   | `resolveStoreRoute`: an org target ALWAYS asks (F2); a personal target skips the question only for a routine kind (default episodic/semantic/preference; `trait` always asks)                                                       | —                                                                    | `org-graph-forces-ask`    |
-| 5′  | **pre-M12**: an org target has no writer. **pre-M6**: `ask` has no confirmation mechanism                                                                                                                                           | `org-no-writer` `no-confirmation` — store nothing and log (F4)       | `pre-m6-no-store`         |
+| 5′  | **pre-M12**: an org target has no writer. **without a `confirm` seam**: `ask` has no confirmation mechanism (pre-M6 behaviour, the fail-closed default)                                                                                                                                    | `org-no-writer` `no-confirmation` — store nothing and log (F4)       | `pre-m6-no-store`         |
 | 6   | extract (≤ `maxPerTurn`, default 3, read in order)                                                                                                                                                                                  | `extract-error` `no-candidates`                                      | `acceptance-rules`        |
 | 7   | embed (`documents`): a throw, a wrong count, a non-finite or ragged vector, an empty `spaceId`                                                                                                                                      | `error`                                                              | `fail-closed`             |
 | 8   | one transaction PER candidate (below)                                                                                                                                                                                               | `failed` / `duplicates` in the report                                | `idempotency-transaction` |
@@ -2183,6 +2223,53 @@ never the user's words) and a returned `skipped` reason.
 The step-3 `decision_made` events are recorded on the context (one per field —
 metadata and `stateChars` only, never the state), so "why was nothing stored" is
 answerable from the blob. A failed gate cannot authorize a write; a failed kind read requires confirmation and uses `episodic` if a write proceeds.
+
+### Confirmation: prepare, propose, apply (#419 M6 = #433 S11)
+
+With a `confirm` seam (`MemoryConfig.confirm`, `MemoryConfirmSeam`), an `ask`
+route **prepares instead of storing nothing**, after step 7 and before any
+write:
+
+1. **Preview** — one read-only transaction: for each accepted candidate the
+   nearest neighbour and the dedupe verdict (`new`, `reinforces` an existing
+   memory, `updates` one), with the text the preview read. The switch is
+   re-read inside it; a switch-off proposes nothing. Nothing is written.
+2. **Propose** — `proposeToHuman` with kind `memory.confirm`, key = the user
+   message's event id (a turn is proposed once: a second settle reports
+   `already-proposed`), options `save` (the default; **no rule may pick it**; one
+   flag per item, labelled "Item N") and `discard` (the only option a rule may
+   pick), rule `park`, a 7-day expiry (`confirm.expiresInMs` overrides). The
+   event carries counts and the closed kind set — **never the memory text**.
+3. **Hold** — the payload (`MemoryProposalPayload`: the items, their
+   document-side vectors, the tier, the embedding space, the source event id)
+   goes to `confirm.hold` under the proposal's request id. A hold that throws
+   takes the proposal back out of the context (`error`): a question nobody can
+   answer is not left behind.
+
+The report says `proposed: n` and writes nothing. **The org target is
+unchanged:** it still stops `org-no-writer` whether or not the host has a
+`confirm` seam, extracts nothing and proposes nothing — there is no writer until
+M12, and an `ask` is never turned into an automatic write by a setting or a
+calibrated read.
+
+**`applyMemoryProposal(ctx, cfg, { payload, selected })`** is the approval's
+write. `payload` is the host's own record (never client input), `selected` the
+refs the answer's flags chose; an unknown ref selects nothing. No model is
+consulted and nothing is sent anywhere. One transaction per item under the
+owner's advisory lock, provenance row first-class:
+
+| Item                             | Writes                                                                                             | Refuses                                                                                                                              |
+| -------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| preview `new`                    | insert — or **reinforce** a same-kind near-duplicate (≥ τ_dup) that appeared since                 | —                                                                                                                                    |
+| preview `reinforces` / `updates` | reinforce / replace the text                                                                       | **`stale`**: the memory is gone, or no longer says what the preview read. The provenance row is rolled back with it; nothing changes |
+| a retried item                   | nothing (`duplicate`): its `(eventId, ordinal)` row exists; a lost `memory_written` is re-recorded | —                                                                                                                                    |
+
+The whole payload is refused when it is malformed (`parseMemoryProposalPayload`:
+version, kinds, lengths, vector shape, dedupe shape), when its vectors are in
+another embedding space than the embedder's now (`embed-space`), or when the
+user's switch is off (`disabled`, read inside each item). It never throws; the
+caller saves the context **after** awaiting it, in the same version-checked save
+as the person's answer (the app: `lib/memory/proposals.server.ts`).
 
 ### Input isolation and the evidence rule (D9)
 
@@ -3011,7 +3098,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── tools.server.ts         # Tools({ namespaces }) — groups MCP tools by namespace; the map is REQUIRED (ruling B-iii); inferServer consults transports' namespaceFor → registered resolvers (registerToolNamespaces) → heuristic; NO catalog in core — the 86-entry map lives in app-tools/mcp-catalog.ts and registers at boot
 ├── run-frame.server.ts     # THE run frame — one ALS scope per run holding all six slots (guard / transports / config / live / inference / hitl — the last a frozen `{ attended }`), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, hitl passes by reference and is refused below an open one, the rest replace), activeRunFrame() THROWS outside a frame and currentRunFrame() is the soft read
 ├── harness.server.ts       # harness() (a bound runner: agent.resume / agent.continue carry its own patterns, S4), resumeHarness(serialized, patterns, answers, { principal, resolve }), continueSession() — each OPENS the run frame (ruling Q17/D5) with a `{ attended: true }` hitl slot unless the frame says otherwise, or joins the host's and adds nothing; resumeHarness binds every answer to a request the run waits on before anything runs, continueSession supersedes what waits; HarnessResultScoped is a union on status — `pending` is non-optional when paused [F18]
-├── hitl.server.ts          # Human in the loop (#433): readHitl() / answerOf() read the hitl_* events; askHuman() raises (or replays, or applies resolveUnattended()) into the run's HITL bookkeeping — an async-context store of its own on a Symbol.for holder, opened by the owning runChain, never on the frame (#477) — held() is a gated executor's placeholder, hitlPending() is the loops' stop check; the owning runChain commits from the buffer only what askHuman could have written, straight into the context, and pauses. S3: checkResume() is the pause binding (HitlAnswerError), recordAnswers() / supersedeHitl() / expireHitl() close requests and substitute held results through sanitizeUntrusted. S4: humanGate() / confirm() are the gate patterns — the custom case and the one-call preset over askHuman
+├── hitl.server.ts          # Human in the loop (#433): readHitl() / answerOf() read the hitl_* events; proposeToHuman() / answerProposal() / readProposals() are the out-of-run, non-blocking form (S11, the memory confirmation); askHuman() raises (or replays, or applies resolveUnattended()) into the run's HITL bookkeeping — an async-context store of its own on a Symbol.for holder, opened by the owning runChain, never on the frame (#477) — held() is a gated executor's placeholder, hitlPending() is the loops' stop check; the owning runChain commits from the buffer only what askHuman could have written, straight into the context, and pauses. S3: checkResume() is the pause binding (HitlAnswerError), recordAnswers() / supersedeHitl() / expireHitl() close requests and substitute held results through sanitizeUntrusted. S4: humanGate() / confirm() are the gate patterns — the custom case and the one-call preset over askHuman
 ├── tool-transport.server.ts # ToolTransport + registerTransport() (process, consulted after every scoped one) / activeTransports() (reads the run frame's `transports` slot); the difference between the two ways to supply one IS the containment invariant — there is no priority field and no argument that could express one
 ├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE phases — scoped transports (innermost first) → process transports (registration order) → MCP gateway (terminal fallback, not a transport); leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element; drops the gateway's own management tools (`mcp-find`, `mcp-add`, `mcp-exec`, …) from the catalog (#412, #420), and `write_neo4j_cypher` and the `database-server` tools, which no agent holds (#403, #412)
 ├── agent-withheld-tools.ts # AGENT_WITHHELD_TOOLS + isAgentWithheldTool() — the tools no agent may hold (#403: `write_neo4j_cypher`; #412: the `database-server` tools), each with the decision and server-side switch its drop warning names (withholdingFor()), seen through a gateway or server-namespace prefix; read by listTools() (the catalog) and by simpleLoop/actorCritic (every allowlist check), never by callTool

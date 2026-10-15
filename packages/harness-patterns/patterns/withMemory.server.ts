@@ -45,6 +45,7 @@ import type {
   ConfiguredPattern,
   DecideAllFn,
   DecideFn,
+  MemoryConfirmSeam,
   MemoryEmbedder,
   MemoryExtractFn,
   MemoryRetention,
@@ -114,6 +115,10 @@ export interface MemoryConfig {
   readonly recall?: Omit<MemoryRecallSettings, 'enabled'>
   /** The store step's tunables (the switch is {@link MemoryConfig.enabled}). */
   readonly settle?: Omit<MemoryStoreSettings, 'enabled'>
+  /** Where a prepared memory waits for the person's confirmation (#419 M6).
+   *  Without it a turn that needs a confirmation stores nothing (`no-confirmation`)
+   *  — the pre-M6 behaviour, kept as the fail-closed default. */
+  readonly confirm?: MemoryConfirmSeam
 }
 
 /** Validate the developer choice and D11: both halves read the user's switch.
@@ -189,6 +194,7 @@ export function memoryStoreConfig(cfg: MemoryConfig): MemoryStoreConfig {
     embed: cfg.embed,
     owner: cfg.owner,
     ...(cfg.awaitWake ? { awaitWake: cfg.awaitWake } : {}),
+    ...(cfg.confirm ? { confirm: cfg.confirm } : {}),
     settings: {
       ...cfg.settle,
       ...(cfg.compact?.settings?.softLimit !== undefined

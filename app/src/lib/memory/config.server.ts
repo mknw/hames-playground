@@ -22,6 +22,7 @@ import {
   memoryWakeTimeoutMs,
 } from '../inference/memory-wake.server'
 import { createMemoryEmbedder } from './embedder.server'
+import { createMemoryConfirmSeam } from './proposals.server'
 
 assertServerOnImport()
 
@@ -57,6 +58,8 @@ export function createHostMemoryConfig(): MemoryConfig {
       return id ? getMemoryEnabled(id) : false
     },
     awaitWake: waitForTurnMemoryWake,
+    // M6: an `ask` proposes to the person instead of storing nothing.
+    confirm: createMemoryConfirmSeam(owner),
     limits: () => limitsFor('compactExecution'),
     settle: { wakeBudgetMs: memoryWakeTimeoutMs() },
   }

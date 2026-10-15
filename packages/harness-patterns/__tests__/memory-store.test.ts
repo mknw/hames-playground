@@ -23,20 +23,50 @@
  *                                nothing
  *   idempotency-transaction    — a retry is a no-op; a partial write leaves no
  *                                orphan; concurrent stores serialize
+ *
+ * M6 (confirmation, #433 S11) adds, at the end of this file:
+ *
+ *   m6-propose-not-write       — an `ask` with a `confirm` seam PREPARES: a
+ *                                proposal in the context, the payload held by
+ *                                the host, nothing written
+ *   m6-no-text-in-events       — the proposal event carries counts and kinds,
+ *                                never the memory text
+ *   m6-org-never-proposes      — the org target still stops `org-no-writer`
+ *   m6-fail-closed             — a hold that fails takes the proposal back; a
+ *                                turn is proposed once
+ *   m6-apply-selected          — an approval writes what was proposed, only the
+ *                                selected items, and nothing else
+ *   m6-apply-stale             — a stale item never overwrites a newer row
+ *   m6-apply-idempotent        — a retried approval is a no-op that repairs a
+ *                                lost `memory_written`
+ *   m6-apply-refusals          — malformed payload, another embedding space,
+ *                                the switch off
  */
 
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  applyMemoryProposal,
+  MEMORY_CONFIRM_DISCARD,
+  MEMORY_CONFIRM_KIND,
+  MEMORY_CONFIRM_SAVE,
   MEMORY_MERGE_SPEC,
   MEMORY_STORE_FALLBACKS,
   MEMORY_STORE_SET,
+  memoryConfirmRequest,
+  parseMemoryProposalPayload,
   readStoreWindow,
   resolveStoreRoute,
   settleMemory,
+  type MemoryApplyConfig,
   type MemoryStoreConfig,
   type MemoryStoreSettings,
 } from '@hames-ai/harness-patterns/memory-store.server'
+import {
+  answerProposal,
+  readProposals,
+  resolveUnattended,
+} from '@hames-ai/harness-patterns/hitl.server'
 import {
   MAX_MEMORY_CHARS,
   acceptCandidate,
@@ -60,6 +90,7 @@ import type {
   MemoryExtractedCandidate,
   MemoryInsertRow,
   MemoryNeighbor,
+  MemoryProposalPayload,
   MemoryWriteStore,
   MemoryWriteTx,
   MemoryWrittenEventData,
@@ -1840,6 +1871,879 @@ describe('#552: switch-off serializes with in-flight settle', () => {
     expect(db.rows()).toEqual([])
     expect(db.sources()).toEqual([])
     expect(written(ctx)).toEqual([])
+  })
+})
+
+// ============================================================================
+// M6 — confirmation (#419 M6 = #433 S11)
+// ============================================================================
+
+const ASK = { confirm: 'ask' } as const
+
+/** A host's `confirm` seam: the held payloads, or a failure. */
+function confirmSeam(over: { fail?: boolean; expiresInMs?: number } = {}) {
+  const held: Array<{ requestId: string; expiresAt: number; payload: MemoryProposalPayload }> = []
+  return {
+    held,
+    seam: {
+      ...(over.expiresInMs !== undefined ? { expiresInMs: over.expiresInMs } : {}),
+      hold: async (input: (typeof held)[number]) => {
+        if (over.fail) throw new Error('db down — SENTINEL-HOLD')
+        held.push(input)
+      },
+    },
+  }
+}
+
+const seedRow = (over: Partial<Row> = {}): Row => ({
+  id: 'mem-old',
+  kind: 'preference',
+  tier: 'verda',
+  content: 'The user prefers imperial units.',
+  evidence: 'I prefer imperial',
+  embedding: [1, 0],
+  embedSpace: SPACE,
+  evidenceCount: 1,
+  updated: false,
+  ...over,
+})
+
+const requestEvents = (ctx: UnifiedContext) =>
+  ctx.events.filter((e) => e.type === 'hitl_request').map((e) => e.data as Record<string, any>)
+
+describe('m6-propose-not-write', () => {
+  // MUTATION: drop the `route.confirm === 'ask' && cfg.confirm` branch (fall
+  // through to the write loop) → the memory is written unconfirmed → red.
+  it('an ask with a confirm seam writes NOTHING and proposes the prepared items', async () => {
+    const { held, seam } = confirmSeam()
+    const { cfg, db } = config({ decide: fakeDecide(ASK).fn, confirm: seam })
+    const ctx = turn()
+    const report = await settleMemory(ctx, cfg)
+
+    expect(report).toMatchObject({ proposed: 1, written: 0, duplicates: 0, failed: 0 })
+    expect(report.skipped).toBeUndefined()
+    expect(report.route).toEqual({ target: 'personal_memory', confirm: 'ask' })
+    expect(db.rows()).toEqual([])
+    expect(db.sources()).toEqual([])
+    expect(written(ctx)).toEqual([])
+
+    const [r] = requestEvents(ctx)
+    expect(r).toMatchObject({ kind: MEMORY_CONFIRM_KIND, blocking: false, unattended: 'park' })
+    expect(readProposals(ctx).map((p) => p.requestId)).toEqual([r.requestId])
+
+    const userEvent = ctx.events.find((e) => e.type === 'user_message')!
+    expect(held).toHaveLength(1)
+    expect(held[0].requestId).toBe(r.requestId)
+    expect(held[0].expiresAt).toBe(r.expiresAt === undefined ? NaN : held[0].expiresAt)
+    expect(held[0].payload).toMatchObject({
+      v: 1,
+      tier: 'verda',
+      embedSpace: SPACE,
+      eventId: userEvent.id,
+      conversationId: ctx.sessionId,
+    })
+    expect(held[0].payload.items).toEqual([
+      {
+        ref: 'i0',
+        ordinal: 0,
+        kind: 'preference',
+        content: CONTENT,
+        evidence: EVIDENCE,
+        embedding: [1, 0],
+        dedupe: 'new',
+      },
+    ])
+  })
+
+  // MUTATION: `confirm.expiresInMs ?? DEFAULT` → ignore the seam's value → red.
+  it('the proposal waits as long as the host says, 7 days by default', async () => {
+    const a = confirmSeam()
+    const b = confirmSeam({ expiresInMs: 5_000 })
+    const long =
+      (await (async () => {
+        const ctx = turn()
+        await settleMemory(ctx, config({ decide: fakeDecide(ASK).fn, confirm: a.seam }).cfg)
+        return requestEvents(ctx)[0].expiresAt as number
+      })()) - Date.now()
+    const short =
+      (await (async () => {
+        const ctx = turn()
+        await settleMemory(ctx, config({ decide: fakeDecide(ASK).fn, confirm: b.seam }).cfg)
+        return requestEvents(ctx)[0].expiresAt as number
+      })()) - Date.now()
+    expect(long).toBeGreaterThan(6.9 * 24 * 3600 * 1000)
+    expect(long).toBeLessThanOrEqual(7 * 24 * 3600 * 1000)
+    expect(short).toBeLessThanOrEqual(5_000)
+  })
+
+  // MUTATION: apply the `not-routine` filter to an ask route too → a trait is
+  // dropped before the person sees it → red.
+  it('a trait is proposed: the person decides, not the routine list', async () => {
+    const { held, seam } = confirmSeam()
+    const { cfg, db } = config({
+      decide: fakeDecide({ ...ASK, kind: 'trait' }).fn,
+      extract: fakeExtract([cand({ kind: 'trait' })]).fn,
+      confirm: seam,
+    })
+    expect(await settleMemory(turn(), cfg)).toMatchObject({ proposed: 1, written: 0 })
+    expect(held[0].payload.items[0].kind).toBe('trait')
+    expect(db.rows()).toEqual([])
+  })
+
+  // The control: a skip route on the same config still writes, unproposed.
+  it('a routine skip still writes straight through, and proposes nothing', async () => {
+    const { held, seam } = confirmSeam()
+    const { cfg, db } = config({ confirm: seam })
+    const ctx = turn()
+    expect(await settleMemory(ctx, cfg)).toMatchObject({ written: 1, proposed: 0 })
+    expect(db.rows()).toHaveLength(1)
+    expect(held).toEqual([])
+    expect(requestEvents(ctx)).toEqual([])
+  })
+
+  // MUTATION: preview with `chooseAction` skipped (always 'new') → the person
+  // is shown a duplicate as new, and an approval inserts beside it → red.
+  it('the preview says what a write would do: reinforce a near-duplicate, with the text it read', async () => {
+    const { held, seam } = confirmSeam()
+    const db = fakeDb({ seed: [seedRow({ content: CONTENT })] })
+    const { cfg } = config({ db, decide: fakeDecide(ASK).fn, confirm: seam })
+    await settleMemory(turn(), cfg)
+    expect(held[0].payload.items[0].dedupe).toEqual({
+      reinforces: 'mem-old',
+      expectedContent: CONTENT,
+    })
+    // read-only: the neighbour is untouched
+    expect(db.rows()[0].evidenceCount).toBe(1)
+  })
+
+  it('a related preference the merge question calls an update is previewed as one', async () => {
+    const { held, seam } = confirmSeam()
+    const db = fakeDb({ seed: [seedRow({ embedding: [0.8, 0.6] })] })
+    const { cfg } = config({
+      db,
+      decide: fakeDecide(ASK, ({ spec }) =>
+        spec.key === 'memory.merge' ? confident(spec.labels, 'update') : undefined,
+      ).fn,
+      confirm: seam,
+    })
+    await settleMemory(turn(), cfg)
+    expect(held[0].payload.items[0].dedupe).toEqual({
+      updates: 'mem-old',
+      expectedContent: 'The user prefers imperial units.',
+    })
+    expect(db.rows()[0].content).toBe('The user prefers imperial units.')
+    expect(db.rows()[0].updated).toBe(false)
+  })
+
+  // MUTATION: drop the `sensitive` stop on the ask route → a sensitive
+  // message is proposed → red. (Control: the gate's other fail-closed stops.)
+  it.each([
+    ['a sensitive message', { ...ASK, sensitive: 'sensitive' }, 'sensitive'],
+    ['target none', { ...ASK, target: 'none' }, 'gate'],
+  ])('%s is not proposed', async (_n, answers, skipped) => {
+    const { held, seam } = confirmSeam()
+    const { cfg } = config({ decide: fakeDecide(answers).fn, confirm: seam })
+    const ctx = turn()
+    expect((await settleMemory(ctx, cfg)).skipped).toBe(skipped)
+    expect(held).toEqual([])
+    expect(requestEvents(ctx)).toEqual([])
+  })
+
+  // MUTATION: re-read the switch not at all in the preview → a proposal is
+  // raised for a user who switched memory off → red.
+  it('a switch that went off while the preview waited proposes nothing', async () => {
+    const { held, seam } = confirmSeam()
+    let reads = 0
+    const { cfg } = config({
+      decide: fakeDecide(ASK).fn,
+      confirm: seam,
+      settings: { enabled: () => ++reads < 2 },
+    })
+    const ctx = turn()
+    expect((await settleMemory(ctx, cfg)).skipped).toBe('disabled')
+    expect(held).toEqual([])
+    expect(requestEvents(ctx)).toEqual([])
+  })
+
+  it('a store that fails the preview proposes nothing and says so', async () => {
+    const { held, seam } = confirmSeam()
+    const { cfg } = config({
+      db: fakeDb({ failTransaction: true }),
+      decide: fakeDecide(ASK).fn,
+      confirm: seam,
+    })
+    const ctx = turn()
+    expect((await settleMemory(ctx, cfg)).skipped).toBe('error')
+    expect(held).toEqual([])
+    expect(requestEvents(ctx)).toEqual([])
+  })
+})
+
+describe('m6-no-text-in-events', () => {
+  const TEXT = 'The user prefers metric units, zebra-pangolin-SENTINEL.'
+  const SAID = 'I always prefer metric units zebra-pangolin-SENTINEL'
+
+  // MUTATION: put `content` in `summary`, or the text in an option label → the
+  // text outlives the payload in the blob and reaches every serialization → red.
+  it('the proposal event and every LLM view are free of the memory text', async () => {
+    const { seam, held } = confirmSeam()
+    const { cfg } = config({
+      decide: fakeDecide(ASK).fn,
+      extract: fakeExtract([cand({ content: TEXT, evidence: SAID })]).fn,
+      confirm: seam,
+    })
+    const ctx = turn(SAID, 'Noted.')
+    await settleMemory(ctx, cfg)
+    expect(held[0].payload.items[0].content).toBe(TEXT)
+
+    const [request] = ctx.events.filter((e) => e.type === 'hitl_request')
+    expect(JSON.stringify(request)).not.toContain('SENTINEL')
+    // The user's own message is in the log (and says it): look at what the
+    // store step added.
+    const mine = { ...ctx, events: ctx.events.filter((e) => e.type === 'hitl_request') }
+    const view = createEventView(mine as UnifiedContext).fromAll()
+    expect(view.serialize()).not.toContain('SENTINEL')
+    expect(view.serializeCompact()).not.toContain('SENTINEL')
+    expect(view.serializeCompact({ showToolPreview: true } as never)).not.toContain('SENTINEL')
+    expect(view.serialize()).toContain('decision requested: memory.confirm')
+  })
+
+  // MUTATION: record the extractor's llmCall unredacted on the request → red.
+  it('the extractor call is not recorded on the proposal', async () => {
+    const { seam } = confirmSeam()
+    const { cfg } = config({ decide: fakeDecide(ASK).fn, confirm: seam })
+    const ctx = turn()
+    await settleMemory(ctx, cfg)
+    expect(JSON.stringify(ctx.events.filter((e) => e.type === 'hitl_request'))).not.toContain(
+      'CALL-SENTINEL',
+    )
+  })
+
+  it('never reaches a live listener: a proposal is not the transcript', async () => {
+    const { seam } = confirmSeam()
+    const { cfg } = config({ decide: fakeDecide(ASK).fn, confirm: seam })
+    const ctx = turn()
+    await settleMemory(ctx, cfg)
+    for (const e of ctx.events.filter((x) => x.type === 'hitl_request')) {
+      expect(wasEmittedLive(e)).toBe(false)
+    }
+    setLivePatternEnabled(true)
+  })
+
+  it('memoryConfirmRequest: positional labels, closed-set summary, key = the source event', () => {
+    const r = memoryConfirmRequest(
+      [
+        { ref: 'i0', kind: 'trait' },
+        { ref: 'i1', kind: 'preference' },
+        { ref: 'i2', kind: 'preference' },
+      ],
+      'ev-9',
+    )
+    expect(r.key).toBe('ev-9')
+    expect(r.summary).toEqual({ items: 3, kinds: 'preference,trait' })
+    const save = r.options.find((o) => o.id === MEMORY_CONFIRM_SAVE)!
+    expect(save.flags).toEqual([
+      { id: 'i0', label: 'Item 1', default: true },
+      { id: 'i1', label: 'Item 2', default: true },
+      { id: 'i2', label: 'Item 3', default: true },
+    ])
+    expect(r.question).toBe('Save these to memory?')
+    expect(memoryConfirmRequest([{ ref: 'i0', kind: 'trait' }], 'ev-9').question).toBe(
+      'Save this to memory?',
+    )
+  })
+
+  // MUTATION: `unattended: true` on save, or defaultOption 'discard' with save
+  // pickable → a rule can save for nobody → red.
+  it('save is the default and no rule may pick it; discard is the one a rule may', () => {
+    const r = memoryConfirmRequest([{ ref: 'i0', kind: 'trait' }], 'ev-9')
+    expect(r.defaultOption).toBe(MEMORY_CONFIRM_SAVE)
+    expect(r.options.find((o) => o.id === MEMORY_CONFIRM_SAVE)!.unattended).not.toBe(true)
+    expect(r.options.find((o) => o.id === MEMORY_CONFIRM_DISCARD)!.unattended).toBe(true)
+    expect(r.unattended).toBe('park')
+    // and the rule, were it ever applied: discard, never save
+    expect(resolveUnattended({ ...r, unattended: 'apply-default' }).choice).toBe(
+      MEMORY_CONFIRM_DISCARD,
+    )
+    expect(resolveUnattended(r).choice).toBeNull()
+  })
+})
+
+describe('m6-org-never-proposes', () => {
+  // MUTATION: test `route.confirm === 'ask' && cfg.confirm` before the org
+  // stop → an org outcome with a seam extracts and proposes → red.
+  it('the org target stops org-no-writer even when the host can hold a proposal', async () => {
+    const { held, seam } = confirmSeam()
+    const { cfg, db, extract } = config({
+      decide: fakeDecide({ target: 'organizational_graph', confirm: 'skip' }).fn,
+      confirm: seam,
+    })
+    const ctx = turn()
+    const report = await settleMemory(ctx, cfg)
+    expect(report.skipped).toBe('org-no-writer')
+    expect(report.route).toEqual({ target: 'organizational_graph', confirm: 'ask' })
+    expect(held).toEqual([])
+    expect(requestEvents(ctx)).toEqual([])
+    expect(db.stats.transactions).toBe(0)
+    expect(extract.fn).not.toHaveBeenCalled()
+  })
+})
+
+describe('m6-fail-closed', () => {
+  // MUTATION: leave the request event when `hold` throws → a question nobody
+  // can answer sits in the blob → red.
+  it('a hold that fails takes the proposal back out of the context', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const { seam } = confirmSeam({ fail: true })
+      const { cfg, db } = config({ decide: fakeDecide(ASK).fn, confirm: seam })
+      const ctx = turn()
+      const before = ctx.events.length
+      const report = await settleMemory(ctx, cfg)
+      expect(report).toMatchObject({ skipped: 'error', proposed: 0 })
+      expect(requestEvents(ctx)).toEqual([])
+      expect(readProposals(ctx)).toEqual([])
+      expect(db.rows()).toEqual([])
+      // only the four decision events were added
+      expect(ctx.events.length - before).toBe(4)
+      // and the log names the class, never the message
+      expect(warn.mock.calls.flat().join('\n')).not.toContain('SENTINEL-HOLD')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  // MUTATION: drop the `ctx.events.length === before` test → a second settle
+  // for the same turn holds a second payload → red.
+  it('a turn is proposed once, however many times it settles', async () => {
+    const { held, seam } = confirmSeam()
+    const { cfg } = config({ decide: fakeDecide(ASK).fn, confirm: seam })
+    const ctx = turn()
+    await settleMemory(ctx, cfg)
+    const again = await settleMemory(ctx, cfg)
+    expect(again.skipped).toBe('already-proposed')
+    expect(again.proposed).toBe(0)
+    expect(held).toHaveLength(1)
+    expect(requestEvents(ctx)).toHaveLength(1)
+  })
+
+  it('an answered proposal is not re-raised by a later settle of the same turn', async () => {
+    const { held, seam } = confirmSeam()
+    const { cfg } = config({ decide: fakeDecide(ASK).fn, confirm: seam })
+    const ctx = turn()
+    await settleMemory(ctx, cfg)
+    answerProposal(ctx, { [held[0].requestId]: MEMORY_CONFIRM_DISCARD })
+    expect((await settleMemory(ctx, cfg)).skipped).toBe('already-proposed')
+    expect(held).toHaveLength(1)
+  })
+})
+
+// ----------------------------------------------------------------------------
+// The approval: applyMemoryProposal
+// ----------------------------------------------------------------------------
+
+/** A payload as `settleMemory` holds it, for the apply tests to vary. */
+function payload(
+  items: Array<Partial<MemoryProposalPayload['items'][number]>> = [{}],
+  over: Partial<MemoryProposalPayload> = {},
+): MemoryProposalPayload {
+  return {
+    v: 1,
+    tier: 'verda',
+    embedSpace: SPACE,
+    eventId: 'ev-user',
+    conversationId: 'conv-1',
+    items: items.map((i, n) => ({
+      ref: `i${n}`,
+      ordinal: n,
+      kind: 'preference' as const,
+      content: `${CONTENT} (${n})`,
+      evidence: EVIDENCE,
+      embedding: [0, 1],
+      dedupe: 'new' as const,
+      ...i,
+    })),
+    ...over,
+  }
+}
+
+function applyCfg(
+  db: ReturnType<typeof fakeDb>,
+  over: Partial<MemoryApplyConfig> = {},
+): MemoryApplyConfig {
+  return { store: db.store, embedSpace: () => SPACE, enabled: () => true, ...over }
+}
+
+const events = (): Pick<UnifiedContext, 'events'> => ({ events: [] })
+
+describe('m6-apply-selected', () => {
+  // MUTATION: iterate every item, not the selected ones → the unchecked item
+  // is written → red.
+  it('writes the selected items and only those, one memory_written each', async () => {
+    const db = fakeDb()
+    const ctx = events()
+    const out = await applyMemoryProposal(ctx, applyCfg(db), {
+      payload: payload([{}, { embedding: [1, 0] }, { embedding: [0.6, 0.8] }]),
+      selected: ['i0', 'i2'],
+    })
+    expect(out.written).toBe(2)
+    expect(out.items.map((i) => [i.ref, i.outcome, i.action])).toEqual([
+      ['i0', 'written', 'inserted'],
+      ['i2', 'written', 'inserted'],
+    ])
+    expect(db.rows().map((r) => r.content)).toEqual([`${CONTENT} (0)`, `${CONTENT} (2)`])
+    expect(db.sources().map(([k]) => k)).toEqual(['ev-user#0', 'ev-user#2'])
+    expect(db.sourceRows().map((r) => r[2])).toEqual(['conv-1', 'conv-1'])
+    expect(written(ctx as UnifiedContext).map((w) => [w.ordinal, w.action, w.tier])).toEqual([
+      [0, 'inserted', 'verda'],
+      [2, 'inserted', 'verda'],
+    ])
+  })
+
+  // MUTATION: treat an unknown ref as "all" → a forged selection writes
+  // everything → red.
+  it('an unknown ref selects nothing, and no selection writes nothing', async () => {
+    const db = fakeDb()
+    for (const selected of [['zzz'], [], ['I0']]) {
+      const out = await applyMemoryProposal(events(), applyCfg(db), {
+        payload: payload([{}, {}]),
+        selected,
+      })
+      expect(out).toEqual({ items: [], written: 0 })
+    }
+    expect(db.rows()).toEqual([])
+    expect(db.stats.transactions).toBe(0)
+  })
+
+  // MUTATION: stamp `tier` from the run frame / the apply config → a verda-tier
+  // memory proposed on one tier is stored under another (D8) → red.
+  it('stamps the tier the proposal recorded, whatever frame the approval runs in', async () => {
+    const db = fakeDb()
+    await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
+      applyMemoryProposal(events(), applyCfg(db), {
+        payload: payload([{}], { tier: 'verda' }),
+        selected: ['i0'],
+      }),
+    )
+    expect(db.rows()[0].tier).toBe('verda')
+  })
+
+  // MUTATION: reinforce → insert → a duplicate row beside the neighbour → red.
+  it('an item the preview said reinforces a memory reinforces it', async () => {
+    const db = fakeDb({ seed: [seedRow({ content: 'Prefers metric.' })] })
+    const out = await applyMemoryProposal(events(), applyCfg(db), {
+      payload: payload([{ dedupe: { reinforces: 'mem-old', expectedContent: 'Prefers metric.' } }]),
+      selected: ['i0'],
+    })
+    expect(out.items[0]).toMatchObject({ outcome: 'written', action: 'reinforced' })
+    expect(db.rows()).toHaveLength(1)
+    expect(db.rows()[0]).toMatchObject({ evidenceCount: 2, content: 'Prefers metric.' })
+    expect(db.sources().map(([, m]) => m)).toEqual(['mem-old'])
+  })
+
+  // MUTATION: update → reinforce (the text is never replaced) → red.
+  it('an item the preview said updates a memory replaces its text, with the new evidence', async () => {
+    const db = fakeDb({ seed: [seedRow()] })
+    const out = await applyMemoryProposal(events(), applyCfg(db), {
+      payload: payload([
+        {
+          dedupe: { updates: 'mem-old', expectedContent: 'The user prefers imperial units.' },
+          content: 'The user prefers metric units.',
+        },
+      ]),
+      selected: ['i0'],
+    })
+    expect(out.items[0]).toMatchObject({ outcome: 'written', action: 'updated' })
+    expect(db.rows()[0]).toMatchObject({
+      content: 'The user prefers metric units.',
+      evidenceEventId: 'ev-user',
+      updated: true,
+      evidenceCount: 2,
+    })
+  })
+
+  // MUTATION: always insert for `new` → a same-kind near-duplicate that
+  // appeared since the preview gets a twin → red.
+  it('a `new` item reinforces a same-kind near-duplicate that has appeared since', async () => {
+    const db = fakeDb({ seed: [seedRow({ embedding: [0, 1], content: 'Already known.' })] })
+    const out = await applyMemoryProposal(events(), applyCfg(db), {
+      payload: payload([{ embedding: [0, 1] }]),
+      selected: ['i0'],
+    })
+    expect(out.items[0]).toMatchObject({ outcome: 'written', action: 'reinforced' })
+    expect(db.rows()).toHaveLength(1)
+    expect(db.rows()[0].evidenceCount).toBe(2)
+  })
+
+  it('a near neighbour of another kind does not absorb a `new` item', async () => {
+    const db = fakeDb({ seed: [seedRow({ embedding: [0, 1], kind: 'episodic' })] })
+    await applyMemoryProposal(events(), applyCfg(db), {
+      payload: payload([{ embedding: [0, 1] }]),
+      selected: ['i0'],
+    })
+    expect(db.rows()).toHaveLength(2)
+  })
+
+  it('writes metadata only: the event carries no memory text', async () => {
+    const db = fakeDb()
+    const ctx = events()
+    await applyMemoryProposal(ctx, applyCfg(db), {
+      payload: payload([{ content: 'zebra-pangolin-SENTINEL fact', evidence: EVIDENCE }]),
+      selected: ['i0'],
+    })
+    expect(JSON.stringify(ctx.events)).not.toContain('SENTINEL')
+  })
+})
+
+describe('m6-apply-hard-limit', () => {
+  const seeded = (n: number) =>
+    fakeDb({
+      seed: Array.from({ length: n }, (_, i) =>
+        seedRow({ id: `m${i}`, kind: 'episodic', embedding: [1, 0], content: `c${i}` }),
+      ),
+    })
+
+  // MUTATION: drop the `makeRoomForInsert` call from the approval's insert → an
+  // approval writes past M3's cap → red.
+  it('an approval at the hard limit writes nothing and says compaction is due', async () => {
+    const db = seeded(3)
+    const ctx = events()
+    const out = await applyMemoryProposal(ctx, applyCfg(db, { hardLimit: 3 }), {
+      payload: payload([{ kind: 'trait' }]),
+      selected: ['i0'],
+    })
+    expect(out.items).toEqual([{ ref: 'i0', outcome: 'full' }])
+    expect(out.compactionDue).toBe(true)
+    expect(out.written).toBe(0)
+    expect(db.rows()).toHaveLength(3)
+    expect(db.sources()).toEqual([])
+    expect(ctx.events).toEqual([])
+  })
+
+  it('below the limit it inserts as before, and a reinforce is never refused', async () => {
+    const db = seeded(2)
+    const out = await applyMemoryProposal(events(), applyCfg(db, { hardLimit: 3 }), {
+      payload: payload([{ kind: 'trait' }]),
+      selected: ['i0'],
+    })
+    expect(out.items[0].outcome).toBe('written')
+    expect(out.compactionDue).toBeUndefined()
+    const full = seeded(3)
+    const r = await applyMemoryProposal(events(), applyCfg(full, { hardLimit: 3 }), {
+      payload: payload([{ dedupe: { reinforces: 'm0', expectedContent: 'c0' } }]),
+      selected: ['i0'],
+    })
+    expect(r.items[0].outcome).toBe('written')
+  })
+
+  it('an invalid limit is refused, never treated as no limit', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const db = seeded(0)
+      const out = await applyMemoryProposal(events(), applyCfg(db, { hardLimit: 0 }), {
+        payload: payload([{}]),
+        selected: ['i0'],
+      })
+      expect(out.items[0].outcome).toBe('failed')
+      expect(db.rows()).toEqual([])
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
+describe('m6-apply-stale', () => {
+  // MUTATION: drop the `current.content !== expectedContent` check → the item
+  // overwrites a row that changed since the proposal was made → red.
+  it('an update meant for text that has since changed is refused, and changes nothing', async () => {
+    const db = fakeDb({ seed: [seedRow({ content: 'Edited since the preview.' })] })
+    const ctx = events()
+    const out = await applyMemoryProposal(ctx, applyCfg(db), {
+      payload: payload([
+        {
+          dedupe: { updates: 'mem-old', expectedContent: 'The user prefers imperial units.' },
+          content: 'The user prefers metric units.',
+        },
+      ]),
+      selected: ['i0'],
+    })
+    expect(out.items).toEqual([{ ref: 'i0', outcome: 'stale' }])
+    expect(out.written).toBe(0)
+    expect(db.rows()[0]).toMatchObject({
+      content: 'Edited since the preview.',
+      evidenceCount: 1,
+      updated: false,
+    })
+    // the provenance row is rolled back with it
+    expect(db.sources()).toEqual([])
+    expect(ctx.events).toEqual([])
+  })
+
+  // MUTATION: treat a missing neighbour as "insert instead" → a forgotten
+  // memory is resurrected by a stale approval → red.
+  it('a memory that was forgotten since is not resurrected', async () => {
+    const db = fakeDb()
+    for (const dedupe of [
+      { reinforces: 'mem-gone', expectedContent: 'x' },
+      { updates: 'mem-gone', expectedContent: 'x' },
+    ]) {
+      const out = await applyMemoryProposal(events(), applyCfg(db), {
+        payload: payload([{ dedupe }]),
+        selected: ['i0'],
+      })
+      expect(out.items).toEqual([{ ref: 'i0', outcome: 'stale' }])
+    }
+    expect(db.rows()).toEqual([])
+    expect(db.sources()).toEqual([])
+  })
+
+  it('one stale item does not stop the others', async () => {
+    const db = fakeDb({ seed: [seedRow({ content: 'Edited.' })] })
+    const out = await applyMemoryProposal(events(), applyCfg(db), {
+      payload: payload([
+        { dedupe: { updates: 'mem-old', expectedContent: 'Original.' } },
+        { embedding: [0.6, 0.8] },
+      ]),
+      selected: ['i0', 'i1'],
+    })
+    expect(out.items.map((i) => i.outcome)).toEqual(['stale', 'written'])
+    expect(out.written).toBe(1)
+  })
+})
+
+describe('m6-apply-idempotent', () => {
+  // MUTATION: drop the provenance claim → the retry reinforces again → red.
+  it('a retried approval is a no-op: no second write, no second event', async () => {
+    const db = fakeDb()
+    const ctx = events()
+    const input = { payload: payload([{}]), selected: ['i0'] }
+    await applyMemoryProposal(ctx, applyCfg(db), input)
+    const again = await applyMemoryProposal(ctx, applyCfg(db), input)
+    expect(again.items).toEqual([{ ref: 'i0', outcome: 'duplicate' }])
+    expect(again.written).toBe(0)
+    expect(db.rows()).toHaveLength(1)
+    expect(db.rows()[0].evidenceCount).toBe(1)
+    expect(written(ctx as UnifiedContext)).toHaveLength(1)
+  })
+
+  // MUTATION: do not re-record on a conflict → the answer whose save was
+  // refused leaves a memory with no reference in the conversation → red.
+  it('a retry whose first save was lost re-records the memory_written', async () => {
+    const db = fakeDb()
+    const input = { payload: payload([{}]), selected: ['i0'] }
+    await applyMemoryProposal(events(), applyCfg(db), input) // its context was never saved
+    const fresh = events()
+    const again = await applyMemoryProposal(fresh, applyCfg(db), input)
+    expect(again.items).toEqual([{ ref: 'i0', outcome: 'duplicate' }])
+    expect(written(fresh as UnifiedContext)).toEqual([
+      expect.objectContaining({ eventId: 'ev-user', ordinal: 0, action: 'reinforced' }),
+    ])
+    expect(db.rows()).toHaveLength(1)
+  })
+
+  // MUTATION: check the neighbour's text BEFORE the provenance claim → the
+  // retry of a written update sees the NEW text, reads as stale, and the lost
+  // event is never repaired → red.
+  it('the retry of an update that was written is a duplicate, not stale', async () => {
+    const db = fakeDb({ seed: [seedRow()] })
+    const input = {
+      payload: payload([
+        {
+          dedupe: { updates: 'mem-old', expectedContent: 'The user prefers imperial units.' },
+          content: 'The user prefers metric units.',
+        },
+      ]),
+      selected: ['i0'],
+    }
+    await applyMemoryProposal(events(), applyCfg(db), input)
+    const fresh = events()
+    const again = await applyMemoryProposal(fresh, applyCfg(db), input)
+    expect(again.items).toEqual([{ ref: 'i0', outcome: 'duplicate' }])
+    expect(written(fresh as UnifiedContext)).toHaveLength(1)
+    expect(db.rows()[0].evidenceCount).toBe(2)
+  })
+
+  // MUTATION: swallow the failure and write the row anyway → an orphan with no
+  // source → red.
+  it('a crash between the memory and its source leaves neither', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const db = fakeDb({ failAfterInsert: true })
+      const ctx = events()
+      const out = await applyMemoryProposal(ctx, applyCfg(db), {
+        payload: payload([{}]),
+        selected: ['i0'],
+      })
+      expect(out.items).toEqual([{ ref: 'i0', outcome: 'failed' }])
+      expect(db.rows()).toEqual([])
+      expect(db.sources()).toEqual([])
+      expect(ctx.events).toEqual([])
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  // MUTATION: drop the owner lock from the fake's contract → not this file's
+  // to test; the real store's serialization is pinned by the DB-backed suite.
+  it('two approvals for the same proposal write once between them', async () => {
+    const db = fakeDb()
+    const input = { payload: payload([{}]), selected: ['i0'] }
+    const [a, b] = await Promise.all([
+      applyMemoryProposal(events(), applyCfg(db), input),
+      applyMemoryProposal(events(), applyCfg(db), input),
+    ])
+    expect([a.written, b.written].sort()).toEqual([0, 1])
+    expect(db.rows()).toHaveLength(1)
+    expect(db.stats.maxConcurrent).toBe(1)
+  })
+})
+
+describe('m6-apply-refusals', () => {
+  const MUTATED: Array<[string, (p: any) => unknown]> = [
+    ['another version', (p) => ({ ...p, v: 2 })],
+    ['a missing tier', (p) => ({ ...p, tier: '' })],
+    ['no items', (p) => ({ ...p, items: [] })],
+    ['a repeated ref', (p) => ({ ...p, items: [p.items[0], p.items[0]] })],
+    ['an unknown kind', (p) => ({ ...p, items: [{ ...p.items[0], kind: 'secret' }] })],
+    [
+      'a memory over the cap',
+      (p) => ({ ...p, items: [{ ...p.items[0], content: 'x'.repeat(MAX_MEMORY_CHARS + 1) }] }),
+    ],
+    ['an empty evidence', (p) => ({ ...p, items: [{ ...p.items[0], evidence: '' }] })],
+    [
+      'a vector with a NaN',
+      (p) => ({ ...p, items: [{ ...p.items[0], embedding: [Number.NaN, 1] }] }),
+    ],
+    [
+      'vectors of different lengths',
+      (p) => ({
+        ...p,
+        items: [p.items[0], { ...payload([{}]).items[0], ref: 'i1', embedding: [1, 0, 0] }],
+      }),
+    ],
+    ['a negative ordinal', (p) => ({ ...p, items: [{ ...p.items[0], ordinal: -1 }] })],
+    [
+      'a dedupe with no id',
+      (p) => ({ ...p, items: [{ ...p.items[0], dedupe: { updates: '', expectedContent: '' } }] }),
+    ],
+    [
+      'a dedupe with no text',
+      (p) => ({ ...p, items: [{ ...p.items[0], dedupe: { reinforces: 'm' } }] }),
+    ],
+    ['an arbitrary dedupe', (p) => ({ ...p, items: [{ ...p.items[0], dedupe: 'maybe' }] })],
+  ]
+
+  // MUTATION (one per row): drop the corresponding check in
+  // `parseMemoryProposalPayload` → the payload is applied → red.
+  it.each(MUTATED)(
+    'a payload with %s is refused whole, and nothing is written',
+    async (_n, mutate) => {
+      const db = fakeDb()
+      const out = await applyMemoryProposal(events(), applyCfg(db), {
+        payload: mutate(payload([{}])),
+        selected: ['i0', 'i1'],
+      })
+      expect(out).toEqual({ skipped: 'malformed', items: [], written: 0 })
+      expect(db.rows()).toEqual([])
+      expect(db.stats.transactions).toBe(0)
+    },
+  )
+
+  it.each([null, undefined, 'x', 7, [], {}])('a non-payload (%j) is refused', async (value) => {
+    expect(parseMemoryProposalPayload(value)).toBeNull()
+  })
+
+  it('a payload this module made parses', () => {
+    expect(parseMemoryProposalPayload(payload([{}, {}]))).not.toBeNull()
+    expect(
+      parseMemoryProposalPayload(
+        payload([
+          { dedupe: { updates: 'm', expectedContent: 'old' } },
+          { dedupe: { reinforces: 'm', expectedContent: '' } },
+        ]),
+      ),
+    ).not.toBeNull()
+  })
+
+  // MUTATION: drop the embed-space comparison → vectors from another model are
+  // stored where recall refuses them, and the memory is silently invisible → red.
+  it('vectors in another embedding space than the embedder now serves are refused', async () => {
+    const db = fakeDb()
+    const out = await applyMemoryProposal(
+      events(),
+      applyCfg(db, { embedSpace: () => 'other/768' }),
+      {
+        payload: payload([{}]),
+        selected: ['i0'],
+      },
+    )
+    expect(out).toEqual({ skipped: 'embed-space', items: [], written: 0 })
+    expect(db.rows()).toEqual([])
+  })
+
+  it('an embedder that cannot say its space refuses too', async () => {
+    const db = fakeDb()
+    const out = await applyMemoryProposal(
+      events(),
+      applyCfg(db, {
+        embedSpace: () => {
+          throw new Error('embedder unreachable')
+        },
+      }),
+      { payload: payload([{}]), selected: ['i0'] },
+    )
+    expect(out.skipped).toBe('embed-space')
+    expect(db.rows()).toEqual([])
+  })
+
+  // MUTATION: skip the in-transaction switch read → an approval written for a
+  // user who has since turned memory off → red.
+  it('a user who switched memory off since writes nothing', async () => {
+    const db = fakeDb()
+    const ctx = events()
+    const out = await applyMemoryProposal(ctx, applyCfg(db, { enabled: () => false }), {
+      payload: payload([{}, {}]),
+      selected: ['i0', 'i1'],
+    })
+    expect(out).toEqual({ skipped: 'disabled', items: [], written: 0 })
+    expect(db.rows()).toEqual([])
+    expect(db.sources()).toEqual([])
+    expect(ctx.events).toEqual([])
+  })
+
+  // MUTATION: `catch → treat as enabled` → an unreadable switch writes → red.
+  it('a switch that cannot be read writes nothing (fail closed)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const db = fakeDb()
+      const out = await applyMemoryProposal(
+        events(),
+        applyCfg(db, {
+          enabled: () => {
+            throw new Error('prefs unreachable')
+          },
+        }),
+        { payload: payload([{}]), selected: ['i0'] },
+      )
+      expect(out.written).toBe(0)
+      expect(db.rows()).toEqual([])
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  // MUTATION: re-read the switch once before the loop, not per item → a
+  // switch-off that lands between two items still writes the second → red.
+  it('the switch is read inside each item, so a switch-off mid-way stops the rest', async () => {
+    const db = fakeDb()
+    let reads = 0
+    const out = await applyMemoryProposal(events(), applyCfg(db, { enabled: () => ++reads < 2 }), {
+      payload: payload([{}, { embedding: [0.6, 0.8] }]),
+      selected: ['i0', 'i1'],
+    })
+    expect(out.skipped).toBe('disabled')
+    expect(out.written).toBe(1)
+    expect(db.rows()).toHaveLength(1)
   })
 })
 

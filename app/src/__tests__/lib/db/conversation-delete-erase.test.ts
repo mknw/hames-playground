@@ -61,12 +61,18 @@ describe('conversation delete → memory erase (#531)', () => {
     ['deleteConversation', () => deleteConversation('conv-a', 'user-a')],
     ['deleteConversations', () => deleteConversations(['conv-a'], 'user-a')],
   ])(
-    '%s: erase first, on the same open transaction, then the row delete, then COMMIT',
+    '%s: proposal rows, then the erase, on the same open transaction, then the row delete, then COMMIT',
     async (_n, run) => {
       await run()
       expect(erase).toHaveBeenCalledWith(['conv-a'], 'user-a', tx)
       expect(calls).toEqual([
         'BEGIN',
+        // A pending memory proposal's payload leaves with its conversation, in
+        // the same transaction (#433 S11), and FIRST: an approval's write takes
+        // its proposal row before `memories`, so this order cannot deadlock with
+        // it (#579 review 3). MUTATION: drop the call → red; run it after the
+        // erase → red.
+        'tx:DELETE FROM hitl_requests',
         'erase(inTx=true,sameTx=true)',
         'tx:DELETE FROM conversations',
         'COMMIT',
@@ -77,6 +83,7 @@ describe('conversation delete → memory erase (#531)', () => {
   )
 
   it('a failing row delete rolls the transaction back after the erase ran in it', async () => {
+    tx.query.mockResolvedValueOnce({ rows: [] }) // the proposal rows
     tx.query.mockRejectedValueOnce(new Error('delete failed'))
     await expect(deleteConversations(['conv-a'], 'user-a')).rejects.toThrow('delete failed')
     expect(calls).toEqual(['BEGIN', 'erase(inTx=true,sameTx=true)', 'ROLLBACK'])

@@ -562,7 +562,17 @@ function decryptContent(raw: unknown): string {
  * Reads go through the main pool (short, and never held across a model call);
  * writes go through {@link getMemoryPool}.
  */
-export function createMemoryDbStore(userId: string): MemoryStore & MemoryWriteStore {
+export function createMemoryDbStore(
+  userId: string,
+  opts: {
+    /** Runs on the write connection, inside the owner-lock transaction, BEFORE
+     *  each `transaction(fn)` body: a host's check that must see the same world
+     *  the write does (a throw rolls the transaction back, nothing written).
+     *  It carries no SQL of this module's tables; the hitl proposal binding
+     *  check is the one user (#579 review 2a). */
+    readonly inTransaction?: (tx: TxQuery) => Promise<void>
+  } = {},
+): MemoryStore & MemoryWriteStore {
   return {
     async count(tiers) {
       await ready()
@@ -597,7 +607,10 @@ export function createMemoryDbStore(userId: string): MemoryStore & MemoryWriteSt
     },
 
     async transaction<R>(fn: (tx: MemoryWriteTx) => Promise<R>): Promise<R> {
-      return memoryTransaction(userId, (client) => fn(writeTx(client, userId)))
+      return memoryTransaction(userId, async (client) => {
+        await opts.inTransaction?.(client)
+        return fn(writeTx(client, userId))
+      })
     },
   }
 }

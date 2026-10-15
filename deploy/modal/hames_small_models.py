@@ -44,12 +44,29 @@ from pathlib import Path
 
 import modal
 
+from log_filter import forward_stderr
+
 # ---- pins: public state only ------------------------------------------------
 
-VLLM_IMAGE = "vllm/vllm-openai:v0.30.0"  # the version the model card's recipe names
+VLLM_IMAGE = "vllm/vllm-openai:v0.30.0@sha256:8a69ffad015f138d7170c4ddc429e230a3bc1c1719f67e14324749df200a4b90"
 
 BASE_REPO = "Qwen/Qwen3.5-4B"
 BASE_REVISION = "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"  # the adapter's pinned base
+
+# Hub LFS sha256 values; non-LFS bytes also checked against the Hub git blob ids.
+BASE_FILES_SHA256 = {
+    "chat_template.jinja": "a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715",
+    "config.json": "ddc63e1c717afa86c865bb5e01313d89d72bb53b97ad4a8a03ba8510c0621670",
+    "merges.txt": "a9d356d7bdf1ef4949e3e748e95b8e10ad9d4e2e838eddc38a0a7b6b94d1db8d",
+    "model.safetensors-00001-of-00002.safetensors": "26a93f066e1916adb13453dae5a0c707c0fbc71299ed98779571a907b8e74c61",
+    "model.safetensors-00002-of-00002.safetensors": "cb544bd9bfae93dc59b0f22b292f5933573854a7f9b97835c67060d7d910e188",
+    "model.safetensors.index.json": "cf3f798ee02ba45f9622aa8892a47369ab667d0afbf154ee7c2212de42e6302d",
+    "preprocessor_config.json": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516",
+    "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+    "tokenizer_config.json": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8",
+    "video_preprocessor_config.json": "7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13",
+    "vocab.json": "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003",
+}
 
 CARD_REPO = "h2oai/h2o-lightning-4b"
 CARD_REVISION = "b43f759b6385d21182f87c3829931ec3d4dfa98a"
@@ -159,7 +176,14 @@ def download_public_weights() -> None:
     """Runs once, at image build: the base, the adapter, the shim and Caddy, each pinned."""
     from huggingface_hub import snapshot_download  # shipped with vLLM
 
-    snapshot_download(BASE_REPO, revision=BASE_REVISION, local_dir=str(BASE_DIR))
+    snapshot_download(
+        BASE_REPO, revision=BASE_REVISION, local_dir=str(BASE_DIR),
+        allow_patterns=list(BASE_FILES_SHA256),
+    )
+    for relative, expected in BASE_FILES_SHA256.items():
+        digest = hashlib.sha256((BASE_DIR / relative).read_bytes()).hexdigest()
+        if digest != expected:
+            raise SystemExit(f"{relative}: sha256 {digest} != pinned {expected}")
     snapshot_download(
         CARD_REPO,
         revision=CARD_REVISION,
@@ -189,11 +213,18 @@ image = (
     modal.Image.from_registry(VLLM_IMAGE)
     .entrypoint([])
     .run_commands("ln -sf $(which python3) /usr/bin/python")
+    .add_local_python_source("log_filter", copy=True)
+    .run_function(download_public_weights)
+    # Offline is applied AFTER the build-time Hub downloads.
     .env(
         {
             # Sleep mode's endpoints exist only in dev mode. Dev mode also
             # defaults `log_error_stack` ON; the serve argv turns it back off.
             "VLLM_SERVER_DEV_MODE": "1",
+            "VLLM_NO_USAGE_STATS": "1",
+            "DO_NOT_TRACK": "1",
+            "VLLM_MEDIA_URL_ALLOW_REDIRECTS": "0",
+            "HF_HUB_OFFLINE": "1",
             # The card's recipe: decisions read logprobs at temperature 0 and
             # never sample, so FlashInfer's JIT-built sampler is not needed.
             "VLLM_USE_FLASHINFER_SAMPLER": "0",
@@ -201,7 +232,6 @@ image = (
             "HF_HUB_CACHE": str(MODELS_DIR / "hf-cache"),
         }
     )
-    .run_function(download_public_weights)
     .add_local_file(Path(__file__).parent / "Caddyfile", "/etc/hames/Caddyfile", copy=True)
 )
 
@@ -239,30 +269,6 @@ def _wait_ok(url: str, process: subprocess.Popen, budget_s: float, what: str) ->
             pass
         time.sleep(2)
     raise TimeoutError(f"{what} was not ready within {budget_s:.0f}s")
-
-
-def _forward_shim_stderr(pipe, dropped: list[int]) -> None:
-    """Allow-list the shim's stderr before it reaches the container log.
-
-    The shim prints its own startup and config lines prefixed `shim`, and
-    nothing else by design — except `traceback.print_exc()` on an unexpected
-    exception, whose message can quote the request that caused it. Only the
-    allow-listed prefix passes; a traceback is reduced to its exception class.
-    """
-    in_traceback = False
-    for raw in iter(pipe.readline, b""):
-        line = raw.decode("utf-8", "replace").rstrip("\n")
-        if in_traceback:
-            if line and not line.startswith(" "):
-                print(f"shim: unhandled {line.split(':', 1)[0]} (traceback withheld from logs)", flush=True)
-                in_traceback = False
-            continue
-        if line.startswith("Traceback (most recent call last)"):
-            in_traceback = True
-        elif line.startswith("shim"):
-            print(line, flush=True)
-        else:
-            dropped[0] += 1
 
 
 def _vllm_argv() -> list[str]:
@@ -327,6 +333,8 @@ def _reference_logprobs(model: str) -> dict[str, float]:
 
 
 def _assert_adapter_active(base: dict[str, float], adapter: dict[str, float]) -> None:
+    if not all(map(math.isfinite, [*base.values(), *adapter.values()])):
+        raise RuntimeError("non-finite adapter reference reading")
     if set(base) == set(adapter) and all(abs(base[k] - adapter[k]) < 1e-3 for k in base):
         raise RuntimeError(
             f"{DECIDER_MODEL!r} answers exactly like {SUMMARIZER_MODEL!r}: the adapter is not active"
@@ -337,10 +345,14 @@ def _reference_drift(before: dict[str, float], after: dict[str, float], model: s
     """The largest probability change on a token both readings rank; raises past the tolerance.
 
     A tail token trading places with the sixth is noise, so only shared tokens are
-    compared, and the pre-sleep top token must still be one of them."""
+    compared, and the pre-sleep top token must remain the argmax."""
+    if not all(map(math.isfinite, [*before.values(), *after.values()])):
+        raise RuntimeError("non-finite restore reference reading")
     top = max(before, key=before.__getitem__)
     shared = before.keys() & after.keys()
     drift = max(abs(math.exp(before[k]) - math.exp(after[k])) for k in shared) if top in shared else 1.0
+    if max(after, key=after.__getitem__) != top:
+        drift = 1.0
     if drift > REFERENCE_TOLERANCE:
         p = lambda reading: {k: round(math.exp(v), 4) for k, v in reading.items()}  # noqa: E731
         raise RuntimeError(
@@ -387,10 +399,18 @@ class SmallModels:
     def _boot(self) -> None:
         self.boot = {"snapshot": SNAPSHOT}
         self.shim_dropped = [0]
+        self.vllm_dropped = [0]
+        self.public_ready = threading.Event()
         budget = STARTUP_TIMEOUT_S * 0.8
         t0 = time.monotonic()
 
-        self.vllm = subprocess.Popen(_vllm_argv())
+        self.vllm = subprocess.Popen(
+            _vllm_argv(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+        )
+        threading.Thread(
+            target=forward_stderr,
+            args=(self.vllm.stdout, self.vllm_dropped, self.public_ready, "vllm"), daemon=True
+        ).start()
         self.boot["vllm_ready_s"] = _wait_ok(f"http://127.0.0.1:{VLLM_PORT}/health", self.vllm, budget, "vLLM")
         status, models = _http("GET", f"http://127.0.0.1:{VLLM_PORT}/v1/models")
         served = {m.get("id") for m in models.get("data", [])}
@@ -401,7 +421,8 @@ class SmallModels:
             _shim_argv(), env={**os.environ, **SHIM_ENV}, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
         )
         threading.Thread(
-            target=_forward_shim_stderr, args=(self.shim.stdout, self.shim_dropped), daemon=True
+            target=forward_stderr,
+            args=(self.shim.stdout, self.shim_dropped, self.public_ready, "shim"), daemon=True
         ).start()
         self.boot["shim_ready_s"] = _wait_ok(f"http://127.0.0.1:{SHIM_PORT}/health", self.shim, 120, "shim")
 
@@ -457,6 +478,7 @@ class SmallModels:
 
         STATUS_DIR.mkdir(parents=True, exist_ok=True)
         (STATUS_DIR / "status.json").write_text(json.dumps(self.boot))
+        self.public_ready.set()
         self.caddy = subprocess.Popen(
             ["caddy", "run", "--config", "/etc/hames/Caddyfile", "--adapter", "caddyfile"]
         )
@@ -482,9 +504,10 @@ class SmallModels:
 
     @modal.exit()
     def stop(self) -> None:
-        dropped = getattr(self, "shim_dropped", [0])[0]
-        if dropped:
-            print(f"shim: {dropped} non-allow-listed stderr lines withheld from logs", flush=True)
+        for source in ("shim", "vllm"):
+            dropped = getattr(self, f"{source}_dropped", [0])[0]
+            if dropped:
+                print(f"{source}: {dropped} stderr lines withheld from logs", flush=True)
         for child in (getattr(self, "caddy", None), getattr(self, "shim", None), getattr(self, "vllm", None)):
             if child is not None and child.poll() is None:
                 child.terminate()

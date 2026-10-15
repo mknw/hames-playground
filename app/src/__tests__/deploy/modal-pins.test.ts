@@ -17,7 +17,7 @@
  *      routes (/sleep, /wake_up, /collective_rpc) and the shim's raw upstreams
  *      (/v1/completions, /tokenize) must not appear.
  *   2. The inbound Authorization header is stripped on every proxied route and
- *      Caddy has no `log` block (Modal ships stdout to US-stored logs).
+ *      Caddy filters request details from its error log (Modal ships stdout to US-stored logs).
  *   3. vLLM's serve argv carries the logging posture (`--no-log-error-stack`,
  *      `--disable-uvicorn-access-log`, never `--enable-log-requests` /
  *      `--enable-log-outputs`), the LoRA flags, the app's model alias, and a
@@ -28,7 +28,7 @@
  *      After a restore the adapter-active check runs on the readings taken
  *      AFTER it; run on the pre-sleep ones it passes whatever the restore did.
  *   4. Everything baked into the image or a snapshot is pinned public state:
- *      a commit hash for each Hub repo, a sha256 per card file, a sha512 for
+ *      a digest for vLLM, a commit for each Hub repo, sha256 per model/card file, a sha512 for
  *      Caddy — and the warm-up prompts are string LITERALS in the file, not
  *      anything read at runtime.
  *   5. The operator's instance files are git-ignored by the pattern the README
@@ -37,17 +37,21 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { execFileSync } from 'node:child_process'
 
-const read = (relative: string) =>
-  readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf-8')
+const path = (relative: string) => fileURLToPath(new URL(relative, import.meta.url))
+const read = (relative: string) => readFileSync(path(relative), 'utf-8')
 
+const behaviourScript = path('../../../../deploy/modal/test_behaviour.py')
 const caddyfile = read('../../../../deploy/modal/Caddyfile')
 const app = read('../../../../deploy/modal/hames_small_models.py')
 const gitignore = read('../../../../.gitignore')
 
-/** The `path …` matcher lines, flattened to one set of public paths. */
+/** The raw-path expression lists, flattened to one set of public paths. */
 const caddyPaths = (text: string): string[] =>
-  [...text.matchAll(/^\s*@\w+\s+path\s+(.+)$/gm)].flatMap((m) => m[1].trim().split(/\s+/))
+  [
+    ...text.matchAll(/^\s*@\w+\s+expression `\{http\.request\.uri\.path\} in \[([^\]]+)\]`$/gm),
+  ].flatMap((m) => [...m[1].matchAll(/'([^']+)'/g)].map((path) => path[1]))
 
 /** Every non-comment line of the Caddyfile. */
 const caddyCode = caddyfile
@@ -59,6 +63,7 @@ const PUBLIC_PATHS = ['/v1/chat/completions', '/v1/models', '/v1/systemone', '/h
 
 describe('deploy/modal: the public surface is the Caddy route list', () => {
   it('forwards exactly the five public paths', () => {
+    expect(caddyCode).not.toMatch(/^\s*@\w+\s+path\s/m)
     expect(caddyPaths(caddyCode).sort()).toEqual([...PUBLIC_PATHS].sort())
     // /status is a file, not a proxy: a `handle /status` block with no upstream.
     expect(caddyCode).toMatch(/handle \/status \{[^}]*file_server[^}]*\}/)
@@ -66,7 +71,10 @@ describe('deploy/modal: the public surface is the Caddy route list', () => {
   })
 
   it('proxies only to the two loopback upstreams, and ends in a 404 handler', () => {
-    const upstreams = [...caddyCode.matchAll(/reverse_proxy\s+(\S+)/g)].map((m) => m[1])
+    const proxyLines = [...caddyCode.matchAll(/^\s*reverse_proxy ([^\n{]+) \{$/gm)]
+    expect(proxyLines).toHaveLength(2)
+    for (const line of proxyLines) expect(line[1].trim().split(/\s+/)).toHaveLength(1)
+    const upstreams = proxyLines.map((m) => m[1].trim())
     expect(upstreams.sort()).toEqual(['127.0.0.1:8000', '127.0.0.1:8741'])
     expect(caddyCode).toMatch(/handle \{\s*respond 404\s*\}/)
   })
@@ -88,11 +96,25 @@ describe('deploy/modal: the public surface is the Caddy route list', () => {
     const proxies = caddyCode.match(/reverse_proxy[^{]*\{[^}]*\}/g) ?? []
     expect(proxies).toHaveLength(2)
     for (const block of proxies) expect(block).toContain('header_up -Authorization')
-    expect(caddyCode).not.toMatch(/^\s*log\b/m)
+    const logBlock = `log default {
+		output stderr
+		format filter {
+			request>uri delete
+			request>headers delete
+			request>remote_ip delete
+			request>remote_port delete
+			request>client_ip delete
+		}
+	}`
+    expect(caddyCode.match(/^\s*log\b/gm)).toHaveLength(1)
+    expect(caddyCode).toContain(logBlock)
   })
 })
 
 /** The `_vllm_argv` list body, as one string. */
+const boot = app.match(/def _boot\(self\)[\s\S]*?(?= {4}def _serve)/)?.[0] ?? ''
+const serve = app.match(/def _serve\(self\)[\s\S]*?hames: ready/)?.[0] ?? ''
+const download = app.match(/def download_public_weights\(\)[\s\S]*?(?=\nimage =)/)?.[0] ?? ''
 const vllmArgv = app.match(/def _vllm_argv\(\)[^[]*\[([\s\S]*?)\n\s*\]\n/)?.[1] ?? ''
 
 describe('deploy/modal: the server shape and the vLLM argv', () => {
@@ -103,6 +125,19 @@ describe('deploy/modal: the server shape and the vLLM argv', () => {
 
   it('starts vLLM on loopback with the logging posture, the LoRA, and the app model alias', () => {
     expect(vllmArgv).not.toBe('')
+    expect(vllmArgv.match(/"--host"/g)).toHaveLength(1)
+    expect(vllmArgv).not.toContain('"--log-error-stack"')
+    expect(boot).toMatch(
+      /self\.vllm = subprocess\.Popen\(\s*_vllm_argv\(\),\s*stdout=subprocess\.PIPE, stderr=subprocess\.STDOUT\s*\)/,
+    )
+    expect(boot).toMatch(
+      /target=forward_stderr,\s*args=\(self\.vllm\.stdout, self\.vllm_dropped, self\.public_ready, "vllm"\)/,
+    )
+    expect(boot).toMatch(
+      /target=forward_stderr,\s*args=\(self\.shim\.stdout, self\.shim_dropped, self\.public_ready, "shim"\)/,
+    )
+    expect(boot).toContain('self.public_ready = threading.Event()')
+    expect(serve).toMatch(/self\.public_ready\.set\(\)\s*self\.caddy = subprocess\.Popen/)
     for (const flag of [
       '"--no-log-error-stack"',
       '"--disable-uvicorn-access-log"',
@@ -130,7 +165,11 @@ describe('deploy/modal: the server shape and the vLLM argv', () => {
   })
 
   it('re-checks the adapter after a restore on the readings taken after it', () => {
-    const serve = app.match(/def _serve\(self\)[\s\S]*?hames: ready/)?.[0] ?? ''
+    expect(app).toMatch(/^REFERENCE_TOLERANCE = 0\.1$/m)
+    expect(serve).toContain('_reference_drift(before, after[model], model)')
+    expect(boot).not.toContain('["caddy", "run"')
+    expect(serve).toContain('["caddy", "run"')
+    expect(app.match(/\["caddy", "run"/g)).toHaveLength(1)
     expect(serve).toMatch(
       /_assert_adapter_active\(after\[SUMMARIZER_MODEL\], after\[DECIDER_MODEL\]\)/,
     )
@@ -139,11 +178,50 @@ describe('deploy/modal: the server shape and the vLLM argv', () => {
 
   it('enables dev mode (sleep needs it) — which is why the route list above exists', () => {
     expect(app).toMatch(/"VLLM_SERVER_DEV_MODE": "1"/)
+    expect(app).not.toContain('VLLM_LOGGING_LEVEL')
+    for (const [key, value] of Object.entries({
+      VLLM_NO_USAGE_STATS: '1',
+      DO_NOT_TRACK: '1',
+      VLLM_MEDIA_URL_ALLOW_REDIRECTS: '0',
+      HF_HUB_OFFLINE: '1',
+    })) {
+      expect(app).toContain(`"${key}": "${value}"`)
+    }
   })
 })
 
 describe('deploy/modal: what the image and a snapshot can contain is pinned public state', () => {
   it('pins both Hub repos to a commit and every card file to a sha256', () => {
+    expect(app).toMatch(/^VLLM_IMAGE = "vllm\/vllm-openai:v0\.30\.0@sha256:[0-9a-f]{64}"$/m)
+    expect(download).toMatch(/if digest != CADDY_SHA512:\s*raise SystemExit/)
+    for (const [files, dir] of [
+      ['CARD_FILES_SHA256', 'CARD_DIR'],
+      ['BASE_FILES_SHA256', 'BASE_DIR'],
+    ]) {
+      expect(download).toContain(`allow_patterns=list(${files})`)
+      expect(download).toContain(`for relative, expected in ${files}.items():`)
+      expect(download).toContain(
+        `digest = hashlib.sha256((${dir} / relative).read_bytes()).hexdigest()`,
+      )
+    }
+    expect(download.match(/if digest != expected:\s*raise SystemExit/g)).toHaveLength(2)
+    const base = app.match(/BASE_FILES_SHA256 = \{([\s\S]*?)\n\}/)?.[1] ?? ''
+    const baseEntries = [...base.matchAll(/"([^"]+)": "([0-9a-f]{64})"/g)]
+    expect(baseEntries.map((m) => m[1]).sort()).toEqual(
+      [
+        'chat_template.jinja',
+        'config.json',
+        'merges.txt',
+        'model.safetensors-00001-of-00002.safetensors',
+        'model.safetensors-00002-of-00002.safetensors',
+        'model.safetensors.index.json',
+        'preprocessor_config.json',
+        'tokenizer.json',
+        'tokenizer_config.json',
+        'video_preprocessor_config.json',
+        'vocab.json',
+      ].sort(),
+    )
     expect(app).toMatch(/BASE_REVISION = "[0-9a-f]{40}"/)
     expect(app).toMatch(/CARD_REVISION = "[0-9a-f]{40}"/)
     const shas = app.match(/CARD_FILES_SHA256 = \{([\s\S]*?)\n\}/)?.[1] ?? ''
@@ -169,6 +247,8 @@ describe('deploy/modal: what the image and a snapshot can contain is pinned publ
     const chat = app.match(/WARMUP_CHAT_MESSAGES = \(([\s\S]*?)\n\)/)?.[1] ?? ''
     const decision = app.match(/WARMUP_DECISION = \{([\s\S]*?)\n\}/)?.[1] ?? ''
     const reference = app.match(/REFERENCE_PROMPT = (.*)/)?.[1] ?? ''
+    expect(boot).toContain('list(WARMUP_CHAT_MESSAGES)')
+    expect(boot).toContain('WARMUP_DECISION)')
     expect(chat).not.toBe('')
     expect(decision).not.toBe('')
     expect(reference).toMatch(/^"[^"]+"$/)
@@ -183,5 +263,14 @@ describe('deploy/modal: what the image and a snapshot can contain is pinned publ
 describe('deploy/modal: the instance files stay out of git', () => {
   it('ignores deploy/modal/*.local.*', () => {
     expect(gitignore).toMatch(/^deploy\/modal\/\*\.local\.\*$/m)
+  })
+})
+
+// ci.yml's ubuntu-latest runner supplies python3; no Modal SDK or pytest needed.
+describe('deploy/modal: Python behaviour (hermetic unit layer)', () => {
+  it('withholds traceback payloads and rejects swapped or nonfinite references', () => {
+    expect(() =>
+      execFileSync('python3', [behaviourScript], { encoding: 'utf8', timeout: 10000 }),
+    ).not.toThrow()
   })
 })

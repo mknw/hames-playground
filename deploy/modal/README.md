@@ -52,7 +52,7 @@ Everything else is a 404 at Caddy. vLLM's dev-mode routes (`/sleep`, `/wake_up`,
 
 1. **Before the snapshot** (`@modal.enter(snap=True)`): start vLLM with the base plus the LoRA, confirm both names are served, start the shim, warm both with the literal synthetic prompts in the file, record top-5 logprobs for one reference prompt on each name, assert the two differ (the model card's adapter-active check), then `POST /sleep?level=1`.
 2. Modal snapshots CPU and GPU memory.
-3. **After a restore** (`snap=False`): `POST /wake_up`, re-read the reference prompt on both names, require each to keep its pre-sleep top token and move no shared top-5 token by more than 0.1 in probability, run the adapter-active check again on these fresh readings, then start Caddy. A failure stops the container rather than serving a box whose adapter silently stopped applying. Each restore records the drift it measured in `/status` (`reference_drift`); the bound is in probability because restores of one snapshot differ by a few hundredths of a logprob from run to run, which is noise rather than damage.
+3. **After a restore** (`snap=False`): `POST /wake_up`, re-read the reference prompt on both names, reject nonfinite readings, require each to keep its pre-sleep argmax token and move no shared top-5 token by more than 0.1 in probability, run the adapter-active check again on these fresh readings, then start Caddy. A failure stops the container rather than serving a box whose adapter silently stopped applying. Each restore records the drift it measured in `/status` (`reference_drift`); the bound is in probability because restores of one snapshot differ by a few hundredths of a logprob from run to run, which is noise rather than damage.
 
 With `HAMES_MODAL_SNAPSHOT=0` the same steps run in one `@modal.enter`, with no sleep. That is the baseline `measure.py` compares against.
 
@@ -62,10 +62,11 @@ GPU snapshots are a Modal **alpha** feature. vLLM 0.30's source keeps a LoRA thr
 
 Modal pins compute and routing to the configured regions and never moves a pinned container. Modal stores **images, memory snapshots, Secrets and container logs in the United States** regardless. So:
 
-- The image and the snapshot hold public weights (Apache-2.0, pinned to a commit and a hash), code, and the synthetic warm-up state. No request has run before the snapshot is taken, by construction.
+- The image and the snapshot hold public weights (Apache-2.0, pinned to a commit and a hash), code, and the synthetic warm-up state. No request has run before the snapshot is taken, by construction. The vLLM image is pinned by index digest, and the base model, adapter and card files are verified by sha256 at build time.
 - Request and response bodies are proxied to the container and not stored by Modal.
 - Outbound requests: none on a request's behalf. vLLM reads no images (`--limit-mm-per-prompt` 0 refuses an image part before anything is fetched), and the shim, whose pinned config enables an image path that would fetch an image named by URL, runs with its own `LIGHTNING_IMAGE_URLS=off` lock.
-- Logs: vLLM 0.30 does not log requests unless asked (`--enable-log-requests` is never passed); its dev-mode default of logging exception stacks is turned off (`--no-log-error-stack`); uvicorn's access log is off; Caddy writes no access log; the shim's stderr passes through an allow-list that reduces any traceback to its exception class.
+- Usage reporting is disabled with `VLLM_NO_USAGE_STATS=1` and `DO_NOT_TRACK=1`; startup and periodic usage-stat posts are blocked. `HF_HUB_OFFLINE=1` applies after the build-time downloads, and media redirects are disabled.
+- Logs: vLLM request/output and uvicorn access logging are off. `--no-log-error-stack` disables the registered handlers' stacks; a shared reducer also reduces streaming tracebacks to a validated exception class and truncates WARNING/ERROR/CRITICAL lines at their source tag. INFO lines pass. The shim's startup lines pass only before the public listener starts; afterwards only synthesized exception metadata passes. Caddy writes no access log, and its error-log filter deletes request URIs, headers and client addresses.
 
 Those are mechanisms. Whether Modal is an acceptable processor for the private tier, and whether a narrow EU region satisfies a residency requirement when Modal does not publish which country backs it, are the operator's decisions. The pointers: Modal's trust center (DPA, subprocessors), `modal.com/docs/guide/data-residency`, and Modal themselves for the country question.
 
@@ -121,6 +122,10 @@ Billed while a container exists: boot, the snapshot creation, serving, and the s
 ## Before any real traffic reaches it
 
 The deploy above serves synthetic data. Pointing a real user's `.env` at the URL is a separate step gated on the operator's own governance decision (processor, region, log and snapshot placement). Nothing in this directory makes that decision.
+
+## Local verification
+
+`python3 deploy/modal/test_behaviour.py` from the repository root runs the stdlib-only behavior checks without Modal, a model, or a network request. The deploy Vitest suite invokes the same command in CI (`ubuntu-latest` supplies `python3`). It tests traceback and warning reduction, the public-listener event gate, exception-class validation, argmax preservation and refusal of nonfinite readings.
 
 ## Layout
 

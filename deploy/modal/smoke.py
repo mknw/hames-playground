@@ -137,7 +137,9 @@ def main() -> int:
     check("decide: score parses and matches its distribution", consistent, f"score {score.get('score')}")
 
     # The surface that must stay closed, now that the box is up.
-    for path in ("/sleep?level=1", "/collective_rpc", "/v1/completions"):
+    for path in ("/sleep?level=1", "/collective_rpc", "/v1/completions",
+                 "/metrics", "/metrics/../v1/models",
+                 "/api/alpha/decisions/../../../v1/systemone"):
         status, _, _ = call(base, token, "POST", path, {})
         check(f"{path.split('?')[0]} is not reachable", status == 404, f"status {status}")
     status, body, _ = call(base, token, "POST", "/v1/systemone", {**DECIDE, "image_url": "https://example.com/x.png"})

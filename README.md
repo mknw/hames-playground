@@ -76,7 +76,11 @@ cd hames-playground
 #    two database passwords from a ROOT .env (not app/.env), and refuses to
 #    start without them. A new stack works with the shipped values; an
 #    existing one kept its first password (`password`) — set that, see below.
+#    Needs Docker Engine >= 28 (gateway_mode_ipv4: isolated); an older one
+#    (colima 27.x: `colima update`, then restart the VM) fails with "unknown
+#    gateway mode isolated". `make check-docker` checks before you start.
 cp .env.example .env
+make check-docker
 docker compose up -d
 docker compose ps                 # all five services should be Up
 

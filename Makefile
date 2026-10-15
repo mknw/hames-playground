@@ -9,6 +9,12 @@
 # The GGUF weights live in models/, which is gitignored — see models/README.md.
 # Both targets run in the FOREGROUND: one server per terminal.
 
+# Docker Engine >= 28 preflight (#241 G13: the neo4j-internal network uses
+# gateway_mode_ipv4: isolated). Run before `docker compose up -d`; read-only.
+.PHONY: check-docker
+check-docker:
+	@scripts/check-docker.sh
+
 .PHONY: embed llm-small
 
 # Where the GGUF files are. Relative to the repo root by default; a git worktree

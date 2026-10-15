@@ -199,6 +199,10 @@ Neo4j itself has no published ports and sits only on `neo4j-internal`
 publishes HTTP/Bolt on loopback for the host app and SSH tunnels; container
 consumers use `neo4j-relay`. APOC and n10s are installed during image build,
 so startup needs no egress. CSV file URLs and APOC file imports are disabled.
+Before recreating the stack, take a Neo4j dump using the currently running
+image. The first `docker compose up -d` after adopting G13 moves an older store
+to 5.26.32; that store-format move cannot be undone. Docker Engine 28+ is
+required for the isolated bridge (see [Docker Compose](../DOCKER_COMPOSE.md)).
 After adopting G13, the owner must recreate their own stack once with
 `docker compose up -d`. The opt-in isolation check and red mutation are in
 [Neo4j egress check](../testing/neo4j-egress.md).

@@ -296,7 +296,10 @@ describe('skipWithoutDatabase: what a DB-backed test does with no database', () 
       .map((f) => ({ f, s: readFileSync(path.join(src, f), 'utf8') }))
       .filter(
         ({ s }) =>
-          /db\/client\.server'/.test(s) && !/vi\.mock\(\s*'[^']*db\/client\.server'/.test(s),
+          /db\/client\.server'/.test(s) &&
+          !/vi\.mock\(\s*'[^']*db\/client\.server'/.test(s) &&
+          // a file that mocks `pg` itself never reaches a database
+          !/vi\.mock\(\s*'pg'/.test(s),
       )
     // The ten today, so a clean pass below is not "scanned nothing".
     expect(dbFiles.length).toBeGreaterThanOrEqual(10)

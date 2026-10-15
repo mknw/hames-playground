@@ -1,75 +1,11 @@
 /**
- * The joint memory wake — Server Only (#419 D20)
- *
- * Memory's two private boxes — the 4B summarizer (`SMALL_LLM_BASE_URL`, the
- * `describe`/`decide` model) and the embedder (`EMBEDDINGS_LOCAL_URL`) — no
- * longer have to be always-on (owner decision 6026903497 (b): "it doesn't have
- * to be always-on if we wake both containers at the same time"). This module is
- * the wake that replaces the requirement, modelled line-for-line on
- * {@link ./wake.server.ts}'s Verda wake: one deduplicated poll, shared by every
- * turn that arrives while it is in flight, retrying short bounded attempts
- * until one proves the boxes up. Read that module for the reasoning this one
- * inherits — why a forward pass and not a readiness endpoint, why it polls
- * rather than rides one long request, and why the dedupe wraps the whole loop.
- *
- * ## How it differs from the Verda wake — three ways, each deliberate
- *
- * **Two targets, one wake — and the target set follows the TURN's tier.** The
- * poll runs one loop per **requested** target, concurrently, and resolves only
- * when **all requested** targets proved up. The embedder leg is always
- * requested (every tier's memory pipeline embeds); the 4B leg only when
- * `activeInferenceTier()` is `verda`, because the 4B serves `decide`/`describe`
- * under the private tier only — an Anthropic-tier turn gates through calibrated
- * Jev and describes through the Anthropic chain. Without that gate a slow 4B
- * would push the joint promise past the recall gate's 1500 ms budget and cause
- * a spurious `skipped: 'waking'` on a turn that only needed the embedder, and
- * every idle Anthropic-tier turn would wake a box it never uses. The owner's
- * words are "wake both containers at the same time" — true whenever both are
- * that turn's targets. The target set is fixed when the poll STARTS; a turn of
- * the other tier joining an in-flight poll attaches to the requested set that
- * is already running, which is the dedupe doing its job (at most one poll per
- * process, ever).
- *
- * **Failure is fail-open, because memory is not the turn.** The Verda wake
- * fails the TURN visibly — confidential compute must not silently fall back.
- * A failed memory wake must not: it is an opportunistic feature on a turn that
- * has other work to do. So {@link ensureMemoryAwake} never rejects — it logs
- * the failure and resolves, and the turn proceeds with memory simply absent.
- * **No wake failure ever sends a call to a public provider** (SD-12) — there is
- * no fallback to Jev or Anthropic, and the failure message says so in the same
- * sentence the Verda wake uses. The callers that must LEARN what happened use
- * {@link awaitMemoryWake}, below.
- *
- * **The bounds are unmeasured, and say so.** The Verda numbers are sized to a
- * 27 B weight load; the 4B is ~2.5 GB Q8_0 and the embedder 639 MB, so the
- * defaults here (`MEMORY_WAKE_TIMEOUT_MS` 180 s overall, 30 s per attempt, 5 s
- * between attempts) are stated as placeholders for layer 4 to measure, not as
- * readings. All three are env-tunable through the SAME parser the Verda wake
- * uses ({@link wakeEnvMs}), so the two wakes cannot grow different validation
- * policies either.
- *
- * ## The two entry points, and who calls which
- *
- * - **{@link ensureMemoryAwake}** — the turn start (wiring slice M5, before the
- *   chain's first pattern). The `optsIn` argument is the memory opt-in probe's
- *   answer (`harnessUsesMemory(patterns)` / `AgentDeps.memory`, the same probe
- *   that gates `settleMemory`): `false` starts NOTHING, because waking the
- *   embedder box for an agent with no memory would be GPU seconds spent on
- *   nothing — the same economics that rejected early-start-alone.
- * - **{@link awaitMemoryWake}** — the waiters. The recall gate (slice M1) waits
- *   on it bounded by its own `gate.timeoutMs` and records `skipped: 'waking'`
- *   when it comes back `'skipped'`; `settleMemory` (slice M2) waits bounded by
- *   `MEMORY_WAKE_TIMEOUT_MS` — acceptable in the detached continuation that has
- *   already answered the user — and skips the store when it comes back
- *   `'skipped'`. Both attach to the SAME in-flight poll {@link ensureMemoryAwake}
- *   started; neither can start a second one.
- *
- * No prompt, no user id, no conversation id — every attempt's content is the
- * same fixed literal (SD-10), exactly as in the Verda wake.
+ * Memory embedder wake — Server Only.
+ * The private-tier turn wakes the summarizer before startTurnMemory; its
+ * detached settleMemory continuation inherits that turn. Only the embedder
+ * remains opportunistic here: a failed wake skips memory and leaves the turn
+ * running. awaitMemoryWake retains the settled outcome for late waiters.
  */
-
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
-import { activeInferenceTier } from '@hames-ai/harness-baml/clients.server'
 import { isRefusal, wakeEnvMs, NOTHING_SENT_ELSEWHERE } from './wake.server'
 
 assertServerOnImport()
@@ -77,7 +13,7 @@ assertServerOnImport()
 /**
  * How long the whole poll is given, across every attempt: **180s**.
  *
- * UNMEASURED, and stated as that rather than derived: the boxes being woken are
+ * UNMEASURED, and stated as that rather than derived: the embedder being woken is
  * an order of magnitude smaller than the 27B whose readings sized the Verda
  * wake (600s against a ~360s measured tail), so those numbers are NOT
  * inherited. 180s is a cold start of the same shape, shorter — one overall
@@ -93,7 +29,7 @@ export const DEFAULT_MEMORY_WAKE_TIMEOUT_MS = 180_000
  * **30s** — the same bet the Verda wake makes, and not an estimate of load time
  * either. It is how long the poll bets on the queue-and-answer reading before
  * spending one more token, and it must stay well clear of a warm call (a warm
- * embedder answers a one-item probe in milliseconds; a warm 4B in seconds), so
+ * embedder answers a one-item probe in milliseconds), so
  * a warm box never retries.
  *
  * Capped by whatever is left of the overall budget, so the last attempt cannot
@@ -137,22 +73,9 @@ export function memoryWakePollIntervalMs(): number {
 export const MEMORY_WAKE_FAILED = 'the memory inference box did not wake'
 
 /**
- * The wake probe's message text — a fixed literal (SD-10), the 4B leg's only
- * content. The embedder leg embeds the same literal.
+ * The embedder wake probe's input — a fixed literal (SD-10).
  */
 export const MEMORY_WAKE_PROMPT = 'wake'
-
-/**
- * The model id the 4B probe names. A COPY of the `model` line on
- * `LocalQwenSmall` (`packages/harness-baml/baml_src/local-client.baml`) — the
- * probe is a hand-rolled fetch, so it has to name a model and BAML exports
- * nothing to read it from. The copy is pinned against the declaration by
- * `memory-wake.test.ts`, the same way `VERDA_MODEL_ID` is pinned against
- * `verda-client.baml`: a drifting id is a 400 from a server that validates
- * model names, which `isRefusal` correctly treats as a misconfiguration and
- * ends the wake on — silently disabling memory until someone reads the log.
- */
-export const SUMMARIZER_MODEL_ID = 'qwen3.5-4b-instruct'
 
 /**
  * The model id the embedder probe names — the same lookup
@@ -184,43 +107,6 @@ interface WakeTarget {
 }
 
 /**
- * The 4B summarizer's probe: a two-token completion at temperature 0. The
- * cheapest request that forces the weights to load and a token out —
- * `max_tokens: 2`, not 0, because a request rejected before generation proves
- * nothing about readiness. The Verda module's `/v1/models` lesson applies
- * verbatim: a readiness GET answers while the weights are still loading, in
- * BOTH directions wrong.
- *
- * **Why 2 and not the Verda probe's 1:** llama-server (observed on b9190,
- * Qwen3.5-4B Q8_0, the Makefile's flags — coordinator finding C1 on #419,
- * [#497 comment 6033599840](https://github.com/mknw/hames-playground/pull/497#issuecomment-6033599840))
- * ABORTS on the second identical prompt sent with `max_tokens: 1` —
- * `common/common.cpp:1489: failed to remove sequence 2 with p0=164, p1=-1`,
- * abort trap 6 — and every later request gets an empty reply. The second probe
- * that reaches a live llama-server, whether from a poll retry or the next
- * turn's wake, would kill the very box the private tier's `describe` role runs
- * on. Two variants survive it, each tested on a fresh server: `max_tokens: 2`
- * and per-request `cache_prompt: false`; the token count is the one that costs
- * nothing, and a probe's only job is to prove a token was produced. This is a
- * llama-server bug, not a vLLM one — the Verda probe on `wake.server.ts` keeps
- * its `max_tokens: 1` and is out of scope here.
- */
-const SUMMARIZER: WakeTarget = {
-  label: 'the 4B summarizer (SMALL_LLM_BASE_URL)',
-  envVar: 'SMALL_LLM_BASE_URL',
-  keyEnvVar: 'SMALL_LLM_API_KEY',
-  probe: (_base) => ({
-    path: '/chat/completions',
-    body: {
-      model: SUMMARIZER_MODEL_ID,
-      messages: [{ role: 'user', content: MEMORY_WAKE_PROMPT }],
-      max_tokens: 2,
-      temperature: 0,
-    },
-  }),
-}
-
-/**
  * The embedder's probe: a ONE-ITEM `POST /v1/embeddings`. The cheapest forward
  * pass an embedding server can serve — one input, the fixed literal — and the
  * only request shape that proves the embedding weights are loaded. The model id
@@ -234,19 +120,6 @@ const EMBEDDER: WakeTarget = {
     path: '/embeddings',
     body: { model: embedderWakeModel(), input: [MEMORY_WAKE_PROMPT] },
   }),
-}
-
-/**
- * The requested target set for THIS turn: the embedder always, the 4B only on
- * the private tier — the tier gate that keeps an Anthropic-tier turn from
- * waiting on (and waking) a 4B it never calls. Read at poll START; see the
- * module docstring for what that means when a turn of the other tier joins an
- * in-flight poll.
- */
-function requestedTargets(): WakeTarget[] {
-  const targets: WakeTarget[] = [EMBEDDER]
-  if (activeInferenceTier() === 'verda') targets.push(SUMMARIZER)
-  return targets
 }
 
 const MEMORY_WAKE_KEY = Symbol.for('hames-app.memory-wake')
@@ -295,10 +168,10 @@ const state: MemoryWakeState = ((globalThis as MemoryWakeGlobal)[MEMORY_WAKE_KEY
  * {@link awaitMemoryWake}, which observes the same in-flight poll.
  *
  * Resolves as soon as every requested target answered its forward pass — which,
- * on a warm box, is the first attempt: two cheap requests, the cheapest warm
+ * on a warm box, is the first attempt: one cheap request, the cheapest warm
  * check there is. (There is deliberately no warm-clock skip like the Verda
- * wake's `verdaProvenWarm`: the small boxes have no usage observer to stamp,
- * and a probe pair costs milliseconds — it IS the warm check.)
+ * wake's `verdaProvenWarm`: the embedder has no usage observer to stamp,
+ * and its probe costs milliseconds — it IS the warm check.)
  */
 export async function ensureMemoryAwake(optsIn: boolean): Promise<void> {
   if (!optsIn) return
@@ -311,7 +184,7 @@ export async function ensureMemoryAwake(optsIn: boolean): Promise<void> {
     // A new poll supersedes the last one's outcome: the waiters it mattered to
     // have been told, and a fresh poll must not inherit a stale 'skipped'.
     state.settled = null
-    const done = pollTargets(requestedTargets()).finally(() => {
+    const done = pollTargets([EMBEDDER]).finally(() => {
       // Keep the settled poll's OUTCOME readable by late waiters (see
       // `settled`), then clear the in-flight slot: an in-flight dedupe, not a
       // memo.

@@ -1,6 +1,6 @@
 # General Agent as a Decision Loop (Plan)
 
-> **Status: design, not built. Round 2.** This replaces round 1's "patternTool inside a `simpleLoop`" core. Round 1 is in git history as `docs/plan/pattern-tools.md`; its two reviews are on [#507](https://github.com/mknw/hames-playground/issues/507). The shape below is the owner's (2026-10-13). This doc says how it works, what each piece sees, and what it still owes. Nothing is dispatched until the owner signs off. Every call raised in round 2 was ruled in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323) (2026-10-13, owner-delegated); the conditions are folded in below and summarised in [Rulings](#rulings-g12).
+> **Status: design, not built. Round 2.** This replaces round 1's "patternTool inside a `simpleLoop`" core. Round 1 is in git history as `docs/plan/pattern-tools.md`; its two reviews are on [#507](https://github.com/mknw/hames-playground/issues/507). The shape below is the owner's (2026-10-13). This doc says how it works, what each piece sees, and what it still owes. Nothing is dispatched until the owner signs off. Every call raised in round 2 was ruled in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323) (2026-10-13, owner-delegated); the conditions are folded in below and summarised in [Rulings](#rulings-g12-g14).
 
 ## The problem, in one paragraph
 
@@ -20,10 +20,11 @@ const doc_ag = withInjectionGuard(DOC_GUARD)(                      // office + d
   ),
 )
 const info_ag = withInjectionGuard(INFO_GUARD)(                    // knowledge lookups
+  withPseudonymisedInputs({ pseudonymise: deps.pseudonymiseForWeb })(   // G14: the web route, private tier only
   withReferences(
     simpleLoop(createLoopControllerAdapter(), [...NEO4J_READ, ...WEB], { patternId: 'info', returnStyle: 'answer', rememberPriorTurns: false }),
     { selector, source: ['retriever', 'info'], viewConfig: { fromLastNTurns: 1 } },
-  ),
+  )),
 )
 const retrieve = withInjectionGuard({ tools: ['retriever'] })(retriever({ backends: [redis], patternId: 'retriever' }))   // the Data Stash
 const think = planner(createPlannerAdapter(…), PLANNABLE_TOOLS, { patternId: 'think' })
@@ -136,7 +137,7 @@ So the selection is declared on the child, independently per child:
 - **No tool-level filter (owner, 2026-10-15).** The sibling's name in `source` is enough to define what a search may draw on, so `WithReferencesConfig` gains no `tools` option. One is added only if a privacy case needs it.
 - **A decisions-model selector.** It is a second `SelectorFn` through the existing required `selector` seam, not a second pattern. Tracked in #570.
 
-**The allowed sibling set is also a privacy control.** `doc_ag`'s results are mail and files. Attached to `info_ag`, which holds web tools, they can become search queries or fetched URLs (SD-1). So `info_ag`'s `source` excludes `doc` unless the owner rules otherwise. R1 on PR #566 covers three flows explicitly: (1) the capped handoff of `doc_ag` output to every route; (2) selected reference previews and on-demand expansion, where `doc` remains excluded from `info_ag`; and (3) the sanitized/capped decision state, including `doc_ag` output under N1. On the Anthropic tier flow (3) goes to the configured decide endpoint, a processor other than Anthropic (`packages/harness-baml/jev-decide.server.ts:301-311`; SD-12); on the private tier it goes only to the self-hosted shim after G11. N1 settles that this decision-state flow happens; R1 must account for it knowingly. R1 is **pending**: the owner is first confirming with the coordinator whether pseudonymisation works now.
+**The allowed sibling set is also a privacy control.** `doc_ag`'s results are mail and files. Attached to `info_ag`, which holds web tools, they can become search queries or fetched URLs (SD-1). So `info_ag`'s `source` excludes `doc` unless the owner rules otherwise. R1 on PR #566 covers three flows explicitly: (1) the capped handoff of `doc_ag` output to every route; (2) selected reference previews and on-demand expansion, where `doc` remains excluded from `info_ag`; and (3) the sanitized/capped decision state, including `doc_ag` output under N1. On the Anthropic tier flow (3) goes to the configured decide endpoint, a processor other than Anthropic (`packages/harness-baml/jev-decide.server.ts:301-311`; SD-12); on the private tier it goes only to the self-hosted shim after G11. N1 settles that this decision-state flow happens; R1 must account for it knowingly. **R1 is settled for `info_ag` on the private tier by [G14](https://github.com/mknw/hames-playground/issues/507#issuecomment-6191473862).** Flows (1) and (2) reach `info_ag` only through the [pseudonymisation guard on the web route](#pseudonymisation-guard-on-the-web-route). They are pseudonymised, not stripped, so the web route keeps their content without the identities. Flow (3) and the Anthropic tier are deferred by G14 ("keep as is"), and this doc designs nothing for them.
 
 **Data Stash or `withReferences`: every case in this agent.** The boundary: **the stash holds documents (bytes), and a route reads them through a stash-connected step. `withReferences` re-uses earlier tool results, for a loop that has no stash connection.**
 
@@ -251,6 +252,76 @@ A route output never passes the `callTool` chokepoint. `decisionLoop` records it
 
 Extractors and the later materialiser must never read `content_sanitized` event data (SD-3). Those human-only events may contain verbatim findings. Slices 1 and 5 each pin this using a fixture containing both a sanitized `tool_result` and a `content_sanitized` event with an unmistakable synthetic raw span.
 
+### Pseudonymisation guard on the web route
+
+Ruled in [G14](https://github.com/mknw/hames-playground/issues/507#issuecomment-6191473862). `info_ag` is the one route whose tools can send text out of our environment, as a `web_search` query or a `fetch` URL, which is a GET to a public host. The guard makes sure the model composing those arguments never sees a real identity taken from earlier results. It is an extra, outbound-facing filter, and the injection guard stays as it is.
+
+**Where it sits.** It is a core wrapper, `withPseudonymisedInputs`, directly around `withReferences` inside `info_ag`, as in [the shape](#the-shape).
+
+- **The pseudonymiser is injected, not imported.** It lives app-side (`app/src/lib/privacy/pseudonymise.ts`, #160: roster-based, no model), and core cannot import the app. So the composition root passes it in through a new optional `AgentDeps` field, `pseudonymiseForWeb`. That is the same seam `withReferences`' required `selector` uses.
+- **Private tier only.** The wrapper applies on a positive match of the run frame's raw tier (the private tier). On every other tier it passes the view through unchanged, because G14 defers that tier.
+
+**What it sees and rewrites.** Before the inner pattern runs, the wrapper rebuilds the view it hands inward, as `chain()` builds a child's view (`chain.server.ts:331-335`). Every event the route did not produce in this invocation is passed through `apply(value, table)` (`pseudonymise.ts:368`). That covers:
+
+- earlier siblings' `tool_result`s (`retriever`, earlier `info`);
+- earlier turns' events;
+- the plan and earlier-step blocks of the child's `plan_context` handoff, including the capped summaries of `doc_ag`'s output (R1 flow 1).
+
+The one exception is the **latest user message**. It is the user's own request, not something "from prior routes".
+
+Selector previews and `expandPreviousResult`'s full payloads are both read from this rewritten view, so the expansion path is covered without a second hook. The rewritten copies exist only in that view: `ctx.events` and the stored conversation are untouched.
+
+**The roster, and why there is no table to keep.**
+
+- **The roster** is `extractRoster` over the payloads being rewritten (Graph's labelled identity fields, `graph-roster.ts:193`), merged by `mergeRosters` with the tenant directory (`rosterFromDirectory`, `org-roster.ts:89, 143`, read through `org-graph/roster-source.server.ts`). The directory is what catches a colleague named only in prose.
+- **One table per invocation**, so a person has the same placeholder across every reference that route sees. It is built in memory and dropped when the invocation ends: never stored, never reversed.
+- **Placeholders stay placeholders.** They appear in `info_ag`'s output and in its route-output record. The synthesizer answers with whatever names it has from the other routes.
+
+**What it does not catch.** A person named only in prose who is not a directory member (a customer, a supplier, a private individual). Non-person private data such as project names or amounts is not in the roster at all. The outgoing check below shares both limits, because it uses the same roster.
+
+**Failure mode: withhold, never pass in clear.** The guard fails closed when:
+
+- building the roster or the table throws;
+- the directory cannot be read;
+- the directory reads as empty while the deployment has not declared that it has none. An empty roster is silent non-protection.
+
+When it fails closed:
+
+- no references are attached;
+- the handoff to `info_ag` keeps only the one-line route / status / stats list, and drops the plan text and every result body;
+- a `warning` records "earlier results withheld: privacy filter unavailable".
+
+The route still runs on the user's message. It is not a turn error.
+
+**Outgoing-argument check: recommended, as the second half of the same guard.** The input rewrite cannot cover what `info_ag` fetches **itself** in this invocation. Free-form Cypher can return a colleague's row, and the next turn of the same loop can put that name into a search query.
+
+So, while the wrapper's scope is open:
+
+- **The check.** It installs a pre-dispatch check at the `callTool` chokepoint, amended into the run frame the way `withInjectionGuard` installs its sanitizer. Every `web`-namespace call (`fetch`, `web_search`, …) has its arguments, URL-decoded, matched against the same roster's literals.
+- **A match denies the call.** The model gets a recoverable tool failure ("the query contained a private identity; rephrase without it"). This counts as a failed dispatch, not a turn error.
+- **Literals in the latest user message are allowed.** A person the user named and asked to search for is the user's call. The owner can tighten this default.
+- **No roster, no web calls.** If the roster could not be built, every web call in that invocation is refused rather than checked against nothing.
+
+This is consistent with ADR-0006. The input half is a rewrite of the view before any model reads it, not a pre- or post-check. The outgoing half acts at the tool chokepoint, which is where that record says guards belong.
+
+**What wiring it decides.** `app/src/__tests__/lib/privacy/egress-wiring.test.ts` is a tripwire that fails on the first production import of `lib/privacy/`. It asks for the wiring commit to delete it and state how Q1–Q3 of `graph-pseudonymisation.md` went. Under G14:
+
+- **Q1, the hook.** It is this route's input view plus its outgoing web arguments. Nothing else.
+- **Q2, what the store holds.** Unchanged: the stored conversation keeps what it holds today.
+- **Q3, the table.** None is kept. It lives for one invocation and is never stored or reversed.
+
+Q5, stable pseudonyms, is answered by the per-invocation table, because nothing outlives the invocation.
+
+**Pins (layer 1).** Each of these is checked by mutation:
+
+- a synthetic Graph payload and a directory member named only in prose both reach the inner controller as placeholders, through both previews and expansion;
+- the latest user message reaches it unchanged;
+- a roster or table failure attaches nothing and puts no result body in the handoff;
+- a web call whose URL carries a percent-encoded roster address is denied;
+- on a non-private tier the wrapper is a pass-through.
+
+Mutations: drop the `apply` call; skip the expansion path; delete the outgoing check.
+
 ## Data between routes
 
 - **Files**, once P4 is wired, move through the stash: `graph_file_ingest` → stash → `/work/in` on `doc_ag`'s next entry, or within one entry after N4. Those are real bytes (security review §5), so the path itself stays off until file-path pseudonymisation is wired (S-f), with `graph_file_ingest` withheld by exact name beforehand.
@@ -279,7 +350,7 @@ The fix is small and stated as a slice item: `thread` mode honours `viewConfig.f
 - **P4 — Pseudonymisation** on the materialisation path, unchanged from round 1. It depends on `graph-pseudonymisation.md`'s Q1, Q2, Q3 and Q5. The file path carries real bytes too, so **the path**, not just its pseudonymiser, stays off until wired: `graph_file_ingest` is withheld from the slice-3 effective tool allowlist by exact name. Ruled S-f in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323): the `graph_file_ingest` → `/work/in` path is pseudonymised as well, and stays off until wired.
 - **P5 — The decisions model on the private tier.** **Order slice 3 after #418 G11's deletion/client-migration slice.** At the checked main commit the private decide role still resolves to `LocalQwenSmallDecide` (`packages/harness-baml/clients.server.ts:564-572`), so today's code would not enforce the shim-only refusal described here. After that prerequisite, G11 requires private-tier decisions to use a separately configured systemone URL (the self-hosted shim), refused when unset. Until the shim is served, this agent then works on the Anthropic tier only and shows a visible error on the private tier; this is target behaviour after G11, not a claim about current main.
 
-## Rulings (G12)
+## Rulings (G12, G14)
 
 All 11 round-2 calls and the 3 departures from the sketch were accepted as recommended in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323). The conditions that bind the slices:
 
@@ -295,6 +366,7 @@ All 11 round-2 calls and the 3 departures from the sketch were accepted as recom
 - **N3, decide failure.** It ends the turn visibly on iteration 1, and stops as `answer` with the answer marked partial on a later iteration.
 - **N4, re-hydration.** `withSandbox` re-hydrates after a stash-storing tool call in its scope. This is its own slice, with its own review.
 - **N5, the iteration bound.** `maxIterations` defaults to 6. At the bound the loop stops as `answer`, with the answer marked partial.
+- **G14 (2026-10-15), pseudonymisation.** An outbound filter around `withReferences` on the web route (`info_ag`), on the private tier only, with no table kept and no reverse. A roster that cannot be built withholds the references; they are never passed in clear. Designed in [Pseudonymisation guard on the web route](#pseudonymisation-guard-on-the-web-route).
 - **The three departures:** the retriever is its own route; `doc_ag` is the sketch's second form; `answer` (`done` in G12) is a choice, so the synthesizer answers once.
 
 The round-1 reviewers' terms (architecture 6068693140, security 6068708025) bind the delta review. Nothing is built before that review converges.
@@ -337,6 +409,7 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
 4. **`withSandbox` re-hydrate on stash write** (N4). A core change with its own review.
 5. **Materialisation and enabling the file path**, gated on P4. The pseudonymiser-valued option has no boolean form. Include a source-scan pin that no env var can enable materialisation; pin entry/exit wipes and the verbatim-hash promotion block; pin that the materialiser never reads `content_sanitized` data with the same two-event fixture as slice 1. Only after file-path pseudonymisation and N4 are wired may `graph_file_ingest` enter the effective allowlist and its file path run. These deterministic pins belong to layer 1.
 6. **Resume from route records** (P1), only when a gate is wanted inside a route.
+7. **The web-route pseudonymisation guard ([G14](https://github.com/mknw/hames-playground/issues/507#issuecomment-6191473862)).** `withPseudonymisedInputs` and the `callTool` outgoing check in core; `AgentDeps.pseudonymiseForWeb` supplied by the app from `lib/privacy/`; deletion of the `egress-wiring` tripwire in the same commit, with Q1–Q3 as stated in [the section](#pseudonymisation-guard-on-the-web-route). The pins listed there belong to layer 1. On the private tier, slice 3's `info_ag` ships only with this guard in place.
 
 ## See also
 

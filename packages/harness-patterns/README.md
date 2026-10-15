@@ -5,12 +5,6 @@
 
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/hames_light-text-on-transparent-bg.png">
-  <source media="(prefers-color-scheme: light)" srcset="assets/hames_dark-text-on-transparent-bg.png">
-  <img src="assets/hames_dark-text-on-transparent-bg.png" alt="hames" width="340">
-</picture>
-
 ### Build AI agents from small, composable TypeScript pieces.
 
 [![npm](https://img.shields.io/npm/v/@hames-ai/harness-patterns?style=flat)](https://www.npmjs.com/package/@hames-ai/harness-patterns)

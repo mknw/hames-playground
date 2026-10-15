@@ -117,7 +117,7 @@ describe('G13 Neo4j isolation', () => {
       'http://${bridgeGateway}:59143/',
       "LOAD CSV FROM 'file:///etc/passwd' AS row RETURN row",
       "CALL apoc.load.json('file:///etc/passwd')",
-      'UnknownHost|Connect|timed out',
+      'UnknownHost|Connect|timed out|Temporary failure in name resolution',
       'Non-network failure',
       'Non-network TCP failure',
       'File prohibition unproven',

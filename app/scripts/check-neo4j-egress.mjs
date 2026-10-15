@@ -290,7 +290,12 @@ try {
     ]) {
       const r = cypher(query)
       if (r.error || r.signal) throw new Error(`Inconclusive ${name}: ${r.error ?? r.signal}`)
-      if (r.status !== 0 && !/UnknownHost|Connect|timed out/i.test(`${r.stdout} ${r.stderr}`))
+      if (
+        r.status !== 0 &&
+        !/UnknownHost|Connect|timed out|Temporary failure in name resolution/i.test(
+          `${r.stdout} ${r.stderr}`,
+        )
+      )
         throw new Error(`Non-network failure ${name}: ${r.stdout} ${r.stderr}`)
       console.log(
         `${r.status === 0 ? 'FAIL' : 'PASS'} blocked ${name}: ${r.stdout.trim()} ${r.stderr.trim()}`,

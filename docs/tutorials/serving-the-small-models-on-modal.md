@@ -13,7 +13,27 @@ models from one process:
   `systemone` API.
 
 It costs nothing while idle. The first request after idle wakes it from a memory snapshot in
-about 30 seconds.
+about 30 seconds, but that request itself gets an error: Modal does not hold requests while
+the box starts. The app does not yet wake the box before using it (step 7 says what to do
+meanwhile).
+
+**Words this page uses:**
+
+- **box**: the one GPU container this page deploys.
+- **private tier**: the app's setting under which no model call goes to a public AI provider;
+  its calls go to models you run yourself. Its two small models are the ones served here.
+- **summarizer**: the small model the app uses for short jobs such as summarizing a tool's
+  result or titling a conversation (the app's `describe` role, client `LocalQwenSmall`).
+- **decision model**: the small model that answers multiple-choice and yes/no questions
+  about a piece of text with a probability for each answer, through H2O's `systemone` API.
+- **LoRA adapter**: a small set of extra weights that turns the summarizer's base model into
+  the decision model, so one GPU serves both.
+- **vLLM**: the open-source server that runs the models inside the box.
+- **processor**: a company that handles your users' data on your behalf, in the data
+  protection sense.
+
+**Where to run the commands:** everything below runs from the `deploy/modal/` directory of
+your hames checkout.
 
 **The code:** [`deploy/modal/`](../../deploy/modal/README.md). That directory's README is the
 reference: every route, the boot sequence and what is logged. This page walks you through it
@@ -30,7 +50,8 @@ once, start to finish.
 3. Install [uv](https://docs.astral.sh/uv/), the Python package runner this directory uses.
    It installs the pinned Modal client for you; nothing goes into your system Python. (No uv?
    `nix run nixpkgs#uv -- …` works in its place.)
-4. Log the Modal client in. This opens a browser and writes `~/.modal.toml`:
+4. From `deploy/modal/`, log the Modal client in. This opens a browser and writes
+   `~/.modal.toml`:
 
    ```bash
    cd deploy/modal
@@ -46,18 +67,22 @@ nothing you put in it can reach the repository:
 cp deploy.env.example deploy.local.env
 ```
 
-Fill in the two required values: the region the GPU runs in, and the region of the proxy in
-front of it.
+Fill in the two required values. `COMPUTE` is where the GPU runs; `ROUTING` is where
+requests enter Modal before they reach it. Use the same region for both unless you have a
+reason not to, so a request does not cross regions on its way in. For example:
 
 ```bash
-HAMES_MODAL_COMPUTE_REGION=<region>
-HAMES_MODAL_ROUTING_REGION=<region>
+HAMES_MODAL_COMPUTE_REGION=eu-west
+HAMES_MODAL_ROUTING_REGION=eu-west
 ```
 
 Which region is your decision. [Modal's region list](https://modal.com/docs/guide/region-selection)
-has the names and prices. A narrow region such as one EU area costs 1.75× the base GPU price;
-a broad one such as all of the EU costs 1.15×. Everything else in `deploy.env.example` has a
-working default (one L4 GPU, one replica, a 120-second idle window before it scales to zero).
+has the names and prices. A _narrow_ region pins the box to one area, such as `eu-west`,
+`eu-north` or `eu-south`, at 1.75× the base GPU price. A _broad_ region such as `eu` lets
+Modal place it anywhere in that area, at 1.15×. Everything else in `deploy.env.example` has a
+working default: one L4 GPU, one replica, a 120-second idle window before it scales to zero,
+and memory snapshots on (`HAMES_MODAL_SNAPSHOT=1`; set it to `0` to boot from scratch every
+time, which is only useful for comparison).
 
 ## 3. Deploy
 
@@ -68,7 +93,8 @@ uv run --env-file deploy.local.env modal deploy hames_small_models.py
 The **first deploy takes 10–20 minutes.** Modal builds the image on its side: it pulls the
 vLLM image and downloads about 9.6 GB of public model weights. Each file is checked against a
 pinned hash, and a mismatch fails the build. Later deploys reuse those layers and finish in
-seconds. It ends like this:
+seconds. The output ends like this (this run reused layers from an earlier build, hence
+two minutes):
 
 ```text
 ✓ Created objects.
@@ -86,8 +112,8 @@ The 🔑 means the URL accepts only requests that carry a token, which you creat
 ## 4. Create a token and save the URL
 
 In Modal's dashboard, go to Settings → Proxy Tokens and create one. It comes as two parts, an
-ID (`wk-…`) and a secret (`ws-…`). Join them with a period and add both lines to
-`deploy.local.env`:
+ID (`wk-…`) and a secret (`ws-…`); copy both when Modal shows them. Join them with a period
+into one value, and add these two lines (the URL and the token) to `deploy.local.env`:
 
 ```bash
 HAMES_MODAL_URL=https://<the .modal.direct URL from step 3>
@@ -109,7 +135,7 @@ app reads them. It prints PASS or FAIL per check and exits non-zero if any fails
 
 **The first run after a deploy waits 8–10 minutes** with no output after its first line.
 That first boot loads the models, warms them, checks that the decision adapter is really
-active (about 6.5 minutes), then saves a memory snapshot. Every later cold start restores
+active (that whole boot takes about 6.5 minutes), then saves a memory snapshot. Every later cold start restores
 that snapshot instead, in about 30 seconds.
 
 Captured from a run (the first boot was already paid, so this one waited for a restore):
@@ -165,7 +191,8 @@ What a reference run measured on one L4:
 
 ## 7. Point the app at it
 
-Three settings in the app's `.env` (`app/.env`, or the host's environment):
+Three settings in the app's `.env` (`app/.env`, or the host's environment). Restart the app
+after changing them.
 
 | Setting                   | Value                                        |
 | ------------------------- | -------------------------------------------- |
@@ -173,12 +200,19 @@ Three settings in the app's `.env` (`app/.env`, or the host's environment):
 | `SMALL_LLM_API_KEY`       | the token from step 4, `wk-<id>.ws-<secret>` |
 | `SMALL_LLM_DECISIONS_URL` | `<HAMES_MODAL_URL>/v1/systemone`             |
 
-> **Not yet complete in the app.** The summarizer answers today with the first two settings.
-> Reading `SMALL_LLM_DECISIONS_URL`, waking this box before a turn and pricing its calls by GPU
-> time are follow-up work. Until that lands, a summary requested while the box is asleep
-> fails: Modal answers a server with no running container with an immediate 503 rather than
-> holding the request. Run `ops.py prewarm` before using it and `ops.py release` after. The
-> app also prices the summarizer's calls as €0 until then.
+> **Not yet complete in the app.** The summarizer works today with the first two settings.
+> The third is safe to set now, but nothing reads it yet: connecting the decision model, and
+> having the app wake this box before a turn, are follow-up work. Until then a summary
+> requested while the box is asleep fails, so start the box before you use the app and let
+> it go afterwards:
+>
+> ```bash
+> uv run --env-file deploy.local.env ops.py prewarm   # before
+> uv run --env-file deploy.local.env ops.py release   # after; until then it bills by the hour
+> ```
+>
+> The app's cost display also shows the summarizer's calls as free until the follow-up
+> prices them by GPU time.
 
 **Before any real user's data goes to it**, decide whether Modal is acceptable as a processor
 for your private tier. Wherever the GPU runs, Modal stores images, snapshots and container

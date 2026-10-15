@@ -41,8 +41,8 @@ import { getEndpoints } from './lib/config/endpoints'
 import { configureNeo4j } from '@hames-ai/connectors/neo4j/client'
 import { configureWorkspaceStore } from '@hames-ai/sandbox/workspace-store'
 import {
-  listDocuments,
-  getDocument,
+  listDocumentsStrict,
+  getDocumentStrict,
   storeDocument,
 } from '@hames-ai/harness-patterns/stash/document-store.server'
 import { guessMimeType, isTextMime } from './lib/stash/upload-service.server'
@@ -95,9 +95,13 @@ configureNeo4j({
 // `content` seam takes them: the extension→MIME table decides what this stash
 // stores verbatim and what it base64s, and a second copy inside the package
 // would drift toward writing a binary deliverable out as mangled UTF-8.
+// The STRICT readers, not the panel's: a failed Redis read must reach
+// `hydrateWorkspace` as a failure, because the panel's versions answer it with
+// "no documents" (and prune the index), which a restore would report as success
+// (#599 review F2).
 configureWorkspaceStore({
-  list: listDocuments,
-  get: getDocument,
+  list: listDocumentsStrict,
+  get: getDocumentStrict,
   store: storeDocument,
   guessMimeType,
   isTextMime,

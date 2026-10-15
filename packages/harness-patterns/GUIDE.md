@@ -544,6 +544,12 @@ Two properties are the design, not accidents:
   inconsistency is deliberate; do not "fix" it, and both rules are stated in one
   place — `amendRunFrame` in `run-frame.server.ts`.
 
+**Two more slots concatenate** (#507 N4): `stashWriteObservers` (told when core's
+`storeDocument` has durably stored a document) and `afterToolCall` (run by
+`callTool` after a call is dispatched and guarded, may replace the result, which is then guarded again; hooks get a private copy). You
+rarely supply them yourself; `withSandbox({ syncWorkspace: true })` does, to
+copy a document a tool stores mid-run into `/work/in`.
+
 ### The gateway tools
 
 `Tools()` is the MCP-gateway transport the package ships. It returns a

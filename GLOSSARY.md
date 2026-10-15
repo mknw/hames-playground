@@ -42,7 +42,9 @@ and `packages/harness-patterns/run-frame.server.ts`.
 empty; an empty slot means "this run has none", never "use the default from
 somewhere else". Combinators that scope _below_ a run (`withInjectionGuard`,
 `withSandbox`) amend individual slots, and the per-slot merge rules are not
-uniform — transports prepend, the rest replace.
+uniform — transports prepend, the rest replace, except the two #507 N4 slots
+(**stashWriteObservers**, **afterToolCall**), which concatenate: an inner scope
+adds an observer or a hook and can never switch an outer one off.
 
 **Proposal** — a question put to a person from outside a run, by a post-reply
 hook, that waits for them across turns instead of pausing one. The memory

@@ -81,6 +81,11 @@ beforeEach(() => {
 afterAll(async () => {
   await app.wipe()
 })
+/** Decisions are identified by the endpoint that served them: both systemone
+ *  clients send the same compatibility model id (#584). */
+const endpointFor = (tier: string) => (tier === 'verda' ? 'private' : 'jev')
+const decided = () => app.fakeLlm.calls.filter((c) => c.endpoint)
+
 describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
   it('exercises both tier positions', () => {
     expect([...TIERS].sort()).toEqual(['anthropic', 'verda'])
@@ -125,13 +130,10 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
       expect(eventsOfType(row.serializedContext, 'assistant_message').at(-1)?.content).toContain(
         FAKE_ANSWER_MARK,
       )
-      const calls = app.fakeLlm.calls.filter((c) => c.model === JEV_MODEL)
+      const calls = decided()
       expect(calls).toHaveLength(1)
-      expect(calls[0]).toMatchObject({
-        model: JEV_MODEL,
-        outcome: 'ok',
-        endpoint: tier === 'verda' ? 'private' : 'jev',
-      })
+      expect(calls.every((c) => c.endpoint === endpointFor(tier))).toBe(true)
+      expect(calls[0]).toMatchObject({ model: JEV_MODEL, outcome: 'ok' })
     })
     it('streams and persists score/noul probabilities and actual clients', async () => {
       const id = `e2e-score-noul-${tier}`
@@ -181,8 +183,9 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
         expect(event.llmCall?.variables).toMatchObject({ state: expect.stringContaining(STATE) })
         expect(JSON.stringify(event.data)).not.toContain(STATE)
       }
-      const calls = app.fakeLlm.calls.filter((c) => c.model === JEV_MODEL)
+      const calls = decided()
       expect(calls).toHaveLength(2)
+      expect(calls.every((c) => c.endpoint === endpointFor(tier))).toBe(true)
       expect(calls.map((c) => c.model)).toEqual([JEV_MODEL, JEV_MODEL])
       expect(calls.map((c) => Object.values(JSON.parse(c.prompt).questions)[0])).toEqual([
         {
@@ -230,8 +233,9 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
         'e2e.four',
       ])
       expect(events.every((e) => !(e.data as DecisionMadeEventData).abstained)).toBe(true)
-      const calls = app.fakeLlm.calls.filter((c) => c.model === JEV_MODEL)
+      const calls = decided()
       expect(calls).toHaveLength(1)
+      expect(calls.every((c) => c.endpoint === endpointFor(tier))).toBe(true)
       const body = JSON.parse(calls[0].prompt)
       expect(body.state).toBe(STATE)
       expect(Object.keys(body.questions)).toEqual(['one', 'two', 'three', 'four'])
@@ -266,7 +270,7 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
     try {
       const result = await app.runTurn(newSessionId('post-reply'), STATE, 'e2e-post-reply')
       expect(result.response).toContain(FAKE_ANSWER_MARK)
-      expect(app.fakeLlm.calls.filter((c) => c.model === JEV_MODEL)).toHaveLength(0)
+      expect(decided()).toHaveLength(0)
       await app.setTier('anthropic')
       release()
       const evaluated = await trailing
@@ -276,9 +280,7 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
         method: 'jev',
       })
       expect(evaluated.llmCall?.clientName).toBe('PrivateSystemOne')
-      expect(app.fakeLlm.calls.filter((c) => c.model === JEV_MODEL).map((c) => c.model)).toEqual([
-        JEV_MODEL,
-      ])
+      expect(decided().map((c) => c.endpoint)).toEqual(['private'])
     } finally {
       release()
       await trailing
@@ -307,7 +309,7 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
     expect(eventsOfType(row.serializedContext, 'error')).toEqual(
       expect.arrayContaining([expect.objectContaining({ severity: 'irrecoverable' })]),
     )
-    expect(app.fakeLlm.calls.filter((c) => c.model === JEV_MODEL)).toHaveLength(1)
+    expect(decided().map((c) => c.endpoint)).toEqual(['jev'])
     expect(app.fakeLlm.calls.filter((c) => c.fn === 'Synthesize')).toEqual([])
   })
   it('a systemone 500 records no verdict and preserves the answer', async () => {
@@ -330,6 +332,6 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
     expect(eventsOfType(row.serializedContext, 'error')).toEqual(
       expect.arrayContaining([expect.objectContaining({ severity: 'recoverable' })]),
     )
-    expect(app.fakeLlm.calls.filter((c) => c.model === JEV_MODEL)).toHaveLength(1)
+    expect(decided().map((c) => c.endpoint)).toEqual(['jev'])
   })
 })

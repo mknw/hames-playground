@@ -16,6 +16,7 @@ import path from 'node:path'
 import { chromium } from '@playwright/test'
 import { provisionDatabase } from '../src/__tests__/global-setup'
 import { startBackend, assertHermetic } from './lib/backend'
+import { JEV_DECISIONS_PATH } from '../e2e/lib/fake-llm'
 import { startDevServer } from './lib/server'
 import { startEgressBackstop, assertNoUnexpectedEgress } from '../e2e/lib/egress-backstop'
 import { conversationRows, wipeUserRows } from './lib/db'
@@ -155,7 +156,7 @@ export function browserServerEnv(
 
     // ---- The fakes ---------------------------------------------------------
     MCP_GATEWAY_URL: backend.gateway.url,
-    JEV_DECISIONS_URL: backend.llm.baseUrl + '/systemone',
+    JEV_DECISIONS_URL: new URL(JEV_DECISIONS_PATH, backend.llm.baseUrl).href,
     JEV_DECISIONS_API_KEY: 'e2e-browser-fake-key',
     // Poison any other OpenRouter consumer too; Jev reads its dedicated key.
     OPENROUTER_API_KEY: 'e2e-browser-fake-key',

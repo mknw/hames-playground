@@ -313,8 +313,16 @@ describe('general-next composition', () => {
   it('G14: the real host rewrites an external sender after the composed Graph guards', async () => {
     const { createWebPseudonymiser } =
       await import('../../../../lib/harness-client/web-pseudonymiser.server')
+    const { shapeMessages } = await import('@hames-ai/connectors/graph/graph-tools.server')
     choices = ['office-data', 'info-retrieval', 'answer']
-    gateway.result = { from: 'Otto Willow', body: 'A synthetic message from Otto Willow.' }
+    gateway.result = shapeMessages({
+      value: [
+        {
+          from: { emailAddress: { name: 'Otto Willow', address: 'otto.willow@outside.test' } },
+          bodyPreview: 'A synthetic message from Otto Willow.',
+        },
+      ],
+    })
     mocks.actor.mockResolvedValue({
       action: {
         reasoning: 'read mail',
@@ -330,6 +338,7 @@ describe('general-next composition', () => {
     const handoff = mocks.controller.mock.calls[0][0].planContext
     expect(handoff).toContain('PERSON_')
     expect(handoff).not.toContain('Otto Willow')
+    expect(handoff).toContain('⟦UNTRUSTED CONTENT')
   })
 
   it('info reuses retriever references while excluding office results from previews', async () => {

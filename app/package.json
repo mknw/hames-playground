@@ -22,7 +22,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit --project tsconfig.json",
-    "prepare": "git rev-parse --is-inside-work-tree > /dev/null 2>&1 || exit 0; git config core.hooksPath .githooks"
+    "prepare": "git rev-parse --is-inside-work-tree > /dev/null 2>&1 || exit 0; git config core.hooksPath .githooks",
+    "eval:general-next": "BAML_LOG=warn pnpm dlx tsx evals/general-next/run.ts"
   },
   "dependencies": {
     "@ark-ui/solid": "^5.36.1",

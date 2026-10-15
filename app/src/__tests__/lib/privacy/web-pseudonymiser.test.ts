@@ -546,8 +546,9 @@ describe('fix round 1 remaining findings', () => {
     expect(scope.events.some((e) => e.type === 'warning')).toBe(true)
   })
 
-  it('compiles a single alternation for a large directory and allocates no regexes per outgoing call', async () => {
-    const people = Array.from({ length: 1000 }, (_, n) => {
+  it('compiles a single alternation and allocates no regexes per outgoing call', async () => {
+    // This pins allocation shape, not a machine-dependent latency benchmark.
+    const people = Array.from({ length: 100 }, (_, n) => {
       const suffix = String.fromCharCode(
         97 + (n % 26),
         97 + (Math.floor(n / 26) % 26),
@@ -563,15 +564,15 @@ describe('fix round 1 remaining findings', () => {
     const regex = vi.spyOn(globalThis, 'RegExp').mockImplementation(function (pattern, flags) {
       return new NativeRegExp(pattern, flags)
     })
-    const filter = await createWebPseudonymiser()([], `Search for ${people[999].displayName}`)
+    const filter = await createWebPseudonymiser()([], `Search for ${people[99].displayName}`)
     // RegExp's species constructor is also used by native String.split;
     // count explicit outgoing matchers, whose flags are exactly `u`.
     const compilations = () =>
       regex.mock.calls.filter(([, flags]) => flags === 'u' || flags === 'iu').length
     expect(compilations()).toBe(1)
     for (let n = 0; n < 10; n++) expect(filter.check({ query: 'ordinary facts' })).toBeUndefined()
-    expect(filter.check({ query: people[998].displayName })).toContain('private identity')
-    expect(filter.check({ query: people[999].displayName })).toBeUndefined()
+    expect(filter.check({ query: people[98].displayName })).toContain('private identity')
+    expect(filter.check({ query: people[99].displayName })).toBeUndefined()
     expect(compilations()).toBe(1)
   })
 

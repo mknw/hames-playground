@@ -65,6 +65,12 @@ export {
 // EventView
 export { EventViewImpl, createEventView } from './event-view.server'
 
+export {
+  withPseudonymisedInputs,
+  type PseudonymiseForWeb,
+  type WebPseudonymisation,
+} from './withPseudonymisedInputs.server'
+
 // Typed systemone decisions and recording.
 export {
   evaluateDecision,

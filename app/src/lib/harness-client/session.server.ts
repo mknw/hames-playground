@@ -23,6 +23,7 @@ import { clientOverrideFor, type BamlRole } from '@hames-ai/harness-baml/clients
 import { canonicalAgentId, getAgent } from './registry.server'
 import { getRequestUserId, isAttendedRequest } from './request-user.server'
 import { createHostMemoryConfig } from '../memory/config.server'
+import { createWebPseudonymiser } from './web-pseudonymiser.server'
 import { reconcileMemoryReferences } from '../memory/reconcile.server'
 import { resolveSandboxSkills } from '../skills/sandbox-skills.server'
 import {
@@ -71,6 +72,7 @@ export type SessionData = AgentData
 export function agentDeps(): AgentDeps {
   return {
     memory: createHostMemoryConfig(),
+    pseudonymiseForWeb: createWebPseudonymiser({ directory: 'required' }),
     toolNamespaces: mcpNamespace,
     enrichNeo4jResult,
     createRedisBackend,

@@ -83,14 +83,15 @@ turns and nothing else. Context is budgeted by construction.
 
 Every combinator takes patterns and returns a pattern, so they nest freely:
 
-| Combinator           | What it does                                                                              |
-| -------------------- | ----------------------------------------------------------------------------------------- |
-| `chain` / `harness`  | run patterns in order; `harness` is the top-level entry that stops on irrecoverable error |
-| `routes`             | dispatch on `data.route` (set by `router` or `decisionRouter`); pass-through on `'user'`  |
-| `parallel`           | run patterns concurrently, merge their event sets                                         |
-| `withReferences`     | attach the relevant results of earlier turns at pattern ingress, expandable on demand     |
-| `withInjectionGuard` | neutralize untrusted tool output before a controller reads it                             |
-| `decisionLoop`       | loop over routes, a decisions model choosing the next one each time, until `answer`       |
+| Combinator                | What it does                                                                              |
+| ------------------------- | ----------------------------------------------------------------------------------------- |
+| `chain` / `harness`       | run patterns in order; `harness` is the top-level entry that stops on irrecoverable error |
+| `routes`                  | dispatch on `data.route` (set by `router` or `decisionRouter`); pass-through on `'user'`  |
+| `parallel`                | run patterns concurrently, merge their event sets                                         |
+| `withReferences`          | attach the relevant results of earlier turns at pattern ingress, expandable on demand     |
+| `withPseudonymisedInputs` | rewrite the web route's earlier inputs and check outgoing web arguments                   |
+| `withInjectionGuard`      | neutralize untrusted tool output before a controller reads it                             |
+| `decisionLoop`            | loop over routes, a decisions model choosing the next one each time, until `answer`       |
 
 Resume and continue are the same mechanism, in two shapes:
 `resumeHarness(serialized, patterns, answers, opts)` after a run paused to ask a
@@ -157,6 +158,30 @@ what it is allowed to (`siblingResults`, default none) and starts with fresh
 data, never `memories`. And a decision that is not a decision — an error, an
 abstention, a state that would not build — never dispatches a route. See SPEC's
 [decisionLoop](SPEC.md#decisionlooproutes-config-507).
+
+### Protecting the web route's earlier inputs
+
+Place `withPseudonymisedInputs({ pseudonymise: hostFilter })` directly around
+`withReferences`. It rewrites both the reference view (previews and expansion)
+and the child's plan/handoff, preserving the latest user message. Only an
+explicit `'anthropic'` run passes through. Supply a host `PseudonymiseForWeb`
+that builds a per-invocation rewrite and outgoing-argument check; no host privacy
+module or table is imported into core. `decisionLoop` gives the wrapper roster
+input from every earlier iteration, even beyond the handoff window, without
+widening its sibling visibility. That temporary input is removed before the
+inner pattern runs.
+
+Missing or failed host wiring withholds earlier results and refuses web calls,
+recording a warning while allowing the child to continue on the user's message
+and internal reads. The app host requires a readable, non-empty directory;
+declare `{ directory: 'none' }` in code only for deployments without one. Its
+table is never stored or reversed. See SPEC's
+[G14 boundary](SPEC.md#withpseudonymisedinputsconfigpattern-507-g14) for the
+failure policy and remaining literal-matching limits.
+
+Outgoing checks use the `egressChecks` run-frame slot. It concatenates on nested
+`amendRunFrame`, innermost first: every check runs and any denial stops dispatch
+as a failed tool call, so an inner scope cannot switch off an outer check.
 
 ### Deciding with probabilities
 

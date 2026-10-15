@@ -19,6 +19,7 @@
  * runs SQL against it.
  */
 
+import { DECISION_LOOP_MAX_ITERATIONS } from '@hames-ai/harness-patterns/patterns/decisionLoop.server'
 import { randomBytes } from 'node:crypto'
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
@@ -839,12 +840,12 @@ const WORST_LOOP_REQUESTS = Math.max(
 )
 
 /**
- * `decisionLoop`'s iteration default (N5 on #507, `maxIterations: 6`). A MIRROR
- * of the ruling, held against the design doc's N5 line and by a tripwire that
- * goes red the day core exports `decisionLoop` (`stuck-run-reaper.test.ts`):
- * import its default then, instead of this copy.
+ * `decisionLoop`'s iteration default (N5 on #507, `maxIterations: 6`), imported
+ * from core now that S1 exports it — the mirror this replaced was held by a
+ * tripwire that went red the day core exported `decisionLoop`
+ * (`stuck-run-reaper.test.ts`). Re-exported under the same name.
  */
-export const DECISION_LOOP_MAX_ITERATIONS = 6
+export { DECISION_LOOP_MAX_ITERATIONS }
 
 /**
  * The wall-clock cap of one tool call: the MCP SDK's

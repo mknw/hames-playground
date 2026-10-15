@@ -192,7 +192,7 @@ export interface DecideOptions {
   readonly errorSeverity?: 'recoverable' | 'irrecoverable'
 }
 
-function readContextWindow(fn: { limits?: DecideFn['limits'] } | undefined): number {
+export function readContextWindow(fn: { limits?: DecideFn['limits'] } | undefined): number {
   try {
     const w = fn?.limits?.().contextWindow
     return typeof w === 'number' && Number.isFinite(w) && w > 0 ? w : DEFAULT_CONTEXT_WINDOW
@@ -392,7 +392,16 @@ export interface TypedDecisionData {
  *  assistant reply can echo untrusted tool content, and what a steered
  *  decision reads is the consumer's call, not a default's. */
 function renderDefaultState(view: EventView, fn: DecideFn): string {
-  const turns = view
+  return trimToFit(conversationTurns(view), (t) => t.join('\n\n'), 300, readContextWindow(fn)).join(
+    '\n\n',
+  )
+}
+
+/** The conversation lines of a decision state, oldest first, untrimmed: the
+ *  window's user messages and FINAL assistant messages. Shared with
+ *  `decisionLoop`, whose state starts with the same lines. */
+export function conversationTurns(view: EventView): string[] {
+  return view
     .get()
     .map((e): ContextEvent => stripThinkBlocks(e))
     .flatMap((e) => {
@@ -404,8 +413,10 @@ function renderDefaultState(view: EventView, fn: DecideFn): string {
       }
       return []
     })
-  return trimToFit(turns, (t) => t.join('\n\n'), 300, readContextWindow(fn)).join('\n\n')
 }
+
+/** The default decision window, shared with `decisionLoop`. */
+export const decisionWindowView = defaultDecisionView
 
 /** The default window: the router's — recent user/assistant messages across
  *  turns. Soft read of the run frame for the same reason `router()` reads it:

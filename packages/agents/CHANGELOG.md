@@ -2,6 +2,8 @@
 
 ## 0.3.0
 
+> The published 0.3.0 tarball differs from the tag only in README.md (Neo4j egress wording, #241 G13); no code differs.
+
 ### Minor Changes
 
 - fb4fac8: Opt the General agent into persistent memory when the host supplies `AgentDeps.memory`. Recall and storage continue to honor the user's memory switch.

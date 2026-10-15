@@ -167,4 +167,74 @@ describe('ensureMemoriesSchema against one database', () => {
     )
     expect(rows[0].present).toBe(true)
   })
+
+  /** A reader holding `mode` on `table`, released by the caller. */
+  async function holdLock(table: string, mode: string) {
+    const c = new pg.Client({ connectionString: target })
+    await c.connect()
+    await c.query('BEGIN')
+    await c.query(`LOCK TABLE ${table} IN ${mode} MODE`)
+    return c
+  }
+  const release = async (c: pg.Client) => {
+    await c.query('ROLLBACK').catch(() => undefined)
+    await c.end()
+  }
+
+  // #592 review 1: the DDL path holds the shared schema lock, so its wait must be bounded.
+  it('the DDL path gives up on a held memories lock with 55P03, then retries to available', async () => {
+    const seed = await freshProcess()
+    await seed.memories.ensureMemoriesSchema()
+    await seed.client.query(`DELETE FROM schema_meta WHERE key = 'memory_ddl_hash'`)
+    const reader = await holdLock('memories', 'ACCESS SHARE')
+    const proc = await freshProcess()
+    try {
+      const outcome = proc.memories.ensureMemoriesSchema().then(
+        () => 'ok',
+        (e: { code?: string }) => e.code,
+      )
+      expect(await settlesWithin(outcome, 15_000)).toBe(true)
+      expect(await outcome).toBe('55P03')
+      expect(proc.memories.isMemoryAvailable()).toBe(false) // not sticky-off by a verdict: it simply is not ready
+    } finally {
+      await release(reader)
+    }
+    await proc.memories.ensureMemoriesSchema()
+    expect(proc.memories.isMemoryAvailable()).toBe(true)
+  }, 30_000)
+
+  // #592 review 5: the hash commits atomically with the DDL — a DDL that fails midway leaves neither.
+  it('a DDL that fails midway rolls back its earlier statements and records no hash', async () => {
+    const seed = await freshProcess()
+    await seed.memories.ensureMemoriesSchema()
+    await seed.client.query(`DELETE FROM schema_meta WHERE key = 'memory_ddl_hash'`)
+    await seed.client.query('DROP INDEX memories_user_idx') // recreated BEFORE the statement that blocks
+    const writer = await holdLock('memory_sources', 'ROW EXCLUSIVE') // CREATE INDEX IF NOT EXISTS needs SHARE
+    const proc = await freshProcess()
+    try {
+      await expect(proc.memories.ensureMemoriesSchema()).rejects.toMatchObject({ code: '55P03' })
+    } finally {
+      await release(writer)
+    }
+    const { rows } = await proc.client.query(
+      `SELECT to_regclass('memories_user_idx') IS NOT NULL AS idx,
+              EXISTS (SELECT 1 FROM schema_meta WHERE key = 'memory_ddl_hash') AS hash`,
+    )
+    expect(rows[0]).toEqual({ idx: false, hash: false })
+  }, 30_000)
+
+  // #592 review 5: the FK half of the relation check.
+  it('re-creates the owner FK dropped by hand even though the hash is current', async () => {
+    const seed = await freshProcess()
+    await seed.memories.ensureMemoriesSchema()
+    await seed.client.query(
+      'ALTER TABLE memory_sources DROP CONSTRAINT memory_sources_conversation_owner_fk',
+    )
+    const proc = await freshProcess()
+    await proc.memories.ensureMemoriesSchema()
+    const { rows } = await proc.client.query(
+      `SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'memory_sources_conversation_owner_fk') AS present`,
+    )
+    expect(rows[0].present).toBe(true)
+  })
 })

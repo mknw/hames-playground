@@ -33,6 +33,7 @@ const mockQuery = async (sql: string, params: unknown[] = []) => {
 vi.mock('../../../lib/db/client.server', () => ({
   databaseUrl: () => 'postgresql://x:x@127.0.0.1:59999/x',
   onClosePool: vi.fn(),
+  SCHEMA_LOCK_KEY: 'hames:schema-init',
   query: vi.fn(mockQuery),
   // The ensure runs in one transaction (#592); the mock's "transaction" is the same recorder.
   withTransaction: vi.fn(async (fn: (tx: { query: typeof mockQuery }) => unknown) =>
@@ -121,6 +122,19 @@ describe('the missing-extension fail policy', () => {
     expect(repo.isMemoryAvailable()).toBe(false)
   })
 
+  // A 42501 anywhere but CREATE EXTENSION (a table owner, schema_meta) is a fault, not the environment.
+  it('a privilege refusal on the DDL rejects and is not sticky', async () => {
+    failOn = (sql) => {
+      if (!sql.trim().startsWith('CREATE TABLE')) return false
+      throw Object.assign(new Error('must be owner of table conversations'), { code: '42501' })
+    }
+    await expect(repo.ensureMemoriesSchema()).rejects.toThrow(/must be owner/)
+    expect(repo.isMemoryAvailable()).toBe(false)
+    failOn = () => false
+    await expect(repo.ensureMemoriesSchema()).resolves.toBeUndefined()
+    expect(repo.isMemoryAvailable()).toBe(true)
+  })
+
   // #592: any OTHER failure (a lost CREATE EXTENSION race is a unique violation) is
   // not "no pgvector": it rejects, is not sticky, and the next call retries.
   it('a CREATE EXTENSION failure that is not a privilege refusal rejects and retries', async () => {
@@ -150,8 +164,10 @@ describe('the missing-extension fail policy', () => {
 describe('the ensure takes the schema lock first, then the extension, then the DDL', () => {
   it('lock precedes everything; one DDL statement names both tables and records its hash', async () => {
     await repo.ensureMemoriesSchema()
-    expect(sent[0]?.sql).toContain('pg_advisory_xact_lock')
-    expect(sent[0]?.params).toEqual(['hames:schema-init'])
+    // Isolation pinned first (the waiter's snapshot must postdate the lock grant), then the lock.
+    expect(sent[0]?.sql).toBe('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+    expect(sent[1]?.sql).toContain('pg_advisory_xact_lock')
+    expect(sent[1]?.params).toEqual(['hames:schema-init'])
     const ddl = sent.filter((s) => s.sql.startsWith('CREATE TABLE'))
     expect(ddl).toHaveLength(1)
     expect(ddl[0]!.sql).toContain('CREATE TABLE IF NOT EXISTS memories')
@@ -159,6 +175,20 @@ describe('the ensure takes the schema lock first, then the extension, then the D
     expect(sent.some((s) => s.sql.startsWith('INSERT INTO schema_meta'))).toBe(true)
     // Spec §5: no tsvector, no ANN index in v1 — recall is exact by construction.
     expect(sent.some((s) => /tsvector|hnsw|ivfflat/i.test(s.sql))).toBe(false)
+  })
+
+  it('the DDL is bounded by lock_timeout, set inside the transaction before it runs', async () => {
+    await repo.ensureMemoriesSchema()
+    const at = (re: RegExp) => sent.findIndex((x) => re.test(x.sql))
+    expect(at(/^SET LOCAL lock_timeout = \d+$/)).toBeGreaterThan(at(/pg_advisory_xact_lock/))
+    expect(at(/^SET LOCAL lock_timeout/)).toBeLessThan(at(/^CREATE TABLE IF NOT EXISTS memories/))
+  })
+
+  it('shares the lock key with client.server.ts instead of repeating the literal', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync('src/lib/db/memories.server.ts', 'utf8')
+    expect(src).not.toContain('hames:schema-init')
+    expect(src).toMatch(/SCHEMA_LOCK_KEY,\s*\n\s*withTransaction/)
   })
 
   it('an extension already installed is never CREATEd again', async () => {

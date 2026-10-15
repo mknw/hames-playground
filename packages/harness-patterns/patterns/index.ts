@@ -16,6 +16,8 @@ export {
 export {
   planner,
   formatPlanContext,
+  HANDOFF_HEADING,
+  AGENT_MAP_HEADING,
   DEFAULT_MAX_PLAN_CHARS,
   type PlannerConfig,
   type PlannerData,
@@ -85,6 +87,27 @@ export {
   type TypedDecisionData,
   type DecisionRouterConfig,
 } from './typedDecision.server'
+
+// decisionLoop (#507) — a loop over routes, the next one chosen by a decision.
+export {
+  decisionLoop,
+  DECISION_LOOP_MAX_ITERATIONS,
+  DECISION_LOOP_KEY,
+  DECISION_LOOP_ANSWER,
+  DECISION_LOOP_OUTPUT_KEY,
+  DECISION_LOOP_RESULT_CHARS,
+  WITHHELD_SCREEN_UNAVAILABLE,
+  type DecisionLoopConfig,
+  type DecisionLoopData,
+  type DecisionLoopRoute,
+  type DecisionLoopStateInput,
+} from './decisionLoop.server'
+export {
+  collectToolNames,
+  type RouteOutput,
+  type RouteStats,
+  type RouteKind,
+} from './decisionLoop-records.server'
 
 // Re-export config types from main types
 export type {

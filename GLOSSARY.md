@@ -56,9 +56,19 @@ is written until the person says yes. See
 **Pattern** — one composable step inside a harness: a named function that runs in
 its own isolated scope and commits its events back to the shared context when it
 finishes. `simpleLoop`, `actorCritic`, `planner`, `compactIntent`, `router`,
-`routes`, `compactExecution`, `retriever`, `withReferences`, `parallel` and
+`routes`, `decisionLoop`, `compactExecution`, `retriever`, `withReferences`, `parallel` and
 `judge` are all patterns; a pattern is identified by its `patternId`, which is
 also how its events are tagged and later queried.
+
+**Decision loop** — `decisionLoop`, the pattern that lets one turn move between
+groups of capabilities: a loop over a table of _routes_ in which a decisions
+model picks the next route each time round, until it picks `answer` or the
+iteration bound is reached. What each route produced comes back as a _route
+output_ — a record built by code from the route's committed events, capped,
+sanitized as untrusted and rendered into the next decision and the next route's
+context as data, never as instructions. See
+[`docs/plan/decision-loop-agent.md`](docs/plan/decision-loop-agent.md) and
+[`packages/harness-patterns/SPEC.md`](packages/harness-patterns/SPEC.md).
 
 **Compaction** — shrinking context with a cheap LLM call so a later, expensive
 call sees a shorter prompt. Three members, one prefix, distinguished by _what_

@@ -1875,6 +1875,7 @@ describe('decisionLoop — fix round 1', () => {
         await produce(scope, view)
         return scope
       })
+    const lastUsers: string[] = []
     const buildTurn = (dumps: string[], script: string[]) =>
       build(
         {
@@ -1891,6 +1892,10 @@ describe('decisionLoop — fix round 1', () => {
           info: route(
             anon('simpleLoop', (s, view) => {
               dumps.push(JSON.stringify(view.unfiltered().get()))
+              lastUsers.push(
+                (view.unfiltered().ofType('user_message').get().at(-1)?.data as { content: string })
+                  .content,
+              )
               trackEvent(s, 'controller_action', returnAction('ok'), true)
             }),
             { siblingResults: [] },
@@ -1912,6 +1917,83 @@ describe('decisionLoop — fix round 1', () => {
     expect(dumps).toHaveLength(2)
     expect(dumps[0]).not.toContain(SECRET_MAIL) // same turn: by id
     expect(dumps[1]).not.toContain(SECRET_MAIL) // later turn, ids regenerated: by route name
+    expect(lastUsers.at(-1)).toBe('next') // …and the latest task is turn 2's own
+  })
+
+  // Delta 2, pin A (probe PD). The id layer is NOT redundant: a route-owned id
+  // emitted OUTSIDE any bracket (a preceding chain step) is hidden only by it.
+  // MUTATION: delete the id-based hiding (`hide.clear()`).
+  it('hides a route-id event emitted outside any bracket (a preceding chain step) — the id layer`s own coverage', async () => {
+    const SECRET = 'CHAIN-STEP-MAIL-RESULT'
+    const preceding = fake('actorCritic', 'doc', (s) => {
+      trackEvent(s, 'tool_result', { tool: 'read_mail', result: SECRET, success: true }, true)
+    })
+    let dump = ''
+    const { decide } = scriptedDecide(['office', 'info', 'answer'])
+    const loop = build(
+      {
+        office: route(fake('actorCritic', 'doc', () => {})),
+        info: route(
+          fake('simpleLoop', 'info', (s, view) => {
+            dump = JSON.stringify(view.unfiltered().get())
+            trackEvent(s, 'controller_action', returnAction('ok'), true)
+          }),
+          { siblingResults: [] },
+        ),
+      },
+      decide,
+    )
+    await run([preceding, loop])
+    expect(dump).toContain('"patternId":"harness"') // the context was really read
+    expect(dump).not.toContain(SECRET)
+  })
+
+  // Delta 2, pin B (probe PE). The bracket logic must not swallow a later turn's
+  // own user message. MUTATION: the bracket never closes on its pattern_exit.
+  it('a later turn keeps its OWN user message as the latest task when an earlier turn ended inside a hidden route', async () => {
+    const anon = (kind: string, produce: Produce) =>
+      configurePattern<Data>(kind, async (scope, view) => {
+        await produce(scope, view)
+        return scope
+      })
+    let latest = ''
+    const buildTurn = (script: string[]) =>
+      build(
+        {
+          office: route(
+            anon(
+              'actorCritic',
+              (s) =>
+                void trackEvent(
+                  s,
+                  'tool_result',
+                  { tool: 'read_mail', result: 'm', success: true },
+                  true,
+                ),
+            ),
+          ),
+          info: route(
+            anon('simpleLoop', (s, view) => {
+              const users = view.unfiltered().ofType('user_message').get()
+              latest = (users.at(-1)?.data as { content: string }).content
+              trackEvent(s, 'controller_action', returnAction('ok'), true)
+            }),
+            { siblingResults: [] },
+          ),
+        },
+        scriptedDecide(script).decide,
+      )
+    const ctx = await run([buildTurn(['office', 'answer'])], { input: 'turn one' })
+    ctx.events.push({
+      id: 'u2',
+      type: 'user_message',
+      ts: Date.now() + 5,
+      patternId: 'harness',
+      data: { content: 'turn two task' },
+    })
+    ctx.status = 'running'
+    await runInFrame(() => runChain(ctx, [buildTurn(['info', 'answer'])]))
+    expect(latest).toBe('turn two task')
   })
 
   // Finding 9. MUTATION: delete the warning.

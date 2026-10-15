@@ -79,6 +79,9 @@ export interface RouteOutput {
   readonly reasoning: string
   /** A short code-generated reason; present only when `status` is `failed`. */
   readonly failure?: string
+  /** Ids of the child's events a screen outage withheld (ids only, no content):
+   *  persisted on the record so later turns skip them too. */
+  readonly withheldEventIds?: readonly string[]
   /** The plan, for a succeeded planner route: the ONLY thing later children
    *  render under their PLAN heading. */
   readonly plan?: { readonly text: string; readonly steps: number }

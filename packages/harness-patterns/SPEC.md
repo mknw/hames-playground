@@ -1577,7 +1577,7 @@ then records the route as `failed` with the marker-only result
 `withheld: screen unavailable`, having discarded the reasoning and every byte of
 the original output first, so neither the state, the handoff nor synthesis can
 carry it. That is this loop's policy; `withInjectionGuard` itself stays fail-open
-on a screen outage. A throw from the deterministic sanitizer is not caught: it
+on a screen outage. S-d's reach: on an outage the record is withheld AND that iteration's child events (their ids persist on the marker record) are removed from every child context this loop builds, in this turn and in later turns, so previews, `expandPreviousResult` and `siblingResults` cannot reach what the screen did not clear; a reader outside the loop's own contexts is not covered. A throw from the deterministic sanitizer is not caught: it
 ends the turn, as it does in `callTool`.
 
 **Failure — never a silent fallback.**

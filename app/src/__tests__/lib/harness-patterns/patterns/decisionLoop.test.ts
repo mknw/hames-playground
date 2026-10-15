@@ -1665,6 +1665,144 @@ describe('decisionLoop — fix round 1', () => {
     expect(unspotlight(spotlight(fenced, 'a', 'b'))).toBe(fenced)
   })
 
+  // Finding 7 (ruled b, incl. later turns). A screen that is down for the first
+  // route's two calls and up afterwards.
+  const outageThenUp = () => {
+    let n = 0
+    return vi.fn(async () => {
+      if (++n <= 2) throw new Error('screen down')
+      return { injection_detected: false, reason: '', spans: [] }
+    })
+  }
+  const RAW_HIT = 'RAW-RETRIEVER-HIT-NOT-CLEARED'
+  const retrLeaf = () =>
+    fake('retriever', 'retr-p', (s) => {
+      trackEvent(
+        s,
+        'tool_result',
+        {
+          tool: 'retriever',
+          success: true,
+          result: {
+            query: 'q',
+            backends: ['redis'],
+            references: [],
+            matches: [{ backend: 'redis', id: 'h', content: RAW_HIT, source: 's.md' }],
+          },
+        },
+        true,
+      )
+    })
+
+  // MUTATIONS: the withheld-id filter removed; the marker not carrying the ids.
+  it('after an outage, a later child with siblingResults on that route cannot read its events', async () => {
+    const { decide } = scriptedDecide(['retr', 'later', 'answer'])
+    let dump = ''
+    const later = fake('simpleLoop', 'later-p', (s, view) => {
+      dump = JSON.stringify(view.unfiltered().get())
+      trackEvent(s, 'controller_action', returnAction('ok'), true)
+    })
+    const loop = guarded(
+      build(
+        { retr: route(retrLeaf()), later: route(later, { siblingResults: ['retr-p'] }) },
+        decide,
+      ),
+      { screen: outageThenUp() },
+    )
+    const ctx = await run([loop])
+    expect(dump).not.toContain(RAW_HIT)
+    const marker = eventsOf(ctx, 'orchestrator', 'tool_result')[0].data as {
+      withheldEventIds?: string[]
+    }
+    expect(marker.withheldEventIds?.length).toBeGreaterThan(0)
+    // The control: with the screen up, the same allowed sibling DOES read it.
+    const { decide: d2 } = scriptedDecide(['retr', 'later', 'answer'])
+    let dump2 = ''
+    const later2 = fake('simpleLoop', 'later-p', (s, view) => {
+      dump2 = JSON.stringify(view.unfiltered().get())
+      trackEvent(s, 'controller_action', returnAction('ok'), true)
+    })
+    await run([
+      guarded(
+        build(
+          { retr: route(retrLeaf()), later: route(later2, { siblingResults: ['retr-p'] }) },
+          d2,
+        ),
+      ),
+    ])
+    expect(dump2).toContain(RAW_HIT)
+  })
+
+  it('a LATER TURN`s withReferences cannot preview or expand what an earlier outage withheld', async () => {
+    const { decide } = scriptedDecide(['retr', 'answer'])
+    const turn1 = guarded(build({ retr: route(retrLeaf()) }, decide), { screen: outageThenUp() })
+    const ctx = await run([turn1])
+    const withheldIds = (
+      eventsOf(ctx, 'orchestrator', 'tool_result')[0].data as { withheldEventIds: string[] }
+    ).withheldEventIds
+    const rawEventId = ctx.events.find(
+      (e) => e.patternId === 'retr-p' && e.type === 'tool_result',
+    )!.id!
+    expect(withheldIds).toContain(rawEventId)
+
+    // Turn 2: a new user message on the SAME context, a new loop instance.
+    ctx.events.push({
+      id: 'u2',
+      type: 'user_message',
+      ts: Date.now() + 5,
+      patternId: 'harness',
+      data: { content: 'follow-up' },
+    })
+    ctx.status = 'running'
+    const { decide: d2 } = scriptedDecide(['info', 'answer'])
+    const inputs: Array<Record<string, unknown>> = []
+    let turn = 0
+    const controller = vi.fn(async (input: Record<string, unknown>) => {
+      inputs.push(input)
+      return {
+        action:
+          ++turn === 1
+            ? ({
+                reasoning: 'expand',
+                tool_name: EXPAND_TOOL_NAME,
+                tool_args: `ref:${rawEventId}`,
+                is_final: false,
+              } as ControllerAction)
+            : ({
+                reasoning: 'done',
+                tool_name: 'Return',
+                tool_args: 'ok',
+                is_final: true,
+              } as ControllerAction),
+      }
+    })
+    const candidates: string[][] = []
+    const selector = vi.fn(async ({ candidates: c }: { candidates: Array<{ ref_id: string }> }) => {
+      candidates.push(c.map((x) => x.ref_id))
+      return { selected: c.map((x) => ({ ref_id: x.ref_id, reason: 'x' })), reasoning: 'r' }
+    })
+    const info = withReferences(
+      simpleLoop<Data>(controller as never, ['search'], {
+        patternId: 'info-p',
+        returnStyle: 'answer',
+      }),
+      {
+        source: ['retr-p', 'info-p'],
+        viewConfig: { fromLast: false, fromLastNTurns: 5 },
+        selector,
+      } as never,
+    )
+    const loop2 = guarded(
+      build({ retr: route(retrLeaf()), info: route(info, { siblingResults: ['retr-p'] }) }, d2),
+    )
+    await runInFrame(() => runChain(ctx, [loop2]))
+    const channels = inputs.map(({ planContext: _p, ...rest }) => rest)
+    expect(JSON.stringify(channels)).not.toContain(RAW_HIT)
+    expect(candidates.flat()).not.toContain(rawEventId)
+    const expandTurn = (inputs[1].turns as Array<{ tool_result?: { success: boolean } }>)[0]
+    expect(expandTurn.tool_result?.success).toBe(false)
+  })
+
   // Finding 9. MUTATION: delete the warning.
   it('warns once when no guard in the run declares decision_loop_output; not when one does', async () => {
     const warn = vi.mocked(console.warn)

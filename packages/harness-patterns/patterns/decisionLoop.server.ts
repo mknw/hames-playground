@@ -376,6 +376,16 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     }
     const outerCtx = (view as unknown as { ctx: UnifiedContext }).ctx
     const records: RouteOutput[] = []
+    // Events withheld by an earlier screen outage (S-d, ruling on finding 7): the
+    // ids ride the marker record, which is in the context and so persists with
+    // the run — read them back here so a LATER TURN's children skip them too.
+    const withheld = new Set<string>()
+    for (const e of outerCtx.events) {
+      if (e.patternId !== loopId || e.type !== 'tool_result') continue
+      for (const id of (e.data as { withheldEventIds?: string[] }).withheldEventIds ?? []) {
+        withheld.add(id)
+      }
+    }
     let latestPlan: { text: string; steps: number } | undefined
     let ended: 'answer' | 'stopped' | 'bound' = 'bound'
 
@@ -443,6 +453,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         events: [...outerCtx.events, ...scope.events].filter(
           (e) =>
             e.patternId !== loopId &&
+            (e.id === undefined || !withheld.has(e.id)) &&
             (!hide.has(e.patternId) || e.type === 'pattern_enter' || e.type === 'pattern_exit'),
         ),
       }
@@ -516,6 +527,11 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         // Marker only: every byte of the original output is discarded BEFORE the
         // record exists, so no projection of it (state, handoff, synthesis) can
         // carry it.
+        // The screen did not clear this child's events either (inner guards
+        // inherit the screen and fail open on an outage): withhold them from
+        // every child context this loop builds from here on.
+        const ids = childEvents.flatMap((e) => (e.id ? [e.id] : []))
+        for (const id of ids) withheld.add(id)
         record = {
           iteration,
           route: label,
@@ -524,6 +540,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
           result: WITHHELD_SCREEN_UNAVAILABLE,
           reasoning: '',
           failure: 'screen unavailable',
+          withheldEventIds: ids,
         }
       } else if (extracted.ok) {
         record = {
@@ -579,7 +596,13 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         'tool_result',
         record.status === 'succeeded'
           ? { tool: label, result: record.result, success: true }
-          : { tool: label, result: null, success: false, error: record.result || record.failure },
+          : {
+              tool: label,
+              result: null,
+              success: false,
+              error: record.result || record.failure,
+              ...(record.withheldEventIds ? { withheldEventIds: record.withheldEventIds } : {}),
+            },
         resolved.trackHistory,
       )
     }

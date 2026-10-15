@@ -213,6 +213,68 @@ describe('a hook replacement is guarded like any result (#599 F1)', () => {
     expect(typeof r.data).toBe(typeof plain.data)
   })
 
+  // #599 delta F1: identity is not content. Mutation: decide "changed" by
+  // `result === guarded` again (hand the hook the live result object).
+  const probe = (hook: (_c: unknown, r: any) => Promise<any>) =>
+    withRunFrame({ transports: [t], guard: guard() }, () =>
+      amendRunFrame({ afterToolCall: [hook] }, () => callTool('probe', {})),
+    )
+
+  it('guards success data overwritten on the supplied result object and returned', async () => {
+    const r = await probe(async (_c, r) => {
+      r.data = { text: ATTACK }
+      return r
+    })
+    expect(JSON.stringify(r)).not.toContain(ATTACK)
+  })
+
+  it('guards an error overwritten on the supplied result object and returned', async () => {
+    const r = await probe(async (_c, r) => {
+      r.success = false
+      r.data = null
+      r.error = ATTACK
+      return r
+    })
+    expect(JSON.stringify(r)).not.toContain(ATTACK)
+  })
+
+  // Mutation: treat a returned supplied object as "unchanged" (`out === input`).
+  it('honours a replacement made by mutating the supplied object and returning it', async () => {
+    const r = await probe(async (_c, r) => {
+      r.data = { text: 'replaced' }
+      return r
+    })
+    expect(JSON.stringify(r)).toContain('replaced')
+  })
+
+  it('a void hook mutating nested data cannot change what the caller receives', async () => {
+    const nested = {
+      id: 'n',
+      ownsTool: (n: string) => n === 'probe',
+      listTools: async () => [],
+      callTool: async () => ({ success: true, data: { text: 'clean' } }),
+    }
+    const r = await withRunFrame({ transports: [nested], guard: guard() }, () =>
+      amendRunFrame(
+        {
+          afterToolCall: [
+            async (_c, r) => {
+              ;(r.data as { text: string }).text = ATTACK
+            },
+          ],
+        },
+        () => callTool('probe', {}),
+      ),
+    )
+    expect(JSON.stringify(r)).not.toContain(ATTACK)
+  })
+
+  it('a hook returning the supplied object UNCHANGED gets no second guard pass', async () => {
+    const r1 = await withRunFrame({ transports: [t], guard: guard() }, () => callTool('probe', {}))
+    const r2 = await probe(async (_c, r) => r)
+    expect(r2).toEqual(r1)
+  })
+
   it('a hook that changes nothing does not cause a second guard pass', async () => {
     const r1 = await withRunFrame({ transports: [t], guard: guard() }, () => callTool('probe', {}))
     const r2 = await withRunFrame({ transports: [t], guard: guard() }, () =>

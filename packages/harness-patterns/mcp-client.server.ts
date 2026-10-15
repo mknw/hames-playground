@@ -331,16 +331,45 @@ export async function callTool(
   return withToolCallId(async (id) => {
     const guarded = await applyGuard(name, await dispatchTool(name, args))
     // Scoped after-call hooks (#507 N4), innermost first. A hook may REPLACE the
-    // result, and a replacement is new content the guard has not seen: it is
-    // put through the same guard pass as a dispatched result, so no hook can
-    // reopen the boundary (#599 review F1). Read softly like the guard — outside
-    // a run there are none.
+    // result, and a replacement is new content the guard has not seen, so it is
+    // put through the same guard pass as a dispatched result. "Changed" is
+    // decided by CONTENT and never by object identity (#599 delta F1): each hook
+    // is handed a private deep copy, so nothing it does to what it was given can
+    // reach the guarded result, and a hook that returns that copy (mutated) is
+    // compared with the result it was cloned from. A hook that returns nothing
+    // changes nothing; one that returns its copy untouched costs no second pass.
+    // Read softly like the guard — outside a run there are none.
     let result = guarded
+    let changed = false
     for (const hook of currentRunFrame()?.afterToolCall ?? []) {
-      result = (await hook({ id, name, args }, result)) ?? result
+      const input = cloneResult(result)
+      const out = await hook({ id, name, args }, input)
+      if (out === undefined) continue
+      if (out === input && sameContent(out, result)) continue
+      result = out
+      changed = true
     }
-    return result === guarded ? result : applyGuard(name, result)
+    return changed ? applyGuard(name, result) : result
   })
+}
+
+/** A private deep copy of a tool result for a hook. Tool results are JSON-shaped;
+ *  a value that cannot be cloned is a bug in whatever produced it, and failing
+ *  the call is the safe answer (the hook must never see the live object). */
+function cloneResult(result: ToolCallResult): ToolCallResult {
+  return structuredClone(result)
+}
+
+/** Content equality for two results, over everything a model can see. */
+function sameContent(a: ToolCallResult, b: ToolCallResult): boolean {
+  try {
+    return (
+      JSON.stringify([a.success, a.data, a.error, a.sanitized]) ===
+      JSON.stringify([b.success, b.data, b.error, b.sanitized])
+    )
+  } catch {
+    return false
+  }
 }
 
 async function applyGuard(name: string, result: ToolCallResult): Promise<ToolCallResult> {

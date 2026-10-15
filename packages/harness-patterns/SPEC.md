@@ -407,9 +407,13 @@ and no other:
    un-stores the document); and `afterToolCall` — run by `callTool` after the
    call has been dispatched **and guarded**, each hook seeing the previous one's
    result and given `{ id, name, args }`, and able to replace the result by
-   returning one. **A replacement is guarded like a dispatched result**: if any
-   hook changed it, `callTool` runs the active guard's sanitize/spotlight over
-   the final result again, so no hook can reopen the injection boundary.
+   returning one. **A replacement is guarded like a dispatched result**: each
+   hook is handed a private deep copy of the current result (nothing it does to
+   that copy can reach the guarded one), and if its returned result differs in
+   CONTENT from the one it was given a copy of — a new object, or the same copy
+   mutated — `callTool` runs the active guard's sanitize/spotlight over the final
+   result again. Identity is never the test. A hook returning nothing changes
+   nothing; one returning its copy untouched costs no second pass.
    `withSandbox({ id, syncWorkspace: true })` uses both, **eagerly, on the
    storing call itself** (dispatch and write → guard → that call's hook →
    `hydrateWorkspace` → return; not on a later call): a document stored under

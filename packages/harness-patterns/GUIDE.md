@@ -489,7 +489,7 @@ Two properties are the design, not accidents:
 
 **Two more slots concatenate** (#507 N4): `stashWriteObservers` (told when core's
 `storeDocument` has durably stored a document) and `afterToolCall` (run by
-`callTool` after a call is dispatched and guarded, may replace the result, which is then guarded again). You
+`callTool` after a call is dispatched and guarded, may replace the result, which is then guarded again; hooks get a private copy). You
 rarely supply them yourself; `withSandbox({ syncWorkspace: true })` does, to
 copy a document a tool stores mid-run into `/work/in`.
 

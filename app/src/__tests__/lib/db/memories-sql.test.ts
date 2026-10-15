@@ -26,6 +26,8 @@ const sent: Sent[] = []
 let failOn: (sql: string) => boolean = () => false
 let reply: (sql: string) => { rows: unknown[]; rowCount?: number } = () => ({ rows: [] })
 vi.mock('../../../lib/db/client.server', () => ({
+  databaseUrl: () => 'postgresql://x:x@127.0.0.1:59999/x',
+  onClosePool: vi.fn(),
   query: vi.fn(async (sql: string, params: unknown[] = []) => {
     if (failOn(sql)) throw new Error(`mocked db failure for: ${sql.trim().slice(0, 40)}`)
     sent.push({ sql: sql.replace(/\s+/g, ' ').trim(), params })
@@ -255,4 +257,66 @@ it('reconciliation source rows are scoped to both source and memory owner', asyn
   expect(statement.sql).toContain('m.user_id = $2')
   expect(statement.sql).toContain('s.event_id')
   expect(statement.sql).toContain('s.ordinal')
+})
+
+describe('M7 row erase and access export', () => {
+  it('erases only the requested owner and row under the shared owner lock', async () => {
+    const txSql: Sent[] = []
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        txSql.push({ sql, params })
+        return { rows: [], rowCount: 1 }
+      }),
+      on: vi.fn(),
+      off: vi.fn(),
+      release: vi.fn(),
+    }
+    const connect = vi.spyOn(repo.getMemoryPool(), 'connect').mockResolvedValue(client as never)
+    try {
+      await repo.deleteMemoryForUser('synthetic-owner', 'synthetic-memory')
+      expect(txSql.find((s) => s.sql.includes('DELETE FROM memories'))).toEqual({
+        sql: 'DELETE FROM memories WHERE user_id = $1 AND id = $2',
+        params: ['synthetic-owner', 'synthetic-memory'],
+      })
+      expect(txSql.findIndex((s) => s.sql.includes('pg_advisory_xact_lock'))).toBeLessThan(
+        txSql.findIndex((s) => s.sql.includes('DELETE FROM memories')),
+      )
+      expect(txSql.at(-1)?.sql).toBe('COMMIT')
+      expect(client.release).toHaveBeenCalled()
+    } finally {
+      connect.mockRestore()
+    }
+  })
+  it('exports decrypted contents, evidence, vectors and all provenance only for the owner', async () => {
+    const { encryptField } = await import('../../../lib/db/crypto.server')
+    const source = { event_id: 'synthetic-event', conversation_id: 'synthetic-conversation' }
+    reply = (sql) =>
+      sql.includes('SELECT m.*')
+        ? {
+            rows: [
+              {
+                id: 'synthetic-memory',
+                content: encryptField('Synthetic content'),
+                evidence: encryptField('Synthetic evidence'),
+                embedding: '[1,0]',
+                sources: [source],
+              },
+            ],
+          }
+        : { rows: [] }
+    const out = await repo.exportMemoryDataForUser('synthetic-owner')
+    expect(out).toEqual([
+      {
+        id: 'synthetic-memory',
+        content: 'Synthetic content',
+        evidence: 'Synthetic evidence',
+        embedding: '[1,0]',
+        sources: [source],
+      },
+    ])
+    const select = sent.find((s) => s.sql.includes('SELECT m.*'))!
+    expect(select.params).toEqual(['synthetic-owner'])
+    expect(select.sql).toContain('m.user_id = $1')
+    expect(select.sql).toContain('s.user_id = $1 AND s.memory_id = m.id')
+  })
 })

@@ -1,5 +1,51 @@
 # @hames-ai/harness-patterns
 
+## 0.3.0
+
+### Minor Changes
+
+- e5fc954: Add the optional core memory compaction pass, deterministic clustering and acceptance, configurable per-kind retention, and a daily sweep seam.
+  
+  `settleMemory` now refuses insertion at `hardLimit` (default 400) with `skipped: full` and `compactionDue: true`, while continuing later reinforcement/update candidates.
+- fa529f0: **#419 M2 erasure semantics (owner decision (b)).** Additive for hosts: an implementation of `MemoryWriteTx` keeps compiling; only code that builds a `MemoryInsertRow` itself must now supply `evidenceEventId`.
+  
+  - `MemoryInsertRow` and `MemoryWriteTx.update`'s `next` gain a required `evidenceEventId`: the `user_message` event the stored `evidence` quotes. `settleMemory` always sets it (to the turn's user event) and a host stores it beside the text, replacing both together on `update`.
+  - The `memory.merge` decision uses the endpoint verdict. A failed, refused or timed-out call inserts the new memory separately, keeping both memories.
+  - SPEC.md "Erasure semantics" records the rule M3 (compaction) inherits: an `update` keeps every `memory_sources` row, including those no longer supporting the text, so deleting a conversation removes every memory that ever drew on it. `MemoryWriteTx` has no way to remove a source row, and a pin keeps it so.
+- 6e4a7ce: **#419 slice M1 — `memoryRecall`, the recall step of persistent memory.** Additive; no existing pattern changes behaviour.
+  
+  - `memoryRecall(config)`: a chain step (`commitStrategy: 'always'`, `errorSeverity: 'recoverable'`, `estimateTurns: () => 0`) that, when a `memory.recall` gate says the user's message depends on remembered facts, attaches the best matches as `data.memories` + `data.memoryContext`. Core stays generic: the host injects a `MemoryStore` (bound to its owner — no method takes one), the RAW `DecideFn`, a `MemoryQueryEmbedder`, `owner()` and `visibleTiers(turnTier)`; a tier is an opaque string.
+  - Ranking in `memory-ranking.server.ts`: NFKC tokenizer (identifiers whole, EN/NL/FR stopwords, no stemming), BM25 over the user's own rows, cosine similarity, the floors BEFORE reciprocal-rank fusion (k = 60), the count cap and the token budget (hard-capped at 5% of the responder's window).
+  - The gate uses the endpoint verdict from `evaluateDecision`; only `retrieve` attaches memories. Gate, search and the host wake run concurrently under one deadline (`gate.timeoutMs`, default 1500 ms); a failed gate or incomplete wake attaches nothing.
+  - Never stops what follows it: every failure ends in `memories = []` and a return — no `error`, no `warning` — and `data.memories`/`memoryContext` are cleared on EVERY exit.
+  - New `memory_recalled` event (ids only, never memory content; explicit metadata-only `formatEventData` case), `PatternCapabilities.memory` and `harnessUsesMemory(patterns)` — the opt-in probe for the memory wake and store. SPEC.md and GUIDE.md updated.
+- ab78dea: **#419 slice M2 — `settleMemory`, the store step of persistent memory.** Additive; no existing pattern changes behaviour.
+  
+  - `settleMemory(ctx, config)`: after the reply, one `decideFields` over the question/answer pair (`sensitive`, `target`, `confirm`, `kind`), using endpoint verdicts and preventing writes on a failed gate, then extract → deterministic acceptance → embed → a per-candidate transaction. Never throws; every uncertain path stores nothing and returns a reason. The host starts it from inside its post-turn continuation and awaits it before saving, so the `memory_written` events ride that one save.
+  - The evidence rule: a memory's evidence must be a verbatim span of the CURRENT user message; tool results, non-final assistant text and `llmCall` records never enter the window. `acceptCandidate` (pure, exported) also enforces the closed kind set, one line ≤ 280 characters, identifier closure and a zero-finding injection sanitizer.
+  - Dedupe and merge under the owner's lock: near-duplicates reinforce, related preferences/traits go to a bounded `memory.merge` question, everything else inserts. The provenance row is written in the SAME transaction as its memory and a primary-key conflict rolls the candidate back, so a retry is a no-op and a crash leaves no orphan.
+  - Seams: `MemoryWriteStore`/`MemoryWriteTx` (the transactional write side of the owner-bound store), `MemoryExtractFn`, `MemoryEmbedder` (recall's query half plus `documents`). Pre-M6 (`ask` with no confirmation mechanism) and pre-M12 (an org-graph target with no writer) store nothing and log; an org target always asks.
+  - New `memory_written` event (ids, kind, tier and action — never the content, nor a hash of it; the extractor's call rides it redacted; explicit metadata-only `formatEventData` case). `settings.enabled` is required for a write (absent → nothing stored, D11); `MemoryWriteTx.addSource` returns `{ inserted, memoryId }` and `read(id)` is added so a retry re-records a lost event. SPEC.md and GUIDE.md updated.
+- e6543b1: **#419 slice M5a — `withMemory`, `memory_context` threading, and the DATA-fence escape.** Core + BAML only; no app change.
+  
+  - `@hames-ai/harness-patterns`: `withMemory(cfg)(patterns)` returns `[memoryRecall(cfg), ...patterns]` (the opt-in; the patterns come back as the same objects) and `memoryStoreConfig(cfg)` derives the store half from the same `MemoryConfig`, so recall and `settleMemory` share one owner, embedder, decision seam, wake and **switch** (`enabled` is required). `CompactExecutionInput.memoryContext?` (set from `data.memoryContext` only when non-blank) and `RouteFn`'s trailing `extra?: RouteExtra` (the router passes it only when non-blank). Additive: a `route`/`synthesize` written before them is called exactly as before when nothing is recalled.
+  - `@hames-ai/harness-baml`: `routeMessageOp` and `defaultSynthesize` pass the block to the trailing BAML `memory_context` parameter. **Breaking for a direct caller of `routeMessageOp`:** its optional collector moved from the fourth parameter to the fifth (`routeMessageOp(message, history, routes, extra, collector)`) so it satisfies `RouteFn`; pass `undefined` for `extra`. New `escapeDataFence` (`@hames-ai/harness-baml/data-fence`): every string the adapters put inside a `---BEGIN DATA---` fence (the extractor's window and latest user message, the compactor's members, the `memory_context` blocks) has any fence marker neutralised, so assistant text composed from tool results cannot end the fence. No `.baml` change, so no regenerated client.
+- f97fd50: `MemoryWrittenEventData` drops `contentHash`: `memory_written` carries ids, kind, tier and action only (#541)
+- ffc87ba: Add score and noul declarations, typed results, metadata event fields and typed decision reads alongside choice questions. Preserve the endpoint probabilities unchanged and keep persisted decision events readable.
+- 08ff54f: Accept choice, score and noul specs in decision patterns and evaluation entry points, and infer mixed decision-set results per field. Preserve decision events and report request failures without applying confidence cuts.
+- 0405113: Add `MemoryConfig.routerMemory` with `routing-and-replies` (default) and `replies-only` to choose whether recalled memory reaches routers or only reply synthesis. Refuse unknown values at the wiring boundary and document the default's tool-egress consequence.
+- 5f377c5: Add typed systemone decision specs and results, the `decision_made` metadata event, and `decisionKeys` / `harnessDecisionKeys` for inspecting the declared decision surface.
+- 459122e: Add `typedDecision`, `decisionRouter`, `evaluateDecision`, `decide` and `decideFields` over typed systemone questions. Preserve the endpoint probabilities and record decision events, with failed calls reported as errors. Decision routers support intent preservation, ordinary conversational routes and shadow recording.
+- 22ff7c3: Render `decision_made` timeline previews with the decision key and verdict. Keep previews metadata-only: never the question or state text.
+
+### Patch Changes
+
+- 59af7c6: README: drop the duplicate wordmark under the banner
+- b52215c: Serve decision sets as typed per-field questions, batched through `decideAll` when supplied.
+- 5efffdf: Re-check the memory switch under each candidate transaction's owner lock so an in-flight settle cannot write after switch-off. Document M7's switch-before-delete requirement and serialized forget-all semantics.
+- 8b8b72c: Refuse raw characters outside XML 1.0's Char production, including lone surrogates, in the shared XML tokenizer. XML parsing, scanning and ZIP validation now reject malformed parts before document disarming can treat them as clean.
+- f13bb7d: Add the systemone transport with single-question and one-request set adapters, supporting choice, score and noul questions with endpoint probabilities passed through untouched. The Anthropic-tier `JevDecide` client uses `JEV_DECISIONS_URL` and `JEV_DECISIONS_API_KEY`; failed requests never retry on another provider. Record usage and the serving client; add the `provider` cost basis for reported USD cost converted once to EUR, with absent cost remaining unknown.
+
 ## 0.2.0
 
 ### Minor Changes

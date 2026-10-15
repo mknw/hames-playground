@@ -16,7 +16,6 @@ let sessions: typeof import('../../src/lib/harness-client/session.server')
 let memories: typeof import('../../src/lib/db/memories.server')
 let conversations: typeof import('../../src/lib/db/conversations.server')
 let db: typeof import('../../src/lib/db/client.server')
-let clients: typeof import('@hames-ai/harness-baml/clients.server')
 let answer: () => ConfiguredPattern<SessionData>
 let gate: (() => Promise<void>) | undefined
 
@@ -58,7 +57,6 @@ beforeAll(async () => {
   memories = await import('../../src/lib/db/memories.server')
   conversations = await import('../../src/lib/db/conversations.server')
   db = await import('../../src/lib/db/client.server')
-  clients = await import('@hames-ai/harness-baml/clients.server')
   const { registerAgent } = await import('../../src/lib/harness-client/registry.server')
   const { compactExecution } =
     await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
@@ -122,22 +120,8 @@ beforeEach(async () => {
   await app.wipe()
   app.fakeLlm.reset()
   gate = undefined
-  // These are fixtures fitted to the fake distribution, never production calibration.
-  const entries = Object.fromEntries(
-    [
-      'memory.recall',
-      ...['target', 'confirm', 'kind', 'sensitive'].map((key) => `memory.store.${key}`),
-    ].map((key) => [key, { temperature: 1, minConfidence: 0.5, minMargin: 0.25 }]),
-  )
-  clients.configureDecisionCalibration({
-    LocalQwenSmallDecide: entries,
-    JevDecide: Object.fromEntries(
-      Object.keys(entries).map((key) => [key, { minConfidence: 0.5, minMargin: 0.25 }]),
-    ),
-  })
 })
 afterAll(async () => {
-  clients.configureDecisionCalibration({})
   await app.wipe()
 })
 

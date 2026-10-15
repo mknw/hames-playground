@@ -51,9 +51,16 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env — see .env.production.example}
 
   neo4j:
-    ports: !override ["127.0.0.1:7474:7474", "127.0.0.1:7687:7687"]
+    ports: !override []
+    networks: !override [neo4j-internal]
     environment:
       - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD in .env — see .env.production.example}
+      - NEO4J_dbms_security_allow__csv__import__from__file__urls=false
+      - NEO4J_apoc_import_file_enabled=false
+
+  neo4j-relay:
+    ports: !override ["127.0.0.1:7474:7474", "127.0.0.1:7687:7687"]
+    networks: !override [neo4j-internal, app-network]
 
   redis:
     # No `platform:` here on purpose. The arm64 redisearch SIGILL that
@@ -146,7 +153,7 @@ services:
       # variable Postgres itself reads.
       - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:?}@postgres:5432/hames
       # The direct Neo4j driver. `config/endpoints.ts` already resolves
-      # bolt://neo4j:7687 in a production build; only the credential is missing.
+      # bolt://neo4j-relay:7687 in a production build; only the credential is missing.
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:?}
       # Defence in depth, not the control. The bypass is gated on
@@ -198,3 +205,9 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+
+networks:
+  neo4j-internal:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated

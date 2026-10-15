@@ -100,22 +100,16 @@ export type {
   NoulDecision,
   AnyDecision,
   DecisionFor,
-  ScorePolicy,
-  NoulPolicy,
-  PolicyFor,
   DecisionSetSpec,
   MixedDecisionSet,
   DecisionLabelsFor,
   DecisionMethod,
   AbstainReason,
   Decision,
-  DecisionPolicy,
-  DecisionCalibrationEntry,
   DecideInput,
   DecideResult,
   DecideFn,
   DecideAllFn,
-  DecideServing,
   DecisionMadeEventData,
 
   // Memory recall (#419)
@@ -126,6 +120,12 @@ export type {
   MemoryExtractInput,
   MemoryExtractFn,
   MemoryEmbedder,
+  MemoryRetention,
+  MemoryCompactionRow,
+  MemoryCompactInput,
+  MemoryCompactFn,
+  MemoryCompactionStore,
+  MemoryCompactionTx,
   MemoryNeighbor,
   MemoryInsertRow,
   MemorySourceRow,
@@ -153,7 +153,7 @@ export type {
 } from './types'
 
 export { DEFAULT_TRACK_HISTORY, DEFAULT_COMMIT_STRATEGY, DEFAULT_ERROR_SEVERITY } from './types'
-export { MAX_DECISION_LABELS, MAX_SCORE_LEVELS } from './types'
+export { MAX_SCORE_LEVELS } from './types'
 
 // The LLM call envelope's error class is a runtime value (instanceof checks in
 // the patterns) — exported from the barrel for the first time in Lane A3.
@@ -225,7 +225,6 @@ export {
   declaresWorkspaceSync,
   harnessUsesSyncWorkspace,
   harnessDecisionKeys,
-  harnessCalibratedDecisionKeys,
   harnessUsesMemory,
 } from './pattern-capabilities'
 
@@ -357,7 +356,6 @@ export {
   MEMORY_MERGE_KEY,
   type MemoryStoreConfig,
   type MemoryStoreSettings,
-  type MemoryStoreGateSettings,
   type MemoryStoreSkip,
   type MemorySettleReport,
   type MemoryStoreFields,
@@ -377,9 +375,26 @@ export {
   type Acceptance,
   type AcceptanceRule,
 } from './memory-acceptance.server'
+export {
+  DEFAULT_MEMORY_RETENTION,
+  memoryRetention,
+  expiredMemories,
+  clusterMemories,
+  acceptCompaction,
+} from './memory-compaction-pure.server'
+export {
+  compactMemory,
+  MEMORY_COMPACT_SPEC,
+  sweepMemories,
+  startMemorySweep,
+  type MemoryCompactionConfig,
+  type MemoryCompactionSettings,
+  type MemoryCompactionReport,
+  type MemorySweepJob,
+} from './memory-compaction.server'
+export { memoryCompactionConfig } from './patterns/withMemory.server'
 
-// Decisions (#418): the user-facing half of the typedDecision seam. The pure
-// scoring helpers (`scoreDecision`, `sumLabelMass`, …) stay on './patterns'.
+// Decisions (#418): the user-facing typed systemone decision seam.
 export {
   defineChoice,
   defineScore,

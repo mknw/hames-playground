@@ -290,12 +290,15 @@ edit without a red test.
   CORRUPT another; it is not a claim that anything is faster in parallel. One
   Postgres and one dev-server port are still shared resources.
 
-The #418 T8 `decision-calibration` scenario, host artifact format and owner-only
-live runbook are described in [Decision calibration](decision-calibration.md).
-Its hermetic pins do not contact a provider or a database; its live measurement
-remains an explicitly owner-triggered layer-4 run.
 ## Browser backend pins
 
 | Command (from `app/`)                                                      | Checks                                                                                         | When                                                                                        |
 | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | `pnpm exec playwright test --config e2e-browser/pins/playwright.config.ts` | Actual dev-server fake credentials, proxy delivery, fixture enforcement, boot and final drains | `release:check`, before the browser layer; also independently, without Postgres or Chromium |
+
+## Infrastructure isolation checks
+
+The opt-in [Neo4j egress check](neo4j-egress.md) (#241 G13) requires Docker
+and is outside the hermetic layers and default CI. Its layer-1 topology pins
+run in CI; its green/red packet evidence runs only in a throwaway `g13-test`
+project.

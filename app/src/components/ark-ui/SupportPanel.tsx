@@ -5,6 +5,7 @@
  * Tabs: Neo4j | Memory | Context manager | Data | Sandbox
  */
 
+import { MemoryPanel } from './MemoryPanel'
 import { Tabs } from '@ark-ui/solid/tabs'
 import {
   Show,
@@ -117,8 +118,6 @@ export const SupportPanel = (props: SupportPanelProps) => {
     ),
   )
 
-  const memoryElements = createMemo(() => props.graphElements.filter((e) => e.source === 'memory'))
-
   // The Sandbox tab blinks twice when a sandbox is entered. A second entry
   // while it is still blinking does not restart it — one signal per burst.
   const [blinking, setBlinking] = createSignal(false)
@@ -178,8 +177,10 @@ export const SupportPanel = (props: SupportPanelProps) => {
             transition="all"
             data-state={selectedTab() === 'memory-graph' ? 'active' : 'inactive'}
             style={{
-              'border-bottom-color': selectedTab() === 'memory-graph' ? '#a855f7' : 'transparent',
-              color: selectedTab() === 'memory-graph' ? '#a855f7' : 'var(--ui-text-secondary)',
+              'border-bottom-color':
+                selectedTab() === 'memory-graph' ? 'var(--ui-accent)' : 'transparent',
+              color:
+                selectedTab() === 'memory-graph' ? 'var(--ui-accent)' : 'var(--ui-text-secondary)',
             }}
           >
             <span class="i-material-symbols-psychology-outline" w="4" h="4" aria-hidden="true" />
@@ -266,15 +267,9 @@ export const SupportPanel = (props: SupportPanelProps) => {
             />
           </Tabs.Content>
 
-          {/* Memory Graph Tab */}
+          {/* Personal memories — replaces the retired shared MCP graph. */}
           <Tabs.Content value="memory-graph" h="full" flex="~ col">
-            <GraphTabContent
-              elements={memoryElements()}
-              highlightedIds={props.highlightedIds}
-              onClearGraph={props.onClearGraph}
-              emptyMessage="No memory graph data yet. Use agents that interact with the Memory MCP to see data."
-              emptyIconClass="i-material-symbols-psychology-outline"
-            />
+            <MemoryPanel />
           </Tabs.Content>
 
           {/* Context manager Tab - ContextEvents based */}

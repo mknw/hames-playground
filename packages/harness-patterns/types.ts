@@ -256,7 +256,7 @@ export type EventType =
   | 'hitl_request'
   /** The decision on one `hitl_request` (#433). Only core writes it. */
   | 'hitl_response'
-  /** One typed decision the policy layer evaluated (#418). Metadata only —
+  /** One typed systemone decision (#418). Metadata only —
    *  the `state` the decision was asked over can hold sanitized mail bodies
    *  or tool results (SD-3/SD-10), so the event carries `stateChars`, the
    *  SIZE, and never the text. See `DecisionMadeEventData`. */
@@ -974,22 +974,8 @@ export interface PatternCapabilities {
    *  performs that sync — a host reads it to decide whether it must hydrate the
    *  workspace itself when it is the first to boot the session's container. */
   workspaceSync?: boolean
-  /** The decision keys this pattern will decide (#418) — the `DecisionSpec.key`
-   *  / `DecisionSetSpec.key` values whose calibration and thresholds a host
-   *  can fit and feed (`configureDecisionCalibration`, keyed `(client,
-   *  spec.key)`). Declared so a boot probe can warn when a key a policy
-   *  requires calibration for has no entry for a configured tier (D12) —
-   *  a `requireCalibrated` decision with no entry always abstains, which is a
-   *  control present and unreachable, exactly the shape the field exists to
-   *  surface. Read by `harnessDecisionKeys` (`pattern-capabilities.ts`). */
+  /** Decision keys declared by this pattern. */
   decisionKeys?: readonly string[]
-  /** The subset of {@link decisionKeys} whose policy sets `requireCalibrated`
-   *  (#418 T6, coordinator decision G4). `decisionKeys` says which keys exist;
-   *  this says which of them ABSTAIN FOREVER without a calibration entry, which
-   *  is the only subset a boot probe has a reason to warn about. Declared next
-   *  to the key rather than read back from `config`, because the patterns
-   *  destructure `policy` out of it. Read by `harnessCalibratedDecisionKeys`. */
-  calibratedDecisionKeys?: readonly string[]
   /** This pattern reads (or writes) the user's persistent memory (#419).
    *  Declared by `memoryRecall`; read by `harnessUsesMemory`, the ONE probe a
    *  host gates the memory wake and the post-reply store on — so an agent that
@@ -1606,21 +1592,6 @@ export type HitlAnswers = Readonly<Record<string, HitlAnswer>>
 // ============================================================================
 // Decisions (#418): the typedDecision seam
 // ============================================================================
-// Three layers: the raw seam (`DecideFn` → `DecideResult`) — one call, one
-// distribution, no policy; the policy layer (`evaluateDecision`/`decide()` →
-// `Decision`, `patterns/typedDecision.server.ts`) — applies a
-// `DecisionPolicy`, records `decision_made`; inference failures never throw; and the transport
-// behind the raw seam (a logprob readout on the private tier, Jev on the
-// Anthropic tier, an explicitly configured verbalized secondary). Core owns
-// the types and the pure policy math; the transports live in harness-baml and
-// the app (#418 T3/T4/T5).
-
-/** Cap on the label count of a `DecisionSpec` (D13). vLLM's default
- *  `--max-logprobs` is 20, and the logprob readout reads top-k logprobs — a
- *  spec wider than that cannot be read out faithfully. Refused at
- *  construction; `mode: 'joint'` refuses a LABEL PRODUCT above it, because a
- *  joint pass reads the product's mass from the same top-k window. */
-export const MAX_DECISION_LABELS = 20
 
 /** TypeSafe's score cap, applied on every transport: https://docs.typesafe.ai/primitives/score */
 export const MAX_SCORE_LEVELS = 10
@@ -1634,10 +1605,6 @@ export interface DecisionLabel<L extends string = string> {
   readonly description: string
 }
 
-/** One typed question over a closed label set. `key` is the prompt fragment,
- *  the calibration lookup, the threshold scope and the event key — one string,
- *  the same everywhere. `labels` carries 2..{@link MAX_DECISION_LABELS} unique
- *  ids; array order is display order (and the scorer's tie-break order). */
 export interface DecisionSpec<L extends string = string> {
   readonly type?: 'choice'
   readonly key: string
@@ -1663,25 +1630,15 @@ export interface NoulSpec {
 
 export type AnyDecisionSpec = DecisionSpec | ScoreSpec | NoulSpec
 
-/** The owner's "ONE call, SEVERAL typed fields" (D6). The PROVIDER decides how
- *  the set is served: Jev answers every field as its own typed question in ONE
- *  request; a logprob client runs one pass per field with a byte-identical
- *  state prefix (so the backend prefix cache serves it), unless `mode` is
- *  'joint'. */
 export interface DecisionSetSpec<F extends Record<string, string>> {
   readonly key: string
-  /** (F5) 'fields' (default) = one pass per field; 'joint' = score the label
-   *  product in one pass and marginalise, only when the product is ≤
-   *  {@link MAX_DECISION_LABELS}. A provider that is already one call (Jev)
-   *  ignores this. */
-  readonly mode?: 'fields' | 'joint'
+
   readonly fields: { readonly [K in keyof F]: DecisionSpec<F[K]> }
 }
 
 /** Several closed questions, preserving each field's own spec and verdict type. */
 export interface MixedDecisionSet<S extends Record<string, AnyDecisionSpec>> {
   readonly key: string
-  readonly mode?: 'fields' | 'joint'
   readonly fields: { readonly [K in keyof S]: S[K] }
 }
 
@@ -1694,55 +1651,28 @@ export type DecisionLabelsFor<S> = S extends NoulSpec
       ? L
       : never
 
-/** How the decision was read out. 'logprob' = answer-letter logprobs (the
- *  private tier); 'jev' = the hosted Jev decision model (Anthropic tier,
- *  calibrated); 'verbalized' = a chat model asked to state a choice — never
- *  calibrated. Widens to `string` at the merged consumer
- *  (`classifierFromDecide`), so a transport naming another method still
- *  typechecks there. */
-export type DecisionMethod = 'logprob' | 'jev' | 'verbalized'
+/** The systemone transport. */
+export type DecisionMethod = 'jev'
 
-/** Why a decision was NOT taken. The scorer abstains in this order:
- *  'no-state' → 'error' → 'uncalibrated' → 'low-coverage' → 'method-mismatch'
- *  → 'low-confidence' → 'low-margin' — first reason wins, and the fallback
- *  label answers. */
-export type AbstainReason =
-  | 'low-confidence'
-  | 'low-margin'
-  | 'uncalibrated'
-  | 'low-coverage'
-  | 'error'
-  | 'no-state'
-  | 'unsupported-type'
-  /** (F2) The serving method is not the method the static thresholds were
-   *  fitted on (`policy.thresholdMethod`) and the applied calibration entry
-   *  carries no cut of its own — a threshold tuned on one distribution means
-   *  nothing on the other. */
-  | 'method-mismatch'
+/** Failure metadata retained for recorded events. No threshold abstention. */
+export type AbstainReason = 'error'
 
-/** The outcome the policy layer hands its consumer. `label` is the verdict to
- *  ACT ON — the top label when the policy passed, the policy's fallback
- *  otherwise. `top` is the argmax, `null` only when there is no distribution
- *  at all (an error or an empty state). */
 export interface Decision<L extends string = string> {
   readonly type?: undefined
   readonly key: string
-  /** ACT ON THIS: `top` when the policy passed, else `policy.fallback`. */
-  readonly label: L
+
+  readonly label: L | null
   readonly top: L | null
   readonly probs: Readonly<Partial<Record<L, number>>>
   readonly margin: number
   /** (K·p_max − 1)/(K − 1) — p_max re-centred on the chance floor, so 0 is
    *  chance and 1 is certain regardless of K. */
-  readonly confidence: number
+  readonly confidence?: number
   readonly abstained: boolean
   readonly reason?: AbstainReason
   readonly method?: DecisionMethod
   readonly calibrated: boolean
-  /** Logprob only — the probability mass the top-k read attributed to a
-   *  label. Not a Jev concept; stays absent there. */
-  readonly coverage?: number
-  /** Set by the policy layer after the `decision_made` event is committed. */
+
   readonly eventId?: string
 }
 
@@ -1754,9 +1684,9 @@ export interface ScoreDecision<L extends string = string> extends Omit<
   'type' | 'label' | 'margin'
 > {
   readonly type: 'score'
-  readonly level: L
-  /** Verdict index (fallback index on abstain), NOT the rounded mean. */
-  readonly value: number
+  readonly level: L | null
+
+  readonly value: number | null
   /** Probability-weighted level index; null only without a usable distribution. */
   readonly expected: number | null
 }
@@ -1766,7 +1696,7 @@ export interface NoulDecision extends Omit<
   'type' | 'label' | 'margin' | 'top'
 > {
   readonly type: 'noul'
-  readonly holds: boolean
+  readonly holds: boolean | null
   readonly pTrue: number | null
 }
 
@@ -1780,79 +1710,16 @@ export type DecisionFor<S> =
         ? ChoiceDecision<L>
         : never
 
-/** The consumer's failure policy. `fallback` is REQUIRED (D8): the seam never
- *  throws, so a failed or abstained decision must always have a verdict to
- *  return, and an unexamined fallback is the defect. */
-export interface DecisionPolicy<L extends string = string> {
-  readonly fallback: L
-  readonly minConfidence?: number
-  readonly minMargin?: number
-  /** (F2) The method these STATIC thresholds were fitted on. Default
-   *  'logprob'. Applied only when the serving method equals it, unless the
-   *  applied calibration entry carries its own cuts (which win) — otherwise
-   *  the decision abstains 'method-mismatch'. */
-  readonly thresholdMethod?: DecisionMethod
-  /** Require a calibrated readout. Known-non-calibratable clients are refused
-   *  BEFORE the call (F3) — a policy that would discard the result must not
-   *  pay for it. */
-  readonly requireCalibrated?: boolean
-  /** Logprob floor on `coverage` — the mass the top-k read captured. An
-   *  absent coverage fails the floor: unknown beats silently wrong. */
-  readonly minCoverage?: number
-}
-
-/** Concentration cut on an ordered rubric; a margin has no ordinal meaning. */
-export type ScorePolicy<L extends string = string> = Omit<DecisionPolicy<L>, 'minMargin'> & {
-  readonly minMargin?: never
-}
-/** Symmetric abstain band: |2·P(true) − 1| < minConfidence. */
-export interface NoulPolicy extends Omit<DecisionPolicy, 'fallback' | 'minMargin'> {
-  readonly minMargin?: never
-  readonly fallback: boolean
-}
-export type PolicyFor<S> =
-  S extends ScoreSpec<infer L>
-    ? ScorePolicy<L>
-    : S extends NoulSpec
-      ? NoulPolicy
-      : S extends DecisionSpec<infer L>
-        ? DecisionPolicy<L>
-        : never
-
-/** Host-fed calibration for one (client, spec.key) pair. The temperature and
- *  bias are applied in log space by the logprob transport. Jev accepts fitted
- *  cuts only and refuses temperature or bias, including identity values (G7).
- *  The cuts, when present,
- *  are the entry's own and WIN over the policy's static thresholds (F2) —
- *  they are fitted on the very (client, question) pair that serves the call,
- *  so they are on-distribution by construction. */
-export interface DecisionCalibrationEntry {
-  readonly temperature?: number
-  readonly bias?: Readonly<Record<string, number>>
-  readonly minConfidence?: number
-  readonly minMargin?: number
-  readonly n?: number
-  readonly fittedAt?: string
-}
-
-/** One raw-seam call: one spec, one state, no policy. The state is the TEXT
- *  the decision is asked over — the transport records it in
- *  `llmCall.variables` (the prompt drill-down), and nowhere else: no event
- *  carries it. */
 export interface DecideInput<L extends string = string> {
   readonly spec: DecisionSpec<L> | ScoreSpec<L> | NoulSpec
   readonly state: string
 }
 
-/** The raw seam's outcome: one distribution over the spec's labels, with the
- *  method that produced it. No policy has been applied. Structurally the
- *  shape the merged `classifierFromDecide` consumer already accepts — its
- *  extra members (`coverage`, `llmCall`) are additions it ignores (D7). */
 export interface DecideResult<L extends string = string> {
   readonly probs: Readonly<Record<L, number>>
   readonly method: DecisionMethod
   readonly calibrated: boolean
-  readonly coverage?: number
+  readonly confidence?: number
   readonly llmCall?: LLMCallRecord
 }
 
@@ -1863,31 +1730,11 @@ export interface DecideResult<L extends string = string> {
 export type DecideFn = {
   <L extends string>(input: DecideInput<L>): Promise<DecideResult<L>>
   limits?: () => ModelLimits
-  serving?: DecideServing
   /** Absent means choice-only: a legacy transport must never serve a new type. */
   readonly supportedTypes?: readonly DecisionType[]
 }
 
-/** What a transport knows about the client it WILL serve a decision from,
- *  resolved per call from the spec key — the adapter's half of the F2/F3
- *  contract (T3/T4 fill it; `evaluateDecision` reads it).
- *
- *   - `method` is known BEFORE the call, which is what lets a
- *     `requireCalibrated` policy abstain without paying (F3).
- *   - `calibration` is the host-fed entry for (serving client, `key`); its
- *     cuts win over the policy's static thresholds (F2).
- *
- *  OPTIONAL, and its absence removes only the pre-call shortcut: the post-call
- *  `method-mismatch` / `uncalibrated` checks still run on the result's own
- *  `method` / `calibrated`. */
-export type DecideServing = (key: string) => {
-  readonly method?: DecisionMethod
-  readonly calibration?: DecisionCalibrationEntry
-}
-
-/** The structured entry: several typed fields over one state (D6). NOTE (F6):
- *  no set-level `coverage` — coverage is per field, and the floors consume it
- *  there. */
+/** The structured entry: several typed fields over one state (D6). */
 export type DecideAllFn = {
   <S extends Record<string, AnyDecisionSpec>>(input: {
     readonly spec: MixedDecisionSet<S>
@@ -1901,50 +1748,29 @@ export type DecideAllFn = {
     readonly state: string
   }): Promise<{ readonly fields: { readonly [K in keyof F]: DecideResult<F[K]> } }>
   limits?: () => ModelLimits
-  serving?: DecideServing
   /** Absent means choice-only, independently of the single-spec transport. */
   readonly supportedTypes?: readonly DecisionType[]
 }
 
-/** Data payload for `decision_made` — one typed decision the policy layer
- *  evaluated (#418). METADATA ONLY, like `content_sanitized` and the `hitl_*`
- *  pair: the `state` the decision was asked over can hold sanitized mail
- *  bodies or tool results (SD-3/SD-10), and this payload is JSON-dumped
- *  wholesale by anything that serializes `event.data` — so the event carries
- *  `stateChars`, the SIZE, and never the text. The state survives in exactly
- *  one place, the transport's `llmCall.variables` (the prompt drill-down).
- *  Pinned by `decision-state-sentinel`. */
 export interface DecisionMadeEventData {
   /** Absent means choice, including persisted events from before score/noul. */
   type?: 'score' | 'noul'
   expected?: number | null
-  value?: number
+  value?: number | null
   pTrue?: number | null
   key: string
   question: string
   labels: Array<{ id: string; description: string }>
   probs: Record<string, number>
-  /** The verdict — the top label when the policy passed, the fallback when
-   *  abstained. */
-  label: string
+
+  label: string | null
   top: string | null
   margin: number
-  confidence: number
+  confidence?: number
   abstained: boolean
   reason?: AbstainReason
-  /** The policy AS DECLARED — the audit record of what was asked, including
-   *  the `thresholdMethod` its static cuts were fitted on (F2). */
-  policy: {
-    fallback: string
-    minConfidence?: number
-    minMargin?: number
-    thresholdMethod?: DecisionMethod
-    requireCalibrated?: boolean
-    minCoverage?: number
-  }
   method?: DecisionMethod
   calibrated: boolean
-  coverage?: number
   /** The SIZE of the state, never the text. */
   stateChars: number
   shadow?: true
@@ -2044,7 +1870,7 @@ export interface MemoryGateRecord {
   readonly top: string | null
   readonly probs: Readonly<Record<string, number>>
   readonly margin: number
-  readonly confidence: number
+  readonly confidence?: number
   readonly abstained: boolean
   readonly reason?: AbstainReason
   readonly method?: DecisionMethod
@@ -2114,6 +1940,54 @@ export type MemoryExtractFn = (
 export interface MemoryEmbedder extends MemoryQueryEmbedder {
   /** Embed stored texts, one vector per text, in order. */
   documents(texts: string[]): Promise<number[][]>
+}
+
+/** Per-kind retention in days after lastSeenAt; null persists until forgotten. */
+export type MemoryRetention = Readonly<Partial<Record<MemoryKind, number | null>>>
+
+/** A complete owner-scoped snapshot for compaction, read under the owner lock.
+ *  Sources include EVERY prior contributor, even when its text was superseded. */
+export interface MemoryCompactionRow extends MemoryInsertRow {
+  readonly createdAt: number
+  readonly lastSeenAt: number
+  readonly compactedFrom: number
+  readonly sources: readonly MemorySourceRow[]
+}
+
+/** The summarizer sees data only, oldest first; ids and provenance stay in core. */
+export interface MemoryCompactInput {
+  readonly kind: MemoryKind
+  readonly members: readonly {
+    readonly content: string
+    readonly evidence: string
+    /** ISO timestamp, matching the already-landed M9 adapter. */
+    readonly last_seen: string
+  }[]
+}
+
+/** No transport in core. The host supplies a tier-routed summarizer, company-run only on the private
+ *  tier (DescribeAnthropic on the Anthropic tier). Its output
+ *  is untrusted, and all deterministic checks run before any write. */
+export type MemoryCompactFn = (
+  input: MemoryCompactInput,
+) => Promise<LLMResult<{ readonly content: string; readonly evidence: string }>>
+
+/** Owner-bound compaction transaction. The host uses the SAME advisory lock,
+ *  dedicated pool and lock timeout as MemoryWriteStore, and rolls back on throw.
+ *  list() reads fresh rows including all provenance inside that transaction. */
+export interface MemoryCompactionTx {
+  list(): Promise<readonly MemoryCompactionRow[]>
+  insert(row: MemoryCompactionRow): Promise<void>
+  /** Repoint ALL sources, including superseded ones, before deleting members.
+   *  Return the number moved; an incomplete move rolls back the whole merge. */
+  moveSources(memberIds: readonly string[], mergedId: string): Promise<number>
+  /** Delete owner-scoped rows, cascading sources only for expiry/eviction.
+   *  During a merge sources have already moved. Return rows actually deleted. */
+  delete(ids: readonly string[]): Promise<number>
+}
+
+export interface MemoryCompactionStore {
+  transaction<R>(fn: (tx: MemoryCompactionTx) => Promise<R>): Promise<R>
 }
 
 /** The nearest ACTIVE memory of the owner to a candidate, same tier and same
@@ -2201,6 +2075,10 @@ export interface MemoryWriteTx {
   read(id: string): Promise<{ kind: MemoryKind; content: string } | null>
   /** Rows the owner has, all tiers (the compaction threshold's input). */
   count(): Promise<number>
+  /** Optional M3 host capability, under this transaction's owner lock. Evict
+   *  at most n oldest episodic rows (last_seen_at, id), never another kind.
+   *  Absent capability: at the hard cap an insertion is refused. */
+  evictOldestEpisodes?(n: number): Promise<void>
 }
 
 /**
@@ -2500,9 +2378,7 @@ export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverab
   // retriever is best-effort: a backend failure yields empty matches and the
   // compactExecution answers from whatever else is in context — never fatal.
   retriever: 'recoverable',
-  // typedDecision never throws and always leaves a verdict (`policy.fallback`,
-  // REQUIRED), so a failed decision is the consumer's abstain, not a hole in
-  // the turn — the consumer that cannot proceed on its fallback says so itself.
+  // Failed decisions carry a null verdict and a recorded error.
   typedDecision: 'recoverable',
   // memoryRecall NEVER stops what follows it (#419): every failure ends in
   // `memories = []` and a return. Memory is opportunistic; the turn is not.
@@ -2510,7 +2386,7 @@ export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverab
   // decisionRouter has router's failure shape: a failed decision clears
   // `data.route` and `routes()` would throw on it, so it stops the turn where
   // it happened (parity with `router`; #418 D10). `errorSeverity: 'recoverable'`
-  // turns that into "continue on `policy.fallback`".
+  // permits the consumer to handle a missing route.
   decisionRouter: 'irrecoverable',
   // ---------------------------------------------------------------------------
   // The FIVE best-effort types were unlisted until #273 D-d, and therefore

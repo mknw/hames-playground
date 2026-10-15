@@ -103,10 +103,6 @@ beforeAll(async () => {
     action: { reasoning: 'r', tool_name: 'search', tool_args: '{}' },
     result: 'rows',
   }
-  const options = [
-    { letter: 'A', description: 'Use tools' },
-    { letter: 'B', description: 'Just answer' },
-  ]
   renderers = {
     ExtractMemory: () =>
       rq('ExtractMemory')(
@@ -127,8 +123,6 @@ beforeAll(async () => {
         ],
         via,
       ),
-    Decide: () => rq('Decide')('state', 'Which route?', options, via),
-    DecideVerbalized: () => rq('DecideVerbalized')('state', 'Which route?', options, via),
     Router: () => rq('Router')('m', [{ name: 'neo4j', description: 'd' }], [], null, via),
     // Ten positional parameters, then the options bag. Counting matters more
     // than it looks: an extra `null` pushes `via` past the options slot, the
@@ -156,9 +150,9 @@ beforeAll(async () => {
 })
 
 describe('the fake recognises every BAML function', () => {
-  it('knows all seventeen functions including memory and decisions', () => {
-    expect(declared).toHaveLength(17)
-    for (const name of ['Decide', 'DecideVerbalized', 'ExtractMemory', 'CompactMemories']) {
+  it('knows all fifteen functions including memory', () => {
+    expect(declared).toHaveLength(15)
+    for (const name of ['ExtractMemory', 'CompactMemories']) {
       expect(declared).toContain(name)
       expect(ALL_BAML_FUNCTIONS).toContain(name)
     }
@@ -168,44 +162,12 @@ describe('the fake recognises every BAML function', () => {
     const { b } = await import('@hames-ai/harness-baml/baml_client')
     const options = (
       b as unknown as {
-        bamlOptions: NonNullable<Parameters<typeof b.request.DecideVerbalized>[3]>
+        bamlOptions: NonNullable<Parameters<typeof b.request.GenerateConversationTitle>[1]>
       }
     ).bamlOptions
-    // This client EXISTS in BAML, but the fake registry has never seen it.
-    // A made-up name would throw even without the guard, proving nothing.
     await expect(
-      b.request.DecideVerbalized(
-        'state',
-        'Which route?',
-        [
-          { letter: 'A', description: 'Take' },
-          { letter: 'B', description: 'Skip' },
-        ],
-        { ...options, client: 'AnthropicHaiku45' },
-      ),
+      b.request.GenerateConversationTitle('state', { ...options, client: 'AnthropicHaiku45' }),
     ).rejects.toThrow('e2e hermetic routing refused client AnthropicHaiku45')
-  })
-
-  it('admits the native decision chain only with its registered fake leaves', async () => {
-    const app = await bootApp()
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
-    const request = await b.request.DecideVerbalized(
-      's',
-      'q',
-      [
-        { letter: 'A', description: 'a' },
-        { letter: 'B', description: 'b' },
-      ],
-      {
-        ...(
-          b as unknown as {
-            bamlOptions: NonNullable<Parameters<typeof b.request.DecideVerbalized>[3]>
-          }
-        ).bamlOptions,
-        client: 'DecideAnthropic',
-      },
-    )
-    expect(request.url).toBe(`${app.fakeLlm.baseUrl}/chat/completions`)
   })
 
   it('covers every function the classifier can name', () => {
@@ -438,7 +400,6 @@ describe.runIf(IS_HERMETIC)('hermetic transport backstop', () => {
     )
   })
   it.each([
-    ['LocalQwenSmallDecide', 'SMALL_LLM_BASE_URL'],
     ['LocalQwenSmall', 'SMALL_LLM_BASE_URL'],
     ['VerdaQwen', 'VERDA_INFERENCE_ENDPOINT'],
   ])('refuses %s when its process endpoint differs from the fake', async (client, variable) => {
@@ -448,19 +409,11 @@ describe.runIf(IS_HERMETIC)('hermetic transport backstop', () => {
     try {
       const options = (
         b as unknown as {
-          bamlOptions: NonNullable<Parameters<typeof b.request.Decide>[3]>
+          bamlOptions: NonNullable<Parameters<typeof b.request.GenerateConversationTitle>[1]>
         }
       ).bamlOptions
       await expect(
-        b.request.Decide(
-          's',
-          'q',
-          [
-            { letter: 'A', description: 'a' },
-            { letter: 'B', description: 'b' },
-          ],
-          { ...options, client },
-        ),
+        b.request.GenerateConversationTitle('s', { ...options, client }),
       ).rejects.toThrow(`e2e hermetic routing refused client ${client}`)
     } finally {
       if (original === undefined) delete process.env[variable]

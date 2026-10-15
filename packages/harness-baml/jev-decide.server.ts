@@ -1,36 +1,6 @@
-/**
- * Jev decide transport — Server Only (#418, slice T4)
- *
- * The Anthropic tier's `decide` client: TypeSafe's Jev, reached directly at
- * `POST https://api.typesafe.ai/v1/systemone` (`jev-1.13.0`). OpenRouter's
- * Decisions API remains an explicitly configured fallback.
- * It is a REST adapter and not a BAML leaf, because that endpoint is not
- * chat-completions and no BAML client can speak it — which is also why it has
- * no collector: it builds its own `LLMCallRecord` and reports through
- * `notifyLlmUsage`.
- *
- * ONE request carries every field of a decision set, each as its own typed
- * choice, score or noul question; each answer becomes a closed distribution.
- * No text is generated, so there is no output cap to hit.
- *
- * THREE RULES, each pinned:
- *
- *  - THE TIER LOCK (`jev-tier-lock`). Jev is a PUBLIC provider and may never
- *    take a call made under the private tier. `createDecideAdapter` refuses
- *    before it gets here; this module refuses again, because a posture
- *    invariant must not rest on one caller remembering to check.
- *  - FAIL CLOSED (`jev-fallback`). A connection error, a non-2xx or a
- *    malformed answer throws an `LLMCallError`; `decide()` turns that into an
- *    abstain with the policy's fallback. Nothing is retried elsewhere — no
- *    other provider, no local 4B.
- *  - PRICE IS WHAT THE PROVIDER REPORTED (`jev-cost-eur`). `usage.cost` is USD
- *    when present. TypeSafe reports token counts without a cost: keep that
- *    unknown under this transport's provider-cost accounting. The reported
- *    USD converts once at the static `EUR_PER_USD`, like every other client.
- *
- * TypeSafe offers enterprise ZDR by agreement, not by request flag. No-training
- * is a separate commitment; default retention is not zero. See SD-10 in
- * docs/data-privacy/plan.md for the processor and retention terms.
+/** Systemone transport — server only. One request carries every typed question.
+ * The resolved client selects the tier's URL and key. No cross-provider retry.
+ * Public calls use reported cost; private calls use measured metered-box time.
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { notifyLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
@@ -52,6 +22,7 @@ import {
   activeCostRates,
   activeInferenceTier,
   limitsFor,
+  resolveClientForRole,
   onExplicitAnthropicTier,
 } from './clients.server'
 
@@ -59,6 +30,7 @@ assertServerOnImport()
 
 /** The BAML-less client the Anthropic tier's `decide` role resolves to. */
 export const JEV_CLIENT_NAME = 'JevDecide'
+export const PRIVATE_SYSTEMONE_CLIENT_NAME = 'PrivateSystemOne'
 
 export const JEV_MODEL = 'typesafe/jev-1.13'
 export const TYPESAFE_JEV_MODEL = 'jev-1.13.0'
@@ -69,11 +41,11 @@ export const JEV_DEFAULT_URL = 'https://api.typesafe.ai/v1/systemone'
 /** Owner gate (#545 D): set true in its own PR once the account's ZDR terms are confirmed. */
 const TYPESAFE_DEFAULT_CONFIRMED = false
 
-/** The endpoint the transport uses: the configured URL, else the gated default ('' = none). Shared with the calibration fingerprint. */
+/** The endpoint the transport uses: the configured URL, else the gated default ('' = none).  */
 export const configuredDecisionsUrl = (): string =>
   process.env.JEV_DECISIONS_URL || (TYPESAFE_DEFAULT_CONFIRMED ? JEV_DEFAULT_URL : '')
 
-/** The model id a request to `hostname` carries; the transport and the calibration fingerprint share it. */
+/** The model id a request to `hostname` carries;  */
 export const jevModelFor = (hostname: string): string =>
   hostname === 'api.typesafe.ai' ? TYPESAFE_JEV_MODEL : JEV_MODEL
 
@@ -92,12 +64,10 @@ export const JEV_KEY_ENV = 'JEV_DECISIONS_API_KEY'
 const JEV_TIMEOUT_MS = 30_000
 
 /** How far a field's probabilities may sit from summing to 1 before the answer
- *  is refused (rounding is absorbed by the normalising division; a missing
- *  label or an out-of-range value is not rounding). */
+ *  is refused. Accepted probabilities pass through unchanged. */
 const JEV_MASS_TOLERANCE = 0.01
 
 const JEV_DECISION_TYPES = Object.freeze(['choice', 'score', 'noul'] as const)
-const JEV_LOCKED_TYPES = Object.freeze(['choice'] as const)
 
 interface JevAnswer {
   readonly type?: unknown
@@ -147,43 +117,25 @@ export function parseDecisionsUrl(raw: string): URL | string {
 const isOpenRouterHost = (host: string) =>
   host === 'openrouter.ai' || host.endsWith('.openrouter.ai')
 
-function jevFailure(
-  message: string,
-  variables: Record<string, unknown>,
-  startTime: number,
-  extra?: Partial<LLMCallRecord>,
-  cause?: unknown,
-): LLMCallError {
-  return new LLMCallError(
-    message,
-    {
-      functionName: 'Decide',
-      variables,
-      clientName: JEV_CLIENT_NAME,
-      durationMs: Date.now() - startTime,
-      // Jev generates no text: there is no cap to have hit.
-      hitOutputCap: false,
-      ...extra,
-    },
-    cause,
-  )
-}
-
 /** Step accounting for one response. `costEur` is the provider-reported USD
  *  converted at the static rate; absent when the provider reported none, which
  *  renders as unknown rather than free. */
 function metricsFor(
   usage: { input_tokens: number; output_tokens: number; cost?: number } | undefined,
+  clientName: string,
+  durationMs: number,
 ): EventMetrics | undefined {
-  if (!usage) return undefined
+  if (!usage && clientName !== PRIVATE_SYSTEMONE_CLIENT_NAME) return undefined
   const tokens = {
-    inputUncachedTokens: usage.input_tokens,
+    inputUncachedTokens: usage?.input_tokens ?? 0,
     inputCacheReadTokens: 0,
     inputCacheWriteTokens: 0,
-    outputTokens: usage.output_tokens,
+    outputTokens: usage?.output_tokens ?? 0,
   }
-  const est = activeCostPricing().estimate(tokens, JEV_CLIENT_NAME, {
-    providerCostUsd: usage.cost,
+  const est = activeCostPricing().estimate(tokens, clientName, {
+    durationMs,
+    eurPerHour: activeCostPricing().timePricedClients?.[clientName]?.(),
+    providerCostUsd: usage?.cost,
     eurPerUsd: activeCostRates().eurPerUsd(),
   })
   return {
@@ -209,21 +161,44 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     const { spec, state } = input
     const names = Object.keys(spec.fields) as Array<keyof S & string>
     const variables: Record<string, unknown> = { state, key: spec.key }
-
-    // THE TIER LOCK — before any request, and without reading the key.
-    if (activeInferenceTier() === 'verda') {
-      throw jevFailure(
-        'Refusing the Jev decide transport under the private inference tier: Jev is a public ' +
-          'provider, and nothing was sent to any provider.',
-        variables,
-        startTime,
+    const clientName = resolveClientForRole('decide')
+    const privateTier = activeInferenceTier() === 'verda'
+    const privateClient = clientName === PRIVATE_SYSTEMONE_CLIENT_NAME
+    let requested = false
+    function jevFailure(
+      message: string,
+      variables: Record<string, unknown>,
+      startTime: number,
+      extra?: Partial<LLMCallRecord>,
+      cause?: unknown,
+    ): LLMCallError {
+      const durationMs = Date.now() - startTime
+      const metrics =
+        privateClient && requested ? metricsFor(undefined, clientName, durationMs) : undefined
+      if (metrics) notifyLlmUsage({ functionName: 'Decide', clientName, durationMs, metrics })
+      return new LLMCallError(
+        message,
+        {
+          functionName: 'Decide',
+          variables,
+          clientName,
+          durationMs,
+          ...(metrics && { metrics }),
+          // Jev generates no text: there is no cap to have hit.
+          hitOutputCap: false,
+          ...extra,
+        },
+        cause,
       )
     }
 
-    // Unknown/future tiers must not inherit a public route from the default.
-    if (!onExplicitAnthropicTier()) {
+    // A private run must resolve to its own client before any URL/key is read.
+    if (
+      (privateTier && !privateClient) ||
+      (!privateTier && (!onExplicitAnthropicTier() || clientName !== JEV_CLIENT_NAME))
+    ) {
       throw jevFailure(
-        'Refusing the Jev decide transport outside the Anthropic inference tier; no request was made.',
+        'Refusing systemone client for this inference tier; no request was made.',
         variables,
         startTime,
       )
@@ -281,10 +256,13 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     const questions = Object.fromEntries(names.map((n) => [n, questionFor(spec.fields[n])]))
 
     // O4 — before the key is read: the bearer token goes only over https: or loopback.
-    const configured = configuredDecisionsUrl()
+    const urlEnv = privateClient ? 'SMALL_LLM_DECISIONS_URL' : 'JEV_DECISIONS_URL'
+    const configured = privateClient
+      ? process.env.SMALL_LLM_DECISIONS_URL
+      : configuredDecisionsUrl()
     if (!configured) {
       throw jevFailure(
-        'The Jev decide transport needs JEV_DECISIONS_URL (there is no default endpoint); no request was made.',
+        `The systemone transport needs ${urlEnv} (there is no default endpoint); no request was made.`,
         variables,
         startTime,
       )
@@ -292,16 +270,34 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     const endpoint = parseDecisionsUrl(configured)
     if (typeof endpoint === 'string') {
       throw jevFailure(
-        `Refusing JEV_DECISIONS_URL: ${endpoint}; no request was made.`,
+        `Refusing ${urlEnv}: ${endpoint}; no request was made.`,
         variables,
         startTime,
       )
     }
 
+    if (privateClient && endpoint.pathname !== '/v1/systemone') {
+      throw jevFailure(
+        'SMALL_LLM_DECISIONS_URL must end in /v1/systemone; no request was made.',
+        variables,
+        startTime,
+      )
+    }
+    if (
+      privateClient &&
+      (isOpenRouterHost(endpoint.hostname) || endpoint.hostname === 'api.typesafe.ai')
+    ) {
+      throw jevFailure(
+        'Refusing SMALL_LLM_DECISIONS_URL: it names a public systemone provider; no request was made.',
+        variables,
+        startTime,
+      )
+    }
     const openRouter = isOpenRouterHost(endpoint.hostname)
     const typeSafe = endpoint.hostname === 'api.typesafe.ai'
     const provider = openRouter ? 'openrouter' : typeSafe ? 'typesafe' : undefined
     const body = {
+      // The private shim ignores this compatibility id and serves its pinned model (#567).
       model: jevModelFor(endpoint.hostname),
       state,
       questions,
@@ -327,10 +323,11 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     }
 
     // O2 — its own key; the embedding provider's is never read here.
-    const apiKey = process.env[JEV_KEY_ENV]
+    const keyEnv = privateClient ? 'SMALL_LLM_API_KEY' : JEV_KEY_ENV
+    const apiKey = process.env[keyEnv]
     if (!apiKey) {
       throw jevFailure(
-        `The Jev decide transport needs ${JEV_KEY_ENV}; no request was made.`,
+        `The Jev decide transport needs ${keyEnv}; no request was made.`,
         variables,
         startTime,
         { rawInput, provider },
@@ -340,6 +337,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     let status: number
     let text: string
     try {
+      requested = true
       const res = await (options.fetch ?? fetch)(endpoint.href, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
@@ -385,20 +383,22 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     const answers = isRecord(json) && isRecord(json.answers) ? json.answers : undefined
     const u = isRecord(json) && isRecord(json.usage) ? json.usage : undefined
     const usage =
-      u && typeof u.input_tokens === 'number' && typeof u.output_tokens === 'number'
+      u &&
+      typeof u.input_tokens === 'number' &&
+      (privateClient || typeof u.output_tokens === 'number')
         ? {
             input_tokens: u.input_tokens,
-            output_tokens: u.output_tokens,
+            output_tokens: typeof u.output_tokens === 'number' ? u.output_tokens : 0,
             ...(typeof u.cost === 'number' && Number.isFinite(u.cost) && u.cost >= 0
               ? { cost: u.cost }
               : {}),
           }
         : undefined
-    const metrics = metricsFor(usage)
     const durationMs = Date.now() - startTime
+    const metrics = metricsFor(usage, clientName, durationMs)
     // The request WAS answered and billed: account it even when the answer then
     // fails to parse, the same rule the BAML failure path follows.
-    notifyLlmUsage({ functionName: 'Decide', clientName: JEV_CLIENT_NAME, metrics, durationMs })
+    notifyLlmUsage({ functionName: 'Decide', clientName, metrics, durationMs })
 
     const record: LLMCallRecord = {
       functionName: 'Decide',
@@ -408,8 +408,8 @@ export function createJevTransport(options: JevTransportOptions = {}): {
       parsedOutput: answers,
       ...(usage && {
         usage: {
-          inputTokens: usage.input_tokens,
-          outputTokens: usage.output_tokens,
+          inputTokens: usage?.input_tokens ?? 0,
+          outputTokens: usage?.output_tokens ?? 0,
           cachedInputTokens: 0,
           totalTokens: usage.input_tokens + usage.output_tokens,
         },
@@ -417,7 +417,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
       ...(metrics && { metrics }),
       durationMs,
       provider,
-      clientName: JEV_CLIENT_NAME,
+      clientName,
       hitOutputCap: false,
     }
 
@@ -442,8 +442,8 @@ export function createJevTransport(options: JevTransportOptions = {}): {
         fields[n] = {
           probs: { true: a.noul, false: 1 - a.noul },
           method: 'jev',
-          // Noul has no confidence field. Its finite, bounded probability is
-          // Jev's calibration claim; S5 measures it rather than inventing a fit.
+          // Native noul probabilities are marked calibrated without a confidence field;
+          // choice and score require that field for the marker.
           calibrated: true,
           llmCall: record,
         } as DecideResult<DecisionLabelsFor<S[typeof n]>>
@@ -476,7 +476,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
         sum += p
       }
       // Fail CLOSED: an answer that omits a label or whose mass is not ~1 must
-      // not be renormalised into certainty — that would clear every cut.
+      // not be renormalised into certainty: preserve the returned probabilities.
       if (Math.abs(sum - 1) > JEV_MASS_TOLERANCE) {
         throw new LLMCallError(
           `Jev's probabilities for field "${n}" sum to ${sum} over its labels, not 1.`,
@@ -484,7 +484,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
         )
       }
       const probs = {} as Record<string, number>
-      for (const l of labels) probs[l.id] = raw[l.id] / sum
+      for (const l of labels) probs[l.id] = raw[l.id]
       if (score) {
         const expected = labels.reduce((s, l, i) => s + i * probs[l.id], 0)
         if (
@@ -499,9 +499,9 @@ export function createJevTransport(options: JevTransportOptions = {}): {
       }
       fields[n] = {
         probs,
+        ...(typeof a?.confidence === 'number' && { confidence: a.confidence }),
         method: 'jev',
         // The response carries a confidence value: Jev's own calibration claim.
-        // T8 verifies it for our questions (ECE).
         calibrated: typeof (a as JevAnswer).confidence === 'number',
         llmCall: record,
       } as DecideResult<DecisionLabelsFor<S[typeof n]>>
@@ -521,7 +521,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
   }
 
   const supported = {
-    get: () => (onExplicitAnthropicTier() ? JEV_DECISION_TYPES : JEV_LOCKED_TYPES),
+    get: () => JEV_DECISION_TYPES,
   }
   Object.defineProperty(decide, 'supportedTypes', supported)
   Object.defineProperty(decideAll, 'supportedTypes', supported)

@@ -74,8 +74,8 @@
  *      suite's `screen-on-the-tier` scenario, which grades the same two
  *      properties including on a page that tells the screen to stay quiet.
  *
- *   7. `smokeDecide()` — actual serving client, logprob method, normalized
- *      decision distribution and coverage on the small model.
+ *   7. `smokeDecide()` — actual serving client and a systemone decision
+ *      distribution from the private endpoint.
  *
  * Each step asserts its actual private-tier serving client, including the 4B
  * decide client in step 7. Being told the
@@ -578,7 +578,7 @@ async function screen(): Promise<void> {
 
 /** Actual serving-client evidence, not the USE_VERDA_INFERENCE flag. */
 export async function smokeDecide(): Promise<void> {
-  console.log('\n▶ 7/7 decide — private-tier first-token distribution (max_tokens 2)')
+  console.log('\n▶ 7/7 decide — private-tier systemone decision')
   const result = await createDecideAdapter()({
     spec: {
       key: 'smoke.decide',
@@ -591,7 +591,7 @@ export async function smokeDecide(): Promise<void> {
     state: 'The number is 4.',
   })
   const expected = VERDA_CLIENT_BY_ROLE.decide
-  if (result.llmCall?.clientName !== expected || result.method !== 'logprob') {
+  if (result.llmCall?.clientName !== expected || result.method !== 'jev') {
     throw new Error(
       `Decide: served by ${result.llmCall?.clientName ?? 'an unreported client'}, expected ${expected}`,
     )
@@ -600,14 +600,11 @@ export async function smokeDecide(): Promise<void> {
   if (
     probabilities.length !== 2 ||
     probabilities.some((p) => !Number.isFinite(p) || p < 0 || p > 1) ||
-    Math.abs(probabilities.reduce((a, b) => a + b, 0) - 1) > 1e-6 ||
-    !(result.coverage! > 0)
+    Math.abs(probabilities.reduce((a, b) => a + b, 0) - 1) > 0.01
   ) {
-    throw new Error('Decide returned no usable normalized first-token distribution')
+    throw new Error('Decide returned no usable systemone distribution')
   }
-  console.log(
-    `   served by ${result.llmCall?.clientName} · probs=${JSON.stringify(result.probs)} · coverage=${result.coverage}`,
-  )
+  console.log(`   served by ${result.llmCall?.clientName} · probs=${JSON.stringify(result.probs)}`)
 }
 
 async function main(): Promise<void> {

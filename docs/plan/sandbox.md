@@ -2,9 +2,10 @@
 
 > **Status: core shipped; forward-looking sections remain the plan.** `withSandbox` + DockerBackend shipped in PR #81 (#79); durable `/work` ⇄ DataStash workspaces in PR #95 (#89); lifecycle hardening (startup reaper, health-check on reuse, Shell-hydrate) in PRs #103/#104 (#97); rootfs flavours (`image-processing`/`data`/`office`) + the router-over-flavours recipe in PR #117 (#78). The durable API lives in [`packages/harness-patterns/SPEC.md`](../../packages/harness-patterns/SPEC.md); operational debugging in [`../sandbox/README.md`](../sandbox/README.md); flavours in [`../sandbox-flavours.md`](../sandbox-flavours.md). Still plan-only: **Swarm** (parallel strategies), **Firecracker substrate** (#78), **ephemeral one-shot mode**, timer-driven sweep + LRU cap (#82), the "Deferred / v1+" section — and **multi-user tenant isolation** ([below](#multi-user-tenant-isolation-348--the-network-twin); design stage — implementation gated on the owner's approval).
 
-Reference design for `withSandbox` — a harness wrapper that attaches a stateful, isolated microVM to a controller pattern, exposing filesystem / shell / Python tools to the actor via MCP servers running *inside* the VM. See [#79](https://github.com/mknw/hames-playground/issues/79) for the implementation story and [#78](https://github.com/mknw/hames-playground/issues/78) for the capability vision (Polars over user-uploaded files, document extraction, NER pipelines, …).
+Reference design for `withSandbox` — a harness wrapper that attaches a stateful, isolated microVM to a controller pattern, exposing filesystem / shell / Python tools to the actor via MCP servers running _inside_ the VM. See [#79](https://github.com/mknw/hames-playground/issues/79) for the implementation story and [#78](https://github.com/mknw/hames-playground/issues/78) for the capability vision (Polars over user-uploaded files, document extraction, NER pipelines, …).
 
 This document is the infrastructure design — wrapper API, attachment model, MCP-in-VM architecture, backend interface, substrate options, lifecycle, failure modes. It does **not** cover:
+
 - Why we want this (see #78)
 - Rootfs flavor catalog beyond the v0 minimum (see #78 → "Rootfs flavors"; the first `image-processing` + `data` flavours are specced in [`sandbox-flavours.md`](../sandbox-flavours.md))
 - `backgroundSession` (a v2 primitive, orthogonal to `withSandbox`; outlined under "Deferred / v1+")
@@ -29,7 +30,7 @@ withSandbox({
 )
 ```
 
-The wrapped pattern's controller (e.g., `actorCritic`, `simpleLoop`) gains the sandbox's tools for the duration of the wrapper. The actor calls them like any other MCP tool. No new pattern primitive — but the two tool-calling controllers do need a one-time change to *dispatch* to the sandbox; see [How tools reach the controller](#how-tools-reach-the-controller).
+The wrapped pattern's controller (e.g., `actorCritic`, `simpleLoop`) gains the sandbox's tools for the duration of the wrapper. The actor calls them like any other MCP tool. No new pattern primitive — but the two tool-calling controllers do need a one-time change to _dispatch_ to the sandbox; see [How tools reach the controller](#how-tools-reach-the-controller).
 
 **Canonical use case:** in-chat data analysis. Agent is asked to operate on a spreadsheet or document, runs Python inside the sandbox, answers in chat. Same shape for format conversion, extraction, profiling — the conversation changes, the wrapper doesn't.
 
@@ -46,25 +47,25 @@ It composes with `parallel` / `parallelMap` too, with semantics that depend on *
 
 ## Attachment model
 
-A sandbox is *attached* to a wrapper invocation. The attachment is the unit of identity — what decides reuse vs. fresh.
+A sandbox is _attached_ to a wrapper invocation. The attachment is the unit of identity — what decides reuse vs. fresh.
 
-| Form | Behavior |
-|------|----------|
-| `withSandbox()` | **Auto.** Reuse if a sandbox is already attached to this wrapper instance; otherwise allocate fresh. |
-| `withSandbox({ id: 'foo' })` | **ID-addressable.** Reuse the sandbox attached to ID `foo`; otherwise allocate fresh and attach. The ID persists across pattern invocations and is exposable to UI / observability. |
-| `withSandbox({ fresh: true })` | **Force fresh.** Allocate a new VM regardless of any existing attachment. Used when prior state would interfere. |
+| Form                           | Behavior                                                                                                                                                                            |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `withSandbox()`                | **Auto.** Reuse if a sandbox is already attached to this wrapper instance; otherwise allocate fresh.                                                                                |
+| `withSandbox({ id: 'foo' })`   | **ID-addressable.** Reuse the sandbox attached to ID `foo`; otherwise allocate fresh and attach. The ID persists across pattern invocations and is exposable to UI / observability. |
+| `withSandbox({ fresh: true })` | **Force fresh.** Allocate a new VM regardless of any existing attachment. Used when prior state would interfere.                                                                    |
 
 Auto is the default. The wrapper's runtime context — re-entries within a session, sibling invocations inside a `chain` — determines what "this wrapper instance" means. See "Lifecycle" below.
 
-**Vocabulary:** we use *attachment* rather than *scope* because `Scope` is already a concept on UnifiedContext / View. The two are unrelated.
+**Vocabulary:** we use _attachment_ rather than _scope_ because `Scope` is already a concept on UnifiedContext / View. The two are unrelated.
 
-**Workspace persistence vs. attachment lifetime.** The attachment keeps a VM *live* between turns, so `/work` survives turn-to-turn while the container exists — but a container is disposable (idle eviction, warm-pool `reset`, process restart all destroy it). For state that must outlive the container, add `syncWorkspace: true` to an `{ id }` sandbox: the session's stored documents are restored into `/work/in` on first boot and `/work/out` deliverables are promoted back to the DataStash on each turn's exit. See [Durable workspaces](#durable-workspaces-89).
+**Workspace persistence vs. attachment lifetime.** The attachment keeps a VM _live_ between turns, so `/work` survives turn-to-turn while the container exists — but a container is disposable (idle eviction, warm-pool `reset`, process restart all destroy it). For state that must outlive the container, add `syncWorkspace: true` to an `{ id }` sandbox: the session's stored documents are restored into `/work/in` on first boot and `/work/out` deliverables are promoted back to the DataStash on each turn's exit. See [Durable workspaces](#durable-workspaces-89).
 
 ---
 
 ## Architecture: MCP-in-VM
 
-Each sandbox VM runs MCP servers *inside it*. The harness connects to those servers over a tunneled socket and adds them to the wrapped controller's tool array. The host-level MCP gateway is uninvolved.
+Each sandbox VM runs MCP servers _inside it_. The harness connects to those servers over a tunneled socket and adds them to the wrapped controller's tool array. The host-level MCP gateway is uninvolved.
 
 ```
 HOST  (Linux + KVM in production; macOS via Docker fallback)
@@ -97,9 +98,9 @@ HOST  (Linux + KVM in production; macOS via Docker fallback)
 
 **Alternatives explicitly considered and rejected:**
 
-- *Session-aware host MCP server* — gateway routes tool calls by `sandbox_id`. Rejected: cross-session blast radius (a single privileged process would hold the union of all sandbox filesystems), MCP wasn't designed for session-aware routing, every server would have to opt in.
-- *Per-session host MCP containers* — gateway spawns a filesystem-MCP container per session, mounting that session's sandbox. Rejected: container churn, doubled deployable count, gains nothing over MCP-in-VM.
-- *Harness-native (non-MCP) sandbox tools* — bypass MCP entirely; the harness exposes `sandbox.bash`, `sandbox.read` etc. as native tools talking directly to the VM. Rejected for v0: throws away the MCP abstraction `tools.server.ts` already understands. Worth revisiting only if MCP-in-VM hits real friction (e.g., MCP server cold-start dominating VM boot).
+- _Session-aware host MCP server_ — gateway routes tool calls by `sandbox_id`. Rejected: cross-session blast radius (a single privileged process would hold the union of all sandbox filesystems), MCP wasn't designed for session-aware routing, every server would have to opt in.
+- _Per-session host MCP containers_ — gateway spawns a filesystem-MCP container per session, mounting that session's sandbox. Rejected: container churn, doubled deployable count, gains nothing over MCP-in-VM.
+- _Harness-native (non-MCP) sandbox tools_ — bypass MCP entirely; the harness exposes `sandbox.bash`, `sandbox.read` etc. as native tools talking directly to the VM. Rejected for v0: throws away the MCP abstraction `tools.server.ts` already understands. Worth revisiting only if MCP-in-VM hits real friction (e.g., MCP server cold-start dominating VM boot).
 
 ---
 
@@ -112,13 +113,13 @@ Today, in both tool-calling controllers (`simpleLoop`, `actorCritic`):
 - the **allowlist** is a construction-time arg (`tools: string[]`), optionally extended at runtime by `dynamicToolAllowlist?: () => Promise<string[]>` and `dynamicToolPattern?: RegExp`;
 - **dispatch** is a global singleton — both call `callTool(name, args)` imported from `mcp-client.server`, which always talks to the one host MCP gateway client. There is no per-call transport parameter.
 
-So a pure outer wrapper **cannot** transparently make the inner loop call in-VM tools the way `withReferences` injects `priorResults` via `scope.data`. Even if the actor *names* a sandbox tool, dispatch would route it to the gateway, not the VM. Tools need both a routing target and an allowlist entry, neither of which a data-only channel provides.
+So a pure outer wrapper **cannot** transparently make the inner loop call in-VM tools the way `withReferences` injects `priorResults` via `scope.data`. Even if the actor _names_ a sandbox tool, dispatch would route it to the gateway, not the VM. Tools need both a routing target and an allowlist entry, neither of which a data-only channel provides.
 
 **Chosen mechanism: request-scoped dispatch via AsyncLocalStorage.** The codebase already uses ALS request-scoping (`getRequestSettings()`). `withSandbox` acquires the sandbox and runs the wrapped pattern inside an ALS scope carrying the handle:
 
 ```typescript
-const sandbox = await acquireOrAttach(cfg)
-return sandboxScope.run(sandbox, () => inner.fn(scope, view))
+const sandbox = await acquireOrAttach(cfg);
+return sandboxScope.run(sandbox, () => inner.fn(scope, view));
 ```
 
 The two controllers, the `callTool` dispatch layer, and the BAML adapters are changed **once** to consult that scope:
@@ -145,20 +146,20 @@ Single backend trait; substrate choice is operational config, not application co
 
 ```typescript
 interface ComputeBackend {
-  boot(rootfs: RootfsId, runtime: RuntimeConfig): Promise<VMHandle>
-  destroy(vm: VMHandle): Promise<void>
-  reset(vm: VMHandle): Promise<void>                // warm-pool recycle
-  connectMcp(vm: VMHandle): Promise<McpTransport>   // tunneled socket to in-VM MCP servers
-  health(vm: VMHandle): Promise<HealthStatus>
+  boot(rootfs: RootfsId, runtime: RuntimeConfig): Promise<VMHandle>;
+  destroy(vm: VMHandle): Promise<void>;
+  reset(vm: VMHandle): Promise<void>; // warm-pool recycle
+  connectMcp(vm: VMHandle): Promise<McpTransport>; // tunneled socket to in-VM MCP servers
+  health(vm: VMHandle): Promise<HealthStatus>;
 }
 ```
 
-Notably *not* in this interface (vs. an earlier sketch): explicit `exec()`, `mount()`, `captureOutDir()`. Those existed for one-shot script execution; in the stateful-sandbox model, every agent action is an MCP tool call routed through `connectMcp`'s transport.
+Notably _not_ in this interface (vs. an earlier sketch): explicit `exec()`, `mount()`, `captureOutDir()`. Those existed for one-shot script execution; in the stateful-sandbox model, every agent action is an MCP tool call routed through `connectMcp`'s transport.
 
-| Backend | Substrate | Boot | Reset | Notes |
-|---------|-----------|------|-------|-------|
-| `DockerBackend` | container + bind mount | 1–3s | fresh container | v0 dev + initial prod. Works on macOS dev hosts. |
-| `FirecrackerBackend` | microVM + virtio-fs | ~125ms | snapshot/restore | Production swap once the abstraction proves out. Linux + KVM only. |
+| Backend              | Substrate              | Boot   | Reset            | Notes                                                              |
+| -------------------- | ---------------------- | ------ | ---------------- | ------------------------------------------------------------------ |
+| `DockerBackend`      | container + bind mount | 1–3s   | fresh container  | v0 dev + initial prod. Works on macOS dev hosts.                   |
+| `FirecrackerBackend` | microVM + virtio-fs    | ~125ms | snapshot/restore | Production swap once the abstraction proves out. Linux + KVM only. |
 
 The harness drives the backend directly from `@hames-ai/sandbox` (`packages/sandbox/`). There is no separate pool-manager process.
 
@@ -168,12 +169,12 @@ The harness drives the backend directly from `@hames-ai/sandbox` (`packages/sand
 
 The deployment shape was an implicit assumption in earlier framing. Captured here explicitly:
 
-| Option | Who owns the worker | Substrate | Verdict |
-|--------|---------------------|-----------|---------|
-| Local Docker (single host) | harness host | Docker engine on dev laptop or single VM | **v0 dev + bootstrap prod** |
-| Remote Azure KVM worker | us | Azure D/E/F-series VM (nested virt) running Firecracker | **target prod** |
-| Kata-on-AKS | kubelet | AKS node pool with `runtimeClass: kata-fc` | deferred |
-| Managed (E2B / Modal / Fly Machines) | vendor | their API | not chosen |
+| Option                               | Who owns the worker | Substrate                                               | Verdict                     |
+| ------------------------------------ | ------------------- | ------------------------------------------------------- | --------------------------- |
+| Local Docker (single host)           | harness host        | Docker engine on dev laptop or single VM                | **v0 dev + bootstrap prod** |
+| Remote Azure KVM worker              | us                  | Azure D/E/F-series VM (nested virt) running Firecracker | **target prod**             |
+| Kata-on-AKS                          | kubelet             | AKS node pool with `runtimeClass: kata-fc`              | deferred                    |
+| Managed (E2B / Modal / Fly Machines) | vendor              | their API                                               | not chosen                  |
 
 **Decision: local Docker for dev, remote Azure KVM worker for production.** Rationale:
 
@@ -212,14 +213,14 @@ rootfs/
 
 The wrapped controller's actor sees:
 
-| Tool | Backed by | Purpose |
-|------|-----------|---------|
-| `sandbox_read` | rust-mcp-filesystem | Read file from `/work`. |
-| `sandbox_write` | rust-mcp-filesystem | Write file in `/work`. |
-| `sandbox_edit` | rust-mcp-filesystem | Surgical edit. |
-| `sandbox_list` | rust-mcp-filesystem | List directory. |
-| `sandbox_search` | rust-mcp-filesystem | Content search. |
-| `sandbox_bash` | mcp-shell | Run a shell command (covers Python via `python -c …`). |
+| Tool             | Backed by           | Purpose                                                |
+| ---------------- | ------------------- | ------------------------------------------------------ |
+| `sandbox_read`   | rust-mcp-filesystem | Read file from `/work`.                                |
+| `sandbox_write`  | rust-mcp-filesystem | Write file in `/work`.                                 |
+| `sandbox_edit`   | rust-mcp-filesystem | Surgical edit.                                         |
+| `sandbox_list`   | rust-mcp-filesystem | List directory.                                        |
+| `sandbox_search` | rust-mcp-filesystem | Content search.                                        |
+| `sandbox_bash`   | mcp-shell           | Run a shell command (covers Python via `python -c …`). |
 
 The `sandbox_*` prefix is applied by the harness when registering the in-VM MCP server's tools with the controller, to disambiguate from any host-level filesystem tools.
 
@@ -262,7 +263,7 @@ Tools the agent does **not** see in v0:
    promoted to the DataStash, so the result survives the VM (see below).
 ```
 
-Same shape works for document extraction, format conversion, dataset profiling — the conversation changes, the wrapper doesn't. When the input file was *uploaded* (rather than written by the actor), `syncWorkspace` restores it from the DataStash into `/work/in` automatically on the next session, so the user can leave and come back to it.
+Same shape works for document extraction, format conversion, dataset profiling — the conversation changes, the wrapper doesn't. When the input file was _uploaded_ (rather than written by the actor), `syncWorkspace` restores it from the DataStash into `/work/in` automatically on the next session, so the user can leave and come back to it.
 
 ---
 
@@ -272,19 +273,19 @@ A container is disposable; the workspace shouldn't be. The 5-minute-class idle w
 
 **Workspace layout (the contract the agent is taught):**
 
-| Path | Role | Lifetime |
-|------|------|----------|
-| `/work/in` | Uploads + prior deliverables, **restored at every turn's entry** (only what is missing). | Durable (DataStash). Read-only by convention. |
-| `/work/out` | Files the agent wants kept. **Promoted to the DataStash on every turn exit.** | Durable (DataStash). |
-| `/work` (elsewhere) | Scratch. | Ephemeral — gone when the container recycles. |
+| Path                | Role                                                                                     | Lifetime                                      |
+| ------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `/work/in`          | Uploads + prior deliverables, **restored at every turn's entry** (only what is missing). | Durable (DataStash). Read-only by convention. |
+| `/work/out`         | Files the agent wants kept. **Promoted to the DataStash on every turn exit.**            | Durable (DataStash).                          |
+| `/work` (elsewhere) | Scratch.                                                                                 | Ephemeral — gone when the container recycles. |
 
 **Mechanism** (`packages/sandbox/work-artifacts.server.ts` + `work-sync.server.ts`):
 
-- **Hydrate** — at every turn's entry, diff-wise: `listDocuments(sessionId)` diffed against what `/work/in` already holds (one in-VM `find`) → write only the missing ones. A steady-state turn therefore costs a list plus a `find` and writes nothing, while a document ingested *this* turn still reaches the actor. It was gated on `Attachment.isFirstBoot` until [#206 §6.1](https://github.com/mknw/hames-playground/issues/206) — which made turn 1 work by accident of ordering and left every later turn, plus every turn after a Shell-first boot, unable to see a newly stored file. Presence, not content hash, is the diff key, so a file the agent wrote under `/work/in` is never clobbered.
+- **Hydrate** — at every turn's entry, diff-wise: `listDocuments(sessionId)` diffed against what `/work/in` already holds (one in-VM `find`) → write only the missing ones. A steady-state turn therefore costs a list plus a `find` and writes nothing, while a document ingested _this_ turn still reaches the actor. It was gated on `Attachment.isFirstBoot` until [#206 §6.1](https://github.com/mknw/hames-playground/issues/206) — which made turn 1 work by accident of ordering and left every later turn, plus every turn after a Shell-first boot, unable to see a newly stored file. Presence, not content hash, is the diff key, so a file the agent wrote under `/work/in` is never clobbered.
 - **Promote** — snapshot `/work/out` (in-VM `sha256sum`) at turn entry, diff at exit, and `storeDocument` each new/changed file. Runs in a `finally`, so deliverables are saved even if the turn throws. Deletions are ignored (promotion never removes stored docs).
 - **Binary-faithful** — text files store verbatim; everything else (xlsx, pdf, images) moves as base64 staged through a `.b64` text file (the in-VM filesystem MCP is text-only) and is stored with `encoding: 'base64'`. See [DATA_STASH.md → Storage model](../DATA_STASH.md#storage-model-redis).
 
-**Boundaries.** Only the `{ id }` path syncs; anonymous (`withSandbox({})`) and one-shot (`{ fresh: true }`) sandboxes have no session identity and are untouched. Sync requires the MCP gateway (the DataStash lives in Redis). The window in which a *live* container is reused before falling back to hydrate-from-store is the warm-cache horizon — see `idleEvictMs` in [Settings](#settings).
+**Boundaries.** Only the `{ id }` path syncs; anonymous (`withSandbox({})`) and one-shot (`{ fresh: true }`) sandboxes have no session identity and are untouched. Sync requires the MCP gateway (the DataStash lives in Redis). The window in which a _live_ container is reused before falling back to hydrate-from-store is the warm-cache horizon — see `idleEvictMs` in [Settings](#settings).
 
 ---
 
@@ -293,18 +294,20 @@ A container is disposable; the workspace shouldn't be. The 5-minute-class idle w
 A composition the wrapper enables, but which depends on primitives that don't exist yet (`parallelMap`, `judge`, and the #123 supervision gate — the removed `withApproval` predecessor):
 
 ```typescript
-superviseGate(                             // user picks the winner — #123, NOT BUILT
-  parallelMap(strategies, (strategy) =>    // N branches, one sandbox each — DOESN'T EXIST YET
+superviseGate(
+  // user picks the winner — #123, NOT BUILT
+  parallelMap(strategies, (strategy) =>
+    // N branches, one sandbox each — DOESN'T EXIST YET
     withSandbox(
-      chain(actorCritic, compactExecution)      // a full agentic loop per strategy
-    )
-  )
-)
+      chain(actorCritic, compactExecution), // a full agentic loop per strategy
+    ),
+  ),
+);
 ```
 
 Each strategy runs a full agentic loop in its own isolated sandbox — install different libs, take a different approach — and the user (or an LLM-as-judge via the untested `judge` pattern) selects the winner at the end. The user waits, by design: swarm mode trades compute for breadth.
 
-This is **not** the shape for data fan-out ("run this transform over 1000 rows"). That's a single sandbox with an in-process map (Polars / pandas), not N sandboxes. Stateful-in-`parallelMap` earns its keep only when each branch is a genuinely different *approach*, not a different *row*.
+This is **not** the shape for data fan-out ("run this transform over 1000 rows"). That's a single sandbox with an in-process map (Polars / pandas), not N sandboxes. Stateful-in-`parallelMap` earns its keep only when each branch is a genuinely different _approach_, not a different _row_.
 
 ---
 
@@ -320,7 +323,7 @@ acquire(attachment) → boot or pool-hit → wrapped pattern runs → release �
 
 **Default lifetime.** A sandbox lives for the duration of the `withSandbox` wrapper. Because the wrapper can wrap a whole subtree, `withSandbox(chain(a, b, c))` keeps one VM alive across `a`, `b`, and `c` — a shared workspace for the turn. No flag is needed for that; it's just the wrapper's own lifetime.
 
-**`persistent` across turns.** To reattach the *same* VM on a later turn (e.g., the router re-routes to the coding agent), use an explicit `id` (ID-addressable attachment) whose lifetime is the chat session. This is v0 **step 6**, not the first cut.
+**`persistent` across turns.** To reattach the _same_ VM on a later turn (e.g., the router re-routes to the coding agent), use an explicit `id` (ID-addressable attachment) whose lifetime is the chat session. This is v0 **step 6**, not the first cut.
 
 **`persistent` across restart.** Surviving a harness/browser restart needs snapshot/restore + storage. Deferred to **v2** (see Restart resilience below).
 
@@ -332,12 +335,12 @@ acquire(attachment) → boot or pool-hit → wrapped pattern runs → release �
 
 ## Warm pool
 
-Pre-booted VMs per rootfs flavor, *unclaimed*. Acquisition is O(ms) on a hit; cold boot otherwise. The difference from a stateless one-shot model: pool entries are "ready to be claimed by an attachment," not "ready to receive a script."
+Pre-booted VMs per rootfs flavor, _unclaimed_. Acquisition is O(ms) on a hit; cold boot otherwise. The difference from a stateless one-shot model: pool entries are "ready to be claimed by an attachment," not "ready to receive a script."
 
-| Substrate | Reset on release |
-|-----------|------------------|
-| Docker | destroy + boot fresh (no snapshot story; container start ~1s dominates, warm pool important) |
-| Firecracker | snapshot at first boot, restore on each acquisition (~10ms) |
+| Substrate   | Reset on release                                                                             |
+| ----------- | -------------------------------------------------------------------------------------------- |
+| Docker      | destroy + boot fresh (no snapshot story; container start ~1s dominates, warm pool important) |
+| Firecracker | snapshot at first boot, restore on each acquisition (~10ms)                                  |
 
 ---
 
@@ -347,18 +350,18 @@ Two caps prevent both global exhaustion and any single session starving the othe
 
 ```typescript
 class SandboxScheduler {
-  private readonly globalCap: number       // e.g. 16
-  private readonly perSessionCap: number   // e.g. 4
-  private readonly inflight = new Map<SessionId, Set<VMHandle>>()
-  private readonly queue: Pending[] = []
+  private readonly globalCap: number; // e.g. 16
+  private readonly perSessionCap: number; // e.g. 4
+  private readonly inflight = new Map<SessionId, Set<VMHandle>>();
+  private readonly queue: Pending[] = [];
 
   async allocate(req: AllocReq): Promise<VMHandle> {
     while (!this.canSchedule(req.sessionId)) {
-      await this.waitForSlot(req)
+      await this.waitForSlot(req);
     }
-    const vm = await this.pool.acquire(req.rootfs)
-    this.track(req.sessionId, vm)
-    return vm
+    const vm = await this.pool.acquire(req.rootfs);
+    this.track(req.sessionId, vm);
+    return vm;
   }
   // … release(), canSchedule() as before
 }
@@ -372,15 +375,15 @@ Defaults overridable via `HarnessSettings`. Compositions like `parallelMap(items
 
 Same two-axis model — whose problem × is the VM recoverable. Simpler than an earlier sketch because there's no custom RPC channel; everything surfaces as MCP `tool_result` events.
 
-| Failure | Whose problem | VM recoverable | Pattern sees |
-|---------|---------------|----------------|--------------|
-| Script bug (agent ran broken Python) | Agent | Yes — keep | `tool_result` with non-zero exit + stderr |
-| Tool timeout | Could be either | Yes — keep | `tool_result` with timeout error |
-| OOM | Agent (resource hint too low) or host | No — destroy | `sandbox_oom` error |
-| Disk full | Agent (output too big) or host | No — destroy | `sandbox_disk_full` error |
-| Egress denied | Agent (asked for blocked domain) | Yes — keep | tool error |
-| Crash before MCP servers came up | Host (rootfs broken) | No — destroy + alert | `sandbox_boot_failed` |
-| MCP transport unreachable mid-execution | Host (transport broken) | No — destroy | `sandbox_unreachable` |
+| Failure                                 | Whose problem                         | VM recoverable       | Pattern sees                              |
+| --------------------------------------- | ------------------------------------- | -------------------- | ----------------------------------------- |
+| Script bug (agent ran broken Python)    | Agent                                 | Yes — keep           | `tool_result` with non-zero exit + stderr |
+| Tool timeout                            | Could be either                       | Yes — keep           | `tool_result` with timeout error          |
+| OOM                                     | Agent (resource hint too low) or host | No — destroy         | `sandbox_oom` error                       |
+| Disk full                               | Agent (output too big) or host        | No — destroy         | `sandbox_disk_full` error                 |
+| Egress denied                           | Agent (asked for blocked domain)      | Yes — keep           | tool error                                |
+| Crash before MCP servers came up        | Host (rootfs broken)                  | No — destroy + alert | `sandbox_boot_failed`                     |
+| MCP transport unreachable mid-execution | Host (transport broken)               | No — destroy         | `sandbox_unreachable`                     |
 
 All surface to pattern code as standard `tool_result` events. Downstream patterns (critic, compactExecution) decide how to react.
 
@@ -398,16 +401,16 @@ Devs working specifically on `FirecrackerBackend` bugs opt into Lima / UTM / Orb
 
 ## Settings
 
-| Setting | Default | Notes |
-|---------|---------|-------|
-| `sandbox.globalCap` | 16 | Max concurrent **in-flight** sandbox VMs across all sessions |
-| `sandbox.perSessionCap` | 4 | Max concurrent in-flight sandbox VMs per session |
-| `sandbox.maxAttachments` | 8 | Hard ceiling on **parked (at-rest)** attachments in the `AttachmentTable`. When a new boot would exceed it, the least-recently-used refCount=0 attachment is evicted (#82). `globalCap` bounds in-flight; this bounds at-rest. |
-| `sandbox.warmPool.base` | 1–2 | Pre-booted VMs of the base flavor |
-| `sandbox.idleEvictMs` | 3_600_000 | Idle time before a parked VM is destroyed. Reaped by the per-acquire lazy sweep *and* a 60s timer-driven sweep (#82) so a fully idle harness still releases parked VMs. With durable workspaces (#89) this is only the *warm-cache* horizon — instant reuse of the live container within the window; beyond it, the next turn re-hydrates `/work/in` from the DataStash. Was 300_000 before #89. |
-| `sandbox.defaultTimeoutSec` | 60 | Per-tool-call wall-clock cap |
-| `sandbox.defaultMemoryMB` | 512 | Per-VM memory cap |
-| `sandbox.defaultEgress` | `'mcp-only'` | Default egress profile |
+| Setting                     | Default      | Notes                                                                                                                                                                                                                                                                                                                                                                                            |
+| --------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `sandbox.globalCap`         | 16           | Max concurrent **in-flight** sandbox VMs across all sessions                                                                                                                                                                                                                                                                                                                                     |
+| `sandbox.perSessionCap`     | 4            | Max concurrent in-flight sandbox VMs per session                                                                                                                                                                                                                                                                                                                                                 |
+| `sandbox.maxAttachments`    | 8            | Hard ceiling on **parked (at-rest)** attachments in the `AttachmentTable`. When a new boot would exceed it, the least-recently-used refCount=0 attachment is evicted (#82). `globalCap` bounds in-flight; this bounds at-rest.                                                                                                                                                                   |
+| `sandbox.warmPool.base`     | 1–2          | Pre-booted VMs of the base flavor                                                                                                                                                                                                                                                                                                                                                                |
+| `sandbox.idleEvictMs`       | 3_600_000    | Idle time before a parked VM is destroyed. Reaped by the per-acquire lazy sweep _and_ a 60s timer-driven sweep (#82) so a fully idle harness still releases parked VMs. With durable workspaces (#89) this is only the _warm-cache_ horizon — instant reuse of the live container within the window; beyond it, the next turn re-hydrates `/work/in` from the DataStash. Was 300_000 before #89. |
+| `sandbox.defaultTimeoutSec` | 60           | Per-tool-call wall-clock cap                                                                                                                                                                                                                                                                                                                                                                     |
+| `sandbox.defaultMemoryMB`   | 512          | Per-VM memory cap                                                                                                                                                                                                                                                                                                                                                                                |
+| `sandbox.defaultEgress`     | `'mcp-only'` | Default egress profile                                                                                                                                                                                                                                                                                                                                                                           |
 
 All overridable per-call via the `withSandbox` config object; defaults come from `HarnessSettings`.
 
@@ -432,26 +435,27 @@ Each step de-risks the next.
 ## Deferred / v1+
 
 **v1:**
+
 - Refined side-panel UX: file tree, persistent terminal view, per-file readouts.
 - Dedicated `sandbox_python` MCP tool (Jupyter-shaped, REPL state across calls).
 - Rootfs flavor catalog (#78): Polars, PyPDF, sentence-transformers, etc.
 - Rust shell-exec MCP server (replaces JS) if cold-start becomes felt.
-- ~~DataStash → sandbox flow: auto-mount referenced entries~~ — **landed in #89** as `syncWorkspace`: stored docs hydrate into `/work/in`, `/work/out` deliverables promote back. Still v1+: *selective* hydration (only `withReferences`-selected entries, vs. the whole session set), an explicit `sandbox_publish` tool (vs. the `/work/out` convention; needs an actorCritic synthetic-tool layer), and version/lineage UI.
-- UI-initiated file uploads into a *running* sandbox (today an upload lands in the DataStash and reaches `/work/in` on the next session boot, not mid-session).
+- ~~DataStash → sandbox flow: auto-mount referenced entries~~ — **landed in #89** as `syncWorkspace`: stored docs hydrate into `/work/in`, `/work/out` deliverables promote back. Still v1+: _selective_ hydration (only `withReferences`-selected entries, vs. the whole session set), an explicit `sandbox_publish` tool (vs. the `/work/out` convention; needs an actorCritic synthetic-tool layer), and version/lineage UI.
+- UI-initiated file uploads into a _running_ sandbox (today an upload lands in the DataStash and reaches `/work/in` on the next session boot, not mid-session).
 
 **v2: `backgroundSession` primitive.**
 
 Orthogonal to `withSandbox`, not a variant. Runs a wrapped pattern asynchronously; the parent harness returns immediately. The inner pattern's prompt comes from the parent harness, not the user.
 
 ```typescript
-const vmAgent = harness(/* ... */)
+const vmAgent = harness(/* ... */);
 const assistant = harness(
   router(routesDescriptions),
   routes({
-    'simple-question': simpleRoute,
-    'coding-task': backgroundSession(vmAgent),
-  })
-)
+    "simple-question": simpleRoute,
+    "coding-task": backgroundSession(vmAgent),
+  }),
+);
 ```
 
 Background sandbox work is the composition `backgroundSession(withSandbox(harness(...)))`. Each primitive does one thing; `backgroundSession` is independently useful for any long-running pattern (deep research, multi-document synthesis).
@@ -464,7 +468,7 @@ Open problems `backgroundSession` surfaces (all genuinely v2):
 - **Concurrency** — multiple background sessions per chat session?
 - **Persistence** — if the harness restarts, do background sessions resume?
 
-**Ephemeral one-shot mode** (script in, result out, VM gone — the leaf-primitive shape an earlier draft of this doc proposed) coexists with stateful sandboxes but is deferred, and its justification is weaker than it first looked. The "fan-out over a dataset" case it was meant for is better served by in-process data parallelism (a Polars / pandas map) inside a *single* stateful sandbox; the "try different approaches and pick a winner" case is served by stateful-in-`parallelMap` (see "Swarm"). No compelling use case remains that the stateful wrapper doesn't already cover — so this stays a theoretical alternative (same `ComputeBackend`, different surface; likely a separate `vmCompute` leaf pattern that allocates → executes → destroys per invocation) until one surfaces.
+**Ephemeral one-shot mode** (script in, result out, VM gone — the leaf-primitive shape an earlier draft of this doc proposed) coexists with stateful sandboxes but is deferred, and its justification is weaker than it first looked. The "fan-out over a dataset" case it was meant for is better served by in-process data parallelism (a Polars / pandas map) inside a _single_ stateful sandbox; the "try different approaches and pick a winner" case is served by stateful-in-`parallelMap` (see "Swarm"). No compelling use case remains that the stateful wrapper doesn't already cover — so this stays a theoretical alternative (same `ComputeBackend`, different surface; likely a separate `vmCompute` leaf pattern that allocates → executes → destroys per invocation) until one surfaces.
 
 ---
 
@@ -476,7 +480,7 @@ Open problems `backgroundSession` surfaces (all genuinely v2):
 
 A **tenant** is an authenticated user. In the single-operator alpha the sandbox's contents were, transitively, the operator's own; that assumption is void in multi-user: the actor executes model-chosen code over **tenant-uploaded files and third-party-fetched content** (documents, web pages), so a prompt injection can turn any sandbox into attacker-controlled code. The design therefore treats **every sandbox as potentially malicious** and asks, of each shared resource: what can it read, write, or reach that belongs to someone else?
 
-Assets at stake: other tenants' Data Stash documents and `/work` contents; the live host services — neo4j (7474/7687), postgres (5432), redis (6379), the MCP gateway (8811), all **published on the host** via `docker-compose.yaml` and routed on the compose `app-network`; the **integrity of the wheel cache** (a poisoned dependency is code execution in the next tenant's analysis); and other tenants' compute.
+Assets at stake: other tenants' Data Stash documents and `/work` contents; the live host services — neo4j (7474/7687), postgres (5432), redis (6379), the MCP gateway (8811), all **published on loopback** via `docker-compose.yaml`; Neo4j is isolated behind `neo4j-relay`, and other services use `app-network`; the **integrity of the wheel cache** (a poisoned dependency is code execution in the next tenant's analysis); and other tenants' compute.
 
 ### The five channels, verdicts, and mechanism per channel
 
@@ -484,7 +488,7 @@ Assets at stake: other tenants' Data Stash documents and `/work` contents; the l
 
 `cacheVolumeArgs()` ([`docker-backend.server.ts`](../../packages/sandbox/docker-backend.server.ts)) mounts `SANDBOX_CACHE_VOLUME` (default `kg-sandbox-cache`) at `/cache` on every networked boot (`pypi`, `github-trusted`, `open`; `mcp-only` skips it). Every container runs as the same non-root uid (`10001`), so the volume is writable by every tenant's sandbox and read by every other tenant's `uv`/`pip` install (`UV_CACHE_DIR`/`PIP_CACHE_DIR` point at `/cache`). The sharp shape is the poisoned wheel cache from #348's review: tenant A writes the cache tenant B's installs read.
 
-**Why not per-boot:** an anonymous volume per container loses the cross-boot warmth that is the volume's entire reason to exist (live installs would re-download the same wheels into every ephemeral container). **Why not "uv verifies index digests, document the trust assumption":** verification narrows the classic poisoned-wheel shape, but the cache is a shared *writable filesystem* whose contents outlive every container — a channel is closed by not sharing it, not by trusting a verifier's coverage of it; and "document the trust assumption" is the posture the single-operator alpha already had.
+**Why not per-boot:** an anonymous volume per container loses the cross-boot warmth that is the volume's entire reason to exist (live installs would re-download the same wheels into every ephemeral container). **Why not "uv verifies index digests, document the trust assumption":** verification narrows the classic poisoned-wheel shape, but the cache is a shared _writable filesystem_ whose contents outlive every container — a channel is closed by not sharing it, not by trusting a verifier's coverage of it; and "document the trust assumption" is the posture the single-operator alpha already had.
 
 **Mechanism:** `RuntimeConfig` gains `tenantId`; the volume name derives from the base name (`SANDBOX_CACHE_VOLUME`, default `kg-sandbox-cache`) by ONE rule — `tenantId` `'default'` → the base name **verbatim**; any other `tenantId` → `${base}-${tenantId}`. The first mount still bootstraps from the image's pre-owned `/cache` (docker copies image content into a named volume on first use — the no-chown property survives), so a single-operator deploy keeps its warm cache (see [Migration](#migration-for-existing-single-tenant-deploys)).
 
@@ -492,9 +496,9 @@ Assets at stake: other tenants' Data Stash documents and `/work` contents; the l
 
 `egressNetworkName(profile)` ([`egress-policy.ts`](../../packages/sandbox/egress-policy.ts)) names ONE internal network per profile, and every tenant's networked sandbox attaches to it. Containers on one docker network are mutually reachable — the embedded DNS resolves every `sbx-*` container name and the gateway's name, and L3 adjacency holds regardless of names. That is sandbox-to-sandbox reachability across tenants: code exec in tenant A's sandbox can port-scan and attack tenant B's live sandbox, and both share one gateway.
 
-**Mechanism:** per-boot internal network `kg-sandbox-egress-<profile>-<vm.id>` plus a per-boot gateway container named for the same vm id — stable across warm-pool `reset` (which re-runs `runContainer` under the same `sbx-*` name, so the reset re-ensures the same network rather than accumulating a new one). The gateway keeps today's shape: default bridge for its own external reach, its per-boot internal network as the sandbox-facing side, listening on `SANDBOX_EGRESS_PROXY_PORT` (3128) — safe to reuse on every gateway because nothing is host-published and the networks are isolated. `ensureEgressGateway` is idempotent; the old in-flight dedupe map is GONE — per-boot names made it unreachable (boot ids are unique, so two boots can never race the same gateway name, and a warm-pool `reset` re-ensures its own names sequentially). **Fail-loud semantics unchanged:** a networked sandbox never boots without its gateway (`SandboxBootError`). **Teardown grows:** `destroy()` removes, in order, the VM's container, then its per-boot gateway, then the labeled network (`docker network rm` refuses while the gateway endpoint remains attached); `reset()` removes none of the three — it re-ensures them. `reapOrphans` gains a labeled-network sweep (`docker network prune --filter label=kg-sandbox=1`) and runs it *after* the container sweep, since prune is a no-op on networks still in use by a leftover gateway. A parked (pooled) networked VM keeps its gateway, exactly as today's per-profile gateway outlived any one sandbox; the count is bounded by `sandbox.globalCap` for live VMs, the pool's per-rootfs caps (`sandbox.warmPool`) and `sandbox.maxAttachments` for parked ones, all evicted after `idleEvictMs`. Per-boot networks also multiply docker's address-pool consumption — the default pools allow only ~30 user-defined networks (`dockerd --default-address-pool`), so a deployment must widen the pool (e.g. `--default-address-pool base=10.0.0.0/8,size=24`) as a documented prerequisite, or the design bounds networked parked VMs so live+parked networks stay under the pool.
+**Mechanism:** per-boot internal network `kg-sandbox-egress-<profile>-<vm.id>` plus a per-boot gateway container named for the same vm id — stable across warm-pool `reset` (which re-runs `runContainer` under the same `sbx-*` name, so the reset re-ensures the same network rather than accumulating a new one). The gateway keeps today's shape: default bridge for its own external reach, its per-boot internal network as the sandbox-facing side, listening on `SANDBOX_EGRESS_PROXY_PORT` (3128) — safe to reuse on every gateway because nothing is host-published and the networks are isolated. `ensureEgressGateway` is idempotent; the old in-flight dedupe map is GONE — per-boot names made it unreachable (boot ids are unique, so two boots can never race the same gateway name, and a warm-pool `reset` re-ensures its own names sequentially). **Fail-loud semantics unchanged:** a networked sandbox never boots without its gateway (`SandboxBootError`). **Teardown grows:** `destroy()` removes, in order, the VM's container, then its per-boot gateway, then the labeled network (`docker network rm` refuses while the gateway endpoint remains attached); `reset()` removes none of the three — it re-ensures them. `reapOrphans` gains a labeled-network sweep (`docker network prune --filter label=kg-sandbox=1`) and runs it _after_ the container sweep, since prune is a no-op on networks still in use by a leftover gateway. A parked (pooled) networked VM keeps its gateway, exactly as today's per-profile gateway outlived any one sandbox; the count is bounded by `sandbox.globalCap` for live VMs, the pool's per-rootfs caps (`sandbox.warmPool`) and `sandbox.maxAttachments` for parked ones, all evicted after `idleEvictMs`. Per-boot networks also multiply docker's address-pool consumption — the default pools allow only ~30 user-defined networks (`dockerd --default-address-pool`), so a deployment must widen the pool (e.g. `--default-address-pool base=10.0.0.0/8,size=24`) as a documented prerequisite, or the design bounds networked parked VMs so live+parked networks stay under the pool.
 
-**Why per-boot rather than per-tenant:** the per-boot gateway is the dominant cost and is required either way (a shared gateway on a shared network is precisely the mutual reachability being closed); per-boot *additionally* closes **within-tenant** cross-session reachability (a poisoned session of user A attacking user A's other session) with the same one-line mechanism; and the extra cost over per-tenant is one tiny node container per networked boot.
+**Why per-boot rather than per-tenant:** the per-boot gateway is the dominant cost and is required either way (a shared gateway on a shared network is precisely the mutual reachability being closed); per-boot _additionally_ closes **within-tenant** cross-session reachability (a poisoned session of user A attacking user A's other session) with the same one-line mechanism; and the extra cost over per-tenant is one tiny node container per networked boot.
 
 **Deployment prerequisite (Lane B, documented only — nothing here touches a running daemon config):** per-boot networks multiply docker's address-pool consumption. The default pools allow only ~30 user-defined networks (`dockerd --default-address-pool`), so a deployment running networked sandboxes must widen the pool (e.g. `--default-address-pool base=10.0.0.0/8,size=24`) in the daemon config of the host that runs them, or boots fail once the pools exhaust. Also documented in [`rootfs/README.md`](../../rootfs/README.md) → "Hardening & egress" and `app/.env.example` → egress section.
 
@@ -511,28 +515,38 @@ Verified from source ([`warm-pool.server.ts`](../../packages/sandbox/warm-pool.s
 
 `open` rides the default bridge: unrestricted, unproxied, unaudited (no chokepoint to log at). No agent selects it today — every sandbox agent pins `mcp-only`, `defaultEgress` is `mcp-only`, and sandbox posture is host policy, deliberately not a user preference (the settings surface drops `sandbox` outright).
 
-**Multi-user exposure:** an `open` sandbox has full outbound network, and the live services **publish ports on the host** — neo4j 7474/7687, postgres 5432, redis 6379, the MCP gateway 8811, the doc-convert sidecar 8000 — so one `curl http://<host-ip>:6379` from an open sandbox reaches the Data Stash and the graph. In multi-user, `open` is a host-services compromise profile, not a convenience.
+**Multi-user exposure:** an `open` sandbox has full outbound network. The
+backing services now publish only on loopback; Neo4j's 7474/7687 publishes
+belong to `neo4j-relay`, which forwards into its isolated internal network
+(#241 G13). A host-IP request no longer reaches these loopback-bound services.
+An operator adding a public-interface publish would reopen that channel.
 
 **Verdict: remove, not gate per-user.** A per-user gate would put an authz decision inside the backend for a profile with zero users, and contradict the host-policy ruling that kept sandbox posture out of user hands. The single operator keeps the escape hatch as an env opt-in, `SANDBOX_ENABLE_OPEN_EGRESS=1`; unset, `open` is treated like an unknown profile — warn + **fail closed to `mcp-only`** (the existing closed-failure semantics at the backend). When the flag IS set, the deployment accepts the documented posture: no audit, no allowlist, unrestricted outbound egress — and, where channel 5's loopback binding is not adopted, reachability of every host-published port. A single-operator deployment may; a multi-user deployment must not. Shipped as specified, with one spelling decision: only the exact value `1` (trimmed) enables the flag — `true`/`yes` are OFF, since a knob that admits unrestricted egress fails closed on a misspelling (`isOpenEgressEnabled`, `egress-policy.ts`).
 
 #### 5. Host-published services — reachable from EVERY networked profile via the internal network's gateway IP → **compose loopback binding**
 
-`--internal` networks drop traffic to and from *other networks*, not to the host itself — docker's own reference states that communication with the gateway IP address (and thus appropriately configured host services) is possible from an internal network. Every compose service publishes on all host interfaces ([`docker-compose.yaml`](../../docker-compose.yaml): neo4j 7474/7687, gateway 8811, postgres 5432, redis 6379, doc-convert 8000 — no loopback prefix). So a `pypi`/`github-trusted` sandbox can open a raw socket to its own bridge gateway IP (e.g. `http://172.18.0.1:6379`) — no proxy, no allowlist, no audit — and reach the Data Stash (redis carries no `requirepass` in compose), the graph, postgres and the gateway. This channel is live today, single-operator, and the four mechanisms above do not close it.
+`--internal` networks drop traffic to and from _other networks_, not to the
+host itself: appropriately configured host services can remain reachable at a
+bridge gateway IP. The committed compose files now publish every service on
+loopback only. Neo4j itself publishes nothing and joins only its own internal
+network; `neo4j-relay` publishes its HTTP/Bolt ports on loopback (#241 G13).
+The former all-interface exposure described by this channel is therefore closed
+in the tracked topology, but an operator override can reopen it.
 
-**Mechanism:** bind every published port to loopback (`"127.0.0.1:6379:6379"`, and the same for 7474/7687/5432/8811/8000) — a container addressing the bridge gateway IP hits a non-loopback host interface, which loopback-bound ports do not serve. The app-in-docker reaches these services over `app-network` by name, and host-side consumers keep `localhost`, so only the exposure closes. Checked against the deployment runbook ([`docs/deployment/azure-vm.md`](../deployment/azure-vm.md) §4 — no consumer reaches a port via a host IP): the tracked [`docker-compose.prod.yaml`](../../docker-compose.prod.yaml) already does exactly this (`!override` loopback binds on every published port), so the multi-user prerequisite is to adopt that shape wherever the sandbox runs — not to invent a new one. A deployment that must publish on a real interface must instead add `DOCKER-USER` iptables rules dropping traffic from the sandbox bridges to host ports.
+**Mechanism:** bind every published port to loopback (`"127.0.0.1:6379:6379"`, and the same for 7474/7687/5432/8811/8000) — a container addressing the bridge gateway IP hits a non-loopback host interface, which loopback-bound ports do not serve. The app-in-docker reaches these services over `app-network` by name (through `neo4j-relay` for Neo4j), and host-side consumers keep `localhost`, so only the exposure closes. Checked against the deployment runbook ([`docs/deployment/azure-vm.md`](../deployment/azure-vm.md) §4 — no consumer reaches a port via a host IP): the tracked [`docker-compose.prod.yaml`](../../docker-compose.prod.yaml) already does exactly this (`!override` loopback binds on every published port), so the multi-user prerequisite is to adopt that shape wherever the sandbox runs — not to invent a new one. A deployment that must publish on a real interface must instead add `DOCKER-USER` iptables rules dropping traffic from the sandbox bridges to host ports.
 
 ### What stays shared, and at what granularity
 
-| Resource                       | Today                          | After                                        | Why                                                                                                            |
-| ------------------------------ | ------------------------------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Images (`kg-sandbox:*`)        | shared                         | shared                                       | Read-only, built by us; nothing tenant-writable                                                              |
-| `/cache` volume                | all tenants                    | **per tenant**                               | Warmth within one trust boundary; the cross-tenant write channel (#348) closes                                |
-| Egress network                 | per profile, all tenants       | **per boot**                                 | Zero sandbox-to-sandbox adjacency, even within a tenant                                                      |
-| Egress gateway + its audit log | per profile                    | **per boot**                                 | One chokepoint per sandbox; its log names exactly that boot                                                   |
-| Warm pool                      | per rootfs, global              | per `tenant \| rootfs \| egress` fingerprint  | Posture never crosses a pool handoff                                                                         |
-| Attachment id                  | per session (server-derived)   | unchanged                                    | Ids are never client-supplied; the Shell/stream routes are already owner-gated (`claimSession`/`requireSessionOwner`) |
-| Scheduler caps                 | per session (`sessionId ?? 'default'`) | unchanged; optional `perTenantCap` follow-up | Every agent path keys the scheduler to the conversation's `sessionId`; the Shell path bypasses the scheduler entirely ([`pty-manager.server.ts`](../../packages/sandbox/pty-manager.server.ts)) — `perTenantCap` is the follow-up when tenants exist |
-| Host MCP gateway, Data Stash, Neo4j | shared infra               | unchanged                                    | Published ports become loopback-bound (channel 5); the app-in-docker reaches them over `app-network` — "owner-scoped in their own seams" holds only for the app-level seams |
+| Resource                            | Today                                  | After                                        | Why                                                                                                                                                                                                                                                  |
+| ----------------------------------- | -------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Images (`kg-sandbox:*`)             | shared                                 | shared                                       | Read-only, built by us; nothing tenant-writable                                                                                                                                                                                                      |
+| `/cache` volume                     | all tenants                            | **per tenant**                               | Warmth within one trust boundary; the cross-tenant write channel (#348) closes                                                                                                                                                                       |
+| Egress network                      | per profile, all tenants               | **per boot**                                 | Zero sandbox-to-sandbox adjacency, even within a tenant                                                                                                                                                                                              |
+| Egress gateway + its audit log      | per profile                            | **per boot**                                 | One chokepoint per sandbox; its log names exactly that boot                                                                                                                                                                                          |
+| Warm pool                           | per rootfs, global                     | per `tenant \| rootfs \| egress` fingerprint | Posture never crosses a pool handoff                                                                                                                                                                                                                 |
+| Attachment id                       | per session (server-derived)           | unchanged                                    | Ids are never client-supplied; the Shell/stream routes are already owner-gated (`claimSession`/`requireSessionOwner`)                                                                                                                                |
+| Scheduler caps                      | per session (`sessionId ?? 'default'`) | unchanged; optional `perTenantCap` follow-up | Every agent path keys the scheduler to the conversation's `sessionId`; the Shell path bypasses the scheduler entirely ([`pty-manager.server.ts`](../../packages/sandbox/pty-manager.server.ts)) — `perTenantCap` is the follow-up when tenants exist |
+| Host MCP gateway, Data Stash, Neo4j | shared infra                           | unchanged                                    | Published ports are loopback-bound (channel 5); the app-in-docker reaches them over `app-network`, through `neo4j-relay` for Neo4j — "owner-scoped in their own seams" holds only for the app-level seams                                            |
 
 ### Tenant identity seam
 
@@ -554,19 +568,19 @@ Verified from source ([`warm-pool.server.ts`](../../packages/sandbox/warm-pool.s
 ### Migration for existing single-tenant deploys
 
 - The default tenant maps to today's names: the cache volume keeps `SANDBOX_CACHE_VOLUME`'s value **verbatim** (no suffix), so the warm cache survives the upgrade.
-- The per-profile gateway containers carry `kg-sandbox=1` and are removed by the expanded container sweep. The two per-profile *networks* are unlabeled today (`docker network create --internal`, no `--label` — [`docker-backend.server.ts`](../../packages/sandbox/docker-backend.server.ts)) and are not covered by the label-scoped prune — remove them by name (`docker network rm kg-sandbox-egress-pypi kg-sandbox-egress-github-trusted`) or leave them; nothing references them after the change.
+- The per-profile gateway containers carry `kg-sandbox=1` and are removed by the expanded container sweep. The two per-profile _networks_ are unlabeled today (`docker network create --internal`, no `--label` — [`docker-backend.server.ts`](../../packages/sandbox/docker-backend.server.ts)) and are not covered by the label-scoped prune — remove them by name (`docker network rm kg-sandbox-egress-pypi kg-sandbox-egress-github-trusted`) or leave them; nothing references them after the change.
 - **Lane B prerequisite:** widen the docker daemon's address pools on any host that runs networked sandboxes (`--default-address-pool base=10.0.0.0/8,size=24`) BEFORE the upgrade — per-boot networks consume pools at one-network-per-boot, and an exhausted pool fails networked boots. Documented in [`rootfs/README.md`](../../rootfs/README.md) and `app/.env.example`; the daemon config is a deployment step, not a repo change.
 - No DB migration, no settings-schema change, no new required env var. One behavior change: `open` without `SANDBOX_ENABLE_OPEN_EGRESS` fail-closes to `mcp-only` with a named warning — the same class as an unknown profile.
 
 ### Env knobs (after)
 
-| Knob                          | Status                                                                                                        |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `SANDBOX_CACHE_VOLUME`        | meaning widens from "the cache volume" to "the cache volume **base** name" (default tenant keeps it verbatim) |
-| `SANDBOX_EGRESS_PROXY_PORT`   | unchanged — every per-boot gateway listens on it, on isolated networks; nothing host-published                 |
-| `SANDBOX_EGRESS_*_ALLOWLIST`  | unchanged — per-deployment policy, now enforced per boot                                                      |
-| `SANDBOX_ENABLE_OPEN_EGRESS`  | **new**, default unset; when set, the deployment accepts `open`'s documented unaudited posture               |
-| all others (pids/tmpfs/seccomp/apparmor/bash-guard) | unchanged                                                                             |
+| Knob                                                | Status                                                                                                        |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `SANDBOX_CACHE_VOLUME`                              | meaning widens from "the cache volume" to "the cache volume **base** name" (default tenant keeps it verbatim) |
+| `SANDBOX_EGRESS_PROXY_PORT`                         | unchanged — every per-boot gateway listens on it, on isolated networks; nothing host-published                |
+| `SANDBOX_EGRESS_*_ALLOWLIST`                        | unchanged — per-deployment policy, now enforced per boot                                                      |
+| `SANDBOX_ENABLE_OPEN_EGRESS`                        | **new**, default unset; when set, the deployment accepts `open`'s documented unaudited posture                |
+| all others (pids/tmpfs/seccomp/apparmor/bash-guard) | unchanged                                                                                                     |
 
 ### Implementation slicing (dispatched only after owner approval)
 
@@ -588,7 +602,7 @@ A and B are independent; C follows A; D is small and independent. Each lane land
 
 ## Open questions
 
-- **Attachment identity across turns & siblings.** Within one wrapper invocation, sharing is settled — ALS gives `withSandbox(chain(a, b, c))` one shared VM (see *How tools reach the controller*). Open: on a *new turn*, should an auto (no-`id`) wrapper reattach or start fresh? (Leaning fresh; opt into reuse with an explicit `id`.) And under `parallel`, confirm each branch's `withSandbox` gets an isolated ALS scope so sibling sandboxes don't bleed.
+- **Attachment identity across turns & siblings.** Within one wrapper invocation, sharing is settled — ALS gives `withSandbox(chain(a, b, c))` one shared VM (see _How tools reach the controller_). Open: on a _new turn_, should an auto (no-`id`) wrapper reattach or start fresh? (Leaning fresh; opt into reuse with an explicit `id`.) And under `parallel`, confirm each branch's `withSandbox` gets an isolated ALS scope so sibling sandboxes don't bleed.
 - **Multi-attachment per session.** Can one session hold multiple ID-addressable sandboxes simultaneously? Probably yes; bounded by `perSessionCap`.
 - **UI access to a running sandbox.** Read-only filesystem browser? Terminal mirror? Either uses the same MCP endpoint the harness uses; access control is the open part.
 - **Snapshot/restore fidelity** (Firecracker). Some kernel state (entropy pool, `/dev/urandom` seeds) needs explicit handling. Document quirks as they surface.

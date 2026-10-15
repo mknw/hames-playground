@@ -51,7 +51,6 @@ import { describeBatchScenario } from './scenarios/describe'
 import { referenceSelectorScenario } from './scenarios/reference-selector'
 import { screenScenario } from './scenarios/screen'
 import { plannerScenario } from './scenarios/planner'
-import { decisionCalibrationScenario } from './scenarios/decision-calibration'
 import { reliabilityScenario } from './scenarios/reliability'
 
 /** Declaration order is report order. Cheap structural checks first so a
@@ -73,7 +72,6 @@ export const SCENARIOS: Scenario[] = [
   describeBatchScenario,
   referenceSelectorScenario,
   reliabilityScenario,
-  decisionCalibrationScenario,
 ]
 
 /** Scenario ids named in `EVAL_ONLY`, if any. Unknown ids throw rather than

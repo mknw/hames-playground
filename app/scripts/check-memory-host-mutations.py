@@ -103,7 +103,8 @@ cases += [
 # #553 option 1: reject a supplier/wake bypass and origin broadening.
 cases += [
     ('553-enabled', C, '      if (!isRequestMemoryAllowed()) return false', '', config, '#553'),
-    ('553-wake', C, '  if (!isRequestMemoryAllowed()) return undefined', '', config, '#553'),
+    # 553-wake is an equivalent mutant after M7: enabled() repeats the origin guard.
+    # 553-enabled plus wake-disabled-user subsume it (PR #574 delta review D1).
     ('553-triggered', T, "const memoryAllowed =\n    req.mode === 'interactive'", "const memoryAllowed =\n    req.mode !== 'resume'", turn, 'triggered run never wakes'),
     ('553-resume-attended', T, "held.loaded?.memoryRunOrigin === 'interactive'", 'isAttendedRequest()', turn, 'resume preserves'),
     ('553-resume-null', T, "held.loaded?.memoryRunOrigin === 'interactive'", "held.loaded?.memoryRunOrigin !== 'triggered'", turn, 'resume preserves'),

@@ -3,11 +3,14 @@
  * so no other file's DDL is a party to it. Needs a Postgres (CI `test · postgres`);
  * skips without one, like the other DB-backed files.
  *
- * MUTATION per pin (each run against a throwaway Postgres): delete the
- * `pg_advisory_xact_lock` statement → "waits for the schema lock" reds (the
- * fresh-database race is probabilistic, so it is the regression net, not the
- * discriminator); make the hash check always run the DDL → "takes no table lock"
- * reds (5s timeout).
+ * MUTATION per pin (each run against a throwaway Postgres):
+ * - delete the `pg_advisory_xact_lock` statement → "waits for the schema lock"
+ *   reds (the deterministic discriminator; the two race pins are a regression
+ *   net, since without the lock a deadlock is probabilistic);
+ * - make the hash check always run the DDL → "takes no table lock" reds (test
+ *   timeout);
+ * - drop the relation check (`current` stays true) → "recreates an index dropped
+ *   by hand" reds.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import pg from 'pg'
@@ -68,11 +71,39 @@ afterAll(async () => {
 describe('initSchema against one database', () => {
   beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
+  // `freshProcess()` calls are awaited in SEQUENCE: interleaved, both resolve to
+  // the same module instance and the "race" is one initialiser.
   it('two concurrent initialisers on a fresh database both complete', async () => {
-    const [a, b] = await Promise.all([freshProcess(), freshProcess()])
+    const a = await freshProcess()
+    const b = await freshProcess()
+    expect(a).not.toBe(b)
     const done = Promise.all([a.query('SELECT 1'), b.query('SELECT 1')])
     expect(await settlesWithin(done, 30_000)).toBe(true)
     await done
+  })
+
+  // The reported CI shape: the schema exists, and two initialisers re-run the DDL.
+  it('two concurrent initialisers over an existing schema both complete', async () => {
+    const seed = await freshProcess()
+    await seed.query('SELECT 1')
+    await seed.query('DELETE FROM schema_meta')
+    const a = await freshProcess()
+    const b = await freshProcess()
+    expect(a).not.toBe(b)
+    const done = Promise.all([a.query('SELECT 1'), b.query('SELECT 1')])
+    expect(await settlesWithin(done, 30_000)).toBe(true)
+    await done
+  })
+
+  it('recreates an index dropped by hand even though the hash is current', async () => {
+    const seed = await freshProcess()
+    await seed.query('SELECT 1')
+    await seed.query('DROP INDEX conversations_share_token_idx')
+    const proc = await freshProcess()
+    const { rows } = await proc.query(
+      `SELECT to_regclass('conversations_share_token_idx') IS NOT NULL AS present`,
+    )
+    expect(rows[0].present).toBe(true)
   })
 
   it('waits for the schema lock instead of running the DDL past it', async () => {
@@ -95,6 +126,7 @@ describe('initSchema against one database', () => {
   it('takes no table lock on a boot where the schema is current', async () => {
     const reader = new pg.Client({ connectionString: target })
     await reader.connect()
+    await (await freshProcess()).query('SELECT 1') // the table must exist, and the schema be current
     await reader.query('BEGIN')
     await reader.query('LOCK TABLE conversations IN ACCESS SHARE MODE')
     try {

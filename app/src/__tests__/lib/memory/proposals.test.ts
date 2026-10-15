@@ -123,12 +123,21 @@ vi.mock('../../../lib/db/hitl.server', async () => {
       }
       return { claimed: false, recorded: h?.status === 'answering' ? (h.answer ?? null) : null }
     },
-    releaseHitlProposalAnswer: async (id: string, user: string) => {
-      releases.push(id)
+    // The real statement's semantics (#579 review 2a): given back only if no
+    // memory_sources row exists for the proposal's source event.
+    releaseHitlProposalAnswer: async (id: string, user: string, eventId: string) => {
       const h = held.get(id)
-      if (h && h.userId === user && h.status === 'answering') {
-        h.status = 'pending'
-        h.answer = null
+      if (!h || h.userId !== user || h.status !== 'answering') return false
+      if ([...sources.keys()].some((k) => k.startsWith(`${eventId}#`))) return false
+      releases.push(id)
+      h.status = 'pending'
+      h.answer = null
+      return true
+    },
+    requireAnsweringBinding: async (_tx: unknown, id: string, user: string) => {
+      const h = held.get(id)
+      if (!h || h.userId !== user || h.status !== 'answering') {
+        throw new Error('[hitl] the proposal answer is no longer bound')
       }
     },
     listHitlProposals: async (sid: string, user: string, kind: string) =>
@@ -161,8 +170,13 @@ let storeFails = false
 /** Fail every transaction after this many have run (null: never). */
 let storeFailsAfter: number | null = null
 let txRuns = 0
-const storeFor = (): MemoryWriteStore => ({
+/** Flip the proposal back to pending as the write begins: a release that landed
+ *  between the claim and this item's transaction (D3). */
+let releaseBeforeWrite = false
+const storeFor = (opts?: { inTransaction?: (tx: never) => Promise<void> }): MemoryWriteStore => ({
   async transaction(fn) {
+    if (releaseBeforeWrite) for (const h of held.values()) h.status = 'pending'
+    await opts?.inTransaction?.({} as never)
     if (storeFails) throw new Error('db down')
     if (storeFailsAfter !== null && txRuns++ >= storeFailsAfter) throw new Error('db down')
     if (rowMovesOnDuringWrite && row) row = { ...row, version: 'v-newer' }
@@ -201,7 +215,10 @@ const storeFor = (): MemoryWriteStore => ({
     }
   },
 })
-vi.mock('../../../lib/db/memories.server', () => ({ createMemoryDbStore: () => storeFor() }))
+vi.mock('../../../lib/db/memories.server', () => ({
+  createMemoryDbStore: (_user: string, opts?: { inTransaction?: (tx: never) => Promise<void> }) =>
+    storeFor(opts),
+}))
 vi.mock('../../../lib/db/user-prefs.server', () => ({ getMemoryEnabled: async () => memoryOn }))
 let space = 'space/1024'
 vi.mock('../../../lib/memory/embedder.server', () => ({
@@ -295,6 +312,7 @@ beforeEach(() => {
   storeFails = false
   storeFailsAfter = null
   txRuns = 0
+  releaseBeforeWrite = false
   space = 'space/1024'
 })
 
@@ -903,5 +921,85 @@ describe('review 7: the session cross-checks', () => {
       outcome: 'unavailable',
     })
     expect(memories()).toEqual([])
+  })
+})
+
+describe('#579 review 2a: "nothing written" is the database\'s call', () => {
+  const failing = async (id: string, setup: () => void, outcome: string) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      setup()
+      expect((await answerMemoryProposalFor('alice', 's1', id, 'save')).outcome).toBe(outcome)
+    } finally {
+      warn.mockRestore()
+    }
+  }
+
+  // D1. MUTATION: decide the release from this attempt's report (the old
+  // `effects` heuristic), i.e. release unguarded → "Don't save" is recorded over
+  // two written memories → red.
+  it('D1 · save writes then the save is refused; a retry whose store fails does NOT release', async () => {
+    await propose()
+    const id = requestId()
+    casOk = false
+    expect((await answerMemoryProposalFor('alice', 's1', id, 'save')).outcome).toBe('conflict')
+    casOk = true
+    expect(memories()).toHaveLength(2)
+    await failing(id, () => (storeFails = true), 'failed')
+    storeFails = false
+    expect(held.get(id)!.status).toBe('answering')
+    expect(releases).toEqual([])
+    expect(await answerMemoryProposalFor('alice', 's1', id, 'discard')).toEqual({
+      outcome: 'already-answered',
+    })
+    expect(responses()).toEqual([])
+    expect(memories()).toHaveLength(2)
+  })
+
+  // D2. MUTATION: release unconditionally on `report.skipped` → red.
+  it('D2 · same, but the embedder changed between attempts: still bound', async () => {
+    await propose()
+    const id = requestId()
+    casOk = false
+    await answerMemoryProposalFor('alice', 's1', id, 'save')
+    casOk = true
+    await failing(id, () => (space = 'other/768'), 'unavailable')
+    space = 'space/1024'
+    expect(held.get(id)!.status).toBe('answering')
+    expect(await answerMemoryProposalFor('alice', 's1', id, 'discard')).toEqual({
+      outcome: 'already-answered',
+    })
+    expect(responses()).toEqual([])
+  })
+
+  it('D2b · and the switch turned off between attempts: still bound', async () => {
+    await propose()
+    const id = requestId()
+    casOk = false
+    await answerMemoryProposalFor('alice', 's1', id, 'save')
+    casOk = true
+    await failing(id, () => (memoryOn = false), 'memory-off')
+    memoryOn = true
+    expect(held.get(id)!.status).toBe('answering')
+  })
+
+  // D3. MUTATION: drop `inTransaction` from the store the answer builds → a
+  // write proceeds under an answer that a concurrent attempt released → red.
+  it('D3 · a release that lands before an item is written stops the write: nothing is stored', async () => {
+    await propose()
+    const id = requestId()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      releaseBeforeWrite = true
+      expect((await answerMemoryProposalFor('alice', 's1', id, 'save')).outcome).toBe('failed')
+    } finally {
+      warn.mockRestore()
+    }
+    releaseBeforeWrite = false
+    expect(memories()).toEqual([])
+    expect(held.get(id)!.status).toBe('pending')
+    expect(await answerMemoryProposalFor('alice', 's1', id, 'discard')).toEqual({
+      outcome: 'discarded',
+    })
   })
 })

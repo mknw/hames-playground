@@ -19,6 +19,7 @@ import {
   canonicalAnswer,
   claimHitlProposalAnswer,
   releaseHitlProposalAnswer,
+  requireAnsweringBinding,
   closeHitlRows,
   deleteHitlProposalsForUser,
   deleteHitlRowsForConversations,
@@ -30,6 +31,12 @@ import {
 } from '../../../lib/db/hitl.server'
 import { closePool, query, withTransaction } from '../../../lib/db/client.server'
 import { getMemoryEnabled } from '../../../lib/db/user-prefs.server'
+import {
+  insertMemory,
+  insertMemorySource,
+  ensureMemoriesSchema,
+} from '../../../lib/db/memories.server'
+import { createConversation } from '../../../lib/db/conversations.server'
 import { looksEncrypted } from '../../../lib/db/crypto.server'
 
 const SUFFIX = Math.random().toString(36).slice(2, 10)
@@ -47,10 +54,14 @@ beforeAll(async () => {
   stopHitlSweepTimer()
   // `user_prefs` is created lazily by its own module; ask it to.
   if (dbAvailable) await getMemoryEnabled('schema-probe')
+  // the release guard reads `memory_sources`, which its own module creates lazily
+  if (dbAvailable) await ensureMemoriesSchema()
   if (dbAvailable) for (const u of ['alice', 'bob', 'carol', 'dave']) await setSwitch(u, true)
 })
 afterAll(async () => {
   if (!dbAvailable) return
+  await query('DELETE FROM memories WHERE id LIKE $1', [`mem-prop-%-${SUFFIX}`])
+  await query('DELETE FROM conversations WHERE id LIKE $1', [`test-prop-%-${SUFFIX}`])
   await query('DELETE FROM hitl_requests WHERE session_id LIKE $1', [`test-prop-%-${SUFFIX}`])
   await closePool()
 })
@@ -199,6 +210,7 @@ describe('proposal rows', () => {
 describe('the bound answer (#579 review 2)', () => {
   beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
   const save = { choice: 'save', flags: { i0: true, i1: false } }
+  const EVENT = `ev-nothing-written-${SUFFIX}`
   const claim = (
     n: string,
     answer: { choice: string; flags?: Record<string, boolean> } = save,
@@ -259,14 +271,160 @@ describe('the bound answer (#579 review 2)', () => {
   it('a release gives a bound answer back, and only to its owner', async () => {
     await put('c4')
     await claim('c4')
-    await releaseHitlProposalAnswer(rid('c4'), 'bob')
+    expect(await releaseHitlProposalAnswer(rid('c4'), 'bob', EVENT)).toBe(false)
     expect((await getHitlProposal(rid('c4'), 'alice'))!.status).toBe('answering')
-    await releaseHitlProposalAnswer(rid('c4'), 'alice')
+    expect(await releaseHitlProposalAnswer(rid('c4'), 'alice', EVENT)).toBe(true)
     expect(await getHitlProposal(rid('c4'), 'alice')).toMatchObject({
       status: 'pending',
       answer: null,
     })
     expect(await claim('c4', { choice: 'discard' })).toEqual({ claimed: true })
+  })
+
+  // #579 review 2a. MUTATION: drop the `NOT EXISTS (… memory_sources …)` → a
+  // release after an earlier attempt WROTE gives the answer back, and "Don't
+  // save" is then recorded over the written memories → red.
+  it('a release with a memory_sources row for the proposal changes nothing', async () => {
+    await ensureMemoriesSchema()
+    await put('c6')
+    await claim('c6')
+    const event = `ev-written-${SUFFIX}`
+    await createConversation({
+      id: sid('c6'),
+      userId: 'alice',
+      agentId: 'search',
+      title: null,
+      serializedContext: '{}',
+    } as never)
+    await insertMemory({
+      id: `mem-prop-c6-${SUFFIX}`,
+      userId: 'alice',
+      kind: 'preference',
+      tier: 'verda',
+      content: 'x',
+      evidence: 'x',
+      embedding: Array.from({ length: 1024 }, (_, i) => (i === 0 ? 1 : 0)),
+      embedSpace: 'synthetic',
+    })
+    await insertMemorySource({
+      userId: 'alice',
+      eventId: event,
+      ordinal: 0,
+      memoryId: `mem-prop-c6-${SUFFIX}`,
+      conversationId: sid('c6'),
+    })
+    expect(await releaseHitlProposalAnswer(rid('c6'), 'alice', event)).toBe(false)
+    expect(await getHitlProposal(rid('c6'), 'alice')).toMatchObject({
+      status: 'answering',
+      answer: save,
+    })
+    // another event's sources do not block it, and another user's source for
+    // the same event id does not either (the guard is owner-scoped)
+    expect(await releaseHitlProposalAnswer(rid('c6'), 'alice', `${event}-other`)).toBe(true)
+  })
+
+  // MUTATION: drop `user_id = $2` from the NOT EXISTS → another user's source row
+  // for the same event id blocks (or is read as) this owner's release → red.
+  it("the release guard is owner-scoped: another user's source for the same event id does not count", async () => {
+    await put('c9')
+    await claim('c9')
+    const event = `ev-shared-${SUFFIX}`
+    await createConversation({
+      id: sid('c9'),
+      userId: 'bob',
+      agentId: 'search',
+      title: null,
+      serializedContext: '{}',
+    } as never)
+    await insertMemory({
+      id: `mem-prop-c9-${SUFFIX}`,
+      userId: 'bob',
+      kind: 'preference',
+      tier: 'verda',
+      content: 'x',
+      evidence: 'x',
+      embedding: Array.from({ length: 1024 }, (_, i) => (i === 0 ? 1 : 0)),
+      embedSpace: 'synthetic',
+    })
+    await insertMemorySource({
+      userId: 'bob',
+      eventId: event,
+      ordinal: 0,
+      memoryId: `mem-prop-c9-${SUFFIX}`,
+      conversationId: sid('c9'),
+    })
+    expect(await releaseHitlProposalAnswer(rid('c9'), 'alice', event)).toBe(true)
+  })
+
+  // MUTATION: drop `FOR UPDATE` from the release, or `FOR SHARE` from the
+  // binding check → the release does not wait for a write in flight, and
+  // (single-snapshot or not) gives the answer back over it → red.
+  it('a release waits for a write transaction that re-checked the binding, then sees its rows (D3)', async () => {
+    await ensureMemoriesSchema()
+    await put('c7')
+    await claim('c7')
+    const event = `ev-race-${SUFFIX}`
+    await createConversation({
+      id: sid('c7'),
+      userId: 'alice',
+      agentId: 'search',
+      title: null,
+      serializedContext: '{}',
+    } as never)
+    await insertMemory({
+      id: `mem-prop-c7-${SUFFIX}`,
+      userId: 'alice',
+      kind: 'preference',
+      tier: 'verda',
+      content: 'x',
+      evidence: 'x',
+      embedding: Array.from({ length: 1024 }, (_, i) => (i === 0 ? 1 : 0)),
+      embedSpace: 'synthetic',
+    })
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    let bound!: () => void
+    const bindingHeld = new Promise<void>((r) => (bound = r))
+    // attempt B: re-checks the binding, then writes its source row, slowly
+    const writer = withTransaction(async (tx) => {
+      await requireAnsweringBinding(tx, rid('c7'), 'alice')
+      bound()
+      await gate
+      await tx.query(
+        `INSERT INTO memory_sources (user_id, event_id, ordinal, memory_id, conversation_id)
+         VALUES ('alice', $1, 0, $2, $3)`,
+        [event, `mem-prop-c7-${SUFFIX}`, sid('c7')],
+      )
+    })
+    await bindingHeld
+    // attempt A: failed before writing, releases while B is mid-write
+    let released: boolean | undefined
+    const releaser = releaseHitlProposalAnswer(rid('c7'), 'alice', event).then(
+      (r) => (released = r),
+    )
+    await new Promise((r) => setTimeout(r, 300))
+    expect(released).toBeUndefined() // it is WAITING on B's lock
+    release()
+    await writer
+    await releaser
+    expect(released).toBe(false) // and then it SAW B's committed row
+    expect(await getHitlProposal(rid('c7'), 'alice')).toMatchObject({ status: 'answering' })
+  })
+
+  // MUTATION: drop the status clause of the binding check → a write proceeds
+  // under an answer that was released → red.
+  it('the binding check refuses a proposal that is not (or no longer) answering', async () => {
+    await put('c8')
+    await expect(
+      withTransaction((tx) => requireAnsweringBinding(tx, rid('c8'), 'alice')),
+    ).rejects.toThrow(/no longer bound/)
+    await claim('c8')
+    await expect(
+      withTransaction((tx) => requireAnsweringBinding(tx, rid('c8'), 'alice')),
+    ).resolves.toBeUndefined()
+    await expect(
+      withTransaction((tx) => requireAnsweringBinding(tx, rid('c8'), 'bob')),
+    ).rejects.toThrow(/no longer bound/)
   })
 
   // MUTATION: leave 'answering' out of the sweep → an expired bound answer keeps its payload → red.

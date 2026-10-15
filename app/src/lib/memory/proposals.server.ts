@@ -66,6 +66,7 @@ import {
   listHitlProposals,
   putHitlProposal,
   releaseHitlProposalAnswer,
+  requireAnsweringBinding,
   type HitlAnswerValue,
 } from '../db/hitl.server'
 import { createMemoryDbStore } from '../db/memories.server'
@@ -300,12 +301,16 @@ export async function answerMemoryProposalFor(
       return { outcome: 'already-answered' }
     }
   }
-  // Nothing was written under this answer: give it back, so a refusal before
-  // any write cannot turn "Don't save" into `already-answered`.
+  // A refusal before any write gives the answer back, so it cannot turn "Don't
+  // save" into `already-answered` — but only if NOTHING is written under it, and
+  // that is the DATABASE's call (`memory_sources` for this proposal's source
+  // event), not this attempt's report: an earlier attempt of the same answer, or
+  // a concurrent one, may have written (#579 review 2a).
   const release = () =>
-    releaseHitlProposalAnswer(requestId, userId).catch((err: unknown) =>
-      console.warn('[memory] bound answer not released:', err),
-    )
+    releaseHitlProposalAnswer(requestId, userId, payload.eventId).catch((err: unknown) => {
+      console.warn('[memory] bound answer not released:', err)
+      return false
+    })
 
   let written = 0
   let stale = 0
@@ -313,7 +318,12 @@ export async function answerMemoryProposalFor(
     const report = await applyMemoryProposal(
       ctx,
       {
-        store: createMemoryDbStore(userId),
+        // Each item's transaction re-checks, under a row lock, that THIS answer is
+        // still the bound one, so a concurrent release cannot slip between the
+        // check and the write (#579 review 2a, D3).
+        store: createMemoryDbStore(userId, {
+          inTransaction: (tx) => requireAnsweringBinding(tx, requestId, userId),
+        }),
         embedSpace: () => createMemoryEmbedder().spaceId,
         enabled: () => getMemoryEnabled(userId),
       },
@@ -324,11 +334,8 @@ export async function answerMemoryProposalFor(
           .map(([ref]) => ref),
       },
     )
-    // Whether anything is already written under this answer (an item written
-    // now, or by an earlier attempt of the same answer).
-    const effects = report.items.some((i) => i.outcome === 'written' || i.outcome === 'duplicate')
     if (report.skipped === 'disabled') {
-      if (!effects) await release()
+      await release()
       return { outcome: 'memory-off' }
     }
     if (report.skipped) {
@@ -336,14 +343,20 @@ export async function answerMemoryProposalFor(
       return { outcome: 'unavailable' }
     }
     if (report.items.some((i) => i.outcome === 'failed')) {
-      if (!effects) await release()
+      await release()
       return { outcome: 'failed' }
     }
     // M3's hard limit refused every item and nothing is written: say so, and
-    // give the answer back so the person can decline or make room and retry.
-    if (!effects && report.items.some((i) => i.outcome === 'full')) {
-      await release()
-      return { outcome: 'full' }
+    // give the answer back (if the database agrees nothing is written) so the
+    // person can decline or make room and retry.
+    if (
+      report.items.length > 0 &&
+      report.items.every((i) => i.outcome === 'full' || i.outcome === 'stale')
+    ) {
+      if (report.items.some((i) => i.outcome === 'full')) {
+        await release()
+        return { outcome: 'full' }
+      }
     }
     // `written` counts what this answer put in memory, a retry's duplicates
     // included, so a retry does not report "Saved 0."

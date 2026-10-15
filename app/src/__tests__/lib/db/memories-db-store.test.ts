@@ -376,6 +376,47 @@ describe('recall store (MemoryStore)', () => {
 describe('write store (MemoryWriteStore)', () => {
   beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
+  // #579 review 2a. MUTATION: drop the `opts.inTransaction?.(client)` call → a
+  // host's check never runs and the write proceeds → red; run it AFTER `fn` → red.
+  it('inTransaction runs on the write connection BEFORE the body, and a throw stops the write', async () => {
+    const order: string[] = []
+    const store = createMemoryDbStore(ALICE, {
+      inTransaction: async (tx) => {
+        const { rows } = await tx.query('SELECT pg_backend_pid() AS pid')
+        order.push(`check:${rows.length}`)
+      },
+    })
+    await store.transaction(async () => {
+      order.push('body')
+    })
+    expect(order).toEqual(['check:1', 'body'])
+
+    const refused = createMemoryDbStore(ALICE, {
+      inTransaction: async () => {
+        throw new Error('no longer bound')
+      },
+    })
+    const before = (await listMemoriesForUser(ALICE)).length
+    let ran = false
+    await expect(
+      refused.transaction(async (tx) => {
+        ran = true
+        await tx.insert({
+          id: id('mem'),
+          kind: 'semantic',
+          tier: 'verda',
+          content: 'must not be written',
+          evidence: 'x',
+          evidenceEventId: id('evidence-event'),
+          embedding: axis(7),
+          embedSpace: SPACE,
+        })
+      }),
+    ).rejects.toThrow('no longer bound')
+    expect(ran).toBe(false)
+    expect((await listMemoriesForUser(ALICE)).length).toBe(before)
+  })
+
   it('addSource: ON CONFLICT DO NOTHING RETURNING — a replay reports the existing memory and the transaction survives', async () => {
     const c = await conv(ALICE)
     const store = createMemoryDbStore(ALICE)

@@ -18,7 +18,7 @@
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { decryptFieldOrNull, encryptFieldOrNull } from './crypto.server'
-import { query, type TxQuery } from './client.server'
+import { query, withTransaction, type TxQuery } from './client.server'
 
 assertServerOnImport()
 
@@ -381,17 +381,71 @@ export async function claimHitlProposalAnswer(input: {
   }
 }
 
-/** Give a bound answer back (`answering → pending`) when NOTHING was written
- *  under it, so a refusal before any write (memory switched off, payload
- *  unusable, a failed first write) does not turn "Don't save" into
- *  `already-answered`. Fenced to the owner and to `answering`. */
-export async function releaseHitlProposalAnswer(requestId: string, userId: string): Promise<void> {
-  await query(
-    `UPDATE hitl_requests
-        SET status = 'pending', answer = NULL, answered_at = NULL, updated_at = NOW()
-      WHERE request_id = $1 AND user_id = $2 AND status = 'answering'`,
+/**
+ * Give a bound answer back (`answering → pending`) ONLY when nothing is written
+ * under it, so a refusal before any write (memory switched off, payload
+ * unusable, a failed first write) does not turn "Don't save" into
+ * `already-answered` (#579 review 2a).
+ *
+ * "Nothing is written" is decided HERE, by the database, never from one
+ * attempt's report: an earlier attempt of the same answer (the retry after a
+ * refused save), or a concurrent one, may already have written. One proposal is
+ * exactly one `event_id` (the user message it was built from), and
+ * `(user_id, event_id, ordinal)` is `memory_sources`' primary key, so a row for
+ * that event IS a write under this proposal.
+ *
+ * Two statements in one transaction, on purpose. The first takes the row lock:
+ * a write transaction that re-checked the binding holds it `FOR SHARE` until it
+ * commits, so this waits for it. The second then runs with a FRESH statement
+ * snapshot, so its `NOT EXISTS` sees what that write committed — a single
+ * `UPDATE … WHERE NOT EXISTS` would keep the snapshot it started with across the
+ * lock wait and could not.
+ *
+ * Returns whether the answer was given back.
+ */
+export async function releaseHitlProposalAnswer(
+  requestId: string,
+  userId: string,
+  eventId: string,
+): Promise<boolean> {
+  return withTransaction(async (tx) => {
+    const { rows } = await tx.query(
+      `SELECT 1 FROM hitl_requests
+        WHERE request_id = $1 AND user_id = $2 AND status = 'answering'
+          FOR UPDATE`,
+      [requestId, userId],
+    )
+    if (rows.length === 0) return false
+    const { rowCount } = await tx.query(
+      `UPDATE hitl_requests
+          SET status = 'pending', answer = NULL, answered_at = NULL, updated_at = NOW()
+        WHERE request_id = $1 AND user_id = $2 AND status = 'answering'
+          AND NOT EXISTS (SELECT 1 FROM memory_sources WHERE user_id = $2 AND event_id = $3)`,
+      [requestId, userId, eventId],
+    )
+    return (rowCount ?? 0) > 0
+  })
+}
+
+/**
+ * Inside a memory write transaction, BEFORE the item is written: the proposal is
+ * still bound (`answering`), and hold the row `FOR SHARE` until the transaction
+ * ends. A release (above) therefore either ran first — and this throws, so
+ * nothing is written under a released answer — or waits for this write to
+ * commit and then sees it (#579 review 2a, D3: two concurrent submits).
+ */
+export async function requireAnsweringBinding(
+  tx: TxQuery,
+  requestId: string,
+  userId: string,
+): Promise<void> {
+  const { rows } = await tx.query(
+    `SELECT 1 FROM hitl_requests
+      WHERE request_id = $1 AND user_id = $2 AND status = 'answering'
+        FOR SHARE`,
     [requestId, userId],
   )
+  if (rows.length === 0) throw new Error('[hitl] the proposal answer is no longer bound')
 }
 
 /**

@@ -373,8 +373,9 @@ active development; the Warning below has the status and what to do meanwhile.
 > Both protect the graph, not the network. A query can still make the database
 > fetch URLs through APOC's load procedures: the server's read tool refuses only
 > queries that look like writes, and `CALL apoc.load.json('http://…')` does not.
-> To close that too, run them against a Neo4j without APOC, or one whose network
-> reaches nothing you care about. The demo graph needs no APOC
+> To close that too, run them against a Neo4j with egress denied, as in this
+> repository's compose stack (#241 G13). Removing APOC alone is insufficient:
+> Cypher's `LOAD CSV` can still fetch URLs. The demo graph needs no APOC
 > (`neo4j_dumps/seed-data.cypher` is plain Cypher), but these agents read the
 > schema through the MCP server's `get_neo4j_schema` tool, which runs
 > `CALL apoc.meta.schema(...)` and fails on a Neo4j without APOC. The agents then

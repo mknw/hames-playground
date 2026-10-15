@@ -113,11 +113,12 @@ logs the driver's error, with its stack trace, before returning it in
 > **Warning:** Guardrails for the Cypher path are in active development, and a
 > release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)). Until it ships, `runManualCypher`
 > and the ready-made agents that compose Cypher are not meant for production use. The
-> easy way to try them without the risk below is a Neo4j without APOC, such as the
-> `docker run` above: nothing on this page needs APOC, and without it a query
-> cannot make the database fetch URLs. Throwaway data (a fresh Neo4j, loaded with
-> the demo graph `neo4j_dumps/seed-data.cypher` if you want something to query)
-> keeps your data safe too, but not the network. The agents hold no Neo4j
+> way to close the network risk below is a Neo4j with egress denied, as in this
+> repository's compose stack (#241 G13). The standalone `docker run` above omits
+> APOC but has no network isolation; Cypher's `LOAD CSV` can still fetch URLs.
+> Throwaway data (a fresh Neo4j, loaded with the demo graph
+> `neo4j_dumps/seed-data.cypher` if you want something to query) protects the
+> graph's contents, but does not constrain network access. The agents hold no Neo4j
 > write tool; the [Warning in @hames-ai/agents](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog) says why.
 >
 > Why: `runManualCypher` runs whatever Cypher you pass it. It refuses write clauses

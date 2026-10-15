@@ -37,34 +37,46 @@ export function createWebPseudonymiser({
       .filter((entry) => entry.address || entry.nameVariants.length > 0)
     const roster = mergeRosters(directoryRoster, payloadRoster)
     const table = buildTable(roster)
-    // A literal the principal actually named in this message may leave. Test
-    // each form with the same Unicode/part boundaries as the input rewrite.
-    const outgoingTable = {
-      entries: table.entries.map((entry) => ({
-        ...entry,
-        forms: entry.forms.filter(
-          (form) =>
-            apply(latestUserMessage, { entries: [{ ...entry, forms: [form] }] }) ===
-            latestUserMessage,
-        ),
-      })),
-    }
+    // Match literals even inside markup: apply intentionally preserves tag
+    // names/unquoted attributes and is therefore not an outgoing predicate.
+    // Keep its Unicode/part boundaries, and exempt forms the user named.
+    const outgoingLiterals = table.entries
+      .flatMap((entry) => entry.forms)
+      .map((form) => {
+        const literal = form.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        const fence = form.part ? '\\p{L}\\p{N}_-' : '\\p{L}\\p{N}_'
+        return new RegExp(`(?<![${fence}])${literal}(?![${fence}])`, 'iu')
+      })
+      .filter((literal) => !literal.test(latestUserMessage))
     return {
       apply: <T>(value: T): T => apply(value, table),
       check: (args) => {
-        let decoded: string
+        let decoded: string[]
         try {
+          // Read original strings before serialization escapes quotes or
+          // backslashes. The replacer visits nested values and object keys;
+          // JSON's own cycle/error handling still fails the check closed.
+          const texts: string[] = []
+          JSON.stringify(args, (key, value) => {
+            texts.push(key)
+            if (typeof value === 'string') texts.push(value)
+            return value
+          })
           // Decode escaped runs, leaving a literal percent ("5% growth") alone.
           // Check literal + as well as form-URL + below, so tagged addresses
           // and names separated by URL-encoded spaces are both covered.
-          decoded = JSON.stringify(args).replace(/(?:%[\da-f]{2})+/gi, decodeURIComponent)
+          decoded = texts.map((s) => s.replace(/(?:%[\da-f]{2})+/gi, decodeURIComponent))
         } catch {
           return 'Web call refused: arguments could not be URL-decoded.'
         }
         // Any suffix: the pure builder may add new forms without weakening
         // this rule. A stable directory placeholder is an identifier too (E3).
-        if (/PERSON_\d+/i.test(decoded)) return 'Placeholders are not search terms.'
-        if ([decoded, decoded.replace(/\+/g, ' ')].some((s) => apply(s, outgoingTable) !== s)) {
+        if (decoded.some((s) => /PERSON_\d+/i.test(s))) return 'Placeholders are not search terms.'
+        if (
+          decoded
+            .flatMap((s) => [s, s.replace(/\+/g, ' ')])
+            .some((s) => outgoingLiterals.some((literal) => literal.test(s)))
+        ) {
           return 'The query contained a private identity; rephrase without it.'
         }
       },

@@ -476,6 +476,7 @@ describe('withholding and outgoing checks', () => {
         'PERSON_3_FUTURE_SUFFIX',
         'PERSON%5F3',
         encodeURIComponent(DIRECTORY.mail),
+        `<${DIRECTORY.mail}>`,
       ]) {
         expect(
           await callTool('fetch', { url: `https://public.example.test/?q=${term}` }),
@@ -593,9 +594,14 @@ describe('withholding and outgoing checks', () => {
       'rene%2Btag%40example.test',
       'Ren%C3%A9%20Alder',
       'Ren%C3%A9+Alder',
+      '<René Alder>',
+      '%3CRen%C3%A9%20Alder%3E',
     ]) {
       expect(filter.check({ query })).toContain('private identity')
     }
+    expect(filter.check({ query: 'Renéish Alderwood' })).toBeUndefined()
+    const userNamed = await createWebPseudonymiser()([], 'Search for <René Alder>')
+    expect(userNamed.check({ query: 'René Alder' })).toBeUndefined()
   })
 
   it('leaves earlier placeholders unchanged when labelled fields are harvested again', async () => {
@@ -605,5 +611,20 @@ describe('withholding and outgoing checks', () => {
     )
     expect(filter.apply('PERSON_1 asked PERSON_2_EMAIL')).toBe('PERSON_1 asked PERSON_2_EMAIL')
     expect(filter.apply(EXTERNAL.name)).toBe('PERSON_2')
+  })
+
+  it('checks original argument strings before JSON escaping, including nested values and keys', async () => {
+    const address = '"odd.nickname"@example.test'
+    vi.mocked(loadDirectoryRoster).mockResolvedValue([
+      { displayName: 'Nora Spruce', mail: address },
+    ])
+    const filter = await createWebPseudonymiser()([], '')
+    expect(filter.check({ query: address })).toContain('private identity')
+    expect(
+      filter.check({
+        nested: [{ url: `https://public.example.test/?q=${encodeURIComponent(address)}` }],
+      }),
+    ).toContain('private identity')
+    expect(filter.check({ [address]: 'value' })).toContain('private identity')
   })
 })

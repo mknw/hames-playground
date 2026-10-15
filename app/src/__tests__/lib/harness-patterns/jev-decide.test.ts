@@ -1014,6 +1014,29 @@ describe('G11 private systemone routing', () => {
     }
   })
 
+  it.each([undefined, 'future', ''])(
+    'routes to the private URL under the private deployment default when the frame tier is %j',
+    async (tier) => {
+      vi.stubEnv('USE_VERDA_INFERENCE', '1')
+      try {
+        const { decideAll } = await transport()
+        const run = () => decideAll({ spec: SET, state: 'Synthetic.' })
+        const result = await (tier === undefined
+          ? run()
+          : withRunFrame({ inference: { tier } }, run))
+        expect(requests).toHaveLength(1)
+        expect(requests[0].url).toBe(process.env.SMALL_LLM_DECISIONS_URL)
+        expect(requests[0].init.headers).toMatchObject({
+          authorization: `Bearer ${process.env.SMALL_LLM_API_KEY}`,
+        })
+        expect(requests.map((r) => r.url)).not.toContain(process.env.JEV_DECISIONS_URL)
+        expect(result.fields.route.llmCall?.clientName).toBe('PrivateSystemOne')
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    },
+  )
+
   it('refuses an unset private URL before reading either key and never falls through to the public URL', async () => {
     delete process.env.SMALL_LLM_DECISIONS_URL
     const { assertPrivateTierConfigured } = await import('../../../lib/inference/config.server')

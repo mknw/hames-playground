@@ -1868,27 +1868,29 @@ describe('#558 F2 asserted same-bytes CPU controls', () => {
 
 /** #558 F3-F7: classification pins the review found missing (each names its mutation). */
 describe('#558 classification discriminators', () => {
-  // F3 (ruling K): the old key also joined a run's OWN IDs with U+0000, which the XML
-  // reader accepts raw in an attribute value. Mutation: R5 (trie replaced by a join).
-  it.each([false, true])(
-    'K a run sequence cannot alias one ID holding U+0000, reverse=%s',
-    async (reverse) => {
-      const nul = 'A' + String.fromCharCode(0) + 'B'
-      const white = `<w:r><w:rPr><w:rStyle w:val="${nul}"/></w:rPr><w:t>VISIBLE</w:t></w:r>`
-      const black =
-        '<w:r><w:rPr><w:rStyle w:val="A"/><w:rStyle w:val="B"/></w:rPr><w:t>VISIBLE</w:t></w:r>'
-      const styles =
-        style(nul, '<w:color w:val="FFFFFF"/>', '', 'character') +
-        style('A', '<w:color w:val="000000"/>', '', 'character') +
-        style('B', '<w:color w:val="000000"/>', '', 'character')
-      const body = `<w:p>${reverse ? white + black : black + white}</w:p>`
-      await pair(word(body, styles), word(body, styles.replace('FFFFFF', '000000')), MIME.docx, {
-        'colour-contrast': 1,
+  // #559: XML Char now refuses the raw NUL before the ruling K resolver.
+  // MUTATION: drop the tokenizer raw-character check; both refusals turn red.
+  it.each([false, true])('refuses raw U+0000 in Word style IDs, reverse=%s', async (reverse) => {
+    const nul = 'A' + String.fromCharCode(0) + 'B'
+    const white = `<w:r><w:rPr><w:rStyle w:val="${nul}"/></w:rPr><w:t>VISIBLE</w:t></w:r>`
+    const black =
+      '<w:r><w:rPr><w:rStyle w:val="A"/><w:rStyle w:val="B"/></w:rPr><w:t>VISIBLE</w:t></w:r>'
+    const styles =
+      style(nul, '<w:color w:val="FFFFFF"/>', '', 'character') +
+      style('A', '<w:color w:val="000000"/>', '', 'character') +
+      style('B', '<w:color w:val="000000"/>', '', 'character')
+    const body = `<w:p>${reverse ? white + black : black + white}</w:p>`
+    for (const definitions of [styles, styles.replace('FFFFFF', '000000')]) {
+      await expect(
+        ooxmlDisarm(makeDocx({ body, styles: wStyles(definitions), stored: true }), MIME.docx),
+      ).rejects.toMatchObject({
+        code: 'xml-malformed',
       })
-    },
-  )
+    }
+  })
   // F4 (ruling K, PowerPoint): a placeholder's (type, idx) is a structured key.
-  // Mutation: restore the `${ph.type}\0${ph.idx}` key at both sites.
+  // #559 MUTATION: drop the raw-character check for NUL; force refusal for
+  // the legal separator control. Each branch turns red under its mutation.
   it.each([String.fromCharCode(0), '_'])(
     'pptx placeholder (type, idx) never aliases across %j',
     async (sep) => {
@@ -1896,16 +1898,22 @@ describe('#558 classification discriminators', () => {
       const ph = (rgb: string, idx: string, id: number) =>
         `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="x"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="${idx}"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr><a:defRPr>${solidFill(rgb)}</a:defRPr></a:lvl1pPr></a:lstStyle><a:p/></p:txBody></p:sp>`
       const deck = (white: string) =>
-        store(
-          makePptx({
-            slides: [{ shapes: shape('VISIBLE', { ph: `body${sep}q`, idx: '1' }) }],
-            style: {
-              layouts: [
-                `<p:sldLayout ${P_ROOT_NS}><p:cSld><p:spTree>${ph('000000', `q${sep}1`, 2) + ph(white, '1', 3)}</p:spTree></p:cSld></p:sldLayout>`,
-              ],
-            },
-          }),
-        )
+        makePptx({
+          slides: [{ shapes: shape('VISIBLE', { ph: `body${sep}q`, idx: '1' }) }],
+          style: {
+            layouts: [
+              `<p:sldLayout ${P_ROOT_NS}><p:cSld><p:spTree>${ph('000000', `q${sep}1`, 2) + ph(white, '1', 3)}</p:spTree></p:cSld></p:sldLayout>`,
+            ],
+          },
+        })
+      if (sep === '\0') {
+        for (const colour of ['FFFFFF', '000000']) {
+          await expect(ooxmlDisarm(deck(colour), MIME.pptx)).rejects.toMatchObject({
+            code: 'xml-malformed',
+          })
+        }
+        return
+      }
       // The slide placeholder matches no (type, idx); by idx it inherits the white level.
       expect((await ooxmlDisarm(deck('FFFFFF'), MIME.pptx)).counted).toEqual({
         'colour-contrast': 1,

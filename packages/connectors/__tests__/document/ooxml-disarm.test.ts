@@ -15,6 +15,7 @@
  * mutation table records the run.
  */
 import { describe, expect, it, vi } from 'vitest'
+import * as zip from '@hames-ai/harness-patterns/stash/zip.server'
 import {
   parseXml,
   readZip,
@@ -93,6 +94,82 @@ const DOCX_STYLES_NORMAL =
 // ============================================================================
 // The rebuilt package
 // ============================================================================
+
+// #559 / SD-1 / SD-2. MUTATION: remove the tokenizer's raw-character
+// refusal; these documents must never become clean sanitized output.
+describe('malformed raw XML stays fail-closed', () => {
+  const deck = (slideSeparator: string, layoutSeparator: string) =>
+    pptx({
+      slides: [{ shapes: shape('VISIBLE', { ph: `body${slideSeparator}q`, idx: '1' }) }],
+      style: {
+        layouts: [
+          `<p:sldLayout ${P_ROOT_NS}><p:cSld><p:spTree>${SP_TREE_HEAD}` +
+            shape('', {
+              ph: 'body',
+              idx: `q${layoutSeparator}1`,
+            }).replace(
+              '<a:p>',
+              '<a:lstStyle><a:lvl1pPr><a:defRPr><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:defRPr></a:lvl1pPr></a:lstStyle><a:p>',
+            ) +
+            shape('', {
+              id: 3,
+              ph: 'body',
+              idx: '1',
+            }).replace(
+              '<a:p>',
+              '<a:lstStyle><a:lvl1pPr><a:defRPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:defRPr></a:lvl1pPr></a:lstStyle><a:p>',
+            ) +
+            '</p:spTree></p:cSld></p:sldLayout>',
+        ],
+      },
+    })
+
+  it.each([
+    ['slide', '\0', '_'],
+    ['layout', '_', '\0'],
+    ['issue #559 collision', '\0', '\0'],
+  ])('refuses the NUL attribute in %s before conversion', async (_, slide, layout) => {
+    const bytes = deck(slide, layout)
+    expect(await refusalOf(ooxmlDisarm(bytes, MIME.pptx))).toBe('xml-malformed')
+    const convert = vi.fn(async () => 'VISIBLE')
+    await expect(
+      flattenDocument(
+        { bytes, filename: 'synthetic.pptx', mimeType: MIME.pptx },
+        { convert, disarm: ooxmlDisarm },
+      ),
+    ).rejects.toMatchObject({ code: 'xml-malformed' })
+    expect(convert).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['ppt/slides/slide1.xml', 'body_q', 'body\0q'],
+    ['ppt/slideLayouts/slideLayout1.xml', 'q_1', 'q\u00001'],
+  ])('propagates parseXml refusal from %s even after ZIP validation', async (part, from, to) => {
+    // Isolate both production parseXml call sites from readZip's earlier
+    // validation, so a future catch-and-continue at either site turns red.
+    const entries = readZip(deck('_', '_')).map((entry) =>
+      entry.name === part
+        ? {
+            ...entry,
+            data: new TextEncoder().encode(new TextDecoder().decode(entry.data).replace(from, to)),
+          }
+        : entry,
+    )
+    const reader = vi.spyOn(zip, 'readZip').mockReturnValue(entries)
+    try {
+      expect(await refusalOf(ooxmlDisarm(new Uint8Array(), MIME.pptx))).toBe('xml-malformed')
+    } finally {
+      reader.mockRestore()
+    }
+  })
+
+  // MUTATION: force refusal for a legal document; this positive control is red.
+  it('keeps a valid separator control readable with concealment counted', async () => {
+    const out = await ooxmlDisarm(deck('_', '_'), MIME.pptx)
+    expect(everything(out.bytes)).toContain('VISIBLE')
+    expect(out.counted).toEqual({ 'colour-contrast': 1 })
+  })
+})
 
 describe('the rebuilt package', () => {
   it('a clean docx keeps its text, removes nothing and counts nothing', async () => {

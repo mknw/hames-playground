@@ -19,7 +19,7 @@
 
 neo4j-cypher:
   enabled: true
-  uri: bolt://neo4j:7687
+  uri: bolt://neo4j-relay:7687
   username: neo4j
   password: ${NEO4J_PASSWORD}
   database: neo4j

@@ -373,14 +373,17 @@ active development; the Warning below has the status and what to do meanwhile.
 > Both protect the graph, not the network. A query can still make the database
 > fetch URLs through APOC's load procedures: the server's read tool refuses only
 > queries that look like writes, and `CALL apoc.load.json('http://…')` does not.
-> To close that too, run them against a Neo4j without APOC, or one whose network
-> reaches nothing you care about. The demo graph needs no APOC
+> To close that too, run them against a Neo4j on an internal bridge with IPv4 gateway mode `isolated`, as in this
+> repository's compose stack (#241 G13). Removing APOC alone is insufficient:
+> Cypher's `LOAD CSV` can still fetch URLs. The demo graph needs no APOC
 > (`neo4j_dumps/seed-data.cypher` is plain Cypher), but these agents read the
 > schema through the MCP server's `get_neo4j_schema` tool, which runs
 > `CALL apoc.meta.schema(...)` and fails on a Neo4j without APOC. The agents then
 > log `graph schema unavailable` and run without the schema
-> ([graph-schema.server.ts](https://github.com/mknw/hames-playground/blob/main/packages/agents/agents/graph-schema.server.ts)). On `docker compose`, the Neo4j shares a network
-> with the MCP server, Postgres and Redis.
+> ([graph-schema.server.ts](https://github.com/mknw/hames-playground/blob/main/packages/agents/agents/graph-schema.server.ts)). The repository compose stack closes this network path (#241 G13): Neo4j
+> sits only on an internal network with a fixed HTTP/Bolt relay; it cannot
+> reach the MCP server, Postgres, Redis or public URLs. Other deployments must
+> provide equivalent isolation.
 >
 > Why: these three agents let the model write Cypher and run it through the MCP
 > server's `read_neo4j_cypher` tool, and none of the three guards its Neo4j
@@ -388,7 +391,7 @@ active development; the Warning below has the status and what to do meanwhile.
 > that look like writes. But what these agents
 > read, whether a person types it or `general` and the web route fetch it, can
 > still try to make the database fetch URLs: the Neo4j this
-> repository ships installs APOC (`NEO4J_PLUGINS=["apoc", "n10s"]` in [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)),
+> repository ships installs APOC (baked into `docker/neo4j/Dockerfile`, used by [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)),
 > and with APOC's load procedures enabled (the default once APOC is installed) a
 > query such as `CALL apoc.load.json('http://…')` makes the database fetch that
 > URL. See also [#241](https://github.com/mknw/hames-playground/issues/241) and the Warning on

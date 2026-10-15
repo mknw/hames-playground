@@ -53,8 +53,10 @@ export function getEndpoints(): Endpoints {
     mcpGateway: isDev ? 'http://localhost:3000/mcp' : 'http://mcp-gateway:3000/mcp',
 
     neo4j: {
-      http: process.env.NEO4J_HTTP_URL || (isDev ? 'http://localhost:7474' : 'http://neo4j:7474'),
-      bolt: process.env.NEO4J_BOLT_URL || (isDev ? 'bolt://localhost:7687' : 'bolt://neo4j:7687'),
+      http:
+        process.env.NEO4J_HTTP_URL || (isDev ? 'http://localhost:7474' : 'http://neo4j-relay:7474'),
+      bolt:
+        process.env.NEO4J_BOLT_URL || (isDev ? 'bolt://localhost:7687' : 'bolt://neo4j-relay:7687'),
     },
   }
 }

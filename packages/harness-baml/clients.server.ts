@@ -225,7 +225,7 @@ export interface CostRates {
 // and cannot be imported here (the extraction's one direction rule). Kept
 // equal to the app's DEFAULT_EUR_PER_USD / DEFAULT_VERDA_EUR_PER_HOUR by
 // clients-seam.test.ts — the same deliberate-copy-with-a-pin pattern as
-// TIME_PRICED_CLIENT in settings.ts.
+// TIME_PRICED_CLIENTS in settings.ts.
 const SEAM_DEFAULT_EUR_PER_USD = 0.86
 const SEAM_DEFAULT_VERDA_EUR_PER_HOUR = 1.819
 
@@ -277,11 +277,12 @@ export type CostEstimator = (
 
 export interface CostPricing {
   estimate: CostEstimator
-  /** The client billed by the second (settings.ts's `TIME_PRICED_CLIENT`).
-   *  `computeEventMetrics` prices a usage-less attempt on this client against
-   *  wall-clock rather than dropping it. Unregistered → no such client, so a
-   *  usage-less attempt is dropped — registration is what restores the floor. */
+  /** @deprecated Single-client compatibility form; uses verdaEurPerHour.
+   * Includes usage-less attempts for this client in the cost floor. */
   timePricedClient?: string
+  /** Per-client rate readers, resolved once per step. Includes usage-less
+   * attempts in pricing; missing timing leaves the step cost unknown. */
+  timePricedClients?: Readonly<Record<string, () => number>>
 }
 
 let costPricing: CostPricing = {
@@ -537,16 +538,11 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   //     the whole reason that mirror reports the override. The visible effect is
   //     `maxBatchItems()` returning 5 instead of 8, i.e. MORE describe calls per
   //     turn, each far cheaper and none of them on the queue in (1).
-  //  4. COST is €0.00, on a basis of its own. `LocalQwenSmall` is in
-  //     `LOCAL_PRICED_CLIENTS` (settings.ts) rather than in `CLIENT_PRICING` or
-  //     `TIME_PRICED_CLIENT`, so a private-tier step that summarized a result
-  //     renders an exact zero labelled "local" — not cost-unknown, which is what
-  //     it read as until the owner settled this on 2026-08-26. The distinction is
-  //     the whole decision: unknown means unmeasured, and a call served by a
-  //     model process on infrastructure with no marginal bill is not unmeasured.
-  //     It is a claim about the CLIENT, so moving that endpoint onto metered
-  //     infrastructure means moving the client into the priced set — the same
-  //     edit this map already requires.
+  //  4. COST is time-priced on metered infrastructure (owner decision
+  //     2026-10-13): SMALL_LLM_EUR_PER_HOUR (default €1.54/h) times measured
+  //     per-attempt duration. Missing duration reads as unknown; measured
+  //     calls carry the same floor marker as the larger GPU. Attribution
+  //     follows LocalQwenSmall, never the endpoint URL.
   //
   // If `SMALL_LLM_BASE_URL` is unset the tier is REFUSED, not descaled — see
   // `assertPrivateTierConfigured` in lib/inference/config.server.ts.

@@ -395,6 +395,9 @@ async function boot(): Promise<AppHandles> {
       const activity = await import('../../src/lib/inference/verda-activity.server')
       const wake = await import('../../src/lib/inference/wake.server')
       activity.resetVerdaActivity()
+      const coldStart = await import('../../src/lib/inference/cold-start.server')
+      coldStart.resetSmallActivity()
+      wake.resetSmallWake()
       // And drop any ping still parked on the shared symbol, so a scenario that
       // just failed one does not attach to its rejected promise.
       wake.resetVerdaWake()

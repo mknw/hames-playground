@@ -214,9 +214,9 @@ vi.mock('../../../lib/inference/verda-activity.server', () => ({
 // right tier, and does a failure end the turn — while `verda-wake.test.ts` owns
 // what the ping puts on the wire and how it dedupes. Running the real one here
 // would open a socket from a scope test.
-const ensureVerdaAwake = vi.fn(async () => {})
+const ensurePrivateTierAwake = vi.fn(async () => {})
 vi.mock('../../../lib/inference/wake.server', () => ({
-  ensureVerdaAwake: () => ensureVerdaAwake(),
+  ensurePrivateTierAwake: () => ensurePrivateTierAwake(),
 }))
 
 const recordTurn = vi.fn()
@@ -378,7 +378,7 @@ beforeEach(() => {
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
   // The private tier is two models, and the scope refuses to open without both.
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
-  ensureVerdaAwake.mockResolvedValue(undefined)
+  ensurePrivateTierAwake.mockResolvedValue(undefined)
   resolveConversationTier.mockResolvedValue('anthropic')
   claimSession.mockResolvedValue(null)
   saveSession.mockResolvedValue('v-saved')
@@ -1140,7 +1140,7 @@ describe('what the header learns from a turn', () => {
       order.push('seed')
       return 'v-seed'
     })
-    ensureVerdaAwake.mockImplementation(async () => {
+    ensurePrivateTierAwake.mockImplementation(async () => {
       order.push('wake')
     })
     getOrBuildPatterns.mockImplementation(async () => {
@@ -1150,7 +1150,7 @@ describe('what the header learns from a turn', () => {
 
     await runTurnAndPersist(interactive())
 
-    expect(ensureVerdaAwake).toHaveBeenCalledTimes(1)
+    expect(ensurePrivateTierAwake).toHaveBeenCalledTimes(1)
     // The #105 pre-seed comes FIRST and the wake second — the other half of the
     // ordering, and the half that makes the failure below recordable. A wake
     // ahead of the seed persisted nothing at all when it failed, so a reload lost
@@ -1178,7 +1178,7 @@ describe('what the header learns from a turn', () => {
     const waking = new Promise<void>((resolve) => {
       releaseWake = resolve
     })
-    ensureVerdaAwake.mockImplementation(async () => {
+    ensurePrivateTierAwake.mockImplementation(async () => {
       await waking
     })
     getOrBuildPatterns.mockImplementation(async (sessionId: string) => {
@@ -1218,10 +1218,10 @@ describe('what the header learns from a turn', () => {
     // request to a deployment this turn is not using.
     await runTurnAndPersist(interactive())
 
-    expect(ensureVerdaAwake).not.toHaveBeenCalled()
+    expect(ensurePrivateTierAwake).not.toHaveBeenCalled()
   })
 
-  it('ends the turn when the box does not wake, and releases the gauge', async () => {
+  it('ends the turn when the private tier does not wake, and releases the gauge', async () => {
     // THE VISIBLE-FAILURE HALF of #273 D-b. A wake that fails must not fall
     // through to the harness (same 146s wait, now against a 180s timeout) and
     // must not fall back to Anthropic (confidential prompts to the provider the
@@ -1230,12 +1230,12 @@ describe('what the header learns from a turn', () => {
     // one dead deployment pins the header to "answering" for the life of the
     // process.
     resolveConversationTier.mockResolvedValue('verda')
-    ensureVerdaAwake.mockRejectedValueOnce(
-      new Error('the private inference box did not wake: no answer within 300s.'),
+    ensurePrivateTierAwake.mockRejectedValueOnce(
+      new Error('the private tier did not wake; nothing was sent to any other provider.'),
     )
 
     await expect(runTurnAndPersist(interactive())).rejects.toThrow(
-      /the private inference box did not wake/,
+      'the private tier did not wake; nothing was sent to any other provider.',
     )
 
     // And the harness never started — a partially-run turn on a box that is not
@@ -1264,7 +1264,7 @@ describe('what the header learns from a turn', () => {
     // sleeping box left a row spinning forever with no trace anywhere: no chat,
     // no error frame, no log.
     resolveConversationTier.mockResolvedValue('verda')
-    ensureVerdaAwake.mockRejectedValueOnce(
+    ensurePrivateTierAwake.mockRejectedValueOnce(
       new Error('the private inference box did not wake: no answer within 300s.'),
     )
 
@@ -1799,7 +1799,7 @@ describe('resume turns (#433 S7)', () => {
     await expect(runTurnAndPersist(resume())).rejects.toThrow('(tier-changed)')
 
     // The refusal never pays a cold start — the delta review's point.
-    expect(ensureVerdaAwake).not.toHaveBeenCalled()
+    expect(ensurePrivateTierAwake).not.toHaveBeenCalled()
     expect(resumeHarness).not.toHaveBeenCalled()
     expect(saveSession).not.toHaveBeenCalled()
     expect(flippedToError()).toEqual([])
@@ -1836,7 +1836,7 @@ describe('resume turns (#433 S7)', () => {
     resolveConversationTier.mockResolvedValue('verda')
     claimSession.mockResolvedValue(claimedPaused(pausedBlob({}, pendingRequest({ tier: 'verda' }))))
     const wakeFailed = new Error('the private inference box did not wake')
-    ensureVerdaAwake.mockRejectedValueOnce(wakeFailed)
+    ensurePrivateTierAwake.mockRejectedValueOnce(wakeFailed)
 
     await expect(runTurnAndPersist(resume())).rejects.toThrow(wakeFailed)
 
@@ -1854,7 +1854,7 @@ describe('resume turns (#433 S7)', () => {
 
     await runTurnAndPersist(resume())
 
-    expect(ensureVerdaAwake).not.toHaveBeenCalled()
+    expect(ensurePrivateTierAwake).not.toHaveBeenCalled()
     expect(resumeHarness).toHaveBeenCalledTimes(1)
   })
 
@@ -1864,7 +1864,7 @@ describe('resume turns (#433 S7)', () => {
 
     await runTurnAndPersist(resume())
 
-    expect(ensureVerdaAwake).toHaveBeenCalledTimes(1)
+    expect(ensurePrivateTierAwake).toHaveBeenCalledTimes(1)
   })
 
   it('missing answers are refused before the wake', async () => {
@@ -1874,7 +1874,7 @@ describe('resume turns (#433 S7)', () => {
 
     await expect(runTurnAndPersist(resume())).rejects.toThrow('(missing-answer)')
 
-    expect(ensureVerdaAwake).not.toHaveBeenCalled()
+    expect(ensurePrivateTierAwake).not.toHaveBeenCalled()
     expect(resumeHarness).not.toHaveBeenCalled()
   })
 
@@ -1901,7 +1901,7 @@ describe('resume turns (#433 S7)', () => {
     const result = await runTurnAndPersist(resume())
 
     // No wake, no patterns, no resume: the run is over and its record says so.
-    expect(ensureVerdaAwake).not.toHaveBeenCalled()
+    expect(ensurePrivateTierAwake).not.toHaveBeenCalled()
     expect(getOrBuildPatterns).not.toHaveBeenCalled()
     expect(resumeHarness).not.toHaveBeenCalled()
     expect(result.status).toBe('done')

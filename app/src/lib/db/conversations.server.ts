@@ -814,28 +814,44 @@ export const CHAIN_OVERHEAD_CALLS = 5
 
 /**
  * The most LLM calls one loop can make, on the longest chain a BROWSER can ask
- * for. `SETTINGS_BOUNDS.maxToolTurns[1]` is the tool loop's ceiling (one call
- * per round) and `actorCritic` is bounded by `SETTINGS_BOUNDS.maxRetries[1]` at
- * an actor call plus a critic call per attempt; `Math.max` takes whichever
- * shape is worse. Both come from the exported bounds, so widening a slider
- * lengthens the backstop with no edit here.
+ * for. `SETTINGS_BOUNDS.maxToolTurns[1]` is the tool loop's ceiling (one
+ * controller call per round) and `actorCritic` is bounded by
+ * `SETTINGS_BOUNDS.maxRetries[1]` at one actor call plus one critic call per
+ * attempt. Both come from the exported bounds, so widening a slider lengthens
+ * the backstop with no edit here. Unlike the actor, the critic has no parse
+ * retry.
  */
-const WORST_LOOP_CALLS = Math.max(
-  SETTINGS_BOUNDS.maxToolTurns[1],
-  2 * SETTINGS_BOUNDS.maxRetries[1],
+export const ATTEMPTS_PER_CONTROLLER_CALL = 2
+
+/**
+ * One REQUEST is what the per-call timeout bounds, and a logical controller,
+ * actor or planner call can make two: `createLoopControllerAdapter`,
+ * `createActorControllerAdapter` and `createPlannerAdapter` each re-ask ONCE
+ * when a completion is truncated at its output cap or empty
+ * (`planParseRetry`, `packages/harness-baml/baml-adapters.server.ts`). On the
+ * private tier a full-cap first attempt (~158 s) still fits inside the 180 s
+ * `request_timeout_ms`, so the retry is reachable and the worst call is two
+ * timeouts' worth, not one (#597 review finding 1).
+ */
+const WORST_LOOP_REQUESTS = Math.max(
+  SETTINGS_BOUNDS.maxToolTurns[1] * ATTEMPTS_PER_CONTROLLER_CALL,
+  SETTINGS_BOUNDS.maxRetries[1] * (ATTEMPTS_PER_CONTROLLER_CALL + 1),
 )
 
 /**
  * `decisionLoop`'s iteration default (N5 on #507, `maxIterations: 6`). A MIRROR
- * of the ruling: the loop lands in core with its own slice, and when it exports
- * the constant the pin in `stuck-run-reaper.test.ts` should read it from there.
+ * of the ruling, held against the design doc's N5 line and by a tripwire that
+ * goes red the day core exports `decisionLoop` (`stuck-run-reaper.test.ts`):
+ * import its default then, instead of this copy.
  */
 export const DECISION_LOOP_MAX_ITERATIONS = 6
 
 /**
- * The wall-clock cap of one tool call: the MCP SDK's default request timeout
- * (`DEFAULT_REQUEST_TIMEOUT_MSEC`, 60 000 ms) and the sandbox's
- * `defaultTimeoutSec` (60). Both are 60 s, which is why it is one mirror here.
+ * The wall-clock cap of one tool call: the MCP SDK's
+ * `DEFAULT_REQUEST_TIMEOUT_MSEC` (60 000 ms), which covers `client.callTool` in
+ * `mcp-client.server.ts` and the sandbox backend. Pinned against the SDK's own
+ * export. (The sandbox's `defaultTimeoutSec` is NOT this cap: it is written into
+ * the runtime config and never read by a backend.)
  */
 export const TOOL_CALL_TIMEOUT_MINUTES = 1
 
@@ -845,29 +861,35 @@ export const TOOL_CALL_TIMEOUT_MINUTES = 1
  * `DEFAULT_SMALL_LLM_WAKE_TIMEOUT_MS` (720 s). The two boxes wake in PARALLEL, so
  * it is the max and not the sum. A mirror — `lib/inference/wake.server.ts` pulls
  * in the whole transport stack, which this module must not — pinned against both
- * constants in `stuck-run-reaper.test.ts`.
+ * defaults in `stuck-run-reaper.test.ts`. A host that raises either env override
+ * by more than the margin has to raise the backstop with it (`.env.example`).
  */
 export const WAKE_ALLOWANCE_MINUTES = 12
 
 /**
- * The calls the `decisionLoop` agent (#507) makes in its worst legitimate turn,
- * and the arithmetic behind {@link HUNG_TURN_BACKSTOP_MINUTES}:
+ * The LLM requests the `decisionLoop` agent (#507) makes in its worst
+ * legitimate turn on the private tier, and the arithmetic behind
+ * {@link HUNG_TURN_BACKSTOP_MINUTES}:
  *
- *     per iteration  = 1 decision + the worst child loop (max(15, 2 × 10) = 20)
- *     turn           = 6 iterations × 21 + 1 synthesis + 5 chain overhead
- *                    = 132 calls
+ *     per iteration  = 1 decision + the worst child loop
+ *                    = 1 + max(15 rounds × 2 attempts, 10 attempts × (2 actor + 1 critic))
+ *                    = 1 + 30 = 31 requests
+ *     turn           = 6 iterations × 31 + 1 synthesis + (5 chain overhead + 1 planner retry)
+ *                    = 193 requests
+ *
+ * The `decide` call is a single request (a systemone client with no parse
+ * retry) and is counted at the same 3-minute budget, which is conservative.
  *
  * **That is not the 97 in the design doc, and the difference is stated rather
- * than hidden.** The doc's P2 counts a child as the 15-round `simpleLoop`:
- * 6 × 15 + 6 decisions + 1 synthesis = **97 calls**, no chain overhead. The
- * existing bound already treated a child as the worse of the two loop shapes
- * (the 20-call `actorCritic`) and counted five chain-overhead calls, and a
- * sandbox route is a likely child, so this takes the same stance. Both
- * computations stand: 97 is pinned as a FLOOR the backstop must exceed, 132 is
- * the value used. The old single-loop bound (25 calls) is subsumed by it.
+ * than hidden.** The doc's P2 counts LOGICAL calls with a child as the 15-round
+ * `simpleLoop` and no chain overhead: 6 × 15 + 6 decisions + 1 synthesis =
+ * **97 calls**. This counts requests, in the worse child shape (`actorCritic`),
+ * with the chain-overhead calls the bound it replaces already carried. Both
+ * computations stand: 97 is pinned as a FLOOR the backstop must exceed, 193 is
+ * the value used.
  */
-export const DECISION_LOOP_WORST_CALLS =
-  DECISION_LOOP_MAX_ITERATIONS * (1 + WORST_LOOP_CALLS) + 1 + CHAIN_OVERHEAD_CALLS
+export const DECISION_LOOP_WORST_REQUESTS =
+  DECISION_LOOP_MAX_ITERATIONS * (1 + WORST_LOOP_REQUESTS) + 1 + (CHAIN_OVERHEAD_CALLS + 1)
 
 /**
  * How long a row may sit at `status='running'` **while its turn lease is still
@@ -876,28 +898,34 @@ export const DECISION_LOOP_WORST_CALLS =
  * {@link TURN_CLAIM_TTL_SECONDS} by the lease, so no composition's arithmetic
  * decides whether an ordinary dead turn is reaped. What this bounds is the one
  * case the lease cannot see — a process that is alive, renewing, and never
- * finishing — and for that a live long turn must not be reaped before it could
+ * finishing — and for that a live long turn should not be reaped before it could
  * legitimately end, so the number is a bound on the longest legitimate turn.
  *
- * **Derived, not chosen** (G12 A1 on #507):
+ * **Derived, not chosen** (G12 A1 on #507), for the PRIVATE tier:
  *
- *     LLM time     = DECISION_LOOP_WORST_CALLS × PER_CALL_TIMEOUT_MINUTES
- *                  = 132 calls × 3 min                          = 396 min
+ *     LLM time     = DECISION_LOOP_WORST_REQUESTS × PER_CALL_TIMEOUT_MINUTES
+ *                  = 193 requests × 3 min                       = 579 min
  *     tool time    = 6 iterations × 15 rounds × 1 min tool cap  =  90 min
  *     wake         = WAKE_ALLOWANCE_MINUTES                     =  12 min
- *     worst turn                                                = 498 min
- *     backstop     = ceil(worst × MARGIN 1.2)                   = 598 min
+ *     worst turn                                                = 681 min
+ *     backstop     = ceil(worst × MARGIN 1.2)                   = 818 min
  *
- * The non-LLM terms are the ones the design review asked to see: a tool round
- * is a model call AND a tool call, and the sandbox and gateway calls are capped
- * at a minute each, not free. Every term is a hard ceiling the app enforces, so
- * the margin is for a turn sitting at the bound not racing the sweep.
+ * **It is a bound on the private tier only.** The Anthropic tier declares no
+ * `request_timeout_ms` on any leaf, and Haiku carries `retry_policy Constant`
+ * (3 retries), so no per-call ceiling exists there to multiply.
  *
- * **The cost of a backstop this long is bounded:** it delays only the
- * reconciliation of a hung-but-renewing turn, whose row then says `running` for
- * up to ~10 hours instead of ~1.5. Honest data late beats a wrong status early
- * (a 21-minute turn was once reaped out from under itself under a 20-minute
- * threshold, #278 F3), and a dead process no longer waits for it at all.
+ * **Not every term is a hard ceiling the app enforces**, and the arithmetic does
+ * not pretend so. Uncounted, because nothing bounds them: a `'sequential'` tool
+ * batch runs k calls per round (the 4-call cap is in the prompt only); app-side
+ * Graph tools `fetch` with no signal; `SandboxScheduler.allocate` waits with no
+ * timeout; and a read-only gateway reconnect re-runs a call once. The cost of
+ * the backstop reaping a turn that outlives it anyway is bounded and
+ * self-healing: the reap writes only `status` (and logs it, on its own line),
+ * and the turn's own save overwrites it.
+ *
+ * **The clock is `updated_at`**, which other writes also bump
+ * (`updateConversationTitle`, `promoteConversation`), so this measures time since
+ * the row's last write, not strictly time at `running`.
  *
  * It tightens when a term does — the per-call ceiling, a slider bound, the
  * iteration default — with no edit here, and `stuck-run-reaper.test.ts` holds
@@ -905,17 +933,28 @@ export const DECISION_LOOP_WORST_CALLS =
  */
 const STUCK_RUN_MARGIN = 1.2
 export const HUNG_TURN_BACKSTOP_MINUTES = Math.ceil(
-  (DECISION_LOOP_WORST_CALLS * PER_CALL_TIMEOUT_MINUTES +
+  (DECISION_LOOP_WORST_REQUESTS * PER_CALL_TIMEOUT_MINUTES +
     DECISION_LOOP_MAX_ITERATIONS * SETTINGS_BOUNDS.maxToolTurns[1] * TOOL_CALL_TIMEOUT_MINUTES +
     WAKE_ALLOWANCE_MINUTES) *
     STUCK_RUN_MARGIN,
 )
 
 /**
+ * One row the reap changed. `leaseDead: false` means the BACKSTOP fired on a
+ * lease that was still being renewed — the only reap a running process will
+ * later overwrite, and an anomaly (a turn alive for hours), so the caller logs
+ * it apart from the ordinary dead-lease reap.
+ */
+export interface ReapedRun {
+  id: string
+  leaseDead: boolean
+}
+
+/**
  * Reconcile abandoned runs: every row at `status='running'` that either holds
  * **no live turn lease** or has sat at `running` past
- * {@link HUNG_TURN_BACKSTOP_MINUTES} becomes `'error'`. Returns the ids it
- * changed (for the caller's log and for tests).
+ * {@link HUNG_TURN_BACKSTOP_MINUTES} becomes `'error'`. Returns the rows it
+ * changed, each with which branch fired (for the caller's log and for tests).
  *
  * The rows this exists for are the ones no code path will ever finish: the
  * process died mid-turn, so the `catch` in `turn.server.ts#runAndSave` that
@@ -984,19 +1023,19 @@ export const HUNG_TURN_BACKSTOP_MINUTES = Math.ceil(
  * where the abandonment time is the honest answer. Nothing depends on it
  * advancing here: the idempotence above comes from `status`.
  */
-export async function reapStuckConversations(): Promise<string[]> {
+export async function reapStuckConversations(): Promise<ReapedRun[]> {
   // Both intervals are constants, never caller values — inlined for the same
   // reason `countActiveUsers` inlines its window (readability over
   // `make_interval` with a bound parameter).
-  const { rows } = await query<{ id: string }>(
+  const { rows } = await query<{ id: string; lease_dead: boolean }>(
     `UPDATE conversations
         SET status = 'error'
       WHERE status = 'running'
         AND (${NO_LIVE_CLAIM}
              OR updated_at < NOW() - INTERVAL '${HUNG_TURN_BACKSTOP_MINUTES} minutes')
-      RETURNING id`,
+      RETURNING id, ${NO_LIVE_CLAIM} AS lease_dead`,
   )
-  return rows.map((r) => r.id)
+  return rows.map((r) => ({ id: r.id, leaseDead: r.lease_dead }))
 }
 
 /**

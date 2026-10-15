@@ -1182,6 +1182,9 @@ describe('reapStuckConversations', () => {
     return rows[0]?.status ?? null
   }
 
+  /** The reaped ids (the rows also say which branch fired). */
+  const reapedIds = async () => (await reapStuckConversations()).map((r) => r.id)
+
   const tag = () => Math.random().toString(36).slice(2, 8)
   const deadLease = TURN_CLAIM_TTL_SECONDS + 60
 
@@ -1190,7 +1193,7 @@ describe('reapStuckConversations', () => {
     // One minute old: the old age-only reaper would have waited ninety.
     await seed(id, 'running', { ageMinutes: 1, claimAgeSeconds: deadLease })
 
-    expect(await reapStuckConversations()).toContain(id)
+    expect(await reapedIds()).toContain(id)
     expect(await statusOf(id)).toBe('error')
   })
 
@@ -1202,7 +1205,7 @@ describe('reapStuckConversations', () => {
     await seed(live, 'running', { ageMinutes: 8 * 60, claimAgeSeconds: 5 })
     expect(8 * 60).toBeLessThan(HUNG_TURN_BACKSTOP_MINUTES)
 
-    expect(await reapStuckConversations()).not.toContain(live)
+    expect(await reapedIds()).not.toContain(live)
     expect(await statusOf(live)).toBe('running')
   })
 
@@ -1212,7 +1215,7 @@ describe('reapStuckConversations', () => {
     await seed(justLive, 'running', { claimAgeSeconds: TURN_CLAIM_TTL_SECONDS - 10 })
     await seed(justDead, 'running', { claimAgeSeconds: TURN_CLAIM_TTL_SECONDS + 10 })
 
-    const reaped = await reapStuckConversations()
+    const reaped = await reapedIds()
 
     expect(reaped).toContain(justDead)
     expect(await statusOf(justDead)).toBe('error')
@@ -1231,8 +1234,8 @@ describe('reapStuckConversations', () => {
     await expect(claimConversation(live, TEST_USER)).rejects.toBeInstanceOf(ConversationBusyError)
     expect(await claimConversation(dead, TEST_USER)).not.toBeNull()
     // …and once taken, the row is live again: the reaper leaves it alone.
-    expect(await reapStuckConversations()).not.toContain(dead)
-    expect(await reapStuckConversations()).not.toContain(live)
+    expect(await reapedIds()).not.toContain(dead)
+    expect(await reapedIds()).not.toContain(live)
   })
 
   it('reaps a running row that holds no claim at all', async () => {
@@ -1241,7 +1244,7 @@ describe('reapStuckConversations', () => {
     // any save. No turn holds it.
     await seed(id, 'running', { ageMinutes: 1, claimAgeSeconds: null })
 
-    expect(await reapStuckConversations()).toContain(id)
+    expect(await reapedIds()).toContain(id)
     expect(await statusOf(id)).toBe('error')
   })
 
@@ -1252,7 +1255,7 @@ describe('reapStuckConversations', () => {
     await seed(under, 'running', { ageMinutes: HUNG_TURN_BACKSTOP_MINUTES - 1, claimAgeSeconds: 5 })
     await seed(over, 'running', { ageMinutes: HUNG_TURN_BACKSTOP_MINUTES + 1, claimAgeSeconds: 5 })
 
-    const reaped = await reapStuckConversations()
+    const reaped = await reapedIds()
 
     expect(reaped).toContain(over)
     expect(await statusOf(over)).toBe('error')
@@ -1267,7 +1270,7 @@ describe('reapStuckConversations', () => {
     await seed(paused, 'paused', stale)
     await seed(finished, 'done', stale)
 
-    const reaped = await reapStuckConversations()
+    const reaped = await reapedIds()
 
     // An approval gate waits for a person for as long as that takes.
     expect(reaped).not.toContain(paused)
@@ -1280,8 +1283,8 @@ describe('reapStuckConversations', () => {
     const id = `reap-twice-${tag()}`
     await seed(id, 'running', { claimAgeSeconds: deadLease })
 
-    expect(await reapStuckConversations()).toContain(id)
-    expect(await reapStuckConversations()).not.toContain(id)
+    expect(await reapedIds()).toContain(id)
+    expect(await reapedIds()).not.toContain(id)
   })
 
   it('reports a row to exactly one of two concurrent sweepers', async () => {
@@ -1292,7 +1295,7 @@ describe('reapStuckConversations', () => {
     // a row lock per UPDATE, so once the first sweeper has flipped the status
     // the second one's WHERE no longer matches it — which is what makes
     // `status` the claim, and this sweep safe to arm on every instance.
-    const [a, b] = await Promise.all([reapStuckConversations(), reapStuckConversations()])
+    const [a, b] = await Promise.all([reapedIds(), reapedIds()])
     expect([...a, ...b].filter((reaped) => reaped === id)).toHaveLength(1)
   })
 
@@ -1308,7 +1311,7 @@ describe('reapStuckConversations', () => {
       ).then((r) => r.rows[0])
     const before = await read()
 
-    expect(await reapStuckConversations()).toContain(id)
+    expect(await reapedIds()).toContain(id)
 
     const after = await read()
     // `countActiveUsers` counts owners of rows touched in the last 15 minutes.
@@ -1319,6 +1322,48 @@ describe('reapStuckConversations', () => {
     // the version it holds.
     expect(after.claim).toBe(before.claim)
     expect(after.version).toBe(before.version)
+  })
+
+  it('says which branch fired: a dead lease, or the backstop on a live one', async () => {
+    const dead = `reap-branch-dead-${tag()}`
+    const hung = `reap-branch-hung-${tag()}`
+    await seed(dead, 'running', { ageMinutes: 1, claimAgeSeconds: deadLease })
+    await seed(hung, 'running', { ageMinutes: HUNG_TURN_BACKSTOP_MINUTES + 1, claimAgeSeconds: 5 })
+
+    const reaped = await reapStuckConversations()
+
+    // The scheduler logs the second apart, at error level: a backstop reap of a
+    // live lease is the only one a running process will later overwrite.
+    expect(reaped.find((r) => r.id === dead)?.leaseDead).toBe(true)
+    expect(reaped.find((r) => r.id === hung)?.leaseDead).toBe(false)
+  })
+
+  it('a stalled-but-alive turn reaped on its lapsed lease can still renew and save over the reap', async () => {
+    const id = `reap-overwrite-${tag()}`
+    await seed(id, 'running', { ageMinutes: 1, claimAgeSeconds: TURN_CLAIM_TTL_SECONDS + 10 })
+    const { rows } = await query<{ version: string }>(
+      'SELECT context_version::text AS version FROM conversations WHERE id = $1',
+      [id],
+    )
+    const version = rows[0].version
+
+    expect(await reapedIds()).toContain(id)
+    expect(await statusOf(id)).toBe('error')
+
+    // The residual the design states, pinned end to end: the reap wrote only
+    // `status`, so the turn's claim and version are intact. It renews, then its
+    // own save lands at the version it holds and states the truth.
+    expect(await renewConversationClaim(id, TEST_USER, version)).toBe(true)
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'search',
+      title: null,
+      serializedContext: '{}',
+      status: 'done',
+      version,
+    })
+    expect(await statusOf(id)).toBe('done')
   })
 })
 

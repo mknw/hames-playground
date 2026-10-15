@@ -78,7 +78,7 @@ evaluation"). Since #507 P2 the test is the **turn lease** (`turn_claimed_at`,
 renewed every 30s by the live turn): a row whose lease has lapsed is reaped
 within about two minutes, however long its turn would have run, and a live long
 turn is never reaped on its age. A long age bound (`HUNG_TURN_BACKSTOP_MINUTES`,
-derived from the decision-loop worst case, ~10 hours) remains only for a process
+derived from the decision-loop worst case on the private tier, ~14 hours) remains only for a process
 that is alive, renewing and never finishing. It reconciles the ROW, not the
 run: nothing resumes the work, and crash-recovery / retries are still an upgrade
 path — a Postgres-polling worker. Assumes a **persistent node server** (not

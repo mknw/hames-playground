@@ -94,16 +94,23 @@ threshold, #278 F3.)
 **The backstop is derived, not chosen.** What the lease cannot see is a process
 that is alive, renewing and never finishing; for that,
 `HUNG_TURN_BACKSTOP_MINUTES` (`lib/db/conversations.server.ts`, arithmetic beside
-it) bounds the longest legitimate `decisionLoop` turn: 6 iterations × (1 decision plus
-the worse child loop, 20 calls) + 1 synthesis + 5 chain-overhead calls = **132
-calls** × the 180s per-call timeout = 396 min, plus tool time (6 × 15 rounds × the
-60s tool cap = 90 min) and the 12-minute private-tier wake, times a 1.2 margin —
-**598 minutes**. The design doc's own count is 97 calls (children counted as the
-15-round `simpleLoop`, no chain overhead); that is pinned as a floor in
-`stuck-run-reaper.test.ts`, and the larger figure is used because the 20-call
-`actorCritic` child and the chain-overhead calls were already in the bound this
-replaces. The number tightens on its own when a term does, and each mirrored term
-(the wake, the tool cap, the per-call timeout) is held against its declaration.
+it) bounds the longest legitimate `decisionLoop` turn **on the private tier**,
+counting REQUESTS, because the per-call timeout bounds a request and a
+controller, actor or planner call re-asks once on a truncated or empty
+completion: 6 iterations × (1 decision + the worse child loop, 30 requests) + 1
+synthesis + 6 overhead (5 chain calls + a planner retry) = **193 requests** ×
+the 180s per-call timeout = 579 min, plus tool time (6 × 15 rounds × the 60s MCP
+request cap = 90 min) and the 12-minute wake, times a 1.2 margin — **818
+minutes**. The Anthropic tier declares no per-call timeout, so it has no such
+bound. Four in-turn waits are not bounded by anything and are NOT counted (a
+`'sequential'` tool batch's k calls per round, app-side Graph `fetch`es, the
+sandbox scheduler's allocate wait, a gateway reconnect's re-run); the cost of the
+backstop reaping a turn that outlives it is status-only and self-healing. The
+design doc's own count is 97 calls (logical calls, children as the 15-round
+`simpleLoop`, no chain overhead); that is pinned as a floor in
+`stuck-run-reaper.test.ts`. The clock is `updated_at`, which a title or promote
+write also bumps, so it measures time since the row's last write. A backstop
+reap of a still-leased row is logged on its own `console.error` line.
 
 **What the reap is visible AS** is honest data at rest, not a spinner stopping —
 a live run's spinner is `session-registry`'s per-tab `isProcessing` signal,

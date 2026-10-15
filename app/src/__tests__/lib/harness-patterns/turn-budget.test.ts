@@ -355,7 +355,7 @@ describe('the clamp keeps the stuck-run reaper honest', () => {
   it('no declarable budget can outlive the reaper threshold derived from the bounds', async () => {
     const { resolveTurnBudget, SETTINGS_BOUNDS } = await import('../../../lib/settings')
 
-    // `DECISION_LOOP_WORST_CALLS` (lib/db/conversations.server.ts) is computed from
+    // `DECISION_LOOP_WORST_REQUESTS` (lib/db/conversations.server.ts) is computed from
     // max(maxToolTurns ceiling, 2 × maxRetries ceiling) + overhead, and
     // `HUNG_TURN_BACKSTOP_MINUTES` follows from it. That derivation is only true
     // if nothing can actually RUN more rounds than the ceiling it reads — which

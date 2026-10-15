@@ -43,7 +43,8 @@ import {
   PER_CALL_TIMEOUT_MINUTES,
   CHAIN_OVERHEAD_CALLS,
   DECISION_LOOP_MAX_ITERATIONS,
-  DECISION_LOOP_WORST_CALLS,
+  DECISION_LOOP_WORST_REQUESTS,
+  ATTEMPTS_PER_CONTROLLER_CALL,
   TOOL_CALL_TIMEOUT_MINUTES,
   WAKE_ALLOWANCE_MINUTES,
   TURN_CLAIM_TTL_SECONDS,
@@ -54,7 +55,7 @@ import {
   DEFAULT_VERDA_WAKE_TIMEOUT_MS,
   DEFAULT_SMALL_LLM_WAKE_TIMEOUT_MS,
 } from '../../../lib/inference/wake.server'
-import { DEFAULT_SANDBOX_SETTINGS } from '@hames-ai/sandbox/settings'
+import { DEFAULT_REQUEST_TIMEOUT_MSEC } from '@modelcontextprotocol/sdk/shared/protocol.js'
 
 beforeEach(() => {
   query.mockReset()
@@ -62,17 +63,29 @@ beforeEach(() => {
 })
 
 describe('the reap statement', () => {
-  it('claims only running rows that are past the threshold, and reports their ids', async () => {
-    query.mockResolvedValue({ rows: [{ id: 'conv-1' }, { id: 'conv-2' }] })
+  it('claims only running rows that are past the threshold, and reports their ids and branch', async () => {
+    query.mockResolvedValue({
+      rows: [
+        { id: 'conv-1', lease_dead: true },
+        { id: 'conv-2', lease_dead: false },
+      ],
+    })
 
-    expect(await reapStuckConversations()).toEqual(['conv-1', 'conv-2'])
+    expect(await reapStuckConversations()).toEqual([
+      { id: 'conv-1', leaseDead: true },
+      { id: 'conv-2', leaseDead: false },
+    ])
 
     const [sql, params] = query.mock.calls[0] as [string, unknown[] | undefined]
     expect(sql).toContain('UPDATE conversations')
     expect(sql).toContain("SET status = 'error'")
     expect(sql).toContain("WHERE status = 'running'")
     expect(sql).toContain(`INTERVAL '${HUNG_TURN_BACKSTOP_MINUTES} minutes'`)
-    expect(sql).toContain('RETURNING id')
+    // Which branch fired rides back in the same statement (a plaintext
+    // expression, no key): a backstop reap of a LIVE lease is logged apart.
+    expect(sql.replace(/\s+/g, ' ')).toContain(
+      `RETURNING id, (turn_claimed_at IS NULL OR turn_claimed_at < NOW() - INTERVAL '${TURN_CLAIM_TTL_SECONDS} seconds') AS lease_dead`,
+    )
     // The threshold is a constant interpolated into the SQL, so it must not be
     // reachable from an argument — a caller-supplied one would be an injection
     // point on a statement that writes every user's rows.
@@ -151,9 +164,16 @@ describe('the reap statement', () => {
    * passes whatever the formula is).
    */
   const worstTurnMinutes = () => {
-    const worstChild = Math.max(SETTINGS_BOUNDS.maxToolTurns[1], 2 * SETTINGS_BOUNDS.maxRetries[1])
-    const calls = DECISION_LOOP_MAX_ITERATIONS * (1 + worstChild) + 1 + CHAIN_OVERHEAD_CALLS
-    const llm = calls * PER_CALL_TIMEOUT_MINUTES
+    // REQUESTS, not logical calls: a controller/actor/planner call re-asks once on
+    // a truncated or empty completion, and the per-call timeout bounds a request
+    // (#597 review finding 1). The critic has no retry.
+    const worstChild = Math.max(
+      SETTINGS_BOUNDS.maxToolTurns[1] * ATTEMPTS_PER_CONTROLLER_CALL,
+      SETTINGS_BOUNDS.maxRetries[1] * (ATTEMPTS_PER_CONTROLLER_CALL + 1),
+    )
+    const requests =
+      DECISION_LOOP_MAX_ITERATIONS * (1 + worstChild) + 1 + (CHAIN_OVERHEAD_CALLS + 1)
+    const llm = requests * PER_CALL_TIMEOUT_MINUTES
     const tools =
       DECISION_LOOP_MAX_ITERATIONS * SETTINGS_BOUNDS.maxToolTurns[1] * TOOL_CALL_TIMEOUT_MINUTES
     return llm + tools + WAKE_ALLOWANCE_MINUTES
@@ -179,13 +199,13 @@ describe('the reap statement', () => {
   it("holds the design doc's 97-call arithmetic as a floor", () => {
     // G12 A1 / the doc's P2: 6 iterations × 15-call children + 6 decisions + 1
     // synthesis = 97 calls. The module deliberately derives a LARGER figure
-    // (a 20-call actorCritic child, five chain-overhead calls: 132) and says so
-    // beside the constant; this pins that the doc's own number can never be the
-    // one that is under-counted.
+    // (requests in the actorCritic child shape, chain overhead and a planner
+    // retry: 193) and says so beside the constant; this pins that the doc's own
+    // number can never be the one that is under-counted.
     const docCalls = 6 * 15 + 6 + 1
     expect(docCalls).toBe(97)
     expect(DECISION_LOOP_MAX_ITERATIONS).toBe(6)
-    expect(DECISION_LOOP_WORST_CALLS).toBeGreaterThanOrEqual(docCalls)
+    expect(DECISION_LOOP_WORST_REQUESTS).toBeGreaterThanOrEqual(docCalls)
     expect(HUNG_TURN_BACKSTOP_MINUTES).toBeGreaterThan(docCalls * PER_CALL_TIMEOUT_MINUTES)
   })
 
@@ -196,7 +216,7 @@ describe('the reap statement', () => {
   })
 
   it('counts non-LLM time: tool calls and the wake are inside the backstop', () => {
-    const llmOnly = DECISION_LOOP_WORST_CALLS * PER_CALL_TIMEOUT_MINUTES
+    const llmOnly = DECISION_LOOP_WORST_REQUESTS * PER_CALL_TIMEOUT_MINUTES
     const nonLlm =
       DECISION_LOOP_MAX_ITERATIONS * SETTINGS_BOUNDS.maxToolTurns[1] * TOOL_CALL_TIMEOUT_MINUTES +
       WAKE_ALLOWANCE_MINUTES
@@ -207,10 +227,49 @@ describe('the reap statement', () => {
   it('mirrors the tool-call cap and the wake allowance it cannot import', () => {
     // Both are copies (the wake module pulls in the transport stack): pinned
     // against their declarations so the drift goes red here, naming the number.
-    expect(TOOL_CALL_TIMEOUT_MINUTES * 60).toBe(DEFAULT_SANDBOX_SETTINGS.defaultTimeoutSec)
+    // The cap that actually applies is the MCP SDK's request timeout, which
+    // covers `client.callTool` and the sandbox backend. NOT the sandbox's
+    // `defaultTimeoutSec`: it is written into the runtime config and no backend
+    // reads it (#597 review finding 2).
+    expect(TOOL_CALL_TIMEOUT_MINUTES * 60_000).toBe(DEFAULT_REQUEST_TIMEOUT_MSEC)
     expect(WAKE_ALLOWANCE_MINUTES * 60_000).toBe(
       Math.max(DEFAULT_VERDA_WAKE_TIMEOUT_MS, DEFAULT_SMALL_LLM_WAKE_TIMEOUT_MS),
     )
+  })
+
+  it('holds the retry multiplier against the adapters it describes', () => {
+    // ATTEMPTS_PER_CONTROLLER_CALL is "one request plus ONE parse retry". The
+    // three adapters that retry (controller, planner, actor) each consult
+    // `planParseRetry` exactly once per call; a fourth site, or a second
+    // consultation, changes the multiplier. truncation-retry.test.ts pins the
+    // single retry's behaviour; this pins the site count the derivation rests on.
+    const src = readFileSync(
+      path.resolve(process.cwd(), '../packages/harness-baml/baml-adapters.server.ts'),
+      'utf8',
+    )
+    const sites = src.match(/planParseRetry\(e, collector\)/g) ?? []
+    expect(sites).toHaveLength(3)
+    expect(ATTEMPTS_PER_CONTROLLER_CALL).toBe(2)
+  })
+
+  it("holds the iteration mirror against the design doc's N5 ruling", () => {
+    // The mirror has no import to drift against until `decisionLoop` exists, so a
+    // ruling change in the doc must redden it (#597 review finding 4a).
+    const doc = readFileSync(
+      path.resolve(process.cwd(), '../docs/plan/decision-loop-agent.md'),
+      'utf8',
+    )
+    const n5 = /\*\*N5, the iteration bound\.\*\*[^\n]*`maxIterations` defaults to (\d+)/.exec(doc)
+    expect(n5, 'the design doc no longer states N5 as `maxIterations` defaults to N').not.toBeNull()
+    expect(DECISION_LOOP_MAX_ITERATIONS).toBe(Number(n5![1]))
+  })
+
+  it('tripwire: goes red the day core exports decisionLoop, so the mirror gets swapped', async () => {
+    const core = await import('@hames-ai/harness-patterns')
+    expect(
+      Object.keys(core),
+      'S1 landed: import its maxIterations default instead of DECISION_LOOP_MAX_ITERATIONS',
+    ).not.toContain('decisionLoop')
   })
 
   it('reaps a dead lease far sooner than the backstop, and the lease outlives a missed renewal', () => {
@@ -244,7 +303,7 @@ describe('the reap statement', () => {
   })
 
   it('is a whole number of minutes, because it is interpolated into an INTERVAL', () => {
-    // `INTERVAL '598.0000001 minutes'` would still parse, but the derivation
+    // `INTERVAL '818.0000001 minutes'` would still parse, but the derivation
     // multiplies by a fractional margin and a rounding change here would show
     // up as a puzzling SQL literal rather than as a failing test.
     expect(Number.isInteger(HUNG_TURN_BACKSTOP_MINUTES)).toBe(true)

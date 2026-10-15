@@ -23,6 +23,7 @@ import { randomBytes } from 'node:crypto'
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { query, withTransaction } from './client.server'
+import { deleteHitlRowsForConversations } from './hitl.server'
 import { deleteMemoriesForConversations } from './memories.server'
 import type { QueryRunner } from './migrate-encryption.server'
 import { SETTINGS_BOUNDS } from '../settings'
@@ -1094,6 +1095,9 @@ export async function deleteConversations(ids: string[], userId: string): Promis
   // what lets the row delete through.
   return withTransaction(async (tx) => {
     await deleteMemoriesForConversations(ids, userId, tx)
+    // A pending memory proposal's payload is memory text the person never
+    // agreed to keep (#433 S11): it leaves with the conversation it came from.
+    await deleteHitlRowsForConversations(ids, userId, tx)
     const { rows } = await tx.query<{ id: string }>(
       'DELETE FROM conversations WHERE id = ANY($1) AND user_id = $2 RETURNING id',
       [ids, userId],

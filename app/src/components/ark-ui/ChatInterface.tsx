@@ -28,6 +28,7 @@ import { ChatInput } from './ChatInput'
 import { AgentSelector } from './AgentSelector'
 import { ConversationTierSwitch } from './ConversationTierSwitch'
 import { ShareConversationButton } from './ShareConversationButton'
+import { MemoryProposalPrompt } from './MemoryProposalPrompt'
 import { LiveProgressBar } from './LiveProgressBar'
 import {
   promoteAction,
@@ -160,6 +161,9 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   // null → modal closed. Declining clears it WITHOUT sending (hard gate).
   const [promotionDraft, setPromotionDraft] = createSignal<string | null>(null)
   const [promoting, setPromoting] = createSignal(false)
+  /** Bumped when a turn of the on-screen conversation settles, so the memory
+   *  prompt knows to look for a proposal the store step may have raised. */
+  const [settledTick, setSettledTick] = createSignal(0)
   // Report the selected agent up to the parent (initial 'search', then on load
   // and on every change) so agent-aware UI can react. Consumers today are the
   // SupportPanel's Data tab (uploads carry agentId, which gates auto-ingest) and
@@ -466,7 +470,10 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           timestamp: new Date(),
         })
       }
-      if (!aborted) props.onRunSettled?.(runSessionId, outcome)
+      if (!aborted) {
+        props.onRunSettled?.(runSessionId, outcome)
+        if (runSessionId === props.sessionId) setSettledTick((n) => n + 1)
+      }
     } finally {
       // Belt and braces: if a Stop raced the stream to completion no abort was
       // reported, and a stale flag here would put a spurious "stopped" bubble
@@ -555,6 +562,8 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           />
         )}
       />
+
+      <MemoryProposalPrompt sessionId={props.sessionId} settledTick={settledTick()} />
 
       {/* Input */}
       <div border="t ui-border-primary" p="4" bg="ui-bg-secondary/80" backdrop-blur="sm">

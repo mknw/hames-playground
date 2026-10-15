@@ -18,7 +18,7 @@
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { decryptFieldOrNull, encryptFieldOrNull } from './crypto.server'
-import { query } from './client.server'
+import { query, type TxQuery } from './client.server'
 
 assertServerOnImport()
 
@@ -200,6 +200,139 @@ export async function closeHitlRows(
         SET status = $3, payload = NULL, updated_at = NOW()
       WHERE user_id = $1 AND request_id = ANY($2)`,
     [userId, [...requestIds], status],
+  )
+  return rowCount ?? 0
+}
+
+// ============================================================================
+// Proposals (#433 S11, #419 M6)
+// ============================================================================
+//
+// A proposal's payload — the memory text a person has not yet agreed to keep —
+// waits here, encrypted, under its request id. It is NEVER authoritative: the
+// proposal is two events in the conversation blob (ADR-0009), and the RPC that
+// lists or applies one derives that from the blob first. A row with no open
+// proposal in the blob is simply never offered.
+
+/** One open proposal's row, decoded. */
+export interface HitlProposalRow {
+  readonly requestId: string
+  readonly sessionId: string
+  readonly kind: string
+  readonly expiresAt: Date | null
+  /** The payload the proposing hook held; `null` once purged. Untyped here —
+   *  the memory module parses it (`parseMemoryProposalPayload`). */
+  readonly payload: unknown
+}
+
+/**
+ * Hold a proposal's payload under its request id, `pending`. The row's owner is
+ * the caller's; an existing row of the same id is left alone (`DO NOTHING`):
+ * request ids are fresh UUIDs, so a conflict is a bug or a replay, and a replay
+ * must not swap the payload a person is about to approve.
+ */
+export async function putHitlProposal(input: {
+  readonly requestId: string
+  readonly userId: string
+  readonly sessionId: string
+  readonly kind: string
+  readonly runId: string | null
+  readonly expiresAt: Date
+  readonly payload: unknown
+}): Promise<void> {
+  const { rowCount } = await query(
+    `INSERT INTO hitl_requests
+       (request_id, user_id, session_id, run_id, kind, status, blocks_run, expires_at, payload)
+     VALUES ($1, $2, $3, $4, $5, 'pending', FALSE, $6, $7)
+     ON CONFLICT (request_id) DO NOTHING`,
+    [
+      input.requestId,
+      input.userId,
+      input.sessionId,
+      input.runId,
+      input.kind,
+      input.expiresAt,
+      encryptJson(input.payload),
+    ],
+  )
+  if (!rowCount) throw new Error('[hitl] a proposal with this request id is already held')
+}
+
+/**
+ * One OPEN proposal of the caller's: `pending`, not past `expires_at`, with its
+ * payload still held. Owner-scoped, so someone else's request id is the same
+ * `null` as an unknown one.
+ */
+export async function getHitlProposal(
+  requestId: string,
+  userId: string,
+): Promise<HitlProposalRow | null> {
+  const { rows } = await query<Record<string, unknown>>(
+    `SELECT request_id, session_id, kind, expires_at, payload
+       FROM hitl_requests
+      WHERE request_id = $1 AND user_id = $2 AND status = 'pending'
+        AND blocks_run = FALSE AND payload IS NOT NULL
+        AND (expires_at IS NULL OR expires_at > NOW())`,
+    [requestId, userId],
+  )
+  return rows.length === 0 ? null : toProposalRow(rows[0])
+}
+
+/** The caller's open proposals of one kind in one conversation, oldest first. */
+export async function listHitlProposals(
+  sessionId: string,
+  userId: string,
+  kind: string,
+): Promise<HitlProposalRow[]> {
+  const { rows } = await query<Record<string, unknown>>(
+    `SELECT request_id, session_id, kind, expires_at, payload
+       FROM hitl_requests
+      WHERE session_id = $1 AND user_id = $2 AND kind = $3 AND status = 'pending'
+        AND blocks_run = FALSE AND payload IS NOT NULL
+        AND (expires_at IS NULL OR expires_at > NOW())
+      ORDER BY created_at, request_id`,
+    [sessionId, userId, kind],
+  )
+  return rows.map(toProposalRow)
+}
+
+function toProposalRow(r: Record<string, unknown>): HitlProposalRow {
+  return {
+    requestId: r.request_id as string,
+    sessionId: r.session_id as string,
+    kind: r.kind as string,
+    expiresAt: (r.expires_at as Date | null) ?? null,
+    payload: decryptJson(r.payload as string | null, 'hitl_requests.payload'),
+  }
+}
+
+/**
+ * Erase every proposal row of the given conversations — the conversation
+ * delete's half (it runs in that delete's transaction, so the two commit
+ * together). A proposal's payload is memory text the person never agreed to
+ * keep; deleting the conversation it came from must take it too.
+ */
+export async function deleteHitlRowsForConversations(
+  conversationIds: readonly string[],
+  userId: string,
+  tx: TxQuery,
+): Promise<void> {
+  if (conversationIds.length === 0) return
+  await tx.query(`DELETE FROM hitl_requests WHERE user_id = $1 AND session_id = ANY($2)`, [
+    userId,
+    [...conversationIds],
+  ])
+}
+
+/**
+ * Erase every pending proposal of one kind for a user — "forget everything"'s
+ * half. Takes a `userId`, so it is NEVER a `'use server'` export (SD-13): the
+ * RPC that reaches it passed its own `requireUser()` first.
+ */
+export async function deleteHitlProposalsForUser(userId: string, kind: string): Promise<number> {
+  const { rowCount } = await query(
+    `DELETE FROM hitl_requests WHERE user_id = $1 AND kind = $2 AND blocks_run = FALSE`,
+    [userId, kind],
   )
   return rowCount ?? 0
 }

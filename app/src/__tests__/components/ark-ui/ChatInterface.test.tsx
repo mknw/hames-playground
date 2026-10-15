@@ -78,6 +78,14 @@ const setConversationTier = vi.fn(async (_id: string, tier: string) => ({
   tier,
   verdaAvailable: true,
 }))
+// The memory confirmation prompt (M6) asks the server for proposals; here it
+// only has to answer, and count the asks. Its own behaviour is
+// `MemoryProposalPrompt.test.tsx`.
+const listMemoryProposals = vi.fn(async (_sessionId: string) => [])
+vi.mock('~/lib/memory/confirm-actions.server', () => ({
+  listMemoryProposals: (s: string) => listMemoryProposals(s),
+  answerMemoryProposal: vi.fn(),
+}))
 vi.mock('~/lib/harness-client', async () => {
   const graph = await import('@hames-ai/agents')
   const refs = await import('@hames-ai/agents')
@@ -551,6 +559,20 @@ describe('ChatInterface — sending a message', () => {
     expect(onRunSettled).toHaveBeenCalledExactlyOnceWith('s1', 'done')
     // The run released its slot and its abort controller.
     expect(host.registry.runState('s1').isProcessing).toBe(false)
+  })
+
+  // MUTATION: drop `setSettledTick` (or bump it for another session) → a
+  // proposal the store step raised after the reply is never looked for → red.
+  it('looks for a memory proposal when this conversation’s turn settles', async () => {
+    listMemoryProposals.mockClear()
+    const host = makeHost()
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
+    await settle()
+    const onMount = listMemoryProposals.mock.calls.length
+    send(container, 'go')
+    await settle()
+    expect(listMemoryProposals.mock.calls.length).toBeGreaterThan(onMount)
+    expect(listMemoryProposals).toHaveBeenLastCalledWith('s1')
   })
 
   it('reports an error outcome when the run ends in an error status', async () => {

@@ -2214,6 +2214,59 @@ export interface MemoryWriteStore {
   transaction<R>(fn: (tx: MemoryWriteTx) => Promise<R>): Promise<R>
 }
 
+/**
+ * One memory the store step PREPARED for a person to confirm (#419 M6): the
+ * accepted candidate, its document-side vector, and what the owner's store
+ * said the write would do — read at proposal time, from a read-only
+ * preview. The text is model-derived from the user's message and untrusted:
+ * it is shown escaped, and it is written only by an approval.
+ */
+export interface MemoryProposalItem {
+  /** Names this item in the answer's flags (`i0`, `i1`, …). */
+  readonly ref: string
+  /** The extraction ordinal — half of the provenance key. */
+  readonly ordinal: number
+  readonly kind: MemoryKind
+  readonly content: string
+  readonly evidence: string
+  readonly embedding: readonly number[]
+  /** `new`, or an existing memory this one would reinforce or update, with
+   *  the text it had when the preview read it: the write refuses the item when
+   *  the row no longer says that (a stale proposal never overwrites a newer row). */
+  readonly dedupe:
+    | 'new'
+    | { readonly reinforces: string; readonly expectedContent: string }
+    | { readonly updates: string; readonly expectedContent: string }
+}
+
+/** What the host holds for one open `memory.confirm` proposal — the payload
+ *  that never rides an event or the conversation blob. Server-held; a client
+ *  supplies only the choice and the item flags. */
+export interface MemoryProposalPayload {
+  readonly v: 1
+  /** The tier the turn ran on — the stamp the written memories take (D8). */
+  readonly tier: string
+  /** The embedding space the vectors are in. */
+  readonly embedSpace: string
+  /** The `user_message` event the items were built from. */
+  readonly eventId: string
+  readonly conversationId: string
+  readonly items: readonly MemoryProposalItem[]
+}
+
+/** The host's half of a confirmation: where the prepared payload is held. */
+export interface MemoryConfirmSeam {
+  /** Persist `payload` under `requestId` until the person answers or
+   *  `expiresAt` (ms since epoch). A throw means nothing was proposed. */
+  hold(input: {
+    readonly requestId: string
+    readonly expiresAt: number
+    readonly payload: MemoryProposalPayload
+  }): Promise<void>
+  /** How long a proposal waits. Default 7 days. */
+  readonly expiresInMs?: number
+}
+
 /** What a stored memory's event says happened to it. */
 export type MemoryWriteAction = 'inserted' | 'reinforced' | 'updated'
 

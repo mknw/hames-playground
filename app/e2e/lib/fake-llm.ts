@@ -235,6 +235,9 @@ export interface FakeLlm {
   /** Let parked requests answer, oldest first. `count` omitted releases all.
    *  Returns how many were actually released. */
   release(count?: number): number
+  /** What the memory store's confirmation question is answered with: `skip`
+   *  (default) or `ask`. Restored by `reset()`. */
+  memoryConfirm(answer: 'ask' | 'skip'): void
   /** Disarm faults, release everything parked, and clear recorded calls. Called
    *  between scenarios. */
   reset(): void
@@ -418,7 +421,7 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
         continue
       }
       const options = Object.keys((q.criteria ?? {}) as Record<string, unknown>)
-      const chosen = q.instructions?.includes('Should a person confirm') ? 1 : 0
+      const chosen = q.instructions?.includes('Should a person confirm') ? confirmIndex : 0
       const rest = options.length > 1 ? 0.1 / (options.length - 1) : 0
       answers[name] = {
         type: 'choice',
@@ -637,8 +640,12 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       for (const entry of freeing) entry.free()
       return freeing.length
     },
+    memoryConfirm(answer: 'ask' | 'skip') {
+      confirmIndex = answer === 'ask' ? 0 : 1
+    },
     reset() {
       armed = null
+      confirmIndex = 1
       // Release BEFORE clearing the log, and always: a parked request left
       // behind by a failed scenario holds a socket the dev server is waiting on,
       // and the next scenario's first turn would inherit that wait.
@@ -701,7 +708,7 @@ function replyFor(fn: BamlFunctionName, prompt: string): string {
       return JSON.stringify({ content: latest?.[1] ?? '', evidence: latest?.[2] ?? '' })
     }
     case 'Decide':
-      return prompt.includes('Should a person confirm') ? 'B' : 'A'
+      return prompt.includes('Should a person confirm') ? (confirmIndex === 1 ? 'B' : 'A') : 'A'
 
     case 'DecideVerbalized':
       return JSON.stringify(
@@ -826,13 +833,21 @@ function readBatchIds(prompt: string): string[] {
 // ============================================================================
 
 /** Read only the offered options, never letters in the state or question. */
+/** Which answer the fake gives the memory store's "Should a person confirm"
+ *  question: 1 = `skip` (the default — a routine memory is written straight
+ *  through), 0 = `ask` (it is proposed to the person, #419 M6). Set per
+ *  scenario by `memoryConfirm()`, restored by `reset()`. */
+let confirmIndex = 1
+
 function decisionProbabilities(prompt: string): Array<{ token: string; probability: number }> {
   const options = prompt.slice(prompt.lastIndexOf('OPTIONS:'))
   const letters = [...options.matchAll(/^\s*([A-T])\. /gm)].map((m) => m[1])
   return letters.map((token, i) => ({
     token,
     probability:
-      i === (prompt.includes('Should a person confirm') ? 1 : 0) ? 0.9 : 0.1 / (letters.length - 1),
+      i === (prompt.includes('Should a person confirm') ? confirmIndex : 0)
+        ? 0.9
+        : 0.1 / (letters.length - 1),
   }))
 }
 

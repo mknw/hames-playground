@@ -44,6 +44,13 @@ somewhere else". Combinators that scope _below_ a run (`withInjectionGuard`,
 `withSandbox`) amend individual slots, and the per-slot merge rules are not
 uniform — transports prepend, the rest replace.
 
+**Proposal** — a question put to a person from outside a run, by a post-reply
+hook, that waits for them across turns instead of pausing one. The memory
+store's "save these?" is the first: it is recorded in the conversation as a
+non-blocking request, the thing it describes is held server-side, and nothing
+is written until the person says yes. See
+[`packages/harness-patterns/SPEC.md`](packages/harness-patterns/SPEC.md#proposals-proposetohuman-and-answerproposal-433-s11).
+
 **Pattern** — one composable step inside a harness: a named function that runs in
 its own isolated scope and commits its events back to the shared context when it
 finishes. `simpleLoop`, `actorCritic`, `planner`, `compactIntent`, `router`,

@@ -39,9 +39,18 @@
  *  4. `sensitive` (including its fallback) stops. `target: none` stops.
  *  5. `resolveStoreRoute`: an organisational-graph outcome ALWAYS asks (F2),
  *     whatever `confirm` said; a personal one may skip the question only for a
- *     routine kind. **Pre-M12 there is no graph writer and pre-M6 there is no
- *     confirmation mechanism: an `ask`, or an org target, stores nothing and
- *     logs (F4).** "Auto-write" is the one pick that contradicts O4.
+ *     routine kind. **Pre-M12 there is no graph writer: an org target stores
+ *     nothing and logs (F4). An `ask` stores nothing and logs unless the host
+ *     supplies a `confirm` seam (M6); with one, the prepared memories are
+ *     PROPOSED to the person (step 5b) and written only by an approval
+ *     ({@link applyMemoryProposal}).** "Auto-write" is the one pick that
+ *     contradicts O4.
+ *  5b. (M6) `route.confirm === 'ask'` with a `confirm` seam runs steps 6–7,
+ *     then PREPARES instead of writing: a read-only dedupe preview per
+ *     candidate, a non-blocking `memory.confirm` proposal recorded in the
+ *     context (metadata only — counts and kinds, never the text), and the
+ *     payload held by the host under the proposal's id. Nothing is written
+ *     and nothing is sent anywhere; the person's answer is a later call.
  *  6. Extract (the `describe`-role call): at most three candidates, from the
  *     current user message — the evidence rule (D9) is enforced in
  *     {@link acceptCandidate}, not here.
@@ -73,8 +82,14 @@ import { stripThinkBlocks } from './content-transforms'
 import { currentRunFrame } from './run-frame.server'
 import { setLivePatternEnabled } from './live-event-context.server'
 import { trimToFit } from './token-budget.server'
-import { acceptCandidate, type AcceptanceRule } from './memory-acceptance.server'
+import {
+  acceptCandidate,
+  MAX_MEMORY_CHARS,
+  MEMORY_KINDS,
+  type AcceptanceRule,
+} from './memory-acceptance.server'
 import { decide, decideFields } from './patterns/typedDecision.server'
+import { proposeToHuman } from './hitl.server'
 import type {
   AssistantMessageEventData,
   ContextEvent,
@@ -84,11 +99,15 @@ import type {
   DecisionPolicy,
   DecisionSetSpec,
   DecisionSpec,
+  HitlRequest,
   LLMCallRecord,
+  MemoryConfirmSeam,
   MemoryEmbedder,
   MemoryExtractFn,
   MemoryKind,
   MemoryNeighbor,
+  MemoryProposalItem,
+  MemoryProposalPayload,
   MemoryWakeWait,
   MemoryWriteAction,
   MemoryWriteTx,
@@ -290,6 +309,9 @@ export interface MemoryStoreConfig {
   /** The joint memory wake (`awaitMemoryWake` binds as-is). Absent → no wake
    *  to wait on. */
   readonly awaitWake?: MemoryWakeWait
+  /** Where a prepared memory waits for the person's confirmation (M6). Absent:
+   *  an `ask` stores nothing (`no-confirmation`), as before M6. */
+  readonly confirm?: MemoryConfirmSeam
   readonly settings?: MemoryStoreSettings
 }
 
@@ -307,8 +329,11 @@ export type MemoryStoreSkip =
   | 'gate'
   /** The message touches a special category, or the read was uncertain. */
   | 'sensitive'
-  /** F4: the route needs a confirmation and no mechanism exists yet. */
+  /** F4: the route needs a confirmation and the host supplied no `confirm` seam. */
   | 'no-confirmation'
+  /** M6: this turn's proposal is already in the context — open, answered or
+   *  expired — so it is not raised twice. */
+  | 'already-proposed'
   /** F4: the target is the organisational graph and no writer exists yet. */
   | 'org-no-writer'
   | 'extract-error'
@@ -324,6 +349,8 @@ export interface MemorySettleReport {
   readonly skipped?: MemoryStoreSkip
   /** Memories inserted, reinforced or updated. */
   readonly written: number
+  /** Memories prepared for a person's confirmation (M6) — not yet written. */
+  readonly proposed: number
   /** Candidates whose provenance row existed already: written before, skipped. */
   readonly duplicates: number
   /** Candidates whose transaction failed. */
@@ -512,6 +539,7 @@ const validVector = (v: unknown, dim?: number): v is number[] =>
 
 const emptyReport = (): MemorySettleReport => ({
   written: 0,
+  proposed: 0,
   duplicates: 0,
   failed: 0,
   rejected: {},
@@ -668,7 +696,7 @@ async function run(
   if (!route) return stop('gate')
   // F4. Pre-M12: no graph writer. Pre-M6: no confirmation mechanism.
   if (route.target === 'organizational_graph') return stop('org-no-writer', undefined, { route })
-  if (route.confirm === 'ask') return stop('no-confirmation', undefined, { route })
+  if (route.confirm === 'ask' && !cfg.confirm) return stop('no-confirmation', undefined, { route })
 
   // --- 6. extract -----------------------------------------------------------
   let extracted: Awaited<ReturnType<MemoryExtractFn>>
@@ -731,11 +759,66 @@ async function run(
     return stop('error', 'embedder returned unusable vectors', { route, rejected })
   }
 
-  // --- 8/9. write, one transaction per candidate ---------------------------
   const conversationId = turn.conversationId ?? ctx.sessionId
   const dup = settings?.dupSimilarity ?? DEFAULT_DUP_SIMILARITY
   const rel = settings?.relatedSimilarity ?? DEFAULT_REL_SIMILARITY
   const mergeMs = settings?.mergeTimeoutMs ?? DEFAULT_MERGE_TIMEOUT_MS
+
+  // --- 5b. prepare and propose (M6): nothing is written -----------------------
+  if (route.confirm === 'ask' && cfg.confirm) {
+    let items: MemoryProposalItem[]
+    try {
+      items = await store.transaction(async (tx) => {
+        // The same re-read as a write: a switch-off while this waited stops it.
+        if (!(await settings!.enabled!())) throw new MemoryDisabled()
+        const prepared: MemoryProposalItem[] = []
+        for (let i = 0; i < accepted.length; i++) {
+          const cand = accepted[i]
+          const embedding = vectors[i]
+          const near = await tx.nearest({ embedding, embedSpace: embed.spaceId, tier })
+          const verdict = await chooseAction(
+            cand,
+            near,
+            { dup, rel, mergeMs },
+            scope,
+            decideFn,
+            cut,
+          )
+          prepared.push({
+            ref: `i${i}`,
+            ordinal: cand.ordinal,
+            kind: cand.kind,
+            content: cand.content,
+            evidence: cand.evidence,
+            embedding,
+            dedupe:
+              verdict === 'insert' || !near
+                ? 'new'
+                : verdict === 'update'
+                  ? { updates: near.id, expectedContent: near.content }
+                  : { reinforces: near.id, expectedContent: near.content },
+          })
+        }
+        return prepared
+      })
+    } catch (err) {
+      if (err instanceof MemoryDisabled) return stop('disabled', undefined, { route, rejected })
+      return stop('error', `proposal preview failed: ${errorKind(err)}`, { route, rejected })
+    }
+    flushDecisions(ctx, scope)
+    return propose(
+      ctx,
+      cfg.confirm,
+      items,
+      { tier, embedSpace: embed.spaceId, userEventId, conversationId },
+      {
+        route,
+        rejected,
+      },
+    )
+  }
+
+  // --- 8/9. write, one transaction per candidate ---------------------------
   let written = 0
   let duplicates = 0
   let failed = 0
@@ -845,7 +928,7 @@ async function run(
       // the count is advice for M3; a failure here changes nothing written
     }
   }
-  return { written, duplicates, failed, route, rejected, compactionDue }
+  return { written, proposed: 0, duplicates, failed, route, rejected, compactionDue }
 }
 
 /** Reinforce a near-duplicate; ask the merge question of a related preference or
@@ -904,3 +987,337 @@ async function chooseAction(
   ]).finally(() => clearTimeout(timer))
   return verdict === 'same' ? 'reinforce' : verdict === 'update' ? 'update' : 'insert'
 }
+
+// ============================================================================
+// Confirmation (#419 M6 = #433 S11)
+// ============================================================================
+
+/** The proposal's kind, and the two options a person chooses between. */
+export const MEMORY_CONFIRM_KIND = 'memory.confirm'
+export const MEMORY_CONFIRM_SAVE = 'save'
+export const MEMORY_CONFIRM_DISCARD = 'discard'
+/** How long a proposal waits for its person: 7 days (#433 decision record, row 5). */
+export const DEFAULT_PROPOSAL_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * The request a prepared memory is proposed under. `save` is the default and a
+ * rule may never pick it; `discard` is the only option an unattended rule may
+ * pick, and a `park` rule picks nothing. Each item is one flag on `save`, so
+ * the person's selection is validated by core against the request EVENT, and
+ * the labels are positional ("Item 1") — the memory text never rides the
+ * event, which outlives the payload. `summary` carries counts and the closed
+ * kind set, nothing the user wrote. The key is the source message's event id,
+ * so a settle that runs twice for one turn raises one proposal.
+ *
+ * Pure; the payload is held by the host, not here.
+ */
+export function memoryConfirmRequest(
+  items: readonly Pick<MemoryProposalItem, 'ref' | 'kind'>[],
+  eventId: string,
+  expiresInMs: number = DEFAULT_PROPOSAL_TTL_MS,
+): HitlRequest {
+  return {
+    kind: MEMORY_CONFIRM_KIND,
+    key: eventId,
+    question: items.length === 1 ? 'Save this to memory?' : 'Save these to memory?',
+    options: [
+      {
+        id: MEMORY_CONFIRM_SAVE,
+        label: 'Save selected',
+        flags: items.map((item, i) => ({
+          id: item.ref,
+          label: `Item ${i + 1}`,
+          default: true,
+        })),
+      },
+      {
+        id: MEMORY_CONFIRM_DISCARD,
+        label: "Don't save",
+        unattended: true,
+        tone: 'caution',
+      },
+    ],
+    defaultOption: MEMORY_CONFIRM_SAVE,
+    summary: {
+      items: items.length,
+      kinds: [...new Set(items.map((i) => i.kind))].sort().join(','),
+    },
+    unattended: 'park',
+    expiresInMs,
+  }
+}
+
+/** Record the proposal in the context and hand the payload to the host. A
+ *  host that cannot hold it takes the proposal back out: a request with no
+ *  payload is a question nobody can answer. */
+async function propose(
+  ctx: UnifiedContext,
+  confirm: MemoryConfirmSeam,
+  items: readonly MemoryProposalItem[],
+  at: { tier: string; embedSpace: string; userEventId: string; conversationId: string },
+  more: Pick<MemorySettleReport, 'route' | 'rejected'>,
+): Promise<MemorySettleReport> {
+  const ttl = confirm.expiresInMs ?? DEFAULT_PROPOSAL_TTL_MS
+  const before = ctx.events.length
+  const outcome = proposeToHuman(ctx, memoryConfirmRequest(items, at.userEventId, ttl), {
+    attended: true,
+    patternId: 'memory-store',
+  })
+  // Raised before (open, answered or expired): this turn was proposed already.
+  if (ctx.events.length === before) {
+    logStop('this turn was already proposed')
+    return { ...emptyReport(), ...more, skipped: 'already-proposed' }
+  }
+  if (outcome.status !== 'pending') {
+    // `park` never decides; anything else would have written a response.
+    logStop('the proposal was not left pending')
+    return { ...emptyReport(), ...more, skipped: 'error' }
+  }
+  const requestId = outcome.requestId
+  try {
+    await confirm.hold({
+      requestId,
+      expiresAt: Date.now() + ttl,
+      payload: {
+        v: 1,
+        tier: at.tier,
+        embedSpace: at.embedSpace,
+        eventId: at.userEventId,
+        conversationId: at.conversationId,
+        items,
+      },
+    })
+  } catch (err) {
+    ctx.events.splice(before, ctx.events.length - before)
+    logStop('the proposal could not be held', errorKind(err))
+    return { ...emptyReport(), ...more, skipped: 'error' }
+  }
+  return { ...emptyReport(), ...more, proposed: items.length }
+}
+
+/** Is `value` a payload this module wrote? The payload is server-held, but it
+ *  was serialized and read back: anything that does not parse is refused
+ *  rather than half-applied. Returns the typed payload, or null. */
+export function parseMemoryProposalPayload(value: unknown): MemoryProposalPayload | null {
+  const str = (v: unknown): v is string => typeof v === 'string' && v !== ''
+  if (typeof value !== 'object' || value === null) return null
+  const p = value as Record<string, unknown>
+  if (p.v !== 1 || !str(p.tier) || !str(p.embedSpace) || !str(p.eventId) || !str(p.conversationId))
+    return null
+  if (!Array.isArray(p.items) || p.items.length === 0) return null
+  const refs = new Set<string>()
+  const dim = Array.isArray(p.items[0]?.embedding) ? p.items[0].embedding.length : undefined
+  for (const raw of p.items as unknown[]) {
+    if (typeof raw !== 'object' || raw === null) return null
+    const i = raw as Record<string, unknown>
+    if (!str(i.ref) || refs.has(i.ref)) return null
+    refs.add(i.ref)
+    if (!Number.isInteger(i.ordinal) || (i.ordinal as number) < 0) return null
+    if (!(MEMORY_KINDS as readonly unknown[]).includes(i.kind)) return null
+    if (!str(i.content) || Array.from(i.content).length > MAX_MEMORY_CHARS) return null
+    if (!str(i.evidence)) return null
+    if (!validVector(i.embedding, dim)) return null
+    const d = i.dedupe
+    if (d !== 'new') {
+      if (typeof d !== 'object' || d === null) return null
+      const o = d as Record<string, unknown>
+      const id = 'reinforces' in o ? o.reinforces : o.updates
+      if (!str(id) || typeof o.expectedContent !== 'string') return null
+    }
+  }
+  return p as unknown as MemoryProposalPayload
+}
+
+export interface MemoryApplyConfig {
+  /** The write seam, bound by the host to the person who answered. */
+  readonly store: MemoryWriteStore
+  /** The embedding space of the embedder in force NOW. A proposal whose
+   *  vectors are in another space is refused: they would be stored where
+   *  recall refuses them. */
+  readonly embedSpace: () => string
+  /** The user's memory switch, re-read inside each item's transaction. */
+  readonly enabled: () => boolean | Promise<boolean>
+  /** τ_dup for an item the preview called `new`. Default 0.92. */
+  readonly dupSimilarity?: number
+}
+
+export type MemoryApplyOutcome =
+  /** Inserted, reinforced or updated. */
+  | 'written'
+  /** Its provenance row existed: written before; nothing changed. */
+  | 'duplicate'
+  /** The memory it would reinforce or update is gone or says something else now. */
+  | 'stale'
+  | 'failed'
+
+export interface MemoryApplyReport {
+  /** Why nothing was written, when the whole payload was refused. */
+  readonly skipped?: 'malformed' | 'embed-space' | 'disabled'
+  readonly items: ReadonlyArray<{
+    readonly ref: string
+    readonly outcome: MemoryApplyOutcome
+    readonly action?: MemoryWriteAction
+  }>
+  readonly written: number
+}
+
+/**
+ * Write the items a person approved (M6). NEVER throws; mutates `ctx.events`
+ * with one metadata-only `memory_written` per memory, so the caller saves the
+ * context AFTER awaiting it, in the same version-checked save as the person's
+ * answer.
+ *
+ * What it writes is exactly what was proposed, and nothing else: `payload` is
+ * the server-held record (never client input — the caller passes what its own
+ * store returned), `selected` names the refs the answer's flags chose, and an
+ * unknown ref selects nothing. No model is consulted. Each item is its own
+ * transaction under the owner's advisory lock, provenance row first-class:
+ * `(eventId, ordinal)` conflicts make a retry — a double submit, an answer
+ * whose context save was refused — a no-op that re-records a lost
+ * `memory_written` rather than a second write.
+ *
+ * A stale answer never overwrites a newer row: an item the preview said would
+ * reinforce or update a memory is written only if that memory still says what
+ * the preview read (`stale` otherwise, and nothing changes). An item the
+ * preview called `new` reinforces a same-kind near-duplicate that has appeared
+ * since rather than inserting beside it. The whole payload is refused when it
+ * is malformed, its vectors are in another embedding space than the
+ * embedder's now, or the user switched memory off.
+ */
+export async function applyMemoryProposal(
+  ctx: Pick<UnifiedContext, 'events'>,
+  cfg: MemoryApplyConfig,
+  input: { readonly payload: unknown; readonly selected: readonly string[] },
+): Promise<MemoryApplyReport> {
+  const none = (skipped: NonNullable<MemoryApplyReport['skipped']>): MemoryApplyReport => ({
+    skipped,
+    items: [],
+    written: 0,
+  })
+  const payload = parseMemoryProposalPayload(input.payload)
+  if (!payload) return none('malformed')
+  let space: string
+  try {
+    space = cfg.embedSpace()
+  } catch {
+    return none('embed-space')
+  }
+  if (space !== payload.embedSpace) return none('embed-space')
+
+  const chosen = new Set(input.selected)
+  const dup = cfg.dupSimilarity ?? DEFAULT_DUP_SIMILARITY
+  const results: Array<{ ref: string; outcome: MemoryApplyOutcome; action?: MemoryWriteAction }> =
+    []
+  let written = 0
+
+  for (const item of payload.items) {
+    if (!chosen.has(item.ref)) continue
+    const src = {
+      eventId: payload.eventId,
+      ordinal: item.ordinal,
+      conversationId: payload.conversationId,
+    }
+    try {
+      const done = await cfg.store.transaction(async (tx) => {
+        if (!(await cfg.enabled())) throw new MemoryDisabled()
+        let memoryId: string
+        let action: MemoryWriteAction
+        if (item.dedupe === 'new') {
+          const near = await tx.nearest({
+            embedding: item.embedding,
+            embedSpace: payload.embedSpace,
+            tier: payload.tier,
+          })
+          if (near && near.kind === item.kind && near.similarity >= dup) {
+            memoryId = near.id
+            action = 'reinforced'
+            await claim(tx, memoryId, src)
+            await tx.reinforce(memoryId)
+          } else {
+            memoryId = generateId('mem')
+            action = 'inserted'
+            await tx.insert({
+              id: memoryId,
+              kind: item.kind,
+              tier: payload.tier,
+              content: item.content,
+              evidence: item.evidence,
+              evidenceEventId: payload.eventId,
+              embedding: item.embedding,
+              embedSpace: payload.embedSpace,
+            })
+            await claim(tx, memoryId, src)
+          }
+        } else {
+          memoryId = 'reinforces' in item.dedupe ? item.dedupe.reinforces : item.dedupe.updates
+          // Gone: nothing to reinforce or update. Then the provenance row, so a
+          // retry of an item that WAS written (the memory now says the new text)
+          // reads as a duplicate and not as stale. Then the text the preview read:
+          // a mismatch rolls the claim back with everything else.
+          const current = await tx.read(memoryId)
+          if (!current) throw new StaleItem()
+          await claim(tx, memoryId, src)
+          if (current.content !== item.dedupe.expectedContent) throw new StaleItem()
+          if ('updates' in item.dedupe) {
+            action = 'updated'
+            await tx.update(memoryId, {
+              content: item.content,
+              evidence: item.evidence,
+              evidenceEventId: payload.eventId,
+              embedding: item.embedding,
+              embedSpace: payload.embedSpace,
+            })
+          } else {
+            action = 'reinforced'
+            await tx.reinforce(memoryId)
+          }
+        }
+        return { memoryId, action }
+      })
+      ctx.events.push(
+        createEvent('memory_written', 'memory-store', {
+          memoryId: done.memoryId,
+          kind: item.kind,
+          tier: payload.tier,
+          eventId: payload.eventId,
+          ordinal: item.ordinal,
+          action: done.action,
+        } satisfies MemoryWrittenEventData),
+      )
+      results.push({ ref: item.ref, outcome: 'written', action: done.action })
+      written++
+    } catch (err) {
+      if (err instanceof MemoryDisabled) return { skipped: 'disabled', items: results, written }
+      if (err instanceof StaleItem) {
+        results.push({ ref: item.ref, outcome: 'stale' })
+      } else if (err instanceof SourceConflict) {
+        results.push({ ref: item.ref, outcome: 'duplicate' })
+        const recorded = ctx.events.some((e) => {
+          if (e.type !== 'memory_written') return false
+          const d = e.data as MemoryWrittenEventData
+          return d.eventId === payload.eventId && d.ordinal === item.ordinal
+        })
+        if (!recorded && err.existing) {
+          ctx.events.push(
+            createEvent('memory_written', 'memory-store', {
+              memoryId: err.memoryId,
+              kind: err.existing.kind,
+              tier: payload.tier,
+              eventId: payload.eventId,
+              ordinal: item.ordinal,
+              action: 'reinforced',
+            } satisfies MemoryWrittenEventData),
+          )
+        }
+      } else {
+        results.push({ ref: item.ref, outcome: 'failed' })
+        logStop('an approved memory could not be written', errorKind(err))
+      }
+    }
+  }
+  return { items: results, written }
+}
+
+/** Thrown inside an item's transaction to roll it back: the memory the preview
+ *  meant to reinforce or update is gone or has changed. */
+class StaleItem extends Error {}

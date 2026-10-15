@@ -68,6 +68,9 @@ describe('conversation delete → memory erase (#531)', () => {
       expect(calls).toEqual([
         'BEGIN',
         'erase(inTx=true,sameTx=true)',
+        // A pending memory proposal's payload leaves with its conversation, in
+        // the same transaction (#433 S11). MUTATION: drop the call → red.
+        'tx:DELETE FROM hitl_requests',
         'tx:DELETE FROM conversations',
         'COMMIT',
       ])
@@ -77,6 +80,7 @@ describe('conversation delete → memory erase (#531)', () => {
   )
 
   it('a failing row delete rolls the transaction back after the erase ran in it', async () => {
+    tx.query.mockResolvedValueOnce({ rows: [] }) // the proposal rows
     tx.query.mockRejectedValueOnce(new Error('delete failed'))
     await expect(deleteConversations(['conv-a'], 'user-a')).rejects.toThrow('delete failed')
     expect(calls).toEqual(['BEGIN', 'erase(inTx=true,sameTx=true)', 'ROLLBACK'])

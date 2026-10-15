@@ -108,8 +108,10 @@ describe('G13 Neo4j isolation', () => {
       "['--context', context, ...args]",
       "docker(['version'])",
       "network_mode: 'host'",
-      'TCP-LISTEN:59143,bind=0.0.0.0',
-      "EXEC:'sh /tmp/g13-host-http.sh'",
+      'command: httpListener(59143)',
+      'dd bs=1 count="$$length"',
+      'TCP-LISTEN:${port},bind=0.0.0.0',
+      "EXEC:'sh /tmp/g13-http.sh'",
       "'network', 'inspect', 'g13-test_neo4j-internal'",
       "['getent', 'hosts', 'example.com']",
       '![0, 2].includes(dns.status)',
@@ -127,6 +129,17 @@ describe('G13 Neo4j isolation', () => {
       'PASS external DNS positive control from app-network',
     ])
       expect(probe, leg).toContain(leg)
+  })
+  it('the runtime error matcher accepts the observed DNS failure but refuses auth and syntax errors', () => {
+    const source = read('app/scripts/check-neo4j-egress.mjs')
+    const pattern = source.match(/!\/(UnknownHost[^/]+)\/i\.test/)
+    expect(pattern).not.toBeNull()
+    const networkError = new RegExp(pattern![1], 'i')
+    expect(networkError.test('httpbin.org: Temporary failure in name resolution')).toBe(true)
+    expect(networkError.test('The client is unauthorized due to authentication failure')).toBe(
+      false,
+    )
+    expect(networkError.test('Invalid input: expected an expression')).toBe(false)
   })
   it('all container consumers address the relay', () => {
     for (const file of [

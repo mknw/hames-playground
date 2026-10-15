@@ -62,6 +62,22 @@ const source = JSON.parse(
 )
 const relay = source.services['neo4j-relay']
 const neo = source.services.neo4j
+// Consume the complete HTTP request before replying, avoiding TCP resets.
+const httpListener = (port) => [
+  [
+    "cat > /tmp/g13-http.sh <<'SH'",
+    '#!/bin/sh',
+    'length=0',
+    'while IFS= read -r line; do',
+    '  case "$$line" in [Cc]ontent-[Ll]ength:*) length=$$(printf \'%s\' "$$line" | tr -cd \'0-9\');; esac',
+    '  [ "$$line" = "$$(printf \'\\r\')" ] && break',
+    'done',
+    'dd bs=1 count="$$length" >/dev/null 2>&1',
+    "printf 'HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\nContent-Length: 2\\r\\nConnection: close\\r\\n\\r\\n{}'",
+    'SH',
+    `exec socat TCP-LISTEN:${port},bind=0.0.0.0,fork,reuseaddr EXEC:'sh /tmp/g13-http.sh'`,
+  ].join('\n'),
+]
 const fixture = {
   services: {
     neo4j: {
@@ -98,21 +114,7 @@ const fixture = {
     'mcp-gateway': {
       image: source.services['mcp-gateway'].image,
       entrypoint: ['/bin/sh', '-ec'],
-      command: [
-        [
-          "cat > /tmp/g13-http.sh <<'SH'",
-          '#!/bin/sh',
-          'length=0',
-          'while IFS= read -r line; do',
-          '  case "$$line" in [Cc]ontent-[Ll]ength:*) length=$$(printf \'%s\' "$$line" | tr -cd \'0-9\');; esac',
-          '  [ "$$line" = "$$(printf \'\\r\')" ] && break',
-          'done',
-          'dd bs=1 count="$$length" >/dev/null 2>&1',
-          "printf 'HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\nContent-Length: 2\\r\\nConnection: close\\r\\n\\r\\n{}'",
-          'SH',
-          "exec socat TCP-LISTEN:8811,fork,reuseaddr EXEC:'sh /tmp/g13-http.sh'",
-        ].join('\n'),
-      ],
+      command: httpListener(8811),
       networks: ['app-network'],
       tmpfs: ['/misc'],
     },
@@ -121,15 +123,7 @@ const fixture = {
       image: relay.image,
       network_mode: 'host',
       entrypoint: ['/bin/sh', '-ec'],
-      command: [
-        [
-          "cat > /tmp/g13-host-http.sh <<'SH'",
-          '#!/bin/sh',
-          "printf 'HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\nConnection: close\\r\\n\\r\\n{}'",
-          'SH',
-          "exec socat TCP-LISTEN:59143,bind=0.0.0.0,fork,reuseaddr EXEC:'sh /tmp/g13-host-http.sh'",
-        ].join('\n'),
-      ],
+      command: httpListener(59143),
       tmpfs: ['/tmp'],
       cap_drop: ['ALL'],
       user: '65534:65534',
@@ -154,7 +148,11 @@ const fixture = {
   },
   networks: {
     'app-network': {},
-    'neo4j-internal': { internal: mutate ? false : source.networks['neo4j-internal'].internal },
+    // Stable scratch subnet keeps the former gateway target identical across runs.
+    'neo4j-internal': {
+      internal: mutate ? false : source.networks['neo4j-internal'].internal,
+      ipam: { config: [{ subnet: '172.30.249.0/24' }] },
+    },
   },
 }
 if (!fixture.networks['neo4j-internal'].internal && !mutate)
@@ -241,7 +239,7 @@ try {
     const bridgeGateway = network.IPAM.Config.find((c) => c.Gateway)?.Gateway
     if (!bridgeGateway || !/^[0-9.]+$/.test(bridgeGateway))
       throw new Error('Missing IPv4 bridge gateway')
-    console.log(`Bridge gateway: ${bridgeGateway}`)
+    console.log(`Bridge gateway: ${bridgeGateway}; IPAM: ${JSON.stringify(network.IPAM)}`)
     // The control must answer at the exact bridge address Neo4j will try.
     const listenerControl = exec('host-listener', [
       '/bin/sh',

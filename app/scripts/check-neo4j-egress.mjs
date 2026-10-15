@@ -235,15 +235,17 @@ try {
     if (!bridgeGateway || !/^[0-9.]+$/.test(bridgeGateway))
       throw new Error('Missing IPv4 bridge gateway')
     console.log(`Bridge gateway: ${bridgeGateway}`)
-    // Positive control in the host namespace: prove the listener really answers.
+    // The control must answer at the exact bridge address Neo4j will try.
     const listenerControl = exec('host-listener', [
       '/bin/sh',
       '-ec',
-      "printf 'GET / HTTP/1.0\\r\\n\\r\\n' | socat -T 3 - TCP:127.0.0.1:59143",
+      `printf 'GET / HTTP/1.0\\r\\n\\r\\n' | socat -T 3 - TCP:${bridgeGateway}:59143`,
     ]).stdout
     if (!listenerControl.includes('200 OK') || !listenerControl.includes('{}'))
       throw new Error('Host listener positive control failed')
     console.log('PASS host-namespace listener positive control')
+    const dnsControl = exec('neo4j-relay', ['nslookup', 'example.com'])
+    console.log(`PASS external DNS positive control from app-network: ${dnsControl.stdout.trim()}`)
     const dns = exec('neo4j', ['getent', 'hosts', 'example.com'], { allowFailure: true })
     if (dns.error || dns.signal || ![0, 2].includes(dns.status))
       throw new Error(`Inconclusive DNS probe: ${dns.error ?? dns.stderr}`)

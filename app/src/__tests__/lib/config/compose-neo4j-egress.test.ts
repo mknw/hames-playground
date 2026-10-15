@@ -121,6 +121,9 @@ describe('G13 Neo4j isolation', () => {
       'Non-network TCP failure',
       'File prohibition unproven',
       'Host listener positive control failed',
+      'TCP:${bridgeGateway}:59143',
+      "exec('neo4j-relay', ['nslookup', 'example.com'])",
+      'PASS external DNS positive control from app-network',
     ])
       expect(probe, leg).toContain(leg)
   })

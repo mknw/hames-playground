@@ -61,13 +61,17 @@ IP addresses of the gateway, Redis and Postgres (not just their DNS names).
 
 The fixture also starts a socat HTTP listener on `0.0.0.0:59143` using
 `network_mode: host`, in the same throwaway project. Its host-namespace positive
-control must return HTTP 200 and JSON. The probe reads `IPAM.Config[].Gateway`
+control must return HTTP 200 and JSON at the bridge gateway address itself
+(rather than loopback), so a split host/bridge namespace cannot pass vacuously.
+The probe reads `IPAM.Config[].Gateway`
 from `docker network inspect g13-test_neo4j-internal` and requires both raw TCP
 and `apoc.load.json('http://<gateway>:59143/')` from Neo4j to fail. This tests
 host-local delivery, which does not traverse Docker's forwarding rules. A
 successful host connection is a failed containment claim; do not weaken the
 probe to fit the daemon. Host networking must be supported by the selected VM.
 
+First `nslookup example.com` in the relay (on `app-network`) must succeed as
+the upstream DNS positive control; its output is recorded. Then
 `getent hosts example.com` inside Neo4j must fail with lookup exit 2 (exit 0
 means egress; any other exit is inconclusive). Evidence records `docker version`
 for the external-DNS forwarding regression CVE-2024-29018 (fixed in Engine

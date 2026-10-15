@@ -58,7 +58,7 @@ import { assertServerOnImport } from './assert.server'
 import { DEFAULT_RUNTIME_CONFIG, type HarnessRuntimeConfig } from './runtime-config'
 import type { ActiveInjectionGuard } from './injection-guard'
 import type { ToolTransport } from './tool-transport.server'
-import type { ContextEvent } from './types'
+import type { ContextEvent, ToolCallResult } from './types'
 
 assertServerOnImport()
 
@@ -103,6 +103,32 @@ export type EgressCheck = (call: {
   readonly args: Readonly<Record<string, unknown>>
 }) => string | void | Promise<string | void>
 
+/** One stash document write, as an observer sees it: which conversation's stash
+ *  and which document. Never the content. */
+export interface StashWrite {
+  readonly sessionId: string
+  readonly documentId: string
+  /** The `callTool` invocation the write happened inside ({@link currentToolCallId}),
+   *  or undefined for a write made outside any tool call. This is how a scope
+   *  attributes a write to the call that made it rather than to "whatever
+   *  call finishes next". */
+  readonly callId?: string
+}
+
+/** Told, synchronously, that core's `storeDocument` persisted a document. A
+ *  throw is swallowed by the caller: observing a write must never fail it. */
+export type StashWriteObserver = (write: StashWrite) => void
+
+/** Runs in `callTool` after a call has been dispatched and guarded, and may
+ *  replace its result by returning one (#507 N4: `withSandbox` turns a call
+ *  whose stored document could not be restored into a failure). Returning
+ *  nothing leaves the result unchanged. A throw is the hook's own bug and
+ *  propagates, so a hook that must degrade has to catch for itself. */
+export type AfterToolCallHook = (
+  call: { readonly id: string; readonly name: string; readonly args: Record<string, unknown> },
+  result: ToolCallResult,
+) => Promise<ToolCallResult | void>
+
 /** What a caller SUPPLIES when opening or amending a frame. Every slot is
  *  optional; an absent slot means "this run has none", not "use a default". */
 export interface RunFrame {
@@ -123,6 +149,10 @@ export interface RunFrame {
    *  turn. `harness()` and its two siblings default it to `{ attended: true }`
    *  when they OPEN the frame, and only then. */
   hitl?: { readonly attended: boolean }
+  /** Observers of stash document writes made inside this scope. */
+  stashWriteObservers?: readonly StashWriteObserver[]
+  /** Hooks run after every tool call dispatched inside this scope. */
+  afterToolCall?: readonly AfterToolCallHook[]
   /** Checks run before any tool dispatch in this scope. */
   egressChecks?: readonly EgressCheck[]
 }
@@ -151,11 +181,15 @@ export interface ActiveRunFrame {
    *  opens (`hitl.server.ts`), so nothing that can read the frame can write
    *  the record or suppress a pause. */
   readonly hitl?: { readonly attended: boolean }
+  /** Never undefined: an empty frozen array outside any observing scope. */
+  readonly stashWriteObservers: readonly StashWriteObserver[]
+  /** Never undefined, innermost first. */
+  readonly afterToolCall: readonly AfterToolCallHook[]
   /** Never undefined; innermost first, without dropping outer checks. */
   readonly egressChecks: readonly EgressCheck[]
 }
 
-const NO_CHECKS: readonly EgressCheck[] = Object.freeze([])
+const NO_HOOKS: readonly never[] = Object.freeze([])
 const NO_TRANSPORTS: readonly ToolTransport[] = Object.freeze([])
 
 /**
@@ -186,6 +220,32 @@ function suppliedSlots(frame: RunFrame): string[] {
   return (Object.keys(frame) as (keyof RunFrame)[]).filter((k) => frame[k] !== undefined)
 }
 
+/**
+ * Per-invocation identity of a `callTool` call, on its own ALS (also on a
+ * `globalThis` symbol, for the same two-copies reason as the frame). `callTool`
+ * opens one around each call; `storeDocument` reads it to say which call a write
+ * belongs to, and `afterToolCall` hooks receive it, so a scope can tie a write
+ * to ITS call's hook instead of a scope-wide flag (#599 review F3).
+ */
+const CALL_KEY: unique symbol = Symbol.for('hames.harness-patterns.tool-call-id') as never
+type CallHolder = { store: AsyncLocalStorage<string>; seq: number }
+const callGlobal = globalThis as unknown as Record<symbol, CallHolder | undefined>
+const callHolder: CallHolder = (callGlobal[CALL_KEY] ??= {
+  store: new AsyncLocalStorage<string>(),
+  seq: 0,
+})
+
+/** Run `fn` as one tool-call invocation with a fresh id. */
+export function withToolCallId<T>(fn: (id: string) => Promise<T>): Promise<T> {
+  const id = `call-${++callHolder.seq}`
+  return callHolder.store.run(id, () => fn(id))
+}
+
+/** The id of the `callTool` invocation this code runs inside, if any. */
+export function currentToolCallId(): string | undefined {
+  return callHolder.store.getStore()
+}
+
 /** A fresh hitl slot: frozen, with `attended` as its only key. `attended` is a
  *  POSITIVE claim: only `true` makes a person the one who decides. */
 function hitlSlot(supplied: { readonly attended: boolean }): { readonly attended: boolean } {
@@ -202,7 +262,11 @@ function build(frame: RunFrame): ActiveRunFrame {
       : undefined,
     inference: frame.inference,
     hitl: frame.hitl ? hitlSlot(frame.hitl) : undefined,
-    egressChecks: frame.egressChecks ? Object.freeze([...frame.egressChecks]) : NO_CHECKS,
+    stashWriteObservers: frame.stashWriteObservers
+      ? Object.freeze([...frame.stashWriteObservers])
+      : NO_HOOKS,
+    afterToolCall: frame.afterToolCall ? Object.freeze([...frame.afterToolCall]) : NO_HOOKS,
+    egressChecks: frame.egressChecks ? Object.freeze([...frame.egressChecks]) : NO_HOOKS,
   }
 }
 
@@ -270,6 +334,10 @@ export function withRunFrame<T>(frame: RunFrame, fn: () => Promise<T>): Promise<
  *     amend around its main run — and is refused below an open one. The slot
  *     is a frozen `{ attended }` and nothing else: the run's bookkeeping is in
  *     a store of its own (`hitl.server.ts`, #477 F1), opened per run.
+ *   - `stashWriteObservers` and `afterToolCall` CONCATENATE, innermost first,
+ *     like transports (#507 N4). Every observer hears a write and every hook
+ *     sees a call: an inner scope adds to what the enclosing ones do and can
+ *     never switch an outer one off.
  *   - `egressChecks` CONCATENATE, innermost first, like transports. Every
  *     check runs; any denial denies, so an inner scope cannot remove one.
  *   - everything else REPLACES for the duration.
@@ -303,6 +371,12 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
       : open.live,
     inference: partial.inference ?? open.inference,
     hitl: partial.hitl ? hitlSlot(partial.hitl) : open.hitl,
+    stashWriteObservers: partial.stashWriteObservers
+      ? Object.freeze([...partial.stashWriteObservers, ...open.stashWriteObservers])
+      : open.stashWriteObservers,
+    afterToolCall: partial.afterToolCall
+      ? Object.freeze([...partial.afterToolCall, ...open.afterToolCall])
+      : open.afterToolCall,
     egressChecks: partial.egressChecks
       ? Object.freeze([...partial.egressChecks, ...open.egressChecks])
       : open.egressChecks,

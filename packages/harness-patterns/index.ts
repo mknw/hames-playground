@@ -209,6 +209,9 @@ export {
   type LiveEventSlot,
   type LiveEventListener,
   type RunClientOverride,
+  type StashWrite,
+  type StashWriteObserver,
+  type AfterToolCallHook,
 } from './run-frame.server'
 
 // ============================================================================

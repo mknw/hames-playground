@@ -244,11 +244,16 @@ const choice = (script: string[]): DecideFn => {
     { supportedTypes: ['choice'] as const },
   ) as DecideFn
 }
-function fakeRoute(id: string, text: string, payload?: unknown): ConfiguredPattern<Data> {
+function fakeRoute(
+  id: string,
+  text: string,
+  payload?: unknown,
+  observe?: (data: Data) => void,
+): ConfiguredPattern<Data> {
   return configurePattern<Data>(
     'simpleLoop',
     async (s) => {
-      expect(s.data).not.toHaveProperty(WEB_ROSTER_INPUT) // E2, unwrapped route.
+      observe?.(s.data)
       if (payload)
         trackEvent(s, 'tool_result', { tool: 'graph_mail', result: payload, success: true }, true)
       trackEvent(
@@ -272,6 +277,7 @@ describe('decisionLoop handoff roster (D1/E1/E2)', () => {
     let prompt: string | undefined
     let data: Data | undefined
     let visible = ''
+    const unwrappedData: Data[] = []
     const info = simpleLoop<Data>(
       async (input) => {
         prompt = input.planContext
@@ -307,10 +313,19 @@ describe('decisionLoop handoff roster (D1/E1/E2)', () => {
       { patternId: 'think' },
     )
     const routes = {
-      doc: { pattern: fakeRoute('doc', `Mail from ${EXTERNAL.name}`, MAIL), description: 'mail' },
+      doc: {
+        pattern: fakeRoute('doc', `Mail from ${EXTERNAL.name}`, MAIL, (d) => unwrappedData.push(d)),
+        description: 'mail',
+      },
       think: { pattern: think, description: 'plan' },
-      one: { pattern: fakeRoute('one', 'first neutral result'), description: 'one' },
-      two: { pattern: fakeRoute('two', 'second neutral result'), description: 'two' },
+      one: {
+        pattern: fakeRoute('one', 'first neutral result', undefined, (d) => unwrappedData.push(d)),
+        description: 'one',
+      },
+      two: {
+        pattern: fakeRoute('two', 'second neutral result', undefined, (d) => unwrappedData.push(d)),
+        description: 'two',
+      },
       info: { pattern: web, description: 'lookup', siblingResults: ['info'] },
     }
     const loop = withInjectionGuard({ tools: ['decision_loop_output'], spotlight: 'always' })(
@@ -325,6 +340,7 @@ describe('decisionLoop handoff roster (D1/E1/E2)', () => {
     const ctx = createContext<Data>('Research the correspondent')
     await withRunFrame(frame('verda'), () => runChain(ctx, [loop]))
     expect(data).not.toHaveProperty(WEB_ROSTER_INPUT)
+    for (const d of unwrappedData) expect(d).not.toHaveProperty(WEB_ROSTER_INPUT)
     expect(visible).not.toContain(EXTERNAL.name) // excluded doc source stays excluded
     return prompt
   }

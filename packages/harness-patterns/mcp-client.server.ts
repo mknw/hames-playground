@@ -6,7 +6,7 @@
  */
 
 import { assertServerOnImport } from './assert.server'
-import { currentRunFrame } from './run-frame.server'
+import { currentRunFrame, withToolCallId } from './run-frame.server'
 import { activeTransports, processTransports } from './tool-transport.server'
 import { markGatewayReachable, markGatewayUnreachable } from './gateway-health.server'
 import type { ToolCallResult, MCPToolDescription } from './types'
@@ -340,8 +340,51 @@ export async function callTool(
     }
   }
   if (denial) return { success: false, data: null, error: denial }
-  const result = await dispatchTool(name, args)
+  return withToolCallId(async (id) => {
+    const guarded = await applyGuard(name, await dispatchTool(name, args))
+    // Scoped after-call hooks (#507 N4), innermost first. A hook may REPLACE the
+    // result, and a replacement is new content the guard has not seen, so it is
+    // put through the same guard pass as a dispatched result. "Changed" is
+    // decided by CONTENT and never by object identity (#599 delta F1): each hook
+    // is handed a private deep copy, so nothing it does to what it was given can
+    // reach the guarded result, and every returned result is compared with the one
+    // the hook was given a copy of. A hook that returns nothing changes nothing;
+    // one that returns equal content, in whatever object, costs no second pass.
+    // Read softly like the guard — outside a run there are none.
+    let result = guarded
+    let changed = false
+    for (const hook of currentRunFrame()?.afterToolCall ?? []) {
+      const input = cloneResult(result)
+      const out = await hook({ id, name, args }, input)
+      if (out === undefined) continue
+      if (sameContent(out, result)) continue
+      result = out
+      changed = true
+    }
+    return changed ? applyGuard(name, result) : result
+  })
+}
 
+/** A private deep copy of a tool result for a hook. Tool results are JSON-shaped;
+ *  a value that cannot be cloned is a bug in whatever produced it, and failing
+ *  the call is the safe answer (the hook must never see the live object). */
+function cloneResult(result: ToolCallResult): ToolCallResult {
+  return structuredClone(result)
+}
+
+/** Content equality for two results, over everything a model can see. */
+function sameContent(a: ToolCallResult, b: ToolCallResult): boolean {
+  try {
+    return (
+      JSON.stringify([a.success, a.data, a.error, a.sanitized]) ===
+      JSON.stringify([b.success, b.data, b.error, b.sanitized])
+    )
+  } catch {
+    return false
+  }
+}
+
+async function applyGuard(name: string, result: ToolCallResult): Promise<ToolCallResult> {
   // The run frame's `guard` slot, read SOFTLY: `callTool` is also reached from
   // a gateway health probe and a tool-catalog refresh, neither of which is a
   // run, and an absent guard is this chokepoint's opt-in sentinel.

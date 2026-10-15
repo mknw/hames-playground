@@ -54,7 +54,7 @@ Two things that are not obvious from here:
 
 `doc-convert` is only used when `STASH_CONVERT_DOCS=1`; the app reads
 `DOC_CONVERT_URL` (default `http://localhost:8000`). All six are defined in the
-repo-root `docker-compose.yaml`. A bare `docker compose up -d` starts every one
+repo-root `docker-compose.yaml` (Docker Engine >= 28 required; run `make check-docker` there first). A bare `docker compose up -d` starts every one
 of them **except `app`** — Neo4j, the MCP gateway, Postgres, redis-stack and
 doc-convert — because the `app` service alone carries a compose profile (see
 [Commands](#commands)).

@@ -71,7 +71,7 @@ no longer the only layer — but it is the one that covers everything the
 application-level key does not: the Neo4j store, the Data Stash volume, the
 `backups/` directory and `.env` itself.
 
-Neo4j is isolated on `neo4j-internal` (`internal: true`, IPv4 gateway mode `isolated`); only `neo4j-relay`
+Neo4j is isolated on `neo4j-internal` (`internal: true`, IPv4 gateway mode `isolated`, Docker Engine >= 28; `make check-docker` locally); only `neo4j-relay`
 shares it. HTTP/Bolt loopback publishes belong to the relay, and container
 consumers use `neo4j-relay`, keeping Neo4j off `app-network` (#241 G13).
 Plugins are baked into the image; CSV file URLs and APOC file imports stay off.

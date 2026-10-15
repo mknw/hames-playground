@@ -201,7 +201,7 @@ consumers use `neo4j-relay`. APOC and n10s are installed during image build,
 so startup needs no egress. CSV file URLs and APOC file imports are disabled.
 Before recreating the stack, take a Neo4j dump using the currently running
 image. The first `docker compose up -d` after adopting G13 moves an older store
-to 5.26.32; that store-format move cannot be undone. Docker Engine 28+ is
+to 5.26.32; that store-format move cannot be undone. Docker Engine >= 28 is
 required for the isolated bridge (see [Docker Compose](../DOCKER_COMPOSE.md)).
 After adopting G13, the owner must recreate their own stack once with
 `docker compose up -d`. The opt-in isolation check and red mutation are in
@@ -211,7 +211,7 @@ After adopting G13, the owner must recreate their own stack once with
 
 ```bash
 cd /opt/hames
-docker compose up -d                 # neo4j, postgres, redis-stack, mcp-gateway, doc-convert
+docker compose up -d                 # (Engine >= 28 is gated by bootstrap-vps.sh) neo4j, postgres, redis-stack, mcp-gateway, doc-convert
 docker compose ps                    # all healthy?
 
 # Build the sandbox base image — the compute sandbox needs it or every run fails

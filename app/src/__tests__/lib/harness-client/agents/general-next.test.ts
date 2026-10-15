@@ -118,7 +118,13 @@ const deps: AgentDeps = {
   toolNamespaces: mcpNamespace,
   withSandbox: attach,
   createRedisBackend: () => ({ name: 'redis', type: 'vector', search: async () => [] }),
-  pseudonymiseForWeb: async () => ({ apply: (value) => value, check: () => {} }),
+  pseudonymiseForWeb: async () => ({
+    apply: (value) => value,
+    redact: <T>(value: T): T => value,
+    checkLiterals: () => {},
+    observe: () => {},
+    check: () => {},
+  }),
 }
 let choices: string[]
 let states: string[]

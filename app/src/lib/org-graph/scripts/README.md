@@ -11,7 +11,7 @@ See the header of `../schema.server.ts`.
 
 ## Prerequisites
 
-- Neo4j up: `docker compose up -d` from the repo root.
+- Neo4j up: `docker compose up -d` from the repo root (Docker Engine >= 28; `make check-docker`).
 - `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` in `app/.env`,
   with the **`User.Read.All` application permission** admin-consented on the app
   registration. Client credentials, not a delegated sign-in — the roster is the

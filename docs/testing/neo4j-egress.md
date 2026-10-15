@@ -8,7 +8,7 @@ and drops every capability. Host consumers keep localhost; the container app
 and gateway config use `neo4j-relay`. Both compose files close CSV file URLs
 and APOC file imports. The bridge controls external forwarding and removes
 the host IPv4 address on the bridge; no procedure allowlist supplies that boundary.
-Docker Engine 28+ is required; runtime evidence targets Engine 29.2.1. The
+Docker Engine >= 28 is required (`gateway_mode_ipv4: isolated`); runtime evidence targets Engine 29.2.1. The
 network proof is IPv4-only. Neo4j can still reach the relay's HTTP/Bolt listeners
 on `neo4j-internal` by design; both forward only back into Neo4j.
 [Docker gateway-mode documentation](https://docs.docker.com/engine/network/port-publishing/#gateway-modes)
@@ -24,7 +24,7 @@ be undone. The backup and restore default is `hames-neo4j:local`, matching compo
 `bootstrap-vps.sh` checks the daemon version before `dc up` and refuses Engine
 versions below 28.0.0, unreadable versions and an unavailable daemon. It does
 not upgrade an existing Engine automatically. Manual operators must run this
-check before deployment (a failed check means stop and upgrade first):
+check before deployment (a failed check means stop and upgrade first). Local dev: `make check-docker` runs the same gate (`scripts/check-docker.sh`, tested by `scripts/check-docker.test.sh`) and names the colima fix (`colima update`, restart the VM); an older Engine otherwise fails `docker compose up -d` with "unknown gateway mode isolated". There is deliberately no fallback that drops the isolation:
 
 ```sh
 test "$(docker version --format '{{.Server.Version}}' | cut -d. -f1)" -ge 28 || { echo 'Docker Engine >= 28.0.0 required; upgrade before deploying.' >&2; exit 1; }

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -106,7 +107,14 @@ WARMUP_DECISION = {
 # that failure is silent everywhere except here.
 REFERENCE_PROMPT = "Ticket: checkout is down for every customer. Priority (P1, P2 or P3):"
 REFERENCE_TOP_LOGPROBS = 5
-REFERENCE_TOLERANCE = 0.05  # logprob units; bf16 across a restore, not bit-identity
+# In PROBABILITY, on the tokens both readings rank. The first deploy read the
+# adapter 0.053 and 0.060 logprob from its pre-sleep reading on two restores of
+# one snapshot and under 0.05 on a third: identical memory, three readings, so
+# that is noise in the forward pass, and logprob units magnify it on tail tokens
+# that carry no mass. Weights a restore damaged move the head of the distribution.
+# 0.1 is three times what a 0.06 logprob wobble on a token at p=0.55 reads as;
+# every restore records its drift in /status, so the bound can tighten on data.
+REFERENCE_TOLERANCE = 0.1
 
 
 # ---- deployment config: the operator's, read at deploy time ------------------
@@ -325,12 +333,21 @@ def _assert_adapter_active(base: dict[str, float], adapter: dict[str, float]) ->
         )
 
 
-def _assert_same_distribution(before: dict[str, float], after: dict[str, float], model: str) -> None:
-    if set(before) != set(after):
-        raise RuntimeError(f"{model!r} after restore ranks different tokens: {sorted(before)} vs {sorted(after)}")
-    drift = max(abs(before[k] - after[k]) for k in before)
+def _reference_drift(before: dict[str, float], after: dict[str, float], model: str) -> float:
+    """The largest probability change on a token both readings rank; raises past the tolerance.
+
+    A tail token trading places with the sixth is noise, so only shared tokens are
+    compared, and the pre-sleep top token must still be one of them."""
+    top = max(before, key=before.__getitem__)
+    shared = before.keys() & after.keys()
+    drift = max(abs(math.exp(before[k]) - math.exp(after[k])) for k in shared) if top in shared else 1.0
     if drift > REFERENCE_TOLERANCE:
-        raise RuntimeError(f"{model!r} after restore drifted {drift:.3f} logprob (> {REFERENCE_TOLERANCE})")
+        p = lambda reading: {k: round(math.exp(v), 4) for k, v in reading.items()}  # noqa: E731
+        raise RuntimeError(
+            f"{model!r} after restore moved {drift:.3f} probability (> {REFERENCE_TOLERANCE}):"
+            f" {p(before)} -> {p(after)}"
+        )
+    return drift
 
 
 app = modal.App(APP_NAME)
@@ -425,9 +442,12 @@ class SmallModels:
             if status != 200:
                 raise RuntimeError(f"vLLM /wake_up failed: {status}")
             _wait_ok(f"http://127.0.0.1:{VLLM_PORT}/health", self.vllm, 300, "vLLM after wake")
-        for model, before in self.reference.items():
-            _assert_same_distribution(before, _reference_logprobs(model), model)
-        _assert_adapter_active(self.reference[SUMMARIZER_MODEL], self.reference[DECIDER_MODEL])
+        after = {model: _reference_logprobs(model) for model in self.reference}
+        self.boot["reference_drift"] = {
+            model: round(_reference_drift(before, after[model], model), 4) for model, before in self.reference.items()
+        }
+        # On the readings taken NOW: the pre-sleep ones passed this already.
+        _assert_adapter_active(after[SUMMARIZER_MODEL], after[DECIDER_MODEL])
         _wait_ok(f"http://127.0.0.1:{SHIM_PORT}/health", self.shim, 60, "shim after wake")
         self.boot["restored"] = restored
         self.boot["wake_s"] = time.monotonic() - t0

@@ -25,6 +25,8 @@
  *      Nothing in the box fetches an image URL a request names: vLLM reads no
  *      images, and the shim (whose pinned config turns its URL-fetching image
  *      path on) is started with its documented `LIGHTNING_IMAGE_URLS=off` lock.
+ *      After a restore the adapter-active check runs on the readings taken
+ *      AFTER it; run on the pre-sleep ones it passes whatever the restore did.
  *   4. Everything baked into the image or a snapshot is pinned public state:
  *      a commit hash for each Hub repo, a sha256 per card file, a sha512 for
  *      Caddy — and the warm-up prompts are string LITERALS in the file, not
@@ -125,6 +127,14 @@ describe('deploy/modal: the server shape and the vLLM argv', () => {
     expect(app).toMatch(
       /subprocess\.Popen\(\s*_shim_argv\(\), env=\{\*\*os\.environ, \*\*SHIM_ENV\}/,
     )
+  })
+
+  it('re-checks the adapter after a restore on the readings taken after it', () => {
+    const serve = app.match(/def _serve\(self\)[\s\S]*?hames: ready/)?.[0] ?? ''
+    expect(serve).toMatch(
+      /_assert_adapter_active\(after\[SUMMARIZER_MODEL\], after\[DECIDER_MODEL\]\)/,
+    )
+    expect(serve).not.toMatch(/_assert_adapter_active\(self\.reference/)
   })
 
   it('enables dev mode (sleep needs it) — which is why the route list above exists', () => {

@@ -50,7 +50,7 @@ Everything else is a 404 at Caddy. vLLM's dev-mode routes (`/sleep`, `/wake_up`,
 
 1. **Before the snapshot** (`@modal.enter(snap=True)`): start vLLM with the base plus the LoRA, confirm both names are served, start the shim, warm both with the literal synthetic prompts in the file, record top-5 logprobs for one reference prompt on each name, assert the two differ (the model card's adapter-active check), then `POST /sleep?level=1`.
 2. Modal snapshots CPU and GPU memory.
-3. **After a restore** (`snap=False`): `POST /wake_up`, re-read the reference logprobs on both names and require them to match the pre-sleep ones within 0.05, then start Caddy. A mismatch fails the container rather than serving a box whose adapter silently stopped applying.
+3. **After a restore** (`snap=False`): `POST /wake_up`, re-read the reference prompt on both names, require each to keep its pre-sleep top token and move no shared top-5 token by more than 0.1 in probability, run the adapter-active check again on these fresh readings, then start Caddy. A failure stops the container rather than serving a box whose adapter silently stopped applying. Each restore records the drift it measured in `/status` (`reference_drift`); the bound is in probability because restores of one snapshot differ by a few hundredths of a logprob from run to run, which is noise rather than damage.
 
 With `HAMES_MODAL_SNAPSHOT=0` the same steps run in one `@modal.enter`, with no sleep. That is the baseline `measure.py` compares against.
 

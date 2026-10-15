@@ -361,6 +361,68 @@ const withSettings = (s: MemoryStoreSettings): Partial<MemoryStoreConfig> => ({ 
 // ============================================================================
 
 describe('settleMemory — the one path that stores', () => {
+  it('M3 hard cap: a store without eviction refuses growth at 400 and reports full', async () => {
+    const { cfg, db } = config()
+    const store: MemoryWriteStore = {
+      transaction: (fn) => db.store.transaction((tx) => fn({ ...tx, count: async () => 400 })),
+    }
+    expect(await settleMemory(turn(), { ...cfg, store })).toMatchObject({
+      skipped: 'full',
+      written: 0,
+    })
+    expect(db.rows()).toEqual([])
+  })
+
+  it('M3 hard cap: optional episode eviction happens inside the candidate transaction before insert', async () => {
+    const { cfg, db } = config()
+    let count = 400
+    const evict = vi.fn(async (n: number) => {
+      count -= n
+    })
+    const order: string[] = []
+    const store: MemoryWriteStore = {
+      transaction: (fn) =>
+        db.store.transaction((tx) =>
+          fn({
+            ...tx,
+            count: async () => count,
+            evictOldestEpisodes: async (n) => {
+              order.push('evict')
+              await evict(n)
+            },
+            insert: async (row) => {
+              order.push('insert')
+              await tx.insert(row)
+            },
+          }),
+        ),
+    }
+    expect(await settleMemory(turn(), { ...cfg, store })).toMatchObject({ written: 1 })
+    expect(evict).toHaveBeenCalledWith(1)
+    expect(order).toEqual(['evict', 'insert'])
+    expect(db.rows()).toHaveLength(1)
+  })
+
+  it('M3 hard cap: unusable counts, invalid ceilings and an ineffective eviction cannot authorize growth', async () => {
+    for (const count of [NaN, -1, 400]) {
+      const { cfg, db } = config()
+      const store: MemoryWriteStore = {
+        transaction: (fn) =>
+          db.store.transaction((tx) =>
+            fn({
+              ...tx,
+              count: async () => count,
+              evictOldestEpisodes: async () => {},
+            }),
+          ),
+      }
+      expect(await settleMemory(turn(), { ...cfg, store })).toMatchObject({ skipped: 'full' })
+      expect(db.rows()).toEqual([])
+    }
+    const { cfg, db } = config({ settings: { hardLimit: Infinity } })
+    expect(await settleMemory(turn(), cfg)).toMatchObject({ failed: 1, written: 0 })
+    expect(db.rows()).toEqual([])
+  })
   it('a confident, calibrated, ordinary, routine personal preference is written', async () => {
     const { cfg, db } = config()
     const ctx = turn()
@@ -970,6 +1032,7 @@ describe('erasure-semantics', () => {
     expect(members.sort()).toEqual([
       'addSource',
       'count',
+      'evictOldestEpisodes',
       'insert',
       'nearest',
       'read',

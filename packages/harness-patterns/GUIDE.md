@@ -323,6 +323,35 @@ answers with memory but no copying into intent or route, is deferred (#544).
 
 Gate the post-reply call on `harnessUsesMemory(patterns)`, the same probe that gates the memory wake, so an agent that did not opt in stores nothing. **Await `settleMemory`, then save the context**: the `memory_written` events it records ride that one save. It never throws and it fails closed: an abstained, uncalibrated or sensitive read, a confirmation your host cannot yet ask, an organisational-graph target or a failed wake all store nothing and say why. Recall never throws either and never stops what follows it; its block is cleared on every turn. Your `MemoryWriteStore.transaction(fn)` must open one transaction, take the owner's advisory lock inside it, and **roll back and rethrow if `fn` throws**: that rollback is what makes a retry a no-op. See SPEC's [Memory recall](SPEC.md#memory-recall-memoryrecall-419) and [Memory store](SPEC.md#memory-store-settlememory-419).
 
+### Optional memory maintenance
+
+Add `compact: { compact: summarize, store: compactionStore, assertTier }` to
+`MemoryConfig` to opt into M3. `memoryCompactionConfig(cfg)` returns the derived
+maintenance config, or `undefined` without that opt-in. After settle reports
+`compactionDue`, await `compactMemory(ctx, derived)` before the same context save.
+Core adds no app calls or timer. The host's owner-bound compaction store must
+use the same advisory lock, memory pool and lock timeout as settle and erasure,
+roll back on any throw, move all member provenance before deleting members,
+and return exact move/deletion counts. `assertTier` must refuse unknown or
+unavailable tiers before inference; no fallback is allowed.
+
+Retention lives at `cfg.retention`, per kind in days after last sighting: episodic
+180 by default, the other kinds `null` (persist). For example,
+`{ episodic: 90, preference: 365, trait: null }`. Compaction keeps the newest
+last-seen date, so it cannot restart the retention clock. A refused or
+uncalibrated merge keeps all members. Only episodes may be evicted at the hard
+cap. Settle refuses growth with `full` if its host cannot reclaim episodic space;
+existing reinforces/updates do not consume capacity. The optional transaction
+method `evictOldestEpisodes(n)` is the host capability for that reclamation.
+
+For the daily retry/expiry pass, supply an async iterable of `MemorySweepJob`s
+(context, config, persist) to `sweepMemories`, or start its opt-in daily timer
+with `startMemorySweep(jobsSupplier)` and retain the returned stop function.
+The timer unrefs itself and never overlaps sweeps. Hosts enumerate enabled
+owners, supply fresh owner-bound seams, and persist each context after its pass.
+See SPEC's [Memory compaction](SPEC.md#memory-compaction-419-m3) for transaction,
+acceptance, event and fail-closed contracts.
+
 ### Asking a human
 
 A run can stop to ask the person watching it, and an answer continues it. The

@@ -2116,6 +2116,53 @@ export interface MemoryEmbedder extends MemoryQueryEmbedder {
   documents(texts: string[]): Promise<number[][]>
 }
 
+/** Per-kind retention in days after lastSeenAt; null persists until forgotten. */
+export type MemoryRetention = Readonly<Partial<Record<MemoryKind, number | null>>>
+
+/** A complete owner-scoped snapshot for compaction, read under the owner lock.
+ *  Sources include EVERY prior contributor, even when its text was superseded. */
+export interface MemoryCompactionRow extends MemoryInsertRow {
+  readonly createdAt: number
+  readonly lastSeenAt: number
+  readonly compactedFrom: number
+  readonly sources: readonly MemorySourceRow[]
+}
+
+/** The summarizer sees data only, oldest first; ids and provenance stay in core. */
+export interface MemoryCompactInput {
+  readonly kind: MemoryKind
+  readonly members: readonly {
+    readonly content: string
+    readonly evidence: string
+    /** ISO timestamp, matching the already-landed M9 adapter. */
+    readonly last_seen: string
+  }[]
+}
+
+/** No transport in core. The host supplies a company-run summarizer. Its output
+ *  is untrusted, and all deterministic checks run before any write. */
+export type MemoryCompactFn = (
+  input: MemoryCompactInput,
+) => Promise<LLMResult<{ readonly content: string; readonly evidence: string }>>
+
+/** Owner-bound compaction transaction. The host uses the SAME advisory lock,
+ *  dedicated pool and lock timeout as MemoryWriteStore, and rolls back on throw.
+ *  list() reads fresh rows including all provenance inside that transaction. */
+export interface MemoryCompactionTx {
+  list(): Promise<readonly MemoryCompactionRow[]>
+  insert(row: MemoryCompactionRow): Promise<void>
+  /** Repoint ALL sources, including superseded ones, before deleting members.
+   *  Return the number moved; an incomplete move rolls back the whole merge. */
+  moveSources(memberIds: readonly string[], mergedId: string): Promise<number>
+  /** Delete owner-scoped rows, cascading sources only for expiry/eviction.
+   *  During a merge sources have already moved. Return rows actually deleted. */
+  delete(ids: readonly string[]): Promise<number>
+}
+
+export interface MemoryCompactionStore {
+  transaction<R>(fn: (tx: MemoryCompactionTx) => Promise<R>): Promise<R>
+}
+
 /** The nearest ACTIVE memory of the owner to a candidate, same tier and same
  *  embedding space, with its cosine SIMILARITY (`1 - distance`). */
 export interface MemoryNeighbor {
@@ -2201,6 +2248,10 @@ export interface MemoryWriteTx {
   read(id: string): Promise<{ kind: MemoryKind; content: string } | null>
   /** Rows the owner has, all tiers (the compaction threshold's input). */
   count(): Promise<number>
+  /** Optional M3 host capability, under this transaction's owner lock. Evict
+   *  at most n oldest episodic rows (last_seen_at, id), never another kind.
+   *  Absent capability: at the hard cap an insertion is refused. */
+  evictOldestEpisodes?(n: number): Promise<void>
 }
 
 /**

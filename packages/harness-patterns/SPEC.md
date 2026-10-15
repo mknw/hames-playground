@@ -67,6 +67,7 @@ is and why it is shaped this way, start at the front page —
   - [typedDecision() and decisionRouter()](#decisions-typeddecision-418)
   - [memoryRecall()](#memory-recall-memoryrecall-419)
   - [settleMemory()](#memory-store-settlememory-419)
+  - [Memory compaction](#memory-compaction-419-m3)
   - [judge()](#judgeevaluator-config)
   - [chain()](#chainctx-patterns-onevent)
   - [harness()](#harnesspatterns)
@@ -2705,7 +2706,112 @@ reconcile `memory_sources` against events on load) is M5's, and M5 cannot land
 without an interleaving pin for it.
 
 `report.compactionDue` is true when the owner's count reaches `softLimit` (300);
-compaction itself is the next slice.
+the host may then call the optional M3 pass before saving the context.
+
+## Memory compaction (#419 M3)
+
+`compactMemory(ctx, cfg)` is an optional post-reply function, never an import
+side effect. `memoryCompactionConfig(memoryConfig)` derives it from the same
+owner, switch, decision seam, embedder and retention as `withMemory`. It returns
+`undefined` without `cfg.compact`; existing composition roots keep compiling.
+No application wiring is added by M3.
+
+```typescript
+const cfg = {
+  ...memoryConfig,
+  retention: { episodic: 90, trait: null },
+  compact: {
+    compact: summarize, // MemoryCompactFn; M9 createMemoryCompactAdapter matches
+    store: compactionStore, // MemoryCompactionStore, owner-bound
+    assertTier, // REQUIRED host check; refuse unknown/unconfigured tiers
+    settings: { softLimit: 300, target: 240, hardLimit: 400 },
+  },
+}
+const report = await settleMemory(ctx, memoryStoreConfig(cfg))
+const compactCfg = memoryCompactionConfig(cfg)
+if (report.compactionDue && compactCfg) await compactMemory(ctx, compactCfg)
+await save(ctx)
+```
+
+The compaction settings' soft/hard thresholds override the settle settings in
+both derived configs; otherwise settle's settings supply them. Default
+`T_soft = 300`, target 240 (0.8 times soft), `T_hard = 400`. Invalid limits
+fail closed. One transaction takes the **same owner advisory lock** as settle
+and erasure, uses the host's dedicated memory pool/lock timeout, rechecks the
+committed switch, and reads fresh rows with complete source provenance. Expiry
+runs first, even below the soft threshold. Above it, each multi-member cluster
+gets `MEMORY_COMPACT_SPEC` (`memory.compact.merge`, `merge | keep`). This is a
+separate spec from M2's unchanged `MEMORY_MERGE_SPEC` (`same | update | distinct`),
+as ruled by the coordinator for M3.
+
+The policy requires calibration and falls back to `keep`. Static cuts carry no
+method override: a Jev read needs fitted cuts for this **new** key. Uncalibrated,
+refused, abstained or failed reads never merge. Each cluster has a 10-second
+budget across tier validation, decision, summary and embedding. A late result
+has no write continuation. The host's required `assertTier` runs before any
+inference, inside the partition's own run-frame tier; unavailable partitions
+are kept. A nested call amends the frame; a sweep outside a turn opens one.
+This seam is exclusively personal memory: organisational-graph targets never
+enter it and still require the existing confirmation path.
+
+After acceptance and a fresh document embedding, insert the merged row with
+its evidence id, move **all** sources (including stale contributors), then
+delete members in that same transaction. Source-move/deletion counts must
+match. `compactedFrom` sums the members' counts; creation takes the oldest
+date and last-seen takes the newest, so compaction cannot renew retention.
+A write failure rolls back the entire pass. The already-durable original user
+event remains the evidence event; M3 introduces no outbox or event-storage seam
+(coordinator ruling Q2). The switch is checked again after inference, before
+writing. Context events cross only after commit: metadata-only decisions and
+`memory_written` with action `inserted` for the new row. Call records retain
+usage/identity only, with all prompt/output text redacted. Persist the context
+after awaiting the pass, as for settle; the existing host-save/reconciliation
+obligations still apply.
+
+At or above the hard threshold, deterministic eviction removes only the oldest
+episodic rows (last-seen/id order), stopping below the threshold. Other kinds
+are never evicted silently. If the remaining rows still fill it, the report
+sets `full` and logs `full`. Settle now checks capacity before an **insertion**,
+under its candidate transaction, and returns `full` when there is no room.
+Existing reinforcements and updates can proceed because they add no row.
+The optional `MemoryWriteTx.evictOldestEpisodes(n)` lets a host reclaim space
+in that same transaction; an absent/ineffective capability refuses growth,
+and an unreadable count cannot authorize an insertion. No existing app adapter
+is changed to supply the capability in this slice.
+
+`sweepMemories(jobs)` consumes host-supplied, owner-bound `MemorySweepJob`s
+(context, config, persist). It runs maintenance and then persists each context;
+a job failure is logged without content and does not stop the next owner.
+`startMemorySweep(jobsSupplier)` schedules this daily with a self-unref'ing
+timer, returning a stop function. It never runs on import, never overlaps
+sweeps, and reschedules after completion. The host supplies the owner directory
+and starts it once; M3 installs no app timer. Daily expiry runs for enabled
+owners below `T_soft` too, while over-threshold owners retry compaction.
+
+`MemoryCompactFn` is the injected summarizer seam. It matches the landed M9
+adapter: `{ kind, members: [{ content, evidence, last_seen }] }`, oldest first,
+returning `{ value: { content, evidence }, call? }`. Member text is untrusted
+data; the host must isolate it from instructions and use company-run inference.
+Core contains no transport or provider fallback.
+
+`clusterMemories` is pure, exact greedy single-link clustering (default cosine
+threshold 0.85, **unmeasured**). Bridge members join all linked clusters. Tier,
+kind and embedding space each partition the corpus; malformed/zero vectors
+remain singletons. Stable last-seen/id order makes input order irrelevant.
+
+`acceptCompaction` reuses M2's length, identifier-closure and zero-sanitizer
+checks against the members' content and evidence. The kind cannot change, and
+evidence must equal the newest member's evidence exactly. Core carries that
+member's `evidenceEventId`; the model never supplies provenance identifiers.
+An unverifiable result leaves every member intact.
+
+`MemoryConfig.retention` implements D21 as days after `lastSeenAt`, per kind.
+Default `{ episodic: 180, semantic: null, preference: null, trait: null }`;
+`null` persists until forgotten. Any kind may be overridden, including
+persistent episodes and expiring preferences. Equality at expiry is expired.
+Nonfinite/negative days are refused; an invalid timestamp never authorizes a
+deletion. Expiry needs no model call. `expiredMemories` reads the configured
+values, never an embedded 180-day literal.
 
 ## EventView Query API
 

@@ -17,6 +17,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   memoryStoreConfig,
+  memoryCompactionConfig,
   withMemory,
   type MemoryConfig,
 } from '@hames-ai/harness-patterns/patterns/withMemory.server'
@@ -114,6 +115,33 @@ const recalled = (ctx: { events: Array<{ type: string; data: unknown }> }) =>
 // ============================================================================
 
 describe('with-memory-shape', () => {
+  it('M3 is optional; its derived config shares switch, retention and capacity thresholds', () => {
+    const base = memoryConfig()
+    expect(memoryCompactionConfig(base)).toBeUndefined()
+    const cfg = memoryConfig({
+      retention: { episodic: null, trait: 7 },
+      settle: { softLimit: 200, hardLimit: 350 },
+      compact: {
+        compact: async () => ({ value: { content: 'synthetic', evidence: 'synthetic' } }),
+        store: {
+          transaction: async () => {
+            throw Error()
+          },
+        },
+        assertTier: () => {},
+        settings: { softLimit: 250 },
+      },
+    })
+    const compact = memoryCompactionConfig(cfg)!
+    expect(compact.enabled).toBe(cfg.enabled)
+    expect(compact.owner).toBe(cfg.owner)
+    expect(compact.decide).toBe(cfg.decide)
+    expect(compact.embed).toBe(cfg.embed)
+    expect(compact.retention).toBe(cfg.retention)
+    expect(compact.settings).toMatchObject({ softLimit: 250, hardLimit: 350 })
+    expect(memoryStoreConfig(cfg).settings).toMatchObject({ softLimit: 250, hardLimit: 350 })
+    expect(() => withMemory(memoryConfig({ retention: { trait: -1 } }))).toThrow(TypeError)
+  })
   it('prepends the recall step and returns the caller’s patterns as the SAME objects', () => {
     const a = synth().pattern
     const b = synth().pattern

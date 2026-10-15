@@ -535,6 +535,7 @@ describe('daily sweep', () => {
       await new Promise<void>((resolve) => {
         finish = resolve
       })
+      yield* []
     })
     const stop = startMemorySweep(jobs)
     expect(jobs).not.toHaveBeenCalled()
@@ -549,6 +550,7 @@ describe('daily sweep', () => {
     await vi.runAllTimersAsync()
     expect(jobs).toHaveBeenCalledOnce()
     const again = vi.fn(async function* () {
+      yield* []
       throw Error()
     })
     const stopAgain = startMemorySweep(again)

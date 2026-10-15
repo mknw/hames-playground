@@ -726,7 +726,7 @@ describe('acceptance-rules', () => {
         ? logprob({ episodic: 0.26, semantic: 0.25, preference: 0.25, trait: 0.24 })
         : undefined,
     )
-    const { cfg, db } = config({
+    const { cfg } = config({
       decide: decide.fn,
       extract: fakeExtract([cand({ kind: 'trait' })]).fn,
     })

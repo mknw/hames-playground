@@ -253,14 +253,14 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
 // LLM pricing (#122 / #132 — token & cost metrics)
 // ============================================================================
 //
-// TWO pricing models, one currency. Everything this app renders as a price is
+// Four pricing bases, one currency. Everything this app renders as a price is
 // in EUR, because that is the currency the bills arrive in.
 //
 //  - TOKEN-priced clients (Anthropic): the vendor publishes $/MTok, so the
 //    tables below stay in dollars — the list price is the auditable fact — and
 //    the conversion to EUR happens once, at the end, at `EUR_PER_USD`.
 //  - TIME-priced clients (the self-hosted GPU): billed by the wall-clock second
-//    the box is awake, at `VERDA_EUR_PER_HOUR`. Tokens on it are free.
+//    the box is awake, at its client-specific EUR/hour rate. Tokens are free.
 //
 // Which model a call takes is decided by the client BAML actually SELECTED
 // (`call.clientName`), never by the tier the run intended — the same attribution
@@ -269,7 +269,7 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
 
 /**
  * $ per MTok per BAML client. A client with no entry — and not in
- * {@link TIME_PRICED_CLIENT} either — reads as cost "unknown" rather than
+ * {@link TIME_PRICED_CLIENTS} either — reads as cost "unknown" rather than
  * silently wrong, so a newly added one must be listed here.
  *
  * These stay in USD on purpose: it is the number Anthropic publishes, so it is
@@ -289,31 +289,9 @@ export const CLIENT_PRICING: Record<string, { inPerMTok: number; outPerMTok: num
   AnthropicOpus4: { inPerMTok: 15.0, outPerMTok: 75.0 },
 }
 
-/**
- * Clients that cost nothing per call, because they are served by a model process
- * on infrastructure with no marginal bill — `make llm-small` on :8095 and
- * `pnpm dev:llama` on :8080.
- *
- * They are priced at €0.00 on a basis of their OWN (`'local'`), rather than left
- * out of both tables to read as "unknown". Owner decision 2026-08-26, and the
- * distinction is the point: unknown means unmeasured, and a locally-served call
- * is not unmeasured — it is free. Before this, a private-tier step that
- * summarized a tool result rendered cost-unknown, which is a coverage hole in
- * the dashboard on the tier's highest-frequency role (six of twelve BAML
- * functions run on the 4B).
- *
- * WHAT THE LABEL CLAIMS, AND ITS ONE LIMIT. It is a statement about the CLIENT,
- * which is the same attribution rule the rest of the cost path follows (the
- * client BAML selected, never the tier the run intended). `SMALL_LLM_BASE_URL`
- * can point anywhere — "local" names the wire format, not the machine (#256) —
- * so a deployment that moves the 4B onto metered infrastructure has to move the
- * client out of this set, the way the 27B sits in {@link TIME_PRICED_CLIENT}.
- * That is the same edit the tier map already requires and is why this is a set
- * rather than a guess about the URL: a URL check would silently re-price the
- * same call differently on two hosts.
- */
+/** Clients with no marginal per-call bill. Attribution follows the selected
+ * client, never its URL. The metered summarizer is in TIME_PRICED_CLIENTS. */
 export const LOCAL_PRICED_CLIENTS: ReadonlySet<string> = new Set([
-  'LocalQwenSmall',
   'LocalQwenSmallDecide',
   'LocalGLM',
 ])
@@ -329,16 +307,7 @@ export const LOCAL_PRICED_CLIENTS: ReadonlySet<string> = new Set([
  */
 export const PROVIDER_COST_CLIENTS: ReadonlySet<string> = new Set(['JevDecide'])
 
-/**
- * The one BAML client billed by wall-clock rather than by token.
- *
- * Written as a literal rather than imported from `VERDA_CLIENT_NAME` in
- * `inference/verda-activity.server.ts`, because this file is client-safe and
- * that one is server-only — the same reason `CLIENT_PRICING`'s and
- * `MODEL_CONTEXT_WINDOWS`' keys are literals. The two are pinned equal by
- * `__tests__/lib/pricing-eur.test.ts`; a rename that moved only one of them
- * would silently drop the box back to per-token pricing.
- */
+/** @deprecated Use TIME_PRICED_CLIENTS for membership and per-client rates. */
 export const TIME_PRICED_CLIENT = 'VerdaQwen'
 
 /** Anthropic cache pricing multipliers on the base input rate. */
@@ -379,6 +348,16 @@ export { DEFAULT_EUR_PER_USD } from '@hames-ai/harness-patterns/types'
  */
 export const DEFAULT_VERDA_EUR_PER_HOUR = 1.819
 
+/** Metered small summarizer GPU rate; overridable at SMALL_LLM_EUR_PER_HOUR. */
+export const DEFAULT_SMALL_LLM_EUR_PER_HOUR = 1.54
+
+/** Default EUR/hour by selected client. Keys are pinned against the routing
+ * vocabulary; server-side overrides are read per call in cost-rates.server.ts. */
+export const TIME_PRICED_CLIENTS: Readonly<Record<string, number>> = {
+  VerdaQwen: DEFAULT_VERDA_EUR_PER_HOUR,
+  LocalQwenSmall: DEFAULT_SMALL_LLM_EUR_PER_HOUR,
+}
+
 /** Token buckets one call was billed on. */
 export interface TokenBuckets {
   inputUncachedTokens: number
@@ -417,7 +396,7 @@ export interface CostEstimateEur {
  * rather than as zero — an invented figure is worse than an absent one.
  *
  * Returns undefined when:
- *  - the client is in none of {@link CLIENT_PRICING}, {@link TIME_PRICED_CLIENT},
+ *  - the client is in none of {@link CLIENT_PRICING}, {@link TIME_PRICED_CLIENTS},
  *    {@link LOCAL_PRICED_CLIENTS} or {@link PROVIDER_COST_CLIENTS}, or
  *  - it IS provider-priced but the provider reported no cost, or
  *  - it IS time-priced but the call was not measured (`durationMs` absent).
@@ -455,10 +434,10 @@ export function estimateLlmCostEur(
     const costEur = usd * (opts?.eurPerUsd ?? DEFAULT_EUR_PER_USD)
     return { costEur, noCacheEur: costEur, basis: 'provider' }
   }
-  if (clientName === TIME_PRICED_CLIENT) {
+  if (clientName !== undefined && Object.hasOwn(TIME_PRICED_CLIENTS, clientName)) {
     const durationMs = opts?.durationMs
     if (durationMs === undefined || !Number.isFinite(durationMs) || durationMs < 0) return undefined
-    const eurPerHour = opts?.eurPerHour ?? DEFAULT_VERDA_EUR_PER_HOUR
+    const eurPerHour = opts?.eurPerHour ?? TIME_PRICED_CLIENTS[clientName]
     const costEur = (durationMs / 3_600_000) * eurPerHour
     return {
       costEur,

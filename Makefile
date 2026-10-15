@@ -9,6 +9,8 @@
 # The GGUF weights live in models/, which is gitignored — see models/README.md.
 # Both targets run in the FOREGROUND: one server per terminal.
 
+.DEFAULT_GOAL := embed
+
 # Docker Engine >= 28 preflight (#241 G13: the neo4j-internal network uses
 # gateway_mode_ipv4: isolated). Run before `docker compose up -d`; read-only.
 .PHONY: check-docker

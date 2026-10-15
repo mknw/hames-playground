@@ -32,12 +32,28 @@ expect 1 ""
 expect 0 "28.0.0"
 expect 0 "28.0.1-rd"
 expect 0 "29.2.1"
+expect 0 "28.5.2"
+expect 0 "28.0.0-rc1"
+expect 1 "27.99.99"
+expect 1 "28.0"
 expect 0 "100.0.0"
 
 PATH="$tmp:$PATH" SHIM_DOCKER_DOWN=1 bash "$SCRIPT" >"$tmp/out" 2>&1
 rc=$?
 if ((rc == 1)) && grep -q unavailable "$tmp/out"; then echo "ok   unreachable daemon fails closed"
 else echo "FAIL unreachable daemon (rc=$rc)"; failures=$((failures + 1)); fi
+
+# docker missing from PATH entirely (empty dir + absolute bash)
+mkdir "$tmp/empty"
+PATH="$tmp/empty" "$(command -v bash)" "$SCRIPT" >"$tmp/out" 2>&1
+rc=$?
+if ((rc == 1)) && grep -q unavailable "$tmp/out"; then echo "ok   missing docker fails closed"
+else echo "FAIL missing docker (rc=$rc)"; failures=$((failures + 1)); fi
+
+# an inherited env var must never turn the gate off
+HAMES_CHECK_DOCKER_SOURCED=1 run "27.4.0"; rc=$?
+if ((rc == 1)); then echo "ok   no env switch bypasses the gate"
+else echo "FAIL env var bypassed the gate (rc=$rc)"; failures=$((failures + 1)); fi
 
 run "27.4.0"
 if grep -q "colima update" "$tmp/out"; then echo "ok   refusal names the fix"

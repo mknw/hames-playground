@@ -14,7 +14,10 @@ engine_supported() {
 
 check_docker() {
   local v
-  v=$(docker version --format '{{.Server.Version}}' 2>/dev/null) || v=""
+  # Bounded when `timeout` exists: a wedged daemon should fail fast, not hang.
+  local t=()
+  command -v timeout >/dev/null 2>&1 && t=(timeout 10)
+  v=$(${t[@]+"${t[@]}"} docker version --format '{{.Server.Version}}' 2>/dev/null) || v=""
   if engine_supported "$v"; then
     echo "Docker Engine $v (>= $MIN_MAJOR for isolated gateway mode)"
     return 0
@@ -25,6 +28,4 @@ check_docker() {
   return 1
 }
 
-if [[ -z ${HAMES_CHECK_DOCKER_SOURCED:-} ]]; then
-  check_docker
-fi
+check_docker

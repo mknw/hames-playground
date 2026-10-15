@@ -61,7 +61,7 @@ git commit -m "Update graph seed data"
 After cloning the repo:
 
 ```bash
-# Start services
+# Start services (Docker Engine >= 28 required: `make check-docker` first)
 docker compose up -d
 
 # Wait for Neo4j to be healthy

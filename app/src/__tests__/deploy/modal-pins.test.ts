@@ -106,6 +106,7 @@ describe('deploy/modal: the public surface is the Caddy route list', () => {
 			request>client_ip delete
 		}
 	}`
+    expect(caddyCode).toMatch(/^\s*admin off$/m)
     expect(caddyCode.match(/^\s*log\b/gm)).toHaveLength(1)
     expect(caddyCode).toContain(logBlock)
   })

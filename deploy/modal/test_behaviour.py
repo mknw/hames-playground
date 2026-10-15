@@ -54,10 +54,43 @@ class Behaviour(unittest.TestCase):
             'request continuation\n'
             '(Worker pid=42) WARNING 10-15 10:00:00 [hf.py:879] request content\n'
             'INFO 10-15 10:00:00 [engine.py:1] startup\n', "vllm")
-        self.assertEqual(output, 'vllm: unhandled ValueError (traceback withheld from logs)\n'
-                         '(Worker pid=42) WARNING 10-15 10:00:00 [hf.py:879]\n'
-                         'INFO 10-15 10:00:00 [engine.py:1] startup\n')
+        self.assertEqual(output, 'vllm: unhandled ValueError (traceback withheld from logs)\n')
         self.assertGreater(dropped, 0)
+
+    def test_vllm_lookalike_continuation(self):
+        output, _ = self.reduce(
+            'Traceback (most recent call last):\n  File "app.py", line 1\n'
+            'ValueError: …Invoice for Jane Roe\n'
+            'INFO 10-15 10:00:00 [x.py:1] Jane Roe IBAN BE71 0961 2345 6769 owes 4,200 EUR\n'
+            'ERROR 10-15 10:00:00 [Jane-Roe-BE71-0961-2345-6769] rest\n', "vllm")
+        self.assertNotIn("Jane", output)
+        self.assertNotIn("BE71", output)
+        self.assertEqual(output, "vllm: unhandled ValueError (traceback withheld from logs)\n")
+
+    def test_vllm_headered_traceback(self):
+        header = '(APIServer pid=1) ERROR 10-15 10:00:00 [serving.py:906] '
+        output, _ = self.reduce(
+            header + 'Traceback (most recent call last):\r\n'
+            + header + '  File "serving.py", line 1\r\n'
+            + header + '    raise ValueError("request content")\r\n'
+            + header + 'ValueError: request content\r\n', "vllm")
+        self.assertEqual(output, "vllm: unhandled ValueError (traceback withheld from logs)\n")
+
+    def test_vllm_startup_stats_and_alert(self):
+        startup = '(EngineCore_DP0 pid=42) INFO 10-15 10:00:00 [engine.py:1] startup\n'
+        stats = (
+            '(APIServer pid=1) INFO 10-15 10:00:00 [loggers.py:265] Engine 0: '
+            'Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 1.2 tokens/s, '
+            'Running: 1 reqs, Waiting: 0 reqs, Deferred: 0 reqs, Preemptions: 0, '
+            'GPU KV cache usage: 0.1%, Prefix cache hit rate: 0.0%, '
+            'External prefix cache hit rate: 0.0%, MM cache hit rate: 0.0%\n')
+        warning = '(APIServer pid=1) WARNING 10-15 10:00:00 [hf.py:879] request content\n'
+        self.assertEqual(self.reduce(startup, "vllm", False)[0], startup)
+        self.assertEqual(self.reduce(startup, "vllm")[0], "")
+        self.assertEqual(self.reduce(stats, "vllm")[0], stats)
+        self.assertEqual(self.reduce(stats.rstrip() + ' request content\n', "vllm")[0], "")
+        self.assertEqual(self.reduce(warning, "vllm")[0],
+                         '(APIServer pid=1) WARNING 10-15 10:00:00 [hf.py:879]\n')
 
     def test_reference_swap(self):
         before = {"P1": math.log(.50), "P2": math.log(.45)}

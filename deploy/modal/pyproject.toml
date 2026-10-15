@@ -1,0 +1,10 @@
+[project]
+name = "hames-small-models-modal"
+version = "0.0.0"
+description = "Modal deployment of the private tier's small models: the Qwen3.5-4B summarizer and the H2O-Lightning decision LoRA on the same base, behind the systemone shim."
+requires-python = ">=3.12,<3.14"
+dependencies = ["modal==1.6.1"]
+
+[tool.uv]
+# A deployment script, not a library: nothing here is built or installed.
+package = false

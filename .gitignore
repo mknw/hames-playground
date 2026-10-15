@@ -29,6 +29,11 @@ wheels/
 # Virtual environments
 **/.venv
 
+# Modal deployment of the small models (deploy/modal/): the app is generic and
+# tracked; one deployment's regions, URL, proxy token and measurements are its
+# operator's and stay out of the public repo (ADR-0008).
+deploy/modal/*.local.*
+
 # neo4j db
 neo4j_data/
 

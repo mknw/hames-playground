@@ -360,6 +360,102 @@ const withSettings = (s: MemoryStoreSettings): Partial<MemoryStoreConfig> => ({ 
 // ============================================================================
 
 describe('settleMemory — the one path that stores', () => {
+  it('M3 full refuses only insertion and still writes a later reinforcement', async () => {
+    const { cfg, db } = config({
+      extract: async () => ({
+        value: [
+          { kind: 'preference', content: CONTENT, evidence: EVIDENCE, ordinal: 0 },
+          { kind: 'preference', content: CONTENT + ' always.', evidence: EVIDENCE, ordinal: 1 },
+        ],
+      }),
+    })
+    let calls = 0
+    const store: MemoryWriteStore = {
+      transaction: (fn) =>
+        db.store.transaction((tx) =>
+          fn({
+            ...tx,
+            count: async () => 400,
+            nearest: async () =>
+              ++calls === 1
+                ? null
+                : { id: 'existing', kind: 'preference', content: CONTENT, similarity: 1 },
+            reinforce: async () => {},
+          }),
+        ),
+    }
+    const ctx = turn()
+    expect(await settleMemory(ctx, { ...cfg, store })).toMatchObject({
+      skipped: 'full',
+      compactionDue: true,
+      written: 1,
+    })
+    expect(written(ctx).map((m) => m.action)).toEqual(['reinforced'])
+  })
+
+  it('M3 hard cap: a store without eviction refuses growth at 400 and reports full', async () => {
+    const { cfg, db } = config()
+    const store: MemoryWriteStore = {
+      transaction: (fn) => db.store.transaction((tx) => fn({ ...tx, count: async () => 400 })),
+    }
+    expect(await settleMemory(turn(), { ...cfg, store })).toMatchObject({
+      skipped: 'full',
+      compactionDue: true,
+      written: 0,
+    })
+    expect(db.rows()).toEqual([])
+  })
+
+  it('M3 hard cap: optional episode eviction happens inside the candidate transaction before insert', async () => {
+    const { cfg, db } = config()
+    let count = 400
+    const evict = vi.fn(async (n: number) => {
+      count -= n
+    })
+    const order: string[] = []
+    const store: MemoryWriteStore = {
+      transaction: (fn) =>
+        db.store.transaction((tx) =>
+          fn({
+            ...tx,
+            count: async () => count,
+            evictOldestEpisodes: async (n) => {
+              order.push('evict')
+              await evict(n)
+            },
+            insert: async (row) => {
+              order.push('insert')
+              await tx.insert(row)
+            },
+          }),
+        ),
+    }
+    expect(await settleMemory(turn(), { ...cfg, store })).toMatchObject({ written: 1 })
+    expect(evict).toHaveBeenCalledWith(1)
+    expect(order).toEqual(['evict', 'insert'])
+    expect(db.rows()).toHaveLength(1)
+  })
+
+  it('M3 hard cap: unusable counts, invalid ceilings and an ineffective eviction cannot authorize growth', async () => {
+    for (const count of [NaN, -1, 400]) {
+      const { cfg, db } = config()
+      const store: MemoryWriteStore = {
+        transaction: (fn) =>
+          db.store.transaction((tx) =>
+            fn({
+              ...tx,
+              count: async () => count,
+              evictOldestEpisodes: async () => {},
+            }),
+          ),
+      }
+      expect(await settleMemory(turn(), { ...cfg, store })).toMatchObject({ skipped: 'full' })
+      expect(db.rows()).toEqual([])
+    }
+    const { cfg, db } = config({ settings: { hardLimit: Infinity } })
+    expect(await settleMemory(turn(), cfg)).toMatchObject({ failed: 1, written: 0 })
+    expect(db.rows()).toEqual([])
+  })
   it('stamps the tier from the run frame when none is configured', async () => {
     const { cfg, db } = config({ tier: undefined })
     await withRunFrame({ inference: { tier: 'anthropic' } }, () => settleMemory(turn(), cfg))
@@ -893,6 +989,7 @@ describe('erasure-semantics', () => {
     expect(members.sort()).toEqual([
       'addSource',
       'count',
+      'evictOldestEpisodes',
       'insert',
       'nearest',
       'read',
@@ -1046,18 +1143,6 @@ describe('merge-fails-to-keep-both', () => {
     updated: false,
   })
   const at = (sim: number): number[] => [sim, Math.sqrt(1 - sim * sim)]
-  /** The merge question answered by `answer`; everything else is confident. */
-  const withMerge = async (answer: (labels: readonly { id: string }[]) => unknown) => {
-    const db = fakeDb({ seed: [seed()] })
-    const decide = fakeDecide({}, (i) =>
-      i.spec.key === 'memory.merge' ? answer(i.spec.labels) : undefined,
-    )
-    const { embed } = fakeEmbed({ [CONTENT]: at(0.85) })
-    const { cfg } = config({ db, decide: decide.fn, embed })
-    const ctx = turn()
-    const report = await settleMemory(ctx, cfg)
-    return { db, ctx, report, decide }
-  }
   const keptBoth = (db: ReturnType<typeof fakeDb>, report: { written: number; failed: number }) => {
     expect(report).toMatchObject({ written: 1, failed: 0 })
     expect(db.rows()).toHaveLength(2)

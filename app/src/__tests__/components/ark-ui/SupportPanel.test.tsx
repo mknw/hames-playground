@@ -43,6 +43,10 @@ vi.mock('../../../components/ark-ui/GraphVisualization', () => ({
   ),
 }))
 
+vi.mock('../../../components/ark-ui/MemoryPanel', () => ({
+  MemoryPanel: () => <div data-testid="memory-panel" />,
+}))
+
 vi.mock('../../../components/ark-ui/DataStashPanel', () => ({
   DataStashPanel: (props: { sessionId: string; agentId?: string }) => (
     <div data-testid="data-stash" data-session={props.sessionId} data-agent={props.agentId} />
@@ -179,14 +183,11 @@ describe('SupportPanel — per-source graph split', () => {
     )
   })
 
-  it('sends only memory-sourced elements to the Memory tab', async () => {
-    const elements = [node('a'), node('b', 'neo4j'), node('m', 'memory')]
-    const { container } = render(() => <SupportPanel graphElements={elements} />)
-
+  it('opens the personal Memory panel in place of the retired MCP graph', async () => {
+    const { container } = render(() => <SupportPanel graphElements={[node('m', 'memory')]} />)
     await clickTab(container, 'Memory')
-    expect(container.querySelector('[data-testid="graph-viz"]')!.getAttribute('data-count')).toBe(
-      '1',
-    )
+    expect(container.querySelector('[data-testid="memory-panel"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="graph-viz"]')).toBeNull()
   })
 
   // #237 follow-up: the graph used to be swapped out for a plain empty-state
@@ -198,9 +199,7 @@ describe('SupportPanel — per-source graph split', () => {
     const { container } = render(() => <SupportPanel graphElements={[node('a', 'neo4j')]} />)
 
     await clickTab(container, 'Memory')
-    const memoryViz = container.querySelector('[data-testid="graph-viz"]')!
-    expect(memoryViz.getAttribute('data-count')).toBe('0')
-    expect(memoryViz.getAttribute('data-empty-message')).toContain('No memory graph data yet')
+    expect(container.querySelector('[data-testid="memory-panel"]')).toBeTruthy()
 
     await clickTab(container, 'Neo4j')
     const neo4jViz = container.querySelector('[data-testid="graph-viz"]')!

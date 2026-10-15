@@ -303,6 +303,7 @@ export interface MemoryRow {
   readonly embedSpace: string
   readonly evidenceEventId: string | null
   readonly evidenceCount: number
+  readonly sourceConversationIds: string[]
   readonly compactedFrom: number
   readonly createdAt: Date
   readonly lastSeenAt: Date
@@ -386,7 +387,9 @@ export async function listMemoriesForUser(userId: string): Promise<MemoryRow[]> 
   await ready()
   const { rows } = await query<Record<string, unknown>>(
     `SELECT id, user_id, kind, tier, content, evidence, embed_space, evidence_event_id,
-            evidence_count, compacted_from, created_at, last_seen_at
+            evidence_count, compacted_from, created_at, last_seen_at,
+            ARRAY(SELECT DISTINCT s.conversation_id FROM memory_sources s
+              WHERE s.user_id = $1 AND s.memory_id = memories.id) AS source_conversation_ids
        FROM memories
       WHERE user_id = $1
       ORDER BY created_at`,
@@ -402,6 +405,7 @@ export async function listMemoriesForUser(userId: string): Promise<MemoryRow[]> 
     embedSpace: r.embed_space as string,
     evidenceEventId: (r.evidence_event_id as string | null) ?? null,
     evidenceCount: r.evidence_count as number,
+    sourceConversationIds: (r.source_conversation_ids as string[]) ?? [],
     compactedFrom: r.compacted_from as number,
     createdAt: r.created_at as Date,
     lastSeenAt: r.last_seen_at as Date,
@@ -780,4 +784,27 @@ export async function listMemorySourcesForConversation(conversationId: string, u
     [conversationId, userId],
   )
   return rows
+}
+
+/** Owner-scoped row erasure; the owner lock also serializes compaction. */
+export async function deleteMemoryForUser(userId: string, memoryId: string): Promise<void> {
+  await memoryTransaction(userId, async (client) => {
+    await client.query(`DELETE FROM memories WHERE user_id = $1 AND id = $2`, [userId, memoryId])
+  })
+}
+
+/** Access export includes the vector and every retained provenance row. */
+export async function exportMemoryDataForUser(userId: string): Promise<Record<string, unknown>[]> {
+  await ready()
+  const { rows } = await query<Record<string, unknown>>(
+    `SELECT m.*, COALESCE((SELECT jsonb_agg(to_jsonb(s)) FROM memory_sources s
+       WHERE s.user_id = $1 AND s.memory_id = m.id), '[]'::jsonb) AS sources
+     FROM memories m WHERE m.user_id = $1 ORDER BY m.created_at`,
+    [userId],
+  )
+  return rows.map((r) => ({
+    ...r,
+    content: decryptField(r.content as string, 'memories.content'),
+    evidence: decryptField(r.evidence as string, 'memories.evidence'),
+  }))
 }

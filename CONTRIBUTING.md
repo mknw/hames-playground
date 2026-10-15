@@ -44,13 +44,17 @@ bump to any one bumps all five. While the family is at `0.x`:
 3. Merging that PR makes the same workflow tag the merge commit —
    `@hames-ai/<pkg>@<version>` for each package plus a repo-level `v<version>`.
 4. **Publishing is manual** and done by the maintainer, from the release tag, not `main`
-   (`prepublishOnly` refuses unless HEAD is exactly `@hames-ai/<pkg>@<version>`):
+   (`prepublishOnly` refuses unless HEAD is exactly `@hames-ai/<pkg>@<version>`;
+   all five tags point at the same commit, so one checkout serves `-r`):
 
    ```sh
    git fetch --tags && git checkout @hames-ai/harness-patterns@<version>
    pnpm install --frozen-lockfile
-   pnpm -r publish
+   pnpm -r publish --no-git-checks
    ```
+
+   `--no-git-checks` is needed because the tag leaves a detached HEAD, which pnpm's
+   own `publish-branch` check rejects; the tag guard replaces that check.
 
    Always `pnpm`, never `npm publish`: the packages reference each other as
    `workspace:^`, which pnpm rewrites to a real range at pack time and npm ships

@@ -2,7 +2,7 @@
 
 ## 0.3.0
 
-> The published 0.3.0 tarball also contains #579 (memory confirmation, M6) and #583, merged after the tag; they are described under the next release.
+> The published 0.3.0 tarball also contains #579 (memory confirmation, M6), merged after the tag; it is described under the next release.
 
 ### Minor Changes
 

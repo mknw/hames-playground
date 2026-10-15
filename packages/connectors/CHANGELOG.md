@@ -2,7 +2,7 @@
 
 ## 0.3.0
 
-> The published 0.3.0 tarball also contains #579 (memory confirmation, M6) and #583, merged after the tag; they are described under the next release. The one file of this package that differs from the tag is `README.md` (Neo4j egress wording, #241 G13).
+> The published 0.3.0 tarball differs from the tag only in README.md (Neo4j egress wording, #241 G13); no code differs.
 
 ### Patch Changes
 

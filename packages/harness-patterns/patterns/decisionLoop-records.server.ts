@@ -142,6 +142,19 @@ export function collectToolNames<T>(pattern: ConfiguredPattern<T>): string[] {
 const asText = (value: unknown): string =>
   typeof value === 'string' ? value : (JSON.stringify(value) ?? '')
 
+/** Extract content before JSON can turn the guard's fence newlines into
+ * literal escape sequences. decisionLoop re-fences the resulting record. */
+function mapStrings(value: unknown, fn: (text: string) => string): unknown {
+  if (typeof value === 'string') return fn(value)
+  if (Array.isArray(value)) return value.map((item) => mapStrings(item, fn))
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, mapStrings(item, fn)]),
+    )
+  }
+  return value
+}
+
 /** The last `error` event's message, or `fallback`. Error text is the event's
  *  own `error` field only. */
 function lastErrorText(events: ContextEvent[], fallback: string): string {
@@ -202,14 +215,15 @@ function extractActorCritic(events: ContextEvent[]): Extracted {
       text: lastErrorText(events, 'no attempt was accepted by the critic'),
     }
   }
-  const body =
+  const result =
     accepted.results.length === 1
-      ? asText(accepted.results[0].success ? accepted.results[0].result : accepted.results[0].error)
-      : JSON.stringify(
-          accepted.results.map((r) =>
-            r.success ? { tool: r.tool, result: r.result } : { tool: r.tool, error: r.error },
-          ),
+      ? accepted.results[0].success
+        ? accepted.results[0].result
+        : accepted.results[0].error
+      : accepted.results.map((r) =>
+          r.success ? { tool: r.tool, result: r.result } : { tool: r.tool, error: r.error },
         )
+  const body = asText(mapStrings(result, unspotlight))
   const reasoning = [accepted.action.reasoning ?? '', accepted.why ? `Critic: ${accepted.why}` : '']
     .filter(Boolean)
     .join('\n')

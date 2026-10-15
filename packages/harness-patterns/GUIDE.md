@@ -164,9 +164,11 @@ abstention, a state that would not build — never dispatches a route. See SPEC'
 Place `withPseudonymisedInputs({ pseudonymise: hostFilter })` directly around
 `withReferences`. It rewrites both the reference view (previews and expansion)
 and all inherited child data, preserving the latest user message. Rewritten
-copies are post-checked for surviving literals; provenance fences stay intact. Only an
+copies are limited to the child's visible events and post-checked per string;
+residual bodies become `[withheld: private identity]` and provenance fences stay
+intact. Only an
 explicit `'anthropic'` run passes through. Supply a host `PseudonymiseForWeb`
-that builds a per-invocation rewrite, literal post-check, local-result observer
+that builds a per-invocation rewrite, selective redaction, literal post-check, local-result observer
 and outgoing-argument check; no host privacy
 module or table is imported into core. `decisionLoop` gives the wrapper roster
 input from every earlier iteration, even beyond the handoff window, without

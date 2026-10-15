@@ -28,6 +28,8 @@ export interface WebRosterInput {
 /** One invocation's host-built substitution, with no table exposed to core. */
 export interface WebPseudonymisation {
   apply<T>(value: T): T
+  /** Withhold only residual string bodies, retaining provenance fences. */
+  redact<T>(value: T): T
   /** The same literal predicate as check, without rejecting our placeholders. */
   checkLiterals(value: unknown): string | void
   /** Extend outgoing literals from a local result; never rewrite that result. */
@@ -68,16 +70,25 @@ export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseFor
             ],
             latestUser ? (latestUser.data as UserMessageEventData).content : '',
           )
+          const visible = view.get()
+          const visibleRefs = new Set(visible)
+          const visibleIds = new Set(visible.flatMap((e) => (e.id ? [e.id] : [])))
           const rewrite = <V>(value: V): V => {
             const copy = filter!.apply(value)
-            if (filter!.checkLiterals(copy)) throw new Error('Incomplete privacy rewrite')
-            return copy
+            return filter!.redact(copy)
           }
           // Rewrite the backing context, not just the configured view: both
           // fromAll() and unfiltered() expansion must see the same copies.
           rewritten = {
             ...ctx,
-            events: ctx.events.map((e) => (e === latestUser ? e : { ...e, data: rewrite(e.data) })),
+            events: ctx.events
+              .filter(
+                (e) =>
+                  e === latestUser ||
+                  visibleRefs.has(e) ||
+                  (e.id !== undefined && visibleIds.has(e.id)),
+              )
+              .map((e) => (e === latestUser ? e : { ...e, data: rewrite(e.data) })),
           }
           const data = { ...scope.data }
           delete data[WEB_ROSTER_INPUT]

@@ -265,10 +265,10 @@ Ruled in [G14](https://github.com/mknw/hames-playground/issues/507#issuecomment-
   - Turns on the turn path always fill the slot, so an Anthropic-tier conversation is unaffected. A frameless run on an Anthropic-default deployment is pseudonymised needlessly, which is the safe error.
   - G14 defers the Anthropic tier, so there the wrapper passes everything through unchanged.
 
-**What it rewrites: the view and the child's handoff data (D1).** Before the inner pattern runs, the wrapper does two things. Both feed one roster and one table.
+**What it rewrites: the view and all child data (D1).** Before the inner pattern runs, the wrapper does two things. Both feed one roster and one table.
 
 1. **It rebuilds the view it hands inward**, as `chain()` builds a child's view (`chain.server.ts:331-335`). Every event the route did not produce in this invocation goes through `apply(value, table)` (`pseudonymise.ts:368`): earlier siblings' `tool_result`s (`retriever`, earlier `info`) and earlier turns' events. `withReferences` passes that view straight to the loop (`with-references.server.ts:304`), and expansion reads `view.fromAll()` (`simpleLoop.server.ts:503`). So selector previews and `expandPreviousResult` payloads are both covered.
-2. **It rewrites the plan and handoff fields of the child's `data`.** The handoff is not an event. It lives in the child's `scope.data` and is rendered into `plan_context` from there (`simpleLoop.server.ts:322`), so a view rewrite never reaches it. That covers the latest `think` plan, the earlier-step lines, and the capped result bodies, including `doc_ag`'s summaries (R1 flow 1).
+2. **It rewrites all inherited child `data` except the roster-only key.** The handoff is not an event. It lives in the child's `scope.data` and is rendered into `plan_context` from there (`simpleLoop.server.ts:322`), so a view rewrite never reaches it. This covers the latest `think` plan, earlier-step lines, capped result bodies including `doc_ag`'s summaries (R1 flow 1), and arbitrary keys such as `intent` inherited under `chain()`.
 
 The one exception is the **latest user message**. It is the user's own request, not something "from prior routes". The rewritten copies exist only in that view and that child `data`: `ctx.events` and the stored conversation are untouched.
 
@@ -289,7 +289,7 @@ The table is built in memory, one per invocation, and dropped when the invocatio
 
 - A person named only in prose who is in neither the directory nor any source payload's labelled fields, such as a customer named only in a mail body.
 - Non-person private data, such as project names or amounts. It is not in the roster at all.
-- The outgoing check below matches **URL-decoded literals only**, so initials, re-spellings and other encodings pass it (D4).
+- The outgoing check matches URL-decoded literals with the normalisation below; initials, re-spellings and other encodings still pass it (D4).
 
 **Failure mode: withhold, never pass in clear.** On every run the wrapper applies to, it fails closed when:
 
@@ -315,7 +315,8 @@ The route still runs, on the user's message and the Neo4j reads. It is not a tur
 
 **Outgoing-argument check: recommended, as the second half of the same guard.** The input rewrite cannot cover what `info_ag` fetches **itself** in this invocation. Free-form Cypher can return a colleague's row, and the next turn of the same loop can put that name into a search query.
 
-- **The check.** It is a pre-dispatch check at the `callTool` chokepoint. Every `web`-namespace call (`fetch`, `web_search`, …) has its arguments URL-decoded and matched against the same roster's literals.
+- **The check.** It is a pre-dispatch check at the `callTool` chokepoint. Every call except the declared local `neo4j` namespace has its arguments URL-decoded and matched against the roster's literals, even without the app's namespace registration. NFKD without combining marks, separators `-_.+/` mapped to spaces, and a letters-only comparison for full names of at least six characters cover URL slugs. One alternation is compiled per invocation, with user-named exemptions in a Set.
+- **Local discoveries.** An `afterToolCall` hook in the same amendment extends the outgoing literal set from labelled identities in local result data, unfencing every string leaf first. It checks only and never rewrites these results; an extension error withholds that result, records fixed feedback and refuses further outgoing calls.
 - **Its slot (D4).** It rides a new named run-frame slot, `egressChecks`.
   - `amendRunFrame` copies slots field by field (`run-frame.server.ts:279-289`), so the slot needs its own merge rule. A nested amend **concatenates** with the open frame's checks, never replaces them. Every check runs, and any one denial denies the call.
   - That is the union rule guards follow, applied to a list, as `transports` already concatenates.
@@ -323,6 +324,19 @@ The route still runs, on the user's message and the Neo4j reads. It is not a tur
 - **Placeholders are denied too (E3).** A placeholder has no value as a search term. With the directory merged first, a colleague keeps the same `PERSON_n` across invocations, turns and conversations, so a placeholder sent to a search provider would become an identifier it can link across sessions, and one that can be traced back to the person in-house. The check therefore also denies any web argument containing a placeholder token, matched as a pattern, `PERSON_<n>` with any suffix: `buildTable` mints `_EMAIL`, `_SLUG`, `_LOCAL`, `_NAME<n>`, `_GIVEN[<n>]` and `_FAMILY[<n>]` (`pseudonymise.ts:185-250`), so an enumerated list would go stale, with the feedback "placeholders are not search terms".
 - **Literals in the latest user message are allowed.** A person the user named and asked to search for is the user's call. The owner can tighten this default.
 - **No roster, no web calls.** In every fail-closed case above, every web call in that invocation is refused rather than checked against nothing.
+
+**Composition pins from fix round 1.** Roster harvesting unfences guarded payload
+leaves before extraction; D1/E1 drive real `simpleLoop` mail calls under the
+orchestrator's `spotlight: 'always'`, using `shapeMessages`. Input rewriting
+preserves fence labels and applies to all inherited child data, including under
+`chain()`. Every rewritten event/data copy is post-checked with the outgoing
+literal predicate, excluding placeholders and fence text. A surviving literal
+(including an address hidden by HTML-like angle brackets) takes the existing
+fail-closed branch, rebuilding child data from the status-only handoff allowlist.
+The placeholder rule also catches spaces and hyphens (`PERSON 3`, `PERSON-3`).
+The redundant separate plus-to-space branch is removed; a short name (`Li Xu`)
+pins plus handling in the shared normaliser. The tripwire also restricts factory
+imports to `session.server.ts`.
 
 This is consistent with ADR-0006. The input half rewrites the view and data a child receives, before any model reads them; it is not a pre- or post-check. The outgoing half acts at the tool chokepoint, which is where that record says guards belong.
 

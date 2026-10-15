@@ -163,9 +163,11 @@ abstention, a state that would not build — never dispatches a route. See SPEC'
 
 Place `withPseudonymisedInputs({ pseudonymise: hostFilter })` directly around
 `withReferences`. It rewrites both the reference view (previews and expansion)
-and the child's plan/handoff, preserving the latest user message. Only an
+and all inherited child data, preserving the latest user message. Rewritten
+copies are post-checked for surviving literals; provenance fences stay intact. Only an
 explicit `'anthropic'` run passes through. Supply a host `PseudonymiseForWeb`
-that builds a per-invocation rewrite and outgoing-argument check; no host privacy
+that builds a per-invocation rewrite, literal post-check, local-result observer
+and outgoing-argument check; no host privacy
 module or table is imported into core. `decisionLoop` gives the wrapper roster
 input from every earlier iteration, even beyond the handoff window, without
 widening its sibling visibility. That temporary input is removed before the
@@ -182,6 +184,9 @@ failure policy and remaining literal-matching limits.
 Outgoing checks use the `egressChecks` run-frame slot. It concatenates on nested
 `amendRunFrame`, innermost first: every check runs and any denial stops dispatch
 as a failed tool call, so an inner scope cannot switch off an outer check.
+Only the declared local `neo4j` namespace is exempt. A scoped `afterToolCall`
+hook extends outgoing literals from identities discovered by local reads;
+an update failure withholds the result and refuses further outgoing calls.
 
 ### Deciding with probabilities
 

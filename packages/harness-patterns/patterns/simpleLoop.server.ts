@@ -319,7 +319,12 @@ export function simpleLoop<T extends SimpleLoopData>(
     // agent-static tier-1 prefix, and a per-question plan there would turn
     // every tool-catalog cache read into a write (#122). Absent when no
     // planner ran — the loop then behaves exactly as it did before.
-    const planContext = formatPlanContext((scope.data as PlannerData).plan)
+    // #507: an orchestrating pattern's earlier-step results ride the SAME string,
+    // under a separate data heading — never inside the PLAN section.
+    const planContext = formatPlanContext(
+      (scope.data as PlannerData).plan,
+      (scope.data as PlannerData).handoff,
+    )
 
     // THE ALLOWLIST, as one predicate. A tool withheld from agents
     // (`isAgentWithheldTool`, #403) is refused even when `tools` names it — the
@@ -1165,5 +1170,8 @@ export function simpleLoop<T extends SimpleLoopData>(
     fn,
     config: resolved,
     estimateTurns: (s) => resolveTurnBudget('maxToolTurns', config?.maxTurns, s.maxToolTurns),
+    // The allowlist this loop will accept (minus what no agent may call), for
+    // static introspection — the planner's agent map reads it (#507).
+    capabilities: { tools: tools.filter((name) => !isAgentWithheldTool(name)) },
   }
 }

@@ -981,6 +981,12 @@ export interface PatternCapabilities {
    *  host gates the memory wake and the post-reply store on — so an agent that
    *  never opted in never wakes the memory boxes. */
   memory?: true
+  /** Tool names this pattern can call, by exact name: a loop's allowlist, or the
+   *  in-VM tools a sandbox wrapper provides. Declared by `simpleLoop`,
+   *  `actorCritic` and `withSandbox`; read by `collectToolNames` to build the
+   *  planner's agent map (#507). It describes what a model is OFFERED — the
+   *  allowlist is still enforced by the loop itself, at call time. */
+  tools?: readonly string[]
 }
 
 // ============================================================================

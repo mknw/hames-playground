@@ -136,7 +136,12 @@ export function actorCritic<T extends ActorCriticData>(
     // this pattern's `currentData`. Formatted once — it cannot change between
     // attempts — and passed to the actor as its trailing `planContext`
     // argument. Absent when no planner ran.
-    const planContext = formatPlanContext((scope.data as PlannerData).plan)
+    // #507: earlier-step results ride the same string under a data heading,
+    // outside the PLAN section (see `formatPlanContext`).
+    const planContext = formatPlanContext(
+      (scope.data as PlannerData).plan,
+      (scope.data as PlannerData).handoff,
+    )
     let successfulTurns = 0
     const previousAttempts: ScriptExecutionEvent[] = []
     let errorMessage: string | undefined
@@ -814,5 +819,8 @@ export function actorCritic<T extends ActorCriticData>(
     fn,
     config: resolved,
     estimateTurns: (s) => resolveTurnBudget('maxRetries', config?.maxRetries, s.maxRetries),
+    // The static allowlist, for introspection (the planner's agent map, #507).
+    // A sandbox's in-VM tools are declared by `withSandbox`, not here.
+    capabilities: { tools: tools.filter((name) => !isAgentWithheldTool(name)) },
   }
 }

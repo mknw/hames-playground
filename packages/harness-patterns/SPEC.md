@@ -413,7 +413,8 @@ and no other:
    CONTENT from the one it was given a copy of — a new object, or the same copy
    mutated — `callTool` runs the active guard's sanitize/spotlight over the final
    result again. Identity is never the test. A hook returning nothing changes
-   nothing; one returning its copy untouched costs no second pass.
+   nothing; one returning equal content, in the same object or another, costs no
+   second pass.
    `withSandbox({ id, syncWorkspace: true })` uses both, **eagerly, on the
    storing call itself** (dispatch and write → guard → that call's hook →
    `hydrateWorkspace` → return; not on a later call): a document stored under

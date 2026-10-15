@@ -269,6 +269,42 @@ describe('a hook replacement is guarded like any result (#599 F1)', () => {
     expect(JSON.stringify(r)).not.toContain(ATTACK)
   })
 
+  // #599 delta 2: an equal-content return is "unchanged" whatever object it is.
+  // Mutation: gate the equality test on `out === input` again.
+  const nestedT = {
+    id: 'nest',
+    ownsTool: (n: string) => n === 'probe',
+    listTools: async () => [],
+    callTool: async () => ({ success: true, data: { rows: [{ a: 1 }], text: 'clean' } }),
+  }
+  const errT = {
+    id: 'err',
+    ownsTool: (n: string) => n === 'probe',
+    listTools: async () => [],
+    callTool: async () => ({ success: false, data: null, error: 'plain failure' }),
+  }
+  const viaHook = (tr: typeof t, hook: (_c: unknown, r: any) => Promise<any>) =>
+    withRunFrame({ transports: [tr], guard: guard() }, () =>
+      amendRunFrame({ afterToolCall: [hook] }, () => callTool('probe', {})),
+    )
+  const baseline = (tr: typeof t) =>
+    withRunFrame({ transports: [tr], guard: guard() }, () => callTool('probe', {}))
+
+  it.each([
+    [
+      'a structuredClone of nested success data',
+      nestedT,
+      async (_c: unknown, r: any) => structuredClone(r),
+    ],
+    ['a shallow copy of success data', t, async (_c: unknown, r: any) => ({ ...r })],
+    ['a shallow copy of a clean error result', errT, async (_c: unknown, r: any) => ({ ...r })],
+  ])(
+    'an equal-content return (%s) is unchanged: one guard pass, identical result',
+    async (_n, tr, hook) => {
+      expect(await viaHook(tr as typeof t, hook)).toEqual(await baseline(tr as typeof t))
+    },
+  )
+
   it('a hook returning the supplied object UNCHANGED gets no second guard pass', async () => {
     const r1 = await withRunFrame({ transports: [t], guard: guard() }, () => callTool('probe', {}))
     const r2 = await probe(async (_c, r) => r)

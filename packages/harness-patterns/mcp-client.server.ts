@@ -335,9 +335,9 @@ export async function callTool(
     // put through the same guard pass as a dispatched result. "Changed" is
     // decided by CONTENT and never by object identity (#599 delta F1): each hook
     // is handed a private deep copy, so nothing it does to what it was given can
-    // reach the guarded result, and a hook that returns that copy (mutated) is
-    // compared with the result it was cloned from. A hook that returns nothing
-    // changes nothing; one that returns its copy untouched costs no second pass.
+    // reach the guarded result, and every returned result is compared with the one
+    // the hook was given a copy of. A hook that returns nothing changes nothing;
+    // one that returns equal content, in whatever object, costs no second pass.
     // Read softly like the guard — outside a run there are none.
     let result = guarded
     let changed = false
@@ -345,7 +345,7 @@ export async function callTool(
       const input = cloneResult(result)
       const out = await hook({ id, name, args }, input)
       if (out === undefined) continue
-      if (out === input && sameContent(out, result)) continue
+      if (sameContent(out, result)) continue
       result = out
       changed = true
     }

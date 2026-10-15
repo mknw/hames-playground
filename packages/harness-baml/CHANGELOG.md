@@ -1,5 +1,47 @@
 # @hames-ai/harness-baml
 
+## 0.3.0
+
+### Minor Changes
+
+- bcf7ab4: Support native systemone score and noul questions alongside choice, validate response shapes and preserve endpoint probabilities untouched. Keep tier checks before question construction.
+- d65f08e: **#419 slice M9 — the memory model functions.** Additive surface, with one breaking change to the generated client: a direct `b.Router(…, opts)` / `b.Synthesize(…, opts)` caller now throws `BamlInvalidArgumentError` until it passes `null` before `opts` (see below). No behaviour change for a caller that passes no memory.
+  
+  - `ExtractMemory` and `CompactMemories` (`baml_src/memory.baml`, committed `baml_client`), both on the `describe` role: `DescribeAnthropic` on the Anthropic tier, `LocalQwenSmall` through the per-call `clientOverrideFor('describe')` spread on the private tier. `kind` is a plain string so core's deterministic acceptance, not the parser, drops an out-of-set value.
+  - `createMemoryExtractAdapter()` / `createMemoryCompactAdapter()` (and their input types) — the `MemoryExtractFn` / `MemoryCompactFn` implementations, each spreading the describe override inline. They return the model's output unfiltered.
+  - `Router` and `Synthesize` gain a trailing optional `memory_context`, rendered only when non-null as a user-role block after the leading system block. **Positional**: the options bag moved one slot right, so a direct `b.Router(…, opts)` / `b.Synthesize(…, opts)` caller must now pass `null` before `opts`. In-repo callers are updated.
+  - `SWITCHED_FUNCTIONS_BY_ROLE.describe` lists the two new functions, so `TIER_SWITCHED_FUNCTIONS` is sixteen.
+- e6543b1: **#419 slice M5a — `withMemory`, `memory_context` threading, and the DATA-fence escape.** Core + BAML only; no app change.
+  
+  - `@hames-ai/harness-patterns`: `withMemory(cfg)(patterns)` returns `[memoryRecall(cfg), ...patterns]` (the opt-in; the patterns come back as the same objects) and `memoryStoreConfig(cfg)` derives the store half from the same `MemoryConfig`, so recall and `settleMemory` share one owner, embedder, decision seam, wake and **switch** (`enabled` is required). `CompactExecutionInput.memoryContext?` (set from `data.memoryContext` only when non-blank) and `RouteFn`'s trailing `extra?: RouteExtra` (the router passes it only when non-blank). Additive: a `route`/`synthesize` written before them is called exactly as before when nothing is recalled.
+  - `@hames-ai/harness-baml`: `routeMessageOp` and `defaultSynthesize` pass the block to the trailing BAML `memory_context` parameter. **Breaking for a direct caller of `routeMessageOp`:** its optional collector moved from the fourth parameter to the fifth (`routeMessageOp(message, history, routes, extra, collector)`) so it satisfies `RouteFn`; pass `undefined` for `extra`. New `escapeDataFence` (`@hames-ai/harness-baml/data-fence`): every string the adapters put inside a `---BEGIN DATA---` fence (the extractor's window and latest user message, the compactor's members, the `memory_context` blocks) has any fence marker neutralised, so assistant text composed from tool results cannot end the fence. No `.baml` change, so no regenerated client.
+- 30fdf03: Add `CostPricing.timePricedClients`, a selected-client to EUR/hour reader mapping, so every metered client includes usage-less timed attempts in cost floors. Existing `timePricedClient` string registrations remain supported through `verdaEurPerHour`; consumers can migrate to the mapping to price multiple clients. `opts.eurPerHour` is now passed only for clients registered in `timePricedClients` (or the legacy `timePricedClient`).
+- 1acfe23: Add `createDecideAdapter()` and the `decide` role with recorded clients per tier: `JevDecide` on the Anthropic tier and `PrivateSystemOne` on the private tier. Private decisions require the full `SMALL_LLM_DECISIONS_URL` ending in `/v1/systemone`, reuse `SMALL_LLM_API_KEY`, and refuse an unset URL without a public fallback. Price `PrivateSystemOne` by measured call duration at `SMALL_LLM_EUR_PER_HOUR`.
+- f13bb7d: Add the systemone transport with single-question and one-request set adapters, supporting choice, score and noul questions with endpoint probabilities passed through untouched. The Anthropic-tier `JevDecide` client uses `JEV_DECISIONS_URL` and `JEV_DECISIONS_API_KEY`; failed requests never retry on another provider. Record usage and the serving client; add the `provider` cost basis for reported USD cost converted once to EUR, with absent cost remaining unknown.
+
+### Patch Changes
+
+- 6970e8b: The Jev decide transport (#418 O1–O4): on an OpenRouter endpoint the request carries `provider: { zdr: true, data_collection: 'deny' }` and refuses to send a request that lacks them; it reads its own key, `JEV_DECISIONS_API_KEY`, never `OPENROUTER_API_KEY`; `JEV_DECISIONS_URL` must parse to `https:` or a loopback host, and is refused before the key is read.
+- 220e794: Support a directly configured systemone endpoint with its native model ID and request shape. Require an explicit `JEV_DECISIONS_URL` and separate `JEV_DECISIONS_API_KEY` on the Anthropic tier; refuse missing configuration, redirects and answers outside the asked set. The private tier uses its separate endpoint and shared small-model key, with no public fallback.
+- Updated dependencies [59af7c6]
+- Updated dependencies [b52215c]
+- Updated dependencies [e5fc954]
+- Updated dependencies [fa529f0]
+- Updated dependencies [6e4a7ce]
+- Updated dependencies [ab78dea]
+- Updated dependencies [e6543b1]
+- Updated dependencies [f97fd50]
+- Updated dependencies [5efffdf]
+- Updated dependencies [8b8b72c]
+- Updated dependencies [ffc87ba]
+- Updated dependencies [08ff54f]
+- Updated dependencies [0405113]
+- Updated dependencies [5f377c5]
+- Updated dependencies [459122e]
+- Updated dependencies [f13bb7d]
+- Updated dependencies [22ff7c3]
+  - @hames-ai/harness-patterns@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes

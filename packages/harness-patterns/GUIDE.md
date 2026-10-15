@@ -86,6 +86,7 @@ Every combinator takes patterns and returns a pattern, so they nest freely:
 | `parallel`           | run patterns concurrently, merge their event sets                                         |
 | `withReferences`     | attach the relevant results of earlier turns at pattern ingress, expandable on demand     |
 | `withInjectionGuard` | neutralize untrusted tool output before a controller reads it                             |
+| `decisionLoop`       | loop over routes, a decisions model choosing the next one each time, until `answer`       |
 
 Resume and continue are the same mechanism, in two shapes:
 `resumeHarness(serialized, patterns, answers, opts)` after a run paused to ask a
@@ -96,6 +97,62 @@ runner, which carry the agent's own patterns. An answer is keyed by the
 supersedes whatever was waiting, so an answer never outlives its run. See SPEC's
 [Human in the loop](SPEC.md#human-in-the-loop), and "Asking a human" below for
 the whole loop a host writes.
+
+### Moving between groups of capabilities within one turn
+
+`routes` fixes the branch before anything runs. `decisionLoop` lets one turn
+move between groups of capabilities, choosing the next group after seeing what
+the last one produced: a loop over a route table in which the systemone `decide`
+seam answers one `choice` question — "Which step should run next?" — until it
+picks `answer` (which runs nothing; a `compactExecution` after the loop writes the
+reply) or `maxIterations` (default `DECISION_LOOP_MAX_ITERATIONS`, 6) is reached.
+
+```typescript
+import {
+  decisionLoop,
+  simpleLoop,
+  planner,
+  withInjectionGuard,
+  DECISION_LOOP_OUTPUT_KEY,
+  type DecideFn,
+  type PlanCallResult,
+} from '@hames-ai/harness-patterns'
+import type { ControllerFn } from '@hames-ai/harness-patterns/types'
+
+type Data = Record<string, unknown>
+declare const decide: DecideFn
+declare const controller: ControllerFn
+declare const planFn: (user: string, intent: string, context?: string) => Promise<PlanCallResult>
+
+const orchestrator = withInjectionGuard({
+  tools: [DECISION_LOOP_OUTPUT_KEY],
+  spotlight: 'always',
+})(
+  decisionLoop<Data>(
+    {
+      lookup: {
+        pattern: simpleLoop(controller, ['search'], { patternId: 'info', returnStyle: 'answer' }),
+        description: 'Look things up',
+      },
+      think: {
+        pattern: planner(planFn, ['search'], { patternId: 'think' }),
+        description: 'Decide the steps before acting',
+      },
+    },
+    { decide, answer: 'Answer the user now', patternId: 'orchestrator' },
+  ),
+)
+```
+
+Three things to know. A route's result is built by code from its committed
+events and is **untrusted**: it is capped, then passed through the enclosing
+guard under the fixed key `decision_loop_output`, so declare that key in the
+guard's `tools` (undeclared, the guard is a no-op for it) and a screen that
+cannot run withholds the output instead of waving it through. A child sees only
+what it is allowed to (`siblingResults`, default none) and starts with fresh
+data, never `memories`. And a decision that is not a decision — an error, an
+abstention, a state that would not build — never dispatches a route. See SPEC's
+[decisionLoop](SPEC.md#decisionlooproutes-config-507).
 
 ### Deciding with probabilities
 

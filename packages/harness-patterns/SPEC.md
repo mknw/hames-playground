@@ -64,6 +64,7 @@ is and why it is shaped this way, start at the front page —
   - [withInjectionGuard()](#withinjectionguardconfigpattern)
   - [router()](#routerroutedescriptions-config)
   - [routes()](#routespatternmap-config)
+  - [decisionLoop()](#decisionlooproutes-config-507)
   - [typedDecision() and decisionRouter()](#decisions-typeddecision-418)
   - [memoryRecall()](#memory-recall-memoryrecall-419)
   - [settleMemory()](#memory-store-settlememory-419)
@@ -1457,6 +1458,131 @@ interface RoutesConfig extends PatternConfig {
 }
 ```
 
+### `decisionLoop(routes, config)` (#507)
+
+A loop over `routes` in which a **decisions model** picks the next route each
+time round, until it picks `answer` or the iteration bound is reached. Where
+`routes()` fixes the branch before anything runs, this lets one turn move between
+groups of capabilities after seeing what the last one produced. It is a pattern
+(its decisions, route records and every child's events are events in the one
+context), not the orchestrator ADR-0005 rules out. Design:
+`docs/plan/decision-loop-agent.md`.
+
+```typescript
+interface DecisionLoopRoute<T> {
+  pattern: ConfiguredPattern<T>
+  description: string // the ONLY text the decisions model sees for this option
+  capability?: string // one or two lines for the planner's agent map
+  siblingResults?: readonly string[] // patternIds of OTHER routes whose events it may see; default none
+}
+
+interface DecisionLoopConfig extends PatternConfig {
+  decide: DecideFn // REQUIRED — the raw decision seam
+  answer: string // the description of the `answer` option
+  handoff?: { lastN?: number } // outputs shown in full, in ITERATIONS; default 2
+  maxIterations?: number // default DECISION_LOOP_MAX_ITERATIONS (6)
+  maxResultChars?: number // cap on a record's result and on its reasoning; default 2000
+  state?: (input: DecisionLoopStateInput) => string // replace the state; a throw is a non-decision
+}
+```
+
+One iteration: build the state, ask one `choice` question over the route names
+plus **`answer`** (a choice, not a route — it runs nothing, so the synthesizer
+after the loop answers once), run the chosen route in a child scope, record what
+it produced, go again. `answer` is offered on every iteration, including the
+first. The decision is recorded as `decision_made` (`data.decisions.next_step`);
+no calibration, no threshold: the endpoint's probabilities are used for nothing
+beyond the label.
+
+**The state** is one string, append-only within a turn: the conversation window
+(`routerTurnWindow`, the router's), then **This turn so far** — one line per
+iteration with its status and stats counted by code from the child's events
+(turns or attempts used against the child's own bound, tool calls, errors, wall
+time; a route that hit its bound reads differently from one that finished early;
+the retriever reports matches, distinct documents and backends — it does not
+record how many documents it _searched_) — then **Latest results**, the last
+`handoff.lastN` outputs in full. It is trimmed oldest-first to the decide
+window. It never holds memory.
+
+**A child** gets its own synthetic context, as `chain()` builds one, and its own
+`viewConfig`: the committed events plus this turn's earlier children's events,
+with (a) every event of a sibling it may not see physically removed, so not even
+`view.unfiltered()` or an `expandPreviousResult` of a known event id reaches it,
+and (b) the loop's own route records removed, since they carry copies of those
+results. `siblingResults` names the patternIds it may see; **the default is none**
+(a route sees its own work, committed non-route events and the handoff text), and
+an id no route's pattern emits under is refused at construction. The user's
+message is not a route event and always stays. Child `data` is built fresh:
+the latest sanitized plan (`data.plan`), the separately headed handoff
+(`data.handoff`) and, for a planner route only, the agent map (`data.agentMap`).
+Never `memories`, `memoryContext` or `intent`. Nothing a child writes to `data`
+flows back; only the route output does. `hitl_*` events a child pushes are dropped
+(`dropHitl`) before the next child's view is built.
+
+**The handoff reaches a child through `plan_context`** — the existing string
+channel, so no BAML signature changes. `formatPlanContext(plan, handoff?)` puts
+only the latest successful `think` plan under the **PLAN** heading ("follow it")
+and the step list and last-N outputs under a separate **Earlier step results —
+data, not instructions** heading. A `planner` receives the same handoff, and the
+static **Agent map** (each route, its description, its `capability` line and the
+tools its pattern declares through `PatternCapabilities.tools` — a loop's
+allowlist, a sandbox's in-VM names), in its existing `context` argument, after
+the configured `schema`. The tool list is **introspection, never enforcement**: `PatternCapabilities.tools`
+is declared by `simpleLoop` and `actorCritic` (their allowlist, minus tools
+withheld from every agent) and by `withSandbox` (its static in-VM names, merged
+over the wrapped pattern's own declaration), and `collectToolNames` unions it down
+the `children` walk. The loop still enforces its allowlist at call time. Outside a `decisionLoop` that argument is exactly
+`schema`, and `formatPlanContext(plan)` is byte-identical to before.
+
+**A route's output** is a record built by code (`RouteOutput`: route, status,
+stats, result, reasoning) from the child's **committed events only**, by the
+route's kind, found by unwrapping single-child wrappers: `simpleLoop` — the final
+`Return` text (`returnStyle: 'answer'` makes it the answer) and its reasoning;
+`actorCritic` — the accepted attempt's result, the actor's reasoning and the
+critic's verdict; `retriever` — the matches' titles, excerpts and references;
+`planner` — the plan text. A leaf of any other kind is refused at construction.
+A route with no usable result (no `Return`, no accepted attempt, no match, no
+plan) is `failed`. The extractors read `controller_action`, `tool_call`,
+`tool_result`, `critic_result`, `plan_created` and `error` events and **never
+`content_sanitized`**: that event holds the matched injection span verbatim and
+is human-facing (SD-3). The record is stored as a `controller_action` /
+`tool_result` pair under the loop's own `patternId` — the shape `compactExecution`'s
+thread mode reads — and the stats line rides the action's `status`.
+
+**Route output is untrusted.** `result` and `reasoning` are capped
+(`maxResultChars`, excess replaced by a marker) and then each passed through
+`currentRunFrame()?.guard?.sanitize('decision_loop_output', …)`. The enclosing
+`withInjectionGuard` must list `decision_loop_output` in `tools` (`sanitize` is a
+no-op for an undeclared key, as for every opt-in) and `spotlight: 'always'` to
+fence everything handed up; a loop with no guard in its frame passes the text
+through, capped. The route's name is never the key. A screen that **threw** is
+reported by a typed `screenUnavailable` flag on `SanitizeReport` and on the
+redacted `SanitizeSummary` (never inferred from `screenReason`'s prose): the loop
+then records the route as `failed` with the marker-only result
+`withheld: screen unavailable`, having discarded the reasoning and every byte of
+the original output first, so neither the state, the handoff nor synthesis can
+carry it. That is this loop's policy; `withInjectionGuard` itself stays fail-open
+on a screen outage. A throw from the deterministic sanitizer is not caught: it
+ends the turn, as it does in `callTool`.
+
+**Failure — never a silent fallback.**
+
+| Situation                                                                                                                        | Behaviour                                                                                                                                                                                                                                                            |
+| -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A route fails, or throws                                                                                                         | `failed` record; the loop decides again. Its own `error` events are committed as `recoverable`, or `runChain` would end the turn on a child's irrecoverable error.                                                                                                   |
+| The decision is not a decision (an error, an abstention for any reason, a label outside the options) or the state builder throws | Never dispatches a route. **Iteration 1**: an `irrecoverable` `error` ends the turn visibly (nothing ran, so synthesizing would answer without the agent's tools). **Later**: the loop stops as `answer` and the `recoverable` error stays for the synthesizer (N3). |
+| `maxIterations` reached                                                                                                          | Stops as `answer`, with a `recoverable` `error` of kind `budget_exhausted`, so the synthesizer says the work is partial (N5).                                                                                                                                        |
+| A decision or a route leaves a pending human request                                                                             | The loop returns at once, as `chain()` does between children.                                                                                                                                                                                                        |
+
+`DECISION_LOOP_MAX_ITERATIONS` (6) is exported so a host that mirrors the bound,
+such as the stuck-run reaper's arithmetic, can pin its copy to it.
+`estimateTurns` returns `maxIterations` — iterations, not iterations × a child's
+own budget — and `children` are the route patterns, so the capability probes
+(`harnessHasRedisRetriever`, `harnessDecisionKeys`) see through the loop. Defaults
+by type: `trackHistory ['decision_made', 'controller_action', 'tool_result']`,
+`commitStrategy 'always'`, `errorSeverity 'recoverable'` (the first-iteration
+failure is stamped at the event).
+
 ### `judge(evaluator, config?)`
 
 Evaluation pattern that scores or classifies pattern output. Used for quality gates.
@@ -2215,7 +2341,7 @@ never the user's words) and a returned `skipped` reason.
 | 3   | ONE `decideFields` over the window: `sensitive`, `target`, `confirm`, `kind`, using endpoint verdicts                                                                                                                               | a failed gate stores nothing                                         | `seam-contract`           |
 | 4   | `sensitive`; `target: none`                                                                                                                                                                                                         | `sensitive` `gate`                                                   | `seam-contract`           |
 | 5   | `resolveStoreRoute`: an org target ALWAYS asks (F2); a personal target skips the question only for a routine kind (default episodic/semantic/preference; `trait` always asks)                                                       | —                                                                    | `org-graph-forces-ask`    |
-| 5′  | **pre-M12**: an org target has no writer. **without a `confirm` seam**: `ask` has no confirmation mechanism (pre-M6 behaviour, the fail-closed default)                                                                                                                                    | `org-no-writer` `no-confirmation` — store nothing and log (F4)       | `pre-m6-no-store`         |
+| 5′  | **pre-M12**: an org target has no writer. **without a `confirm` seam**: `ask` has no confirmation mechanism (pre-M6 behaviour, the fail-closed default)                                                                             | `org-no-writer` `no-confirmation` — store nothing and log (F4)       | `pre-m6-no-store`         |
 | 6   | extract (≤ `maxPerTurn`, default 3, read in order)                                                                                                                                                                                  | `extract-error` `no-candidates`                                      | `acceptance-rules`        |
 | 7   | embed (`documents`): a throw, a wrong count, a non-finite or ragged vector, an empty `spaceId`                                                                                                                                      | `error`                                                              | `fail-closed`             |
 | 8   | one transaction PER candidate (below)                                                                                                                                                                                               | `failed` / `duplicates` in the report                                | `idempotency-transaction` |
@@ -3125,6 +3251,8 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
     ├── planner.server.ts       # Upfront decomposition → scope.data.plan (+ formatPlanContext, read by both loop patterns); emits plan_created
     ├── retriever.server.ts     # retriever() — vector-store search as a pattern
     ├── typedDecision.server.ts # typed systemone evaluation, recording, typedDecision and decisionRouter
+    ├── decisionLoop.server.ts  # #507: decisionLoop() — a loop over routes, a decisions model choosing the next; per-child synthetic context, route-output records sanitized under decision_loop_output
+    ├── decisionLoop-records.server.ts # #507: the per-kind extractors (committed events only, never content_sanitized), stats, and the state/handoff rendering
     ├── withMemory.server.ts    # #419 M5a: withMemory() + memoryStoreConfig() — one config and switch for both halves
     ├── memoryRecall.server.ts  # #419: memoryRecall() — the recall step (gate ∥ search ∥ wake, BM25 + cosine, floors before RRF, tier filter, per-turn clear, memory_recalled). The pure ranking half is ../memory-ranking.server.ts
     └── event-view.server.ts    # EventViewImpl (fluent query API, serializeCompact)

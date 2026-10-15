@@ -314,6 +314,7 @@ describe('the classification map', () => {
     'withReferences', // the inner pattern ran without curated prior results
     'typedDecision', // never throws and always leaves a verdict — policy.fallback (#418)
     'memoryRecall', // every failure is memories = [] and a return — it never stops what follows (#419)
+    'decisionLoop', // a failed route or later decision leaves something to answer from; iteration 1 is stamped at the EVENT (#507)
   ] as const
 
   it.each(IRRECOVERABLE)('classifies %s as irrecoverable — it leaves nothing behind', (type) => {

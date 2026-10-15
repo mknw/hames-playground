@@ -1056,9 +1056,14 @@ describe('G11 private systemone routing', () => {
     async (host) => {
       process.env.SMALL_LLM_DECISIONS_URL = `https://${host}/v1/systemone`
       const fn = await adapter()
-      await expect(onPrivateTier(() => fn({ spec: SPEC, state: 'Synthetic.' }))).rejects.toThrow(
-        /public systemone provider/,
-      )
+      let entered = false
+      await expect(
+        onPrivateTier(() => {
+          entered = true
+          return fn({ spec: SPEC, state: 'Synthetic.' })
+        }),
+      ).rejects.toThrow(/public systemone provider/)
+      expect(entered).toBe(false)
       // The transport must refuse independently of the host's configuration gate.
       await expect(
         withRunFrame({ inference: { tier: 'verda' } }, () =>

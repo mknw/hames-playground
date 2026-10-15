@@ -11,7 +11,9 @@ name; no Cypher blacklist or procedure allowlist supplies the boundary.
 The image builds APOC (bundled upstream) and n10s into the plugins directory.
 Runtime plugin downloads would fail under isolation, so `NEO4J_PLUGINS` is
 absent. A first bring-up builds the image automatically. After merge the owner
-must recreate their own stack once: `docker compose up -d`.
+must take a dump with the currently running image before recreating their stack:
+`docker compose up -d` moves an older store to 5.26.32 and that move cannot
+be undone. The backup and restore default is `hames-neo4j:local`, matching compose.
 
 ## Checks and scope
 
@@ -22,22 +24,27 @@ assertions. The [pyramid](pyramid.md) cannot prove packet containment in its
 hermetic layers. `app/scripts/check-neo4j-egress.mjs` is therefore an explicit
 infrastructure check outside the default CI glob, with no package hook.
 
-Run from `app/`, with a default-context Docker daemon of at least 4 GiB:
+Run from `app/`, only after the owner starts a dedicated throwaway VM of at
+least 4 GiB. Pass its Docker context explicitly (the script never changes the
+active context). Replace `g13-vm` below with that existing context:
 
 ```sh
-node scripts/check-neo4j-egress.mjs --config-only
-node scripts/check-neo4j-egress.mjs > /tmp/g13-green.log 2>&1
-node scripts/check-neo4j-egress.mjs --mutate > /tmp/g13-red.log 2>&1
+node scripts/check-neo4j-egress.mjs --context g13-vm --config-only
+node scripts/check-neo4j-egress.mjs --context g13-vm > /tmp/g13-green.log 2>&1
+node scripts/check-neo4j-egress.mjs --context g13-vm --mutate > /tmp/g13-red.log 2>&1
 ```
 
 The green run must exit 0. The red run removes `internal: true` and must exit 1
 with `EGRESS OPEN` and a successful forbidden fetch. An unavailable public
 endpoint, missing procedure or unobserved mutation is inconclusive, never green.
-Keep both outputs in the PR evidence.
+Keep both outputs, including the recorded `docker version`, in the PR evidence.
+Authentication, syntax, missing commands and other non-network failures are
+inconclusive: a blocked APOC request must report `UnknownHost`, `Connect` or
+`timed out`; TCP must time out or report a network-class error.
 
 The check renders the actual production compose settings, then creates a
-throwaway fixture: project **g13-test** only, default context only, ports
-**59141/59142** only, synthetic credentials, tmpfs database storage, no named
+throwaway fixture: project **g13-test** only, explicit context only, ports
+**59141–59143** only, synthetic credentials, tmpfs database storage, no named
 volumes, host `.env`, Docker socket mount or company data. It refuses to adopt
 existing `g13-test` containers or networks and runs `docker compose -p g13-test
 down` in its cleanup. It never starts Docker/Colima or changes a context.
@@ -51,6 +58,27 @@ their ports listen. APOC and n10s procedure inventory checks prevent a missing
 plugin from masquerading as isolation. From inside Neo4j, APOC GET to public
 JSON and POST to `mcp-gateway:8811` must fail, as must raw TCP to the literal
 IP addresses of the gateway, Redis and Postgres (not just their DNS names).
+
+The fixture also starts a socat HTTP listener on `0.0.0.0:59143` using
+`network_mode: host`, in the same throwaway project. Its host-namespace positive
+control must return HTTP 200 and JSON. The probe reads `IPAM.Config[].Gateway`
+from `docker network inspect g13-test_neo4j-internal` and requires both raw TCP
+and `apoc.load.json('http://<gateway>:59143/')` from Neo4j to fail. This tests
+host-local delivery, which does not traverse Docker's forwarding rules. A
+successful host connection is a failed containment claim; do not weaken the
+probe to fit the daemon. Host networking must be supported by the selected VM.
+
+`getent hosts example.com` inside Neo4j must fail with lookup exit 2 (exit 0
+means egress; any other exit is inconclusive). Evidence records `docker version`
+for the external-DNS forwarding regression CVE-2024-29018 (fixed in Engine
+26.0.0 / 25.0.4 / 23.0.11). Runtime checks also require
+`LOAD CSV FROM 'file:///etc/passwd' AS row RETURN row` and
+`apoc.load.json('file:///etc/passwd')` to fail with the corresponding disabled
+file-import setting errors. Reaching these assertions after a healthy startup
+also exercises strict config validation of `NEO4J_apoc_import_file_enabled`.
+
+All these runtime legs are pending until the owner supplies the daemon; source
+pins and config-only checks do not constitute packet or file-import evidence.
 
 ## Digest provenance (2026-10-15)
 

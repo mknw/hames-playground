@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Opt-in Docker infrastructure check, outside default CI. Run from app/:
-// node scripts/check-neo4j-egress.mjs [--mutate] [--config-only]
+// node scripts/check-neo4j-egress.mjs --context <throwaway-VM-context> [--mutate] [--config-only]
 // --mutate drops internal:true and MUST exit 1 with EGRESS OPEN.
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
@@ -8,12 +8,20 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, URL } from 'node:url'
 import neo4j from 'neo4j-driver'
+import { parseArgs } from 'node:util'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
-const mutate = process.argv.includes('--mutate')
-const configOnly = process.argv.includes('--config-only')
-if (process.argv.slice(2).some((a) => !['--mutate', '--config-only'].includes(a)))
-  throw new Error('Unknown argument')
+const { values } = parseArgs({
+  options: {
+    context: { type: 'string' },
+    mutate: { type: 'boolean' },
+    'config-only': { type: 'boolean' },
+  },
+})
+if (!values.context?.trim()) throw new Error('Required: --context <throwaway-VM-context>')
+const context = values.context
+const mutate = values.mutate
+const configOnly = values['config-only']
 const env = {
   ...process.env,
   COMPOSE_FILE: '',
@@ -24,7 +32,7 @@ const env = {
   ACME_EMAIL: 'test@example.com',
 }
 function docker(args, { allowFailure = false, timeout = 120_000 } = {}) {
-  const r = spawnSync('docker', ['--context', 'default', ...args], {
+  const r = spawnSync('docker', ['--context', context, ...args], {
     cwd: root,
     env,
     encoding: 'utf8',
@@ -74,6 +82,7 @@ const fixture = {
     },
     'neo4j-relay': {
       image: relay.image,
+      init: relay.init,
       entrypoint: relay.entrypoint,
       command: relay.command,
       user: relay.user,
@@ -106,6 +115,19 @@ const fixture = {
       ],
       networks: ['app-network'],
       tmpfs: ['/misc'],
+    },
+    // Listener in the daemon host namespace, on a reserved throwaway port.
+    'host-listener': {
+      image: relay.image,
+      network_mode: 'host',
+      entrypoint: ['/bin/sh', '-ec'],
+      command: [
+        `exec socat TCP-LISTEN:59143,bind=0.0.0.0,fork,reuseaddr SYSTEM:"printf 'HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\nConnection: close\\r\\n\\r\\n{}'"`,
+      ],
+      cap_drop: ['ALL'],
+      user: '65534:65534',
+      read_only: true,
+      init: true,
     },
     postgres: {
       image: source.services.postgres.image,
@@ -147,9 +169,10 @@ try {
   compose(['config', '--quiet'])
   if (configOnly) {
     console.log(
-      `PASS throwaway compose config (${mutate ? 'RED mutation' : 'GREEN'}); tmpfs, no named volumes, ports 59141/59142`,
+      `PASS throwaway compose config (${mutate ? 'RED mutation' : 'GREEN'}); tmpfs, no named volumes, ports 59141/59142; host listener 59143`,
     )
   } else {
+    console.log(docker(['version']).stdout)
     const info = docker(['info', '--format', '{{.MemTotal}}'])
     if (Number(info.stdout.trim()) < 4 * 1024 ** 3)
       throw new Error('Docker VM needs at least 4 GiB; stop and escalate')
@@ -207,8 +230,49 @@ try {
       if (r.status !== 0 || !/\n1\s*$/.test(r.stdout))
         throw new Error(`Missing procedure ${name}: ${r.stdout} ${r.stderr}`)
     }
-    let leaked = false
+    const network = JSON.parse(docker(['network', 'inspect', 'g13-test_neo4j-internal']).stdout)[0]
+    const bridgeGateway = network.IPAM.Config.find((c) => c.Gateway)?.Gateway
+    if (!bridgeGateway || !/^[0-9.]+$/.test(bridgeGateway))
+      throw new Error('Missing IPv4 bridge gateway')
+    console.log(`Bridge gateway: ${bridgeGateway}`)
+    // Positive control in the host namespace: prove the listener really answers.
+    const listenerControl = exec('host-listener', [
+      '/bin/sh',
+      '-ec',
+      "printf 'GET / HTTP/1.0\\r\\n\\r\\n' | socat -T 3 - TCP:127.0.0.1:59143",
+    ]).stdout
+    if (!listenerControl.includes('200 OK') || !listenerControl.includes('{}'))
+      throw new Error('Host listener positive control failed')
+    console.log('PASS host-namespace listener positive control')
+    const dns = exec('neo4j', ['getent', 'hosts', 'example.com'], { allowFailure: true })
+    if (dns.error || dns.signal || ![0, 2].includes(dns.status))
+      throw new Error(`Inconclusive DNS probe: ${dns.error ?? dns.stderr}`)
+    let leaked = dns.status === 0
+    console.log(`${leaked ? 'FAIL' : 'PASS'} blocked external DNS: ${dns.stdout.trim()}`)
+    for (const [name, query, reason] of [
+      [
+        'CSV file URL',
+        "LOAD CSV FROM 'file:///etc/passwd' AS row RETURN row",
+        /file.*URLs.*(not allowed|disabled)|allow_csv_import_from_file_urls/i,
+      ],
+      [
+        'APOC file URL',
+        "CALL apoc.load.json('file:///etc/passwd') YIELD value RETURN value",
+        /Import from files not enabled|apoc\.import\.file\.enabled/i,
+      ],
+    ]) {
+      const r = cypher(query)
+      if (r.error || r.signal || r.status === 0 || !reason.test(`${r.stdout} ${r.stderr}`))
+        throw new Error(
+          `File prohibition unproven ${name}: ${r.error ?? ''} ${r.stdout} ${r.stderr}`,
+        )
+      console.log(`PASS blocked ${name}: ${r.stdout.trim()} ${r.stderr.trim()}`)
+    }
     for (const [name, query] of [
+      [
+        'bridge gateway APOC GET',
+        `CALL apoc.load.json('http://${bridgeGateway}:59143/') YIELD value RETURN value`,
+      ],
       ['public APOC GET', `CALL apoc.load.json('${publicUrl}') YIELD value RETURN value`],
       [
         'gateway APOC POST',
@@ -216,25 +280,31 @@ try {
       ],
     ]) {
       const r = cypher(query)
+      if (r.error || r.signal) throw new Error(`Inconclusive ${name}: ${r.error ?? r.signal}`)
+      if (r.status !== 0 && !/UnknownHost|Connect|timed out/i.test(`${r.stdout} ${r.stderr}`))
+        throw new Error(`Non-network failure ${name}: ${r.stdout} ${r.stderr}`)
       console.log(
         `${r.status === 0 ? 'FAIL' : 'PASS'} blocked ${name}: ${r.stdout.trim()} ${r.stderr.trim()}`,
       )
-      if (r.error || r.signal) throw new Error(`Inconclusive ${name}: ${r.error ?? r.signal}`)
       if (r.status === 0) leaked = true
     }
     exec('neo4j', ['bash', '-c', 'timeout 3 bash -c "echo > /dev/tcp/127.0.0.1/7687"'])
     for (const [service, port] of [
+      ['bridge-gateway', 59143],
       ['mcp-gateway', 8811],
       ['redis', 6379],
       ['postgres', 5432],
     ]) {
-      const id = compose(['ps', '-q', service]).stdout.trim()
-      const ip = docker([
-        'inspect',
-        '--format',
-        '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}',
-        id,
-      ]).stdout.trim()
+      const id = service === 'bridge-gateway' ? null : compose(['ps', '-q', service]).stdout.trim()
+      const ip =
+        service === 'bridge-gateway'
+          ? bridgeGateway
+          : docker([
+              'inspect',
+              '--format',
+              '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}',
+              id,
+            ]).stdout.trim()
       const r = exec(
         'neo4j',
         ['bash', '-c', 'timeout 3 bash -c "echo > /dev/tcp/$1/$2"', '_', ip, String(port)],
@@ -242,6 +312,12 @@ try {
       )
       if (r.error || r.signal || ![0, 1, 124].includes(r.status))
         throw new Error(`Inconclusive TCP probe for ${service}: ${r.error ?? r.stderr}`)
+      if (
+        r.status !== 0 &&
+        r.status !== 124 &&
+        !/Connection refused|Network is unreachable|No route to host|timed out/i.test(r.stderr)
+      )
+        throw new Error(`Non-network TCP failure for ${service}: ${r.stderr}`)
       if (r.status === 0) leaked = true
       console.log(
         `${r.status === 0 ? 'FAIL' : 'PASS'} blocked Neo4j TCP to ${service}:${port} (literal IP): ${r.stderr.trim()}`,

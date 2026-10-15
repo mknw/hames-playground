@@ -48,6 +48,7 @@ services:
   # It accepts HTTP/Bolt inbound; it provides no HTTP proxy or IP forwarding.
   neo4j-relay:
     # Registry index bytes verified against Docker-Content-Digest (G13 runbook).
+    init: true
     image: alpine/socat@sha256:fb3862c949af7c79996d0e514ee96128644d840835ed5368eeecb14a869de361
     restart: unless-stopped
     entrypoint: ["/bin/sh", "-ec"]

@@ -686,10 +686,10 @@ docker compose exec -T postgres dropdb -U postgres restorecheck
 #    a typo here would silently seed an empty one and fail further down.
 docker volume create neo4j_restorecheck
 docker run --rm --user root -v neo4j_restorecheck:/data -v "$PWD/$BK":/backups \
-  --entrypoint sh neo4j:5.26 -c \
+  --entrypoint sh hames-neo4j:local -c \
   'neo4j-admin database load neo4j --from-path=/backups --overwrite-destination=true'
 docker run -d --name neo4j-restorecheck -v neo4j_restorecheck:/data \
-  -e NEO4J_AUTH=neo4j/restorecheck neo4j:5.26
+  -e NEO4J_AUTH=neo4j/restorecheck hames-neo4j:local
 # Poll rather than guess: a fixed `sleep 30` is short on a busy box (~45 s was
 # needed once) and the resulting timeout reads as a bad backup. Bounded at 2
 # min, so a genuinely broken restore stops instead of spinning.

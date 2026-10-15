@@ -36,7 +36,7 @@ import {
   insertMemorySource,
   ensureMemoriesSchema,
 } from '../../../lib/db/memories.server'
-import { createConversation } from '../../../lib/db/conversations.server'
+import { createConversation, deleteConversations } from '../../../lib/db/conversations.server'
 import { looksEncrypted } from '../../../lib/db/crypto.server'
 
 const SUFFIX = Math.random().toString(36).slice(2, 10)
@@ -271,9 +271,9 @@ describe('the bound answer (#579 review 2)', () => {
   it('a release gives a bound answer back, and only to its owner', async () => {
     await put('c4')
     await claim('c4')
-    expect(await releaseHitlProposalAnswer(rid('c4'), 'bob', EVENT)).toBe(false)
+    expect(await releaseHitlProposalAnswer(rid('c4'), 'bob', EVENT, save)).toBe(false)
     expect((await getHitlProposal(rid('c4'), 'alice'))!.status).toBe('answering')
-    expect(await releaseHitlProposalAnswer(rid('c4'), 'alice', EVENT)).toBe(true)
+    expect(await releaseHitlProposalAnswer(rid('c4'), 'alice', EVENT, save)).toBe(true)
     expect(await getHitlProposal(rid('c4'), 'alice')).toMatchObject({
       status: 'pending',
       answer: null,
@@ -313,14 +313,14 @@ describe('the bound answer (#579 review 2)', () => {
       memoryId: `mem-prop-c6-${SUFFIX}`,
       conversationId: sid('c6'),
     })
-    expect(await releaseHitlProposalAnswer(rid('c6'), 'alice', event)).toBe(false)
+    expect(await releaseHitlProposalAnswer(rid('c6'), 'alice', event, save)).toBe(false)
     expect(await getHitlProposal(rid('c6'), 'alice')).toMatchObject({
       status: 'answering',
       answer: save,
     })
     // another event's sources do not block it, and another user's source for
     // the same event id does not either (the guard is owner-scoped)
-    expect(await releaseHitlProposalAnswer(rid('c6'), 'alice', `${event}-other`)).toBe(true)
+    expect(await releaseHitlProposalAnswer(rid('c6'), 'alice', `${event}-other`, save)).toBe(true)
   })
 
   // MUTATION: drop `user_id = $2` from the NOT EXISTS → another user's source row
@@ -353,7 +353,7 @@ describe('the bound answer (#579 review 2)', () => {
       memoryId: `mem-prop-c9-${SUFFIX}`,
       conversationId: sid('c9'),
     })
-    expect(await releaseHitlProposalAnswer(rid('c9'), 'alice', event)).toBe(true)
+    expect(await releaseHitlProposalAnswer(rid('c9'), 'alice', event, save)).toBe(true)
   })
 
   // MUTATION: drop `FOR UPDATE` from the release, or `FOR SHARE` from the
@@ -387,7 +387,7 @@ describe('the bound answer (#579 review 2)', () => {
     const bindingHeld = new Promise<void>((r) => (bound = r))
     // attempt B: re-checks the binding, then writes its source row, slowly
     const writer = withTransaction(async (tx) => {
-      await requireAnsweringBinding(tx, rid('c7'), 'alice')
+      await requireAnsweringBinding(tx, rid('c7'), 'alice', save)
       bound()
       await gate
       await tx.query(
@@ -399,7 +399,7 @@ describe('the bound answer (#579 review 2)', () => {
     await bindingHeld
     // attempt A: failed before writing, releases while B is mid-write
     let released: boolean | undefined
-    const releaser = releaseHitlProposalAnswer(rid('c7'), 'alice', event).then(
+    const releaser = releaseHitlProposalAnswer(rid('c7'), 'alice', event, save).then(
       (r) => (released = r),
     )
     await new Promise((r) => setTimeout(r, 300))
@@ -416,14 +416,138 @@ describe('the bound answer (#579 review 2)', () => {
   it('the binding check refuses a proposal that is not (or no longer) answering', async () => {
     await put('c8')
     await expect(
-      withTransaction((tx) => requireAnsweringBinding(tx, rid('c8'), 'alice')),
+      withTransaction((tx) => requireAnsweringBinding(tx, rid('c8'), 'alice', save)),
     ).rejects.toThrow(/no longer bound/)
     await claim('c8')
     await expect(
-      withTransaction((tx) => requireAnsweringBinding(tx, rid('c8'), 'alice')),
+      withTransaction((tx) => requireAnsweringBinding(tx, rid('c8'), 'alice', save)),
     ).resolves.toBeUndefined()
     await expect(
-      withTransaction((tx) => requireAnsweringBinding(tx, rid('c8'), 'bob')),
+      withTransaction((tx) => requireAnsweringBinding(tx, rid('c8'), 'bob', save)),
+    ).rejects.toThrow(/no longer bound/)
+  })
+
+  // #579 delta review 2, LOW: lock order. An approval's write takes its proposal
+  // row FOR SHARE and then touches `memories`; a conversation delete must take the
+  // same locks in the same order. MUTATION: delete the memories BEFORE the
+  // proposal rows (the old order) → the two deadlock and one aborts → red.
+  it('a conversation delete racing an approval write takes the proposal row first: no deadlock, nothing half-done', async () => {
+    await put('c12')
+    await claim('c12')
+    await createConversation({
+      id: sid('c12'),
+      userId: 'alice',
+      agentId: 'search',
+      title: null,
+      serializedContext: '{}',
+    } as never)
+    const mem = `mem-prop-c12-${SUFFIX}`
+    await insertMemory({
+      id: mem,
+      userId: 'alice',
+      kind: 'preference',
+      tier: 'verda',
+      content: 'x',
+      evidence: 'x',
+      embedding: Array.from({ length: 1024 }, (_, i) => (i === 0 ? 1 : 0)),
+      embedSpace: 'synthetic',
+    })
+    await insertMemorySource({
+      userId: 'alice',
+      eventId: `ev-c12-${SUFFIX}`,
+      ordinal: 0,
+      memoryId: mem,
+      conversationId: sid('c12'),
+    })
+    let go!: () => void
+    const gate = new Promise<void>((r) => (go = r))
+    let held!: () => void
+    const bound = new Promise<void>((r) => (held = r))
+    // the approval's item transaction: binding row first, then the memory
+    const approval = withTransaction(async (tx) => {
+      await requireAnsweringBinding(tx, rid('c12'), 'alice', save)
+      held()
+      await gate
+      await tx.query('UPDATE memories SET evidence_count = evidence_count + 1 WHERE id = $1', [mem])
+    })
+    await bound
+    let deleted = false
+    const del = deleteConversations([sid('c12')], 'alice').then(() => (deleted = true))
+    await new Promise((r) => setTimeout(r, 400))
+    expect(deleted).toBe(false) // waiting on the proposal row, holding nothing the write needs
+    go()
+    await approval
+    await del
+    expect(deleted).toBe(true)
+    const { rows } = await query('SELECT 1 FROM memories WHERE id = $1', [mem])
+    expect(rows).toEqual([])
+    expect(await getHitlProposal(rid('c12'), 'alice')).toBeNull()
+  })
+
+  // D4 (#579 delta review 2). MUTATION: drop the answer comparison (check the
+  // status only) → after a release and a re-claim as "Don't save", an in-flight
+  // save still passes the check and writes under the discard binding → red.
+  it('D4 · the binding check is for THIS answer: after a release and a re-claim as discard, a save is refused', async () => {
+    await put('c10')
+    await claim('c10') // attempt A: save, bound
+    await expect(
+      withTransaction((tx) => requireAnsweringBinding(tx, rid('c10'), 'alice', save)),
+    ).resolves.toBeUndefined()
+    // a sibling releases (nothing written yet), and "Don't save" claims the row
+    expect(await releaseHitlProposalAnswer(rid('c10'), 'alice', EVENT, save)).toBe(true)
+    expect(await claim('c10', { choice: 'discard' })).toEqual({ claimed: true })
+    // the row is `answering` again — with discard bound
+    expect((await getHitlProposal(rid('c10'), 'alice'))!.status).toBe('answering')
+    await expect(
+      withTransaction((tx) => requireAnsweringBinding(tx, rid('c10'), 'alice', save)),
+    ).rejects.toThrow(/no longer bound/)
+    // and the stale attempt cannot undo the discard's claim by releasing it
+    // MUTATION: release without the answer comparison → red
+    expect(await releaseHitlProposalAnswer(rid('c10'), 'alice', EVENT, save)).toBe(false)
+    expect((await getHitlProposal(rid('c10'), 'alice'))!.answer).toEqual({ choice: 'discard' })
+    // the same answer in another flag order, and the discard itself, still pass
+    await expect(
+      withTransaction((tx) =>
+        requireAnsweringBinding(tx, rid('c10'), 'alice', { choice: 'discard' }),
+      ),
+    ).resolves.toBeUndefined()
+  })
+
+  it('the binding check compares flags too: a save of one item is not a save of both', async () => {
+    await put('c11')
+    await claim('c11', { choice: 'save', flags: { i0: true, i1: false } })
+    await expect(
+      withTransaction((tx) =>
+        requireAnsweringBinding(tx, rid('c11'), 'alice', {
+          choice: 'save',
+          flags: { i0: true, i1: true },
+        }),
+      ),
+    ).rejects.toThrow(/no longer bound/)
+    await expect(
+      withTransaction((tx) =>
+        requireAnsweringBinding(tx, rid('c11'), 'alice', {
+          choice: 'save',
+          flags: { i1: false, i0: true },
+        }),
+      ),
+    ).resolves.toBeUndefined()
+  })
+
+  // MUTATION: drop the status clause from the binding check → a CLOSED proposal
+  // (answer kept for audit, payload gone) still passes for the same answer → red.
+  it('the binding check refuses a closed proposal even for the answer it recorded', async () => {
+    await put('c13')
+    await claim('c13')
+    await closeHitlRows([rid('c13')], 'alice', 'applied')
+    const { rows } = await query<{ answer: string | null; status: string }>(
+      'SELECT answer, status FROM hitl_requests WHERE request_id = $1',
+      [rid('c13')],
+    )
+    expect(rows[0].status).toBe('applied')
+    expect(rows[0].answer).not.toBeNull() // kept for audit
+    await expect(
+      withTransaction((tx) => requireAnsweringBinding(tx, rid('c13'), 'alice', save)),
     ).rejects.toThrow(/no longer bound/)
   })
 

@@ -307,7 +307,7 @@ export async function answerMemoryProposalFor(
   // event), not this attempt's report: an earlier attempt of the same answer, or
   // a concurrent one, may have written (#579 review 2a).
   const release = () =>
-    releaseHitlProposalAnswer(requestId, userId, payload.eventId).catch((err: unknown) => {
+    releaseHitlProposalAnswer(requestId, userId, payload.eventId, bound).catch((err: unknown) => {
       console.warn('[memory] bound answer not released:', err)
       return false
     })
@@ -322,7 +322,7 @@ export async function answerMemoryProposalFor(
         // still the bound one, so a concurrent release cannot slip between the
         // check and the write (#579 review 2a, D3).
         store: createMemoryDbStore(userId, {
-          inTransaction: (tx) => requireAnsweringBinding(tx, requestId, userId),
+          inTransaction: (tx) => requireAnsweringBinding(tx, requestId, userId, bound),
         }),
         embedSpace: () => createMemoryEmbedder().spaceId,
         enabled: () => getMemoryEnabled(userId),

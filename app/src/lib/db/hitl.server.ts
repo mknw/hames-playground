@@ -401,21 +401,31 @@ export async function claimHitlProposalAnswer(input: {
  * `UPDATE … WHERE NOT EXISTS` would keep the snapshot it started with across the
  * lock wait and could not.
  *
+ * `bound` is the answer the caller claimed or matched; the release is refused
+ * unless it is still the one bound (same canonical form), so an attempt cannot
+ * undo a DIFFERENT answer's claim.
+ *
  * Returns whether the answer was given back.
  */
 export async function releaseHitlProposalAnswer(
   requestId: string,
   userId: string,
   eventId: string,
+  bound: StoredAnswer,
 ): Promise<boolean> {
   return withTransaction(async (tx) => {
-    const { rows } = await tx.query(
-      `SELECT 1 FROM hitl_requests
+    const { rows } = await tx.query<{ answer: string | null }>(
+      `SELECT answer FROM hitl_requests
         WHERE request_id = $1 AND user_id = $2 AND status = 'answering'
           FOR UPDATE`,
       [requestId, userId],
     )
     if (rows.length === 0) return false
+    // Only the answer that is bound NOW may give it back: after a release and a
+    // re-claim by another answer (D4) the row is `answering` for someone else,
+    // and this attempt's refusal is not that answer's to undo.
+    const recorded = decryptJson(rows[0].answer, 'hitl_requests.answer') as StoredAnswer | null
+    if (!recorded || canonicalAnswer(recorded) !== canonicalAnswer(bound)) return false
     const { rowCount } = await tx.query(
       `UPDATE hitl_requests
           SET status = 'pending', answer = NULL, answered_at = NULL, updated_at = NOW()
@@ -428,24 +438,38 @@ export async function releaseHitlProposalAnswer(
 }
 
 /**
- * Inside a memory write transaction, BEFORE the item is written: the proposal is
- * still bound (`answering`), and hold the row `FOR SHARE` until the transaction
- * ends. A release (above) therefore either ran first — and this throws, so
- * nothing is written under a released answer — or waits for this write to
- * commit and then sees it (#579 review 2a, D3: two concurrent submits).
+ * Inside a memory write transaction, BEFORE the item is written: THIS answer is
+ * still the one bound to the proposal, and hold the row `FOR SHARE` until the
+ * transaction ends. A release (above) therefore either ran first — and this
+ * throws, so nothing is written under a released answer — or waits for this
+ * write to commit and then sees it (#579 review 2a, D3: two concurrent submits).
+ *
+ * It compares the ANSWER, not just the status (D4): between an attempt's claim
+ * and its first write a sibling can release and a different answer ("Don't
+ * save") can claim the row again, which is `answering` all the same. The answer
+ * is stored as randomised ciphertext, so the comparison is made here, on the
+ * decrypted answer of the row this statement has locked, against `bound` — the
+ * answer this attempt claimed or matched.
  */
 export async function requireAnsweringBinding(
   tx: TxQuery,
   requestId: string,
   userId: string,
+  bound: StoredAnswer,
 ): Promise<void> {
-  const { rows } = await tx.query(
-    `SELECT 1 FROM hitl_requests
+  const { rows } = await tx.query<{ answer: string | null }>(
+    `SELECT answer FROM hitl_requests
       WHERE request_id = $1 AND user_id = $2 AND status = 'answering'
         FOR SHARE`,
     [requestId, userId],
   )
-  if (rows.length === 0) throw new Error('[hitl] the proposal answer is no longer bound')
+  const recorded =
+    rows.length === 0
+      ? null
+      : (decryptJson(rows[0].answer, 'hitl_requests.answer') as StoredAnswer | null)
+  if (!recorded || canonicalAnswer(recorded) !== canonicalAnswer(bound)) {
+    throw new Error('[hitl] the proposal answer is no longer bound')
+  }
 }
 
 /**

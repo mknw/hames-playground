@@ -1094,10 +1094,16 @@ export async function deleteConversations(ids: string[], userId: string): Promis
   // `memory_sources` FK to conversations is NO ACTION, so the order is also
   // what lets the row delete through.
   return withTransaction(async (tx) => {
-    await deleteMemoriesForConversations(ids, userId, tx)
     // A pending memory proposal's payload is memory text the person never
     // agreed to keep (#433 S11): it leaves with the conversation it came from.
+    // FIRST, and the order matters (#579 review 3, lock order): an approval's
+    // item transaction takes its proposal row `FOR SHARE` and only then touches
+    // `memories`, so taking the row first here means a write that has not
+    // started finds no row and stops, and one that has started finishes before
+    // this proceeds — instead of the two taking the same locks in opposite
+    // orders and one aborting on a deadlock.
     await deleteHitlRowsForConversations(ids, userId, tx)
+    await deleteMemoriesForConversations(ids, userId, tx)
     const { rows } = await tx.query<{ id: string }>(
       'DELETE FROM conversations WHERE id = ANY($1) AND user_id = $2 RETURNING id',
       [ids, userId],

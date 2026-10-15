@@ -83,6 +83,7 @@ vi.mock('../../../lib/db/hitl.server', async () => {
   const real = await vi.importActual<typeof import('../../../lib/db/hitl.server')>(
     '../../../lib/db/hitl.server',
   )
+  const canonicalAnswer = real.canonicalAnswer
   return {
     ...real,
     putHitlProposal: async (i: Held & { requestId: string }) => {
@@ -125,18 +126,35 @@ vi.mock('../../../lib/db/hitl.server', async () => {
     },
     // The real statement's semantics (#579 review 2a): given back only if no
     // memory_sources row exists for the proposal's source event.
-    releaseHitlProposalAnswer: async (id: string, user: string, eventId: string) => {
+    releaseHitlProposalAnswer: async (
+      id: string,
+      user: string,
+      eventId: string,
+      bound: { choice: string; flags?: Record<string, boolean> },
+    ) => {
       const h = held.get(id)
       if (!h || h.userId !== user || h.status !== 'answering') return false
+      if (!h.answer || canonicalAnswer(h.answer) !== canonicalAnswer(bound)) return false
       if ([...sources.keys()].some((k) => k.startsWith(`${eventId}#`))) return false
       releases.push(id)
       h.status = 'pending'
       h.answer = null
       return true
     },
-    requireAnsweringBinding: async (_tx: unknown, id: string, user: string) => {
+    requireAnsweringBinding: async (
+      _tx: unknown,
+      id: string,
+      user: string,
+      bound: { choice: string; flags?: Record<string, boolean> },
+    ) => {
       const h = held.get(id)
-      if (!h || h.userId !== user || h.status !== 'answering') {
+      if (
+        !h ||
+        h.userId !== user ||
+        h.status !== 'answering' ||
+        !h.answer ||
+        canonicalAnswer(h.answer) !== canonicalAnswer(bound)
+      ) {
         throw new Error('[hitl] the proposal answer is no longer bound')
       }
     },
@@ -173,9 +191,17 @@ let txRuns = 0
 /** Flip the proposal back to pending as the write begins: a release that landed
  *  between the claim and this item's transaction (D3). */
 let releaseBeforeWrite = false
+/** Before the first item's transaction: a sibling releases and "Don't save" claims (D4). */
+let reclaimAsDiscardBeforeWrite = false
 const storeFor = (opts?: { inTransaction?: (tx: never) => Promise<void> }): MemoryWriteStore => ({
   async transaction(fn) {
     if (releaseBeforeWrite) for (const h of held.values()) h.status = 'pending'
+    if (reclaimAsDiscardBeforeWrite) {
+      for (const h of held.values()) {
+        h.status = 'answering'
+        h.answer = { choice: 'discard', flags: {} }
+      }
+    }
     await opts?.inTransaction?.({} as never)
     if (storeFails) throw new Error('db down')
     if (storeFailsAfter !== null && txRuns++ >= storeFailsAfter) throw new Error('db down')
@@ -313,6 +339,7 @@ beforeEach(() => {
   storeFailsAfter = null
   txRuns = 0
   releaseBeforeWrite = false
+  reclaimAsDiscardBeforeWrite = false
   space = 'space/1024'
 })
 
@@ -1001,5 +1028,31 @@ describe('#579 review 2a: "nothing written" is the database\'s call', () => {
     expect(await answerMemoryProposalFor('alice', 's1', id, 'discard')).toEqual({
       outcome: 'discarded',
     })
+  })
+
+  // D4 (delta review 2). MUTATION: drop the `bound` argument / the answer
+  // comparison in the binding check → the save writes under the discard binding
+  // that claimed the row after a release → red.
+  it('D4 · a release and a re-claim as "Don\'t save" between the claim and the first write: the save writes nothing', async () => {
+    await propose()
+    const id = requestId()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      reclaimAsDiscardBeforeWrite = true
+      expect((await answerMemoryProposalFor('alice', 's1', id, 'save')).outcome).toBe('failed')
+    } finally {
+      reclaimAsDiscardBeforeWrite = false
+      warn.mockRestore()
+    }
+    expect(memories()).toEqual([])
+    expect(sources.size).toBe(0)
+    // the row is still bound to discard, which is what the blob will record
+    expect(held.get(id)!.status).toBe('answering')
+    expect(held.get(id)!.answer).toEqual({ choice: 'discard', flags: {} })
+    expect(await answerMemoryProposalFor('alice', 's1', id, 'discard')).toMatchObject({
+      outcome: 'discarded',
+    })
+    expect(responses()).toEqual([expect.objectContaining({ choice: 'discard' })])
+    expect(memories()).toEqual([])
   })
 })

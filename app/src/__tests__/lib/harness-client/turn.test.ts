@@ -378,6 +378,7 @@ beforeEach(() => {
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
   // The private tier is two models, and the scope refuses to open without both.
   process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+  process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
   ensureVerdaAwake.mockResolvedValue(undefined)
   resolveConversationTier.mockResolvedValue('anthropic')
@@ -400,6 +401,7 @@ afterEach(async () => {
   delete process.env.VERDA_INFERENCE_ENDPOINT
   delete process.env.VERDA_INFERENCE_API_KEY
   delete process.env.SMALL_LLM_DECISIONS_URL
+  delete process.env.SMALL_LLM_API_KEY
   delete process.env.SMALL_LLM_BASE_URL
 })
 

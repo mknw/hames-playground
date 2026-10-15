@@ -684,10 +684,7 @@ export function findingsRecordFor(
 /** The labels the tier-1 question allows. */
 export type DocumentInjectionLabel = 'clean' | 'suspicious'
 
-/**
- * The closed question tier 1 asks. Its `key` is what a fitted calibration is
- * keyed by (#418 §3: `(client, spec.key)`), so it is stable.
- */
+/** The closed systemone question tier 1 asks, with a stable event key. */
 export const DOCUMENT_INJECTION_DECISION = Object.freeze({
   key: 'document.injection',
   question:

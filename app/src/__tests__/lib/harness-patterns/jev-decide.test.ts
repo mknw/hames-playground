@@ -122,6 +122,7 @@ beforeEach(() => {
   smallRequests = 0
   respond = async () => Response.json(JEV_BODY)
   process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+  process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.JEV_DECISIONS_API_KEY = 'or-test-key'
   // O2 on EVERY path: the embedding provider's key is set in every test, so a
   // fallback to it anywhere (success, error, retry) is a request carrying it.
@@ -460,7 +461,7 @@ describe('jev-tier-lock — Jev is a public provider and may never take a privat
       /Refusing systemone client/,
     )
     await expect(
-      onPrivateTier(() => createDecideAllAdapter(decide)({ spec: SET, state: 's' })),
+      onPrivateTier(() => createDecideAllAdapter()({ spec: SET, state: 's' })),
     ).rejects.toThrow(/inference tier/)
     expect(requests).toHaveLength(0)
   })
@@ -637,7 +638,7 @@ describe('jev-limits — the 32k state cap', () => {
       await import('@hames-ai/harness-baml/baml-adapters.server')
     const decide = createDecideAdapter()
     expect(decide.limits!().contextWindow).toBe(32_000)
-    expect(createDecideAllAdapter(decide).limits!().contextWindow).toBe(32_000)
+    expect(createDecideAllAdapter().limits!().contextWindow).toBe(32_000)
     const t = await transport()
     expect(t.decide.limits!().contextWindow).toBe(32_000)
     expect(t.decideAll.limits!().contextWindow).toBe(32_000)
@@ -939,8 +940,7 @@ describe('jev-tier-lock score/noul', () => {
 
 describe('G11 private systemone routing', () => {
   it('posts every question to the private full URL with its Bearer key and records time cost', async () => {
-    const { createDecideAllAdapter, createDecideAdapter } =
-      await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { createDecideAllAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
     process.env.SMALL_LLM_API_KEY = 'private-test-key'
     const savedRate = process.env.SMALL_LLM_EUR_PER_HOUR
     process.env.SMALL_LLM_EUR_PER_HOUR = '3.6'
@@ -961,13 +961,14 @@ describe('G11 private systemone routing', () => {
       })
     try {
       const result = await onPrivateTier(() =>
-        createDecideAllAdapter(createDecideAdapter())({
+        createDecideAllAdapter()({
           spec: { key: 'private-mixed', fields: { pick: SPEC, score: SCORE, noul: NOUL } },
           state: 'Synthetic state only.',
         }),
       )
       expect(requests).toHaveLength(1)
       expect(requests[0].url).toBe(process.env.SMALL_LLM_DECISIONS_URL)
+      expect(requests[0].init.redirect).toBe('error')
       expect(requests[0].init.headers).toMatchObject({ authorization: 'Bearer private-test-key' })
       const body = JSON.parse(String(requests[0].init.body))
       expect(body).toMatchObject({
@@ -1048,6 +1049,66 @@ describe('G11 private systemone routing', () => {
       ),
     ).rejects.toThrow('Refusing')
     expect(requests).toHaveLength(0)
+  })
+
+  it.each(['api.typesafe.ai', 'openrouter.ai', 'proxy.openrouter.ai'])(
+    'refuses a private URL naming public systemone provider %s, zero requests',
+    async (host) => {
+      process.env.SMALL_LLM_DECISIONS_URL = `https://${host}/v1/systemone`
+      const fn = await adapter()
+      await expect(onPrivateTier(() => fn({ spec: SPEC, state: 'Synthetic.' }))).rejects.toThrow(
+        /public systemone provider/,
+      )
+      // The transport must refuse independently of the host's configuration gate.
+      await expect(
+        withRunFrame({ inference: { tier: 'verda' } }, () =>
+          fn({ spec: SPEC, state: 'Synthetic.' }),
+        ),
+      ).rejects.toThrow(/public systemone provider/)
+      expect(requests).toHaveLength(0)
+    },
+  )
+
+  it('refuses a private run whose resolved client is any other name, zero requests', async () => {
+    const fn = await adapter()
+    await expect(
+      withRunFrame(
+        { inference: { tier: 'verda', clientOverride: () => ({ client: 'SomeConsumerDecide' }) } },
+        () => fn({ spec: SPEC, state: 'Synthetic.' }),
+      ),
+    ).rejects.toThrow('Refusing')
+    expect(requests).toHaveLength(0)
+  })
+
+  it('refuses a missing private key without reading or using the public key', async () => {
+    const savedKey = process.env.SMALL_LLM_API_KEY
+    delete process.env.SMALL_LLM_API_KEY
+    const real = process.env
+    let publicKeyReads = 0
+    process.env = new Proxy(real, {
+      get(target, key) {
+        if (key === 'JEV_DECISIONS_API_KEY') publicKeyReads++
+        return Reflect.get(target, key)
+      },
+    })
+    try {
+      const fn = await adapter()
+      await expect(onPrivateTier(() => fn({ spec: SPEC, state: 'Synthetic.' }))).rejects.toThrow(
+        'SMALL_LLM_API_KEY',
+      )
+      // Host refusal cannot hide a transport-level fallback to the public key.
+      await expect(
+        withRunFrame({ inference: { tier: 'verda' } }, () =>
+          fn({ spec: SPEC, state: 'Synthetic.' }),
+        ),
+      ).rejects.toThrow('SMALL_LLM_API_KEY')
+      expect(requests).toHaveLength(0)
+      expect(publicKeyReads).toBe(0)
+    } finally {
+      process.env = real
+      if (savedKey === undefined) delete process.env.SMALL_LLM_API_KEY
+      else process.env.SMALL_LLM_API_KEY = savedKey
+    }
   })
 
   it('keeps Anthropic decisions on the public URL and public key when a private URL is configured', async () => {

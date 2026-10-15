@@ -221,6 +221,7 @@ describe('createInjectionScreen — client routing', () => {
     // a scope naming it without the 4B's endpoint is refused.
     'SMALL_LLM_BASE_URL',
     'SMALL_LLM_DECISIONS_URL',
+    'SMALL_LLM_API_KEY',
   ] as const
   let savedVerdaEnv: Record<string, string | undefined>
 
@@ -275,6 +276,7 @@ describe('createInjectionScreen — client routing', () => {
     // only so the scope opens; it is the model this screen must NOT be sent to,
     // which is what the second assertion below says.
     process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+    process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
     const { assertInferenceTier } = await import('@hames-ai/harness-baml/clients.server')
     const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')

@@ -159,6 +159,7 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   LocalGLM: 16_384,
   // = the `--ctx-size` `make llm-small` serves it with; keep the two in step.
   LocalQwenSmall: 32_768,
+  // Conservative state budget below the private shim's 40,960-token serving length (#567).
   PrivateSystemOne: 32_768,
   // #418 T4. Jev's documented state cap ("up to 32k tokens", state + questions):
   // a REST adapter has no `--ctx-size` to read, so the number is the docs'.

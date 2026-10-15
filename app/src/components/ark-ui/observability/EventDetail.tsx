@@ -547,11 +547,6 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
             method <span font="mono">{props.data.method}</span>
           </span>
         </Show>
-        <Show when={props.data.coverage !== undefined}>
-          <span>
-            coverage <span font="mono">{props.data.coverage!.toFixed(3)}</span>
-          </span>
-        </Show>
 
         <span>
           state <span font="mono">{props.data.stateChars.toLocaleString()}</span> chars

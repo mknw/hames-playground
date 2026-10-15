@@ -90,6 +90,7 @@ const ENV_KEYS = [
   // switch's private position DISABLED.
   'SMALL_LLM_BASE_URL',
   'SMALL_LLM_DECISIONS_URL',
+  'SMALL_LLM_API_KEY',
   // Cleared per test and restored after, so the wake's own defaults apply
   // everywhere except where a case sets its budget deliberately — see
   // `shortWakeBudget`.
@@ -106,6 +107,7 @@ function configureVerda(): void {
   process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
   process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+  process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
 }
 

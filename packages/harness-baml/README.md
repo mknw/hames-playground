@@ -301,7 +301,7 @@ await withRunFrame({ inference: { tier: 'anthropic' } }, async () => {
 
 ### Systemone decisions
 
-`createDecideAdapter()` and `createDecideAllAdapter(decide)` supply single-question
+`createDecideAdapter()` and `createDecideAllAdapter()` supply single-question
 and set calls for `choice`, `score` and `noul`. Probabilities from the endpoint
 pass through untouched; decision events record the serving client.
 

@@ -210,7 +210,7 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
           )
           await patterns.decideFields(scope, {
             decide,
-            decideAll: adapters.createDecideAllAdapter(decide),
+            decideAll: adapters.createDecideAllAdapter(),
             set: { key: 'e2e.fields', fields },
             state: STATE,
           })

@@ -370,8 +370,7 @@ export {
   type AcceptanceRule,
 } from './memory-acceptance.server'
 
-// Decisions (#418): the user-facing half of the typedDecision seam. The pure
-// scoring helpers (`scoreDecision`, `sumLabelMass`, …) stay on './patterns'.
+// Decisions (#418): the user-facing typed systemone decision seam.
 export {
   defineChoice,
   defineScore,

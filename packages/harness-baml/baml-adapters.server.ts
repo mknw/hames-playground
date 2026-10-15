@@ -1725,6 +1725,6 @@ export function createDecideAdapter(): DecideFn {
   return createJevTransport().decide
 }
 
-export function createDecideAllAdapter(_decide: DecideFn): DecideAllFn {
+export function createDecideAllAdapter(): DecideAllFn {
   return createJevTransport().decideAll
 }

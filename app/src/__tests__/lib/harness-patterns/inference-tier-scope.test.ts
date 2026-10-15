@@ -36,8 +36,8 @@ const ENV_KEYS = [
   // The private tier is TWO models since 2026-08-26 — `describe` runs on the 4B
   // `LocalQwenSmall`, reached through this — so it is part of the tier's
   // configuration and a scope naming `verda` without it is refused. The KEY is
-  // saved/restored too, because one test deletes it to pin that it is NOT
-  // required, and a leaked deletion would change another file's outcome.
+  // saved/restored too: systemone requires it, and one test deletes it to pin
+  // refusal before tier entry and boot.
   'SMALL_LLM_BASE_URL',
   'SMALL_LLM_DECISIONS_URL',
   'SMALL_LLM_API_KEY',
@@ -68,6 +68,7 @@ function configureEndpointOnly(): void {
   process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
   process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+  process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
 }
 
@@ -325,6 +326,7 @@ describe('the verda position fails closed when the endpoint is unset', () => {
     // verbatim, so a root URL 404s every describe call mid-conversation.
     configureEndpointOnly()
     process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+    process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small'
     const { runWithInferenceTier } = await load()
 
@@ -333,17 +335,17 @@ describe('the verda position fails closed when the endpoint is unset', () => {
     )
   })
 
-  it('does NOT require the 4B api key — llama-server authenticates nothing', async () => {
-    // A local `make llm-small` has no key to set. Refusing the tier for a
-    // missing one would refuse it for the common case, and a remote endpoint
-    // that checks a key fails loudly on its own with a 401.
+  it('requires the private systemone key before opening the tier or booting with the flag', async () => {
     configureEndpointOnly()
     delete process.env.SMALL_LLM_API_KEY
-    const { runWithInferenceTier, resolveClientForRole } = await load()
-
-    await expect(
-      runWithInferenceTier('verda', async () => resolveClientForRole('describe')),
-    ).resolves.toBe('LocalQwenSmall')
+    const { runWithInferenceTier } = await load()
+    const ran = vi.fn()
+    await expect(runWithInferenceTier('verda', async () => ran())).rejects.toThrow(
+      'SMALL_LLM_API_KEY',
+    )
+    expect(ran).not.toHaveBeenCalled()
+    process.env.USE_VERDA_INFERENCE = '1'
+    await expect(load()).rejects.toThrow('SMALL_LLM_API_KEY')
   })
 
   it('never blocks the anthropic position — it needs no endpoint', async () => {

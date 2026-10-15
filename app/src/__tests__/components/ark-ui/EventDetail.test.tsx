@@ -17,14 +17,13 @@ const data: DecisionMadeEventData = {
     { id: 'now', description: 'Work is blocked.' },
   ],
   probs: { wait: 0, soon: 0.57, now: 0.43 },
-  label: 'now',
+  label: 'soon',
   top: 'soon',
   expected: 1.43,
-  value: 2,
+  value: 1,
   margin: 0.14,
   confidence: 0.355,
-  abstained: true,
-  reason: 'error',
+  abstained: false,
   method: 'jev',
   calibrated: true,
   stateChars: 32,
@@ -41,7 +40,7 @@ const detail = (over: Partial<DecisionMadeEventData> = {}) =>
 
 describe('EventDetail score/noul observability', () => {
   // Mutation: draw at the mode instead of expected.
-  it('draws the score mean at expected, independently of mode and fallback', () => {
+  it('draws the score mean at expected, independently of the mode', () => {
     const panel = detail()
     expect(panel.querySelector<HTMLElement>('[data-role="decision-mean"]')!.style.left).toBe(
       '71.5%',
@@ -55,7 +54,7 @@ describe('EventDetail score/noul observability', () => {
     expect(meter.getAttribute('aria-valuenow')).toBe('1.43')
     expect(meter.getAttribute('aria-valuemax')).toBe('2')
     expect(panel.textContent).toContain('Mean (level index): 1.43')
-    expect(panel.querySelector('[data-role="decision-verdict"]')!.textContent).toContain('now')
+    expect(panel.querySelector('[data-role="decision-verdict"]')!.textContent).toContain('soon')
     expect(
       [...panel.querySelectorAll<HTMLElement>('[data-role="decision-bar"]')].map(
         (b) => b.style.width,
@@ -153,6 +152,36 @@ describe('EventDetail score/noul observability', () => {
         4.5,
       )
     }
+  })
+  it('preserves persisted choice bars when new fields are absent', () => {
+    const panel = detail({
+      type: undefined,
+      expected: undefined,
+      value: undefined,
+      pTrue: undefined,
+    })
+    expect(panel.querySelectorAll('[data-role="decision-bar"]')).toHaveLength(3)
+    expect(panel.querySelector('[data-role="decision-mean"]')).toBeNull()
+    expect(panel.textContent).toContain('margin')
+  })
+  it('renders the noul probability in a positioned meter', () => {
+    const panel = detail({
+      type: 'noul',
+      pTrue: 0.7,
+      label: 'true',
+      top: 'true',
+      probs: { true: 0.7, false: 0.3 },
+      labels: [
+        { id: 'true', description: 'It holds.' },
+        { id: 'false', description: 'It does not.' },
+      ],
+      margin: 0,
+      expected: undefined,
+      value: undefined,
+    })
+    const meter = panel.querySelector('[aria-label="P(true)"]')!
+    expect(meter.hasAttribute('relative')).toBe(true)
+    expect(panel.querySelector<HTMLElement>('[data-role="decision-bar"]')!.style.width).toBe('70%')
   })
   // Mutation: hard-code the chip to choice.
   it.each(['score', 'noul', undefined] as const)(

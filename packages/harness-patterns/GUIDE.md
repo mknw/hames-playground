@@ -127,7 +127,7 @@ score exposes `level`, `value` and `expected`, and noul exposes `holds` and
 Outside a pattern, `evaluateDecision` evaluates without a scope, `decide`
 records on a scope, and `decideFields` answers the fields of a
 `defineDecisionSet`, recording one `decision_made` per field. Pass
-`createDecideAllAdapter(decide)` for a set in one request.
+`createDecideAllAdapter()` for a set in one request.
 
 `decisionRouter` writes the selected route to `data.route`. Put `compactIntent`
 in front and pass `preserveIntent: true` when routing needs that intent.

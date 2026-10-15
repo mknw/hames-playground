@@ -1133,6 +1133,16 @@ describe('fail-closed paths', () => {
     return { report, db, decide, extract, ctx }
   }
 
+  it('a failed target decision stops at the gate and writes nothing', async () => {
+    const decide = fakeDecide({}, (input) => {
+      if (input.spec.key === 'memory.store.target') throw new Error('synthetic target refusal')
+    })
+    const result = await stops({ decide: decide.fn })
+    expect(result.report.skipped).toBe('gate')
+    expect(result.db.rows()).toEqual([])
+    expect(result.db.stats.transactions).toBe(0)
+  })
+
   it('no owner → nothing, and no model is asked', async () => {
     const r = await stops({ owner: () => null })
     expect(r.report.skipped).toBe('no-user')

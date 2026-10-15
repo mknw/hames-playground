@@ -1425,7 +1425,7 @@ describe('ObservabilityPanel — Anthropic prompt bodies', () => {
 })
 
 // ============================================================================
-// #418 T6 — `decision_made`: the distribution, the cut, the abstain
+// #418 — `decision_made`: the endpoint distribution and failures
 // ============================================================================
 describe('ObservabilityPanel — decision_made', () => {
   const decision = (over: Record<string, unknown> = {}) =>

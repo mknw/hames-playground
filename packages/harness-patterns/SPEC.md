@@ -1882,7 +1882,7 @@ statement holds. The endpoint's probabilities pass through untouched. To offer
 `defineChoice`, `defineScore` and `defineNoul` infer option ids from literal
 specs; `defineDecisionSet` groups typed fields over one state. `DecideFn` is the
 single-question seam; `DecideAllFn` answers a set in one request.
-`createDecideAdapter()` and `createDecideAllAdapter(decide)` provide these seams.
+`createDecideAdapter()` and `createDecideAllAdapter()` provide these seams.
 `evaluateDecision` evaluates without a scope, `decide` records on a scope, and
 `decideFields` returns the typed fields and records one `decision_made` per
 field. Request failures remain errors; consumers must handle failure before

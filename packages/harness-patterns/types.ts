@@ -1734,9 +1734,7 @@ export type DecideFn = {
   readonly supportedTypes?: readonly DecisionType[]
 }
 
-/** The structured entry: several typed fields over one state (D6). NOTE (F6):
- *  no set-level `coverage` — coverage is per field, and the floors consume it
- *  there. */
+/** The structured entry: several typed fields over one state (D6). */
 export type DecideAllFn = {
   <S extends Record<string, AnyDecisionSpec>>(input: {
     readonly spec: MixedDecisionSet<S>
@@ -1773,7 +1771,6 @@ export interface DecisionMadeEventData {
   reason?: AbstainReason
   method?: DecisionMethod
   calibrated: boolean
-  coverage?: number
   /** The SIZE of the state, never the text. */
   stateChars: number
   shadow?: true

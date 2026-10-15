@@ -283,10 +283,21 @@ export function createJevTransport(options: JevTransportOptions = {}): {
         startTime,
       )
     }
+    if (
+      privateClient &&
+      (isOpenRouterHost(endpoint.hostname) || endpoint.hostname === 'api.typesafe.ai')
+    ) {
+      throw jevFailure(
+        'Refusing SMALL_LLM_DECISIONS_URL: it names a public systemone provider; no request was made.',
+        variables,
+        startTime,
+      )
+    }
     const openRouter = isOpenRouterHost(endpoint.hostname)
     const typeSafe = endpoint.hostname === 'api.typesafe.ai'
     const provider = openRouter ? 'openrouter' : typeSafe ? 'typesafe' : undefined
     const body = {
+      // The private shim ignores this compatibility id and serves its pinned model (#567).
       model: jevModelFor(endpoint.hostname),
       state,
       questions,
@@ -431,7 +442,8 @@ export function createJevTransport(options: JevTransportOptions = {}): {
         fields[n] = {
           probs: { true: a.noul, false: 1 - a.noul },
           method: 'jev',
-          // Preserve the endpoint's probability.
+          // Native noul probabilities are marked calibrated without a confidence field;
+          // choice and score require that field for the marker.
           calibrated: true,
           llmCall: record,
         } as DecideResult<DecisionLabelsFor<S[typeof n]>>
@@ -464,7 +476,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
         sum += p
       }
       // Fail CLOSED: an answer that omits a label or whose mass is not ~1 must
-      // not be renormalised into certainty — that would clear every cut.
+      // not be renormalised into certainty: preserve the returned probabilities.
       if (Math.abs(sum - 1) > JEV_MASS_TOLERANCE) {
         throw new LLMCallError(
           `Jev's probabilities for field "${n}" sum to ${sum} over its labels, not 1.`,

@@ -46,6 +46,7 @@ const ENV_KEYS = [
   'VERDA_INFERENCE_API_KEY',
   'SMALL_LLM_BASE_URL',
   'SMALL_LLM_DECISIONS_URL',
+  'SMALL_LLM_API_KEY',
 ] as const
 let saved: Record<string, string | undefined>
 
@@ -102,6 +103,7 @@ describe('createMemoryExtractAdapter', () => {
     process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
     process.env.VERDA_INFERENCE_API_KEY = 'k'
     process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+    process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
     const { createMemoryExtractAdapter } = await load()
     await createMemoryExtractAdapter()({ kindHint: 'k', window: 'w', latestUser: 'u' })
@@ -144,6 +146,7 @@ describe('createMemoryCompactAdapter', () => {
     process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
     process.env.VERDA_INFERENCE_API_KEY = 'k'
     process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+    process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
     const { createMemoryCompactAdapter } = await load()
     await createMemoryCompactAdapter()({ kind: 'preference', members: MEMBERS })

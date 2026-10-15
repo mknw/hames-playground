@@ -55,6 +55,7 @@ const ENV_KEYS = [
   // tier without it is refused rather than descaled (see the fail-closed block).
   'SMALL_LLM_BASE_URL',
   'SMALL_LLM_DECISIONS_URL',
+  'SMALL_LLM_API_KEY',
 ] as const
 
 const ALL_ROLES: BamlRole[] = [
@@ -115,6 +116,7 @@ function enable(): void {
   // BOTH endpoints. The tier is two models, so a fixture with one describes a
   // deployment this build refuses — which is its own test, below.
   process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+  process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
 }
 

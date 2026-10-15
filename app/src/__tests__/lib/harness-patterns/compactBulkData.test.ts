@@ -667,11 +667,13 @@ describe('compactBulkData', () => {
       'VERDA_INFERENCE_API_KEY',
       'SMALL_LLM_BASE_URL',
       'SMALL_LLM_DECISIONS_URL',
+      'SMALL_LLM_API_KEY',
     ]
     const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]))
     process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
     process.env.VERDA_INFERENCE_API_KEY = 'test-key'
     process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+    process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
     try {
       // #374: the tier is a slot of the run frame; the reachability check the

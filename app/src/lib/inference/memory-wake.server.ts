@@ -19,7 +19,7 @@
  * when **all requested** targets proved up. The embedder leg is always
  * requested (every tier's memory pipeline embeds); the 4B leg only when
  * `activeInferenceTier()` is `verda`, because the 4B serves `decide`/`describe`
- * under the private tier only — an Anthropic-tier turn gates through calibrated
+ * under the private tier only — an Anthropic-tier turn gates through
  * Jev and describes through the Anthropic chain. Without that gate a slow 4B
  * would push the joint promise past the recall gate's 1500 ms budget and cause
  * a spurious `skipped: 'waking'` on a turn that only needed the embedder, and

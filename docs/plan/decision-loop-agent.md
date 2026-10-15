@@ -108,13 +108,36 @@ The child's `data` is built fresh: the plan block plus what the child pattern ne
 There are four channels, from cheapest to richest:
 
 1. **The handoff.** The last N outputs, capped, in the next child's `plan_context` (above). It works for every route kind and costs nothing extra.
-2. **Earlier tool results in full: `withReferences`.** `withReferences` does **not** connect to the Data Stash. It runs an LLM selector (`ReferenceSelector`, the `describe` role) over the `tool_result` events the wrapped pattern can see, and attaches the relevant ones to the inner loop's `turns_previous_runs` (`with-references.server.ts:1-10`). It is the way for `info_ag` to reuse, say, Cypher rows that `info-retrieval` fetched two iterations ago without fetching them again: wrap `info_ag` as `withReferences(…)(simpleLoop(…))`, as `retriever-agent` already wraps its loops.
-   - The catch: a child's events reach `ctx.events` only when the top-level pattern commits. So `decisionLoop` must give each child a view of this turn's earlier children: the synthetic view `chain()` builds (`chain.server.ts:331-335`), with its `dropHitl`.
-   - Without that view, `withReferences` would see earlier turns but not earlier iterations of this one. That is slice 1's job, and it is pinned.
-3. **The Data Stash, for documents.** Documents uploaded by the user or ingested by an agent are reached through the `read-documents` route. Its output then rides the handoff, and the full matches can be picked up through channel 2.
-   - `info_ag` itself has no stash tool, deliberately. The only existing one, the redis server's search, is not scoped to the conversation.
-   - If searching the stash _inside_ `info_ag`'s loop proves necessary, the way to do it is a conversation-scoped app tool that takes its session from the request, the way `graph_file_ingest` does. That is not a new route.
-4. **Files, for the sandbox.** Stash → `/work/in` on entry, with the re-hydrate fix (N4), and materialisation once P4 is met ([Data between routes](#data-between-routes)). `withSandbox` needs neither channel 2 nor channel 3.
+2. **Earlier tool results in full: `withReferences`.** `withReferences` does **not** connect to the Data Stash. It runs a selector over the `tool_result` events its view can see, and attaches the ones it picks to the inner loop's `turns_previous_runs` (`with-references.server.ts:1-10`, `:199-210`). Only `simpleLoop` consumes them (`simpleLoop.server.ts:309-310`). `ActorController` has no prior-results input (`actorCritic.baml:222-232`), so wrapping `doc_ag` would attach nothing.
+3. **The Data Stash, for documents.** Documents uploaded by the user, ingested by an agent or promoted from `/work/out` are read by the `read-documents` route. The retriever emits its matches as a `tool_result` (`retriever.server.ts:28-29`). So they ride the handoff as a summary, and channel 2 can attach them in full to a loop that has no stash access of its own.
+   - `info_ag` has no stash tool, deliberately. The only existing one, the redis server's search, is not scoped to the conversation.
+   - If a stash search _inside_ a loop is ever needed, the way to do it is a conversation-scoped app tool that takes its session from the request, the way `graph_file_ingest` does.
+4. **Files, for the sandbox.** Stash → `/work/in` on entry, plus the re-hydrate fix (N4). Materialisation follows once P4 is met ([Data between routes](#data-between-routes)).
+
+**Each child's view is its own (review, 2026-10-15).** `decisionLoop` does not decide what a child sees. It supplies the **context**: the committed events plus this turn's earlier children's events, which reach `ctx.events` only when the top-level pattern commits. It does that the way `chain()` does, a synthetic context plus `dropHitl` (`chain.server.ts:331-341`). The child's view is then built from that context and **the child's own `viewConfig`**, as `chain()` builds `createEventView(syntheticCtx, pattern.config.viewConfig, subId)`. `routes`' pass-through of the parent's view is the thing not to copy.
+
+So the selection is declared on the child, independently per child:
+
+- **`withReferences`' own config.** `source: ['retrieve', 'info']` limits candidates to those siblings' patterns (`with-references.server.ts:200-210`). `viewConfig: { fromLastNTurns: 1 }` limits them to this turn. `decisionLoop` runs once per turn, so "this turn" is "this invocation".
+- **A tool-level filter.** "Only results from tool `x`" is **not** expressible today. `source` names patterns, and `ViewConfig` has no tool filter (`types.ts:399-419`). Slice 1 adds `tools?: string[]` to `WithReferencesConfig`, filtering candidates on their `tool` before selection. It is the narrowest place for it: a `ViewConfig` tool filter would also hide the matching `tool_call` that the candidate's `tool_args` are read from (`with-references.server.ts:101-117`).
+- **A decisions-model selector.** It is a second `SelectorFn` through the existing required `selector` seam, not a second pattern. Tracked in #570.
+
+**These filters are also a privacy control.** `doc_ag`'s results are mail and files. Attached to `info_ag`, which holds web tools, they can become search queries or fetched URLs (SD-1). So `info_ag`'s `source` excludes `doc` unless the owner rules otherwise. The handoff carries a capped summary of `doc_ag`'s output to every route as well; that is the same flow at a smaller size, and it is owner call R1 on PR #566.
+
+**Data Stash or `withReferences`: every case in this agent.** The boundary: **the stash holds documents (bytes), and a route reads them through a stash-connected step. `withReferences` re-uses earlier tool results, for a loop that has no stash connection.**
+
+| Data                                                         | Needed by                                          | Channel                                             | Why                                                       |
+| ------------------------------------------------------------ | -------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------- |
+| an uploaded or ingested file                                 | `doc_ag` (code over it)                            | stash → `/work/in`                                  | the sandbox reads files; its actor takes no attached refs |
+| a file `doc_ag` produced (`/work/out`)                       | a later turn, or `read-documents`                  | promotion → stash                                   | durable, conversation-scoped bytes                        |
+| text inside stash documents                                  | `read-documents`                                   | stash vector search                                 | the retriever is the stash's reader                       |
+| `read-documents`' matches, in full                           | `info_ag` (e.g. a web search seeded by a document) | `withReferences`, `source: ['retrieve']`            | `info_ag` has no stash connection                         |
+| Cypher rows or web results from an earlier iteration or turn | `info_ag`                                          | `withReferences`, `source: ['info']`                | avoids re-querying; the summary alone may drop the rows   |
+| Cypher rows or web results                                   | `doc_ag` (compute over them)                       | handoff summary; full rows via materialisation (P4) | the actor takes no attached refs                          |
+| any route's result + reasoning                               | the next decision, `think`, every child            | handoff (`plan_context`)                            | always on, capped                                         |
+| everything this turn produced                                | the synthesizer                                    | `fromPatterns: ['orchestrator']`                    | it reads the route-output records                         |
+
+So `withReferences` is needed in this agent in exactly one place, around `info_ag`, and the stash in three. Neither replaces the other.
 
 ### "Last N route outputs", and where N lives
 
@@ -276,7 +299,8 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
    - the iteration;
    - the custom state;
    - the route-output record, its stats and the per-kind extractors;
-   - each child's synthetic view of this turn's earlier children, with `dropHitl` (for `withReferences`);
+   - each child's synthetic context of this turn's earlier children, with `dropHitl`, and its view built from its own `viewConfig`;
+   - `tools?: string[]` on `WithReferencesConfig`, filtering candidates by tool name;
    - the planner's agent map;
    - sanitizing on the way up;
    - failure capture and severity downgrade;

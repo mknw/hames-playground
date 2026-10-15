@@ -71,7 +71,7 @@ export const DEFAULT_SETTINGS: HarnessSettings = {
  *
  * Exported because one thing outside this file has to reason about the CEILING
  * rather than the current value: the stuck-run reaper derives its threshold
- * from the longest turn a browser can ask for (`STUCK_RUN_TIMEOUT_MINUTES`,
+ * from the longest turn a browser can ask for (`HUNG_TURN_BACKSTOP_MINUTES`,
  * `lib/db/conversations.server.ts`). Widening a bound here therefore lengthens
  * that threshold automatically, which is the point — the alternative is two
  * numbers that disagree about how long a turn may legitimately run.

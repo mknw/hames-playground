@@ -19,10 +19,12 @@ vi.mock('../../../lib/routines/dispatch.server', () => ({ fireRoutine }))
 // The tick's other half (#273 D-a). Mocked for the same reason the store is:
 // this file drives the timer under fake timers, and the real reaper would run
 // SQL against the test database on every advance.
-const reapStuckConversations = vi.fn<() => Promise<string[]>>(async () => [])
+const reapStuckConversations = vi.fn<() => Promise<{ id: string; leaseDead: boolean }[]>>(
+  async () => [],
+)
 vi.mock('../../../lib/db/conversations.server', () => ({
   reapStuckConversations,
-  STUCK_RUN_TIMEOUT_MINUTES: 20,
+  HUNG_TURN_BACKSTOP_MINUTES: 20,
 }))
 
 const {
@@ -218,9 +220,13 @@ describe('the armed timer', () => {
 })
 
 describe('sweepStuckRuns', () => {
-  it('passes the reaped ids back and names them in one warning', async () => {
+  it('passes the reaped ids back and names a dead-lease reap in one warning', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    reapStuckConversations.mockResolvedValue(['conv-a', 'conv-b'])
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    reapStuckConversations.mockResolvedValue([
+      { id: 'conv-a', leaseDead: true },
+      { id: 'conv-b', leaseDead: true },
+    ])
 
     expect(await sweepStuckRuns()).toEqual(['conv-a', 'conv-b'])
 
@@ -230,7 +236,33 @@ describe('sweepStuckRuns', () => {
     const line = warn.mock.calls[0].join(' ')
     expect(line).toContain('conv-a')
     expect(line).toContain('conv-b')
+    expect(err).not.toHaveBeenCalled()
     warn.mockRestore()
+    err.mockRestore()
+  })
+
+  it('logs a backstop reap of a LIVE lease on its own console.error line', async () => {
+    // The one reap a running process will later overwrite, and an anomaly: it
+    // must not read as an ordinary abandoned turn (#597 review finding 6).
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    reapStuckConversations.mockResolvedValue([
+      { id: 'conv-dead', leaseDead: true },
+      { id: 'conv-hung', leaseDead: false },
+    ])
+
+    expect(await sweepStuckRuns()).toEqual(['conv-dead', 'conv-hung'])
+
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0].join(' ')).toContain('conv-dead')
+    expect(warn.mock.calls[0].join(' ')).not.toContain('conv-hung')
+    expect(err).toHaveBeenCalledTimes(1)
+    const line = err.mock.calls[0].join(' ')
+    expect(line).toContain('conv-hung')
+    expect(line).not.toContain('conv-dead')
+    expect(line).toContain('20m backstop')
+    warn.mockRestore()
+    err.mockRestore()
   })
 
   it('says nothing on an idle sweep', async () => {

@@ -44,7 +44,7 @@ import {
   setConversationPinned,
   reapStuckConversations,
   CONVERSATION_PIN_LIMIT,
-  STUCK_RUN_TIMEOUT_MINUTES,
+  HUNG_TURN_BACKSTOP_MINUTES,
 } from '../../../lib/db/conversations.server'
 import { closePool, query } from '../../../lib/db/client.server'
 import { setStoredInferenceTier } from '../../../lib/db/user-prefs.server'
@@ -1143,9 +1143,20 @@ describe('backfillConversationInferenceTier', () => {
 describe('reapStuckConversations', () => {
   beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
-  /** Seed one row, then age its `updated_at` by `ageMinutes`. */
-  async function seed(id: string, status: 'running' | 'paused' | 'done', age: number) {
-    await seedRow({
+  /**
+   * Seed one row the way a turn leaves it mid-flight, then set the two clocks
+   * the reaper reads: `updated_at` (age at `running`, minutes) and the lease
+   * (`claimAgeSeconds` since the last renewal, or `null` for no claim at all).
+   */
+  async function seed(
+    id: string,
+    status: 'running' | 'paused' | 'done',
+    {
+      ageMinutes = 1,
+      claimAgeSeconds = 5,
+    }: { ageMinutes?: number; claimAgeSeconds?: number | null } = {},
+  ) {
+    await createConversation({
       id,
       userId: TEST_USER,
       agentId: 'search',
@@ -1154,9 +1165,12 @@ describe('reapStuckConversations', () => {
       status,
     })
     await query(
-      `UPDATE conversations SET updated_at = NOW() - INTERVAL '${age} minutes'
+      `UPDATE conversations
+          SET updated_at = NOW() - make_interval(mins => $3),
+              turn_claimed_at = CASE WHEN $4::float8 IS NULL THEN NULL
+                                     ELSE NOW() - make_interval(secs => $4::float8) END
         WHERE id = $1 AND user_id = $2`,
-      [id, TEST_USER],
+      [id, TEST_USER, ageMinutes, claimAgeSeconds],
     )
   }
 
@@ -1168,95 +1182,188 @@ describe('reapStuckConversations', () => {
     return rows[0]?.status ?? null
   }
 
-  const past = STUCK_RUN_TIMEOUT_MINUTES + 5
+  /** The reaped ids (the rows also say which branch fired). */
+  const reapedIds = async () => (await reapStuckConversations()).map((r) => r.id)
 
-  it('reaps an abandoned run and leaves every other row alone', async () => {
-    const tag = Math.random().toString(36).slice(2, 8)
-    const stale = `reap-stale-${tag}`
-    const fresh = `reap-fresh-${tag}`
-    const paused = `reap-paused-${tag}`
-    const finished = `reap-done-${tag}`
-    await seed(stale, 'running', past)
-    await seed(fresh, 'running', 1)
-    await seed(paused, 'paused', past)
-    await seed(finished, 'done', past)
+  const tag = () => Math.random().toString(36).slice(2, 8)
+  const deadLease = TURN_CLAIM_TTL_SECONDS + 60
 
-    const reaped = await reapStuckConversations()
+  it('reaps a row whose turn lease is dead, however recently it was written', async () => {
+    const id = `reap-dead-${tag()}`
+    // One minute old: the old age-only reaper would have waited ninety.
+    await seed(id, 'running', { ageMinutes: 1, claimAgeSeconds: deadLease })
 
-    expect(reaped).toContain(stale)
-    expect(await statusOf(stale)).toBe('error')
-    // A turn that is merely slow keeps its spinner — that is the threshold
-    // doing its job, and the reason it is measured in tens of minutes.
-    expect(reaped).not.toContain(fresh)
-    expect(await statusOf(fresh)).toBe('running')
-    // An approval gate waits for a person for as long as that takes.
-    expect(reaped).not.toContain(paused)
-    expect(await statusOf(paused)).toBe('paused')
-    expect(await statusOf(finished)).toBe('done')
+    expect(await reapedIds()).toContain(id)
+    expect(await statusOf(id)).toBe('error')
   })
 
-  it('reaps one minute over the threshold and not one minute under', async () => {
-    // The boundary itself, driven rather than argued — the derivation is only
-    // worth what the statement does at its edges. Re-driven at the post-#279
-    // threshold of 90 minutes (it was 300 when these cases were first run).
-    const tag = Math.random().toString(36).slice(2, 8)
-    const under = `reap-under-${tag}`
-    const over = `reap-over-${tag}`
-    // The base review's case: a live 21-minute turn WAS reaped out from under
-    // itself under the old 20-minute threshold, which is what made the number
-    // derived rather than chosen (#278 F3). It must still survive, and it is the
-    // one row here whose age is a fact about the past rather than a fraction of
-    // the current constant — so it stays honest if the threshold moves again.
-    const live21 = `reap-live21-${tag}`
-    await seed(under, 'running', STUCK_RUN_TIMEOUT_MINUTES - 1)
-    await seed(over, 'running', STUCK_RUN_TIMEOUT_MINUTES + 1)
-    await seed(live21, 'running', 21)
+  it('does NOT reap a live long turn: renewed lease, hours past the old 90-minute bound', async () => {
+    const live = `reap-live-${tag()}`
+    // Eight hours at `running` with a lease renewed seconds ago — a legitimate
+    // decision-loop turn (#507 P2). Under the old age-only rule this was reaped
+    // at 90 minutes, mid-flight.
+    await seed(live, 'running', { ageMinutes: 8 * 60, claimAgeSeconds: 5 })
+    expect(8 * 60).toBeLessThan(HUNG_TURN_BACKSTOP_MINUTES)
 
-    const reaped = await reapStuckConversations()
+    expect(await reapedIds()).not.toContain(live)
+    expect(await statusOf(live)).toBe('running')
+  })
+
+  it('draws the lease boundary at the TTL claimConversation uses, not one second either side', async () => {
+    const justLive = `reap-lease-live-${tag()}`
+    const justDead = `reap-lease-dead-${tag()}`
+    await seed(justLive, 'running', { claimAgeSeconds: TURN_CLAIM_TTL_SECONDS - 10 })
+    await seed(justDead, 'running', { claimAgeSeconds: TURN_CLAIM_TTL_SECONDS + 10 })
+
+    const reaped = await reapedIds()
+
+    expect(reaped).toContain(justDead)
+    expect(await statusOf(justDead)).toBe('error')
+    expect(reaped).not.toContain(justLive)
+    expect(await statusOf(justLive)).toBe('running')
+  })
+
+  it('agrees with claimConversation about what is dead', async () => {
+    // The reuse claim of the design (one lease, one predicate): a row the reaper
+    // calls dead is a row a new turn may take, and the reverse.
+    const dead = `reap-agree-dead-${tag()}`
+    const live = `reap-agree-live-${tag()}`
+    await seed(dead, 'running', { claimAgeSeconds: TURN_CLAIM_TTL_SECONDS + 10 })
+    await seed(live, 'running', { claimAgeSeconds: TURN_CLAIM_TTL_SECONDS - 10 })
+
+    await expect(claimConversation(live, TEST_USER)).rejects.toBeInstanceOf(ConversationBusyError)
+    expect(await claimConversation(dead, TEST_USER)).not.toBeNull()
+    // …and once taken, the row is live again: the reaper leaves it alone.
+    expect(await reapedIds()).not.toContain(dead)
+    expect(await reapedIds()).not.toContain(live)
+  })
+
+  it('reaps a running row that holds no claim at all', async () => {
+    const id = `reap-noclaim-${tag()}`
+    // Seeded before the lease existed, or released by a turn that threw before
+    // any save. No turn holds it.
+    await seed(id, 'running', { ageMinutes: 1, claimAgeSeconds: null })
+
+    expect(await reapedIds()).toContain(id)
+    expect(await statusOf(id)).toBe('error')
+  })
+
+  it('reaps a hung-but-renewing turn one minute past the backstop and not one minute under', async () => {
+    const under = `reap-bs-under-${tag()}`
+    const over = `reap-bs-over-${tag()}`
+    // Both leases are live: the backstop is the only thing that can reap these.
+    await seed(under, 'running', { ageMinutes: HUNG_TURN_BACKSTOP_MINUTES - 1, claimAgeSeconds: 5 })
+    await seed(over, 'running', { ageMinutes: HUNG_TURN_BACKSTOP_MINUTES + 1, claimAgeSeconds: 5 })
+
+    const reaped = await reapedIds()
 
     expect(reaped).toContain(over)
     expect(await statusOf(over)).toBe('error')
     expect(reaped).not.toContain(under)
     expect(await statusOf(under)).toBe('running')
-    expect(reaped).not.toContain(live21)
-    expect(await statusOf(live21)).toBe('running')
+  })
+
+  it('leaves paused and finished rows alone even with a dead lease past the backstop', async () => {
+    const paused = `reap-paused-${tag()}`
+    const finished = `reap-done-${tag()}`
+    const stale = { ageMinutes: HUNG_TURN_BACKSTOP_MINUTES + 5, claimAgeSeconds: deadLease }
+    await seed(paused, 'paused', stale)
+    await seed(finished, 'done', stale)
+
+    const reaped = await reapedIds()
+
+    // An approval gate waits for a person for as long as that takes.
+    expect(reaped).not.toContain(paused)
+    expect(await statusOf(paused)).toBe('paused')
+    expect(reaped).not.toContain(finished)
+    expect(await statusOf(finished)).toBe('done')
   })
 
   it('is idempotent — a second sweep finds nothing to do', async () => {
-    const id = `reap-twice-${Math.random().toString(36).slice(2, 8)}`
-    await seed(id, 'running', past)
+    const id = `reap-twice-${tag()}`
+    await seed(id, 'running', { claimAgeSeconds: deadLease })
 
-    expect(await reapStuckConversations()).toContain(id)
-    expect(await reapStuckConversations()).not.toContain(id)
+    expect(await reapedIds()).toContain(id)
+    expect(await reapedIds()).not.toContain(id)
   })
 
   it('reports a row to exactly one of two concurrent sweepers', async () => {
-    const id = `reap-race-${Math.random().toString(36).slice(2, 8)}`
-    await seed(id, 'running', past)
+    const id = `reap-race-${tag()}`
+    await seed(id, 'running', { claimAgeSeconds: deadLease })
 
     // Two app instances, no leader election, the same 30s tick. Postgres takes
     // a row lock per UPDATE, so once the first sweeper has flipped the status
     // the second one's WHERE no longer matches it — which is what makes
     // `status` the claim, and this sweep safe to arm on every instance.
-    const [a, b] = await Promise.all([reapStuckConversations(), reapStuckConversations()])
+    const [a, b] = await Promise.all([reapedIds(), reapedIds()])
     expect([...a, ...b].filter((reaped) => reaped === id)).toHaveLength(1)
   })
 
-  it('does not make a reaped row look like recent user activity', async () => {
-    const id = `reap-activity-${Math.random().toString(36).slice(2, 8)}`
-    await seed(id, 'running', past)
+  it('writes only the status: not updated_at, not the claim, not the version', async () => {
+    const id = `reap-activity-${tag()}`
+    await seed(id, 'running', { ageMinutes: 30, claimAgeSeconds: deadLease })
+    const read = () =>
+      query<{ stale: boolean; claim: string | null; version: string }>(
+        `SELECT updated_at < NOW() - INTERVAL '20 minutes' AS stale,
+                turn_claimed_at::text AS claim, context_version::text AS version
+           FROM conversations WHERE id = $1`,
+        [id],
+      ).then((r) => r.rows[0])
+    const before = await read()
 
-    await reapStuckConversations()
+    expect(await reapedIds()).toContain(id)
 
-    const { rows } = await query<{ stale: boolean }>(
-      `SELECT updated_at < NOW() - INTERVAL '${STUCK_RUN_TIMEOUT_MINUTES} minutes' AS stale
-         FROM conversations WHERE id = $1`,
-      [id],
-    )
+    const after = await read()
     // `countActiveUsers` counts owners of rows touched in the last 15 minutes.
     // Had the reap bumped `updated_at`, every reaped conversation's owner would
     // appear in the preview header's "active" figure.
-    expect(rows[0].stale).toBe(true)
+    expect(after.stale).toBe(true)
+    // A turn that was only stalled past its lease must still be able to save at
+    // the version it holds.
+    expect(after.claim).toBe(before.claim)
+    expect(after.version).toBe(before.version)
+  })
+
+  it('says which branch fired: a dead lease, or the backstop on a live one', async () => {
+    const dead = `reap-branch-dead-${tag()}`
+    const hung = `reap-branch-hung-${tag()}`
+    await seed(dead, 'running', { ageMinutes: 1, claimAgeSeconds: deadLease })
+    await seed(hung, 'running', { ageMinutes: HUNG_TURN_BACKSTOP_MINUTES + 1, claimAgeSeconds: 5 })
+
+    const reaped = await reapStuckConversations()
+
+    // The scheduler logs the second apart, at error level: a backstop reap of a
+    // live lease is the only one a running process will later overwrite.
+    expect(reaped.find((r) => r.id === dead)?.leaseDead).toBe(true)
+    expect(reaped.find((r) => r.id === hung)?.leaseDead).toBe(false)
+  })
+
+  it('a stalled-but-alive turn reaped on its lapsed lease can still renew and save over the reap', async () => {
+    const id = `reap-overwrite-${tag()}`
+    await seed(id, 'running', { ageMinutes: 1, claimAgeSeconds: TURN_CLAIM_TTL_SECONDS + 10 })
+    const { rows } = await query<{ version: string }>(
+      'SELECT context_version::text AS version FROM conversations WHERE id = $1',
+      [id],
+    )
+    const version = rows[0].version
+
+    expect(await reapedIds()).toContain(id)
+    expect(await statusOf(id)).toBe('error')
+
+    // The residual the design states, pinned end to end: the reap wrote only
+    // `status`, so the turn's claim and version are intact. It renews, then its
+    // own save lands at the version it holds and states the truth.
+    expect(await renewConversationClaim(id, TEST_USER, version)).toBe(true)
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'search',
+      title: null,
+      serializedContext: '{}',
+      status: 'done',
+      version,
+    })
+    expect(await statusOf(id)).toBe('done')
   })
 })
 

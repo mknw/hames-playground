@@ -112,4 +112,46 @@ describe('Forget everything', () => {
     await waitFor(() => expect(q('memory-proposal-notice')).toBeNull())
     expect(q('hitl-inbox-trigger')).toBeNull()
   })
+
+  // R1. MUTATION: drop `!d.checked` from MemoryPanel's switch handler → red.
+  it('clears them when memory is switched OFF directly (no memories, so no confirm dialog)', async () => {
+    mem.list.mockResolvedValue({ enabled: true, memories: [] })
+    render(() => (
+      <>
+        <HitlInbox />
+        <MemoryProposalPrompt sessionId="s1" settledTick={0} />
+        <MemoryPanel />
+      </>
+    ))
+    await waitFor(() => expect(q('memory-proposal-notice')).not.toBeNull())
+    await waitFor(() => expect(q('hitl-inbox-trigger')).not.toBeNull())
+    mem.proposals.mockResolvedValue([])
+    mem.inbox.mockResolvedValue([])
+    mem.list.mockResolvedValue({ enabled: false, memories: [] })
+    mem.set.mockResolvedValue(undefined)
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Memory enabled' }))
+    await waitFor(() => expect(mem.set).toHaveBeenCalledWith(false))
+    expect(screen.queryByRole('dialog', { name: /Forget everything/ })).toBeNull()
+    await waitFor(() => {
+      expect(q('memory-proposal-notice')).toBeNull()
+      expect(q('hitl-inbox-trigger')).toBeNull()
+    })
+  })
+
+  // Switching memory ON must NOT clear anything (it erases nothing).
+  it('switching memory ON leaves the surfaces alone', async () => {
+    mem.list.mockResolvedValue({ enabled: false, memories: [] })
+    render(() => (
+      <>
+        <MemoryProposalPrompt sessionId="s1" settledTick={0} />
+        <MemoryPanel />
+      </>
+    ))
+    await waitFor(() => expect(q('memory-proposal-notice')).not.toBeNull())
+    mem.set.mockResolvedValue(undefined)
+    mem.list.mockResolvedValue({ enabled: true, memories: [] })
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Memory enabled' }))
+    await waitFor(() => expect(mem.set).toHaveBeenCalledWith(true))
+    expect(q('memory-proposal-notice')).not.toBeNull()
+  })
 })

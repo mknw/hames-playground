@@ -625,3 +625,69 @@ describe('#589 fix round 1: every model-derived field is a text node', () => {
     expect(dialog.textContent).toContain('<b>bold</b>')
   })
 })
+
+describe('#589 fix round 2', () => {
+  const { requestReview, reviewTarget, notifyMemoryErased } = reviewStore
+
+  // R2. MUTATION: remove `setProposals([])` from the erase effect → red.
+  it.each([
+    ['hangs', () => new Promise(() => undefined)],
+    ['fails', () => Promise.reject(new Error('offline'))],
+  ])(
+    'R2: the card and its text are gone BEFORE the post-erase read, which %s',
+    async (_n, read) => {
+      render(() => <MemoryProposalPrompt sessionId="s-clear" settledTick={0} />)
+      await tick()
+      expect(q('memory-proposal-notice')).not.toBeNull()
+      listMemoryProposals.mockImplementation(read)
+      notifyMemoryErased()
+      await tick()
+      expect(q('memory-proposal-notice')).toBeNull()
+      fireEvent.click(q('memory-proposal-review') ?? document.body)
+      await tick()
+      expect(document.body.textContent).not.toContain('The user prefers metric units.')
+    },
+  )
+
+  // R3. MUTATION: drop `t.sessionId !== props.sessionId` from the review effect → red.
+  it('R3: an ask for ANOTHER conversation survives until the navigation lands, then opens', async () => {
+    const [sid, setSid] = createSignal('s-A')
+    listMemoryProposals.mockImplementation(async (s: string) =>
+      s === 's-B' ? [{ ...view(), requestId: 'req-b' }] : [],
+    )
+    render(() => <MemoryProposalPrompt sessionId={sid()} settledTick={0} />)
+    await tick()
+    requestReview({ sessionId: 's-B', requestId: 'req-b' })
+    await tick()
+    expect(reviewTarget()).not.toBeNull()
+    setSid('s-B')
+    await tick()
+    expect(q('memory-proposal-dialog')).not.toBeNull()
+    expect(reviewTarget()).toBeNull()
+  })
+
+  // R4. MUTATION: don't re-read when the ask targets the conversation on screen → red.
+  it('R4: an ask for the conversation on screen is decided by a read made AFTER it', async () => {
+    listMemoryProposals.mockResolvedValue([])
+    render(() => <MemoryProposalPrompt sessionId="s-here" settledTick={0} />)
+    await tick()
+    expect(q('memory-proposal-notice')).toBeNull()
+    // the store step landed after the first read; the inbox's poll found it
+    listMemoryProposals.mockResolvedValue([{ ...view(), requestId: 'req-9' }])
+    requestReview({ sessionId: 's-here', requestId: 'req-9' })
+    await tick()
+    expect(q('memory-proposal-dialog')).not.toBeNull()
+    expect(reviewTarget()).toBeNull()
+  })
+
+  // R4/F4. MUTATION: decide the ask by the OLD read (drop the rev check) → the next two assertions go red/green wrongly.
+  it('R4: an ask whose request is still not there after the fresh read is dropped', async () => {
+    listMemoryProposals.mockResolvedValue([])
+    render(() => <MemoryProposalPrompt sessionId="s-none" settledTick={0} />)
+    await tick()
+    requestReview({ sessionId: 's-none', requestId: 'req-gone' })
+    await tick()
+    expect(q('memory-proposal-dialog')).toBeNull()
+    expect(reviewTarget()).toBeNull()
+  })
+})

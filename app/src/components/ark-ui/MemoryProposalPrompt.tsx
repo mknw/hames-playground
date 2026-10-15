@@ -24,7 +24,7 @@
  * What this component sends back is a choice id and one flag per item.
  */
 import { createToaster, Toast, Toaster } from '@ark-ui/solid/toast'
-import { createEffect, createSignal, on, onCleanup, onMount, Show } from 'solid-js'
+import { createEffect, createSignal, on, onCleanup, onMount, Show, untrack } from 'solid-js'
 import { HitlDialog } from './HitlDialog'
 import {
   clearReview,
@@ -74,9 +74,15 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
   let generation = 0
   /** The ids last shown, joined: the inbox is told only when THIS changes. */
   let shownKey = ''
-  /** The conversation whose first read has completed (success or failure) —
-   *  what decides a pending review ask for it (#589 F4). */
-  const [settledFor, setSettledFor] = createSignal<string | null>(null)
+  /** The last completed read (success or failure) of the conversation on
+   *  screen, and the ask revision it STARTED under — what decides a pending
+   *  review ask: only a read that began after the ask may drop it (#589 F4/R4). */
+  const [readDone, setReadDone] = createSignal<{ sessionId: string | null; rev: number }>({
+    sessionId: null,
+    rev: 0,
+  })
+  let askRev = 0
+  let ask: { requestId: string; rev: number } | null = null
 
   let alive = true
   let timers: ReturnType<typeof setTimeout>[] = []
@@ -91,6 +97,7 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
 
   const refresh = async (sessionId: string): Promise<number> => {
     const gen = generation
+    const startRev = askRev
     try {
       const found = await listMemoryProposals(sessionId)
       if (alive && sessionId === props.sessionId && gen === generation) {
@@ -118,13 +125,15 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
           shownKey = key
           notifyInboxChanged()
         }
-        setSettledFor(sessionId)
+        setReadDone({ sessionId, rev: startRev })
       }
       return found.length
     } catch {
       // An unreadable list is no notice, never a fabricated one. A failed read
       // still settles a pending review ask (it is dropped, not kept for later).
-      if (alive && sessionId === props.sessionId && gen === generation) setSettledFor(sessionId)
+      if (alive && sessionId === props.sessionId && gen === generation) {
+        setReadDone({ sessionId, rev: startRev })
+      }
       return 0
     }
   }
@@ -140,7 +149,8 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
         seen = new Set()
         baselined = false
         shownKey = ''
-        setSettledFor(null)
+        setReadDone({ sessionId: null, rev: 0 })
+        ask = null
         // A toast belongs to the conversation that raised it (#589 F5), and a
         // review ask for another conversation is dropped here (#589 F4).
         toaster.dismiss()
@@ -193,13 +203,30 @@ export function MemoryProposalPrompt(props: MemoryProposalPromptProps) {
   )
 
   // The header inbox and the toast ask for a request by id. It opens once it is
-  // in THIS conversation's list. The ask is decided by the conversation's first
-  // completed read: found → open; not found (answered meanwhile, erased, read
-  // failed) → dropped, so a later arrival can never open a modal nobody asked
-  // for (#589 F4).
+  // in THIS conversation's list. The ask is decided by a read that began AFTER
+  // it (or, on arriving in a conversation, its first read): found → open; not
+  // found (answered meanwhile, erased, read failed) → dropped, so a later
+  // arrival can never open a modal nobody asked for (#589 F4). An ask for the
+  // conversation already on screen makes that read happen: its list may predate
+  // the proposal (#589 R4). An ask for ANOTHER conversation is left alone until
+  // the navigation lands (#589 R3).
   createEffect(() => {
     const t = reviewTarget()
-    if (!t || t.sessionId !== props.sessionId || settledFor() !== props.sessionId) return
+    if (!t) {
+      ask = null
+      return
+    }
+    if (t.sessionId !== props.sessionId) return
+    if (!ask || ask.requestId !== t.requestId) {
+      if (untrack(readDone).sessionId === props.sessionId) {
+        ask = { requestId: t.requestId, rev: ++askRev }
+        untrack(() => void refresh(props.sessionId))
+      } else {
+        ask = { requestId: t.requestId, rev: askRev }
+      }
+    }
+    const done = readDone()
+    if (done.sessionId !== props.sessionId || done.rev < ask.rev) return
     const at = proposals().findIndex((p) => p.requestId === t.requestId)
     clearReview()
     if (at < 0) return

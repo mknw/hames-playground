@@ -189,4 +189,43 @@ for (const theme of ['dark', 'light'] as const) {
     await expect(page.getByText('The user’s team is Aurora.')).toHaveCount(0)
     expect(await savedMemories()).toBe(0)
   })
+
+  for (const withMemory of [false, true]) {
+    test(`switching memory off removes the card, the toast and the badge without a reload${withMemory ? ' (via the confirm dialog)' : ' (directly)'}, in ${theme}`, async ({
+      page,
+      appUrl,
+    }) => {
+      const tag = `${theme}-${withMemory ? 'c' : 'd'}`
+      const request = `8d1f6c1e-2f55-4f0e-9d0f-6a0b9d8f4e${withMemory ? '1' : '2'}${theme === 'dark' ? '1' : '2'}`
+      const id = `e2e-s8-off-${tag}`
+      await open(page, appUrl, { theme })
+      await enableMemory(page)
+      if (withMemory) await seedMemory(`m-s8-off-${tag}`, 'I prefer synthetic examples')
+      await seedProposal(id, request, ITEMS, null, 'conversation')
+      await page.goto(`${appUrl}/?c=${id}`)
+      await page.waitForLoadState('networkidle')
+      await seedProposal(id, request, ITEMS, null, 'payload')
+      await arrive(page, page.getByTestId('memory-proposal-toast'))
+      await expect(page.getByTestId('memory-proposal-notice')).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Waiting on you: 1' })).toBeVisible()
+
+      await page.getByRole('tab', { name: 'Memory', exact: true }).click()
+      const panel = page.getByRole('region', { name: 'What I remember about you' })
+      await panel.getByRole('checkbox', { name: 'Memory enabled' }).press('Space')
+      if (withMemory) {
+        await page.getByRole('button', { name: 'Confirm forget everything' }).click()
+      } else {
+        // nothing to forget: no confirm dialog stands between the switch and the erase
+        await expect(page.getByRole('dialog')).toHaveCount(0)
+      }
+
+      await expect(page.getByTestId('memory-proposal-notice')).toHaveCount(0, { timeout: 5_000 })
+      await expect(page.getByTestId('memory-proposal-toast')).toHaveCount(0, { timeout: 5_000 })
+      await expect(page.getByRole('button', { name: /Waiting on you/ })).toHaveCount(0, {
+        timeout: 5_000,
+      })
+      await expect(page.getByText('The user’s team is Aurora.')).toHaveCount(0)
+      expect(await savedMemories()).toBe(0)
+    })
+  }
 }

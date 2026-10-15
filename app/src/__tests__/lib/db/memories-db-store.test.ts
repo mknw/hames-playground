@@ -908,3 +908,47 @@ describe('#552: forget-all shares the candidate owner lock', () => {
     MEMORY_LOCK_TIMEOUT_MS + 5000,
   )
 })
+
+describe('M7: panel data, access export and per-row Forget', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
+  it('exports all owner tiers with vectors and provenance, and forgets only the owner row with its sources', async () => {
+    const { deleteMemoryForUser, exportMemoryDataForUser } =
+      await import('../../../lib/db/memories.server')
+    const { setMemoryEnabledForUser } = await import('../../../lib/db/user-prefs.server')
+    const a = await conv(ALICE)
+    const b = await conv(BOB)
+    const privateMemory = await memorySourcedFrom(ALICE, [a], {
+      content: 'Synthetic private preference',
+    })
+    const publicMemory = await memorySourcedFrom(ALICE, [a], {
+      tier: 'anthropic',
+      content: 'Synthetic public preference',
+    })
+    const otherMemory = await memorySourcedFrom(BOB, [b])
+    const panel = await listMemoriesForUser(ALICE)
+    expect(panel.find((m) => m.id === privateMemory)?.sourceConversationIds).toEqual([a])
+    const exported = await exportMemoryDataForUser(ALICE)
+    expect(exported.every((m) => m.user_id === ALICE)).toBe(true)
+    expect(exported.find((m) => m.id === privateMemory)).toMatchObject({
+      content: 'Synthetic private preference',
+      tier: 'verda',
+      sources: [expect.objectContaining({ conversation_id: a })],
+    })
+    expect(exported.find((m) => m.id === publicMemory)).toMatchObject({
+      tier: 'anthropic',
+      content: 'Synthetic public preference',
+    })
+    expect(exported.find((m) => m.id === privateMemory)?.embedding).toBeTruthy()
+    await deleteMemoryForUser(ALICE, otherMemory)
+    expect(await memExists(otherMemory)).toBe(true)
+    await deleteMemoryForUser(ALICE, privateMemory)
+    expect(await memExists(privateMemory)).toBe(false)
+    expect(await sourceCount(privateMemory)).toBe(0)
+    expect(await memExists(publicMemory)).toBe(true)
+    await setMemoryEnabledForUser(ALICE, true)
+    expect(await getMemoryEnabled(ALICE)).toBe(true)
+    await setMemoryEnabledForUser(ALICE, false)
+    expect(await getMemoryEnabled(ALICE)).toBe(false)
+  })
+})

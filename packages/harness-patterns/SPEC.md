@@ -2125,7 +2125,11 @@ and the sanitizer are.
 `PatternCapabilities.memory` is declared by `memoryRecall`; `harnessUsesMemory`
 walks the (nested) graph for it. It is the ONE opt-in probe a host gates the
 memory wake and the post-reply store on, so an agent that never opted in never
-wakes the memory boxes.
+wakes the memory boxes. The app's M13 `memory-wake-optin` contract also
+requires an interactive-origin request and `await memory.enabled()` before
+`ensureMemoryAwake`: a disabled user or a thrown setting read returns without
+waking either box. The host awaits this check before starting patterns, on both
+new turns and non-stop-only resumes; the wake poll itself remains asynchronous.
 
 ## Memory store (settleMemory, #419)
 

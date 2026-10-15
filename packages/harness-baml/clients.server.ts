@@ -219,23 +219,19 @@ export function configureInferencePolicy(policy: InferenceTierPolicy): void {
 export interface CostRates {
   eurPerUsd: () => number
   verdaEurPerHour: () => number
-  smallLlmEurPerHour?: () => number
 }
 
 // Package-side fallbacks, deliberately LITERALS: settings.ts is client-safe
 // and cannot be imported here (the extraction's one direction rule). Kept
-// equal to the app's DEFAULT_EUR_PER_USD / DEFAULT_VERDA_EUR_PER_HOUR /
-// DEFAULT_SMALL_LLM_EUR_PER_HOUR by
+// equal to the app's DEFAULT_EUR_PER_USD / DEFAULT_VERDA_EUR_PER_HOUR by
 // clients-seam.test.ts — the same deliberate-copy-with-a-pin pattern as
 // TIME_PRICED_CLIENTS in settings.ts.
 const SEAM_DEFAULT_EUR_PER_USD = 0.86
 const SEAM_DEFAULT_VERDA_EUR_PER_HOUR = 1.819
-const SEAM_DEFAULT_SMALL_LLM_EUR_PER_HOUR = 1.54
 
 let costRates: CostRates = {
   eurPerUsd: () => SEAM_DEFAULT_EUR_PER_USD,
   verdaEurPerHour: () => SEAM_DEFAULT_VERDA_EUR_PER_HOUR,
-  smallLlmEurPerHour: () => SEAM_DEFAULT_SMALL_LLM_EUR_PER_HOUR,
 }
 
 /** Feed the host's EUR rates in. Called once at the composition root. */

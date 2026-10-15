@@ -40,10 +40,10 @@ import {
   DEFAULT_SMALL_LLM_EUR_PER_HOUR,
   LOCAL_PRICED_CLIENTS,
   PROVIDER_COST_CLIENTS,
-  TIME_PRICED_CLIENT,
   TIME_PRICED_CLIENTS,
   estimateLlmCostEur,
 } from '../../lib/settings'
+import { VERDA_CLIENT_NAME } from '../../lib/inference/verda-activity.server'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -77,7 +77,6 @@ const ONE_MTOK_EACH = {
 
 describe('the time-priced client mapping', () => {
   it('contains exactly the metered clients and their default rates', async () => {
-    const { VERDA_CLIENT_NAME } = await import('../../lib/inference/verda-activity.server')
     expect(TIME_PRICED_CLIENTS).toEqual({ [VERDA_CLIENT_NAME]: 1.819, LocalQwenSmall: 1.54 })
   })
 
@@ -157,7 +156,7 @@ describe('time pricing → EUR', () => {
   )
 
   it('is €/h × wall-clock, and tokens do not enter it', () => {
-    const oneHour = estimateLlmCostEur(NO_TOKENS, TIME_PRICED_CLIENT, {
+    const oneHour = estimateLlmCostEur(NO_TOKENS, VERDA_CLIENT_NAME, {
       durationMs: 3_600_000,
       eurPerHour: 1.819,
     })!
@@ -165,7 +164,7 @@ describe('time pricing → EUR', () => {
     expect(oneHour.costEur).toBeCloseTo(1.819, 9)
 
     // Same duration, a huge token count: identical cost. Tokens are free.
-    const withTokens = estimateLlmCostEur(ONE_MTOK_EACH, TIME_PRICED_CLIENT, {
+    const withTokens = estimateLlmCostEur(ONE_MTOK_EACH, VERDA_CLIENT_NAME, {
       durationMs: 3_600_000,
       eurPerHour: 1.819,
     })!
@@ -174,25 +173,25 @@ describe('time pricing → EUR', () => {
 
   it('prices a realistic call in fractions of a cent', () => {
     // The measured 4.1s single-call latency at the default rate.
-    const est = estimateLlmCostEur(ONE_MTOK_EACH, TIME_PRICED_CLIENT, { durationMs: 4_100 })!
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, VERDA_CLIENT_NAME, { durationMs: 4_100 })!
     expect(est.costEur).toBeCloseTo((4.1 / 3600) * DEFAULT_VERDA_EUR_PER_HOUR, 12)
     expect(est.timeRate).toEqual({ eurPerHour: DEFAULT_VERDA_EUR_PER_HOUR, durationMs: 4_100 })
   })
 
   it('defaults to €1.819/h', () => {
     expect(DEFAULT_VERDA_EUR_PER_HOUR).toBe(1.819)
-    const est = estimateLlmCostEur(NO_TOKENS, TIME_PRICED_CLIENT, { durationMs: 3_600_000 })!
+    const est = estimateLlmCostEur(NO_TOKENS, VERDA_CLIENT_NAME, { durationMs: 3_600_000 })!
     expect(est.costEur).toBeCloseTo(1.819, 9)
   })
 
   it('offers no caching savings — caching cannot save wall-clock', () => {
-    const est = estimateLlmCostEur(ONE_MTOK_EACH, TIME_PRICED_CLIENT, { durationMs: 5_000 })!
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, VERDA_CLIENT_NAME, { durationMs: 5_000 })!
     expect(est.noCacheEur).toBe(est.costEur)
     expect(est.rates).toBeUndefined()
   })
 
   it('an idle box costs nothing: zero duration is zero, not a minimum charge', () => {
-    const est = estimateLlmCostEur(NO_TOKENS, TIME_PRICED_CLIENT, { durationMs: 0 })!
+    const est = estimateLlmCostEur(NO_TOKENS, VERDA_CLIENT_NAME, { durationMs: 0 })!
     expect(est.costEur).toBe(0)
     expect(est.basis).toBe('time')
   })
@@ -201,16 +200,14 @@ describe('time pricing → EUR', () => {
     // A time bill with no time is not a free call. BAML reports no duration when
     // it measured none, and a 0 here would render as "this call cost nothing" on
     // a box that was demonstrably awake to answer it.
-    expect(estimateLlmCostEur(ONE_MTOK_EACH, TIME_PRICED_CLIENT)).toBeUndefined()
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, VERDA_CLIENT_NAME)).toBeUndefined()
     expect(
-      estimateLlmCostEur(ONE_MTOK_EACH, TIME_PRICED_CLIENT, { durationMs: undefined }),
+      estimateLlmCostEur(ONE_MTOK_EACH, VERDA_CLIENT_NAME, { durationMs: undefined }),
     ).toBeUndefined()
     expect(
-      estimateLlmCostEur(ONE_MTOK_EACH, TIME_PRICED_CLIENT, { durationMs: Number.NaN }),
+      estimateLlmCostEur(ONE_MTOK_EACH, VERDA_CLIENT_NAME, { durationMs: Number.NaN }),
     ).toBeUndefined()
-    expect(
-      estimateLlmCostEur(ONE_MTOK_EACH, TIME_PRICED_CLIENT, { durationMs: -1 }),
-    ).toBeUndefined()
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, VERDA_CLIENT_NAME, { durationMs: -1 })).toBeUndefined()
   })
 })
 
@@ -229,7 +226,7 @@ describe('attribution: the SELECTED client decides the model', () => {
   })
 
   it('a time-priced client never gets token pricing, however many tokens it moved', () => {
-    const est = estimateLlmCostEur(ONE_MTOK_EACH, TIME_PRICED_CLIENT, { durationMs: 1_000 })!
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, VERDA_CLIENT_NAME, { durationMs: 1_000 })!
     expect(est.basis).toBe('time')
     expect(est.rates).toBeUndefined()
     // Nothing anywhere near a per-MTok figure.

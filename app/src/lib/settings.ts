@@ -289,8 +289,9 @@ export const CLIENT_PRICING: Record<string, { inPerMTok: number; outPerMTok: num
   AnthropicOpus4: { inPerMTok: 15.0, outPerMTok: 75.0 },
 }
 
-/** Clients with no marginal per-call bill. Attribution follows the selected
- * client, never its URL. The metered summarizer is in TIME_PRICED_CLIENTS. */
+/** LocalGLM has no marginal per-call bill. Attribution follows the selected
+ * client, never its URL. The metered summarizer is in TIME_PRICED_CLIENTS.
+ * LocalQwenSmallDecide still reads €0.00 on that metered box: a known under-count pending its removal. */
 export const LOCAL_PRICED_CLIENTS: ReadonlySet<string> = new Set([
   'LocalQwenSmallDecide',
   'LocalGLM',
@@ -306,9 +307,6 @@ export const LOCAL_PRICED_CLIENTS: ReadonlySet<string> = new Set([
  * Disjoint from the other three sets (`pricing-eur.test.ts`).
  */
 export const PROVIDER_COST_CLIENTS: ReadonlySet<string> = new Set(['JevDecide'])
-
-/** @deprecated Use TIME_PRICED_CLIENTS for membership and per-client rates. */
-export const TIME_PRICED_CLIENT = 'VerdaQwen'
 
 /** Anthropic cache pricing multipliers on the base input rate. */
 export const CACHE_WRITE_MULT = 1.25
@@ -352,7 +350,8 @@ export const DEFAULT_VERDA_EUR_PER_HOUR = 1.819
 export const DEFAULT_SMALL_LLM_EUR_PER_HOUR = 1.54
 
 /** Default EUR/hour by selected client. Keys are pinned against the routing
- * vocabulary; server-side overrides are read per call in cost-rates.server.ts. */
+ * vocabulary; server-side overrides are read per call in cost-rates.server.ts.
+ * Keys are written as literals because this file is client-safe. */
 export const TIME_PRICED_CLIENTS: Readonly<Record<string, number>> = {
   VerdaQwen: DEFAULT_VERDA_EUR_PER_HOUR,
   LocalQwenSmall: DEFAULT_SMALL_LLM_EUR_PER_HOUR,

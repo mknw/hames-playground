@@ -209,7 +209,7 @@ configureInferencePolicy({
   },
 })
 
-configureCostRates({ eurPerUsd: eurPerUsdRate, verdaEurPerHour, smallLlmEurPerHour })
+configureCostRates({ eurPerUsd: eurPerUsdRate, verdaEurPerHour })
 
 // The cost ESTIMATOR stays host-side (its CLIENT_PRICING table is app pricing
 // config beside the client-safe UI that renders it — SA-C2 family); the
@@ -218,7 +218,7 @@ configureCostRates({ eurPerUsd: eurPerUsdRate, verdaEurPerHour, smallLlmEurPerHo
 // scale-to-zero box price as a floor instead of being dropped.
 configureCostPricing({
   estimate: estimateLlmCostEur,
-  timePricedClients: { VerdaQwen: verdaEurPerHour, LocalQwenSmall: smallLlmEurPerHour },
+  timePricedClients: { [VERDA_CLIENT_NAME]: verdaEurPerHour, LocalQwenSmall: smallLlmEurPerHour },
 })
 
 // Checked once, at module load, and only when the flag is on: a misconfigured

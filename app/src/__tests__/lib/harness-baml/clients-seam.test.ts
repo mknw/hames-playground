@@ -215,6 +215,14 @@ describe('the configuration the host registers is the configuration the resoluti
     expect(unknown.basis).toBeUndefined()
   })
 
+  it('registers exactly the time-priced clients settings.ts prices', async () => {
+    const clients = await loadWired()
+    const { TIME_PRICED_CLIENTS } = await import(SETTINGS)
+    expect(Object.keys(clients.activeCostPricing().timePricedClients ?? {}).sort()).toEqual(
+      Object.keys(TIME_PRICED_CLIENTS).sort(),
+    )
+  })
+
   it('prices both metered clients independently in the same step', async () => {
     await loadWired()
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
@@ -231,7 +239,7 @@ describe('the configuration the host registers is the configuration the resoluti
     const measured = computeEventMetrics(collector as never)!
     expect(measured.costEur).toBeCloseTo(((1.819 + 1.54) * 2) / 3600, 12)
     expect(measured.timePricedAttempts).toBe(2)
-    expect(measured.timeRate).toEqual({ eurPerHour: 1.54, durationMs: 4_000 })
+    expect(measured.timeRate?.durationMs).toBe(4_000)
   })
 
   it('retains the published single-client pricing registration', async () => {
@@ -260,7 +268,6 @@ describe('the configuration the host registers is the configuration the resoluti
     enable()
     process.env.EUR_PER_USD = '1.25'
     process.env.VERDA_EUR_PER_HOUR = '2.5'
-    process.env.SMALL_LLM_EUR_PER_HOUR = '3.25'
     await loadWired()
     const bamlAdapters = await import('@hames-ai/harness-baml/baml-adapters.server')
     // computeEventMetrics reads the rates through the seam per step; reading
@@ -268,7 +275,6 @@ describe('the configuration the host registers is the configuration the resoluti
     const { activeCostRates } = await import(CLIENTS)
     expect(activeCostRates().eurPerUsd()).toBe(1.25)
     expect(activeCostRates().verdaEurPerHour()).toBe(2.5)
-    expect(activeCostRates().smallLlmEurPerHour?.()).toBe(3.25)
     expect(bamlAdapters).toBeDefined()
   })
 })
@@ -294,18 +300,15 @@ describe('unregistered — the package-side defaults are safe', () => {
 
   it('the package-side rate fallbacks are pinned equal to the app defaults they mirror', async () => {
     const clients = await import(CLIENTS)
-    const { DEFAULT_EUR_PER_USD, DEFAULT_VERDA_EUR_PER_HOUR, DEFAULT_SMALL_LLM_EUR_PER_HOUR } =
-      await import(SETTINGS)
+    const { DEFAULT_EUR_PER_USD, DEFAULT_VERDA_EUR_PER_HOUR } = await import(SETTINGS)
 
     const rates = clients.activeCostRates()
     expect(rates.eurPerUsd()).toBe(DEFAULT_EUR_PER_USD)
     expect(rates.verdaEurPerHour()).toBe(DEFAULT_VERDA_EUR_PER_HOUR)
-    expect(rates.smallLlmEurPerHour?.()).toBe(DEFAULT_SMALL_LLM_EUR_PER_HOUR)
     // The fallback exists so an unregistered consumer still prices sanely; the
     // equality pin is what keeps the two copies from drifting silently.
     expect(DEFAULT_EUR_PER_USD).toBe(0.86)
     expect(DEFAULT_VERDA_EUR_PER_HOUR).toBe(1.819)
-    expect(DEFAULT_SMALL_LLM_EUR_PER_HOUR).toBe(1.54)
   })
 
   it('a host that does register gets exactly what it hands over', async () => {

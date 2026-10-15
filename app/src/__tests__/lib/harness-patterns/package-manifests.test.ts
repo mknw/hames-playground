@@ -317,8 +317,7 @@ function stripFences(markdown: string): string {
  * READMEs actually use: an inline `](target)` (with or without `<>` and a
  * trailing `"title"`), a reference definition `[id]: target`, and raw HTML
  * `src="…"` / `srcset="…"` — the last because `harness-patterns`' banner is a
- * `<picture>`, whose two `<source srcset>` candidates are the only reference to
- * one of the two shipped PNGs anywhere in the page.
+ * `<picture>`, whose dark image is referenced only by `<source srcset>`.
  */
 function linkTargets(document: string): string[] {
   const markdown = stripFences(document)
@@ -528,17 +527,23 @@ describe('published package manifests', () => {
     })
 
     it('the extractor found the targets it is supposed to find (non-vacuity)', () => {
-      // Named, not counted. Both emptiness assertions below pass for a package
-      // whose links the extractor silently failed to see, which is the one way
-      // this pin can rot into a green that means nothing. These three are one
-      // per extraction form: `./SPEC.md` is an inline markdown link and the
-      // case study this file is named for; the dark PNG is an HTML `src`; the
-      // light PNG is reachable ONLY through a `<source srcset>` candidate list,
-      // so it is the half a simpler `src`-only regex would drop.
+      // Named, not counted: local docs must be found before checking that
+      // their targets ship. The banner uses remote URLs, so check extraction
+      // before inPackageTarget deliberately filters those URLs out. Its dark
+      // image is reachable only through srcset; its light image uses src.
       const patterns = targetsByName.get('harness-patterns') ?? []
       expect(patterns).toContain('SPEC.md')
-      expect(patterns).toContain('assets/hames_dark-text-on-transparent-bg.png')
-      expect(patterns).toContain('assets/hames_light-text-on-transparent-bg.png')
+      expect(patterns).toContain('GUIDE.md')
+      expect(patterns).toContain('LICENSE')
+      const readmeTargets = linkTargets(
+        readFileSync(join(PACKAGES, 'harness-patterns', 'README.md'), 'utf8'),
+      )
+      expect(readmeTargets).toContain(
+        `${REPO_URL.replace('github.com', 'raw.githubusercontent.com')}/main/docs/images/hames-banner-wide-dark.png`,
+      )
+      expect(readmeTargets).toContain(
+        `${REPO_URL.replace('github.com', 'raw.githubusercontent.com')}/main/docs/images/hames-banner-wide-light.png`,
+      )
     })
 
     for (const name of packages) {

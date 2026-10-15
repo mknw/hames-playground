@@ -32,6 +32,11 @@ import {
   resetLlmUsageObservers,
 } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import { resetVerdaActivity, verdaWarmth } from '../../../lib/inference/verda-activity.server'
+import {
+  noteSmallCallCompleted,
+  resetSmallActivity,
+  smallProvenWarm,
+} from '../../../lib/inference/cold-start.server'
 import { resetCallLatency, tierLatency } from '../../../lib/metrics/call-latency.server'
 import type { EventMetrics } from '@hames-ai/harness-patterns/types'
 // Namespace import: the tier map is read as DATA here, to prove the recorder
@@ -51,6 +56,7 @@ beforeEach(async () => {
   addUsage.mockReset()
   addUsage.mockResolvedValue(undefined)
   resetVerdaActivity()
+  resetSmallActivity()
   resetCallLatency()
   await flushUsage() // drain anything a previous case left pending
   addUsage.mockReset()
@@ -130,6 +136,30 @@ describe('the warm clock does NOT follow the tier attribution', () => {
 
     recordSample({ functionName: 'LoopController', clientName: 'VerdaQwen' }, NOW)
     expect(verdaWarmth(NOW).state).toBe('warm')
+  })
+})
+
+describe('the small warm clock requires metrics', () => {
+  it('refreshes an expired clock when a describe sample spent tokens', () => {
+    const now = Date.now()
+    noteSmallCallCompleted(now - 200_000)
+    expect(smallProvenWarm(now)).toBe(false)
+    recordSample(
+      {
+        functionName: 'DescribeToolResult',
+        clientName: 'LocalQwenSmall',
+        metrics: metrics(),
+      },
+      now,
+    )
+    expect(smallProvenWarm(now)).toBe(true)
+  })
+
+  it('leaves an expired clock cold when the sample has no metrics', () => {
+    const now = Date.now()
+    noteSmallCallCompleted(now - 200_000)
+    recordSample({ functionName: 'DescribeToolResult', clientName: 'LocalQwenSmall' }, now)
+    expect(smallProvenWarm(now)).toBe(false)
   })
 })
 

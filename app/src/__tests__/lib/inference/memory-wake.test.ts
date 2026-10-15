@@ -1,30 +1,4 @@
-/**
- * The joint memory wake (#419 D20) — the poll that lets the 4B and the embedder
- * scale to zero.
- *
- * `verda-wake.test.ts` pins the Verda wake this module is modelled on; this
- * file pins the memory wake's deltas from it, which is where its own failures
- * would live:
- *
- *   - the target set follows the TURN's tier (an Anthropic-tier turn never
- *     waits on — or wakes — a 4B it never calls), and the joint promise
- *     resolves only when ALL REQUESTED targets proved up;
- *   - the wake starts only for an agent that opted into memory, and starts
- *     EAGERLY, before the chain's first pattern can run;
- *   - it is fail-open: a failed wake never fails the turn, never blocks a
- *     waiter past its budget, and never sends a call to a public provider;
- *   - both consumers — the recall gate (M1) and `settleMemory` (M2) — attach
- *     to the ONE deduplicated poll through `awaitMemoryWake`, bounded, while
- *     the wake keeps running in the background.
- *
- * The recall gate and `settleMemory` are later slices; their call sites are
- * pinned by fakes here at the seam this slice owns (`ensureMemoryAwake` /
- * `awaitMemoryWake`), which is what makes the M1/M2/M5 slices free to wire
- * without re-deciding any of this. A real `fetch` is stubbed rather than a
- * server started, for the same reason `verda-wake.test.ts` gives: what is
- * being pinned is the requests this module builds and the decisions around
- * them. The live counterpart is one cold-start cycle against the real boxes.
- */
+/** The opportunistic embedder wake; the summarizer belongs to the turn wake. */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -46,7 +20,6 @@ import {
   resetMemoryWake,
   MEMORY_WAKE_FAILED,
   MEMORY_WAKE_PROMPT,
-  SUMMARIZER_MODEL_ID,
   embedderWakeModel,
   DEFAULT_MEMORY_WAKE_TIMEOUT_MS,
   DEFAULT_MEMORY_WAKE_ATTEMPT_TIMEOUT_MS,
@@ -58,7 +31,6 @@ import {
 
 const SMALL_BASE = 'https://small.test/v1'
 const EMBED_BASE = 'https://embed.test/v1'
-const SMALL_URL = `${SMALL_BASE}/chat/completions`
 const EMBED_URL = `${EMBED_BASE}/embeddings`
 
 /** A 200 from an OpenAI-compatible endpoint, shaped enough to be drained. */
@@ -159,7 +131,7 @@ function quiet<T>(p: Promise<T>): Promise<T | Error> {
   return p.catch((err: unknown) => (err instanceof Error ? err : new Error(String(err))))
 }
 
-describe('the requested target set follows the turn’s tier', () => {
+describe('the embedder is the only memory wake target on either tier', () => {
   it('requests ONLY the embedder on an anthropic-tier turn', async () => {
     // The 4B serves decide/describe under the private tier only; an
     // Anthropic-tier turn gates through Jev and describes through
@@ -172,9 +144,9 @@ describe('the requested target set follows the turn’s tier', () => {
     expect(sentUrls()).toEqual([EMBED_URL])
   })
 
-  it('requests BOTH on a verda-tier turn', async () => {
+  it('requests only the embedder after the private-tier turn wake', async () => {
     await ensureMemoryAwake(true)
-    expect(sentUrls()).toEqual([EMBED_URL, SMALL_URL])
+    expect(sentUrls()).toEqual([EMBED_URL])
   })
 })
 
@@ -195,47 +167,23 @@ describe('the opt-in gate', () => {
     // deferred until first await would lose that overlap one microtask at a
     // time; the assertion is synchronous on purpose.
     const wake = ensureMemoryAwake(true)
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
     await wake
   })
 })
 
 describe('what goes on the wire', () => {
-  it('probes with forward passes, never /health or /v1/models', async () => {
-    // The Verda wake's measured lesson applies to both boxes: a readiness
-    // endpoint answers while the weights are still loading, wrong in both
-    // directions. Only a request that makes the box produce something proves
-    // it — a two-token completion, a one-item embedding.
+  it('probes the embedder with a forward pass', async () => {
+    // A one-item embedding proves that the embedding weights are loaded.
     await ensureMemoryAwake(true)
     expect(fetchMock.mock.calls[0]).toEqual([
       EMBED_URL,
-      expect.objectContaining({ method: 'POST' }),
-    ])
-    expect(fetchMock.mock.calls[1]).toEqual([
-      SMALL_URL,
       expect.objectContaining({ method: 'POST' }),
     ])
     for (const url of sentUrls()) {
       expect(url).not.toContain('/models')
       expect(url).not.toContain('health')
     }
-  })
-
-  it('the 4B probe is a two-token completion at temperature 0 (SD-10: fixed literals)', async () => {
-    // TWO tokens, not the Verda probe's one: llama-server (b9190, Qwen3.5-4B,
-    // coordinator finding C1, #497 comment 6033599840) aborts on the second
-    // identical prompt sent with max_tokens: 1 — `failed to remove sequence 2`
-    // — so the wake's next probe would kill the box the private tier's
-    // describe role runs on. A probe's only job is to prove a token was
-    // produced; 2 survives the crash, 1 does not.
-    await ensureMemoryAwake(true)
-    const init = fetchMock.mock.calls.find(([url]) => url === SMALL_URL)![1] as RequestInit
-    expect(JSON.parse(init.body as string)).toEqual({
-      model: SUMMARIZER_MODEL_ID,
-      messages: [{ role: 'user', content: MEMORY_WAKE_PROMPT }],
-      max_tokens: 2,
-      temperature: 0,
-    })
   })
 
   it('the embedder probe is a ONE-ITEM /v1/embeddings (SD-10: fixed literals)', async () => {
@@ -253,8 +201,6 @@ describe('what goes on the wire', () => {
     const embedInit = fetchMock.mock.calls[0][1] as RequestInit
     expect(fetchMock.mock.calls[0][0]).toBe(EMBED_URL)
     expect((embedInit.headers as Record<string, string>).Authorization).toBe('Bearer embed-key')
-    const smallInit = fetchMock.mock.calls[1][1] as RequestInit
-    expect((smallInit.headers as Record<string, string>).Authorization).toBe('Bearer small-key')
   })
 
   it('bounds every attempt with an abort signal — node fetch has no default timeout', async () => {
@@ -262,23 +208,6 @@ describe('what goes on the wire', () => {
     for (const call of fetchMock.mock.calls) {
       expect((call[1] as RequestInit).signal).toBeInstanceOf(AbortSignal)
     }
-  })
-
-  it('pins the 4B model id against the .baml declaration', async () => {
-    // `SUMMARIZER_MODEL_ID` is a COPY of the `model` line on `LocalQwenSmall` —
-    // the probe is a hand-rolled fetch, so it has to name a model and BAML
-    // exports nothing to read it from. A server that validates model names
-    // 400s a drifting id, which `isRefusal` correctly refuses to retry: memory
-    // would be silently off until someone reads the log. This pin makes the
-    // copy safe the way `VERDA_MODEL_ID`'s pin does.
-    const declared = readFileSync(
-      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/local-client.baml'),
-      'utf8',
-    )
-      .split('\n')
-      .filter((line) => !line.trimStart().startsWith('//'))
-      .join('\n')
-    expect(declared).toContain(`model "${SUMMARIZER_MODEL_ID}"`)
   })
 
   it('pins the embedder model id default against the embeddings module it mirrors', async () => {
@@ -297,7 +226,7 @@ describe('what goes on the wire', () => {
 
 describe('the three budgets', () => {
   it('ships the unmeasured defaults D20 states, and no Verda number is inherited', () => {
-    // The 4B (~2.5GB) and the embedder (639MB) are an order of magnitude
+    // The embedder (639MB) is an order of magnitude
     // smaller than the 27B whose readings sized the Verda wake's 600s, so
     // 180s is a PLACEHOLDER for layer 4 to measure — closer to the truth than
     // the Verda numbers, but still not a reading.
@@ -336,47 +265,22 @@ describe('the three budgets', () => {
   })
 })
 
-describe('the joint promise resolves only when all requested targets proved up', () => {
-  it('keeps waiting for the 4B after the embedder has answered', async () => {
-    // "Wake both containers at the same time" means the wake is done when
-    // both are up, not when the faster one is: resolving on the first would
-    // let the store's extract/embed calls reach a 4B that is still loading.
-    vi.useFakeTimers()
-    Object.assign(process.env, FAST_POLL)
-    // The EMBEDDER answers its first attempt; the 4B stalls one out.
-    byUrl(stallsFirst(1), () => Promise.resolve(ok()))
-
-    const wake = quiet(ensureMemoryAwake(true))
-    let settled = false
-    void wake.then(() => (settled = true))
-    // Attempt 1: the embedder answers inside it, the 4B times out at 10s.
-    await vi.advanceTimersByTimeAsync(10_500)
-    expect(settled, 'the embedder answered but the joint promise must not resolve').toBe(false)
-
-    // Attempt 2, at 11s: the 4B answers, and the joint promise lands.
-    await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS)
-    await wake
-    expect(settled).toBe(true)
-    expect(sentUrls().filter((u) => u === SMALL_URL)).toHaveLength(2)
-  })
-
+describe('the embedder poll resolves only when it proved up', () => {
   it('joins the whole loop: a caller arriving in the gap attaches, adding no poll', async () => {
     vi.useFakeTimers()
     Object.assign(process.env, FAST_POLL)
-    // Both targets stall two attempts, then answer: the poll ends on attempt
-    // 3 — one loop, three requests per target, six in all. A second poll
-    // would have made it eight.
+    // The embedder stalls twice, then answers. A joined caller adds no probe.
     byUrl(stallsFirst(2), stallsFirst(2))
 
     const first = quiet(ensureMemoryAwake(true))
     // Land the second caller in the GAP between attempt 1 and attempt 2.
     await vi.advanceTimersByTimeAsync(10_500)
     const second = quiet(ensureMemoryAwake(true))
-    // Past attempt 3 (22s), where both targets answer.
+    // Past attempt 3 (22s), where the embedder answers.
     await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS * 2)
 
     await Promise.all([first, second])
-    expect(fetchMock).toHaveBeenCalledTimes(6)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 })
 
@@ -392,7 +296,7 @@ describe('one deduplicated poll, shared by every module copy', () => {
 
     const turns = [ensureMemoryAwake(true), ensureMemoryAwake(true), ensureMemoryAwake(true)]
     await Promise.all(turns)
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('a FRESH MODULE COPY shares the in-flight poll instead of starting a second one', async () => {
@@ -410,7 +314,7 @@ describe('one deduplicated poll, shared by every module copy', () => {
       () => new Promise<Response>((resolve) => setTimeout(() => resolve(ok()), 50)),
     )
     await Promise.all([first.ensureMemoryAwake(true), second.ensureMemoryAwake(true)])
-    expect(fetchMock, 'two copies, one poll — two requests, not four').toHaveBeenCalledTimes(2)
+    expect(fetchMock, 'two copies share one embedder poll').toHaveBeenCalledTimes(1)
   })
 })
 
@@ -425,24 +329,12 @@ describe('which failures are retried, and which end the wake on the spot', () =>
         : new Promise<Response>(() => {}),
     )
     await ensureMemoryAwake(true)
-    expect(fetchMock).toHaveBeenCalledTimes(2) // one per target, no retry
+    expect(fetchMock).toHaveBeenCalledTimes(1) // one per target, no retry
     const message = warn.mock.calls.map((c: unknown[]) => String(c[0])).join('\n')
     expect(message).toContain(MEMORY_WAKE_FAILED)
     expect(message).toContain('embedder')
     expect(message).toContain('401')
     expect(message).toContain('nothing was sent to any other provider')
-  })
-
-  it('a refusal stops the sibling loop — the joint wake is over', async () => {
-    // The embedder refuses on attempt 1; the 4B, mid-wake, must not keep
-    // hammering its box for the rest of the budget behind a poll nobody is
-    // waiting on any more.
-    vi.useFakeTimers()
-    Object.assign(process.env, FAST_POLL)
-    byUrl(() => Promise.resolve(new Response('bad key', { status: 401 })), stalls())
-    await ensureMemoryAwake(true)
-    await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS * 2)
-    expect(fetchMock, 'the 4B loop was aborted with the joint wake').toHaveBeenCalledTimes(2)
   })
 
   it('retries a 5xx — a starting box saying "not yet"', async () => {
@@ -463,7 +355,7 @@ describe('which failures are retried, and which end the wake on the spot', () =>
     const wake = quiet(ensureMemoryAwake(true))
     await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS)
     await wake
-    expect(fetchMock).toHaveBeenCalledTimes(3) // 4B once; embedder 504, then ok
+    expect(fetchMock).toHaveBeenCalledTimes(2) // embedder 504, then ok
   })
 
   it('retries a transport error, and the message carries the count and the last error', async () => {
@@ -535,8 +427,8 @@ describe('the bounded wait both consumers attach through', () => {
     expect(await first).toBe('skipped')
     // ...the wake is still running: it lands on the embedder's third attempt.
     await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS * 2 + 1_000)
-    // The 4B answered its first attempt (1) and the embedder its third (3).
-    expect(fetchMock).toHaveBeenCalledTimes(4)
+    // The embedder answers on its third attempt.
+    expect(fetchMock).toHaveBeenCalledTimes(3)
 
     // The poll has settled and cleared by now: a LATER attach — `settleMemory`
     // minutes into the turn — sees 'awake' and proceeds, without any request.
@@ -562,7 +454,7 @@ describe('the bounded wait both consumers attach through', () => {
       () => Promise.resolve(ok()),
       () => Promise.resolve(new Response('bad key', { status: 401 })),
     )
-    // A fresh poll whose 4B leg refuses: a waiter attached through
+    // A fresh poll whose embedder refuses: a waiter attached through
     // awaitMemoryWake gets 'skipped', not a throw.
     void ensureMemoryAwake(true)
     await Promise.resolve()
@@ -617,7 +509,7 @@ describe('the env knobs are documented where a deployment reads them', () => {
     for (const m of source.matchAll(/wakeEnvMs\('([A-Z_]+)'/g)) names.add(m[1])
     for (const m of source.matchAll(/process\.env\.([A-Z_]+)/g)) names.add(m[1])
     for (const m of source.matchAll(/(?:envVar|keyEnvVar): '([A-Z_]+)'/g)) names.add(m[1])
-    expect(names.size).toBeGreaterThanOrEqual(8)
+    expect(names.size).toBeGreaterThanOrEqual(6)
     // The wake vars live BELOW the block header; the module's other reads live
     // anywhere in the file, as long as they have a row.
     const blockStart = example.indexOf('# ----- Waking the memory boxes')
@@ -657,17 +549,17 @@ describe('fail-open: a failed wake is not the turn’s failure', () => {
   it('a failed poll is retried by the next turn, not remembered', async () => {
     // First wake: the embedder refuses on the spot (400). Second wake: a
     // fresh poll — a remembered rejection would poison every later turn —
-    // and both boxes answer. Two requests per poll on the private tier.
+    // and the embedder answers. One request per poll on either tier.
     fetchMock.mockImplementationOnce(async () => new Response('nope', { status: 400 }))
     await expect(ensureMemoryAwake(true)).resolves.toBeUndefined()
     await expect(ensureMemoryAwake(true)).resolves.toBeUndefined()
-    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   it('no failure ever sends a call to a public provider (SD-12)', async () => {
     // Every failure mode in one sweep — refusal, budget expiry, transport —
     // and after all of it, every request this module has ever sent went to
-    // one of the two company-run endpoints. There is no configuration that
+    // the configured embedder endpoint. There is no configuration that
     // makes a failed memory wake into a Jev or Anthropic call.
     vi.useFakeTimers()
     Object.assign(process.env, FAST_POLL)
@@ -678,7 +570,7 @@ describe('fail-open: a failed wake is not the turn’s failure', () => {
     await expect(ensureMemoryAwake(true)).resolves.toBeUndefined()
     resetMemoryWake()
 
-    // 2. budget expiry on both legs (ten dropped attempts each)
+    // 2. budget expiry (ten dropped attempts)
     tier.current = 'verda'
     byUrl(stalls(), stalls())
     const stalled = quiet(ensureMemoryAwake(true))

@@ -10,7 +10,6 @@
 #
 # Why no `log` block: Modal ships stdout/stderr to US-stored logs. Caddy writes
 # no access log unless asked, and this file never asks.
-
 {
 	admin off
 	auto_https off

@@ -25,6 +25,7 @@ import {
   deleteHitlRowsForConversations,
   getHitlProposal,
   listHitlProposals,
+  listProposalSessionIds,
   putHitlProposal,
   stopHitlSweepTimer,
   sweepExpiredHitl,
@@ -130,6 +131,24 @@ describe('proposal rows', () => {
     await put('kind', { kind: 'provenance', sessionId: sid('blk') })
     expect(await getHitlProposal(rid('blk'), 'alice')).toBeNull()
     expect(await listHitlProposals(sid('blk'), 'alice', 'memory.confirm')).toEqual([])
+  })
+
+  // MUTATION: drop `user_id = $1` → another user's conversations are listed → red.
+  // MUTATION: drop the expiry / blocks_run / kind clauses → each of the rows below leaks → red.
+  it('lists the caller’s conversations with an open proposal, ids only, and nothing else', async () => {
+    await put('ib1')
+    await put('ib2', { userId: 'bob' })
+    await put('ib3', { expiresAt: new Date(Date.now() - 1_000) })
+    await put('ib4', { kind: 'provenance' })
+    await put('ib5')
+    await query('UPDATE hitl_requests SET blocks_run = TRUE WHERE request_id = $1', [rid('ib5')])
+    await closeHitlRows([rid('ib1')], 'alice', 'applied')
+    await put('ib6')
+    const mine = await listProposalSessionIds('alice', 'memory.confirm', 500)
+    expect(mine).toContain(sid('ib6'))
+    for (const n of ['ib1', 'ib2', 'ib3', 'ib4', 'ib5']) expect(mine).not.toContain(sid(n))
+    expect(await listProposalSessionIds('bob', 'memory.confirm', 500)).toContain(sid('ib2'))
+    expect(await listProposalSessionIds('mallory', 'memory.confirm', 500)).toEqual([])
   })
 
   // MUTATION: `DO UPDATE` instead of `DO NOTHING` → a replay swaps the payload a person is about to approve → red.

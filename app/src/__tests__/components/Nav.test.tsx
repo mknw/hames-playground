@@ -15,11 +15,17 @@ beforeAll(() => installDomStubs())
 const [pathname, setPathname] = createSignal('/')
 
 vi.mock('@solidjs/router', () => ({
+  useNavigate: () => vi.fn(),
   useLocation: () => ({
     get pathname() {
       return pathname()
     },
   }),
+}))
+
+// The header inbox's RPC: same story as the strip's — nothing pending here.
+vi.mock('~/lib/memory/confirm-actions.server', () => ({
+  listMemoryInbox: () => Promise.resolve([]),
 }))
 
 // The bar renders the preview strip, whose server action would otherwise be

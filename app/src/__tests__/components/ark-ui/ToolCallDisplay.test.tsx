@@ -8,7 +8,7 @@
  * A pending write showing no Approve button (or an executed one still showing
  * it) is the failure worth catching.
  */
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { render } from '@solidjs/testing-library'
 import { ToolCallDisplay } from '~/components/ark-ui/ToolCallDisplay'
 import type { ToolCallInfo } from '~/components/ark-ui/types'
@@ -77,7 +77,7 @@ describe('ToolCallDisplay — collapsed header', () => {
 
   it("labels pending and failed calls in the user's terms", () => {
     const pending = render(() => <ToolCallDisplay toolCall={call({ status: 'pending' })} />)
-    expect(header(pending.container).textContent).toContain('Awaiting approval')
+    expect(header(pending.container).textContent).toContain('Awaiting decision')
     pending.unmount()
 
     const failed = render(() => <ToolCallDisplay toolCall={call({ status: 'error' })} />)
@@ -140,49 +140,17 @@ describe('ToolCallDisplay — expanded detail', () => {
   })
 })
 
-describe('ToolCallDisplay — approval gate', () => {
-  it('offers Approve/Reject only while the call is pending', async () => {
-    const pending = render(() => (
-      <ToolCallDisplay toolCall={call({ status: 'pending', cypher: 'CREATE (n)' })} />
-    ))
-    const pendingBody = await expand(pending.container)
-    expect(buttonNamed(pendingBody, 'Approve')).toBeTruthy()
-    expect(buttonNamed(pendingBody, 'Reject')).toBeTruthy()
-    pending.unmount()
-
-    const executed = render(() => <ToolCallDisplay toolCall={call()} />)
-    const executedBody = await expand(executed.container)
-    expect(buttonNamed(executedBody, 'Approve')).toBeUndefined()
-    expect(buttonNamed(executedBody, 'Reject')).toBeUndefined()
-  })
-
-  it("reports the user's decision to exactly one handler", async () => {
-    const onApprove = vi.fn()
-    const onReject = vi.fn()
-    const { container } = render(() => (
-      <ToolCallDisplay
-        toolCall={call({ status: 'pending' })}
-        onApprove={onApprove}
-        onReject={onReject}
-      />
-    ))
-    const body = await expand(container)
-
-    buttonNamed(body, 'Approve')!.click()
-    expect(onApprove).toHaveBeenCalledTimes(1)
-    expect(onReject).not.toHaveBeenCalled()
-
-    buttonNamed(body, 'Reject')!.click()
-    expect(onReject).toHaveBeenCalledTimes(1)
-    expect(onApprove).toHaveBeenCalledTimes(1)
-  })
-
-  // The handlers are optional — a read-only surface may render the row without
-  // wiring them, and clicking must not throw.
-  it('tolerates a pending call rendered without handlers', async () => {
-    const { container } = render(() => <ToolCallDisplay toolCall={call({ status: 'pending' })} />)
-    const body = await expand(container)
-    expect(() => buttonNamed(body, 'Approve')!.click()).not.toThrow()
-    expect(() => buttonNamed(body, 'Reject')!.click()).not.toThrow()
+describe('ToolCallDisplay — no approval controls', () => {
+  // Decisions are the HITL card's and dialog's (#433 S8); a tool row that offered
+  // Approve/Reject would be a second, unbound way to decide.
+  // MUTATION: restore the pending Approve/Reject buttons → red.
+  it('never offers Approve or Reject, pending or not', async () => {
+    for (const status of ['pending', 'executed'] as const) {
+      const r = render(() => <ToolCallDisplay toolCall={call({ status, cypher: 'CREATE (n)' })} />)
+      const body = await expand(r.container)
+      expect(buttonNamed(body, 'Approve')).toBeUndefined()
+      expect(buttonNamed(body, 'Reject')).toBeUndefined()
+      r.unmount()
+    }
   })
 })

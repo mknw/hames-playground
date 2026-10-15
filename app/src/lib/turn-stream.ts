@@ -47,7 +47,7 @@ import type { RunOutcome } from '~/lib/run-registry'
  * from; `runTurn` reports every transition from `streaming` onwards.
  *
  * The three terminal states are distinct because callers treat them
- * differently: `done` and `awaiting-approval` are results worth announcing,
+ * differently: `done` and `awaiting-decision` are results worth announcing,
  * `error` paints a bubble, and `stopped` is a torn-down stream — either the
  * user's Stop or page teardown — which by itself says nothing about the run,
  * because the chain keeps going server-side.
@@ -55,7 +55,10 @@ import type { RunOutcome } from '~/lib/run-registry'
 export type TurnState =
   | { status: 'idle' }
   | { status: 'streaming'; runningTool: string | null }
-  | { status: 'awaiting-approval'; tool: string; reason: string }
+  /** The run paused on human-in-the-loop requests (#433). `requestIds` name the
+   *  ones the run waits on — a HINT with no consumer outside tests today: the
+   *  card, toast and inbox read the authoritative set from the server. */
+  | { status: 'awaiting-decision'; requestIds: readonly string[] }
   | { status: 'done' }
   | { status: 'error'; message: string }
   | { status: 'stopped' }
@@ -261,7 +264,7 @@ export async function runTurn(request: TurnRequest, sink: TurnSink): Promise<Tur
 
     if (finalResult?.context) sink.setContext(finalResult.context)
 
-    const pending = pendingActionOf(finalResult)
+    const pendingIds = pendingRequestIds(finalResult)
     const finalResponse = finalResult?.response ?? ''
     // Only paint an answer when there is a real one — an error status with a
     // stale or empty response is not a reply.
@@ -273,15 +276,6 @@ export async function runTurn(request: TurnRequest, sink: TurnSink): Promise<Tur
         timestamp: new Date(),
         // Retriever citations for this turn (inline superscripts + footer).
         references: extractReferences(finalResult?.context?.events ?? []),
-        toolCall: pending
-          ? {
-              type: 'neo4j',
-              status: 'pending',
-              tool: pending.action,
-              explanation: pending.reason,
-              isReadOnly: false,
-            }
-          : undefined,
       })
     }
     flushAfterAnswer()
@@ -293,13 +287,9 @@ export async function runTurn(request: TurnRequest, sink: TurnSink): Promise<Tur
         aborted: false,
       }
     }
-    if (pending) {
+    if (pendingIds.length > 0) {
       return {
-        state: transition({
-          status: 'awaiting-approval',
-          tool: pending.action,
-          reason: pending.reason,
-        }),
+        state: transition({ status: 'awaiting-decision', requestIds: pendingIds }),
         outcome: 'done',
         aborted: false,
       }
@@ -326,12 +316,19 @@ export async function runTurn(request: TurnRequest, sink: TurnSink): Promise<Tur
   }
 }
 
-/** The paused write a `done` frame is asking approval for, if any. */
-function pendingActionOf(
-  final: DoneEventData | null,
-): { action: string; reason: string } | undefined {
-  if (final?.status !== 'paused') return undefined
-  const pending = (final.data as Record<string, unknown>).pendingAction as
-    { action: string; reason: string } | undefined
-  return pending
+/**
+ * The HITL requests a paused `done` frame names: `hitl_request` events with no
+ * `hitl_response` for the same id. Core's own reader is server-only, so this is
+ * only a HINT for the client's state — the card, toast and inbox read the
+ * authoritative pending set from the server, and nothing here gates an answer.
+ */
+function pendingRequestIds(final: DoneEventData | null): readonly string[] {
+  if (final?.status !== 'paused') return []
+  const events = final.context?.events ?? []
+  const idOf = (e: { data: unknown }) => (e.data as { requestId?: unknown }).requestId
+  const answered = new Set(events.filter((e) => e.type === 'hitl_response').map(idOf))
+  return events
+    .filter((e) => e.type === 'hitl_request')
+    .map(idOf)
+    .filter((id): id is string => typeof id === 'string' && !answered.has(id))
 }

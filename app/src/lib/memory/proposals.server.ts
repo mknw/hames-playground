@@ -64,6 +64,7 @@ import {
   closeHitlRows,
   getHitlProposal,
   listHitlProposals,
+  listProposalSessionIds,
   putHitlProposal,
   releaseHitlProposalAnswer,
   requireAnsweringBinding,
@@ -132,17 +133,29 @@ export async function listMemoryProposalsFor(
   userId: string,
   sessionId: string,
 ): Promise<MemoryProposalView[]> {
+  return (await readMemoryProposals(userId, sessionId, { switchChecked: false })).views
+}
+
+/** The list plus the conversation's title, from ONE blob load. `switchChecked`
+ *  says the caller has already read the memory switch for this owner, so the
+ *  inbox does not pay it once per conversation (#589 F3). */
+async function readMemoryProposals(
+  userId: string,
+  sessionId: string,
+  opts: { switchChecked: boolean },
+): Promise<{ views: MemoryProposalView[]; title: string | null }> {
+  const none = { views: [], title: null }
   // The cheap, indexed read first: the popup polls on every settle and every
   // window focus in every conversation, and nearly all of those find nothing —
   // that must not cost a decrypt of the whole blob (#579 review 5).
   const rows = await listHitlProposals(sessionId, userId, MEMORY_CONFIRM_KIND)
-  if (rows.length === 0) return []
+  if (rows.length === 0) return none
   // A proposal is memory text the person has not agreed to keep. With memory
   // off — "Forget everything" and the switch both leave it off — it is not
   // offered, whatever a row still holds (#579 review 1).
-  if (!(await getMemoryEnabled(userId))) return []
+  if (!opts.switchChecked && !(await getMemoryEnabled(userId))) return none
   const conv = await loadConversation(sessionId, userId)
-  if (!conv) return []
+  if (!conv) return none
   let ctx = deserializeContext(conv.serializedContext)
   if (readHitl(ctx).pending.length === 0) {
     const closed = expireHitl(conv.serializedContext, Date.now())
@@ -165,7 +178,7 @@ export async function listMemoryProposalsFor(
       .filter((r) => r.kind === MEMORY_CONFIRM_KIND)
       .map((r) => r.requestId),
   )
-  if (open.size === 0) return []
+  if (open.size === 0) return none
 
   const views: MemoryProposalView[] = []
   for (const row of rows) {
@@ -192,7 +205,48 @@ export async function listMemoryProposalsFor(
       }),
     })
   }
-  return views
+  return { views, title: conv.title ? displayText(conv.title) : null }
+}
+
+/** One row of the header inbox: a conversation with a proposal waiting. Display
+ *  text only — the title is the person's own, but the count and ids are all the
+ *  inbox needs, so no memory text rides here. */
+export interface MemoryInboxEntry {
+  readonly sessionId: string
+  readonly requestId: string
+  readonly title: string | null
+  readonly itemCount: number
+  readonly expiresAt: number | null
+}
+
+/** How many conversations one inbox read opens. Each costs a blob decrypt. */
+export const MEMORY_INBOX_LIMIT = 20
+
+/**
+ * The caller's pending memory proposals across conversations (#433 S8). The
+ * same gates as the per-conversation list, because it IS that list per
+ * conversation: memory off → nothing; a proposal the blob no longer has open,
+ * an expired one, a purged payload → absent. Erased rows disappear with their
+ * rows; nothing is cached.
+ */
+export async function listMemoryInboxFor(userId: string): Promise<MemoryInboxEntry[]> {
+  // The switch first: with memory off nothing is offered, and nothing is read.
+  if (!(await getMemoryEnabled(userId))) return []
+  const sessionIds = await listProposalSessionIds(userId, MEMORY_CONFIRM_KIND, MEMORY_INBOX_LIMIT)
+  const entries: MemoryInboxEntry[] = []
+  for (const sessionId of sessionIds) {
+    const { views, title } = await readMemoryProposals(userId, sessionId, { switchChecked: true })
+    for (const v of views) {
+      entries.push({
+        sessionId,
+        requestId: v.requestId,
+        title,
+        itemCount: v.items.length,
+        expiresAt: v.expiresAt,
+      })
+    }
+  }
+  return entries
 }
 
 /** What became of one answer. The client renders `outcome`; nothing here quotes

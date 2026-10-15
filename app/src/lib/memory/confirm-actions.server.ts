@@ -24,7 +24,9 @@ import { getAuthenticatedUser } from '../auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
 import {
   answerMemoryProposalFor,
+  listMemoryInboxFor,
   listMemoryProposalsFor,
+  type MemoryInboxEntry,
   type MemoryAnswerOutcome,
   type MemoryProposalView,
 } from './proposals.server'
@@ -66,4 +68,12 @@ export async function answerMemoryProposal(
   if (typeof requestId !== 'string' || !requestId) throw new Error('requestId is required')
   if (!isAnswerShape(answer)) throw new Error('an answer is not a choice id with optional flags')
   return answerMemoryProposalFor(user.id, sessionId, requestId, answer)
+}
+
+/** Every memory proposal waiting on the caller, across conversations — the
+ *  header inbox. No arguments: the owner is the session's user, never a value
+ *  the browser supplies. */
+export async function listMemoryInbox(): Promise<MemoryInboxEntry[]> {
+  const user = await requireUser()
+  return listMemoryInboxFor(user.id)
 }

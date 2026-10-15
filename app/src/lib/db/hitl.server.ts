@@ -311,6 +311,25 @@ export async function listHitlProposals(
   return rows.map(toProposalRow)
 }
 
+/** The conversations in which the caller has an open proposal of one kind,
+ *  newest first. Owner-fenced in SQL; reads ids only (no ciphertext), so the
+ *  header inbox's poll costs one indexed query when there is nothing to show. */
+export async function listProposalSessionIds(
+  userId: string,
+  kind: string,
+  limit: number,
+): Promise<string[]> {
+  const { rows } = await query<{ session_id: string }>(
+    `SELECT session_id FROM hitl_requests
+      WHERE user_id = $1 AND kind = $2 AND status IN ('pending', 'answering')
+        AND blocks_run = FALSE AND payload IS NOT NULL
+        AND (expires_at IS NULL OR expires_at > NOW())
+      GROUP BY session_id ORDER BY MAX(created_at) DESC LIMIT $3`,
+    [userId, kind, limit],
+  )
+  return rows.map((r) => r.session_id)
+}
+
 function toProposalRow(r: Record<string, unknown>): HitlProposalRow {
   return {
     requestId: r.request_id as string,

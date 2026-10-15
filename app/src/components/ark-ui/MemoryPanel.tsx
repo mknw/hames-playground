@@ -9,6 +9,7 @@ import {
   setMemoryEnabled,
   exportMyMemories,
 } from '../../lib/memory/actions.server'
+import { notifyMemoryErased } from '../../lib/hitl/review-store'
 
 const kinds = ['all', 'episodic', 'semantic', 'preference', 'trait'] as const
 
@@ -20,13 +21,18 @@ export function MemoryPanel() {
   const [confirmOpen, setConfirmOpen] = createSignal(false)
   const [confirmSwitchOff, setConfirmSwitchOff] = createSignal(false)
   const rows = () => data()?.memories.filter((row) => kind() === 'all' || row.kind === kind()) ?? []
-  async function run(action: () => Promise<unknown>) {
+  /** `erases`: the action turns memory off or deletes it all. Whatever the
+   *  outcome — a partial failure leaves memory OFF — the chat's card, dialog,
+   *  toast and the header inbox must stop showing the text (#589 F1). */
+  async function run(action: () => Promise<unknown>, erases = false) {
     setBusy(true)
     setError('')
     try {
       await action()
+      if (erases) notifyMemoryErased()
       await refetch()
     } catch (err) {
+      if (erases) notifyMemoryErased()
       setError(err instanceof Error ? err.message : 'Memory action failed. Please retry.')
       await Promise.resolve(refetch()).catch(() => undefined)
     } finally {
@@ -92,7 +98,7 @@ export function MemoryPanel() {
                 if (!d.checked && state().memories.length > 0) {
                   setConfirmSwitchOff(true)
                   setConfirmOpen(true)
-                } else void run(() => setMemoryEnabled(d.checked))
+                } else void run(() => setMemoryEnabled(d.checked), !d.checked)
               }}
               flex="~"
               items="center"
@@ -270,7 +276,7 @@ export function MemoryPanel() {
                 void run(async () => {
                   await action()
                   setConfirmOpen(false)
-                })
+                }, true)
               }}
             >
               Confirm forget everything

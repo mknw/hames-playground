@@ -141,11 +141,16 @@ describe('rowIndicator', () => {
     }
   })
 
-  it('shows nothing for a conversation that is running, paused or finished', () => {
+  // #433 S8. MUTATION: return 'none' for a paused conversation → red.
+  it('shows a conversation that waits on a decision, with the pause glyph', () => {
+    expect(rowIndicator({ kind: 'conversation', status: 'paused' })).toBe('paused')
+  })
+
+  it('shows nothing for a conversation that is running or finished', () => {
     // A live run in this browser is the progress strip's job, and 'running' is
     // also the at-rest value of a completed chat — a badge on either would be
     // noise on every row in the list.
-    for (const status of ['running', 'paused', 'done'] as const) {
+    for (const status of ['running', 'done'] as const) {
       expect(rowIndicator({ kind: 'conversation', status })).toBe('none')
     }
   })

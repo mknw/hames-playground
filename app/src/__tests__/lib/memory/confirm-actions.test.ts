@@ -26,12 +26,14 @@ vi.mock('../../../lib/auth/dev-bypass', () => ({
 
 const answerFor = vi.fn(async (..._a: unknown[]) => ({ outcome: 'discarded' }))
 const listFor = vi.fn(async (..._a: unknown[]) => [])
+const inboxFor = vi.fn(async (..._a: unknown[]) => [])
 vi.mock('../../../lib/memory/proposals.server', () => ({
   answerMemoryProposalFor: (...a: unknown[]) => answerFor(...a),
   listMemoryProposalsFor: (...a: unknown[]) => listFor(...a),
+  listMemoryInboxFor: (...a: unknown[]) => inboxFor(...a),
 }))
 
-const { listMemoryProposals, answerMemoryProposal } =
+const { listMemoryProposals, answerMemoryProposal, listMemoryInbox } =
   await import('../../../lib/memory/confirm-actions.server')
 
 const source = () =>
@@ -50,7 +52,11 @@ describe('SD-13: the gate', () => {
     expect(src.trimStart().startsWith('/**')).toBe(true)
     expect(src).toMatch(/^'use server'$/m)
     const fns = [...src.matchAll(/^export async function (\w+)\(([\s\S]*?)\): Promise/gm)]
-    expect(fns.map((m) => m[1]).sort()).toEqual(['answerMemoryProposal', 'listMemoryProposals'])
+    expect(fns.map((m) => m[1]).sort()).toEqual([
+      'answerMemoryProposal',
+      'listMemoryInbox',
+      'listMemoryProposals',
+    ])
     // nothing else is a value export: a helper here would itself be an RPC
     expect([...src.matchAll(/^export (?!type |async function )/gm)]).toEqual([])
     for (const [, name, params] of fns) {
@@ -68,8 +74,17 @@ describe('SD-13: the gate', () => {
     getAuthenticatedUser.mockRejectedValue(new Error('no session'))
     await expect(listMemoryProposals('s1')).rejects.toThrow('no session')
     await expect(answerMemoryProposal('s1', 'r1', 'discard')).rejects.toThrow('no session')
+    await expect(listMemoryInbox()).rejects.toThrow('no session')
     expect(listFor).not.toHaveBeenCalled()
+    expect(inboxFor).not.toHaveBeenCalled()
     expect(answerFor).not.toHaveBeenCalled()
+  })
+
+  // MUTATION: give listMemoryInbox an owner parameter, or read it from the caller → red.
+  it('the inbox takes no argument and reads the SESSION user', async () => {
+    expect(listMemoryInbox.length).toBe(0)
+    await (listMemoryInbox as (...a: unknown[]) => Promise<unknown>)('mallory')
+    expect(inboxFor).toHaveBeenCalledWith('alice')
   })
 
   it('passes the SESSION user, never a caller-chosen one', async () => {

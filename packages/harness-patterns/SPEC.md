@@ -401,21 +401,33 @@ and no other:
    an outer one off) — #507 N4:
    `stashWriteObservers` — told, synchronously, by core's `storeDocument` once a
    document and its session-index entry are durably written
-   (`{ sessionId, documentId }`, never content; a failed write notifies nothing,
-   a throwing observer is logged and never un-stores the document); and
-   `afterToolCall` — run by `callTool` after the call has been dispatched
-   **and guarded**, each hook seeing the previous one's result, and able to
-   replace it by returning one. `withSandbox({ id, syncWorkspace: true })` uses
-   both: a document stored under its own `sessionId` marks its scope dirty, and
-   the next after-call hook re-runs `hydrateWorkspace` for that same session —
-   so a file ingested mid-run is in `/work/in` before the actor sees the call's
-   result. Fail-closed: if the copy throws, or any file is skipped, the call's
-   result becomes a failure saying the document is stored but NOT in the
-   sandbox (and not to repeat the call), and an `error` event is recorded. A
-   write to another conversation's stash is ignored; a call that stored nothing
-   costs one boolean read. Known limit: stores are attributed by the dirty flag,
-   not per call, so two parallel storing calls share one restore (sandbox
-   agents batch sequentially).
+   (`{ sessionId, documentId, callId }`, never content; `callId` is the
+   `callTool` invocation the write happened inside, undefined outside one; a
+   failed write notifies nothing, a throwing observer is logged and never
+   un-stores the document); and `afterToolCall` — run by `callTool` after the
+   call has been dispatched **and guarded**, each hook seeing the previous one's
+   result and given `{ id, name, args }`, and able to replace the result by
+   returning one. **A replacement is guarded like a dispatched result**: if any
+   hook changed it, `callTool` runs the active guard's sanitize/spotlight over
+   the final result again, so no hook can reopen the injection boundary.
+   `withSandbox({ id, syncWorkspace: true })` uses both, **eagerly, on the
+   storing call itself** (dispatch and write → guard → that call's hook →
+   `hydrateWorkspace` → return; not on a later call): a document stored under
+   its own `sessionId` is recorded against the `callId` that stored it, and that
+   call's hook re-runs `hydrateWorkspace` for the same session before the
+   result reaches the caller. `sandbox_*` calls are skipped and never consume
+   another call's pending write; parallel storing calls each restore and each
+   receive their own outcome. Fail-closed: unless a strict read accounts for
+   every stored document (`hydrateWorkspace` returns `accounted` ids — an empty
+   or short listing is not proof), the call's result becomes a FIXED failure text
+   ("stored but NOT in the sandbox, do not repeat") and a recoverable `error`
+   event with the detail withheld; the raw detail (which may hold stash
+   filenames) goes to the server log only. The host wires `listDocumentsStrict`
+   / `getDocumentStrict` — a failed Redis read throws and never prunes the
+   index — into the workspace store. The scope is closed when the pattern
+   returns (before promotion and release): inherited observers/hooks become
+   inert and a restore in flight is drained. A write to another conversation's
+   stash is ignored; a call that stored nothing costs a map lookup.
 2. **Process transports** — supplied by `registerTransport(t)`, in registration
    order. Today's one is the app-side in-process tools.
 3. **The MCP gateway** — the terminal fallback, and deliberately NOT a

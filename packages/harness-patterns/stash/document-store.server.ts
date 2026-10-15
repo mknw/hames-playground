@@ -28,7 +28,7 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import { currentRunFrame } from '../run-frame.server'
+import { currentRunFrame, currentToolCallId } from '../run-frame.server'
 import { resolveStashCallTool, isBuiltinStashTransport } from '../stash-transport.server'
 import type { ToolCallResult } from '../types'
 import type { PriorResult } from '../types'
@@ -361,9 +361,10 @@ export async function storeDocument(
   // reading the stash (#507 N4) must find it. The list cache is already
   // invalidated above for the same reason. A throwing observer is its own bug
   // and never un-stores the document.
+  const callId = currentToolCallId()
   for (const observe of currentRunFrame()?.stashWriteObservers ?? []) {
     try {
-      observe({ sessionId: doc.sessionId, documentId: doc.id })
+      observe({ sessionId: doc.sessionId, documentId: doc.id, callId })
     } catch (err) {
       console.warn(
         `[stash] a stash-write observer threw: ${err instanceof Error ? err.message : String(err)}`,
@@ -389,6 +390,27 @@ export async function getDocument(
   })
   if (!res.success || res.data == null) return null
 
+  const value = unwrapJsonGet(res.data)
+  if (value == null || typeof value !== 'object') return null
+  return value as StashDocument
+}
+
+/**
+ * {@link getDocument} for a caller that must tell a failed read from an absent
+ * document (#599 review F2): a Redis failure THROWS, and only a successful read
+ * of nothing returns null. `getDocument` collapses both to null, which is right
+ * for a panel and wrong for anyone about to claim a document is available.
+ */
+export async function getDocumentStrict(
+  sessionId: string,
+  docId: string,
+  callTool: CallTool = resolveStashCallTool(),
+): Promise<StashDocument | null> {
+  const res = await callTool('json_get', { name: docKey(sessionId, docId), path: '$' })
+  if (!res.success) {
+    throw new Error(`stash read failed for a document: ${res.error ?? 'unknown error'}`)
+  }
+  if (res.data == null) return null
   const value = unwrapJsonGet(res.data)
   if (value == null || typeof value !== 'object') return null
   return value as StashDocument
@@ -457,6 +479,30 @@ export async function listDocuments(
   // Newest first, matching the conversations list ordering.
   out.sort((a, b) => b.uploadedAt - a.uploadedAt)
   if (cacheable) listCache.set(sessionId, { docs: out, at: Date.now() })
+  return out
+}
+
+/**
+ * {@link listDocuments} for a caller that must not mistake a failure for an
+ * empty stash (#599 review F2). Any failed read THROWS, and an index entry is
+ * pruned only for a document whose read SUCCEEDED and found nothing — never on a
+ * failure. Uncached: it exists to answer "is this document really there now".
+ */
+export async function listDocumentsStrict(
+  sessionId: string,
+  callTool: CallTool = resolveStashCallTool(),
+): Promise<StashDocumentMeta[]> {
+  const members = await callTool('smembers', { name: indexKey(sessionId) })
+  if (!members.success) {
+    throw new Error(`stash index read failed: ${members.error ?? 'unknown error'}`)
+  }
+  const out: StashDocumentMeta[] = []
+  for (const id of parseSetMembers(members.data)) {
+    const doc = await getDocumentStrict(sessionId, id, callTool)
+    if (doc) out.push(stripContent(doc))
+    else await callTool('srem', { name: indexKey(sessionId), value: id })
+  }
+  out.sort((a, b) => b.uploadedAt - a.uploadedAt)
   return out
 }
 

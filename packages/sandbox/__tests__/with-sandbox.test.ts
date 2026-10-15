@@ -20,6 +20,7 @@ const artifacts = vi.hoisted(() => ({
   hydrateWorkspace: vi.fn(async () => ({
     written: 0,
     skipped: [] as Array<{ filename: string; error: string }>,
+    accounted: [] as string[],
   })),
   snapshotOutputs: vi.fn(async () => new Map<string, string>()),
   promoteOutputs: vi.fn(async () => ({
@@ -740,7 +741,9 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
   }
 
   beforeEach(() => {
-    artifacts.hydrateWorkspace.mockClear().mockResolvedValue({ written: 0, skipped: [] })
+    artifacts.hydrateWorkspace
+      .mockClear()
+      .mockResolvedValue({ written: 0, skipped: [], accounted: [] })
     artifacts.snapshotOutputs.mockClear().mockResolvedValue(new Map())
     artifacts.promoteOutputs.mockClear().mockResolvedValue({ promoted: [], skipped: [] })
   })

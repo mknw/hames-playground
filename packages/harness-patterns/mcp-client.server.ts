@@ -6,7 +6,7 @@
  */
 
 import { assertServerOnImport } from './assert.server'
-import { currentRunFrame } from './run-frame.server'
+import { currentRunFrame, withToolCallId } from './run-frame.server'
 import { activeTransports, processTransports } from './tool-transport.server'
 import { markGatewayReachable, markGatewayUnreachable } from './gateway-health.server'
 import type { ToolCallResult, MCPToolDescription } from './types'
@@ -328,19 +328,22 @@ export async function callTool(
   name: string,
   args: Record<string, unknown>,
 ): Promise<ToolCallResult> {
-  let result = await guardedCall(name, args)
-  // Scoped after-call hooks (#507 N4), innermost first, on the FINAL result:
-  // past the guard, so a hook's own replacement is never rewritten by it, and
-  // read softly like the guard above — outside a run there are none.
-  for (const hook of currentRunFrame()?.afterToolCall ?? []) {
-    result = (await hook({ name, args }, result)) ?? result
-  }
-  return result
+  return withToolCallId(async (id) => {
+    const guarded = await applyGuard(name, await dispatchTool(name, args))
+    // Scoped after-call hooks (#507 N4), innermost first. A hook may REPLACE the
+    // result, and a replacement is new content the guard has not seen: it is
+    // put through the same guard pass as a dispatched result, so no hook can
+    // reopen the boundary (#599 review F1). Read softly like the guard — outside
+    // a run there are none.
+    let result = guarded
+    for (const hook of currentRunFrame()?.afterToolCall ?? []) {
+      result = (await hook({ id, name, args }, result)) ?? result
+    }
+    return result === guarded ? result : applyGuard(name, result)
+  })
 }
 
-async function guardedCall(name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
-  const result = await dispatchTool(name, args)
-
+async function applyGuard(name: string, result: ToolCallResult): Promise<ToolCallResult> {
   // The run frame's `guard` slot, read SOFTLY: `callTool` is also reached from
   // a gateway health probe and a tool-catalog refresh, neither of which is a
   // run, and an absent guard is this chokepoint's opt-in sentinel.

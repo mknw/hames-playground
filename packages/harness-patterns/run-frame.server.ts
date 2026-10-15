@@ -100,6 +100,11 @@ export interface InferenceSlot {
 export interface StashWrite {
   readonly sessionId: string
   readonly documentId: string
+  /** The `callTool` invocation the write happened inside ({@link currentToolCallId}),
+   *  or undefined for a write made outside any tool call. This is how a scope
+   *  attributes a write to the call that made it rather than to "whatever
+   *  call finishes next". */
+  readonly callId?: string
 }
 
 /** Told, synchronously, that core's `storeDocument` persisted a document. A
@@ -112,7 +117,7 @@ export type StashWriteObserver = (write: StashWrite) => void
  *  nothing leaves the result unchanged. A throw is the hook's own bug and
  *  propagates, so a hook that must degrade has to catch for itself. */
 export type AfterToolCallHook = (
-  call: { readonly name: string; readonly args: Record<string, unknown> },
+  call: { readonly id: string; readonly name: string; readonly args: Record<string, unknown> },
   result: ToolCallResult,
 ) => Promise<ToolCallResult | void>
 
@@ -201,6 +206,32 @@ const store = holder.store
  *  slot, so `{ guard: maybeGuard }` with nothing to put there still joins. */
 function suppliedSlots(frame: RunFrame): string[] {
   return (Object.keys(frame) as (keyof RunFrame)[]).filter((k) => frame[k] !== undefined)
+}
+
+/**
+ * Per-invocation identity of a `callTool` call, on its own ALS (also on a
+ * `globalThis` symbol, for the same two-copies reason as the frame). `callTool`
+ * opens one around each call; `storeDocument` reads it to say which call a write
+ * belongs to, and `afterToolCall` hooks receive it, so a scope can tie a write
+ * to ITS call's hook instead of a scope-wide flag (#599 review F3).
+ */
+const CALL_KEY: unique symbol = Symbol.for('hames.harness-patterns.tool-call-id') as never
+type CallHolder = { store: AsyncLocalStorage<string>; seq: number }
+const callGlobal = globalThis as unknown as Record<symbol, CallHolder | undefined>
+const callHolder: CallHolder = (callGlobal[CALL_KEY] ??= {
+  store: new AsyncLocalStorage<string>(),
+  seq: 0,
+})
+
+/** Run `fn` as one tool-call invocation with a fresh id. */
+export function withToolCallId<T>(fn: (id: string) => Promise<T>): Promise<T> {
+  const id = `call-${++callHolder.seq}`
+  return callHolder.store.run(id, () => fn(id))
+}
+
+/** The id of the `callTool` invocation this code runs inside, if any. */
+export function currentToolCallId(): string | undefined {
+  return callHolder.store.getStore()
 }
 
 /** A fresh hitl slot: frozen, with `attended` as its only key. `attended` is a

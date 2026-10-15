@@ -304,6 +304,27 @@ describe('hydrateWorkspace', () => {
       expect(fs.get('/work/in/data.csv')).toBe('a,b\n99,edited-in-vm')
     })
 
+    // #599 F2. Mutation: push ids from the `skipped` / missing-body branch too,
+    // or drop the `present`/`hidden` pushes.
+    it('accounts for exactly the documents that are in /work/in or deliberately not wanted there', async () => {
+      vi.mocked(listDocuments).mockResolvedValue([
+        meta('new', 'new.csv', 3),
+        meta('there', 'there.csv', 2),
+        { ...meta('hid', 'hid.csv', 1), hidden: true },
+        meta('gone', 'gone.csv', 4),
+      ] as never)
+      vi.mocked(getDocument).mockImplementation(async (_s, id) =>
+        id === 'gone' ? null : (doc(id, `${id}.csv`, 'x') as never),
+      )
+      const { transport, fs } = makeFsTransport()
+      fs.set('/work/in/there.csv', 'already')
+
+      const r = await hydrateWorkspace(transport, 's')
+
+      expect([...r.accounted].sort()).toEqual(['hid', 'new', 'there'])
+      expect(r.skipped.map((f) => f.filename)).toEqual(['gone.csv'])
+    })
+
     // #507 N4: re-hydration can now run mid-turn on a filename a tool chose, so
     // the only path it may write is /work/in/<basename>, for ONE session.
     // Mutation: write `${WORK_IN_DIR}/${meta.filename}` instead of the basename.

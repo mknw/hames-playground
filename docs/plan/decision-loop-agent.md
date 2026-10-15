@@ -275,7 +275,10 @@ The one exception is the **latest user message**. It is the user's own request, 
 **The roster, including identities the route never sees (D1).** A capped summary carries no labelled Graph fields. And the `doc` events that do carry them are, by design, outside `info_ag`'s context. So a roster built only from what `info_ag` can see would leave an external mail correspondent who is not a directory member in clear in the handoff. The roster is therefore the union of three sources:
 
 - **what is being rewritten:** `extractRoster` (`graph-roster.ts:193`) over the payloads in the view;
-- **what is behind the handoff:** `decisionLoop` built every record it hands to `info_ag`, so it holds their source `tool_result`s, `doc_ag`'s mail results included. It passes those payloads **as roster input only**, in a child-data key that no adapter renders. The wrapper reads that key, builds the roster, and deletes the key before the inner pattern runs. Those payloads are never shown to `info_ag`, and the sibling restriction on its context still holds;
+- **everything this turn has produced (E1):** the source `tool_result`s of **every iteration of this turn**, not only those behind the last-N handed-off records. A `think` plan, and the planner input that produced it, can name a sender from a record outside the handoff window. `decisionLoop` ran every iteration, so it holds all of these payloads, `doc_ag`'s mail results included.
+  - **They are roster input only.** `decisionLoop` passes them in a child-data key that no adapter renders. They are never shown to `info_ag`, and the sibling restriction on its context still holds.
+  - **The key is removed on every path (E2).** `decisionLoop` attaches it only to a route whose pattern declares the wrapper, a `pseudonymisedInputs` capability found through `children` as the other probes are.
+  - The wrapper deletes the key in a `finally` before anything runs inside it: on the rewrite path, on the explicit-Anthropic pass-through, on fail-closed and on a throw. `doc_ag`'s raw payloads therefore never sit in `info_ag`'s `data`;
 - **the tenant directory:** `rosterFromDirectory`, merged with `mergeRosters` (`org-roster.ts:89, 143`) and read from Neo4j `Member` nodes through `org-graph/roster-source.server.ts`. This is what catches a colleague named only in prose.
 
 The table is built in memory, one per invocation, and dropped when the invocation ends: never stored, never reversed. Placeholders stay placeholders in `info_ag`'s output and in its route-output record. The synthesizer answers with whatever names it has from the other routes.
@@ -300,6 +303,7 @@ The table is built in memory, one per invocation, and dropped when the invocatio
 
 When it fails closed:
 
+- the roster-input key is still deleted (E2);
 - no references are attached;
 - the handoff to `info_ag` keeps only the one-line route / status / stats list, and drops the plan text and every result body;
 - every web call in that invocation is refused (below);
@@ -316,6 +320,7 @@ The route still runs, on the user's message and the Neo4j reads. It is not a tur
   - `amendRunFrame` copies slots field by field (`run-frame.server.ts:279-289`), so the slot needs its own merge rule. A nested amend **concatenates** with the open frame's checks, never replaces them. Every check runs, and any one denial denies the call.
   - That is the union rule guards follow, applied to a list, as `transports` already concatenates.
 - **A match denies the call.** The model gets a recoverable tool failure ("the query contained a private identity; rephrase without it"). This counts as a failed dispatch, not a turn error.
+- **Placeholders are denied too (E3).** A placeholder has no value as a search term. With the directory merged first, a colleague keeps the same `PERSON_n` across invocations, turns and conversations, so a placeholder sent to a search provider would become an identifier it can link across sessions, and one that can be traced back to the person in-house. The check therefore also denies any web argument containing a placeholder token, matched as a pattern, `PERSON_<n>` with any suffix: `buildTable` mints `_EMAIL`, `_SLUG`, `_LOCAL`, `_NAME<n>`, `_GIVEN[<n>]` and `_FAMILY[<n>]` (`pseudonymise.ts:185-250`), so an enumerated list would go stale, with the feedback "placeholders are not search terms".
 - **Literals in the latest user message are allowed.** A person the user named and asked to search for is the user's call. The owner can tighten this default.
 - **No roster, no web calls.** In every fail-closed case above, every web call in that invocation is refused rather than checked against nothing.
 
@@ -330,7 +335,10 @@ This is consistent with ADR-0006. The input half rewrites the view and data a ch
 **Pins (layer 1).** Each of these is checked by mutation:
 
 - a synthetic Graph payload and a directory member named only in prose both reach the inner controller as placeholders, through both previews and expansion;
-- **(D1)** a synthetic mail result in `doc_ag` from an external sender who is not in the directory reaches `info_ag`'s rendered `plan_context` as a placeholder, and the roster-source key is absent from the inner pattern's `data`. Mutation: rewrite the view only, and this pin fails;
+- **(D1)** a synthetic mail result in `doc_ag` from an external sender who is not in the directory reaches `info_ag`'s rendered `plan_context` as a placeholder. Mutation: rewrite the view only, and this pin fails;
+- **(E1)** with `lastN: 2`, the sequence `doc_ag` reads a mail from an external non-directory sender → `think` names the sender → two other routes → `info_ag`: the sender appears in `info_ag`'s PLAN section as a placeholder. Mutation: draw the roster input from the handed-off records only, and this pin fails;
+- **(E2)** the roster-input key is absent from the inner pattern's `data` on the rewrite path, the explicit-Anthropic pass-through, fail-closed and a throw, and a route whose pattern does not declare the wrapper is never given the key;
+- **(E3)** a web call whose arguments contain `PERSON_3` or `PERSON_3_EMAIL` is denied;
 - the latest user message reaches the inner controller unchanged;
 - **(D2)** a frame with no tier slot, and one with an unrecognised tier value, both get the rewrite. A frame whose raw tier is exactly `'anthropic'` is a pass-through;
 - **(D3)** on a private-tier run with no `pseudonymiseForWeb`, nothing is attached, no result body is in the handoff, and a web call is refused;
@@ -338,7 +346,7 @@ This is consistent with ADR-0006. The input half rewrites the view and data a ch
 - a web call whose URL carries a percent-encoded roster address is denied, and a nested `egressChecks` amend keeps the outer check;
 - **(D5)** a second production import of `lib/privacy/` fails the narrowed tripwire.
 
-Mutations: drop the `apply` call; skip the data rewrite; skip the expansion path; turn the tier rule back into a positive private-tier match; let a missing pseudonymiser pass through; delete the outgoing check; make a nested `egressChecks` replace instead of concatenate.
+Mutations: drop the `apply` call; skip the data rewrite; narrow the roster input to the last-N records; move the key deletion out of the `finally`; drop the placeholder-token rule; skip the expansion path; turn the tier rule back into a positive private-tier match; let a missing pseudonymiser pass through; delete the outgoing check; make a nested `egressChecks` replace instead of concatenate.
 
 ## Data between routes
 

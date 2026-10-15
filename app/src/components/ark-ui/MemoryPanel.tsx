@@ -111,7 +111,7 @@ export function MemoryPanel() {
               <Switch.HiddenInput
                 onChange={(event) => {
                   // Keep the native checkbox on the persisted value while confirmation is pending.
-                  if (confirmOpen() && confirmSwitchOff())
+                  if (state().enabled && state().memories.length > 0)
                     event.currentTarget.checked = state().enabled
                 }}
               />

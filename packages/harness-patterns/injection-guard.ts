@@ -528,6 +528,23 @@ export function spotlight(text: string, tool: string, namespace: string): string
   )
 }
 
+/**
+ * Strip ONE spotlight fence from `text`, if it carries one; otherwise return it
+ * unchanged. For a reader that excerpts fenced text: the header is ~180
+ * characters, so a fixed-length excerpt of a fenced chunk is the header, not the
+ * chunk. The sentinels are the guard's own (content cannot contain them —
+ * `sentinel-escape` removed them), so the match cannot be forged from data.
+ * Provenance is the caller's to restore (the loop re-fences its output).
+ */
+export function unspotlight(text: string): string {
+  const open = `${SENTINEL_OPEN}UNTRUSTED CONTENT · `
+  const close = `\n${SENTINEL_OPEN}END UNTRUSTED CONTENT${SENTINEL_CLOSE}`
+  if (!text.startsWith(open) || !text.endsWith(close)) return text
+  const headerEnd = text.indexOf(`${SENTINEL_CLOSE}\n`)
+  if (headerEnd === -1) return text
+  return text.slice(headerEnd + 2, text.length - close.length)
+}
+
 // ============================================================================
 // Single-string sanitization
 // ============================================================================

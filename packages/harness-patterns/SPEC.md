@@ -1499,7 +1499,7 @@ beyond the label.
 iteration with its status and stats counted by code from the child's events
 (turns or attempts used against the child's own bound, tool calls, errors, wall
 time; a route that hit its bound reads differently from one that finished early;
-the retriever reports matches, distinct documents and backends — it does not
+the retriever reports matches, distinct documents and backends (its excerpts are taken from the chunk, not from the guard's spotlight fence: `unspotlight` from `injection-guard.ts` strips it, and the loop's own fence restores provenance) — it does not
 record how many documents it _searched_) — then **Latest results**, the last
 `handoff.lastN` outputs in full. It is trimmed oldest-first to the decide
 window. It never holds memory.
@@ -1511,7 +1511,7 @@ with (a) every event of a sibling it may not see physically removed, so not even
 and (b) the loop's own route records removed, since they carry copies of those
 results. `siblingResults` names the patternIds it may see; **the default is none**
 (a route sees its own work, committed non-route events and the handoff text), and
-an id no route's pattern emits under is refused at construction. The user's
+an id no route's pattern emits under is refused at construction. Visibility is per patternId, so two routes that emit under one id (or a route under the loop's own id) are refused at construction too: they would read each other's events. The user's
 message is not a route event and always stays. Child `data` is built fresh:
 the latest sanitized plan (`data.plan`), the separately headed handoff
 (`data.handoff`) and, for a planner route only, the agent map (`data.agentMap`).
@@ -1554,8 +1554,8 @@ thread mode reads — and the stats line rides the action's `status`.
 `currentRunFrame()?.guard?.sanitize('decision_loop_output', …)`. The enclosing
 `withInjectionGuard` must list `decision_loop_output` in `tools` (`sanitize` is a
 no-op for an undeclared key, as for every opt-in) and `spotlight: 'always'` to
-fence everything handed up; a loop with no guard in its frame passes the text
-through, capped. The route's name is never the key. A screen that **threw** is
+fence everything handed up; a loop whose frame has no guard declaring the key passes the text
+through, capped, and warns once per process. The route's name is never the key. A screen that **threw** is
 reported by a typed `screenUnavailable` flag on `SanitizeReport` and on the
 redacted `SanitizeSummary` (never inferred from `screenReason`'s prose): the loop
 then records the route as `failed` with the marker-only result
@@ -1572,7 +1572,7 @@ ends the turn, as it does in `callTool`.
 | A route fails, or throws                                                                                                         | `failed` record; the loop decides again. Its own `error` events are committed as `recoverable`, or `runChain` would end the turn on a child's irrecoverable error.                                                                                                   |
 | The decision is not a decision (an error, an abstention for any reason, a label outside the options) or the state builder throws | Never dispatches a route. **Iteration 1**: an `irrecoverable` `error` ends the turn visibly (nothing ran, so synthesizing would answer without the agent's tools). **Later**: the loop stops as `answer` and the `recoverable` error stays for the synthesizer (N3). |
 | `maxIterations` reached                                                                                                          | Stops as `answer`, with a `recoverable` `error` of kind `budget_exhausted`, so the synthesizer says the work is partial (N5).                                                                                                                                        |
-| A decision or a route leaves a pending human request                                                                             | The loop returns at once, as `chain()` does between children.                                                                                                                                                                                                        |
+| A route leaves a pending human request                                                                                           | The loop returns at once, as `chain()` does between children.                                                                                                                                                                                                        |
 
 `DECISION_LOOP_MAX_ITERATIONS` (6) is exported so a host that mirrors the bound,
 such as the stuck-run reaper's arithmetic, can pin its copy to it.

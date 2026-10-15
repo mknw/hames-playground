@@ -21,6 +21,7 @@
 
 import { assertServerOnImport } from '../assert.server'
 import { EXPAND_TOOL_NAME } from '../types'
+import { unspotlight } from '../injection-guard'
 import type {
   ContextEvent,
   ControllerActionEventData,
@@ -106,7 +107,9 @@ export function routeKind<T>(pattern: ConfiguredPattern<T>): RouteKind | undefin
 }
 
 /** Every `patternId` a pattern can emit events under, nested ones included.
- *  Wrappers are config-transparent, so they add nothing of their own. */
+ *  `withInjectionGuard` and `withSandbox` are config-transparent and add none of
+ *  their own; `withReferences` is not (it generates its own id), and the walk
+ *  collects that one too. */
 export function collectPatternIds<T>(pattern: ConfiguredPattern<T>): Set<string> {
   const ids = new Set<string>()
   const walk = (p: ConfiguredPattern<T>): void => {
@@ -233,7 +236,7 @@ function extractRetriever(events: ContextEvent[]): Extracted {
       m.docId !== undefined && m.startOffset !== undefined && m.endOffset !== undefined
         ? ` [doc ${m.docId}, chars ${m.startOffset}-${m.endOffset}]`
         : ''
-    const excerpt = m.content.replace(/\s+/g, ' ').trim().slice(0, EXCERPT_CHARS)
+    const excerpt = unspotlight(m.content).replace(/\s+/g, ' ').trim().slice(0, EXCERPT_CHARS)
     return `- ${m.source ?? m.id}${where}: ${excerpt}`
   })
   const docs = new Set(matches.map((m) => m.docId ?? m.source ?? m.id)).size

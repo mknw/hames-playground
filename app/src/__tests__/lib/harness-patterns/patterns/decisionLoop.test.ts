@@ -33,6 +33,7 @@ import {
   DECISION_LOOP_MAX_ITERATIONS,
   DECISION_LOOP_OUTPUT_KEY,
   WITHHELD_SCREEN_UNAVAILABLE,
+  __resetDecisionLoopWarnings,
   type DecisionLoopData,
   type DecisionLoopRoute,
 } from '@hames-ai/harness-patterns/patterns/decisionLoop.server'
@@ -48,7 +49,7 @@ import {
 import { withReferences } from '@hames-ai/harness-patterns/patterns/with-references.server'
 import { withInjectionGuard } from '@hames-ai/harness-patterns/patterns/withInjectionGuard.server'
 import { harnessDecisionKeys, harnessHasRedisRetriever } from '@hames-ai/harness-patterns'
-import { redactReport } from '@hames-ai/harness-patterns/guard'
+import { redactReport, spotlight, unspotlight } from '@hames-ai/harness-patterns/guard'
 import {
   DEFAULT_COMMIT_STRATEGY,
   DEFAULT_ERROR_SEVERITY,
@@ -1478,5 +1479,205 @@ describe('decisionLoop — default extractors over real patterns', () => {
     const result = eventsOf(ctx, 'orchestrator', 'tool_result')[0].data as ToolResultEventData
     expect(result.result).toBe('FINAL ANSWER TEXT')
     expect(states[1]).toContain('simpleLoop: 2 of 4 turns, 1 tool call, 0 errors,')
+  })
+})
+
+// ============================================================================
+// Fix round 1 (review of PR #600)
+// ============================================================================
+
+describe('decisionLoop — fix round 1', () => {
+  beforeEach(() => {
+    __resetDecisionLoopWarnings()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(console.warn).mockClear()
+  })
+
+  // Finding 1. MUTATION: delete the collision check and these go red.
+  it('refuses two routes that emit under one patternId, a reused pattern object, and a route under the loop`s id', () => {
+    const { decide } = scriptedDecide(['answer'])
+    expect(() =>
+      build(
+        {
+          office: route(fake('actorCritic', 'shared', () => {})),
+          info: route(
+            fake('simpleLoop', 'shared', () => {}),
+            { siblingResults: [] },
+          ),
+        },
+        decide,
+      ),
+    ).toThrow(/both emit under patternId 'shared'/)
+    const one = returning('one-p', 'x')
+    expect(() => build({ a: route(one), b: route(one) }, decide)).toThrow(/both emit under/)
+    expect(() => build({ a: route(returning('orchestrator', 'x')) }, decide)).toThrow(
+      /loop's own patternId 'orchestrator'/,
+    )
+  })
+
+  // Finding 2. MUTATION: take `latestPlan` from the child's raw `finished.data.plan`.
+  it('the PLAN a later child renders comes from the sanitized record, never the raw child data', async () => {
+    const { decide } = scriptedDecide(['think', 'info', 'answer'])
+    const planFn = vi.fn(async () => ({
+      plan: { reasoning: '', plan: `1) ${INJECTION}`, n_steps: 1 },
+      llmCall: undefined,
+      toolCount: 0,
+    }))
+    const seen: Array<string | undefined> = []
+    const controller = vi.fn(async (input: { planContext?: string }) => {
+      seen.push(input.planContext)
+      return {
+        action: {
+          reasoning: 'r',
+          tool_name: 'Return',
+          tool_args: 'ok',
+          is_final: true,
+        } as ControllerAction,
+      }
+    })
+    const loop = guarded(
+      build(
+        {
+          think: route(planner<Data>(planFn as never, [], { patternId: 'think-p' })),
+          info: route(simpleLoop<Data>(controller as never, ['search'], { patternId: 'info-p' })),
+        },
+        decide,
+      ),
+    )
+    await run([loop])
+    const planSection = seen[0]!.split(HANDOFF_HEADING)[0]
+    expect(planSection).toContain('PLAN (from previous step')
+    expect(planSection).toContain('⟦neutralized:')
+    expect(planSection).toContain('UNTRUSTED CONTENT')
+    expect(planSection).not.toContain(INJECTION_SPAN)
+  })
+
+  // Finding 3. MUTATION: `continue` instead of `break` on a later non-decision.
+  it('a non-decision after iteration 1 STOPS the loop: no later decision is asked and no route reruns', async () => {
+    const { decide, calls } = scriptedDecide(['info', 'throw', 'info', 'answer'])
+    let ran = 0
+    const info = fake('simpleLoop', 'info-p', (s) => {
+      ran += 1
+      trackEvent(s, 'controller_action', returnAction('x'), true)
+    })
+    const synthSaw: number[] = []
+    const synth = fake(
+      'compactExecution',
+      'synth',
+      (_s, v) => void synthSaw.push(v.fromAll().errors().get().length),
+    )
+    const ctx = await run([build({ info: route(info) }, decide), synth])
+    expect(ran).toBe(1)
+    expect(calls()).toBe(2)
+    const errors = eventsOf(ctx, 'orchestrator', 'error')
+    expect(errors).toHaveLength(1)
+    expect((errors[0].data as ErrorEventData).severity).toBe('recoverable')
+    expect(synthSaw).toEqual([1])
+  })
+
+  // Finding 4. MUTATIONS: a thrown message bypasses sanitizeField; any ok:false text bypasses it.
+  it('failed-route text is sanitized: a thrown message and an error-event text reach no projection raw', async () => {
+    const { decide, states } = scriptedDecide(['thrower', 'errored', 'next', 'answer'])
+    const thrower = fake('simpleLoop', 'thrower-p', () => {
+      throw new Error(INJECTION)
+    })
+    const errored = fake('simpleLoop', 'errored-p', (s) => {
+      trackEvent(s, 'error', { error: INJECTION, severity: 'recoverable' } as ErrorEventData, true)
+    })
+    const handoffs: string[] = []
+    const next = fake('simpleLoop', 'next-p', (s) => {
+      handoffs.push((s.data as { handoff?: string }).handoff ?? '')
+      trackEvent(s, 'controller_action', returnAction('ok'), true)
+    })
+    const loop = guarded(
+      build({ thrower: route(thrower), errored: route(errored), next: route(next) }, decide, {
+        handoff: { lastN: 3 },
+      }),
+    )
+    const ctx = await run([loop])
+    const records = eventsOf(ctx, 'orchestrator', 'tool_result').map(
+      (e) => e.data as ToolResultEventData,
+    )
+    expect(records[0].success).toBe(false)
+    expect(records[1].success).toBe(false)
+    for (const text of [
+      records[0].error ?? '',
+      records[1].error ?? '',
+      states[2],
+      states[3],
+      handoffs[0],
+    ]) {
+      expect(text).toContain('⟦neutralized:')
+      expect(text).not.toContain(INJECTION_SPAN)
+    }
+  })
+
+  // Finding 5. MUTATION: `if (resultField.unavailable)` alone.
+  it('an outage on the REASONING call alone withholds the record', async () => {
+    const { decide } = scriptedDecide(['info', 'answer'])
+    let calls = 0
+    const screen = vi.fn(async () => {
+      if (++calls === 2) throw new Error('screen down on the second call')
+      return { injection_detected: false, reason: '', spans: [] }
+    })
+    const loop = guarded(
+      build({ info: route(returning('info-p', 'fine text', 'fine reasoning')) }, decide),
+      { screen },
+    )
+    const ctx = await run([loop])
+    const record = eventsOf(ctx, 'orchestrator', 'tool_result')[0].data as ToolResultEventData
+    expect(record.success).toBe(false)
+    expect(record.error).toBe(WITHHELD_SCREEN_UNAVAILABLE)
+    expect(JSON.stringify(eventsOf(ctx, 'orchestrator'))).not.toContain('fine text')
+  })
+
+  // Finding 6. MUTATION: excerpt the fenced content (drop `unspotlight`).
+  it('retriever excerpts keep the chunk`s words under the retriever`s own spotlight fence', async () => {
+    const hit = {
+      backend: 'redis',
+      id: 'h1',
+      content: 'QUARTERLY-REVENUE-WAS up four percent year on year.',
+      source: 'q3.md',
+      docId: 'd9',
+      chunkIndex: 0,
+      startOffset: 0,
+      endOffset: 50,
+    }
+    const retr = retriever<Data>({
+      backends: [{ name: 'redis', type: 'vector', search: async () => [hit] }],
+      rewrite: (async () => ({ value: '' })) as never,
+    })
+    const { decide } = scriptedDecide(['read', 'answer'])
+    const loop = guarded(build({ read: route(retr) }, decide), {
+      tools: [DECISION_LOOP_OUTPUT_KEY, 'retriever'],
+    })
+    const ctx = await run([loop])
+    const result = (eventsOf(ctx, 'orchestrator', 'tool_result')[0].data as ToolResultEventData)
+      .result as string
+    expect(result).toMatch(/: QUARTERLY-REVENUE-WAS up four percent year on year\./)
+  })
+
+  it('unspotlight strips exactly one guard fence and nothing else', () => {
+    const fenced = spotlight('inner text', 'retriever', 'retriever')
+    expect(unspotlight(fenced)).toBe('inner text')
+    expect(unspotlight('plain text')).toBe('plain text')
+    expect(unspotlight('⟦UNTRUSTED CONTENT · no close')).toBe('⟦UNTRUSTED CONTENT · no close')
+    expect(unspotlight(spotlight(fenced, 'a', 'b'))).toBe(fenced)
+  })
+
+  // Finding 9. MUTATION: delete the warning.
+  it('warns once when no guard in the run declares decision_loop_output; not when one does', async () => {
+    const warn = vi.mocked(console.warn)
+    const mk = () =>
+      build({ a: route(returning('a-p', 'x')) }, scriptedDecide(['a', 'answer']).decide)
+    await run([mk()])
+    await run([mk()])
+    const mine = () => warn.mock.calls.filter((c) => String(c[0]).includes('[decisionLoop]'))
+    expect(mine()).toHaveLength(1)
+    expect(String(mine()[0][0])).toContain(DECISION_LOOP_OUTPUT_KEY)
+    __resetDecisionLoopWarnings()
+    warn.mockClear()
+    await run([guarded(mk())])
+    expect(mine()).toHaveLength(0)
   })
 })

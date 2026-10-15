@@ -183,6 +183,14 @@ function buildAgentMap<T>(routes: Record<string, DecisionLoopRoute<T>>): string 
     .join('\n')
 }
 
+/** Warned once per process, like the guard's namespace warning. */
+let warnedUnguarded = false
+
+/** Test-only: forget that the unguarded-output warning has fired. */
+export function __resetDecisionLoopWarnings(): void {
+  warnedUnguarded = false
+}
+
 // ============================================================================
 // Pattern
 // ============================================================================
@@ -275,6 +283,28 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
   })
   const loopId = resolved.patternId
 
+  // Visibility is decided PER patternId, so an id that two routes both emit
+  // under — two routes given one id, one pattern object reused in two routes —
+  // is never hidden from either of them, and `siblingResults: []` would read
+  // like access control while granting it. An id equal to the loop's own would
+  // strip the route's own events with the loop's records. Both are refused here,
+  // where the declaration is made, rather than discovered as a leak.
+  for (let i = 0; i < names.length; i++) {
+    for (let j = i + 1; j < names.length; j++) {
+      const shared = [...owned.get(names[i])!].find((id) => owned.get(names[j])!.has(id))
+      if (shared !== undefined) {
+        throw new Error(
+          `decisionLoop: routes '${names[i]}' and '${names[j]}' both emit under patternId '${shared}'; visibility is per patternId, so they would read each other's events — give each route's pattern its own patternId`,
+        )
+      }
+    }
+    if (owned.get(names[i])!.has(loopId)) {
+      throw new Error(
+        `decisionLoop: route '${names[i]}' emits under the loop's own patternId '${loopId}'; its events would be removed with the loop's records`,
+      )
+    }
+  }
+
   // --------------------------------------------------------------------------
 
   /** Cap, then sanitize under the declared key. `unavailable` is the typed
@@ -335,6 +365,15 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
   }
 
   const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
+    // The opt-in is silent by construction (`sanitize` is a no-op for an
+    // undeclared key), which here means raw route output reaching the decision
+    // state and every child's plan_context. Say so once.
+    if (!warnedUnguarded && !currentRunFrame()?.guard?.isUntrusted(DECISION_LOOP_OUTPUT_KEY)) {
+      warnedUnguarded = true
+      console.warn(
+        `[decisionLoop] no guard in this run declares '${DECISION_LOOP_OUTPUT_KEY}' in its tools: route output is NOT sanitized before it reaches the decision state and the next child's plan_context. Wrap the loop in withInjectionGuard({ tools: ['${DECISION_LOOP_OUTPUT_KEY}'], spotlight: 'always' }).`,
+      )
+    }
     const outerCtx = (view as unknown as { ctx: UnifiedContext }).ctx
     const records: RouteOutput[] = []
     let latestPlan: { text: string; steps: number } | undefined

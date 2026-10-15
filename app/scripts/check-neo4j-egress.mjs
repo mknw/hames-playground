@@ -236,13 +236,14 @@ try {
         throw new Error(`Missing procedure ${name}: ${r.stdout} ${r.stderr}`)
     }
     const network = JSON.parse(docker(['network', 'inspect', 'g13-test_neo4j-internal']).stdout)[0]
+    // With isolated mode, .1 can be a peer; Containers below records its holder.
     const bridgeGateway = '172.30.249.1' // Address proven reachable in the pre-change RED.
     const subnet = network.IPAM.Config.find((c) => c.Subnet)?.Subnet
     if (subnet !== '172.30.249.0/24') throw new Error('Scratch subnet changed')
     const isolatedGateway =
       network.Options['com.docker.network.bridge.gateway_mode_ipv4'] === 'isolated'
     console.log(
-      `Network inspect: ${JSON.stringify({ Internal: network.Internal, EnableIPv6: network.EnableIPv6, Options: network.Options, IPAM: network.IPAM })}`,
+      `Network inspect: ${JSON.stringify({ Internal: network.Internal, EnableIPv6: network.EnableIPv6, Options: network.Options, IPAM: network.IPAM, Containers: network.Containers })}`,
     )
     console.log(`Former bridge gateway target: ${bridgeGateway}; subnet: ${subnet}`)
     const host = (args) => exec('host-listener', args).stdout

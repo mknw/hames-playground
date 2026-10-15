@@ -13,7 +13,9 @@ The stack runs as one Docker Compose project, `hames`:
 
 Neo4j sits only on `neo4j-internal` (`internal: true`, IPv4 gateway mode `isolated`), with `neo4j-relay` as
 its only peer. Other services use `app-network` and reach Neo4j through that
-fixed-destination HTTP/Bolt relay. Every
+fixed-destination HTTP/Bolt relay. Neo4j can reach the relay's two internal
+listeners by design; each forwards only back into Neo4j. The recorded network
+proof is IPv4-only. Every
 published port is bound to `127.0.0.1`, and the two database passwords come from
 the repo-root `.env` — see [Credentials and existing volumes](#credentials-and-existing-volumes)
 before the first `docker compose up` on a machine that already has the stack.
@@ -23,7 +25,7 @@ before the first `docker compose up` on a machine that already has the stack.
 ### Neo4j
 
 - **Container**: hames-neo4j
-- **Network**: `neo4j-internal` only, with IPv4 gateway mode `isolated`; no published ports or host address on that bridge. The [runtime probe](testing/neo4j-egress.md) checks public HTTP/DNS, peer TCP/HTTP, the former bridge address, VM primary address, docker0 and `host.docker.internal` when resolvable (Docker Engine 28+ required).
+- **Network**: `neo4j-internal` only, with IPv4 gateway mode `isolated`; no published ports or host IPv4 address on that bridge. The [runtime probe](testing/neo4j-egress.md) checks public HTTP/DNS, peer TCP/HTTP, the former bridge address, VM primary address, docker0 and `host.docker.internal` when resolvable (Docker Engine 28+ required).
 - **Ports via neo4j-relay** (loopback only):
   - 127.0.0.1:7474 (HTTP browser interface)
   - 127.0.0.1:7687 (Bolt protocol)

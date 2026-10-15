@@ -2,6 +2,7 @@
 // Layer 1 topology pins. The opt-in Docker probe checks actual packets;
 // docs/testing/neo4j-egress.md explains the distinction and red mutation.
 import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -136,6 +137,7 @@ describe('G13 Neo4j isolation', () => {
       'Neo4j has a default route or gateway',
       "['cat', '/proc/net/route']",
       "driver_opts: source.networks['neo4j-internal'].driver_opts",
+      'Containers: network.Containers',
       "exec('neo4j-relay', ['nslookup', 'example.com'])",
       'PASS external DNS positive control from app-network',
     ])
@@ -151,6 +153,48 @@ describe('G13 Neo4j isolation', () => {
       false,
     )
     expect(networkError.test('Invalid input: expected an expression')).toBe(false)
+  })
+  it.each([
+    ['27.5.1', '0', 'assert_engine_supported', 1],
+    ['28.0.0', '0', 'assert_engine_supported', 0],
+    ['29.2.1', '0', 'assert_engine_supported', 0],
+    ['', '0', 'assert_engine_supported', 1],
+    ['unknown', '0', 'assert_engine_supported', 1],
+    ['29.2.1', '1', 'assert_engine_supported', 1],
+    ['27.5.1', '0', 'stage_boot', 1],
+  ])('bootstrap gates server Engine %s (status %s) in %s', (version, status, entry, expected) => {
+    const result = spawnSync(
+      'bash',
+      [
+        '-c',
+        `
+      source "$1"
+      sudo() {
+        [[ "$#" == 4 && "$1" == docker && "$2" == version && "$3" == --format && "$4" == '{{.Server.Version}}' ]] || return 90
+        [[ "$G13_FAKE_ENGINE_STATUS" == 0 ]] || return 1
+        printf '%s\n' "$G13_FAKE_ENGINE_VERSION"
+      }
+      "$G13_ENGINE_ENTRY"
+    `,
+        '_',
+        path.join(root, 'scripts/bootstrap-vps.sh'),
+      ],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          HAMES_BOOTSTRAP_SOURCED: '1',
+          HAMES_APP_DIR: '/nonexistent/g13-bootstrap-engine-test',
+          HAMES_STATE_DIR: '/nonexistent/g13-bootstrap-engine-state',
+          G13_FAKE_ENGINE_VERSION: version,
+          G13_FAKE_ENGINE_STATUS: status,
+          G13_ENGINE_ENTRY: entry,
+        },
+      },
+    )
+    expect(result.error).toBeUndefined()
+    expect(result.status, result.stdout + result.stderr).toBe(expected)
+    expect(result.stdout).toContain(expected ? 'need >= 28.0.0' : `Docker Engine ${version}`)
   })
   it('all container consumers address the relay', () => {
     for (const file of [

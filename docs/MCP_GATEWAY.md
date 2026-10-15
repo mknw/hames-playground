@@ -37,7 +37,13 @@ The Neo4j box above is reached through `neo4j-relay` on ports 7474/7687.
 Neo4j joins only `neo4j-internal` (`internal: true`, IPv4 gateway mode `isolated`); the relay is its only
 peer and joins `app-network` for gateway clients. The [runtime probe](testing/neo4j-egress.md) checks forbidden connections from
 Neo4j to the gateway, Redis/Postgres, public URLs and daemon-host addresses,
-while rechecking inbound Bolt through the relay (#241 G13).
+while rechecking inbound Bolt through the relay (#241 G13). Neo4j can reach
+both internal relay listeners by design; they forward only back into Neo4j.
+The recorded reachability proof is IPv4-only.
+
+Before recreating the stack for G13, take a Neo4j dump using the currently
+running image. The first `docker compose up -d` moves an older store to 5.26.32;
+that store-format move cannot be undone.
 
 No MCP server reaches the app's Postgres: agents get no database access (see
 [Postgres](#postgres) below). The app reads and writes Postgres itself, through

@@ -7,8 +7,10 @@ Its two socat listeners have fixed Neo4j destinations; it has no IP forwarding
 and drops every capability. Host consumers keep localhost; the container app
 and gateway config use `neo4j-relay`. Both compose files close CSV file URLs
 and APOC file imports. The bridge controls external forwarding and removes
-the host address on the bridge; no procedure allowlist supplies that boundary.
-Docker Engine 28+ is required; runtime evidence targets Engine 29.2.1.
+the host IPv4 address on the bridge; no procedure allowlist supplies that boundary.
+Docker Engine 28+ is required; runtime evidence targets Engine 29.2.1. The
+network proof is IPv4-only. Neo4j can still reach the relay's HTTP/Bolt listeners
+on `neo4j-internal` by design; both forward only back into Neo4j.
 [Docker gateway-mode documentation](https://docs.docker.com/engine/network/port-publishing/#gateway-modes)
 explains why `internal: true` alone still permits host-local delivery and why
 `isolated` removes the bridge address.
@@ -19,6 +21,14 @@ absent. A first bring-up builds the image automatically. After merge the owner
 must take a dump with the currently running image before recreating their stack:
 `docker compose up -d` moves an older store to 5.26.32 and that move cannot
 be undone. The backup and restore default is `hames-neo4j:local`, matching compose.
+`bootstrap-vps.sh` checks the daemon version before `dc up` and refuses Engine
+versions below 28.0.0, unreadable versions and an unavailable daemon. It does
+not upgrade an existing Engine automatically. Manual operators must run this
+check before deployment (a failed check means stop and upgrade first):
+
+```sh
+test "$(docker version --format '{{.Server.Version}}' | cut -d. -f1)" -ge 28 || { echo 'Docker Engine >= 28.0.0 required; upgrade before deploying.' >&2; exit 1; }
+```
 
 ## Checks and scope
 
@@ -78,14 +88,21 @@ The probe records network inspect, the host bridge's IPv4 addresses and Neo4j's
 route or gateway in Neo4j. This structural check replaces the old exact-address
 D1 positive control, which cannot succeed at an address removed by the fix.
 
-The former `172.30.249.1` TCP and APOC negatives remain. The probe also requires
+The former `172.30.249.1` leg is structural, not a daemon-host reachability
+negative: with no host bridge address or IPAM gateway, `.1` can be allocated to
+Neo4j or the relay. Its recorded `Connection refused` is a peer reset, not a
+network-class timeout proving host isolation. The probe now prints network
+inspect `Containers` to identify the holder; host isolation is carried by the
+actual bridge-address/route assertions and the controlled VM/docker0 negatives.
+The `.1` TCP/APOC assertions remain unchanged. The probe also requires
 forbidden TCP and APOC GET to the VM primary-interface IPv4 address and docker0
 (`172.17.0.1`), plus every IPv4 address of `host.docker.internal` if Neo4j resolves
 it. Lookup exit 2 is recorded explicitly if the alias is absent; other lookup
 failures are inconclusive. Each _assigned_ host address must first return HTTP
 200 and JSON from the SAME host listener to the non-isolated gateway-image
 container on `app-network`. The former bridge address instead has the recorded
-pre-change positive control and structural proof of its removal. No failed
+pre-change host control and structural proof that the host address was removed;
+a peer may now own that same numeric address. No failed
 negative is converted into a pass by a missing listener. A real failed negative,
 unsupported mode or broken relay stops the evidence run for owner direction.
 

@@ -75,7 +75,9 @@ Neo4j is isolated on `neo4j-internal` (`internal: true`, IPv4 gateway mode `isol
 shares it. HTTP/Bolt loopback publishes belong to the relay, and container
 consumers use `neo4j-relay`, keeping Neo4j off `app-network` (#241 G13).
 Plugins are baked into the image; CSV file URLs and APOC file imports stay off.
-After merge the owner must recreate their own stack once: `docker compose up -d`.
+Before recreating the stack, take a Neo4j dump using the currently running
+image. The first `docker compose up -d` after adopting G13 moves an older store
+to 5.26.32; that store-format move cannot be undone.
 See the [opt-in egress check](testing/neo4j-egress.md).
 
 ## 2. Firewall — network security group

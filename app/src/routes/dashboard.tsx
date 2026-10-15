@@ -473,10 +473,11 @@ export default function Dashboard() {
               <Show when={totals()!.timePricedCalls > 0}>
                 <span>
                   A <span font="mono">≥</span> marks a figure that includes wall-clock-billed steps.
-                  The self-hosted GPU bills by the second it is awake (
-                  <span font="mono">VERDA_EUR_PER_HOUR</span>) and its tokens are free, but the only
-                  seconds visible here are the durations of the calls themselves — not the idle
-                  window the box stays warm for afterwards, nor the cold start before the first
+                  The self-hosted GPUs bill by the second they are awake (
+                  <span font="mono">VERDA_EUR_PER_HOUR</span> and{' '}
+                  <span font="mono">SMALL_LLM_EUR_PER_HOUR</span>) and their tokens are free, but
+                  the only seconds visible here are the durations of the calls themselves — not the
+                  idle window the box stays warm for afterwards, nor the cold start before the first
                   call. Those figures are floors on the bill, not the bill.
                 </span>
               </Show>

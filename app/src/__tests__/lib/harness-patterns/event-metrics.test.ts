@@ -2,6 +2,7 @@
 // tables, cost rates); these tests exercise scopes/rates/windows, so they run
 // the same wiring a production turn takes.
 import '../../../lib/inference/config.server'
+import { VERDA_CLIENT_NAME } from '../../../lib/inference/verda-activity.server'
 /**
  * Event-level token/cost accounting (#122).
  *
@@ -158,12 +159,12 @@ describe('computeEventMetrics', () => {
 
   it('prices a self-hosted attempt by its OWN measured duration, not by tokens', async () => {
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const { DEFAULT_VERDA_EUR_PER_HOUR, TIME_PRICED_CLIENT } = await import('../../../lib/settings')
+    const { DEFAULT_VERDA_EUR_PER_HOUR } = await import('../../../lib/settings')
     const collector = fakeCollector([
       {
         calls: [
           {
-            ...apiCall(TIME_PRICED_CLIENT, { input_tokens: 900_000, output_tokens: 40_000 }),
+            ...apiCall(VERDA_CLIENT_NAME, { input_tokens: 900_000, output_tokens: 40_000 }),
             timing: { durationMs: 6_300 },
           },
         ],
@@ -188,13 +189,13 @@ describe('computeEventMetrics', () => {
     // tokens for the second. Pricing the whole step by the run's intended tier
     // would bill one of the two wrong.
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const { DEFAULT_EUR_PER_USD, DEFAULT_VERDA_EUR_PER_HOUR, TIME_PRICED_CLIENT } =
+    const { DEFAULT_EUR_PER_USD, DEFAULT_VERDA_EUR_PER_HOUR } =
       await import('../../../lib/settings')
     const collector = fakeCollector([
       {
         calls: [
           {
-            ...apiCall(TIME_PRICED_CLIENT, { input_tokens: 5_000, output_tokens: 100 }),
+            ...apiCall(VERDA_CLIENT_NAME, { input_tokens: 5_000, output_tokens: 100 }),
             timing: { durationMs: 3_600_000 },
           },
           {
@@ -234,19 +235,19 @@ describe('computeEventMetrics', () => {
     // plus a 6.3s call as €0.003 — with a `≥` in front of it, which reads as
     // accounted for.
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const { DEFAULT_VERDA_EUR_PER_HOUR, TIME_PRICED_CLIENT } = await import('../../../lib/settings')
+    const { DEFAULT_VERDA_EUR_PER_HOUR } = await import('../../../lib/settings')
     const collector = fakeCollector([
       {
         calls: [
           // Usage-less: no httpResponse to read, no Collector usage either.
           {
             selected: false,
-            clientName: TIME_PRICED_CLIENT,
+            clientName: VERDA_CLIENT_NAME,
             provider: 'openai-generic',
             timing: { durationMs: 900_000 },
           },
           {
-            ...apiCall(TIME_PRICED_CLIENT, { input_tokens: 2_000, output_tokens: 80 }),
+            ...apiCall(VERDA_CLIENT_NAME, { input_tokens: 2_000, output_tokens: 80 }),
             timing: { durationMs: 6_300 },
           },
         ],
@@ -271,13 +272,12 @@ describe('computeEventMetrics', () => {
     // Counting the attempt must not invent a price for it: a time bill with no
     // time is not a free call, so the whole step reads as cost-unknown.
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const { TIME_PRICED_CLIENT } = await import('../../../lib/settings')
     const collector = fakeCollector([
       {
         calls: [
-          { selected: false, clientName: TIME_PRICED_CLIENT, provider: 'openai-generic' },
+          { selected: false, clientName: VERDA_CLIENT_NAME, provider: 'openai-generic' },
           {
-            ...apiCall(TIME_PRICED_CLIENT, { input_tokens: 2_000, output_tokens: 80 }),
+            ...apiCall(VERDA_CLIENT_NAME, { input_tokens: 2_000, output_tokens: 80 }),
             timing: { durationMs: 6_300 },
           },
         ],
@@ -322,9 +322,8 @@ describe('computeEventMetrics', () => {
     // A time bill with no time is not a free call, and the step's other attempts
     // cannot stand in for it: the honest reading is unknown.
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const { TIME_PRICED_CLIENT } = await import('../../../lib/settings')
     const collector = fakeCollector([
-      { calls: [apiCall(TIME_PRICED_CLIENT, { input_tokens: 5_000, output_tokens: 100 })] },
+      { calls: [apiCall(VERDA_CLIENT_NAME, { input_tokens: 5_000, output_tokens: 100 })] },
     ])
     const m = computeEventMetrics(collector as never)!
     expect(m.attempts).toBe(1)
@@ -335,7 +334,6 @@ describe('computeEventMetrics', () => {
 
   it('honours the env rates when pricing a step', async () => {
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const { TIME_PRICED_CLIENT } = await import('../../../lib/settings')
     const saved = process.env.VERDA_EUR_PER_HOUR
     process.env.VERDA_EUR_PER_HOUR = '3.5'
     try {
@@ -343,7 +341,7 @@ describe('computeEventMetrics', () => {
         {
           calls: [
             {
-              ...apiCall(TIME_PRICED_CLIENT, { input_tokens: 10, output_tokens: 1 }),
+              ...apiCall(VERDA_CLIENT_NAME, { input_tokens: 10, output_tokens: 1 }),
               timing: { durationMs: 3_600_000 },
             },
           ],

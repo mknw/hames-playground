@@ -456,9 +456,15 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
   // composition root — rather than a direct import of the host's
   // `lib/cost-rates.server.ts`, which an installed package cannot resolve.
   const { eurPerUsd: eurPerUsdRate, verdaEurPerHour: verdaEurPerHour } = activeCostRates()
-  const { estimate: estimateLlmCostEur, timePricedClient: TIME_PRICED_CLIENT } = activeCostPricing()
+  const { estimate: estimateLlmCostEur, timePricedClient, timePricedClients } = activeCostPricing()
   const eurPerUsd = eurPerUsdRate()
-  const eurPerHour = verdaEurPerHour()
+  const timeRates = Object.fromEntries(
+    Object.entries(timePricedClients ?? {}).map(([client, readRate]) => [client, readRate()]),
+  )
+  // Keep the published single-client form working for existing consumers.
+  if (timePricedClient && !Object.hasOwn(timeRates, timePricedClient)) {
+    timeRates[timePricedClient] = verdaEurPerHour()
+  }
   let attempts = 0
   let costEur = 0
   let noCacheEur = 0
@@ -475,9 +481,12 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
       // either way. Zero buckets leave the token sums truthful and let the
       // measured duration price the attempt — dropping it instead understated a
       // 15-minute cold start as €0.003 with a `≥` in front of it.
+      const eurPerHour =
+        call.clientName !== undefined && Object.hasOwn(timeRates, call.clientName)
+          ? timeRates[call.clientName]
+          : undefined
       const buckets =
-        callTokenBuckets(call) ??
-        (call.clientName === TIME_PRICED_CLIENT ? NO_TOKEN_USAGE : undefined)
+        callTokenBuckets(call) ?? (eurPerHour !== undefined ? NO_TOKEN_USAGE : undefined)
       if (!buckets) continue
       attempts++
       totals.inputUncachedTokens += buckets.inputUncachedTokens
@@ -499,7 +508,7 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
         if (est.basis === 'time') {
           timePricedAttempts++
           timeRate = {
-            eurPerHour: est.timeRate?.eurPerHour ?? eurPerHour,
+            eurPerHour: est.timeRate?.eurPerHour ?? eurPerHour ?? verdaEurPerHour(),
             durationMs: (timeRate?.durationMs ?? 0) + (est.timeRate?.durationMs ?? 0),
           }
         }

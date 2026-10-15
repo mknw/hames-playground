@@ -1,5 +1,7 @@
 # Small models on Modal
 
+First time? [Serving the small models on Modal](../../docs/tutorials/serving-the-small-models-on-modal.md) walks the whole setup once; this page is the reference.
+
 The private tier's two small roles on one scale-to-zero GPU container: the Qwen3.5-4B summarizer the app reaches as `LocalQwenSmall`, and the H2O-Lightning-4B decision LoRA (same base) behind H2O's `systemone` shim. One vLLM process serves both; a Caddy route list is the only public surface.
 
 ## Quick start

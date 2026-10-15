@@ -372,6 +372,8 @@ services:
 networks:
   neo4j-internal:
     internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
   app-network:
     driver: bridge
 

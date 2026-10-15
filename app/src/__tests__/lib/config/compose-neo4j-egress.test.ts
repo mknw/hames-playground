@@ -22,7 +22,7 @@ interface Service {
 }
 interface Compose {
   services: Record<string, Service>
-  networks: Record<string, { internal?: boolean }>
+  networks: Record<string, { internal?: boolean; driver_opts?: Record<string, string> }>
 }
 function load(file: string): Compose {
   const doc = parseDocument(read(file))
@@ -34,6 +34,9 @@ const prod = load('docker-compose.prod.yaml')
 
 function isolated(compose: Compose): void {
   expect(compose.networks['neo4j-internal'].internal).toBe(true)
+  expect(
+    compose.networks['neo4j-internal'].driver_opts?.['com.docker.network.bridge.gateway_mode_ipv4'],
+  ).toBe('isolated')
   expect(compose.services.neo4j.networks).toEqual(['neo4j-internal'])
   expect(compose.services.neo4j.ports ?? []).toEqual([])
   // The offline renderer is the sole exception; namespace sharing anywhere
@@ -115,7 +118,7 @@ describe('G13 Neo4j isolation', () => {
       "'network', 'inspect', 'g13-test_neo4j-internal'",
       "['getent', 'hosts', 'example.com']",
       '![0, 2].includes(dns.status)',
-      "['bridge-gateway', 59143]",
+      "['bridge-gateway', bridgeGateway]",
       'http://${bridgeGateway}:59143/',
       "LOAD CSV FROM 'file:///etc/passwd' AS row RETURN row",
       "CALL apoc.load.json('file:///etc/passwd')",
@@ -124,7 +127,15 @@ describe('G13 Neo4j isolation', () => {
       'Non-network TCP failure',
       'File prohibition unproven',
       'Host listener positive control failed',
-      'TCP:${bridgeGateway}:59143',
+      'TCP:${address}:59143',
+      'assertHostListener(ip)',
+      "['vm-primary', primaryAddress]",
+      "['docker0', docker0]",
+      "['getent', 'hosts', 'host.docker.internal']",
+      'Isolated bridge still has a host IPv4 address',
+      'Neo4j has a default route or gateway',
+      "['cat', '/proc/net/route']",
+      "driver_opts: source.networks['neo4j-internal'].driver_opts",
       "exec('neo4j-relay', ['nslookup', 'example.com'])",
       'PASS external DNS positive control from app-network',
     ])
@@ -158,6 +169,7 @@ describe('G13 Neo4j isolation', () => {
   // Docker network flag controls packets rather than just the YAML spelling.
   it.each([
     'external network',
+    'host gateway',
     'shared backend network',
     'third peer',
     'published database',
@@ -170,6 +182,7 @@ describe('G13 Neo4j isolation', () => {
     'renderer shares neo4j',
   ])('rejects mutation: %s', (mutation) => {
     const changed = structuredClone(base)
+    if (mutation === 'host gateway') changed.networks['neo4j-internal'].driver_opts = {}
     if (mutation === 'external network') changed.networks['neo4j-internal'].internal = false
     if (mutation === 'shared backend network') changed.services.neo4j.networks?.push('app-network')
     if (mutation === 'third peer') changed.services.redis.networks = ['neo4j-internal']

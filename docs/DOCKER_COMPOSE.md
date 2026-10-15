@@ -11,7 +11,7 @@ The stack runs as one Docker Compose project, `hames`:
 - **doc-convert**: document → markdown sidecar for the Data Stash
 - **app**: the SolidStart app itself — opt-in via the `app` profile (#197)
 
-Neo4j sits only on `neo4j-internal` (`internal: true`), with `neo4j-relay` as
+Neo4j sits only on `neo4j-internal` (`internal: true`, IPv4 gateway mode `isolated`), with `neo4j-relay` as
 its only peer. Other services use `app-network` and reach Neo4j through that
 fixed-destination HTTP/Bolt relay. Every
 published port is bound to `127.0.0.1`, and the two database passwords come from
@@ -23,7 +23,7 @@ before the first `docker compose up` on a machine that already has the stack.
 ### Neo4j
 
 - **Container**: hames-neo4j
-- **Network**: `neo4j-internal` only; no published ports and no outbound network access
+- **Network**: `neo4j-internal` only, with IPv4 gateway mode `isolated`; no published ports or host address on that bridge. The [runtime probe](testing/neo4j-egress.md) checks public HTTP/DNS, peer TCP/HTTP, the former bridge address, VM primary address, docker0 and `host.docker.internal` when resolvable (Docker Engine 28+ required).
 - **Ports via neo4j-relay** (loopback only):
   - 127.0.0.1:7474 (HTTP browser interface)
   - 127.0.0.1:7687 (Bolt protocol)

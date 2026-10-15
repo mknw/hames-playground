@@ -34,9 +34,10 @@ The MCP Gateway is Docker's tool for managing and running MCP (Model Context Pro
 ```
 
 The Neo4j box above is reached through `neo4j-relay` on ports 7474/7687.
-Neo4j joins only `neo4j-internal` (`internal: true`); the relay is its only
-peer and joins `app-network` for gateway clients. Neo4j cannot initiate
-connections to the gateway, other backend services or public URLs (#241 G13).
+Neo4j joins only `neo4j-internal` (`internal: true`, IPv4 gateway mode `isolated`); the relay is its only
+peer and joins `app-network` for gateway clients. The [runtime probe](testing/neo4j-egress.md) checks forbidden connections from
+Neo4j to the gateway, Redis/Postgres, public URLs and daemon-host addresses,
+while rechecking inbound Bolt through the relay (#241 G13).
 
 No MCP server reaches the app's Postgres: agents get no database access (see
 [Postgres](#postgres) below). The app reads and writes Postgres itself, through

@@ -1,12 +1,17 @@
 # Neo4j network isolation (#241 G13)
 
-Neo4j joins only `neo4j-internal` (`internal: true`). The only other member,
+Neo4j joins only `neo4j-internal` (`internal: true`,
+`com.docker.network.bridge.gateway_mode_ipv4: isolated`). The only other member,
 `neo4j-relay`, also joins `app-network` and listens on HTTP 7474/Bolt 7687.
 Its two socat listeners have fixed Neo4j destinations; it has no IP forwarding
 and drops every capability. Host consumers keep localhost; the container app
 and gateway config use `neo4j-relay`. Both compose files close CSV file URLs
-and APOC file imports. This fails closed at the network regardless of procedure
-name; no Cypher blacklist or procedure allowlist supplies the boundary.
+and APOC file imports. The bridge controls external forwarding and removes
+the host address on the bridge; no procedure allowlist supplies that boundary.
+Docker Engine 28+ is required; runtime evidence targets Engine 29.2.1.
+[Docker gateway-mode documentation](https://docs.docker.com/engine/network/port-publishing/#gateway-modes)
+explains why `internal: true` alone still permits host-local delivery and why
+`isolated` removes the bridge address.
 
 The image builds APOC (bundled upstream) and n10s into the plugins directory.
 Runtime plugin downloads would fail under isolation, so `NEO4J_PLUGINS` is
@@ -34,7 +39,7 @@ node scripts/check-neo4j-egress.mjs --context g13-vm > /tmp/g13-green.log 2>&1
 node scripts/check-neo4j-egress.mjs --context g13-vm --mutate > /tmp/g13-red.log 2>&1
 ```
 
-The green run must exit 0. The red run removes `internal: true` and must exit 1
+The green run must exit 0. The red run additionally joins Neo4j to `app-network` and must exit 1
 with `EGRESS OPEN` and a successful forbidden fetch. An unavailable public
 endpoint, missing procedure or unobserved mutation is inconclusive, never green.
 Keep both outputs, including the recorded `docker version`, in the PR evidence.
@@ -59,18 +64,37 @@ plugin from masquerading as isolation. From inside Neo4j, APOC GET to public
 JSON and POST to `mcp-gateway:8811` must fail, as must raw TCP to the literal
 IP addresses of the gateway, Redis and Postgres (not just their DNS names).
 
-The fixture also starts a socat HTTP listener on `0.0.0.0:59143` using
-`network_mode: host`, in the same throwaway project. Its response script lives
-on tmpfs and runs through socat `EXEC`; putting the response inline in `SYSTEM`
-loses shell quoting and produces a malformed response. Its host-namespace positive
-control must return HTTP 200 and JSON at the bridge gateway address itself
-(rather than loopback), so a split host/bridge namespace cannot pass vacuously.
-The probe reads `IPAM.Config[].Gateway`
-from `docker network inspect g13-test_neo4j-internal` and requires both raw TCP
-and `apoc.load.json('http://<gateway>:59143/')` from Neo4j to fail. This tests
-host-local delivery, which does not traverse Docker's forwarding rules. A
-successful host connection is a failed containment claim; do not weaken the
-probe to fit the daemon. Host networking must be supported by the selected VM.
+The fixture starts a socat HTTP listener on `0.0.0.0:59143` using
+`network_mode: host`, in the same throwaway project. Both HTTP stand-ins reuse
+a handler that consumes the request before replying, preventing TCP resets from
+masquerading as containment. The handler lives on tmpfs and uses socat `EXEC`.
+
+The scratch internal subnet is fixed at `172.30.249.0/24` across runs. Before
+applying isolated gateway mode, the evidence captures a RED: the exact-address
+listener control at `172.30.249.1` passes and Neo4j can fetch JSON and connect
+by TCP there. With `isolated`, that host bridge address intentionally disappears.
+The probe records network inspect, the host bridge's IPv4 addresses and Neo4j's
+`/proc/net/route`; GREEN requires no IPv4 address on the bridge and no default
+route or gateway in Neo4j. This structural check replaces the old exact-address
+D1 positive control, which cannot succeed at an address removed by the fix.
+
+The former `172.30.249.1` TCP and APOC negatives remain. The probe also requires
+forbidden TCP and APOC GET to the VM primary-interface IPv4 address and docker0
+(`172.17.0.1`), plus every IPv4 address of `host.docker.internal` if Neo4j resolves
+it. Lookup exit 2 is recorded explicitly if the alias is absent; other lookup
+failures are inconclusive. Each _assigned_ host address must first return HTTP
+200 and JSON from the SAME host listener to the non-isolated gateway-image
+container on `app-network`. The former bridge address instead has the recorded
+pre-change positive control and structural proof of its removal. No failed
+negative is converted into a pass by a missing listener. A real failed negative,
+unsupported mode or broken relay stops the evidence run for owner direction.
+
+Host-authenticated Bolt and the gateway-image Bolt handshake are repeated with
+the isolated bridge, proving the relay can still reach Neo4j. The `--mutate` run
+keeps the internal isolated bridge but attaches Neo4j to `app-network` too;
+this avoids the invalid `isolated` plus `internal: false` combination and must
+expose forbidden reachability with exit 1 / `EGRESS OPEN`. All runtime legs,
+including the old failure and source SHAs, are recorded verbatim on the PR.
 
 First `nslookup example.com` in the relay (on `app-network`) must succeed as
 the upstream DNS positive control; its output is recorded. Then
@@ -83,8 +107,10 @@ for the external-DNS forwarding regression CVE-2024-29018 (fixed in Engine
 file-import setting errors. Reaching these assertions after a healthy startup
 also exercises strict config validation of `NEO4J_apoc_import_file_enabled`.
 
-All these runtime legs are pending until the owner supplies the daemon; source
-pins and config-only checks do not constitute packet or file-import evidence.
+Source pins and config-only checks do not constitute packet or file-import
+evidence. See PR #573 for the recorded runtime attempts and their exact scope;
+no runtime claim is made for another Engine version or deployment without its
+own probe run.
 
 ## Digest provenance (2026-10-15)
 

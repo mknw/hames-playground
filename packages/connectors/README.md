@@ -113,7 +113,7 @@ logs the driver's error, with its stack trace, before returning it in
 > **Warning:** Guardrails for the Cypher path are in active development, and a
 > release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)). Until it ships, `runManualCypher`
 > and the ready-made agents that compose Cypher are not meant for production use. The
-> way to close the network risk below is a Neo4j with egress denied, as in this
+> way to close the network risk below is a Neo4j on an internal bridge with IPv4 gateway mode `isolated`, as in this
 > repository's compose stack (#241 G13). The standalone `docker run` above omits
 > APOC but has no network isolation; Cypher's `LOAD CSV` can still fetch URLs.
 > Throwaway data (a fresh Neo4j, loaded with the demo graph
@@ -135,7 +135,7 @@ logs the driver's error, with its stack trace, before returning it in
 > of every agent's tools anyway
 > ([#403](https://github.com/mknw/hames-playground/issues/403)). See also
 > [#241](https://github.com/mknw/hames-playground/issues/241). The repository compose stack now
-> isolates Neo4j on an internal network behind a fixed HTTP/Bolt relay (G13);
+> isolates Neo4j on an internal bridge with IPv4 gateway mode `isolated` behind a fixed HTTP/Bolt relay (G13);
 > it cannot reach public URLs or other backend services. Other deployments
 > still need equivalent isolation.
 

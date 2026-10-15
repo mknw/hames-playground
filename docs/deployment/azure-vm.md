@@ -195,7 +195,7 @@ The UI reaches all of these over `localhost`, so loopback binding is transparent
 to the app and closes the exposure.
 
 Neo4j itself has no published ports and sits only on `neo4j-internal`
-(`internal: true`), with `neo4j-relay` as its only peer (#241 G13). The relay
+(`internal: true`, IPv4 gateway mode `isolated`), with `neo4j-relay` as its only peer (#241 G13). The relay
 publishes HTTP/Bolt on loopback for the host app and SSH tunnels; container
 consumers use `neo4j-relay`. APOC and n10s are installed during image build,
 so startup needs no egress. CSV file URLs and APOC file imports are disabled.

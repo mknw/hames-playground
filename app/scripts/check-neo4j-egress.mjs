@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Opt-in Docker infrastructure check, outside default CI. Run from app/:
 // node scripts/check-neo4j-egress.mjs --context <throwaway-VM-context> [--mutate] [--config-only]
-// --mutate drops internal:true and MUST exit 1 with EGRESS OPEN.
+// --mutate joins Neo4j to app-network and MUST exit 1 with EGRESS OPEN.
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -91,7 +91,7 @@ const fixture = {
         NEO4J_apoc_http_timeout_connect: '3000',
         NEO4J_apoc_http_timeout_read: '3000',
       },
-      networks: neo.networks,
+      networks: mutate ? { ...neo.networks, 'app-network': {} } : neo.networks,
       healthcheck: { ...neo.healthcheck, retries: 60 },
       tmpfs: ['/data:uid=7474,gid=7474', '/logs:uid=7474,gid=7474'],
       mem_limit: '1500m',
@@ -150,13 +150,13 @@ const fixture = {
     'app-network': {},
     // Stable scratch subnet keeps the former gateway target identical across runs.
     'neo4j-internal': {
-      internal: mutate ? false : source.networks['neo4j-internal'].internal,
+      internal: source.networks['neo4j-internal'].internal,
+      driver_opts: source.networks['neo4j-internal'].driver_opts,
       ipam: { config: [{ subnet: '172.30.249.0/24' }] },
     },
   },
 }
-if (!fixture.networks['neo4j-internal'].internal && !mutate)
-  throw new Error('Source lost internal:true')
+if (!fixture.networks['neo4j-internal'].internal) throw new Error('Source lost internal:true')
 if (Object.keys(neo.networks).join() !== 'neo4j-internal')
   throw new Error('Neo4j gained another network')
 for (const s of Object.values(fixture.services)) {
@@ -236,19 +236,100 @@ try {
         throw new Error(`Missing procedure ${name}: ${r.stdout} ${r.stderr}`)
     }
     const network = JSON.parse(docker(['network', 'inspect', 'g13-test_neo4j-internal']).stdout)[0]
-    const bridgeGateway = network.IPAM.Config.find((c) => c.Gateway)?.Gateway
-    if (!bridgeGateway || !/^[0-9.]+$/.test(bridgeGateway))
-      throw new Error('Missing IPv4 bridge gateway')
-    console.log(`Bridge gateway: ${bridgeGateway}; IPAM: ${JSON.stringify(network.IPAM)}`)
-    // The control must answer at the exact bridge address Neo4j will try.
-    const listenerControl = exec('host-listener', [
-      '/bin/sh',
-      '-ec',
-      `printf 'GET / HTTP/1.0\\r\\n\\r\\n' | socat -T 3 - TCP:${bridgeGateway}:59143`,
-    ]).stdout
-    if (!listenerControl.includes('200 OK') || !listenerControl.includes('{}'))
-      throw new Error('Host listener positive control failed')
-    console.log('PASS host-namespace listener positive control')
+    const bridgeGateway = '172.30.249.1' // Address proven reachable in the pre-change RED.
+    const subnet = network.IPAM.Config.find((c) => c.Subnet)?.Subnet
+    if (subnet !== '172.30.249.0/24') throw new Error('Scratch subnet changed')
+    const isolatedGateway =
+      network.Options['com.docker.network.bridge.gateway_mode_ipv4'] === 'isolated'
+    console.log(
+      `Network inspect: ${JSON.stringify({ Internal: network.Internal, EnableIPv6: network.EnableIPv6, Options: network.Options, IPAM: network.IPAM })}`,
+    )
+    console.log(`Former bridge gateway target: ${bridgeGateway}; subnet: ${subnet}`)
+    const host = (args) => exec('host-listener', args).stdout
+    const bridgeDevice = `br-${network.Id.slice(0, 12)}`
+    const bridgeAddresses = host(['ip', '-4', 'addr', 'show', 'dev', bridgeDevice])
+    console.log(`Host bridge addresses:
+${bridgeAddresses.trim()}`)
+    const routes = exec('neo4j', ['cat', '/proc/net/route']).stdout
+    console.log(`Neo4j IPv4 routes:
+${routes.trim()}`)
+    if (isolatedGateway) {
+      if (!network.Internal || network.EnableIPv6 || /\binet\s/.test(bridgeAddresses))
+        throw new Error('Isolated bridge still has a host IPv4 address or unexpected topology')
+      if (
+        !mutate &&
+        routes
+          .trim()
+          .split('\n')
+          .slice(1)
+          .some((line) => {
+            const fields = line.trim().split(/\s+/)
+            return fields[1] === '00000000' || fields[2] !== '00000000'
+          })
+      )
+        throw new Error('Neo4j has a default route or gateway')
+      console.log('PASS isolated bridge has no host IPv4 address')
+      console.log(
+        mutate
+          ? 'RED mutation: Neo4j joins app-network; no-default-route assertion not applied'
+          : 'PASS Neo4j has no default route or gateway',
+      )
+    }
+    const hostRoutes = host(['ip', '-4', 'route'])
+    console.log(`Host IPv4 routes:
+${hostRoutes.trim()}`)
+    const primaryDevice = hostRoutes.match(/^default .*?\bdev\s+(\S+)/m)?.[1]
+    if (!primaryDevice) throw new Error('Missing VM primary interface')
+    const hostIp = (device) => {
+      const addresses = host(['ip', '-4', 'addr', 'show', 'dev', device])
+      const address = addresses.match(/\binet\s+([0-9.]+)\//)?.[1]
+      if (!address) throw new Error(`Missing host IPv4 address on ${device}`)
+      return address
+    }
+    const primaryAddress = hostIp(primaryDevice)
+    const docker0 = hostIp('docker0')
+    if (docker0 !== '172.17.0.1') throw new Error(`Unexpected default docker0 address: ${docker0}`)
+    const hostTargets = new Map([
+      ['bridge-gateway', bridgeGateway],
+      ['vm-primary', primaryAddress],
+      ['docker0', docker0],
+    ])
+    const hostDns = exec('neo4j', ['getent', 'hosts', 'host.docker.internal'], {
+      allowFailure: true,
+    })
+    if (hostDns.error || hostDns.signal || ![0, 2].includes(hostDns.status))
+      throw new Error(`Inconclusive host.docker.internal lookup: ${hostDns.stderr}`)
+    if (hostDns.status === 0) {
+      const addresses = [
+        ...new Set(
+          hostDns.stdout
+            .trim()
+            .split('\n')
+            .map((line) => line.trim().split(/\s+/)[0]),
+        ),
+      ]
+      for (const [index, ip] of addresses.entries()) {
+        if (!/^[0-9.]+$/.test(ip)) throw new Error(`Unexpected host.docker.internal address: ${ip}`)
+        hostTargets.set(`host.docker.internal-${index}`, ip)
+      }
+      console.log(`host.docker.internal resolves: ${hostDns.stdout.trim()}`)
+    } else console.log('host.docker.internal does not resolve in Neo4j (lookup exit 2)')
+    function assertHostListener(address) {
+      // A non-isolated app-network container must reach the SAME host listener.
+      const response = gateway(
+        `printf 'GET / HTTP/1.0\\r\\n\\r\\n' | socat -T 3 - TCP:${address}:59143`,
+      ).stdout
+      if (!response.includes('200 OK') || !response.includes('{}'))
+        throw new Error(`Host listener positive control failed at ${address}: ${response}`)
+      console.log(
+        `PASS app-network host-listener positive control at ${address}: ${response.trim()}`,
+      )
+    }
+    for (const [name, ip] of hostTargets) {
+      // The former bridge address deliberately no longer belongs to the host.
+      // Its structural absence replaces D1; all real host addresses need a control.
+      if (name !== 'bridge-gateway' || !isolatedGateway) assertHostListener(ip)
+    }
     const dnsControl = exec('neo4j-relay', ['nslookup', 'example.com'])
     console.log(`PASS external DNS positive control from app-network: ${dnsControl.stdout.trim()}`)
     const dns = exec('neo4j', ['getent', 'hosts', 'example.com'], { allowFailure: true })
@@ -280,6 +361,12 @@ try {
         'bridge gateway APOC GET',
         `CALL apoc.load.json('http://${bridgeGateway}:59143/') YIELD value RETURN value`,
       ],
+      ...[...hostTargets]
+        .filter(([name]) => name !== 'bridge-gateway')
+        .map(([name, ip]) => [
+          `${name} APOC GET`,
+          `CALL apoc.load.json('http://${ip}:59143/') YIELD value RETURN value`,
+        ]),
       ['public APOC GET', `CALL apoc.load.json('${publicUrl}') YIELD value RETURN value`],
       [
         'gateway APOC POST',
@@ -290,7 +377,7 @@ try {
       if (r.error || r.signal) throw new Error(`Inconclusive ${name}: ${r.error ?? r.signal}`)
       if (
         r.status !== 0 &&
-        !/UnknownHost|Connect|timed out|Temporary failure in name resolution/i.test(
+        !/UnknownHost|Connect|timed out|Temporary failure in name resolution|Network is unreachable|No route to host/i.test(
           `${r.stdout} ${r.stderr}`,
         )
       )
@@ -302,21 +389,20 @@ try {
     }
     exec('neo4j', ['bash', '-c', 'timeout 3 bash -c "echo > /dev/tcp/127.0.0.1/7687"'])
     for (const [service, port] of [
-      ['bridge-gateway', 59143],
+      ...[...hostTargets.keys()].map((name) => [name, 59143]),
       ['mcp-gateway', 8811],
       ['redis', 6379],
       ['postgres', 5432],
     ]) {
-      const id = service === 'bridge-gateway' ? null : compose(['ps', '-q', service]).stdout.trim()
-      const ip =
-        service === 'bridge-gateway'
-          ? bridgeGateway
-          : docker([
-              'inspect',
-              '--format',
-              '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}',
-              id,
-            ]).stdout.trim()
+      const id = hostTargets.has(service) ? null : compose(['ps', '-q', service]).stdout.trim()
+      const ip = hostTargets.has(service)
+        ? hostTargets.get(service)
+        : docker([
+            'inspect',
+            '--format',
+            '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}',
+            id,
+          ]).stdout.trim()
       const r = exec(
         'neo4j',
         ['bash', '-c', 'timeout 3 bash -c "echo > /dev/tcp/$1/$2"', '_', ip, String(port)],

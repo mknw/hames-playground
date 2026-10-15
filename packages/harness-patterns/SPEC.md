@@ -1180,6 +1180,16 @@ compactExecution({ mode: 'message', synthesize: baml.synthesize }) // Receives o
 compactExecution({ mode: 'response', synthesize: baml.synthesize }) // Receives { data, response } object
 compactExecution({ mode: 'thread', synthesize: baml.synthesize }) // Receives full loop history
 
+// Thread mode reads the LAST pattern to enter. Name the patterns instead with
+// `viewConfig.fromPatterns` and it reads exactly those: use this when the loop
+// sits inside a wrapper whose children run in nested views (the last pattern to
+// enter is then a child, and the wrapper's own records are what you want).
+compactExecution({
+  mode: 'thread',
+  viewConfig: { fromPatterns: ['orchestrator'], fromLastNTurns: 1 },
+  synthesize: baml.synthesize,
+})
+
 // Custom synthesis function
 compactExecution({
   mode: 'response',
@@ -2215,7 +2225,7 @@ never the user's words) and a returned `skipped` reason.
 | 3   | ONE `decideFields` over the window: `sensitive`, `target`, `confirm`, `kind`, using endpoint verdicts                                                                                                                               | a failed gate stores nothing                                         | `seam-contract`           |
 | 4   | `sensitive`; `target: none`                                                                                                                                                                                                         | `sensitive` `gate`                                                   | `seam-contract`           |
 | 5   | `resolveStoreRoute`: an org target ALWAYS asks (F2); a personal target skips the question only for a routine kind (default episodic/semantic/preference; `trait` always asks)                                                       | —                                                                    | `org-graph-forces-ask`    |
-| 5′  | **pre-M12**: an org target has no writer. **without a `confirm` seam**: `ask` has no confirmation mechanism (pre-M6 behaviour, the fail-closed default)                                                                                                                                    | `org-no-writer` `no-confirmation` — store nothing and log (F4)       | `pre-m6-no-store`         |
+| 5′  | **pre-M12**: an org target has no writer. **without a `confirm` seam**: `ask` has no confirmation mechanism (pre-M6 behaviour, the fail-closed default)                                                                             | `org-no-writer` `no-confirmation` — store nothing and log (F4)       | `pre-m6-no-store`         |
 | 6   | extract (≤ `maxPerTurn`, default 3, read in order)                                                                                                                                                                                  | `extract-error` `no-candidates`                                      | `acceptance-rules`        |
 | 7   | embed (`documents`): a throw, a wrong count, a non-finite or ragged vector, an empty `spaceId`                                                                                                                                      | `error`                                                              | `fail-closed`             |
 | 8   | one transaction PER candidate (below)                                                                                                                                                                                               | `failed` / `duplicates` in the report                                | `idempotency-transaction` |

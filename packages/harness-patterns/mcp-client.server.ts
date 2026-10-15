@@ -328,6 +328,17 @@ export async function callTool(
   name: string,
   args: Record<string, unknown>,
 ): Promise<ToolCallResult> {
+  let result = await guardedCall(name, args)
+  // Scoped after-call hooks (#507 N4), innermost first, on the FINAL result:
+  // past the guard, so a hook's own replacement is never rewritten by it, and
+  // read softly like the guard above — outside a run there are none.
+  for (const hook of currentRunFrame()?.afterToolCall ?? []) {
+    result = (await hook({ name, args }, result)) ?? result
+  }
+  return result
+}
+
+async function guardedCall(name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
   const result = await dispatchTool(name, args)
 
   // The run frame's `guard` slot, read SOFTLY: `callTool` is also reached from

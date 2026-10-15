@@ -28,6 +28,7 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
+import { currentRunFrame } from '../run-frame.server'
 import { resolveStashCallTool, isBuiltinStashTransport } from '../stash-transport.server'
 import type { ToolCallResult } from '../types'
 import type { PriorResult } from '../types'
@@ -356,6 +357,19 @@ export async function storeDocument(
   }
 
   invalidateDocumentList(doc.sessionId)
+  // Told only now, once the document is readable: an observer that reacts by
+  // reading the stash (#507 N4) must find it. The list cache is already
+  // invalidated above for the same reason. A throwing observer is its own bug
+  // and never un-stores the document.
+  for (const observe of currentRunFrame()?.stashWriteObservers ?? []) {
+    try {
+      observe({ sessionId: doc.sessionId, documentId: doc.id })
+    } catch (err) {
+      console.warn(
+        `[stash] a stash-write observer threw: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
   return doc
 }
 

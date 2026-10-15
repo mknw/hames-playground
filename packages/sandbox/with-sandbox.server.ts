@@ -18,7 +18,7 @@
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { trackEvent } from '@hames-ai/harness-patterns/context.server'
-import { amendRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
+import { amendRunFrame, type RunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { DEFAULT_SANDBOX_SETTINGS } from './settings'
 import { AttachmentTable } from './attachment-table.server'
 import { DockerBackend } from './docker-backend.server'
@@ -40,6 +40,7 @@ import type {
   PatternCapabilities,
   PatternScope,
   EventView,
+  ToolCallResult,
 } from '@hames-ai/harness-patterns/types'
 
 assertServerOnImport()
@@ -626,6 +627,83 @@ function reportWorkspaceFailure<T>(
   )
 }
 
+/**
+ * Re-hydrate `/work/in` after a tool call in this scope stored a stash document
+ * (#507 N4). `/work/in` is otherwise filled once, on entry, so a file ingested
+ * mid-run — `graph_file_ingest` — is in the stash and not on disk until the
+ * route is entered again, and the actor is told the file exists that it cannot
+ * open.
+ *
+ * Two run-frame seams, both concatenating (`amendRunFrame`): an observer on core's
+ * `storeDocument`, which marks the scope dirty when a document is stored under
+ * THIS sandbox's own `sessionId` (a write to any other conversation's stash is
+ * heard and ignored: nothing of that stash is ever read here), and an after-call
+ * hook that, only when dirty, runs `hydrateWorkspace` for that same session.
+ * The observer fires after the write is durable and the hook after the call
+ * returns, so the document is always there to be read. No model step, no tool
+ * name list: any tool that stores is covered, and a call that stores nothing
+ * costs one boolean read. The write is only ever `hydrateWorkspace`'s —
+ * `/work/in/<basename>`, presence-diffed — so this adds no path of its own.
+ *
+ * Failure policy, named: FAIL CLOSED. The call stored its document, but if the
+ * copy did not land (a throw, or any file skipped — which of the files is the
+ * new one is not known) the call's result is replaced by a failure that says so
+ * and says not to repeat the call, and the failure is recorded as an event like
+ * the entry hydrate's. Passing the original result through would tell the actor
+ * a file exists that it cannot open.
+ *
+ * Restores are serialized. KNOWN LIMIT: stores are attributed to a call by the
+ * dirty flag, not per call, so two PARALLEL storing calls share one restore and
+ * a failure lands on the call whose hook ran it (the event is recorded either
+ * way). Sandbox agents batch sequentially (`multiToolCalls: 'sequential'`), where
+ * it is one call, one restore.
+ */
+function restoreAfterStashWrite<T>(
+  transport: McpTransport,
+  scope: PatternScope<T>,
+  sessionId: string,
+): RunFrame {
+  let dirty = false
+  let queue: Promise<unknown> = Promise.resolve()
+  const restore = async (result: ToolCallResult): Promise<ToolCallResult | void> => {
+    if (!dirty) return
+    dirty = false
+    try {
+      const { skipped } = await hydrateWorkspace(transport, sessionId)
+      if (skipped.length === 0) return
+      throw new Error(
+        `${skipped.length} file(s) not restored: ` +
+          skipped.map((f) => `${f.filename} (${f.error})`).join(', '),
+      )
+    } catch (err) {
+      reportWorkspaceFailure(scope, 'hydrate', sessionId, err)
+      return {
+        success: false,
+        data: null,
+        error:
+          'The document was stored in the Data Stash but could not be copied into /work/in ' +
+          `(${err instanceof Error ? err.message : String(err)}). It is NOT available to ` +
+          'the sandbox. Do not repeat the call; tell the user the file could not be loaded.' +
+          (result.success ? '' : ` The call itself also failed: ${result.error ?? 'unknown'}`),
+      }
+    }
+  }
+  return {
+    stashWriteObservers: [
+      (write) => {
+        if (write.sessionId === sessionId) dirty = true
+      },
+    ],
+    afterToolCall: [
+      (_call, result) => {
+        const next = queue.then(() => restore(result))
+        queue = next.catch(() => {})
+        return next
+      },
+    ],
+  }
+}
+
 async function runWithIdAttachment<T>(
   attachments: AttachmentTable,
   id: string,
@@ -700,7 +778,9 @@ async function runWithIdAttachment<T>(
         reportWorkspaceFailure(scope, 'snapshot', sessionId, err)
       }
       try {
-        return await pattern.fn(scope, view)
+        return await amendRunFrame(restoreAfterStashWrite(att.transport, scope, sessionId), () =>
+          pattern.fn(scope, view),
+        )
       } finally {
         if (baseline) {
           try {

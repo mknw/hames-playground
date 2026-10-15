@@ -58,7 +58,7 @@ import { assertServerOnImport } from './assert.server'
 import { DEFAULT_RUNTIME_CONFIG, type HarnessRuntimeConfig } from './runtime-config'
 import type { ActiveInjectionGuard } from './injection-guard'
 import type { ToolTransport } from './tool-transport.server'
-import type { ContextEvent } from './types'
+import type { ContextEvent, ToolCallResult } from './types'
 
 assertServerOnImport()
 
@@ -95,6 +95,27 @@ export interface InferenceSlot {
   readonly clientOverride?: RunClientOverride
 }
 
+/** One stash document write, as an observer sees it: which conversation's stash
+ *  and which document. Never the content. */
+export interface StashWrite {
+  readonly sessionId: string
+  readonly documentId: string
+}
+
+/** Told, synchronously, that core's `storeDocument` persisted a document. A
+ *  throw is swallowed by the caller: observing a write must never fail it. */
+export type StashWriteObserver = (write: StashWrite) => void
+
+/** Runs in `callTool` after a call has been dispatched and guarded, and may
+ *  replace its result by returning one (#507 N4: `withSandbox` turns a call
+ *  whose stored document could not be restored into a failure). Returning
+ *  nothing leaves the result unchanged. A throw is the hook's own bug and
+ *  propagates, so a hook that must degrade has to catch for itself. */
+export type AfterToolCallHook = (
+  call: { readonly name: string; readonly args: Record<string, unknown> },
+  result: ToolCallResult,
+) => Promise<ToolCallResult | void>
+
 /** What a caller SUPPLIES when opening or amending a frame. Every slot is
  *  optional; an absent slot means "this run has none", not "use a default". */
 export interface RunFrame {
@@ -115,6 +136,10 @@ export interface RunFrame {
    *  turn. `harness()` and its two siblings default it to `{ attended: true }`
    *  when they OPEN the frame, and only then. */
   hitl?: { readonly attended: boolean }
+  /** Observers of stash document writes made inside this scope. */
+  stashWriteObservers?: readonly StashWriteObserver[]
+  /** Hooks run after every tool call dispatched inside this scope. */
+  afterToolCall?: readonly AfterToolCallHook[]
 }
 
 /** The live slot as the emitters see it: the listener plus the per-run
@@ -141,8 +166,13 @@ export interface ActiveRunFrame {
    *  opens (`hitl.server.ts`), so nothing that can read the frame can write
    *  the record or suppress a pause. */
   readonly hitl?: { readonly attended: boolean }
+  /** Never undefined: an empty frozen array outside any observing scope. */
+  readonly stashWriteObservers: readonly StashWriteObserver[]
+  /** Never undefined, innermost first. */
+  readonly afterToolCall: readonly AfterToolCallHook[]
 }
 
+const NO_HOOKS: readonly never[] = Object.freeze([])
 const NO_TRANSPORTS: readonly ToolTransport[] = Object.freeze([])
 
 /**
@@ -189,6 +219,10 @@ function build(frame: RunFrame): ActiveRunFrame {
       : undefined,
     inference: frame.inference,
     hitl: frame.hitl ? hitlSlot(frame.hitl) : undefined,
+    stashWriteObservers: frame.stashWriteObservers
+      ? Object.freeze([...frame.stashWriteObservers])
+      : NO_HOOKS,
+    afterToolCall: frame.afterToolCall ? Object.freeze([...frame.afterToolCall]) : NO_HOOKS,
   }
 }
 
@@ -256,6 +290,10 @@ export function withRunFrame<T>(frame: RunFrame, fn: () => Promise<T>): Promise<
  *     amend around its main run — and is refused below an open one. The slot
  *     is a frozen `{ attended }` and nothing else: the run's bookkeeping is in
  *     a store of its own (`hitl.server.ts`, #477 F1), opened per run.
+ *   - `stashWriteObservers` and `afterToolCall` CONCATENATE, innermost first,
+ *     like transports (#507 N4). Every observer hears a write and every hook
+ *     sees a call: an inner scope adds to what the enclosing ones do and can
+ *     never switch an outer one off.
  *   - everything else REPLACES for the duration.
  *
  * Refuses outside a frame, by way of {@link activeRunFrame}: something that
@@ -287,6 +325,12 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
       : open.live,
     inference: partial.inference ?? open.inference,
     hitl: partial.hitl ? hitlSlot(partial.hitl) : open.hitl,
+    stashWriteObservers: partial.stashWriteObservers
+      ? Object.freeze([...partial.stashWriteObservers, ...open.stashWriteObservers])
+      : open.stashWriteObservers,
+    afterToolCall: partial.afterToolCall
+      ? Object.freeze([...partial.afterToolCall, ...open.afterToolCall])
+      : open.afterToolCall,
   }
   return store.run(amended, fn)
 }

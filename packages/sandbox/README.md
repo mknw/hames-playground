@@ -210,6 +210,10 @@ them:
   `/work/out` is saved back when it ends. Syncing is off by default. If you turn
   it on without configuring a store, the first turn fails with
   `WorkspaceStoreNotConfiguredError` rather than silently saving nothing.
+  A file a tool stores _during_ the run (for example a Microsoft 365 file copied
+  into the stash) is copied into `/work/in` right after that call returns, so
+  the agent can open it in the same run. If that copy fails, the call is
+  reported as failed rather than as a success that the agent cannot act on.
 - **Whose container it is** — `WithSandboxConfig.tenantId`, the id of the user who
   owns the conversation, as a string or as a function called per run (useful when
   you build your patterns once but the signed-in user changes per request).

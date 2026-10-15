@@ -396,6 +396,26 @@ and no other:
    filled when the frame is opened, or prepended below it by
    `amendRunFrame({ transports: [t] }, fn)`. Today's one is the in-VM sandbox,
    which `withSandbox` registers this way.
+   The frame carries two more slots, both read around that dispatch and both
+   **concatenating** (innermost first; an inner scope adds and never switches
+   an outer one off) — #507 N4:
+   `stashWriteObservers` — told, synchronously, by core's `storeDocument` once a
+   document and its session-index entry are durably written
+   (`{ sessionId, documentId }`, never content; a failed write notifies nothing,
+   a throwing observer is logged and never un-stores the document); and
+   `afterToolCall` — run by `callTool` after the call has been dispatched
+   **and guarded**, each hook seeing the previous one's result, and able to
+   replace it by returning one. `withSandbox({ id, syncWorkspace: true })` uses
+   both: a document stored under its own `sessionId` marks its scope dirty, and
+   the next after-call hook re-runs `hydrateWorkspace` for that same session —
+   so a file ingested mid-run is in `/work/in` before the actor sees the call's
+   result. Fail-closed: if the copy throws, or any file is skipped, the call's
+   result becomes a failure saying the document is stored but NOT in the
+   sandbox (and not to repeat the call), and an `error` event is recorded. A
+   write to another conversation's stash is ignored; a call that stored nothing
+   costs one boolean read. Known limit: stores are attributed by the dirty flag,
+   not per call, so two parallel storing calls share one restore (sandbox
+   agents batch sequentially).
 2. **Process transports** — supplied by `registerTransport(t)`, in registration
    order. Today's one is the app-side in-process tools.
 3. **The MCP gateway** — the terminal fallback, and deliberately NOT a
@@ -3096,7 +3116,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── types.ts                # Core types (UnifiedContext, PatternScope, RouterConfig, DIRECT_RESPONSE_ROUTE, the seam callables ControllerFn/PlannerFn/CompactIntentFn/… )
 ├── context.server.ts       # Context factory, createEvent(), generateId()
 ├── tools.server.ts         # Tools({ namespaces }) — groups MCP tools by namespace; the map is REQUIRED (ruling B-iii); inferServer consults transports' namespaceFor → registered resolvers (registerToolNamespaces) → heuristic; NO catalog in core — the 86-entry map lives in app-tools/mcp-catalog.ts and registers at boot
-├── run-frame.server.ts     # THE run frame — one ALS scope per run holding all six slots (guard / transports / config / live / inference / hitl — the last a frozen `{ attended }`), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, hitl passes by reference and is refused below an open one, the rest replace), activeRunFrame() THROWS outside a frame and currentRunFrame() is the soft read
+├── run-frame.server.ts     # THE run frame — one ALS scope per run holding all eight slots (guard / transports / config / live / inference / hitl — the last a frozen `{ attended }` — plus the concatenating `stashWriteObservers` / `afterToolCall`, #507 N4), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, hitl passes by reference and is refused below an open one, the rest replace), activeRunFrame() THROWS outside a frame and currentRunFrame() is the soft read
 ├── harness.server.ts       # harness() (a bound runner: agent.resume / agent.continue carry its own patterns, S4), resumeHarness(serialized, patterns, answers, { principal, resolve }), continueSession() — each OPENS the run frame (ruling Q17/D5) with a `{ attended: true }` hitl slot unless the frame says otherwise, or joins the host's and adds nothing; resumeHarness binds every answer to a request the run waits on before anything runs, continueSession supersedes what waits; HarnessResultScoped is a union on status — `pending` is non-optional when paused [F18]
 ├── hitl.server.ts          # Human in the loop (#433): readHitl() / answerOf() read the hitl_* events; proposeToHuman() / answerProposal() / readProposals() are the out-of-run, non-blocking form (S11, the memory confirmation); askHuman() raises (or replays, or applies resolveUnattended()) into the run's HITL bookkeeping — an async-context store of its own on a Symbol.for holder, opened by the owning runChain, never on the frame (#477) — held() is a gated executor's placeholder, hitlPending() is the loops' stop check; the owning runChain commits from the buffer only what askHuman could have written, straight into the context, and pauses. S3: checkResume() is the pause binding (HitlAnswerError), recordAnswers() / supersedeHitl() / expireHitl() close requests and substitute held results through sanitizeUntrusted. S4: humanGate() / confirm() are the gate patterns — the custom case and the one-call preset over askHuman
 ├── tool-transport.server.ts # ToolTransport + registerTransport() (process, consulted after every scoped one) / activeTransports() (reads the run frame's `transports` slot); the difference between the two ways to supply one IS the containment invariant — there is no priority field and no argument that could express one

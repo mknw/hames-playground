@@ -304,6 +304,39 @@ describe('hydrateWorkspace', () => {
       expect(fs.get('/work/in/data.csv')).toBe('a,b\n99,edited-in-vm')
     })
 
+    // #507 N4: re-hydration can now run mid-turn on a filename a tool chose, so
+    // the only path it may write is /work/in/<basename>, for ONE session.
+    // Mutation: write `${WORK_IN_DIR}/${meta.filename}` instead of the basename.
+    it('writes only /work/in/<basename>, whatever path the stored filename carries', async () => {
+      vi.mocked(listDocuments).mockResolvedValue([
+        meta('t1', '../../etc/cron.d/evil', 1),
+        meta('t2', '/work/out/planted.csv', 2),
+      ] as never)
+      vi.mocked(getDocument).mockImplementation(async (_s, id) => doc(id, 'x', 'payload') as never)
+
+      const { transport, fs } = makeFsTransport()
+      await hydrateWorkspace(transport, 's')
+
+      const written = [...fs.keys()].filter((k) => !k.includes('.hydrate'))
+      expect(written.length).toBeGreaterThan(0)
+      for (const path of written) {
+        expect(path).toMatch(/^\/work\/in\/[^/]+$/)
+      }
+      expect(fs.has('/work/out/planted.csv')).toBe(false)
+    })
+
+    // Mutation: list or fetch under a different session id than the one given.
+    it('lists and reads only the session it was asked to hydrate', async () => {
+      vi.mocked(listDocuments).mockResolvedValue([meta('d1', 'data.csv', 1)] as never)
+      vi.mocked(getDocument).mockResolvedValue(doc('d1', 'data.csv', 'a') as never)
+
+      const { transport } = makeFsTransport()
+      await hydrateWorkspace(transport, 'session-A')
+
+      expect(vi.mocked(listDocuments).mock.calls.map((c) => c[0])).toEqual(['session-A'])
+      expect(vi.mocked(getDocument).mock.calls.map((c) => c[0])).toEqual(['session-A'])
+    })
+
     it('lands the NEWEST document when two reduce to the same basename', async () => {
       // Same filename uploaded twice: both are absent, so one write wins. It is
       // the newer upload, not whichever the store listed last.

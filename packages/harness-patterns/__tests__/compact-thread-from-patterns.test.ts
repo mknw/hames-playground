@@ -161,6 +161,43 @@ describe('compactExecution thread mode — fromPatterns', () => {
     expect(tools(seen[0])).toEqual(['route:doc'])
   })
 
+  // Review finding 1: no `fromLastNTurns` declared (SPEC's own example shape).
+  // Mutation 5: the pre-round-1 `scopedToPatterns ? view : …` (no turn bound) →
+  // turn 1's call joins the thread (`['turn1_call', 'turn2_call']`).
+  it('fromPatterns with no fromLastNTurns still bounds the thread to the current turn', async () => {
+    const { seen, pattern } = capture({ fromPatterns: ['loop'] })
+    const ctx = ctxOf('first question')
+    await withRunFrame({}, async () => {
+      await runChain(ctx, [leaf('loop', 'turn1_call', 1)])
+      ctx.events.push(createEvent('user_message', 'harness', { content: 'second question' }))
+      await runChain(ctx, [leaf('loop', 'turn2_call', 2), pattern])
+    })
+
+    expect(tools(seen[0])).toEqual(['turn2_call'])
+  })
+
+  // Review finding 2: `general`'s own viewConfig (packages/agents/agents/general.server.ts).
+  // A HITL resume re-enters the paused pattern with NO new user_message, so
+  // `execute` runs twice in one turn; the thread now reads BOTH executions
+  // (pre-fix: only the last). Mutation 1 (`view.fromLastPattern()`) → only
+  // `['post_resume']`.
+  it('general\u2019s viewConfig: every execution of `execute` within the turn is read (HITL resume)', async () => {
+    const { seen, pattern } = capture({
+      fromPatterns: ['harness', 'execute'],
+      fromLastNTurns: 1,
+      eventTypes: ['user_message', 'controller_action', 'tool_call', 'tool_result', 'error'],
+    })
+    await withRunFrame({}, () =>
+      runChain(ctxOf('q'), [
+        leaf('execute', 'pre_pause', 1),
+        leaf('execute', 'post_resume', 2),
+        pattern,
+      ]),
+    )
+
+    expect(tools(seen[0])).toEqual(['pre_pause', 'post_resume'])
+  })
+
   // The flat shape keeps its meaning: with no `fromPatterns`, `thread` reads the
   // last pattern to enter only. `fromLast: false` leaves the bare view
   // unfiltered, so only `fromLastPattern()` narrows it. Mutation 4:

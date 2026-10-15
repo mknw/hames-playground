@@ -89,7 +89,13 @@ function buildSynthesisInputFromView(
       // the synthesizer silently dropped to `response` mode (#507 S2). The
       // named patterns' records are the thread; the children's internal
       // traces, tagged with their own ids, stay out.
-      const threadView = scopedToPatterns ? view : view.fromLastPattern()
+      // `fromLastPattern()` also bounded the read to one execution; a pattern
+      // scope is not a turn scope (see `errorView`), so the named read gets the
+      // same turn bound the error read has: the caller's window when it gave
+      // one, else the current turn.
+      const threadView = scopedToPatterns
+        ? view.fromLastNTurns(errorTurnWindow)
+        : view.fromLastPattern()
       const toolEvents = threadView.tools().get()
       const actionEvents = threadView.actions().get()
 

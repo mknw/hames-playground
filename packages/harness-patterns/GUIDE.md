@@ -64,9 +64,10 @@ The `view` argument is an `EventView` — a query over the log whose slice is
 declared once in the pattern's `viewConfig`, not re-argued at every call site:
 
 - `fromPatterns` / `fromLastN` / `fromLast` — which patterns' events are visible
-  (`compactExecution`'s `thread` mode reads exactly the `fromPatterns` you name,
-  and otherwise the last pattern to enter — name the wrapper when its children run
-  in nested views)
+  (`compactExecution`'s `thread` mode reads every execution of the `fromPatterns`
+  you name within the turn window, and otherwise the last pattern to enter — name
+  the wrapper when its children run in nested views; a name absent from the run
+  gives no history and synthesis drops to `response` mode)
 - `eventTypes` / `limit` — narrow by type and size
 - `fromLastNTurns` — a rolling window bounded by `user_message` events
 - `contentTransforms` — read-time reshaping (`truncateToolResults`,

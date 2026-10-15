@@ -1181,9 +1181,13 @@ compactExecution({ mode: 'response', synthesize: baml.synthesize }) // Receives 
 compactExecution({ mode: 'thread', synthesize: baml.synthesize }) // Receives full loop history
 
 // Thread mode reads the LAST pattern to enter. Name the patterns instead with
-// `viewConfig.fromPatterns` and it reads exactly those: use this when the loop
-// sits inside a wrapper whose children run in nested views (the last pattern to
-// enter is then a child, and the wrapper's own records are what you want).
+// `viewConfig.fromPatterns` and it reads EVERY execution of the named patterns
+// within the view's turn window (the caller's `fromLastNTurns`, else the
+// current turn), in log order; duplicate names are ignored. Use this when the
+// loop sits inside a wrapper whose children run in nested views (the last
+// pattern to enter is then a child, and the wrapper's own records are what you
+// want). `fromPatterns: []` means unset. A name absent from the run yields no
+// history, and synthesis drops to `response` mode.
 compactExecution({
   mode: 'thread',
   viewConfig: { fromPatterns: ['orchestrator'], fromLastNTurns: 1 },

@@ -122,8 +122,15 @@ const fixture = {
       network_mode: 'host',
       entrypoint: ['/bin/sh', '-ec'],
       command: [
-        `exec socat TCP-LISTEN:59143,bind=0.0.0.0,fork,reuseaddr SYSTEM:"printf 'HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\nConnection: close\\r\\n\\r\\n{}'"`,
+        [
+          "cat > /tmp/g13-host-http.sh <<'SH'",
+          '#!/bin/sh',
+          "printf 'HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\nConnection: close\\r\\n\\r\\n{}'",
+          'SH',
+          "exec socat TCP-LISTEN:59143,bind=0.0.0.0,fork,reuseaddr EXEC:'sh /tmp/g13-host-http.sh'",
+        ].join('\n'),
       ],
+      tmpfs: ['/tmp'],
       cap_drop: ['ALL'],
       user: '65534:65534',
       read_only: true,

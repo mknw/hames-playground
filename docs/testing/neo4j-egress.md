@@ -60,7 +60,9 @@ JSON and POST to `mcp-gateway:8811` must fail, as must raw TCP to the literal
 IP addresses of the gateway, Redis and Postgres (not just their DNS names).
 
 The fixture also starts a socat HTTP listener on `0.0.0.0:59143` using
-`network_mode: host`, in the same throwaway project. Its host-namespace positive
+`network_mode: host`, in the same throwaway project. Its response script lives
+on tmpfs and runs through socat `EXEC`; putting the response inline in `SYSTEM`
+loses shell quoting and produces a malformed response. Its host-namespace positive
 control must return HTTP 200 and JSON at the bridge gateway address itself
 (rather than loopback), so a split host/bridge namespace cannot pass vacuously.
 The probe reads `IPAM.Config[].Gateway`

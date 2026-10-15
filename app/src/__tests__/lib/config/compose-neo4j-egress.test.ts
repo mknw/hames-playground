@@ -109,6 +109,7 @@ describe('G13 Neo4j isolation', () => {
       "docker(['version'])",
       "network_mode: 'host'",
       'TCP-LISTEN:59143,bind=0.0.0.0',
+      "EXEC:'sh /tmp/g13-host-http.sh'",
       "'network', 'inspect', 'g13-test_neo4j-internal'",
       "['getent', 'hosts', 'example.com']",
       '![0, 2].includes(dns.status)',

@@ -256,6 +256,91 @@ function config(seed = [row('a'), row('b', { lastSeenAt: 2 * DAY })]) {
 }
 
 describe('compaction transaction', () => {
+  it('G1: an exact endpoint tie keeps both rows without summarizing', async () => {
+    const { cfg, ctx, db } = config()
+    const compact = vi.fn(cfg.compact)
+    const decide = (async () => ({
+      probs: { merge: 0.5, keep: 0.5 },
+      method: 'jev',
+      calibrated: true,
+    })) as DecideFn
+    expect(await compactMemory(ctx, { ...cfg, decide, compact })).toMatchObject({
+      merged: 0,
+      kept: 1,
+    })
+    expect(db.rows()).toHaveLength(2)
+    expect(compact).not.toHaveBeenCalled()
+  })
+
+  it('G2: switch-off during decide prevents the next summary call', async () => {
+    const { cfg, ctx, db } = config()
+    let on = true
+    const compact = vi.fn(cfg.compact)
+    const decide = (async (input) => {
+      on = false
+      return merges(input)
+    }) as DecideFn
+    await compactMemory(ctx, { ...cfg, enabled: () => on, decide, compact })
+    expect(compact).not.toHaveBeenCalled()
+    expect(db.rows()).toHaveLength(2)
+  })
+
+  it('G3: a failed member re-verify still records the decision and redacted call', async () => {
+    const { cfg, ctx, db } = config()
+    expect(
+      await compactMemory(ctx, {
+        ...cfg,
+        compact: async (input) => {
+          await db.store.transaction(async (tx) => {
+            await tx.delete(['a'])
+          })
+          return cfg.compact(input)
+        },
+      }),
+    ).toMatchObject({ merged: 0, kept: 1 })
+    const decisions = ctx.events.filter((e) => e.type === 'decision_made')
+    expect(decisions).toHaveLength(1)
+    expect(decisions[0].data).toMatchObject({ label: 'merge' })
+    expect(decisions[0].llmCall?.functionName).toBe('Decide')
+    expect(JSON.stringify(decisions)).not.toContain('OLD-SENTINEL')
+    expect(ctx.events.filter((e) => e.type === 'memory_written')).toEqual([])
+  })
+
+  it('G3: switch-off under the expiry lock preserves even a due episode', async () => {
+    const { cfg, ctx, db } = config([row('expired', { kind: 'episodic' })])
+    const enabled = vi.fn().mockResolvedValueOnce(true).mockResolvedValue(false)
+    expect(await compactMemory(ctx, { ...cfg, enabled })).toMatchObject({
+      expired: 0,
+      skipped: 'disabled',
+    })
+    expect(db.rows().map((r) => r.id)).toEqual(['expired'])
+    expect(db.order).toEqual([])
+  })
+
+  it('G3: switch-off under the eviction lock preserves a full store', async () => {
+    const seed = [
+      row('episode', { kind: 'episodic', lastSeenAt: NOW }),
+      row('pref'),
+      row('semantic', { kind: 'semantic' }),
+      row('trait', { kind: 'trait' }),
+    ]
+    const { cfg, ctx, db } = config(seed)
+    const enabled = vi
+      .fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValue(false)
+    expect(
+      await compactMemory(ctx, {
+        ...cfg,
+        enabled,
+        settings: { softLimit: 4, target: 3, hardLimit: 4 },
+      }),
+    ).toMatchObject({ evicted: 0, skipped: 'disabled' })
+    expect(db.rows()).toEqual(seed)
+    expect(db.order).toEqual([])
+  })
+
   it('F6: stops at target after one of two mergeable pairs', async () => {
     const { cfg, db, ctx } = config([
       row('a'),
@@ -551,7 +636,7 @@ describe('compaction transaction', () => {
         label: result?.probs.merge === 0 ? 'keep' : null,
       })
     }
-    expect(MEMORY_COMPACT_SPEC.labels.map((l) => l.id)).toEqual(['merge', 'keep'])
+    expect(MEMORY_COMPACT_SPEC.labels.map((l) => l.id)).toEqual(['keep', 'merge'])
   })
 
   it('invalid summaries and vectors keep both; no model-provided provenance is used', async () => {

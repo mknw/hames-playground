@@ -2332,6 +2332,8 @@ Following G11 and the store step, compaction uses the endpoint verdict through
 `evaluateDecision`, with the `jev`-only seam. No calibration requirement,
 threshold policy or policy fallback is added. Only a usable `merge` verdict
 can proceed; `keep`, unavailable, refused, abstained or failed reads keep rows.
+`keep` is listed first, so an exact merge/keep tie keeps both rows without a
+threshold policy.
 This supersedes M3's earlier requireCalibrated/fitted-cut contract. Each cluster has a 10-second
 budget across tier validation, decision, summary and embedding. A late result
 has no write continuation. This timeout only stops waiting: the current seams
@@ -2340,7 +2342,8 @@ the pass or switch-off. Their late call records are not attached to the context;
 transport-level usage observers, if supplied by the host, remain independent.
 Inference runs outside every owner-locked transaction against the committed
 snapshot. The switch is re-read before EVERY cluster, including after a `keep`,
-and off stops further clusters. The host's required `assertTier` runs before any
+and off stops further clusters. After a merge verdict, the switch is re-read
+again before the summarizer call. The host's required `assertTier` runs before any
 inference, inside the partition's own run-frame tier; unavailable partitions
 are kept. The app wiring slice MUST positively allow only `anthropic` and
 `verda` before delegating to `assertInferenceTier`; passing that function bare
@@ -2362,8 +2365,10 @@ A write failure rolls back only that merge; earlier expiry and merges stay commi
 Each merge publishes its events after its own commit, before the next cluster. The already-durable original user
 event remains the evidence event; M3 introduces no outbox or event-storage seam
 (coordinator ruling Q2). The switch is checked again after inference, before
-writing. Context events cross only after commit: metadata-only decisions and
-`memory_written` with action `inserted` for the new row. Call records retain
+writing. Successful merges publish their decision and `memory_written` with
+action `inserted` after commit. Kept clusters, including a failed member
+re-verification, still record their metadata-only decision and redacted call
+without a write event. Call records retain
 usage/identity only, with all prompt/output text redacted. Persist the context
 after awaiting the pass, as for settle; the existing host-save/reconciliation
 obligations still apply. Expiry/eviction ids and absorbed-member ids/counts

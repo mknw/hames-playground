@@ -193,7 +193,9 @@ each cluster's inference runs outside every transaction, then a short merge
 transaction re-reads the switch and all members (including their source set).
 Changed members are kept. Each merge commits independently and publishes its
 events after commit; a final short transaction handles fresh-count eviction.
-The switch is also re-read before every cluster, including after `keep`.
+The switch is also re-read before every cluster, including after `keep`, and
+after a merge verdict before summarization. A cluster kept because its members
+changed still records the decision and redacted call, without a write event.
 `assertTier` must refuse unknown or unavailable tiers before inference; no
 fallback is allowed. For the later app wiring slice, wrap the reachability check:
 
@@ -219,7 +221,8 @@ Retention lives at `cfg.retention`, per kind in days after last sighting: episod
 `{ episodic: 90, preference: 365, trait: null }`. Compaction keeps the newest
 last-seen date, so it cannot restart the retention clock. A refused, failed or unavailable decision keeps all members. Compaction follows
 the store step under G11: it uses the endpoint verdict through `evaluateDecision`
-on the `jev`-only seam, without calibration or threshold policy. Only episodes may be evicted at the hard
+on the `jev`-only seam, without calibration or threshold policy. `keep` is the
+first option, so an exact merge/keep tie keeps both rows. Only episodes may be evicted at the hard
 cap, even when episodic retention is `null`. Settle refuses an insertion with
 `full` and `compactionDue: true` if its host cannot reclaim episodic space; it
 continues later candidates, so

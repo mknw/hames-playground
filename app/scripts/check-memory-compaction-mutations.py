@@ -1,10 +1,11 @@
-"""#576 fix round 1: isolated assertion mutations; restores every file.
+"""#576 fix rounds 1/2: isolated assertion mutations; restores every file.
 
 Run from app/: python3 scripts/check-memory-compaction-mutations.py /tmp/m3-results
 No DB, Docker or live providers. Author A1-A22 reproduce the published table; A9/A10 migrate to G11 equivalents.
 Only eight reviewer mutations were enumerated publicly; R1-R19 reconstruct the
 named controls and finding pins, NOT a claim to possess the reviewer's harness.
 The coordinator approved this reconstruction; the reviewer owns the delta rerun.
+The original 44 cases remain; round 2 adds five G1/G2/G3 assertion mutations.
 """
 from pathlib import Path
 import json
@@ -20,6 +21,17 @@ OUT.mkdir(parents=True, exist_ok=True)
 CORE = 'memory-compaction.server.ts'
 PURE = 'memory-compaction-pure.server.ts'
 STORE = 'memory-store.server.ts'
+KEEP_LABEL = """    {
+      id: 'keep',
+      description: 'Keep separately: distinct facts, uncertainty or any loss of meaning.',
+    },
+"""
+MERGE_LABEL = """    {
+      id: 'merge',
+      description:
+        'They express one fact; merge, resolving contradictions toward the most recent member.',
+    },
+"""
 # id, file, old, new, optional test-name filter
 CASES = [
  ('A1-tier', PURE, 'm.tier === row.tier &&', 'true &&', ''),
@@ -67,6 +79,12 @@ CASES = [
  ('F7-bare-host-guard', 'GUIDE.md', "const assertTier = (tier: string) => {\n  if (tier !== 'anthropic' && tier !== 'verda') throw new TypeError('unknown memory tier')\n  assertInferenceTier(tier)\n}", 'const assertTier = assertInferenceTier', ''),
  ('F9-deletion-audit-docs', 'SPEC.md', 'are deliberately not context events in M3', 'are recorded as context events in M3', ''),
  ('F9-changeset-full', '../../.changeset/memory-core-compaction.md', '`settleMemory` now refuses insertion at `hardLimit` (default 400)', 'Settle has no capacity change', ''),
+ ('G1-tie-order', CORE, KEEP_LABEL + MERGE_LABEL, MERGE_LABEL + KEEP_LABEL, 'G1:'),
+ ('G2-switch-before-summary', CORE, '  if (!(await cfg.enabled())) return kept', '', 'G2:'),
+ ('G3-kept-decision', CORE, '        if (!committed) {\n          ctx.events.push(...result.events)', '        if (!committed) {', 'G3: a failed member'),
+ ('G3-expiry-switch', CORE, 'const snapshot = await cfg.store.transaction(async (tx) => {\n      if (!(await cfg.enabled())) return undefined', 'const snapshot = await cfg.store.transaction(async (tx) => {', 'G3: switch-off under the expiry'),
+ ('G3-eviction-switch', CORE, 'const final = await cfg.store.transaction(async (tx) => {\n      if (!(await cfg.enabled())) return undefined', 'const final = await cfg.store.transaction(async (tx) => {', 'G3: switch-off under the eviction'),
+
 ]
 COMMAND = ['corepack', 'pnpm', 'exec', 'vitest', 'run', '--root', str(BASE),
            '__tests__/memory-compaction.test.ts', '__tests__/memory-store.test.ts', '__tests__/with-memory.test.ts']

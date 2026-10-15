@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { assertLivePreconditions } from '../../../lib/eval-support/live-preconditions'
+import {
+  assertLivePreconditions,
+  poisonPublicProviders,
+} from '../../../lib/eval-support/live-preconditions'
 
 const env = {
   EVAL_GENERAL_GO: 'S3 merged: go',
@@ -61,5 +64,30 @@ describe('private eval live preconditions', () => {
     expect(() =>
       assertLivePreconditions({ ...env, EMBEDDINGS_LOCAL_URL: 'https://embed.example.invalid' }),
     ).toThrow('owner local embedder')
+  })
+})
+
+describe('public paths cannot use loaded or inherited credentials', () => {
+  it.each([
+    'ANTHROPIC_API_KEY',
+    'JEV_DECISIONS_URL',
+    'JEV_DECISIONS_API_KEY',
+    'OPENROUTER_API_KEY',
+  ])('poisons %s after loading dotenv', (key) => {
+    const target = { [key]: 'synthetic-inherited-or-dotenv-value' }
+    poisonPublicProviders(target)
+    expect(target[key]).toBe(
+      key === 'JEV_DECISIONS_URL'
+        ? 'http://127.0.0.1:1/disabled'
+        : 'hermetic-refuses-public-provider',
+    )
+  })
+  it.each(['openrouter', '', 'LOCAL', 'garbage'])('refuses embedding provider %s', (provider) => {
+    expect(() => assertLivePreconditions({ ...env, EMBEDDINGS_PROVIDER: provider })).toThrow(
+      'EMBEDDINGS_PROVIDER',
+    )
+  })
+  it('accepts the explicit local provider', () => {
+    expect(() => assertLivePreconditions({ ...env, EMBEDDINGS_PROVIDER: 'local' })).not.toThrow()
   })
 })

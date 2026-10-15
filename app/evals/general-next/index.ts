@@ -15,6 +15,8 @@ import { scenario as scenario14 } from './scenarios/14-analysis-index-follow-up'
 import { scenario as scenario15 } from './scenarios/15-graph-file-summary'
 import { scenario as scenario16 } from './scenarios/16-graph-files-analysis'
 
+import { scenario as scenario17 } from './scenarios/17-mail-analysis-follow-up'
+
 export const scenarios = [
   scenario01,
   scenario02,
@@ -32,4 +34,5 @@ export const scenarios = [
   scenario14,
   scenario15,
   scenario16,
+  scenario17,
 ]

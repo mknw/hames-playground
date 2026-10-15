@@ -14,6 +14,7 @@ export interface ConversationScenario {
   p4: boolean
   messages: string[]
   expectedTools: string[]
+  expectedArgs?: Record<string, (args: Record<string, unknown>) => boolean>
   expectedRoutes: string[]
   answerIncludes: string[]
   artifacts: string[]

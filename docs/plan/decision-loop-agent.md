@@ -405,8 +405,8 @@ The owner named a later step: utilities that instantiate loops, agents, harnesse
 
 Ship as a new agent beside `general` (working id `general-next`). It replaces `general` when:
 
-1. an eval scenario shows no regression on `general`'s current cases, on both tiers;
-2. a synthetic fetch → read back → compute request passes;
+1. an eval scenario shows no regression on `general`'s current cases, on the private tier only (owner amendment, 2026-10-15; #507 W4);
+2. a synthetic fetch → read back → compute request passes (W4 scenario 17: mail lookup, uploaded notes/sales, analysis, indexed markdown and cited follow-up; Graph-file variants remain gated on P4);
 3. P2, P3 (G13 landed with its evidence) and P5 (G11 deletion/client migration first) are met;
 4. P1 is met, or "no gates in routes" is pinned;
 5. the M7 memory opt-in moves with it;

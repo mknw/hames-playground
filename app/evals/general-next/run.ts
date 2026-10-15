@@ -1,9 +1,26 @@
 /** Opt-in conversation eval: private tier only; no module-scope model calls. */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { parseEnv } from 'node:util'
 import { resolve } from 'node:path'
-import { SpendBudget, parseSpendCap, type SpendKey } from '../../src/lib/eval-support/spend-budget'
-import { assertLivePreconditions } from '../../src/lib/eval-support/live-preconditions'
+import {
+  SpendBudget,
+  parseSpendCap,
+  floorHourlyRate,
+  type SpendKey,
+} from '../../src/lib/eval-support/spend-budget'
+import { createSpendObserver } from '../../src/lib/eval-support/spend-observer'
+import { flipGate } from '../../src/lib/eval-support/flip-gate'
+import {
+  assertProxyNode,
+  proxyEnvironment,
+  assertEgressSelfTest,
+} from '../../src/lib/eval-support/hermetic-egress'
+import { DEFAULT_VERDA_EUR_PER_HOUR, DEFAULT_SMALL_LLM_EUR_PER_HOUR } from '../../src/lib/settings'
+import {
+  assertLivePreconditions,
+  poisonPublicProviders,
+} from '../../src/lib/eval-support/live-preconditions'
 import { grade } from '../../src/lib/eval-support/conversation-checks'
 import type { ConversationDriver, ConversationResult } from './types'
 import { scenarios } from './index'
@@ -26,30 +43,35 @@ async function main() {
     return
   }
   let fake: Awaited<ReturnType<typeof import('./fixture-inference').fixtureInference>> | undefined
-  let backstop:
-    | Awaited<ReturnType<typeof import('../../e2e/lib/egress-backstop').startEgressBackstop>>
-    | undefined
+  if (!live && process.env.GENERAL_EVAL_CHILD !== '1') {
+    assertProxyNode()
+    const { startEgressBackstop } = await import('../../e2e/lib/egress-backstop')
+    const backstop = await startEgressBackstop()
+    try {
+      const child = spawn(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
+        env: proxyEnvironment(backstop.url),
+        stdio: 'inherit',
+      })
+      process.exitCode = await new Promise<number>((resolve, reject) => {
+        child.on('error', reject)
+        child.on('exit', (code) => resolve(code ?? 1))
+      })
+    } finally {
+      await backstop.close()
+    }
+    return
+  }
+  let takeEgressAttempts: (() => Promise<Array<{ target: string }>>) | undefined
   if (live) {
     // The .env FILE is authoritative: inherited variables cannot mask a stale copy.
     const deployed = parseEnv(readFileSync('.env', 'utf8'))
     assertLivePreconditions({ ...deployed, EVAL_GENERAL_GO: process.env.EVAL_GENERAL_GO })
     Object.assign(process.env, deployed)
   } else {
-    process.env.ANTHROPIC_API_KEY = 'hermetic-refuses-public-provider'
-    process.env.JEV_DECISIONS_URL = 'http://127.0.0.1:1/disabled'
-    process.env.JEV_DECISIONS_API_KEY = 'hermetic-refuses-public-provider'
-    const { startEgressBackstop } = await import('../../e2e/lib/egress-backstop')
-    backstop = await startEgressBackstop()
-    for (const key of [
-      'HTTP_PROXY',
-      'HTTPS_PROXY',
-      'ALL_PROXY',
-      'http_proxy',
-      'https_proxy',
-      'all_proxy',
-    ])
-      process.env[key] = backstop.url
-    process.env.NO_PROXY = process.env.no_proxy = '127.0.0.1,localhost,::1'
+    assertProxyNode()
+    const egress = await import('../../e2e/lib/egress-backstop')
+    takeEgressAttempts = egress.takeEgressAttempts
+    await assertEgressSelfTest(takeEgressAttempts)
     const { fixtureInference } = await import('./fixture-inference')
     fake = await fixtureInference()
     Object.assign(process.env, {
@@ -60,12 +82,22 @@ async function main() {
       SMALL_LLM_API_KEY: 'fixture',
     })
   }
+  poisonPublicProviders(process.env)
   // All model calls use the production private-role map. No EVAL_CLIENT overrides.
   process.env.USE_VERDA_INFERENCE = '1'
+  const liveCatalog = live
+    ? await (
+        await import('./tool-catalog')
+      ).productionCatalog(process.env.MCP_GATEWAY_URL ?? 'http://127.0.0.1:8811/mcp')
+    : []
   const { startFakeGateway } = await import('../../e2e/lib/fake-gateway')
   const gateway = await startFakeGateway()
   process.env.MCP_GATEWAY_URL = gateway.url
   const rates = await import('../../src/lib/cost-rates.server')
+  const verdaRate = floorHourlyRate(rates.verdaEurPerHour(), DEFAULT_VERDA_EUR_PER_HOUR)
+  const smallRate = floorHourlyRate(rates.smallLlmEurPerHour(), DEFAULT_SMALL_LLM_EUR_PER_HOUR)
+  const { verdaScaledownSeconds } = await import('../../src/lib/inference/verda-activity.server')
+  const { smallScaledownSeconds } = await import('../../src/lib/inference/cold-start.server')
   await import('../../src/lib/inference/config.server')
   const clients = await import('@hames-ai/harness-baml/clients.server')
   clients.assertInferenceTier('verda')
@@ -103,15 +135,23 @@ async function main() {
           tier: 'verda',
           candidate,
           selectionComplete: picked.length === scenarios.length,
+          flipGate: flipGate(
+            live,
+            picked.length === scenarios.length,
+            candidate,
+            scenarios,
+            rows as ConversationResult[],
+          ),
+          tailLines: budget.tailLines,
           capUsd: cap,
           stopUsd: budget.stopUsd,
           totalUsd: budget.totalUsd,
           stopReason: budget.reason,
           eurPerUsd: budget.eurPerUsd,
-          verdaEurPerHour: rates.verdaEurPerHour(),
-          smallEurPerHour: rates.smallLlmEurPerHour(),
+          verdaEurPerHour: verdaRate,
+          smallEurPerHour: smallRate,
           limitation:
-            'The observer prices completed calls, so a final call can overshoot the 80% stop threshold and even the configured cap. Private infrastructure is an additional conservative floor: elapsed private-scenario time (including setup and endpoint wake wait) times both GPU hourly rates; observer call-time cost is also counted. Idle scale-down tails, provider rounding and unobserved infrastructure are not measured. This is not an invoice ceiling. Hermetic results certify scripted wiring only; they cannot authorize the default flip.',
+            'The observer prices completed calls, so a final call can overshoot the 80% stop threshold and even the configured cap. Private infrastructure is an additional conservative floor: elapsed private-scenario time (including setup and endpoint wake wait) times both GPU hourly rates; observer call-time cost is also counted. Configured scale-down tails are reserved once per run and after idle gaps longer than each box window. Provider rounding and unobserved infrastructure are not measured. This is not an invoice ceiling. Hermetic results certify scripted wiring only; they cannot authorize the default flip.',
           results: rows.map((r) => ({ ...r, spend: budget.row(r) })),
         },
         null,
@@ -120,12 +160,7 @@ async function main() {
     )
   }
   const tick = () => {
-    if (active && live)
-      budget.infrastructure(
-        active,
-        Date.now() - started,
-        rates.verdaEurPerHour() + rates.smallLlmEurPerHour(),
-      )
+    if (active && live) budget.infrastructure(active, Date.now() - started, verdaRate + smallRate)
   }
   const stop = () => {
     write()
@@ -135,17 +170,8 @@ async function main() {
     process.exit(1)
   }
   const { observeLlmUsage } = await import('@hames-ai/harness-patterns/llm-usage-observer.server')
-  const unobserve = observeLlmUsage((sample) => {
-    if (!active) {
-      budget.reason = 'Usage outside a scenario'
-      stop()
-    }
-    if (!['VerdaQwen', 'LocalQwenSmall', 'PrivateSystemOne'].includes(sample.clientName ?? ''))
-      budget.reason = 'Unexpected serving client on the private tier'
-    budget.observe(active!, live ? sample.metrics : { costEur: 0 })
-    tick()
-    if (budget.stopped) stop()
-  })
+  const observer = createSpendObserver({ budget, live, onStop: stop })
+  const unobserve = observeLlmUsage(observer.observe)
   const timer = setInterval(() => {
     tick()
     if (budget.stopped) stop()
@@ -162,10 +188,11 @@ async function main() {
         )
     }
     const { createDriver } = await import('./driver')
-    driver = await createDriver(fake)
+    driver = await createDriver(fake, live, liveCatalog)
     for (const job of jobs) {
       active = job.key
       started = Date.now()
+      observer.activate(active)
       budget.row(active)
       if (job.scenario.p4) {
         results.push({
@@ -176,9 +203,25 @@ async function main() {
         })
       } else {
         try {
+          if (live) {
+            budget.beginInfrastructure(active, started, [
+              { box: 'verda', seconds: verdaScaledownSeconds(), eurPerHour: verdaRate },
+              { box: 'small', seconds: smallScaledownSeconds(), eurPerHour: smallRate },
+            ])
+            if (budget.stopped) stop()
+            const { ensurePrivateTierAwake } = await import('../../src/lib/inference/wake.server')
+            try {
+              await ensurePrivateTierAwake()
+            } catch {
+              budget.reason = 'VERDA_WAKE_FAILED'
+              results.push({ ...active, status: 'fail', checks: [], error: 'VERDA_WAKE_FAILED' })
+              tick()
+              stop()
+            }
+          }
           const trace = await driver.run(job.scenario, active)
           const checks = grade(job.scenario, trace, active.agent === 'general')
-          if (backstop?.recorded.length)
+          if ((await takeEgressAttempts?.())?.length)
             checks.push({
               name: 'no unexpected egress',
               pass: false,
@@ -201,7 +244,9 @@ async function main() {
       tick()
       write()
       if (budget.stopped) stop()
+      if (live && !job.scenario.p4) budget.endInfrastructure(Date.now())
       active = undefined
+      observer.activate(undefined)
     }
     console.log(`Report: ${file}`)
     process.exitCode = results.some((r) => r.status === 'fail') ? 1 : 0
@@ -210,7 +255,6 @@ async function main() {
     unobserve()
     await driver?.close()
     await fake?.close()
-    await backstop?.close()
     const { closeMcpClient } = await import('@hames-ai/harness-patterns/mcp-client.server')
     await closeMcpClient()
     await gateway.goDown()

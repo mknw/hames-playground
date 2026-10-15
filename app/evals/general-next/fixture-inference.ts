@@ -68,13 +68,20 @@ export async function fixtureInference() {
               tool_name: name ?? 'Return',
               tool_args: JSON.stringify(
                 name === 'sandbox_bash'
-                  ? { command: `fixture-write ${scenario.artifacts.join(' ')}` }
-                  : {
-                      query: 'Lantern',
-                      url: 'https://example.invalid/lantern',
-                      libraryName: 'solid-js',
-                      context7CompatibleLibraryID: '/solidjs/solid',
-                    },
+                  ? {
+                      command: `python3 -c "# lantern-notes.md lantern-sales.csv ${scenario.artifacts.join(' ')}"`,
+                    }
+                  : name?.startsWith('graph_')
+                    ? { limit: 10 }
+                    : {
+                        query:
+                          name === 'read_neo4j_cypher'
+                            ? 'MATCH (p:Project) RETURN count(p) AS count'
+                            : 'Lantern',
+                        url: 'https://example.invalid/lantern',
+                        libraryName: 'solid-js',
+                        context7CompatibleLibraryID: '/solidjs/solid',
+                      },
               ),
               is_final: !name,
             }

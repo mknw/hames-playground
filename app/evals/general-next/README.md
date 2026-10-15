@@ -1,6 +1,6 @@
 # general-next conversation Eval (#507 W4)
 
-[SCENARIOS.md](SCENARIOS.md) records the 16 acceptance scenarios. This extends the
+[SCENARIOS.md](SCENARIOS.md) records the 17 acceptance scenarios. This extends the
 existing role-level compatibility evals with whole conversations: run the shipped
 package agent through `harness` / `continueSession`, then check tool order, routes,
 termination, facts, artifacts and retrieval locators. Each scenario has its own file.
@@ -40,27 +40,25 @@ The observer prices completed calls, so the final in-flight call can overshoot t
 80% threshold and even the configured cap. The report adds a separate conservative
 private-infrastructure line: elapsed scenario seconds (including setup and endpoint
 wake waits) × (`VERDA_EUR_PER_HOUR` + `SMALL_LLM_EUR_PER_HOUR`), converted to USD at
-the same static `EUR_PER_USD` used by the observer. Observer call-time cost is also
+the same static `EUR_PER_USD` used by the observer, refused outside 0.75–0.95. Each hourly rate is floored at its committed default. Observer call-time cost is also
 counted, deliberately overcounting overlap. Infrastructure remains a floor because
-scale-down tails, provider rounding and unobserved infrastructure are not measured;
+provider rounding and unobserved infrastructure are not measured; configured scale-down tails are reserved once per run and after idle gaps longer than each box’s window;
 this is not an invoice ceiling. Both cap and stop threshold appear in every report.
 
 ## Execution boundaries and pending evidence
 
 Hermetic mode poisons public-provider credentials, redirects the private endpoints
 to a loopback fake before importing the agent, and installs a recording dead-end
-HTTP proxy for non-loopback requests. No Anthropic-tier run exists. Live mode reads
+HTTP proxy for non-loopback requests. It re-execs a child with `NODE_USE_ENV_PROXY=1` and all proxy variables set at spawn, requires Node ≥24.5, and refuses execution unless a startup fetch of `http://egress-selftest.invalid/` is recorded by the backstop. No Anthropic-tier run exists. Live mode reads
 **this worktree's `app/.env` file**, checks remote HTTPS URLs and `/v1` versus
 `/v1/systemone` paths, then installs the same private role map used in production.
 It refuses a missing/stale small-model URL or key before inference; refresh a stale
-worktree copy from `/Users/mknw/Code/kg-agent/app/.env` without printing key values,
-and escalate if the required values are absent. The runner does not copy or print
-credentials. The owner local embedder at `127.0.0.1:8090` must answer `/health`;
+worktree copy from the main checkout's `app/.env` without printing key values,
+and escalate if the required values are absent. The runner does not copy or print credentials. After loading `.env`, it poisons all public-provider keys and the public decision URL in both modes, and live mode refuses a non-local embedding provider. Each live job awaits `ensurePrivateTierAwake()` after its elapsed-time clock starts. Wake failure records `VERDA_WAKE_FAILED` and stops without fallback. The owner local embedder at `127.0.0.1:8090` must answer `/health`;
 otherwise escalate. Never start another embedder.
 
 Both modes isolate all tool dependencies with synthetic fixtures. The builtin driver
-uses a memory-only stash, a keyword retrieval backend and a scripted `fixture-write`
-sandbox command. It executes no generated code and makes no real Graph, Neo4j or
+uses a memory-only stash, a keyword retrieval backend and scripted shell effects. Live mode reads the production gateway descriptions/schemas through metadata-only MCP requests and the shipped Graph definitions; the sandbox tool mirrors the shipped shell schema/description. Missing metadata refuses execution. Every required tool has per-scenario argument predicates. It executes no generated code and makes no real Graph, Neo4j or
 Redis request; the gateway is a loopback fake. Artifact and markdown-index checks
 prove the **dependency contract**, not Office rendering, numerical Python/Excel
 execution, vector search quality, app-upload HTTP integration or containment.
@@ -84,3 +82,5 @@ so ordinary hermetic unit tests can exercise them without importing the eval run
 The existing `evals-not-in-ci` pin remains unchanged; neither this script nor the
 role evals run in CI. No public package API changed, so this PR needs no package
 changeset or core SPEC/GUIDE update.
+
+The JSON report includes a computed `flipGate` with explicit reasons; hermetic or filtered reports are ineligible. See the catalogue’s rollout criterion map and each scenario’s “A live pass proves” statement.

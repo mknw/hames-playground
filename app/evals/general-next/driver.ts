@@ -7,7 +7,7 @@ import type { ConversationDriver, ConversationScenario, ConversationTrace } from
 import type { fixtureInference } from './fixture-inference'
 
 const NOTES =
-  'Lantern release date: 2030-04-12. Target count: 50. North revenue: 40. South revenue: 20. Hosting overspend: 5.'
+  'Lantern release date: 2030-04-12. Target count: 50. North revenue: 47. South revenue: 19. Hosting overspend: 5.'
 const FIXTURES: Record<string, unknown> = {
   get_neo4j_schema: [{ label: 'Project', properties: { name: 'STRING' } }],
   read_neo4j_cypher: [{ count: 42 }],
@@ -27,6 +27,7 @@ const FIXTURES: Record<string, unknown> = {
 const NAMESPACES: Record<string, string> = {
   get_neo4j_schema: 'neo4j',
   read_neo4j_cypher: 'neo4j',
+  write_neo4j_cypher: 'neo4j',
   search: 'web',
   fetch: 'web',
   'resolve-library-id': 'context7',
@@ -38,6 +39,8 @@ const NAMESPACES: Record<string, string> = {
 
 export async function createDriver(
   fake?: Awaited<ReturnType<typeof fixtureInference>>,
+  live = false,
+  liveCatalog: MCPToolDescription[] = [],
 ): Promise<ConversationDriver> {
   // Runtime imports follow endpoint configuration; none of these run at module load.
   const { harness, continueSession } = await import('@hames-ai/harness-patterns')
@@ -49,11 +52,11 @@ export async function createDriver(
   let scenario: ConversationScenario
   let turn = 0
   const documents = new Map<string, string>()
-  const descriptions: MCPToolDescription[] = Object.keys(NAMESPACES).map((name) => ({
+  const fixtureDescriptions: MCPToolDescription[] = Object.keys(NAMESPACES).map((name) => ({
     name,
     description:
       name === 'sandbox_bash'
-        ? 'Synthetic sandbox: fixture-write <filename> creates a fixture artifact in /work/out, promotes it to the stash and indexes markdown. Input files: /work/in/lantern-notes.md and /work/in/lantern-sales.csv. This fixture does not execute arbitrary code.'
+        ? 'Run a shell command. Inputs: /work/in/lantern-notes.md and /work/in/lantern-sales.csv. Outputs: /work/out.'
         : `Synthetic ${name}; returns fixed Lantern fixture data.`,
     inputSchema: {
       type: 'object',
@@ -66,36 +69,43 @@ export async function createDriver(
       },
     },
   }))
+  const descriptions = live
+    ? Object.keys(NAMESPACES).map((name) => {
+        const tool = liveCatalog.find((t) => t.name === name)
+        if (!tool) throw new Error(`Production tool metadata missing: ${name}`)
+        return tool
+      })
+    : fixtureDescriptions
   const transport = {
     id: 'general-eval-synthetic-only',
     ownsTool: (name: string) => name in NAMESPACES && name !== 'sandbox_bash',
     namespaceFor: (name: string) => NAMESPACES[name],
     listTools: async () => descriptions.filter((t) => t.name !== 'sandbox_bash'),
     callTool: async (name: string, args: Record<string, unknown>) => {
-      const success = !(scenario.failFirstTurn && turn === 0 && name === 'read_neo4j_cypher')
-      trace.tools.push({ name, args, success, turn })
+      const success =
+        name !== 'write_neo4j_cypher' &&
+        !(scenario?.failFirstTurn && turn === 0 && name === 'read_neo4j_cypher')
+      trace?.tools.push({ name, args, success, turn })
       if (!success)
         return {
           success: false,
           data: null,
-          error: 'Synthetic service unavailable; retry on the next user turn.',
+          error:
+            name === 'write_neo4j_cypher'
+              ? 'Graph is read-only; write refused.'
+              : 'Synthetic service unavailable; retry on the next user turn.',
         }
       if (name === 'sandbox_bash') {
-        const words = typeof args.command === 'string' ? args.command.trim().split(/\s+/) : []
-        if (
-          words.shift() !== 'fixture-write' ||
-          words.length === 0 ||
-          words.some((w) => !/^[a-z0-9-]+\.(md|csv|docx)$/.test(w))
-        ) {
+        if (!scenario.expectedArgs?.sandbox_bash?.(args)) {
           trace.tools.at(-1)!.success = false
           return {
             success: false,
             data: null,
-            error:
-              'Fixture accepts only fixture-write <filename> [filename ...]. No code was executed.',
+            error: 'Invalid synthetic shell request; no code executed.',
           }
         }
-        for (const file of words) {
+        const files = scenario.artifacts
+        for (const file of files) {
           documents.set(file, NOTES)
           trace.artifacts.push(file)
           if (file.endsWith('.md')) trace.indexed.push(file)
@@ -103,10 +113,12 @@ export async function createDriver(
         return {
           success: true,
           data: {
-            artifacts: words.map((name) => ({ name, url: `stash://fixture/${name}` })),
-            total: 60,
-            north: 40,
-            south: 20,
+            artifacts: files.map((name) => ({ name, url: `stash://fixture/${name}` })),
+            stdout:
+              'Synthetic transport recorded the request. Source data: North revenue 47; South revenue 19. No generated code was executed.',
+            stderr: '',
+            exit_code: 0,
+            timed_out: false,
           },
         }
       }
@@ -171,7 +183,7 @@ export async function createDriver(
       trace = { turns: [], tools: [], artifacts: [], indexed: [], retrievals: [] }
       documents.clear()
       documents.set('lantern-notes.md', NOTES)
-      documents.set('lantern-sales.csv', 'region,revenue\nNorth,40\nSouth,20\n')
+      documents.set('lantern-sales.csv', 'region,revenue\nNorth,47\nSouth,19\n')
       const sessionId = `eval-${key.agent}-${next.id}`
       return withRunFrame({ inference: { tier: 'verda' }, hitl: { attended: false } }, async () => {
         const patterns = await agent.createPatterns(sessionId, deps)

@@ -8,6 +8,10 @@ export const scenario: ConversationScenario = {
   p4: false,
   messages: ['Find the SolidJS createSignal docs and show me a tiny counter example.'],
   expectedTools: ['resolve-library-id', 'get-library-docs'],
+  expectedArgs: {
+    'resolve-library-id': (a) => /solid/i.test(String(a.libraryName)),
+    'get-library-docs': (a) => /solid/i.test(String(a.context7CompatibleLibraryID)),
+  },
   expectedRoutes: ['info-retrieval'],
   answerIncludes: ['createSignal'],
   artifacts: [],

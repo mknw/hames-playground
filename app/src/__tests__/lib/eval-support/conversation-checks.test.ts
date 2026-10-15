@@ -25,18 +25,23 @@ const scenario: ConversationScenario = {
 }
 const decision = (label: string) =>
   event('decision_made', { label, labels: [{ id: 'answer' }], abstained: false })
+const child = (route: string) => [
+  { ...event('pattern_enter', { route }), patternId: route },
+  { ...event('pattern_exit', { status: 'completed' }), patternId: route },
+]
 const successful = (): ConversationTrace => ({
   turns: [
     {
       response: 'Created analysis.md; graph is read-only',
       status: 'running',
-      events: [decision('office-data'), decision('answer')],
+      events: [decision('office-data'), ...child('office-data'), decision('answer')],
     },
     {
       response: '42 [analysis.md](stash://fixture/analysis.md); graph is read-only',
       status: 'running',
       events: [
         decision('read-documents'),
+        ...child('read-documents'),
         decision('answer'),
         event('tool_result', {
           result: {
@@ -162,5 +167,60 @@ describe('conversation checks discriminate trace changes', () => {
     const t = successful()
     t.turns[1].events = [event('tool_result', null), event('decision_made', 'answer')]
     expect(failed(t)).toContain('document citation has a locator')
+  })
+})
+
+describe('review grading regressions', () => {
+  it('refuses a route selected without a completed child before answer', () => {
+    for (const events of [
+      [decision('office-data'), decision('answer')],
+      [decision('office-data'), decision('answer'), ...child('office-data')],
+      [
+        decision('office-data'),
+        child('office-data')[0],
+        event('error', { error: 'failed' }),
+        child('office-data')[1],
+        decision('answer'),
+      ],
+      [
+        decision('office-data'),
+        child('office-data')[0],
+        { ...child('office-data')[1], data: { status: 'error' } },
+        decision('answer'),
+      ],
+      [...child('office-data'), decision('office-data'), decision('answer')],
+    ]) {
+      const t = successful()
+      t.turns[0].events = events
+      expect(failed(t)).toContain('route selected: office-data')
+    }
+  })
+  it('grades tool arguments, including a valid tool name with the wrong query', () => {
+    const t = successful()
+    const s = {
+      ...scenario,
+      expectedArgs: {
+        read_neo4j_cypher: (a: Record<string, unknown>) =>
+          /MATCH.*Project.*count/i.test(String(a.query)),
+      },
+    }
+    expect(failed(t, s)).toContain('valid arguments: read_neo4j_cypher')
+    t.tools[0].args = { query: 'MATCH (p:Project) RETURN count(p)' }
+    expect(failed(t, s)).toEqual([])
+  })
+  it('matches whole numeric facts on every turn, never substrings', () => {
+    const t = successful()
+    t.turns[1].response = '148 [analysis.md](stash://fixture/analysis.md); graph is read-only'
+    expect(failed(t)).toContain('answer contains 42')
+    expect(failed(t, { ...scenario, answerIncludes: ['8'] })).toContain('answer contains 8')
+    t.turns[0].response = '142'
+    expect(failed(t, { ...scenario, turnAnswerIncludes: [['42']] })).toContain(
+      'turn 1: answer contains 42',
+    )
+  })
+  it('rejects a claim of graph write success even beside a read-only disclaimer', () => {
+    const t = successful()
+    t.turns[1].response += '. I created it; the graph is read-only.'
+    expect(failed(t)).toContain('does not claim a graph write succeeded')
   })
 })

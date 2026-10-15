@@ -1,3 +1,4 @@
+import { projectCountArgs } from '../../../src/lib/eval-support/tool-arguments'
 import type { ConversationScenario } from '../types'
 
 export const scenario: ConversationScenario = {
@@ -10,8 +11,9 @@ export const scenario: ConversationScenario = {
     'Compare the Project count in the knowledge graph with the target count in lantern-notes.md. How far apart are they? Cite the notes.',
   ],
   expectedTools: ['read_neo4j_cypher'],
+  expectedArgs: { read_neo4j_cypher: projectCountArgs },
   expectedRoutes: ['info-retrieval', 'read-documents'],
-  answerIncludes: ['8'],
+  answerIncludes: ['42', '50', '8'],
   artifacts: [],
   forbiddenTools: [],
   maxIterations: 6,

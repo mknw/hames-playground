@@ -8,6 +8,7 @@ export interface SpendKey {
 export interface SpendRow extends SpendKey {
   observerUsd: number
   infrastructureUsd: number
+  tailUsd: number
   calls: number
   unknownCost: boolean
 }
@@ -24,6 +25,8 @@ export class SpendBudget {
   readonly capUsd: number
   readonly stopUsd: number
   readonly rows: SpendRow[] = []
+  readonly tailLines: Array<SpendKey & { box: string; usd: number }> = []
+  private lastInfrastructureEnd?: number
   reason?: string
 
   constructor(
@@ -32,11 +35,15 @@ export class SpendBudget {
   ) {
     this.capUsd = parseSpendCap(String(capUsd))
     this.stopUsd = capUsd * 0.8
-    if (!Number.isFinite(eurPerUsd) || eurPerUsd <= 0) throw new Error('Invalid EUR per USD')
+    if (!Number.isFinite(eurPerUsd) || eurPerUsd < 0.75 || eurPerUsd > 0.95)
+      throw new Error('Invalid EUR per USD')
   }
 
   get totalUsd(): number {
-    return this.rows.reduce((sum, row) => sum + row.observerUsd + row.infrastructureUsd, 0)
+    return this.rows.reduce(
+      (sum, row) => sum + row.observerUsd + row.infrastructureUsd + row.tailUsd,
+      0,
+    )
   }
 
   get stopped(): boolean {
@@ -48,7 +55,14 @@ export class SpendBudget {
       (r) => r.agent === key.agent && r.scenario === key.scenario && r.tier === key.tier,
     )
     if (!row) {
-      row = { ...key, observerUsd: 0, infrastructureUsd: 0, calls: 0, unknownCost: false }
+      row = {
+        ...key,
+        observerUsd: 0,
+        infrastructureUsd: 0,
+        tailUsd: 0,
+        calls: 0,
+        unknownCost: false,
+      }
       this.rows.push(row)
     }
     return row
@@ -88,9 +102,46 @@ export class SpendBudget {
     this.check()
   }
 
+  /** Reserve one scale-down tail per run and another after each long idle gap.
+   * Charge before waking, so a tail alone can stop the run. */
+  beginInfrastructure(
+    key: SpendKey,
+    now: number,
+    boxes: Array<{ box: string; seconds: number; eurPerHour: number }>,
+  ): void {
+    for (const { box, seconds, eurPerHour } of boxes) {
+      if (!Number.isFinite(seconds) || seconds <= 0) {
+        this.reason = 'Unknown scale-down tail; refusing further calls'
+        return
+      }
+      if (
+        this.lastInfrastructureEnd === undefined ||
+        now - this.lastInfrastructureEnd > seconds * 1000
+      ) {
+        const usd = ((seconds / 3600) * eurPerHour) / this.eurPerUsd
+        if (!Number.isFinite(usd) || usd <= 0) {
+          this.reason = 'Unknown scale-down tail cost; refusing further calls'
+          return
+        }
+        this.row(key).tailUsd += usd
+        this.tailLines.push({ ...key, box, usd })
+        this.check()
+      }
+    }
+  }
+
+  endInfrastructure(now: number): void {
+    this.lastInfrastructureEnd = now
+  }
+
   private check(): void {
     if (!this.stopped && this.totalUsd >= this.stopUsd) {
       this.reason = `Observed spend reached the conservative stop threshold (${this.stopUsd} USD)`
     }
   }
+}
+
+export function floorHourlyRate(configured: number, committed: number): number {
+  if (!Number.isFinite(configured) || configured <= 0) throw new Error('Invalid hourly rate')
+  return Math.max(configured, committed)
 }

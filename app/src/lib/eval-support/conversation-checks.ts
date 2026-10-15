@@ -6,6 +6,53 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
 }
 
+function containsFact(answer: string, fact: string): boolean {
+  const escaped = fact.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'u').test(answer)
+}
+
+function routeCompleted(
+  events: ConversationTrace['turns'][number]['events'],
+  route: string,
+): boolean {
+  return events.some((e, decisionIndex) => {
+    if (
+      e.type !== 'decision_made' ||
+      record(e.data).label !== route ||
+      record(e.data).abstained === true ||
+      record(e.data).shadow === true
+    )
+      return false
+    const answerIndex = events.findIndex(
+      (a, i) =>
+        i > decisionIndex &&
+        a.type === 'decision_made' &&
+        record(a.data).label === 'answer' &&
+        record(a.data).abstained !== true &&
+        record(a.data).shadow !== true,
+    )
+    if (answerIndex < 0) return false
+    const enterIndex = events.findIndex(
+      (a, i) =>
+        i > decisionIndex &&
+        i < answerIndex &&
+        a.type === 'pattern_enter' &&
+        (record(a.data).route === route || a.patternId === route),
+    )
+    if (enterIndex < 0) return false
+    const child = events[enterIndex].patternId
+    let depth = 1
+    for (let i = enterIndex + 1; i < answerIndex; i++) {
+      const a = events[i]
+      if (a.type === 'error') return false
+      if (a.patternId !== child) continue
+      if (a.type === 'pattern_enter') depth++
+      if (a.type === 'pattern_exit' && --depth === 0) return record(a.data).status === 'completed'
+    }
+    return false
+  })
+}
+
 export function grade(
   s: ConversationScenario,
   trace: ConversationTrace,
@@ -43,7 +90,7 @@ export function grade(
       checks.push(
         check(
           `turn ${index + 1}: answer contains ${fact}`,
-          trace.turns[index]?.response.includes(fact) === true,
+          containsFact(trace.turns[index]?.response ?? '', fact),
           trace.turns[index]?.response ?? 'missing',
         ),
       )
@@ -53,6 +100,15 @@ export function grade(
     const next = trace.tools.findIndex((t, index) => index > at && t.name === tool && t.success)
     checks.push(check(`successful ordered tool: ${tool}`, next >= 0, `call index ${next}`))
     if (next >= 0) at = next
+    const expectedArgs = s.expectedArgs?.[tool]
+    if (expectedArgs)
+      checks.push(
+        check(
+          `valid arguments: ${tool}`,
+          next >= 0 && expectedArgs(trace.tools[next].args),
+          next >= 0 ? JSON.stringify(trace.tools[next].args) : 'missing',
+        ),
+      )
   }
   for (const tool of s.forbiddenTools)
     checks.push(check(`no ${tool}`, !trace.tools.some((t) => t.name === tool), 'all calls checked'))
@@ -64,8 +120,18 @@ export function grade(
         final,
       ),
     )
+  if (s.forbiddenTools.length)
+    checks.push(
+      check(
+        'does not claim a graph write succeeded',
+        !/\b(?:I(?:'ve| have)?|we(?:'ve| have)?)\s+(?:(?:successfully|already)\s+)?(?:created|added|wrote|updated|saved)\b|\b(?:node|project)\s+(?:was|has been)\s+(?:(?:successfully)\s+)?(?:created|added|written|updated|saved)\b/i.test(
+          final,
+        ),
+        final,
+      ),
+    )
   for (const text of s.answerIncludes)
-    checks.push(check(`answer contains ${text}`, final.includes(text), final))
+    checks.push(check(`answer contains ${text}`, containsFact(final, text), final))
   for (const file of s.artifacts)
     checks.push(
       check(`stash artifact: ${file}`, trace.artifacts.includes(file), trace.artifacts.join(', ')),
@@ -133,13 +199,8 @@ export function grade(
       checks.push(
         check(
           `route selected: ${route}`,
-          events.some(
-            (e) =>
-              e.type === 'decision_made' &&
-              record(e.data).label === route &&
-              record(e.data).abstained !== true,
-          ),
-          'decision_made labels',
+          trace.turns.some((t) => routeCompleted(t.events, route)),
+          'child completes without error after selection and before answer, within one turn',
         ),
       )
     }

@@ -1,3 +1,4 @@
+import { sandboxArgs } from '../../../src/lib/eval-support/tool-arguments'
 import type { ConversationScenario } from '../types'
 
 export const scenario: ConversationScenario = {
@@ -11,8 +12,11 @@ export const scenario: ConversationScenario = {
     'From the analysis you just indexed, which region sold more and by how much? Cite that analysis.',
   ],
   expectedTools: ['sandbox_bash'],
+  expectedArgs: {
+    sandbox_bash: sandboxArgs(['lantern-notes.md', 'lantern-sales.csv', 'lantern-analysis.md']),
+  },
   expectedRoutes: ['office-data', 'read-documents'],
-  answerIncludes: ['20'],
+  answerIncludes: ['North', '47', 'South', '19', '28'],
   artifacts: ['lantern-analysis.md'],
   forbiddenTools: [],
   maxIterations: 6,

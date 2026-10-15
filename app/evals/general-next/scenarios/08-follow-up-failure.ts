@@ -1,3 +1,4 @@
+import { projectCountArgs } from '../../../src/lib/eval-support/tool-arguments'
 import type { ConversationScenario } from '../types'
 
 export const scenario: ConversationScenario = {
@@ -11,6 +12,7 @@ export const scenario: ConversationScenario = {
     'That failed earlier. Please try the same count again now.',
   ],
   expectedTools: ['read_neo4j_cypher'],
+  expectedArgs: { read_neo4j_cypher: projectCountArgs },
   expectedRoutes: ['info-retrieval'],
   answerIncludes: ['42'],
   artifacts: [],

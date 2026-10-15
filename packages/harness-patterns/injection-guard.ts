@@ -154,6 +154,17 @@ export interface SanitizeReport {
   scanned: number
   /** Present when the optional LLM screen ran and reported an injection. */
   screenReason?: string
+  /**
+   * True when a screen was configured, was due to run (the deterministic layer
+   * found nothing) and THREW: the second opinion did not happen. A typed flag
+   * and never a reading of `screenReason`'s prefix, because detections use that
+   * field too and a caller must not parse prose to learn whether a layer ran.
+   * The guard itself stays fail-open here (the deterministic verdict stands, the
+   * outage is recorded); a caller whose failure policy is stricter — the
+   * decision loop's, #507 S-d — reads this to withhold what the screen did not
+   * clear.
+   */
+  screenUnavailable?: boolean
 }
 
 /**
@@ -181,6 +192,9 @@ export interface SanitizeSummary {
   spotlighted: boolean
   scanned: number
   screenReason?: string
+  /** Mirrors {@link SanitizeReport.screenUnavailable}. A boolean about whether a
+   *  layer ran carries no content, so it survives the redaction. */
+  screenUnavailable?: boolean
   /** Id of the `content_sanitized` event holding the full findings, so a human
    *  can jump from an annotated result to what was removed. */
   eventId?: string
@@ -198,6 +212,7 @@ export function redactReport(report: SanitizeReport, eventId?: string): Sanitize
     spotlighted: report.spotlighted,
     scanned: report.scanned,
     ...(report.screenReason ? { screenReason: report.screenReason } : {}),
+    ...(report.screenUnavailable ? { screenUnavailable: true } : {}),
     ...(eventId ? { eventId } : {}),
   }
 }

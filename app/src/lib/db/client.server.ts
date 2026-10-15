@@ -12,6 +12,7 @@ import {
   ensureEncryptionReady,
   type QueryRunner,
 } from './migrate-encryption.server'
+import { createHash } from 'node:crypto'
 import pg from 'pg'
 import { localDatabaseUrl } from '../config/compose-credentials.server'
 
@@ -276,8 +277,95 @@ const SCHEMA_SQL = `
 const directRunner: QueryRunner = (text, params) =>
   getPool().query(text, params as never[]) as never
 
+/** The `pg_advisory_xact_lock` key every schema initialiser takes first (#585). */
+const SCHEMA_LOCK_KEY = 'hames:schema-init'
+
+/** What a recorded schema must equal for the DDL to be skipped: the hash of
+ *  the SQL itself, so an edit to `SCHEMA_SQL` can never be forgotten. */
+const SCHEMA_HASH = createHash('sha256').update(SCHEMA_SQL).digest('hex')
+
+/** Every relation `SCHEMA_SQL` creates by name — what the skip path re-checks. */
+const SCHEMA_RELATIONS = [
+  ...SCHEMA_SQL.matchAll(/CREATE (?:UNIQUE )?(?:TABLE|INDEX|SEQUENCE) IF NOT EXISTS (\w+)/g),
+].map((m) => m[1])
+
+/**
+ * Apply {@link SCHEMA_SQL} once per schema version, serialised across processes
+ * (#585).
+ *
+ * `SCHEMA_SQL` takes `ACCESS EXCLUSIVE` table locks even when it changes
+ * nothing (`ADD COLUMN IF NOT EXISTS`), after a `SHARE` lock from `CREATE INDEX
+ * IF NOT EXISTS`. Two initialisers therefore deadlocked on the upgrade (40P01),
+ * and every boot queued live readers behind the DDL. So: the transaction's
+ * first statement is an advisory lock (one initialiser at a time, no table
+ * lock involved), and when the hash recorded in `schema_meta` is current AND
+ * every relation `SCHEMA_SQL` names still exists (a catalog lookup, no table
+ * lock) the DDL is skipped and the boot takes no table lock at all. The first
+ * boot after an edit — or against a database that never recorded a hash — still
+ * runs it.
+ *
+ * Two invariants this relies on:
+ * - `SCHEMA_SQL` must stay idempotent and additive-only (`IF NOT EXISTS`, no
+ *   DROP, no data UPDATE): an older binary re-applies ITS `SCHEMA_SQL` over a
+ *   newer schema in a rollback or rolling deploy, and records its own hash.
+ * - Recovery from drift the relation check cannot see (a column or default
+ *   changed by hand): `DELETE FROM schema_meta WHERE key = 'schema_sql_hash'`,
+ *   then restart; the next boot re-runs the DDL.
+ */
+async function applySchema(): Promise<void> {
+  const client = await getPool().connect()
+  // A checked-out client has no pool listener: without this, a dropped
+  // connection mid-init is an uncaught throw that kills the process rather than
+  // a rejected init that `ensureInit` retries (see withTransaction below).
+  let broken = false
+  const onError = (err: Error) => {
+    broken = true
+    console.error('[db] connection lost during schema init:', err.message)
+  }
+  client.on('error', onError)
+  try {
+    // Explicit: under REPEATABLE READ the snapshot would predate the lock grant
+    // and a second booter could not see the first one's hash.
+    await client.query('BEGIN ISOLATION LEVEL READ COMMITTED')
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [SCHEMA_LOCK_KEY])
+    await client.query(
+      'CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
+    )
+    const { rows } = await client.query<{ value: string }>(
+      `SELECT value FROM schema_meta WHERE key = 'schema_sql_hash'`,
+    )
+    let current = rows[0]?.value === SCHEMA_HASH
+    if (current) {
+      const { rows: present } = await client.query<{ ok: boolean }>(
+        'SELECT bool_and(to_regclass(n) IS NOT NULL) AS ok FROM unnest($1::text[]) AS n',
+        [SCHEMA_RELATIONS],
+      )
+      current = present[0]?.ok === true
+    }
+    if (!current) {
+      await client.query(SCHEMA_SQL)
+      await client.query(
+        `INSERT INTO schema_meta (key, value) VALUES ('schema_sql_hash', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+        [SCHEMA_HASH],
+      )
+    }
+    await client.query('COMMIT')
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK')
+    } catch {
+      broken = true // destroy the connection rather than return it to the pool
+    }
+    throw err
+  } finally {
+    client.off('error', onError)
+    client.release(broken)
+  }
+}
+
 async function initSchema(): Promise<void> {
-  await getPool().query(SCHEMA_SQL)
+  await applySchema()
   // At-rest encryption (see crypto.server.ts): verify the key against what is
   // already stored, then backfill any rows written before encryption existed.
   // Deliberately part of schema-ensure rather than a separate script — a

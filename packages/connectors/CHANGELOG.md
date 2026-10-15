@@ -2,6 +2,8 @@
 
 ## 0.3.0
 
+> The published 0.3.0 tarball differs from the tag only in README.md (Neo4j egress wording, #241 G13); no code differs.
+
 ### Patch Changes
 
 - 84536cf: `ooxmlDisarm`'s pptx placeholder resolver (#517).

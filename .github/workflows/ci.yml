@@ -80,8 +80,9 @@ jobs:
       - name: Shell tests (VPS bootstrap)
         working-directory: .
         run: |
-          shellcheck -x scripts/bootstrap-vps.sh scripts/bootstrap-vps.test.sh
+          shellcheck -x scripts/bootstrap-vps.sh scripts/bootstrap-vps.test.sh scripts/check-docker.sh scripts/check-docker.test.sh
           scripts/bootstrap-vps.test.sh
+          scripts/check-docker.test.sh
 
       # Pins the Postgres → pgvector migration script (#419 M8) against a docker
       # shim that ALLOW-LISTS the calls it may make: the source mount stays :ro,
@@ -94,6 +95,10 @@ jobs:
         run: |
           shellcheck -x scripts/migrate-postgres-pgvector.sh scripts/migrate-postgres-pgvector.test.sh
           scripts/migrate-postgres-pgvector.test.sh
+
+      - name: Shell tests (release-tag publish guard)
+        working-directory: .
+        run: scripts/check-release-tag.test.sh
 
       - run: pnpm typecheck
 

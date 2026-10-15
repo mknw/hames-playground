@@ -11,7 +11,7 @@ The stack runs as one Docker Compose project, `hames`:
 - **doc-convert**: document → markdown sidecar for the Data Stash
 - **app**: the SolidStart app itself — opt-in via the `app` profile (#197)
 
-Neo4j sits only on `neo4j-internal` (`internal: true`, IPv4 gateway mode `isolated`), with `neo4j-relay` as
+Neo4j sits only on `neo4j-internal` (`internal: true`, IPv4 gateway mode `isolated`; **Docker Engine >= 28 required**, check with `make check-docker`), with `neo4j-relay` as
 its only peer. Other services use `app-network` and reach Neo4j through that
 fixed-destination HTTP/Bolt relay. Neo4j can reach the relay's two internal
 listeners by design; each forwards only back into Neo4j. The recorded network

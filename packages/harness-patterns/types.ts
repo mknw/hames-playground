@@ -922,8 +922,8 @@ export interface ConfiguredPattern<T> {
   estimateTurns?: (settings: TurnEstimateSettings) => number
   /** Wrapped sub-patterns, for combinators that compose others
    *  (`chain`, `routes`, `parallel`, `withReferences`). Leaf patterns omit it.
-   *  Purely for static introspection of the pattern graph — execution runs
-   *  through `fn`, never this — so it's safe and additive. See
+   *  Introspection of the pattern graph — dispatch runs through `fn`, never
+   *  this; decisionLoop also walks declarations before supplying roster input. See
    *  `pattern-capabilities.ts` (`harnessHasRetriever`) for the canonical walk. */
   children?: ConfiguredPattern<T>[]
   /** Set by `withInjectionGuard`: the untrusted sources it declared. Same
@@ -936,9 +936,9 @@ export interface ConfiguredPattern<T> {
    *  pattern's own object). */
   injectionGuard?: { namespaces: string[]; tools: string[] }
   /** Statically declared capabilities — see {@link PatternCapabilities}. Same
-   *  charter as `children` and `injectionGuard`: introspection only, never read
-   *  during execution, and NOT part of `config`, so a wrapper that declares one
-   *  stays config-transparent. */
+   *  charter as `children`: declarations rather than dispatch, and NOT part of
+   *  `config`, so a wrapper stays config-transparent. decisionLoop uses
+   *  pseudonymisedInputs to supply roster-only data to its consuming subtree. */
   capabilities?: PatternCapabilities
 }
 
@@ -948,7 +948,8 @@ export interface ConfiguredPattern<T> {
  * Every field is a capability in the host's own vocabulary, named for what it
  * DOES rather than for the package that supplies it — core hosts the contract,
  * other packages fill it in. The probes in `pattern-capabilities.ts` walk a
- * pattern graph and read these; nothing here is consulted during execution.
+ * pattern graph and read these. decisionLoop also uses pseudonymisedInputs
+ * before supplying roster-only data; it still dispatches through fn.
  *
  * It is one typed field instead of the ad-hoc config keys it replaced
  * (`backendKinds`, `sandboxSyncWorkspace`), because those rode between packages
@@ -963,6 +964,9 @@ export interface ConfiguredPattern<T> {
  * agreed by convention at two call sites that never see each other.
  */
 export interface PatternCapabilities {
+  /** This subtree consumes the roster-only child input before invoking any
+   *  model (#507 G14). Read by decisionLoop through children. */
+  pseudonymisedInputs?: true
   /** Names of the retrieval backends this pattern will query (the
    *  `RetrieverBackend.name`s it was built with). Declared by `retriever`. A
    *  host gates on the backend it owns — `'redis'` is the local Data Stash
@@ -1273,6 +1277,8 @@ export type WarningTask =
   | 'query_rewrite'
   /** `withReferences`' choice of prior results to attach. */
   | 'reference_selection'
+  /** G14 withheld earlier results because its privacy filter was unavailable. */
+  | 'web_privacy'
   /** `@hames-ai/sandbox`'s mount of the run's skills into `/skills` (#415). */
   | 'skills_mount'
 

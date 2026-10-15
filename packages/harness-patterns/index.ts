@@ -204,6 +204,7 @@ export {
   currentRunFrame,
   type RunFrame,
   type ActiveRunFrame,
+  type EgressCheck,
   type InferenceSlot,
   type LiveEventSlot,
   type LiveEventListener,
@@ -229,6 +230,7 @@ export {
   harnessUsesSyncWorkspace,
   harnessDecisionKeys,
   harnessUsesMemory,
+  harnessPseudonymisesInputs,
 } from './pattern-capabilities'
 
 // ============================================================================
@@ -296,6 +298,9 @@ export {
   simpleLoop,
   actorCritic,
   withReferences,
+  withPseudonymisedInputs,
+  type PseudonymiseForWeb,
+  type WebPseudonymisation,
   chain,
   runChain,
   compactExecution,

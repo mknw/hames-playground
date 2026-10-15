@@ -30,19 +30,25 @@ _Routine_'s, and it means the same thing there.
 
 **Run frame** — the ambient scope a run carries, opened once per run by those
 three entry points and read by everything inside it without being passed
-anywhere. It holds five slots: the injection **guard**, the run's scoped tool
+anywhere. It holds named slots, including the injection **guard**, the run's scoped tool
 **transports**, the host's runtime **config**, the **live** event listener, and
-the **inference** tier. A run with no frame refuses rather than running with all
-five silently absent. "Frame" on its own is this repo's word for an
+the **inference** tier, and policies for human decisions and outgoing calls.
+A run with no frame refuses rather than running with all
+its slots silently absent. "Frame" on its own is this repo's word for an
 AsyncLocalStorage scope. See
 [`docs/tutorials/hosting-the-harness.md`](docs/tutorials/hosting-the-harness.md)
 and `packages/harness-patterns/run-frame.server.ts`.
 
-**Slot** — one of a run frame's five named fields. A slot is either filled or
+**Slot** — one of a run frame's named fields. A slot is either filled or
 empty; an empty slot means "this run has none", never "use the default from
 somewhere else". Combinators that scope _below_ a run (`withInjectionGuard`,
 `withSandbox`) amend individual slots, and the per-slot merge rules are not
-uniform — transports prepend, the rest replace.
+uniform. See `packages/harness-patterns/run-frame.server.ts`.
+
+**Web pseudonymisation guard** — the web route's boundary over earlier results
+and outgoing tool arguments, retaining their content while replacing known
+identities with placeholders. See
+[`packages/harness-patterns/SPEC.md`](packages/harness-patterns/SPEC.md#withpseudonymisedinputsconfigpattern-507-g14).
 
 **Proposal** — a question put to a person from outside a run, by a post-reply
 hook, that waits for them across turns instead of pausing one. The memory

@@ -1,0 +1,117 @@
+/** G14: a private web route reads rewritten copies, never a stored table or a
+ *  reverse mapping. The host supplies the roster policy; core owns the scope
+ *  and the pre-dispatch boundary. */
+import { assertServerOnImport } from '../assert.server'
+import { trackEvent } from '../context.server'
+import { amendRunFrame, currentRunFrame } from '../run-frame.server'
+import { inferServer } from '../tools.server'
+import type {
+  ConfiguredPattern,
+  UnifiedContext,
+  UserMessageEventData,
+  WarningEventData,
+} from '../types'
+import type { PlannerData } from './planner.server'
+import { createEventView } from './event-view.server'
+
+assertServerOnImport()
+
+/** Internal child-data channel, never rendered by an adapter. decisionLoop
+ *  attaches it only when the subtree declares pseudonymisedInputs. */
+export const WEB_ROSTER_INPUT = 'webRosterInput'
+export interface WebRosterInput {
+  readonly payloads: readonly unknown[]
+  /** Code-built route/status/stats lines, with no result bodies. */
+  readonly steps: string
+}
+
+/** One invocation's host-built substitution, with no table exposed to core. */
+export interface WebPseudonymisation {
+  apply<T>(value: T): T
+  /** URL-decode arguments and return safe feedback on a literal/placeholder. */
+  check(args: Readonly<Record<string, unknown>>): string | void
+}
+
+export type PseudonymiseForWeb = (
+  payloads: readonly unknown[],
+  latestUserMessage: string,
+) => Promise<WebPseudonymisation>
+
+export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseForWeb }) {
+  return <T extends PlannerData & Record<string, unknown>>(
+    pattern: ConfiguredPattern<T>,
+  ): ConfiguredPattern<T> => ({
+    ...pattern,
+    children: [pattern],
+    capabilities: { ...pattern.capabilities, pseudonymisedInputs: true },
+    fn: async (scope, view) => {
+      const ctx = (view as unknown as { ctx: UnifiedContext }).ctx
+      const latestUser = ctx.events.findLast((e) => e.type === 'user_message')
+      const input = scope.data[WEB_ROSTER_INPUT] as WebRosterInput | undefined
+      let rewritten: UnifiedContext | undefined
+      let filter: WebPseudonymisation | undefined
+      const explicitAnthropic = currentRunFrame()?.inference?.tier === 'anthropic'
+      try {
+        if (!explicitAnthropic && config.pseudonymise) {
+          filter = await config.pseudonymise(
+            [
+              ...ctx.events.filter((e) => e.type === 'tool_result').map((e) => e.data),
+              ...(input?.payloads ?? []),
+            ],
+            latestUser ? (latestUser.data as UserMessageEventData).content : '',
+          )
+          // Rewrite the backing context, not just the configured view: both
+          // fromAll() and unfiltered() expansion must see the same copies.
+          rewritten = {
+            ...ctx,
+            events: ctx.events.map((e) =>
+              e === latestUser ? e : { ...e, data: filter!.apply(e.data) },
+            ),
+          }
+          const data = filter.apply({ plan: scope.data.plan, handoff: scope.data.handoff })
+          scope.data = { ...scope.data, ...data }
+        }
+      } catch {
+        // A host error can contain identity literals. Only the fixed warning
+        // below is recorded; no exception text reaches a model or the store.
+        filter = undefined
+        rewritten = undefined
+      } finally {
+        // Every path, including explicit Anthropic and a throwing host. Never
+        // move this after inner dispatch: the payloads may be excluded siblings.
+        delete scope.data[WEB_ROSTER_INPUT]
+      }
+      if (explicitAnthropic) return pattern.fn(scope, view)
+
+      if (!filter || !rewritten) {
+        delete scope.data.plan
+        delete scope.data.attachedRefs
+        scope.data.handoff = input?.steps || undefined
+        // Withhold earlier content, including summaries and expansion payloads.
+        rewritten = { ...ctx, events: latestUser ? [latestUser] : [] }
+        trackEvent(
+          scope,
+          'warning',
+          {
+            task: 'web_privacy',
+            message: 'earlier results withheld: privacy filter unavailable',
+            fallback: 'This step ran without earlier results; web calls were refused.',
+          } satisfies WarningEventData,
+          true,
+        )
+      }
+      const childView = createEventView(rewritten, pattern.config.viewConfig, scope.id)
+      return amendRunFrame(
+        {
+          egressChecks: [
+            ({ name, args }) => {
+              if (inferServer(name) !== 'web') return
+              return filter ? filter.check(args) : 'Web call refused: privacy filter unavailable.'
+            },
+          ],
+        },
+        () => pattern.fn(scope, childView),
+      )
+    },
+  })
+}

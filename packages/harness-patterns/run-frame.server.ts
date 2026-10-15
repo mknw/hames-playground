@@ -95,6 +95,14 @@ export interface InferenceSlot {
   readonly clientOverride?: RunClientOverride
 }
 
+/** Pre-dispatch check, above every transport. A reason denies the call with a
+ *  recoverable tool failure; every enclosing check still runs. A check must
+ *  return feedback without quoting private arguments. */
+export type EgressCheck = (call: {
+  readonly name: string
+  readonly args: Readonly<Record<string, unknown>>
+}) => string | void | Promise<string | void>
+
 /** What a caller SUPPLIES when opening or amending a frame. Every slot is
  *  optional; an absent slot means "this run has none", not "use a default". */
 export interface RunFrame {
@@ -115,6 +123,8 @@ export interface RunFrame {
    *  turn. `harness()` and its two siblings default it to `{ attended: true }`
    *  when they OPEN the frame, and only then. */
   hitl?: { readonly attended: boolean }
+  /** Checks run before any tool dispatch in this scope. */
+  egressChecks?: readonly EgressCheck[]
 }
 
 /** The live slot as the emitters see it: the listener plus the per-run
@@ -141,8 +151,11 @@ export interface ActiveRunFrame {
    *  opens (`hitl.server.ts`), so nothing that can read the frame can write
    *  the record or suppress a pause. */
   readonly hitl?: { readonly attended: boolean }
+  /** Never undefined; innermost first, without dropping outer checks. */
+  readonly egressChecks: readonly EgressCheck[]
 }
 
+const NO_CHECKS: readonly EgressCheck[] = Object.freeze([])
 const NO_TRANSPORTS: readonly ToolTransport[] = Object.freeze([])
 
 /**
@@ -189,6 +202,7 @@ function build(frame: RunFrame): ActiveRunFrame {
       : undefined,
     inference: frame.inference,
     hitl: frame.hitl ? hitlSlot(frame.hitl) : undefined,
+    egressChecks: frame.egressChecks ? Object.freeze([...frame.egressChecks]) : NO_CHECKS,
   }
 }
 
@@ -256,6 +270,8 @@ export function withRunFrame<T>(frame: RunFrame, fn: () => Promise<T>): Promise<
  *     amend around its main run — and is refused below an open one. The slot
  *     is a frozen `{ attended }` and nothing else: the run's bookkeeping is in
  *     a store of its own (`hitl.server.ts`, #477 F1), opened per run.
+ *   - `egressChecks` CONCATENATE, innermost first, like transports. Every
+ *     check runs; any denial denies, so an inner scope cannot remove one.
  *   - everything else REPLACES for the duration.
  *
  * Refuses outside a frame, by way of {@link activeRunFrame}: something that
@@ -287,6 +303,9 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
       : open.live,
     inference: partial.inference ?? open.inference,
     hitl: partial.hitl ? hitlSlot(partial.hitl) : open.hitl,
+    egressChecks: partial.egressChecks
+      ? Object.freeze([...partial.egressChecks, ...open.egressChecks])
+      : open.egressChecks,
   }
   return store.run(amended, fn)
 }

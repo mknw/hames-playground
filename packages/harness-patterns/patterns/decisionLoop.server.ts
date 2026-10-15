@@ -96,6 +96,8 @@ import {
   type RouteOutput,
 } from './decisionLoop-records.server'
 import type { PlannerData } from './planner.server'
+import { harnessPseudonymisesInputs } from '../pattern-capabilities'
+import { WEB_ROSTER_INPUT, type WebRosterInput } from './withPseudonymisedInputs.server'
 
 assertServerOnImport()
 
@@ -398,6 +400,9 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     }
     const outerCtx = (view as unknown as { ctx: UnifiedContext }).ctx
     const records: RouteOutput[] = []
+    // Roster-only source payloads from EVERY iteration, even after its summary
+    // falls outside lastN. Never content_sanitized, never shown to a child.
+    const rosterPayloads: unknown[][] = []
     // Events withheld by an earlier screen outage (S-d, ruling on finding 7): the
     // ids ride the marker record, which is in the context and so persists with
     // the run — read them back here so a LATER TURN's children skip them too.
@@ -519,6 +524,14 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
           : {}),
         ...(handoffText ? { handoff: handoffText } : {}),
         ...(kinds.get(label) === 'planner' ? { agentMap } : {}),
+        ...(harnessPseudonymisesInputs([pattern])
+          ? {
+              [WEB_ROSTER_INPUT]: {
+                payloads: rosterPayloads.flat(),
+                steps: renderHandoff(records, 0),
+              } satisfies WebRosterInput,
+            }
+          : {}),
       } as unknown as T
       const childScope = createScope<T>(childId, childData)
 
@@ -618,6 +631,11 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         }
       }
       records.push(record)
+      rosterPayloads.push(
+        record.withheldEventIds
+          ? []
+          : childEvents.filter((e) => e.type === 'tool_result').map((e) => e.data),
+      )
       if (record.plan) latestPlan = record.plan
 
       // The record as events: the controller_action / tool_result pair

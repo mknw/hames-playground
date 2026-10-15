@@ -328,6 +328,18 @@ export async function callTool(
   name: string,
   args: Record<string, unknown>,
 ): Promise<ToolCallResult> {
+  let denial: string | undefined
+  for (const check of currentRunFrame()?.egressChecks ?? []) {
+    try {
+      const reason = await check({ name, args })
+      if (reason) denial ??= reason
+    } catch {
+      // An unavailable check must not turn into an unchecked dispatch, and its
+      // exception may quote the very arguments being withheld.
+      denial ??= 'Tool call refused: outgoing privacy check unavailable.'
+    }
+  }
+  if (denial) return { success: false, data: null, error: denial }
   const result = await dispatchTool(name, args)
 
   // The run frame's `guard` slot, read SOFTLY: `callTool` is also reached from

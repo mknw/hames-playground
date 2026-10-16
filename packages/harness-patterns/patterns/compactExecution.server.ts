@@ -42,8 +42,15 @@ function buildSynthesisInputFromView(
   // configured: `fromAll()` keeps the caller's `fromPatterns` scope, and the
   // message is a `harness`-level event, so a scoped synthesizer read an empty
   // string (#507 W4). User-typed text is trusted — the user is the principal —
-  // so reading it past the scope widens nothing the guard fences.
-  const userMessage = view.unfiltered().ofType('user_message').last(1).get()[0]
+  // so reading it past the scope widens nothing the guard fences. Only core
+  // authors it, as `harness`; a `user_message` another pattern committed is not
+  // the user's and would move both the message and the turn boundaries.
+  const userMessage = view
+    .unfiltered()
+    .fromPattern('harness')
+    .ofType('user_message')
+    .last(1)
+    .get()[0]
   const userContent = userMessage ? (userMessage.data as { content: string }).content : ''
 
   // Read error state from the view rather than from the data stash, so errors
@@ -104,6 +111,19 @@ function buildSynthesisInputFromView(
       const threadView = scopedToPatterns
         ? view.fromLastNTurns(threadTurnWindow)
         : view.fromLastPattern()
+      // A record from an EARLIER turn is kept only when it succeeded. A failed
+      // one reads as `{ __error }` with nothing marking it old, so the
+      // synthesizer would apologise for it while `hasError` (one turn) is false
+      // — SA-H1 through the record channel. This also drops a withheld
+      // (marker-only) record once its turn is over.
+      const currentTurnIds = scopedToPatterns
+        ? new Set(
+            view
+              .fromLastNTurns(errorTurnWindow)
+              .get()
+              .map((e) => e.id),
+          )
+        : undefined
       const toolEvents = threadView.tools().get()
       const actionEvents = threadView.actions().get()
 
@@ -138,6 +158,9 @@ function buildSynthesisInputFromView(
             openReceived = 0
           } else if (event.type === 'tool_result') {
             const resultData = event.data as ToolResultEventData
+            if (currentTurnIds && resultData.success === false && !currentTurnIds.has(event.id)) {
+              continue
+            }
             const open = iterations.length > 0 ? iterations[iterations.length - 1] : undefined
             if (open && openReceived < openExpected) {
               // Pair with the controller_action that owns this result.
@@ -252,6 +275,21 @@ export function compactExecution<T extends CompactExecutionData>(
 ): ConfiguredPattern<T> {
   const { mode, synthesize, skipIfHasResponse = false } = config
   const resolved = resolveConfig('compactExecution', config)
+  // `threadTurns` is a public turn bound: 0, a negative, a fraction, NaN or
+  // Infinity would make the view slice return the WHOLE history, and without
+  // a named-pattern thread read it would do nothing while reading as if it did.
+  if (config.threadTurns !== undefined) {
+    if (!Number.isInteger(config.threadTurns) || config.threadTurns < 1) {
+      throw new Error(
+        `compactExecution: threadTurns must be an integer >= 1, got ${String(config.threadTurns)}`,
+      )
+    }
+    if (mode !== 'thread' || !config.viewConfig?.fromPatterns?.length) {
+      throw new Error(
+        "compactExecution: threadTurns only widens a thread read scoped by viewConfig.fromPatterns; set mode: 'thread' and name the patterns, or remove it",
+      )
+    }
+  }
 
   const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
     try {

@@ -1091,7 +1091,10 @@ export interface CompactExecutionConfig extends PatternConfig {
   /** Turn window of the `thread` read when `viewConfig.fromPatterns` names the
    *  patterns whose records are the thread. Defaults to `viewConfig.fromLastNTurns`
    *  (else 1). Widen it so a follow-up turn keeps earlier turns' committed
-   *  records; the error read ignores it and keeps its own one-turn window. */
+   *  records; the error read ignores it and keeps its own window
+   *  (`viewConfig.fromLastNTurns`, else 1), and an earlier turn's FAILED record
+   *  is not carried forward. An integer >= 1; refused at construction unless
+   *  `mode` is `'thread'` and `viewConfig.fromPatterns` is set. */
   threadTurns?: number
 }
 

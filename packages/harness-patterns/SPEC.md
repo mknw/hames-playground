@@ -57,6 +57,7 @@ is and why it is shaped this way, start at the front page —
   - [actorCritic()](#actorcriticactor-critic-tools-config)
   - [parallel()](#parallelpatterns)
   - [withReferences()](#withreferencespattern-config)
+  - [withPseudonymisedInputs()](#withpseudonymisedinputsconfigpattern-507-g14)
   - [compactExecution()](#compactexecutionconfig)
   - [compactIntent()](#compactintentconfig)
   - [planner()](#plannerplanfn-tools-config)
@@ -217,14 +218,15 @@ interface ConfiguredPattern<T> {
 }
 
 // What a pattern declares for a host to read WITHOUT running it. Core owns the
-// type; other packages fill fields in. Introspection only — execution never
-// reads it — and NOT part of `config`, so a wrapper that declares one stays
+// type; other packages fill fields in. Declarations, never dispatch — and NOT
+// part of `config`, so a wrapper that declares one stays
 // config-transparent (the same charter `children` and `injectionGuard` have).
 interface PatternCapabilities {
   retrievalBackends?: readonly string[] // declared by `retriever`: the backends it will query
   workspaceSync?: boolean // declared by a wrapper that gives its subtree a durable workspace
   decisionKeys?: readonly string[] // declared by a deciding pattern (#418): the declared DecisionSpec keys
   memory?: true // declared by memoryRecall (#419): read by harnessUsesMemory, the opt-in probe for the memory wake and store
+  pseudonymisedInputs?: true // the subtree consumes decisionLoop's roster-only input before invoking a model (#507 G14)
 }
 ```
 
@@ -1153,6 +1155,94 @@ definition, deliberately not in a shared default):
 | `microsoft-365` | `graph`                                      | —                       |
 | `retriever`     | `web` (namespace) + `retriever` (exact name) | `neo4j`                 |
 
+### `withPseudonymisedInputs(config)(pattern)` (#507 G14)
+
+Wrap the web route's `withReferences` with this config-transparent input/egress
+boundary. It applies unless the run frame's raw `inference.tier` is exactly
+`'anthropic'`; an absent or unknown tier is protected too. Core imports no host
+privacy code. The host supplies the optional `pseudonymise: PseudonymiseForWeb`:
+`(payloads, latestUserMessage) => Promise<WebPseudonymisation>`, returning
+`apply<T>(value: T): T`, `redact<T>(value: T): T`, `checkLiterals(value): string | void`,
+`observe(data): void`, and `check(args): string | void` (a denial reason).
+`redact` replaces only residual string bodies with `[withheld: private identity]`,
+retaining valid provenance fences; it also withholds residual object-key strings.
+`checkLiterals` uses the check's literal predicate without rejecting placeholders;
+`observe` extends only the outgoing literals from a local result.
+
+Before inner dispatch, it rewrites event-data copies in a synthetic backing
+context and all child data except the roster-input key. The backing copy contains
+only events selected by the child's view plus the latest user message; an
+unfiltered expansion cannot reintroduce excluded events. Every rewritten string
+body is post-checked; a surviving literal withholds only that body, leaving other
+content and outgoing calls available. Roster/build/rewrite errors still fail closed.
+This includes inherited data under `chain()`, as well as plan/handoff. Selector previews,
+`fromAll()` expansion and `unfiltered()` therefore read the same copies. Event
+ids and pattern metadata survive, the latest user message is unchanged, and
+stored context events are untouched. The wrapper declares
+`capabilities.pseudonymisedInputs`; `harnessPseudonymisesInputs` finds it through
+`children`. Only such a route receives `webRosterInput` from `decisionLoop`:
+source `tool_result` payloads of **every** preceding iteration this turn, after
+screen-outage withholding, plus a code-built status/stats-only handoff. This is
+roster input, never extra sibling visibility: the loop filters the synthetic
+context before invoking the wrapper. The wrapper deletes this key in `finally`
+before calling anything inward, including on explicit-Anthropic pass-through,
+failure and a throw. No adapter renders it.
+
+Under `chain()`, returned rewritten data is forwarded to subsequent steps just
+like any other child result; it is not confined to the wrapped child. Under
+`decisionLoop`, each route starts with fresh child data instead.
+
+An absent pseudonymiser or any roster/table/rewrite failure withholds earlier
+content. No references attach, the plan and all result bodies disappear, and
+only an allowlisted handoff containing route/status/stats lines remains in child
+data. A `warning` with task
+`web_privacy` records "earlier results withheld: privacy filter unavailable".
+The child still runs on the user's message and Neo4j reads; every web call in
+that invocation is refused. The app's `createWebPseudonymiser` requires a readable,
+non-empty directory by default; `{ directory: 'none' }` is an explicit code-only
+choice for deployments without an org graph. A Neo4j/relay outage therefore
+refuses private web calls until it recovers.
+
+The wrapper scopes an `egressChecks` run-frame slot around the inner pattern.
+`RunFrame.egressChecks` is a readonly array of `EgressCheck`s; each accepts
+`{ name, args }` and returns (or resolves) a safe denial reason or nothing.
+Opening copies/freezes it; nested amendments concatenate **innermost first**,
+never replace. `callTool` runs every check before any transport and any denial
+returns `{ success: false, data: null, error }`, a recoverable tool failure,
+not a turn error. A throwing check denies with fixed feedback without exposing
+its exception. The wrapper checks every call except the explicitly local
+`neo4j` namespace, including uncatalogued calls and calls made without the app's
+namespace registration. In the same amendment, an `afterToolCall` hook extends
+the outgoing literals from local results, after unfencing each string leaf.
+It never rewrites those results. An extension failure withholds that result,
+records a fixed warning, and refuses subsequent outgoing calls.
+
+The app merges the fixed-order directory first with identities from the view
+and every source payload, unfencing string leaves before harvesting and building
+one ephemeral table per invocation. Rewriting and post-checking touch content
+bodies and leave provenance fences intact, including embedded plan/handoff fences.
+Both literal post-checks and outgoing checks normalise JSON escape sequences
+(`\\[nrtfb"\\/]` and `\\uXXXX`) before NFKD without combining marks and mapping
+`-_.+/` to spaces. The actorCritic record extractor first unfences result leaves
+before JSON stringification; the loop then fences that record under its own key.
+One active compiled alternation is rebuilt on each local observation. It matches
+literals plus letters-only full names of at least six characters within individual
+whitespace-delimited tokens, with boundaries, never across a whole string.
+An exact-token collision remains accepted: `Tim Ely` also matches `timely`.
+User-named forms are held in an exempt Set. It denies roster literals (except literal forms actually named
+in the latest user message), and `PERSON[\s_-]*<n>` tokens with any suffix
+("placeholders are not search terms"). Malformed URL encoding is
+refused. No table is kept or reversed; placeholders stay in route output.
+Only Graph-shaped identity fields are harvested from local results; a flat Cypher
+projection such as `{ name, email }` adds no identity unless another recognised
+field or the directory already supplied it.
+Names absent from both directory and labelled source fields, non-person private
+facts and alternative encodings/paraphrases remain limitations. The single
+permitted host import site is `harness-client/web-pseudonymiser.server.ts`,
+pinned by `egress-wiring.test.ts`, which also permits only `session.server.ts`
+to import that factory; history-at-rest, the Anthropic tier and file
+materialisation remain governed by their existing contracts.
+
 ### `withReferences(pattern, config)`
 
 Wrap a pattern so that on entry, an LLM-driven selector picks relevant prior
@@ -1571,6 +1661,11 @@ the latest sanitized plan (`data.plan`), the separately headed handoff
 Never `memories`, `memoryContext` or `intent`. Nothing a child writes to `data`
 flows back; only the route output does. `hitl_*` events a child pushes are dropped
 (`dropHitl`) before the next child's view is built.
+
+A route declaring `pseudonymisedInputs` also receives the invocation-local
+roster input described above, consumed before its inner pattern runs. It holds
+all earlier iterations' source payloads rather than only the last-N outputs;
+an older external sender named by the latest plan must still be replaced.
 
 **The handoff reaches a child through `plan_context`** — the existing string
 channel, so no BAML signature changes. `formatPlanContext(plan, handoff?)` puts
@@ -3275,7 +3370,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── types.ts                # Core types (UnifiedContext, PatternScope, RouterConfig, DIRECT_RESPONSE_ROUTE, the seam callables ControllerFn/PlannerFn/CompactIntentFn/… )
 ├── context.server.ts       # Context factory, createEvent(), generateId()
 ├── tools.server.ts         # Tools({ namespaces }) — groups MCP tools by namespace; the map is REQUIRED (ruling B-iii); inferServer consults transports' namespaceFor → registered resolvers (registerToolNamespaces) → heuristic; NO catalog in core — the 86-entry map lives in app-tools/mcp-catalog.ts and registers at boot
-├── run-frame.server.ts     # THE run frame — one ALS scope per run holding all eight slots (guard / transports / config / live / inference / hitl — the last a frozen `{ attended }` — plus the concatenating `stashWriteObservers` / `afterToolCall`, #507 N4), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, hitl passes by reference and is refused below an open one, the rest replace), activeRunFrame() THROWS outside a frame and currentRunFrame() is the soft read
+├── run-frame.server.ts     # THE run frame — one ALS scope per run holding its named slots (guard / transports / config / live / inference / hitl / egressChecks / stashWriteObservers / afterToolCall — hitl is a frozen `{ attended }`), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, hitl passes by reference and is refused below an open one, egressChecks, stashWriteObservers and afterToolCall concatenate, the rest replace), activeRunFrame() THROWS outside a frame and currentRunFrame() is the soft read
 ├── harness.server.ts       # harness() (a bound runner: agent.resume / agent.continue carry its own patterns, S4), resumeHarness(serialized, patterns, answers, { principal, resolve }), continueSession() — each OPENS the run frame (ruling Q17/D5) with a `{ attended: true }` hitl slot unless the frame says otherwise, or joins the host's and adds nothing; resumeHarness binds every answer to a request the run waits on before anything runs, continueSession supersedes what waits; HarnessResultScoped is a union on status — `pending` is non-optional when paused [F18]
 ├── hitl.server.ts          # Human in the loop (#433): readHitl() / answerOf() read the hitl_* events; proposeToHuman() / answerProposal() / readProposals() are the out-of-run, non-blocking form (S11, the memory confirmation); askHuman() raises (or replays, or applies resolveUnattended()) into the run's HITL bookkeeping — an async-context store of its own on a Symbol.for holder, opened by the owning runChain, never on the frame (#477) — held() is a gated executor's placeholder, hitlPending() is the loops' stop check; the owning runChain commits from the buffer only what askHuman could have written, straight into the context, and pauses. S3: checkResume() is the pause binding (HitlAnswerError), recordAnswers() / supersedeHitl() / expireHitl() close requests and substitute held results through sanitizeUntrusted. S4: humanGate() / confirm() are the gate patterns — the custom case and the one-call preset over askHuman
 ├── tool-transport.server.ts # ToolTransport + registerTransport() (process, consulted after every scoped one) / activeTransports() (reads the run frame's `transports` slot); the difference between the two ways to supply one IS the containment invariant — there is no priority field and no argument that could express one

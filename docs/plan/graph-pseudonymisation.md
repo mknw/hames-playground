@@ -1,6 +1,11 @@
 # Pseudonymising Graph tool results — the roster is already in the payload
 
-**Status:** core built and tested, **wired to nothing**. This is a proof that
+**Status:** core built and tested; G14 now supplies the web route's private-tier
+filter through `app/src/lib/harness-client/web-pseudonymiser.server.ts`.
+Q1: input view/handoff plus outgoing web arguments only. Q2: stored history
+unchanged. Q3: invocation-local table, never stored or reversed. The deferred
+seams below remain open; see [the G14 design](decision-loop-agent.md#pseudonymisation-guard-on-the-web-route).
+This is a proof that
 option three exists for [item 3 of the data-protection
 plan](../data-privacy/plan.md#plan) ("encrypt or exclude Graph-derived
 `tool_result` content"), plus the questions that have to be answered before any
@@ -8,8 +13,8 @@ of it is switched on. Those questions are deliberately left open — see
 [Open questions](#open-questions).
 
 Code: `app/src/lib/privacy/graph-roster.ts`, `app/src/lib/privacy/pseudonymise.ts`.
-Tests: `app/src/__tests__/lib/privacy/` (59 cases). No production module imports
-either file, and no dependency was added.
+Tests: `app/src/__tests__/lib/privacy/`. The narrowed `egress-wiring.test.ts`
+permits that single production import site and fails on any second site.
 
 ---
 

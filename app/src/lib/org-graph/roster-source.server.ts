@@ -19,9 +19,10 @@
  *     tripwire in front of them. Wiring privacy imports into a server module
  *     here would trip that tripwire while answering none of its questions.
  *
- * So the composition — `rosterFromDirectory(await loadDirectoryRoster())` — is
- * written down exactly once, in the manual verification script under
- * `scripts/`, and nowhere on a production path.
+ * G14 now composes this source with lib/privacy in exactly one production
+ * module: `harness-client/web-pseudonymiser.server.ts`. The narrowed tripwire
+ * permits that web-route factory alone; the directory reader itself still
+ * imports no privacy code. See docs/plan/decision-loop-agent.md.
  *
  * Not a `'use server'` module: see `schema.server.ts`'s header (SD-13). This
  * returns the whole tenant's names and addresses, which is precisely the shape

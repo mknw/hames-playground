@@ -95,6 +95,14 @@ export interface InferenceSlot {
   readonly clientOverride?: RunClientOverride
 }
 
+/** Pre-dispatch check, above every transport. A reason denies the call with a
+ *  recoverable tool failure; every enclosing check still runs. A check must
+ *  return feedback without quoting private arguments. */
+export type EgressCheck = (call: {
+  readonly name: string
+  readonly args: Readonly<Record<string, unknown>>
+}) => string | void | Promise<string | void>
+
 /** One stash document write, as an observer sees it: which conversation's stash
  *  and which document. Never the content. */
 export interface StashWrite {
@@ -145,6 +153,8 @@ export interface RunFrame {
   stashWriteObservers?: readonly StashWriteObserver[]
   /** Hooks run after every tool call dispatched inside this scope. */
   afterToolCall?: readonly AfterToolCallHook[]
+  /** Checks run before any tool dispatch in this scope. */
+  egressChecks?: readonly EgressCheck[]
 }
 
 /** The live slot as the emitters see it: the listener plus the per-run
@@ -175,6 +185,8 @@ export interface ActiveRunFrame {
   readonly stashWriteObservers: readonly StashWriteObserver[]
   /** Never undefined, innermost first. */
   readonly afterToolCall: readonly AfterToolCallHook[]
+  /** Never undefined; innermost first, without dropping outer checks. */
+  readonly egressChecks: readonly EgressCheck[]
 }
 
 const NO_HOOKS: readonly never[] = Object.freeze([])
@@ -254,6 +266,7 @@ function build(frame: RunFrame): ActiveRunFrame {
       ? Object.freeze([...frame.stashWriteObservers])
       : NO_HOOKS,
     afterToolCall: frame.afterToolCall ? Object.freeze([...frame.afterToolCall]) : NO_HOOKS,
+    egressChecks: frame.egressChecks ? Object.freeze([...frame.egressChecks]) : NO_HOOKS,
   }
 }
 
@@ -325,6 +338,8 @@ export function withRunFrame<T>(frame: RunFrame, fn: () => Promise<T>): Promise<
  *     like transports (#507 N4). Every observer hears a write and every hook
  *     sees a call: an inner scope adds to what the enclosing ones do and can
  *     never switch an outer one off.
+ *   - `egressChecks` CONCATENATE, innermost first, like transports. Every
+ *     check runs; any denial denies, so an inner scope cannot remove one.
  *   - everything else REPLACES for the duration.
  *
  * Refuses outside a frame, by way of {@link activeRunFrame}: something that
@@ -362,6 +377,9 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
     afterToolCall: partial.afterToolCall
       ? Object.freeze([...partial.afterToolCall, ...open.afterToolCall])
       : open.afterToolCall,
+    egressChecks: partial.egressChecks
+      ? Object.freeze([...partial.egressChecks, ...open.egressChecks])
+      : open.egressChecks,
   }
   return store.run(amended, fn)
 }

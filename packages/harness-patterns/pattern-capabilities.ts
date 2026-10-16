@@ -6,7 +6,8 @@
  * running it. Wrapping combinators (`chain`, `routes`, `parallel`,
  * `withReferences`) expose their sub-patterns via
  * `ConfiguredPattern.children`; leaves omit it. Execution never reads `children`
- * — it's introspection-only.
+ * — it describes the graph, never a dispatch mechanism. decisionLoop also
+ * probes declarations before supplying roster-only child data (#507 G14).
  *
  * What a pattern declares, it declares in `ConfiguredPattern.capabilities`
  * ({@link PatternCapabilities}) — a field core owns and other packages fill in.
@@ -103,4 +104,15 @@ export function harnessDecisionKeys<T>(patterns: ConfiguredPattern<T>[] | undefi
 export function harnessUsesMemory<T>(patterns: ConfiguredPattern<T>[] | undefined): boolean {
   if (!patterns || patterns.length === 0) return false
   return patterns.some((p) => p.capabilities?.memory === true || harnessUsesMemory(p.children))
+}
+
+/** Whether a route consumes the roster-only input before its inner pattern. */
+export function harnessPseudonymisesInputs<T>(
+  patterns: ConfiguredPattern<T>[] | undefined,
+): boolean {
+  return (
+    patterns?.some(
+      (p) => p.capabilities?.pseudonymisedInputs === true || harnessPseudonymisesInputs(p.children),
+    ) ?? false
+  )
 }

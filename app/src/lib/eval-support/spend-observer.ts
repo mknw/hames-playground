@@ -15,7 +15,11 @@ export function createSpendObserver({
     activate(key: SpendKey | undefined) {
       active = key
     },
-    observe(sample: { clientName?: string; metrics?: { costEur?: number } }) {
+    observe(sample: {
+      functionName?: string
+      clientName?: string
+      metrics?: { costEur?: number }
+    }) {
       if (!active) {
         budget.reason = 'Usage outside a scenario'
         onStop()
@@ -26,7 +30,7 @@ export function createSpendObserver({
         onStop()
         return
       }
-      budget.observe(active, live ? sample.metrics : { costEur: 0 })
+      budget.observe(active, live ? sample.metrics : { costEur: 0 }, sample.functionName)
       if (budget.stopped) onStop()
     },
   }

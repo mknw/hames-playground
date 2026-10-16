@@ -75,7 +75,9 @@ it('uses live production metadata, records refusing writes, and never returns a 
   const driver = read('evals/general-next/driver.ts')
   expect(run()).toContain('productionCatalog(')
   expect(run()).toContain('createDriver(fake, live, liveCatalog)')
-  expect(driver).toMatch(/const descriptions = live\s*\?\s*Object.keys\(NAMESPACES\)/)
+  expect(driver).toMatch(
+    /const descriptions = live\s*\?\s*liveDescriptions\(\s*Object.keys\(NAMESPACES\)/,
+  )
   expect(driver).toContain("write_neo4j_cypher: 'neo4j'")
   expect(driver).toContain("name !== 'write_neo4j_cypher'")
   expect(driver).toContain('trace?.tools.push({ name, args, success, turn })')

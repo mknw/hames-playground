@@ -48,9 +48,6 @@ function stubAgent(id: string, extra: Partial<AgentConfig> = {}): AgentConfig {
 vi.mock('@hames-ai/agents/agents/search.server', () => ({
   searchAgent: stubAgent('search'),
 }))
-vi.mock('@hames-ai/agents/agents/general.server', () => ({
-  generalAgent: stubAgent('general'),
-}))
 vi.mock('@hames-ai/agents/agents/general-next.server', () => ({
   generalNextAgent: stubAgent('general-next', { usesSandbox: true }),
 }))
@@ -104,7 +101,7 @@ beforeEach(() => {
 describe('registration + lookup', () => {
   it('registers the bundled agents on import', () => {
     expect(getAllAgents().map((a) => a.id)).toEqual(
-      expect.arrayContaining(['search', 'general', 'sandbox', 'retriever', 'microsoft-365']),
+      expect.arrayContaining(['search', 'general-next', 'sandbox', 'retriever', 'microsoft-365']),
     )
   })
 
@@ -114,6 +111,14 @@ describe('registration + lookup', () => {
   it('registers exactly one sandbox agent, and neither of the two it replaced', () => {
     const ids = getAllAgents().map((a) => a.id)
     expect(ids.filter((id) => id.includes('sandbox'))).toEqual(['sandbox'])
+  })
+
+  // HELD flip (#507): general-next takes general's slot; stored 'general' rows still open.
+  it('registers general-next and not general, and resolves a stored general id forward', () => {
+    const ids = getAllAgents().map((a) => a.id)
+    expect(ids).toContain('general-next')
+    expect(ids).not.toContain('general')
+    expect(getAgent('general')?.id).toBe('general-next')
   })
 
   it('returns undefined for an unknown id rather than throwing', () => {

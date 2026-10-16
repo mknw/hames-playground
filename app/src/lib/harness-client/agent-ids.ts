@@ -23,6 +23,8 @@ const RENAMED_AGENT_IDS: Record<string, string> = {
   // `flavoured-sandbox` is the router it kept, so both land on it.
   'sandbox-session': 'sandbox',
   'flavoured-sandbox': 'sandbox',
+  // #507 flip — general-next replaced general in the picker. Rows keep resolving.
+  general: 'general-next',
 }
 
 /** Current id for a possibly-legacy agent id. Unknown ids pass through. */

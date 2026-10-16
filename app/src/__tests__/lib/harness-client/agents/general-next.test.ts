@@ -649,7 +649,7 @@ describe('general-next composition', () => {
     const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
     expect(
       harnessUsesMemory(await generalAgent.createPatterns('old-general', { ...deps, memory })),
-    ).toBe(true)
+    ).toBe(false)
     const ctx = createContext<AgentData>('synthetic task', {
       memories: [{ content: 'MEMORY-SENTINEL' }],
       memoryContext: 'MEMORY-SENTINEL',
@@ -678,10 +678,13 @@ describe('general-next composition', () => {
     },
   )
 
-  it('registers the candidate with its app-side glyph while the default stays search', () => {
+  it('registers general-next, forwards stored general ids to it, and leaves the initial agent as search', () => {
     const registry = readFileSync('src/lib/harness-client/registry.server.ts', 'utf8')
     expect(registry).toContain("overlay(generalNextAgent, 'i-material-symbols-route', 'indigo')")
-    expect(readFileSync('src/lib/harness-client/agent-ids.ts', 'utf8')).not.toMatch(/general-next/)
+    expect(readFileSync('src/lib/harness-client/agent-ids.ts', 'utf8')).toMatch(
+      /general: 'general-next'/,
+    )
+    expect(registry).not.toMatch(/overlay\(generalAgent,/)
     expect(readFileSync('src/routes/index.tsx', 'utf8')).toContain("createSignal<string>('search')")
     const actions = readFileSync('src/lib/harness-client/actions.server.ts', 'utf8')
     expect(actions).toContain("return processMessageWithAgent(sessionId, message, 'search')")

@@ -34,6 +34,7 @@ import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
 import { chooseConversationTier, resolveTier, verdaConfigured } from '../inference/tier.server'
 import { getStoredInferenceTier } from '../db/user-prefs.server'
 import type { InferenceTier } from '../inference/config.server'
+import { DEFAULT_AGENT_ID } from './agent-ids'
 
 // ============================================================================
 // Auth helper
@@ -57,13 +58,13 @@ async function requireUser(): Promise<{ id: string; email: string }> {
 // ============================================================================
 
 /**
- * Process a user message using the default agent (the `search` agent).
+ * Process a user message using the default agent (`DEFAULT_AGENT_ID`).
  */
 export async function processMessage(
   sessionId: string,
   message: string,
 ): Promise<HarnessResultScoped<SessionData>> {
-  return processMessageWithAgent(sessionId, message, 'search')
+  return processMessageWithAgent(sessionId, message, DEFAULT_AGENT_ID)
 }
 
 /**
@@ -72,7 +73,7 @@ export async function processMessage(
 export async function processMessageWithAgent(
   sessionId: string,
   message: string,
-  agentId: string = 'search',
+  agentId: string = DEFAULT_AGENT_ID,
 ): Promise<HarnessResultScoped<SessionData>> {
   const user = await requireUser()
   return runTurnAndPersist({

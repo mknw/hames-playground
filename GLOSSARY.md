@@ -127,8 +127,8 @@ used to hand a pattern a scoped tool set: `neo4j`, `web`, `context7`,
 exposes, not a security boundary.
 
 **general-next** — the general agent that chooses successive groups of
-capabilities within a turn. HELD flip: it replaces `general` in the picker and
-owns the memory opt-in, once the rollout evidence is in. See [`packages/agents/README.md`](packages/agents/README.md).
+capabilities within a turn. HELD flip: it replaces `general` in the picker, is the
+agent a new chat opens with, and owns the memory opt-in, once the rollout evidence is in. See [`packages/agents/README.md`](packages/agents/README.md).
 
 ## Storage and runtime
 

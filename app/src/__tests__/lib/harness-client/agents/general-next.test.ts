@@ -678,16 +678,26 @@ describe('general-next composition', () => {
     },
   )
 
-  it('registers general-next, forwards stored general ids to it, and leaves the initial agent as search', () => {
+  it('registers general-next, forwards stored general ids to it, and makes it the one default agent id', () => {
     const registry = readFileSync('src/lib/harness-client/registry.server.ts', 'utf8')
     expect(registry).toContain("overlay(generalNextAgent, 'i-material-symbols-route', 'indigo')")
     expect(readFileSync('src/lib/harness-client/agent-ids.ts', 'utf8')).toMatch(
       /general: 'general-next'/,
     )
     expect(registry).not.toMatch(/overlay\(generalAgent,/)
-    expect(readFileSync('src/routes/index.tsx', 'utf8')).toContain("createSignal<string>('search')")
-    const actions = readFileSync('src/lib/harness-client/actions.server.ts', 'utf8')
-    expect(actions).toContain("return processMessageWithAgent(sessionId, message, 'search')")
-    expect(actions).toContain("agentId: string = 'search'")
+    expect(readFileSync('src/lib/harness-client/agent-ids.ts', 'utf8')).toContain(
+      "DEFAULT_AGENT_ID = 'general-next'",
+    )
+    // Every site that names no agent reads the one constant and spells no literal id.
+    for (const file of [
+      'src/routes/index.tsx',
+      'src/components/ark-ui/ChatInterface.tsx',
+      'src/lib/harness-client/actions.server.ts',
+      'src/routes/api/events.ts',
+    ]) {
+      const source = readFileSync(file, 'utf8')
+      expect(source, file).toContain('DEFAULT_AGENT_ID')
+      expect(source, file).not.toMatch(/['"]search['"]\)|= 'search'|\?\? 'search'/)
+    }
   })
 })

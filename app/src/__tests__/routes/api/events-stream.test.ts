@@ -9,6 +9,7 @@
  * `title_updated` frame, a close, and an `error` frame instead of a crash.
  */
 
+import { DEFAULT_AGENT_ID } from '../../../lib/harness-client/agent-ids'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -190,9 +191,9 @@ describe('POST /api/events', () => {
     })
   })
 
-  it('defaults the agent to "search" when none is named', async () => {
+  it('defaults the agent to DEFAULT_AGENT_ID when none is named', async () => {
     await POST(evt({ sessionId: 's1', message: 'hi' })).then((r) => r.text())
-    expect(runTurnAndPersist.mock.calls[0][0]).toMatchObject({ agentId: 'search' })
+    expect(runTurnAndPersist.mock.calls[0][0]).toMatchObject({ agentId: DEFAULT_AGENT_ID })
   })
 
   it('emits title_updated when the turn generates one', async () => {

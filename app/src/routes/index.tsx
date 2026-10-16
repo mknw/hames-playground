@@ -15,6 +15,7 @@ import { hasPendingIngest, refreshDocuments } from '~/lib/stash-documents'
 import { createSessionRegistry } from '~/lib/session-registry'
 import { SessionRegistryContext } from '~/lib/session-registry-context'
 import { createThreadListStore } from '~/lib/thread-list-store'
+import { DEFAULT_AGENT_ID } from '~/lib/harness-client/agent-ids'
 import type { RunOutcome } from '~/lib/run-registry'
 
 export default function Home() {
@@ -86,7 +87,7 @@ export default function Home() {
   // until set). Whether it runs in a sandbox rides along from the registry, and
   // stays undefined until the agent list has loaded: the Sandbox tab is greyed
   // out only on a definite "no", never on "not known yet".
-  const [currentAgentId, setCurrentAgentId] = createSignal<string>('search')
+  const [currentAgentId, setCurrentAgentId] = createSignal<string>(DEFAULT_AGENT_ID)
   const [currentAgentUsesSandbox, setCurrentAgentUsesSandbox] = createSignal<boolean | undefined>()
   const handleSelectedAgentChange = (agentId: string, agent?: { usesSandbox: boolean }) => {
     setCurrentAgentId(agentId)

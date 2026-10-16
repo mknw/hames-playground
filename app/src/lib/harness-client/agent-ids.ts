@@ -27,6 +27,10 @@ const RENAMED_AGENT_IDS: Record<string, string> = {
   general: 'general-next',
 }
 
+/** The agent a new chat opens with, and the id every caller that names none falls back to.
+ * One constant, so the next change of default is one line. (HELD flip, #507: was 'search'.) */
+export const DEFAULT_AGENT_ID = 'general-next'
+
 /** Current id for a possibly-legacy agent id. Unknown ids pass through. */
 export function canonicalAgentId(id: string): string {
   return RENAMED_AGENT_IDS[id] ?? id

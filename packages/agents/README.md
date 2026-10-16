@@ -139,8 +139,8 @@ configured in
 ### How the shipped agents are composed
 
 `general-next` is the decision-loop agent. HELD flip: it takes `general`'s
-picker slot and `general` stays a package export (the Eval baseline), while
-`search` remains the initial agent. It requires `deps.withSandbox` and
+picker slot and is the agent a new chat opens with; `general` stays a package
+export (the Eval baseline). It requires `deps.withSandbox` and
 `deps.createRedisBackend`, and accepts `deps.pseudonymiseForWeb` for the
 web route. It chooses among Microsoft 365 work, Neo4j/web lookup,
 conversation-document retrieval and planning, then synthesizes once from the

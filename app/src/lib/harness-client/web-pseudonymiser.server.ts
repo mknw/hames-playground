@@ -37,19 +37,46 @@ function mapContent(text: string, fn: (body: string) => string): string {
     .join('')
 }
 
+/** An accepted actorCritic record is ONE JSON string, so a newline in a leaf
+ * arrives as the two characters `\n` and glues itself to the next word
+ * (`\nOtto`), where no word boundary matches. Work per parsed leaf, then
+ * re-stringify only if something changed. Anything not valid JSON is plain text. */
+function mapBody(body: string, fn: (text: string) => string, keys = false): string {
+  if (/^\s*[[{]/.test(body)) {
+    try {
+      const parsed: unknown = JSON.parse(body)
+      let changed = false
+      const mapped = mapStrings(
+        parsed,
+        (leaf) => {
+          const next = fn(leaf)
+          if (next !== leaf) changed = true
+          return next
+        },
+        keys,
+      )
+      return changed ? JSON.stringify(mapped) : body
+    } catch {
+      // Not JSON after all.
+    }
+  }
+  return fn(body)
+}
+
 /** Batch every content span so the pure rewriter compiles its matcher once
  * for this value, rather than once per string leaf. */
 function applyToContent<T>(value: T, table: PseudonymTable): T {
   const bodies: string[] = []
-  mapStrings(value, (text) =>
-    mapContent(text, (body) => {
-      bodies.push(body)
-      return body
-    }),
-  )
+  const collect = (text: string) => {
+    bodies.push(text)
+    return text
+  }
+  mapStrings(value, (text) => mapContent(text, (body) => mapBody(body, collect, true)))
   const rewritten = apply(bodies, table)
   let index = 0
-  return mapStrings(value, (text) => mapContent(text, () => rewritten[index++]))
+  return mapStrings(value, (text) =>
+    mapContent(text, (body) => mapBody(body, () => rewritten[index++], true)),
+  )
 }
 
 const normalise = (text: string): string =>
@@ -153,14 +180,28 @@ function unfenceRosterValue(text: string): string {
   }
 }
 
-const harvest = (payloads: unknown) =>
-  extractRoster(mapStrings(payloads, unfenceRosterValue))
+/** The screen replaces a quoted span with this marker BEFORE the host sees the
+ * result, so a person it names in a labelled field is gone from the data and
+ * would silently drop out of the roster (their other spellings then pass). */
+const NEUTRALIZED_MARKER = /⟦neutralized:/
+
+const harvest = (payloads: unknown) => {
+  const found = extractRoster(mapStrings(payloads, unfenceRosterValue))
+  const damaged = found.some((entry) =>
+    [entry.name, entry.address, ...entry.nameVariants].some(
+      (value) => value !== null && NEUTRALIZED_MARKER.test(value),
+    ),
+  )
+  // Fail closed: the wrapper withholds earlier content and refuses web calls.
+  if (damaged) throw new Error('An identity field was neutralized: the roster is incomplete')
+  return found
     .map((entry) => ({
       ...entry,
       name: isPlaceholder(entry.name) ? null : entry.name,
       nameVariants: entry.nameVariants.filter((name) => !isPlaceholder(name)),
     }))
     .filter((entry) => entry.address || entry.nameVariants.length > 0)
+}
 
 /** `none` is only for a deployment without an org graph. Set it in code at
  *  the composition root, never from an env var. A required empty/unreadable
@@ -192,9 +233,17 @@ export function createWebPseudonymiser({
         mapStrings(
           value,
           (text) =>
-            mapContent(text, (body) =>
-              outgoingLiterals.matches(body) ? '[withheld: private identity]' : body,
-            ),
+            mapContent(text, (body) => {
+              const out = mapBody(
+                body,
+                (leaf) => (outgoingLiterals.matches(leaf) ? '[withheld: private identity]' : leaf),
+                true,
+              )
+              // An unchanged JSON body can still hide text no leaf holds (duplicate keys).
+              return out === body && outgoingLiterals.matches(body)
+                ? '[withheld: private identity]'
+                : out
+            }),
           true,
         ),
       checkLiterals: (value) => {

@@ -23,7 +23,7 @@ import { loadDirectoryRoster } from '../../../lib/org-graph/roster-source.server
 import * as roster from '../../../lib/privacy/graph-roster'
 import * as pseudonym from '../../../lib/privacy/pseudonymise'
 import { shapeMessages } from '@hames-ai/connectors/graph/graph-tools.server'
-import { spotlight } from '@hames-ai/harness-patterns/guard'
+import { spotlight, applyScreenVerdict } from '@hames-ai/harness-patterns/guard'
 import {
   createContext,
   createEvent,
@@ -1163,5 +1163,136 @@ describe('withholding and outgoing checks', () => {
       }),
     ).toContain('private identity')
     expect(filter.check({ [address]: 'value' })).toContain('private identity')
+  })
+})
+
+describe('pre-flip LOWs (R-1, screened identity)', () => {
+  const rewriteLikeWrapper = (filter: Awaited<ReturnType<PseudonymiseForWeb>>, value: string) =>
+    filter.redact(filter.apply(value))
+
+  it('R-1: a content newline before a name keeps the other leaves of an actorCritic record', async () => {
+    const filter = await createWebPseudonymiser()([MAIL], '')
+    // actorCritic records are one JSON string: the newline arrives escaped.
+    const record = JSON.stringify({
+      subject: 'Quarterly numbers',
+      preview: `Regards,\n${EXTERNAL.name}`,
+      note: 'ordinary retained facts',
+    })
+    const fenced = spotlight(record, 'doc', 'decision_loop_output')
+    const out = rewriteLikeWrapper(filter, fenced)
+    expect(out).not.toContain('withheld')
+    expect(out).not.toContain('Otto')
+    expect(out).not.toContain('Willow')
+    expect(out).toContain('ordinary retained facts')
+    expect(out).toContain('Quarterly numbers')
+    expect(out).toContain('PERSON_2')
+    // The fence and the JSON shape survive.
+    const body = out.slice(out.indexOf('⟧\n') + 2, out.lastIndexOf('\n⟦END'))
+    expect(JSON.parse(body).note).toBe('ordinary retained facts')
+  })
+
+  it('R-1: a JSON body with no identity is returned byte-identical, and non-JSON text still works', async () => {
+    const filter = await createWebPseudonymiser()([MAIL], '')
+    const plain = '{ "a" : "x",\n "b": [1, 2] }'
+    expect(rewriteLikeWrapper(filter, plain)).toBe(plain)
+    expect(rewriteLikeWrapper(filter, `{not json ${EXTERNAL.name}`)).toBe('{not json PERSON_2')
+  })
+
+  it('R-1: a residual identity inside a JSON leaf withholds only that leaf', async () => {
+    const filter = await createWebPseudonymiser()([MAIL], '')
+    const out = JSON.parse(
+      filter.redact(JSON.stringify({ keep: 'fine', odd: `Sent by\n${DIRECTORY.mail}` })),
+    )
+    expect(out.keep).toBe('fine')
+    expect(JSON.stringify(out)).not.toContain(DIRECTORY.mail)
+  })
+
+  const screened = (span: string) =>
+    applyScreenVerdict(
+      { from: EXTERNAL.name, subject: 'Mr Willow wrote', body: 'Hello' },
+      { injection_detected: true, reason: 'synthetic', spans: [span] },
+      { tool: 'graph_mail_recent', namespace: 'graph' },
+      {
+        tool: 'graph_mail_recent',
+        namespace: 'graph',
+        findings: [],
+        neutralized: false,
+        spotlighted: false,
+        scanned: 0,
+      },
+    ).data
+
+  it('screen span equal to the sender name: the roster is never silently emptied (fails closed)', async () => {
+    for (const span of [EXTERNAL.name, 'Otto']) {
+      const data = screened(span)
+      expect(JSON.stringify(data)).toContain('neutralized:llm-screen')
+      await expect(createWebPseudonymiser()([data], '')).rejects.toThrow()
+    }
+  })
+
+  it('F3: an address-only sender and a name variant fail closed too (address / variant arms)', async () => {
+    const address = applyScreenVerdict(
+      { from: 'otto@outside.test' },
+      { injection_detected: true, reason: 'synthetic', spans: ['otto'] },
+      { tool: 'graph_mail_recent', namespace: 'graph' },
+      {
+        tool: 'graph_mail_recent',
+        namespace: 'graph',
+        findings: [],
+        neutralized: false,
+        spotlighted: false,
+        scanned: 0,
+      },
+    ).data
+    expect(JSON.stringify(address)).toContain('⟦neutralized:llm-screen')
+    await expect(createWebPseudonymiser()([address], '')).rejects.toThrow()
+    const variant = applyScreenVerdict(
+      { createdBy: { user: { displayName: 'Mr Z', givenName: 'Otto' } } },
+      { injection_detected: true, reason: 'synthetic', spans: ['Otto'] },
+      { tool: 'graph_file', namespace: 'graph' },
+      {
+        tool: 'graph_file',
+        namespace: 'graph',
+        findings: [],
+        neutralized: false,
+        spotlighted: false,
+        scanned: 0,
+      },
+    ).data
+    await expect(createWebPseudonymiser()([variant], '')).rejects.toThrow()
+  })
+
+  it('F1: a duplicate-key JSON body cannot carry a clear name past apply and redact', async () => {
+    const filter = await createWebPseudonymiser()([MAIL], '')
+    const body = `{"note":"${EXTERNAL.name} wrote","note":"hi"}`
+    const out = rewriteLikeWrapper(filter, spotlight(body, 'doc', 'decision_loop_output'))
+    expect(out).not.toContain('Willow')
+    expect(out).toContain('withheld')
+  })
+
+  it('F5: a name in a JSON key is pseudonymised, not withheld', async () => {
+    const filter = await createWebPseudonymiser()([MAIL], '')
+    expect(JSON.parse(rewriteLikeWrapper(filter, `{"${EXTERNAL.name}":"x"}`))).toEqual({
+      PERSON_2: 'x',
+    })
+  })
+
+  it('screen span equal to the sender name: the wrapper withholds earlier content and refuses web calls', async () => {
+    const child = configurePattern<Data>('probe', async (s) => {
+      expect(await callTool('web_search', { query: 'Mr Willow' })).toMatchObject({ success: false })
+      return s
+    })
+    const scope = createScope<Data>('probe', {
+      [WEB_ROSTER_INPUT]: { payloads: [screened(EXTERNAL.name)], steps: 'Steps so far' },
+    })
+    await withRunFrame(frame('verda'), () =>
+      withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child).fn(
+        scope,
+        createEventView(createContext('Research')),
+      ),
+    )
+    expect(outgoing).not.toHaveBeenCalled()
+    expect(scope.events.some((e) => e.type === 'warning')).toBe(true)
+    expect(JSON.stringify(scope.events)).not.toContain('Willow')
   })
 })

@@ -5,7 +5,18 @@ export interface SpendKey {
   tier: 'verda'
 }
 
+/** The injection screen's BAML function: `screenDespiteFindings` runs it on every
+ * route output of general-next, so its private-tier time is its own report line. */
+export const SCREEN_FUNCTION = 'ScreenUntrustedContent'
+
+export interface FunctionSpend {
+  calls: number
+  observerUsd: number
+}
+
 export interface SpendRow extends SpendKey {
+  /** Per BAML function; sums to `calls` / `observerUsd` below, never added on top. */
+  functions: Record<string, FunctionSpend>
   observerUsd: number
   infrastructureUsd: number
   tailUsd: number
@@ -57,6 +68,7 @@ export class SpendBudget {
     if (!row) {
       row = {
         ...key,
+        functions: {},
         observerUsd: 0,
         infrastructureUsd: 0,
         tailUsd: 0,
@@ -69,15 +81,22 @@ export class SpendBudget {
   }
 
   /** Every observer sample counts, including calls that later fail parsing. */
-  observe(key: SpendKey, metrics: { costEur?: number } | undefined): void {
+  observe(
+    key: SpendKey,
+    metrics: { costEur?: number } | undefined,
+    functionName = 'unknown',
+  ): void {
     const row = this.row(key)
     row.calls++
+    const fn = (row.functions[functionName] ??= { calls: 0, observerUsd: 0 })
+    fn.calls++
     const cost = metrics?.costEur
     if (cost === undefined || !Number.isFinite(cost) || cost < 0) {
       row.unknownCost = true
       this.reason = 'Unknown observer cost; refusing further calls'
     } else {
       row.observerUsd += cost / this.eurPerUsd
+      fn.observerUsd += cost / this.eurPerUsd
       this.check()
     }
   }
@@ -144,4 +163,19 @@ export class SpendBudget {
 export function floorHourlyRate(configured: number, committed: number): number {
   if (!Number.isFinite(configured) || configured <= 0) throw new Error('Invalid hourly rate')
   return Math.max(configured, committed)
+}
+
+/** The screen against everything else, for one row. Shares are of observer cost and
+ * of calls; infrastructure and tail lines are scenario time and not attributable. */
+export function screenShare(row: Pick<SpendRow, 'functions' | 'calls' | 'observerUsd'>) {
+  const screen = row.functions[SCREEN_FUNCTION] ?? { calls: 0, observerUsd: 0 }
+  const share = (part: number, whole: number) => (whole > 0 ? part / whole : 0)
+  return {
+    calls: screen.calls,
+    observerUsd: screen.observerUsd,
+    otherCalls: row.calls - screen.calls,
+    otherObserverUsd: row.observerUsd - screen.observerUsd,
+    callShare: share(screen.calls, row.calls),
+    observerUsdShare: share(screen.observerUsd, row.observerUsd),
+  }
 }

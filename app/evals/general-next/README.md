@@ -12,7 +12,7 @@ No live run or default-flip evidence was produced in this PR.
 ```bash
 # All scripts run from app/. --list imports no agent and reads no credentials.
 corepack pnpm eval:general-next --list
-# Once S3 exists: free, scripted inference and synthetic tools. No .env is loaded.
+# Free: scripted inference and synthetic tools against the real agent. No .env is loaded.
 corepack pnpm eval:general-next
 EVAL_GENERAL_AGENT=general corepack pnpm eval:general-next
 # ONLY after the coordinator's actual “S3 merged: go” message:
@@ -64,10 +64,10 @@ prove the **dependency contract**, not Office rendering, numerical Python/Excel
 execution, vector search quality, app-upload HTTP integration or containment.
 Those integration claims remain owed to app-path evidence using synthetic documents
 seeded through the app's upload path and the shipped sandbox. The driver interface
-allows those integrations to be supplied independently. The final injected
-`AgentDeps.pseudonymiseForWeb` field/factory wiring is not available on this base;
-per coordinator instruction it lands with S3. This PR does not invent that contract
-or claim that the absent `general-next` has run. Scripted inference checks
+allows those integrations to be supplied independently. The driver supplies the production
+`createWebPseudonymiser` as `AgentDeps.pseudonymiseForWeb`, so `general-next`'s `info`
+route runs behind its real G14 filter; the directory leg is off (`directory: 'none'`: the
+eval holds no org graph), so only payload-harvested identities are exercised. Scripted inference checks
 wiring only: hermetic green does not certify model behaviour or authorize a flip.
 P4 scenarios are always reported as gated while the file path is withheld; no env
 switch enables `graph_file_ingest` or materialisation.
@@ -82,5 +82,12 @@ so ordinary hermetic unit tests can exercise them without importing the eval run
 The existing `evals-not-in-ci` pin remains unchanged; neither this script nor the
 role evals run in CI. No public package API changed, so this PR needs no package
 changeset or core SPEC/GUIDE update.
+
+Every result row carries a `screen` block beside `spend`: the injection screen
+(`ScreenUntrustedContent`) calls and observer cost, the same for everything else, and the
+screen's share of each. `general-next` sets `screenDespiteFindings`, so the screen runs on
+every route output, and on the private tier each call is Verda time. Infrastructure and
+scale-down tail lines are scenario time, not attributable per function, so the share is of
+observer cost only (hermetic runs price every call at 0: calls are the signal there).
 
 The JSON report includes a computed `flipGate` with explicit reasons; hermetic or filtered reports are ineligible. See the catalogue’s rollout criterion map and each scenario’s “A live pass proves” statement.

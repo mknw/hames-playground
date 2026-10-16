@@ -132,10 +132,17 @@ export async function createDriver(
     ownsTool: (name: string) => name === 'sandbox_bash',
     listTools: async () => descriptions.filter((t) => t.name === 'sandbox_bash'),
   }
+  // The production factory, so general-next's info route runs behind its real G14 filter
+  // and not the fail-closed refusal an absent dep produces. `none` because the hermetic
+  // run has no org graph: the directory leg is NOT covered here (live mode keeps it off
+  // too, since the eval holds no tenant data). Payload-harvested identities still apply.
+  const { createWebPseudonymiser } =
+    await import('../../src/lib/harness-client/web-pseudonymiser.server')
   const dispose = registerTransport(transport)
   const deps: AgentDeps = {
     toolNamespaces: transport.namespaceFor,
     clientOverride: clientOverrideFor,
+    pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
     withSandbox: () => (pattern) => ({
       ...pattern,
       children: [pattern],

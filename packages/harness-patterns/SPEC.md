@@ -684,14 +684,14 @@ just the failures); ALL sub-calls failed → the loop continues too, recorded as
 error.
 
 **Who writes the final answer: `returnStyle`** (#149). The loop's terminal
-`Return` prose never reaches the user. It does travel to `Synthesize` —
-`compactExecution` maps the terminal iteration to `tool_call.args` and
-fabricates a `tool_result` for it (result `null`), so that turn renders as
-`Tool: Return / Result: null` — but the template renders `tool_result.tool` /
-`.result` only and **never `tool_call.args`**, which is the single guard to
-preserve if the template ever grows a call-args section (issue #149 §2). So the
-downstream `compactExecution` composes the user-facing answer from the tool
-results either way. Measured on a 5-turn web-search run, composing it in the
+`Return` prose does not reach the user, and — when the turn called a tool — does
+not reach `Synthesize` either: `compactExecution` drops the terminal `Return`
+iteration (SA-H4), because it has no `tool_result` of its own and used to render
+as a fabricated success (`Tool: Return / Result: null`). The downstream
+`compactExecution` composes the user-facing answer from the tool results.
+(The template renders `tool_result.tool` / `.result` only and **never
+`tool_call.args`** — the single guard to preserve if it ever grows a call-args
+section, issue #149 §2.) Measured on a 5-turn web-search run, composing it in the
 loop as well cost **2,134 output tokens and ~22s** (the run's most expensive
 turn) for a text nothing read.
 
@@ -704,14 +704,20 @@ turn) for a text nothing read.
   `loopHistory.iterations[].action`. Making the loop's answer _suppress_
   synthesis is #149 Option B and is deliberately not built.
 
-**One exception: a Return-only turn (#610).** The above holds for a turn that
-called a tool. When the controller answers WITHOUT calling one, the terminal
-`Return` is the only content the turn produced, and dropping it left the
-synthesizer with no turns at all ("tool results were not provided"). So in
-`thread` mode, when no real iteration survives the drop, `compactExecution`
-passes the last `Return`'s trimmed text as the input's `response` (the usual
-response-mode downgrade then hands it to `Synthesize` as a direct response). An
-explicit `data.response` wins; a turn with any tool iteration is unchanged.
+**One exception: a Return-only turn (#610).** When the controller answers
+WITHOUT calling a tool, the terminal `Return` is the only content the turn
+produced, and dropping it left the synthesizer with no turns at all ("tool
+results were not provided"). `simpleLoop` therefore records the text of ITS
+`Return` exit as `data.returnText` (cleared at the start of each loop and by
+`continueSession`), and in `thread` mode, when no tool iteration survives,
+`compactExecution` passes it as the input's `response` (the usual response-mode
+downgrade then hands it to `Synthesize` as a direct response). Limits: it is
+current-turn only and applies to a `simpleLoop` exit only — an `actorCritic`
+`Return` is refused and never reviewed, so it never sets the key; an explicit
+`data.response` wins; a turn with any tool iteration (even a failed one) is
+unchanged (a failed single call followed by a `Return` is still dropped, #614);
+and under `returnStyle: 'summary'` the controller is told its `Return` is not the
+answer, so whether that text contains the answer depends on the model (#615).
 
 The default is safe because `compactExecution` is the better-informed author in
 every shipped chain: it reads results at full fidelity (no `maxResultChars`

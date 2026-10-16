@@ -199,18 +199,6 @@ function buildSynthesisInputFromView(
 
         // Nothing left to reconstruct: fall through to the existing
         // no-loopHistory path below, which downgrades thread → response mode.
-        // That path used to hand the synthesizer NOTHING when the controller
-        // answered without calling a tool: the dropped `Return` carried the
-        // only content of the turn (its text, in `tool_args`), and no loop
-        // writes `data.response`. So a thread with no real iteration keeps the
-        // last `Return`'s text as the response. A turn that DID call a tool
-        // keeps dropping it — there the `Return` is a summary and the tool
-        // results are what the synthesizer authors from (#149).
-        if (real.length === 0) {
-          const ret = iterations.findLast((it) => it.action.tool_name === 'Return')
-          const text = typeof ret?.action.tool_args === 'string' ? ret.action.tool_args.trim() : ''
-          if (text) returnOnlyText = text
-        }
         if (real.length > 0) {
           input.loopHistory = {
             iterations: real,
@@ -220,6 +208,22 @@ function buildSynthesisInputFromView(
         }
       }
 
+      // That path used to hand the synthesizer NOTHING when the controller
+      // answered without calling a tool: the dropped `Return` carried the
+      // only content of the turn (its text, in `tool_args`), and no loop
+      // writes `data.response`. So a thread with no real iteration keeps the
+      // `Return` text the LOOP recorded on exit (`data.returnText`) as the
+      // response. It comes from the producer, not from a read of the thread:
+      // only `simpleLoop` knows its `Return` ended the loop — an actorCritic
+      // `Return` is refused and never reviewed — and `continueSession` clears
+      // the key, so a previous turn's text cannot answer this one under a
+      // wider thread window. A turn that DID call a tool
+      // keeps dropping it — there the `Return` is a summary and the tool
+      // results are what the synthesizer authors from (#149).
+      if (!input.loopHistory) {
+        const text = typeof data.returnText === 'string' ? data.returnText.trim() : ''
+        if (text) returnOnlyText = text
+      }
       input.response = data.response ?? returnOnlyText
       break
     }

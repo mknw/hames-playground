@@ -472,13 +472,13 @@ describe('interactive turns', () => {
     claimSession.mockResolvedValue(STORED)
 
     const result = await runTurnAndPersist(
-      interactive({ sessionId: 'sess-3', agentId: 'sandbox', message: 'hi' }),
+      interactive({ sessionId: 'sess-3', agentId: 'general', message: 'hi' }),
     )
 
     expect(continueSession).not.toHaveBeenCalled()
-    expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-3', 'sandbox')
+    expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-3', 'general')
     expect(result.response).toBe('fresh:hi')
-    expect(saveSession).toHaveBeenCalledWith('sess-3', 'user-1', 'sandbox', 'serialized:sess-3', {
+    expect(saveSession).toHaveBeenCalledWith('sess-3', 'user-1', 'general', 'serialized:sess-3', {
       version: 'v-claim',
       inferenceTier: 'anthropic',
       memoryRunOrigin: 'interactive',

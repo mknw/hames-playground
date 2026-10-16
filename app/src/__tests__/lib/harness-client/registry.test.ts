@@ -49,7 +49,7 @@ vi.mock('@hames-ai/agents/agents/search.server', () => ({
   searchAgent: stubAgent('search'),
 }))
 vi.mock('@hames-ai/agents/agents/general.server', () => ({
-  generalAgent: stubAgent('general', { usesSandbox: true }),
+  generalAgent: stubAgent('general'),
 }))
 vi.mock('@hames-ai/agents/agents/general-next.server', () => ({
   generalNextAgent: stubAgent('general-next', { usesSandbox: true }),
@@ -119,9 +119,12 @@ describe('registration + lookup', () => {
   // HELD flip (#507, ruling C=B+A): general-next replaces general in the PICKER; stored
   // 'general' rows keep opening on `general` (no legacy-id mapping forward).
   it('lists general-next and not general, yet general still resolves to itself', () => {
-    const listed = getAgentMetadata().map((m) => m.id)
+    const meta = getAgentMetadata()
+    const listed = meta.filter((m) => m.listed).map((m) => m.id)
     expect(listed).toContain('general-next')
     expect(listed).not.toContain('general')
+    // ...but the metadata still carries it, so the picker can name an old row's own agent.
+    expect(meta.find((m) => m.id === 'general')?.listed).toBe(false)
     expect(getAgent('general')?.id).toBe('general')
     expect(canonicalAgentId('general')).toBe('general')
   })
@@ -183,6 +186,7 @@ describe('registration + lookup', () => {
       // A definition that does not declare a sandbox has none — sent as an
       // explicit `false`, so the client never interprets an absent flag.
       usesSandbox: false,
+      listed: true,
     })
     expect('createPatterns' in meta).toBe(false)
   })

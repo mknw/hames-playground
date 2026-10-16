@@ -207,6 +207,8 @@ export async function getAgentList(): Promise<
     servers: string[]
     /** Whether the agent runs in a sandbox — gates the support panel's Sandbox tab. */
     usesSandbox: boolean
+    /** False for an unlisted agent: not offered in the picker, still resolvable by id. */
+    listed: boolean
   }>
 > {
   return getAgentMetadata()

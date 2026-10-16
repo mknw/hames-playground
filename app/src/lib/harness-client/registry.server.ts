@@ -112,10 +112,13 @@ export function getAgentMetadata(): Array<{
    *  definition's absent flag means "no sandbox", and the client must not have
    *  to know that convention. */
   usesSandbox: boolean
+  /** False for an agent registered unlisted: the picker offers only listed ones, but every
+   *  agent is here so a conversation stored under an unlisted one still resolves its own name,
+   *  greeting and sandbox flag. */
+  listed: boolean
 }> {
-  return getAllAgents()
-    .filter((a) => !unlistedAgentIds.has(a.id))
-    .map(({ id, name, description, welcome, icon, accent, servers, usesSandbox }) => ({
+  return getAllAgents().map(
+    ({ id, name, description, welcome, icon, accent, servers, usesSandbox }) => ({
       id,
       name,
       description,
@@ -124,7 +127,9 @@ export function getAgentMetadata(): Array<{
       accent,
       servers,
       usesSandbox: usesSandbox === true,
-    }))
+      listed: !unlistedAgentIds.has(id),
+    }),
+  )
 }
 
 // ============================================================================

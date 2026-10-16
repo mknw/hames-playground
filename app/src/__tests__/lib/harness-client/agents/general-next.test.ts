@@ -779,6 +779,19 @@ describe('general-next composition', () => {
     expect(mocks.synthesize).not.toHaveBeenCalled()
   })
 
+  // #507 flip, review finding 2: the flip makes the Anthropic-tier decisions endpoint a
+  // requirement of every new chat; unset, the turn must end visibly and call nothing.
+  it('P5b: an unconfigured Anthropic decisions endpoint ends visibly before any route or synthesis', async () => {
+    vi.stubEnv('JEV_DECISIONS_URL', '')
+    const result = await run('anthropic')
+    expect(result.status).toBe('error')
+    expect(result.context.error).toContain('JEV_DECISIONS_URL')
+    expect(requests).not.toHaveBeenCalled()
+    expect(mocks.controller).not.toHaveBeenCalled()
+    expect(mocks.actor).not.toHaveBeenCalled()
+    expect(mocks.synthesize).not.toHaveBeenCalled()
+  })
+
   it('M7: also opts into memory and gives recalled data only to synthesis', async () => {
     const memory = { owner: () => null, enabled: () => false } as unknown as MemoryConfig
     const patterns = await agent.createPatterns('synthetic-session', { ...deps, memory })

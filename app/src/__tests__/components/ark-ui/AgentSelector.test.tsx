@@ -19,13 +19,14 @@ const { AgentSelector } = await import('../../../components/ark-ui/AgentSelector
 
 const tick = () => new Promise((r) => setTimeout(r, 20))
 
-const agent = (id: string, name: string, servers: string[] = ['neo4j']) => ({
+const agent = (id: string, name: string, servers: string[] = ['neo4j'], listed = true) => ({
   id,
   name,
   description: `${name} does things`,
   icon: `i-material-symbols-${id}`,
   accent: 'indigo' as const,
   servers,
+  listed,
 })
 
 const buttons = (container: HTMLElement) => [...container.querySelectorAll('button')]
@@ -64,6 +65,25 @@ describe('AgentSelector', () => {
     await tick()
 
     expect(container.textContent).toContain('Graph Explorer')
+  })
+
+  // #507 flip: an old `general` row is stored under an agent the picker no longer offers. The
+  // trigger must name THAT agent (not list[0]) and the dropdown must not offer it.
+  it('names an unlisted selected agent on the trigger without offering it', async () => {
+    getAgentList.mockResolvedValue([
+      agent('graph', 'Graph Explorer'),
+      agent('old', 'Old General', ['neo4j'], false),
+    ])
+    const { container } = render(() => (
+      <AgentSelector selectedAgent="old" onAgentChange={vi.fn()} />
+    ))
+    await tick()
+
+    expect(buttons(container)[0].textContent).toContain('Old General')
+    buttons(container)[0].click()
+    await tick()
+    expect(container.textContent).not.toContain('Old General does things')
+    expect(container.textContent).toContain('Graph Explorer does things')
   })
 
   it('lists every agent when opened and reports the pick, then closes', async () => {

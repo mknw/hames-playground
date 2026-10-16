@@ -52,6 +52,7 @@ const AGENTS = [
     icon: 'i-x',
     servers: ['neo4j'],
     usesSandbox: false,
+    listed: true,
   },
   {
     id: 'kg',
@@ -61,6 +62,7 @@ const AGENTS = [
     icon: 'i-y',
     servers: ['neo4j', 'memory'],
     usesSandbox: false,
+    listed: true,
   },
   {
     id: 'box',
@@ -70,6 +72,7 @@ const AGENTS = [
     icon: 'i-z',
     servers: [],
     usesSandbox: true,
+    listed: true,
   },
 ]
 const getAgentList = vi.fn(async () => AGENTS)

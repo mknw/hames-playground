@@ -165,8 +165,8 @@ Place `withPseudonymisedInputs({ pseudonymise: hostFilter })` directly around
 `withReferences`. It rewrites both the reference view (previews and expansion)
 and all inherited child data, preserving the latest user message. Rewritten
 copies are limited to the child's visible events and post-checked per string;
-residual bodies become `[withheld: private identity]` and provenance fences stay
-intact. Only an
+residual bodies become `[withheld: private identity]` (per leaf inside a JSON
+body) and provenance fences stay intact. Only an
 explicit `'anthropic'` run passes through. Supply a host `PseudonymiseForWeb`
 that builds a per-invocation rewrite, selective redaction, literal post-check, local-result observer
 and outgoing-argument check; no host privacy

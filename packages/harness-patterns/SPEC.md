@@ -1200,7 +1200,9 @@ like any other child result; it is not confined to the wrapped child. Under
 `decisionLoop`, each route starts with fresh child data instead.
 
 An absent pseudonymiser or any roster/table/rewrite failure withholds earlier
-content. No references attach, the plan and all result bodies disappear, and
+content. A roster whose labelled identity was already neutralized by the
+injection screen is such a failure: the name is gone from the data, so the host
+refuses to build a partial roster. No references attach, the plan and all result bodies disappear, and
 only an allowlisted handoff containing route/status/stats lines remains in child
 data. A `warning` with task
 `web_privacy` records "earlier results withheld: privacy filter unavailable".

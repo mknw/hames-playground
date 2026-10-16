@@ -763,17 +763,22 @@ export function applyScreenVerdict(
   const walk = (node: unknown): unknown => {
     if (typeof node === 'string') {
       scanned += node.length
+      // The deterministic projection may already carry a guard-owned fence.
+      // Screen spans apply to its body; retain that exact provenance label.
+      const body = unspotlight(node)
       const { text, findings: found } = sanitizeText(
-        node,
+        body,
         spanRules,
         base.findings.length + findings.length,
       )
       findings.push(...found)
-      const out = found.length > 0 ? text : node
-      // The screen fired, so every string leaf of this result gets fenced —
-      // the verdict is about the whole document, not one span.
+      const out = found.length > 0 ? text : body
+      // Exactly one fence per leaf, including unchanged fields. Adding another
+      // would turn a labelled identity into fence text for downstream readers.
       changed = true
-      return spotlight(out, ctx.tool, ctx.namespace)
+      if (body === node) return spotlight(out, ctx.tool, ctx.namespace)
+      const bodyStart = node.indexOf(`${SENTINEL_CLOSE}\n`) + 2
+      return node.slice(0, bodyStart) + out + node.slice(bodyStart + body.length)
     }
     if (Array.isArray(node)) return node.map(walk)
     if (node !== null && typeof node === 'object') {

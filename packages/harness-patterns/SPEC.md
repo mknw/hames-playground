@@ -1073,7 +1073,10 @@ at a cheaper model can never silently re-point prompt-injection screening with
 it (SA-M5). By default the guard calls it **only for content the
 deterministic layer passed clean**. With `screenDespiteFindings: true`, it also
 screens the deterministically sanitized projection after findings; applying the
-verdict preserves the original rule findings and neutralizations. This option
+verdict preserves the original rule findings and neutralizations, with exactly
+one fence per string leaf and the original provenance label retained. The
+reference host unfences repeated wrappers to a fixed point before harvesting
+identity fields as defence in depth for older payloads. This option
 unions monotonically across nested guards. Regexes catch known phrasings and
 the screen catches novel ones. A verbatim span it quotes is neutralized like a
 regex match; a span it paraphrased (matching nothing) still forces the fence, so

@@ -44,6 +44,47 @@ describe('screenDespiteFindings', () => {
     expect(JSON.stringify(events)).toContain(residual)
   })
 
+  it('D-1: findings plus a screen detection leave exactly one fence on every string leaf', async () => {
+    const guard = createInjectionGuard(
+      {
+        tools: ['mail'],
+        spotlight: 'always',
+        screenDespiteFindings: true,
+        screen: async () => ({
+          injection_detected: true,
+          reason: 'residual instruction',
+          spans: [residual],
+        }),
+      },
+      () => {},
+      'test',
+    )
+    const { data, summary } = await guard.sanitize('mail', {
+      from: 'Otto Willow',
+      preview: input,
+      nested: ['ordinary text', ''],
+      count: 2,
+      missing: null,
+    })
+    const result = data as {
+      from: string
+      preview: string
+      nested: string[]
+      count: number
+      missing: null
+    }
+    for (const leaf of [result.from, result.preview, ...result.nested]) {
+      expect(leaf.match(/⟦UNTRUSTED CONTENT · source:/g)).toHaveLength(1)
+      expect(leaf.match(/⟦END UNTRUSTED CONTENT⟧/g)).toHaveLength(1)
+      expect(leaf).toContain('source: mail/mail ·')
+    }
+    expect(result.preview).not.toContain(attack)
+    expect(result.preview).not.toContain(residual)
+    expect(summary?.rules).toEqual(expect.arrayContaining(['instruction-override', 'llm-screen-1']))
+    expect(result.count).toBe(2)
+    expect(result.missing).toBeNull()
+  })
+
   it('records an outage after findings without restoring the original text', async () => {
     const screen = vi.fn(async () => {
       throw new Error('offline')

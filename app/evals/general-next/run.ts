@@ -12,6 +12,7 @@ import {
 } from '../../src/lib/eval-support/spend-budget'
 import { createSpendObserver } from '../../src/lib/eval-support/spend-observer'
 import { flipGate } from '../../src/lib/eval-support/flip-gate'
+import { describeWakeFailure } from '../../src/lib/eval-support/wake-failure'
 import {
   assertProxyNode,
   proxyEnvironment,
@@ -108,6 +109,7 @@ async function main() {
   clients.assertInferenceTier('verda')
   const budget = new SpendBudget(cap, rates.eurPerUsdRate())
   const results: ConversationResult[] = []
+  let wakeDetail: string | undefined
   const jobs = picked.flatMap((s) =>
     (s.baseline && candidate !== 'general' ? ['general', candidate] : [candidate]).map((agent) => ({
       scenario: s,
@@ -155,6 +157,7 @@ async function main() {
           stopUsd: budget.stopUsd,
           totalUsd: budget.totalUsd,
           stopReason: budget.reason,
+          stopDetail: wakeDetail,
           eurPerUsd: budget.eurPerUsd,
           verdaEurPerHour: verdaRate,
           smallEurPerHour: smallRate,
@@ -223,8 +226,9 @@ async function main() {
             const { ensurePrivateTierAwake } = await import('../../src/lib/inference/wake.server')
             try {
               await ensurePrivateTierAwake()
-            } catch {
+            } catch (err) {
               budget.reason = 'VERDA_WAKE_FAILED'
+              wakeDetail = describeWakeFailure(err)
               results.push({ ...active, status: 'fail', checks: [], error: 'VERDA_WAKE_FAILED' })
               tick()
               stop()

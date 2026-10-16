@@ -41,7 +41,7 @@ it('awaits production wake after starting the scenario clock, fails and stops wi
   )
   expect(s.indexOf('await ensurePrivateTierAwake()')).toBeLessThan(s.indexOf('await driver.run('))
   expect(s).toMatch(
-    /catch\s*\{\s*budget.reason = 'VERDA_WAKE_FAILED'\s*results.push\(\{[^}]*status: 'fail'[^}]*VERDA_WAKE_FAILED[^}]*\}\)\s*tick\(\)\s*stop\(\)/,
+    /catch\s*(?:\(err\)\s*)?\{\s*budget.reason = 'VERDA_WAKE_FAILED'\s*(?:wakeDetail = describeWakeFailure\(err\)\s*)?results.push\(\{[^}]*status: 'fail'[^}]*VERDA_WAKE_FAILED[^}]*\}\)\s*tick\(\)\s*stop\(\)/,
   )
 })
 it('poisons after dotenv loading and before any inference configuration', () => {

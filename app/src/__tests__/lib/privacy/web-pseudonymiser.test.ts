@@ -1230,6 +1230,53 @@ describe('pre-flip LOWs (R-1, screened identity)', () => {
     }
   })
 
+  it('F3: an address-only sender and a name variant fail closed too (address / variant arms)', async () => {
+    const address = applyScreenVerdict(
+      { from: 'otto@outside.test' },
+      { injection_detected: true, reason: 'synthetic', spans: ['otto'] },
+      { tool: 'graph_mail_recent', namespace: 'graph' },
+      {
+        tool: 'graph_mail_recent',
+        namespace: 'graph',
+        findings: [],
+        neutralized: false,
+        spotlighted: false,
+        scanned: 0,
+      },
+    ).data
+    expect(JSON.stringify(address)).toContain('⟦neutralized:llm-screen')
+    await expect(createWebPseudonymiser()([address], '')).rejects.toThrow()
+    const variant = applyScreenVerdict(
+      { createdBy: { user: { displayName: 'Mr Z', givenName: 'Otto' } } },
+      { injection_detected: true, reason: 'synthetic', spans: ['Otto'] },
+      { tool: 'graph_file', namespace: 'graph' },
+      {
+        tool: 'graph_file',
+        namespace: 'graph',
+        findings: [],
+        neutralized: false,
+        spotlighted: false,
+        scanned: 0,
+      },
+    ).data
+    await expect(createWebPseudonymiser()([variant], '')).rejects.toThrow()
+  })
+
+  it('F1: a duplicate-key JSON body cannot carry a clear name past apply and redact', async () => {
+    const filter = await createWebPseudonymiser()([MAIL], '')
+    const body = `{"note":"${EXTERNAL.name} wrote","note":"hi"}`
+    const out = rewriteLikeWrapper(filter, spotlight(body, 'doc', 'decision_loop_output'))
+    expect(out).not.toContain('Willow')
+    expect(out).toContain('withheld')
+  })
+
+  it('F5: a name in a JSON key is pseudonymised, not withheld', async () => {
+    const filter = await createWebPseudonymiser()([MAIL], '')
+    expect(JSON.parse(rewriteLikeWrapper(filter, `{"${EXTERNAL.name}":"x"}`))).toEqual({
+      PERSON_2: 'x',
+    })
+  })
+
   it('screen span equal to the sender name: the wrapper withholds earlier content and refuses web calls', async () => {
     const child = configurePattern<Data>('probe', async (s) => {
       expect(await callTool('web_search', { query: 'Mr Willow' })).toMatchObject({ success: false })

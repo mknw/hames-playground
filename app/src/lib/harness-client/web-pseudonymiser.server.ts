@@ -71,11 +71,11 @@ function applyToContent<T>(value: T, table: PseudonymTable): T {
     bodies.push(text)
     return text
   }
-  mapStrings(value, (text) => mapContent(text, (body) => mapBody(body, collect)))
+  mapStrings(value, (text) => mapContent(text, (body) => mapBody(body, collect, true)))
   const rewritten = apply(bodies, table)
   let index = 0
   return mapStrings(value, (text) =>
-    mapContent(text, (body) => mapBody(body, () => rewritten[index++])),
+    mapContent(text, (body) => mapBody(body, () => rewritten[index++], true)),
   )
 }
 
@@ -233,13 +233,17 @@ export function createWebPseudonymiser({
         mapStrings(
           value,
           (text) =>
-            mapContent(text, (body) =>
-              mapBody(
+            mapContent(text, (body) => {
+              const out = mapBody(
                 body,
                 (leaf) => (outgoingLiterals.matches(leaf) ? '[withheld: private identity]' : leaf),
                 true,
-              ),
-            ),
+              )
+              // An unchanged JSON body can still hide text no leaf holds (duplicate keys).
+              return out === body && outgoingLiterals.matches(body)
+                ? '[withheld: private identity]'
+                : out
+            }),
           true,
         ),
       checkLiterals: (value) => {

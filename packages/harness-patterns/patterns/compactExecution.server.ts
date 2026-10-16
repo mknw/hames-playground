@@ -98,6 +98,9 @@ function buildSynthesisInputFromView(
         : view.fromLastPattern()
       const toolEvents = threadView.tools().get()
       const actionEvents = threadView.actions().get()
+      // The text of a Return-only turn — set below, only when nothing else in
+      // the thread reaches the synthesizer.
+      let returnOnlyText: string | undefined
 
       // Build loop history from events if available
       if (toolEvents.length > 0 || actionEvents.length > 0) {
@@ -205,7 +208,23 @@ function buildSynthesisInputFromView(
         }
       }
 
-      input.response = data.response
+      // That path used to hand the synthesizer NOTHING when the controller
+      // answered without calling a tool: the dropped `Return` carried the
+      // only content of the turn (its text, in `tool_args`), and no loop
+      // writes `data.response`. So a thread with no real iteration keeps the
+      // `Return` text the LOOP recorded on exit (`data.returnText`) as the
+      // response. It comes from the producer, not from a read of the thread:
+      // only `simpleLoop` knows its `Return` ended the loop — an actorCritic
+      // `Return` is refused and never reviewed — and `continueSession` clears
+      // the key, so a previous turn's text cannot answer this one under a
+      // wider thread window. A turn that DID call a tool
+      // keeps dropping it — there the `Return` is a summary and the tool
+      // results are what the synthesizer authors from (#149).
+      if (!input.loopHistory) {
+        const text = typeof data.returnText === 'string' ? data.returnText.trim() : ''
+        if (text) returnOnlyText = text
+      }
+      input.response = data.response ?? returnOnlyText
       break
     }
   }

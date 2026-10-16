@@ -1098,6 +1098,10 @@ export interface CompactExecutionData {
   loopHistory?: LoopHistory
   /** Written by `memoryRecall`, cleared by it every turn; read here (#419 M5a). */
   memoryContext?: string
+  /** The text of a `simpleLoop` turn's terminal `Return`, written by that loop
+   *  on exit and cleared by `continueSession` (and at the loop's own start).
+   *  Read only when no tool iteration reached the synthesizer (#610). */
+  returnText?: string
 }
 
 // ============================================================================

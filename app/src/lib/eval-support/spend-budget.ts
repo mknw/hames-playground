@@ -5,8 +5,9 @@ export interface SpendKey {
   tier: 'verda'
 }
 
-/** The injection screen's BAML function: `screenDespiteFindings` runs it on every
- * route output of general-next, so its private-tier time is its own report line. */
+/** The injection screen's BAML function. general-next's orchestrator screens every guarded
+ * tool result and both fields of every route output (`screenDespiteFindings` adds only
+ * results with deterministic findings), so its private-tier time is its own report line. */
 export const SCREEN_FUNCTION = 'ScreenUntrustedContent'
 
 export interface FunctionSpend {

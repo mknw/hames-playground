@@ -147,6 +147,9 @@ async function main() {
             scenarios,
             rows as ConversationResult[],
           ),
+          hermeticCaveat: live
+            ? undefined
+            : 'Hermetic passes are wiring only. Scripted Synthesize echoes the expected answer, so answer/read-only/no-write/failure-acknowledged checks are self-fulfilling; only tool order+arguments, route selection+completion, artifacts, index/retrieval and first-turn-failure checks discriminate. 06-read-only passes vacuously. No G14 substitution is exercised (no fixture identity, directory off).',
           tailLines: budget.tailLines,
           capUsd: cap,
           stopUsd: budget.stopUsd,

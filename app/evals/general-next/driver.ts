@@ -135,7 +135,7 @@ export async function createDriver(
   // The production factory, so general-next's info route runs behind its real G14 filter
   // and not the fail-closed refusal an absent dep produces. `none` because the hermetic
   // run has no org graph: the directory leg is NOT covered here (live mode keeps it off
-  // too, since the eval holds no tenant data). Payload-harvested identities still apply.
+  // too, since the eval holds no tenant data). No fixture carries an identity, so no substitution runs: this proves presence only.
   const { createWebPseudonymiser } =
     await import('../../src/lib/harness-client/web-pseudonymiser.server')
   const dispose = registerTransport(transport)

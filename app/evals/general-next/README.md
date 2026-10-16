@@ -66,8 +66,9 @@ Those integration claims remain owed to app-path evidence using synthetic docume
 seeded through the app's upload path and the shipped sandbox. The driver interface
 allows those integrations to be supplied independently. The driver supplies the production
 `createWebPseudonymiser` as `AgentDeps.pseudonymiseForWeb`, so `general-next`'s `info`
-route runs behind its real G14 filter; the directory leg is off (`directory: 'none'`: the
-eval holds no org graph), so only payload-harvested identities are exercised. Scripted inference checks
+route is not refused. The production G14 filter is present and passes identity-free
+payloads; no substitution is exercised (no fixture carries an identity, and the directory
+leg is off: `directory: 'none'`). Scripted inference checks
 wiring only: hermetic green does not certify model behaviour or authorize a flip.
 P4 scenarios are always reported as gated while the file path is withheld; no env
 switch enables `graph_file_ingest` or materialisation.
@@ -85,9 +86,21 @@ changeset or core SPEC/GUIDE update.
 
 Every result row carries a `screen` block beside `spend`: the injection screen
 (`ScreenUntrustedContent`) calls and observer cost, the same for everything else, and the
-screen's share of each. `general-next` sets `screenDespiteFindings`, so the screen runs on
-every route output, and on the private tier each call is Verda time. Infrastructure and
-scale-down tail lines are scenario time, not attributable per function, so the share is of
-observer cost only (hermetic runs price every call at 0: calls are the signal there).
+screen's share of each. The orchestrator's screen covers every guarded tool result (inherited
+by the nested guards) and both fields of every route output; `screenDespiteFindings` adds
+only results with deterministic findings, which hermetic fixtures never produce, so switching
+it off would not change these counts. The levers that move cost are the screen's scope and
+whether the reasoning field is screened. On the private tier each call is Verda time.
+Infrastructure and scale-down tail lines are scenario time, not attributable per function, so
+the share is of observer cost only (hermetic runs price every call at 0: calls are the signal).
+
+**What a hermetic pass proves.** The scripted `Synthesize` echoes `answerIncludes`, the
+citation link and "The graph is read-only." whatever the tools returned, so "answer
+contains…", "explains read-only capability", "does not claim a graph write" and "acknowledges
+failure" are self-fulfilling there. Only these discriminate hermetically: tool order and
+arguments, route selection and completion, stash artifacts, the index and retrieval checks,
+and "first turn recorded a tool failure". A scenario whose only discriminating checks are
+absent (06) is a vacuous pass hermetically; every hermetic report says so in `hermeticCaveat`.
+The eval omits `deps.memory`, so no `withMemory` describe calls are priced that production makes.
 
 The JSON report includes a computed `flipGate` with explicit reasons; hermetic or filtered reports are ineligible. See the catalogue’s rollout criterion map and each scenario’s “A live pass proves” statement.

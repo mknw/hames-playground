@@ -170,3 +170,6 @@ it('writes the computed flip gate, reserves configured tails, floors rates, and 
 it('writes the screen subtotal beside every scenario row', () => {
   expect(run()).toMatch(/return \{ \.\.\.r, spend, screen: screenShare\(spend\) \}/)
 })
+it('marks hermetic reports with the vacuous-pass caveat', () => {
+  expect(run()).toMatch(/hermeticCaveat: live\s*\? undefined\s*: 'Hermetic passes are wiring only/)
+})

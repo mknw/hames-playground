@@ -7,6 +7,7 @@ import {
   SpendBudget,
   parseSpendCap,
   floorHourlyRate,
+  screenShare,
   type SpendKey,
 } from '../../src/lib/eval-support/spend-budget'
 import { createSpendObserver } from '../../src/lib/eval-support/spend-observer'
@@ -146,6 +147,9 @@ async function main() {
             scenarios,
             rows as ConversationResult[],
           ),
+          hermeticCaveat: live
+            ? undefined
+            : 'Hermetic passes are wiring only. Scripted Synthesize echoes the expected answer, so answer/read-only/no-write/failure-acknowledged checks are self-fulfilling; only tool order+arguments, route selection+completion, artifacts, index/retrieval and first-turn-failure checks discriminate. 06-read-only passes vacuously. No G14 substitution is exercised (no fixture identity, directory off).',
           tailLines: budget.tailLines,
           capUsd: cap,
           stopUsd: budget.stopUsd,
@@ -156,7 +160,10 @@ async function main() {
           smallEurPerHour: smallRate,
           limitation:
             'The observer prices completed calls, so a final call can overshoot the 80% stop threshold and even the configured cap. Private infrastructure is an additional conservative floor: elapsed private-scenario time (including setup and endpoint wake wait) times both GPU hourly rates; observer call-time cost is also counted. Configured scale-down tails are reserved once per run and after idle gaps longer than each box window. Provider rounding and unobserved infrastructure are not measured. This is not an invoice ceiling. Hermetic results certify scripted wiring only; they cannot authorize the default flip.',
-          results: rows.map((r) => ({ ...r, spend: budget.row(r) })),
+          results: rows.map((r) => {
+            const spend = budget.row(r)
+            return { ...r, spend, screen: screenShare(spend) }
+          }),
         },
         null,
         2,

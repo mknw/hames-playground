@@ -45,4 +45,21 @@ describe('runner synchronous spend stop', () => {
     expect(hermetic.budget.totalUsd).toBe(0)
     expect(hermetic.onStop).not.toHaveBeenCalled()
   })
+  it('attributes each sample to its BAML function, not just to the scenario', () => {
+    const { budget, observer } = setup()
+    observer.activate(key)
+    observer.observe({
+      functionName: 'ScreenUntrustedContent',
+      clientName: 'VerdaQwen',
+      metrics: { costEur: 0.2 },
+    })
+    observer.observe({
+      functionName: 'Synthesize',
+      clientName: 'VerdaQwen',
+      metrics: { costEur: 0.4 },
+    })
+    expect(budget.row(key).functions.ScreenUntrustedContent.calls).toBe(1)
+    expect(budget.row(key).functions.ScreenUntrustedContent.observerUsd).toBeCloseTo(0.25)
+    expect(budget.row(key).functions.Synthesize.calls).toBe(1)
+  })
 })

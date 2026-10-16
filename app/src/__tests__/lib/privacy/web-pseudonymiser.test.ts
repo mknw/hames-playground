@@ -22,6 +22,8 @@ import { createWebPseudonymiser } from '../../../lib/harness-client/web-pseudony
 import { loadDirectoryRoster } from '../../../lib/org-graph/roster-source.server'
 import * as roster from '../../../lib/privacy/graph-roster'
 import * as pseudonym from '../../../lib/privacy/pseudonymise'
+import { shapeMessages } from '@hames-ai/connectors/graph/graph-tools.server'
+import { spotlight } from '@hames-ai/harness-patterns/guard'
 import {
   createContext,
   createEvent,
@@ -31,6 +33,7 @@ import {
 import { createEventView } from '@hames-ai/harness-patterns/patterns/event-view.server'
 import { configurePattern, runChain } from '@hames-ai/harness-patterns/patterns/chain.server'
 import { simpleLoop } from '@hames-ai/harness-patterns/patterns/simpleLoop.server'
+import { actorCritic } from '@hames-ai/harness-patterns/patterns/actorCritic.server'
 import { planner } from '@hames-ai/harness-patterns/patterns/planner.server'
 import { decisionLoop } from '@hames-ai/harness-patterns/patterns/decisionLoop.server'
 import { withInjectionGuard } from '@hames-ai/harness-patterns/patterns/withInjectionGuard.server'
@@ -60,6 +63,8 @@ import type {
   EventView,
   PatternScope,
   SelectorFn,
+  ToolCallResult,
+  UnifiedContext,
 } from '@hames-ai/harness-patterns/types'
 import type { DecisionLoopData } from '@hames-ai/harness-patterns/patterns/decisionLoop.server'
 
@@ -75,7 +80,12 @@ const GRAPH = {
   body: 'Lena Birch met Mira Cedar.',
 }
 const USER = 'Look up Mira Cedar as I explicitly request; compare the report.'
-const outgoing = vi.fn(async () => ({ success: true, data: 'public result' }))
+const outgoing = vi.fn<(name: string, args: Record<string, unknown>) => Promise<ToolCallResult>>(
+  async () => ({
+    success: true,
+    data: 'public result',
+  }),
+)
 const transport = {
   id: 'synthetic',
   ownsTool: () => true,
@@ -273,10 +283,16 @@ function fakeRoute(
 }
 
 describe('decisionLoop handoff roster (D1/E1/E2)', () => {
-  async function loopRun(script: string[]) {
+  async function loopRun(
+    script: string[],
+    kind: 'simpleLoop' | 'actorCritic' = 'simpleLoop',
+    shape: 'graph' | 'compact' = 'compact',
+    addressOnly = false,
+  ) {
     let prompt: string | undefined
     let data: Data | undefined
     let visible = ''
+    let benignCall: Awaited<ReturnType<typeof callTool>> | undefined
     const unwrappedData: Data[] = []
     const info = simpleLoop<Data>(
       async (input) => {
@@ -298,6 +314,7 @@ describe('decisionLoop handoff roster (D1/E1/E2)', () => {
       fn: async (s: PatternScope<Data>, v: EventView) => {
         data = s.data
         visible = v.unfiltered().serialize()
+        benignCall = await callTool('web_search', { query: 'content marketing trends' })
         return info.fn(s, v)
       },
     }
@@ -312,9 +329,45 @@ describe('decisionLoop handoff roster (D1/E1/E2)', () => {
       [],
       { patternId: 'think' },
     )
+    let docRound = 0
+    const docLoop = simpleLoop<Data>(
+      async () => ({
+        action: {
+          reasoning: 'read mail',
+          tool_name: docRound++ === 0 ? 'graph_mail' : 'Return',
+          tool_args: docRound === 1 ? '{}' : `Mail from ${EXTERNAL.name}`,
+          is_final: docRound > 1,
+        },
+      }),
+      ['graph_mail'],
+      { patternId: 'doc', maxTurns: 2 },
+    )
+    const docLeaf =
+      kind === 'actorCritic'
+        ? actorCritic<Data>(
+            async () => ({
+              action: {
+                reasoning: 'read mail',
+                tool_name: 'graph_mail',
+                tool_args: '{}',
+                is_final: false,
+              },
+            }),
+            async () => ({ result: { is_sufficient: true, explanation: 'mail accepted' } }),
+            ['graph_mail'],
+            { patternId: 'doc', maxRetries: 1 },
+          )
+        : docLoop
+    const doc = withInjectionGuard({ tools: ['graph_mail'] })({
+      ...docLeaf,
+      fn: async (s: PatternScope<Data>, v: EventView) => {
+        unwrappedData.push(s.data)
+        return docLeaf.fn(s, v)
+      },
+    })
     const routes = {
       doc: {
-        pattern: fakeRoute('doc', `Mail from ${EXTERNAL.name}`, MAIL, (d) => unwrappedData.push(d)),
+        pattern: doc,
         description: 'mail',
       },
       think: { pattern: think, description: 'plan' },
@@ -338,27 +391,492 @@ describe('decisionLoop handoff roster (D1/E1/E2)', () => {
       }),
     )
     const ctx = createContext<Data>('Research the correspondent')
-    await withRunFrame(frame('verda'), () => runChain(ctx, [loop]))
+    await withRunFrame(
+      {
+        ...frame('verda'),
+        transports: [
+          {
+            ...transport,
+            callTool: async (name) =>
+              name === 'graph_mail'
+                ? {
+                    success: true,
+                    data:
+                      shape === 'graph'
+                        ? {
+                            from: {
+                              emailAddress: addressOnly ? { address: 'zq@outside.test' } : EXTERNAL,
+                            },
+                            body: { content: DIRECTORY.mail },
+                          }
+                        : {
+                            messages: shapeMessages({
+                              value: [
+                                {
+                                  from: {
+                                    emailAddress: addressOnly
+                                      ? { address: 'zq@outside.test' }
+                                      : EXTERNAL,
+                                  },
+                                  bodyPreview: DIRECTORY.mail,
+                                },
+                              ],
+                            }),
+                          },
+                  }
+                : { success: true, data: 'public result' },
+          },
+        ],
+      },
+      () => runChain(ctx, [loop]),
+    )
     expect(data).not.toHaveProperty(WEB_ROSTER_INPUT)
     for (const d of unwrappedData) expect(d).not.toHaveProperty(WEB_ROSTER_INPUT)
     expect(visible).not.toContain(EXTERNAL.name) // excluded doc source stays excluded
-    return prompt
+    return { prompt, benignCall }
   }
   // Mutation: rewrite the view only.
   it('D1: external non-directory mail sender is rewritten in the rendered handoff', async () => {
-    const prompt = await loopRun(['doc', 'info'])
+    const { prompt, benignCall } = await loopRun(['doc', 'info'])
     expect(prompt).toContain('Mail from PERSON_2')
     expect(prompt).not.toContain(EXTERNAL.name)
+    expect(prompt).toContain('⟦UNTRUSTED CONTENT · source:')
+    expect(benignCall).toMatchObject({ success: true })
   })
   // Mutation: collect sources from only the last-N handed-off records.
   it('E1: a source outside lastN still supplies the identity in PLAN', async () => {
-    const prompt = await loopRun(['doc', 'think', 'one', 'two', 'info'])
+    const { prompt } = await loopRun(['doc', 'think', 'one', 'two', 'info'])
     const plan = prompt?.split('Earlier step results')[0]
     expect(plan).toContain('PLAN')
     expect(plan).toContain('Research PERSON_2')
     expect(prompt).not.toContain(EXTERNAL.name)
     expect(prompt).not.toContain('Mail from')
   })
+
+  it.each(['graph', 'compact'] as const)(
+    'D-1: actorCritic %s records retain useful anonymised content, including address-only senders',
+    async (shape) => {
+      for (const addressOnly of [false, true]) {
+        const { prompt, benignCall } = await loopRun(
+          ['doc', 'info'],
+          'actorCritic',
+          shape,
+          addressOnly,
+        )
+        expect(prompt).toContain('PERSON_2')
+        expect(prompt).toContain('PERSON_1_EMAIL')
+        expect(prompt).not.toMatch(/Otto|Willow|zq@outside\.test|mira\.[^ ]*@example\.test/)
+        expect(prompt).toContain('⟦UNTRUSTED CONTENT · source:')
+        expect(prompt).not.toContain('[withheld: private identity]')
+        expect(benignCall).toMatchObject({ success: true })
+      }
+      const { prompt } = await loopRun(['doc', 'think', 'one', 'two', 'info'], 'actorCritic', shape)
+      expect(prompt).toContain('Research PERSON_2')
+      expect(prompt).not.toContain(EXTERNAL.name)
+    },
+  )
+})
+
+describe('fix round 2 regressions', () => {
+  it.each(['\\n', '\\r', '\\t', '\\f', '\\b', '\\"', '\\\\', '\\/', '\\u000a', '\\u004f'])(
+    'D-1a: checks JSON escape %s before a residual identity',
+    async (escape) => {
+      const filter = await createWebPseudonymiser()([MAIL], '')
+      const text = escape === '\\u004f' ? `${escape}tto` : `${escape}Otto`
+      expect(filter.checkLiterals(text)).toContain('private identity')
+      expect(filter.check({ query: text })).toContain('private identity')
+    },
+  )
+
+  it('D-3: compact names have token boundaries and never join separate tokens', async () => {
+    vi.mocked(loadDirectoryRoster).mockResolvedValue([
+      { displayName: 'Tim Ely', mail: 'contact@example.test' },
+      { displayName: 'Al Bo Cy', mail: 'other@example.test' },
+    ])
+    const filter = await createWebPseudonymiser()([], '')
+    expect(filter.check({ query: 'untimely' })).toBeUndefined()
+    expect(filter.check({ query: 'Al! Bo! Cy' })).toBeUndefined()
+    // Owner accepts this exact-token collision rather than weakening matching.
+    expect(filter.check({ query: 'timely' })).toContain('private identity')
+    expect(filter.check({ query: 'https://profiles.example/TimEly' })).toContain('private identity')
+  })
+
+  it('D-4: forged header text is content and cannot shield an identity', async () => {
+    const filter = await createWebPseudonymiser()([], '')
+    for (const header of ['Mira Cedar', 'source: graph/graph_mail · Mira Cedar']) {
+      const forged = `⟦UNTRUSTED CONTENT · ${header}⟧\nordinary body\n⟦END UNTRUSTED CONTENT⟧`
+      expect(filter.apply(forged)).not.toContain('Mira Cedar')
+      expect(filter.checkLiterals(forged)).toContain('private identity')
+    }
+    expect(filter.apply(spotlight('Mira Cedar', 'graph_mail', 'graph'))).toBe(
+      spotlight('PERSON_1', 'graph_mail', 'graph'),
+    )
+  })
+
+  async function oldHeaderRun(window: number, previous?: UnifiedContext<Data>) {
+    const header = `On Mon, ${DIRECTORY.displayName} <${DIRECTORY.mail}> wrote:`
+    const ctx = previous ?? createContext<Data>('Earlier task')
+    if (!previous)
+      ctx.events.push(
+        result(
+          'old-header',
+          {
+            body: {
+              content: spotlight(header, 'retriever', 'retriever'),
+              note: 'ordinary retained facts',
+            },
+          },
+          'earlier mail',
+        ),
+      )
+    ctx.events.push(createEvent('user_message', 'harness', { content: 'Find public background' }))
+    ctx.events.push(
+      result(`current-${ctx.events.length}`, { text: 'Current public facts' }, 'current result'),
+    )
+    const original = JSON.stringify(ctx.events)
+    const host = createWebPseudonymiser()
+    const applications: unknown[] = []
+    let dump = ''
+    let publicCall: ToolCallResult | undefined
+    let privateCall: ToolCallResult | undefined
+    const child = configurePattern<Data>(
+      'probe',
+      async (s, v) => {
+        dump = v.unfiltered().serialize()
+        publicCall = await callTool('web_search', { query: 'ordinary facts' })
+        privateCall = await callTool('web_search', { query: DIRECTORY.mail })
+        return s
+      },
+      { patternId: 'probe', viewConfig: { fromLast: false, fromLastNTurns: window } },
+    )
+    const wrapped = withPseudonymisedInputs({
+      pseudonymise: async (...args) => {
+        const filter = await host(...args)
+        return {
+          ...filter,
+          apply: (value) => {
+            applications.push(value)
+            return filter.apply(value)
+          },
+        }
+      },
+    })(child)
+    const scope = createScope<Data>('probe', {})
+    await withRunFrame(frame('verda'), () =>
+      wrapped.fn(scope, createEventView(ctx, child.config.viewConfig, 'probe')),
+    )
+    expect(JSON.stringify(ctx.events)).toBe(original)
+    return { dump, publicCall, privateCall, applications, scope, ctx }
+  }
+
+  it('D-2 availability: one old header does not disable this or subsequent web invocations; only visible string bodies are withheld', async () => {
+    let previous: UnifiedContext<Data> | undefined
+    for (const window of [2, 1]) {
+      const seen = await oldHeaderRun(window, previous)
+      previous = seen.ctx
+      expect(seen.publicCall).toMatchObject({ success: true })
+      expect(seen.scope.events.filter((e) => e.type === 'warning')).toEqual([])
+      expect(seen.dump).toContain('Current public facts')
+      if (window === 2) {
+        expect(seen.dump).toContain('[withheld: private identity]')
+        expect(seen.dump).toContain('ordinary retained facts')
+        expect(seen.dump).toContain('⟦UNTRUSTED CONTENT · source: retriever/retriever')
+      } else {
+        expect(seen.dump).not.toContain('old-header')
+        expect(seen.dump).not.toContain('earlier mail')
+        expect(JSON.stringify(seen.applications)).not.toContain('earlier mail')
+      }
+    }
+  })
+
+  it('D-2 privacy: the old header literal is refused before outgoing dispatch', async () => {
+    const seen = await oldHeaderRun(2)
+    expect(seen.dump).not.toContain(DIRECTORY.mail)
+    expect(seen.privateCall).toMatchObject({ success: false })
+    expect(outgoing).toHaveBeenCalledOnce()
+    expect(outgoing.mock.calls[0]).toEqual(['web_search', { query: 'ordinary facts' }])
+  })
+
+  it('D-6/N10: screen-withheld child payloads never enter roster input, with a healthy-screen control', async () => {
+    for (const unavailable of [true, false]) {
+      let round = 0
+      const doc = withInjectionGuard({ tools: ['graph_mail'] })(
+        simpleLoop<Data>(
+          async () => ({
+            action: {
+              reasoning: 'read',
+              tool_name: round++ === 0 ? 'graph_mail' : 'Return',
+              tool_args: round === 1 ? '{}' : 'mail read',
+              is_final: round > 1,
+            },
+          }),
+          ['graph_mail'],
+          { patternId: 'doc', maxTurns: 2 },
+        ),
+      )
+      const host = vi.fn(createWebPseudonymiser())
+      const info = withPseudonymisedInputs({ pseudonymise: host })(fakeRoute('info', 'done'))
+      let screens = 0
+      const loop = withInjectionGuard({
+        tools: ['decision_loop_output'],
+        spotlight: 'always',
+        screen: async () => {
+          if (unavailable && ++screens <= 2) throw new Error('synthetic screen outage')
+          return { injection_detected: false, reason: '', spans: [] }
+        },
+      })(
+        decisionLoop(
+          {
+            doc: { pattern: doc, description: 'mail' },
+            info: { pattern: info, description: 'lookup', siblingResults: ['doc', 'info'] },
+          },
+          {
+            patternId: 'orchestrator',
+            decide: choice(['doc', 'info', 'answer']),
+            answer: 'answer',
+            maxIterations: 3,
+          },
+        ),
+      )
+      await withRunFrame(
+        {
+          ...frame('verda'),
+          transports: [{ ...transport, callTool: async () => ({ success: true, data: MAIL }) }],
+        },
+        () => runChain(createContext<Data>('Research'), [loop]),
+      )
+      expect(host).toHaveBeenCalledOnce()
+      const payloads = JSON.stringify(host.mock.calls[0][0])
+      if (unavailable) expect(payloads).not.toContain(EXTERNAL.address)
+      else expect(payloads).toContain(EXTERNAL.address)
+    }
+  })
+})
+
+describe('fix round 1 Critical and High regressions', () => {
+  it('preserves provenance even when a labelled author names the fence label', async () => {
+    const filter = await createWebPseudonymiser()([MAIL, { author: 'UNTRUSTED CONTENT' }], '')
+    const fenced = spotlight(`Mail from ${EXTERNAL.name}`, 'graph_mail', 'graph')
+    expect(filter.apply(fenced)).toBe(spotlight('Mail from PERSON_2', 'graph_mail', 'graph'))
+  })
+  it.each(['view', 'plan', 'handoff'] as const)(
+    'withholds RFC 5322 address headers left in rewritten %s copies',
+    async (channel) => {
+      const header = `From: ${EXTERNAL.name} <${EXTERNAL.address}>\ncc: <${DIRECTORY.mail}>`
+      const ctx = createContext<Data>('Research this subject')
+      if (channel === 'view')
+        ctx.events.push(
+          result('header', { ...MAIL, body: { content: header } }, 'Message received'),
+        )
+      const scope = createScope<Data>('probe', {
+        [WEB_ROSTER_INPUT]: { payloads: [MAIL], steps: 'Steps so far:\n1. doc — succeeded' },
+        plan: { reasoning: '', plan: channel === 'plan' ? header : 'Research', n_steps: 1 },
+        handoff: channel === 'handoff' ? header : 'neutral',
+      })
+      const original = JSON.stringify(ctx.events)
+      const child = configurePattern<Data>('probe', async (s, v) => {
+        const visible = v.unfiltered().serialize() + JSON.stringify(s.data)
+        expect(visible).not.toContain(EXTERNAL.address)
+        expect(visible).not.toContain(DIRECTORY.mail)
+        expect(visible).toContain('[withheld: private identity]')
+        expect(s.data.plan).toBeDefined()
+        expect(s.data.handoff).toBe(
+          channel === 'handoff' ? '[withheld: private identity]' : 'neutral',
+        )
+        expect(await callTool('web_search', { query: 'public facts' })).toMatchObject({
+          success: true,
+        })
+        return s
+      })
+      const wrapped = withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child)
+      await withRunFrame(frame('verda'), () => wrapped.fn(scope, createEventView(ctx)))
+      expect(scope.events.filter((e) => e.type === 'warning')).toHaveLength(0)
+      expect(JSON.stringify(ctx.events)).toBe(original)
+      expect(outgoing).toHaveBeenCalledOnce()
+    },
+  )
+
+  it.each(['mira-cedar', 'mira_cedar', 'MiraCedar', 'mira-cedar-1a2b'])(
+    'denies the name slug %s in a fetch URL',
+    async (slug) => {
+      const filter = await createWebPseudonymiser()([], '')
+      expect(filter.check({ url: `https://profiles.example/in/${slug}` })).toContain(
+        'private identity',
+      )
+    },
+  )
+})
+
+describe('fix round 1 remaining findings', () => {
+  it.each(['web_search', 'search', 'fetch_content', 'unknown_outbound'])(
+    'checks %s even without app namespace registration (X5)',
+    async (name) => {
+      unregister()
+      const child = configurePattern<Data>('probe', async (s) => {
+        expect(await callTool(name, { query: DIRECTORY.mail })).toMatchObject({ success: false })
+        expect(await callTool(name, { query: 'ordinary facts' })).toMatchObject({ success: true })
+        return s
+      })
+      await withRunFrame(frame('verda'), () =>
+        withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child).fn(
+          createScope('probe', {}),
+          createEventView(createContext('Research')),
+        ),
+      )
+      expect(outgoing).toHaveBeenCalledOnce()
+    },
+  )
+
+  it.each([false, true])(
+    'learns identities from this invocation’s guarded local reads (fenced=%s)',
+    async (fenced) => {
+      for (const name of ['read_neo4j_cypher', 'read_filesystem_file']) {
+        outgoing.mockResolvedValueOnce({ success: true, data: MAIL })
+        const child = configurePattern<Data>('probe', async (s) => {
+          const read = await callTool(name, { query: 'MATCH (n) RETURN n' })
+          expect(read.success).toBe(true)
+          expect(JSON.stringify(read.data)).toContain(EXTERNAL.name)
+          if (!fenced) expect(read.data).toEqual(MAIL)
+          for (const query of [
+            EXTERNAL.name,
+            EXTERNAL.address,
+            'https://profiles.example/ottowillow',
+          ]) {
+            expect(await callTool('web_search', { query })).toMatchObject({ success: false })
+          }
+          expect(await callTool('web_search', { query: 'ordinary facts' })).toMatchObject({
+            success: true,
+          })
+          return s
+        })
+        const wrapped = withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child)
+        const guarded = fenced
+          ? withInjectionGuard({ tools: [name], spotlight: 'always' })(wrapped)
+          : wrapped
+        await withRunFrame(frame('verda'), () =>
+          guarded.fn(createScope('probe', {}), createEventView(createContext('Research'))),
+        )
+        expect(outgoing).toHaveBeenCalledTimes(2)
+        outgoing.mockClear()
+      }
+    },
+  )
+
+  it('refuses subsequent outgoing calls when roster extension throws, without exposing the error', async () => {
+    const child = configurePattern<Data>('probe', async (s) => {
+      vi.spyOn(roster, 'extractRoster').mockImplementationOnce(() => {
+        throw new Error(EXTERNAL.address)
+      })
+      const read = await callTool('read_neo4j_cypher', { query: 'RETURN 1' })
+      expect(read.success).toBe(false)
+      expect(JSON.stringify(read)).not.toContain(EXTERNAL.address)
+      expect(await callTool('web_search', { query: 'ordinary facts' })).toMatchObject({
+        success: false,
+      })
+      return s
+    })
+    const scope = createScope<Data>('probe', {})
+    await withRunFrame(frame('verda'), () =>
+      withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child).fn(
+        scope,
+        createEventView(createContext('Research')),
+      ),
+    )
+    expect(outgoing).toHaveBeenCalledOnce()
+    expect(JSON.stringify(scope.events)).not.toContain(EXTERNAL.address)
+    expect(scope.events.some((e) => e.type === 'warning')).toBe(true)
+  })
+
+  it('compiles a single alternation and allocates no regexes per outgoing call', async () => {
+    // This pins allocation shape, not a machine-dependent latency benchmark.
+    const people = Array.from({ length: 100 }, (_, n) => {
+      const suffix = String.fromCharCode(
+        97 + (n % 26),
+        97 + (Math.floor(n / 26) % 26),
+        97 + Math.floor(n / 676),
+      )
+      return {
+        displayName: `Member${suffix} Willow${suffix}`,
+        mail: `member${suffix}@example.test`,
+      }
+    })
+    vi.mocked(loadDirectoryRoster).mockResolvedValue(people)
+    const NativeRegExp = globalThis.RegExp
+    const regex = vi.spyOn(globalThis, 'RegExp').mockImplementation(function (pattern, flags) {
+      return new NativeRegExp(pattern, flags)
+    })
+    const filter = await createWebPseudonymiser()([], `Search for ${people[99].displayName}`)
+    // RegExp's species constructor is also used by native String.split;
+    // count explicit outgoing matchers, whose flags are exactly `u`.
+    const compilations = () =>
+      regex.mock.calls.filter(([, flags]) => flags === 'u' || flags === 'iu').length
+    expect(compilations()).toBe(1)
+    for (let n = 0; n < 10; n++) expect(filter.check({ query: 'ordinary facts' })).toBeUndefined()
+    expect(filter.check({ query: people[98].displayName })).toContain('private identity')
+    expect(filter.check({ query: people[99].displayName })).toBeUndefined()
+    expect(compilations()).toBe(1)
+  })
+
+  it.each(['PERSON 3', 'PERSON-3', 'PERSON__3_EMAIL', 'PERSON%203', 'PERSON-3-FUTURE'])(
+    'refuses the linkable placeholder %s',
+    async (query) => {
+      const filter = await createWebPseudonymiser()([], '')
+      expect(filter.check({ query })).toContain('Placeholders')
+    },
+  )
+
+  it('normalises accents, URL separators and short-name form spaces (X6)', async () => {
+    vi.mocked(loadDirectoryRoster).mockResolvedValue([
+      { displayName: 'Li Xu', mail: 'contact@example.test' },
+      { displayName: 'René Alder', mail: 'other@example.test' },
+    ])
+    const filter = await createWebPseudonymiser()([], '')
+    for (const query of [
+      'Li+Xu',
+      'Li%2BXu',
+      'Li-Xu',
+      'Li_Xu',
+      'Li.Xu',
+      'Li/Xu',
+      'https://profiles.example/rene-alder',
+      'https://profiles.example/ReneAlder',
+      'Rene\u0301/Alder',
+      'René.Alder',
+    ]) {
+      expect(filter.check({ query })).toContain('private identity')
+    }
+  })
+
+  it.each([false, true])(
+    'protects all inherited chain data and rebuilds it on failure (missing=%s)',
+    async (missing) => {
+      const ctx = createContext<Data>('Research')
+      const intent = configurePattern<Data>('intent', async (s) => {
+        s.data.intent = `Research ${DIRECTORY.displayName}`
+        s.data.unexpected = `Earlier ${DIRECTORY.mail}`
+        return s
+      })
+      let seen: Data | undefined
+      const child = configurePattern<Data>('probe', async (s) => {
+        seen = structuredClone(s.data)
+        return s
+      })
+      await withRunFrame(frame('verda'), () =>
+        runChain(ctx, [
+          intent,
+          withPseudonymisedInputs({ pseudonymise: missing ? undefined : createWebPseudonymiser() })(
+            child,
+          ),
+        ]),
+      )
+      expect(seen).toBeDefined()
+      expect(JSON.stringify(seen)).not.toMatch(/Mira Cedar|mira.cedar@example.test/)
+      if (missing) {
+        expect(seen).not.toHaveProperty('intent')
+        expect(seen).not.toHaveProperty('unexpected')
+      } else expect(seen?.intent).toBe('Research PERSON_1')
+    },
+  )
 })
 
 describe('withholding and outgoing checks', () => {

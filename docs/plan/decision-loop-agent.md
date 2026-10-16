@@ -265,12 +265,12 @@ Ruled in [G14](https://github.com/mknw/hames-playground/issues/507#issuecomment-
   - Turns on the turn path always fill the slot, so an Anthropic-tier conversation is unaffected. A frameless run on an Anthropic-default deployment is pseudonymised needlessly, which is the safe error.
   - G14 defers the Anthropic tier, so there the wrapper passes everything through unchanged.
 
-**What it rewrites: the view and the child's handoff data (D1).** Before the inner pattern runs, the wrapper does two things. Both feed one roster and one table.
+**What it rewrites: the view and all child data (D1).** Before the inner pattern runs, the wrapper does two things. Both feed one roster and one table.
 
-1. **It rebuilds the view it hands inward**, as `chain()` builds a child's view (`chain.server.ts:331-335`). Every event the route did not produce in this invocation goes through `apply(value, table)` (`pseudonymise.ts:368`): earlier siblings' `tool_result`s (`retriever`, earlier `info`) and earlier turns' events. `withReferences` passes that view straight to the loop (`with-references.server.ts:304`), and expansion reads `view.fromAll()` (`simpleLoop.server.ts:503`). So selector previews and `expandPreviousResult` payloads are both covered.
-2. **It rewrites the plan and handoff fields of the child's `data`.** The handoff is not an event. It lives in the child's `scope.data` and is rendered into `plan_context` from there (`simpleLoop.server.ts:322`), so a view rewrite never reaches it. That covers the latest `think` plan, the earlier-step lines, and the capped result bodies, including `doc_ag`'s summaries (R1 flow 1).
+1. **It rebuilds the view it hands inward**, as `chain()` builds a child's view (`chain.server.ts:331-335`). Every visible event the route did not produce in this invocation goes through `apply(value, table)` (`pseudonymise.ts:368`): earlier siblings' `tool_result`s (`retriever`, earlier `info`) and earlier turns' events. `withReferences` passes that view straight to the loop (`with-references.server.ts:304`), and expansion reads `view.fromAll()` (`simpleLoop.server.ts:503`). So selector previews and `expandPreviousResult` payloads are both covered.
+2. **It rewrites all inherited child `data` except the roster-only key.** The handoff is not an event. It lives in the child's `scope.data` and is rendered into `plan_context` from there (`simpleLoop.server.ts:322`), so a view rewrite never reaches it. This covers the latest `think` plan, earlier-step lines, capped result bodies including `doc_ag`'s summaries (R1 flow 1), and arbitrary keys such as `intent` inherited under `chain()`.
 
-The one exception is the **latest user message**. It is the user's own request, not something "from prior routes". The rewritten copies exist only in that view and that child `data`: `ctx.events` and the stored conversation are untouched.
+The one exception is the **latest user message**. It is the user's own request, not something "from prior routes". The copied backing context contains only events selected by the child’s view plus the latest user message, so even an unfiltered expansion cannot recover excluded events. Residual literals after rewriting replace only their string body with `[withheld: private identity]`, preserving valid provenance fences and keeping other content and web calls available. `ctx.events` and the stored conversation are untouched. Under `chain()`, the returned rewritten data is forwarded to later steps; under `decisionLoop`, route data is fresh for each child.
 
 **The roster, including identities the route never sees (D1).** A capped summary carries no labelled Graph fields. And the `doc` events that do carry them are, by design, outside `info_ag`'s context. So a roster built only from what `info_ag` can see would leave an external mail correspondent who is not a directory member in clear in the handoff. The roster is therefore the union of three sources:
 
@@ -281,6 +281,8 @@ The one exception is the **latest user message**. It is the user's own request, 
   - The wrapper deletes the key in a `finally` before anything runs inside it: on the rewrite path, on the explicit-Anthropic pass-through, on fail-closed and on a throw. `doc_ag`'s raw payloads therefore never sit in `info_ag`'s `data`;
 - **the tenant directory:** `rosterFromDirectory`, merged with `mergeRosters` (`org-roster.ts:89, 143`) and read from Neo4j `Member` nodes through `org-graph/roster-source.server.ts`. This is what catches a colleague named only in prose.
 
+Accepted actorCritic object results have their string leaves unfenced before JSON stringification; the loop fences the complete record again. This keeps substitution boundaries intact, while normalising JSON escapes in the literal checker supplies a safety net for residual text.
+
 The table is built in memory, one per invocation, and dropped when the invocation ends: never stored, never reversed. Placeholders stay placeholders in `info_ag`'s output and in its route-output record. The synthesizer answers with whatever names it has from the other routes.
 
 **Placeholder numbering across invocations (review note).** `buildTable` numbers placeholders by roster position, so `PERSON_1` in an earlier `info` output (already pseudonymised, and left alone by a later `apply`) can name a different person from `PERSON_1` in a later invocation. Merging the directory **first**, in its fixed order, keeps colleagues' numbers stable across invocations. External identities are numbered after them in first-seen order and can still collide. That can confuse the model, but leaks nothing. A per-invocation placeholder prefix would remove it, but that changes `pseudonymise.ts`, so it is left as a known limitation.
@@ -289,7 +291,8 @@ The table is built in memory, one per invocation, and dropped when the invocatio
 
 - A person named only in prose who is in neither the directory nor any source payload's labelled fields, such as a customer named only in a mail body.
 - Non-person private data, such as project names or amounts. It is not in the roster at all.
-- The outgoing check below matches **URL-decoded literals only**, so initials, re-spellings and other encodings pass it (D4).
+- Local discoveries require Graph-shaped labelled identity fields. A flat Cypher row such as `{ name, email }` adds nothing unless a recognised field or the directory already supplies that person.
+- The outgoing check matches URL-decoded literals with the normalisation below; initials, re-spellings and other encodings still pass it (D4).
 
 **Failure mode: withhold, never pass in clear.** On every run the wrapper applies to, it fails closed when:
 
@@ -315,7 +318,8 @@ The route still runs, on the user's message and the Neo4j reads. It is not a tur
 
 **Outgoing-argument check: recommended, as the second half of the same guard.** The input rewrite cannot cover what `info_ag` fetches **itself** in this invocation. Free-form Cypher can return a colleague's row, and the next turn of the same loop can put that name into a search query.
 
-- **The check.** It is a pre-dispatch check at the `callTool` chokepoint. Every `web`-namespace call (`fetch`, `web_search`, …) has its arguments URL-decoded and matched against the same roster's literals.
+- **The check.** It is a pre-dispatch check at the `callTool` chokepoint. Every call except the declared local `neo4j` namespace has its arguments URL-decoded and matched against the roster's literals, even without the app's namespace registration. NFKD without combining marks, separators `-_.+/` mapped to spaces, and a letters-only comparison for full names of at least six characters cover URL slugs. One active alternation is compiled and rebuilt on each local observation, with user-named exemptions in a Set. JSON escapes are normalised before matching. Compact comparisons use token boundaries and never join separate tokens; an exact-token collision such as `Tim Ely` / `timely` remains accepted.
+- **Local discoveries.** An `afterToolCall` hook in the same amendment extends the outgoing literal set from labelled identities in local result data, unfencing every string leaf first. It checks only and never rewrites these results; an extension error withholds that result, records fixed feedback and refuses further outgoing calls.
 - **Its slot (D4).** It rides a new named run-frame slot, `egressChecks`.
   - `amendRunFrame` copies slots field by field (`run-frame.server.ts:279-289`), so the slot needs its own merge rule. A nested amend **concatenates** with the open frame's checks, never replaces them. Every check runs, and any one denial denies the call.
   - That is the union rule guards follow, applied to a list, as `transports` already concatenates.

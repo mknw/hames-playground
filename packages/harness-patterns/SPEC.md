@@ -1162,10 +1162,20 @@ boundary. It applies unless the run frame's raw `inference.tier` is exactly
 `'anthropic'`; an absent or unknown tier is protected too. Core imports no host
 privacy code. The host supplies the optional `pseudonymise: PseudonymiseForWeb`:
 `(payloads, latestUserMessage) => Promise<WebPseudonymisation>`, returning
-`apply<T>(value: T): T` and `check(args): string | void` (a denial reason).
+`apply<T>(value: T): T`, `redact<T>(value: T): T`, `checkLiterals(value): string | void`,
+`observe(data): void`, and `check(args): string | void` (a denial reason).
+`redact` replaces only residual string bodies with `[withheld: private identity]`,
+retaining valid provenance fences; it also withholds residual object-key strings.
+`checkLiterals` uses the check's literal predicate without rejecting placeholders;
+`observe` extends only the outgoing literals from a local result.
 
 Before inner dispatch, it rewrites event-data copies in a synthetic backing
-context and the child's `data.plan` and `data.handoff`. Selector previews,
+context and all child data except the roster-input key. The backing copy contains
+only events selected by the child's view plus the latest user message; an
+unfiltered expansion cannot reintroduce excluded events. Every rewritten string
+body is post-checked; a surviving literal withholds only that body, leaving other
+content and outgoing calls available. Roster/build/rewrite errors still fail closed.
+This includes inherited data under `chain()`, as well as plan/handoff. Selector previews,
 `fromAll()` expansion and `unfiltered()` therefore read the same copies. Event
 ids and pattern metadata survive, the latest user message is unchanged, and
 stored context events are untouched. The wrapper declares
@@ -1178,9 +1188,14 @@ context before invoking the wrapper. The wrapper deletes this key in `finally`
 before calling anything inward, including on explicit-Anthropic pass-through,
 failure and a throw. No adapter renders it.
 
+Under `chain()`, returned rewritten data is forwarded to subsequent steps just
+like any other child result; it is not confined to the wrapped child. Under
+`decisionLoop`, each route starts with fresh child data instead.
+
 An absent pseudonymiser or any roster/table/rewrite failure withholds earlier
 content. No references attach, the plan and all result bodies disappear, and
-only the route/status/stats lines remain in the handoff. A `warning` with task
+only an allowlisted handoff containing route/status/stats lines remains in child
+data. A `warning` with task
 `web_privacy` records "earlier results withheld: privacy filter unavailable".
 The child still runs on the user's message and Neo4j reads; every web call in
 that invocation is refused. The app's `createWebPseudonymiser` requires a readable,
@@ -1195,18 +1210,37 @@ Opening copies/freezes it; nested amendments concatenate **innermost first**,
 never replace. `callTool` runs every check before any transport and any denial
 returns `{ success: false, data: null, error }`, a recoverable tool failure,
 not a turn error. A throwing check denies with fixed feedback without exposing
-its exception. The wrapper checks the shared resolver's `web` namespace only.
+its exception. The wrapper checks every call except the explicitly local
+`neo4j` namespace, including uncatalogued calls and calls made without the app's
+namespace registration. In the same amendment, an `afterToolCall` hook extends
+the outgoing literals from local results, after unfencing each string leaf.
+It never rewrites those results. An extension failure withholds that result,
+records a fixed warning, and refuses subsequent outgoing calls.
 
 The app merges the fixed-order directory first with identities from the view
-and every source payload, building one ephemeral table per invocation. Its
-outgoing check URL-decodes arguments and denies roster literals (except literal
-forms actually named in the latest user message), and `PERSON_<n>` tokens with
-any suffix ("placeholders are not search terms"). Malformed URL encoding is
+and every source payload, unfencing string leaves before harvesting and building
+one ephemeral table per invocation. Rewriting and post-checking touch content
+bodies and leave provenance fences intact, including embedded plan/handoff fences.
+Both literal post-checks and outgoing checks normalise JSON escape sequences
+(`\\[nrtfb"\\/]` and `\\uXXXX`) before NFKD without combining marks and mapping
+`-_.+/` to spaces. The actorCritic record extractor first unfences result leaves
+before JSON stringification; the loop then fences that record under its own key.
+One active compiled alternation is rebuilt on each local observation. It matches
+literals plus letters-only full names of at least six characters within individual
+whitespace-delimited tokens, with boundaries, never across a whole string.
+An exact-token collision remains accepted: `Tim Ely` also matches `timely`.
+User-named forms are held in an exempt Set. It denies roster literals (except literal forms actually named
+in the latest user message), and `PERSON[\s_-]*<n>` tokens with any suffix
+("placeholders are not search terms"). Malformed URL encoding is
 refused. No table is kept or reversed; placeholders stay in route output.
+Only Graph-shaped identity fields are harvested from local results; a flat Cypher
+projection such as `{ name, email }` adds no identity unless another recognised
+field or the directory already supplied it.
 Names absent from both directory and labelled source fields, non-person private
 facts and alternative encodings/paraphrases remain limitations. The single
 permitted host import site is `harness-client/web-pseudonymiser.server.ts`,
-pinned by `egress-wiring.test.ts`; history-at-rest, the Anthropic tier and file
+pinned by `egress-wiring.test.ts`, which also permits only `session.server.ts`
+to import that factory; history-at-rest, the Anthropic tier and file
 materialisation remain governed by their existing contracts.
 
 ### `withReferences(pattern, config)`

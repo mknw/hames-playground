@@ -28,6 +28,12 @@ export interface WebRosterInput {
 /** One invocation's host-built substitution, with no table exposed to core. */
 export interface WebPseudonymisation {
   apply<T>(value: T): T
+  /** Withhold only residual string bodies, retaining provenance fences. */
+  redact<T>(value: T): T
+  /** The same literal predicate as check, without rejecting our placeholders. */
+  checkLiterals(value: unknown): string | void
+  /** Extend outgoing literals from a local result; never rewrite that result. */
+  observe(data: unknown): void
   /** URL-decode arguments and return safe feedback on a literal/placeholder. */
   check(args: Readonly<Record<string, unknown>>): string | void
 }
@@ -36,6 +42,10 @@ export type PseudonymiseForWeb = (
   payloads: readonly unknown[],
   latestUserMessage: string,
 ) => Promise<WebPseudonymisation>
+
+// All other calls are checked, even with no namespace registration. A new
+// local capability must be declared here, never inferred as safe by default.
+const LOCAL_SERVERS = new Set(['neo4j'])
 
 export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseForWeb }) {
   return <T extends PlannerData & Record<string, unknown>>(
@@ -60,16 +70,29 @@ export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseFor
             ],
             latestUser ? (latestUser.data as UserMessageEventData).content : '',
           )
+          const visible = view.get()
+          const visibleRefs = new Set(visible)
+          const visibleIds = new Set(visible.flatMap((e) => (e.id ? [e.id] : [])))
+          const rewrite = <V>(value: V): V => {
+            const copy = filter!.apply(value)
+            return filter!.redact(copy)
+          }
           // Rewrite the backing context, not just the configured view: both
           // fromAll() and unfiltered() expansion must see the same copies.
           rewritten = {
             ...ctx,
-            events: ctx.events.map((e) =>
-              e === latestUser ? e : { ...e, data: filter!.apply(e.data) },
-            ),
+            events: ctx.events
+              .filter(
+                (e) =>
+                  e === latestUser ||
+                  visibleRefs.has(e) ||
+                  (e.id !== undefined && visibleIds.has(e.id)),
+              )
+              .map((e) => (e === latestUser ? e : { ...e, data: rewrite(e.data) })),
           }
-          const data = filter.apply({ plan: scope.data.plan, handoff: scope.data.handoff })
-          scope.data = { ...scope.data, ...data }
+          const data = { ...scope.data }
+          delete data[WEB_ROSTER_INPUT]
+          scope.data = rewrite(data)
         }
       } catch {
         // A host error can contain identity literals. Only the fixed warning
@@ -84,9 +107,7 @@ export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseFor
       if (explicitAnthropic) return pattern.fn(scope, view)
 
       if (!filter || !rewritten) {
-        delete scope.data.plan
-        delete scope.data.attachedRefs
-        scope.data.handoff = input?.steps || undefined
+        scope.data = { handoff: input?.steps || undefined } as T
         // Withhold earlier content, including summaries and expansion payloads.
         rewritten = { ...ctx, events: latestUser ? [latestUser] : [] }
         trackEvent(
@@ -105,8 +126,33 @@ export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseFor
         {
           egressChecks: [
             ({ name, args }) => {
-              if (inferServer(name) !== 'web') return
+              if (LOCAL_SERVERS.has(inferServer(name))) return
               return filter ? filter.check(args) : 'Web call refused: privacy filter unavailable.'
+            },
+          ],
+          afterToolCall: [
+            async ({ name }, result) => {
+              if (!filter || inferServer(name) === 'web') return
+              try {
+                filter.observe(result.data)
+              } catch {
+                filter = undefined
+                trackEvent(
+                  scope,
+                  'warning',
+                  {
+                    task: 'web_privacy',
+                    message: 'privacy roster update failed: web calls refused',
+                    fallback: 'Further web calls were refused.',
+                  } satisfies WarningEventData,
+                  true,
+                )
+                return {
+                  success: false,
+                  data: null,
+                  error: 'Tool result withheld: privacy roster unavailable.',
+                }
+              }
             },
           ],
         },

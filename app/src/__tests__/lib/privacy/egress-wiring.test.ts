@@ -57,4 +57,13 @@ describe('lib/privacy is reachable only through the G14 factory and tests', () =
       .filter((f) => IMPORTS_PRIVACY.test(readFileSync(join(SRC, '..', f), 'utf8')))
     expect(testImporters.length).toBeGreaterThanOrEqual(4)
   })
+
+  it('permits only session.server.ts to import the production factory (X12)', () => {
+    const importsFactory =
+      /(?:from|import|require)\s*\(?\s*['"][^'"]*web-pseudonymiser\.server(?:\.ts)?['"]/
+    const importers = files
+      .filter((f) => !f.startsWith(TESTS + sep))
+      .filter((f) => importsFactory.test(readFileSync(join(SRC, '..', f), 'utf8')))
+    expect(importers).toEqual([join('src', 'lib', 'harness-client', 'session.server.ts')])
+  })
 })

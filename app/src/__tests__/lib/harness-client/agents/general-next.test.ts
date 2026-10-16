@@ -567,6 +567,68 @@ describe('general-next composition', () => {
     ).toMatchObject({ success: false, error: expect.stringContaining(mailId) })
   })
 
+  // S3b delta review D2: the guarded (fenced) memory path. A fenced result hides
+  // every field from memoryRoster unless harvest unfences first, so this fails
+  // if the ordering flips, with real guard, real filter and real composition.
+  it('S3b D2: memory-sourced identities are refused on later outbound calls and absent from the next invocation', async () => {
+    const { createWebPseudonymiser } =
+      await import('../../../../lib/harness-client/web-pseudonymiser.server')
+    const NAME = 'Ottilie Ferngrove'
+    const EMAIL = 'ottilie.f@fernco.example'
+    choices = ['info-retrieval', 'info-retrieval', 'answer']
+    gateway.result = {
+      entities: [
+        {
+          type: 'entity',
+          name: NAME,
+          entityType: 'person',
+          observations: [`reach her at ${EMAIL}`],
+        },
+      ],
+      relations: [],
+    }
+    const call = (tool_name: string, args: Record<string, unknown>) => ({
+      action: {
+        reasoning: 'lookup',
+        tool_name,
+        tool_args: JSON.stringify(args),
+        is_final: false,
+      },
+    })
+    const script = [
+      call('search_nodes', { query: 'Fernco' }),
+      { action: { reasoning: 'done', tool_name: 'Return', tool_args: 'ok', is_final: true } },
+      call('resolve-library-id', { libraryName: NAME }),
+      call('get-library-docs', { topic: `about ${NAME}` }),
+      call('search', { query: EMAIL }),
+      call('fetch', { url: `https://x.example/?q=${encodeURIComponent(NAME)}` }),
+    ]
+    // The turn log is mutated in place, so snapshot each input at call time.
+    const seen: string[] = []
+    mocks.controller.mockImplementation(async (input) => {
+      seen.push(JSON.stringify(input))
+      return (
+        script.shift() ?? {
+          action: { reasoning: 'done', tool_name: 'Return', tool_args: 'ok', is_final: true },
+        }
+      )
+    })
+    const result = await run('verda', {
+      ...deps,
+      pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
+    })
+    const results = result.context.events.filter((e) => e.type === 'tool_result')
+    const byTool = (tool: string) =>
+      results.find((e) => (e.data as { tool: string }).tool === tool)!.data
+    expect(byTool('search_nodes')).toMatchObject({ success: true })
+    for (const tool of ['resolve-library-id', 'get-library-docs', 'search', 'fetch'])
+      expect(byTool(tool), tool).toMatchObject({ success: false })
+    // The second invocation's first controller input (call index 2).
+    const next = seen[2]
+    expect(next).not.toContain(NAME)
+    expect(next).not.toContain(EMAIL)
+  })
+
   it('G14: the real host rewrites an external sender after the composed Graph guards', async () => {
     const { createWebPseudonymiser } =
       await import('../../../../lib/harness-client/web-pseudonymiser.server')

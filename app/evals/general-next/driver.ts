@@ -48,8 +48,6 @@ export async function createDriver(
     await import('@hames-ai/harness-patterns/run-frame.server')
   const { registerTransport } = await import('@hames-ai/harness-patterns/tool-transport.server')
   const { clientOverrideFor } = await import('@hames-ai/harness-baml/clients.server')
-  const { createWebPseudonymiser } =
-    await import('../../src/lib/harness-client/web-pseudonymiser.server')
   let trace: ConversationTrace
   let scenario: ConversationScenario
   let turn = 0
@@ -134,13 +132,16 @@ export async function createDriver(
     ownsTool: (name: string) => name === 'sandbox_bash',
     listTools: async () => descriptions.filter((t) => t.name === 'sandbox_bash'),
   }
+  // The production factory, so general-next's info route runs behind its real G14 filter
+  // and not the fail-closed refusal an absent dep produces. `none` because the hermetic
+  // run has no org graph: the directory leg is NOT covered here (live mode keeps it off
+  // too, since the eval holds no tenant data). No fixture carries an identity, so no substitution runs: this proves presence only.
+  const { createWebPseudonymiser } =
+    await import('../../src/lib/harness-client/web-pseudonymiser.server')
   const dispose = registerTransport(transport)
   const deps: AgentDeps = {
     toolNamespaces: transport.namespaceFor,
     clientOverride: clientOverrideFor,
-    // The real G14 factory with no org-graph directory (an explicit, code-only
-    // choice for synthetic data). Without a host filter every private-tier web
-    // or context7 call is refused, which no scenario can pass.
     pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
     withSandbox: () => (pattern) => ({
       ...pattern,

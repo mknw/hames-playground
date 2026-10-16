@@ -83,7 +83,10 @@ export async function fixtureInference() {
                         context7CompatibleLibraryID: '/solidjs/solid',
                       },
               ),
-              is_final: !name,
+              // The actor cannot exit actorCritic itself: is_final only summons the critic,
+              // which is the exit authority, so the actor sets it on its LAST scripted tool.
+              // A loop controller ends with Return instead.
+              is_final: fn === 'ActorController' ? !pending.length : !name,
             }
             break
           }

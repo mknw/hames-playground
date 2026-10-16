@@ -3,6 +3,8 @@ import {
   SpendBudget,
   parseSpendCap,
   floorHourlyRate,
+  screenShare,
+  SCREEN_FUNCTION,
   type SpendKey,
 } from '../../../lib/eval-support/spend-budget'
 
@@ -134,5 +136,51 @@ describe('rates and scale-down reservations', () => {
       b.beginInfrastructure(key, 0, [box])
       expect(b.stopped).toBe(true)
     }
+  })
+})
+
+describe('per-function screen subtotal', () => {
+  const fill = () => {
+    const budget = new SpendBudget(20, 0.8)
+    budget.observe(key, { costEur: 0.08 }, 'LoopController')
+    budget.observe(key, { costEur: 0.04 }, SCREEN_FUNCTION)
+    budget.observe(key, { costEur: 0.04 }, SCREEN_FUNCTION)
+    budget.observe(key, { costEur: 0.04 }, 'Synthesize')
+    return budget
+  }
+  it('splits calls and cost by BAML function without changing the totals', () => {
+    const row = fill().row(key)
+    expect(row.calls).toBe(4)
+    expect(row.functions[SCREEN_FUNCTION].calls).toBe(2)
+    expect(row.functions[SCREEN_FUNCTION].observerUsd).toBeCloseTo(0.1)
+    expect(row.observerUsd).toBeCloseTo(0.25)
+    expect(Object.values(row.functions).reduce((n, f) => n + f.calls, 0)).toBe(row.calls)
+  })
+  it('reports the screen against everything else, per row', () => {
+    const share = screenShare(fill().row(key))
+    expect(share).toMatchObject({ calls: 2, otherCalls: 2 })
+    expect(share.callShare).toBeCloseTo(0.5)
+    expect(share.observerUsd).toBeCloseTo(0.1)
+    expect(share.otherObserverUsd).toBeCloseTo(0.15)
+    expect(share.observerUsdShare).toBeCloseTo(0.4)
+  })
+  it('is zero, not NaN, for a row with no screen call or no spend', () => {
+    expect(screenShare(new SpendBudget(20, 0.8).row(key))).toMatchObject({
+      calls: 0,
+      callShare: 0,
+      observerUsdShare: 0,
+    })
+  })
+  it('files a sample with no function name under unknown, never under the screen', () => {
+    const budget = new SpendBudget(20, 0.8)
+    budget.observe(key, { costEur: 0.01 })
+    expect(screenShare(budget.row(key)).calls).toBe(0)
+    expect(budget.row(key).functions.unknown.calls).toBe(1)
+  })
+  it('still counts a screen call of unknown cost, and stops the run on it', () => {
+    const budget = new SpendBudget(20, 0.8)
+    budget.observe(key, undefined, SCREEN_FUNCTION)
+    expect(budget.stopped).toBe(true)
+    expect(screenShare(budget.row(key)).calls).toBe(1)
   })
 })

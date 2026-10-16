@@ -1,6 +1,6 @@
 /** Live metadata rule for the general-next driver: only the withheld write tool may fall back. */
 import { it, expect } from 'vitest'
-import { liveDescriptions } from '../../../../evals/general-next/driver'
+import { liveDescriptions } from '../../../lib/eval-support/live-descriptions'
 
 const d = (name: string, description = name) => ({ name, description, inputSchema: {} })
 const names = ['read_neo4j_cypher', 'write_neo4j_cypher', 'search']

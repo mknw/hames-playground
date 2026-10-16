@@ -99,7 +99,14 @@ beforeEach(() => {
   vi.mocked(loadDirectoryRoster).mockResolvedValue([DIRECTORY])
   __clearReferenceCache()
   unregister = registerToolNamespaces(
-    (n) => ({ fetch: 'web', web_search: 'web', read_neo4j_cypher: 'neo4j' })[n],
+    (n) =>
+      ({
+        fetch: 'web',
+        web_search: 'web',
+        read_neo4j_cypher: 'neo4j',
+        'resolve-library-id': 'context7',
+        search_nodes: 'memory',
+      })[n],
   )
 })
 afterEach(async () => {
@@ -780,6 +787,41 @@ describe('fix round 1 remaining findings', () => {
       }
     },
   )
+
+  // S3b: context7 is an outbound public service (checked, never an identity
+  // source); memory is local (unchecked, and its results extend the roster).
+  it('checks context7 arguments like web, exempts memory, and learns only from memory results', async () => {
+    outgoing.mockResolvedValueOnce({ success: true, data: MAIL }) // context7 result
+    outgoing.mockResolvedValueOnce({ success: true, data: 'web ok' }) // first web_search
+    outgoing.mockResolvedValueOnce({ success: true, data: MAIL }) // memory result
+    const child = configurePattern<Data>('probe', async (s) => {
+      expect(await callTool('resolve-library-id', { libraryName: DIRECTORY.mail })).toMatchObject({
+        success: false,
+      })
+      expect(await callTool('resolve-library-id', { libraryName: 'solid-js' })).toMatchObject({
+        success: true,
+      })
+      // MAIL came back from public docs: it must not extend the outgoing literals.
+      expect(await callTool('web_search', { query: EXTERNAL.address })).toMatchObject({
+        success: true,
+      })
+      expect(await callTool('search_nodes', { query: DIRECTORY.mail })).toMatchObject({
+        success: true,
+      })
+      // The memory result did: the same literal is now refused outbound.
+      expect(await callTool('web_search', { query: EXTERNAL.address })).toMatchObject({
+        success: false,
+      })
+      return s
+    })
+    await withRunFrame(frame('verda'), () =>
+      withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child).fn(
+        createScope('probe', {}),
+        createEventView(createContext('Research')),
+      ),
+    )
+    expect(outgoing).toHaveBeenCalledTimes(3)
+  })
 
   it('refuses subsequent outgoing calls when roster extension throws, without exposing the error', async () => {
     const child = configurePattern<Data>('probe', async (s) => {

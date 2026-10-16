@@ -47,7 +47,9 @@ uniform. See `packages/harness-patterns/run-frame.server.ts`.
 
 **Web pseudonymisation guard** — the web route's boundary over earlier results
 and outgoing tool arguments, retaining their content while replacing known
-identities with placeholders. See
+identities with placeholders. Only the local `neo4j` and `memory`
+namespaces are exempt from the outgoing check; `context7` library lookup is
+outbound and checked like web search. See
 [`packages/harness-patterns/SPEC.md`](packages/harness-patterns/SPEC.md#withpseudonymisedinputsconfigpattern-507-g14).
 
 **Proposal** — a question put to a person from outside a run, by a post-reply

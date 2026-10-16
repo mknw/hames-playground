@@ -37,7 +37,7 @@ const orchestrator = withInjectionGuard({
 })(decisionLoop(
   {
     'office-data': { pattern: doc_ag, description: 'Work on Microsoft 365 files and mail; run code over them' },
-    'info-retrieval': { pattern: info_ag, description: 'Look things up in the knowledge graph or on the web' },
+    'info-retrieval': { pattern: info_ag, description: 'Look things up in the knowledge graph, on the web, in library docs and in the memory graph' },
     'read-documents': { pattern: retrieve, description: 'Search documents already in this conversation' },
     think: { pattern: think, description: 'Decide the steps before acting' },
   },
@@ -215,7 +215,7 @@ The child's own `error` events stay inside its `pattern_enter`/`pattern_exit`, b
 ## Routes, and how tools are grouped
 
 - **`read-documents` is its own route** rather than a tool inside `info_ag`. The retriever is a pattern, not an MCP tool. Putting it in `simpleLoop`'s tool list would need round 1's `patternTool` primitive. The redis server's `search_redis_documents` cannot stand in for it: it is not scoped to the conversation, so the model could name another conversation's keys (the same reason `graph_file_ingest` takes its session from the request). As a route it needs nothing new, and `harnessHasRedisRetriever` still finds it through `children`.
-- **`info_ag` holds Neo4j reads and web tools.** That grouping is the owner's. Free-form Cypher stays. The agent slice waits for [G13's network isolation and required evidence](https://github.com/mknw/hames-playground/issues/241#issuecomment-6181475778), which supersedes G12 S-a's procedure allow-list dependency; see P3.
+- **`info_ag` holds Neo4j reads, web tools, the two `context7` library-doc tools and the memory graph's READ tools** (`search_nodes`, `open_nodes`, `read_graph`; S3b, to match what `general` can do for scenarios 04/05). The memory create/add/delete tools stay withheld by name. `context7` is an outbound public service, checked like web search by the G14 egress check; `memory` is declared local beside `neo4j`. The Neo4j-and-web grouping was the owner's. Free-form Cypher stays. The agent slice waits for [G13's network isolation and required evidence](https://github.com/mknw/hames-playground/issues/241#issuecomment-6181475778), which supersedes G12 S-a's procedure allow-list dependency; see P3.
 - **`doc_ag` holds the Microsoft 365 tools, inside a sandbox.** S-f means **the file path stays off until wired**: withhold `graph_file_ingest` from `MS365_TOOLS` in the agent's effective allowlist until P4's file-path pseudonymisation is wired. Pin the exact name's absence in slice 3. Its eventual presence is conditional on that wiring, not permission for slice 3 to carry real Graph file bytes into `/work/in`.
 
 ## Where memory, guards and the sandbox sit
@@ -230,7 +230,7 @@ Recall, wake and settle still run only on interactive turns (#553).
 
 **Injection guards.** Each inner agent gets its own `withInjectionGuard`, as in the sketch, declared by exact name where namespaces cannot reach:
 
-- **`INFO_GUARD`**: `namespaces: ['web', 'neo4j']`.
+- **`INFO_GUARD`**: `namespaces: ['web', 'neo4j', 'context7', 'memory']` (S3b).
 - **`DOC_GUARD`**: `namespaces: ['graph']` plus the sandbox tools **by name** (`sandbox_read`, `sandbox_bash`, …). `namespaces: ['sandbox']` is refused when the agent is built (security review §1).
 - **`read-documents`**: needs `tools: ['retriever']` on a guard that wraps it.
 - **One guard around `orchestrator`**, shown in the shape: the union of the three plus the exact fixed tool key **`decision_loop_output`**, `spotlight: 'always'`, and `screen: createInjectionScreen()` (the role-resolved adapter, `packages/harness-baml/baml-adapters.server.ts:1663-1720`). `decisionLoop` uses that key for every output sanitize call; it never uses the route name for this boundary. Nested guards union and never shadow, so the inner guards stay as the local declaration of each agent's sources.

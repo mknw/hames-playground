@@ -32,6 +32,10 @@ import { NEO4J_READ_ONLY_CONTEXT } from './neo4j-fewshots.server'
 
 assertServerOnImport()
 
+/** Read-only slice of the memory MCP namespace; its create/add/delete tools stay
+ *  withheld by name, so a new memory tool is outside the route until reviewed. */
+const MEMORY_READ_TOOLS = ['search_nodes', 'open_nodes', 'read_graph']
+
 async function createPatterns(
   sessionId: string,
   deps: AgentDeps,
@@ -45,7 +49,10 @@ async function createPatterns(
   // S-f/P4: the Graph file-to-stash path stays off until its own wiring lands.
   const available = new Set(tools.graph ?? [])
   const officeTools = MICROSOFT_365_TOOLS.filter((name) => available.has(name))
-  const infoTools = [...(tools.neo4j ?? []), ...(tools.web ?? [])]
+  const memoryAvailable = new Set(tools.memory ?? [])
+  const memoryReads = MEMORY_READ_TOOLS.filter((name) => memoryAvailable.has(name))
+  const docTools = tools.context7 ?? []
+  const infoTools = [...(tools.neo4j ?? []), ...(tools.web ?? []), ...docTools, ...memoryReads]
   const office = deps.withSandbox({
     id: `${sessionId}:office`,
     sessionId,
@@ -77,7 +84,17 @@ async function createPatterns(
   // They are exact tool keys, never the unverifiable 'sandbox' namespace.
   const sandboxTools = collectToolNames(office).filter((name) => name.startsWith('sandbox_'))
   const docGuard = { namespaces: ['graph'], tools: sandboxTools, catalog: tools.all }
-  const infoGuard = { namespaces: ['web', 'neo4j'], catalog: tools.all }
+  // The guard refuses a declared namespace that matches no catalog tool, so the
+  // two optional servers are declared only when the gateway offers them.
+  const infoGuard = {
+    namespaces: [
+      'web',
+      'neo4j',
+      ...(docTools.length ? ['context7'] : []),
+      ...(memoryReads.length ? ['memory'] : []),
+    ],
+    catalog: tools.all,
+  }
   const doc = withInjectionGuard(docGuard)(office)
   const info = withInjectionGuard(infoGuard)(
     withPseudonymisedInputs({ pseudonymise: deps.pseudonymiseForWeb })(
@@ -136,8 +153,10 @@ async function createPatterns(
         },
         'info-retrieval': {
           pattern: info,
-          description: 'Look things up in the knowledge graph or on the web',
-          capability: 'Read the knowledge graph and search or fetch public web sources.',
+          description:
+            'Look things up in the knowledge graph, on the web, in library docs and in the memory graph',
+          capability:
+            'Read the knowledge graph and the memory graph; search or fetch public web sources and library documentation.',
           siblingResults: ['retriever'],
         },
         'read-documents': {
@@ -188,6 +207,8 @@ export const generalNextAgent: AgentDefinition = {
     'neo4j-cypher',
     'web_search',
     'fetch',
+    'context7',
+    'memory (read-only)',
     'graph (app-side, per-user)',
     'office sandbox',
     'Data Stash',

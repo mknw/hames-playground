@@ -38,7 +38,26 @@ const GRAPH = [
   'graph_files_shared',
   'graph_file_ingest',
 ]
-const INFO = ['get_neo4j_schema', 'read_neo4j_cypher', 'search', 'fetch', 'fetch_content']
+const CONTEXT7 = ['resolve-library-id', 'get-library-docs']
+// Exact READ names only; the memory server's create/add/delete tools are withheld.
+const MEMORY_READ = ['search_nodes', 'open_nodes', 'read_graph']
+const MEMORY_WRITE = [
+  'create_entities',
+  'create_relations',
+  'add_observations',
+  'delete_entities',
+  'delete_relations',
+  'delete_observations',
+]
+const INFO = [
+  'get_neo4j_schema',
+  'read_neo4j_cypher',
+  'search',
+  'fetch',
+  'fetch_content',
+  ...CONTEXT7,
+  ...MEMORY_READ,
+]
 // Explicit names are P1's reviewed ungated surface. A registry addition must
 // fail this pin instead of silently widening both actual and expected lists.
 const SANDBOX = [
@@ -150,6 +169,7 @@ beforeEach(() => {
   gateway.names = [
     ...GRAPH,
     ...INFO,
+    ...MEMORY_WRITE,
     'query_database',
     'write_neo4j_cypher',
     'search_redis_documents',
@@ -245,11 +265,16 @@ describe('general-next composition', () => {
       Object.entries(MCP_TOOL_CATALOG)
         .filter(
           ([name, namespace]) =>
-            ['web', 'neo4j'].includes(namespace) && name !== 'write_neo4j_cypher',
+            ['web', 'neo4j', 'context7'].includes(namespace) && name !== 'write_neo4j_cypher',
         )
         .map(([name]) => name)
+        .concat(MEMORY_READ)
         .sort(),
     ).toEqual([...INFO].sort())
+    // No memory write and no raw redis/filesystem/database tool reaches any route.
+    const reachable = collectToolNames(patterns[0])
+    for (const name of [...MEMORY_WRITE, 'query_database', 'search_redis_documents'])
+      expect(reachable, name).not.toContain(name)
     expect(loop.config).toMatchObject({ rememberPriorTurns: false, returnStyle: 'answer' })
     const references = all.find((p) => p.name.startsWith('withReferences('))!
     expect(references.config).toMatchObject({
@@ -279,6 +304,10 @@ describe('general-next composition', () => {
     const patterns = await agent.createPatterns('synthetic-session', deps)
     expect(composition.config).toMatchObject({ handoff: { lastN: 2 }, maxIterations: 6 })
     expect(composition.routes['info-retrieval']).toMatchObject({ siblingResults: ['retriever'] })
+    expect(composition.routes['info-retrieval']).toMatchObject({
+      description:
+        'Look things up in the knowledge graph, on the web, in library docs and in the memory graph',
+    })
     expect(
       (composition.routes['info-retrieval'] as { siblingResults: string[] }).siblingResults,
     ).toEqual(['retriever'])
@@ -291,6 +320,14 @@ describe('general-next composition', () => {
       'simpleLoop',
     ])
     expect(agent.servers).toEqual(expect.arrayContaining(['office sandbox', 'Data Stash']))
+  })
+
+  it('S3b: a gateway without context7 or memory still builds, with those namespaces undeclared', async () => {
+    gateway.names = [...GRAPH, 'get_neo4j_schema', 'read_neo4j_cypher', 'search', 'fetch']
+    const patterns = await agent.createPatterns('synthetic-session', deps)
+    const info = walk(patterns).find((p) => p.config.patternId === 'info' && p.injectionGuard)!
+    expect(info.injectionGuard!.namespaces).toEqual(['web', 'neo4j'])
+    expect(collectToolNames(patterns[0])).not.toContain('resolve-library-id')
   })
 
   it('keeps a future graph tool outside the explicit office allowlist', async () => {
@@ -313,7 +350,7 @@ describe('general-next composition', () => {
       tools: SANDBOX,
     })
     expect(guarded.find((p) => p.config.patternId === 'info')?.injectionGuard).toEqual({
-      namespaces: ['web', 'neo4j'],
+      namespaces: ['web', 'neo4j', 'context7', 'memory'],
       tools: [],
     })
     expect(guarded.find((p) => p.config.patternId === 'retriever')?.injectionGuard).toEqual({
@@ -426,6 +463,37 @@ describe('general-next composition', () => {
       error: expect.stringContaining('privacy filter unavailable'),
     })
     expect(JSON.stringify(web?.data)).not.toContain('synthetic result')
+  })
+
+  it('S3b: a private run egress-checks context7 like web search, and leaves memory reads local', async () => {
+    const checked: string[] = []
+    const pseudonymiseForWeb: AgentDeps['pseudonymiseForWeb'] = async () => ({
+      ...(await deps.pseudonymiseForWeb!([], '')),
+      check: (args) => {
+        checked.push(JSON.stringify(args))
+        return JSON.stringify(args).includes('PRIVATE-NAME') ? 'refused literal' : undefined
+      },
+    })
+    const call = (tool_name: string, query: string) => ({
+      action: {
+        reasoning: 'lookup',
+        tool_name,
+        tool_args: JSON.stringify({ query, libraryName: query }),
+        is_final: false,
+      },
+    })
+    mocks.controller
+      .mockResolvedValueOnce(call('resolve-library-id', 'PRIVATE-NAME'))
+      .mockResolvedValueOnce(call('search_nodes', 'PRIVATE-NAME'))
+    const result = await run('verda', { ...deps, pseudonymiseForWeb })
+    const byTool = (tool: string) =>
+      result.context.events.find(
+        (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === tool,
+      )?.data
+    expect(byTool('resolve-library-id')).toMatchObject({ success: false })
+    expect(byTool('search_nodes')).toMatchObject({ success: true })
+    expect(checked.some((c) => c.includes('PRIVATE-NAME'))).toBe(true)
+    expect(checked).toHaveLength(1)
   })
 
   it('excludes the office mail event from info’s view and refuses its expansion', async () => {

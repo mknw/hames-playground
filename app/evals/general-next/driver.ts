@@ -48,6 +48,8 @@ export async function createDriver(
     await import('@hames-ai/harness-patterns/run-frame.server')
   const { registerTransport } = await import('@hames-ai/harness-patterns/tool-transport.server')
   const { clientOverrideFor } = await import('@hames-ai/harness-baml/clients.server')
+  const { createWebPseudonymiser } =
+    await import('../../src/lib/harness-client/web-pseudonymiser.server')
   let trace: ConversationTrace
   let scenario: ConversationScenario
   let turn = 0
@@ -136,6 +138,10 @@ export async function createDriver(
   const deps: AgentDeps = {
     toolNamespaces: transport.namespaceFor,
     clientOverride: clientOverrideFor,
+    // The real G14 factory with no org-graph directory (an explicit, code-only
+    // choice for synthetic data). Without a host filter every private-tier web
+    // or context7 call is refused, which no scenario can pass.
+    pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
     withSandbox: () => (pattern) => ({
       ...pattern,
       children: [pattern],

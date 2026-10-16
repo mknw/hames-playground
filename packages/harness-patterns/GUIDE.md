@@ -67,7 +67,8 @@ declared once in the pattern's `viewConfig`, not re-argued at every call site:
   (`compactExecution`'s `thread` mode reads every execution of the `fromPatterns`
   you name within the turn window, and otherwise the last pattern to enter — name
   the wrapper when its children run in nested views; a name absent from the run
-  gives no history and synthesis drops to `response` mode)
+  gives no history and synthesis drops to `response` mode; `threadTurns` widens
+  only that read, e.g. to keep the previous turn's records on a follow-up)
 - `eventTypes` / `limit` — narrow by type and size
 - `fromLastNTurns` — a rolling window bounded by `user_message` events
 - `contentTransforms` — read-time reshaping (`truncateToolResults`,

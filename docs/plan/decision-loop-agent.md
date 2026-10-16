@@ -147,16 +147,16 @@ So the selection is declared on the child, independently per child:
 
 **Data Stash or `withReferences`: every case in this agent.** The boundary: **the stash holds documents (bytes), and a route reads them through a stash-connected step. `withReferences` re-uses earlier tool results, for a loop that has no stash connection.**
 
-| Data                                                           | Needed by                                          | Channel                                               | Why                                                       |
-| -------------------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------- |
-| an uploaded or ingested file (Graph-ingest path gated on P4)   | `doc_ag` (code over it)                            | stash → `/work/in`                                    | the sandbox reads files; its actor takes no attached refs |
-| a file `doc_ag` produced (`/work/out`)                         | a later turn, or `read-documents`                  | promotion → stash                                     | durable, conversation-scoped bytes                        |
-| text inside stash documents                                    | `read-documents`                                   | stash vector search                                   | the retriever is the stash's reader                       |
-| `read-documents`' matches, in full                             | `info_ag` (e.g. a web search seeded by a document) | selected preview + expansion, `source: ['retriever']` | `info_ag` has no stash connection                         |
-| Cypher rows or web results from an earlier iteration this turn | `info_ag`                                          | selected preview + expansion, `source: ['info']`      | avoids re-querying; the summary alone may drop the rows   |
-| Cypher rows or web results                                     | `doc_ag` (compute over them)                       | handoff summary; full rows via materialisation (P4)   | the actor takes no attached refs                          |
-| any route's result + reasoning                                 | the next decision, `think`, every child            | state / planner context / `plan_context`              | always on, capped                                         |
-| everything this turn produced                                  | the synthesizer                                    | `fromPatterns: ['orchestrator']`                      | it reads the route-output records                         |
+| Data                                                                          | Needed by                                          | Channel                                               | Why                                                       |
+| ----------------------------------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------- |
+| an uploaded or ingested file (Graph-ingest path gated on P4)                  | `doc_ag` (code over it)                            | stash → `/work/in`                                    | the sandbox reads files; its actor takes no attached refs |
+| a file `doc_ag` produced (`/work/out`)                                        | a later turn, or `read-documents`                  | promotion → stash                                     | durable, conversation-scoped bytes                        |
+| text inside stash documents                                                   | `read-documents`                                   | stash vector search                                   | the retriever is the stash's reader                       |
+| `read-documents`' matches, in full                                            | `info_ag` (e.g. a web search seeded by a document) | selected preview + expansion, `source: ['retriever']` | `info_ag` has no stash connection                         |
+| Cypher rows or web results from an earlier iteration this turn                | `info_ag`                                          | selected preview + expansion, `source: ['info']`      | avoids re-querying; the summary alone may drop the rows   |
+| Cypher rows or web results                                                    | `doc_ag` (compute over them)                       | handoff summary; full rows via materialisation (P4)   | the actor takes no attached refs                          |
+| any route's result + reasoning                                                | the next decision, `think`, every child            | state / planner context / `plan_context`              | always on, capped                                         |
+| everything this turn and the previous one produced (earlier failures dropped) | the synthesizer                                    | `fromPatterns: ['orchestrator']`, `threadTurns: 2`    | it reads the route-output records                         |
 
 So `withReferences` is needed in this agent in exactly one place, around `info_ag`, and the stash in three. Neither replaces the other.
 
@@ -373,7 +373,7 @@ Mutations: drop the `apply` call; skip the data rewrite; narrow the roster input
 
 The top-level `compactExecution` in `thread` mode reads loop history through `view.fromLastPattern()` (`compactExecution.server.ts:82-83`). Under this shape the last pattern to enter is the last **child**, not `orchestrator`, so synthesis would silently drop to `response` mode. This is round 1's architecture finding 1, which still applies here.
 
-The fix is small and stated as a slice item: `thread` mode honours `viewConfig.fromPatterns` when it is set, instead of `fromLastPattern()`, and is pinned on exactly this nesting. With `fromPatterns: ['orchestrator']`, the synthesizer reads the route-output records, which is the owner's "view on the last N pattern outputs". It does not read the children's internal traces.
+The fix is small and stated as a slice item: `thread` mode honours `viewConfig.fromPatterns` when it is set, instead of `fromLastPattern()`, and is pinned on exactly this nesting. With `fromPatterns: ['orchestrator']`, the synthesizer reads the route-output records, which is the owner's "view on the last N pattern outputs". It does not read the children's internal traces. The records of this turn and the previous one are read (`threadTurns: 2`, #507 W4) so a follow-up keeps what was found; an earlier turn's failed or withheld record is dropped, since nothing would mark it old, and the user's message is read past the scope.
 
 ## Preconditions the design owes
 

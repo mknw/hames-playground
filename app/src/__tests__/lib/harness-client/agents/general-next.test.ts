@@ -95,6 +95,7 @@ vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
 const mocks = vi.hoisted(() => ({
   controller: vi.fn<ControllerFn>(),
   actor: vi.fn<ControllerFn>(),
+  actorOptions: vi.fn(),
   screen: vi.fn(async (_input: { tool: string; content?: string }) => ({
     injection_detected: false,
     reason: 'clean',
@@ -109,7 +110,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@hames-ai/harness-baml', async (original) => ({
   ...(await original<object>()),
   createLoopControllerAdapter: () => mocks.controller,
-  createActorControllerAdapter: () => mocks.actor,
+  createActorControllerAdapter: (options: unknown) => {
+    mocks.actorOptions(options)
+    return mocks.actor
+  },
   createCriticAdapter: () => async () => ({ result: { is_sufficient: true, explanation: 'done' } }),
   createInjectionScreen: () => mocks.screen,
   bamlPatterns: () => ({
@@ -332,6 +336,16 @@ describe('general-next composition', () => {
     const info = walk(patterns).find((p) => p.config.patternId === 'info' && p.injectionGuard)!
     expect(info.injectionGuard!.namespaces).toEqual(['web', 'neo4j'])
     expect(collectToolNames(patterns[0])).not.toContain('resolve-library-id')
+  })
+
+  it('W4: the office actor is GIVEN the Graph read tools by exact name, never ingest or a write', async () => {
+    await agent.createPatterns('synthetic-session', deps)
+    // The adapter builds the actor prompt's catalogue from its own `toolNames`
+    // option and ignores the pattern's allowlist, so the two must agree.
+    expect(mocks.actorOptions).toHaveBeenCalledTimes(1)
+    const options = mocks.actorOptions.mock.calls[0][0] as { toolNames?: string[] }
+    const expected = GRAPH.filter((n) => n !== 'graph_file_ingest').sort()
+    expect([...(options.toolNames ?? [])].sort()).toEqual(expected)
   })
 
   it('keeps a future graph tool outside the explicit office allowlist', async () => {

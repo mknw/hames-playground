@@ -530,6 +530,7 @@ export async function continueSession<T extends HarnessData & Record<string, unk
       delete (ctx.data as Record<string, unknown>).hasError
       delete (ctx.data as Record<string, unknown>).errorMessage
       delete (ctx.data as Record<string, unknown>).response
+      delete (ctx.data as Record<string, unknown>).returnText
       delete (ctx.data as Record<string, unknown>).approved
     }
 

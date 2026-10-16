@@ -153,6 +153,10 @@ export interface SimpleLoopData {
    *  answer — do not treat it as user-facing text. */
   lastAction?: ControllerAction
   response?: string
+  /** The terminal `Return`'s text, for `compactExecution`'s Return-only case
+   *  (#610). Written ONLY by this loop's own `Return` exit — an actorCritic
+   *  `Return` is refused and never reaches it. */
+  returnText?: string
 }
 
 /**
@@ -275,6 +279,9 @@ export function simpleLoop<T extends SimpleLoopData>(
     let errorLlmCall: LLMCallRecord | undefined
     let recoveryCapHit = false
     let exitedViaReturn = false
+    // This loop owns the key for its own run: an earlier loop's text (same
+    // turn) must not answer for one that ended without a `Return` (#610).
+    if (scope.data.returnText !== undefined) scope.data = { ...scope.data, returnText: undefined }
 
     // Build structured references to tool results from previous tasks.
     // These are passed as turns_previous_runs (separate from the current task's turns)
@@ -484,6 +491,9 @@ export function simpleLoop<T extends SimpleLoopData>(
             ...scope.data,
             lastAction: action,
             turn,
+            ...(action.tool_name === 'Return' && typeof action.tool_args === 'string'
+              ? { returnText: action.tool_args }
+              : {}),
           }
           exitedViaReturn = true
           break

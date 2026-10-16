@@ -202,6 +202,7 @@ describe('the inventory is complete', () => {
     expect(registered).toEqual(
       [
         'searchAgent',
+        'generalAgent',
         'generalNextAgent',
         'sandboxAgent',
         'retrieverAgent',
@@ -213,13 +214,7 @@ describe('the inventory is complete', () => {
     // the final consumer of (owner decision 2026-08-25). An agent that ships on
     // disk but not in the registry is a trust boundary nobody reviews, so the
     // two lists being equal is the property worth pinning.
-    // HELD flip (#507): `general` is the one deliberate exception. It stays on disk as the
-    // Eval baseline and its stored ids resolve to general-next, so it is not in the picker.
-    expect(registered).toEqual(
-      AGENT_MODULES.map((m) => m.exportName)
-        .filter((name) => name !== 'generalAgent')
-        .sort(),
-    )
+    expect(registered).toEqual(AGENT_MODULES.map((m) => m.exportName).sort())
   })
 })
 

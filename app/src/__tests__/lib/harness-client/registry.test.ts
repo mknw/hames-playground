@@ -48,6 +48,9 @@ function stubAgent(id: string, extra: Partial<AgentConfig> = {}): AgentConfig {
 vi.mock('@hames-ai/agents/agents/search.server', () => ({
   searchAgent: stubAgent('search'),
 }))
+vi.mock('@hames-ai/agents/agents/general.server', () => ({
+  generalAgent: stubAgent('general', { usesSandbox: true }),
+}))
 vi.mock('@hames-ai/agents/agents/general-next.server', () => ({
   generalNextAgent: stubAgent('general-next', { usesSandbox: true }),
 }))
@@ -113,12 +116,14 @@ describe('registration + lookup', () => {
     expect(ids.filter((id) => id.includes('sandbox'))).toEqual(['sandbox'])
   })
 
-  // HELD flip (#507): general-next takes general's slot; stored 'general' rows still open.
-  it('registers general-next and not general, and resolves a stored general id forward', () => {
-    const ids = getAllAgents().map((a) => a.id)
-    expect(ids).toContain('general-next')
-    expect(ids).not.toContain('general')
-    expect(getAgent('general')?.id).toBe('general-next')
+  // HELD flip (#507, ruling C=B+A): general-next replaces general in the PICKER; stored
+  // 'general' rows keep opening on `general` (no legacy-id mapping forward).
+  it('lists general-next and not general, yet general still resolves to itself', () => {
+    const listed = getAgentMetadata().map((m) => m.id)
+    expect(listed).toContain('general-next')
+    expect(listed).not.toContain('general')
+    expect(getAgent('general')?.id).toBe('general')
+    expect(canonicalAgentId('general')).toBe('general')
   })
 
   it('returns undefined for an unknown id rather than throwing', () => {

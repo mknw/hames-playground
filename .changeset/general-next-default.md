@@ -3,6 +3,6 @@
 ---
 
 HELD (#507 default flip): `general` no longer opts into memory, which moves to
-`general-next`; the app registers `general-next` in `general`'s picker slot and
-resolves stored `general` ids to it. A new chat opens on `general-next`
-(`DEFAULT_AGENT_ID`) instead of `search`.
+`general-next`; in the picker `general-next` replaces `general`, which stays
+registered but unlisted so stored `general` conversations keep opening on it.
+A new chat opens on `general-next` (`DEFAULT_AGENT_ID`) instead of `search`.

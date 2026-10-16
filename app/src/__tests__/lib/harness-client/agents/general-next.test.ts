@@ -820,13 +820,13 @@ describe('general-next composition', () => {
     },
   )
 
-  it('registers general-next, forwards stored general ids to it, and makes it the one default agent id', () => {
+  it('replaces general in the picker, leaves stored general ids on general, and makes general-next the one default agent id', () => {
     const registry = readFileSync('src/lib/harness-client/registry.server.ts', 'utf8')
     expect(registry).toContain("overlay(generalNextAgent, 'i-material-symbols-route', 'indigo')")
-    expect(readFileSync('src/lib/harness-client/agent-ids.ts', 'utf8')).toMatch(
-      /general: 'general-next'/,
-    )
-    expect(registry).not.toMatch(/overlay\(generalAgent,/)
+    // Ruling C=B+A: stored `general` rows keep opening on `general` — no forward mapping, and
+    // the agent stays registered, only unlisted.
+    expect(readFileSync('src/lib/harness-client/agent-ids.ts', 'utf8')).not.toMatch(/^\s*general:/m)
+    expect(registry).toMatch(/overlay\(generalAgent,[^;]*?\{\s*listed: false,?\s*\}/)
     expect(readFileSync('src/lib/harness-client/agent-ids.ts', 'utf8')).toContain(
       "DEFAULT_AGENT_ID = 'general-next'",
     )

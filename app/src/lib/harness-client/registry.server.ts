@@ -65,11 +65,17 @@ export interface AgentConfig extends Omit<AgentDefinition, 'createPatterns'> {
 
 const agentRegistry = new Map<string, AgentConfig>()
 
+/** Registered and resolvable, but absent from the picker (`getAgentMetadata`). */
+const unlistedAgentIds = new Set<string>()
+
 /**
- * Register an agent configuration.
+ * Register an agent configuration. `listed: false` keeps it resolvable by id (stored
+ * conversations still open on it) without offering it in the picker.
  */
-export function registerAgent(config: AgentConfig): void {
+export function registerAgent(config: AgentConfig, opts: { listed?: boolean } = {}): void {
   agentRegistry.set(config.id, config)
+  if (opts.listed === false) unlistedAgentIds.add(config.id)
+  else unlistedAgentIds.delete(config.id)
 }
 
 // The legacy-id map lives in its own dependency-free module so the turn
@@ -107,8 +113,9 @@ export function getAgentMetadata(): Array<{
    *  to know that convention. */
   usesSandbox: boolean
 }> {
-  return getAllAgents().map(
-    ({ id, name, description, welcome, icon, accent, servers, usesSandbox }) => ({
+  return getAllAgents()
+    .filter((a) => !unlistedAgentIds.has(a.id))
+    .map(({ id, name, description, welcome, icon, accent, servers, usesSandbox }) => ({
       id,
       name,
       description,
@@ -117,8 +124,7 @@ export function getAgentMetadata(): Array<{
       accent,
       servers,
       usesSandbox: usesSandbox === true,
-    }),
-  )
+    }))
 }
 
 // ============================================================================
@@ -238,6 +244,7 @@ export async function agentUsesSyncWorkspace(agentId: string, sessionId: string)
  * marker is load-bearing (see the uno.config comment).
  */
 import { searchAgent } from '@hames-ai/agents/agents/search.server'
+import { generalAgent } from '@hames-ai/agents/agents/general.server'
 import { generalNextAgent } from '@hames-ai/agents/agents/general-next.server'
 import { sandboxAgent } from '@hames-ai/agents/agents/sandbox.server'
 import { retrieverAgent } from '@hames-ai/agents/agents/retriever-agent.server'
@@ -256,8 +263,11 @@ function overlay(def: AgentDefinition, icon: string, accent: AgentAccent): Agent
 
 // Register all agents — one overlay site per agent, beside the palette.
 registerAgent(overlay(searchAgent, 'i-material-symbols-search', 'indigo'))
-// HELD flip (#507): general-next takes general's picker slot, and its icon. `general` stays a
-// package export (the Eval baseline) and its old conversations resolve forward (agent-ids.ts).
+// HELD flip (#507): general-next replaces general in the picker. `general` stays registered but
+// unlisted, so conversations stored under it keep opening on it (no legacy-id mapping forward).
+registerAgent(overlay(generalAgent, 'i-material-symbols-robot-2-outline', 'indigo'), {
+  listed: false,
+})
 registerAgent(overlay(generalNextAgent, 'i-material-symbols-route', 'indigo'))
 registerAgent(overlay(sandboxAgent, 'i-material-symbols-castle-outline', 'orange'))
 registerAgent(overlay(retrieverAgent, 'i-material-symbols-document-search-outline', 'violet'))

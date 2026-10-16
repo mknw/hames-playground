@@ -18,7 +18,9 @@ function infoEvent(event: ContextEvent): ContextEvent[] {
   if (data.tool !== 'retriever') return [event]
   const result = data.result as RetrieverResult
   if (!Array.isArray(result?.matches)) return [event]
-  const matches = result.matches.filter((hit) => hit.provenance !== 'sandbox-output')
+  // The private host can rewrite string VALUES while preserving object keys.
+  // Presence is the boundary: a rewritten provenance must still be excluded.
+  const matches = result.matches.filter((hit) => hit.provenance === undefined)
   if (matches.length === result.matches.length) return [event]
   if (matches.length === 0) return []
   const allowed = new Set(matches.map((hit) => hit.docId))

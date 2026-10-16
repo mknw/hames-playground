@@ -63,6 +63,7 @@ export function createRedisBackend(
       const hits = await searchFn(sessionId, text, { k })
       return hits.map((h) => ({
         backend: 'redis',
+        ...(h.provenance ? { provenance: h.provenance } : {}),
         id: `${h.docId}:${h.chunkIndex}`,
         content: h.content,
         source: h.source,

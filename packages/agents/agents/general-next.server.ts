@@ -25,6 +25,8 @@ import {
 } from '@hames-ai/harness-baml'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { AgentData, AgentDefinition, AgentDeps } from '../types'
+import { withInfoDocumentReferences } from './info-document-references.server'
+import { MICROSOFT_365_TOOLS } from './microsoft-365.server'
 import { getGraphSchema } from './graph-schema.server'
 import { NEO4J_READ_ONLY_CONTEXT } from './neo4j-fewshots.server'
 
@@ -41,7 +43,8 @@ async function createPatterns(
   const baml = bamlPatterns()
 
   // S-f/P4: the Graph file-to-stash path stays off until its own wiring lands.
-  const officeTools = (tools.graph ?? []).filter((name) => name !== 'graph_file_ingest')
+  const available = new Set(tools.graph ?? [])
+  const officeTools = MICROSOFT_365_TOOLS.filter((name) => available.has(name))
   const infoTools = [...(tools.neo4j ?? []), ...(tools.web ?? [])]
   const office = deps.withSandbox({
     id: `${sessionId}:office`,
@@ -78,23 +81,25 @@ async function createPatterns(
   const doc = withInjectionGuard(docGuard)(office)
   const info = withInjectionGuard(infoGuard)(
     withPseudonymisedInputs({ pseudonymise: deps.pseudonymiseForWeb })(
-      withReferences<AgentData>(
-        simpleLoop<AgentData>(createLoopControllerAdapter(NEO4J_READ_ONLY_CONTEXT), infoTools, {
-          patternId: 'info',
-          schema,
-          liveEvents: true,
-          returnStyle: 'answer',
-          rememberPriorTurns: false,
-        }),
-        {
-          patternId: 'info',
-          selector: baml.selector,
-          source: ['retriever', 'info'],
-          // simpleLoop reads user_message from this view, so keep the task
-          // alongside the allowed siblings rather than the last pattern alone.
-          viewConfig: { fromLast: false, fromLastNTurns: 1 },
-          liveEvents: true,
-        },
+      withInfoDocumentReferences(
+        withReferences<AgentData>(
+          simpleLoop<AgentData>(createLoopControllerAdapter(NEO4J_READ_ONLY_CONTEXT), infoTools, {
+            patternId: 'info',
+            schema,
+            liveEvents: true,
+            returnStyle: 'answer',
+            rememberPriorTurns: false,
+          }),
+          {
+            patternId: 'info',
+            selector: baml.selector,
+            source: ['retriever', 'info'],
+            // simpleLoop reads user_message from this view, so keep the task
+            // alongside the allowed siblings rather than the last pattern alone.
+            viewConfig: { fromLast: false, fromLastNTurns: 1 },
+            liveEvents: true,
+          },
+        ),
       ),
     ),
   )
@@ -119,6 +124,7 @@ async function createPatterns(
     catalog: tools.all,
     spotlight: 'always',
     screen: createInjectionScreen(),
+    screenDespiteFindings: true,
   })(
     decisionLoop<AgentData>(
       {
@@ -178,7 +184,14 @@ export const generalNextAgent: AgentDefinition = {
   welcome:
     'I can look up information, search your uploaded documents, read Microsoft 365 mail, ' +
     'and run code in an office sandbox. I choose the next step from what the last one found.',
-  servers: ['neo4j-cypher', 'web_search', 'fetch', 'graph (app-side, per-user)'],
+  servers: [
+    'neo4j-cypher',
+    'web_search',
+    'fetch',
+    'graph (app-side, per-user)',
+    'office sandbox',
+    'Data Stash',
+  ],
   usesSandbox: true,
   createPatterns,
 }

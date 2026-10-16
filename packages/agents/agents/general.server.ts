@@ -22,6 +22,7 @@
 // (see the host's harness-client/registry.server.ts), not here: `icon`/`accent`
 // are UI fields and stay app-side (the #225 composition-root decision).
 import {
+  withMemory,
   planner,
   simpleLoop,
   compactExecution,
@@ -115,7 +116,7 @@ async function createPatterns(
   })
 
   const patterns = [planPattern, executePattern, responseSynth]
-  return patterns
+  return deps.memory ? withMemory<AgentData>(deps.memory)(patterns) : patterns
 }
 
 export const generalAgent: AgentDefinition = {

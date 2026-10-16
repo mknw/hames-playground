@@ -102,7 +102,8 @@ describe.runIf(IS_HERMETIC)('general-next conversation', () => {
         ),
       ).toHaveLength(0)
     } finally {
-      process.env.SMALL_LLM_DECISIONS_URL = previous
+      if (previous === undefined) delete process.env.SMALL_LLM_DECISIONS_URL
+      else process.env.SMALL_LLM_DECISIONS_URL = previous
     }
   })
 })

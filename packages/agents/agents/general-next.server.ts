@@ -191,7 +191,9 @@ async function createPatterns(
     compactExecution<AgentData>({
       mode: 'thread',
       patternId: 'response-synth',
+      // Records of the previous turn too (`threadTurns`), but errors of this turn only.
       viewConfig: { fromPatterns: ['orchestrator'], fromLastNTurns: 1 },
+      threadTurns: 2,
       synthesize: baml.synthesize,
       liveEvents: true,
     }),

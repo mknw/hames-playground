@@ -1222,9 +1222,9 @@ never replace. `callTool` runs every check before any transport and any denial
 returns `{ success: false, data: null, error }`, a recoverable tool failure,
 not a turn error. A throwing check denies with fixed feedback without exposing
 its exception. The wrapper checks every call except the explicitly local
-`neo4j` namespace, including uncatalogued calls and calls made without the app's
+`neo4j` and `memory` namespaces (`context7` library lookup is outbound and IS checked), including uncatalogued calls and calls made without the app's
 namespace registration. In the same amendment, an `afterToolCall` hook extends
-the outgoing literals from local results, after unfencing each string leaf.
+the outgoing literals from every result except web and `context7` ones, after unfencing each string leaf.
 It never rewrites those results. An extension failure withholds that result,
 records a fixed warning, and refuses subsequent outgoing calls.
 

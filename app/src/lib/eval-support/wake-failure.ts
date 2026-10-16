@@ -3,10 +3,13 @@ const SECRET_ENV = ['VERDA_INFERENCE_API_KEY', 'SMALL_LLM_API_KEY']
 
 export function describeWakeFailure(err: unknown): string {
   let raw = err instanceof Error ? err.message : String(err)
-  for (const name of SECRET_ENV) {
-    const value = process.env[name]
-    if (value && value.length >= 8) raw = raw.split(value).join('<redacted>')
-  }
+  const keys = SECRET_ENV.map((name) => process.env[name] ?? '').filter((v) => v.length >= 8)
+  for (const key of keys) raw = raw.split(key).join('<redacted>')
+  // The response body is cut before this runs, so a key echo can arrive truncated: a literal check
+  // cannot match a partial key, but a long token-like run that is a piece of one is still ours.
+  raw = raw.replace(/[A-Za-z0-9+/=_.-]{12,}/g, (m) =>
+    keys.some((k) => k.includes(m)) ? '<redacted>' : m,
+  )
   return raw
     .replace(
       /https?:\/\/(?:[^\s/@'"]*@)?([^\s/:?#@'"]+)[^\s'"]*/gi,

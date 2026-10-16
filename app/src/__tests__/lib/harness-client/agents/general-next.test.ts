@@ -811,6 +811,14 @@ describe('general-next composition', () => {
     expect(mocks.synthesize.mock.calls[0][0].memoryContext).toBe('MEMORY-SENTINEL')
   })
 
+  // MUTATION: delete `threadTurns: 2` from the response-synth config in
+  // general-next.server.ts (a follow-up turn then loses turn 1's records).
+  it('W4: the synthesizer reads the previous turn`s records but only this turn`s errors', async () => {
+    const synth = (await agent.createPatterns('synthetic-session', deps))[1]
+    expect(synth.config.viewConfig).toEqual({ fromPatterns: ['orchestrator'], fromLastNTurns: 1 })
+    expect((synth.config as { threadTurns?: number }).threadTurns).toBe(2)
+  })
+
   it.each(['withSandbox', 'createRedisBackend'] as const)(
     'refuses missing host %s',
     async (key) => {

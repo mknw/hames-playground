@@ -35,9 +35,15 @@ function buildSynthesisInputFromView(
   errorTurnWindow: number,
   /** The caller's own `viewConfig.fromPatterns`, when it declared any. */
   scopedToPatterns: boolean,
+  /** Turn window of the `thread` read when scoped; never applied to errors. */
+  threadTurnWindow: number,
 ): CompactExecutionInput {
-  // Get user message
-  const userMessage = view.fromAll().ofType('user_message').last(1).get()[0]
+  // The user's message is the one input a pattern needs however its view was
+  // configured: `fromAll()` keeps the caller's `fromPatterns` scope, and the
+  // message is a `harness`-level event, so a scoped synthesizer read an empty
+  // string (#507 W4). User-typed text is trusted — the user is the principal —
+  // so reading it past the scope widens nothing the guard fences.
+  const userMessage = view.unfiltered().ofType('user_message').last(1).get()[0]
   const userContent = userMessage ? (userMessage.data as { content: string }).content : ''
 
   // Read error state from the view rather than from the data stash, so errors
@@ -92,9 +98,11 @@ function buildSynthesisInputFromView(
       // `fromLastPattern()` also bounded the read to one execution; a pattern
       // scope is not a turn scope (see `errorView`), so the named read gets the
       // same turn bound the error read has: the caller's window when it gave
-      // one, else the current turn.
+      // one, else the current turn. `threadTurns` widens ONLY this read, so a
+      // follow-up turn that runs no route still synthesizes from the records an
+      // earlier turn committed; the error read above keeps its own window.
       const threadView = scopedToPatterns
-        ? view.fromLastNTurns(errorTurnWindow)
+        ? view.fromLastNTurns(threadTurnWindow)
         : view.fromLastPattern()
       const toolEvents = threadView.tools().get()
       const actionEvents = threadView.actions().get()
@@ -265,6 +273,7 @@ export function compactExecution<T extends CompactExecutionData>(
         scope.data,
         resolved.viewConfig?.fromLastNTurns ?? 1,
         (resolved.viewConfig?.fromPatterns?.length ?? 0) > 0,
+        config.threadTurns ?? resolved.viewConfig?.fromLastNTurns ?? 1,
       )
 
       // Validate thread mode

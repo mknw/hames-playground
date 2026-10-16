@@ -1328,9 +1328,15 @@ compactExecution({ mode: 'thread', synthesize: baml.synthesize }) // Receives fu
 // pattern to enter is then a child, and the wrapper's own records are what you
 // want). `fromPatterns: []` means unset. A name absent from the run yields no
 // history, and synthesis drops to `response` mode.
+// `threadTurns` widens ONLY that read (default: the window above), so a follow-up
+// turn that runs no route still sees the records an earlier turn committed; the
+// error read keeps its own window. The user's message is read past the scope
+// (it is a `harness`-level event, trusted input), so a scoped synthesizer still
+// gets `userMessage` and `intent`.
 compactExecution({
   mode: 'thread',
   viewConfig: { fromPatterns: ['orchestrator'], fromLastNTurns: 1 },
+  threadTurns: 2,
   synthesize: baml.synthesize,
 })
 
@@ -1755,7 +1761,7 @@ findings remain neutralized while the screen reviews the sanitized projection.
 Union semantics carry that screen and unconditional
 fencing into every route's tool results, costing a screen call per result. A
 screen failure inside a route is recorded and fails open; at the route-output
-boundary it follows the marker-only policy above. Its thread synthesizer reads this turn's `orchestrator` records.
+boundary it follows the marker-only policy above. Its thread synthesizer reads the `orchestrator` records of this turn and the previous one (`threadTurns: 2`; they are the already-sanitized, fenced records, and a withheld one stays marker-only), the user's message, and only this turn's errors.
 
 `general-next` also opts into M7's optional `withMemory`; `general` keeps its
 opt-in until the default-agent flip. Only the candidate's synthesis receives

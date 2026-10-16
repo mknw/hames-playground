@@ -32,9 +32,10 @@ import { NEO4J_READ_ONLY_CONTEXT } from './neo4j-fewshots.server'
 
 assertServerOnImport()
 
-/** Read-only slice of the memory MCP namespace; its create/add/delete tools stay
- *  withheld by name, so a new memory tool is outside the route until reviewed. */
-const MEMORY_READ_TOOLS = ['search_nodes', 'open_nodes', 'read_graph']
+/** Targeted read slice of the memory MCP namespace. Its create/add/delete tools
+ *  stay withheld by name, and so does `read_graph`: the memory graph is shared by
+ *  every user, and that call returns all of it in one result (S3b review F3). */
+const MEMORY_READ_TOOLS = ['search_nodes', 'open_nodes']
 
 async function createPatterns(
   sessionId: string,

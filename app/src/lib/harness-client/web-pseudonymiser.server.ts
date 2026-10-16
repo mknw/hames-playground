@@ -3,7 +3,7 @@
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { PseudonymiseForWeb } from '@hames-ai/harness-patterns'
 import { unspotlight } from '@hames-ai/harness-patterns/guard'
-import { extractRoster } from '../privacy/graph-roster'
+import { extractRoster, type RosterEntry } from '../privacy/graph-roster'
 import { rosterFromDirectory, mergeRosters } from '../privacy/org-roster'
 import { buildTable, apply, type PseudonymTable } from '../privacy/pseudonymise'
 import { loadDirectoryRoster } from '../org-graph/roster-source.server'
@@ -153,14 +153,56 @@ function unfenceRosterValue(text: string): string {
   }
 }
 
-const harvest = (payloads: unknown) =>
-  extractRoster(mapStrings(payloads, unfenceRosterValue))
+/** The memory MCP server's entity types that denote a person (S3b review F1). */
+const PERSON_ENTITY_TYPE =
+  /\b(person|people|contact|colleague|employee|staff|customer|client|user|member|individual|stakeholder|author|owner)\b/i
+const EMAIL_TOKEN = /[^\s@<>()[\],;:"']+@[^\s@<>()[\],;:"']+\.[^\s@<>()[\],;:"'.]+/g
+
+/** The memory server returns `{ entities: [{ name, entityType, observations[] }] }`,
+ *  which `extractRoster` (Graph shapes) never matches. A person-typed entity
+ *  yields a name; every email-shaped token in any observation yields an address,
+ *  whatever the entity type. Non-person entities keep their names, since the
+ *  same table rewrites later copies. */
+function memoryRoster(payloads: unknown): RosterEntry[] {
+  const out: RosterEntry[] = []
+  const walk = (value: unknown): void => {
+    if (Array.isArray(value)) return value.forEach(walk)
+    if (value === null || typeof value !== 'object') return
+    const obj = value as Record<string, unknown>
+    if (typeof obj.entityType === 'string' && typeof obj.name === 'string') {
+      const observations = Array.isArray(obj.observations)
+        ? obj.observations.filter((o): o is string => typeof o === 'string')
+        : []
+      const emails = observations.flatMap((o) => o.match(EMAIL_TOKEN) ?? [])
+      const name = obj.name.trim()
+      const person = !!name && PERSON_ENTITY_TYPE.test(obj.entityType)
+      for (const address of emails)
+        out.push({
+          name: person ? name : null,
+          address,
+          nameVariants: person ? [name] : [],
+          roles: ['memory'],
+        })
+      if (person && emails.length === 0)
+        out.push({ name, address: null, nameVariants: [name], roles: ['memory'] })
+      return
+    }
+    Object.values(obj).forEach(walk)
+  }
+  walk(payloads)
+  return out
+}
+
+const harvest = (payloads: unknown) => {
+  const unfenced = mapStrings(payloads, unfenceRosterValue)
+  return mergeRosters(extractRoster(unfenced), memoryRoster(unfenced))
     .map((entry) => ({
       ...entry,
       name: isPlaceholder(entry.name) ? null : entry.name,
       nameVariants: entry.nameVariants.filter((name) => !isPlaceholder(name)),
     }))
     .filter((entry) => entry.address || entry.nameVariants.length > 0)
+}
 
 /** `none` is only for a deployment without an org graph. Set it in code at
  *  the composition root, never from an env var. A required empty/unreadable

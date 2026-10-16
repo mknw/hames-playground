@@ -106,6 +106,7 @@ beforeEach(() => {
         read_neo4j_cypher: 'neo4j',
         'resolve-library-id': 'context7',
         search_nodes: 'memory',
+        open_nodes: 'memory',
       })[n],
   )
 })
@@ -821,6 +822,92 @@ describe('fix round 1 remaining findings', () => {
       ),
     )
     expect(outgoing).toHaveBeenCalledTimes(3)
+  })
+
+  // Owner ruling on S3b: `memory` is LOCAL for G14. A memory READ never reaches
+  // egressChecks as an outbound call; context7 (a public service) does.
+  it('runs the egress check for context7 arguments and never for memory reads', async () => {
+    const seen: string[] = []
+    const base = await createWebPseudonymiser()([], '')
+    const pseudonymise = async () => ({
+      ...base,
+      check: (args: Readonly<Record<string, unknown>>) => {
+        seen.push(String(args.query ?? args.libraryName))
+      },
+    })
+    const child = configurePattern<Data>('probe', async (s) => {
+      await callTool('search_nodes', { query: 'MEMORY-ARG' })
+      await callTool('open_nodes', { names: ['MEMORY-ARG-2'] })
+      await callTool('resolve-library-id', { libraryName: 'DOCS-ARG' })
+      return s
+    })
+    await withRunFrame(frame('verda'), () =>
+      withPseudonymisedInputs({ pseudonymise })(child).fn(
+        createScope('probe', {}),
+        createEventView(createContext('Research')),
+      ),
+    )
+    expect(seen).toEqual(['DOCS-ARG'])
+  })
+
+  // S3b review F1 (HIGH): the memory server's REAL result shape, entities only
+  // (no relation whose `from` could satisfy the person-key heuristic).
+  describe('memory-server result shape', () => {
+    const MEMORY = {
+      entities: [
+        {
+          type: 'entity',
+          name: 'Ottilie Ferngrove',
+          entityType: 'person',
+          observations: ['prefers morning calls', 'reach her at ottilie.f@fernco.example'],
+        },
+        {
+          type: 'entity',
+          name: 'Lanternwick',
+          entityType: 'project',
+          observations: ['owner mailbox is lantern-owner@fernco.example'],
+        },
+      ],
+      relations: [],
+    }
+    const NAME = 'Ottilie Ferngrove'
+
+    it('refuses the person name and observation emails on later web and context7 calls', async () => {
+      outgoing.mockImplementationOnce(async () => ({ success: true, data: MEMORY }))
+      const child = configurePattern<Data>('probe', async (s) => {
+        expect(await callTool('search_nodes', { query: 'Lantern' })).toMatchObject({
+          success: true,
+        })
+        for (const [tool, args] of [
+          ['web_search', { query: NAME }],
+          ['web_search', { query: 'ottilie.f@fernco.example' }],
+          ['web_search', { query: 'lantern-owner@fernco.example' }],
+          ['resolve-library-id', { libraryName: NAME }],
+        ] as const)
+          expect(await callTool(tool, args), JSON.stringify(args)).toMatchObject({ success: false })
+        // A project is not a person: its name stays usable.
+        expect(await callTool('web_search', { query: 'Lanternwick' })).toMatchObject({
+          success: true,
+        })
+        return s
+      })
+      await withRunFrame(frame('verda'), () =>
+        withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child).fn(
+          createScope('probe', {}),
+          createEventView(createContext('Research')),
+        ),
+      )
+    })
+
+    it('rewrites an earlier-turn memory payload, but not a name the user typed', async () => {
+      const filter = await createWebPseudonymiser()([MEMORY], 'unrelated question')
+      const rewritten = JSON.stringify(filter.apply(MEMORY))
+      expect(rewritten).not.toContain(NAME)
+      expect(rewritten).not.toContain('ottilie.f@fernco.example')
+      expect(rewritten).toContain('Lanternwick')
+      const named = await createWebPseudonymiser()([MEMORY], `What do we know about ${NAME}?`)
+      expect(named.check({ query: NAME })).toBeUndefined()
+    })
   })
 
   it('refuses subsequent outgoing calls when roster extension throws, without exposing the error', async () => {

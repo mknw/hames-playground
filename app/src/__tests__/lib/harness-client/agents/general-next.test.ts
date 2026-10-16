@@ -40,8 +40,10 @@ const GRAPH = [
 ]
 const CONTEXT7 = ['resolve-library-id', 'get-library-docs']
 // Exact READ names only; the memory server's create/add/delete tools are withheld.
-const MEMORY_READ = ['search_nodes', 'open_nodes', 'read_graph']
-const MEMORY_WRITE = [
+const MEMORY_READ = ['search_nodes', 'open_nodes']
+// Withheld by exact name: every write, and `read_graph` (global, all-at-once).
+const MEMORY_WITHHELD = [
+  'read_graph',
   'create_entities',
   'create_relations',
   'add_observations',
@@ -169,7 +171,7 @@ beforeEach(() => {
   gateway.names = [
     ...GRAPH,
     ...INFO,
-    ...MEMORY_WRITE,
+    ...MEMORY_WITHHELD,
     'query_database',
     'write_neo4j_cypher',
     'search_redis_documents',
@@ -273,7 +275,7 @@ describe('general-next composition', () => {
     ).toEqual([...INFO].sort())
     // No memory write and no raw redis/filesystem/database tool reaches any route.
     const reachable = collectToolNames(patterns[0])
-    for (const name of [...MEMORY_WRITE, 'query_database', 'search_redis_documents'])
+    for (const name of [...MEMORY_WITHHELD, 'query_database', 'search_redis_documents'])
       expect(reachable, name).not.toContain(name)
     expect(loop.config).toMatchObject({ rememberPriorTurns: false, returnStyle: 'answer' })
     const references = all.find((p) => p.name.startsWith('withReferences('))!
@@ -307,6 +309,8 @@ describe('general-next composition', () => {
     expect(composition.routes['info-retrieval']).toMatchObject({
       description:
         'Look things up in the knowledge graph, on the web, in library docs and in the memory graph',
+      capability:
+        'Read the knowledge graph and the memory graph; search or fetch public web sources and library documentation.',
     })
     expect(
       (composition.routes['info-retrieval'] as { siblingResults: string[] }).siblingResults,
@@ -353,6 +357,14 @@ describe('general-next composition', () => {
       namespaces: ['web', 'neo4j', 'context7', 'memory'],
       tools: [],
     })
+    // The orchestrator's own guard unions the route namespaces (S3b review R5).
+    expect(patterns[0].injectionGuard?.namespaces).toEqual([
+      'web',
+      'neo4j',
+      'context7',
+      'memory',
+      'graph',
+    ])
     expect(guarded.find((p) => p.config.patternId === 'retriever')?.injectionGuard).toEqual({
       namespaces: [],
       tools: ['retriever'],

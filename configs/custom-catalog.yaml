@@ -102,6 +102,7 @@ registry:
       - name: open_nodes
     volumes:
       - claude-memory:/app/dist
+    disableNetwork: true
 
   redis:
     description: Redis database operations - key/value, hashes, lists, sets, sorted sets, streams, pub/sub, and vector search

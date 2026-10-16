@@ -1200,7 +1200,11 @@ like any other child result; it is not confined to the wrapped child. Under
 `decisionLoop`, each route starts with fresh child data instead.
 
 An absent pseudonymiser or any roster/table/rewrite failure withholds earlier
-content. No references attach, the plan and all result bodies disappear, and
+content. A roster whose labelled identity was already neutralized by the
+injection screen is such a failure: the name is gone from the data, so the host
+refuses to build a partial roster. The refusal persists for every later web-route invocation in the
+conversation while that result stays in context, and a sender can trigger it on
+purpose through the display name. No references attach, the plan and all result bodies disappear, and
 only an allowlisted handoff containing route/status/stats lines remains in child
 data. A `warning` with task
 `web_privacy` records "earlier results withheld: privacy filter unavailable".
@@ -1218,9 +1222,9 @@ never replace. `callTool` runs every check before any transport and any denial
 returns `{ success: false, data: null, error }`, a recoverable tool failure,
 not a turn error. A throwing check denies with fixed feedback without exposing
 its exception. The wrapper checks every call except the explicitly local
-`neo4j` namespace, including uncatalogued calls and calls made without the app's
+`neo4j` and `memory` namespaces (`context7` library lookup is outbound and IS checked), including uncatalogued calls and calls made without the app's
 namespace registration. In the same amendment, an `afterToolCall` hook extends
-the outgoing literals from local results, after unfencing each string leaf.
+the outgoing literals from every result except web and `context7` ones, after unfencing each string leaf.
 It never rewrites those results. An extension failure withholds that result,
 records a fixed warning, and refuses subsequent outgoing calls.
 

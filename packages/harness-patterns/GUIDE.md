@@ -165,8 +165,8 @@ Place `withPseudonymisedInputs({ pseudonymise: hostFilter })` directly around
 `withReferences`. It rewrites both the reference view (previews and expansion)
 and all inherited child data, preserving the latest user message. Rewritten
 copies are limited to the child's visible events and post-checked per string;
-residual bodies become `[withheld: private identity]` and provenance fences stay
-intact. Only an
+residual bodies become `[withheld: private identity]` (per leaf inside a JSON
+body) and provenance fences stay intact. A roster identity the screen already neutralized fails the filter closed for the rest of the conversation. Only an
 explicit `'anthropic'` run passes through. Supply a host `PseudonymiseForWeb`
 that builds a per-invocation rewrite, selective redaction, literal post-check, local-result observer
 and outgoing-argument check; no host privacy
@@ -186,14 +186,14 @@ failure policy and remaining literal-matching limits.
 Outgoing checks use the `egressChecks` run-frame slot. It concatenates on nested
 `amendRunFrame`, innermost first: every check runs and any denial stops dispatch
 as a failed tool call, so an inner scope cannot switch off an outer check.
-Only the declared local `neo4j` namespace is exempt. A scoped `afterToolCall`
+Only the declared local `neo4j` and `memory` namespaces are exempt (`context7` is outbound and checked). A scoped `afterToolCall`
 hook extends outgoing literals from identities discovered by local reads;
 an update failure withholds the result and refuses further outgoing calls.
 
 The reference application registers `general-next` as a selectable candidate
 beside `general` (#507 S3), built in `packages/agents/agents/general-next.server.ts`.
 It combines four routes: an office sandbox with Microsoft 365, Neo4j/web
-lookups, the conversation's Redis retriever, and planning. The web route uses
+lookups (plus `context7` library docs and the memory graph's read tools), the conversation's Redis retriever, and planning. The web route uses
 the host-supplied G14 pseudonymiser around `withReferences`; missing private
 configuration withholds earlier content and refuses web calls. The outer
 injection guard always fences route outputs and enables the screen. Memory

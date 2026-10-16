@@ -167,3 +167,9 @@ it('writes the computed flip gate, reserves configured tails, floors rates, and 
     'on the private tier only (owner amendment, 2026-10-15; #507 W4)',
   )
 })
+it('writes the screen subtotal beside every scenario row', () => {
+  expect(run()).toMatch(/return \{ \.\.\.r, spend, screen: screenShare\(spend\) \}/)
+})
+it('marks hermetic reports with the vacuous-pass caveat', () => {
+  expect(run()).toMatch(/hermeticCaveat: live\s*\? undefined\s*: 'Hermetic passes are wiring only/)
+})

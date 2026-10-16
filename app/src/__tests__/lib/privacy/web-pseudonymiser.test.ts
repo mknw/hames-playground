@@ -477,6 +477,25 @@ describe('decisionLoop handoff roster (D1/E1/E2)', () => {
   )
 })
 
+describe('nested guard-fence roster defence', () => {
+  it('unfences to a fixed point before harvesting identities and preserves all fence labels', async () => {
+    const fence = (text: string) =>
+      spotlight(
+        spotlight(spotlight(text, 'graph_mail_recent', 'graph'), 'graph_mail_recent', 'graph'),
+        'graph_mail_recent',
+        'graph',
+      )
+    const payload = {
+      from: { emailAddress: { name: fence(EXTERNAL.name), address: fence(EXTERNAL.address) } },
+    }
+    const filter = await createWebPseudonymiser({ directory: 'none' })([payload], '')
+    expect(filter.apply(`A message from ${EXTERNAL.name}`)).toBe('A message from PERSON_1')
+    expect(filter.apply(payload).from.emailAddress.name).toBe(fence('PERSON_1'))
+    expect(filter.check({ query: EXTERNAL.name })).toContain('private identity')
+    expect(filter.check({ query: EXTERNAL.address })).toContain('private identity')
+  })
+})
+
 describe('fix round 2 regressions', () => {
   it.each(['\\n', '\\r', '\\t', '\\f', '\\b', '\\"', '\\\\', '\\/', '\\u000a', '\\u004f'])(
     'D-1a: checks JSON escape %s before a residual identity',

@@ -28,9 +28,10 @@
  * it too), costs a call and seconds of latency per tool result, and cannot be
  * pinned by a unit test. So the always-on layer is a bounded regex corpus plus
  * lossless control-character stripping, and the LLM screen
- * (`InjectionGuardOptions.screen`) is opt-in, runs ONLY on content the
- * deterministic layer passed clean, and feeds its verdict through the same
- * finding/event trail. The two divide labour: regexes catch the known
+ * (`InjectionGuardOptions.screen`) is opt-in and normally runs only on content
+ * the deterministic layer passed clean. `screenDespiteFindings` also screens
+ * the sanitized projection after findings, preserving those neutralizations.
+ * Both feed verdicts through the same finding/event trail. Regexes catch known
  * phrasings cheaply, the screen catches novel ones when an agent opts into
  * paying for it.
  *
@@ -276,6 +277,9 @@ export interface InjectionGuardOptions {
   disableRules?: string[]
   /** Opt-in LLM second opinion. Off by default. */
   screen?: InjectionScreen
+  /** Screen the deterministically sanitized projection even after findings.
+   *  Off by default; nesting keeps this enabled if either guard requests it. */
+  screenDespiteFindings?: boolean
 }
 
 /**
@@ -721,9 +725,9 @@ export function resolveRules(options?: InjectionGuardOptions): readonly Injectio
 // ============================================================================
 
 /**
- * Fold an LLM screen verdict into an already-sanitized result. Called ONLY
- * when the deterministic layer found nothing (see the module header), so the
- * `data` handed in is the untouched original.
+ * Fold an LLM screen verdict into a result. With deterministic findings,
+ * `data` is the sanitized projection; otherwise it is the untouched original.
+ * Base findings and their neutralizations are retained.
  *
  * A span the screen quoted verbatim is neutralized exactly like a regex match.
  * A span it paraphrased matches nothing — that finding still lands (with an
@@ -759,13 +763,22 @@ export function applyScreenVerdict(
   const walk = (node: unknown): unknown => {
     if (typeof node === 'string') {
       scanned += node.length
-      const { text, findings: found } = sanitizeText(node, spanRules, findings.length)
+      // The deterministic projection may already carry a guard-owned fence.
+      // Screen spans apply to its body; retain that exact provenance label.
+      const body = unspotlight(node)
+      const { text, findings: found } = sanitizeText(
+        body,
+        spanRules,
+        base.findings.length + findings.length,
+      )
       findings.push(...found)
-      const out = found.length > 0 ? text : node
-      // The screen fired, so every string leaf of this result gets fenced —
-      // the verdict is about the whole document, not one span.
+      const out = found.length > 0 ? text : body
+      // Exactly one fence per leaf, including unchanged fields. Adding another
+      // would turn a labelled identity into fence text for downstream readers.
       changed = true
-      return spotlight(out, ctx.tool, ctx.namespace)
+      if (body === node) return spotlight(out, ctx.tool, ctx.namespace)
+      const bodyStart = node.indexOf(`${SENTINEL_CLOSE}\n`) + 2
+      return node.slice(0, bodyStart) + out + node.slice(bodyStart + body.length)
     }
     if (Array.isArray(node)) return node.map(walk)
     if (node !== null && typeof node === 'object') {

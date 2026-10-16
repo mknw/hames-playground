@@ -126,6 +126,10 @@ used to hand a pattern a scoped tool set: `neo4j`, `web`, `context7`,
 `database` namespace: no agent reaches Postgres (#412). Namespaces are a grouping over the tools a single MCP gateway
 exposes, not a security boundary.
 
+**general-next** — the candidate general agent that chooses successive groups
+of capabilities within a turn, offered beside `general` while rollout evidence
+is gathered. See [`packages/agents/README.md`](packages/agents/README.md).
+
 ## Storage and runtime
 
 **Data Stash** — the document side of a session: user-uploaded files stored in

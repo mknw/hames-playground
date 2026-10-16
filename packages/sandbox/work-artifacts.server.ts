@@ -185,6 +185,7 @@ export async function promoteOutputs(
           filename,
           mimeType,
           content,
+          provenance: 'sandbox-output',
           ...(text ? {} : { encoding: 'base64' as const }),
         },
         callTool,

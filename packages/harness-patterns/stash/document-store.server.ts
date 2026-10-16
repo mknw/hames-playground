@@ -41,6 +41,9 @@ assertServerOnImport()
 
 /** Metadata stored alongside the document content. */
 export interface StashDocumentMeta {
+  /** Fixed non-content enum, safe as plaintext metadata like ingestStatus.
+   * Absent means not promoted; legacy/uploaded records need no migration. */
+  provenance?: 'sandbox-output'
   /** Stable per-session document id (also the `ref:<id>` target). */
   id: string
   /** Session that owns this document. */
@@ -118,6 +121,7 @@ export interface StashDocument extends StashDocumentMeta {
 
 /** Input for {@link storeDocument}. `id` and `uploadedAt` are minted here. */
 export interface StoreDocumentInput {
+  provenance?: StashDocumentMeta['provenance']
   sessionId: string
   filename: string
   mimeType: string
@@ -324,6 +328,7 @@ export async function storeDocument(
     size,
     uploadedAt: Date.now(),
     content: input.content,
+    ...(input.provenance === 'sandbox-output' ? { provenance: input.provenance } : {}),
     // Omit when utf8 so existing docs/tests stay byte-identical.
     ...(encoding === 'base64' ? { encoding } : {}),
     // Persist the initial ingest status in this first write (no separate

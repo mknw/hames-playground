@@ -273,6 +273,12 @@ async function boot(): Promise<AppHandles> {
   const actions = await import('../../src/lib/harness-client/actions.server')
   const events = await import('../../src/routes/api/events')
   const prefs = await import('../../src/lib/db/user-prefs.server')
+  // Mirror the namespace registration normally performed by middleware's
+  // app-tools import. This suite composes Graph separately, so importing that
+  // production barrel here would also install its live transport.
+  const { registerToolNamespaces } = await import('@hames-ai/harness-patterns/tools.server')
+  const { mcpNamespace } = await import('@hames-ai/connectors/mcp-catalog')
+  registerToolNamespaces(mcpNamespace)
   const conversations = await import('../../src/lib/db/conversations.server')
   const dbClient = await import('../../src/lib/db/client.server')
   const { BYPASS_USER, isBypassEnabled } = await import('../../src/lib/auth/dev-bypass')

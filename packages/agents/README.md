@@ -13,9 +13,10 @@
 
 ## What this is
 
-Five ready-made AI agents to register in your own application: search over the
+Six ready-made AI agents to register in your own application: search over the
 web and a Neo4j knowledge graph, question-answering over documents you have
 uploaded, a Microsoft 365 assistant, a general-purpose agent with every tool,
+its decision-loop candidate `general-next`,
 and one that runs code in a container, picking a plain, data or office
 container for each message. Each one is built from
 [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme)
@@ -136,6 +137,32 @@ configured in
 [configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml).
 
 ### How the shipped agents are composed
+
+`general-next` is the selectable decision-loop candidate beside `general`;
+the default remains `search`. It requires `deps.withSandbox` and
+`deps.createRedisBackend`, and accepts `deps.pseudonymiseForWeb` for the
+web route. It chooses among Microsoft 365 work, Neo4j/web lookup,
+conversation-document retrieval and planning, then synthesizes once from the
+orchestrator's guarded route records. The outer guard's screen and unconditional
+fencing apply inside every route too. It enables `screenDespiteFindings`, so
+even results with deterministic findings are screened after sanitization; those
+neutralizations stay intact. This adds a screen call per result and per
+nonempty route-output field (the retriever also screens each content/source
+projection), including extra inference time on the private tier. A screen
+outage inside a route is recorded
+and fails open; at the route-output boundary it withholds the output before
+state, handoff and synthesis. The web route admits only its own and retriever
+references, excluding sandbox-promoted documents, and pseudonymises inherited
+content on the private tier. Missing private host wiring withholds earlier
+content and refuses web calls. An unconfigured private decisions endpoint
+produces a visible error without public fallback.
+
+`general-next` also opts into optional memory; `general` keeps its opt-in until
+the default-agent flip. Only the candidate's final synthesis receives recalled
+memory. Graph file ingestion and turn-results materialisation stay disabled
+until their dedicated integration. The default-agent rollout remains gated by
+the design's acceptance evidence. See the
+[decision-loop design](../../docs/plan/decision-loop-agent.md).
 
 These excerpts show how the shipped agents are built. Each definition's `createPatterns` composes patterns from
 `@hames-ai/harness-patterns` with what your application supplies in
@@ -332,13 +359,14 @@ order under **Composition**; each name is a pattern documented in the
 which neutralizes instructions hidden in untrusted content (a web page, an
 email) before a model reads it.
 
-| Agent           | Composition                                                      | Tools                                                   | Injection guard                                                                          |
-| --------------- | ---------------------------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `search`        | router → routes(neo4j loop, web loop) → compactExecution         | neo4j-cypher, web_search, fetch                         | web route guarded; neo4j route not guarded (see the Warning below)                       |
-| `retriever`     | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                         | web namespace + retriever exact-name guarded together (ingested documents are untrusted) |
-| `microsoft-365` | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token | whole Microsoft Graph loop guarded (mail and files can be written by anyone)             |
-| `general`       | planner → simpleLoop(tools.all) → compactExecution               | everything                                              | not guarded yet (below)                                                                  |
-| `sandbox`       | router → routes(basic, data, office) → compactExecution          | in-container `sandbox_*`                                | not on tool results yet, on any route; shell commands are screened (below)               |
+| Agent           | Composition                                                      | Tools                                                   | Injection guard                                                                                    |
+| --------------- | ---------------------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `search`        | router → routes(neo4j loop, web loop) → compactExecution         | neo4j-cypher, web_search, fetch                         | web route guarded; neo4j route not guarded (see the Warning below)                                 |
+| `retriever`     | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                         | web namespace + retriever exact-name guarded together (ingested documents are untrusted)           |
+| `microsoft-365` | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token | whole Microsoft Graph loop guarded (mail and files can be written by anyone)                       |
+| `general`       | planner → simpleLoop(tools.all) → compactExecution               | everything                                              | not guarded yet (below)                                                                            |
+| `general-next`  | decisionLoop(office, info, retriever, think) → compactExecution  | Microsoft 365, office sandbox, Neo4j/web, Data Stash    | per-route guards and a screened, always-fenced output boundary; private web input pseudonymisation |
+| `sandbox`       | router → routes(basic, data, office) → compactExecution          | in-container `sandbox_*`                                | not on tool results yet, on any route; shell commands are screened (below)                         |
 
 **Guardrail status.** Two guards ship today. The injection guard covers the
 tool results marked in the table above, and the sandbox agent also gets
@@ -481,6 +509,6 @@ front-end code can import it without pulling in anything server-side:
 | `AgentDefinition`, `AgentData`, `AgentDeps`                                   | the definition types (see Configuration)                        |
 
 The definitions entry point (`import from '@hames-ai/agents/agents'`) is
-**server-only** — five registered agents plus three shared helpers
+**server-only** — six registered agents plus three shared helpers
 (`getGraphSchema`, the Neo4j few-shots, the title generator). Every module
 calls core's `assertServerOnImport()` at load.

@@ -190,6 +190,17 @@ Only the declared local `neo4j` namespace is exempt. A scoped `afterToolCall`
 hook extends outgoing literals from identities discovered by local reads;
 an update failure withholds the result and refuses further outgoing calls.
 
+The reference application registers `general-next` as a selectable candidate
+beside `general` (#507 S3), built in `packages/agents/agents/general-next.server.ts`.
+It combines four routes: an office sandbox with Microsoft 365, Neo4j/web
+lookups, the conversation's Redis retriever, and planning. The web route uses
+the host-supplied G14 pseudonymiser around `withReferences`; missing private
+configuration withholds earlier content and refuses web calls. The outer
+injection guard always fences route outputs and enables the screen. Memory
+is optional and reaches synthesis alone. `graph_file_ingest` and turn-results
+materialisation remain disabled until P4. The rollout still requires live
+acceptance evidence; registration does not change the default agent.
+
 ### Deciding with probabilities
 
 `typedDecision` asks a typed systemone question and records the endpoint's

@@ -37,6 +37,7 @@ const toolSets = {
   context7: ['resolve-library-id', 'get-library-docs'],
   filesystem: ['read_text_file', 'write_file'],
   memory: ['search_nodes', 'read_graph'],
+  graph: ['graph_me', 'graph_mail_recent'],
   all: [] as string[],
 }
 toolSets.all = [
@@ -45,6 +46,7 @@ toolSets.all = [
   ...toolSets.context7,
   ...toolSets.filesystem,
   ...toolSets.memory,
+  ...toolSets.graph,
 ]
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -124,6 +126,7 @@ const AGENTS_DIR = join(process.cwd(), '../packages/agents/agents')
 const AGENT_MODULES = [
   { file: 'search.server.ts', exportName: 'searchAgent' },
   { file: 'general.server.ts', exportName: 'generalAgent' },
+  { file: 'general-next.server.ts', exportName: 'generalNextAgent' },
   { file: 'sandbox.server.ts', exportName: 'sandboxAgent' },
   { file: 'retriever-agent.server.ts', exportName: 'retrieverAgent' },
   { file: 'microsoft-365.server.ts', exportName: 'microsoft365Agent' },
@@ -134,6 +137,7 @@ const AGENT_MODULES = [
 const LOADERS: Record<string, () => Promise<Record<string, unknown>>> = {
   'search.server.ts': () => import('@hames-ai/agents/agents/search.server'),
   'general.server.ts': () => import('@hames-ai/agents/agents/general.server'),
+  'general-next.server.ts': () => import('@hames-ai/agents/agents/general-next.server'),
   'sandbox.server.ts': () => import('@hames-ai/agents/agents/sandbox.server'),
   'retriever-agent.server.ts': () => import('@hames-ai/agents/agents/retriever-agent.server'),
   'microsoft-365.server.ts': () => import('@hames-ai/agents/agents/microsoft-365.server'),
@@ -196,7 +200,14 @@ describe('the inventory is complete', () => {
     )
     const registered = [...registry.matchAll(/overlay\((\w+),/g)].map((m) => m[1]).sort()
     expect(registered).toEqual(
-      ['searchAgent', 'generalAgent', 'sandboxAgent', 'retrieverAgent', 'microsoft365Agent'].sort(),
+      [
+        'searchAgent',
+        'generalAgent',
+        'generalNextAgent',
+        'sandboxAgent',
+        'retrieverAgent',
+        'microsoft365Agent',
+      ].sort(),
     )
     // Every module in `agents/` is now registered: the last unregistered one
     // (`multi-source-research`) was deleted with the GitHub MCP server it was
@@ -310,7 +321,7 @@ describe('agents with NO guard anywhere (pinned gaps)', () => {
 // ============================================================================
 
 describe('roll-up across every agent', () => {
-  it('pins the guarded / unguarded split (3 of 5 agents carry a guard)', async () => {
+  it('pins the guarded / unguarded split (4 of 6 agents carry a guard)', async () => {
     const guarded: string[] = []
     const unguarded: string[] = []
     for (const { file, exportName } of AGENT_MODULES) {
@@ -318,29 +329,31 @@ describe('roll-up across every agent', () => {
       ;(rows.some((r) => r.includes('guarded:')) ? guarded : unguarded).push(file)
     }
     expect(guarded.sort()).toEqual(
-      ['search.server.ts', 'retriever-agent.server.ts', 'microsoft-365.server.ts'].sort(),
+      [
+        'search.server.ts',
+        'general-next.server.ts',
+        'retriever-agent.server.ts',
+        'microsoft-365.server.ts',
+      ].sort(),
     )
     expect(unguarded.sort()).toEqual(['general.server.ts', 'sandbox.server.ts'].sort())
   })
 
-  it('documents current behavior: no agent enables the optional LLM screen', async () => {
-    // `screen` is off everywhere, so the semantic layer is currently dead code
-    // in production — which is worth knowing before reading the screen-gate
-    // findings in `injection-guard-assumptions.test.ts` as a live exposure.
-    // They describe what happens the moment an agent turns it on.
+  it('only general-next enables the optional LLM screen', async () => {
+    // The candidate is the first screen opt-in; the other agents keep their
+    // existing policy. Its semantic layer is part of the S3 composition pins.
     for (const { file } of AGENT_MODULES) {
       const src = readFileSync(join(AGENTS_DIR, file), 'utf8')
-      expect(src).not.toMatch(/\bscreen\s*:/)
+      expect(/\bscreen\s*:/.test(src)).toBe(file === 'general-next.server.ts')
     }
   })
 
-  it('documents current behavior: no agent overrides spotlight or disables a rule', async () => {
-    // Every guarded agent takes the defaults: `spotlight: 'on-detection'`, the
-    // full corpus. So the per-leaf fencing and the false-positive costs
-    // measured in the assumptions suite are what production actually pays.
+  it('only general-next overrides spotlight; no agent disables a rule', async () => {
+    // The candidate takes S-c's always spotlight; the other agents keep
+    // on-detection. Every agent retains the full deterministic corpus.
     for (const { file } of AGENT_MODULES) {
       const src = readFileSync(join(AGENTS_DIR, file), 'utf8')
-      expect(src).not.toMatch(/\bspotlight\s*:/)
+      expect(/\bspotlight\s*:/.test(src)).toBe(file === 'general-next.server.ts')
       expect(src).not.toMatch(/\bdisableRules\s*:/)
     }
   })

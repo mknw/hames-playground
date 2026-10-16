@@ -173,26 +173,20 @@ export function createInjectionGuard(
       const effective = overrides ? { ...options, ...overrides } : options
       let { data: out, report } = sanitizeUntrusted(data, { tool, namespace }, effective)
 
-      // The optional LLM screen is a SECOND OPINION on content the
-      // deterministic layer passed clean — if regexes already fired we have
-      // neutralized and fenced the content, and a second call would buy
-      // nothing. Its failure is non-fatal: a screen that throws (rate limit,
-      // timeout) must not turn a working tool call into an error, so the
-      // deterministic verdict stands and the reason is recorded.
-      //
-      // Gated on FINDINGS, not on `report.neutralized`: with
-      // `spotlight: 'always'` every result comes back "neutralized" (it was
-      // fenced), which silently switched the screen off entirely for the agents
-      // that asked for the STRICTEST setting — a fail-open the tests now pin.
-      if (options.screen && report.findings.length === 0) {
+      // Default: a second opinion on regex-clean content. Opt-in callers can
+      // also screen the sanitized projection after findings; never resubmit or
+      // restore the original spans. Screen outages are recorded and fail open
+      // here; decisionLoop applies its fail-closed output-boundary policy.
+      if (options.screen && (report.findings.length === 0 || options.screenDespiteFindings)) {
+        const screenInput = report.findings.length > 0 ? out : data
         try {
           const verdict = await options.screen({
             tool,
             namespace,
-            content: typeof data === 'string' ? data : JSON.stringify(data),
+            content: typeof screenInput === 'string' ? screenInput : JSON.stringify(screenInput),
           })
           if (verdict.injection_detected) {
-            const screened = applyScreenVerdict(data, verdict, { tool, namespace }, report)
+            const screened = applyScreenVerdict(screenInput, verdict, { tool, namespace }, report)
             out = screened.data
             report = screened.report
           }
@@ -349,6 +343,7 @@ function unionOptions(
     ...(byId.size > 0 ? { rules: [...byId.values()] } : {}),
     spotlight: strictestSpotlight(own.spotlight, outer.spotlight),
     screen: own.screen ?? outer.screen,
+    screenDespiteFindings: own.screenDespiteFindings || outer.screenDespiteFindings,
   }
 }
 

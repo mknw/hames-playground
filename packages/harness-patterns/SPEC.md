@@ -924,6 +924,7 @@ interface InjectionGuardConfig extends InjectionGuardOptions {
   tools?: string[] // explicit per-tool opt-in, added to namespaces
   spotlight?: 'on-detection' | 'always' | 'off' // default 'on-detection'
   screen?: InjectionScreen // optional LLM second opinion; OFF by default
+  screenDespiteFindings?: boolean // screen sanitized content after findings; default false
   rules?: InjectionRule[] // extra rules appended to the corpus
   disableRules?: string[] // corpus rule ids to switch off
 }
@@ -1069,9 +1070,14 @@ overwhelmingly common case must cost zero tokens and carry zero mangling risk.
 `DescribeAnthropic` client. It has its OWN `screen` role in
 `harness-baml/clients.server.ts` rather than riding `describe`, so re-pointing summarization
 at a cheaper model can never silently re-point prompt-injection screening with
-it (SA-M5). The guard calls it **only for content the
-deterministic layer passed clean** — i.e. gated on `findings.length === 0`, see
-the note above — so the two layers divide labour: regexes catch known phrasings,
+it (SA-M5). By default the guard calls it **only for content the
+deterministic layer passed clean**. With `screenDespiteFindings: true`, it also
+screens the deterministically sanitized projection after findings; applying the
+verdict preserves the original rule findings and neutralizations, with exactly
+one fence per string leaf and the original provenance label retained. The
+reference host unfences repeated wrappers to a fixed point before harvesting
+identity fields as defence in depth for older payloads. This option
+unions monotonically across nested guards. Regexes catch known phrasings and
 the screen catches novel ones. A verbatim span it quotes is neutralized like a
 regex match; a span it paraphrased (matching nothing) still forces the fence, so
 a verdict never degrades to silence. A screen that throws is non-fatal — the
@@ -1132,13 +1138,14 @@ alone was not enough: once an inner guard widens the boundary, it is the inner
 guard's config that sanitizes the outer guard's namespaces too, so an inner
 `disableRules` re-opened a hole for tools the inner wrapper never mentioned.
 
-| Dimension            | Nesting rule                                  | Why                                                                                      |
-| -------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `namespaces`/`tools` | union (OR of `isUntrusted`)                   | a narrow inner wrapper must not drop the outer one's coverage for its whole subtree      |
-| `disableRules`       | **intersection** — off only if _both_ agreed  | it is one agent's false-positive escape hatch, not a licence over the enclosing boundary |
-| `rules`              | union, deduped by id                          | extra detection is always safe to inherit                                                |
-| `spotlight`          | strictest (`always` > `on-detection` > `off`) | an inner default must not remove a fence the outer wrapper asked for                     |
-| `screen`             | kept if _either_ has one (inner wins if both) | a nested guard cannot remove a paid-for second layer                                     |
+| Dimension               | Nesting rule                                  | Why                                                                                      |
+| ----------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `namespaces`/`tools`    | union (OR of `isUntrusted`)                   | a narrow inner wrapper must not drop the outer one's coverage for its whole subtree      |
+| `disableRules`          | **intersection** — off only if _both_ agreed  | it is one agent's false-positive escape hatch, not a licence over the enclosing boundary |
+| `rules`                 | union, deduped by id                          | extra detection is always safe to inherit                                                |
+| `spotlight`             | strictest (`always` > `on-detection` > `off`) | an inner default must not remove a fence the outer wrapper asked for                     |
+| `screenDespiteFindings` | true if _either_ requests it                  | an inner guard cannot skip an outer guard’s post-finding screen                          |
+| `screen`                | kept if _either_ has one (inner wins if both) | a nested guard cannot remove a paid-for second layer                                     |
 
 Per-**call** `overrides` still win, because they are a local decision by a known
 call site (the retriever passes `spotlight: 'off'` for a filename, where a
@@ -1730,6 +1737,31 @@ own budget — and `children` are the route patterns, so the capability probes
 by type: `trackHistory ['decision_made', 'controller_action', 'tool_result']`,
 `commitStrategy 'always'`, `errorSeverity 'recoverable'` (the first-iteration
 failure is stamped at the event).
+
+The reference host's `general-next` composition (#507 S3) uses this loop beside
+`general`, without changing the default agent. Its `orchestrator` chooses among
+`office-data` (guarded Microsoft 365 tools and an office sandbox),
+`info-retrieval` (guarded Neo4j reads and web), `read-documents` (the guarded
+Redis retriever, pattern id `retriever`) and `think` (the planner). The web
+route wraps `withReferences` in `withPseudonymisedInputs`, admits only the
+`retriever` sibling plus its own results, excludes sandbox-promoted documents
+from references and expansions, and disables independent prior-turn results. The orchestrator declares `decision_loop_output`, `spotlight: 'always'`
+and a role-resolved screen with `screenDespiteFindings: true`: deterministic
+findings remain neutralized while the screen reviews the sanitized projection.
+Union semantics carry that screen and unconditional
+fencing into every route's tool results, costing a screen call per result. A
+screen failure inside a route is recorded and fails open; at the route-output
+boundary it follows the marker-only policy above. Its thread synthesizer reads this turn's `orchestrator` records.
+
+`general-next` also opts into M7's optional `withMemory`; `general` keeps its
+opt-in until the default-agent flip. Only the candidate's synthesis receives
+recalled memory, while decisions and children receive none. The
+private tier refuses an unconfigured `SMALL_LLM_DECISIONS_URL` visibly, with
+no provider fallback. Until P4, the office allowlist withholds
+`graph_file_ingest` by exact name and declares no turn-results materialisation
+capability. Layer-1 composition pins and the layer-2 graph-count conversation
+live in the host; it consumes the separately pinned core
+`screenDespiteFindings` opt-in.
 
 ### `judge(evaluator, config?)`
 

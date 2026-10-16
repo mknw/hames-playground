@@ -143,8 +143,18 @@ function literalCheck(table: PseudonymTable, latestUserMessage: string) {
   }
 }
 
+// Older guarded payloads may contain nested fences. Harvest identity values,
+// never a leftover provenance header, even when those payloads are replayed.
+function unfenceRosterValue(text: string): string {
+  for (;;) {
+    const body = unspotlight(text)
+    if (body === text) return text
+    text = body
+  }
+}
+
 const harvest = (payloads: unknown) =>
-  extractRoster(mapStrings(payloads, unspotlight))
+  extractRoster(mapStrings(payloads, unfenceRosterValue))
     .map((entry) => ({
       ...entry,
       name: isPlaceholder(entry.name) ? null : entry.name,

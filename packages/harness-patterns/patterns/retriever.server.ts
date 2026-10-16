@@ -61,6 +61,8 @@ assertServerOnImport()
 /** A normalized retrieval result. `score` is a distance (lower = closer) when
  *  the backend reports one; cross-backend comparability is best-effort. */
 export interface RetrievalHit {
+  /** Persisted non-content origin of the source document, when promoted. */
+  provenance?: 'sandbox-output'
   /** Which backend produced this hit (e.g. 'redis', 'supabase'). */
   backend: string
   /** Stable id/reference for the match within its backend. */

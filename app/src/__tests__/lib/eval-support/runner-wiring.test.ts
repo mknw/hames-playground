@@ -41,7 +41,7 @@ it('awaits production wake after starting the scenario clock, fails and stops wi
   )
   expect(s.indexOf('await ensurePrivateTierAwake()')).toBeLessThan(s.indexOf('await driver.run('))
   expect(s).toMatch(
-    /catch\s*\{\s*budget.reason = 'VERDA_WAKE_FAILED'\s*results.push\(\{[^}]*status: 'fail'[^}]*VERDA_WAKE_FAILED[^}]*\}\)\s*tick\(\)\s*stop\(\)/,
+    /catch\s*(?:\(err\)\s*)?\{\s*budget.reason = 'VERDA_WAKE_FAILED'\s*(?:wakeDetail = describeWakeFailure\(err\)\s*)?results.push\(\{[^}]*status: 'fail'[^}]*VERDA_WAKE_FAILED[^}]*\}\)\s*tick\(\)\s*stop\(\)/,
   )
 })
 it('poisons after dotenv loading and before any inference configuration', () => {
@@ -75,7 +75,9 @@ it('uses live production metadata, records refusing writes, and never returns a 
   const driver = read('evals/general-next/driver.ts')
   expect(run()).toContain('productionCatalog(')
   expect(run()).toContain('createDriver(fake, live, liveCatalog)')
-  expect(driver).toMatch(/const descriptions = live\s*\?\s*Object.keys\(NAMESPACES\)/)
+  expect(driver).toMatch(
+    /const descriptions = live\s*\?\s*liveDescriptions\(\s*Object.keys\(NAMESPACES\)/,
+  )
   expect(driver).toContain("write_neo4j_cypher: 'neo4j'")
   expect(driver).toContain("name !== 'write_neo4j_cypher'")
   expect(driver).toContain('trace?.tools.push({ name, args, success, turn })')

@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import type { AgentDefinition, AgentDeps } from '@hames-ai/agents'
 import type { MCPToolDescription } from '@hames-ai/harness-patterns'
 import type { ConversationDriver, ConversationScenario, ConversationTrace } from './types'
+import { liveDescriptions } from '../../src/lib/eval-support/live-descriptions'
 import type { fixtureInference } from './fixture-inference'
 
 const NOTES =
@@ -70,11 +71,7 @@ export async function createDriver(
     },
   }))
   const descriptions = live
-    ? Object.keys(NAMESPACES).map((name) => {
-        const tool = liveCatalog.find((t) => t.name === name)
-        if (!tool) throw new Error(`Production tool metadata missing: ${name}`)
-        return tool
-      })
+    ? liveDescriptions(Object.keys(NAMESPACES), liveCatalog, fixtureDescriptions)
     : fixtureDescriptions
   const transport = {
     id: 'general-eval-synthetic-only',

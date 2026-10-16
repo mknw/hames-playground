@@ -98,6 +98,9 @@ function buildSynthesisInputFromView(
         : view.fromLastPattern()
       const toolEvents = threadView.tools().get()
       const actionEvents = threadView.actions().get()
+      // The text of a Return-only turn — set below, only when nothing else in
+      // the thread reaches the synthesizer.
+      let returnOnlyText: string | undefined
 
       // Build loop history from events if available
       if (toolEvents.length > 0 || actionEvents.length > 0) {
@@ -196,6 +199,18 @@ function buildSynthesisInputFromView(
 
         // Nothing left to reconstruct: fall through to the existing
         // no-loopHistory path below, which downgrades thread → response mode.
+        // That path used to hand the synthesizer NOTHING when the controller
+        // answered without calling a tool: the dropped `Return` carried the
+        // only content of the turn (its text, in `tool_args`), and no loop
+        // writes `data.response`. So a thread with no real iteration keeps the
+        // last `Return`'s text as the response. A turn that DID call a tool
+        // keeps dropping it — there the `Return` is a summary and the tool
+        // results are what the synthesizer authors from (#149).
+        if (real.length === 0) {
+          const ret = iterations.findLast((it) => it.action.tool_name === 'Return')
+          const text = typeof ret?.action.tool_args === 'string' ? ret.action.tool_args.trim() : ''
+          if (text) returnOnlyText = text
+        }
         if (real.length > 0) {
           input.loopHistory = {
             iterations: real,
@@ -205,7 +220,7 @@ function buildSynthesisInputFromView(
         }
       }
 
-      input.response = data.response
+      input.response = data.response ?? returnOnlyText
       break
     }
   }

@@ -704,6 +704,15 @@ turn) for a text nothing read.
   `loopHistory.iterations[].action`. Making the loop's answer _suppress_
   synthesis is #149 Option B and is deliberately not built.
 
+**One exception: a Return-only turn (#610).** The above holds for a turn that
+called a tool. When the controller answers WITHOUT calling one, the terminal
+`Return` is the only content the turn produced, and dropping it left the
+synthesizer with no turns at all ("tool results were not provided"). So in
+`thread` mode, when no real iteration survives the drop, `compactExecution`
+passes the last `Return`'s trimmed text as the input's `response` (the usual
+response-mode downgrade then hands it to `Synthesize` as a direct response). An
+explicit `data.response` wins; a turn with any tool iteration is unchanged.
+
 The default is safe because `compactExecution` is the better-informed author in
 every shipped chain: it reads results at full fidelity (no `maxResultChars`
 clip, no `resultOmit` projection — `microsoft-365` hides `webUrl` from its

@@ -57,6 +57,11 @@ def reasoning_of(message: dict) -> str:
     return message.get("reasoning") or message.get("reasoning_content") or ""
 
 
+def reasoning_fields(message: dict) -> list[str]:
+    """Which reasoning field names the box filled; the app-side design needs the name."""
+    return [name for name in ("reasoning", "reasoning_content") if message.get(name)]
+
+
 def main() -> int:
     base = os.environ.get("HAMES_MODAL_27B_URL", "").rstrip("/")
     token = os.environ.get("HAMES_MODAL_PROXY_TOKEN", "")
@@ -89,10 +94,12 @@ def main() -> int:
     text = (message.get("content") or "").strip()
     check("VerdaQwen body: 200", status == 200, f"{seconds:.2f}s")
     check("VerdaQwen body: finished, not cut off", choice.get("finish_reason") == "stop", f"{choice.get('finish_reason')}")
-    check(
-        "VerdaQwen body: thinking off means no reasoning anywhere",
-        bool(text) and "<think" not in text and "</think>" not in text and not reasoning_of(message),
-    )
+    # A 200 is not enough: a parser that files a tag-less answer under the
+    # reasoning field returns an empty content, which the app reads as an empty
+    # completion on every call.
+    check("VerdaQwen body: content is non-empty", bool(text))
+    check("VerdaQwen body: no thinking tags in content", "<think" not in text and "</think>" not in text)
+    check("VerdaQwen body: reasoning field empty or null", not reasoning_of(message), f"{reasoning_fields(message)}")
     try:
         parsed = json.loads(text[text.index("{") : text.rindex("}") + 1])
     except ValueError:
@@ -104,16 +111,22 @@ def main() -> int:
     message = choice.get("message") or {}
     text = message.get("content") or ""
     check("thinking on: 200 and finished", status == 200 and choice.get("finish_reason") == "stop", f"{seconds:.2f}s")
+    usage = body.get("usage") or {}
     check(
         "thinking on: reasoning in its own field, none in content",
         bool(reasoning_of(message)) and "<think" not in text and "</think>" not in text,
-        f"{len(reasoning_of(message))} reasoning chars",
+        f"fields {reasoning_fields(message)}, {len(reasoning_of(message))} reasoning chars, {len(text)} content chars,"
+        f" completion_tokens {usage.get('completion_tokens')}"
+        f" (a count far above content chars / 4 means the trace is included)",
     )
     check("thinking on: answers", "no" in text.lower(), json.dumps(text[:80]))
 
     # The surface that must stay closed, now that the box is up.
     for path in ("/sleep?level=1", "/wake_up", "/is_sleeping", "/collective_rpc", "/reset_prefix_cache",
-                 "/v1/completions", "/v1/responses", "/tokenize", "/metrics", "/metrics/../v1/models"):
+                 "/v1/completions", "/v1/responses", "/tokenize", "/metrics",
+                 # Dot segments are resolved before the route list is matched, so a
+                 # traversal is only a bypass if it LANDS on an unlisted route.
+                 "/v1/models/../../metrics", "/v1/chat/completions/../../sleep"):
         status, _, _ = call(base, token, "POST", path, {})
         check(f"{path.split('?')[0]} is not reachable", status == 404, f"status {status}")
     image = {

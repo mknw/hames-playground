@@ -254,7 +254,7 @@ export function accountBamlCall(
     metrics: callMetrics,
     durationMs: measuredDurationMs(last),
   })
-  const violation = thinkingFunctionViolation(functionName, selectedCall?.clientName)
+  const violation = thinkingFunctionViolation(functionName, selectedCall)
   if (violation) {
     const record = llmCall ?? buildLLMCallDataFromLog(last, functionName, {}, Date.now())
     throw new LLMCallError(violation, {
@@ -267,13 +267,21 @@ export function accountBamlCall(
   }
 }
 
-function thinkingFunctionViolation(functionName: string, clientName?: string): string | undefined {
+function thinkingFunctionViolation(functionName: string, call?: CollectorCall): string | undefined {
+  const clientName = call?.clientName
+  let requestThinking = false
+  try {
+    const body = call?.httpRequest?.body?.json() as
+      { chat_template_kwargs?: { enable_thinking?: unknown } } | undefined
+    requestThinking = body?.chat_template_kwargs?.enable_thinking === true
+  } catch {
+    // Some failed attempts have no rendered JSON body; the leaf-name policy still applies.
+  }
   if (
-    clientName &&
-    THINKING_CLIENTS.has(clientName) &&
-    !THINKING_FUNCTIONS_BY_CLIENT[clientName]?.includes(functionName)
+    ((clientName && THINKING_CLIENTS.has(clientName)) || requestThinking) &&
+    !THINKING_FUNCTIONS_BY_CLIENT[clientName ?? '']?.includes(functionName)
   ) {
-    return `${functionName} selected a thinking leaf '${clientName}' without a designated counterpart`
+    return `${functionName} selected a thinking leaf '${clientName ?? 'unknown'}' without a designated counterpart`
   }
 }
 
@@ -748,7 +756,7 @@ function planParseRetry(
   const selected = calls.find((call) => call.selected) ?? calls[calls.length - 1]
   // A hidden thinking leaf is a policy violation, even if its trace consumed
   // the whole output cap. Never send a corrective retry to that same leaf.
-  if (thinkingFunctionViolation(functionName, selected?.clientName)) return null
+  if (thinkingFunctionViolation(functionName, selected)) return null
   if (collectorHitOutputCap(collector)) return { guidance: TRUNCATION_RETRY_GUIDANCE }
   if (collectorReturnedNoText(collector)) return { guidance: null }
   return null
@@ -1104,7 +1112,7 @@ export function createLoopControllerAdapter(
     // self-hosted deployment (`clients.server.ts`). A structured-output
     // failure that is not a truncation or an empty completion propagates:
     // there is no second provider to escalate to on either route.
-    const baseOpts = { collector, ...clientOverrideFor('controller') }
+    const baseOpts = { ...clientOverrideFor('controller'), collector }
     let action: ControllerAction
     try {
       action = await b.LoopController(
@@ -1287,7 +1295,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
     const override = clientOverrideFor('planner')
     const requestedThinking = THINKING_CLIENTS.has(override?.client ?? '')
     const functionName = requestedThinking ? 'PlannerThinking' : 'Planner'
-    const baseOpts = { collector, ...override }
+    const baseOpts = { ...override, collector }
     const selectedCall = (source = collector) => {
       const calls = (source.last?.calls ?? []) as CollectorCall[]
       return calls.find((call) => call.selected) ?? calls[calls.length - 1]
@@ -1601,7 +1609,7 @@ export function createActorControllerAdapter(
     // else — including a genuine structured-output failure, a network error or
     // a pre-call throw — is wrapped as `LLMCallError` so the observability
     // panel keeps the captured prompt/variables drill-down.
-    const baseOpts = { collector, ...clientOverrideFor('controller') }
+    const baseOpts = { ...clientOverrideFor('controller'), collector }
     let action: ControllerAction
     try {
       action = await b.ActorController(
@@ -1740,7 +1748,7 @@ export function createCriticAdapter(): CriticAdapterFn {
     // bag, so the old with/without-opts dual call is gone. `actorCritic.baml`
     // declares `CriticAnthropic`, overridden onto the self-hosted deployment
     // when `USE_VERDA_INFERENCE=1` re-points the `critic` role.
-    const criticOpts = { collector, ...clientOverrideFor('critic') }
+    const criticOpts = { ...clientOverrideFor('critic'), collector }
     let result: CriticResult
     try {
       result = await b.Critic(intent, attempts, criticOpts)
@@ -1781,8 +1789,8 @@ export async function describeToolResultOp(
   const { b } = await import('./baml_client')
   return withUsageAccounting('ResultDescribe', (opts) =>
     b.ResultDescribe(tool, toolArgs, reasoning, result, {
-      ...opts,
       ...clientOverrideFor('describe'),
+      ...opts,
     }),
   )
 }
@@ -1823,8 +1831,8 @@ export async function describeToolResultsBatchOp(
   // throws to the caller, which logs the N+1 fallback it then pays for.
   const batch = await withUsageAccounting('ResultDescribeBatch', (opts) =>
     b.ResultDescribeBatch(targets, {
-      ...opts,
       ...clientOverrideFor('describe'),
+      ...opts,
     }),
   )
   for (const entry of batch?.summaries ?? []) {
@@ -1923,8 +1931,8 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
     // seam every other routed call uses.
     const verdict = await withUsageAccounting('ScreenUntrustedContent', (opts) =>
       b.ScreenUntrustedContent(source, body, {
-        ...opts,
         ...clientOverrideFor('screen'),
+        ...opts,
       }),
     )
 

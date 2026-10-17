@@ -16,11 +16,28 @@ import { observeLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.s
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 afterEach(() => vi.restoreAllMocks())
 
-function collector(selected = 'VerdaQwenThink', last = 'VerdaQwen'): Collector {
+function collector(
+  selected = 'VerdaQwenThink',
+  last = 'VerdaQwen',
+  selectedThinking?: unknown,
+  lastThinking?: unknown,
+): Collector {
   const log = {
     calls: [
-      { selected: true, clientName: selected },
-      { selected: false, clientName: last },
+      {
+        selected: true,
+        clientName: selected,
+        httpRequest: {
+          body: { json: () => ({ chat_template_kwargs: { enable_thinking: selectedThinking } }) },
+        },
+      },
+      {
+        selected: false,
+        clientName: last,
+        httpRequest: {
+          body: { json: () => ({ chat_template_kwargs: { enable_thinking: lastThinking } }) },
+        },
+      },
     ],
     rawLlmResponse: 'Synthetic content',
   }
@@ -54,6 +71,21 @@ describe('thinking leaf function policy', () => {
       accountBamlCall(collector('VerdaQwen', 'VerdaQwenThink'), 'LoopController'),
     ).not.toThrow()
     expect(() => accountBamlCall(collector(), 'PlannerThinking')).not.toThrow()
+  })
+
+  it('reads thinking only from the selected request and retains exact function designation', () => {
+    expect(() =>
+      accountBamlCall(collector('Sneaky', 'Other', false, true), 'LoopController'),
+    ).not.toThrow()
+    expect(() =>
+      accountBamlCall(collector('Sneaky', 'Other', true, false), 'LoopController'),
+    ).toThrow(/selected a thinking leaf/)
+    expect(() => accountBamlCall(collector('Sneaky', 'Other', true), 'PlannerThinking')).toThrow(
+      /selected a thinking leaf/,
+    )
+    expect(() =>
+      accountBamlCall(collector('VerdaQwenThink', 'Other', true), 'PlannerThinking'),
+    ).not.toThrow()
   })
 
   it('keeps fatal refusal metadata and does not wrap or account it again', () => {

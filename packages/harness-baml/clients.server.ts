@@ -563,6 +563,10 @@ export const THINKING_CLIENTS: ReadonlySet<string> = new Set(
 export const THINKING_ROLES: ReadonlySet<BamlRole> = new Set(['planner'])
 
 function assertThinkingOverride(role: BamlRole, bag: BamlClientOverride): void {
+  // Routing overrides must never replace implementation-owned accounting.
+  if ('collector' in bag) {
+    throw new Error('Client override must not carry a collector; the adapter owns accounting')
+  }
   if (
     THINKING_CLIENTS.has(bag.client) &&
     (!THINKING_ROLES.has(role) || activeInferenceTier() !== 'verda')
@@ -748,7 +752,7 @@ export function activeInferenceTier(): InferenceTier {
  * Spread the result into the BAML call's options bag, and branch on whether
  * the bag ended up empty rather than on `collector`:
  *
- *   const opts = { ...(collector ? { collector } : {}), ...clientOverrideFor('controller') }
+ *   const opts = { ...clientOverrideFor('controller'), ...(collector ? { collector } : {}) }
  *   const hasOpts = Object.keys(opts).length > 0
  *
  * The generated BAML functions take their arguments POSITIONALLY, so passing

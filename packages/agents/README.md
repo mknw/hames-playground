@@ -138,8 +138,9 @@ configured in
 
 ### How the shipped agents are composed
 
-`general-next` is the selectable decision-loop candidate beside `general`;
-the default remains `search`. It requires `deps.withSandbox` and
+`general-next` is the decision-loop agent. HELD flip: it takes `general`'s
+picker slot and is the agent a new chat opens with; `general` stays a package
+export (the Eval baseline). It requires `deps.withSandbox` and
 `deps.createRedisBackend`, and accepts `deps.pseudonymiseForWeb` for the
 web route. It chooses among Microsoft 365 work, Neo4j/web lookup,
 conversation-document retrieval and planning, then synthesizes once from the
@@ -157,8 +158,8 @@ content on the private tier. Missing private host wiring withholds earlier
 content and refuses web calls. An unconfigured private decisions endpoint
 produces a visible error without public fallback.
 
-`general-next` also opts into optional memory; `general` keeps its opt-in until
-the default-agent flip. Only the candidate's final synthesis receives recalled
+`general-next` also opts into optional memory, and since the flip `general` does
+not: the opt-in moved with the default. Only the final synthesis receives recalled
 memory. Graph file ingestion and turn-results materialisation stay disabled
 until their dedicated integration. The default-agent rollout remains gated by
 the design's acceptance evidence. See the

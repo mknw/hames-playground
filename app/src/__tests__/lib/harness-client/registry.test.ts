@@ -104,7 +104,7 @@ beforeEach(() => {
 describe('registration + lookup', () => {
   it('registers the bundled agents on import', () => {
     expect(getAllAgents().map((a) => a.id)).toEqual(
-      expect.arrayContaining(['search', 'general', 'sandbox', 'retriever', 'microsoft-365']),
+      expect.arrayContaining(['search', 'general-next', 'sandbox', 'retriever', 'microsoft-365']),
     )
   })
 
@@ -114,6 +114,19 @@ describe('registration + lookup', () => {
   it('registers exactly one sandbox agent, and neither of the two it replaced', () => {
     const ids = getAllAgents().map((a) => a.id)
     expect(ids.filter((id) => id.includes('sandbox'))).toEqual(['sandbox'])
+  })
+
+  // HELD flip (#507, ruling C=B+A): general-next replaces general in the PICKER; stored
+  // 'general' rows keep opening on `general` (no legacy-id mapping forward).
+  it('lists general-next and not general, yet general still resolves to itself', () => {
+    const meta = getAgentMetadata()
+    const listed = meta.filter((m) => m.listed).map((m) => m.id)
+    expect(listed).toContain('general-next')
+    expect(listed).not.toContain('general')
+    // ...but the metadata still carries it, so the picker can name an old row's own agent.
+    expect(meta.find((m) => m.id === 'general')?.listed).toBe(false)
+    expect(getAgent('general')?.id).toBe('general')
+    expect(canonicalAgentId('general')).toBe('general')
   })
 
   it('returns undefined for an unknown id rather than throwing', () => {
@@ -173,6 +186,7 @@ describe('registration + lookup', () => {
       // A definition that does not declare a sandbox has none — sent as an
       // explicit `false`, so the client never interprets an absent flag.
       usesSandbox: false,
+      listed: true,
     })
     expect('createPatterns' in meta).toBe(false)
   })

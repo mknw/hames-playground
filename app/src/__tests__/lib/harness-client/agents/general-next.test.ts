@@ -794,6 +794,19 @@ describe('general-next composition', () => {
     expect(mocks.synthesize).not.toHaveBeenCalled()
   })
 
+  // #507 flip, review finding 2: the flip makes the Anthropic-tier decisions endpoint a
+  // requirement of every new chat; unset, the turn must end visibly and call nothing.
+  it('P5b: an unconfigured Anthropic decisions endpoint ends visibly before any route or synthesis', async () => {
+    vi.stubEnv('JEV_DECISIONS_URL', '')
+    const result = await run('anthropic')
+    expect(result.status).toBe('error')
+    expect(result.context.error).toContain('JEV_DECISIONS_URL')
+    expect(requests).not.toHaveBeenCalled()
+    expect(mocks.controller).not.toHaveBeenCalled()
+    expect(mocks.actor).not.toHaveBeenCalled()
+    expect(mocks.synthesize).not.toHaveBeenCalled()
+  })
+
   it('M7: also opts into memory and gives recalled data only to synthesis', async () => {
     const memory = { owner: () => null, enabled: () => false } as unknown as MemoryConfig
     const patterns = await agent.createPatterns('synthetic-session', { ...deps, memory })
@@ -806,7 +819,7 @@ describe('general-next composition', () => {
     const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
     expect(
       harnessUsesMemory(await generalAgent.createPatterns('old-general', { ...deps, memory })),
-    ).toBe(true)
+    ).toBe(false)
     const ctx = createContext<AgentData>('synthetic task', {
       memories: [{ content: 'MEMORY-SENTINEL' }],
       memoryContext: 'MEMORY-SENTINEL',
@@ -843,13 +856,26 @@ describe('general-next composition', () => {
     },
   )
 
-  it('registers the candidate with its app-side glyph while the default stays search', () => {
+  it('replaces general in the picker, leaves stored general ids on general, and makes general-next the one default agent id', () => {
     const registry = readFileSync('src/lib/harness-client/registry.server.ts', 'utf8')
     expect(registry).toContain("overlay(generalNextAgent, 'i-material-symbols-route', 'indigo')")
-    expect(readFileSync('src/lib/harness-client/agent-ids.ts', 'utf8')).not.toMatch(/general-next/)
-    expect(readFileSync('src/routes/index.tsx', 'utf8')).toContain("createSignal<string>('search')")
-    const actions = readFileSync('src/lib/harness-client/actions.server.ts', 'utf8')
-    expect(actions).toContain("return processMessageWithAgent(sessionId, message, 'search')")
-    expect(actions).toContain("agentId: string = 'search'")
+    // Ruling C=B+A: stored `general` rows keep opening on `general` — no forward mapping, and
+    // the agent stays registered, only unlisted.
+    expect(readFileSync('src/lib/harness-client/agent-ids.ts', 'utf8')).not.toMatch(/^\s*general:/m)
+    expect(registry).toMatch(/overlay\(generalAgent,[^;]*?\{\s*listed: false,?\s*\}/)
+    expect(readFileSync('src/lib/harness-client/agent-ids.ts', 'utf8')).toContain(
+      "DEFAULT_AGENT_ID = 'general-next'",
+    )
+    // Every site that names no agent reads the one constant and spells no literal id.
+    for (const file of [
+      'src/routes/index.tsx',
+      'src/components/ark-ui/ChatInterface.tsx',
+      'src/lib/harness-client/actions.server.ts',
+      'src/routes/api/events.ts',
+    ]) {
+      const source = readFileSync(file, 'utf8')
+      expect(source, file).toContain('DEFAULT_AGENT_ID')
+      expect(source, file).not.toMatch(/['"]search['"]\)|= 'search'|\?\? 'search'/)
+    }
   })
 })

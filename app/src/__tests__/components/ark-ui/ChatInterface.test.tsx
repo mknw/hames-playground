@@ -19,6 +19,7 @@
  * assertions read the registry rather than a hand-rolled stand-in that could
  * drift from it.
  */
+import { DEFAULT_AGENT_ID } from '~/lib/harness-client/agent-ids'
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { render } from '@solidjs/testing-library'
 import { createSignal, createRoot, type JSX } from 'solid-js'
@@ -44,13 +45,14 @@ const loadConversation = vi.fn()
 const promoteAction = vi.fn()
 const AGENTS = [
   {
-    id: 'search',
+    id: DEFAULT_AGENT_ID,
     name: 'Default',
     description: 'The generalist',
     welcome: 'I route your question to the graph or the web.',
     icon: 'i-x',
     servers: ['neo4j'],
     usesSandbox: false,
+    listed: true,
   },
   {
     id: 'kg',
@@ -60,6 +62,7 @@ const AGENTS = [
     icon: 'i-y',
     servers: ['neo4j', 'memory'],
     usesSandbox: false,
+    listed: true,
   },
   {
     id: 'box',
@@ -69,6 +72,7 @@ const AGENTS = [
     icon: 'i-z',
     servers: [],
     usesSandbox: true,
+    listed: true,
   },
 ]
 const getAgentList = vi.fn(async () => AGENTS)
@@ -377,14 +381,14 @@ describe('ChatInterface — hydration', () => {
     ))
     await settle()
 
-    expect(onSelectedAgentChange).toHaveBeenLastCalledWith('search', undefined)
+    expect(onSelectedAgentChange).toHaveBeenLastCalledWith(DEFAULT_AGENT_ID, undefined)
   })
 
   // Regression for the field-picking bug called out in the source: an error
   // bubble's hint/patternId/turnInfo must survive a reload.
   it('keeps the hint and attribution on a replayed error bubble', async () => {
     loadConversation.mockResolvedValue({
-      agentId: 'search',
+      agentId: DEFAULT_AGENT_ID,
       kind: 'conversation',
       serialized: '{}',
       messages: [
@@ -409,7 +413,7 @@ describe('ChatInterface — hydration', () => {
 
   it('survives a thread whose serialized context is unparseable', async () => {
     loadConversation.mockResolvedValue({
-      agentId: 'search',
+      agentId: DEFAULT_AGENT_ID,
       kind: 'conversation',
       serialized: 'not json',
       messages: [{ id: 'm1', role: 'user', content: 'hi', timestamp: '2026-05-10T09:00:00Z' }],
@@ -426,7 +430,7 @@ describe('ChatInterface — hydration', () => {
 
   it('reloads and resets the panels when the route swaps in another session', async () => {
     loadConversation.mockImplementation(async (sid: string) => ({
-      agentId: 'search',
+      agentId: DEFAULT_AGENT_ID,
       kind: 'conversation',
       serialized: '{}',
       messages: [
@@ -455,7 +459,7 @@ describe('ChatInterface — hydration', () => {
   // conversation is the one on screen (SA-H8 / #226 B1).
   it('files a replayed graph in its own thread and highlights it while displayed', async () => {
     loadConversation.mockResolvedValue({
-      agentId: 'search',
+      agentId: DEFAULT_AGENT_ID,
       kind: 'conversation',
       serialized: JSON.stringify({ events: [toolResult(singleNodeFixture)] }),
       messages: [],
@@ -475,13 +479,19 @@ describe('ChatInterface — hydration', () => {
       (sid: string) =>
         new Promise((resolve) => {
           const payload = {
-            agentId: 'search',
+            agentId: DEFAULT_AGENT_ID,
             kind: 'conversation',
             serialized: JSON.stringify({ events: [toolResult(singleNodeFixture)] }),
             messages: [],
           }
           if (sid === 's1') releaseS1 = () => resolve(payload)
-          else resolve({ agentId: 'search', kind: 'conversation', serialized: '{}', messages: [] })
+          else
+            resolve({
+              agentId: DEFAULT_AGENT_ID,
+              kind: 'conversation',
+              serialized: '{}',
+              messages: [],
+            })
         }),
     )
     const onHighlightEntities = vi.fn()
@@ -532,7 +542,7 @@ describe('ChatInterface — sending a message', () => {
     expect(JSON.parse(init.body)).toMatchObject({
       sessionId: 's1',
       message: 'what nodes exist?',
-      agentId: 'search',
+      agentId: DEFAULT_AGENT_ID,
     })
     expect(transcript(container)).toContain('what nodes exist?')
     expect(transcript(container)).toContain('Here is your answer.')
@@ -880,7 +890,7 @@ describe('ChatInterface — composer gates', () => {
 describe('ChatInterface — action promotion gate', () => {
   const asAction = () =>
     loadConversation.mockResolvedValue({
-      agentId: 'search',
+      agentId: DEFAULT_AGENT_ID,
       kind: 'action',
       serialized: '{}',
       messages: [

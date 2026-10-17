@@ -358,6 +358,120 @@ This is consistent with ADR-0006. The input half rewrites the view and data a ch
 
 Mutations: drop the `apply` call; skip the data rewrite; narrow the roster input to the last-N records; move the key deletion out of the `finally`; drop the placeholder-token rule; skip the expansion path; turn the tier rule back into a positive private-tier match; let a missing pseudonymiser pass through; delete the outgoing check; make a nested `egressChecks` replace instead of concatenate.
 
+## Writes, gated by a person
+
+Ruled by the owner on 2026-10-16, closing #396 (read-only Cypher by default) in favour of this: `general-next` may write, and **every write waits for the person's approval**. On 2026-10-17 the owner set the bar for the resume: **after an approval the run continues as if it had not stopped**, inside the route that proposed the write, including whatever the agent planned to do after it. Slice 6 (resume inside a route), slice 8 (the gated write) and slice 9 (the UI) build it.
+
+### What is gated
+
+- **Neo4j writes.** No agent can write today: `write_neo4j_cypher` is withheld from every agent (`packages/harness-patterns/agent-withheld-tools.ts:35-45, 67-68`), and the gateway serves `neo4j-cypher` with `read_only: true`. **Both stay.** The agent gets a different tool, a **write request** (working name `cypher_write_request`), whose executor never writes. It checks the statement, stores it, asks the person and returns the `held()` placeholder (`packages/harness-patterns/hitl.server.ts:451-456`). The write runs only in the host's `resolve`, after an approval ([below](#where-the-write-runs-the-hosts-resolve)). An allowlist slip therefore cannot hand an agent a writing tool: the barrier stays structural (SD-14), and a person's answer is the only path to a write session.
+- **Microsoft 365 writes.** None exist. Every registered `graph` tool reads (`packages/connectors/graph/graph-tools.server.ts:1318-1903`), although the consented scopes include `Mail.Send` and `Calendars.ReadWrite`, with the note that any future write tool carries its own confirmation gate (`app/src/lib/auth/entra-config.server.ts:66-72`). The rule here: a Microsoft 365 write ships only as a write request of the same shape. It would live in `office-data`, which runs in a sandbox, and v1 does not resume a sandbox route ([below](#resume-inside-a-route-slice-6)), so it also waits for that.
+- **Sandbox promotion: not gated.** Promotion is the owner-scoped `/work` ⇄ Data Stash sync that S-e names as the only way derived files leave the sandbox. It writes into this conversation's stash, never outside our environment, and it already runs in a `finally`, even on a pause (`packages/sandbox/with-sandbox.server.ts:833-842`). Gating it would ask the person about every chart.
+
+### Where the write request lives (owner call H1)
+
+Recommended: **a separate route, `graph-edit`**: a `simpleLoop` over the Neo4j read tools plus the write request, guarded on `neo4j`, with no web tools and no pseudonymisation wrapper. Its description: "Change the knowledge graph; every change waits for the person's approval". Two reasons:
+
+1. A write composed in the same loop as `web_search` and `fetch` puts untrusted web text one step from a write. The separate route reads only the graph and the handoff, which is sanitized, fenced and capped.
+2. On the private tier `info-retrieval` sees earlier results through G14's rewrite, so a statement composed there can carry `PERSON_3` where a real name belongs. No table is kept, so nothing could turn it back.
+
+The alternative, the write request inside `info-retrieval`, saves one route option and keeps both problems.
+
+### What the request checks before it asks
+
+Each refusal is a recoverable tool failure with fixed feedback, as G14's egress denials are:
+
+- **A placeholder token** (`PERSON_<n>` with any suffix, matched as a pattern as in E3) anywhere in the statement or parameters: "this is a privacy placeholder, not a real value; ask the person for it". `info-retrieval`'s route output keeps its placeholders (G14), so even the separate route can receive one through the handoff.
+- **A guard marker** (a `⟦` provenance fence or a `⟦neutralized:…⟧` marker) in the arguments. A span neutralized upstream must never be written back into the graph, where later reads would serve it as trusted data.
+- **Size.** The statement and its parameters are capped (e.g. 8 KB).
+- **A statement Neo4j cannot plan.** The request runs `EXPLAIN` on it, which plans and never executes. A planning error goes back to the controller to fix.
+- **A batch.** A write request is never part of a multi-call turn: a batch containing one is refused with "send a write request on its own". So every pause sits on a single call, which is what the resume rebuilds.
+
+### What the person sees
+
+The request event carries display primitives only (`summary` is "display only, and untrusted", `packages/harness-patterns/types.ts:1517-1518`). The statement itself goes into the host store behind `payloadRef` (`:1519-1520`): the `hitl_requests` payload column is encrypted at rest, keyed by `requestId` and owner. The dialog shows:
+
+1. **The statement and its parameters, verbatim**, as monospace text nodes after the server-side `displayText` pass (`app/src/lib/memory/display-text.ts:14-22`), never as markup.
+2. **What it does**, read from the `EXPLAIN` plan's operators: creates, merges, property sets and removals, deletes and detach-deletes, and every procedure call by name. A plan containing a delete gives Approve the danger tone. There are no counts, because counting needs execution.
+3. **Which route proposed it, and what this turn read first**: counts by untrusted source ("3 web results, 2 mails") and how many spans the guard neutralized this turn. Code computes both from the run's `tool_result` events and their `sanitized` summaries.
+4. **Approve** and **Reject.** Reject is the default and the option the unattended rule picks; Approve carries no unattended flag. So a triggered run or a routine never writes. Reject does not stop the run: the loop continues with "rejected; nothing was written", and the agent says so.
+
+**No dry run.** Running the statement in a transaction and rolling it back would give real counts, but some procedures commit transactions of their own (APOC's periodic procedures among them). A rolled-back "preview" could therefore still write: a statement composed after reading untrusted content would have taken effect before anyone approved it. `EXPLAIN` names the operations without running anything.
+
+**Who may approve (owner call H2).** Every user reads the same graph. Recommended for v1: any allow-listed user may approve a write proposed in their own conversation, the same boundary every other action uses (SD-15). Revisit with roles under Entra SSO (#119).
+
+### Where the write runs: the host's `resolve`
+
+`resumeHarness` calls the host's `resolve(request, answer)` once per answer, after every check and before re-entry. What it returns is recorded, and sanitized it becomes the held result (`packages/harness-patterns/harness.server.ts:368-391`; SPEC resume step 9). Today the host passes one function, the quarantine delete (`app/src/lib/harness-client/turn.server.ts:893-901`). Slice 8 makes it dispatch on `request.kind`:
+
+- **`graph-write`, Approve.** Load the frozen statement by `payloadRef`; check that its owner is the resuming user and that its `requestId` matches; run it in a write transaction; return `{ status: 'written', counters }` (nodes and relationships created or deleted, properties set). A Neo4j error returns `{ status: 'failed', error }`: the run continues, and the agent reports it.
+- **Reject.** `{ status: 'rejected' }`. Nothing is opened.
+- **Idempotent per `requestId`.** This is required (Δ4): when a later `resolve` throws, the retry calls every `resolve` again. The write transaction checks for, and creates, one bookkeeping node keyed by `requestId` that holds the counters. A retry finds it and returns the stored counters without writing. Only a marker inside the same transaction makes the write exactly-once, because it commits or rolls back with the write. The cost is one marker node per approved write, under a label readers ignore.
+- The executor is an app-side module and never a `'use server'` export, because it takes an owner (SD-13). A source-scan pin keeps the request tool's module from opening a write session.
+
+The run then re-enters and continues from the held call, whose result is now that outcome.
+
+### Resume inside a route (slice 6)
+
+The context already holds what a resume needs (ADR-0009):
+
+- at a pause, the paused child's events are committed together with the loop's (`packages/harness-patterns/patterns/decisionLoop.server.ts:550-566`);
+- the loop's earlier records are committed events;
+- the resume replaces the held result with its outcome.
+
+What core lacks is patterns that read their own progress back. SPEC resume step 11 re-enters the paused top-level pattern "from its start" (`packages/harness-patterns/SPEC.md:2064-2068`). `decisionLoop` then starts with no records (`decisionLoop.server.ts:402`), and `simpleLoop` starts with an empty turn log (`simpleLoop.server.ts:275`).
+
+Slice 6 completes the existing design rather than adding a mechanism. On re-entry, each pattern on the path to the gate rebuilds its state from its own events in the current run, meaning the events since the latest `user_message` (`hitl.server.ts:1126-1131`). It then continues from the next step without calling a model.
+
+- **`decisionLoop`** rebuilds its records, the latest plan, the roster inputs and the withheld ids from its own events. It counts the iterations already run against `maxIterations`, makes **no decide call** for the paused iteration, and re-enters that route with the child data the records reproduce.
+- **Per-invocation identity** (architecture review §5, addition 1). A route can run twice in one turn under the same child `patternId`, so each child `pattern_enter` carries its `iteration`. Today it carries only the route and the loop id (`decisionLoop.server.ts:473-477`). A paused child's `pattern_exit` says `paused` rather than `completed` (`:557-560`). The paused iteration still writes no record (`:566`), so no stale "waiting" preview reaches the decision state (addition 2). That iteration's stats and record span both halves; its wall time excludes the wait.
+- **`simpleLoop`** rebuilds its turn log from its own `controller_action`, `tool_call` and `tool_result` events in the open bracket. It applies the same projection it used when it first built each entry (`resultOmit` and the result cap, `simpleLoop.server.ts:1056-1075`), keeps its turn count against `maxTurns`, and calls the controller next. The held call's entry now carries the outcome, so that next controller call sees "written: 3 nodes created". This path is separate from the prior-results path, so `rememberPriorTurns: false` keeps its meaning.
+- **The wrappers in between.**
+  - `withReferences` replays its recorded selection (the `reference_attached` event, `with-references.server.ts:293`) instead of calling the selector again.
+  - `withInjectionGuard` holds no per-invocation state.
+  - `withPseudonymisedInputs` rebuilds its roster and its rewrite from the same events. It rewrites the child's own pre-pause results too, so the resumed controller may see a placeholder where it had seen a local result in clear. That is the safe direction. A directory change during the wait can renumber placeholders, which leaks nothing.
+- **Not resumable in v1:** `actorCritic`, `withSandbox`, `parallel` and `routes`. The sandbox is the reason that matters. Its machine can be evicted during the wait, and a rebuilt log that says "wrote `/work/tmp/x.py`" would then point at a file that is gone.
+  - Each pattern declares a `resumable` capability.
+  - Construction refuses a gated tool name in any allowlist whose path from the root is not resumable all the way down. Gated names are a declared list, starting with the write request.
+  - A walk of `children` alone cannot see an `askHuman` inside a tool executor (architecture review §5, addition 3). So the check matches allowlist **names**, found through the walk.
+
+**Pins (layer 1)**, each checked by mutation:
+
+- After an approval, no earlier tool is dispatched again, and no decide call is made for a finished iteration or the paused one. Mutation: decide again on re-entry.
+- The resumed controller's rendered prompt equals the pre-pause one, with only the held entry replaced. Mutation: rebuild an empty turn log.
+- A route that ran twice in the turn resumes its second invocation, not its first. Mutation: drop `iteration` from `pattern_enter`.
+- The selector is not called on resume. Mutation: call it.
+- A write request under `withSandbox` or `actorCritic` is refused at construction. Mutation: allow it.
+- `maxIterations` and `maxTurns` count across the pause.
+- A placeholder, a guard marker, an unplannable statement and a batched request are each refused before any request is raised.
+- `resolve` retried after a successful write writes nothing new and returns the same counters. Mutation: drop the marker check.
+- Reject writes nothing, and the run continues. An unattended run picks Reject.
+
+**Layer 2 (app-path e2e)** drives a scripted turn through the real resume path (`POST /api/events` with `mode: 'resume'`, `app/src/routes/api/events.ts:52-60, 110-116`): a read, a proposed write, the pause, an approval, exactly one write, then the loop continuing to a read-back and an answer that names the counts. A reject variant runs the same turn. The Eval can grade both by answering through `resumeHarness`.
+
+### The injection angle
+
+A write composed after reading untrusted content is the riskiest thing this agent does, and the person is the control. Four things make that control informed rather than decorative:
+
+- the statement is shown verbatim;
+- its destructive operations are named from the plan;
+- the dialog says what untrusted content the turn read and how much of it the guard neutralized;
+- a statement carrying a guard marker or a placeholder never reaches the dialog, and a run with nobody attending never writes.
+
+What it does not catch: a plausible but harmful statement that the person approves. The dialog turns that into a reading task; it does not guarantee anything.
+
+### The UI (slice 9)
+
+None of this has a client yet. `HitlDialog` renders memory proposals only (`app/src/components/ark-ui/HitlDialog.tsx:82-84`), and no client code sends a resume. Slice 9 adds:
+
+- a blocking-request card in the transcript for a paused turn;
+- a `graph-write` body in the shared dialog shell;
+- pending blocking requests in the inbox, beside proposals;
+- the client resume over the existing SSE path;
+- an owner-gated read of the frozen statement by `payloadRef`: a `'use server'` read, gated like every other one and taking no owner argument (SD-13).
+
+A new message sent while a write waits supersedes it (`continueSession`), and the card says so.
+
 ## Data between routes
 
 - **Files**, once P4 is wired, move through the stash: `graph_file_ingest` → stash → `/work/in` on `doc_ag`'s next entry, or within one entry after N4. Those are real bytes (security review §5), so the path itself stays off until file-path pseudonymisation is wired (S-f), with `graph_file_ingest` withheld by exact name beforehand.
@@ -378,8 +492,8 @@ The fix is small and stated as a slice item: `thread` mode honours `viewConfig.f
 ## Preconditions the design owes
 
 - **P1 — Pause and resume.** A resume re-runs the paused top-level pattern from its start (SPEC). Here, that means `decisionLoop` from iteration 1, re-running earlier routes.
-  - It becomes cheaper to fix than in round 1: `decisionLoop`'s history is its own compact route-output events, so on resume it can rebuild its iterations from this run's records instead of re-deciding.
-  - v1 keeps the round-1 rule: no gated tool inside any route, pinned by allowlist names rather than a `children` walk (architecture review §5.3).
+  - **Settled by the owner on 2026-10-17:** an approved run continues as if it had not stopped. Slice 6 makes `decisionLoop`, `simpleLoop` and the wrappers between them rebuild their state from their own events in the current run, as [Resume inside a route](#resume-inside-a-route-slice-6) specifies. This completes ADR-0009's resume rather than adding a second mechanism.
+  - Until slices 6, 8 and 9 land, the round-1 rule stays: no gated tool inside any route, pinned by allowlist names rather than a `children` walk (architecture review §5.3). Afterwards the pin narrows to "no gated tool under a pattern that is not resumable".
   - No production code pauses today.
 - **P2 — The stuck-run reaper.** Its 25-call bound assumes one loop per turn. This shape is up to 6 iterations of up to 15-call children. Arithmetic: 6 × 15 + 6 decisions + 1 synthesis = 97. The architecture review's fix applies unchanged: reap on a dead turn lease, with an age backstop. Ruled A1 in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323): the age bound is a named constant with its justification beside it.
 - **P3 — The injection boundary.** As stated in [the guards section](#where-memory-guards-and-the-sandbox-sit), plus **G13 landed, with its evidence**: no egress from Neo4j, and `file://` closed. [G13](https://github.com/mknw/hames-playground/issues/241#issuecomment-6181475778) replaces the historical [G12 S-a](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323) procedure allow-list dependency; free-form Cypher stays. In both compose files, Neo4j must be isolated on its internal network behind the relay, file-URL CSV imports disabled, and APOC file imports off. The G13 implementation PR must carry the specified throwaway-project evidence: public `apoc.load.json` and gateway `apoc.load.jsonParams` POST fail from Neo4j; Redis and Postgres are unreachable; host and gateway Bolt through the relay work; dropping `internal: true` or reconnecting Neo4j to `app-network` makes the egress test fail. These are dependency evidence requirements, not checks run by this docs PR. Historical residual wording: **`LOAD CSV` survives the allow-list**; that network/file-read exposure is closed by G13, rather than left as an allow-list residual. The surviving risk is in `info_ag`: graph rows and untrusted web text share a loop with a model-chosen `fetch` URL or `web_search` query. The guard reduces this risk but cannot stop every paraphrased instruction; Neo4j isolation does not constrain those app-side web calls.
@@ -404,6 +518,7 @@ All 11 round-2 calls and the 3 departures from the sketch were accepted as recom
 - **N5, the iteration bound.** `maxIterations` defaults to 6. At the bound the loop stops as `answer`, with the answer marked partial.
 - **G14 (2026-10-15), pseudonymisation.** An outbound filter around `withReferences` on the web route (`info_ag`), on the private tier only, with no table kept and no reverse. The filter applies unless a run is explicitly on the Anthropic tier, and it covers the handoff data as well as the view. A roster that cannot be built withholds the references; they are never passed in clear. Designed in [Pseudonymisation guard on the web route](#pseudonymisation-guard-on-the-web-route).
 - **The three departures:** the retriever is its own route; `doc_ag` is the sketch's second form; `answer` (`done` in G12) is a choice, so the synthesizer answers once.
+- **Writes (owner, 2026-10-16 and 2026-10-17).** #396 is closed: writes are gated by a person, not prevented by read-only defaults. After an approval the run continues inside the route as if it had not stopped. Designed in [Writes, gated by a person](#writes-gated-by-a-person). Calls H1 (a separate `graph-edit` route) and H2 (who may approve) are open.
 
 The round-1 reviewers' terms (architecture 6068693140, security 6068708025) bind the delta review. Nothing is built before that review converges.
 
@@ -418,7 +533,7 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
 1. an eval scenario shows no regression on `general`'s current cases, on the private tier only (owner amendment, 2026-10-15; #507 W4);
 2. a synthetic fetch → read back → compute request passes;
 3. P2, P3 (G13 landed with its evidence) and P5 (G11 deletion/client migration first) are met;
-4. P1 is met, or "no gates in routes" is pinned;
+4. P1 is met, or "no gates in routes" is pinned. A write request enters an allowlist only with slices 6, 8 and 9;
 5. the M7 memory opt-in moves with it;
 6. until P4, `graph_file_ingest` is absent by name, its file path stays off, and no turn-results materialisation capability is declared. The fetch → read back → compute case that needs this path remains gated on P4.
 
@@ -444,8 +559,19 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
    The source/formatter/failure/data-isolation pins in slice 1 and these composition pins belong to layer 1 (unit); this slice's real-turn scenario belongs to layer 2 (app-path e2e). They are implementation obligations, not tests added or run by this design PR.
 4. **`withSandbox` re-hydrate on stash write** (N4). A core change with its own review.
 5. **Materialisation and enabling the file path**, gated on P4. The pseudonymiser-valued option has no boolean form. Include a source-scan pin that no env var can enable materialisation; pin entry/exit wipes and the verbatim-hash promotion block; pin that the materialiser never reads `content_sanitized` data with the same two-event fixture as slice 1. Only after file-path pseudonymisation and N4 are wired may `graph_file_ingest` enter the effective allowlist and its file path run. These deterministic pins belong to layer 1.
-6. **Resume from route records** (P1), only when a gate is wanted inside a route.
+6. **Resume inside a route** (P1), in core, as [specified](#resume-inside-a-route-slice-6):
+   - `decisionLoop`, `simpleLoop` and the wrappers between them rebuild their state from their own events in the current run;
+   - `iteration` on each child `pattern_enter`, and `paused` on a paused child's `pattern_exit`;
+   - the `resumable` capability, and the construction refusal of a gated tool name under a pattern that is not resumable.
+     The pins listed there belong to layer 1; the scripted approve and reject turns belong to layer 2.
 7. **The web-route pseudonymisation guard ([G14](https://github.com/mknw/hames-playground/issues/507#issuecomment-6191473862)).** `withPseudonymisedInputs` (rewriting the view and the child's plan/handoff data) and the `callTool` outgoing check on a new concatenating `egressChecks` run-frame slot, in core; `decisionLoop` passing the handoff's source payloads as roster input; `AgentDeps.pseudonymiseForWeb` built by the app's `createWebPseudonymiser` from `lib/privacy/`; the `egress-wiring` tripwire **narrowed** to that one import site, not deleted, with Q1–Q3 stated in the commit as in [the section](#pseudonymisation-guard-on-the-web-route). The pins listed there belong to layer 1. On the private tier, slice 3's `info_ag` ships only with this guard in place.
+8. **The gated Neo4j write**, after slice 6:
+   - the write request tool and its checks (placeholder, guard marker, size, `EXPLAIN`, no batch);
+   - the frozen statement in the encrypted host row behind `payloadRef`;
+   - the host's `resolve` dispatching on `request.kind`, with the idempotent write and its same-transaction marker;
+   - the `graph-edit` route, if H1 is accepted;
+   - `write_neo4j_cypher` still withheld and the gateway still read-only, each pinned.
+9. **The UI for blocking requests**, which can be built alongside slice 8: the transcript card, the `graph-write` dialog body, inbox entries, the client resume, and the owner-gated read of the frozen statement. Its checks belong to the component and browser layers.
 
 ## See also
 

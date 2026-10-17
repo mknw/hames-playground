@@ -53,6 +53,8 @@
  *      that goes through a production op rather than a BAML function directly.
  *   5. `describeToolResultsBatchOp` and `describeToolResultOp` — the DESCRIBE
  *      role, which joined on the same day and is handed tool results VERBATIM.
+ *      It runs on `LocalQwenSmall`, the private tier's 4B summarizer; the
+ *      expected client is read from `VERDA_CLIENT_BY_ROLE.describe`.
  *      Neither takes a collector: they own one internally for accounting, so
  *      the client they were served by is read off the usage observer — the same
  *      path the preview header's on-prem share is computed from, which makes
@@ -78,7 +80,7 @@
  *      distribution from the private endpoint.
  *
  * Each step asserts its actual private-tier serving client, including the 4B
- * decide client in step 7. Being told the
+ * describe client in step 5 and decide client in step 7. Being told the
  * flag is on is not evidence that the call went there.
  */
 
@@ -426,7 +428,7 @@ async function router(): Promise<void> {
 }
 
 /**
- * The describe role, through the accounting path rather than a collector.
+ * The describe role on LocalQwenSmall, through accounting rather than a collector.
  *
  * Neither describe op exposes its collector — both wrap `withUsageAccounting`,
  * which creates one, hands it to the call and reads it in a `finally`. So the
@@ -434,8 +436,9 @@ async function router(): Promise<void> {
  * attributes a tier from in production. If these two agree, the header's
  * on-prem share is measuring the same thing the routing did.
  */
-async function describe(): Promise<void> {
-  console.log('\n▶ 5/7 describe — tool results, verbatim, on the box')
+export async function smokeDescribe(): Promise<void> {
+  const expectedClient = VERDA_CLIENT_BY_ROLE.describe
+  console.log(`\n▶ 5/7 describe — tool results, verbatim, on ${expectedClient}`)
   const seen = new Map<string, string | undefined>()
   const stop = observeLlmUsage((sample) => seen.set(sample.functionName, sample.clientName))
   try {
@@ -478,10 +481,10 @@ async function describe(): Promise<void> {
             'accounting chokepoint stopped notifying (which would also empty the header).',
         )
       }
-      if (seen.get(fn) !== EXPECTED_CLIENT) {
+      if (seen.get(fn) !== expectedClient) {
         throw new Error(
           `${fn}: accounted against ${seen.get(fn) ?? 'an unreported client'}, ` +
-            `expected ${EXPECTED_CLIENT}`,
+            `expected ${expectedClient}`,
         )
       }
     }
@@ -616,7 +619,7 @@ async function main(): Promise<void> {
   await controller()
   await actorRetry()
   await router()
-  await describe()
+  await smokeDescribe()
   await screen()
   await smokeDecide()
   console.log('\n✅ every call served by its private-tier client and parsed into its declared type')

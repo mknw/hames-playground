@@ -3,16 +3,34 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ClientRegistry } from '@boundaryml/baml'
+import { ClientRegistry, Collector } from '@boundaryml/baml'
 import {
   clientOverrideFor,
   resolveClientForRole,
   configureConsumerClients,
   VERDA_CLIENT_BY_ROLE,
 } from '@hames-ai/harness-baml/clients.server'
+import * as clientPolicy from '@hames-ai/harness-baml/clients.server'
 import type { BamlRole } from '@hames-ai/harness-baml/clients.server'
 import '../../../lib/inference/config.server'
-import { createPlannerAdapter } from '@hames-ai/harness-baml/baml-adapters.server'
+import {
+  createPlannerAdapter,
+  createLoopControllerAdapter,
+  createActorControllerAdapter,
+  createCriticAdapter,
+  createInjectionScreen,
+  describeToolResultOp,
+  describeToolResultsBatchOp,
+} from '@hames-ai/harness-baml/baml-adapters.server'
+import { routeMessageOp } from '@hames-ai/harness-baml/routing.server'
+import {
+  createCompactIntentAdapter,
+  createRetrieveQueryAdapter,
+  createMemoryExtractAdapter,
+  createMemoryCompactAdapter,
+} from '@hames-ai/harness-baml/baml-patterns.server'
+import { createTitleAgent } from '@hames-ai/agents/agents/title-generator.server'
+import { defaultSelector, defaultSynthesize } from '@hames-ai/harness-baml/defaults.server'
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { planner, formatPlanContext } from '@hames-ai/harness-patterns/patterns/planner.server'
 import { createScope } from '@hames-ai/harness-patterns/context.server'
@@ -44,12 +62,14 @@ let requests: Array<Record<string, unknown>>
 let transports: Array<{ url: string | undefined; authorization: string | undefined }>
 let samples: LlmUsageSample[]
 let stopObserving: () => void
+let onRequest: (() => void) | undefined
 
 beforeAll(async () => {
   server = createServer(async (req, res) => {
     let raw = ''
     for await (const part of req) raw += part
     requests.push(JSON.parse(raw))
+    onRequest?.()
     transports.push({ url: req.url, authorization: req.headers.authorization })
     const reply = replies.shift()
     if (!reply) {
@@ -97,6 +117,7 @@ afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()))
 })
 beforeEach(() => {
+  onRequest = undefined
   replies = []
   requests = []
   transports = []
@@ -125,6 +146,7 @@ function run<T>(fn: () => Promise<T>, client = 'VerdaQwenThink', tier = 'verda')
 }
 afterEach(() => {
   configureConsumerClients(undefined)
+  vi.restoreAllMocks()
   vi.unstubAllEnvs()
 })
 
@@ -177,6 +199,182 @@ function scopeAndView() {
 }
 
 describe('Planner thinking mode', () => {
+  it.each(['per-run', 'consumer'] as const)(
+    'refuses a %s override carrying its own collector at both routing lookups',
+    async (layer) => {
+      const registry = new ClientRegistry()
+      registry.addLlmClient('Hidden', 'fallback', { strategy: ['VerdaQwenThink'] })
+      const override = () => ({
+        client: 'Hidden',
+        clientRegistry: registry,
+        collector: new Collector('x'),
+      })
+      if (layer === 'consumer') configureConsumerClients(override)
+      await withRunFrame(
+        {
+          inference: {
+            tier: 'verda',
+            clientOverride: layer === 'per-run' ? override : undefined,
+          },
+        },
+        async () => {
+          for (const lookup of [clientOverrideFor, resolveClientForRole]) {
+            expect(() => lookup('controller')).toThrow(/collector/)
+          }
+          await expect(createLoopControllerAdapter()('q', 'i', '[]', 0)).rejects.toThrow(
+            /collector/,
+          )
+        },
+      )
+      expect(requests).toHaveLength(0)
+      expect(samples).toHaveLength(0)
+    },
+  )
+
+  it('preserves the loop collector when an unsafe bag bypasses routing validation', async () => {
+    const registry = new ClientRegistry()
+    registry.addLlmClient('Hidden', 'fallback', { strategy: ['VerdaQwenThink'] })
+    replies.push({
+      content: JSON.stringify({
+        reasoning: 'draft',
+        tool_name: 'Return',
+        tool_args: '{"response":"draft"}',
+      }),
+    })
+    const failure = await registryRun<unknown>(
+      registry,
+      async () => {
+        // Independently pin call-site ordering, even if trusted code replaces the routing seam.
+        const unsafe = { ...clientOverrideFor('controller')!, collector: new Collector('x') }
+        vi.spyOn(clientPolicy, 'clientOverrideFor').mockReturnValue(unsafe)
+        return createLoopControllerAdapter()('q', 'i', '[]', 0)
+      },
+      'Hidden',
+    ).catch((e: unknown) => e)
+    expect(failure).toMatchObject({
+      recoverable: false,
+      message: expect.stringContaining('LoopController selected a thinking leaf'),
+    })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].chat_template_kwargs).toEqual({ enable_thinking: true })
+    expect(samples).toHaveLength(1)
+  })
+
+  it('preserves the title accounting collector against bare consumer deps', async () => {
+    const registry = new ClientRegistry()
+    registered(registry, 'VerdaQwenThink')
+    registry.addLlmClient('Hidden', 'fallback', { strategy: ['VerdaQwenThink'] })
+    replies.push({ content: 'draft', reasoning: TRACE })
+    // This dependency deliberately bypasses clientOverrideFor, like a standalone consumer.
+    const result = await createTitleAgent({
+      toolNamespaces: () => undefined,
+      clientOverride: () => ({
+        client: 'Hidden',
+        clientRegistry: registry,
+        collector: new Collector('x'),
+      }),
+    })('q', 'bare-consumer-title')
+    expect(result).toMatchObject({
+      status: 'error',
+      context: {
+        error: expect.stringContaining('GenerateConversationTitle selected a thinking leaf'),
+      },
+    })
+    expect(result.response).not.toBe('draft')
+    expect(requests).toHaveLength(1)
+    expect(requests[0].chat_template_kwargs).toEqual({ enable_thinking: true })
+    expect(samples).toHaveLength(1)
+  })
+
+  it.each(
+    ['Sneaky', 'VerdaQwen'].flatMap((name) =>
+      ['valid', 'capped', 'http-failure'].map((response) => ({ name, response })),
+    ),
+  )(
+    'refuses thinking enabled in the rendered request under registry name $name ($response)',
+    async ({ name, response }) => {
+      const registry = new ClientRegistry()
+      registry.addLlmClient(name, 'openai-generic', {
+        base_url: endpoint,
+        api_key: 'synthetic-key',
+        model: 'synthetic',
+        chat_template_kwargs: { enable_thinking: true },
+      })
+      replies.push({
+        content:
+          response === 'capped'
+            ? ''
+            : JSON.stringify({
+                reasoning: 'draft',
+                tool_name: 'Return',
+                tool_args: '{"response":"draft"}',
+              }),
+        tokens: response === 'capped' ? 4096 : 20,
+        status: response === 'http-failure' ? 503 : 200,
+      })
+      const failure = await registryRun<unknown>(
+        registry,
+        () => createLoopControllerAdapter()('q', 'i', '[]', 0),
+        name,
+      ).catch((e: unknown) => e)
+      expect(failure).toMatchObject({
+        recoverable: false,
+        message: expect.stringContaining('LoopController selected a thinking leaf'),
+        llmCall: { clientName: name, parsedOutput: undefined },
+      })
+      expect(requests).toHaveLength(1)
+      expect(requests[0].chat_template_kwargs).toEqual({ enable_thinking: true })
+      expect(samples).toHaveLength(1)
+    },
+  )
+
+  it.each(
+    ['LoopController', 'ActorController', 'Planner'].flatMap((name) =>
+      [200, 503].map((status) => ({ name, status })),
+    ),
+  )(
+    'refuses thinking first selected on the $name corrective retry status $status',
+    async ({ name, status }) => {
+      const registry = new ClientRegistry()
+      registered(registry, 'VerdaQwen')
+      registered(registry, 'VerdaQwenThink')
+      registry.addLlmClient('Alternating', 'fallback', { strategy: ['VerdaQwen'] })
+      onRequest = () => {
+        registry.addLlmClient('Alternating', 'fallback', { strategy: ['VerdaQwenThink'] })
+        onRequest = undefined
+      }
+      replies.push(
+        { content: '', tokens: 4096 },
+        {
+          content: JSON.stringify(
+            name === 'Planner'
+              ? OFF
+              : { reasoning: 'draft', tool_name: 'Return', tool_args: '{"response":"draft"}' },
+          ),
+          reasoning: TRACE,
+          status,
+        },
+      )
+      const invoke =
+        name === 'Planner'
+          ? call
+          : name === 'LoopController'
+            ? () => createLoopControllerAdapter()('q', 'i', '[]', 0)
+            : () => createActorControllerAdapter([])('q', 'i', [], [])
+      const failure = await registryRun<unknown>(registry, invoke, 'Alternating').catch(
+        (e: unknown) => e,
+      )
+      expect(failure).toMatchObject({
+        recoverable: false,
+        message: expect.stringContaining(`${name} selected a thinking leaf`),
+        llmCall: { functionName: name, clientName: 'VerdaQwenThink', parsedOutput: undefined },
+      })
+      expect(requests).toHaveLength(2)
+      expect(samples).toHaveLength(1)
+      expect(samples[0].metrics?.attempts).toBe(2)
+    },
+  )
+
   it.each(['reasoning_content', 'reasoning'] as const)(
     'restores the full selected trace from %s, prices it and uses the no-reasoning schema',
     async (field) => {
@@ -386,6 +584,152 @@ describe('Planner thinking mode', () => {
     expect(requests).toHaveLength(1)
   })
 
+  it.each(
+    [
+      {
+        name: 'LoopController',
+        call: () => createLoopControllerAdapter()('q', 'i', '[]', 0),
+        answer: { reasoning: 'Written', tool_name: 'Return', tool_args: '{"response":"draft"}' },
+      },
+      {
+        name: 'ActorController',
+        call: () => createActorControllerAdapter([])('q', 'i', [], []),
+        answer: { reasoning: 'Written', tool_name: 'Return', tool_args: '{"response":"draft"}' },
+      },
+      {
+        name: 'Critic',
+        call: () => createCriticAdapter()('i', []),
+        answer: { explanation: 'Synthetic verdict', is_sufficient: true },
+      },
+      {
+        name: 'ResultDescribe',
+        call: () => describeToolResultOp('synthetic', '{}', '', 'Synthetic result'),
+        answer: 'Synthetic summary',
+      },
+      {
+        name: 'ScreenUntrustedContent',
+        call: () =>
+          createInjectionScreen()({ tool: 'synthetic', namespace: 'web', content: 'Text' }),
+        answer: { injection_detected: false, reason: 'Synthetic verdict', spans: [] },
+      },
+      {
+        name: 'Router',
+        call: () => routeMessageOp('q', []),
+        answer: { intent: 'i', needs_tool: false, route: null, response: 'draft' },
+      },
+      {
+        name: 'Synthesize',
+        call: () =>
+          defaultSynthesize({ mode: 'message', userMessage: 'q', intent: 'i', response: 'draft' }),
+        answer: 'draft',
+      },
+      {
+        name: 'CompactIntent',
+        call: () => createCompactIntentAdapter()({ history: [], latest: 'q' }),
+        answer: 'draft',
+      },
+      {
+        name: 'RetrieveQuery',
+        call: () => createRetrieveQueryAdapter()({ history: [], latest: 'q' }),
+        answer: 'draft',
+      },
+      {
+        name: 'ExtractMemory',
+        call: () =>
+          createMemoryExtractAdapter()({ kindHint: 'preference', window: 'q', latestUser: 'q' }),
+        answer: [],
+      },
+      {
+        name: 'CompactMemories',
+        call: () => createMemoryCompactAdapter()({ kind: 'preference', members: [] }),
+        answer: { content: 'draft', evidence: 'q' },
+      },
+      {
+        name: 'ResultDescribeBatch',
+        call: () =>
+          describeToolResultsBatchOp([
+            { id: 'a', tool: 'x', toolArgs: '{}', reasoning: '', result: 'x' },
+          ]),
+        answer: { summaries: [{ id: 'a', summary: 'draft' }] },
+      },
+      {
+        name: 'GenerateConversationTitle',
+        call: () =>
+          createTitleAgent({
+            toolNamespaces: () => undefined,
+            clientOverride: () => clientOverrideFor('describe'),
+          })('q', 'synthetic-title'),
+        answer: 'draft',
+      },
+      {
+        name: 'ReferenceSelector',
+        call: () => defaultSelector({ intent: 'i', recentMessages: [], candidates: [] }),
+        answer: { reasoning: 'Written', selected: [] },
+      },
+    ].flatMap((site) => [200, 503].map((status) => ({ ...site, status }))),
+  )(
+    'refuses a hidden thinking leaf in $name status $status before returning any result',
+    async ({ name, call, answer, status }) => {
+      const registry = new ClientRegistry()
+      registry.addLlmClient('SyntheticHiddenThinking', 'fallback', { strategy: ['VerdaQwenThink'] })
+      const content = typeof answer === 'string' ? answer : JSON.stringify(answer)
+      replies.push({ content, reasoning: TRACE, status })
+      const failure = await registryRun<unknown>(registry, call, 'SyntheticHiddenThinking').catch(
+        (e: unknown) => e,
+      )
+      if (name === 'GenerateConversationTitle') {
+        // The real title harness catches the refusal and publishes its error state.
+        expect(failure).toMatchObject({
+          status: 'error',
+          context: { error: expect.stringContaining(`${name} selected a thinking leaf`) },
+        })
+        expect((failure as { response?: string }).response).not.toBe(content)
+      } else {
+        expect(failure).toMatchObject({
+          message: expect.stringMatching(new RegExp(`${name} selected a thinking leaf`)),
+          recoverable: false,
+          llmCall: { functionName: name, clientName: 'VerdaQwenThink' },
+        })
+        if (status === 200)
+          expect((failure as { llmCall: { rawOutput: string } }).llmCall.rawOutput).toBe(content)
+        expect(
+          (failure as { llmCall: { parsedOutput?: unknown } }).llmCall.parsedOutput,
+        ).toBeUndefined()
+      }
+      expect(requests).toHaveLength(1)
+      expect(requests[0].chat_template_kwargs).toEqual({ enable_thinking: true })
+      expect(samples).toHaveLength(1)
+      expect(samples[0].clientName).toBe('VerdaQwenThink')
+    },
+  )
+
+  it.each(['LoopController', 'ActorController'] as const)(
+    'does not retry a hidden thinking leaf with an empty capped %s completion',
+    async (name) => {
+      const registry = new ClientRegistry()
+      registry.addLlmClient('SyntheticHiddenThinking', 'fallback', { strategy: ['VerdaQwenThink'] })
+      replies.push({ content: '', reasoning: TRACE, tokens: 4096 })
+      const call = () =>
+        name === 'LoopController'
+          ? createLoopControllerAdapter()('q', 'i', '[]', 0)
+          : createActorControllerAdapter([])('q', 'i', [], [])
+      const failure = await registryRun(registry, call, 'SyntheticHiddenThinking').catch(
+        (e: unknown) => e,
+      )
+      expect(failure).toMatchObject({
+        message: expect.stringMatching(/selected a thinking leaf/),
+        recoverable: false,
+        llmCall: {
+          clientName: 'VerdaQwenThink',
+          hitOutputCap: true,
+          usage: { outputTokens: 4096 },
+        },
+      })
+      expect(requests).toHaveLength(1)
+      expect(samples).toHaveLength(1)
+    },
+  )
+
   it('retains a terminal malformed-answer trace in the durable error call without a downstream plan', async () => {
     replies.push({ content: 'not a plan', reasoning: TRACE, tokens: 20 })
     const { scope, view } = scopeAndView()
@@ -500,6 +844,21 @@ describe('Planner thinking mode', () => {
     })
     expect(requests).toHaveLength(1)
   })
+
+  it.each([JSON.stringify(ANSWER), 'not a plan'])(
+    'retains the parser trace alongside rejected tail diagnostics (%s)',
+    async (tail) => {
+      replies.push({ content: `Draft </think> ${tail}`, reasoning: TRACE })
+      const failure = await run(call).catch((e: unknown) => e)
+      expect(failure).toMatchObject({
+        message: expect.stringMatching(/reasoning parser.*<\/think>/i),
+        recoverable: false,
+        llmCall: { parsedOutput: { reasoning: TRACE, ...(tail === 'not a plan' ? {} : ANSWER) } },
+      })
+      expect(samples).toHaveLength(1)
+      expect(requests).toHaveLength(1)
+    },
+  )
 
   it('does not retry a malformed nonempty answer or an HTTP error', async () => {
     replies.push({ content: 'not a plan', reasoning_content: TRACE })

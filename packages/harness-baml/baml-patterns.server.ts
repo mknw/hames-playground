@@ -71,7 +71,7 @@ export function createCompactIntentAdapter(): CompactIntentFn {
     // Routes to `DescribeAnthropic` (Haiku 4.5), or to the self-hosted box
     // on a verda-tier run — the intent is compacted FROM the conversation's
     // own history, so it moves with the rest of the describe role.
-    const opts = { collector, ...clientOverrideFor('describe') }
+    const opts = { ...clientOverrideFor('describe'), collector }
     let raw: string
     try {
       raw = await b.CompactIntent(history, latest, opts)
@@ -106,7 +106,7 @@ export function createRetrieveQueryAdapter(): RetrieveQueryFn {
     const variables = { history, latest }
     // describe-tier, and it moves with a verda tier decision: the rewrite is
     // built from the user's own question and the conversation history.
-    const opts = { collector, ...clientOverrideFor('describe') }
+    const opts = { ...clientOverrideFor('describe'), collector }
     let raw: string
     try {
       raw = await b.RetrieveQuery(history, latest, opts)
@@ -181,8 +181,8 @@ export function createMemoryExtractAdapter(): (
         escapeDataFence(window),
         escapeDataFence(latestUser),
         {
-          collector,
           ...clientOverrideFor('describe'),
+          collector,
         },
       )
     } catch (e) {
@@ -217,8 +217,8 @@ export function createMemoryCompactAdapter(): (
           evidence: escapeDataFence(m.evidence),
         })),
         {
-          collector,
           ...clientOverrideFor('describe'),
+          collector,
         },
       )
     } catch (e) {

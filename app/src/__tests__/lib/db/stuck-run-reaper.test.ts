@@ -247,8 +247,13 @@ describe('the reap statement', () => {
       path.resolve(process.cwd(), '../packages/harness-baml/baml-adapters.server.ts'),
       'utf8',
     )
-    const sites = src.match(/planParseRetry\(e, collector\)/g) ?? []
+    const sites = [...src.matchAll(/planParseRetry\(e, collector(?:, '([^']+)')?\)/g)]
     expect(sites).toHaveLength(3)
+    expect(sites.map((site) => site[1]).sort()).toEqual([
+      'ActorController',
+      'LoopController',
+      'Planner',
+    ])
     expect(ATTEMPTS_PER_CONTROLLER_CALL).toBe(2)
   })
 

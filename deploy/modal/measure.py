@@ -203,7 +203,7 @@ def main() -> int:
 
     for n in range(1, args.samples + 1):
         wait_scaled_to_zero(scaledown_s)
-        sample = {"sample": n, "box": args.box, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        sample = {"sample": n, "target": args.box, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
         sample.update(cold_start(base, token, args.cold_budget_s))
         sample["warm"] = warm_calls_27b(base, token) if big else warm_calls(base, token)
         if args.stop and ops("stop").returncode != 0:

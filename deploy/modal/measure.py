@@ -6,9 +6,12 @@ facts from /status, and times one warm call per role. Synthetic inputs only;
 nothing here is a real document. Results append to a git-ignored JSONL.
 
     uv run --env-file deploy.local.env measure.py --samples 3
+    uv run --env-file deploy.local.env measure.py --box 27b --stop --samples 3
 
-Needs HAMES_MODAL_URL and HAMES_MODAL_PROXY_TOKEN (deploy.env.example). Each
-sample costs a cold start plus the scaledown window of GPU time.
+Needs HAMES_MODAL_URL (HAMES_MODAL_27B_URL for the 27B) and
+HAMES_MODAL_PROXY_TOKEN (deploy.env.example). Each sample costs a cold start
+plus the scaledown window of GPU time; `--stop` stops the container after each
+sample instead (ops.py stop), so a sample costs the cold start and the calls.
 """
 
 from __future__ import annotations
@@ -52,6 +55,33 @@ DECISION_REQUEST = {
 }
 
 
+# The 27B, in `VerdaQwen`'s request shape: thinking off, its temperature and output cap.
+QWEN27B_MODEL = "Qwen/Qwen3.8-27B-FP8"
+CONTROLLER_REQUEST = {
+    "model": QWEN27B_MODEL,
+    "messages": [
+        {
+            "role": "system",
+            "content": "You pick the next tool call. Reply with one JSON object: "
+            '{"tool": string, "args": object, "is_final": boolean}.',
+        },
+        {"role": "user", "content": "Tool result so far:\n" + SYNTHETIC_TOOL_RESULT[:9000]
+         + "\n\nTask: find which carrier tracking numbers start with 0, then stop."},
+    ],
+    "max_tokens": 4096,
+    "temperature": 0.2,
+    "chat_template_kwargs": {"enable_thinking": False},
+}
+# A long answer: where decode speed, and so MTP, shows.
+LONG_REQUEST = {
+    "model": QWEN27B_MODEL,
+    "messages": [{"role": "user", "content": "Explain, in about 400 words, how a warehouse runs a quarterly stock count."}],
+    "max_tokens": 700,
+    "temperature": 0.2,
+    "chat_template_kwargs": {"enable_thinking": False},
+}
+
+
 def call(base: str, token: str, method: str, path: str, body: dict | None = None, timeout: float = 60):
     data = json.dumps(body).encode() if body is not None else None
     request = urllib.request.Request(base + path, data=data, method=method)
@@ -71,10 +101,14 @@ def call(base: str, token: str, method: str, path: str, body: dict | None = None
         return error.code, body, time.monotonic() - started
 
 
+def ops(command: str) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, "ops.py", command], capture_output=True, text=True, timeout=120)
+
+
 def containers_up() -> int | None:
     """Via ops.py (the operator's token); None when that is unavailable."""
     try:
-        out = subprocess.run([sys.executable, "ops.py", "status"], capture_output=True, text=True, timeout=60)
+        out = ops("status")
         return int(json.loads(out.stdout)["containers"]) if out.returncode == 0 else None
     except (ValueError, KeyError, subprocess.SubprocessError):
         return None
@@ -131,24 +165,49 @@ def warm_calls(base: str, token: str) -> dict:
     }
 
 
+def warm_calls_27b(base: str, token: str) -> dict:
+    result = {}
+    for name, request in (("controller", CONTROLLER_REQUEST), ("long", LONG_REQUEST)):
+        status, body, seconds = call(base, token, "POST", "/v1/chat/completions", request, timeout=180)
+        usage = body.get("usage") or {}
+        tokens = usage.get("completion_tokens") or 0
+        result[name] = {
+            "status": status,
+            "s": round(seconds, 2),
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": tokens,
+            "tok_per_s": round(tokens / seconds, 1) if seconds else None,
+        }
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--samples", type=int, default=3)
     parser.add_argument("--out", default="measurements.local.jsonl")
     parser.add_argument("--cold-budget-s", type=int, default=900)
+    parser.add_argument("--box", choices=("small", "27b"), default="small")
+    parser.add_argument("--stop", action="store_true", help="stop the container after each sample (ops.py stop)")
     args = parser.parse_args()
 
-    base = os.environ.get("HAMES_MODAL_URL", "").rstrip("/")
+    big = args.box == "27b"
+    url_var = "HAMES_MODAL_27B_URL" if big else "HAMES_MODAL_URL"
+    base = os.environ.get(url_var, "").rstrip("/")
     token = os.environ.get("HAMES_MODAL_PROXY_TOKEN", "")
     if not base or not token:
-        raise SystemExit("HAMES_MODAL_URL and HAMES_MODAL_PROXY_TOKEN are required (deploy.env.example)")
-    scaledown_s = int(os.environ.get("HAMES_MODAL_SCALEDOWN_S", "120"))
+        raise SystemExit(f"{url_var} and HAMES_MODAL_PROXY_TOKEN are required (deploy.env.example)")
+    if big:
+        os.environ["HAMES_MODAL_SERVER"] = "Qwen27B"  # for ops.py
+    scaledown_s = int(os.environ.get("HAMES_MODAL_27B_SCALEDOWN_S" if big else "HAMES_MODAL_SCALEDOWN_S",
+                                     "300" if big else "120"))
 
     for n in range(1, args.samples + 1):
         wait_scaled_to_zero(scaledown_s)
-        sample = {"sample": n, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        sample = {"sample": n, "box": args.box, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
         sample.update(cold_start(base, token, args.cold_budget_s))
-        sample["warm"] = warm_calls(base, token)
+        sample["warm"] = warm_calls_27b(base, token) if big else warm_calls(base, token)
+        if args.stop and ops("stop").returncode != 0:
+            raise SystemExit("ops.py stop failed; the container is still billed until its scaledown")
         with open(args.out, "a", encoding="utf-8") as out:
             out.write(json.dumps(sample) + "\n")
         print(json.dumps(sample), flush=True)

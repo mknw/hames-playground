@@ -33,6 +33,10 @@
  *      anything read at runtime.
  *   5. The operator's instance files are git-ignored by the pattern the README
  *      promises.
+ *
+ * The 27B class (`Qwen27B`, `Caddyfile.27b`) gets the same five, plus the one
+ * thing that makes it a drop-in for the app's `VerdaQwen` client: the name it
+ * serves and the window it allows equal what that client sends and assumes.
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -44,6 +48,9 @@ const read = (relative: string) => readFileSync(path(relative), 'utf-8')
 
 const behaviourScript = path('../../../../deploy/modal/test_behaviour.py')
 const caddyfile = read('../../../../deploy/modal/Caddyfile')
+const caddyfile27b = read('../../../../deploy/modal/Caddyfile.27b')
+const verdaClient = read('../../../../packages/harness-baml/baml_src/verda-client.baml')
+const settings = read('../../lib/settings.ts')
 const app = read('../../../../deploy/modal/hames_small_models.py')
 const gitignore = read('../../../../.gitignore')
 
@@ -53,11 +60,14 @@ const caddyPaths = (text: string): string[] =>
     ...text.matchAll(/^\s*@\w+\s+expression `\{http\.request\.uri\.path\} in \[([^\]]+)\]`$/gm),
   ].flatMap((m) => [...m[1].matchAll(/'([^']+)'/g)].map((path) => path[1]))
 
-/** Every non-comment line of the Caddyfile. */
-const caddyCode = caddyfile
-  .split('\n')
-  .filter((line) => !line.trim().startsWith('#'))
-  .join('\n')
+/** Every non-comment line of a Caddyfile. */
+const code = (text: string) =>
+  text
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('#'))
+    .join('\n')
+const caddyCode = code(caddyfile)
+const caddyCode27b = code(caddyfile27b)
 
 const PUBLIC_PATHS = ['/v1/chat/completions', '/v1/models', '/v1/systemone', '/health']
 
@@ -170,7 +180,7 @@ describe('deploy/modal: the server shape and the vLLM argv', () => {
     expect(serve).toContain('_reference_drift(before, after[model], model)')
     expect(boot).not.toContain('["caddy", "run"')
     expect(serve).toContain('["caddy", "run"')
-    expect(app.match(/\["caddy", "run"/g)).toHaveLength(1)
+    expect(app.match(/\["caddy", "run"/g)).toHaveLength(2)
     expect(serve).toMatch(
       /_assert_adapter_active\(after\[SUMMARIZER_MODEL\], after\[DECIDER_MODEL\]\)/,
     )
@@ -258,6 +268,138 @@ describe('deploy/modal: what the image and a snapshot can contain is pinned publ
       expect(block).toMatch(/"content": "[^"]+"|"state": "[^"]+"/)
       expect(block).not.toMatch(/os\.environ|open\(|read|f"|\.get\(|input\(/)
     }
+  })
+})
+
+/** The `Qwen27B` class, its boot and serve methods, its argv and its download. */
+const big = app.slice(app.lastIndexOf('@app.server('))
+const bigBoot = big.match(/def _boot\(self\)[\s\S]*?(?= {4}def _serve)/)?.[0] ?? ''
+const bigServe = big.match(/def _serve\(self\)[\s\S]*?hames: ready/)?.[0] ?? ''
+const bigArgv =
+  app.match(/def _qwen27b_argv\(mtp_tokens: int\)[^[]*\[([\s\S]*?)\n\s*\]\n/)?.[1] ?? ''
+const bigDownload =
+  app.match(/def download_qwen27b_weights\(\)[\s\S]*?(?=\nqwen27b_image =)/)?.[0] ?? ''
+
+describe('deploy/modal: the 27B box (Qwen27B)', () => {
+  it('serves the exact model name and window the VerdaQwen client sends and assumes', () => {
+    expect(big).toMatch(/^@app\.server\([^@]*?\n\)\nclass Qwen27B:/)
+    const clientModel = verdaClient.match(/^\s*model "([^"]+)"$/m)?.[1]
+    expect(clientModel).toBeTruthy()
+    expect(app).toContain(`QWEN27B_MODEL = "${clientModel}"`)
+    const window = settings.match(/^\s*VerdaQwen: ([\d_]+),$/m)?.[1]?.replaceAll('_', '')
+    expect(app).toContain(`QWEN27B_MAX_MODEL_LEN = ${window}`)
+    expect(bigArgv).toContain('"--served-model-name", QWEN27B_MODEL')
+    expect(bigArgv).toContain('"--max-model-len", str(QWEN27B_MAX_MODEL_LEN)')
+    expect(bigBoot).toMatch(/served != \{QWEN27B_MODEL\}/)
+  })
+
+  it('forwards exactly three public paths to the one loopback upstream, the rest is a 404', () => {
+    expect(caddyCode27b).not.toMatch(/^\s*@\w+\s+path\s/m)
+    expect(caddyPaths(caddyCode27b).sort()).toEqual(
+      ['/v1/chat/completions', '/v1/models', '/health'].sort(),
+    )
+    const proxies = caddyCode27b.match(/reverse_proxy[^{]*\{[^}]*\}/g) ?? []
+    expect(proxies).toHaveLength(1)
+    expect(proxies[0]).toMatch(/^reverse_proxy 127\.0\.0\.1:8000 \{/)
+    expect(proxies[0]).toContain('header_up -Authorization')
+    expect(caddyCode27b).toMatch(/handle \/status \{[^}]*file_server[^}]*\}/)
+    expect(caddyCode27b).toMatch(/handle \{\s*respond 404\s*\}/)
+    for (const forbidden of [
+      '/sleep',
+      '/wake_up',
+      '/is_sleeping',
+      '/collective_rpc',
+      '/v1/completions',
+      '/tokenize',
+      '/metrics',
+    ])
+      expect(caddyCode27b).not.toContain(forbidden)
+    // The same global block, log filter included, as the small box's.
+    expect(caddyCode27b.slice(0, caddyCode27b.indexOf(':8080'))).toBe(
+      caddyCode.slice(0, caddyCode.indexOf(':8080')),
+    )
+    expect(app).toContain(
+      '.add_local_file(Path(__file__).parent / "Caddyfile.27b", "/etc/hames/Caddyfile", copy=True)',
+    )
+  })
+
+  it('starts vLLM on loopback, text only, with the logging posture and the reasoning parser', () => {
+    expect(bigArgv).not.toBe('')
+    expect(bigArgv.match(/"--host"/g)).toHaveLength(1)
+    for (const flag of [
+      '"--host", "127.0.0.1"',
+      '"--no-log-error-stack"',
+      '"--disable-uvicorn-access-log"',
+      '"--enable-sleep-mode"',
+      '"--language-model-only"',
+      '"--reasoning-parser", "qwen3"',
+    ])
+      expect(bigArgv).toContain(flag)
+    for (const forbidden of [
+      '--enable-log-requests',
+      '--enable-log-outputs',
+      '"0.0.0.0"',
+      '--limit-mm-per-prompt',
+    ])
+      expect(bigArgv).not.toContain(forbidden)
+    expect(bigBoot).toMatch(
+      /target=forward_stderr,\s*args=\(self\.vllm\.stdout, self\.vllm_dropped, self\.public_ready, "vllm"\)/,
+    )
+    expect(bigServe).toMatch(/self\.public_ready\.set\(\)\s*self\.caddy = subprocess\.Popen/)
+    expect(app.match(/unauthenticated=False/g)).toHaveLength(2)
+    expect(big).toMatch(/^\s*image=qwen27b_image,$/m)
+    expect(app).toMatch(/\.run_function\(download_qwen27b_weights\)\s*\.env\(VLLM_IMAGE_ENV\)/)
+  })
+
+  it('injects the argv inputs into the container, so it runs what was deployed', () => {
+    expect(big).toContain('"HAMES_MODAL_27B_MTP_TOKENS": str(QWEN27B_MTP_TOKENS)')
+    expect(big).toContain('"HAMES_MODAL_27B_TARGET_CONCURRENCY": str(QWEN27B_TARGET_CONCURRENCY)')
+    expect(bigBoot).toContain('_qwen27b_argv(QWEN27B_MTP_TOKENS)')
+  })
+
+  it('checks after a restore on readings taken after it, before Caddy listens', () => {
+    expect(bigServe).toContain(
+      'after = _reference_logprobs(QWEN27B_MODEL, QWEN27B_REFERENCE_PROMPT)',
+    )
+    expect(bigServe).toContain('_reference_drift(self.reference, after, QWEN27B_MODEL)')
+    expect(bigServe).toMatch(/if _qwen27b_answer\(\) != QWEN27B_ANSWER:\s*raise RuntimeError/)
+    expect(bigServe).toMatch(
+      /now = _draft_acceptance\(\)[\s\S]*if now < before - QWEN27B_DRAFT_TOLERANCE:\s*raise/,
+    )
+    expect(bigServe.indexOf('_qwen27b_answer()')).toBeLessThan(bigServe.indexOf('["caddy", "run"'))
+    expect(bigBoot).not.toContain('["caddy", "run"')
+  })
+
+  it('pins the 27B repo to a commit and every file to a sha256, verified at build', () => {
+    expect(app).toMatch(/^QWEN27B_REVISION = "[0-9a-f]{40}"$/m)
+    const pins = app.match(/QWEN27B_FILES_SHA256 = \{([\s\S]*?)\n\}/)?.[1] ?? ''
+    const entries = [...pins.matchAll(/"([^"]+)": "([0-9a-f]{64})"/g)]
+    expect(entries).toHaveLength(pins.split('\n').filter((l) => l.trim()).length)
+    const names = entries.map((m) => m[1])
+    for (let i = 0; i < 64; i++) expect(names).toContain(`layers-${i}.safetensors`)
+    for (const name of [
+      'config.json',
+      'chat_template.jinja',
+      'mtp.safetensors',
+      'outside.safetensors',
+      'tokenizer.json',
+    ])
+      expect(names).toContain(name)
+    expect(bigDownload).toContain('allow_patterns=list(QWEN27B_FILES_SHA256)')
+    expect(bigDownload).toMatch(
+      /digest = _sha256_file\(QWEN27B_DIR \/ relative\)\s*if digest != expected:\s*raise SystemExit/,
+    )
+    expect(bigDownload).toContain('_install_caddy()')
+  })
+
+  it('warms up and checks with string literals only', () => {
+    for (const name of ['QWEN27B_WARMUP_MESSAGES', 'QWEN27B_ANSWER_MESSAGES']) {
+      const block = app.match(new RegExp(`${name} = \\(([\\s\\S]*?)\\n\\)`))?.[1] ?? ''
+      expect(block).toMatch(/"content": '?"?[^"]+/)
+      expect(block).not.toMatch(/os\.environ|open\(|read|f"|\.get\(|input\(/)
+    }
+    expect(app.match(/QWEN27B_REFERENCE_PROMPT = (.*)/)?.[1]).toMatch(/^"[^"]+"$/)
+    expect(bigBoot).toContain('list(QWEN27B_WARMUP_MESSAGES)')
   })
 })
 

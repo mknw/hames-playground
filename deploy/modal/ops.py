@@ -8,6 +8,9 @@ proxy token. Run from this directory with the same env file as the deploy:
     uv run --env-file deploy.local.env ops.py prewarm   # min_containers=1: boot now, no request
     uv run --env-file deploy.local.env ops.py release   # back to scale-to-zero
     uv run --env-file deploy.local.env ops.py stats     # the last hour's engine stats
+    uv run --env-file deploy.local.env ops.py stop      # stop its containers now (measurements)
+
+`HAMES_MODAL_SERVER=Qwen27B` points every command at the 27B class instead.
 
 `status` is the only way to ask "is it up?" WITHOUT starting it: any HTTP
 request to a scaled-to-zero server, a GET included, triggers the cold start.
@@ -19,12 +22,13 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 
 import modal
 
 APP_NAME = os.environ.get("HAMES_MODAL_APP_NAME", "hames-small-models")
-SERVER_NAME = "SmallModels"
+SERVER_NAME = os.environ.get("HAMES_MODAL_SERVER", "SmallModels")
 
 
 def main(argv: list[str]) -> int:
@@ -32,13 +36,20 @@ def main(argv: list[str]) -> int:
     server = modal.Server.from_name(APP_NAME, SERVER_NAME)
     if command == "status":
         containers = server._experimental_list_containers()
-        print(json.dumps({"app": APP_NAME, "containers": len(containers)}))
+        print(json.dumps({"app": APP_NAME, "server": SERVER_NAME, "containers": len(containers)}))
     elif command == "prewarm":
         print(server.update_autoscaler(min_containers=1))
     elif command == "release":
         print(server.update_autoscaler(min_containers=0))
     elif command == "stats":
         print(server.stats())
+    elif command == "stop":
+        # Instead of waiting out the billed scaledown window; the next request
+        # restores from the snapshot exactly as after a scale-down.
+        for container in server._experimental_list_containers():
+            subprocess.run(
+                [sys.executable, "-m", "modal", "container", "stop", container.container_id, "--yes"], check=True
+            )
     else:
         print(__doc__, file=sys.stderr)
         return 2

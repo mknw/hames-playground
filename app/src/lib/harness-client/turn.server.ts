@@ -68,6 +68,7 @@ import {
   type MemoryConfig,
   type MemoryWrittenEventData,
   type ContextEvent,
+  type ErrorEventData,
   type HarnessResultScoped,
   type HitlDecidedBy,
   type HitlRequestEventData,
@@ -629,6 +630,12 @@ async function runAndSave(
   } catch (err) {
     console.error(`[turn] run failed for ${sessionId}:`, err)
     held.released = true
+    // The failure is RECORDED in the transcript before the row is let go — the
+    // live stream's `error` frame is the only other place it exists, and a
+    // reload (or opening a triggered run) rebuilds the transcript from the blob
+    // alone. A claim that was lost, or a row that cannot be read, falls through
+    // to the plain release below, which is the old behaviour.
+    if (await recordRunFailure(req, agentId, tier, held, err)) throw err
     await dbReleaseConversationClaim(sessionId, userId, held.version, { failed: true }).catch(
       (statusErr: unknown) => {
         console.error(
@@ -640,6 +647,69 @@ async function runAndSave(
       },
     )
     throw err
+  }
+}
+
+/**
+ * Write a failed turn into the conversation's own blob and release the claim in
+ * the same statement: the turn's user message (when the stored blob does not
+ * hold it yet), an irrecoverable `error` event, and `status: 'error'`.
+ *
+ * `replayMessages` turns that event into the same bubble the live stream
+ * painted, so a failure that ends the turn before the harness produced a single
+ * event — a wake that never answered — survives a reload instead of leaving an
+ * empty transcript under an `error` badge.
+ *
+ * Resolves `false` when nothing was written (row unreadable, claim lost, save
+ * refused); the caller then releases the claim without a blob, as before. An
+ * interactive first message and a triggered run already have a seeded blob
+ * holding their input; only a CONTINUED conversation needs the new message
+ * added, and one whose agent changed starts over exactly as `planTurn` does
+ * (the stored history is replaced, as a successful turn's save would).
+ *
+ * The persisted text is the SAME string the live `error` frame carries
+ * (`routes/api/events.ts`), capped at {@link PERSISTED_ERROR_MAX}: it is stored
+ * for every failure in `runAndSave`, not only the wake, and a stored blob has no
+ * expiry. The column is encrypted, and the shared-conversation projection drops
+ * error bubbles.
+ */
+const PERSISTED_ERROR_MAX = 2000
+
+async function recordRunFailure(
+  req: TurnRequest,
+  agentId: string,
+  tier: InferenceTier,
+  held: HeldTurn,
+  err: unknown,
+): Promise<boolean> {
+  const { sessionId, userId } = req
+  try {
+    const row = await dbLoadConversation(sessionId, userId)
+    if (!row) return false
+    let ctx = deserializeContext<SessionData>(row.serializedContext)
+    if (req.mode === 'interactive' && held.loaded) {
+      ctx =
+        held.loaded.agentId === agentId
+          ? ctx
+          : createContext<SessionData>(req.message, undefined, sessionId)
+      if (held.loaded.agentId === agentId) {
+        ctx.events.push(createEvent('user_message', 'harness', { content: req.message }))
+      }
+    }
+    const data: ErrorEventData = {
+      error: (err instanceof Error ? err.message : String(err)).slice(0, PERSISTED_ERROR_MAX),
+      severity: 'irrecoverable',
+    }
+    ctx.events.push(createEvent('error', 'harness', data))
+    ctx.status = 'error'
+    await saveSession(sessionId, userId, agentId, serializeContext(ctx), {
+      version: held.version,
+      inferenceTier: tier,
+    })
+    return true
+  } catch (writeErr) {
+    console.error('[turn] could not record the failure in %s:', sessionId, writeErr)
+    return false
   }
 }
 

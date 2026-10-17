@@ -63,10 +63,6 @@ async function createPatterns(
   })(
     actorCritic<AgentData>(
       createActorControllerAdapter({
-        // The adapter builds the actor's prompt catalogue from THIS list and
-        // ignores the pattern's allowlist (third argument), so the Graph read
-        // tools are named in both: allowed but undescribed was W4's defect.
-        toolNames: officeTools,
         contextPrefix:
           'Work on Microsoft 365 mail and files with the supplied Graph tools. ' +
           'The office sandbox has Python, python-docx, openpyxl, xlsxwriter and PyMuPDF. ' +

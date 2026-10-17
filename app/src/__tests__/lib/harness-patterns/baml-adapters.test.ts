@@ -717,9 +717,13 @@ describe('extractLLMCallData', () => {
     )
 
     expect(result).toBeDefined()
-    // Raw prompt = the BAML template with placeholders intact
+    // Raw prompt = the function's wrapper with its arguments intact (#625 S2).
+    // The Template tab displays this source; expansion is follow-up #628.
     expect(result!.promptTemplate).toBeDefined()
-    expect(result!.promptTemplate).toMatch(/\{\{\s*intent\s*\}\}/)
+    expect(result!.promptTemplate).toContain(
+      '{{ LoopControllerBody(user_message, intent, tools, turns, context, turns_previous_runs, few_shots, multi_call_mode, plan_context, return_style, true) }}',
+    )
+    expect(result!.promptTemplate).toMatch(/\{\{\s*ctx\.output_format\s*\}\}/)
     // Parsed prompt = the rendered HTTP body containing substituted content
     expect(result!.rawInput).toContain('INTENT: hello')
     // The two must not be the same string
@@ -1155,9 +1159,12 @@ describe('LLMCallError — failed LLM call capture', () => {
         intent: 'do thing',
       }),
     )
-    // promptTemplate must be populated from inlined BAML
+    // Failed calls capture the same raw wrapper and output-format placeholder.
     expect(err.llmCall.promptTemplate).toBeDefined()
-    expect(err.llmCall.promptTemplate).toMatch(/\{\{\s*intent\s*\}\}/)
+    expect(err.llmCall.promptTemplate).toContain(
+      '{{ LoopControllerBody(user_message, intent, tools, turns, context, turns_previous_runs, few_shots, multi_call_mode, plan_context, return_style, true) }}',
+    )
+    expect(err.llmCall.promptTemplate).toMatch(/\{\{\s*ctx\.output_format\s*\}\}/)
     // HTTP body captured before the failure
     expect(err.llmCall.rawInput).toBe('{"messages":[{"role":"user","content":"INTENT: do thing"}]}')
     // rawOutput captured (the malformed response) — equivalent to httpResponse

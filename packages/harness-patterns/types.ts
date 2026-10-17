@@ -480,9 +480,8 @@ export interface ControllerInput {
 export interface ActorInput {
   userMessage: string
   intent: string
-  /** Part of the seam shape per the design note; the implementation resolves
-   *  its own allowlist from the factory options and does not read this — it
-   *  was accepted-and-ignored positionally before A4 too. */
+  /** Rendered by `createActorControllerAdapter` as the actor's catalogue,
+   *  unioned with the factory's own `toolNames`/`toolNamesProvider` (#613). */
   availableTools: readonly string[]
   previousAttempts: readonly ScriptExecutionEvent[]
   attemptNumber?: number

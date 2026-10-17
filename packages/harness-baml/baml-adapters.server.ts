@@ -1238,7 +1238,9 @@ export type LegacyActorFn = (
  *  that should be visible to subsequent actor calls in the same session). */
 export interface ActorAdapterOptions {
   /** Static tool names always available to the actor. Mutually exclusive
-   *  with `toolNamesProvider`; if both are set, the provider wins. */
+   *  with `toolNamesProvider`; if both are set, the provider wins. Both are
+   *  unioned with the pattern's `input.availableTools`; neither can remove a
+   *  name the pattern allows. */
   toolNames?: string[]
   /** Async closure resolved per actor invocation. Use this when the
    *  allowlist is user-curated and may change between turns of the same

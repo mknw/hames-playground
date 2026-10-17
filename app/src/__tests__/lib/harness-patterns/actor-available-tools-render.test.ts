@@ -7,10 +7,11 @@ import '../../mocks/namespace-catalog'
 import '../../../lib/inference/config.server'
 import { withRunFrame } from '@hames-ai/harness-patterns'
 import type { ActorInput } from '@hames-ai/harness-patterns'
+import type { ActorAdapterOptions } from '@hames-ai/harness-baml/baml-adapters.server'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 
-const NAMES = ['tool_alpha', 'tool_beta', 'tool_gamma', 'tool_withheld']
+const NAMES = ['tool_alpha', 'tool_beta', 'tool_gamma', 'tool_unlisted']
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
   Client: class {
     connect = vi.fn()
@@ -56,7 +57,7 @@ const input = (availableTools: string[]): ActorInput => ({
 const catalogue = () =>
   [...lastBody.matchAll(/\\n- ([A-Za-z0-9_-]+): desc of /g)].map((m) => m[1]).sort()
 
-const render = async (opts: { toolNames?: string[] }, available: string[]) => {
+const render = async (opts: ActorAdapterOptions, available: string[]) => {
   const { createActorControllerAdapter } = await import('@hames-ai/harness-baml')
   const actor = createActorControllerAdapter(opts)
   await withRunFrame({ inference: { tier: 'anthropic' } }, () => actor(input(available)))
@@ -75,10 +76,17 @@ it('renders the union of availableTools and toolNames, once each', async () => {
 
 it('never renders a tool that is in neither list', async () => {
   await render({ toolNames: ['tool_alpha'] }, ['tool_beta'])
-  expect(lastBody).not.toContain('desc of tool_withheld')
+  expect(lastBody).not.toContain('desc of tool_unlisted')
   expect(lastBody).not.toContain('desc of tool_gamma')
 })
 
 it('renders nothing from the gateway when both are empty (sandbox shape)', async () => {
   expect(await render({}, [])).toEqual([])
+})
+
+it('renders toolNamesProvider names unioned with availableTools', async () => {
+  expect(await render({ toolNamesProvider: async () => ['tool_gamma'] }, ['tool_alpha'])).toEqual([
+    'tool_alpha',
+    'tool_gamma',
+  ])
 })

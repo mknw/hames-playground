@@ -145,7 +145,11 @@ describe('the app is pointed at the service the memory wake probes', () => {
     const makefile = read('Makefile')
     const model = /^EMBED_MODEL \?= (\S+)/m.exec(makefile)?.[1]
     expect(model).toBeDefined()
-    expect(flag('-m')).toBe(`/models/${model}`)
+    expect(read('models/embedder.lock')).toContain(`filename=${model}\n`)
+    // The entrypoint supplies the verified private snapshot as -m. A model
+    // argument here could override it and reopen the mutable host bind.
+    expect(flag('-m')).toBeUndefined()
+    expect(flag('--model')).toBeUndefined()
     expect(makefile).toContain(`--ctx-size ${flag('--ctx-size')}`)
     expect(read('models/README.md')).toContain(`\`${model}\``)
   })

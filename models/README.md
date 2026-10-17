@@ -12,9 +12,13 @@ The lock pins the Hugging Face repository, full revision commit, filename,
 SHA-256 and 1024 dimensions. Its checksum comes from the file's [LFS metadata
 at that revision](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/blob/370f27d7550e0def9b39c1f16d3fbaa13aa67728/Qwen3-Embedding-0.6B-Q8_0.gguf).
 Downloads use a temporary file and are renamed only after verification. Re-runs
-verify the existing file without downloading; a mismatch refuses (remove the
-incorrect GGUF and retry). The compose entrypoint verifies again before each
-start, including restarts. `boot` waits for embedder health and `smoke` makes one
+verify the existing file without downloading; symlinks, non-regular inputs and
+checksum mismatches refuse (remove the incorrect GGUF and retry). Before every
+start, including restarts, the compose entrypoint copies the input without
+following symlinks into a container-private regular snapshot, verifies that
+snapshot and passes it to the server. Host-side renames or writes cannot change
+the verified copy. Each restart replaces the previous snapshot; allow disk space
+for that additional GGUF copy. `boot` waits for embedder health and `smoke` makes one
 internal `/v1/embeddings` request and requires 1024 finite numbers. No model port
 is published. CPU RSS, latency, ingest time and the 2 GiB limit remain unmeasured;
 measure on the deployment before choosing capacity. Other GGUFs are supplied

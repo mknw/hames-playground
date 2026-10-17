@@ -13,6 +13,8 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -104,25 +106,175 @@ class Preparation(unittest.TestCase):
         self.target.write_bytes(PAYLOAD * 50000)
         self.assertEqual(model.digest(self.target), hashlib.sha256(self.target.read_bytes()).hexdigest())
 
-    def test_container_refuses_missing_and_corrupt_weights_before_exec(self):
+    def entry(self, env=None, extra=()):
         compose = FILES["COMPOSE_SCRIPT"].read_text().split("\n  embedder:", 1)[1].split("\n  app:", 1)[0]
         script = re.search(r"      - \|\n(.*?)      - --\n", compose, re.S)
         self.assertIsNotNone(script, "embedder must verify in its entrypoint")
         options = re.search(r"entrypoint:\n      - /bin/sh\n      - (\S+)", compose)
         self.assertIsNotNone(options)
         body = script[1].replace("$$", "$").replace("/models", str(self.directory))
+        body = body.replace("/tmp/embedder-verified", str(self.directory / "private"))
         executable = self.directory / "server"
-        executable.write_text('#!/bin/sh\nprintf "STARTED %s\\n" "$*"\n')
+        # Parse the actual composed argv; a model argument reopening /models
+        # must fail even if another -m argument names the verified snapshot.
+        executable.write_text('''#!/usr/bin/env python3
+import json, pathlib, sys
+args = sys.argv[1:]
+models = [args[i + 1] for i, arg in enumerate(args) if arg in ("-m", "--model")]
+path = pathlib.Path(models[-1])
+print(json.dumps({"models": models, "bytes": path.read_bytes().hex(),
+                  "regular": path.is_file() and not path.is_symlink(),
+                  "mode": path.stat().st_mode & 0o777,
+                  "parent_mode": path.parent.stat().st_mode & 0o777}))
+''')
         executable.chmod(0o755)
         body = body.replace("/app/llama-server", str(executable))
+        command = compose.split("    command:\n", 1)[1].split("    volumes:", 1)[0]
+        arguments = [line.strip()[2:].strip('"') for line in command.splitlines() if line.strip().startswith("- ")]
+        arguments = [arg.replace("/models", str(self.directory)) for arg in arguments]
+        return subprocess.run(["sh", options[1], body, "--", *arguments, *extra],
+                              text=True, capture_output=True, timeout=5, env=env)
+
+    def assert_verified_snapshot(self, result):
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        loaded = json.loads(result.stdout.splitlines()[-1])
+        self.assertEqual(loaded["bytes"], PAYLOAD.hex())
+        self.assertEqual(len(loaded["models"]), 1)
+        self.assertNotEqual(Path(loaded["models"][0]), self.target)
+        self.assertEqual(loaded["regular"], True)
+        self.assertEqual(loaded["mode"], 0o400)
+        self.assertEqual(loaded["parent_mode"], 0o700)
+
+    def test_container_refuses_missing_and_corrupt_weights_before_exec(self):
         for data, allowed in ((None, False), (b"wrong", False), (PAYLOAD, True)):
             if data is not None:
                 self.target.write_bytes(data)
-            result = subprocess.run(["sh", options[1], body, "--", "--embedding", "-m", str(self.target)],
-                                    text=True, capture_output=True, timeout=5)
+            result = self.entry()
             with self.subTest(data=data):
-                self.assertEqual(result.returncode == 0, allowed, result.stderr)
-                self.assertEqual("STARTED --embedding -m " + str(self.target) in result.stdout, allowed)
+                if allowed:
+                    self.assert_verified_snapshot(result)
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_preparation_refuses_symlinks_and_nonregular_inputs_without_network(self):
+        backing = self.directory / "backing"
+        backing.write_bytes(PAYLOAD)
+        for kind in ("symlink", "dangling", "directory", "fifo"):
+            with self.subTest(kind=kind):
+                if kind in ("symlink", "dangling"):
+                    self.target.symlink_to(backing if kind == "symlink" else self.directory / "missing")
+                elif kind == "directory":
+                    self.target.mkdir()
+                else:
+                    os.mkfifo(self.target)
+                with self.assertRaises((ValueError, OSError)):
+                    model.prepare(self.directory)
+                self.opener.open.assert_not_called()
+                if kind == "directory":
+                    self.target.rmdir()
+                else:
+                    self.target.unlink()
+
+    def test_fifo_with_matching_empty_digest_is_still_not_a_regular_model(self):
+        os.mkfifo(self.target)
+        (self.directory / "embedder.lock").write_text(
+            self.lock.replace(self.pin["sha256"], hashlib.sha256(b"").hexdigest()))
+        with self.assertRaises((ValueError, OSError)):
+            model.prepare(self.directory)
+        self.opener.open.assert_not_called()
+        self.assertNotEqual(self.entry().returncode, 0)
+
+    def test_preparation_open_does_not_follow_a_late_symlink(self):
+        self.target.write_bytes(PAYLOAD)
+        backing = self.directory / "backing"
+        backing.write_bytes(PAYLOAD)
+        real_open = os.open
+
+        def replace_before_open(path, flags, *args, **kwargs):
+            if Path(path) == self.target:
+                self.target.unlink()
+                self.target.symlink_to(backing)
+            return real_open(path, flags, *args, **kwargs)
+
+        with patch("os.open", side_effect=replace_before_open):
+            with self.assertRaises((ValueError, OSError)):
+                model.prepare(self.directory)
+        self.opener.open.assert_not_called()
+
+    def test_container_refuses_symlinks_and_nonregular_inputs(self):
+        backing = self.directory / "backing"
+        backing.write_bytes(PAYLOAD)
+        for kind in ("symlink", "dangling", "directory", "fifo"):
+            with self.subTest(kind=kind):
+                if kind in ("symlink", "dangling"):
+                    self.target.symlink_to(backing if kind == "symlink" else self.directory / "missing")
+                elif kind == "directory":
+                    self.target.mkdir()
+                else:
+                    os.mkfifo(self.target)
+                result = self.entry()
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                if kind == "directory":
+                    self.target.rmdir()
+                else:
+                    self.target.unlink()
+
+    def test_container_loads_only_snapshot_after_host_rename_or_inplace_write(self):
+        bin_dir = self.directory / "bin"
+        bin_dir.mkdir()
+        shim = bin_dir / "sha256sum"
+        for operation in ("rename", "inplace"):
+            with self.subTest(operation=operation):
+                self.target.write_bytes(PAYLOAD)
+                replacement = self.directory / "replacement"
+                replacement.write_bytes(b"unverified replacement")
+                change = ("mv " + shlex.quote(str(replacement)) + " " + shlex.quote(str(self.target))
+                          if operation == "rename" else "printf unverified > " + shlex.quote(str(self.target)))
+                shim.write_text("#!/bin/sh\n" + shlex.quote(shutil.which("sha256sum")) +
+                                ' "$@" || exit $?\n' + change + "\n")
+                shim.chmod(0o755)
+                result = self.entry({**os.environ, "PATH": str(bin_dir) + ":" + os.environ["PATH"]})
+                self.assertNotEqual(self.target.read_bytes(), PAYLOAD, "host mutation must run after the real hash")
+                self.assert_verified_snapshot(result)
+
+    def test_container_refuses_source_symlink_swapped_before_snapshot_open(self):
+        self.target.write_bytes(PAYLOAD)
+        backing = self.directory / "backing"
+        backing.write_bytes(PAYLOAD)
+        bin_dir = self.directory / "bin"
+        bin_dir.mkdir()
+        shim = bin_dir / "dd"
+        shim.write_text("#!/bin/sh\nrm " + shlex.quote(str(self.target)) + "\nln -s " +
+                        shlex.quote(str(backing)) + " " + shlex.quote(str(self.target)) + "\nexec " +
+                        shlex.quote(shutil.which("dd")) + ' "$@"\n')
+        shim.chmod(0o755)
+        result = self.entry({**os.environ, "PATH": str(bin_dir) + ":" + os.environ["PATH"]})
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_container_hashes_the_snapshot_and_refuses_a_corrupt_copy(self):
+        self.target.write_bytes(PAYLOAD)
+        bin_dir = self.directory / "bin"
+        bin_dir.mkdir()
+        shim = bin_dir / "dd"
+        shim.write_text("#!/bin/sh\n" + shlex.quote(shutil.which("dd")) + ' "$@" || exit $?\n' +
+                        'for arg do case "$arg" in of=*) printf corrupt > "${arg#of=}" ;; esac; done\n')
+        shim.chmod(0o755)
+        result = self.entry({**os.environ, "PATH": str(bin_dir) + ":" + os.environ["PATH"]})
+        self.assertEqual(self.target.read_bytes(), PAYLOAD)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_restart_replaces_private_snapshot_instead_of_accumulating_files(self):
+        self.target.write_bytes(PAYLOAD)
+        self.assert_verified_snapshot(self.entry())
+        self.assert_verified_snapshot(self.entry())
+        self.assertEqual(len(list((self.directory / "private").iterdir())), 1)
+
+    def test_command_cannot_override_the_verified_model(self):
+        self.target.write_bytes(PAYLOAD)
+        for args in (("-m", str(self.target)), ("--model", str(self.target)),
+                     ("--model=" + str(self.target),)):
+            with self.subTest(args=args):
+                self.assertNotEqual(self.entry(extra=args).returncode, 0)
 
 
 class Wiring(unittest.TestCase):
@@ -135,7 +287,8 @@ class Wiring(unittest.TestCase):
                               "dimensions": "1024"})
         compose = FILES["COMPOSE_SCRIPT"].read_text().split("\n  embedder:", 1)[1].split("\n  app:", 1)[0]
         self.assertRegex(compose, r'--n-gpu-layers\s*\n\s*- "0"')
-        self.assertIn("/models/" + pin["filename"], compose)
+        self.assertNotIn("      - -m\n", compose)
+        self.assertNotIn("      - --model\n", compose)
 
     def test_boot_prepares_before_compose_and_requires_embedder_health(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -262,6 +415,22 @@ MUTATIONS = [
     ("whole-file-hash", "EMBEDDER_SCRIPT", 'checksum.update(chunk)', 'checksum.update(chunk); break'),
     ("container-sha", "COMPOSE_SCRIPT", '| sha256sum -c -', '| cat'),
     ("container-fail-closed", "COMPOSE_SCRIPT", '      - -ec\n', '      - -c\n'),
+    # Review finding 1: every new pin is exercised by a red source mutation.
+    ("prepare-nofollow", "EMBEDDER_SCRIPT", ' | os.O_NOFOLLOW', ''),
+    ("prepare-regular", "EMBEDDER_SCRIPT", 'if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):', 'if False:'),
+    ("prepare-dangling", "EMBEDDER_SCRIPT", ' or target.is_symlink()', ''),
+    ("source-regular", "COMPOSE_SCRIPT", '[ -f "$$source" ]', 'true'),
+    ("snapshot-nofollow", "COMPOSE_SCRIPT", 'iflag=nofollow,nonblock', 'iflag=nonblock'),
+    ("snapshot-hash-source", "COMPOSE_SCRIPT", '"$$sha256" "$$snapshot" |', '"$$sha256" "$$source" |'),
+    ("load-source", "COMPOSE_SCRIPT", 'exec /app/llama-server -m "$$snapshot"', 'exec /app/llama-server -m "$$source"'),
+    ("hardlink-snapshot", "COMPOSE_SCRIPT", 'dd if="$$source" of="$$snapshot" iflag=nofollow,nonblock status=none', 'ln "$$source" "$$snapshot"'),
+    ("snapshot-mode", "COMPOSE_SCRIPT", 'chmod 400 "$$snapshot"', 'chmod 644 "$$snapshot"'),
+    ("snapshot-private-directory", "COMPOSE_SCRIPT", 'mkdir -m 700 /tmp/embedder-verified', 'mkdir -m 755 /tmp/embedder-verified'),
+    ("snapshot-restart", "COMPOSE_SCRIPT", 'rm -rf /tmp/embedder-verified', ': # old snapshot retained'),
+    ("command-model-override", "COMPOSE_SCRIPT", '      - --embedding\n', '      - --embedding\n      - -m\n      - /models/Qwen3-Embedding-0.6B-Q8_0.gguf\n'),
+    ("command-long-model-override", "COMPOSE_SCRIPT", '      - --embedding\n', '      - --embedding\n      - --model\n      - /models/Qwen3-Embedding-0.6B-Q8_0.gguf\n'),
+    ("model-override-refusal", "COMPOSE_SCRIPT", '-m|--model|--model=*) exit 1', '--never-a-model-option) exit 1'),
+    ("lock-filename", "MODEL_LOCK", 'filename=Qwen3-Embedding-0.6B-Q8_0.gguf', 'filename=other.gguf'),
     ("cpu-only", "COMPOSE_SCRIPT", '      - --n-gpu-layers\n      - "0"', '      - --n-gpu-layers\n      - "99"'),
     ("boot-prepare", "BOOTSTRAP_SCRIPT", '  prepare_embedder || return 1', '  : # prepare removed'),
     ("boot-preparation-failure", "BOOTSTRAP_SCRIPT", '    refuse "embedder GGUF preparation failed; no compose services were started"', '    return 0'),

@@ -7,9 +7,11 @@ No inference provider is contacted. Downloads are verified before atomic rename;
 an existing mismatch is refused, never silently replaced with another space.
 """
 import hashlib
+import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import sys
 import tempfile
 from urllib.request import ProxyHandler, build_opener
@@ -17,7 +19,10 @@ from urllib.request import ProxyHandler, build_opener
 
 def digest(path):
     checksum = hashlib.sha256()
-    with path.open("rb") as stream:
+    # Check the opened inode, not a pathname that can change before open.
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError("model input must be a regular file")
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             checksum.update(chunk)
     return checksum.hexdigest()
@@ -31,7 +36,7 @@ def prepare(directory):
     if set(pin) != set(patterns) or not all(re.fullmatch(pattern, pin[key]) for key, pattern in patterns.items()):
         raise ValueError("invalid model pin")
     target = directory / pin["filename"]
-    if target.exists():
+    if target.exists() or target.is_symlink():
         if digest(target) != pin["sha256"]:
             raise ValueError("existing model checksum mismatch; remove the incorrect GGUF and retry")
         return

@@ -1,4 +1,6 @@
-# Small models on Modal
+# Private-tier models on Modal
+
+Two Modal apps, each one scale-to-zero GPU box: the small models (below) and [the 27B](#the-27b-hames_private_27bpy), the private tier's capable model. They are separate apps because a memory snapshot is discarded whenever its app's code changes; what they share is `vllm_box.py`.
 
 First time? [Serving the small models on Modal](../../docs/tutorials/serving-the-small-models-on-modal.md) walks the whole setup once; this page is the reference.
 
@@ -119,6 +121,58 @@ Scale to zero after the last request took about 2 minutes, as configured.
 
 Billed while a container exists: boot, the snapshot creation, serving, and the scaledown window after the last request. Per Modal's list prices, an L4 with 2 cores and 24 GiB pinned to a narrow EU region is about $1.8 per active hour, $0 at zero containers. Set a workspace spend limit in Modal's dashboard before the first deploy; `HAMES_MODAL_MAX_CONTAINERS=1` caps the box at one replica.
 
+## The 27B (`hames_private_27b.py`)
+
+Qwen3.8-27B-FP8 for the app's `VerdaQwen` client, a drop-in for the Verda deployment: the same model name (vLLM enforces it), a 131072-token window and an OpenAI-compatible `/v1`. `modal-pins.test.ts` pins the name and the window against the client's own files.
+
+```bash
+uv run --env-file deploy.local.env modal deploy hames_private_27b.py
+uv run --env-file deploy.local.env smoke_27b.py                         # PASS/FAIL, in VerdaQwen's request shape
+uv run --env-file deploy.local.env measure.py --box 27b --stop --samples 3
+HAMES_MODAL_SERVER=Qwen27B uv run --env-file deploy.local.env ops.py status   # every ops.py command, for this box
+```
+
+Then, from `app/`, the app's own checks against it: `smoke-verda.ts` and `smoke-verda-load.ts` (`src/lib/inference/scripts/`), with the endpoint and key in an overlay env file.
+
+**Switching the app to it is env-only, and these move together:**
+
+| App setting                | Value                                                                              |
+| -------------------------- | ---------------------------------------------------------------------------------- |
+| `VERDA_INFERENCE_ENDPOINT` | `<27B URL>/v1`                                                                     |
+| `VERDA_INFERENCE_API_KEY`  | the Proxy Token, `wk-….ws-…`                                                       |
+| `VERDA_EUR_PER_HOUR`       | this box's rate, not Verda's (an H100 below is ≈ 7.00)                             |
+| `VERDA_SCALEDOWN_SECONDS`  | `HAMES_MODAL_27B_SCALEDOWN_S`, 300 by default                                      |
+| `VERDA_WAKE_TIMEOUT_MS`    | `1200000`: a full boot (next paragraph) takes 8–15 minutes, past the 600 s default |
+
+**When a cold start is a full boot.** Most cold starts restore the snapshot. Three things make one a full boot instead, which is why the wake budget above is longer than any restore: the first few cold starts after a deploy (Modal takes 2–3 snapshots per GPU type, one per worker type it lands on; in both measured runs the SECOND cold start after a deploy was one), Modal re-taking snapshots for its own runtime updates, and any change to `hames_private_27b.py` or `vllm_box.py`. After a deploy, run `measure.py --box 27b --stop` until a sample reports `restored` from a snapshot that is not the one being created, so no turn meets those boots.
+
+**What differs from the small box:**
+
+- Thinking. vLLM runs the `qwen3` reasoning parser, so the model can think and its reasoning arrives in the response's `reasoning` field (and counts in `completion_tokens`); `VerdaQwen` turns it off per request with `chat_template_kwargs`. `smoke_27b.py` checks both: with thinking off, `content` is non-empty and parses and `reasoning` is empty; with it on, nothing leaks into `content`.
+- Text only (`--language-model-only`): no vision tower is loaded and an image part is a 400 before anything is fetched.
+- Multi-token prediction (`HAMES_MODAL_27B_MTP_TOKENS`, 2 by default) drafts tokens with the model's own MTP head. A damaged draft head costs speed, never correctness, so the restore check reads its acceptance rate on a literal generation before the sleep and after the restore.
+- After a restore, before Caddy listens: the reference distribution (as the small box), a literal question that must parse to the exact JSON answer with thinking off, and MTP acceptance within 0.15 of its pre-sleep value.
+- Routes (`Caddyfile.27b`): `POST /v1/chat/completions`, `GET /v1/models`, `GET /health` (vLLM's, answered only once those checks passed) and `GET /status`. Everything else is a 404, including every dot-segment path that resolves off the list.
+- Shape: 4 cores and 64 GiB (level-1 sleep holds the ~31 GB of weights in CPU RAM for the snapshot), `H100!` (the `!` stops Modal substituting an H200, which would need snapshots of its own), up to 8 requests in flight, 300 s idle.
+
+**Reference measurements, 2026-10-17** (synthetic inputs; `eu-west`; the load figures are `smoke-verda-load.ts`, 2.75k-token prompts, the same script Verda was measured with on 2026-08-25):
+
+|                                                   | RTX PRO 6000, MTP 2 | **H100, MTP 2** (default) | H100, MTP off | Verda, 2026-08-25       |
+| ------------------------------------------------- | ------------------- | ------------------------- | ------------- | ----------------------- |
+| One in flight, p50                                | 3.9 s               | **2.0 s**                 | 3.2 s         | 4.1 s                   |
+| One in flight, 550-token answer                   | 76 tok/s            | **137 tok/s**             | 78 tok/s      | —                       |
+| Eight in flight, p50 / p95                        | 4.1 / 4.7 s         | 3.7 / 7.7 s               | 4.5 / 5.3 s   | 6.3 / 9.9 s             |
+| Eight in flight, aggregate                        | 396 tok/s           | 357 tok/s                 | 388 tok/s     | 208 tok/s               |
+| Controller envelopes parsed                       | 47/47               | 47/47                     | 47/47         | 47/47                   |
+| Cold start, restored from a snapshot              | 110 s, 37 s         | 36 s, 62 s                | —             | 146–360 s (no snapshot) |
+| Full boot (first after deploy; a second snapshot) | 575 s; 889 s        | 938 s; 513 s              | 505 s         | —                       |
+| Inside the box after a restore (wake + checks)    | 2.0 s               | 2.5–2.7 s                 | —             | —                       |
+| MTP acceptance, before → after restore            | 0.56 → 0.56         | 0.61 → 0.61               | —             | —                       |
+
+Reference drift was 0.0 on every restore. The eight-in-flight p95 is two rounds of eight, so one slow round sets it.
+
+**Cost.** Per Modal's list prices with the narrow-region multiplier (1.75×): H100 + 4 cores + 64 GiB ≈ $8.14 per active hour (≈ €7.00 at the app's `EUR_PER_USD`), an RTX PRO 6000 in the same shape ≈ $6.53 (≈ €5.62); $0 at zero containers. A full boot is ≈ $1.1–2 of that.
+
 ## Before any real traffic reaches it
 
 The deploy above serves synthetic data. Pointing a real user's `.env` at the URL is a separate step gated on the operator's own governance decision (processor, region, log and snapshot placement). Nothing in this directory makes that decision.
@@ -129,14 +183,16 @@ The deploy above serves synthetic data. Pointing a real user's `.env` at the URL
 
 ## Layout
 
-| File                       | Tracked | Holds                                                  |
-| -------------------------- | ------- | ------------------------------------------------------ |
-| `hames_small_models.py`    | yes     | the Modal app: image pins, boot sequence, server shape |
-| `Caddyfile`                | yes     | the public route list                                  |
-| `ops.py`, `measure.py`     | yes     | operator commands; the measurement run                 |
-| `smoke.py`                 | yes     | the pass/fail check before the app is pointed at it    |
-| `deploy.env.example`       | yes     | every instance variable, documented                    |
-| `deploy.local.env`         | **no**  | this deployment's regions, URL and proxy token         |
-| `measurements.local.jsonl` | **no**  | `measure.py` output                                    |
+| File                         | Tracked | Holds                                                          |
+| ---------------------------- | ------- | -------------------------------------------------------------- |
+| `hames_small_models.py`      | yes     | the small models' app: pins, boot sequence, server shape       |
+| `hames_private_27b.py`       | yes     | the 27B's app: pins, boot sequence, server shape               |
+| `vllm_box.py`                | yes     | what both share: vLLM and Caddy pins, image env, restore check |
+| `Caddyfile`, `Caddyfile.27b` | yes     | each box's public route list                                   |
+| `ops.py`, `measure.py`       | yes     | operator commands; the measurement run                         |
+| `smoke.py`, `smoke_27b.py`   | yes     | the pass/fail check before the app is pointed at it            |
+| `deploy.env.example`         | yes     | every instance variable, documented                            |
+| `deploy.local.env`           | **no**  | this deployment's regions, URL and proxy token                 |
+| `measurements.local.jsonl`   | **no**  | `measure.py` output                                            |
 
 Per [ADR-0008](../../docs/adr/0008-deployment-guidance-is-provider-neutral.md), the tracked files are generic: anyone with a Modal workspace can run them, and nothing in them names a deployment. The `*.local.*` pattern is git-ignored at the repo root.

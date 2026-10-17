@@ -1,5 +1,60 @@
 # @hames-ai/agents
 
+## 0.4.0
+
+### Minor Changes
+
+- 787830f: Add general-next beside general: guarded decision-loop routes for Microsoft 365
+  and an office sandbox, Neo4j/web lookup, conversation-document retrieval and
+  planning. The candidate also opts into optional memory, with recall reaching
+  only synthesis; general keeps its opt-in until the default-agent flip. Keep Graph file ingestion and turn-results materialisation off
+  until P4, and require the S7 web-route pseudonymisation guard.
+- c46aa3c: general-next's info route gains `context7` library docs and the memory graph's
+  targeted read tools (`search_nodes`, `open_nodes`) under the same injection
+  guard and web-route pseudonymisation boundary; memory write tools stay withheld.
+  `withPseudonymisedInputs` now treats `memory` as a local namespace beside
+  `neo4j`, keeps `context7` under the outgoing check, and stops extending its outgoing
+  literals from `context7` results (as already for web).
+- 3819eee: Record sandbox output provenance in stored documents and retrieved chunks. Exclude promoted documents from the General Agent Next web route's reference previews and expansions while keeping them available for document search and user answers.
+- 8f8ebd0: Add `withPseudonymisedInputs` and its host `PseudonymiseForWeb` seam for #507 G14.
+  Rewrite and post-check earlier event-data copies and all inherited child data on
+  every run except an explicit Anthropic run, preserving provenance fences,
+  restricting copied events to the child's view and withholding residual identities
+  per string body. Missing or unavailable host wiring still fails closed. Check
+  outgoing arguments for every capability except declared local reads at `callTool`
+  through concatenating run-frame
+  `egressChecks`. `decisionLoop` supplies every preceding iteration's source
+  payloads as roster-only input to declaring routes, removed before inner dispatch.
+  Local results extend the outgoing literal check through `afterToolCall`.
+  ActorCritic output records unfence string leaves before JSON stringification;
+  literal checks normalise JSON escapes and bound compact names to single tokens.
+  `AgentDeps.pseudonymiseForWeb` lets hosts supply the ephemeral implementation.
+
+### Patch Changes
+
+- 3e816f9: `createActorControllerAdapter` now renders `input.availableTools` together with its own `toolNames`, so an actor pattern's allowlist no longer has to be declared twice. `general-next` drops its duplicate `toolNames`.
+- 4889011: general-next: the office-data actor's prompt now lists the Graph read tools. They were allowlisted on the route but the actor adapter never received them, so the model was shown only the sandbox tools. `graph_file_ingest` stays withheld by exact name.
+- d89bf08: `compactExecution` (#507 W4): the user's message is read past a `viewConfig.fromPatterns` scope (it is a `harness`-level event, so a scoped synthesizer received an empty `userMessage` and `intent`), and a new optional `threadTurns` widens only the scoped `thread` read, so a follow-up turn keeps the previous turn's committed `decisionLoop` records while the error read keeps its own window and an earlier turn's failed or withheld record is not carried forward. `threadTurns` must be an integer >= 1 and is refused at construction unless `mode` is `'thread'` and `viewConfig.fromPatterns` is set; the user message is read only from `harness`. `general-next` sets `threadTurns: 2`. The records stay sanitized and fenced, and a record withheld by a screen outage stays marker-only.
+- Updated dependencies [3e816f9]
+- Updated dependencies [959966b]
+- Updated dependencies [d6b58f4]
+- Updated dependencies [c46aa3c]
+- Updated dependencies [e7f697e]
+- Updated dependencies [b1f162c]
+- Updated dependencies [e4c744d]
+- Updated dependencies [a65a7b7]
+- Updated dependencies [3819eee]
+- Updated dependencies [1b84721]
+- Updated dependencies [e39d5a4]
+- Updated dependencies [fdaf3f8]
+- Updated dependencies [d89bf08]
+- Updated dependencies [372bb26]
+- Updated dependencies [2e0e103]
+- Updated dependencies [55a780e]
+- Updated dependencies [8f8ebd0]
+  - @hames-ai/harness-baml@0.4.0
+  - @hames-ai/harness-patterns@0.4.0
+
 ## 0.3.0
 
 > The published 0.3.0 tarball differs from the tag only in README.md (Neo4j egress wording, #241 G13); no code differs.

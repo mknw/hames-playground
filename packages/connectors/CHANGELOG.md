@@ -1,5 +1,24 @@
 # @hames-ai/connectors
 
+## 0.4.0
+
+### Patch Changes
+
+- Updated dependencies [959966b]
+- Updated dependencies [d6b58f4]
+- Updated dependencies [c46aa3c]
+- Updated dependencies [e7f697e]
+- Updated dependencies [b1f162c]
+- Updated dependencies [e4c744d]
+- Updated dependencies [a65a7b7]
+- Updated dependencies [3819eee]
+- Updated dependencies [1b84721]
+- Updated dependencies [e39d5a4]
+- Updated dependencies [d89bf08]
+- Updated dependencies [55a780e]
+- Updated dependencies [8f8ebd0]
+  - @hames-ai/harness-patterns@0.4.0
+
 ## 0.3.0
 
 > The published 0.3.0 tarball differs from the tag only in README.md (Neo4j egress wording, #241 G13); no code differs.

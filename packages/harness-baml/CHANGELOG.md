@@ -1,5 +1,33 @@
 # @hames-ai/harness-baml
 
+## 0.4.0
+
+### Minor Changes
+
+- 2e0e103: Add `@hames-ai/harness-baml/thinking-trace` (#625 S1): `thinkingFrom(call)` reads a model's thinking trace from a BAML collector call's raw response body (OpenAI-compatible `reasoning_content` or `reasoning`; Anthropic `thinking` blocks) and returns it verbatim or as a typed absence, and `splitAtLastThinkClose(raw)` cuts a no-parser response at its last `</think>`. Nothing calls either yet; no routing, BAML or client change.
+
+### Patch Changes
+
+- 3e816f9: `createActorControllerAdapter` now renders `input.availableTools` together with its own `toolNames`, so an actor pattern's allowlist no longer has to be declared twice. `general-next` drops its duplicate `toolNames`.
+- d6b58f4: A turn whose every tool call failed and which then `Return`s an answer from context keeps that answer (#614). `compactExecution` thread mode carries the `Return` text as the new optional `CompactExecutionInput.returnText` beside the error history, and `defaultSynthesize` appends it as a final turn. A turn with any successful call is unchanged.
+- e4c744d: `LoopController`'s default (`returnStyle: 'summary'`) prompt now tells the controller to put the complete answer in `tool_args` when no tool call in the task has returned a result, i.e. it called none or every call failed (#615). A Return-only turn has no tool result for the synthesizer to compose from, and #612 hands that Return text on as the answer; before, the prompt said the Return was "NOT the user-facing answer", so whether the text held the answer depended on the model. A turn that called a tool is unchanged (the Return stays a brief summary, #149); `returnStyle: 'answer'` is unchanged. The regenerated `baml_client` ships with it.
+- fdaf3f8: Extract controller and planner prompt bodies into shared templates while preserving existing request bytes.
+- 372bb26: Record shared template_string bodies as labelled textual includes in promptTemplate so the observability Template tab shows the complete raw source without evaluating Jinja.
+- Updated dependencies [959966b]
+- Updated dependencies [d6b58f4]
+- Updated dependencies [c46aa3c]
+- Updated dependencies [e7f697e]
+- Updated dependencies [b1f162c]
+- Updated dependencies [e4c744d]
+- Updated dependencies [a65a7b7]
+- Updated dependencies [3819eee]
+- Updated dependencies [1b84721]
+- Updated dependencies [e39d5a4]
+- Updated dependencies [d89bf08]
+- Updated dependencies [55a780e]
+- Updated dependencies [8f8ebd0]
+  - @hames-ai/harness-patterns@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes

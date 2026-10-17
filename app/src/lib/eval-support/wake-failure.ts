@@ -1,3 +1,4 @@
+import { WakeFailure } from '../inference/wake-failure'
 /** Diagnosable wake-failure text for the report: URLs shrink to host names, credentials never appear. */
 const SECRET_ENV = ['VERDA_INFERENCE_API_KEY', 'SMALL_LLM_API_KEY']
 
@@ -23,14 +24,15 @@ export function describeWakeFailure(err: unknown): string {
     .slice(0, 600)
 }
 
+export type WakeFailureReason =
+  'VERDA_WAKE_FAILED' | 'SMALL_LLM_WAKE_FAILED' | 'PRIVATE_TIER_WAKE_FAILED'
+
 /**
- * Stop reason naming the box that failed. `ensurePrivateTierAwake` rejects with the first box's
- * own message (the 27B's carries "the 27B", the small box's "small model box"); anything else,
- * such as a bare abort, cannot be attributed and says so rather than guessing a box.
+ * Stop reason naming the box that failed, read from the typed error the wake throws and never
+ * from its message, which embeds remote response text. Anything that is not a `WakeFailure`
+ * (a bare abort, a thrown string) cannot be attributed and says so rather than guessing.
  */
-export function wakeFailureReason(err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err)
-  if (msg.includes('small model box')) return 'SMALL_LLM_WAKE_FAILED'
-  if (msg.includes('the 27B')) return 'VERDA_WAKE_FAILED'
-  return 'PRIVATE_TIER_WAKE_FAILED'
+export function wakeFailureReason(err: unknown): WakeFailureReason {
+  if (!(err instanceof WakeFailure)) return 'PRIVATE_TIER_WAKE_FAILED'
+  return err.box === 'small' ? 'SMALL_LLM_WAKE_FAILED' : 'VERDA_WAKE_FAILED'
 }

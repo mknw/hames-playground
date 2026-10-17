@@ -22,3 +22,15 @@ export function describeWakeFailure(err: unknown): string {
     )
     .slice(0, 600)
 }
+
+/**
+ * Stop reason naming the box that failed. `ensurePrivateTierAwake` rejects with the first box's
+ * own message (the 27B's carries "the 27B", the small box's "small model box"); anything else,
+ * such as a bare abort, cannot be attributed and says so rather than guessing a box.
+ */
+export function wakeFailureReason(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err)
+  if (msg.includes('small model box')) return 'SMALL_LLM_WAKE_FAILED'
+  if (msg.includes('the 27B')) return 'VERDA_WAKE_FAILED'
+  return 'PRIVATE_TIER_WAKE_FAILED'
+}

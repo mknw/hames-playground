@@ -338,10 +338,12 @@ try:
             # WHATWG treats a numeric final label as IPv4, and refuses it
             # when the full address cannot be parsed (e.g. an octet > 255).
             host_valid = not re.fullmatch(r"[0-9]+|0x[0-9a-f]*", host.rsplit(".", 1)[-1])
+    # Brackets belong to the parsed IPv6 authority, never a decoded domain.
+    forbidden = "#/%<>?@\\^|[]" + ("" if url.netloc.startswith("[") else ":")
     valid = (
         bool(host)
         and host_valid
-        and not any(ord(c) <= 32 or c in "#/%<>?@\\^|" for c in host)
+        and not any(ord(c) <= 32 or ord(c) == 127 or c in forbidden for c in host)
         and (url.scheme == "https" or (url.scheme == "http" and loopback))
         and not url.username and not url.password
         and not host.endswith(".")

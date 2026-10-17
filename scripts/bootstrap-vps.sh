@@ -299,8 +299,8 @@ readonly OWNER_REQUIRED=(
   "ANTHROPIC_API_KEY|Anthropic API key|1"
   "VITE_ALLOWED_EMAILS|this deployment's allow-list: comma-separated, *@domain wildcards|0"
 )
-# The private tier: all three or none (CLAUDE.md, docs/PREVIEW.md §6).
-readonly VERDA_TRIO=(VERDA_INFERENCE_ENDPOINT VERDA_INFERENCE_API_KEY SMALL_LLM_BASE_URL)
+# The private tier: all five or none (CLAUDE.md, docs/PREVIEW.md §6).
+readonly PRIVATE_TIER_REQUIRED=(VERDA_INFERENCE_ENDPOINT VERDA_INFERENCE_API_KEY SMALL_LLM_BASE_URL SMALL_LLM_DECISIONS_URL SMALL_LLM_API_KEY)
 
 # owner_missing — print each owner-required key that is empty or a placeholder.
 owner_missing() {
@@ -315,7 +315,50 @@ owner_missing() {
   done
 }
 
-# env_problems — docs/PREVIEW.md §6's preflight greps, plus the rest of what a
+# decisions_url_problem — mirror assertPrivateTierConfigured's parsed-URL
+# policy without Node on the host. python3 is installed by stage_updates.
+# Read via stdin, never argv; only a key/problem label may reach the transcript.
+decisions_url_problem() {
+  python3 -c '
+import ipaddress, re, socket, sys
+from urllib.parse import unquote, urlsplit
+try:
+    url = urlsplit(sys.stdin.read())
+    # WHATWG URL canonicalizes escaped/IDNA hosts before the runtime checks.
+    host = unquote(url.hostname or "").encode("idna").decode("ascii").lower()
+    port = url.port  # Reject malformed/out-of-range ports like the runtime parser.
+    host_valid = True
+    try:
+        loopback = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        try:
+            loopback = socket.inet_aton(host)[0] == 127
+        except OSError:
+            loopback = host == "localhost"
+            # WHATWG treats a numeric final label as IPv4, and refuses it
+            # when the full address cannot be parsed (e.g. an octet > 255).
+            host_valid = not re.fullmatch(r"[0-9]+|0x[0-9a-f]*", host.rsplit(".", 1)[-1])
+    # Brackets belong to the parsed IPv6 authority, never a decoded domain.
+    forbidden = "#/%<>?@\\^|[]" + ("" if url.netloc.startswith("[") else ":")
+    valid = (
+        bool(host)
+        and host_valid
+        and not any(ord(c) <= 32 or ord(c) == 127 or c in forbidden for c in host)
+        and (url.scheme == "https" or (url.scheme == "http" and loopback))
+        and not url.username and not url.password
+        and not host.endswith(".")
+        and url.path == "/v1/systemone"
+        and host not in ("api.typesafe.ai", "openrouter.ai")
+        and not host.endswith(".openrouter.ai")
+    )
+except (ValueError, UnicodeError):
+    valid = False
+if not valid:
+    print("SMALL_LLM_DECISIONS_URL must end in /v1/systemone (the full systemone URL): absolute HTTPS or HTTP loopback, no userinfo or trailing-dot host, exact pathname, no public systemone provider")
+'
+}
+
+# env_problems — docs/PREVIEW.md §6's shared preflight, plus the rest of what a
 # boot needs from .env. One line per problem; nothing printed means clean.
 env_problems() {
   local k n=0 v
@@ -324,9 +367,9 @@ env_problems() {
     POSTGRES_PASSWORD NEO4J_PASSWORD; do
     [[ -n "$(env_get "$k")" ]] || printf '%s\n' "$k is empty"
   done
-  for k in "${VERDA_TRIO[@]}"; do [[ -n "$(env_get "$k")" ]] && n=$((n + 1)); done
-  if ((n != 0 && n != 3)); then
-    printf '%s\n' "private tier: $n of ${VERDA_TRIO[*]} set — all three or none (a partial tier is refused at run time)"
+  for k in "${PRIVATE_TIER_REQUIRED[@]}"; do [[ -n "$(env_get "$k")" ]] && n=$((n + 1)); done
+  if ((n != 0 && n != ${#PRIVATE_TIER_REQUIRED[@]})); then
+    printf '%s\n' "private tier: $n of ${PRIVATE_TIER_REQUIRED[*]} set — all five or none (a partial tier is refused at run time)"
   fi
   # Spliced raw into the app's DATABASE_URL (both compose files), where these
   # break the URL. The gateway renderer used to refuse them; since #412 it
@@ -340,7 +383,11 @@ env_problems() {
     v=$(env_get "$k")
     [[ -z $v || $v == */v1 ]] || printf '%s\n' "$k must end in /v1"
   done
-  [[ "$(env_get USE_VERDA_INFERENCE)" == 1 && $n -ne 3 ]] && printf '%s\n' "USE_VERDA_INFERENCE=1 without all of ${VERDA_TRIO[*]}"
+  v=$(env_get SMALL_LLM_DECISIONS_URL)
+  if [[ -n $v ]]; then
+    printf '%s' "$v" | decisions_url_problem || printf '%s\n' 'SMALL_LLM_DECISIONS_URL validation unavailable'
+  fi
+  [[ "$(env_get USE_VERDA_INFERENCE)" == 1 && $n -ne ${#PRIVATE_TIER_REQUIRED[@]} ]] && printf '%s\n' "USE_VERDA_INFERENCE=1 without all of ${PRIVATE_TIER_REQUIRED[*]}"
   [[ "$(env_get STASH_DIRECT_REDIS)" == 1 ]] || printf '%s\n' "STASH_DIRECT_REDIS must be '1' (the preview gateway has no redis server; §3a)"
   grep -qE '^VITE_DEV_BYPASS_AUTH=' "$ENV_FILE" && printf '%s\n' "VITE_DEV_BYPASS_AUTH is set in .env — it must stay unset"
   [[ "$(env_get COMPOSE_FILE)" == "$COMPOSE_FILES" ]] || printf '%s\n' "COMPOSE_FILE must be $COMPOSE_FILES"
@@ -1248,22 +1295,28 @@ stage_env() {
       unset v
     fi
   done
-  if ((INTERACTIVE && !DRY_RUN)) && [[ -z "$(env_get VERDA_INFERENCE_ENDPOINT)" ]]; then
-    printf '  Configure the private inference tier (Verda + small model) now? [y/N] ' >/dev/tty
+  local n=0
+  for key in "${PRIVATE_TIER_REQUIRED[@]}"; do [[ -n "$(env_get "$key")" ]] && n=$((n + 1)); done
+  if ((INTERACTIVE && !DRY_RUN && n < ${#PRIVATE_TIER_REQUIRED[@]})); then
+    printf '  Configure the private inference tier now (all five values required)? [y/N] ' >/dev/tty
     IFS= read -r v </dev/tty
     if [[ $v =~ ^[Yy] ]]; then
-      for key in VERDA_INFERENCE_ENDPOINT SMALL_LLM_BASE_URL; do
-        printf '  %s (OpenAI base URL, ends in /v1): ' "$key" >/dev/tty
-        IFS= read -r v </dev/tty
-        [[ -n $v ]] && env_set "$key" "$v" && chg "set $key"
-      done
-      for key in VERDA_INFERENCE_API_KEY SMALL_LLM_API_KEY; do
-        printf '  %s (hidden; Enter to skip): ' "$key" >/dev/tty
-        IFS= read -rs v </dev/tty
-        printf '\n' >/dev/tty
+      for key in "${PRIVATE_TIER_REQUIRED[@]}"; do
+        [[ -n "$(env_get "$key")" ]] && continue
+        case $key in
+          *_API_KEY) label="bearer key, hidden"; secret=1 ;;
+          SMALL_LLM_DECISIONS_URL) label="full systemone URL, ends in /v1/systemone"; secret=0 ;;
+          *) label="OpenAI base URL, ends in /v1"; secret=0 ;;
+        esac
+        printf '  %s (%s): ' "$key" "$label" >/dev/tty
+        if ((secret)); then
+          IFS= read -rs v </dev/tty
+          printf '\n' >/dev/tty
+        else IFS= read -r v </dev/tty; fi
         [[ -n $v ]] && env_set "$key" "$v" && chg "set $key (value not shown)"
       done
-      printf '  Make it the deployment default (USE_VERDA_INFERENCE=1)? [y/N] ' >/dev/tty
+      note "With all five values configured, a user who never chose starts on Private; the first turn may pay a cold start."
+      printf '  Also default non-conversation runs to Private (USE_VERDA_INFERENCE=1)? [y/N] ' >/dev/tty
       IFS= read -r v </dev/tty
       [[ $v =~ ^[Yy] ]] && env_set USE_VERDA_INFERENCE 1 && chg "set USE_VERDA_INFERENCE=1"
     fi
@@ -1276,9 +1329,9 @@ stage_env() {
     while read -r key; do note "- $key"; done <<<"$missing"
     note "Fill them in $ENV_FILE (or re-run this script from a terminal: it prompts)."
   fi
-  local n=0
-  for key in "${VERDA_TRIO[@]}"; do [[ -n "$(env_get "$key")" ]] && n=$((n + 1)); done
-  note "private tier: $n of 3 endpoints set (0 = Anthropic only; 3 = the tier is available)"
+  n=0
+  for key in "${PRIVATE_TIER_REQUIRED[@]}"; do [[ -n "$(env_get "$key")" ]] && n=$((n + 1)); done
+  note "private tier: $n of ${#PRIVATE_TIER_REQUIRED[@]} required values set (0 = Anthropic only; 5 = the tier is configured)"
 
   # docs/PREVIEW.md §7. The keys exist ONLY in this file until the owner copies
   # them out; the backup script deliberately never copies .env.

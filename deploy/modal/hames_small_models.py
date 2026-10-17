@@ -15,8 +15,9 @@ listener on the public port. vLLM and the shim bind loopback.
 
 Everything below the "pins" block is public state: the base model and the
 adapter are Apache-2.0 weights from the Hub, pinned to a commit; the shim and
-its config are pinned by sha256; Caddy by sha512. That is a condition, not a
-habit: Modal stores images and memory snapshots outside the compute region,
+its config are pinned by sha256; vLLM and Caddy in `vllm_box.py`, which
+this box shares with the 27B's own app (`hames_private_27b.py`). That is a
+condition, not a habit: Modal stores images and memory snapshots outside the compute region,
 so a snapshot may hold public weights, code and the SYNTHETIC warm-up state
 below, and never a request. The warm-up prompts are literals in this file for
 that reason, and `modal-pins.test.ts` (app/src/__tests__/deploy/) pins that
@@ -35,20 +36,29 @@ import json
 import math
 import os
 import subprocess
-import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 import modal
 
 from log_filter import forward_stderr
+from vllm_box import (
+    MODELS_DIR,
+    PUBLIC_PORT,
+    STATUS_DIR,
+    VLLM_IMAGE,
+    VLLM_IMAGE_ENV,
+    VLLM_PORT,
+    _env,
+    _http,
+    _install_caddy,
+    _reference_drift,
+    _reference_logprobs,
+    _wait_ok,
+)
 
 # ---- pins: public state only ------------------------------------------------
-
-VLLM_IMAGE = "vllm/vllm-openai:v0.30.0@sha256:8a69ffad015f138d7170c4ddc429e230a3bc1c1719f67e14324749df200a4b90"
 
 BASE_REPO = "Qwen/Qwen3.5-4B"
 BASE_REVISION = "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"  # the adapter's pinned base
@@ -77,26 +87,16 @@ CARD_FILES_SHA256 = {
     "adapter/adapter_model.safetensors": "98a4b55083e9e935bee9565de6cb67cb2b0ae11229070ed7ba7dd3235ddab31f",
 }
 
-CADDY_VERSION = "2.11.7"
-CADDY_SHA512 = (
-    "a7a433a1b133efc3c8d10eb0b99d52a24b5ef5c322dc77f5282182b1c0402139"
-    "ab83f3a99f0c52409df77d20123fb0b523edad8a66d8f5e49136197bf61ef0e7"
-)
-
 # The names on the wire. The first is what the app's BAML client sends and vLLM
 # enforces `model`, so it must be served under exactly this alias. The second is
 # the LoRA's served name, which the shim looks up in /v1/models at startup.
 SUMMARIZER_MODEL = "qwen3.5-4b-instruct"
 DECIDER_MODEL = "h2oai/h2o-lightning-4b"
 
-MODELS_DIR = Path("/models")
 BASE_DIR = MODELS_DIR / "base"
 CARD_DIR = MODELS_DIR / "h2o"
-STATUS_DIR = Path("/run/hames")
 
-VLLM_PORT = 8000
 SHIM_PORT = 8741
-PUBLIC_PORT = 8080
 
 # Synthetic warm-up state. These are the ONLY prompts that run before a snapshot
 # is taken, so they are the only prompts a snapshot can contain. Literals, not
@@ -123,34 +123,9 @@ WARMUP_DECISION = {
 # the model class is accepted by vLLM without a warning and changes nothing —
 # that failure is silent everywhere except here.
 REFERENCE_PROMPT = "Ticket: checkout is down for every customer. Priority (P1, P2 or P3):"
-REFERENCE_TOP_LOGPROBS = 5
-# In PROBABILITY, on the tokens both readings rank. The first deploy read the
-# adapter 0.053 and 0.060 logprob from its pre-sleep reading on two restores of
-# one snapshot and under 0.05 on a third: identical memory, three readings, so
-# that is noise in the forward pass, and logprob units magnify it on tail tokens
-# that carry no mass. Weights a restore damaged move the head of the distribution.
-# 0.1 is three times what a 0.06 logprob wobble on a token at p=0.55 reads as;
-# every restore records its drift in /status, so the bound can tighten on data.
-REFERENCE_TOLERANCE = 0.1
 
 
 # ---- deployment config: the operator's, read at deploy time ------------------
-
-
-def _env(name: str, default: str | None = None) -> str:
-    value = os.environ.get(name, "").strip()
-    if value:
-        return value
-    if default is not None:
-        return default
-    # Only the operator's machine has deploy.local.env. Modal imports this module
-    # again in the image build and in every container, with none of these set;
-    # there the decorator's values are never sent anywhere (the deployed
-    # definition already holds the real ones), but `@app.server` still rejects
-    # an empty `routing_region`, so the stand-in must be non-empty.
-    if modal.is_local():
-        raise SystemExit(f"{name} is required (see deploy.env.example); refusing to deploy.")
-    return "unset-in-container"
 
 
 COMPUTE_REGION = _env("HAMES_MODAL_COMPUTE_REGION")
@@ -194,81 +169,21 @@ def download_public_weights() -> None:
         digest = hashlib.sha256((CARD_DIR / relative).read_bytes()).hexdigest()
         if digest != expected:
             raise SystemExit(f"{relative}: sha256 {digest} != pinned {expected}")
-
-    tarball = Path("/tmp/caddy.tar.gz")
-    url = (
-        f"https://github.com/caddyserver/caddy/releases/download/v{CADDY_VERSION}"
-        f"/caddy_{CADDY_VERSION}_linux_amd64.tar.gz"
-    )
-    with urllib.request.urlopen(url, timeout=120) as response:
-        tarball.write_bytes(response.read())
-    digest = hashlib.sha512(tarball.read_bytes()).hexdigest()
-    if digest != CADDY_SHA512:
-        raise SystemExit(f"caddy: sha512 {digest} != pinned {CADDY_SHA512}")
-    subprocess.run(["tar", "-xzf", str(tarball), "-C", "/usr/local/bin", "caddy"], check=True)
-    tarball.unlink()
+    _install_caddy()
 
 
 image = (
     modal.Image.from_registry(VLLM_IMAGE)
     .entrypoint([])
     .run_commands("ln -sf $(which python3) /usr/bin/python")
-    .add_local_python_source("log_filter", copy=True)
+    .add_local_python_source("log_filter", "vllm_box", copy=True)
     .run_function(download_public_weights)
-    # Offline is applied AFTER the build-time Hub downloads.
-    .env(
-        {
-            # Sleep mode's endpoints exist only in dev mode. Dev mode also
-            # defaults `log_error_stack` ON; the serve argv turns it back off.
-            "VLLM_SERVER_DEV_MODE": "1",
-            "VLLM_NO_USAGE_STATS": "1",
-            "DO_NOT_TRACK": "1",
-            "VLLM_MEDIA_URL_ALLOW_REDIRECTS": "0",
-            "HF_HUB_OFFLINE": "1",
-            # The card's recipe: decisions read logprobs at temperature 0 and
-            # never sample, so FlashInfer's JIT-built sampler is not needed.
-            "VLLM_USE_FLASHINFER_SAMPLER": "0",
-            "TORCH_CPP_LOG_LEVEL": "FATAL",
-            "HF_HUB_CACHE": str(MODELS_DIR / "hf-cache"),
-        }
-    )
+    .env(VLLM_IMAGE_ENV)
     .add_local_file(Path(__file__).parent / "Caddyfile", "/etc/hames/Caddyfile", copy=True)
 )
 
 
 # ---- the box ----------------------------------------------------------------
-
-
-def _http(method: str, url: str, body: dict | None = None, timeout: float = 120) -> tuple[int, dict]:
-    data = json.dumps(body).encode() if body is not None else None
-    request = urllib.request.Request(url, data=data, method=method)
-    request.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read()
-            return response.status, (json.loads(raw) if raw else {})
-    except urllib.error.HTTPError as error:
-        raw = error.read()
-        try:
-            return error.code, json.loads(raw) if raw else {}
-        except ValueError:
-            return error.code, {"raw": raw[:200].decode("utf-8", "replace")}
-
-
-def _wait_ok(url: str, process: subprocess.Popen, budget_s: float, what: str) -> float:
-    """Poll `url` for a 200 until `budget_s` runs out; a dead child ends it early."""
-    started = time.monotonic()
-    while time.monotonic() - started < budget_s:
-        if process.poll() is not None:
-            raise RuntimeError(f"{what} exited with {process.returncode} before it was ready")
-        try:
-            status, _ = _http("GET", url, timeout=5)
-            if status == 200:
-                return time.monotonic() - started
-        except (urllib.error.URLError, OSError, TimeoutError):
-            pass
-        time.sleep(2)
-    raise TimeoutError(f"{what} was not ready within {budget_s:.0f}s")
 
 
 def _vllm_argv() -> list[str]:
@@ -315,23 +230,6 @@ def _shim_argv() -> list[str]:
 SHIM_ENV = {"LIGHTNING_IMAGE_URLS": "off"}
 
 
-def _reference_logprobs(model: str) -> dict[str, float]:
-    status, body = _http(
-        "POST",
-        f"http://127.0.0.1:{VLLM_PORT}/v1/completions",
-        {
-            "model": model,
-            "prompt": REFERENCE_PROMPT,
-            "max_tokens": 1,
-            "temperature": 0,
-            "logprobs": REFERENCE_TOP_LOGPROBS,
-        },
-    )
-    if status != 200:
-        raise RuntimeError(f"reference completion on {model!r} failed: {status} {body}")
-    return dict(body["choices"][0]["logprobs"]["top_logprobs"][0])
-
-
 def _assert_adapter_active(base: dict[str, float], adapter: dict[str, float]) -> None:
     if not all(map(math.isfinite, [*base.values(), *adapter.values()])):
         raise RuntimeError("non-finite adapter reference reading")
@@ -339,27 +237,6 @@ def _assert_adapter_active(base: dict[str, float], adapter: dict[str, float]) ->
         raise RuntimeError(
             f"{DECIDER_MODEL!r} answers exactly like {SUMMARIZER_MODEL!r}: the adapter is not active"
         )
-
-
-def _reference_drift(before: dict[str, float], after: dict[str, float], model: str) -> float:
-    """The largest probability change on a token both readings rank; raises past the tolerance.
-
-    A tail token trading places with the sixth is noise, so only shared tokens are
-    compared, and the pre-sleep top token must remain the argmax."""
-    if not all(map(math.isfinite, [*before.values(), *after.values()])):
-        raise RuntimeError("non-finite restore reference reading")
-    top = max(before, key=before.__getitem__)
-    shared = before.keys() & after.keys()
-    drift = max(abs(math.exp(before[k]) - math.exp(after[k])) for k in shared) if top in shared else 1.0
-    if max(after, key=after.__getitem__) != top:
-        drift = 1.0
-    if drift > REFERENCE_TOLERANCE:
-        p = lambda reading: {k: round(math.exp(v), 4) for k, v in reading.items()}  # noqa: E731
-        raise RuntimeError(
-            f"{model!r} after restore moved {drift:.3f} probability (> {REFERENCE_TOLERANCE}):"
-            f" {p(before)} -> {p(after)}"
-        )
-    return drift
 
 
 app = modal.App(APP_NAME)
@@ -437,7 +314,7 @@ class SmallModels:
         status, answer = _http("POST", f"http://127.0.0.1:{SHIM_PORT}/v1/systemone", WARMUP_DECISION)
         if status != 200 or "priority" not in answer.get("answers", {}):
             raise RuntimeError(f"decision warm-up failed: {status} {answer}")
-        self.reference = {m: _reference_logprobs(m) for m in (SUMMARIZER_MODEL, DECIDER_MODEL)}
+        self.reference = {m: _reference_logprobs(m, REFERENCE_PROMPT) for m in (SUMMARIZER_MODEL, DECIDER_MODEL)}
         _assert_adapter_active(self.reference[SUMMARIZER_MODEL], self.reference[DECIDER_MODEL])
         self.boot["warmup_s"] = time.monotonic() - t_warm
 
@@ -463,7 +340,7 @@ class SmallModels:
             if status != 200:
                 raise RuntimeError(f"vLLM /wake_up failed: {status}")
             _wait_ok(f"http://127.0.0.1:{VLLM_PORT}/health", self.vllm, 300, "vLLM after wake")
-        after = {model: _reference_logprobs(model) for model in self.reference}
+        after = {model: _reference_logprobs(model, REFERENCE_PROMPT) for model in self.reference}
         self.boot["reference_drift"] = {
             model: round(_reference_drift(before, after[model], model), 4) for model, before in self.reference.items()
         }

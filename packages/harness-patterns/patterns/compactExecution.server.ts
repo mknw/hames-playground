@@ -152,6 +152,17 @@ function buildSynthesisInputFromView(
         // real iteration (the synthesizer's only record of the failure), but it
         // gives the turn nothing to author from (#614).
         const succeeded = new Set<LoopHistory['iterations'][number]>()
+        // Iterations authored THIS turn. The thread window can span turns and
+        // keeps earlier turns' successful records, but `data.returnText` is the
+        // current turn's `Return`: an earlier turn's success must not make this
+        // turn's all-failed calls read as supported (#614 review, finding 3).
+        const thisTurnIds = new Set(
+          view
+            .fromLastNTurns(1)
+            .get()
+            .map((e) => e.id),
+        )
+        const mine = new Set<LoopHistory['iterations'][number]>()
 
         for (const event of threadView.get()) {
           if (event.type === 'controller_action') {
@@ -163,6 +174,7 @@ function buildSynthesisInputFromView(
               result: null,
               timestamp: event.ts,
             })
+            if (thisTurnIds.has(event.id)) mine.add(iterations[iterations.length - 1])
             openExpected = 1 + (actionData.action.additional_calls?.length ?? 0)
             openReceived = 0
           } else if (event.type === 'tool_result') {
@@ -213,7 +225,9 @@ function buildSynthesisInputFromView(
                 result: resultData.result,
                 timestamp: event.ts,
               })
-              if (resultData.success !== false) succeeded.add(iterations[iterations.length - 1])
+              const orphan = iterations[iterations.length - 1]
+              if (thisTurnIds.has(event.id)) mine.add(orphan)
+              if (resultData.success !== false) succeeded.add(orphan)
             }
           }
         }
@@ -243,7 +257,7 @@ function buildSynthesisInputFromView(
           // authored, and `loopHistory` alone would render just the error(s)
           // (#614). Carried beside it, never in `response`: a synthesizer that
           // takes `response` over the history would lose the failure instead.
-          if (!real.some((it) => succeeded.has(it))) failedOnlyHistory = true
+          if (!real.some((it) => mine.has(it) && succeeded.has(it))) failedOnlyHistory = true
           input.loopHistory = {
             iterations: real,
             startTime: toolEvents[0]?.ts ?? Date.now(),
@@ -262,7 +276,8 @@ function buildSynthesisInputFromView(
       // `Return` is refused and never reviewed — and `continueSession` clears
       // the key, so a previous turn's text cannot answer this one under a
       // wider thread window. A turn that DID call a tool
-      // keeps dropping it — there the `Return` is a summary and the tool
+      // keeps dropping it, unless every one of its calls failed (#614, below) —
+      // there the `Return` is a summary and the tool
       // results are what the synthesizer authors from (#149).
       if (!input.loopHistory) {
         const text = typeof data.returnText === 'string' ? data.returnText.trim() : ''

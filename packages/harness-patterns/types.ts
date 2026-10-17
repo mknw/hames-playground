@@ -1114,7 +1114,8 @@ export interface CompactExecutionData {
   memoryContext?: string
   /** The text of a `simpleLoop` turn's terminal `Return`, written by that loop
    *  on exit and cleared by `continueSession` (and at the loop's own start).
-   *  Read only when no tool iteration reached the synthesizer (#610). */
+   *  Read only when no tool iteration reached the synthesizer (#610), or when
+   *  every tool call of the turn failed (#614). */
   returnText?: string
 }
 

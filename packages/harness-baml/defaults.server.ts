@@ -85,7 +85,7 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
     // context — the history above is the failure, this is the answer.
     if (input.returnText) {
       turns.push({
-        n: input.loopHistory.iterations.length,
+        n: (input.loopHistory.iterations.at(-1)?.turn ?? -1) + 1,
         reasoning: 'Direct response',
         tool_result: { tool: 'response', result: input.returnText, success: true },
       })

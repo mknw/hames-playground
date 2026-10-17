@@ -715,7 +715,7 @@ downgrade then hands it to `Synthesize` as a direct response). Limits: it is
 current-turn only and applies to a `simpleLoop` exit only — an `actorCritic`
 `Return` is refused and never reviewed, so it never sets the key; an explicit
 `data.response` wins; a turn with any tool iteration (even a failed one) is
-unchanged — except that when EVERY tool call of the turn failed (#614), the
+unchanged — except that when EVERY tool call of the CURRENT turn failed (#614; an earlier turn's successful records in a wider thread window do not count), the
 failed iterations stay in `loopHistory` (the error is the synthesizer's only
 record of it) and the text rides beside them as `CompactExecutionInput.returnText`
 for the synthesizer to append as a final turn (`defaultSynthesize` does; `response`

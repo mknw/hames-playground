@@ -151,4 +151,30 @@ describe('Return-only turn reaches Synthesize', () => {
     expect(turns[0].tool_result.result).toContain('lookup exploded')
     expect(turns[1].tool_result).toMatchObject({ tool: 'response', result: 'Twice 42 is 84.' })
   })
+
+  // #614 review finding 6: the appended turn's `n` must not repeat a surviving
+  // iteration's `turn` (a refused call leaves the history at [turn 1]).
+  // Mutation: `n: 0` / `iterations.length` → both headers read Turn 1.
+  it('numbers the appended answer turn after the last surviving iteration', async () => {
+    const { defaultSynthesize } = await import('@hames-ai/harness-baml/defaults.server')
+    await defaultSynthesize({
+      mode: 'thread',
+      userMessage: 'q',
+      intent: 'q',
+      returnText: 'From context.',
+      loopHistory: {
+        iterations: [
+          {
+            turn: 1,
+            action: { reasoning: '', tool_name: 'lookup', tool_args: '{}', status: 'ok' },
+            result: { __error: 'boom' },
+            timestamp: 0,
+          },
+        ],
+        startTime: 0,
+        endTime: 1,
+      },
+    } as never)
+    expect(synthesize.mock.calls[0][2].map((t: { n: number }) => t.n)).toEqual([1, 2])
+  })
 })

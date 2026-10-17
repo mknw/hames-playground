@@ -10,6 +10,7 @@ import {
   configureConsumerClients,
   VERDA_CLIENT_BY_ROLE,
 } from '@hames-ai/harness-baml/clients.server'
+import * as clientPolicy from '@hames-ai/harness-baml/clients.server'
 import type { BamlRole } from '@hames-ai/harness-baml/clients.server'
 import '../../../lib/inference/config.server'
 import {
@@ -145,6 +146,7 @@ function run<T>(fn: () => Promise<T>, client = 'VerdaQwenThink', tier = 'verda')
 }
 afterEach(() => {
   configureConsumerClients(undefined)
+  vi.restoreAllMocks()
   vi.unstubAllEnvs()
 })
 
@@ -228,6 +230,35 @@ describe('Planner thinking mode', () => {
       expect(samples).toHaveLength(0)
     },
   )
+
+  it('preserves the loop collector when an unsafe bag bypasses routing validation', async () => {
+    const registry = new ClientRegistry()
+    registry.addLlmClient('Hidden', 'fallback', { strategy: ['VerdaQwenThink'] })
+    replies.push({
+      content: JSON.stringify({
+        reasoning: 'draft',
+        tool_name: 'Return',
+        tool_args: '{"response":"draft"}',
+      }),
+    })
+    const failure = await registryRun<unknown>(
+      registry,
+      async () => {
+        // Independently pin call-site ordering, even if trusted code replaces the routing seam.
+        const unsafe = { ...clientOverrideFor('controller')!, collector: new Collector('x') }
+        vi.spyOn(clientPolicy, 'clientOverrideFor').mockReturnValue(unsafe)
+        return createLoopControllerAdapter()('q', 'i', '[]', 0)
+      },
+      'Hidden',
+    ).catch((e: unknown) => e)
+    expect(failure).toMatchObject({
+      recoverable: false,
+      message: expect.stringContaining('LoopController selected a thinking leaf'),
+    })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].chat_template_kwargs).toEqual({ enable_thinking: true })
+    expect(samples).toHaveLength(1)
+  })
 
   it('preserves the title accounting collector against bare consumer deps', async () => {
     const registry = new ClientRegistry()

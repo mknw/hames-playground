@@ -444,18 +444,20 @@ unset. These instructions change no tier default in code.
 K_PRIVATE="VERDA_INFERENCE_ENDPOINT|VERDA_INFERENCE_API_KEY|SMALL_LLM_BASE_URL|SMALL_LLM_DECISIONS_URL|SMALL_LLM_API_KEY"
 grep -cE "^($K_PRIVATE)='.+'$" .env
 
-# URL checks print only a problem label, never the configured values.
-for key in VERDA_INFERENCE_ENDPOINT SMALL_LLM_BASE_URL; do
-  grep -qE "^${key}='[^']+/v1'$" .env || echo "$key missing or must end in /v1"
-done
-grep -qE "^SMALL_LLM_DECISIONS_URL='[^']+/v1/systemone'$" .env || echo 'SMALL_LLM_DECISIONS_URL missing or must end in /v1/systemone'
+# Run from the checkout root. Use boot's shared validation (requires python3);
+# it prints only key/problem labels, never configured values, and makes no calls.
+HAMES_APP_DIR="$PWD" HAMES_BOOTSTRAP_SOURCED=1 source scripts/bootstrap-vps.sh
+env_problems
 ```
 
 The bootstrap asks for missing values on an interactive re-run, including a
 partially configured tier; both bearer-key prompts are hidden. Its preflight
-refuses a partial set, a malformed URL suffix, or a flag enabled without the
+refuses a partial set, malformed URLs, or a flag enabled without the
 complete set, before starting containers. This checks configuration only and
-makes no provider request. Endpoint values belong with the operator
+makes no provider request. The decisions URL must parse as an absolute HTTPS
+URL or HTTP loopback URL, without userinfo or a trailing-dot host, with pathname
+exactly `/v1/systemone`, and must not name a public systemone provider. Both
+checks use this same validation. Endpoint values belong with the operator
 (ADR-0008); the env names remain unchanged when the hosting provider changes.
 
 ```bash

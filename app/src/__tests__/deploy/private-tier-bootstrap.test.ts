@@ -2,13 +2,17 @@
 /** Layer 1: real bootstrap functions and terminal prompts, scratch files only.
  * No Docker, root, database or inference endpoint is contacted (#432 G20).
  */
-import { afterEach, describe, expect, it } from 'vitest'
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node-pty'
+
+vi.mock('../../lib/db/client.server', () => ({ query: vi.fn() }))
+import { assertPrivateTierConfigured } from '../../lib/inference/config.server'
+import { defaultInferenceTier } from '../../lib/db/user-prefs.server'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..')
 const read = (file: string) => readFileSync(path.join(REPO, file), 'utf8')
@@ -38,6 +42,9 @@ const dirs: string[] = []
 function fixture(values: Record<string, string>) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'private-tier-bootstrap-'))
   dirs.push(dir)
+  symlinkSync(path.join(REPO, 'scripts'), path.join(dir, 'scripts'), 'dir')
+  mkdirSync(path.join(dir, 'configs'))
+  writeFileSync(path.join(dir, 'configs/mcp-config.yaml'), '')
   writeFileSync(path.join(dir, '.env.production.example'), '')
   writeFileSync(
     path.join(dir, '.env'),
@@ -68,6 +75,8 @@ function problems(values: Record<string, string>) {
   )
 }
 afterEach(() => {
+  vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
@@ -102,6 +111,139 @@ describe('private-tier preflight', () => {
     expect(output).toContain(`${key} must end in /v1`)
     expect(output).not.toContain(value)
   })
+})
+
+// Harvested from the independent review's URL and stage_boot fixtures (#631).
+// Runtime is the policy oracle; fixtures are synthetic and fetch is forbidden.
+const DECISIONS_CASES: Array<[string, string, boolean]> = [
+  ['HTTPS', REQUIRED.SMALL_LLM_DECISIONS_URL, true],
+  ['query and fragment', 'https://small.example.invalid/v1/systemone?mode=one#note', true],
+  ['localhost HTTP', 'http://localhost:8095/v1/systemone', true],
+  ['IPv4 loopback HTTP', 'http://127.0.0.2:8095/v1/systemone', true],
+  ['IPv6 loopback HTTP', 'http://[::1]:8095/v1/systemone', true],
+  ['short IPv4 loopback HTTP', 'http://127.1:8095/v1/systemone', true],
+  ['escaped private host', 'https://%73mall.example.invalid/v1/systemone', true],
+  ['relative URL', 'not-a-url/v1/systemone', false],
+  ['prefix path', 'https://small.example.invalid/prefix/v1/systemone', false],
+  ['remote HTTP', 'http://small.example.invalid/v1/systemone', false],
+  ['userinfo', 'https://synthetic:credential@small.example.invalid/v1/systemone', false],
+  ['trailing-dot host', 'https://small.example.invalid./v1/systemone', false],
+  ['public OpenRouter host', 'https://openrouter.ai/v1/systemone', false],
+  ['public OpenRouter subdomain', 'https://api.openrouter.ai/v1/systemone', false],
+  ['public TypeSafe host', 'https://api.typesafe.ai/v1/systemone', false],
+  ['uppercase public host', 'https://OPENROUTER.AI/v1/systemone', false],
+  ['escaped public host', 'https://%6fpenrouter.ai/v1/systemone', false],
+  ['escaped trailing dot', 'https://small.example.invalid%2e/v1/systemone', false],
+  ['loopback lookalike', 'http://127.0.0.1.evil.invalid/v1/systemone', false],
+  ['unsupported scheme', 'ftp://localhost/v1/systemone', false],
+  ['missing host', 'https:///v1/systemone', false],
+  ['invalid port', 'https://small.example.invalid:bad/v1/systemone', false],
+  ['space in host', 'https://bad host.invalid/v1/systemone', false],
+  ['forbidden host character', 'https://bad^host.invalid/v1/systemone', false],
+  ['escaped host separator', 'https://small.example.invalid%2f/v1/systemone', false],
+  ['IPv6 zone identifier', 'https://[::1%25eth0]/v1/systemone', false],
+  ['invalid IPv4 host', 'https://127.0.0.999/v1/systemone', false],
+  ['wrong path', 'https://small.example.invalid/v1', false],
+  ['trailing slash', 'https://small.example.invalid/v1/systemone/', false],
+]
+function documentedPreflight(values: Record<string, string>) {
+  const commands = read('docs/PREVIEW.md')
+    .split('**Pre-launch check — the private tier')[1]
+    ?.split('```bash')[1]
+    ?.split('```')[0]
+  expect(commands).toBeDefined()
+  const dir = fixture(values)
+  return execFileSync('bash', ['-c', commands!], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: { PATH: process.env.PATH } as unknown as NodeJS.ProcessEnv,
+  })
+}
+function boot(values: Record<string, string>) {
+  const dir = fixture(values)
+  return spawnSync(
+    'bash',
+    [
+      '-c',
+      `
+    source "$1/scripts/bootstrap-vps.sh"
+    DRY_RUN=0 HOSTNAME_ARG=staging.example.invalid ACME_EMAIL_ARG=ops@example.invalid
+    assert_engine_supported() { :; }; assert_gateway_pinned() { :; }
+    escrow_recorded() { :; }; dns_points_here() { :; }
+    reserved_name() { return 1; }; assert_dynamic_tools_off() { :; }
+    rendered_exposure() { :; }; wait_state() { :; }
+    dc() { printf 'COMPOSE_CALLED\\n'; }
+    stage_boot
+  `,
+      '_',
+      REPO,
+    ],
+    { encoding: 'utf8', env: shellEnv(dir) as unknown as NodeJS.ProcessEnv },
+  )
+}
+
+describe('decisions URL parity with runtime', () => {
+  it.each(DECISIONS_CASES)(
+    '%s: runtime, bootstrap and documented preflight agree',
+    (_label, url, valid) => {
+      const values = { ...REQUIRED, SMALL_LLM_DECISIONS_URL: url }
+      for (const [key, value] of Object.entries(values)) vi.stubEnv(key, value)
+      vi.stubEnv('USE_VERDA_INFERENCE', '')
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(() => {
+          throw new Error('network forbidden')
+        }),
+      )
+      if (valid) expect(() => assertPrivateTierConfigured()).not.toThrow()
+      else expect(() => assertPrivateTierConfigured()).toThrow()
+      expect(defaultInferenceTier()).toBe(valid ? 'verda' : 'anthropic')
+      expect(fetch).not.toHaveBeenCalled()
+      const bootstrap = problems(values)
+      const documented = documentedPreflight(values)
+      expect(documented.split('\n')[0]).toBe('5')
+      if (valid) {
+        expect(bootstrap).toBe('')
+        expect(documented.trim()).toBe('5')
+      } else {
+        expect(bootstrap).toContain('SMALL_LLM_DECISIONS_URL')
+        expect(documented).toContain('SMALL_LLM_DECISIONS_URL')
+      }
+      for (const value of Object.values(values)) {
+        expect(bootstrap).not.toContain(value)
+        expect(documented).not.toContain(value)
+      }
+    },
+  )
+})
+
+describe('private-tier refusal at the real boot entry point', () => {
+  it('starts Compose for a complete tier', () => {
+    const result = boot(REQUIRED)
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('COMPOSE_CALLED')
+  })
+  it.each(Object.keys(REQUIRED))('refuses a missing %s before Compose', (key) => {
+    const values: Record<string, string> = { ...REQUIRED }
+    delete values[key]
+    for (const missing of [values, { ...values, [key]: '' }]) {
+      const result = boot(missing)
+      expect(result.status).toBe(1)
+      expect(result.stdout).toContain('REFUSED: .env is not ready:')
+      expect(result.stdout).not.toContain('COMPOSE_CALLED')
+    }
+  })
+  it.each(DECISIONS_CASES.filter(([, , valid]) => !valid))(
+    'refuses %s before Compose',
+    (_label, url) => {
+      const result = boot({ ...REQUIRED, SMALL_LLM_DECISIONS_URL: url })
+      expect(result.status).toBe(1)
+      expect(result.stdout).toContain('REFUSED: .env is not ready:')
+      expect(result.stdout).toContain('SMALL_LLM_DECISIONS_URL')
+      expect(result.stdout).not.toContain('COMPOSE_CALLED')
+      expect(result.stdout).not.toContain(url)
+    },
+  )
 })
 
 // A real PTY gives /dev/tty its production semantics. Only unrelated host
@@ -231,10 +373,14 @@ describe('operator docs agree with the private-tier contract', () => {
       { ...REQUIRED, SMALL_LLM_DECISIONS_URL: 'https://small.example.invalid/v1' },
     ]) {
       const dir = fixture(values)
-      const output = execFileSync('bash', ['-c', commands!], { cwd: dir, encoding: 'utf8' })
+      const output = execFileSync('bash', ['-c', commands!], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH } as unknown as NodeJS.ProcessEnv,
+      })
       expect(output.split('\n')[0]).toBe(values.SMALL_LLM_API_KEY ? '5' : '4')
       if (!values.SMALL_LLM_DECISIONS_URL.endsWith('/v1/systemone'))
-        expect(output).toContain('SMALL_LLM_DECISIONS_URL missing or must end in /v1/systemone')
+        expect(output).toContain('SMALL_LLM_DECISIONS_URL must end in /v1/systemone')
       for (const value of Object.values(values).filter(Boolean)) expect(output).not.toContain(value)
     }
   })

@@ -54,13 +54,12 @@ import {
   clientOverrideFor,
   limitsFor,
   maxOutputTokensFor,
-  resolveClientForRole,
   THINKING_CLIENTS,
+  THINKING_FUNCTIONS_BY_CLIENT,
   VERDA_CLIENT_BY_ROLE,
 } from './clients.server'
 import { notifyLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import { createJevTransport } from './jev-decide.server'
-import { escapeDataFence } from './data-fence'
 import { thinkingFrom, splitAtLastThinkClose } from './thinking-trace'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
 import type { DecideFn, DecideAllFn } from '@hames-ai/harness-patterns/types'
@@ -207,7 +206,7 @@ export function extractLLMCallData(
   }
   const llmCall = buildLLMCallDataFromLog(last, functionName, variables, startTime, parsedOutput)
   llmCall.metrics = computeEventMetrics(collector)
-  accountBamlCall(collector, functionName, llmCall.metrics)
+  accountBamlCall(collector, functionName, llmCall.metrics, llmCall)
   // Lane A3: the implementation stamps the cap-hit on the record; the pattern
   // layer reads the boolean and never sees the cap table.
   return { ...llmCall, hitOutputCap: llmCallHitOutputCap(llmCall) }
@@ -233,23 +232,49 @@ export function extractLLMCallData(
  * everyone else lets this recompute from the collector.
  *
  * Silent when the collector never saw a call (a pre-flight failure spent
- * nothing), and never throws — `notifyLlmUsage` owns that guarantee.
+ * nothing). After accounting, refuses a thinking leaf selected for a function
+ * without its designated twin (#637). This covers registry chains hidden from
+ * the pre-send name guard, including calls with no observability event. The
+ * refusal is fatal and retains the exchange, never an executable draft.
  */
 export function accountBamlCall(
   collector: Collector | undefined,
   functionName: string,
   metrics?: EventMetrics,
+  llmCall?: LLMCallData,
 ): void {
   const last = collector?.last
   if (!last) return
   const calls = (last.calls ?? []) as CollectorCall[]
   const selectedCall = calls.find((c) => c.selected) ?? calls[calls.length - 1]
+  const callMetrics = metrics ?? computeEventMetrics(collector)
   notifyLlmUsage({
     functionName,
     clientName: selectedCall?.clientName,
-    metrics: metrics ?? computeEventMetrics(collector),
+    metrics: callMetrics,
     durationMs: measuredDurationMs(last),
   })
+  const violation = thinkingFunctionViolation(functionName, selectedCall?.clientName)
+  if (violation) {
+    const record = llmCall ?? buildLLMCallDataFromLog(last, functionName, {}, Date.now())
+    throw new LLMCallError(violation, {
+      ...record,
+      // A rejected action must not look like an accepted parsed result.
+      parsedOutput: undefined,
+      metrics: callMetrics,
+      hitOutputCap: llmCallHitOutputCap(record),
+    })
+  }
+}
+
+function thinkingFunctionViolation(functionName: string, clientName?: string): string | undefined {
+  if (
+    clientName &&
+    THINKING_CLIENTS.has(clientName) &&
+    !THINKING_FUNCTIONS_BY_CLIENT[clientName]?.includes(functionName)
+  ) {
+    return `${functionName} selected a thinking leaf '${clientName}' without a designated counterpart`
+  }
 }
 
 /** How long BAML measured something to take — a whole function call across
@@ -602,7 +627,7 @@ export function extractFailureLLMCallData(
     // Failed steps still spent tokens (e.g. a truncated 32k-output response
     // before the retry also failed) — account for them.
     llmCall.metrics = computeEventMetrics(collector)
-    accountBamlCall(collector, functionName, llmCall.metrics)
+    accountBamlCall(collector, functionName, llmCall.metrics, llmCall)
     // The FAILURE path stamps hitOutputCap too — this is the twin of the
     // success path above and of the old llmCallHitOutputCap/collectorHitOutputCap
     // pair. Missing it would silently revert the loop patterns'
@@ -716,8 +741,14 @@ function collectorReturnedNoText(collector: Collector | undefined): boolean {
 function planParseRetry(
   error: unknown,
   collector: Collector | undefined,
+  functionName: string,
 ): { guidance: string | null } | null {
   if (!(error instanceof BamlValidationError)) return null
+  const calls = (collector?.last?.calls ?? []) as CollectorCall[]
+  const selected = calls.find((call) => call.selected) ?? calls[calls.length - 1]
+  // A hidden thinking leaf is a policy violation, even if its trace consumed
+  // the whole output cap. Never send a corrective retry to that same leaf.
+  if (thinkingFunctionViolation(functionName, selected?.clientName)) return null
   if (collectorHitOutputCap(collector)) return { guidance: TRUNCATION_RETRY_GUIDANCE }
   if (collectorReturnedNoText(collector)) return { guidance: null }
   return null
@@ -744,6 +775,9 @@ export function wrapAsLLMCallError(
   startTime: number,
   collector: Collector | undefined,
 ): LLMCallError {
+  // Shared extraction may already have refused and accounted the exchange.
+  // Keep its fatal classification and avoid recording the bill twice.
+  if (err instanceof LLMCallError) return err
   const message = err instanceof Error ? err.message : String(err)
   const llmCall = extractFailureLLMCallData(collector, functionName, variables, startTime)
   return new LLMCallError(message, llmCall, err, {
@@ -1092,7 +1126,7 @@ export function createLoopControllerAdapter(
       // response at all — not because the model can't do structured output.
       // ONE retry, guidance appended to `context` only when there is something
       // to correct (per-call, transient); a second failure throws.
-      const plan = planParseRetry(e, collector)
+      const plan = planParseRetry(e, collector, 'LoopController')
       if (plan) {
         const retryContext = plan.guidance
           ? [context, plan.guidance].filter(Boolean).join('\n\n')
@@ -1284,11 +1318,6 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
         plan = { ...answer, reasoning: trace.kind === 'trace' ? trace.text : '' }
       } else {
         plan = await b.Planner(user_message, intent, tools, context, baseOpts)
-        if (THINKING_CLIENTS.has(selectedCall()?.clientName ?? '')) {
-          throw new Error(
-            'Planner selected a thinking leaf through an unsupported chain; use the private-tier leaf override',
-          )
-        }
       }
       llmCall = extractLLMCallData(collector, functionName, variables, startTime, plan)
     } catch (e) {
@@ -1376,7 +1405,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
           throw wrapAsLLMCallError(retryError, 'Planner', variables, startTime, retryCollector)
         }
       } else {
-        const retry = requestedThinking ? null : planParseRetry(e, collector)
+        const retry = requestedThinking ? null : planParseRetry(e, collector, 'Planner')
         if (!retry) throw failure()
         const retryContext = retry.guidance
           ? [context, retry.guidance].filter(Boolean).join('\n\n')
@@ -1590,7 +1619,7 @@ export function createActorControllerAdapter(
     } catch (e) {
       // Truncated or empty response: one retry, guidance only when there is
       // something to correct — see createLoopControllerAdapter for rationale.
-      const plan = planParseRetry(e, collector)
+      const plan = planParseRetry(e, collector, 'ActorController')
       if (plan) {
         const retryContext = plan.guidance
           ? [context, plan.guidance].filter(Boolean).join('\n\n')

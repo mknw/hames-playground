@@ -547,9 +547,17 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   decide: 'PrivateSystemOne',
 }
 
+/** The only functions designated to consume each trace-exposing leaf (#637).
+ * Loop/actor counterparts still require G19 Q2's live measurement. */
+export const THINKING_FUNCTIONS_BY_CLIENT: Readonly<Record<string, readonly string[]>> = {
+  VerdaQwenThink: ['PlannerThinking'],
+}
+
 /** Trace-exposing leaves, never chains: mode is verified against the collector's
  * selected client, not inferred from the intended tier (#625 G19). */
-export const THINKING_CLIENTS: ReadonlySet<string> = new Set(['VerdaQwenThink'])
+export const THINKING_CLIENTS: ReadonlySet<string> = new Set(
+  Object.keys(THINKING_FUNCTIONS_BY_CLIENT),
+)
 
 /** Only the planner has a trace-aware counterpart in this slice (#625 G19 Q7). */
 export const THINKING_ROLES: ReadonlySet<BamlRole> = new Set(['planner'])

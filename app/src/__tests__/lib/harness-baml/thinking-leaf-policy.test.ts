@@ -1,0 +1,93 @@
+/** #637: layer 1 policy pins; synthetic collector exchanges only. */
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { Collector } from '@boundaryml/baml'
+import {
+  extractLLMCallData,
+  extractFailureLLMCallData,
+  accountBamlCall,
+  withUsageAccounting,
+  wrapAsLLMCallError,
+  LLMCallError,
+} from '@hames-ai/harness-baml/baml-adapters.server'
+import { getBamlFiles } from '@hames-ai/harness-baml/baml_client/inlinedbaml'
+import { THINKING_FUNCTIONS_BY_CLIENT } from '@hames-ai/harness-baml/clients.server'
+import { observeLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
+
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
+afterEach(() => vi.restoreAllMocks())
+
+function collector(selected = 'VerdaQwenThink', last = 'VerdaQwen'): Collector {
+  const log = {
+    calls: [
+      { selected: true, clientName: selected },
+      { selected: false, clientName: last },
+    ],
+    rawLlmResponse: 'Synthetic content',
+  }
+  return { last: log, logs: [log] } as unknown as Collector
+}
+
+describe('thinking leaf function policy', () => {
+  const functions = Object.values(getBamlFiles()).flatMap((source) =>
+    [...source.matchAll(/^function (\w+)\(/gm)].map((match) => match[1]),
+  )
+  const originals = functions.filter((name) => name !== 'PlannerThinking')
+
+  it('designates only the measured-scope planner counterpart for the thinking leaf', () => {
+    expect(THINKING_FUNCTIONS_BY_CLIENT).toEqual({ VerdaQwenThink: ['PlannerThinking'] })
+    expect(functions.filter((name) => name.endsWith('Thinking'))).toEqual(['PlannerThinking'])
+  })
+
+  it.each(originals)('refuses %s at both extractors and the accounting-only path', (name) => {
+    const source = collector()
+    for (const extract of [extractLLMCallData, extractFailureLLMCallData]) {
+      expect(() => extract(source, name, { intent: 'Synthetic' }, 0)).toThrow(
+        `${name} selected a thinking leaf`,
+      )
+    }
+    expect(() => accountBamlCall(source, name)).toThrow(`${name} selected a thinking leaf`)
+  })
+
+  it('uses the selected leaf rather than another attempted leaf', () => {
+    expect(() => accountBamlCall(collector('VerdaQwen'), 'LoopController')).not.toThrow()
+    expect(() =>
+      accountBamlCall(collector('VerdaQwen', 'VerdaQwenThink'), 'LoopController'),
+    ).not.toThrow()
+    expect(() => accountBamlCall(collector(), 'PlannerThinking')).not.toThrow()
+  })
+
+  it('keeps fatal refusal metadata and does not wrap or account it again', () => {
+    const samples: unknown[] = []
+    const stop = observeLlmUsage((sample) => samples.push(sample))
+    try {
+      const source = collector()
+      let failure: unknown
+      try {
+        extractLLMCallData(source, 'LoopController', { intent: 'Synthetic' }, 0, {
+          tool_name: 'draft',
+        })
+      } catch (error) {
+        failure = error
+      }
+      expect(failure).toBeInstanceOf(LLMCallError)
+      expect(failure).toMatchObject({
+        recoverable: false,
+        llmCall: { variables: { intent: 'Synthetic' }, rawOutput: 'Synthetic content' },
+      })
+      expect((failure as LLMCallError).llmCall.parsedOutput).toBeUndefined()
+      expect(wrapAsLLMCallError(failure, 'LoopController', {}, 0, source)).toBe(failure)
+      expect(samples).toHaveLength(1)
+    } finally {
+      stop()
+    }
+  })
+
+  it('refuses an accounting-only call even when the model response failed to parse', async () => {
+    await expect(
+      withUsageAccounting('ResultDescribe', async ({ collector: target }) => {
+        Object.defineProperty(target, 'last', { get: () => collector().last })
+        throw new Error('Synthetic parse error')
+      }),
+    ).rejects.toThrow(/ResultDescribe selected a thinking leaf/)
+  })
+})

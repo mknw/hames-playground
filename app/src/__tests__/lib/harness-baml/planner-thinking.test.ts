@@ -12,7 +12,15 @@ import {
 } from '@hames-ai/harness-baml/clients.server'
 import type { BamlRole } from '@hames-ai/harness-baml/clients.server'
 import '../../../lib/inference/config.server'
-import { createPlannerAdapter } from '@hames-ai/harness-baml/baml-adapters.server'
+import {
+  createPlannerAdapter,
+  createLoopControllerAdapter,
+  createActorControllerAdapter,
+  createCriticAdapter,
+  createInjectionScreen,
+  describeToolResultOp,
+} from '@hames-ai/harness-baml/baml-adapters.server'
+import { defaultSelector } from '@hames-ai/harness-baml/defaults.server'
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { planner, formatPlanContext } from '@hames-ai/harness-patterns/patterns/planner.server'
 import { createScope } from '@hames-ai/harness-patterns/context.server'
@@ -386,6 +394,86 @@ describe('Planner thinking mode', () => {
     expect(requests).toHaveLength(1)
   })
 
+  it.each([
+    {
+      name: 'LoopController',
+      call: () => createLoopControllerAdapter()('q', 'i', '[]', 0),
+      answer: { reasoning: 'Written', tool_name: 'Return', tool_args: '{"response":"draft"}' },
+    },
+    {
+      name: 'ActorController',
+      call: () => createActorControllerAdapter([])('q', 'i', [], []),
+      answer: { reasoning: 'Written', tool_name: 'Return', tool_args: '{"response":"draft"}' },
+    },
+    {
+      name: 'Critic',
+      call: () => createCriticAdapter()('i', []),
+      answer: { explanation: 'Synthetic verdict', is_sufficient: true },
+    },
+    {
+      name: 'ResultDescribe',
+      call: () => describeToolResultOp('synthetic', '{}', '', 'Synthetic result'),
+      answer: 'Synthetic summary',
+    },
+    {
+      name: 'ScreenUntrustedContent',
+      call: () => createInjectionScreen()({ tool: 'synthetic', namespace: 'web', content: 'Text' }),
+      answer: { injection_detected: false, reason: 'Synthetic verdict', spans: [] },
+    },
+    {
+      name: 'ReferenceSelector',
+      call: () => defaultSelector({ intent: 'i', recentMessages: [], candidates: [] }),
+      answer: { reasoning: 'Written', selected: [] },
+    },
+  ])(
+    'refuses a hidden thinking leaf in $name before returning any result',
+    async ({ name, call, answer }) => {
+      const registry = new ClientRegistry()
+      registry.addLlmClient('SyntheticHiddenThinking', 'fallback', { strategy: ['VerdaQwenThink'] })
+      const content = typeof answer === 'string' ? answer : JSON.stringify(answer)
+      replies.push({ content, reasoning: TRACE })
+      const failure = await registryRun<unknown>(registry, call, 'SyntheticHiddenThinking').catch(
+        (e: unknown) => e,
+      )
+      expect(failure).toMatchObject({
+        message: expect.stringMatching(new RegExp(`${name} selected a thinking leaf`)),
+        recoverable: false,
+        llmCall: { functionName: name, clientName: 'VerdaQwenThink', rawOutput: content },
+      })
+      expect(requests).toHaveLength(1)
+      expect(requests[0].chat_template_kwargs).toEqual({ enable_thinking: true })
+      expect(samples).toHaveLength(1)
+      expect(samples[0].clientName).toBe('VerdaQwenThink')
+    },
+  )
+
+  it.each(['LoopController', 'ActorController'] as const)(
+    'does not retry a hidden thinking leaf with an empty capped %s completion',
+    async (name) => {
+      const registry = new ClientRegistry()
+      registry.addLlmClient('SyntheticHiddenThinking', 'fallback', { strategy: ['VerdaQwenThink'] })
+      replies.push({ content: '', reasoning: TRACE, tokens: 4096 })
+      const call = () =>
+        name === 'LoopController'
+          ? createLoopControllerAdapter()('q', 'i', '[]', 0)
+          : createActorControllerAdapter([])('q', 'i', [], [])
+      const failure = await registryRun(registry, call, 'SyntheticHiddenThinking').catch(
+        (e: unknown) => e,
+      )
+      expect(failure).toMatchObject({
+        message: expect.stringMatching(/selected a thinking leaf/),
+        recoverable: false,
+        llmCall: {
+          clientName: 'VerdaQwenThink',
+          hitOutputCap: true,
+          usage: { outputTokens: 4096 },
+        },
+      })
+      expect(requests).toHaveLength(1)
+      expect(samples).toHaveLength(1)
+    },
+  )
+
   it('retains a terminal malformed-answer trace in the durable error call without a downstream plan', async () => {
     replies.push({ content: 'not a plan', reasoning: TRACE, tokens: 20 })
     const { scope, view } = scopeAndView()
@@ -500,6 +588,21 @@ describe('Planner thinking mode', () => {
     })
     expect(requests).toHaveLength(1)
   })
+
+  it.each([JSON.stringify(ANSWER), 'not a plan'])(
+    'retains the parser trace alongside rejected tail diagnostics (%s)',
+    async (tail) => {
+      replies.push({ content: `Draft </think> ${tail}`, reasoning: TRACE })
+      const failure = await run(call).catch((e: unknown) => e)
+      expect(failure).toMatchObject({
+        message: expect.stringMatching(/reasoning parser.*<\/think>/i),
+        recoverable: false,
+        llmCall: { parsedOutput: { reasoning: TRACE, ...(tail === 'not a plan' ? {} : ANSWER) } },
+      })
+      expect(samples).toHaveLength(1)
+      expect(requests).toHaveLength(1)
+    },
+  )
 
   it('does not retry a malformed nonempty answer or an HTTP error', async () => {
     replies.push({ content: 'not a plan', reasoning_content: TRACE })

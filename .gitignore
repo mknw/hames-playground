@@ -84,6 +84,7 @@ pgvector-migration-dump/
 # models/README.md documents what belongs here and stays tracked.
 models/*
 !models/README.md
+!models/embedder.lock
 
 # Credential-shaped strays that were tracked in a PUBLIC repo until the preview
 # security baseline removed them. None held a live secret — `neo4j_password.txt`

@@ -1489,6 +1489,13 @@ assert_engine_supported() {
   ok "Docker Engine $v (>= $MIN_ENGINE for isolated gateway mode)"
 }
 
+prepare_embedder() {
+  if ! run python3 "$APP_DIR/scripts/prepare-embedder.py" "$APP_DIR/models"; then
+    refuse "embedder GGUF preparation failed; no compose services were started"
+    return 1
+  fi
+}
+
 stage_boot() {
   banner "11/13 boot — docker compose up -d (base + prod overlay, profile app)"
   # Every gate below runs before anything starts. A real run stops at the
@@ -1535,6 +1542,7 @@ stage_boot() {
     fi
   fi
 
+  prepare_embedder || return 1
   run dc up -d --remove-orphans
   ((DRY_RUN)) && return 0
   if ! vps_check --network; then
@@ -1543,7 +1551,7 @@ stage_boot() {
     return 0
   fi
   local svc
-  for svc in postgres neo4j redis app; do
+  for svc in postgres neo4j redis embedder app; do
     if wait_state "$svc" healthy 600; then ok "$svc healthy"; else
       fail "$svc did not become healthy (docker compose logs $svc)"
       return 1
@@ -1642,6 +1650,7 @@ stage_smoke() {
     note "5  the graph is not empty (seed imported)"
     note "6  Engine >= $MIN_ENGINE, daemon.json safe, deployed Neo4j bridge internal/isolated; bounded egress negatives with positive controls"
     note "7  Cypher RETURN through neo4j-relay:7687 (also with --no-seed)"
+    note "9  CPU embedder: one internal POST /v1/embeddings returns 1024 finite dimensions"
     if ((PROBE_PRIVATE_HEALTH)); then
       note "8  OPT-IN: one authenticated GET small-model /health; may wake a box; no completion or retry"
     else
@@ -1756,6 +1765,10 @@ stage_smoke() {
     fi
   else
     note "8  SKIPPED private /health: no provider request (--probe-private-health may wake a box)"
+  fi
+  if vps_check --embeddings; then ok "9  embedder returned 1024 dimensions"; else
+    fail "9  embedder forward pass failed or returned the wrong dimensions"
+    fails=$((fails + 1))
   fi
 
   say ""

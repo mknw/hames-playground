@@ -426,11 +426,12 @@ class Wiring(unittest.TestCase):
             self.assertLess(output.stdout.index("ENGINE"), output.stdout.index("PROBE --daemon"))
             for mode in ("daemon", "egress", "relay"):
                 self.assertIn("PROBE --" + mode + " --ssh-port 50022", output.stdout)
+            self.assertIn("PROBE --embeddings", output.stdout)
             self.assertEqual("HEALTH" in output.stdout, flag == "1")
         output = self.shell(body.replace('echo HEALTH;', 'echo HEALTH; return 1;'), "1", "none")
         self.assertEqual(output.returncode, 1, output.stdout + output.stderr)
         self.assertIn("private /health failed", output.stdout)
-        for failed in ("egress", "relay", "daemon"):
+        for failed in ("egress", "relay", "daemon", "embeddings"):
             output = self.shell(body, "0", failed)
             self.assertEqual(output.returncode, 1, output.stdout + output.stderr)
         output = self.shell(body.replace('echo ENGINE;', 'refuse "unsupported Engine";'), "0", "none")

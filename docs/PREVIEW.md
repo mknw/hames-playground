@@ -826,10 +826,13 @@ diagnosis, and nothing is reachable from outside.
   VM.** The stack carries the embedder as the compose `embedder` service
   (profile `app`, so the `COMPOSE_PROFILES=app` of the bring-up includes it;
   internal network only; the app is pointed at `http://embedder:8090/v1`). The
-  weights are not in git: put `Qwen3-Embedding-0.6B-Q8_0.gguf` in `models/`
-  ([`models/README.md`](../models/README.md)), or the service exits at start and
-  vector search over uploads stays dead while everything else — upload, storage,
-  download, conversion — works. The service publishes **no port**, not even on
+  weights are not in git: the bootstrap's `boot` stage fetches them from Hugging
+  Face, pinned by repository, revision commit and file SHA-256 in
+  `models/embedder.lock`. Manual bring-up runs
+  `python3 scripts/prepare-embedder.py models` first
+  ([`models/README.md`](../models/README.md)). Each container start verifies the
+  checksum; bootstrap waits for health and its smoke requires a 1024-dimension
+  forward pass. The service publishes **no port**, not even on
   loopback. Alternatively point `EMBEDDINGS_LOCAL_URL` at a remote
   OpenAI-compatible embedder (the `/v1` suffix is required; "local" names the
   wire format, not the machine) or `EMBEDDINGS_PROVIDER` at a hosted one — which

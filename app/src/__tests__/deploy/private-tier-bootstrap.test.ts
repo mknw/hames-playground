@@ -182,6 +182,7 @@ function boot(values: Record<string, string>) {
     escrow_recorded() { :; }; dns_points_here() { :; }
     reserved_name() { return 1; }; assert_dynamic_tools_off() { :; }
     rendered_exposure() { :; }; wait_state() { :; }
+    prepare_embedder() { :; } # model preparation has daemon-free fixture tests
     dc() { printf 'COMPOSE_CALLED\\n'; }
     stage_boot
   `,
@@ -407,11 +408,13 @@ describe('operator docs agree with the private-tier contract', () => {
     expect(preview).not.toContain('`SMALL_LLM_API_KEY` is **not** required')
   })
 
-  it('explains the compose embedder and links the current limitations section', () => {
+  it('explains the compose embedder, its pinned preparation and readiness checks', () => {
     expect(template).toContain('The compose `embedder` service serves')
-    expect(template).toContain('Supply its GGUF weights separately in models/')
-    expect(template).toContain('§11 "Known limitations of this preview"')
-    expect(preview).toContain('## 11. Known limitations of this preview')
+    expect(template).toContain('models/embedder.lock (repository, revision commit, file sha256)')
+    expect(template).toContain('boot waits for health and smoke checks 1024 dimensions')
+    expect(template).toContain('python3 scripts/prepare-embedder.py models')
+    expect(template).toContain('See models/README.md and docs/PREVIEW.md §6')
+    expect(template).toContain('EMBEDDINGS_LOCAL_URL http://embedder:8090/v1  (base compose)')
     expect(template).not.toMatch(/compose stack does NOT provide|Known limitation: embeddings/)
   })
 

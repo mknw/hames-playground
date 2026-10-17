@@ -187,6 +187,24 @@ def relay():
     require(result.splitlines() == ["bootstrap_relay", "432"], "relay Cypher round trip failed")
 
 
+EMBEDDINGS = """(async()=>{
+const response=await fetch('http://embedder:8090/v1/embeddings',{
+method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),
+headers:{'Content-Type':'application/json'},
+body:JSON.stringify({input:['bootstrap embedder smoke'],model:'Qwen3-Embedding-0.6B'})});
+if(response.status!==200)process.exit(1);
+const body=await response.json();const vector=body.data?.[0]?.embedding;
+if(body.data?.length!==1||!Array.isArray(vector)||vector.length!==1024||
+!vector.every(x=>typeof x==='number'&&Number.isFinite(x)))process.exit(1);
+})().catch(()=>process.exit(1));"""
+
+
+def embeddings():
+    # The embedder has no published port. Use the installed app's Node from
+    # its network namespace; never read a configurable provider URL or key.
+    checked("docker", "compose", "exec", "-T", "app", "node", "-e", EMBEDDINGS)
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -216,7 +234,7 @@ def private_health():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_mutually_exclusive_group(required=True)
-    for mode in ("daemon", "network", "egress", "relay", "private-health"):
+    for mode in ("daemon", "network", "egress", "relay", "private-health", "embeddings"):
         modes.add_argument("--" + mode, action="store_true")
     parser.add_argument("--ssh-port", type=int, default=22)
     args = parser.parse_args()
@@ -232,6 +250,8 @@ def main():
             relay()
         elif args.private_health:
             private_health()
+        elif args.embeddings:
+            embeddings()
     except Exception as error:
         # Only our fixed labels are safe to print. Library errors may carry
         # a URL, bearer value or Docker-inspect content.

@@ -118,6 +118,7 @@ async function capture(skills: SandboxSkill[] | undefined) {
       await createActorControllerAdapter({})({
         userMessage: 'Write the report.',
         intent: 'write the report',
+        availableTools: [],
         previousAttempts: [],
         attemptNumber: 1,
         maxAttempts: 3,

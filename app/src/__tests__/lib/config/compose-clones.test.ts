@@ -149,6 +149,33 @@ describe('two built clones, one shared infrastructure (#432 row 8)', () => {
     }
   })
 
+  it.each([
+    { configExit: 0, validateExit: 1 },
+    { configExit: 7, validateExit: 0 },
+    { configExit: 0, validateExit: 0 },
+  ])(
+    'the pasted preflight gates startup ($configExit / $validateExit)',
+    ({ configExit, validateExit }) => {
+      const preview = readFileSync(repoFile('docs/PREVIEW.md'), 'utf8')
+      const snippet = preview.match(
+        /```bash\n((?:set[^\n]*\n)?docker compose config --format json \| node scripts\/validate-clones\.mjs[\s\S]*?)\n```/,
+      )?.[1]
+      expect(snippet).toBeDefined()
+      // Execute the actual copyable block with shell functions replacing only
+      // its external programs. No daemon, node process or provider is contacted.
+      const stubs = `docker() {
+      if [ "$*" = 'compose config --format json' ]; then printf '{}'; return ${configExit}; fi
+      printf STARTED
+    }
+    node() { cat >/dev/null; return ${validateExit}; }
+    `
+      const run = spawnSync('bash', ['-c', stubs + snippet], { encoding: 'utf8' })
+      const succeeds = configExit === 0 && validateExit === 0
+      expect(run.status === 0).toBe(succeeds)
+      expect(run.stdout.includes('STARTED')).toBe(succeeds)
+    },
+  )
+
   it('the CLI fails closed without printing malformed secret input', () => {
     const secret = 'synthetic-do-not-print'
     const run = spawnSync(process.execPath, [repoFile('scripts/validate-clones.mjs')], {

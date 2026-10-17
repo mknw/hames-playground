@@ -999,11 +999,12 @@ the inputs above:
 
 ```bash
 set -o pipefail
-docker compose config --format json | node scripts/validate-clones.mjs
-docker compose up -d --build app app-dev
+docker compose config --format json | node scripts/validate-clones.mjs &&
+  docker compose up -d --build app app-dev
 ```
 
-Stop on any preflight failure; do not run the second command after one. **Never
+The `&&` prevents startup after a failed preflight, including when pasting the
+whole block. Stop on any failure; do not run startup separately after one. **Never
 save or print the rendered config**: it contains secrets. The validator's CLI
 prints no input or secret-bearing parse error. It refuses shared encryption /
 signing keys, callbacks, sandbox caches/namespaces and database roles/databases,

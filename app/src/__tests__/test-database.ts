@@ -71,7 +71,7 @@ export interface ResolveOptions {
  * Decide which Postgres a test suite may use. Called for every suite's default,
  * before anything connects. In order:
  *
- *  1. `TEST_DATABASE_URL` is set: use it. Naming a database is an explicit act.
+ *  1. `TEST_DATABASE_URL` is set: validate its test-only target, then use it.
  *  2. {@link ALLOW_LOCAL_DB} names THIS checkout, in the environment or in
  *     `app/.env`: use the compose Postgres on `localhost:5432`.
  *  3. CI, and the suite can run without a database: use {@link noDatabaseUrl}.
@@ -80,18 +80,61 @@ export interface ResolveOptions {
  */
 export function resolveTestDatabase(database: string, options: ResolveOptions = {}): TestDatabase {
   const { skipInCi = false, env = process.env, checkout = CHECKOUT } = options
-  if (env.TEST_DATABASE_URL) return { source: 'explicit', url: env.TEST_DATABASE_URL }
-
   const optIn = env[ALLOW_LOCAL_DB] || envFileValue(path.join(checkout, 'app', '.env'))
   // Absolute only. `realpathSync` resolves a relative value against the cwd,
   // which is always the running checkout's `app/`, so `..` would name every
   // checkout a copied `app/.env` lands in: a flag again, in path form.
-  if (optIn && path.isAbsolute(optIn) && samePath(optIn, checkout)) {
+  const ownerLocal = !!optIn && path.isAbsolute(optIn) && samePath(optIn, checkout)
+  assertTestDatabaseName(database)
+  if (env.TEST_DATABASE_URL) {
+    assertTestDatabaseUrl(env.TEST_DATABASE_URL, ownerLocal)
+    return { source: 'explicit', url: env.TEST_DATABASE_URL }
+  }
+  if (ownerLocal) {
     return { source: 'local', url: localDatabaseUrl(database) }
   }
   if (skipInCi && isCi(env.CI)) return { source: 'none', url: noDatabaseUrl(database) }
 
   throw new Error(refusal(database, optIn))
+}
+
+/** The dead-port /x URL is the dispatched no-DB sentinel, not a database to
+ * provision. Keep it exact; every reachable target needs a test-only name. */
+const DEAD_PORT_URL = 'postgresql://x:x@127.0.0.1:59999/x'
+
+function assertTestDatabaseName(database: string): void {
+  if (!/^(?:[a-z0-9]+_)*test(?:_[a-z0-9]+)*$/.test(database)) {
+    throw new Error('[test-db] Refusing a non-test database name')
+  }
+}
+
+function assertTestDatabaseUrl(connectionString: string, ownerLocal = false): void {
+  if (connectionString === DEAD_PORT_URL) return
+  let url: URL
+  try {
+    url = new URL(connectionString)
+    assertTestDatabaseName(decodeURIComponent(url.pathname.slice(1)))
+  } catch {
+    throw new Error('[test-db] Refusing a malformed URL or non-test database name')
+  }
+  // Query parameters can override pg connection settings, including host and
+  // database. Refuse all of them on explicit URLs, even on the owner path.
+  if (!['postgres:', 'postgresql:'].includes(url.protocol) || url.search || url.hash) {
+    throw new Error('[test-db] Refusing URL overrides or a non-Postgres URL')
+  }
+  // Empty hosts inherit pg's defaults; percent-encoded hosts are decoded by
+  // pg rather than URL. Require a plain explicit host even on the owner path.
+  if (!url.hostname || url.hostname.includes('%')) {
+    throw new Error('[test-db] Refusing a missing or encoded explicit host')
+  }
+  // A structural port barrier covers numeric IPv4, IPv6 and every DNS alias.
+  // An omitted port is pg's 5432 default. No host spelling can bypass this.
+  const live = (url.port || '5432') === '5432'
+  if (live && !ownerLocal) {
+    throw new Error(
+      '[test-db] Refusing the live compose server without its checkout-bound owner opt-in',
+    )
+  }
 }
 
 function envFileValue(file: string): string | undefined {

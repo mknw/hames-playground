@@ -560,7 +560,14 @@ describe('DockerBackend.reapOrphans', () => {
 
     // Listing is scoped to the family label so it never touches other containers.
     const ps = spawnCalls.find((c) => c.args[0] === 'ps')!
-    expect(ps.args).toEqual(['ps', '-aq', '--filter', 'label=kg-sandbox=1'])
+    expect(ps.args).toEqual([
+      'ps',
+      '-aq',
+      '--filter',
+      'label=kg-sandbox=1',
+      '--filter',
+      'label=kg-sandbox-environment=local',
+    ])
 
     // A single force-remove passes every found id.
     const rm = spawnCalls.find((c) => c.args[0] === 'rm')!
@@ -856,7 +863,16 @@ describe('DockerBackend — egress profiles (#116)', () => {
 
     // network created once, --internal, labeled for the reaper's sweep
     const create = spawnCalls.find((c) => c.args[0] === 'network' && c.args[1] === 'create')!
-    expect(create.args).toEqual(['network', 'create', '--internal', '--label', 'kg-sandbox=1', net])
+    expect(create.args).toEqual([
+      'network',
+      'create',
+      '--internal',
+      '--label',
+      'kg-sandbox=1',
+      '--label',
+      'kg-sandbox-environment=local',
+      net,
+    ])
 
     // gateway booted from the sandbox image running the allowlist proxy…
     const gwRun = spawnCalls.find(
@@ -1263,7 +1279,15 @@ describe('DockerBackend — per-boot egress isolation & lifecycle (Lane B)', () 
     // 1 container + 2 pruned networks — the header line is NOT counted.
     expect(await backend.reapOrphans()).toBe(3)
     const prune = spawnCalls.find((c) => c.args[0] === 'network' && c.args[1] === 'prune')!
-    expect(prune.args).toEqual(['network', 'prune', '-f', '--filter', 'label=kg-sandbox=1'])
+    expect(prune.args).toEqual([
+      'network',
+      'prune',
+      '-f',
+      '--filter',
+      'label=kg-sandbox=1',
+      '--filter',
+      'label=kg-sandbox-environment=local',
+    ])
     // prune runs AFTER the container rm: prune is a no-op on networks still
     // in use by a leftover gateway, so the gateway sweep must go first.
     const rmIdx = spawnCalls.findIndex((c) => c.args[0] === 'rm')
@@ -1383,5 +1407,51 @@ describe('DockerBackend — per-boot egress isolation & lifecycle (Lane B)', () 
     // SandboxBootError, named like every other boot failure.
     expect(err.name).toBe('SandboxBootError')
     expect(err.message).toMatch(/egress network create failed.*address pool/)
+  })
+})
+
+describe('clone-scoped sandbox cleanup (#432 row 8)', () => {
+  afterEach(() => vi.unstubAllEnvs())
+
+  it.each(['release', 'dev'])(
+    'labels every %s resource and scopes both sweeps',
+    async (environment) => {
+      vi.stubEnv('SANDBOX_ENVIRONMENT', environment)
+      const backend = await makeBackend()
+      // Prove the backend retains its namespace, including across env changes.
+      vi.stubEnv('SANDBOX_ENVIRONMENT', 'other')
+      spawnPlan = (_cmd, args) => {
+        if (args[0] === 'network' && args[1] === 'inspect') return { code: 1 }
+        if (args[0] === 'inspect') return { stdout: 'false' }
+        return { stdout: args[0] === 'run' ? 'container' : '' }
+      }
+      await backend.boot('base', { egress: 'pypi' })
+      const label = `kg-sandbox-environment=${environment}`
+      const creates = spawnCalls.filter(
+        ({ args }) => args[0] === 'run' || (args[0] === 'network' && args[1] === 'create'),
+      )
+      expect(creates).toHaveLength(3) // sandbox, proxy, network
+      for (const { args } of creates) expect(args).toContain(label)
+      await backend.reapOrphans()
+      const sweeps = spawnCalls.filter(
+        ({ args }) => args[0] === 'ps' || (args[0] === 'network' && args[1] === 'prune'),
+      )
+      expect(sweeps).toHaveLength(2)
+      for (const { args } of sweeps) {
+        expect(args).toContain(`label=${label}`)
+        expect(args[args.indexOf(`label=${label}`) - 1]).toBe('--filter')
+        expect(args).toContain('label=kg-sandbox=1')
+      }
+    },
+  )
+
+  it('refuses production without a namespace and malformed labels before any Docker call', async () => {
+    const { DockerBackend } = await import('../docker-backend.server')
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('SANDBOX_ENVIRONMENT', '')
+    expect(() => new DockerBackend()).toThrow(/requires SANDBOX_ENVIRONMENT/)
+    vi.stubEnv('SANDBOX_ENVIRONMENT', 'bad label')
+    expect(() => new DockerBackend()).toThrow(/at most 63/)
+    expect(spawnCalls).toHaveLength(0)
   })
 })

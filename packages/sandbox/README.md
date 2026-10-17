@@ -198,6 +198,17 @@ containers.
 
 ## Configuration
 
+### Multiple app clones on one Docker daemon
+
+Set a distinct `SANDBOX_ENVIRONMENT` in each app (for example `release` and
+`dev`). Production requires it; local development defaults to `local`. The
+backend captures that label once and applies it to sandbox/proxy containers and
+egress networks. Both startup cleanup sweeps require the environment label as
+well as `kg-sandbox=1`, so a restart leaves other environments and legacy
+unlabelled resources alone. Remove legacy leftovers manually by inspected ID.
+Set a distinct `SANDBOX_CACHE_VOLUME` base per clone too. Labels prevent
+accidental cleanup; access to the Docker socket remains host-wide authority.
+
 ### What your application passes in
 
 Nothing, for the example above. Two things are yours to supply when you need

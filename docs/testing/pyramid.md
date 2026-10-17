@@ -164,6 +164,18 @@ is never left unset, because `lib/db/client.server.ts` reads an unset
 layer. So in a checkout with neither of the first two rows, its unit layer skips
 the DB-backed tests and the two e2e layers refuse.
 
+Explicit URLs must use a test-named database (`test`, `hames_test`, or a
+`*_test_*` name), with a nonempty, unencoded explicit host. Without the
+checkout-bound owner opt-in, **all port-5432 URLs are refused**, regardless of
+host spelling; an omitted port counts as 5432. This structural barrier includes
+numeric IPv4, IPv6 and DNS aliases. The owner opt-in can authorize that port for
+test names only; it cannot authorize missing/encoded hosts, query overrides or
+non-test names, and a copied opt-in never authorizes another checkout. The guard
+cannot establish whether an arbitrary remote server on another port is
+production: the operator must still supply a throwaway server. The exact
+`postgresql://x:x@127.0.0.1:59999/x` URL is accepted only as a dead-port no-DB
+sentinel for dispatched runs; nothing may listen there.
+
 `test-database-guard.test.ts` pins the four rows. `suite-isolation.test.ts` pins
 that every suite's default goes through the guard, because a suite that falls
 back on its own would go round it.

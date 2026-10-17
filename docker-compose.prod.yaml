@@ -162,6 +162,8 @@ services:
       # `dev-bypass.ts` warns at module load if a prod build still carries it.
       # Set explicitly anyway so `docker compose config` shows the intent.
       - VITE_DEV_BYPASS_AUTH=false
+      - SANDBOX_ENVIRONMENT=release
+      - SANDBOX_CACHE_VOLUME=kg-sandbox-cache-release
 
   # ---------------------------------------------------------------------------
   # TLS termination

@@ -20,6 +20,7 @@ const artifacts = vi.hoisted(() => ({
   hydrateWorkspace: vi.fn(async () => ({
     written: 0,
     skipped: [] as Array<{ filename: string; error: string }>,
+    accounted: [] as string[],
   })),
   snapshotOutputs: vi.fn(async () => new Map<string, string>()),
   promoteOutputs: vi.fn(async () => ({
@@ -638,6 +639,28 @@ describe('withSandbox default-singleton orphan reaper (#97 Gap 1)', () => {
   })
 })
 
+describe('withSandbox declares its in-VM tools (#507)', () => {
+  it('declares the six curated tool names, merged over the wrapped pattern`s own', () => {
+    const backend = fakeBackend()
+    const inner = {
+      ...fakePattern(async (scope) => scope),
+      capabilities: { tools: ['search'], retrievalBackends: ['redis'] },
+    }
+    const wrapped = withSandbox({ backend, id: 'sess-1' })(inner)
+    expect(wrapped.capabilities?.tools).toEqual([
+      'search',
+      'sandbox_read',
+      'sandbox_write',
+      'sandbox_edit',
+      'sandbox_list',
+      'sandbox_search',
+      'sandbox_bash',
+    ])
+    // The wrapper's own declaration must not shadow the inner one.
+    expect(wrapped.capabilities?.retrievalBackends).toEqual(['redis'])
+  })
+})
+
 describe('withSandbox durable-workspace capability marker (#97 Gap 3)', () => {
   it('exposes the wrapped pattern as children', () => {
     const backend = fakeBackend()
@@ -688,7 +711,8 @@ describe('withSandbox durable-workspace capability marker (#97 Gap 3)', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
     const wrapped = withSandbox({ backend, id: 'sess-1' })(inner)
-    expect(wrapped.capabilities).toBeUndefined()
+    // `workspaceSync` is absent; the wrapper still declares its in-VM tools (#507).
+    expect(wrapped.capabilities?.workspaceSync).toBeUndefined()
     expect(wrapped.config).toEqual(inner.config)
     expect(harnessUsesSyncWorkspace([wrapped])).toBe(false)
   })
@@ -698,7 +722,7 @@ describe('withSandbox durable-workspace capability marker (#97 Gap 3)', () => {
     const inner = fakePattern(async (scope) => scope)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const wrapped = withSandbox({ backend, syncWorkspace: true })(inner)
-    expect(wrapped.capabilities).toBeUndefined()
+    expect(wrapped.capabilities?.workspaceSync).toBeUndefined()
     expect(wrapped.config).toEqual(inner.config)
     expect(harnessUsesSyncWorkspace([wrapped])).toBe(false)
     warn.mockRestore()
@@ -740,7 +764,9 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
   }
 
   beforeEach(() => {
-    artifacts.hydrateWorkspace.mockClear().mockResolvedValue({ written: 0, skipped: [] })
+    artifacts.hydrateWorkspace
+      .mockClear()
+      .mockResolvedValue({ written: 0, skipped: [], accounted: [] })
     artifacts.snapshotOutputs.mockClear().mockResolvedValue(new Map())
     artifacts.promoteOutputs.mockClear().mockResolvedValue({ promoted: [], skipped: [] })
   })

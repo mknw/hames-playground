@@ -54,6 +54,9 @@ app needs at runtime, so it works on a plain VPS or an Azure VM identically —
    redis-stack :6379 (DataStash)   │ mounts docker.sock, spawns 1 container/MCP-server
 ```
 
+The Neo4j ports in the diagram belong to `neo4j-relay`, which forwards into
+Neo4j's isolated internal network (#241 G13); Neo4j itself publishes no ports.
+
 **Why this guide runs the UI on the host:** it shells out to `docker run -d --rm …`
 for compute sandboxes (`docker-backend.server.ts:291`) and uses `node-pty` for the
 Shell terminal, and a host `systemd` service gives it a native `docker` CLI and a
@@ -178,8 +181,9 @@ services:
     ports: ["127.0.0.1:5432:5432"]
     environment: ["POSTGRES_PASSWORD=<STRONG_PW>"]
   neo4j:
-    ports: ["127.0.0.1:7474:7474", "127.0.0.1:7687:7687"]
     environment: ["NEO4J_AUTH=neo4j/<STRONG_PW>"]
+  neo4j-relay:
+    ports: ["127.0.0.1:7474:7474", "127.0.0.1:7687:7687"]
   redis:
     ports: ["127.0.0.1:6379:6379"]
   mcp-gateway:
@@ -190,11 +194,24 @@ services:
 The UI reaches all of these over `localhost`, so loopback binding is transparent
 to the app and closes the exposure.
 
+Neo4j itself has no published ports and sits only on `neo4j-internal`
+(`internal: true`, IPv4 gateway mode `isolated`), with `neo4j-relay` as its only peer (#241 G13). The relay
+publishes HTTP/Bolt on loopback for the host app and SSH tunnels; container
+consumers use `neo4j-relay`. APOC and n10s are installed during image build,
+so startup needs no egress. CSV file URLs and APOC file imports are disabled.
+Before recreating the stack, take a Neo4j dump using the currently running
+image. The first `docker compose up -d` after adopting G13 moves an older store
+to 5.26.32; that store-format move cannot be undone. Docker Engine >= 28 is
+required for the isolated bridge (see [Docker Compose](../DOCKER_COMPOSE.md)).
+After adopting G13, the owner must recreate their own stack once with
+`docker compose up -d`. The opt-in isolation check and red mutation are in
+[Neo4j egress check](../testing/neo4j-egress.md).
+
 ## 5. Bring up the backing tier
 
 ```bash
 cd /opt/hames
-docker compose up -d                 # neo4j, postgres, redis-stack, mcp-gateway, doc-convert
+docker compose up -d                 # (Engine >= 28 is gated by bootstrap-vps.sh) neo4j, postgres, redis-stack, mcp-gateway, doc-convert
 docker compose ps                    # all healthy?
 
 # Build the sandbox base image — the compute sandbox needs it or every run fails
@@ -257,7 +274,15 @@ The Data Stash pipeline needs an embedder. Two options:
   required** — the value is used as `` `${baseUrl}/embeddings` ``
   (`embeddings.server.ts`), and both the code default and the compose service
   include it.
+- **The container run shape** ([`PREVIEW.md`](../PREVIEW.md)) needs none of
+  the above: the compose `embedder` service (profile `app`, mounts `./models`
+  read-only) is reached by the app as `http://embedder:8090/v1` over the compose
+  network and **publishes no port at all** — not even on loopback, in the base
+  file or the production overlay. Memory text is embedded there (#419), so
+  keep it unreachable from outside; if a host-run process truly needs it, add a
+  git-ignored override binding `127.0.0.1` and nothing wider.
 - **Hosted provider** — set `EMBEDDINGS_PROVIDER` to a remote provider instead.
+  (`openrouter` sends text off the box; the memory pipeline pins `local`.)
 
 If you don't use DataStash search, you can skip this.
 
@@ -359,7 +384,7 @@ docker compose pull && docker compose up -d   # only if the gateway image moved
 dump` + a forced Redis RDB into `backups/<timestamp>/`, verified, with 7-day
 rotation and no cloud dependency. Cron line and a restore drill:
 [`../PREVIEW.md` §9](../PREVIEW.md). Azure Disk snapshots of the three named
-volumes (`neo4j_data`, `postgres_data`, `redis_data`) are the managed
+volumes (`neo4j_data`, `pg16_glibc_data`, `redis_data`) are the managed
 alternative. These hold all conversations, the graph, and the Data Stash — and
 note that neither path captures `AUTH_SESSION_SECRET` /
 `TOKEN_ENCRYPTION_KEY`, which must be escrowed separately or the restored

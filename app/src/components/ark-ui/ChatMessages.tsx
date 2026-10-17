@@ -32,8 +32,6 @@ export interface Message {
 
 interface ChatMessagesProps {
   messages: Message[]
-  onApproveWrite?: (messageId: string) => void
-  onRejectWrite?: (messageId: string) => void
   /** Map of entity/relation names → graph element IDs */
   graphEntityNames?: Map<string, string[]>
   /** Callback to highlight graph element IDs (hover/click) */
@@ -511,11 +509,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                 {/* Tool Call - SEPARATE from message bubble */}
                 <Show when={message.toolCall && message.role === 'assistant'}>
                   <div m="l-11">
-                    <ToolCallDisplay
-                      toolCall={message.toolCall!}
-                      onApprove={() => props.onApproveWrite?.(message.id)}
-                      onReject={() => props.onRejectWrite?.(message.id)}
-                    />
+                    <ToolCallDisplay toolCall={message.toolCall!} />
                   </div>
                 </Show>
               </div>

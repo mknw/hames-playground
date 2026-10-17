@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mknw/hames-playground/main/docs/images/hames-banner-wide-dark.png">
+  <img src="https://raw.githubusercontent.com/mknw/hames-playground/main/docs/images/hames-banner-wide-light.png" alt="hames: supports of a harness to which its traces are fastened. The @hames-ai packages on npm: harness-patterns, harness-baml, agents, connectors, sandbox. hames app: where harness primitives become your integrated workspace." width="880">
+</picture>
+
 # @hames-ai/harness-baml
 
 [![npm](https://img.shields.io/npm/v/@hames-ai/harness-baml?style=flat)](https://www.npmjs.com/package/@hames-ai/harness-baml)
@@ -293,6 +298,19 @@ await withRunFrame({ inference: { tier: 'anthropic' } }, async () => {
   const limits = limitsFor('controller')
 })
 ```
+
+### Systemone decisions
+
+`createDecideAdapter()` and `createDecideAllAdapter()` supply single-question
+and set calls for `choice`, `score` and `noul`. Probabilities from the endpoint
+pass through untouched; decision events record the serving client.
+
+The Anthropic tier records `JevDecide`, using `JEV_DECISIONS_URL` and
+`JEV_DECISIONS_API_KEY`. The private tier records `PrivateSystemOne`, using
+`SMALL_LLM_DECISIONS_URL` (a full URL ending in `/v1/systemone`) and the shared
+`SMALL_LLM_API_KEY`. An unset private URL refuses the call with no public
+fallback. Private calls use measured duration at `SMALL_LLM_EUR_PER_HOUR`.
+Request routing and validation live in `jev-decide.server.ts`.
 
 ### Optional self-hosted tier
 

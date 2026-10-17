@@ -59,6 +59,12 @@ export interface Attempt {
   
 }
 
+export interface CompactedMemory {
+  content: string
+  evidence: string
+  
+}
+
 /**
  * Action decision returned by loop and actor controllers
  */
@@ -111,6 +117,13 @@ export interface ExpandedRef {
   
 }
 
+export interface ExtractedMemory {
+  kind: string
+  content: string
+  evidence: string
+  
+}
+
 /**
  * A canonical example of how the agent should pick a tool for a given user request.
  * Few-shots are domain-specific — pass at config time on a per-route basis (e.g., a
@@ -138,6 +151,13 @@ export interface LoopTurn {
   
 }
 
+export interface MemoryMember {
+  content: string
+  evidence: string
+  last_seen: string
+  
+}
+
 /**
  * Conversation message for history context
  */
@@ -161,6 +181,15 @@ export interface PlanResult {
    * vocabulary for "why this course of action", wherever it is produced.
    */
   reasoning: string
+  plan: string
+  n_steps: number
+  
+}
+
+/**
+ * Content-only planner answer; the adapter restores reasoning from the parser trace.
+ */
+export interface PlanResultThinking {
   plan: string
   n_steps: number
   

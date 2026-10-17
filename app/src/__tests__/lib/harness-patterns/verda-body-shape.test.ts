@@ -131,16 +131,30 @@ const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
     () => b.request.ActorController('q', 'i', TOOLS, [], null, null, 1, 5, null, VERDA),
   ],
   ['Critic', () => b.request.Critic('i', [], VERDA)],
-  ['Synthesize', () => b.request.Synthesize('q', 'i', TURNS, false, null, VERDA)],
-  ['Router', () => b.request.Router('q', [{ name: 'search', description: 'd' }], MESSAGES, VERDA)],
+  ['Synthesize', () => b.request.Synthesize('q', 'i', TURNS, false, null, null, VERDA)],
+  [
+    'Router',
+    () => b.request.Router('q', [{ name: 'search', description: 'd' }], MESSAGES, null, VERDA),
+  ],
   ['Planner', () => b.request.Planner('q', 'i', TOOLS, null, VERDA)],
-  // The six describe functions, on the 4B — the shipped route since the flip.
+  // The eight describe functions, on the 4B — the shipped route since the flip
+  // (six of them at the flip, the two memory functions of #419 M9 since).
   ['ResultDescribe', () => b.request.ResultDescribe('search', '{}', 'r', 'rows', SMALL)],
   ['ResultDescribeBatch', () => b.request.ResultDescribeBatch(DESCRIBE_TARGETS, SMALL)],
   ['GenerateConversationTitle', () => b.request.GenerateConversationTitle('q', SMALL)],
   ['CompactIntent', () => b.request.CompactIntent(MESSAGES, 'q', SMALL)],
   ['RetrieveQuery', () => b.request.RetrieveQuery(MESSAGES, 'q', SMALL)],
   ['ReferenceSelector', () => b.request.ReferenceSelector('i', MESSAGES, CANDIDATES, SMALL)],
+  ['ExtractMemory', () => b.request.ExtractMemory('preference', 'USER: q', 'q', SMALL)],
+  [
+    'CompactMemories',
+    () =>
+      b.request.CompactMemories(
+        'preference',
+        [{ content: 'likes tea', evidence: 'I like tea', last_seen: '2026-10-01' }],
+        SMALL,
+      ),
+  ],
   [
     'ScreenUntrustedContent',
     () => b.request.ScreenUntrustedContent('web/fetch', 'fetched page text', VERDA),
@@ -168,6 +182,7 @@ describe('private-tier request bodies', () => {
     }
     const expected = new Map<string, string>()
     for (const [role, fns] of Object.entries(SWITCHED_FUNCTIONS_BY_ROLE)) {
+      if (role === 'decide') continue // REST systemone, outside the BAML corpus.
       const client = VERDA_CLIENT_BY_ROLE[role as keyof typeof VERDA_CLIENT_BY_ROLE]!
       for (const fn of fns as readonly string[]) expected.set(fn, MODEL_OF[client])
     }
@@ -197,7 +212,10 @@ describe('private-tier request bodies', () => {
     // moved on an explicit owner decision, so it is checked like every other
     // routed function rather than excluded).
     const { TIER_SWITCHED_FUNCTIONS } = await import('@hames-ai/harness-baml/clients.server')
-    expect(CALLS.map(([name]) => name).sort()).toEqual([...TIER_SWITCHED_FUNCTIONS].sort())
+    expect(CALLS.map(([name]) => name).sort()).toEqual(
+      // The dormant twin is pinned separately in planner-thinking-render.test.ts.
+      [...TIER_SWITCHED_FUNCTIONS].filter((n) => n !== 'Decide' && n !== 'PlannerThinking').sort(),
+    )
     expect(CALLS.map(([name]) => name)).toContain('ScreenUntrustedContent')
   })
 
@@ -223,6 +241,46 @@ describe('private-tier request bodies', () => {
     const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../../lib/settings')
     expect(body.max_tokens).toBe(CLIENT_MAX_OUTPUT_TOKENS.LocalQwenSmall)
     expect(body.max_tokens).toBeLessThan(CLIENT_MAX_OUTPUT_TOKENS.VerdaQwen)
+  })
+
+  it('carries a recalled memory block on the wire as ONE user message, and costs nothing when absent', async () => {
+    // `memory_context` is the trailing optional parameter of Router and
+    // Synthesize (#419 M9). Two properties, both silent when lost: an absent
+    // block must leave the body BYTE-IDENTICAL to the pre-memory prompt (every
+    // non-memory agent's cached prefix and prompt budget ride on that), and a
+    // present one must reach the private-tier body as DATA in a user message —
+    // never in the leading system message, where the template would be handing
+    // per-user text the instruction channel.
+    const ROUTES = [{ name: 'search', description: 'd' }]
+    const MEMORY = 'MEMTOKEN-7731: the user prefers metric units'
+    const renders: [string, (memory: string | null | undefined) => Promise<unknown>][] = [
+      [
+        'Router',
+        (m) =>
+          m === undefined
+            ? b.request.Router('q', ROUTES, MESSAGES, undefined, VERDA)
+            : b.request.Router('q', ROUTES, MESSAGES, m, VERDA),
+      ],
+      ['Synthesize', (m) => b.request.Synthesize('q', 'i', TURNS, false, null, m, VERDA)],
+    ]
+    for (const [name, render] of renders) {
+      const bodyOf = async (m: string | null | undefined) =>
+        ((await render(m)) as { body: { json(): unknown } }).body.json() as Body
+      const absent = JSON.stringify(await bodyOf(null))
+      expect(JSON.stringify(await bodyOf(undefined)), name).toBe(absent)
+      expect(absent, name).not.toContain('MEMTOKEN')
+      // …and not even the block's FRAMING: a template that rendered its header
+      // around an empty body would pass the byte-for-byte comparison above
+      // against `undefined` while still changing every non-memory prompt.
+      expect(absent, name).not.toContain('WHAT YOU REMEMBER')
+      const present = await bodyOf(MEMORY)
+      const messages = present.messages as { role: string; content: unknown }[]
+      const carrying = messages.filter((m) => JSON.stringify(m.content).includes('MEMTOKEN-7731'))
+      expect(carrying, name).toHaveLength(1)
+      expect(carrying[0].role, name).toBe('user')
+      expect(messages[0].role, name).toBe('system')
+      expect(JSON.stringify(messages[0].content), name).not.toContain('MEMTOKEN')
+    }
   })
 
   it('sends no cache_control anywhere in the body, where the Anthropic chain does', async () => {

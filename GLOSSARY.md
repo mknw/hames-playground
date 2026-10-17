@@ -30,26 +30,51 @@ _Routine_'s, and it means the same thing there.
 
 **Run frame** — the ambient scope a run carries, opened once per run by those
 three entry points and read by everything inside it without being passed
-anywhere. It holds five slots: the injection **guard**, the run's scoped tool
+anywhere. It holds named slots, including the injection **guard**, the run's scoped tool
 **transports**, the host's runtime **config**, the **live** event listener, and
-the **inference** tier. A run with no frame refuses rather than running with all
-five silently absent. "Frame" on its own is this repo's word for an
+the **inference** tier, and policies for human decisions and outgoing calls.
+A run with no frame refuses rather than running with all
+its slots silently absent. "Frame" on its own is this repo's word for an
 AsyncLocalStorage scope. See
 [`docs/tutorials/hosting-the-harness.md`](docs/tutorials/hosting-the-harness.md)
 and `packages/harness-patterns/run-frame.server.ts`.
 
-**Slot** — one of a run frame's five named fields. A slot is either filled or
+**Slot** — one of a run frame's named fields. A slot is either filled or
 empty; an empty slot means "this run has none", never "use the default from
 somewhere else". Combinators that scope _below_ a run (`withInjectionGuard`,
 `withSandbox`) amend individual slots, and the per-slot merge rules are not
-uniform — transports prepend, the rest replace.
+uniform. See `packages/harness-patterns/run-frame.server.ts`.
+
+**Web pseudonymisation guard** — the web route's boundary over earlier results
+and outgoing tool arguments, retaining their content while replacing known
+identities with placeholders. Only the local `neo4j` and `memory`
+namespaces are exempt from the outgoing check; `context7` library lookup is
+outbound and checked like web search. See
+[`packages/harness-patterns/SPEC.md`](packages/harness-patterns/SPEC.md#withpseudonymisedinputsconfigpattern-507-g14).
+
+**Proposal** — a question put to a person from outside a run, by a post-reply
+hook, that waits for them across turns instead of pausing one. The memory
+store's "save these?" is the first: it is recorded in the conversation as a
+non-blocking request, the thing it describes is held server-side, and nothing
+is written until the person says yes. See
+[`packages/harness-patterns/SPEC.md`](packages/harness-patterns/SPEC.md#proposals-proposetohuman-and-answerproposal-433-s11).
 
 **Pattern** — one composable step inside a harness: a named function that runs in
 its own isolated scope and commits its events back to the shared context when it
 finishes. `simpleLoop`, `actorCritic`, `planner`, `compactIntent`, `router`,
-`routes`, `compactExecution`, `retriever`, `withReferences`, `parallel` and
+`routes`, `decisionLoop`, `compactExecution`, `retriever`, `withReferences`, `parallel` and
 `judge` are all patterns; a pattern is identified by its `patternId`, which is
 also how its events are tagged and later queried.
+
+**Decision loop** — `decisionLoop`, the pattern that lets one turn move between
+groups of capabilities: a loop over a table of _routes_ in which a decisions
+model picks the next route each time round, until it picks `answer` or the
+iteration bound is reached. What each route produced comes back as a _route
+output_ — a record built by code from the route's committed events, capped,
+sanitized as untrusted and rendered into the next decision and the next route's
+context as data, never as instructions. See
+[`docs/plan/decision-loop-agent.md`](docs/plan/decision-loop-agent.md) and
+[`packages/harness-patterns/SPEC.md`](packages/harness-patterns/SPEC.md).
 
 **Compaction** — shrinking context with a cheap LLM call so a later, expensive
 call sees a shorter prompt. Three members, one prefix, distinguished by _what_
@@ -60,6 +85,13 @@ pattern's execution trace into the user-facing answer **at the end of a chain**;
 response has been sent, in batches, so later turns read pointers instead of raw
 payloads. Compaction is always lossy and always optional — every member falls
 back to the uncompacted input rather than failing the turn.
+
+**Memory compaction** — the optional `compactMemory` maintenance pass for
+`withMemory` (#419 M3). It expires memories at configured per-kind retention,
+clusters within tier/kind/embedding space, and replaces a cluster only after a
+an endpoint merge verdict and deterministic acceptance. Each merge transaction keeps
+every provenance row and the newest member's evidence event id. A daily sweep
+retries eligible owners; only episodic rows may be evicted at the hard cap.
 
 **Controller** — the LLM function that drives a `simpleLoop`: given the current
 context it returns a `ControllerAction` naming the next tool to call, and the
@@ -96,6 +128,10 @@ used to hand a pattern a scoped tool set: `neo4j`, `web`, `context7`,
 `database` namespace: no agent reaches Postgres (#412). Namespaces are a grouping over the tools a single MCP gateway
 exposes, not a security boundary.
 
+**general-next** — the candidate general agent that chooses successive groups
+of capabilities within a turn, offered beside `general` while rollout evidence
+is gathered. See [`packages/agents/README.md`](packages/agents/README.md).
+
 ## Storage and runtime
 
 **Data Stash** — the document side of a session: user-uploaded files stored in
@@ -127,3 +163,10 @@ promoted to a regular conversation the moment a user interacts with it. See
 scheduling layer over the action path rather than a second way to run an agent:
 when a routine's trigger fires, its run lands as an ordinary action row marked
 `source='routine'`. See [`docs/ROUTINES.md`](docs/ROUTINES.md).
+
+**general-next Eval** — #507's conversation acceptance catalogue and opt-in runner,
+under `app/evals/general-next/`. Compares the candidate with the current `general`
+baseline on the private tier alone. Scripted inference proves wiring; live model
+behaviour is separate evidence. Shares one conservative USD spend ledger across
+scenarios, stops at 80% of the configured cap and reports P4-gated cases explicitly.
+See [the runner guide](app/evals/general-next/README.md).

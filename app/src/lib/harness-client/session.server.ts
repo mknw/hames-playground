@@ -22,6 +22,9 @@ import { withSandbox, type WithSandboxConfig } from '@hames-ai/sandbox'
 import { clientOverrideFor, type BamlRole } from '@hames-ai/harness-baml/clients.server'
 import { canonicalAgentId, getAgent } from './registry.server'
 import { getRequestUserId, isAttendedRequest } from './request-user.server'
+import { createHostMemoryConfig } from '../memory/config.server'
+import { createWebPseudonymiser } from './web-pseudonymiser.server'
+import { reconcileMemoryReferences } from '../memory/reconcile.server'
 import { resolveSandboxSkills } from '../skills/sandbox-skills.server'
 import {
   claimConversation,
@@ -34,6 +37,8 @@ import {
   type ConversationKind,
   type ConversationRow,
   type ConversationStatus,
+  type MemoryRunOrigin,
+  updateConversationContextIfUnchanged,
 } from '../db/conversations.server'
 
 assertServerOnImport()
@@ -66,6 +71,8 @@ export type SessionData = AgentData
  */
 export function agentDeps(): AgentDeps {
   return {
+    memory: createHostMemoryConfig(),
+    pseudonymiseForWeb: createWebPseudonymiser({ directory: 'required' }),
     toolNamespaces: mcpNamespace,
     enrichNeo4jResult,
     createRedisBackend,
@@ -208,6 +215,7 @@ export async function getOrBuildPatterns(
     throw err
   }
   exitBuild(sessionId)
+
   // The flag names the SESSION, not one build, so it cannot be attributed to
   // whichever build settles first: while any build for this session is still
   // in flight, every result stays uncached and the flag survives for it. It is
@@ -241,6 +249,7 @@ export interface LoadedSession {
   kind: ConversationKind
   /** Lifted status copy — surfaced so callers don't re-deserialize the blob. */
   status: ConversationStatus
+  memoryRunOrigin?: MemoryRunOrigin | null
 }
 
 /** A session as a turn holds it: loaded under its claim. */
@@ -258,6 +267,7 @@ function toLoadedSession(row: ConversationRow): LoadedSession {
     agentId: canonicalAgentId(row.agentId),
     kind: row.kind,
     status: row.status,
+    memoryRunOrigin: row.memoryRunOrigin,
   }
 }
 
@@ -308,6 +318,16 @@ export async function loadSession(
   const row = await loadConversation(sessionId, userId)
   if (!row) return null
   restorePausedFromBlob(row)
+  const repaired = await reconcileMemoryReferences(row.serializedContext, sessionId, userId)
+  if (repaired !== row.serializedContext) {
+    // Never fight a newer turn's claim; a claimed load repairs its own copy.
+    await updateConversationContextIfUnchanged(sessionId, userId, repaired, row.version).catch(
+      () => {
+        console.warn('[memory] repaired references not saved; retry on next load')
+      },
+    )
+    row.serializedContext = repaired
+  }
   return toLoadedSession(row)
 }
 
@@ -321,7 +341,9 @@ export async function claimSession(
   userId: string,
 ): Promise<ClaimedSession | null> {
   const row = await claimConversation(sessionId, userId)
-  return row ? { ...toLoadedSession(row), version: row.version } : null
+  if (!row) return null
+  row.serializedContext = await reconcileMemoryReferences(row.serializedContext, sessionId, userId)
+  return { ...toLoadedSession(row), version: row.version }
 }
 
 /**
@@ -340,7 +362,7 @@ export async function saveSession(
   userId: string,
   agentId: string,
   serializedContext: string,
-  held: { version: string; inferenceTier?: string },
+  held: { version: string; inferenceTier?: string; memoryRunOrigin?: MemoryRunOrigin | null },
 ): Promise<string> {
   return saveConversation({
     id: sessionId,
@@ -351,6 +373,7 @@ export async function saveSession(
     status: extractStatusFromContext(serializedContext),
     inferenceTier: held.inferenceTier,
     version: held.version,
+    memoryRunOrigin: held.memoryRunOrigin,
   })
 }
 

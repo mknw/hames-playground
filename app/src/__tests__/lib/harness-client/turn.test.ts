@@ -17,6 +17,7 @@ import '../../../lib/inference/config.server'
  * settings scope at all.
  */
 
+import type { MemoryConfig, MemoryStoreConfig, UnifiedContext } from '@hames-ai/harness-patterns'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -29,9 +30,11 @@ import {
   getRequestUserId,
   getRequestSessionId,
   isAttendedRequest,
+  isRequestMemoryAllowed,
 } from '../../../lib/harness-client/request-user.server'
 import { runtimeConfig } from '@hames-ai/harness-patterns/runtime-config.server'
 import { DEFAULT_SETTINGS } from '../../../lib/settings'
+import { replayMessages } from '@hames-ai/agents/replay'
 
 /** Every run records the ambient scope it saw. */
 const seenScopes: Array<{ userId: string | null; sessionId: string | null }> = []
@@ -212,9 +215,9 @@ vi.mock('../../../lib/inference/verda-activity.server', () => ({
 // right tier, and does a failure end the turn — while `verda-wake.test.ts` owns
 // what the ping puts on the wire and how it dedupes. Running the real one here
 // would open a socket from a scope test.
-const ensureVerdaAwake = vi.fn(async () => {})
+const ensurePrivateTierAwake = vi.fn(async () => {})
 vi.mock('../../../lib/inference/wake.server', () => ({
-  ensureVerdaAwake: () => ensureVerdaAwake(),
+  ensurePrivateTierAwake: () => ensurePrivateTierAwake(),
 }))
 
 const recordTurn = vi.fn()
@@ -230,18 +233,22 @@ type Loaded = {
   status: string
   /** The version the turn's claim holds. */
   version: string
+  memoryRunOrigin?: 'interactive' | 'triggered' | null
 } | null
 /** The turn's load is its claim (#458): one statement takes the row and reads it. */
 const claimSession = vi.fn<(id: string, userId: string) => Promise<Loaded>>(async () => null)
 /** The end-of-turn save hands back the version it wrote. */
 const saveSession = vi.fn<(...args: unknown[]) => Promise<string | void>>(async () => 'v-saved')
-const getOrBuildPatterns = vi.fn(async (_s: string, agentId: string) => [`patterns:${agentId}`])
+const getOrBuildPatterns = vi.fn<(...args: string[]) => Promise<unknown[]>>(
+  async (_s: string, agentId: string) => [`patterns:${agentId}`],
+)
+const suppliedDeps: { memory?: MemoryConfig } = {}
 vi.mock('../../../lib/harness-client/session.server', () => ({
   claimSession,
   saveSession,
   getOrBuildPatterns,
   // The composition root's deps bag — the title generator takes it now.
-  agentDeps: () => ({}),
+  agentDeps: () => suppliedDeps,
 }))
 
 // ── db/conversations ────────────────────────────────────────────────────────
@@ -314,6 +321,18 @@ vi.mock('../../../lib/db/hitl.server', () => ({
   deleteQuarantine: (...a: unknown[]) => deleteQuarantine(...(a as [])),
 }))
 
+const ensureMemoryAwake = vi.fn(async (_opt: boolean) => {})
+const awaitMemoryWake = vi.fn(async (_budget: number): Promise<'awake' | 'skipped'> => 'awake')
+vi.mock('../../../lib/inference/memory-wake.server', () => ({
+  ensureMemoryAwake,
+  awaitMemoryWake,
+  memoryWakeTimeoutMs: () => 25,
+}))
+const settleMemory = vi.fn(
+  async (_ctx: UnifiedContext, _cfg: MemoryStoreConfig, _turn: { conversationId?: string }) => ({}),
+)
+vi.mock('@hames-ai/harness-patterns/memory-store.server', () => ({ settleMemory }))
+
 // ── title agent ─────────────────────────────────────────────────────────────
 const runFirstTurnTitleGen = vi.fn<() => Promise<string | null>>(async () => null)
 vi.mock('@hames-ai/agents/agents/title-generator.server', () => ({
@@ -345,6 +364,9 @@ let logged: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
   vi.clearAllMocks()
+  delete suppliedDeps.memory
+  settleMemory.mockImplementation(async () => ({}))
+  awaitMemoryWake.mockResolvedValue('awake')
   seenScopes.length = 0
   seenAttended.length = 0
   openedFrames.length = 0
@@ -356,8 +378,10 @@ beforeEach(() => {
   process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
   // The private tier is two models, and the scope refuses to open without both.
+  process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+  process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
-  ensureVerdaAwake.mockResolvedValue(undefined)
+  ensurePrivateTierAwake.mockResolvedValue(undefined)
   resolveConversationTier.mockResolvedValue('anthropic')
   claimSession.mockResolvedValue(null)
   saveSession.mockResolvedValue('v-saved')
@@ -377,6 +401,8 @@ afterEach(async () => {
   logged.mockRestore()
   delete process.env.VERDA_INFERENCE_ENDPOINT
   delete process.env.VERDA_INFERENCE_API_KEY
+  delete process.env.SMALL_LLM_DECISIONS_URL
+  delete process.env.SMALL_LLM_API_KEY
   delete process.env.SMALL_LLM_BASE_URL
 })
 
@@ -418,6 +444,7 @@ describe('interactive turns', () => {
     expect(saveSession).toHaveBeenCalledWith('sess-1', 'user-1', 'search', 'serialized:sess-1', {
       version: 'v-seed',
       inferenceTier: 'anthropic',
+      memoryRunOrigin: 'interactive',
     })
   })
 
@@ -438,6 +465,7 @@ describe('interactive turns', () => {
     expect(saveSession).toHaveBeenCalledWith('sess-2', 'user-1', 'search', 'ctx-a+follow up', {
       version: 'v-claim',
       inferenceTier: 'anthropic',
+      memoryRunOrigin: 'interactive',
     })
   })
 
@@ -454,6 +482,7 @@ describe('interactive turns', () => {
     expect(saveSession).toHaveBeenCalledWith('sess-3', 'user-1', 'general', 'serialized:sess-3', {
       version: 'v-claim',
       inferenceTier: 'anthropic',
+      memoryRunOrigin: 'interactive',
     })
   })
 
@@ -478,6 +507,7 @@ describe('interactive turns', () => {
     expect(saveSession).toHaveBeenCalledWith('sess-legacy', 'user-1', 'sandbox', 'ctx-a+and now?', {
       version: 'v-claim',
       inferenceTier: 'anthropic',
+      memoryRunOrigin: 'interactive',
     })
   })
 
@@ -795,7 +825,7 @@ describe('interactive turns', () => {
       'user-1',
       'search',
       'serialized:sess-1',
-      { version: 'v-seed', inferenceTier: 'anthropic' },
+      { version: 'v-seed', inferenceTier: 'anthropic', memoryRunOrigin: 'interactive' },
     )
     expect(dbUpdateContextIfUnchanged).toHaveBeenCalledWith(
       'sess-1',
@@ -905,7 +935,7 @@ describe('triggered turns', () => {
       'user-1',
       'search',
       'serialized:run-1',
-      { version: 'v-trig', inferenceTier: 'anthropic' },
+      { version: 'v-trig', inferenceTier: 'anthropic', memoryRunOrigin: 'triggered' },
     )
   })
 
@@ -921,7 +951,7 @@ describe('triggered turns', () => {
       'user-1',
       'sandbox',
       'serialized:run-1',
-      { version: 'v-trig', inferenceTier: 'anthropic' },
+      { version: 'v-trig', inferenceTier: 'anthropic', memoryRunOrigin: 'triggered' },
     )
   })
 
@@ -1115,7 +1145,7 @@ describe('what the header learns from a turn', () => {
       order.push('seed')
       return 'v-seed'
     })
-    ensureVerdaAwake.mockImplementation(async () => {
+    ensurePrivateTierAwake.mockImplementation(async () => {
       order.push('wake')
     })
     getOrBuildPatterns.mockImplementation(async () => {
@@ -1125,7 +1155,7 @@ describe('what the header learns from a turn', () => {
 
     await runTurnAndPersist(interactive())
 
-    expect(ensureVerdaAwake).toHaveBeenCalledTimes(1)
+    expect(ensurePrivateTierAwake).toHaveBeenCalledTimes(1)
     // The #105 pre-seed comes FIRST and the wake second — the other half of the
     // ordering, and the half that makes the failure below recordable. A wake
     // ahead of the seed persisted nothing at all when it failed, so a reload lost
@@ -1153,7 +1183,7 @@ describe('what the header learns from a turn', () => {
     const waking = new Promise<void>((resolve) => {
       releaseWake = resolve
     })
-    ensureVerdaAwake.mockImplementation(async () => {
+    ensurePrivateTierAwake.mockImplementation(async () => {
       await waking
     })
     getOrBuildPatterns.mockImplementation(async (sessionId: string) => {
@@ -1193,10 +1223,10 @@ describe('what the header learns from a turn', () => {
     // request to a deployment this turn is not using.
     await runTurnAndPersist(interactive())
 
-    expect(ensureVerdaAwake).not.toHaveBeenCalled()
+    expect(ensurePrivateTierAwake).not.toHaveBeenCalled()
   })
 
-  it('ends the turn when the box does not wake, and releases the gauge', async () => {
+  it('ends the turn when the private tier does not wake, and releases the gauge', async () => {
     // THE VISIBLE-FAILURE HALF of #273 D-b. A wake that fails must not fall
     // through to the harness (same 146s wait, now against a 180s timeout) and
     // must not fall back to Anthropic (confidential prompts to the provider the
@@ -1205,12 +1235,12 @@ describe('what the header learns from a turn', () => {
     // one dead deployment pins the header to "answering" for the life of the
     // process.
     resolveConversationTier.mockResolvedValue('verda')
-    ensureVerdaAwake.mockRejectedValueOnce(
-      new Error('the private inference box did not wake: no answer within 300s.'),
+    ensurePrivateTierAwake.mockRejectedValueOnce(
+      new Error('the private tier did not wake; nothing was sent to any other provider.'),
     )
 
     await expect(runTurnAndPersist(interactive())).rejects.toThrow(
-      /the private inference box did not wake/,
+      'the private tier did not wake; nothing was sent to any other provider.',
     )
 
     // And the harness never started — a partially-run turn on a box that is not
@@ -1239,7 +1269,7 @@ describe('what the header learns from a turn', () => {
     // sleeping box left a row spinning forever with no trace anywhere: no chat,
     // no error frame, no log.
     resolveConversationTier.mockResolvedValue('verda')
-    ensureVerdaAwake.mockRejectedValueOnce(
+    ensurePrivateTierAwake.mockRejectedValueOnce(
       new Error('the private inference box did not wake: no answer within 300s.'),
     )
 
@@ -1267,6 +1297,156 @@ describe('what the header learns from a turn', () => {
       expect.stringContaining('[turn] run failed for run-wake'),
       expect.anything(),
     )
+  })
+
+  describe('a wake failure is recorded in the transcript', () => {
+    // The live stream's `error` frame is the only copy of the failure unless the
+    // blob holds it too: a reload rebuilds the transcript from the blob alone,
+    // and a turn that died before the harness produced one event left an empty
+    // transcript under an `error` badge — the bubble "showed and disappeared".
+    const WAKE_MSG =
+      'the private inference box did not wake (the 27B): 18 attempts over 600s. ' +
+      'The turn was not started; nothing was sent to any other provider.'
+    const seeded = (events: unknown[]) =>
+      JSON.stringify({ sessionId: 'sess-1', status: 'running', events })
+    const userEvent = (content: string) => ({
+      id: `u-${content}`,
+      type: 'user_message',
+      ts: 1,
+      patternId: 'harness',
+      data: { content },
+    })
+    const savedBlob = () => saveSession.mock.calls[0][3] as string
+
+    beforeEach(() => {
+      resolveConversationTier.mockResolvedValue('verda')
+      ensurePrivateTierAwake.mockRejectedValueOnce(new Error(WAKE_MSG))
+    })
+
+    // MUTATION: delete the `recordRunFailure` call in `runAndSave`'s catch →
+    // the blob is never saved, nothing replays, and every assertion reddens.
+    it('replays the first message and the failure after a reload, status error', async () => {
+      dbLoadConversation.mockResolvedValue({
+        serializedContext: seeded([userEvent('first question')]),
+        version: 'v-seed',
+      })
+
+      await expect(runTurnAndPersist(interactive())).rejects.toThrow(WAKE_MSG)
+
+      expect(saveSession).toHaveBeenCalledWith('sess-1', 'user-1', 'search', expect.any(String), {
+        version: 'v-seed',
+        inferenceTier: 'verda',
+      })
+      expect(JSON.parse(savedBlob()).status).toBe('error')
+      expect(replayMessages(savedBlob())).toMatchObject([
+        { role: 'user', content: 'first question' },
+        { role: 'error', content: WAKE_MSG },
+      ])
+      // The save released the claim; a second release would be a no-op at best.
+      expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
+    })
+
+    // MUTATION: drop the `user_message` push for a continued conversation → the
+    // new message is missing from the replay (the second entry reddens).
+    it('keeps the history and the new message of a continued conversation', async () => {
+      const stored = seeded([userEvent('earlier')])
+      claimSession.mockResolvedValue({ ...STORED, serializedContext: stored })
+      dbLoadConversation.mockResolvedValue({ serializedContext: stored, version: 'v-claim' })
+
+      await expect(runTurnAndPersist(interactive({ message: 'again' }))).rejects.toThrow(WAKE_MSG)
+
+      expect(replayMessages(savedBlob())).toMatchObject([
+        { role: 'user', content: 'earlier' },
+        { role: 'user', content: 'again' },
+        { role: 'error', content: WAKE_MSG },
+      ])
+    })
+
+    // MUTATION: add `if (req.mode === 'triggered') return false` at the top of
+    // `recordRunFailure` → no save, the replay assertion reddens.
+    it('records a TRIGGERED run at its seeded claim, without a second input event', async () => {
+      dbLoadConversation.mockResolvedValue({
+        serializedContext: seeded([userEvent('do it')]),
+        version: 'v-trig',
+      })
+
+      await expect(
+        runTurnAndPersist({
+          mode: 'triggered' as const,
+          sessionId: 'run-wake',
+          userId: 'user-1',
+          agentId: 'search',
+          message: 'do it',
+          data: { trigger: TRIGGER },
+          claimVersion: 'v-claim',
+        }),
+      ).rejects.toThrow(WAKE_MSG)
+
+      expect(saveSession).toHaveBeenCalledWith('run-wake', 'user-1', 'search', expect.any(String), {
+        version: 'v-claim',
+        inferenceTier: 'verda',
+      })
+      expect(JSON.parse(savedBlob()).status).toBe('error')
+      expect(replayMessages(savedBlob())).toMatchObject([
+        { role: 'user', content: 'do it' },
+        { role: 'error', content: WAKE_MSG },
+      ])
+      expect(replayMessages(savedBlob())).toHaveLength(2)
+      expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
+    })
+
+    // MUTATION: replace `createContext(req.message, undefined, sessionId)` with
+    // `ctx` in `recordRunFailure` → the old agent's history survives and the
+    // length assertion reddens. Pins that a changed agent starts over, as
+    // `planTurn`'s success path does.
+    it('starts over when the agent changed, as the success path would', async () => {
+      const stored = seeded([userEvent('earlier')])
+      claimSession.mockResolvedValue({
+        ...STORED,
+        agentId: 'other-agent',
+        serializedContext: stored,
+      })
+      dbLoadConversation.mockResolvedValue({ serializedContext: stored, version: 'v-claim' })
+
+      await expect(runTurnAndPersist(interactive({ message: 'again' }))).rejects.toThrow(WAKE_MSG)
+
+      const replay = replayMessages(savedBlob())
+      expect(replay).toMatchObject([
+        { role: 'user', content: 'again' },
+        { role: 'error', content: WAKE_MSG },
+      ])
+      expect(replay).toHaveLength(2)
+    })
+
+    // MUTATION: remove `.slice(0, PERSISTED_ERROR_MAX)` → the stored text is
+    // the whole message and the length assertion reddens.
+    it('caps the persisted error text', async () => {
+      ensurePrivateTierAwake.mockReset()
+      ensurePrivateTierAwake.mockRejectedValueOnce(new Error('x'.repeat(5000)))
+      dbLoadConversation.mockResolvedValue({
+        serializedContext: seeded([userEvent('q')]),
+        version: 'v-seed',
+      })
+
+      await expect(runTurnAndPersist(interactive())).rejects.toThrow()
+
+      const error = replayMessages(savedBlob()).find((m) => m.role === 'error')
+      expect(error?.content).toHaveLength(2000)
+    })
+
+    it('falls back to the plain failed release when the blob cannot be saved', async () => {
+      dbLoadConversation.mockResolvedValue({
+        serializedContext: seeded([userEvent('q')]),
+        version: 'v-seed',
+      })
+      saveSession.mockRejectedValueOnce(new Error('row moved on'))
+
+      await expect(runTurnAndPersist(interactive())).rejects.toThrow(WAKE_MSG)
+
+      expect(dbReleaseConversationClaim).toHaveBeenCalledWith('sess-1', 'user-1', 'v-seed', {
+        failed: true,
+      })
+    })
   })
 
   it('does not touch the gauge for an Anthropic turn', async () => {
@@ -1331,6 +1511,7 @@ describe('one turn per conversation (#458)', () => {
     expect(saveSession).toHaveBeenCalledWith('run-c', 'user-1', 'search', 'serialized:run-c', {
       version: 'v-trig',
       inferenceTier: 'anthropic',
+      memoryRunOrigin: 'triggered',
     })
   })
 
@@ -1773,7 +1954,7 @@ describe('resume turns (#433 S7)', () => {
     await expect(runTurnAndPersist(resume())).rejects.toThrow('(tier-changed)')
 
     // The refusal never pays a cold start — the delta review's point.
-    expect(ensureVerdaAwake).not.toHaveBeenCalled()
+    expect(ensurePrivateTierAwake).not.toHaveBeenCalled()
     expect(resumeHarness).not.toHaveBeenCalled()
     expect(saveSession).not.toHaveBeenCalled()
     expect(flippedToError()).toEqual([])
@@ -1810,7 +1991,7 @@ describe('resume turns (#433 S7)', () => {
     resolveConversationTier.mockResolvedValue('verda')
     claimSession.mockResolvedValue(claimedPaused(pausedBlob({}, pendingRequest({ tier: 'verda' }))))
     const wakeFailed = new Error('the private inference box did not wake')
-    ensureVerdaAwake.mockRejectedValueOnce(wakeFailed)
+    ensurePrivateTierAwake.mockRejectedValueOnce(wakeFailed)
 
     await expect(runTurnAndPersist(resume())).rejects.toThrow(wakeFailed)
 
@@ -1828,7 +2009,7 @@ describe('resume turns (#433 S7)', () => {
 
     await runTurnAndPersist(resume())
 
-    expect(ensureVerdaAwake).not.toHaveBeenCalled()
+    expect(ensurePrivateTierAwake).not.toHaveBeenCalled()
     expect(resumeHarness).toHaveBeenCalledTimes(1)
   })
 
@@ -1838,7 +2019,7 @@ describe('resume turns (#433 S7)', () => {
 
     await runTurnAndPersist(resume())
 
-    expect(ensureVerdaAwake).toHaveBeenCalledTimes(1)
+    expect(ensurePrivateTierAwake).toHaveBeenCalledTimes(1)
   })
 
   it('missing answers are refused before the wake', async () => {
@@ -1848,7 +2029,7 @@ describe('resume turns (#433 S7)', () => {
 
     await expect(runTurnAndPersist(resume())).rejects.toThrow('(missing-answer)')
 
-    expect(ensureVerdaAwake).not.toHaveBeenCalled()
+    expect(ensurePrivateTierAwake).not.toHaveBeenCalled()
     expect(resumeHarness).not.toHaveBeenCalled()
   })
 
@@ -1875,7 +2056,7 @@ describe('resume turns (#433 S7)', () => {
     const result = await runTurnAndPersist(resume())
 
     // No wake, no patterns, no resume: the run is over and its record says so.
-    expect(ensureVerdaAwake).not.toHaveBeenCalled()
+    expect(ensurePrivateTierAwake).not.toHaveBeenCalled()
     expect(getOrBuildPatterns).not.toHaveBeenCalled()
     expect(resumeHarness).not.toHaveBeenCalled()
     expect(result.status).toBe('done')
@@ -2110,5 +2291,226 @@ describe('the trailing pass after a resume (A3/Δ2)', () => {
       events: { data: Record<string, unknown> }[]
     }
     expect(merged.events[0].data.summary).toBeUndefined()
+  })
+})
+
+// #419 M5c host recipe pins. Core's acceptance/transaction pins remain real in
+// memory-store.test.ts; this seam records the exact host order and row id.
+describe('memory host turns (G9)', () => {
+  const memoryPattern = { name: 'memoryRecall', capabilities: { memory: true }, config: {} }
+  function wireMemory() {
+    suppliedDeps.memory = {
+      store: {
+        count: async () => 0,
+        candidates: async () => [],
+        transaction: async (fn) => fn({} as never),
+      },
+      owner: getRequestUserId,
+      enabled: async () => true,
+      decide: async () => {
+        throw new Error('not used by host fake')
+      },
+      extract: async () => ({ value: [] }),
+      embed: { spaceId: 'local:test:1024', query: async () => [1], documents: async () => [[1]] },
+      visibleTiers: () => ['anthropic'],
+      awaitWake: async (budget) =>
+        (await import('../../../lib/memory/config.server')).waitForTurnMemoryWake(budget),
+      settle: { wakeBudgetMs: 25 },
+    }
+    getOrBuildPatterns.mockResolvedValueOnce([memoryPattern])
+  }
+  it('starts wake before patterns, settles after stream close, then saves even a tool-less turn', async () => {
+    wireMemory()
+    compactBulkData.mockImplementationOnce(async () => {})
+    const closed = vi.fn()
+    let observed: unknown
+    settleMemory.mockImplementationOnce(async (ctx, cfg, turn) => {
+      observed = {
+        user: getRequestUserId(),
+        tier: tierScopes.value.at(-1),
+        turn,
+        wake: await cfg.awaitWake!(25),
+      }
+      ctx.events.push({
+        id: 'm1',
+        type: 'memory_written',
+        ts: 0,
+        patternId: 'memory-store',
+        data: {},
+      })
+      return {}
+    })
+    await runTurnAndPersist(interactive({ onSettled: closed }))
+    await flush()
+    expect(ensureMemoryAwake.mock.invocationCallOrder[0]).toBeLessThan(
+      runFresh.mock.invocationCallOrder[0],
+    )
+    expect(closed.mock.invocationCallOrder[0]).toBeLessThan(
+      settleMemory.mock.invocationCallOrder[0],
+    )
+    expect(observed).toEqual({
+      user: 'user-1',
+      tier: 'anthropic',
+      turn: { conversationId: 'sess-1' },
+      wake: 'awake',
+    })
+    expect(dbUpdateContextIfUnchanged).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(dbUpdateContextIfUnchanged.mock.calls[0][2]).events).toEqual([
+      expect.objectContaining({ type: 'memory_written' }),
+    ])
+    expect(saveSession.mock.calls[0][4]).toMatchObject({ memoryRunOrigin: 'interactive' })
+  })
+  it('a reply during settle can lose its trailing save; the next load repairs the committed source', async () => {
+    wireMemory()
+    compactBulkData.mockImplementationOnce(async () => {})
+    let finish!: () => void
+    const blocked = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    settleMemory.mockImplementationOnce(async (ctx) => {
+      await blocked
+      ctx.events.push({
+        id: 'lost-memory-event',
+        type: 'memory_written',
+        ts: 0,
+        patternId: 'memory-store',
+        data: {},
+      })
+      return {}
+    })
+    await runTurnAndPersist(interactive())
+    expect(dbUpdateContextIfUnchanged).not.toHaveBeenCalled()
+    const { createContext, createEvent, serializeContext, deserializeContext } =
+      await vi.importActual<typeof import('@hames-ai/harness-patterns/context.server')>(
+        '@hames-ai/harness-patterns/context.server',
+      )
+    const next = createContext('synthetic reply', undefined, 'sess-1')
+    next.events.push(createEvent('user_message', 'input', { content: 'synthetic reply' }))
+    const row = {
+      serializedContext: serializeContext(next),
+      version: 'newer-claim',
+      agentId: 'search',
+      kind: 'conversation',
+      status: 'running',
+      memoryRunOrigin: 'interactive',
+    }
+    dbLoadConversation.mockResolvedValue(row)
+    dbUpdateContextIfUnchanged.mockResolvedValue(false)
+    finish()
+    await flush()
+    expect(dbUpdateContextIfUnchanged).toHaveBeenCalledTimes(3)
+    expect(saveSession).toHaveBeenCalledTimes(1)
+    const repo = await import('../../../lib/db/memories.server')
+    const available = vi.spyOn(repo, 'isMemoryAvailable').mockReturnValue(true)
+    const sources = vi
+      .spyOn(repo, 'listMemorySourcesForConversation')
+      .mockResolvedValue([
+        { eventId: 'original-input', ordinal: 0, memoryId: 'committed-memory', tier: 'anthropic' },
+      ])
+    const store = vi.spyOn(repo, 'createMemoryDbStore').mockReturnValue({
+      transaction: async (fn: (tx: never) => Promise<unknown>) =>
+        fn({ read: async () => ({ kind: 'preference' }) } as never),
+    } as never)
+    try {
+      dbUpdateContextIfUnchanged.mockResolvedValue(true)
+      const realSession = await vi.importActual<
+        typeof import('../../../lib/harness-client/session.server')
+      >('../../../lib/harness-client/session.server')
+      const loaded = await realSession.loadSession('sess-1', 'user-1')
+      const events = deserializeContext(loaded!.serializedContext).events
+      expect(
+        events.some(
+          (e) =>
+            e.type === 'user_message' &&
+            (e.data as { content?: string }).content === 'synthetic reply',
+        ),
+      ).toBe(true)
+      expect(events.filter((e) => e.type === 'memory_written')).toHaveLength(1)
+      expect(events.find((e) => e.type === 'memory_written')!.data).toMatchObject({
+        memoryId: 'committed-memory',
+        eventId: 'original-input',
+        ordinal: 0,
+      })
+      expect(deserializeContext(dbUpdateContextIfUnchanged.mock.calls.at(-1)![2]).events).toEqual(
+        events,
+      )
+      expect(sources).toHaveBeenCalledWith('sess-1', 'user-1')
+    } finally {
+      available.mockRestore()
+      sources.mockRestore()
+      store.mockRestore()
+    }
+  })
+  it('no shipped-style agent opt-in means no memory wake or settle', async () => {
+    await runTurnAndPersist(interactive())
+    await flush()
+    expect(ensureMemoryAwake).not.toHaveBeenCalled()
+    expect(settleMemory).not.toHaveBeenCalled()
+  })
+  it('a triggered run never wakes, recalls or settles even with memory opted in', async () => {
+    wireMemory()
+    const run = runFresh.getMockImplementation()!
+    runFresh.mockImplementationOnce(async (...args) => {
+      expect(isRequestMemoryAllowed()).toBe(false)
+      return run(...args)
+    })
+    await runTurnAndPersist({
+      mode: 'triggered',
+      sessionId: 'run-trigger',
+      userId: 'user-1',
+      agentId: 'search',
+      message: 'synthetic',
+      claimVersion: 'seed-version',
+    })
+    await flush()
+    expect(settleMemory).not.toHaveBeenCalled()
+    expect(ensureMemoryAwake).not.toHaveBeenCalled()
+    expect(saveSession.mock.calls[0][4]).toMatchObject({ memoryRunOrigin: 'triggered' })
+  })
+  it.each(['interactive', 'triggered', null] as const)(
+    'resume preserves %s run origin and settles only interactive',
+    async (origin) => {
+      wireMemory()
+      claimSession.mockResolvedValueOnce({
+        ...claimedPaused(pausedBlob())!,
+        memoryRunOrigin: origin,
+      })
+      loadHitlAnswerRows.mockResolvedValueOnce([answerRow('req-uuid-1', 'approve')])
+      const run = resumeHarness.getMockImplementation()!
+      resumeHarness.mockImplementationOnce(async (...args) => {
+        expect(isRequestMemoryAllowed()).toBe(origin === 'interactive')
+        return run(...args)
+      })
+      await runTurnAndPersist(resume())
+      await flush()
+      expect(ensureMemoryAwake).toHaveBeenCalledTimes(origin === 'interactive' ? 1 : 0)
+      expect(settleMemory).toHaveBeenCalledTimes(origin === 'interactive' ? 1 : 0)
+      expect(saveSession.mock.calls[0][4]).not.toHaveProperty('memoryRunOrigin')
+    },
+  )
+  it('a stop-only resume of an interactive run starts no memory wake and settles nothing', async () => {
+    wireMemory()
+    claimSession.mockResolvedValueOnce({
+      ...claimedPaused(pausedBlob())!,
+      memoryRunOrigin: 'interactive',
+    })
+    loadHitlAnswerRows.mockResolvedValueOnce([answerRow('req-uuid-1', 'reject')])
+    await runTurnAndPersist(resume())
+    await flush()
+    expect(resumeHarness).toHaveBeenCalledTimes(1)
+    expect(ensureMemoryAwake).not.toHaveBeenCalled()
+    expect(settleMemory).not.toHaveBeenCalled()
+  })
+  it('an interactive turn on a promoted action settles and records interactive origin', async () => {
+    wireMemory()
+    claimSession.mockResolvedValueOnce({
+      ...STORED!,
+      kind: 'conversation',
+      memoryRunOrigin: 'triggered',
+    })
+    await runTurnAndPersist(interactive())
+    await flush()
+    expect(settleMemory).toHaveBeenCalledTimes(1)
+    expect(saveSession.mock.calls[0][4]).toMatchObject({ memoryRunOrigin: 'interactive' })
   })
 })

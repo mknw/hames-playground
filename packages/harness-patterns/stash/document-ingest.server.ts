@@ -86,6 +86,7 @@ export interface IngestResult {
 }
 
 export interface SearchHit {
+  provenance?: StashDocument['provenance']
   docId: string
   source: string
   chunkIndex: number
@@ -222,6 +223,7 @@ export async function ingestDocument(
       {
         content: c.content,
         doc_id: doc.id,
+        ...(doc.provenance ? { provenance: doc.provenance } : {}),
         session_id: doc.sessionId,
         source: doc.filename,
         chunk_index: c.index,
@@ -451,6 +453,9 @@ export async function searchDocuments(
     if (content == null) continue
     out.push({
       docId: str(h.payload.doc_id) ?? '',
+      ...(h.payload.provenance === 'sandbox-output'
+        ? { provenance: 'sandbox-output' as const }
+        : {}),
       source: str(h.payload.source) ?? '',
       chunkIndex: num(h.payload.chunk_index) ?? 0,
       content,

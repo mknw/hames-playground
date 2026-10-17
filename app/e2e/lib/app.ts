@@ -28,7 +28,7 @@ import {
   TURN_TIMEOUT_MS,
   WAKE_ATTEMPT_TIMEOUT_MS,
 } from './mode'
-import { startFakeLlm, type FakeLlm } from './fake-llm'
+import { JEV_DECISIONS_PATH, startFakeLlm, type FakeLlm } from './fake-llm'
 import { startFakeGateway, type FakeGateway } from './fake-gateway'
 import { startFakeConverter, type FakeConverter } from './fake-converter'
 import { createFakeGraph, composeGraphTools, type FakeGraph } from './fake-graph'
@@ -225,6 +225,11 @@ async function boot(): Promise<AppHandles> {
     // controller call as the 27B's.
     process.env.SMALL_LLM_BASE_URL = fakeLlm.baseUrl
     process.env.SMALL_LLM_API_KEY = 'e2e-fake-key'
+    process.env.EMBEDDINGS_LOCAL_URL = fakeLlm.baseUrl
+    process.env.EMBEDDINGS_LOCAL_API_KEY = 'e2e-fake-key'
+    process.env.JEV_DECISIONS_URL = new URL(JEV_DECISIONS_PATH, fakeLlm.baseUrl).href
+    process.env.JEV_DECISIONS_API_KEY = 'e2e-fake-key'
+    process.env.SMALL_LLM_DECISIONS_URL = `${fakeLlm.baseUrl}/systemone`
     // Poison the real credential — see HERMETIC_ANTHROPIC_KEY.
     process.env.ANTHROPIC_API_KEY = HERMETIC_ANTHROPIC_KEY
     // The strip's control-plane probe (`verda-control-plane.server.ts`) reads
@@ -268,6 +273,12 @@ async function boot(): Promise<AppHandles> {
   const actions = await import('../../src/lib/harness-client/actions.server')
   const events = await import('../../src/routes/api/events')
   const prefs = await import('../../src/lib/db/user-prefs.server')
+  // Mirror the namespace registration normally performed by middleware's
+  // app-tools import. This suite composes Graph separately, so importing that
+  // production barrel here would also install its live transport.
+  const { registerToolNamespaces } = await import('@hames-ai/harness-patterns/tools.server')
+  const { mcpNamespace } = await import('@hames-ai/connectors/mcp-catalog')
+  registerToolNamespaces(mcpNamespace)
   const conversations = await import('../../src/lib/db/conversations.server')
   const dbClient = await import('../../src/lib/db/client.server')
   const { BYPASS_USER, isBypassEnabled } = await import('../../src/lib/auth/dev-bypass')
@@ -388,12 +399,22 @@ async function boot(): Promise<AppHandles> {
       const activity = await import('../../src/lib/inference/verda-activity.server')
       const wake = await import('../../src/lib/inference/wake.server')
       activity.resetVerdaActivity()
+      const coldStart = await import('../../src/lib/inference/cold-start.server')
+      coldStart.resetSmallActivity()
+      wake.resetSmallWake()
       // And drop any ping still parked on the shared symbol, so a scenario that
       // just failed one does not attach to its rejected promise.
       wake.resetVerdaWake()
     },
 
     async wipe() {
+      // Memories first: memory_sources' FK refuses a conversation delete that
+      // would strand a source (#531); the sources cascade from memories.
+      await dbClient
+        .query('DELETE FROM memories WHERE user_id = $1', [userId])
+        .catch((err: { code?: string }) => {
+          if (err.code !== '42P01') throw err
+        })
       await dbClient.query('DELETE FROM conversations WHERE user_id = $1', [userId])
     },
   }

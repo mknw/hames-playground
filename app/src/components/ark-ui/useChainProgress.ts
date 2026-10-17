@@ -241,6 +241,15 @@ export function createChainProgress(): ChainProgressController {
           break
         }
 
+        // One `decision_made` per decided field (#418 F7): a four-field memory
+        // decision records four of them, and the chain estimate counts the
+        // PATTERN that made them (one turn) — so advancing per event would run
+        // the bar past its own denominator on every storing turn. Named rather
+        // than left to `default` so the exclusion is a line a mutation can
+        // remove.
+        case 'decision_made':
+          break
+
         default:
           break
       }

@@ -20,6 +20,20 @@ const ev = (type: EventType, data: unknown, extra: Partial<ContextEvent> = {}): 
 })
 
 describe('getEventPreview', () => {
+  it('previews a decision_made as its verdict or its abstain, never its question', () => {
+    const base = { key: 'route', question: 'SECRET QUESTION', label: 'web', stateChars: 9 }
+    expect(getEventPreview('decision_made', { ...base, abstained: false })).toBe('route: web')
+    expect(
+      getEventPreview('decision_made', {
+        ...base,
+        label: 'chat',
+        abstained: true,
+        reason: 'low-confidence',
+      }),
+    ).toBe('route: abstained (low-confidence) → chat')
+    expect(getEventPreview('decision_made', { ...base, abstained: false })).not.toContain('SECRET')
+  })
+
   it('names the tool for a call and reports success or failure for a result', () => {
     expect(getEventPreview('tool_call', { tool: 'read_neo4j_cypher' })).toBe('read_neo4j_cypher')
     expect(getEventPreview('tool_result', { tool: 'get', success: true })).toBe('get: ok')

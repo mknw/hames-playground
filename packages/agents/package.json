@@ -1,7 +1,7 @@
 {
   "name": "@hames-ai/agents",
-  "version": "0.1.1",
-  "description": "Ready-made harness compositions — five agent definitions and three shared helpers built on @hames-ai/harness-patterns, plus the client-safe extraction/replay helpers.",
+  "version": "0.3.0",
+  "description": "Ready-made harness compositions — six agent definitions and three shared helpers built on @hames-ai/harness-patterns, plus the client-safe extraction/replay helpers.",
   "keywords": [
     "agents",
     "harness",
@@ -46,7 +46,7 @@
     "access": "public"
   },
   "scripts": {
-    "prepublishOnly": "node -e \"const ua=process.env.npm_config_user_agent||'';const ex=process.env.npm_execpath||'';if(ua.startsWith('npm/')||ex.includes('npm-cli'))throw new Error('This package must be published with pnpm publish, not npm: npm does not rewrite workspace: specifiers and ships them literally.')\""
+    "prepublishOnly": "node -e \"const ua=process.env.npm_config_user_agent||'';const ex=process.env.npm_execpath||'';if(ua.startsWith('npm/')||ex.includes('npm-cli'))throw new Error('This package must be published with pnpm publish, not npm: npm does not rewrite workspace: specifiers and ships them literally.')\" && node ../../scripts/check-release-tag.mjs"
   },
   "peerDependencies": {
     "@hames-ai/harness-baml": "workspace:^",

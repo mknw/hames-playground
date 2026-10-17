@@ -172,3 +172,51 @@ describe('general agent — compactExecution view scope', () => {
     expect(view.errors().count()).toBe(1)
   })
 })
+
+it('general still opts into memory and recalls until the default-agent flip', async () => {
+  const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
+  const { harnessUsesMemory, createContext, createScope, createEventView, withRunFrame } =
+    await import('@hames-ai/harness-patterns')
+  const memory = {
+    owner: () => 'synthetic-owner',
+    enabled: () => true,
+    store: {
+      count: async () => 1,
+      candidates: async () => [
+        {
+          id: 'memory-1',
+          kind: 'preference',
+          tier: 'verda',
+          content: 'prefers metric units',
+          embedSpace: 'synthetic',
+          distance: 0.01,
+          lastSeenAt: Date.now(),
+        },
+      ],
+    },
+    decide: async () => ({ probs: { retrieve: 1, skip: 0 }, method: 'jev', calibrated: true }),
+    extract: vi.fn(),
+    embed: { query: async () => [1, 0], spaceId: 'synthetic' },
+    visibleTiers: () => ['verda'],
+    limits: { contextWindow: 32000, maxOutputTokens: 2048 },
+  }
+  const withConfig = await generalAgent.createPatterns('memory-general', {
+    ...degradedDeps,
+    memory: memory as never,
+  })
+  expect(harnessUsesMemory(withConfig)).toBe(true)
+  expect(withConfig.map((p) => p.name)).toEqual([
+    'memoryRecall',
+    'planner',
+    'simpleLoop',
+    'compactExecution',
+  ])
+  const ctx = createContext('use my preferred units')
+  const recalled = await withRunFrame({ inference: { tier: 'verda' } }, () =>
+    withConfig[0].fn(createScope('memory-recall', ctx.data), createEventView(ctx)),
+  )
+  expect(recalled.data.memoryContext).toContain('prefers metric units')
+  expect(
+    harnessUsesMemory(await generalAgent.createPatterns('no-memory-general', degradedDeps)),
+  ).toBe(false)
+})

@@ -12,6 +12,7 @@ import {
   ensureEncryptionReady,
   type QueryRunner,
 } from './migrate-encryption.server'
+import { createHash } from 'node:crypto'
 import pg from 'pg'
 import { localDatabaseUrl } from '../config/compose-credentials.server'
 
@@ -22,11 +23,17 @@ const { Pool } = pg
 let _pool: pg.Pool | null = null
 let _initPromise: Promise<void> | null = null
 
+/** The connection string every pool of this app uses — the main one here and
+ *  the memory-write pool in `memories.server.ts`, so the two can never point
+ *  at different databases. Unset: the compose Postgres on localhost, with the
+ *  repo-root .env password. */
+export function databaseUrl(): string {
+  return process.env.DATABASE_URL ?? localDatabaseUrl('hames')
+}
+
 function getPool(): pg.Pool {
   if (!_pool) {
-    // Unset: the compose Postgres on localhost, with the repo-root .env password.
-    const connectionString = process.env.DATABASE_URL ?? localDatabaseUrl('hames')
-    _pool = new Pool({ connectionString })
+    _pool = new Pool({ connectionString: databaseUrl() })
     _pool.on('error', (err) => {
       console.error('[db] idle client error:', err)
     })
@@ -89,6 +96,11 @@ const SCHEMA_SQL = `
   -- the tier only where the user actually recorded one.
   ALTER TABLE conversations
     ADD COLUMN IF NOT EXISTS inference_tier TEXT;
+  -- Current run's origin, not conversation creation source (a promoted action
+  -- can have interactive runs). Plaintext lifted enum; NULL records no fact.
+  -- No backfill: legacy paused runs remain excluded from memory settlement.
+  ALTER TABLE conversations ADD COLUMN IF NOT EXISTS memory_run_origin TEXT
+    CHECK (memory_run_origin IN ('interactive', 'triggered'));
   -- When the user pinned this conversation to the top of the sidebar, or NULL
   -- for the overwhelming majority that are not pinned. A lifted, plaintext
   -- column for the same reason as kind/source/status: the list ORDER BY reads
@@ -265,8 +277,95 @@ const SCHEMA_SQL = `
 const directRunner: QueryRunner = (text, params) =>
   getPool().query(text, params as never[]) as never
 
+/** The `pg_advisory_xact_lock` key every schema initialiser takes first (#585). */
+export const SCHEMA_LOCK_KEY = 'hames:schema-init'
+
+/** What a recorded schema must equal for the DDL to be skipped: the hash of
+ *  the SQL itself, so an edit to `SCHEMA_SQL` can never be forgotten. */
+const SCHEMA_HASH = createHash('sha256').update(SCHEMA_SQL).digest('hex')
+
+/** Every relation `SCHEMA_SQL` creates by name — what the skip path re-checks. */
+const SCHEMA_RELATIONS = [
+  ...SCHEMA_SQL.matchAll(/CREATE (?:UNIQUE )?(?:TABLE|INDEX|SEQUENCE) IF NOT EXISTS (\w+)/g),
+].map((m) => m[1])
+
+/**
+ * Apply {@link SCHEMA_SQL} once per schema version, serialised across processes
+ * (#585).
+ *
+ * `SCHEMA_SQL` takes `ACCESS EXCLUSIVE` table locks even when it changes
+ * nothing (`ADD COLUMN IF NOT EXISTS`), after a `SHARE` lock from `CREATE INDEX
+ * IF NOT EXISTS`. Two initialisers therefore deadlocked on the upgrade (40P01),
+ * and every boot queued live readers behind the DDL. So: the transaction's
+ * first statement is an advisory lock (one initialiser at a time, no table
+ * lock involved), and when the hash recorded in `schema_meta` is current AND
+ * every relation `SCHEMA_SQL` names still exists (a catalog lookup, no table
+ * lock) the DDL is skipped and the boot takes no table lock at all. The first
+ * boot after an edit — or against a database that never recorded a hash — still
+ * runs it.
+ *
+ * Two invariants this relies on:
+ * - `SCHEMA_SQL` must stay idempotent and additive-only (`IF NOT EXISTS`, no
+ *   DROP, no data UPDATE): an older binary re-applies ITS `SCHEMA_SQL` over a
+ *   newer schema in a rollback or rolling deploy, and records its own hash.
+ * - Recovery from drift the relation check cannot see (a column or default
+ *   changed by hand): `DELETE FROM schema_meta WHERE key = 'schema_sql_hash'`,
+ *   then restart; the next boot re-runs the DDL.
+ */
+async function applySchema(): Promise<void> {
+  const client = await getPool().connect()
+  // A checked-out client has no pool listener: without this, a dropped
+  // connection mid-init is an uncaught throw that kills the process rather than
+  // a rejected init that `ensureInit` retries (see withTransaction below).
+  let broken = false
+  const onError = (err: Error) => {
+    broken = true
+    console.error('[db] connection lost during schema init:', err.message)
+  }
+  client.on('error', onError)
+  try {
+    // Explicit: under REPEATABLE READ the snapshot would predate the lock grant
+    // and a second booter could not see the first one's hash.
+    await client.query('BEGIN ISOLATION LEVEL READ COMMITTED')
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [SCHEMA_LOCK_KEY])
+    await client.query(
+      'CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
+    )
+    const { rows } = await client.query<{ value: string }>(
+      `SELECT value FROM schema_meta WHERE key = 'schema_sql_hash'`,
+    )
+    let current = rows[0]?.value === SCHEMA_HASH
+    if (current) {
+      const { rows: present } = await client.query<{ ok: boolean }>(
+        'SELECT bool_and(to_regclass(n) IS NOT NULL) AS ok FROM unnest($1::text[]) AS n',
+        [SCHEMA_RELATIONS],
+      )
+      current = present[0]?.ok === true
+    }
+    if (!current) {
+      await client.query(SCHEMA_SQL)
+      await client.query(
+        `INSERT INTO schema_meta (key, value) VALUES ('schema_sql_hash', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+        [SCHEMA_HASH],
+      )
+    }
+    await client.query('COMMIT')
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK')
+    } catch {
+      broken = true // destroy the connection rather than return it to the pool
+    }
+    throw err
+  } finally {
+    client.off('error', onError)
+    client.release(broken)
+  }
+}
+
 async function initSchema(): Promise<void> {
-  await getPool().query(SCHEMA_SQL)
+  await applySchema()
   // At-rest encryption (see crypto.server.ts): verify the key against what is
   // already stored, then backfill any rows written before encryption existed.
   // Deliberately part of schema-ensure rather than a separate script — a
@@ -308,6 +407,55 @@ export async function query<R extends pg.QueryResultRow = pg.QueryResultRow>(
   text: string,
   params?: unknown[],
 ): Promise<pg.QueryResult<R>> {
+  await ensureInit()
+  return getPool().query<R>(text, params as never[])
+}
+
+/** The slice of a pooled connection a transaction body may use. */
+export interface TxQuery {
+  query<R extends pg.QueryResultRow = pg.QueryResultRow>(
+    text: string,
+    params?: unknown[],
+  ): Promise<pg.QueryResult<R>>
+}
+
+/**
+ * Run `fn` in ONE transaction on ONE connection of the main pool: BEGIN, then
+ * COMMIT if it resolved, ROLLBACK and rethrow if it threw. The connection is
+ * released either way. For short multi-statement writes that must commit
+ * together (a conversation delete and the memories it erases); a transaction
+ * that waits on a model call belongs on `memories.server.ts`'s own pool, not
+ * here.
+ */
+export async function withTransaction<R>(fn: (tx: TxQuery) => Promise<R>): Promise<R> {
+  await ensureInit()
+  const client = await getPool().connect()
+  let broken = false
+  // See memories.server.ts transaction(): checked-out clients need their own error listener.
+  const onError = (err: Error) => {
+    broken = true
+    console.error('[db] connection lost mid-transaction:', err.message)
+  }
+  client.on('error', onError)
+  try {
+    await client.query('BEGIN')
+    const out = await fn({ query: (text, params) => client.query(text, params as never[]) })
+    await client.query('COMMIT')
+    return out
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK')
+    } catch {
+      broken = true // destroy the connection rather than return it to the pool
+    }
+    throw err
+  } finally {
+    client.off('error', onError)
+    client.release(broken)
+  }
+}
+
+async function ensureInit(): Promise<void> {
   if (!_initPromise) {
     _initPromise = initSchema().catch((err) => {
       // A transient failure (Postgres briefly unreachable) is retried on the
@@ -322,13 +470,21 @@ export async function query<R extends pg.QueryResultRow = pg.QueryResultRow>(
     })
   }
   await _initPromise
-  return getPool().query<R>(text, params as never[])
+}
+
+const _closers = new Set<() => Promise<void>>()
+
+/** Register a sibling pool (the memory-write pool) to be closed with this one. */
+export function onClosePool(closer: () => Promise<void>): void {
+  _closers.add(closer)
 }
 
 /**
- * Close the pool (test teardown only).
+ * Close the pool (test teardown only) — and every sibling pool registered
+ * through {@link onClosePool}.
  */
 export async function closePool(): Promise<void> {
+  for (const closer of _closers) await closer()
   if (_pool) {
     await _pool.end()
     _pool = null

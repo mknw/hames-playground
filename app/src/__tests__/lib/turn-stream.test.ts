@@ -226,33 +226,39 @@ describe('runTurn — transitions', () => {
     expect(rec.states[1]).toEqual({ status: 'streaming', runningTool: '3 tools' })
   })
 
-  it('ends in awaiting-approval when the run pauses on a write', async () => {
+  // MUTATION: return `done` for a paused frame → red.
+  it('ends in awaiting-decision, naming the unanswered requests, when the run pauses (#433 S8)', async () => {
+    const ev = (type: string, requestId: string) => ({ type, data: { requestId } })
     fetchMock.mockResolvedValue(
       sseResponse([
         done({
           status: 'paused',
-          response: 'I need approval to write.',
-          data: { pendingAction: { action: 'write_neo4j_cypher', reason: 'creates a node' } },
+          response: 'I need a decision.',
+          context: {
+            events: [
+              ev('hitl_request', 'r1'),
+              ev('hitl_request', 'r2'),
+              ev('hitl_response', 'r1'),
+              { type: 'tool_result', data: {} },
+            ],
+          },
         }),
       ]),
     )
     const rec = recorder()
     const result = await runTurn(request(), rec.sink)
 
-    expect(result.state).toEqual({
-      status: 'awaiting-approval',
-      tool: 'write_neo4j_cypher',
-      reason: 'creates a node',
-    })
+    expect(result.state).toEqual({ status: 'awaiting-decision', requestIds: ['r2'] })
     // A paused turn is not a failure — the thread mark says it landed.
     expect(result.outcome).toBe('done')
-    expect(rec.messages.at(-1)?.toolCall).toEqual({
-      type: 'neo4j',
-      status: 'pending',
-      tool: 'write_neo4j_cypher',
-      explanation: 'creates a node',
-      isReadOnly: false,
-    })
+    // No inline approve/reject bubble: the card and dialog own the decision.
+    expect(rec.messages.at(-1)?.toolCall).toBeUndefined()
+  })
+
+  it('a paused frame with no unanswered request is just done', async () => {
+    fetchMock.mockResolvedValue(sseResponse([done({ status: 'paused', response: 'ok' })]))
+    const result = await runTurn(request(), recorder().sink)
+    expect(result.state).toEqual({ status: 'done' })
   })
 
   it('exposes idle as the resting state a caller starts from', () => {
@@ -545,6 +551,25 @@ describe('runTurn — the cold-start notice', () => {
     await runTurn(request(), rec.sink)
 
     expect(rec.warmings.at(-1)).toBeNull()
+  })
+
+  // The notice and the failure are different things: the spinner comes down on
+  // the `error` frame, the bubble must NOT. "Cleared on the next frame of any
+  // kind" is a rule about the warming notice only.
+  // MUTATION: call `sink.appendMessage` nowhere in the catch (or clear the
+  // transcript with the notice) → no error bubble remains and this reddens.
+  it('leaves the wake failure standing as an error bubble after the notice comes down', async () => {
+    const rec = recorder()
+    const message = 'the private inference box did not wake: nothing was sent to any provider.'
+    fetchMock.mockResolvedValue(
+      sseResponse([warmingFrame(), { event: 'error', data: { error: message } }]),
+    )
+    const result = await runTurn(request(), rec.sink)
+
+    expect(rec.order.slice(0, 1)).toEqual(['warming:on'])
+    expect(rec.warmings.at(-1)).toBeNull()
+    expect(rec.messages).toEqual([expect.objectContaining({ role: 'error', content: message })])
+    expect(result.state).toEqual({ status: 'error', message })
   })
 
   it('clears it when the stream just ends mid-wait, rather than leaving a spinner behind', async () => {

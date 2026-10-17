@@ -14,6 +14,50 @@ EVAL_CLIENT=VerdaQwen pnpm eval:harness    # every role on the 27B (exploratory)
 A report lands in [`reports/`](reports/) and the exit code is non-zero if any
 scenario failed.
 
+### Thinking planner measurement (#625 Q5)
+
+**Live spend remains gated on the owner's separate authorization.** Do not run
+this command to test the wiring, probe an endpoint, or wake a paused box.
+After that authorization, with `VERDA_INFERENCE_ENDPOINT` naming the approved
+parser-equipped box (G19 Q7; never the parserless deployment):
+
+```bash
+EVAL_CLIENT=VerdaQwenThink EVAL_ROLES=planner EVAL_ONLY=planner-plan-shape pnpm eval:harness
+```
+
+This mode calls `PlannerThinking` with an **eval-only 8192-token / 340-second**
+registry override. Model and sampling come from the committed twin's rendered
+request. The shipped **4096 / 180 seconds** pair stays provisional and unchanged.
+It also calls thinking-off `Planner` on `VerdaQwen`, requiring identical endpoint,
+credentials and model before either call. The unrelated Critic preflight is
+skipped; a wider twin selection is refused before preflight.
+
+`EVAL_PLANNER_N` sets the positive integer sample count per mode (default **20**,
+so **40 billed calls**, sequentially). No corrective retry substitutes a
+thinking-off answer for a failed twin sample. Both modes keep the existing plan
+checks. The twin additionally requires a nonempty parser trace as `reasoning`
+and no `</think>` in content; thinking off requires nonempty content and no
+parser trace. Every sample's usage, trace/plan lengths and headroom are reported,
+including failed samples, with completion-token samples and min/p50/p95/max per
+mode. S0 established that **`completion_tokens` includes trace + answer**; these
+are the counts used for headroom and the distribution. Separate trace and answer
+token counts are unavailable and are never inferred from character lengths.
+Missing usage fails headroom and is counted as unreported in the distribution.
+
+Hermetic wiring proof (loopback only, no `.env` loading, no database):
+
+```bash
+corepack pnpm exec vitest run --config evals/vitest.config.ts
+```
+
+That manual suite exercises the committed BAML client, both envelopes, the
+registry budget, trace extraction, failure samples and report output. It is
+outside CI and the coverage floors. CI runs the source pins in
+`src/__tests__/planner-eval-config.test.ts` (eval budget, unchanged shipped pair,
+selection before preflight), plus the existing isolation pins; it never imports
+or executes the eval. Hermetic proof establishes the wiring, not model quality
+or a measured production cap. The live measurement is still owed.
+
 ---
 
 ## What this is not
@@ -50,7 +94,7 @@ it), so they cannot rot into unbuildable code unnoticed.
 | Env var              | Default                  | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | -------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `EVAL_CLIENT`        | unset                    | The BAML client to route through, e.g. `VerdaQwen`. Unset (or `default`) is the **baseline**: no override anywhere, so every function runs the Anthropic chain it declares in `baml_src/`. The special value **`tier`** resolves each role through the production map instead of naming one client — which is the only way to measure the shipped private tier since it became TWO models on 2026-08-26 (the 27B for the heavy roles, `LocalQwenSmall` for `describe`). A single-name run is still a fair question, just a different one: it measures summarization on a model production does not use for it. |
-| `EVAL_ROLES`         | the production Verda map | Comma-separated roles `EVAL_CLIENT` applies to. Default is `controller,actor,critic,compactExecution,router,planner,describe,screen` — the same set a verda tier decision moves in production (widened twice on 2026-08-26, the second time to include the injection screen), so a plain run measures the shipped route rather than a hypothetical one. Set it to NARROW a run while bisecting. No role is refused; nothing is pinned.                                                                                                                                                                         |
+| `EVAL_ROLES`         | the production Verda map | Comma-separated roles `EVAL_CLIENT` applies to. Default is `controller,actor,critic,compactExecution,router,planner,describe,screen` — the same set a verda tier decision moves in production (widened twice on 2026-08-26, the second time to include the injection screen), so a plain run measures the shipped route rather than a hypothetical one. Set it to NARROW a run while bisecting. The thinking twin requires `EVAL_ROLES=planner`; other clients retain the exploratory role selection.                                                                                                          |
 | `EVAL_RELIABILITY_N` | `20`                     | Calls in the structured-output reliability sample. `0` skips them, for a quick structural-only pass.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `EVAL_ONLY`          | unset                    | Comma-separated scenario ids, to re-run one thing. Unknown ids throw.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
@@ -189,3 +233,13 @@ structural checks first). Two rules:
 - **A scenario with zero checks fails.** `scenarioPassed()` enforces it, because
   a green cell that asserts nothing is worse than a red one — it manufactures a
   coverage number.
+
+## Conversation acceptance scenarios
+
+[#507's general-next Eval](general-next/README.md) is a separate opt-in runner in
+this suite. It adds a 16-scenario catalogue, the current `general` baseline,
+conversation-level checks and a shared spend ledger. The owner amended this eval
+to the **private tier only**; the role compatibility scenarios above retain their
+existing routing. Its default inference is hermetic, so its free scripted results
+must be distinguished from billed model evidence. `--live` remains gated on the
+coordinator's “S3 merged: go” instruction and worktree `.env` preconditions.

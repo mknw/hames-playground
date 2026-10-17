@@ -1423,3 +1423,69 @@ describe('ObservabilityPanel — Anthropic prompt bodies', () => {
     expect(panel.textContent).toContain('1 message')
   })
 })
+
+// ============================================================================
+// #418 — `decision_made`: the endpoint distribution and failures
+// ============================================================================
+describe('ObservabilityPanel — decision_made', () => {
+  const decision = (over: Record<string, unknown> = {}) =>
+    ev('decision_made', {
+      key: 'memory.store.kind',
+      question: 'Which kind of memory is this?',
+      labels: [
+        { id: 'episodic', description: 'an event' },
+        { id: 'semantic', description: 'a fact' },
+      ],
+      probs: { episodic: 0.25, semantic: 0.75 },
+      label: 'semantic',
+      top: 'semantic',
+      margin: 0.5,
+      // K = 2: confidence = 2·0.75 − 1 = 0.5 (what `scoreDecision` produces).
+      confidence: 0.5,
+      abstained: false,
+      method: 'jev',
+      calibrated: true,
+      stateChars: 1234,
+      ...over,
+    })
+
+  const open = (e: ContextEvent) => {
+    const { container } = render(() => <ObservabilityPanel events={[e]} />)
+    fireEvent.click(rows(container)[0])
+    return detailIn(container)!
+  }
+
+  it('shows the timeline row as key: label, not an empty cell', () => {
+    const { container } = render(() => <ObservabilityPanel events={[decision()]} />)
+    expect(rows(container)[0].textContent).toContain('memory.store.kind: semantic')
+  })
+
+  it('draws one bar per label at the endpoint probability', () => {
+    const panel = open(decision())
+    const labels = [...panel.querySelectorAll<HTMLElement>('[data-role="decision-label"]')]
+    expect(labels.map((l) => l.dataset.label)).toEqual(['episodic', 'semantic'])
+    const widths = labels.map(
+      (l) => l.querySelector<HTMLElement>('[data-role="decision-bar"]')!.style.width,
+    )
+    expect(widths).toEqual(['25%', '75%'])
+  })
+
+  it('marks a failed decision with its error', () => {
+    const abstained = open(decision({ abstained: true, reason: 'error', top: null }))
+    expect(abstained.querySelector('[data-role="decision-abstained"]')!.textContent).toContain(
+      'failed: error',
+    )
+  })
+
+  it('shows no abstained chip on a decision that was taken', () => {
+    expect(open(decision()).querySelector('[data-role="decision-abstained"]')).toBeNull()
+  })
+
+  it('renders the SIZE of the state and nothing the event does not carry', () => {
+    const panel = open(decision({ state: 'LEAKED STATE SENTINEL' }))
+    expect(panel.textContent).toContain('1,234')
+    // `state` is not a field of the event, so it has no place to be rendered
+    // from; the detail view is built from the declared fields only.
+    expect(panel.textContent).not.toContain('LEAKED STATE SENTINEL')
+  })
+})

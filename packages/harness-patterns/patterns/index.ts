@@ -16,7 +16,10 @@ export {
 export {
   planner,
   formatPlanContext,
+  HANDOFF_HEADING,
+  AGENT_MAP_HEADING,
   DEFAULT_MAX_PLAN_CHARS,
+  DEFAULT_MAX_REASONING_CHARS,
   type PlannerConfig,
   type PlannerData,
 } from './planner.server'
@@ -38,8 +41,80 @@ export {
 } from './withInjectionGuard.server'
 export { withReferences, __clearReferenceCache } from './with-references.server'
 
+// Memory recall (#419 M1) — the recall chain step; ranking helpers live in
+// '../memory-ranking.server'.
+export {
+  memoryRecall,
+  formatMemoryContext,
+  MEMORY_RECALL_KEY,
+  MEMORY_RECALL_SPEC,
+  type MemoryRecallConfig,
+  type MemoryRecallData,
+  type MemoryRecallSettings,
+  type MemoryGateSettings,
+  type MemoryRecallLabel,
+  type RecalledMemory,
+} from './memoryRecall.server'
+// withMemory (#419 M5a) — the opt-in combinator and the store half of its config.
+export {
+  withMemory,
+  memoryStoreConfig,
+  type MemoryConfig,
+  type RouterMemory,
+} from './withMemory.server'
+
 // EventView
 export { EventViewImpl, createEventView } from './event-view.server'
+
+export {
+  withPseudonymisedInputs,
+  type PseudonymiseForWeb,
+  type WebPseudonymisation,
+} from './withPseudonymisedInputs.server'
+
+// Typed systemone decisions and recording.
+export {
+  evaluateDecision,
+  decide,
+  decideFields,
+  assertDecisionSetSpec,
+  defineChoice,
+  defineScore,
+  defineNoul,
+  defineDecisionSet,
+  readDecision,
+  typedDecision,
+  decisionRouter,
+  DECISION_ROUTER_KEY,
+  type DecisionCall,
+  type EvaluatedDecision,
+  type DecideOptions,
+  type DecideFieldsCall,
+  type TypedDecisionConfig,
+  type TypedDecisionData,
+  type DecisionRouterConfig,
+} from './typedDecision.server'
+
+// decisionLoop (#507) — a loop over routes, the next one chosen by a decision.
+export {
+  decisionLoop,
+  DECISION_LOOP_MAX_ITERATIONS,
+  DECISION_LOOP_KEY,
+  DECISION_LOOP_ANSWER,
+  DECISION_LOOP_OUTPUT_KEY,
+  DECISION_LOOP_RESULT_CHARS,
+  WITHHELD_SCREEN_UNAVAILABLE,
+  type DecisionLoopConfig,
+  type DecisionLoopData,
+  type DecisionLoopRoute,
+  type DecisionLoopStateInput,
+} from './decisionLoop.server'
+export {
+  collectToolNames,
+  type RouteOutput,
+  type RouteStats,
+  type RouteKind,
+} from './decisionLoop-records.server'
 
 // Re-export config types from main types
 export type {

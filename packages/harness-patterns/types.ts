@@ -148,7 +148,9 @@ export interface PlanResult {
 /**
  * How a cost figure was arrived at — the UI needs this to know whether the
  * number is an estimate of a token bill, a FLOOR on a time bill, or an exact
- * €0 for a call that was served locally and has no bill at all.
+ * €0 for a call that was served locally and has no bill at all — or, on
+ * `'provider'`, the figure the provider itself reported (USD, converted once at
+ * the static rate; #418 T4).
  *
  * Defined here because it labels `EventMetrics.basis` — core owns the event
  * vocabulary it rides on. Moved from app's `settings.ts` at Step 1d: the
@@ -156,7 +158,7 @@ export interface PlanResult {
  * published tarball cannot resolve. app's `settings.ts` re-exports this
  * definition, so app-side importers are unchanged.
  */
-export type CostBasis = 'tokens' | 'time' | 'local'
+export type CostBasis = 'tokens' | 'time' | 'local' | 'provider'
 
 /** How a loop pattern handles multi-call turns (ControllerAction.additional_calls).
  *  - 'parallel'   — affordance advertised; independent calls run concurrently
@@ -171,7 +173,10 @@ export type MultiCallMode = 'parallel' | 'sequential' | 'off'
 
 /** What a simpleLoop asks its controller to put in the terminal `Return`
  *  action's `tool_args` (#149).
- *  - 'summary' (default) — a one-or-two-sentence completion summary. The loop's
+ *  - 'summary' (default) — a one-or-two-sentence completion summary, except
+ *    that when no tool call in the task has returned a result (none called, or
+ *    every call failed) the prompt asks for the complete answer instead (#615),
+ *    since the core hands that `Return` text to the synthesizer as the answer. The loop's
  *    prose reaches no user: `Synthesize` renders `tool_result.tool` / `.result`
  *    only and never `tool_call.args`, which is where the terminal action's
  *    prose lands, so a downstream `compactExecution` composes the user-facing
@@ -254,6 +259,19 @@ export type EventType =
   | 'hitl_request'
   /** The decision on one `hitl_request` (#433). Only core writes it. */
   | 'hitl_response'
+  /** One typed systemone decision (#418). Metadata only —
+   *  the `state` the decision was asked over can hold sanitized mail bodies
+   *  or tool results (SD-3/SD-10), so the event carries `stateChars`, the
+   *  SIZE, and never the text. See `DecisionMadeEventData`. */
+  | 'decision_made'
+  /** What the memory recall step did on a turn (#419): the ids it attached, or
+   *  why it attached nothing. IDS ONLY — never memory content. See
+   *  `MemoryRecalledEventData`. */
+  | 'memory_recalled'
+  /** One memory the store step wrote or reinforced (#419 M2). METADATA ONLY —
+   *  ids, kind, tier and action, never the content nor a hash of it (#541). See
+   *  `MemoryWrittenEventData`. */
+  | 'memory_written'
 
 /** Accounting record for one harness step (#122): token and cost totals
  *  summed across EVERY physical API call the step made — including truncation
@@ -301,7 +319,8 @@ export interface EventMetrics {
   rates?: { inPerMTok: number; outPerMTok: number }
   /** €/h and the measured wall-clock it was applied to, SUMMED over the step's
    *  time-priced attempts, so it describes the same seconds `costEur` charged
-   *  for rather than the last attempt's alone. */
+   *  for rather than the last attempt's alone. Like `basis`, `eurPerHour` is
+   *  the last time-priced attempt's rate; mixed-rate steps have no single rate. */
   timeRate?: { eurPerHour: number; durationMs: number }
   /** @deprecated Pre-EUR stamp, in USD. Events persisted before the currency
    *  fix carry this instead of `costEur`; the folds convert it at the DEFAULT
@@ -464,9 +483,8 @@ export interface ControllerInput {
 export interface ActorInput {
   userMessage: string
   intent: string
-  /** Part of the seam shape per the design note; the implementation resolves
-   *  its own allowlist from the factory options and does not read this — it
-   *  was accepted-and-ignored positionally before A4 too. */
+  /** Rendered by `createActorControllerAdapter` as the actor's catalogue,
+   *  unioned with the factory's own `toolNames`/`toolNamesProvider` (#613). */
   availableTools: readonly string[]
   previousAttempts: readonly ScriptExecutionEvent[]
   attemptNumber?: number
@@ -587,6 +605,8 @@ export type RetrieveQueryFn = {
  *  (the resolved one — an active sandbox scope's in-VM tools plus the gateway
  *  tools that resolved — not the raw name list). */
 export interface PlanCallResult {
+  /** Diagnostic degradation on an otherwise usable plan, recorded by the pattern. */
+  warning?: string
   plan: PlanResult
   llmCall?: LLMCallRecord
   toolCount: number
@@ -600,6 +620,8 @@ export type PlannerFn = (
   userMessage: string,
   intent: string,
   context?: string,
+  /** Called before a same-endpoint retry; the pattern records the failed attempt. */
+  onRetry?: (failedCall: LLMCallRecord | undefined) => void,
 ) => Promise<PlanCallResult>
 
 /** One tool result queued for a batched describe call. `id` is a
@@ -664,8 +686,20 @@ export type RouteFn = {
     message: string,
     history: Array<{ role: string; content: string }>,
     routes?: Array<{ name: string; description: string }>,
+    extra?: RouteExtra,
   ): Promise<RouteMessageResult>
   limits?: () => ModelLimits
+}
+
+/** What a turn can hand the router besides the message (#419 M5a). Optional and
+ *  TRAILING, so a `RouteFn` written before it keeps its meaning. The router
+ *  passes it only when it has something to pass: a call with nothing recalled
+ *  carries no fourth argument at all. */
+export interface RouteExtra {
+  /** The block `memoryRecall` formatted for this turn (`data.memoryContext`):
+   *  background about the user, rendered as DATA — never an instruction, never
+   *  a routing signal on its own. */
+  memoryContext?: string
 }
 
 // ============================================================================
@@ -894,8 +928,8 @@ export interface ConfiguredPattern<T> {
   estimateTurns?: (settings: TurnEstimateSettings) => number
   /** Wrapped sub-patterns, for combinators that compose others
    *  (`chain`, `routes`, `parallel`, `withReferences`). Leaf patterns omit it.
-   *  Purely for static introspection of the pattern graph — execution runs
-   *  through `fn`, never this — so it's safe and additive. See
+   *  Introspection of the pattern graph — dispatch runs through `fn`, never
+   *  this; decisionLoop also walks declarations before supplying roster input. See
    *  `pattern-capabilities.ts` (`harnessHasRetriever`) for the canonical walk. */
   children?: ConfiguredPattern<T>[]
   /** Set by `withInjectionGuard`: the untrusted sources it declared. Same
@@ -908,9 +942,9 @@ export interface ConfiguredPattern<T> {
    *  pattern's own object). */
   injectionGuard?: { namespaces: string[]; tools: string[] }
   /** Statically declared capabilities — see {@link PatternCapabilities}. Same
-   *  charter as `children` and `injectionGuard`: introspection only, never read
-   *  during execution, and NOT part of `config`, so a wrapper that declares one
-   *  stays config-transparent. */
+   *  charter as `children`: declarations rather than dispatch, and NOT part of
+   *  `config`, so a wrapper stays config-transparent. decisionLoop uses
+   *  pseudonymisedInputs to supply roster-only data to its consuming subtree. */
   capabilities?: PatternCapabilities
 }
 
@@ -920,7 +954,8 @@ export interface ConfiguredPattern<T> {
  * Every field is a capability in the host's own vocabulary, named for what it
  * DOES rather than for the package that supplies it — core hosts the contract,
  * other packages fill it in. The probes in `pattern-capabilities.ts` walk a
- * pattern graph and read these; nothing here is consulted during execution.
+ * pattern graph and read these. decisionLoop also uses pseudonymisedInputs
+ * before supplying roster-only data; it still dispatches through fn.
  *
  * It is one typed field instead of the ad-hoc config keys it replaced
  * (`backendKinds`, `sandboxSyncWorkspace`), because those rode between packages
@@ -935,6 +970,9 @@ export interface ConfiguredPattern<T> {
  * agreed by convention at two call sites that never see each other.
  */
 export interface PatternCapabilities {
+  /** This subtree consumes the roster-only child input before invoking any
+   *  model (#507 G14). Read by decisionLoop through children. */
+  pseudonymisedInputs?: true
   /** Names of the retrieval backends this pattern will query (the
    *  `RetrieverBackend.name`s it was built with). Declared by `retriever`. A
    *  host gates on the backend it owns — `'redis'` is the local Data Stash
@@ -946,6 +984,19 @@ export interface PatternCapabilities {
    *  performs that sync — a host reads it to decide whether it must hydrate the
    *  workspace itself when it is the first to boot the session's container. */
   workspaceSync?: boolean
+  /** Decision keys declared by this pattern. */
+  decisionKeys?: readonly string[]
+  /** This pattern reads (or writes) the user's persistent memory (#419).
+   *  Declared by `memoryRecall`; read by `harnessUsesMemory`, the ONE probe a
+   *  host gates the memory wake and the post-reply store on — so an agent that
+   *  never opted in never wakes the memory boxes. */
+  memory?: true
+  /** Tool names this pattern can call, by exact name: a loop's allowlist, or the
+   *  in-VM tools a sandbox wrapper provides. Declared by `simpleLoop`,
+   *  `actorCritic` and `withSandbox`; read by `collectToolNames` to build the
+   *  planner's agent map (#507). It describes what a model is OFFERED — the
+   *  allowlist is still enforced by the loop itself, at call time. */
+  tools?: readonly string[]
 }
 
 // ============================================================================
@@ -1021,10 +1072,20 @@ export interface CompactExecutionInput {
   response?: string
   data?: unknown
   loopHistory?: LoopHistory
+  /** The controller's own `Return` text, set ONLY alongside a `loopHistory`
+   *  whose every tool call failed (#614) — the one case where the `Return` is
+   *  the turn's answer and `response` (which a history-reading synthesizer
+   *  ignores) would cost it the failure. A synthesizer appends it as a final
+   *  turn after the history. */
+  returnText?: string
   /** Whether an error occurred in upstream patterns */
   hasError?: boolean
   /** Error message from upstream patterns */
   errorMessage?: string
+  /** The block `memoryRecall` formatted for this turn (`data.memoryContext`),
+   *  present ONLY when something was recalled (#419 M5a). Background about the
+   *  user for the synthesizer to render as DATA; never a tool result. */
+  memoryContext?: string
 }
 
 /** Custom synthesis function type */
@@ -1039,6 +1100,14 @@ export interface CompactExecutionConfig extends PatternConfig {
   synthesize: SynthesisFn
   /** Skip synthesis if response already exists */
   skipIfHasResponse?: boolean
+  /** Turn window of the `thread` read when `viewConfig.fromPatterns` names the
+   *  patterns whose records are the thread. Defaults to `viewConfig.fromLastNTurns`
+   *  (else 1). Widen it so a follow-up turn keeps earlier turns' committed
+   *  records; the error read ignores it and keeps its own window
+   *  (`viewConfig.fromLastNTurns`, else 1), and an earlier turn's FAILED record
+   *  is not carried forward. An integer >= 1; refused at construction unless
+   *  `mode` is `'thread'` and `viewConfig.fromPatterns` is set. */
+  threadTurns?: number
 }
 
 /** Data interface for compactExecution */
@@ -1047,6 +1116,13 @@ export interface CompactExecutionData {
   synthesizedResponse?: string
   intent?: string
   loopHistory?: LoopHistory
+  /** Written by `memoryRecall`, cleared by it every turn; read here (#419 M5a). */
+  memoryContext?: string
+  /** The text of a `simpleLoop` turn's terminal `Return`, written by that loop
+   *  on exit and cleared by `continueSession` (and at the loop's own start).
+   *  Read only when no tool iteration reached the synthesizer (#610), or when
+   *  every tool call of the turn failed (#614). */
+  returnText?: string
 }
 
 // ============================================================================
@@ -1226,8 +1302,12 @@ export type WarningTask =
   | 'query_rewrite'
   /** `withReferences`' choice of prior results to attach. */
   | 'reference_selection'
+  /** G14 withheld earlier results because its privacy filter was unavailable. */
+  | 'web_privacy'
   /** `@hames-ai/sandbox`'s mount of the run's skills into `/skills` (#415). */
   | 'skills_mount'
+  /** The planner retried without thinking or accepted a plan with no trace (#625). */
+  | 'planner'
 
 /**
  * Data payload for a `warning` event: a side task failed and the turn carried
@@ -1343,14 +1423,17 @@ export interface IntentCompactedEventData {
  *  render as a tool call that never happened. `llmCall` (on the ContextEvent)
  *  holds the BAML call detail. */
 export interface PlanCreatedEventData {
-  /** The plan written to `scope.data.plan` (post-truncation). Absent when
-   *  `skipped` is set — there is no plan in that case. */
+  /** Plan text post-truncation, with the FULL reasoning for observability.
+   *  `scope.data.plan` carries the capped reasoning handed to executors.
+   *  Absent when `skipped` is set — there is no plan in that case. */
   plan?: PlanResult
   /** Number of tools the planner was shown — the catalog the adapter actually
    *  resolved (sandbox + gateway), not the raw name list the factory took. */
   toolCount: number
   /** Set when the plan text was capped by `PlannerConfig.maxPlanChars`. */
   truncated?: boolean
+  /** Reasoning was capped for executors; this event still holds the full trace. */
+  reasoningTruncated?: boolean
   /** Set when no LLM call was made: the context held no user message to plan
    *  for, so the chain runs unplanned. Mirrors
    *  `IntentCompactedEventData.skipped`. */
@@ -1549,6 +1632,580 @@ export type HitlAnswer =
 export type HitlAnswers = Readonly<Record<string, HitlAnswer>>
 
 // ============================================================================
+// Decisions (#418): the typedDecision seam
+// ============================================================================
+
+/** TypeSafe's score cap, applied on every transport: https://docs.typesafe.ai/primitives/score */
+export const MAX_SCORE_LEVELS = 10
+
+export type DecisionType = 'choice' | 'score' | 'noul'
+
+/** One label of a typed decision. `description` is the ONLY text the model
+ *  sees for this label — the id is an identifier, not prose. */
+export interface DecisionLabel<L extends string = string> {
+  readonly id: L
+  readonly description: string
+}
+
+export interface DecisionSpec<L extends string = string> {
+  readonly type?: 'choice'
+  readonly key: string
+  readonly question: string
+  readonly labels: readonly DecisionLabel<L>[]
+}
+
+/** One ordered dimension, levels low → high; ids are local verdict names. */
+export interface ScoreSpec<L extends string = string> {
+  readonly type: 'score'
+  readonly key: string
+  readonly question: string
+  readonly levels: readonly DecisionLabel<L>[]
+}
+
+/** The probability that one statement is true. */
+export interface NoulSpec {
+  readonly type: 'noul'
+  readonly key: string
+  readonly question: string
+  readonly criteria?: { readonly true: string; readonly false: string }
+}
+
+export type AnyDecisionSpec = DecisionSpec | ScoreSpec | NoulSpec
+
+export interface DecisionSetSpec<F extends Record<string, string>> {
+  readonly key: string
+
+  readonly fields: { readonly [K in keyof F]: DecisionSpec<F[K]> }
+}
+
+/** Several closed questions, preserving each field's own spec and verdict type. */
+export interface MixedDecisionSet<S extends Record<string, AnyDecisionSpec>> {
+  readonly key: string
+  readonly fields: { readonly [K in keyof S]: S[K] }
+}
+
+/** The categorical ids on the raw seam; nouls use true/false strings. */
+export type DecisionLabelsFor<S> = S extends NoulSpec
+  ? 'true' | 'false'
+  : S extends ScoreSpec<infer L>
+    ? L
+    : S extends DecisionSpec<infer L>
+      ? L
+      : never
+
+/** The systemone transport. */
+export type DecisionMethod = 'jev'
+
+/** Failure metadata retained for recorded events. No threshold abstention. */
+export type AbstainReason = 'error'
+
+export interface Decision<L extends string = string> {
+  readonly type?: undefined
+  readonly key: string
+
+  readonly label: L | null
+  readonly top: L | null
+  readonly probs: Readonly<Partial<Record<L, number>>>
+  readonly margin: number
+  /** (K·p_max − 1)/(K − 1) — p_max re-centred on the chance floor, so 0 is
+   *  chance and 1 is certain regardless of K. */
+  readonly confidence?: number
+  readonly abstained: boolean
+  readonly reason?: AbstainReason
+  readonly method?: DecisionMethod
+  readonly calibrated: boolean
+
+  readonly eventId?: string
+}
+
+/** Backward-compatible name for the existing choice verdict. Never writes a type. */
+export type ChoiceDecision<L extends string = string> = Decision<L>
+
+export interface ScoreDecision<L extends string = string> extends Omit<
+  Decision<L>,
+  'type' | 'label' | 'margin'
+> {
+  readonly type: 'score'
+  readonly level: L | null
+
+  readonly value: number | null
+  /** Probability-weighted level index; null only without a usable distribution. */
+  readonly expected: number | null
+}
+
+export interface NoulDecision extends Omit<
+  Decision<'true' | 'false'>,
+  'type' | 'label' | 'margin' | 'top'
+> {
+  readonly type: 'noul'
+  readonly holds: boolean | null
+  readonly pTrue: number | null
+}
+
+export type AnyDecision = ChoiceDecision | ScoreDecision | NoulDecision
+export type DecisionFor<S> =
+  S extends ScoreSpec<infer L>
+    ? ScoreDecision<L>
+    : S extends NoulSpec
+      ? NoulDecision
+      : S extends DecisionSpec<infer L>
+        ? ChoiceDecision<L>
+        : never
+
+export interface DecideInput<L extends string = string> {
+  readonly spec: DecisionSpec<L> | ScoreSpec<L> | NoulSpec
+  readonly state: string
+}
+
+export interface DecideResult<L extends string = string> {
+  readonly probs: Readonly<Record<L, number>>
+  readonly method: DecisionMethod
+  readonly calibrated: boolean
+  readonly confidence?: number
+  readonly llmCall?: LLMCallRecord
+}
+
+/** The raw decision seam. `limits` follows every other seam callable's shape
+ *  (Lane A5): optional, resolved per call, and what the state trimmer trims
+ *  against — a REST adapter has no model table to fall back on and reports
+ *  its own cap (`JevDecide` → 32 000, D13). */
+export type DecideFn = {
+  <L extends string>(input: DecideInput<L>): Promise<DecideResult<L>>
+  limits?: () => ModelLimits
+  /** Absent means choice-only: a legacy transport must never serve a new type. */
+  readonly supportedTypes?: readonly DecisionType[]
+}
+
+/** The structured entry: several typed fields over one state (D6). */
+export type DecideAllFn = {
+  <S extends Record<string, AnyDecisionSpec>>(input: {
+    readonly spec: MixedDecisionSet<S>
+    readonly state: string
+  }): Promise<{
+    readonly fields: { readonly [K in keyof S]: DecideResult<DecisionLabelsFor<S[K]>> }
+  }>
+  /** Keep explicit label-map generic calls source-compatible. */
+  <F extends Record<string, string>>(input: {
+    readonly spec: DecisionSetSpec<F>
+    readonly state: string
+  }): Promise<{ readonly fields: { readonly [K in keyof F]: DecideResult<F[K]> } }>
+  limits?: () => ModelLimits
+  /** Absent means choice-only, independently of the single-spec transport. */
+  readonly supportedTypes?: readonly DecisionType[]
+}
+
+export interface DecisionMadeEventData {
+  /** Absent means choice, including persisted events from before score/noul. */
+  type?: 'score' | 'noul'
+  expected?: number | null
+  value?: number | null
+  pTrue?: number | null
+  key: string
+  question: string
+  labels: Array<{ id: string; description: string }>
+  probs: Record<string, number>
+
+  label: string | null
+  top: string | null
+  margin: number
+  confidence?: number
+  abstained: boolean
+  reason?: AbstainReason
+  method?: DecisionMethod
+  calibrated: boolean
+  /** The SIZE of the state, never the text. */
+  stateChars: number
+  shadow?: true
+}
+
+// ============================================================================
+// Memory recall (#419 M1)
+// ============================================================================
+//
+// The injected seams and event payload of the `memoryRecall` chain step. Core
+// hosts no database, no embedder and no provider vocabulary: a tier is an
+// OPAQUE string (the run frame's own rule), and the store is whatever the host
+// binds to its own owner.
+
+/** A kind of memory — the closed set the store gate also writes. */
+export type MemoryKind = 'episodic' | 'semantic' | 'preference' | 'trait'
+
+/** One stored memory as recall reads it. `distance` is the COSINE DISTANCE
+ *  between the query embedding and this row's embedding, computed by the
+ *  store (`1 - distance` is the semantic similarity `s_v`). */
+export interface MemoryCandidate {
+  readonly id: string
+  readonly kind: MemoryKind
+  /** The tier this memory was written under. Opaque to core. */
+  readonly tier: string
+  readonly content: string
+  /** The embedding space the row was embedded in. */
+  readonly embedSpace: string
+  readonly distance: number
+  readonly lastSeenAt: Date | string | number
+}
+
+/**
+ * The persistence seam recall reads through. HOST-BOUND TO ITS OWNER: no method
+ * takes a user, so a call site cannot name another one. The store resolves its
+ * owner on EVERY call, from the same supplier the host passes as `owner`:
+ * patterns are built once and reused across turns, so an owner captured at
+ * construction would serve whichever request reuses them. A `null` owner
+ * refuses every method.
+ *
+ * Recall's query is EXACT — every active row of the owner in the requested
+ * tiers, with its cosine distance; no `ORDER BY`/`LIMIT` — because BM25's
+ * document frequencies are computed over exactly this corpus.
+ */
+export interface MemoryStore {
+  /** How many rows of the owner's are visible in `tiers`. 0 ends recall
+   *  before any gate or embedding is paid for. */
+  count(tiers: readonly string[]): Promise<number>
+  /** Every row of the owner's in `tiers`, with its distance to `embedding`.
+   *  `embedSpace` is the space the query was embedded in; a row from another
+   *  space is returned as it is and REFUSED by recall (a distance across two
+   *  spaces is a number that means nothing). */
+  candidates(query: {
+    readonly embedding: readonly number[]
+    readonly embedSpace?: string
+    readonly tiers: readonly string[]
+  }): Promise<MemoryCandidate[]>
+}
+
+/** The query half of the embedder seam (the document half is the store's). */
+export interface MemoryQueryEmbedder {
+  /** Embed a QUERY (the model's query instruction applies). */
+  query(text: string): Promise<readonly number[]>
+  /** The embedding space this embedder produces (`embeddingSpaceId()`). */
+  readonly spaceId: string
+}
+
+/** The wake wait recall's gate shares with the host's wake — structurally
+ *  the host's `awaitMemoryWake` (the app's joint memory wake). */
+export type MemoryWakeWait = (budgetMs: number) => Promise<'awake' | 'skipped'>
+
+/** Why recall attached nothing. */
+export type MemorySkipReason =
+  /** No owner resolved for the turn. */
+  | 'no-user'
+  /** The user's memory switch is off. */
+  | 'disabled'
+  /** No memory visible in this turn's tiers (no gate, no embedding paid). */
+  | 'empty'
+  /** The turn has no user message to ask about. */
+  | 'no-query'
+  /** The joint memory wake had not landed within the gate's budget (or failed). */
+  | 'waking'
+  /** The gate answered `skip`, abstained, errored or was out-of-set. */
+  | 'gate'
+  /** The gate budget expired with the wake already up. */
+  | 'timeout'
+  /** The gate said retrieve and nothing cleared the floors. */
+  | 'no-match'
+  /** Embedding, the store, the settings read or a space mismatch failed. */
+  | 'error'
+
+/** The gate's outcome as `memory_recalled` records it — the numbers, never the
+ *  state it was asked over. (Recall records NO separate `decision_made`.) */
+export interface MemoryGateRecord {
+  readonly label: string
+  readonly top: string | null
+  readonly probs: Readonly<Record<string, number>>
+  readonly margin: number
+  readonly confidence?: number
+  readonly abstained: boolean
+  readonly reason?: AbstainReason
+  readonly method?: DecisionMethod
+  readonly calibrated: boolean
+  /** The SIZE of the gate state, never the text. */
+  readonly stateChars: number
+}
+
+/** Data payload for `memory_recalled`. IDS ONLY (SD-3): a memory's content is
+ *  user data and this payload is JSON-dumped wholesale by anything that
+ *  serializes `event.data`. Pinned by `event-hygiene`. */
+export interface MemoryRecalledEventData {
+  /** The ids attached to the prompt, best first. Empty when `skipped`. */
+  readonly attached: readonly string[]
+  /** Rows read from the store (after the tier filter). */
+  readonly considered: number
+  /** Rows that cleared the floors, before the cap. */
+  readonly survivors: number
+  /** The turn's tier, as the run frame named it. */
+  readonly tier?: string
+  /** Estimated tokens of the attached block. */
+  readonly tokens: number
+  readonly skipped?: MemorySkipReason
+  readonly gate?: MemoryGateRecord
+  /** The joint wake's outcome as the gate saw it. */
+  readonly wake?: 'awake' | 'skipped'
+  /** The thrown error's CLASS, for `skipped: 'error'`. The message is logged,
+   *  not recorded: an error can quote what it was reading. */
+  readonly errorKind?: string
+}
+
+// ============================================================================
+// Memory store (#419 M2)
+// ============================================================================
+//
+// The injected seams and event payload of `settleMemory`, the store half of
+// `withMemory`. Same rules as the recall half above: no database, no embedder,
+// no provider vocabulary in core — the host binds the owner into the store it
+// hands in, and a tier is an opaque string.
+
+/** One candidate memory as the extractor returns it — UNFILTERED. `kind` is a
+ *  plain string on purpose: the closed set is core's deterministic acceptance,
+ *  and a candidate the adapter quietly dropped would be one acceptance could
+ *  never log (structurally the harness-baml `ExtractedMemory`). */
+export interface MemoryExtractedCandidate {
+  readonly kind: string
+  readonly content: string
+  readonly evidence: string
+}
+
+/** What the extractor is handed (the `describe`-role call): the store gate's
+ *  kind as a HINT, the labelled window, and the current user message bare so
+ *  the evidence rule has ONE text to point at. */
+export interface MemoryExtractInput {
+  readonly kindHint: string
+  readonly window: string
+  readonly latestUser: string
+}
+
+/** The extractor seam — at most the first three candidates are read. */
+export type MemoryExtractFn = (
+  input: MemoryExtractInput,
+) => Promise<LLMResult<readonly MemoryExtractedCandidate[]>>
+
+/** The full embedder seam: recall's query half plus the DOCUMENT side (no
+ *  query instruction). Company-run; the host pins its provider. */
+export interface MemoryEmbedder extends MemoryQueryEmbedder {
+  /** Embed stored texts, one vector per text, in order. */
+  documents(texts: string[]): Promise<number[][]>
+}
+
+/** Per-kind retention in days after lastSeenAt; null persists until forgotten. */
+export type MemoryRetention = Readonly<Partial<Record<MemoryKind, number | null>>>
+
+/** A complete owner-scoped snapshot for compaction, read under the owner lock.
+ *  Sources include EVERY prior contributor, even when its text was superseded. */
+export interface MemoryCompactionRow extends MemoryInsertRow {
+  readonly createdAt: number
+  readonly lastSeenAt: number
+  readonly compactedFrom: number
+  readonly sources: readonly MemorySourceRow[]
+}
+
+/** The summarizer sees data only, oldest first; ids and provenance stay in core. */
+export interface MemoryCompactInput {
+  readonly kind: MemoryKind
+  readonly members: readonly {
+    readonly content: string
+    readonly evidence: string
+    /** ISO timestamp, matching the already-landed M9 adapter. */
+    readonly last_seen: string
+  }[]
+}
+
+/** No transport in core. The host supplies a tier-routed summarizer, company-run only on the private
+ *  tier (DescribeAnthropic on the Anthropic tier). Its output
+ *  is untrusted, and all deterministic checks run before any write. */
+export type MemoryCompactFn = (
+  input: MemoryCompactInput,
+) => Promise<LLMResult<{ readonly content: string; readonly evidence: string }>>
+
+/** Owner-bound compaction transaction. The host uses the SAME advisory lock,
+ *  dedicated pool and lock timeout as MemoryWriteStore, and rolls back on throw.
+ *  list() reads fresh rows including all provenance inside that transaction. */
+export interface MemoryCompactionTx {
+  list(): Promise<readonly MemoryCompactionRow[]>
+  insert(row: MemoryCompactionRow): Promise<void>
+  /** Repoint ALL sources, including superseded ones, before deleting members.
+   *  Return the number moved; an incomplete move rolls back the whole merge. */
+  moveSources(memberIds: readonly string[], mergedId: string): Promise<number>
+  /** Delete owner-scoped rows, cascading sources only for expiry/eviction.
+   *  During a merge sources have already moved. Return rows actually deleted. */
+  delete(ids: readonly string[]): Promise<number>
+}
+
+export interface MemoryCompactionStore {
+  transaction<R>(fn: (tx: MemoryCompactionTx) => Promise<R>): Promise<R>
+}
+
+/** The nearest ACTIVE memory of the owner to a candidate, same tier and same
+ *  embedding space, with its cosine SIMILARITY (`1 - distance`). */
+export interface MemoryNeighbor {
+  readonly id: string
+  readonly kind: MemoryKind
+  readonly content: string
+  readonly similarity: number
+}
+
+/** A memory to insert. The host encrypts `content`/`evidence` on write. */
+export interface MemoryInsertRow {
+  readonly id: string
+  readonly kind: MemoryKind
+  readonly tier: string
+  readonly content: string
+  readonly evidence: string
+  /** The `user_message` event `evidence` quotes (#419 erasure semantics (b)).
+   *  The host stores it BESIDE the text it describes, on the memory row, and
+   *  replaces both together on `update`. Required, so every writer (M3's
+   *  compaction insert included) is a compile error without it. */
+  readonly evidenceEventId: string
+  readonly embedding: readonly number[]
+  readonly embedSpace: string
+}
+
+/** The provenance row: which conversation event a memory was built from.
+ *
+ *  Erasure semantics (#419 owner decision (b)): a source row is NEVER removed
+ *  because a memory's text moved on. An `update` (and M3's compaction) keeps
+ *  every row that ever supported the memory, including those that no longer
+ *  support its current text, so deleting a conversation removes every memory
+ *  that EVER drew on it. A host's only legitimate deletions are the
+ *  conversation delete, the memory's own forget, and the cascade between them. */
+export interface MemorySourceRow {
+  readonly memoryId: string
+  readonly eventId: string
+  readonly ordinal: number
+  readonly conversationId: string
+}
+
+/**
+ * The write half of the persistence seam, handed to ONE transaction. Owner-bound
+ * like {@link MemoryStore}: no method takes a user.
+ *
+ * Every call here belongs to the transaction `MemoryWriteStore.transaction`
+ * opened — they commit together or roll back together, which is the whole of
+ * the idempotency guarantee (F9).
+ */
+export interface MemoryWriteTx {
+  /** Nearest memory of the owner's in `tier` and `embedSpace`, or null. */
+  nearest(q: {
+    readonly embedding: readonly number[]
+    readonly embedSpace: string
+    readonly tier: string
+  }): Promise<MemoryNeighbor | null>
+  insert(row: MemoryInsertRow): Promise<void>
+  /** Count this sighting: `evidence_count + 1`, `last_seen_at = now`. */
+  reinforce(id: string): Promise<void>
+  /** Replace a memory's text and vector with a newer statement of the same
+   *  fact, and count the sighting. It replaces `evidence` and
+   *  `evidenceEventId` together and DELETES NO `memory_sources` row: the rows
+   *  that supported the old text stay (decision (b), see `MemorySourceRow`). */
+  update(
+    id: string,
+    next: {
+      readonly content: string
+      readonly evidence: string
+      readonly evidenceEventId: string
+      readonly embedding: readonly number[]
+      readonly embedSpace: string
+    },
+  ): Promise<void>
+  /** Insert the provenance row. On a primary-key conflict on
+   *  `(owner, eventId, ordinal)` — this candidate was written before — insert
+   *  nothing and return `{ inserted: false, memoryId }` with the memory the
+   *  EXISTING row points at (`ON CONFLICT DO NOTHING RETURNING`; a bare INSERT
+   *  would abort the whole transaction). */
+  addSource(
+    src: MemorySourceRow,
+  ): Promise<{ inserted: true } | { inserted: false; memoryId: string }>
+  /** Read one memory of the owner's by id, or null. Used only to re-record a
+   *  lost `memory_written` on a retry. */
+  read(id: string): Promise<{ kind: MemoryKind; content: string } | null>
+  /** Rows the owner has, all tiers (the compaction threshold's input). */
+  count(): Promise<number>
+  /** Optional M3 host capability, under this transaction's owner lock. Evict
+   *  at most n oldest episodic rows (last_seen_at, id), never another kind.
+   *  Absent capability: at the hard cap an insertion is refused. */
+  evictOldestEpisodes?(n: number): Promise<void>
+}
+
+/**
+ * The write seam. `transaction(fn)` MUST: open ONE database transaction; take
+ * the owner's advisory lock inside it (`pg_advisory_xact_lock`), so two
+ * concurrent stores for one user — and compaction — serialize; run `fn`;
+ * COMMIT if it resolved; ROLLBACK and rethrow if it threw. A host whose
+ * transaction does not roll back on a throw breaks idempotency.
+ */
+export interface MemoryWriteStore {
+  transaction<R>(fn: (tx: MemoryWriteTx) => Promise<R>): Promise<R>
+}
+
+/**
+ * One memory the store step PREPARED for a person to confirm (#419 M6): the
+ * accepted candidate, its document-side vector, and what the owner's store
+ * said the write would do — read at proposal time, from a read-only
+ * preview. The text is model-derived from the user's message and untrusted:
+ * it is shown escaped, and it is written only by an approval.
+ */
+export interface MemoryProposalItem {
+  /** Names this item in the answer's flags (`i0`, `i1`, …). */
+  readonly ref: string
+  /** The extraction ordinal — half of the provenance key. */
+  readonly ordinal: number
+  readonly kind: MemoryKind
+  readonly content: string
+  readonly evidence: string
+  readonly embedding: readonly number[]
+  /** `new`, or an existing memory this one would reinforce or update, with
+   *  the text it had when the preview read it: the write refuses the item when
+   *  the row no longer says that (a stale proposal never overwrites a newer row). */
+  readonly dedupe:
+    | 'new'
+    | { readonly reinforces: string; readonly expectedContent: string }
+    | { readonly updates: string; readonly expectedContent: string }
+}
+
+/** What the host holds for one open `memory.confirm` proposal — the payload
+ *  that never rides an event or the conversation blob. Server-held; a client
+ *  supplies only the choice and the item flags. */
+export interface MemoryProposalPayload {
+  readonly v: 1
+  /** The tier the turn ran on — the stamp the written memories take (D8). */
+  readonly tier: string
+  /** The embedding space the vectors are in. */
+  readonly embedSpace: string
+  /** The `user_message` event the items were built from. */
+  readonly eventId: string
+  readonly conversationId: string
+  readonly items: readonly MemoryProposalItem[]
+}
+
+/** The host's half of a confirmation: where the prepared payload is held. */
+export interface MemoryConfirmSeam {
+  /** Persist `payload` under `requestId` until the person answers or
+   *  `expiresAt` (ms since epoch). A throw means nothing was proposed. */
+  hold(input: {
+    readonly requestId: string
+    readonly expiresAt: number
+    readonly payload: MemoryProposalPayload
+  }): Promise<void>
+  /** How long a proposal waits. Default 7 days. */
+  readonly expiresInMs?: number
+}
+
+/** What a stored memory's event says happened to it. */
+export type MemoryWriteAction = 'inserted' | 'reinforced' | 'updated'
+
+/** Data payload for `memory_written`. METADATA ONLY (SD-3): ids, kind, tier and
+ *  action — no content and no value derived from it. A hash of a short memory
+ *  is a confirmable fingerprint of the text, and the event outlives the memory
+ *  in every other conversation that recorded it (#541). Pinned by
+ *  `event-hygiene`. */
+export interface MemoryWrittenEventData {
+  readonly memoryId: string
+  readonly kind: MemoryKind
+  readonly tier: string
+  /** The `user_message` event the memory was built from. */
+  readonly eventId: string
+  readonly ordinal: number
+  readonly action: MemoryWriteAction
+}
+
+// ============================================================================
 // LLM Call Observability
 // ============================================================================
 
@@ -1733,6 +2390,18 @@ export const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory> = {
   // The retriever's matches are surfaced as a tool_result (the channel the
   // compactExecution reads via view.fromLastPattern()) — same as a simpleLoop tool.
   retriever: ['tool_result'],
+  // The decision IS the deliverable (#418): track it so the distribution
+  // survives in ctx.events and the panel. `error` is always tracked anyway.
+  typedDecision: 'decision_made',
+  decisionRouter: 'decision_made',
+  // The recall outcome IS the deliverable (#419): which ids were attached, or
+  // why nothing was. Ids only.
+  memoryRecall: 'memory_recalled',
+  // The loop's own record IS the deliverable (#507): each decision, and one
+  // controller_action / tool_result pair per route it ran, which is the shape
+  // compactExecution's thread mode reads. The children's events are merged by
+  // the loop itself and do not pass through this filter.
+  decisionLoop: ['decision_made', 'controller_action', 'tool_result'],
 }
 
 /** Default commitStrategy by pattern type */
@@ -1746,6 +2415,13 @@ export const DEFAULT_COMMIT_STRATEGY: Record<string, CommitStrategy> = {
   compactIntent: 'always',
   planner: 'always',
   retriever: 'always',
+  // A decision a consumer acted on must stay explainable on a failed turn
+  // (`decision_made` is in ALWAYS_COMMIT_TYPES regardless, #418).
+  typedDecision: 'always',
+  decisionRouter: 'always',
+  memoryRecall: 'always',
+  // Every decision and route record must stay explainable on a failed turn.
+  decisionLoop: 'always',
 }
 
 /**
@@ -1804,6 +2480,23 @@ export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverab
   // retriever is best-effort: a backend failure yields empty matches and the
   // compactExecution answers from whatever else is in context — never fatal.
   retriever: 'recoverable',
+  // Failed decisions carry a null verdict and a recorded error.
+  typedDecision: 'recoverable',
+  // memoryRecall NEVER stops what follows it (#419): every failure ends in
+  // `memories = []` and a return. Memory is opportunistic; the turn is not.
+  memoryRecall: 'recoverable',
+  // decisionRouter has router's failure shape: a failed decision clears
+  // `data.route` and `routes()` would throw on it, so it stops the turn where
+  // it happened (parity with `router`; #418 D10). `errorSeverity: 'recoverable'`
+  // permits the consumer to handle a missing route.
+  decisionRouter: 'irrecoverable',
+  // decisionLoop classifies each failure at the EVENT, because the same pattern
+  // has both kinds: a decision that fails on the FIRST iteration means nothing
+  // ran and synthesizing would answer without the agent's tools, so that error
+  // is stamped irrecoverable and ends the turn; a failed route, a later failed
+  // decision and the iteration bound leave something to answer from, so they
+  // are recoverable (#507, N3/N5). The pattern-level value is the latter.
+  decisionLoop: 'recoverable',
   // ---------------------------------------------------------------------------
   // The FIVE best-effort types were unlisted until #273 D-d, and therefore
   // inherited `resolveConfig`'s `'irrecoverable'` fallback; the three that

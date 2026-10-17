@@ -241,6 +241,7 @@ test, both in `global-setup.ts`:
 | `09-gpu-indicator.browser.ts`        | The header's GPU indicator, which shipped computing the right thing and showing the wrong one. A cold box **reports** the state at rest, **offers** `start RTX PRO 6000` under the pointer, and is a real `<button>` — so it is operable from the keyboard, which a clickable `<div>` would look identical and fail to be. Pressing it puts a request on the wire and **that request is the shared wake ping** (`held[0].wake`), not a second wake path. Requests are PARKED and released by name, so the pending state is a fact rather than a deadline. The countdown's own rendering is pinned at layer 1 instead: this suite's `VERDA_SCALEDOWN_SECONDS: 2` makes a warm window two seconds wide, and asserting a number inside it would race the suite's own configuration. |
 | `10-pinned-conversations.browser.ts` | Pinning a conversation moves its row to the top of the sidebar — proved by which conversation the top row OPENS, not by an index — and the pinned state is legible with the cursor off the list. That last half is the reason this is a browser scenario: the pin is a hover-revealed control, so a pinned row whose glyph only appears under the cursor is present, labelled, `aria-pressed="true"` and invisible, which every layer below reads as a pass.                                                                                                                                                                                                                                                                                                                     |
 | `10-share-link.browser.ts`           | A conversation acquires a URL, survives a reload of it, and is turned into a share link that a SECOND browser context opens: the transcript is painted, the read-only banner names it, and the composer / New Chat / share / agent picker / dashboard link are ABSENT rather than disabled. Then the revocation half — the same link renders the not-found page and says nothing that admits a conversation is behind it. The one claim it cannot make (this suite runs with the dev bypass, so no context is truly anonymous) is named in the file, with the two layer-1 pins that make it instead.                                                                                                                                                                             |
+| `14-wake-failure-bubble.browser.ts`  | A wake the box refuses ends the turn with an error bubble AND leaves it in the persisted transcript: still there once the notice is gone, and rebuilt after a reload (both themes). The refusal is a 400 aimed at the wake ping, so the poll ends at once and no wake budget is spent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 ### What is NOT covered
 
@@ -320,3 +321,19 @@ look at the same thing. Then record its baseline with
 `pnpm test:e2e:browser --update-snapshots`, in a commit of its own, having looked
 at the image first — a baseline recorded in the same commit as the change that
 moved it is a baseline nobody reviewed.
+
+## Browser backend pins
+
+| Command (from `app/`)                                                      | Checks                                                                                         | When                                                                                        |
+| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `pnpm exec playwright test --config e2e-browser/pins/playwright.config.ts` | Actual dev-server fake credentials, proxy delivery, fixture enforcement, boot and final drains | `release:check`, before the browser layer; also independently, without Postgres or Chromium |
+
+Known duplication (PR #529 F4): the Node >=24.5 check and proxy environment
+are still defined in both browser setup and layer-2 setup. The shared
+`e2e/lib/egress-backstop.ts` remains read-only in this change; [follow-up #538](https://github.com/mknw/hames-playground/issues/538) tracks
+extracting `assertEnvProxyRuntime(version)` and `egressProxyEnv(url)` for both layers.
+
+The standalone `test:e2e:browser:pins` alias is deferred to
+[follow-up #539](https://github.com/mknw/hames-playground/issues/539): the existing
+CI-isolation pin refuses additional package scripts that reference this suite.
+`release:check --only browser-pins` runs this config through the release reporter.

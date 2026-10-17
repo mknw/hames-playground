@@ -65,7 +65,10 @@ import {
   createEvent,
   HitlAnswerError,
   type ConfiguredPattern,
+  type MemoryConfig,
+  type MemoryWrittenEventData,
   type ContextEvent,
+  type ErrorEventData,
   type HarnessResultScoped,
   type HitlDecidedBy,
   type HitlRequestEventData,
@@ -81,7 +84,14 @@ import {
   type LoadedSession,
   type SessionData,
 } from './session.server'
-import { runWithRequestContext, isAttendedRequest } from './request-user.server'
+import { startTurnMemory } from '../memory/config.server'
+import { settleMemory } from '@hames-ai/harness-patterns/memory-store.server'
+import { memoryStoreConfig } from '@hames-ai/harness-patterns/patterns/withMemory.server'
+import {
+  runWithRequestContext,
+  isAttendedRequest,
+  setRequestMemoryAllowed,
+} from './request-user.server'
 import { canonicalAgentId } from './agent-ids'
 import { amendRunFrame, withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { activeInferenceTier, assertInferenceTier } from '@hames-ai/harness-baml/clients.server'
@@ -91,7 +101,7 @@ import type { InferenceTier } from '../inference/config.server'
 import { resolveConversationTier } from '../inference/tier.server'
 import { beginVerdaTurn, endVerdaTurn } from '../inference/verda-activity.server'
 import { runWithColdStartWatch, type ColdStartEstimate } from '../inference/cold-start.server'
-import { ensureVerdaAwake } from '../inference/wake.server'
+import { ensurePrivateTierAwake } from '../inference/wake.server'
 import { recordTurn } from '../metrics/usage-recorder.server'
 import type { HarnessSettings } from '../settings'
 import { runFirstTurnTitleGen } from '@hames-ai/agents/agents/title-generator.server'
@@ -359,6 +369,11 @@ async function runOneTurn(
   const { sessionId, userId } = req
   // Refused here, before anything runs, when another turn holds the row.
   const held = await claimTurn(req, tier)
+  // #553 option 1: recall, wake and settle share the persisted run-origin gate.
+  const memoryAllowed =
+    req.mode === 'interactive' ||
+    (req.mode === 'resume' && held.loaded?.memoryRunOrigin === 'interactive')
+  setRequestMemoryAllowed(memoryAllowed)
   // The lease is renewed for as long as this turn holds it, so a slow turn
   // keeps its conversation and only a dead process loses it.
   const renewal = setInterval(() => {
@@ -378,7 +393,12 @@ async function runOneTurn(
   }, TURN_CLAIM_RENEW_MS)
   renewal.unref?.()
 
-  let ran: { agentId: string; result: HarnessResultScoped<SessionData>; saved: SavedTurn }
+  let ran: {
+    agentId: string
+    result: HarnessResultScoped<SessionData>
+    saved: SavedTurn
+    memory?: MemoryConfig
+  }
   try {
     ran =
       req.mode === 'resume'
@@ -412,7 +432,7 @@ async function runOneTurn(
   // all three scopes, so it keeps them for its whole continuation (the
   // tier scope included: a detached summarization must not silently
   // change provider halfway through a turn).
-  void compactAndSave(req, result, titleWarned, saved)
+  void compactAndSave(req, result, titleWarned, saved, memoryAllowed ? ran.memory : undefined)
   return result
 }
 
@@ -545,8 +565,9 @@ function planTurn(
  *
  * Both are the same defect: a routine, network-dependent failure on the tier
  * that is the deployment DEFAULT, against a box whose documented behaviour is to
- * be asleep. #278's reaper is a 90-minute backstop (it is derived from the
- * per-call ceiling this PR halved, so it moved with it), not the designed path.
+ * be asleep. #278's reaper is a backstop (it reaps on a dead turn lease since #507 P2,
+ * with an age bound derived from the per-call ceiling this PR halved), not the
+ * designed path.
  * So the ping happens here, first, inside the try — every entry point ends its
  * row in an error state, chat or not.
  *
@@ -555,8 +576,8 @@ function planTurn(
  * `getOrBuildPatterns` so the private tier's first act is still to get the box
  * up rather than to build patterns against a gateway while the GPU sleeps. The
  * announcement seam is unchanged: `runTurnAndPersist` still opens the cold-start
- * watch around all of this, so `ensureVerdaAwake`'s `noteVerdaCallStarting` sees
- * the listener and the `warming` frame still lands INSIDE the wait.
+ * watch around all of this, so `ensurePrivateTierAwake` calls `noteBoxCallStarting`
+ * once per box; each sees the listener and the `warming` frame still lands INSIDE the wait.
  */
 async function runAndSave(
   req: TurnRequest,
@@ -564,7 +585,7 @@ async function runAndSave(
   run: RunFn,
   tier: InferenceTier,
   held: HeldTurn,
-): Promise<{ result: HarnessResultScoped<SessionData>; saved: SavedTurn }> {
+): Promise<{ result: HarnessResultScoped<SessionData>; saved: SavedTurn; memory?: MemoryConfig }> {
   const { sessionId, userId } = req
   try {
     // WAKE THEN RUN. The self-hosted box scales to zero, so on the private tier
@@ -576,7 +597,7 @@ async function runAndSave(
     // THROWS, which is what ends the turn as a visible error rather than handing
     // the harness a box that is not there — see the SSE route's `catch`, and the
     // `catch` below for the row.
-    if (tier === 'verda') await ensureVerdaAwake()
+    if (tier === 'verda') await ensurePrivateTierAwake()
     // THE LISTENER'S SCOPE IS THIS RUN, not the turn — see the frame opened in
     // `runTurnAndPersist`. Amending it here rather than filling the turn frame's
     // slot is what keeps the title agent and the detached compaction, both
@@ -589,6 +610,7 @@ async function runAndSave(
     // `attended` (m8), read from the request scope `runTurnAndPersist` wrote —
     // not a second derivation.
     const patterns = await getOrBuildPatterns(sessionId, agentId)
+    const memory = await startTurnMemory(patterns, agentDeps().memory)
     const result = await amendRunFrame(
       { live: req.onEvent, hitl: { attended: isAttendedRequest() } },
       () => run(patterns),
@@ -601,12 +623,19 @@ async function runAndSave(
     const version = await saveSession(sessionId, userId, agentId, result.serialized, {
       version: held.version,
       inferenceTier: tier,
+      memoryRunOrigin: req.mode === 'interactive' ? 'interactive' : 'triggered',
     })
     held.released = true
-    return { result, saved: { version, eventCount: result.context.events.length } }
+    return { result, memory, saved: { version, eventCount: result.context.events.length } }
   } catch (err) {
     console.error(`[turn] run failed for ${sessionId}:`, err)
     held.released = true
+    // The failure is RECORDED in the transcript before the row is let go — the
+    // live stream's `error` frame is the only other place it exists, and a
+    // reload (or opening a triggered run) rebuilds the transcript from the blob
+    // alone. A claim that was lost, or a row that cannot be read, falls through
+    // to the plain release below, which is the old behaviour.
+    if (await recordRunFailure(req, agentId, tier, held, err)) throw err
     await dbReleaseConversationClaim(sessionId, userId, held.version, { failed: true }).catch(
       (statusErr: unknown) => {
         console.error(
@@ -618,6 +647,69 @@ async function runAndSave(
       },
     )
     throw err
+  }
+}
+
+/**
+ * Write a failed turn into the conversation's own blob and release the claim in
+ * the same statement: the turn's user message (when the stored blob does not
+ * hold it yet), an irrecoverable `error` event, and `status: 'error'`.
+ *
+ * `replayMessages` turns that event into the same bubble the live stream
+ * painted, so a failure that ends the turn before the harness produced a single
+ * event — a wake that never answered — survives a reload instead of leaving an
+ * empty transcript under an `error` badge.
+ *
+ * Resolves `false` when nothing was written (row unreadable, claim lost, save
+ * refused); the caller then releases the claim without a blob, as before. An
+ * interactive first message and a triggered run already have a seeded blob
+ * holding their input; only a CONTINUED conversation needs the new message
+ * added, and one whose agent changed starts over exactly as `planTurn` does
+ * (the stored history is replaced, as a successful turn's save would).
+ *
+ * The persisted text is the SAME string the live `error` frame carries
+ * (`routes/api/events.ts`), capped at {@link PERSISTED_ERROR_MAX}: it is stored
+ * for every failure in `runAndSave`, not only the wake, and a stored blob has no
+ * expiry. The column is encrypted, and the shared-conversation projection drops
+ * error bubbles.
+ */
+const PERSISTED_ERROR_MAX = 2000
+
+async function recordRunFailure(
+  req: TurnRequest,
+  agentId: string,
+  tier: InferenceTier,
+  held: HeldTurn,
+  err: unknown,
+): Promise<boolean> {
+  const { sessionId, userId } = req
+  try {
+    const row = await dbLoadConversation(sessionId, userId)
+    if (!row) return false
+    let ctx = deserializeContext<SessionData>(row.serializedContext)
+    if (req.mode === 'interactive' && held.loaded) {
+      ctx =
+        held.loaded.agentId === agentId
+          ? ctx
+          : createContext<SessionData>(req.message, undefined, sessionId)
+      if (held.loaded.agentId === agentId) {
+        ctx.events.push(createEvent('user_message', 'harness', { content: req.message }))
+      }
+    }
+    const data: ErrorEventData = {
+      error: (err instanceof Error ? err.message : String(err)).slice(0, PERSISTED_ERROR_MAX),
+      severity: 'irrecoverable',
+    }
+    ctx.events.push(createEvent('error', 'harness', data))
+    ctx.status = 'error'
+    await saveSession(sessionId, userId, agentId, serializeContext(ctx), {
+      version: held.version,
+      inferenceTier: tier,
+    })
+    return true
+  } catch (writeErr) {
+    console.error('[turn] could not record the failure in %s:', sessionId, writeErr)
+    return false
   }
 }
 
@@ -813,7 +905,12 @@ async function runResumeAndSave(
   req: Extract<TurnRequest, { mode: 'resume' }>,
   tier: InferenceTier,
   held: HeldTurn,
-): Promise<{ agentId: string; result: HarnessResultScoped<SessionData>; saved: SavedTurn }> {
+): Promise<{
+  agentId: string
+  result: HarnessResultScoped<SessionData>
+  saved: SavedTurn
+  memory?: MemoryConfig
+}> {
   const { sessionId, userId } = req
   // `claimTurn` refuses a resume that loads no session, so this is never null
   // here; the assertion keeps the type honest without a cast.
@@ -859,8 +956,9 @@ async function runResumeAndSave(
     // WAKE THEN RUN — the same rule as `runAndSave`, minus the stop-only
     // case (A5): a resume whose answers all stop the run makes no model
     // call, so it must not pay a cold start either.
-    if (tier === 'verda' && !plan.stopOnly) await ensureVerdaAwake()
+    if (tier === 'verda' && !plan.stopOnly) await ensurePrivateTierAwake()
     const patterns = await getOrBuildPatterns(sessionId, loaded.agentId)
+    const memory = !plan.stopOnly ? await startTurnMemory(patterns, agentDeps().memory) : undefined
     const result = await amendRunFrame(
       { live: req.onEvent, hitl: { attended: isAttendedRequest() } },
       () =>
@@ -890,6 +988,7 @@ async function runResumeAndSave(
     return {
       agentId: loaded.agentId,
       result,
+      memory,
       saved: { version, eventCount: result.context.events.length },
     }
   } catch (err) {
@@ -1008,7 +1107,14 @@ async function compactAndSave(
   result: HarnessResultScoped<SessionData>,
   mustPersist: boolean,
   saved: SavedTurn,
+  memory?: MemoryConfig,
 ): Promise<void> {
+  const before = result.context.events.length
+  if (memory) {
+    // The row id claimTurn created/claimed, never core's fresh context id.
+    await settleMemory(result.context, memoryStoreConfig(memory), { conversationId: req.sessionId })
+  }
+  mustPersist ||= result.context.events.length !== before
   let persisted = false
   const persist = async (): Promise<void> => {
     persisted = true
@@ -1130,6 +1236,24 @@ export function mergeTrailingPass<T>(
   }
   let anchor = ours.events[savedCount - 1]?.id
   for (const event of ours.events.slice(savedCount)) {
+    // A load may have re-derived this reference from its committed source row
+    // while this save was pending (G9 Q2). One (eventId, ordinal) is one write:
+    // the settle's own record replaces the derived copy rather than joining it.
+    if (event.type === 'memory_written') {
+      const d = event.data as MemoryWrittenEventData
+      const at = fresh.events.findIndex(
+        (e) =>
+          e.type === 'memory_written' &&
+          (e.data as MemoryWrittenEventData).eventId === d.eventId &&
+          (e.data as MemoryWrittenEventData).ordinal === d.ordinal,
+      )
+      if (at !== -1) {
+        fresh.events[at] = event
+        present.add(event.id)
+        anchor = event.id
+        continue
+      }
+    }
     if (event.id === undefined || !present.has(event.id)) {
       const at = anchor === undefined ? -1 : fresh.events.findIndex((e) => e.id === anchor)
       fresh.events.splice(at === -1 ? fresh.events.length : at + 1, 0, event)

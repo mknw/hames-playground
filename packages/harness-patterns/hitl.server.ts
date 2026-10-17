@@ -72,7 +72,7 @@ import {
 } from './context.server'
 import { redactReport, sanitizeUntrusted } from './injection-guard'
 import { emitLive } from './live-event-context.server'
-import { activeRunFrame } from './run-frame.server'
+import { activeRunFrame, currentRunFrame } from './run-frame.server'
 import type {
   AssistantMessageEventData,
   ConfiguredPattern,
@@ -231,16 +231,22 @@ export class HitlRequestError extends Error {
 
 const UNATTENDED_RULES: ReadonlySet<HitlUnattended> = new Set(['apply-default', 'park', 'stop'])
 
+function refuseAs(message: string, who: string): never {
+  throw new HitlRequestError(`${who}: ${message}`)
+}
+
 function refuse(message: string): never {
-  throw new HitlRequestError(`askHuman: ${message}`)
+  return refuseAs(message, 'askHuman')
 }
 
 /** May the unattended rule pick this option? Only when it says so, and only
  *  when it can be picked at all [P4]. */
 const pickable = (o: HitlOption): boolean => o.unattended === true && !o.unavailable
 
-/** Validation at raise (spec §1, with the #472 amendment on ':'). */
-function validate(request: HitlRequest): void {
+/** Validation at raise (spec §1, with the #472 amendment on ':'). `who` names
+ *  the raising function in the refusal. */
+function validate(request: HitlRequest, who = 'askHuman'): void {
+  const refuse = (message: string): never => refuseAs(message, who)
   if (typeof request.kind !== 'string' || request.kind.includes(':')) {
     refuse(`kind must be a string without ':' (got ${JSON.stringify(request.kind)})`)
   }
@@ -490,8 +496,13 @@ export type HitlAnswerErrorCode =
 export class HitlAnswerError extends Error {
   readonly code: HitlAnswerErrorCode
   readonly requestId?: string
-  constructor(code: HitlAnswerErrorCode, message: string, requestId?: string) {
-    super(`resumeHarness refused (${code}): ${message}`)
+  constructor(
+    code: HitlAnswerErrorCode,
+    message: string,
+    requestId?: string,
+    by = 'resumeHarness',
+  ) {
+    super(`${by} refused (${code}): ${message}`)
     this.name = 'HitlAnswerError'
     this.code = code
     if (requestId !== undefined) this.requestId = requestId
@@ -517,6 +528,68 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)
 
 const own = (o: object, key: string): boolean => Object.prototype.hasOwnProperty.call(o, key)
+
+/**
+ * Step 5 of the binding, for ONE request: the answer's choice is an option of
+ * THAT request event (`invalid-choice`), an available one
+ * (`unavailable-option`), its flags are that option's flags (`invalid-flag`),
+ * and every required flag is set true by the answer itself (`required-flag`) —
+ * a default does not confirm. Shared by a resume and by {@link answerProposal},
+ * so a proposal is held to exactly the checks a pause is. Throws; writes
+ * nothing.
+ */
+function checkChoice(
+  request: HitlRequestEventData,
+  raw: unknown,
+  by = 'resumeHarness',
+): AcceptedAnswer {
+  const choice = typeof raw === 'string' ? raw : isRecord(raw) ? raw.choice : undefined
+  const option =
+    typeof choice === 'string' ? request.options.find((o) => o.id === choice) : undefined
+  if (!option) {
+    throw new HitlAnswerError(
+      'invalid-choice',
+      `the answer to ${request.requestId} is not one of its options`,
+      request.requestId,
+      by,
+    )
+  }
+  if (option.unavailable) {
+    throw new HitlAnswerError(
+      'unavailable-option',
+      `'${option.id}' is not available on ${request.requestId}`,
+      request.requestId,
+      by,
+    )
+  }
+  const sent = isRecord(raw) ? raw.flags : undefined
+  if (sent !== undefined && !isRecord(sent)) {
+    throw new HitlAnswerError('invalid-flag', 'flags must be an object', request.requestId, by)
+  }
+  const declared = option.flags ?? []
+  for (const [id, value] of Object.entries(sent ?? {})) {
+    if (typeof value !== 'boolean' || !declared.some((f) => f.id === id)) {
+      throw new HitlAnswerError(
+        'invalid-flag',
+        `a flag is not one '${option.id}' declares`,
+        request.requestId,
+        by,
+      )
+    }
+  }
+  for (const flag of declared) {
+    if (flag.required && sent?.[flag.id] !== true) {
+      throw new HitlAnswerError(
+        'required-flag',
+        `'${option.id}' needs '${flag.id}' confirmed`,
+        request.requestId,
+        by,
+      )
+    }
+  }
+  const flags = { ...defaultFlags(option), ...(sent as Record<string, boolean> | undefined) }
+  return { request, option, answer: { choice: option.id, flags } }
+}
 
 /**
  * The binding (P1), steps 1–6 of the spec: checks only, in order, and the
@@ -589,51 +662,7 @@ export function checkResume(
     }
   }
 
-  const accepted = pending.map((request): AcceptedAnswer => {
-    const raw = given[request.requestId]
-    const choice = typeof raw === 'string' ? raw : isRecord(raw) ? raw.choice : undefined
-    const option =
-      typeof choice === 'string' ? request.options.find((o) => o.id === choice) : undefined
-    if (!option) {
-      throw new HitlAnswerError(
-        'invalid-choice',
-        `the answer to ${request.requestId} is not one of its options`,
-        request.requestId,
-      )
-    }
-    if (option.unavailable) {
-      throw new HitlAnswerError(
-        'unavailable-option',
-        `'${option.id}' is not available on ${request.requestId}`,
-        request.requestId,
-      )
-    }
-    const sent = isRecord(raw) ? raw.flags : undefined
-    if (sent !== undefined && !isRecord(sent)) {
-      throw new HitlAnswerError('invalid-flag', 'flags must be an object', request.requestId)
-    }
-    const declared = option.flags ?? []
-    for (const [id, value] of Object.entries(sent ?? {})) {
-      if (typeof value !== 'boolean' || !declared.some((f) => f.id === id)) {
-        throw new HitlAnswerError(
-          'invalid-flag',
-          `a flag is not one '${option.id}' declares`,
-          request.requestId,
-        )
-      }
-    }
-    for (const flag of declared) {
-      if (flag.required && sent?.[flag.id] !== true) {
-        throw new HitlAnswerError(
-          'required-flag',
-          `'${option.id}' needs '${flag.id}' confirmed`,
-          request.requestId,
-        )
-      }
-    }
-    const flags = { ...defaultFlags(option), ...(sent as Record<string, boolean> | undefined) }
-    return { request, option, answer: { choice: option.id, flags } }
-  })
+  const accepted = pending.map((request) => checkChoice(request, given[request.requestId]))
 
   const startAt = pending[0].resumeAt?.index
   const sameChain = (r: HitlRequestEventData): boolean =>
@@ -806,6 +835,226 @@ function closeUnanswered(
   }
   substituteHeld(ctx, outcomes)
   return requests.map((r) => r.requestId)
+}
+
+// ============================================================================
+// Proposals (#433 S11, #419 M6)
+// ============================================================================
+//
+// A proposal is a request raised from OUTSIDE a run — a post-reply hook such as
+// `settleMemory` — so it is non-blocking: it pauses nothing, resumes nothing and
+// has no held result to substitute. It is still two events in the context
+// (ADR-0009): a `hitl_request` with `blocking: false` and, later, the person's
+// `hitl_response`. It differs from a blocking request in WHERE it is read:
+// `readHitl` windows to the current run and ignores it, because a proposal
+// outlives the turn that raised it — a person answers it on a later turn, from
+// a popup, up to its `expiresAt` (`expireHitl` closes it then).
+
+/** The non-blocking requests of the whole log that no response answers, in
+ *  raise order. */
+function openProposals(events: readonly ContextEvent[]): HitlRequestEventData[] {
+  const answered = new Set<string>()
+  for (const event of events) {
+    if (event.type === 'hitl_response' && isResponse(event)) answered.add(event.data.requestId)
+  }
+  const seen = new Set<string>()
+  const open: HitlRequestEventData[] = []
+  for (const event of events) {
+    if (event.type !== 'hitl_request' || !isRequest(event)) continue
+    const r = event.data
+    if (seen.has(r.requestId)) continue
+    seen.add(r.requestId)
+    if (!r.blocking && !answered.has(r.requestId)) open.push(r)
+  }
+  return open
+}
+
+/**
+ * The proposals still waiting for a person, read from the WHOLE log (a
+ * proposal outlives its turn). Pure. With `now`, a proposal past its
+ * `expiresAt` is left out — {@link answerProposal} refuses one as `expired`
+ * either way, and {@link expireHitl} is what closes it.
+ */
+export function readProposals(
+  ctx: Pick<UnifiedContext, 'events'>,
+  now?: number,
+): readonly HitlRequestEventData[] {
+  const open = openProposals(ctx.events)
+  return now === undefined ? open : open.filter((r) => !pastDue(r, now))
+}
+
+/**
+ * Raise a request from outside a run and record it in the context — no pause,
+ * no resume. In order:
+ *
+ * 1. Validate the request like {@link askHuman}; an invalid one throws
+ *    {@link HitlRequestError}.
+ * 2. Replay: a proposal this log already holds for the same kind, key and
+ *    option set is NOT raised again — answered (or closed by expiry) returns
+ *    `answered` with what was recorded, still open returns `pending`. A
+ *    settle that runs twice for one turn therefore never asks twice.
+ * 3. Otherwise a new `requestId` (a UUID v4), `blocking: false`, stamped with
+ *    the opaque tier of the open frame when there is one. Nobody there
+ *    (`attended: false`) and a rule other than `park`: the rule decides, and
+ *    an `unattended` response is recorded beside the request.
+ *
+ * It writes straight into `ctx.events` and never through `trackEvent`, so
+ * nothing here reaches a live listener — a proposal is never the transcript.
+ */
+export function proposeToHuman<C extends string>(
+  ctx: Pick<UnifiedContext, 'events'>,
+  request: HitlRequest<C>,
+  at: { readonly attended: boolean; readonly patternId?: string },
+): HitlOutcome<C> {
+  validate(request, 'proposeToHuman')
+  const kind = request.kind
+  const key = `${kind}:${request.key ?? defaultKey(request)}`
+  const identity = hitlReplayKey({ kind, key, options: request.options })
+
+  const responses = new Map<string, HitlResponseEventData>()
+  for (const event of ctx.events) {
+    if (event.type === 'hitl_response' && isResponse(event)) {
+      if (!responses.has(event.data.requestId)) responses.set(event.data.requestId, event.data)
+    }
+  }
+  let runId = ''
+  for (let i = ctx.events.length - 1; i >= 0; i--) {
+    if (ctx.events[i].type === 'user_message') {
+      runId = ctx.events[i].id ?? ''
+      break
+    }
+  }
+  for (const event of ctx.events) {
+    if (event.type !== 'hitl_request' || !isRequest(event) || event.data.blocking) continue
+    if (hitlReplayKey(event.data) !== identity) continue
+    const earlier = responses.get(event.data.requestId)
+    if (!earlier) return { status: 'pending', requestId: event.data.requestId }
+    return {
+      status: 'answered',
+      requestId: earlier.requestId,
+      choice: earlier.choice as C | null,
+      flags: earlier.flags ?? {},
+      by: earlier.by,
+    }
+  }
+
+  const requestId = randomUUID()
+  const rule = request.unattended ?? 'apply-default'
+  const tier = currentRunFrame()?.inference?.tier
+  const patternId = at.patternId ?? 'harness'
+  const data: HitlRequestEventData = {
+    v: 1,
+    requestId,
+    runId,
+    key,
+    kind,
+    question: request.question,
+    options: request.options,
+    defaultOption: request.defaultOption,
+    unattended: rule,
+    summary: request.summary ?? {},
+    ...(request.payloadRef !== undefined ? { payloadRef: request.payloadRef } : {}),
+    ...(request.expiresInMs !== undefined ? { expiresAt: Date.now() + request.expiresInMs } : {}),
+    blocking: false,
+    ...(tier !== undefined ? { tier } : {}),
+  }
+  ctx.events.push(mintHitlEvent('hitl_request', patternId, data))
+
+  if (!at.attended && rule !== 'park') {
+    const { choice } = resolveUnattended(request)
+    const flags = defaultFlags(request.options.find((o) => o.id === choice))
+    ctx.events.push(
+      mintHitlEvent('hitl_response', patternId, {
+        v: 1,
+        requestId,
+        key,
+        kind,
+        choice,
+        ...(Object.keys(flags).length > 0 ? { flags } : {}),
+        by: 'unattended',
+      }),
+    )
+    return { status: 'answered', requestId, choice, flags, by: 'unattended' }
+  }
+  return { status: 'pending', requestId }
+}
+
+/** One proposal answer that passed every check. */
+export interface AnsweredProposal {
+  /** The proposal as recorded — frozen, so the host reads what the person saw. */
+  readonly request: HitlRequestEventData
+  readonly choice: string
+  readonly flags: Readonly<Record<string, boolean>>
+}
+
+/**
+ * Record a person's answers to open proposals. Every answer must pass before
+ * any is recorded — a refusal throws {@link HitlAnswerError} and leaves the
+ * context untouched:
+ *
+ * - it names an OPEN proposal (`unknown-request`): a blocking request, an
+ *   answered one, a closed one and a made-up id are all the same refusal, so a
+ *   replay or a double submit cannot answer twice, and an answer meant for a
+ *   pause cannot be redirected into one;
+ * - the proposal is not past due (`expired`);
+ * - the choice is an available option of THAT request event, its flags are
+ *   that option's, and every required flag is set true by the answer itself
+ *   (`invalid-choice`, `unavailable-option`, `invalid-flag`, `required-flag`) —
+ *   the checks a resume applies.
+ *
+ * Unlike a resume, answers may cover only some of the open proposals. Nothing
+ * here decides what an answer DOES — the host writes (or declines to write)
+ * what the proposal described, and records this answer in the same save as
+ * the outcome. `principal` comes from the host's session, never from the
+ * client; `by` is always `'person'`.
+ */
+export function answerProposal(
+  ctx: Pick<UnifiedContext, 'events'>,
+  answers: HitlAnswers,
+  opts: { readonly principal?: string; readonly now?: number; readonly patternId?: string } = {},
+): readonly AnsweredProposal[] {
+  const by = 'answerProposal'
+  const given: Record<string, unknown> = isRecord(answers) ? answers : {}
+  const ids = Object.keys(given)
+  if (ids.length === 0) {
+    throw new HitlAnswerError('missing-answer', 'no answer was given', undefined, by)
+  }
+  const open = new Map(openProposals(ctx.events).map((r) => [r.requestId, r]))
+  const now = opts.now ?? Date.now()
+  const accepted = ids.map((id) => {
+    const request = open.get(id)
+    if (!request) {
+      throw new HitlAnswerError(
+        'unknown-request',
+        'an answer names no open proposal',
+        undefined,
+        by,
+      )
+    }
+    if (pastDue(request, now)) {
+      throw new HitlAnswerError('expired', `proposal ${id} is past due`, id, by)
+    }
+    return checkChoice(request, given[id], by)
+  })
+  ctx.events.push(
+    ...accepted.map(({ request, option, answer }) =>
+      mintHitlEvent('hitl_response', opts.patternId ?? 'harness', {
+        v: 1,
+        requestId: request.requestId,
+        key: request.key,
+        kind: request.kind,
+        choice: answer.choice,
+        ...(option.flags?.length ? { flags: answer.flags } : {}),
+        by: 'person',
+        ...(opts.principal !== undefined ? { principal: opts.principal } : {}),
+      }),
+    ),
+  )
+  return accepted.map(({ request, answer }) => ({
+    request,
+    choice: answer.choice,
+    flags: answer.flags,
+  }))
 }
 
 /** Is this a gated executor's placeholder? */

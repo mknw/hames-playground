@@ -50,7 +50,9 @@ import {
   promptText,
   type ChatMessage,
 } from '../lib/baml-functions'
-import { VERDA_MODEL } from '../lib/mode'
+import { takeEgressAttempts } from '../lib/egress-backstop'
+import { checkAfterAll, checkAfterEach } from '../lib/setup-checks'
+import { IS_HERMETIC, VERDA_MODEL } from '../lib/mode'
 
 type Renderer = () => Promise<{ body: { json: () => unknown } }>
 
@@ -102,7 +104,26 @@ beforeAll(async () => {
     result: 'rows',
   }
   renderers = {
-    Router: () => rq('Router')('m', [{ name: 'neo4j', description: 'd' }], [], via),
+    ExtractMemory: () =>
+      rq('ExtractMemory')(
+        'episodic',
+        'User: I prefer concise replies.',
+        'I prefer concise replies.',
+        via,
+      ),
+    CompactMemories: () =>
+      rq('CompactMemories')(
+        'episodic',
+        [
+          {
+            content: 'I prefer concise replies.',
+            evidence: 'I prefer concise replies.',
+            last_seen: '2026-01-01',
+          },
+        ],
+        via,
+      ),
+    Router: () => rq('Router')('m', [{ name: 'neo4j', description: 'd' }], [], null, via),
     // Ten positional parameters, then the options bag. Counting matters more
     // than it looks: an extra `null` pushes `via` past the options slot, the
     // render silently falls back to the DECLARED Anthropic chain, and the
@@ -112,7 +133,7 @@ beforeAll(async () => {
     ActorController: () =>
       rq('ActorController')('m', 'i', tools, [], null, null, null, null, null, via),
     Critic: () => rq('Critic')('i', [attempt], via),
-    Synthesize: () => rq('Synthesize')('m', 'i', [], false, null, via),
+    Synthesize: () => rq('Synthesize')('m', 'i', [], false, null, null, via),
     ResultDescribe: () => rq('ResultDescribe')('search', '{}', 'r', 'rows', via),
     ResultDescribeBatch: () =>
       rq('ResultDescribeBatch')(
@@ -121,6 +142,7 @@ beforeAll(async () => {
       ),
     CompactIntent: () => rq('CompactIntent')([], 'latest', via),
     Planner: () => rq('Planner')('m', 'i', tools, null, via),
+    PlannerThinking: () => rq('PlannerThinking')('m', 'i', tools, null, via),
     ScreenUntrustedContent: () => rq('ScreenUntrustedContent')('web', 'content', via),
     RetrieveQuery: () => rq('RetrieveQuery')([], 'latest', via),
     ReferenceSelector: () => rq('ReferenceSelector')('i', [], [], via),
@@ -129,6 +151,26 @@ beforeAll(async () => {
 })
 
 describe('the fake recognises every BAML function', () => {
+  it('knows all sixteen functions including memory and the dormant planner twin', () => {
+    expect(declared).toHaveLength(16)
+    for (const name of ['ExtractMemory', 'CompactMemories']) {
+      expect(declared).toContain(name)
+      expect(ALL_BAML_FUNCTIONS).toContain(name)
+    }
+  })
+
+  it('refuses an explicit production client absent from the fake registry before networking', async () => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const options = (
+      b as unknown as {
+        bamlOptions: NonNullable<Parameters<typeof b.request.GenerateConversationTitle>[1]>
+      }
+    ).bamlOptions
+    await expect(
+      b.request.GenerateConversationTitle('state', { ...options, client: 'AnthropicHaiku45' }),
+    ).rejects.toThrow('e2e hermetic routing refused client AnthropicHaiku45')
+  })
+
   it('covers every function the classifier can name', () => {
     // Guards against the guard going vacuous: a function added to MARKERS but
     // not rendered here would never be checked.
@@ -191,4 +233,251 @@ describe('the fake recognises every BAML function', () => {
       expect(classifyPrompt(text)).toBe(name)
     })
   }
+})
+
+// #418 T4. The Jev transport is a REST adapter, so no `b.request` render can
+// check it; this drives the REAL transport at the fake instead. The fake exists
+// so a hermetic run never reaches OpenRouter — it is only worth that while the
+// transport and the fake agree on the wire.
+describe("the fake's Jev endpoint (Decisions API)", () => {
+  const SET = {
+    key: 'turn',
+    fields: {
+      route: {
+        key: 'route',
+        question: 'Which route?',
+        labels: [
+          { id: 'search', description: 'look something up' },
+          { id: 'chat', description: 'just talk' },
+        ],
+      },
+    },
+  }
+
+  it('answers the shipped transport with typed probabilities, recorded under the Jev model id', async () => {
+    const { fakeLlm } = await bootApp()
+    fakeLlm.reset()
+    const { createJevTransport } = await import('@hames-ai/harness-baml/jev-decide.server')
+    const r = await createJevTransport().decideAll({ spec: SET, state: 's' })
+    expect(r.fields.route.method).toBe('jev')
+    expect(r.fields.route.probs.search).toBeCloseTo(0.9, 9)
+    expect(r.fields.route.llmCall?.metrics?.basis).toBe('provider')
+    expect(fakeLlm.calls.map((c) => [c.model, c.outcome, c.endpoint])).toEqual([
+      ['typesafe/jev-1.13', 'ok', 'jev'],
+    ])
+  })
+
+  it('records the private decide client under the private endpoint', async () => {
+    const { fakeLlm } = await bootApp()
+    fakeLlm.reset()
+    const { createJevTransport } = await import('@hames-ai/harness-baml/jev-decide.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+    const r = await withRunFrame({ inference: { tier: 'verda' } }, () =>
+      createJevTransport().decideAll({ spec: SET, state: 's' }),
+    )
+    expect(r.fields.route.llmCall?.clientName).toBe('PrivateSystemOne')
+    expect(fakeLlm.calls.map((c) => c.endpoint)).toEqual(['private'])
+  })
+
+  it('an armed status fault is a Jev error the transport fails closed on', async () => {
+    const { fakeLlm } = await bootApp()
+    fakeLlm.reset()
+    fakeLlm.arm({ kind: 'status', status: 500, times: 1 })
+    const { createJevTransport } = await import('@hames-ai/harness-baml/jev-decide.server')
+    await expect(createJevTransport().decideAll({ spec: SET, state: 's' })).rejects.toThrow(
+      /Jev answered HTTP 500/,
+    )
+    expect(fakeLlm.calls.map((c) => c.outcome)).toEqual(['status'])
+    fakeLlm.reset()
+  })
+})
+
+describe.runIf(IS_HERMETIC)('hermetic transport backstop', () => {
+  it('afterEach fails on a recorded refusal even when fetch rejection was swallowed', async () => {
+    await fetch('https://hermetic-enforce.invalid/').catch(() => {})
+    await expect(checkAfterEach()).rejects.toThrow('CONNECT hermetic-enforce.invalid:443')
+  })
+
+  it('afterAll fails on a recorded refusal even when fetch rejection was swallowed', async () => {
+    await fetch('https://hermetic-enforce.invalid/').catch(() => {})
+    await expect(checkAfterAll()).rejects.toThrow('after the last test')
+  })
+
+  it('enforces unexpected egress in both setup hooks', () => {
+    const setup = readFileSync(new URL('../setup.ts', import.meta.url), 'utf8')
+    expect(setup).toMatch(/^afterEach\(checkAfterEach\)$/m)
+    expect(setup).toMatch(/^afterAll\(checkAfterAll\)$/m)
+  })
+
+  const target = 'hermetic-backstop.invalid:443'
+  async function registry() {
+    const { ClientRegistry } = await import('@boundaryml/baml')
+    const r = new ClientRegistry()
+    r.addLlmClient('E2EEgressProbe', 'openai-generic', {
+      base_url: 'https://hermetic-backstop.invalid/v1',
+      api_key: 'e2e-fake-key',
+      model: 'fake',
+    })
+    r.setPrimary('E2EEgressProbe')
+    return r
+  }
+  async function recordedRefusal(call: () => Promise<unknown>, expected = target) {
+    await expect(call()).rejects.toThrow()
+    const attempts = await takeEgressAttempts()
+    expect(attempts.length).toBeGreaterThan(0)
+    expect(attempts).toEqual(attempts.map(() => ({ method: 'CONNECT', target: expected })))
+  }
+  it('records a real BAML call with a replacing per-call registry', async () => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const r = await registry()
+    await recordedRefusal(() => b.GenerateConversationTitle('x', { clientRegistry: r }))
+  })
+  it('records Node fetch at the transport', async () => {
+    await recordedRefusal(() => fetch('https://hermetic-backstop.invalid/'))
+  })
+  it('records the consumer client layer bypass', async () => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { activateConsumerClients, defineInferenceClients } =
+      await import('@hames-ai/harness-baml/consumer-clients.server')
+    const { clientOverrideFor } = await import('@hames-ai/harness-baml/clients.server')
+    activateConsumerClients(
+      defineInferenceClients({
+        clients: [
+          {
+            name: 'E2EConsumer',
+            provider: 'openai-generic',
+            options: {
+              base_url: 'https://hermetic-backstop.invalid/v1',
+              api_key: 'e2e-fake-key',
+              model: 'fake',
+            },
+          },
+        ],
+        byRole: { describe: 'E2EConsumer' },
+      }),
+    )
+    try {
+      await recordedRefusal(() => b.GenerateConversationTitle('x', clientOverrideFor('describe')))
+    } finally {
+      activateConsumerClients(undefined)
+    }
+  })
+  it.each([true, false])('records a per-run registry bypass (named=%s)', async (named) => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { clientOverrideFor } = await import('@hames-ai/harness-baml/clients.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+    const r = await registry()
+    await withRunFrame(
+      {
+        inference: {
+          tier: 'anthropic',
+          clientOverride: () => ({
+            clientRegistry: r,
+            ...(named ? { client: 'E2EEgressProbe' } : {}),
+          }),
+        },
+      },
+      async () => {
+        await recordedRefusal(() => b.GenerateConversationTitle('x', clientOverrideFor('describe')))
+      },
+    )
+  })
+  it('records b.withOptions bypassing the singleton getter', async () => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const r = await registry()
+    await recordedRefusal(() => b.withOptions({ clientRegistry: r }).GenerateConversationTitle('x'))
+  })
+  it('records b.stream bypassing the singleton getter', async () => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const r = await registry()
+    await recordedRefusal(() =>
+      b.stream.GenerateConversationTitle('x', { clientRegistry: r }).getFinalResponse(),
+    )
+  })
+  it('observes the native defaults on unconfigured b.withOptions and b.stream', async () => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    // Offline evidence of the captured options gap; the live pins above use
+    // .invalid so even a mutated proxy cannot send a probe to a provider.
+    for (const request of [
+      await b.withOptions({}).request.GenerateConversationTitle('x'),
+      await b.streamRequest.GenerateConversationTitle('x'),
+    ]) {
+      expect(request.url).toBe('https://api.anthropic.com/v1/messages')
+    }
+  })
+  it('records a per-call env overriding an admitted private endpoint', async () => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    await recordedRefusal(() =>
+      b.GenerateConversationTitle('x', {
+        client: 'LocalQwenSmall',
+        env: { SMALL_LLM_BASE_URL: 'https://hermetic-backstop.invalid/v1' },
+      }),
+    )
+  })
+  it.each([
+    ['LocalQwenSmall', 'SMALL_LLM_BASE_URL'],
+    ['VerdaQwen', 'VERDA_INFERENCE_ENDPOINT'],
+  ])('refuses %s when its process endpoint differs from the fake', async (client, variable) => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const original = process.env[variable]
+    process.env[variable] = 'https://e2e-not-the-fake.invalid/v1'
+    try {
+      const options = (
+        b as unknown as {
+          bamlOptions: NonNullable<Parameters<typeof b.request.GenerateConversationTitle>[1]>
+        }
+      ).bamlOptions
+      await expect(
+        b.request.GenerateConversationTitle('s', { ...options, client }),
+      ).rejects.toThrow(`e2e hermetic routing refused client ${client}`)
+    } finally {
+      if (original === undefined) delete process.env[variable]
+      else process.env[variable] = original
+    }
+  })
+})
+
+describe.runIf(IS_HERMETIC)('memory fake wire fidelity', () => {
+  it('serves deterministic 1024-dimensional OpenAI embeddings for single and batched input', async () => {
+    const app = await bootApp()
+    const { createMemoryEmbedder } = await import('../../src/lib/memory/embedder.server')
+    const embedder = createMemoryEmbedder()
+    const documents = await embedder.documents(['synthetic garden', 'synthetic path'])
+    expect(documents).toHaveLength(2)
+    for (const vector of documents) {
+      expect(vector).toHaveLength(1024)
+      expect(vector.every(Number.isFinite)).toBe(true)
+      expect(vector.some((value) => value !== 0)).toBe(true)
+    }
+    expect(await embedder.documents(['synthetic garden'])).toEqual([documents[0]])
+    expect(await embedder.query('synthetic garden')).toHaveLength(1024)
+    const response = await fetch(`${app.fakeLlm.baseUrl}/embeddings`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'synthetic', input: 'synthetic garden' }),
+    })
+    expect(await response.json()).toMatchObject({
+      object: 'list',
+      model: 'synthetic',
+      data: [{ object: 'embedding', index: 0, embedding: documents[0] }],
+      usage: { prompt_tokens: 1, total_tokens: 1 },
+    })
+  })
+  it('parses both new functions through the real BAML client', async () => {
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const evidence = 'I prefer concise synthetic notes.'
+    expect(await b.ExtractMemory('episodic', `User: ${evidence}`, evidence)).toEqual([
+      { kind: 'episodic', content: evidence, evidence },
+    ])
+    expect(
+      await b.CompactMemories('episodic', [
+        {
+          content: 'I prefer synthetic notes.',
+          evidence: 'synthetic notes',
+          last_seen: '2026-01-01',
+        },
+        { content: evidence, evidence, last_seen: '2026-01-02' },
+      ]),
+    ).toEqual({ content: evidence, evidence })
+  })
 })

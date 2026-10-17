@@ -51,9 +51,16 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env — see .env.production.example}
 
   neo4j:
-    ports: !override ["127.0.0.1:7474:7474", "127.0.0.1:7687:7687"]
+    ports: !override []
+    networks: !override [neo4j-internal]
     environment:
       - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD in .env — see .env.production.example}
+      - NEO4J_dbms_security_allow__csv__import__from__file__urls=false
+      - NEO4J_apoc_import_file_enabled=false
+
+  neo4j-relay:
+    ports: !override ["127.0.0.1:7474:7474", "127.0.0.1:7687:7687"]
+    networks: !override [neo4j-internal, app-network]
 
   redis:
     # No `platform:` here on purpose. The arm64 redisearch SIGILL that
@@ -112,6 +119,16 @@ services:
   doc-convert:
     ports: !override ["127.0.0.1:8000:8000"]
 
+  # The embedder (#419 M8) is the one data-tier service with NO publish at all,
+  # not even on loopback: nothing on the VM needs to reach it but the app, over
+  # the compose network, and an SSH-tunnelled operator has no use for it either.
+  # The base file declares no `ports:` for it; this restates that on its own, so
+  # a future publish added to the laptop file cannot reach a public host through
+  # the overlay (SD-18) — `!override []` replaces whatever the base carries.
+  # compose-embedder.test.ts renders both files and fails on any published port.
+  embedder:
+    ports: !override []
+
   # ---------------------------------------------------------------------------
   # App
   # ---------------------------------------------------------------------------
@@ -136,7 +153,7 @@ services:
       # variable Postgres itself reads.
       - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:?}@postgres:5432/hames
       # The direct Neo4j driver. `config/endpoints.ts` already resolves
-      # bolt://neo4j:7687 in a production build; only the credential is missing.
+      # bolt://neo4j-relay:7687 in a production build; only the credential is missing.
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:?}
       # Defence in depth, not the control. The bypass is gated on
@@ -145,6 +162,8 @@ services:
       # `dev-bypass.ts` warns at module load if a prod build still carries it.
       # Set explicitly anyway so `docker compose config` shows the intent.
       - VITE_DEV_BYPASS_AUTH=false
+      - SANDBOX_ENVIRONMENT=release
+      - SANDBOX_CACHE_VOLUME=kg-sandbox-cache-release
 
   # ---------------------------------------------------------------------------
   # TLS termination
@@ -188,3 +207,9 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+
+networks:
+  neo4j-internal:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated

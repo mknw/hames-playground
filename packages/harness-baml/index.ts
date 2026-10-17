@@ -13,6 +13,10 @@ export {
   bamlPatterns,
   createCompactIntentAdapter,
   createRetrieveQueryAdapter,
+  createMemoryExtractAdapter,
+  createMemoryCompactAdapter,
+  type MemoryExtractInput,
+  type MemoryCompactInput,
   type BamlPatterns,
 } from './baml-patterns.server'
 export { defaultSynthesize, defaultSelector } from './defaults.server'
@@ -21,6 +25,8 @@ export {
   createActorControllerAdapter,
   createCriticAdapter,
   createInjectionScreen,
+  createDecideAdapter,
+  createDecideAllAdapter,
   accountBamlCall,
   withUsageAccounting,
   llmCallHitOutputCap,

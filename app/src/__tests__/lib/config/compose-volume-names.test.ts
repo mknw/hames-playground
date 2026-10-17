@@ -60,9 +60,9 @@ const DATA_VOLUMES = [
   {
     file: BASE,
     service: 'postgres',
-    key: 'postgres_data',
+    key: 'pg16_glibc_data',
     target: '/var/lib/postgresql/data',
-    onDisk: 'hames_postgres_data',
+    onDisk: 'hames_pg16_glibc_data',
   },
   {
     file: BASE,

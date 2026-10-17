@@ -85,7 +85,7 @@ export const routerScenario: Scenario = {
       const collector = new Collector(`eval-router-${u.message.slice(0, 20)}`)
       collectors.push(collector)
       const opts = ctx.opts('router', collector)
-      const result = await b.Router(u.message, ROUTES, u.history, opts)
+      const result = await b.Router(u.message, ROUTES, u.history, null, opts)
 
       const label = JSON.stringify(u.message)
       // The needs_tool branch and the route name are separate failures: a

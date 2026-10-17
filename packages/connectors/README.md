@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mknw/hames-playground/main/docs/images/hames-banner-wide-dark.png">
+  <img src="https://raw.githubusercontent.com/mknw/hames-playground/main/docs/images/hames-banner-wide-light.png" alt="hames: supports of a harness to which its traces are fastened. The @hames-ai packages on npm: harness-patterns, harness-baml, agents, connectors, sandbox. hames app: where harness primitives become your integrated workspace." width="880">
+</picture>
+
 # @hames-ai/connectors
 
 [![npm](https://img.shields.io/npm/v/@hames-ai/connectors?style=flat)](https://www.npmjs.com/package/@hames-ai/connectors)
@@ -108,18 +113,18 @@ logs the driver's error, with its stack trace, before returning it in
 > **Warning:** Guardrails for the Cypher path are in active development, and a
 > release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)). Until it ships, `runManualCypher`
 > and the ready-made agents that compose Cypher are not meant for production use. The
-> easy way to try them without the risk below is a Neo4j without APOC, such as the
-> `docker run` above: nothing on this page needs APOC, and without it a query
-> cannot make the database fetch URLs. Throwaway data (a fresh Neo4j, loaded with
-> the demo graph `neo4j_dumps/seed-data.cypher` if you want something to query)
-> keeps your data safe too, but not the network. The agents hold no Neo4j
+> way to close the network risk below is a Neo4j on an internal bridge with IPv4 gateway mode `isolated`, as in this
+> repository's compose stack (#241 G13). The standalone `docker run` above omits
+> APOC but has no network isolation; Cypher's `LOAD CSV` can still fetch URLs.
+> Throwaway data (a fresh Neo4j, loaded with the demo graph
+> `neo4j_dumps/seed-data.cypher` if you want something to query) protects the
+> graph's contents, but does not constrain network access. The agents hold no Neo4j
 > write tool; the [Warning in @hames-ai/agents](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog) says why.
 >
 > Why: `runManualCypher` runs whatever Cypher you pass it. It refuses write clauses
 > and opens a read-only session, but that does not stop a query from reaching the
 > network: if the database has APOC's load procedures enabled (the default once
-> APOC is installed; the Neo4j this repository's [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) runs installs APOC,
-> `NEO4J_PLUGINS=["apoc", "n10s"]`), a query such as
+> APOC is installed; the Neo4j this repository's [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml) runs installs APOC at image build time), a query such as
 > `CALL apoc.load.json('http://…')` makes the database fetch that URL, and a read
 > transaction does not prevent it. So on a Neo4j with APOC, pass it only text from
 > people you would let make requests from your database's network. The ready-made
@@ -129,7 +134,10 @@ logs the driver's error, with its stack trace, before returning it in
 > write tool; were it to offer one, `@hames-ai/harness-patterns` leaves it out
 > of every agent's tools anyway
 > ([#403](https://github.com/mknw/hames-playground/issues/403)). See also
-> [#241](https://github.com/mknw/hames-playground/issues/241).
+> [#241](https://github.com/mknw/hames-playground/issues/241). The repository compose stack now
+> isolates Neo4j on an internal bridge with IPv4 gateway mode `isolated` behind a fixed HTTP/Bolt relay (G13);
+> it cannot reach public URLs or other backend services. Other deployments
+> still need equivalent isolation.
 
 > **Needs:** a Neo4j database with user `neo4j` and password `password` — the `docker run` line under the quick start starts one without APOC; or clone [the repository](https://github.com/mknw/hames-playground) and run `docker compose up -d` ([docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)), which installs APOC.
 

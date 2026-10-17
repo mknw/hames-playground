@@ -1,9 +1,8 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/harness-patterns/hames_light-text-on-transparent-bg.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/harness-patterns/hames_dark-text-on-transparent-bg.png">
-  <img src="docs/harness-patterns/hames_dark-text-on-transparent-bg.png" alt="hames" width="380">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/hames-banner-wide-dark.png">
+  <img src="docs/images/hames-banner-wide-light.png" alt="hames: supports of a harness to which its traces are fastened. The @hames-ai packages on npm: harness-patterns, harness-baml, agents, connectors, sandbox. hames app: where harness primitives become your integrated workspace." width="880">
 </picture>
 
 ### The hames app
@@ -77,7 +76,11 @@ cd hames-playground
 #    two database passwords from a ROOT .env (not app/.env), and refuses to
 #    start without them. A new stack works with the shipped values; an
 #    existing one kept its first password (`password`) — set that, see below.
+#    Needs Docker Engine >= 28 (gateway_mode_ipv4: isolated); an older one
+#    (colima 27.x: `colima update`, then restart the VM) fails with "unknown
+#    gateway mode isolated". `make check-docker` checks before you start.
 cp .env.example .env
+make check-docker
 docker compose up -d
 docker compose ps                 # all five services should be Up
 

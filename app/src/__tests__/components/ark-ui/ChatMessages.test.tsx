@@ -210,32 +210,16 @@ describe('ChatMessages — tool calls', () => {
     tool: 'write_neo4j_cypher',
   }
 
-  it('renders the tool call outside the assistant bubble and wires approve/reject', async () => {
-    const onApproveWrite = vi.fn()
-    const onRejectWrite = vi.fn()
+  it('renders the tool call outside the assistant bubble', () => {
     const { container } = render(() => (
       <ChatMessages
         messages={[msg({ id: 'm1', role: 'assistant', content: 'May I write?', toolCall })]}
-        onApproveWrite={onApproveWrite}
-        onRejectWrite={onRejectWrite}
       />
     ))
-
     // The tool row is a sibling of the bubble, not nested inside it.
     const bubble = container.querySelector<HTMLElement>('[data-role="assistant"]')!
     const trigger = container.querySelector<HTMLElement>('[data-part="trigger"]')!
     expect(bubble.contains(trigger)).toBe(false)
-
-    trigger.click()
-    await tick()
-    const approve = [...container.querySelectorAll('button')].find((b) =>
-      b.textContent?.includes('Approve'),
-    )!
-    approve.click()
-
-    // The message id is what the interface needs to patch the right bubble.
-    expect(onApproveWrite).toHaveBeenCalledWith('m1')
-    expect(onRejectWrite).not.toHaveBeenCalled()
   })
 
   // A tool call attached to a user turn is not the agent asking permission —

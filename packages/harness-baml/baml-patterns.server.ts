@@ -38,6 +38,7 @@ import type {
   SelectorFn,
   SynthesisFn,
 } from '@hames-ai/harness-patterns/types'
+import type { CompactedMemory, ExtractedMemory, MemoryMember } from './baml_client/types'
 import { defaultSelector, defaultSynthesize } from './defaults.server'
 import {
   createPlannerAdapter,
@@ -48,6 +49,7 @@ import {
 } from './baml-adapters.server'
 import { clientOverrideFor, limitsFor } from './clients.server'
 import { routeMessageOp } from './routing.server'
+import { escapeDataFence } from './data-fence'
 
 assertServerOnImport()
 
@@ -69,7 +71,7 @@ export function createCompactIntentAdapter(): CompactIntentFn {
     // Routes to `DescribeAnthropic` (Haiku 4.5), or to the self-hosted box
     // on a verda-tier run — the intent is compacted FROM the conversation's
     // own history, so it moves with the rest of the describe role.
-    const opts = { collector, ...clientOverrideFor('describe') }
+    const opts = { ...clientOverrideFor('describe'), collector }
     let raw: string
     try {
       raw = await b.CompactIntent(history, latest, opts)
@@ -104,7 +106,7 @@ export function createRetrieveQueryAdapter(): RetrieveQueryFn {
     const variables = { history, latest }
     // describe-tier, and it moves with a verda tier decision: the rewrite is
     // built from the user's own question and the conversation history.
-    const opts = { collector, ...clientOverrideFor('describe') }
+    const opts = { ...clientOverrideFor('describe'), collector }
     let raw: string
     try {
       raw = await b.RetrieveQuery(history, latest, opts)
@@ -119,6 +121,114 @@ export function createRetrieveQueryAdapter(): RetrieveQueryFn {
   }
   fn.limits = () => limitsFor('describe')
   return fn
+}
+
+// ============================================================================
+// Memory (#419 M9) — the two describe-role calls behind `withMemory`
+// ============================================================================
+
+/** What `ExtractMemory` is handed — `MemoryExtractFn`'s input (spec §6), shape
+ *  for shape. Declared here rather than imported: the seam type lives in core
+ *  with the store step (M2), and companion → core is the only import direction
+ *  this package allows, so the structural twin is what keeps M9 independent of
+ *  a slice that has not landed. */
+export interface MemoryExtractInput {
+  readonly kindHint: string
+  readonly window: string
+  readonly latestUser: string
+}
+
+/** What `CompactMemories` is handed — `MemoryCompactFn`'s input. `members` are
+ *  ordered oldest first by the CALLER; the prompt's contradiction rule ("the
+ *  most recent member wins") reads that order. */
+export interface MemoryCompactInput {
+  readonly kind: string
+  readonly members: readonly MemoryMember[]
+}
+
+/** `MemoryExtractFn` backed by the BAML `ExtractMemory` call (describe role).
+ *  Returns the model's candidates UNFILTERED: the closed `kind` set, the
+ *  verbatim-evidence rule, identifier closure and the sanitizer are core's
+ *  deterministic acceptance, and a candidate this adapter quietly dropped would
+ *  be one acceptance could never log. A failure after reaching the model throws
+ *  `LLMCallError` like every other adapter here. */
+export function createMemoryExtractAdapter(): (
+  input: MemoryExtractInput,
+) => Promise<LLMResult<ExtractedMemory[]>> {
+  return async ({
+    kindHint,
+    window,
+    latestUser,
+  }: MemoryExtractInput): Promise<LLMResult<ExtractedMemory[]>> => {
+    const { b } = await import('./baml_client')
+    const startTime = Date.now()
+    const collector = new Collector('memory-extract')
+    const variables = { kindHint, window, latestUser }
+    // The window holds the assistant's reply, which was composed from tool
+    // results; both strings go inside DATA fences (#419 M5a). See data-fence.ts.
+    // `variables` keeps the originals: it is the record of what was ASKED.
+    //
+    // describe role: the window carries the user's words, so on a private-tier
+    // turn it moves onto the 4B with the rest of the role and never reaches a
+    // public provider.
+    let items: ExtractedMemory[]
+    try {
+      // The spread is INLINE in the argument list, not hoisted into a local:
+      // `clients-verda.test.ts` pins it on this very call by balanced parens,
+      // and a variable would read as unwired to a pin built to fail loudly.
+      items = await b.ExtractMemory(
+        kindHint,
+        escapeDataFence(window),
+        escapeDataFence(latestUser),
+        {
+          ...clientOverrideFor('describe'),
+          collector,
+        },
+      )
+    } catch (e) {
+      throw wrapAsLLMCallError(e, 'ExtractMemory', variables, startTime, collector)
+    }
+    return {
+      value: items,
+      call: extractLLMCallData(collector, 'ExtractMemory', variables, startTime, items),
+    }
+  }
+}
+
+/** `MemoryCompactFn` backed by the BAML `CompactMemories` call (describe
+ *  role). Same contract as {@link createMemoryExtractAdapter}: the merged line
+ *  comes back as the model wrote it and core accepts or rejects it. */
+export function createMemoryCompactAdapter(): (
+  input: MemoryCompactInput,
+) => Promise<LLMResult<CompactedMemory>> {
+  return async ({ kind, members }: MemoryCompactInput): Promise<LLMResult<CompactedMemory>> => {
+    const { b } = await import('./baml_client')
+    const startTime = Date.now()
+    const collector = new Collector('memory-compact')
+    const variables = { kind, members }
+    let merged: CompactedMemory
+    try {
+      merged = await b.CompactMemories(
+        kind,
+        // Stored text going back inside a fence: escaped for the same reason.
+        members.map((m) => ({
+          ...m,
+          content: escapeDataFence(m.content),
+          evidence: escapeDataFence(m.evidence),
+        })),
+        {
+          ...clientOverrideFor('describe'),
+          collector,
+        },
+      )
+    } catch (e) {
+      throw wrapAsLLMCallError(e, 'CompactMemories', variables, startTime, collector)
+    }
+    return {
+      value: merged,
+      call: extractLLMCallData(collector, 'CompactMemories', variables, startTime, merged),
+    }
+  }
 }
 
 // ============================================================================

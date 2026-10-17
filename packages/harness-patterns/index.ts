@@ -88,6 +88,60 @@ export type {
   HitlAnswer,
   HitlAnswers,
 
+  // Decisions (#418)
+  DecisionLabel,
+  DecisionSpec,
+  DecisionType,
+  ScoreSpec,
+  NoulSpec,
+  AnyDecisionSpec,
+  ChoiceDecision,
+  ScoreDecision,
+  NoulDecision,
+  AnyDecision,
+  DecisionFor,
+  DecisionSetSpec,
+  MixedDecisionSet,
+  DecisionLabelsFor,
+  DecisionMethod,
+  AbstainReason,
+  Decision,
+  DecideInput,
+  DecideResult,
+  DecideFn,
+  DecideAllFn,
+  DecisionMadeEventData,
+
+  // Memory recall (#419)
+  MemoryKind,
+  MemoryCandidate,
+  MemoryStore,
+  MemoryExtractedCandidate,
+  MemoryExtractInput,
+  MemoryExtractFn,
+  MemoryEmbedder,
+  MemoryRetention,
+  MemoryCompactionRow,
+  MemoryCompactInput,
+  MemoryCompactFn,
+  MemoryCompactionStore,
+  MemoryCompactionTx,
+  MemoryNeighbor,
+  MemoryInsertRow,
+  MemorySourceRow,
+  MemoryWriteTx,
+  MemoryWriteStore,
+  MemoryWriteAction,
+  MemoryWrittenEventData,
+  MemoryConfirmSeam,
+  MemoryProposalItem,
+  MemoryProposalPayload,
+  MemoryQueryEmbedder,
+  MemoryWakeWait,
+  MemorySkipReason,
+  MemoryGateRecord,
+  MemoryRecalledEventData,
+
   // LLM Observability
   LLMCallData,
   LLMCallRecord,
@@ -102,6 +156,7 @@ export type {
 } from './types'
 
 export { DEFAULT_TRACK_HISTORY, DEFAULT_COMMIT_STRATEGY, DEFAULT_ERROR_SEVERITY } from './types'
+export { MAX_SCORE_LEVELS } from './types'
 
 // The LLM call envelope's error class is a runtime value (instanceof checks in
 // the patterns) — exported from the barrel for the first time in Lane A3.
@@ -149,10 +204,14 @@ export {
   currentRunFrame,
   type RunFrame,
   type ActiveRunFrame,
+  type EgressCheck,
   type InferenceSlot,
   type LiveEventSlot,
   type LiveEventListener,
   type RunClientOverride,
+  type StashWrite,
+  type StashWriteObserver,
+  type AfterToolCallHook,
 } from './run-frame.server'
 
 // ============================================================================
@@ -172,6 +231,9 @@ export {
   harnessHasRedisRetriever,
   declaresWorkspaceSync,
   harnessUsesSyncWorkspace,
+  harnessDecisionKeys,
+  harnessUsesMemory,
+  harnessPseudonymisesInputs,
 } from './pattern-capabilities'
 
 // ============================================================================
@@ -214,6 +276,9 @@ export {
   HitlAnswerError,
   HELD_NOTE,
   readHitl,
+  readProposals,
+  proposeToHuman,
+  answerProposal,
   answerOf,
   expireHitl,
   // The gate patterns (S4): `confirm` is the one-call common case, `humanGate`
@@ -222,6 +287,7 @@ export {
   humanGate,
   confirm,
   type HitlState,
+  type AnsweredProposal,
   type HitlAnswerErrorCode,
   type HumanGateConfig,
   type ConfirmConfig,
@@ -235,13 +301,27 @@ export {
   simpleLoop,
   actorCritic,
   withReferences,
+  withPseudonymisedInputs,
+  type PseudonymiseForWeb,
+  type WebPseudonymisation,
   chain,
   runChain,
   compactExecution,
   compactIntent,
   planner,
   formatPlanContext,
+  HANDOFF_HEADING,
+  AGENT_MAP_HEADING,
   DEFAULT_MAX_PLAN_CHARS,
+  DEFAULT_MAX_REASONING_CHARS,
+  decisionLoop,
+  DECISION_LOOP_MAX_ITERATIONS,
+  DECISION_LOOP_KEY,
+  DECISION_LOOP_ANSWER,
+  DECISION_LOOP_OUTPUT_KEY,
+  DECISION_LOOP_RESULT_CHARS,
+  WITHHELD_SCREEN_UNAVAILABLE,
+  collectToolNames,
   retriever,
   configurePattern,
   parallel,
@@ -255,6 +335,13 @@ export {
   type CompactIntentData,
   type PlannerConfig,
   type PlannerData,
+  type DecisionLoopConfig,
+  type DecisionLoopData,
+  type DecisionLoopRoute,
+  type DecisionLoopStateInput,
+  type RouteOutput,
+  type RouteStats,
+  type RouteKind,
   type RetrieverBackend,
   type RetrieverConfig,
   type RetrieverData,
@@ -268,6 +355,110 @@ export {
 
 // EventView
 export { EventViewImpl, createEventView } from './patterns'
+
+// Memory recall (#419): the chain step, its settings and the block formatter.
+export {
+  memoryRecall,
+  formatMemoryContext,
+  MEMORY_RECALL_KEY,
+  MEMORY_RECALL_SPEC,
+  type MemoryRecallConfig,
+  type MemoryRecallData,
+  type MemoryRecallSettings,
+  type MemoryGateSettings,
+  type MemoryRecallLabel,
+  type RecalledMemory,
+  withMemory,
+  memoryStoreConfig,
+  type MemoryConfig,
+  type RouterMemory,
+} from './patterns'
+
+// Memory store (#419 M2): the post-reply step and its pure acceptance rules. A
+// host calls `settleMemory` from inside its post-turn continuation, before it
+// saves; the acceptance rules are exported so a host can reuse them (a
+// compaction pass applies the same ones).
+export {
+  settleMemory,
+  applyMemoryProposal,
+  memoryConfirmRequest,
+  parseMemoryProposalPayload,
+  MEMORY_CONFIRM_KIND,
+  MEMORY_CONFIRM_SAVE,
+  MEMORY_CONFIRM_DISCARD,
+  DEFAULT_PROPOSAL_TTL_MS,
+  resolveStoreRoute,
+  readStoreWindow,
+  MEMORY_STORE_SET,
+  MEMORY_STORE_KEY,
+  MEMORY_STORE_FALLBACKS,
+  MEMORY_MERGE_SPEC,
+  MEMORY_MERGE_KEY,
+  type MemoryApplyConfig,
+  type MemoryApplyOutcome,
+  type MemoryApplyReport,
+  type MemoryStoreConfig,
+  type MemoryStoreSettings,
+  type MemoryStoreSkip,
+  type MemorySettleReport,
+  type MemoryStoreFields,
+  type MemoryTarget,
+  type MemoryConfirm,
+  type MemorySensitivity,
+  type MemoryMergeLabel,
+  type RejectRule,
+  type StoreRoute,
+} from './memory-store.server'
+export {
+  acceptCandidate,
+  identifiersIn,
+  MEMORY_KINDS,
+  MAX_MEMORY_CHARS,
+  MIN_EVIDENCE_CHARS,
+  type Acceptance,
+  type AcceptanceRule,
+} from './memory-acceptance.server'
+export {
+  DEFAULT_MEMORY_RETENTION,
+  memoryRetention,
+  expiredMemories,
+  clusterMemories,
+  acceptCompaction,
+} from './memory-compaction-pure.server'
+export {
+  compactMemory,
+  MEMORY_COMPACT_SPEC,
+  sweepMemories,
+  startMemorySweep,
+  type MemoryCompactionConfig,
+  type MemoryCompactionSettings,
+  type MemoryCompactionReport,
+  type MemorySweepJob,
+} from './memory-compaction.server'
+export { memoryCompactionConfig } from './patterns/withMemory.server'
+
+// Decisions (#418): the user-facing typed systemone decision seam.
+export {
+  defineChoice,
+  defineScore,
+  defineNoul,
+  defineDecisionSet,
+  readDecision,
+  typedDecision,
+  decisionRouter,
+  decide,
+  decideFields,
+  evaluateDecision,
+  assertDecisionSetSpec,
+  DECISION_ROUTER_KEY,
+  type TypedDecisionConfig,
+  type TypedDecisionData,
+  type DecisionRouterConfig,
+  type DecisionCall,
+  type DecideFieldsCall,
+  type DecideOptions,
+  type EvaluatedDecision,
+} from './patterns'
 
 // ============================================================================
 // Context Helpers
@@ -361,6 +552,7 @@ export type {
   DescribeBatchItem,
   BulkDescribeFns,
   RouteFn,
+  RouteExtra,
   RouteMessageResult,
 } from './types'
 

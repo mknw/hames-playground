@@ -64,6 +64,11 @@ The `view` argument is an `EventView` — a query over the log whose slice is
 declared once in the pattern's `viewConfig`, not re-argued at every call site:
 
 - `fromPatterns` / `fromLastN` / `fromLast` — which patterns' events are visible
+  (`compactExecution`'s `thread` mode reads every execution of the `fromPatterns`
+  you name within the turn window, and otherwise the last pattern to enter — name
+  the wrapper when its children run in nested views; a name absent from the run
+  gives no history and synthesis drops to `response` mode; `threadTurns` widens
+  only that read, e.g. to keep the previous turn's records on a follow-up)
 - `eventTypes` / `limit` — narrow by type and size
 - `fromLastNTurns` — a rolling window bounded by `user_message` events
 - `contentTransforms` — read-time reshaping (`truncateToolResults`,
@@ -79,13 +84,15 @@ turns and nothing else. Context is budgeted by construction.
 
 Every combinator takes patterns and returns a pattern, so they nest freely:
 
-| Combinator           | What it does                                                                              |
-| -------------------- | ----------------------------------------------------------------------------------------- |
-| `chain` / `harness`  | run patterns in order; `harness` is the top-level entry that stops on irrecoverable error |
-| `routes`             | dispatch on `data.route` (set by `router`); pass-through on the `'user'` route            |
-| `parallel`           | run patterns concurrently, merge their event sets                                         |
-| `withReferences`     | attach the relevant results of earlier turns at pattern ingress, expandable on demand     |
-| `withInjectionGuard` | neutralize untrusted tool output before a controller reads it                             |
+| Combinator                | What it does                                                                              |
+| ------------------------- | ----------------------------------------------------------------------------------------- |
+| `chain` / `harness`       | run patterns in order; `harness` is the top-level entry that stops on irrecoverable error |
+| `routes`                  | dispatch on `data.route` (set by `router` or `decisionRouter`); pass-through on `'user'`  |
+| `parallel`                | run patterns concurrently, merge their event sets                                         |
+| `withReferences`          | attach the relevant results of earlier turns at pattern ingress, expandable on demand     |
+| `withPseudonymisedInputs` | rewrite the web route's earlier inputs and check outgoing web arguments                   |
+| `withInjectionGuard`      | neutralize untrusted tool output before a controller reads it                             |
+| `decisionLoop`            | loop over routes, a decisions model choosing the next one each time, until `answer`       |
 
 Resume and continue are the same mechanism, in two shapes:
 `resumeHarness(serialized, patterns, answers, opts)` after a run paused to ask a
@@ -96,6 +103,254 @@ runner, which carry the agent's own patterns. An answer is keyed by the
 supersedes whatever was waiting, so an answer never outlives its run. See SPEC's
 [Human in the loop](SPEC.md#human-in-the-loop), and "Asking a human" below for
 the whole loop a host writes.
+
+### Moving between groups of capabilities within one turn
+
+`routes` fixes the branch before anything runs. `decisionLoop` lets one turn
+move between groups of capabilities, choosing the next group after seeing what
+the last one produced: a loop over a route table in which the systemone `decide`
+seam answers one `choice` question — "Which step should run next?" — until it
+picks `answer` (which runs nothing; a `compactExecution` after the loop writes the
+reply) or `maxIterations` (default `DECISION_LOOP_MAX_ITERATIONS`, 6) is reached.
+
+```typescript
+import {
+  decisionLoop,
+  simpleLoop,
+  planner,
+  withInjectionGuard,
+  DECISION_LOOP_OUTPUT_KEY,
+  type DecideFn,
+  type PlanCallResult,
+} from '@hames-ai/harness-patterns'
+import type { ControllerFn } from '@hames-ai/harness-patterns/types'
+
+type Data = Record<string, unknown>
+declare const decide: DecideFn
+declare const controller: ControllerFn
+declare const planFn: (user: string, intent: string, context?: string) => Promise<PlanCallResult>
+
+const orchestrator = withInjectionGuard({
+  tools: [DECISION_LOOP_OUTPUT_KEY],
+  spotlight: 'always',
+})(
+  decisionLoop<Data>(
+    {
+      lookup: {
+        pattern: simpleLoop(controller, ['search'], { patternId: 'info', returnStyle: 'answer' }),
+        description: 'Look things up',
+      },
+      think: {
+        pattern: planner(planFn, ['search'], { patternId: 'think' }),
+        description: 'Decide the steps before acting',
+      },
+    },
+    { decide, answer: 'Answer the user now', patternId: 'orchestrator' },
+  ),
+)
+```
+
+Three things to know. A route's result is built by code from its committed
+events and is **untrusted**: it is capped, then passed through the enclosing
+guard under the fixed key `decision_loop_output`, so declare that key in the
+guard's `tools` (undeclared, the guard is a no-op for it) and a screen that
+cannot run withholds the output instead of waving it through. A child sees only
+what it is allowed to (`siblingResults`, default none) and starts with fresh
+data, never `memories`. And a decision that is not a decision — an error, an
+abstention, a state that would not build — never dispatches a route. See SPEC's
+[decisionLoop](SPEC.md#decisionlooproutes-config-507).
+
+A planner caps the reasoning handed to downstream executors with
+`maxReasoningChars` (default 2000), alongside the existing `maxPlanChars` for
+plan text. Its `plan_created` event and LLM call record retain the full trace.
+A `PlannerFn` may call its optional fourth `onRetry(failedCall)` argument before
+a same-endpoint retry; the pattern records a warning even if that retry fails.
+See SPEC's [planner](SPEC.md#plannerplanfn-tools-config) for the full contract.
+
+### Protecting the web route's earlier inputs
+
+Place `withPseudonymisedInputs({ pseudonymise: hostFilter })` directly around
+`withReferences`. It rewrites both the reference view (previews and expansion)
+and all inherited child data, preserving the latest user message. Rewritten
+copies are limited to the child's visible events and post-checked per string;
+residual bodies become `[withheld: private identity]` (per leaf inside a JSON
+body) and provenance fences stay intact. A roster identity the screen already neutralized fails the filter closed for the rest of the conversation. Only an
+explicit `'anthropic'` run passes through. Supply a host `PseudonymiseForWeb`
+that builds a per-invocation rewrite, selective redaction, literal post-check, local-result observer
+and outgoing-argument check; no host privacy
+module or table is imported into core. `decisionLoop` gives the wrapper roster
+input from every earlier iteration, even beyond the handoff window, without
+widening its sibling visibility. That temporary input is removed before the
+inner pattern runs.
+
+Missing or failed host wiring withholds earlier results and refuses web calls,
+recording a warning while allowing the child to continue on the user's message
+and internal reads. The app host requires a readable, non-empty directory;
+declare `{ directory: 'none' }` in code only for deployments without one. Its
+table is never stored or reversed. See SPEC's
+[G14 boundary](SPEC.md#withpseudonymisedinputsconfigpattern-507-g14) for the
+failure policy and remaining literal-matching limits.
+
+Outgoing checks use the `egressChecks` run-frame slot. It concatenates on nested
+`amendRunFrame`, innermost first: every check runs and any denial stops dispatch
+as a failed tool call, so an inner scope cannot switch off an outer check.
+Only the declared local `neo4j` and `memory` namespaces are exempt (`context7` is outbound and checked). A scoped `afterToolCall`
+hook extends outgoing literals from identities discovered by local reads;
+an update failure withholds the result and refuses further outgoing calls.
+
+The reference application registers `general-next` as a selectable candidate
+beside `general` (#507 S3), built in `packages/agents/agents/general-next.server.ts`.
+It combines four routes: an office sandbox with Microsoft 365, Neo4j/web
+lookups (plus `context7` library docs and the memory graph's read tools), the conversation's Redis retriever, and planning. The web route uses
+the host-supplied G14 pseudonymiser around `withReferences`; missing private
+configuration withholds earlier content and refuses web calls. The outer
+injection guard always fences route outputs and enables the screen. Memory
+is optional and reaches synthesis alone. `graph_file_ingest` and turn-results
+materialisation remain disabled until P4. The rollout still requires live
+acceptance evidence; registration does not change the default agent.
+
+### Deciding with probabilities
+
+`typedDecision` asks a typed systemone question and records the endpoint's
+probabilities untouched. Use `choice` for unordered options, `score` for ordered
+levels and `noul` for whether a statement holds. Include “none of these” as a
+choice option when it is a valid answer.
+
+```typescript
+import { defineChoice, typedDecision } from '@hames-ai/harness-patterns'
+import type { DecideFn } from '@hames-ai/harness-patterns'
+
+declare const decide: DecideFn // createDecideAdapter() in a host
+const route = defineChoice({
+  key: 'route',
+  question: 'Which route answers this message?',
+  labels: [
+    { id: 'chat', description: 'Answer directly.' },
+    { id: 'search', description: 'Search for evidence.' },
+  ],
+})
+typedDecision({ decide, spec: route })
+```
+
+`readDecision(data, spec)` reads a typed result by key. Choice exposes `label`,
+score exposes `level`, `value` and `expected`, and noul exposes `holds` and
+`pTrue`. Handle a failed result before acting on its verdict.
+
+Outside a pattern, `evaluateDecision` evaluates without a scope, `decide`
+records on a scope, and `decideFields` answers the fields of a
+`defineDecisionSet`, recording one `decision_made` per field. Pass
+`createDecideAllAdapter()` for a set in one request.
+
+`decisionRouter` writes the selected route to `data.route`. Put `compactIntent`
+in front and pass `preserveIntent: true` when routing needs that intent.
+`conversationalRoute` is an ordinary route key; `shadow: true` records a decision
+without changing the route. Request failures follow the pattern's error severity.
+
+The Anthropic tier records `JevDecide` and uses `JEV_DECISIONS_URL` plus
+`JEV_DECISIONS_API_KEY`. The private tier records `PrivateSystemOne` and uses
+`SMALL_LLM_DECISIONS_URL` (the full URL ending in `/v1/systemone`) plus
+`SMALL_LLM_API_KEY`. An unset private URL refuses the call; there is no public
+fallback. The private client is time-priced at `SMALL_LLM_EUR_PER_HOUR`.
+See SPEC's [Decisions](SPEC.md#decisions-typeddecision-418).
+
+### Recalling what the user told us
+
+```typescript
+import { withMemory, memoryStoreConfig, settleMemory } from '@hames-ai/harness-patterns'
+import type { ConfiguredPattern, MemoryConfig, UnifiedContext } from '@hames-ai/harness-patterns'
+
+type AgentData = Record<string, unknown>
+declare const deps: { memory: MemoryConfig }
+declare const chain: ConfiguredPattern<AgentData>[] // the host's router, routes and compactExecution
+
+declare const ctx: UnifiedContext<AgentData>
+declare const conversationId: string
+
+const patterns = withMemory<AgentData>({ ...deps.memory, routerMemory: 'replies-only' })(chain)
+// after the reply, from the host's compactAndSave continuation:
+await settleMemory(ctx, memoryStoreConfig(deps.memory), { conversationId })
+```
+
+`enabled` is required, and both halves read the same function. Settle re-reads it inside every candidate transaction after the owner lock; false rolls the candidate back and reports `skipped: 'disabled'`. **M7 precondition (#552):** the "turn off" and "forget all" RPCs must commit the switch-off (`user_prefs.memory_enabled = false`) in its own transaction BEFORE calling the erase (`deleteAllMemoriesForUser`). An uncommitted flip is invisible to a candidate on another connection; do not wrap the erase in the flip transaction. Any erase rejection (`55P03`, a memory-pool connect timeout or `40P01`) means "not erased": leave the switch off and report the retryable failure, never success. Later writers, including M3 compaction, must re-read the switch and their inputs inside the owner-lock transaction. Forget-all must use the memory pool, the same owner advisory transaction lock and lock timeout; propagate `55P03` as a retryable failure, never success.
+
+Choose `routerMemory` on this wiring: `'routing-and-replies'` is the default and
+preserves existing calls. The router sees recalled memory and may put it into
+`intent`: a tool route's task can carry facts from earlier conversations into tool
+arguments, for example a web-search query or a fetch, even with private model
+inference. `'replies-only'`, shown above, withholds the recalled block from every
+router, including nested routers, while `compactExecution` / `synthesize` still
+receive it for reply writing. Direct conversational router replies have no memory
+and still skip synthesis. It is a per-turn boundary, not a guarantee that remembered facts never reach a tool: a fact the reply states becomes conversation history, and on a later turn the router sees that history and may put the fact into `intent`, and so into tool arguments (#548). Unknown values throw at construction. The exported
+`RouterMemory` union names both choices; no extra router configuration is needed.
+Controllers and the planner get no direct memory block; with the default they can
+receive its facts indirectly through intent (#419 D13 / decision 6, amended by
+#535). This setting controls the current recalled block; it does not remove facts
+from user text or previous replies in ordinary conversation history, or constrain
+custom patterns that explicitly read the memory data bag. Option (b), direct
+answers with memory but no copying into intent or route, is deferred (#544).
+
+Gate the post-reply call on `harnessUsesMemory(patterns)`, the same probe that gates the memory wake, so an agent that did not opt in stores nothing. **Await `settleMemory`, then save the context**: the `memory_written` events it records ride that one save. It never throws and it fails closed: a failed or sensitive read, a confirmation your host cannot ask (no `confirm` seam), an organisational-graph target or a failed wake all store nothing and say why. Recall never throws either and never stops what follows it; its block is cleared on every turn. Your `MemoryWriteStore.transaction(fn)` must open one transaction, take the owner's advisory lock inside it, and **roll back and rethrow if `fn` throws**: that rollback is what makes a retry a no-op. See SPEC's [Memory recall](SPEC.md#memory-recall-memoryrecall-419) and [Memory store](SPEC.md#memory-store-settlememory-419).
+
+**Asking the person before a memory is saved.** Give `MemoryConfig` a `confirm` seam (`{ hold(input) }`) and a turn the gate marks `ask` stops storing nothing: it prepares the memories (with their vectors and a read-only dedupe preview), records a non-blocking `memory.confirm` proposal in the context and hands the payload to `hold`, keyed by the proposal's request id. The proposal carries counts, never the text. When the person answers, your host calls `answerProposal(ctx, { [requestId]: { choice: 'save', flags } }, { principal })` (core binds the answer to that open proposal and refuses anything the request did not offer), then `applyMemoryProposal(ctx, { store, embedSpace, enabled }, { payload, selected })` (it writes only the flagged items, refuses an item whose target memory changed since the preview, and is a no-op on a retry), then saves the context **once**, conditional on the version you read. Write the memories before the save: a refused save is then a retry, never a double write or a lost choice. The organisational-graph target is never proposed or written by this path. See SPEC's [Proposals](SPEC.md#proposals-proposetohuman-and-answerproposal-433-s11) and [Confirmation](SPEC.md#confirmation-prepare-propose-apply-419-m6--433-s11).
+
+### Optional memory maintenance
+
+Add `compact: { compact: summarize, store: compactionStore, assertTier }` to
+`MemoryConfig` to opt into M3. `memoryCompactionConfig(cfg)` returns the derived
+maintenance config, or `undefined` without that opt-in. After settle reports
+`compactionDue` (including a refused full-store insertion), await `compactMemory(ctx, derived)` before the same context save.
+Core adds no app calls or timer. The host's owner-bound compaction store must
+use the same advisory lock, memory pool and lock timeout as settle and erasure,
+roll back on any throw, move all member provenance before deleting members,
+and return exact move/deletion counts. Expiry commits in a short transaction;
+each cluster's inference runs outside every transaction, then a short merge
+transaction re-reads the switch and all members (including their source set).
+Changed members are kept. Each merge commits independently and publishes its
+events after commit; a final short transaction handles fresh-count eviction.
+The switch is also re-read before every cluster, including after `keep`, and
+after a merge verdict before summarization. A cluster kept because its members
+changed still records the decision and redacted call, without a write event.
+`assertTier` must refuse unknown or unavailable tiers before inference; no
+fallback is allowed. For the later app wiring slice, wrap the reachability check:
+
+```typescript
+// Supplied by the app from @hames-ai/harness-baml/clients.server:
+declare const assertInferenceTier: (tier: 'anthropic' | 'verda') => void
+
+const assertTier = (tier: string) => {
+  if (tier !== 'anthropic' && tier !== 'verda') throw new TypeError('unknown memory tier')
+  assertInferenceTier(tier)
+}
+```
+
+Passing `assertInferenceTier` bare does not reject unknown strings. Core tiers
+are opaque; this positive allowlist is a binding host requirement, not app wiring
+supplied by M3. The summarizer is tier-routed, company-run only on the private
+tier. The default unmeasured `maxClusterSize: 8` keeps oversize clusters whole
+and unmerged, without splitting or calling a model. The cluster timeout stops
+waiting; it cannot abort in-flight calls or attach their late usage to context.
+
+Retention lives at `cfg.retention`, per kind in days after last sighting: episodic
+180 by default, the other kinds `null` (persist). For example,
+`{ episodic: 90, preference: 365, trait: null }`. Compaction keeps the newest
+last-seen date, so it cannot restart the retention clock. A refused, failed or unavailable decision keeps all members. Compaction follows
+the store step under G11: it uses the endpoint verdict through `evaluateDecision`
+on the `jev`-only seam, without calibration or threshold policy. `keep` is the
+first option, so an exact merge/keep tie keeps both rows. Only episodes may be evicted at the hard
+cap, even when episodic retention is `null`. Settle refuses an insertion with
+`full` and `compactionDue: true` if its host cannot reclaim episodic space; it
+continues later candidates, so
+existing reinforces/updates do not consume capacity. The optional transaction
+method `evictOldestEpisodes(n)` is the host capability for that reclamation.
+
+For the daily retry/expiry pass, supply an async iterable of `MemorySweepJob`s
+(context, config, persist) to `sweepMemories`, or start its opt-in daily timer
+with `startMemorySweep(jobsSupplier)` and retain the returned stop function.
+The timer runs once at startup (zero delay), then daily after each completion;
+it unrefs itself and never overlaps sweeps. Hosts enumerate enabled
+owners, supply fresh owner-bound seams, and persist each context after its pass.
+See SPEC's [Memory compaction](SPEC.md#memory-compaction-419-m3) for transaction,
+acceptance, event and fail-closed contracts.
 
 ### Asking a human
 
@@ -339,6 +594,12 @@ Two properties are the design, not accidents:
   reviewer of the same content and the strictest reading must win. The
   inconsistency is deliberate; do not "fix" it, and both rules are stated in one
   place — `amendRunFrame` in `run-frame.server.ts`.
+
+**Two more slots concatenate** (#507 N4): `stashWriteObservers` (told when core's
+`storeDocument` has durably stored a document) and `afterToolCall` (run by
+`callTool` after a call is dispatched and guarded, may replace the result, which is then guarded again; hooks get a private copy). You
+rarely supply them yourself; `withSandbox({ syncWorkspace: true })` does, to
+copy a document a tool stores mid-run into `/work/in`.
 
 ### The gateway tools
 

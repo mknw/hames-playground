@@ -57,6 +57,7 @@ is and why it is shaped this way, start at the front page —
   - [actorCritic()](#actorcriticactor-critic-tools-config)
   - [parallel()](#parallelpatterns)
   - [withReferences()](#withreferencespattern-config)
+  - [withPseudonymisedInputs()](#withpseudonymisedinputsconfigpattern-507-g14)
   - [compactExecution()](#compactexecutionconfig)
   - [compactIntent()](#compactintentconfig)
   - [planner()](#plannerplanfn-tools-config)
@@ -64,6 +65,11 @@ is and why it is shaped this way, start at the front page —
   - [withInjectionGuard()](#withinjectionguardconfigpattern)
   - [router()](#routerroutedescriptions-config)
   - [routes()](#routespatternmap-config)
+  - [decisionLoop()](#decisionlooproutes-config-507)
+  - [typedDecision() and decisionRouter()](#decisions-typeddecision-418)
+  - [memoryRecall()](#memory-recall-memoryrecall-419)
+  - [settleMemory()](#memory-store-settlememory-419)
+  - [Memory compaction](#memory-compaction-419-m3)
   - [judge()](#judgeevaluator-config)
   - [chain()](#chainctx-patterns-onevent)
   - [harness()](#harnesspatterns)
@@ -188,6 +194,7 @@ type EventType =
   | 'loop_recovery' // simpleLoop / actorCritic fed one failure back to the model and continued on its budget (#437)
   | 'hitl_request' // a person is asked to decide (#433) — core writes it; readHitl() derives state from it
   | 'hitl_response' // the decision on one hitl_request (#433) — core writes it
+  | 'decision_made' // one typed systemone decision (#418) — metadata only; the state's SIZE rides, never its text
 
 // Isolated workspace for each pattern
 interface PatternScope<T> {
@@ -211,12 +218,15 @@ interface ConfiguredPattern<T> {
 }
 
 // What a pattern declares for a host to read WITHOUT running it. Core owns the
-// type; other packages fill fields in. Introspection only — execution never
-// reads it — and NOT part of `config`, so a wrapper that declares one stays
+// type; other packages fill fields in. Declarations, never dispatch — and NOT
+// part of `config`, so a wrapper that declares one stays
 // config-transparent (the same charter `children` and `injectionGuard` have).
 interface PatternCapabilities {
   retrievalBackends?: readonly string[] // declared by `retriever`: the backends it will query
   workspaceSync?: boolean // declared by a wrapper that gives its subtree a durable workspace
+  decisionKeys?: readonly string[] // declared by a deciding pattern (#418): the declared DecisionSpec keys
+  memory?: true // declared by memoryRecall (#419): read by harnessUsesMemory, the opt-in probe for the memory wake and store
+  pseudonymisedInputs?: true // the subtree consumes decisionLoop's roster-only input before invoking a model (#507 G14)
 }
 ```
 
@@ -389,6 +399,43 @@ and no other:
    filled when the frame is opened, or prepended below it by
    `amendRunFrame({ transports: [t] }, fn)`. Today's one is the in-VM sandbox,
    which `withSandbox` registers this way.
+   The frame carries two more slots, both read around that dispatch and both
+   **concatenating** (innermost first; an inner scope adds and never switches
+   an outer one off) — #507 N4:
+   `stashWriteObservers` — told, synchronously, by core's `storeDocument` once a
+   document and its session-index entry are durably written
+   (`{ sessionId, documentId, callId }`, never content; `callId` is the
+   `callTool` invocation the write happened inside, undefined outside one; a
+   failed write notifies nothing, a throwing observer is logged and never
+   un-stores the document); and `afterToolCall` — run by `callTool` after the
+   call has been dispatched **and guarded**, each hook seeing the previous one's
+   result and given `{ id, name, args }`, and able to replace the result by
+   returning one. **A replacement is guarded like a dispatched result**: each
+   hook is handed a private deep copy of the current result (nothing it does to
+   that copy can reach the guarded one), and if its returned result differs in
+   CONTENT from the one it was given a copy of — a new object, or the same copy
+   mutated — `callTool` runs the active guard's sanitize/spotlight over the final
+   result again. Identity is never the test. A hook returning nothing changes
+   nothing; one returning equal content, in the same object or another, costs no
+   second pass.
+   `withSandbox({ id, syncWorkspace: true })` uses both, **eagerly, on the
+   storing call itself** (dispatch and write → guard → that call's hook →
+   `hydrateWorkspace` → return; not on a later call): a document stored under
+   its own `sessionId` is recorded against the `callId` that stored it, and that
+   call's hook re-runs `hydrateWorkspace` for the same session before the
+   result reaches the caller. `sandbox_*` calls are skipped and never consume
+   another call's pending write; parallel storing calls each restore and each
+   receive their own outcome. Fail-closed: unless a strict read accounts for
+   every stored document (`hydrateWorkspace` returns `accounted` ids — an empty
+   or short listing is not proof), the call's result becomes a FIXED failure text
+   ("stored but NOT in the sandbox, do not repeat") and a recoverable `error`
+   event with the detail withheld; the raw detail (which may hold stash
+   filenames) goes to the server log only. The host wires `listDocumentsStrict`
+   / `getDocumentStrict` — a failed Redis read throws and never prunes the
+   index — into the workspace store. The scope is closed when the pattern
+   returns (before promotion and release): inherited observers/hooks become
+   inert and a restore in flight is drained. A write to another conversation's
+   stash is ignored; a call that stored nothing costs a map lookup.
 2. **Process transports** — supplied by `registerTransport(t)`, in registration
    order. Today's one is the app-side in-process tools.
 3. **The MCP gateway** — the terminal fallback, and deliberately NOT a
@@ -515,10 +562,11 @@ Two values can supply it, and one rule picks between them
 - **A declared budget is clamped to `SETTINGS_BOUNDS`** (`[1, 15]` for
   `maxToolTurns`), which a call-site literal otherwise bypasses. Load-bearing,
   not hygiene: the stuck-run reaper derives the longest turn the app may
-  legitimately run from that ceiling (`MAX_SEQUENTIAL_LLM_CALLS`,
-  `lib/db/conversations.server.ts`), so an agent pinning `maxTurns: 40` would
-  not raise the threshold — it would make an honest turn outlast it and be
-  reaped mid-flight. Raising a budget past the ceiling is therefore a deliberate
+  legitimately run from that ceiling for its age backstop
+  (`HUNG_TURN_BACKSTOP_MINUTES`, `lib/db/conversations.server.ts`; the reaper's
+  primary test is the turn lease), so an agent pinning `maxTurns: 40` would
+  not raise the backstop — it would make an honest, renewing turn outlast it and
+  be reaped mid-flight. Raising a budget past the ceiling is therefore a deliberate
   edit to the bound (and so to the reaper), never a side effect of one agent's
   config. The floor matters too: a declared `0` used to run zero rounds and
   record nothing at all.
@@ -636,25 +684,49 @@ just the failures); ALL sub-calls failed → the loop continues too, recorded as
 error.
 
 **Who writes the final answer: `returnStyle`** (#149). The loop's terminal
-`Return` prose never reaches the user. It does travel to `Synthesize` —
-`compactExecution` maps the terminal iteration to `tool_call.args` and
-fabricates a `tool_result` for it (result `null`), so that turn renders as
-`Tool: Return / Result: null` — but the template renders `tool_result.tool` /
-`.result` only and **never `tool_call.args`**, which is the single guard to
-preserve if the template ever grows a call-args section (issue #149 §2). So the
-downstream `compactExecution` composes the user-facing answer from the tool
-results either way. Measured on a 5-turn web-search run, composing it in the
+`Return` prose does not reach the user, and — when the turn called a tool — does
+not reach `Synthesize` either: `compactExecution` drops the terminal `Return`
+iteration (SA-H4), because it has no `tool_result` of its own and used to render
+as a fabricated success (`Tool: Return / Result: null`). The downstream
+`compactExecution` composes the user-facing answer from the tool results.
+(The template renders `tool_result.tool` / `.result` only and **never
+`tool_call.args`** — the single guard to preserve if it ever grows a call-args
+section, issue #149 §2.) Measured on a 5-turn web-search run, composing it in the
 loop as well cost **2,134 output tokens and ~22s** (the run's most expensive
 turn) for a text nothing read.
 
 - `'summary'` (default) — the prompt asks for a one-or-two-sentence completion
-  summary: the cheapest text that still terminates the loop.
+  summary: the cheapest text that still terminates the loop. Exception (#615):
+  when no tool call in the task has returned a result (none called, or every
+  call failed) the prompt asks for the COMPLETE answer instead, in the system
+  block and on the tier-1 catalog line, because the core hands that `Return`
+  text to the synthesizer as the answer.
 - `'answer'` — the pre-#149 wording ("put the complete answer in tool_args").
   **Prompt-only**: the loop still sets no `data.response`, so a downstream
   `compactExecution` remains the author. For a loop whose Return prose is itself
   the deliverable — e.g. a custom `synthesize` that reads
   `loopHistory.iterations[].action`. Making the loop's answer _suppress_
   synthesis is #149 Option B and is deliberately not built.
+
+**One exception: a Return-only turn (#610).** When the controller answers
+WITHOUT calling a tool, the terminal `Return` is the only content the turn
+produced, and dropping it left the synthesizer with no turns at all ("tool
+results were not provided"). `simpleLoop` therefore records the text of ITS
+`Return` exit as `data.returnText` (cleared at the start of each loop and by
+`continueSession`), and in `thread` mode, when no tool iteration survives,
+`compactExecution` passes it as the input's `response` (the usual response-mode
+downgrade then hands it to `Synthesize` as a direct response). Limits: it is
+current-turn only and applies to a `simpleLoop` exit only — an `actorCritic`
+`Return` is refused and never reviewed, so it never sets the key; an explicit
+`data.response` wins; a turn with any tool iteration (even a failed one) is
+unchanged — except that when EVERY tool call of the CURRENT turn failed (#614; an earlier turn's successful records in a wider thread window do not count), the
+failed iterations stay in `loopHistory` (the error is the synthesizer's only
+record of it) and the text rides beside them as `CompactExecutionInput.returnText`
+for the synthesizer to append as a final turn (`defaultSynthesize` does; `response`
+is not used, because a history-reading synthesizer ignores it). A turn with any
+successful call keeps dropping the `Return` (#149); and under `returnStyle: 'summary'` the controller is told to put the complete
+answer in that `Return` when no tool call in the task has returned a result (#615), which is a prompt instruction, so it is
+unverified live until baseline 06/07 pass.
 
 The default is safe because `compactExecution` is the better-informed author in
 every shipped chain: it reads results at full fidelity (no `maxResultChars`
@@ -876,6 +948,7 @@ interface InjectionGuardConfig extends InjectionGuardOptions {
   tools?: string[] // explicit per-tool opt-in, added to namespaces
   spotlight?: 'on-detection' | 'always' | 'off' // default 'on-detection'
   screen?: InjectionScreen // optional LLM second opinion; OFF by default
+  screenDespiteFindings?: boolean // screen sanitized content after findings; default false
   rules?: InjectionRule[] // extra rules appended to the corpus
   disableRules?: string[] // corpus rule ids to switch off
 }
@@ -1021,9 +1094,14 @@ overwhelmingly common case must cost zero tokens and carry zero mangling risk.
 `DescribeAnthropic` client. It has its OWN `screen` role in
 `harness-baml/clients.server.ts` rather than riding `describe`, so re-pointing summarization
 at a cheaper model can never silently re-point prompt-injection screening with
-it (SA-M5). The guard calls it **only for content the
-deterministic layer passed clean** — i.e. gated on `findings.length === 0`, see
-the note above — so the two layers divide labour: regexes catch known phrasings,
+it (SA-M5). By default the guard calls it **only for content the
+deterministic layer passed clean**. With `screenDespiteFindings: true`, it also
+screens the deterministically sanitized projection after findings; applying the
+verdict preserves the original rule findings and neutralizations, with exactly
+one fence per string leaf and the original provenance label retained. The
+reference host unfences repeated wrappers to a fixed point before harvesting
+identity fields as defence in depth for older payloads. This option
+unions monotonically across nested guards. Regexes catch known phrasings and
 the screen catches novel ones. A verbatim span it quotes is neutralized like a
 regex match; a span it paraphrased (matching nothing) still forces the fence, so
 a verdict never degrades to silence. A screen that throws is non-fatal — the
@@ -1084,13 +1162,14 @@ alone was not enough: once an inner guard widens the boundary, it is the inner
 guard's config that sanitizes the outer guard's namespaces too, so an inner
 `disableRules` re-opened a hole for tools the inner wrapper never mentioned.
 
-| Dimension            | Nesting rule                                  | Why                                                                                      |
-| -------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `namespaces`/`tools` | union (OR of `isUntrusted`)                   | a narrow inner wrapper must not drop the outer one's coverage for its whole subtree      |
-| `disableRules`       | **intersection** — off only if _both_ agreed  | it is one agent's false-positive escape hatch, not a licence over the enclosing boundary |
-| `rules`              | union, deduped by id                          | extra detection is always safe to inherit                                                |
-| `spotlight`          | strictest (`always` > `on-detection` > `off`) | an inner default must not remove a fence the outer wrapper asked for                     |
-| `screen`             | kept if _either_ has one (inner wins if both) | a nested guard cannot remove a paid-for second layer                                     |
+| Dimension               | Nesting rule                                  | Why                                                                                      |
+| ----------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `namespaces`/`tools`    | union (OR of `isUntrusted`)                   | a narrow inner wrapper must not drop the outer one's coverage for its whole subtree      |
+| `disableRules`          | **intersection** — off only if _both_ agreed  | it is one agent's false-positive escape hatch, not a licence over the enclosing boundary |
+| `rules`                 | union, deduped by id                          | extra detection is always safe to inherit                                                |
+| `spotlight`             | strictest (`always` > `on-detection` > `off`) | an inner default must not remove a fence the outer wrapper asked for                     |
+| `screenDespiteFindings` | true if _either_ requests it                  | an inner guard cannot skip an outer guard’s post-finding screen                          |
+| `screen`                | kept if _either_ has one (inner wins if both) | a nested guard cannot remove a paid-for second layer                                     |
 
 Per-**call** `overrides` still win, because they are a local decision by a known
 call site (the retriever passes `spotlight: 'off'` for a filename, where a
@@ -1106,6 +1185,98 @@ definition, deliberately not in a shared default):
 | `search`        | `web` (that route only)                      | `neo4j` — our own graph |
 | `microsoft-365` | `graph`                                      | —                       |
 | `retriever`     | `web` (namespace) + `retriever` (exact name) | `neo4j`                 |
+
+### `withPseudonymisedInputs(config)(pattern)` (#507 G14)
+
+Wrap the web route's `withReferences` with this config-transparent input/egress
+boundary. It applies unless the run frame's raw `inference.tier` is exactly
+`'anthropic'`; an absent or unknown tier is protected too. Core imports no host
+privacy code. The host supplies the optional `pseudonymise: PseudonymiseForWeb`:
+`(payloads, latestUserMessage) => Promise<WebPseudonymisation>`, returning
+`apply<T>(value: T): T`, `redact<T>(value: T): T`, `checkLiterals(value): string | void`,
+`observe(data): void`, and `check(args): string | void` (a denial reason).
+`redact` replaces only residual string bodies with `[withheld: private identity]`,
+retaining valid provenance fences; it also withholds residual object-key strings.
+`checkLiterals` uses the check's literal predicate without rejecting placeholders;
+`observe` extends only the outgoing literals from a local result.
+
+Before inner dispatch, it rewrites event-data copies in a synthetic backing
+context and all child data except the roster-input key. The backing copy contains
+only events selected by the child's view plus the latest user message; an
+unfiltered expansion cannot reintroduce excluded events. Every rewritten string
+body is post-checked; a surviving literal withholds only that body, leaving other
+content and outgoing calls available. Roster/build/rewrite errors still fail closed.
+This includes inherited data under `chain()`, as well as plan/handoff. Selector previews,
+`fromAll()` expansion and `unfiltered()` therefore read the same copies. Event
+ids and pattern metadata survive, the latest user message is unchanged, and
+stored context events are untouched. The wrapper declares
+`capabilities.pseudonymisedInputs`; `harnessPseudonymisesInputs` finds it through
+`children`. Only such a route receives `webRosterInput` from `decisionLoop`:
+source `tool_result` payloads of **every** preceding iteration this turn, after
+screen-outage withholding, plus a code-built status/stats-only handoff. This is
+roster input, never extra sibling visibility: the loop filters the synthetic
+context before invoking the wrapper. The wrapper deletes this key in `finally`
+before calling anything inward, including on explicit-Anthropic pass-through,
+failure and a throw. No adapter renders it.
+
+Under `chain()`, returned rewritten data is forwarded to subsequent steps just
+like any other child result; it is not confined to the wrapped child. Under
+`decisionLoop`, each route starts with fresh child data instead.
+
+An absent pseudonymiser or any roster/table/rewrite failure withholds earlier
+content. A roster whose labelled identity was already neutralized by the
+injection screen is such a failure: the name is gone from the data, so the host
+refuses to build a partial roster. The refusal persists for every later web-route invocation in the
+conversation while that result stays in context, and a sender can trigger it on
+purpose through the display name. No references attach, the plan and all result bodies disappear, and
+only an allowlisted handoff containing route/status/stats lines remains in child
+data. A `warning` with task
+`web_privacy` records "earlier results withheld: privacy filter unavailable".
+The child still runs on the user's message and Neo4j reads; every web call in
+that invocation is refused. The app's `createWebPseudonymiser` requires a readable,
+non-empty directory by default; `{ directory: 'none' }` is an explicit code-only
+choice for deployments without an org graph. A Neo4j/relay outage therefore
+refuses private web calls until it recovers.
+
+The wrapper scopes an `egressChecks` run-frame slot around the inner pattern.
+`RunFrame.egressChecks` is a readonly array of `EgressCheck`s; each accepts
+`{ name, args }` and returns (or resolves) a safe denial reason or nothing.
+Opening copies/freezes it; nested amendments concatenate **innermost first**,
+never replace. `callTool` runs every check before any transport and any denial
+returns `{ success: false, data: null, error }`, a recoverable tool failure,
+not a turn error. A throwing check denies with fixed feedback without exposing
+its exception. The wrapper checks every call except the explicitly local
+`neo4j` and `memory` namespaces (`context7` library lookup is outbound and IS checked), including uncatalogued calls and calls made without the app's
+namespace registration. In the same amendment, an `afterToolCall` hook extends
+the outgoing literals from every result except web and `context7` ones, after unfencing each string leaf.
+It never rewrites those results. An extension failure withholds that result,
+records a fixed warning, and refuses subsequent outgoing calls.
+
+The app merges the fixed-order directory first with identities from the view
+and every source payload, unfencing string leaves before harvesting and building
+one ephemeral table per invocation. Rewriting and post-checking touch content
+bodies and leave provenance fences intact, including embedded plan/handoff fences.
+Both literal post-checks and outgoing checks normalise JSON escape sequences
+(`\\[nrtfb"\\/]` and `\\uXXXX`) before NFKD without combining marks and mapping
+`-_.+/` to spaces. The actorCritic record extractor first unfences result leaves
+before JSON stringification; the loop then fences that record under its own key.
+One active compiled alternation is rebuilt on each local observation. It matches
+literals plus letters-only full names of at least six characters within individual
+whitespace-delimited tokens, with boundaries, never across a whole string.
+An exact-token collision remains accepted: `Tim Ely` also matches `timely`.
+User-named forms are held in an exempt Set. It denies roster literals (except literal forms actually named
+in the latest user message), and `PERSON[\s_-]*<n>` tokens with any suffix
+("placeholders are not search terms"). Malformed URL encoding is
+refused. No table is kept or reversed; placeholders stay in route output.
+Only Graph-shaped identity fields are harvested from local results; a flat Cypher
+projection such as `{ name, email }` adds no identity unless another recognised
+field or the directory already supplied it.
+Names absent from both directory and labelled source fields, non-person private
+facts and alternative encodings/paraphrases remain limitations. The single
+permitted host import site is `harness-client/web-pseudonymiser.server.ts`,
+pinned by `egress-wiring.test.ts`, which also permits only `session.server.ts`
+to import that factory; history-at-rest, the Anthropic tier and file
+materialisation remain governed by their existing contracts.
 
 ### `withReferences(pattern, config)`
 
@@ -1172,6 +1343,28 @@ compactExecution({ mode: 'thread', patternId: 'response-synth', synthesize: baml
 compactExecution({ mode: 'message', synthesize: baml.synthesize }) // Receives only response string
 compactExecution({ mode: 'response', synthesize: baml.synthesize }) // Receives { data, response } object
 compactExecution({ mode: 'thread', synthesize: baml.synthesize }) // Receives full loop history
+
+// Thread mode reads the LAST pattern to enter. Name the patterns instead with
+// `viewConfig.fromPatterns` and it reads EVERY execution of the named patterns
+// within the view's turn window (the caller's `fromLastNTurns`, else the
+// current turn), in log order; duplicate names are ignored. Use this when the
+// loop sits inside a wrapper whose children run in nested views (the last
+// pattern to enter is then a child, and the wrapper's own records are what you
+// want). `fromPatterns: []` means unset. A name absent from the run yields no
+// history, and synthesis drops to `response` mode.
+// `threadTurns` widens ONLY that read (default: the window above), so a follow-up
+// turn that runs no route still sees the records an earlier turn committed; the
+// error read keeps its own window. The user's message is read past the scope
+// (it is a `harness`-level event, trusted input), so a scoped synthesizer still
+// gets `userMessage` and `intent`. An earlier turn's FAILED record is dropped
+// from the widened read (only this turn's failures reach the synthesizer), and
+// `threadTurns` must be an integer >= 1 in a scoped `thread` read, else it throws.
+compactExecution({
+  mode: 'thread',
+  viewConfig: { fromPatterns: ['orchestrator'], fromLastNTurns: 1 },
+  threadTurns: 2,
+  synthesize: baml.synthesize,
+})
 
 // Custom synthesis function
 compactExecution({
@@ -1240,6 +1433,7 @@ chain(
 interface PlannerConfig extends PatternConfig {
   schema?: string // Extra context (e.g. neo4j schema) — mirrors simpleLoop's
   maxPlanChars?: number // Cap on the plan text handed downstream (default 2000)
+  maxReasoningChars?: number // Cap on downstream reasoning (default 2000); events keep it whole
 }
 ```
 
@@ -1286,12 +1480,30 @@ changes:
    <plan>
    ```
 
-2. **`plan_created` event** — carries the plan, the tool count and a
+2. **`plan_created` event** — carries the plan, the tool count, a
+   `reasoningTruncated` flag when executor-facing reasoning was capped, and a
    `truncated` flag for the observability panel and any downstream consumer
    (`view.ofType('plan_created')`). A dedicated event type, NOT
    `controller_action`: that payload is a real `ControllerAction`, and the
    compactExecution's thread mode renders every `controller_action` in view as a
    tool iteration — a synthetic one would show a tool call that never happened.
+
+**Reasoning bounds (#625).** `scope.data.plan.reasoning` is capped at
+`maxReasoningChars` (default 2000), with the same `…[truncated]` suffix as
+`maxPlanChars`. Both loop patterns consume this bounded copy through
+`formatPlanContext`. `plan_created.plan.reasoning` and `llmCall.parsedOutput`
+retain the full trace for observability only; `view.serialize()` renders the
+plan text, `n_steps` and `skipped` without the trace. The plan text keeps its
+existing `maxPlanChars` behavior.
+
+`PlannerFn` accepts an optional fourth `onRetry(failedCall)` callback. Before
+retrying a thinking planner without thinking on the same endpoint, the BAML
+adapter calls it; the pattern records a `warning` (`task: 'planner'`) with the
+failed call attached. The warning survives even when that single retry fails.
+A parser violation fails loudly without retry. A valid plan with no trace is
+accepted with `reasoning: ''` and a `warning` (`task: 'planner'`, `no thinking trace`);
+only empty, trace-only or cap-hit-in-thinking answers take the retry fallback.
+The adapter's optional `PlanCallResult.warning` carries that diagnostic to the pattern.
 
 **Defaults:** `commitStrategy: 'always'` (the plan survives a downstream error),
 `trackHistory: 'plan_created'`, `errorSeverity: 'recoverable'`, and a
@@ -1449,6 +1661,162 @@ interface RoutesConfig extends PatternConfig {
   directResponseRoute?: string // Default: 'user' — must match paired router()
 }
 ```
+
+### `decisionLoop(routes, config)` (#507)
+
+A loop over `routes` in which a **decisions model** picks the next route each
+time round, until it picks `answer` or the iteration bound is reached. Where
+`routes()` fixes the branch before anything runs, this lets one turn move between
+groups of capabilities after seeing what the last one produced. It is a pattern
+(its decisions, route records and every child's events are events in the one
+context), not the orchestrator ADR-0005 rules out. Design:
+`docs/plan/decision-loop-agent.md`.
+
+```typescript
+interface DecisionLoopRoute<T> {
+  pattern: ConfiguredPattern<T>
+  description: string // the ONLY text the decisions model sees for this option
+  capability?: string // one or two lines for the planner's agent map
+  siblingResults?: readonly string[] // patternIds of OTHER routes whose events it may see; default none
+}
+
+interface DecisionLoopConfig extends PatternConfig {
+  decide: DecideFn // REQUIRED — the raw decision seam
+  patternId: string // REQUIRED here (inherited as optional): matched across turns
+  answer: string // the description of the `answer` option
+  handoff?: { lastN?: number } // outputs shown in full, in ITERATIONS; default 2
+  maxIterations?: number // default DECISION_LOOP_MAX_ITERATIONS (6)
+  maxResultChars?: number // cap on a record's result and on its reasoning; default 2000
+  state?: (input: DecisionLoopStateInput) => string // replace the state; a throw is a non-decision
+}
+```
+
+One iteration: build the state, ask one `choice` question over the route names
+plus **`answer`** (a choice, not a route — it runs nothing, so the synthesizer
+after the loop answers once), run the chosen route in a child scope, record what
+it produced, go again. `answer` is offered on every iteration, including the
+first. The decision is recorded as `decision_made` (`data.decisions.next_step`);
+no calibration, no threshold: the endpoint's probabilities are used for nothing
+beyond the label.
+
+**The state** is one string, append-only within a turn: the conversation window
+(`routerTurnWindow`, the router's), then **This turn so far** — one line per
+iteration with its status and stats counted by code from the child's events
+(turns or attempts used against the child's own bound, tool calls, errors, wall
+time; a route that hit its bound reads differently from one that finished early;
+the retriever reports matches, distinct documents and backends (its excerpts are taken from the chunk, not from the guard's spotlight fence: `unspotlight` from `injection-guard.ts` strips it, and the loop's own fence restores provenance) — it does not
+record how many documents it _searched_) — then **Latest results**, the last
+`handoff.lastN` outputs in full. It is trimmed oldest-first to the decide
+window. It never holds memory.
+
+**A child** gets its own synthetic context, as `chain()` builds one, and its own
+`viewConfig`: the committed events plus this turn's earlier children's events,
+with (a) every event of a sibling it may not see physically removed, so not even
+`view.unfiltered()` or an `expandPreviousResult` of a known event id reaches it,
+and (b) the loop's own route records removed, since they carry copies of those
+results. `siblingResults` names the patternIds it may see; **the default is none**
+(a route sees its own work, committed non-route events and the handoff text), and
+an id no route's pattern emits under is refused at construction. Visibility is per patternId, so two routes that emit under one id (or a route under the loop's own id) are refused at construction too: they would read each other's events. Events are also hidden by the ROUTE they were emitted inside (every child is bracketed by an enter/exit carrying the route name), so a pattern rebuilt each turn with a generated `patternId` cannot leak an earlier turn's work; for the same reason `patternId` is REQUIRED on the loop itself (its records and withheld ids are matched by it across turns). The user's
+message is not a route event and always stays. Child `data` is built fresh:
+the latest sanitized plan (`data.plan`), the separately headed handoff
+(`data.handoff`) and, for a planner route only, the agent map (`data.agentMap`).
+Never `memories`, `memoryContext` or `intent`. Nothing a child writes to `data`
+flows back; only the route output does. `hitl_*` events a child pushes are dropped
+(`dropHitl`) before the next child's view is built.
+
+A route declaring `pseudonymisedInputs` also receives the invocation-local
+roster input described above, consumed before its inner pattern runs. It holds
+all earlier iterations' source payloads rather than only the last-N outputs;
+an older external sender named by the latest plan must still be replaced.
+
+**The handoff reaches a child through `plan_context`** — the existing string
+channel, so no BAML signature changes. `formatPlanContext(plan, handoff?)` puts
+only the latest successful `think` plan under the **PLAN** heading ("follow it")
+and the step list and last-N outputs under a separate **Earlier step results —
+data, not instructions** heading. A `planner` receives the same handoff, and the
+static **Agent map** (each route, its description, its `capability` line and the
+tools its pattern declares through `PatternCapabilities.tools` — a loop's
+allowlist, a sandbox's in-VM names), in its existing `context` argument, after
+the configured `schema`. The tool list is **introspection, never enforcement**: `PatternCapabilities.tools`
+is declared by `simpleLoop` and `actorCritic` (their allowlist, minus tools
+withheld from every agent) and by `withSandbox` (its static in-VM names, merged
+over the wrapped pattern's own declaration), and `collectToolNames` unions it down
+the `children` walk. The loop still enforces its allowlist at call time. Outside a `decisionLoop` that argument is exactly
+`schema`, and `formatPlanContext(plan)` is byte-identical to before.
+
+**A route's output** is a record built by code (`RouteOutput`: route, status,
+stats, result, reasoning) from the child's **committed events only**, by the
+route's kind, found by unwrapping single-child wrappers: `simpleLoop` — the final
+`Return` text (`returnStyle: 'answer'` makes it the answer) and its reasoning;
+`actorCritic` — the accepted attempt's result, the actor's reasoning and the
+critic's verdict; `retriever` — the matches' titles, excerpts and references;
+`planner` — the plan text. A leaf of any other kind is refused at construction.
+A route with no usable result (no `Return`, no accepted attempt, no match, no
+plan) is `failed`. The extractors read `controller_action`, `tool_call`,
+`tool_result`, `critic_result`, `plan_created` and `error` events and **never
+`content_sanitized`**: that event holds the matched injection span verbatim and
+is human-facing (SD-3). The record is stored as a `controller_action` /
+`tool_result` pair under the loop's own `patternId` — the shape `compactExecution`'s
+thread mode reads — and the stats line rides the action's `status`.
+
+**Route output is untrusted.** `result` and `reasoning` are capped
+(`maxResultChars`, excess replaced by a marker) and then each passed through
+`currentRunFrame()?.guard?.sanitize('decision_loop_output', …)`. The enclosing
+`withInjectionGuard` must list `decision_loop_output` in `tools` (`sanitize` is a
+no-op for an undeclared key, as for every opt-in) and `spotlight: 'always'` to
+fence everything handed up; a loop whose frame has no guard declaring the key passes the text
+through, capped, and warns once per process. The route's name is never the key. A screen that **threw** is
+reported by a typed `screenUnavailable` flag on `SanitizeReport` and on the
+redacted `SanitizeSummary` (never inferred from `screenReason`'s prose): the loop
+then records the route as `failed` with the marker-only result
+`withheld: screen unavailable`, having discarded the reasoning and every byte of
+the original output first, so neither the state, the handoff nor synthesis can
+carry it. That is this loop's policy; `withInjectionGuard` itself stays fail-open
+on a screen outage. S-d's reach: on an outage the record is withheld AND that iteration's child events (their ids persist on the marker record) are removed from every child context this loop builds, in this turn and in later turns, so previews, `expandPreviousResult` and `siblingResults` cannot reach what the screen did not clear; a reader outside the loop's own contexts is not covered. A throw from the deterministic sanitizer is not caught: it
+ends the turn, as it does in `callTool`.
+
+**Failure — never a silent fallback.**
+
+| Situation                                                                                                                        | Behaviour                                                                                                                                                                                                                                                            |
+| -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A route fails, or throws                                                                                                         | `failed` record; the loop decides again. Its own `error` events are committed as `recoverable`, or `runChain` would end the turn on a child's irrecoverable error.                                                                                                   |
+| The decision is not a decision (an error, an abstention for any reason, a label outside the options) or the state builder throws | Never dispatches a route. **Iteration 1**: an `irrecoverable` `error` ends the turn visibly (nothing ran, so synthesizing would answer without the agent's tools). **Later**: the loop stops as `answer` and the `recoverable` error stays for the synthesizer (N3). |
+| `maxIterations` reached                                                                                                          | Stops as `answer`, with a `recoverable` `error` of kind `budget_exhausted`, so the synthesizer says the work is partial (N5).                                                                                                                                        |
+| A route leaves a pending human request                                                                                           | The loop returns at once, as `chain()` does between children.                                                                                                                                                                                                        |
+
+`DECISION_LOOP_MAX_ITERATIONS` (6) is exported so a host that mirrors the bound,
+such as the stuck-run reaper's arithmetic, can pin its copy to it.
+`estimateTurns` returns `maxIterations` — iterations, not iterations × a child's
+own budget — and `children` are the route patterns, so the capability probes
+(`harnessHasRedisRetriever`, `harnessDecisionKeys`) see through the loop. Defaults
+by type: `trackHistory ['decision_made', 'controller_action', 'tool_result']`,
+`commitStrategy 'always'`, `errorSeverity 'recoverable'` (the first-iteration
+failure is stamped at the event).
+
+The reference host's `general-next` composition (#507 S3) uses this loop beside
+`general`, without changing the default agent. Its `orchestrator` chooses among
+`office-data` (guarded Microsoft 365 tools and an office sandbox),
+`info-retrieval` (guarded Neo4j reads and web), `read-documents` (the guarded
+Redis retriever, pattern id `retriever`) and `think` (the planner). The web
+route wraps `withReferences` in `withPseudonymisedInputs`, admits only the
+`retriever` sibling plus its own results, excludes sandbox-promoted documents
+from references and expansions, and disables independent prior-turn results. The orchestrator declares `decision_loop_output`, `spotlight: 'always'`
+and a role-resolved screen with `screenDespiteFindings: true`: deterministic
+findings remain neutralized while the screen reviews the sanitized projection.
+Union semantics carry that screen and unconditional
+fencing into every route's tool results, costing a screen call per result. A
+screen failure inside a route is recorded and fails open; at the route-output
+boundary it follows the marker-only policy above. Its thread synthesizer reads the `orchestrator` records of this turn and the previous one (`threadTurns: 2`; they are the already-sanitized, fenced records, and a withheld one stays marker-only), the user's message, and only this turn's errors: an earlier turn's failed or withheld record is not carried forward (it would read as an unmarked error), only its successful records are. `threadTurns` must be an integer >= 1 and is refused at construction unless `mode` is `'thread'` and `viewConfig.fromPatterns` is set.
+
+`general-next` also opts into M7's optional `withMemory`; `general` keeps its
+opt-in until the default-agent flip. Only the candidate's synthesis receives
+recalled memory, while decisions and children receive none. The
+private tier refuses an unconfigured `SMALL_LLM_DECISIONS_URL` visibly, with
+no provider fallback. Until P4, the office allowlist withholds
+`graph_file_ingest` by exact name and declares no turn-results materialisation
+capability. Layer-1 composition pins and the layer-2 graph-count conversation
+live in the host; it consumes the separately pinned core
+`screenDespiteFindings` opt-in.
 
 ### `judge(evaluator, config?)`
 
@@ -1818,6 +2186,46 @@ never lists a pending request. It returns the new blob with the `expired` and
 Superseding and expiring never choose for the person (P4): both record
 `choice: null`, and neither re-enters a pattern.
 
+### Proposals: `proposeToHuman` and `answerProposal` (#433 S11)
+
+A **proposal** is a request raised from **outside a run** — a post-reply hook
+such as `settleMemory` — so it is non-blocking: it pauses nothing, resumes
+nothing and holds no tool result. It is still two events in the context
+(ADR-0009), a `hitl_request` with `blocking: false` and, later, the person's
+`hitl_response`, and it differs from a blocking request in one way: it
+**outlives the turn that raised it**. `readHitl` windows to the current run and
+never lists one; `readProposals(ctx, now?)` reads the whole log.
+
+```ts
+proposeToHuman(ctx, request, { attended, patternId? }): HitlOutcome
+readProposals(ctx, now?): readonly HitlRequestEventData[]
+answerProposal(ctx, answers, { principal?, now?, patternId? }): readonly AnsweredProposal[]
+```
+
+- **`proposeToHuman`** validates like `askHuman` (a refusal names
+  `proposeToHuman`). A proposal this log already holds for the same kind, key
+  and option set is **not raised again**: still open returns `pending`; answered
+  or closed by expiry returns `answered` with what was recorded (`choice: null`
+  for expiry). Otherwise it records a request with a UUID v4 id and the open
+  frame's tier. With nobody there (`attended: false`) and a rule other than
+  `park`, the rule decides and an `unattended` response is recorded beside it.
+  It writes straight into `ctx.events` and never reaches a live listener.
+- **`answerProposal`** binds an answer to a proposal that is **open**: not a
+  blocking request, not answered, not closed, not past due (`unknown-request`,
+  `expired`), with a choice that is an available option of **that request
+  event** and flags that are that option's (the checks a resume applies). Every
+  answer is checked before any is recorded; a refusal throws `HitlAnswerError`
+  (message prefix `answerProposal`) and leaves the context byte-identical.
+  Answers may cover only some of the open proposals. `principal` is the host's;
+  `by` is always `'person'`. It decides nothing about what an answer **does**:
+  the host writes (or declines to write) what the proposal described and records
+  the answer in the **same version-checked save** as that outcome.
+- **`expireHitl`** already closes an expired proposal wherever it sits (m6).
+
+Payloads stay out of events: a proposal's `summary` and option labels carry
+counts and closed-set values only, because the request outlives the payload the
+host purges on close (F20b). The memory consumer is below.
+
 ### Properties (P1–P6)
 
 **P1 · Pause binding.** An answer resumes only the pause it was issued for. It
@@ -1865,6 +2273,615 @@ both types; `commitEvents` and `chain()` drop every one a scope carries;
 when minted and when deserialized; and the run's bookkeeping store admits only
 what `askHuman` could have written. `readHitl` reads only `hitl_*` events, so a
 legacy `approval_response { approved: true }` answers nothing.
+
+## Decisions (typedDecision, #418)
+
+`typedDecision` is a systemone client. It accepts `AnyDecisionSpec`: `choice`
+for unordered options, `score` for ordered levels, or `noul` for whether a
+statement holds. The endpoint's probabilities pass through untouched. To offer
+“none of these”, include that option in the question's choices.
+
+`defineChoice`, `defineScore` and `defineNoul` infer option ids from literal
+specs; `defineDecisionSet` groups typed fields over one state. `DecideFn` is the
+single-question seam; `DecideAllFn` answers a set in one request.
+`createDecideAdapter()` and `createDecideAllAdapter()` provide these seams.
+`evaluateDecision` evaluates without a scope, `decide` records on a scope, and
+`decideFields` returns the typed fields and records one `decision_made` per
+field. Request failures remain errors; consumers must handle failure before
+acting on a verdict.
+
+`typedDecision({ decide, spec, state? })` writes the current result to
+`data.decisions[spec.key]`. `readDecision(data, spec)` reads the result with its
+spec's type. Choice exposes `label`; score exposes `level`, `value` and
+`expected`; noul exposes `holds` and `pTrue`. The step writes no reply text.
+The default state contains user messages and final assistant messages; tool
+results require an explicit state builder. State is bounded by the serving
+client's context window.
+
+`decisionRouter` uses its routes as choice options and writes the selected route
+to `data.route`. Compose `compactIntent` first and use `preserveIntent: true`
+when the route needs a rewritten intent. `conversationalRoute` is an ordinary
+route key. `shadow: true` records the decision without changing routing.
+A failed router clears routing and follows its configured error severity.
+
+The transport is `packages/harness-baml/jev-decide.server.ts`. The recorded
+client is `JevDecide` on the Anthropic tier, configured by `JEV_DECISIONS_URL`
+and `JEV_DECISIONS_API_KEY`. On the private tier it is `PrivateSystemOne`,
+configured by the full `SMALL_LLM_DECISIONS_URL` ending in `/v1/systemone` and
+`SMALL_LLM_API_KEY`. An unset private URL refuses the request; the private tier
+never falls through to the public endpoint. A client that does not match the
+tier is refused before a request. `PrivateSystemOne` uses measured call time
+at `SMALL_LLM_EUR_PER_HOUR`; public cost uses reported usage and stays unknown
+when the endpoint supplies no cost.
+
+`decision_made` remains in `ALWAYS_COMMIT_TYPES`. It carries decision metadata,
+the probabilities and `stateChars`, never the state text. The call record
+carries usage and the recorded client. `PatternCapabilities.decisionKeys` and
+`harnessDecisionKeys(patterns)` expose declared keys without running the
+harness. Timeline previews show the decision type and verdict.
+
+## Memory recall (memoryRecall, #419)
+
+The recall half of `withMemory`: a chain step that runs BEFORE routing and, when
+the user's message plausibly depends on what the system remembers about them,
+attaches the few best-matching memories to the turn. It generates no text.
+
+```typescript
+harness(
+  memoryRecall({ store, decide, embed, owner, visibleTiers, awaitWake }),
+  router(),
+  routes({/* … */}),
+  compactExecution(),
+)
+```
+
+It is shaped after `retriever`: `commitStrategy: 'always'`, `errorSeverity:
+'recoverable'`, `estimateTurns: () => 0`, its backends injected. **Core stays
+generic** — no database, no network, no embedder, no provider vocabulary (a tier
+is an opaque string, the run frame's own rule). Everything the host owns arrives
+through five REQUIRED seams:
+
+| Config                        | What it is                                                                                                                                                                                                                                                                                                                                                                      |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `store: MemoryStore`          | `count(tiers)` and `candidates({ embedding, embedSpace?, tiers })`. **No method takes an owner**: the host binds the turn's owner into the store it hands in. The recall query is EXACT — every active row of the owner in the visible tiers, each with its cosine distance, no `ORDER BY`/`LIMIT` — because BM25's document frequencies are computed over exactly that corpus. |
+| `decide: DecideFn`            | The systemone decision seam; the step uses the endpoint verdict through `evaluateDecision`.                                                                                                                                                                                                                                                                                     |
+| `embed: MemoryQueryEmbedder`  | `query(text)`, plus an optional `spaceId`. A row from another space is refused (`skipped: 'error'`), never ranked on.                                                                                                                                                                                                                                                           |
+| `owner: () => string \| null` | From the host's request context, never an argument. `null` → `skipped: 'no-user'`.                                                                                                                                                                                                                                                                                              |
+| `visibleTiers(turnTier)`      | Which stored tiers a turn of this tier may read. The rule lives where the tier vocabulary does (the app: `anthropic` sees `anthropic`; `verda` sees both). **Fail closed** for an unknown tier.                                                                                                                                                                                 |
+
+Optional: `awaitWake` (below), `tier` (default: the run frame's `inference.tier`),
+`limits` (the responder's window, for the 5% ceiling) and `settings`.
+
+### The pipeline
+
+1. **Clear** `data.memories` and `data.memoryContext` — FIRST, before anything
+   can fail. `scope.data` survives the turn boundary, so a failure that returned
+   it untouched would hand the NEXT turn this turn's memories (pin
+   `per-turn-clear`).
+2. **Owner** (`no-user`) → **switch** (`settings.enabled`, `disabled`) → **count**
+   in the turn's tiers (0 → `empty`, with no gate and no embedding paid) →
+   **query** (the latest user message; none → `no-query`).
+3. **Gate, search and wake run concurrently** under one deadline,
+   `gate.timeoutMs` (default 1500 ms), so the turn pays the slowest of the three
+   and not their sum. The gate asks `memory.recall` (`retrieve | skip`, fallback
+   `skip`) over the latest user message and the previous FINAL assistant message
+   — **never memory content**.
+4. **Rank** (`rankMemories`, `memory-ranking.server.ts`): NFKC tokenizer
+   over `\p{L}`/`\p{N}` runs with identifiers kept whole (beside their parts) and
+   small EN/NL/FR stopword lists, no stemming; BM25 (k1 1.2, b 0.75; Lucene's
+   non-negative idf) over the user's own rows; cosine similarity `s_v = 1 −
+distance`; the **floors BEFORE fusion** — a row survives a channel only if
+   `s_v ≥ τ_v`, or it shares a non-stopword query term of length ≥ 3 with
+   `idf ≥ τ_idf`; **RRF** (k = 60) over each channel's surviving ranked list,
+   ties on `s_v`, then `last_seen_at`, then id. RRF is rank-only, so a fused score
+   cannot reject garbage: floored AFTER fusion, rejected rows would take rank
+   positions from the survivors (pin `bm25-rrf-floors`).
+5. **Cap**: `maxMemories` (default 5) then `maxMemoryTokens` (default 400 via
+   `estimateTokens`, hard-capped at 5% of `limits().contextWindow`). The block
+   stops at the first row that does not fit — it never skips to a smaller,
+   lower-ranked one.
+6. **Attach** only when the endpoint verdict `label` is `retrieve`. A failed
+   call, timeout or out-of-set answer attaches nothing.
+
+`data.memories` is `RecalledMemory[]` (`{ id, kind, tier, content }`) and
+`data.memoryContext` the formatted block (`- [kind] content`, one line per
+memory, no ids) that a responder renders in its run-static part. Two patterns
+consume it (#419 M5a): `compactExecution` copies a non-blank `data.memoryContext`
+into `CompactExecutionInput.memoryContext` (the key is ABSENT when nothing was
+recalled), and `router` (unless `routerMemory: 'replies-only'`) hands it to `route` as a trailing fourth argument,
+`RouteExtra { memoryContext? }`, again only when non-blank — so a `route` written
+before `RouteExtra` sees the three-argument call it always saw. Neither renders
+anything itself: the BAML adapters pass the block to the trailing `memory_context`
+parameter, escaped (see the DATA fence below).
+
+### The joint memory wake
+
+`awaitWake?: (budgetMs) => Promise<'awake' | 'skipped'>` is structurally the
+app's `awaitMemoryWake` (`lib/inference/memory-wake.server.ts`, #419 M13): the
+host binds it as it is and core imports no app code. The step passes it the
+gate's own budget and runs it concurrently with the gate and the search. If the
+wake reports `skipped`, or has not landed when the deadline fires, nothing is
+attached and the event records `skipped: 'waking'`; the wake itself keeps
+running, so the post-reply store and the next turn benefit. A deadline that
+fires with the wake already `awake` is `skipped: 'timeout'`. The wake is
+STARTED by the host before the chain's first pattern, and only for an agent that
+opted in — `harnessUsesMemory(patterns)` (below) is that probe.
+
+### It never stops what follows it
+
+Every failure — a throwing store or embedder, a gate that errors, an expired
+deadline, a rejecting wake, a throwing switch or owner resolver — ends in
+`memories = []` and a RETURN. Nothing is rethrown and **no `error` event is
+recorded**: an `error` is a statement about the turn (the synthesizer apologises
+for one, `settleTurn` fails an empty turn on one), and an unavailable memory is
+not one. Nor is it a `warning` — that renders a chat bubble, and the user sees
+nothing. The thrown error is `console.warn`ed, and the event records only its
+CLASS (`errorKind`): a message can quote what it was reading (pin
+`recall-never-skips-downstream`).
+
+### The `memory_recalled` event
+
+One per turn, from every exit: `{ attached, considered, survivors, tier?,
+tokens, skipped?, gate?, wake?, errorKind? }`. **IDS ONLY** — `attached` lists
+memory ids and nothing in the payload is memory content; `formatEventData`
+renders it from `skipped`/`attached.length` alone, so a field added later cannot
+reach an LLM-facing serialization by the JSON dump (pin `event-hygiene`). The
+gate's result rides in `gate` (verdict, probabilities, failure metadata and
+`stateChars`); recall records **no separate `decision_made`**, and the gate's
+`llmCall` rides this event so its cost is
+counted once.
+
+### Memory text never rides the persisted blob (review F1)
+
+`data.memories` / `data.memoryContext` hold decrypted memory text, and `ctx.data`
+is part of the serialized session. `serializeContext` therefore drops
+`TRANSIENT_DATA_KEYS` (`memories`, `memoryContext`) unless the run is `paused`
+(a resume re-enters from the blob, so a paused blob keeps the block — short-lived,
+but the same plaintext). Without it Forget and retention would never reach the
+conversation blob or the nightly dump (pin `memory-not-in-blob`).
+
+### Cost, and what is unrecordable
+
+The gate's `llmCall` rides the `memory_recalled` event on the success path AND
+on a deadline that fires after the gate answered (pins `recall-gate-cost`). A gate
+that finishes after the event is written is unrecordable without a late mutation.
+
+### Notes
+
+- With ONE stored memory the lexical channel cannot fire (`idf(1,1) = 0.288 <
+τ_idf 0.5`): such users get semantic-only recall. M11 calibrates τ_idf.
+- `MemoryQueryEmbedder.spaceId` is REQUIRED, and the store is told `embedSpace`; a
+  mismatch throws `MemoryEmbeddingSpaceMismatch` (a string compare, since
+  `assertSameSpace` takes space objects, not ids).
+- The recalled block carries no provenance fence: the responder's template fences it (`router.baml:72`, `compact-execution.baml:55`).
+
+### `withMemory(cfg)(patterns)` and `memoryStoreConfig(cfg)` (#419 M5a)
+
+```typescript
+const patterns = withMemory<AgentData>(deps.memory)([router(...), routes({...}), compactExecution(...)])
+// after the reply, from the host's compactAndSave continuation:
+await settleMemory(ctx, memoryStoreConfig(deps.memory), { conversationId })
+```
+
+`withMemory` returns `[memoryRecall(cfg), ...patterns]` — an array combinator, not a
+wrapper (a wrapper would break `runChain`'s per-top-level-pattern live toggle and
+irrecoverable-error stop, and memory must reach two responders). The caller's
+patterns come back as the SAME objects with the default. With `'replies-only'`,
+each top-level function is wrapped at ingress (the config stays identical), so
+a resume that skips recall still withholds memory from routing. It is the whole opt-in: it adds
+`capabilities.memory`, which `harnessUsesMemory` reads.
+
+`MemoryConfig` is ONE object for both halves. `store` is `MemoryStore &
+MemoryWriteStore` (no shared member; no method takes an owner); `decide`,
+`extract`, `embed`, `owner`, `visibleTiers` and **`enabled`** are required.
+`enabled` is the user's switch and is required here, unlike on a bare
+`memoryRecall` (where absent means on): D11 makes memory off until enabled, and
+`memoryStoreConfig` hands the SAME function to the store half (where absent means
+off), so recall and store cannot disagree about it. `recall` / `settle` carry each
+half's tunables.
+
+`routerMemory?: RouterMemory` is the developer's choice on this same wiring:
+
+- `'routing-and-replies'` (default, option a) preserves today's router arguments
+  and rendered prompt. The router may use recalled memory when writing `intent`.
+  A tool route's task can carry facts from earlier conversations into tool
+  arguments, for example a web-search query or a fetch. This includes tool egress
+  even when model calls stay on private infrastructure.
+- `'replies-only'` (option c) leaves the recalled block off every router prompt,
+  including nested routers. Memory reaches only reply-writing steps:
+  `compactExecution` and its `synthesize` path still receive it. The router's
+  direct conversational answer has no recalled memory, and its direct-response
+  route still skips synthesis. The current recalled block therefore cannot shape
+  a tool route's intent or tool arguments through routing. It is a per-turn boundary, not a guarantee that remembered facts never reach a tool: a fact the reply states becomes conversation history, and on a later turn the router sees that history and may put the fact into `intent`, and so into tool arguments (#548).
+
+Unknown values throw at the wiring boundary (`withMemory` and
+`memoryStoreConfig`); they never silently fall back. `RouterMemory` is the exported
+string-literal union of those two values. The choice is written on turn data by
+the prepended recall step, so callers need no extra router plumbing and the
+original pattern configs stay identical. This amends #419 D13 / decision 6:
+controllers and the planner have no direct memory-block input, but option (a)
+can carry memory indirectly through intent. Option (b), router memory for direct
+answers only with no copying into intent or route, is deferred (#544).
+
+This controls injection of the recalled block on the current turn. User text,
+ordinary conversation history (including earlier replies), and custom patterns
+that explicitly read `data.memories` are outside that boundary.
+
+M3 adds `compact` and `retention` as OPTIONAL fields (absent: no compaction, and the D21 default retention), so a composition root written now keeps compiling.
+
+### The DATA fence (harness-baml, #419 M5a)
+
+`memory.baml`'s prompts and the `memory_context` blocks put
+text between `---BEGIN DATA---` and `---END DATA---`. The assistant's reply, which is
+composed from tool results, is among that text: it is in the extractor's window and in
+the store and recall gates' state. So `harness-baml`'s adapters pass every fenced
+string through `escapeDataFence`. It rewrites each `BEGIN DATA` / `END DATA`, however it
+is spelled (see `data-fence.ts`), to `BEGIN (data marker removed)` /
+`END (data marker removed)`, and returns text without one unchanged. A verbatim
+`evidence` span therefore stays verbatim, and an evidence span that overlaps a marker
+in the user's own message fails closed. This is not the security control: acceptance
+and the sanitizer are.
+
+### `harnessUsesMemory(patterns)`
+
+`PatternCapabilities.memory` is declared by `memoryRecall`; `harnessUsesMemory`
+walks the (nested) graph for it. It is the ONE opt-in probe a host gates the
+memory wake and the post-reply store on, so an agent that never opted in never
+wakes the memory boxes. The app's M13 `memory-wake-optin` contract also
+requires an interactive-origin request and `await memory.enabled()` before
+`ensureMemoryAwake`: a disabled user or a thrown setting read returns without
+waking either box. The host awaits this check before starting patterns, on both
+new turns and non-stop-only resumes; the wake poll itself remains asynchronous.
+
+## Memory store (settleMemory, #419)
+
+The store half of persistent memory. After the reply, decide whether the turn
+contains something worth remembering about the user and, if so, write it. **This
+function writes persistent user data**, so every uncertain path ends in "store
+nothing" — each is named below and pinned in `__tests__/memory-store.test.ts`.
+
+```typescript
+const report = await settleMemory(ctx, {
+  store, // MemoryWriteStore — the transactional write seam, bound to the owner
+  decide, // the systemone decision seam
+  decideAll, // optional one-request provider (Jev)
+  extract, // MemoryExtractFn — the `describe`-role call
+  embed, // MemoryEmbedder — query side AND documents(texts)
+  owner, // () => string | null — from the host's request context
+  tier, // () => string | undefined — default: the run frame's inference.tier
+  awaitWake, // MemoryWakeWait — the app's awaitMemoryWake, as-is
+  settings, // enabled (REQUIRED to write — absent stores nothing, D11), softLimit, routineKinds, …
+})
+```
+
+### Where it runs — and why its events are not lost (review F1)
+
+`settleMemory` is a plain async function (the `compactBulkData` shape), not a
+chain step. The host starts it **from inside its post-turn continuation**
+(`compactAndSave`), which already holds the request context and the run frame,
+and **awaits it there**, so every `memory_written` is in `ctx.events` **before
+that continuation's `saveSession`**: one version-conditional save carries the
+turn's events and the memory references together. It writes into `ctx.events`
+directly and never through `trackEvent`, so `memory_written` can never reach a
+live listener — which is to say the transcript. It **never throws** and never
+touches the conversation row: a failure is a `console.warn` line (the reason,
+never the user's words) and a returned `skipped` reason.
+
+### The pipeline, and every fail-closed path
+
+| #   | Step                                                                                                                                                                                                                                | Stops with                                                           | Pin                       |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------- |
+| 1   | owner (`null`/`''`), the user's switch (off or unreadable), the tier to stamp (none), the turn (`error`/`paused`), a question/answer pair (no `final` answer), the user message's event id (none — a retry could not be recognised) | `no-user` `disabled` `no-tier` `turn-failed` `no-pair` `no-event-id` | `fail-closed`             |
+| 2   | the joint wake, `wakeBudgetMs` (default 180 s): `'skipped'` or a rejection                                                                                                                                                          | `waking` — and nothing is sent to a public provider instead          | `fail-closed`             |
+| 3   | ONE `decideFields` over the window: `sensitive`, `target`, `confirm`, `kind`, using endpoint verdicts                                                                                                                               | a failed gate stores nothing                                         | `seam-contract`           |
+| 4   | `sensitive`; `target: none`                                                                                                                                                                                                         | `sensitive` `gate`                                                   | `seam-contract`           |
+| 5   | `resolveStoreRoute`: an org target ALWAYS asks (F2); a personal target skips the question only for a routine kind (default episodic/semantic/preference; `trait` always asks)                                                       | —                                                                    | `org-graph-forces-ask`    |
+| 5′  | **pre-M12**: an org target has no writer. **without a `confirm` seam**: `ask` has no confirmation mechanism (pre-M6 behaviour, the fail-closed default)                                                                             | `org-no-writer` `no-confirmation` — store nothing and log (F4)       | `pre-m6-no-store`         |
+| 6   | extract (≤ `maxPerTurn`, default 3, read in order)                                                                                                                                                                                  | `extract-error` `no-candidates`                                      | `acceptance-rules`        |
+| 7   | embed (`documents`): a throw, a wrong count, a non-finite or ragged vector, an empty `spaceId`                                                                                                                                      | `error`                                                              | `fail-closed`             |
+| 8   | one transaction PER candidate (below)                                                                                                                                                                                               | `failed` / `duplicates` in the report                                | `idempotency-transaction` |
+
+The step-3 `decision_made` events are recorded on the context (one per field —
+metadata and `stateChars` only, never the state), so "why was nothing stored" is
+answerable from the blob. A failed gate cannot authorize a write; a failed kind read requires confirmation and uses `episodic` if a write proceeds.
+
+### Confirmation: prepare, propose, apply (#419 M6 = #433 S11)
+
+With a `confirm` seam (`MemoryConfig.confirm`, `MemoryConfirmSeam`), an `ask`
+route **prepares instead of storing nothing**, after step 7 and before any
+write:
+
+1. **Preview** — one read-only transaction: for each accepted candidate the
+   nearest neighbour and the dedupe verdict (`new`, `reinforces` an existing
+   memory, `updates` one), with the text the preview read. The switch is
+   re-read inside it; a switch-off proposes nothing. Nothing is written.
+2. **Propose** — `proposeToHuman` with kind `memory.confirm`, key = the user
+   message's event id (a turn is proposed once: a second settle reports
+   `already-proposed`), options `save` (the default; **no rule may pick it**; one
+   flag per item, labelled "Item N") and `discard` (the only option a rule may
+   pick), rule `park`, a 7-day expiry (`confirm.expiresInMs` overrides). The
+   event carries counts and the closed kind set — **never the memory text**.
+3. **Hold** — the payload (`MemoryProposalPayload`: the items, their
+   document-side vectors, the tier, the embedding space, the source event id)
+   goes to `confirm.hold` under the proposal's request id. A hold that throws
+   takes the proposal back out of the context (`error`): a question nobody can
+   answer is not left behind.
+
+The report says `proposed: n` and writes nothing. **The org target is
+unchanged:** it still stops `org-no-writer` whether or not the host has a
+`confirm` seam, extracts nothing and proposes nothing — there is no writer until
+M12, and an `ask` is never turned into an automatic write by a setting or a
+calibrated read.
+
+**`applyMemoryProposal(ctx, cfg, { payload, selected })`** is the approval's
+write. `payload` is the host's own record (never client input), `selected` the
+refs the answer's flags chose; an unknown ref selects nothing. No model is
+consulted and nothing is sent anywhere. One transaction per item under the
+owner's advisory lock, provenance row first-class:
+
+| Item                             | Writes                                                                                             | Refuses                                                                                                                              |
+| -------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| preview `new`                    | insert — or **reinforce** a same-kind near-duplicate (≥ τ_dup) that appeared since                 | —                                                                                                                                    |
+| preview `reinforces` / `updates` | reinforce / replace the text                                                                       | **`stale`**: the memory is gone, or no longer says what the preview read. The provenance row is rolled back with it; nothing changes |
+| a retried item                   | nothing (`duplicate`): its `(eventId, ordinal)` row exists; a lost `memory_written` is re-recorded | —                                                                                                                                    |
+
+The whole payload is refused when it is malformed (`parseMemoryProposalPayload`:
+version, kinds, lengths, vector shape, dedupe shape), when its vectors are in
+another embedding space than the embedder's now (`embed-space`), or when the
+user's switch is off (`disabled`, read inside each item). It never throws; the
+caller saves the context **after** awaiting it, in the same version-checked save
+as the person's answer (the app: `lib/memory/proposals.server.ts`).
+
+### Input isolation and the evidence rule (D9)
+
+The window is the turn's last `user_message` plus the `assistant_message` with
+`final: true` after it (`storeWindowTurns` adds earlier pairs). `tool_call`,
+`tool_result`, `controller_action`, non-final assistant text and `llmCall`
+records are **never read** (pin `input-isolation`). Because the final reply is
+itself composed from tool results, excluding tool records alone is not enough:
+**every memory's `evidence` must be a verbatim span of the CURRENT user
+message** — assistant text and earlier turns resolve references, never source.
+
+### Deterministic acceptance (`acceptCandidate`, pure)
+
+Each rule drops the candidate and names itself; nothing is repaired. In order:
+`kind` in the closed set · `shape` (one non-empty line, ≤ 280 characters) ·
+`evidence-length` (≥ 8 characters after NFKC) · `evidence-verbatim` ·
+`identifier-closure` (every URL, email, @handle, 3+-digit number and capitalised
+name — only `the user they their this that a an it` may open a sentence
+unchecked; any other sentence-initial capital is checked like every other —
+occurs as a whole
+token in a user message of the window) · `sanitizer` (`sanitizeUntrusted` reports
+zero findings on `content`, because a memory is replayed into a later prompt).
+`report.rejected` counts drops by rule id. A route that skipped confirmation on
+the gate's kind also drops a candidate whose own kind must ask (`not-routine`).
+
+### Dedupe, merge and idempotency (F9)
+
+Per candidate, in ONE transaction that the host holds under the owner's advisory
+lock (`MemoryWriteStore.transaction` — it MUST roll back on a throw):
+
+0. Re-read `settings.enabled()` after acquiring the owner lock, inside EACH candidate's transaction and before its first write. False throws to roll that candidate back and reports `skipped: 'disabled'` (#552); the entry check alone cannot cover a switch-off during wake/extract/embed.
+1. `nearest` memory of the same owner, tier and embedding space.
+2. **Same kind and cosine ≥ `dupSimilarity` (0.92)** → reinforce. **Related
+   (≥ `relatedSimilarity`, 0.75) preference or trait** → the `memory.merge`
+   question `same | update | distinct`, bounded by `mergeTimeoutMs`. The endpoint
+   verdict determines the action; a failed, refused or timed-out call, or
+   `distinct`, inserts separately (both memories kept, never merged). Episodes and facts only reinforce or insert;
+   kinds and tiers never merge.
+3. Insert/reinforce/update **and the `memory_sources` row in the same
+   transaction.** `addSource` returning `{ inserted: false, memoryId }` is the primary-key
+   conflict on `(owner, eventId, ordinal)` (`ON CONFLICT DO NOTHING RETURNING`; a
+   bare INSERT would abort the transaction): the transaction is rolled back, so a retry of
+   the same event is a no-op (the reinforce is undone with it), and a crash can
+   leave neither a memory without its source nor a source without its memory.
+   `ordinal` is the candidate's index in the extractor's output.
+
+The merge question runs INSIDE the transaction (it must see the lock's world),
+which is why it has its own deadline.
+
+### Erasure semantics (owner decision (b), M2 and M3 together)
+
+**M7 precondition (#552, SD-10/SD-11):** both the "turn off" and "forget all" RPCs must **commit** the user's memory switch-off (`user_prefs.memory_enabled = false`) in its own transaction **before** calling `deleteAllMemoriesForUser`. The erase opens its own memory-pool transaction, and a candidate re-reads the switch on another connection, so a flip that is not yet committed is invisible to it. A flip inside a transaction that wraps the erase call reopens the race: a settle that takes the lock between the erase's commit and the flip's commit reads `true` and writes a memory that survives. Any rejection from the erase means "not erased" and is retryable: `55P03`, a memory-pool connect timeout (`MEMORY_POOL_MAX` is 2 and settles can hold both connections) or a `40P01`. The switch stays off and the RPC reports the failure, never success. Any later writer, such as M3 compaction, must re-read the switch and its inputs inside the owner-lock transaction, as settle does. Forget-all uses the memory pool and the same owner advisory transaction lock (`pg_advisory_xact_lock(hashtextextended('memories:' || $1, 0))`) and `lock_timeout` as candidate writes. A `55P03` must reach the RPC as a retryable failure, never success. In-flight commits before the erase are deleted; candidates acquiring the lock afterwards re-read the disabled switch and write nothing.
+
+Three rules, decided once for storing and for compaction:
+
+1. **A source row is never dropped because the text moved on.** An `update`
+   replaces the memory's `content`, `evidence` and vector in place (same
+   `memoryId`) and keeps EVERY `memory_sources` row, including rows that no longer
+   support the new text. `MemoryWriteTx` has no way to remove one, and a host's
+   `update` must not delete any. **Compaction (M3) inherits the rule**: when
+   it writes a merged memory it moves every member's source rows to it, **keeps
+   all of them**, and deletes only the members themselves (the cascade must
+   never take the moved rows with it). It does not prune the rows whose
+   member text the summary dropped.
+2. **Deleting a conversation removes every memory that ever drew on it:** every
+   memory with ANY `memory_sources` row in that conversation, current or stale,
+   dies together with its sources, not only memories left with no source. This
+   errs toward erasing more, deliberately; it is what rule 1 buys. The delete
+   itself is host-side (#531, `memories.server.ts`, called from both conversation deletes in one transaction): core records the
+   `conversationId` on every row it writes (insert, reinforce and update alike),
+   and the SQL pin for the cascade lives with that delete. This supersedes #419 decision 11 and D18 ("delete any memory left with no source" / "an orphaned memory"): implemented as worded there, deleting the conversation an `update` drew on would leave the memory alive through a stale row while it quotes that conversation verbatim.
+3. **`evidence` names its event.** `MemoryInsertRow` and `update`'s `next` carry
+   `evidenceEventId` — the `user_message` event id the stored `evidence` is a
+   span of — and the host stores it on the memory row beside the text,
+   replacing both together on `update`. Today it always equals the turn's user
+   event (evidence is verbatim from the CURRENT message, D9); M3's merged
+   memory takes the evidence AND the `evidenceEventId` of the member whose
+   span it keeps. The field is required in the type, so a writer that omits it does not compile.
+
+The merge question uses the endpoint verdict. Failure, refusal or timeout
+keeps both memories by inserting separately. An `update` retains every source
+row under the erasure rules above.
+
+### The `memory_written` event
+
+One per memory written, recorded after its commit:
+`{ memoryId, kind, tier, eventId, ordinal, action }` — **never the content, nor a
+hash of it** (#541). `formatEventData` renders it from `action` and
+`kind` alone (pin `event-hygiene`). The extractor's `llmCall` rides the first one **redacted**:
+`functionName`, `usage`, `metrics`, `durationMs`, `provider`, `clientName` only —
+`variables`, `promptTemplate`, `rawInput`, `rawOutput` and `parsedOutput` are the
+candidates and the window, i.e. the memory's text, and never reach the blob. A
+call that produced nothing has no event to ride and is not recorded.
+
+**Residual (host save).** "One save carries both" holds only if that save lands.
+The host's trailing save (`saveTrailingPass`) is refused while a newer turn holds
+the conversation, and `settleMemory` may sit in that continuation for the wake
+budget plus extract, embed and merge time: a user who replies in that window
+commits memories and loses their `memory_written` events. A retry repairs the
+reference — on a conflict it re-records the event (`action: 'reinforced'`, its `kind`
+from a `read`) when the context has none for `(eventId, ordinal)` — but nothing
+replays a turn on its own. The mechanism (wait for the claim to release, or
+reconcile `memory_sources` against events on load) is M5's, and M5 cannot land
+without an interleaving pin for it.
+
+`report.compactionDue` is true when the owner's count reaches `softLimit` (300)
+or an insertion is refused at `hardLimit`;
+the host may then call the optional M3 pass before saving the context.
+
+## Memory compaction (#419 M3)
+
+`compactMemory(ctx, cfg)` is an optional post-reply function, never an import
+side effect. `memoryCompactionConfig(memoryConfig)` derives it from the same
+owner, switch, decision seam, embedder and retention as `withMemory`. It returns
+`undefined` without `cfg.compact`; existing composition roots keep compiling.
+No application wiring is added by M3.
+
+```typescript
+const cfg = {
+  ...memoryConfig,
+  retention: { episodic: 90, trait: null },
+  compact: {
+    compact: summarize, // MemoryCompactFn; M9 createMemoryCompactAdapter matches
+    store: compactionStore, // MemoryCompactionStore, owner-bound
+    assertTier, // REQUIRED host check; refuse unknown/unconfigured tiers
+    settings: { softLimit: 300, target: 240, hardLimit: 400 },
+  },
+}
+const report = await settleMemory(ctx, memoryStoreConfig(cfg))
+const compactCfg = memoryCompactionConfig(cfg)
+if (report.compactionDue && compactCfg) await compactMemory(ctx, compactCfg)
+await save(ctx)
+```
+
+The compaction settings' soft/hard thresholds override the settle settings in
+both derived configs; otherwise settle's settings supply them. Default
+`T_soft = 300`, target 240 (0.8 times soft), `T_hard = 400`. Target may equal
+soft, but cannot exceed it. Invalid limits fail closed. A short transaction
+takes the **same owner advisory lock** as settle and erasure, uses the host's
+dedicated memory pool/lock timeout, rechecks the committed switch, lists and
+verifies rows, then expires due rows and commits, even below the soft threshold.
+Unverifiable provenance excludes only those rows from merging; the report counts
+`unverifiable` rows (also counted as kept) and logs `unverifiable-provenance`.
+Owner scope and a valid last-seen timestamp suffice for expiry. At the soft
+threshold or above, each eligible multi-member cluster
+gets `MEMORY_COMPACT_SPEC` (`memory.compact.merge`, `merge | keep`). This is a
+separate spec from M2's unchanged `MEMORY_MERGE_SPEC` (`same | update | distinct`),
+as ruled by the coordinator for M3.
+
+Following G11 and the store step, compaction uses the endpoint verdict through
+`evaluateDecision`, with the `jev`-only seam. No calibration requirement,
+threshold policy or policy fallback is added. Only a usable `merge` verdict
+can proceed; `keep`, unavailable, refused, abstained or failed reads keep rows.
+`keep` is listed first, so an exact merge/keep tie keeps both rows without a
+threshold policy.
+This supersedes M3's earlier requireCalibrated/fitted-cut contract. Each cluster has a 10-second
+budget across tier validation, decision, summary and embedding. A late result
+has no write continuation. This timeout only stops waiting: the current seams
+have no abort signal, so late decision/summary/embedding calls can continue after
+the pass or switch-off. Their late call records are not attached to the context;
+transport-level usage observers, if supplied by the host, remain independent.
+Inference runs outside every owner-locked transaction against the committed
+snapshot. The switch is re-read before EVERY cluster, including after a `keep`,
+and off stops further clusters. After a merge verdict, the switch is re-read
+again before the summarizer call. The host's required `assertTier` runs before any
+inference, inside the partition's own run-frame tier; unavailable partitions
+are kept. The app wiring slice MUST positively allow only `anthropic` and
+`verda` before delegating to `assertInferenceTier`; passing that function bare
+is insufficient because it does not reject unknown strings. Core treats tiers
+as opaque and relies on this injected host contract. A nested call amends the frame; a sweep outside a turn opens one.
+This seam is exclusively personal memory: organisational-graph targets never
+enter it and still require the existing confirmation path.
+
+After acceptance and a fresh document embedding, a short transaction locks,
+rechecks the switch and re-lists rows. Every member must still be unchanged
+(id, content, evidence, evidenceEventId, lastSeenAt, compactedFrom, source set,
+and the remaining row fields); otherwise keep the cluster. Source ordering is
+irrelevant. Then insert the merged row with
+its evidence id, move **all** sources (including stale contributors), then
+delete members in that same transaction. Source-move/deletion counts must
+match. `compactedFrom` sums the members' counts; creation takes the oldest
+date and last-seen takes the newest, so compaction cannot renew retention.
+A write failure rolls back only that merge; earlier expiry and merges stay committed.
+Each merge publishes its events after its own commit, before the next cluster. The already-durable original user
+event remains the evidence event; M3 introduces no outbox or event-storage seam
+(coordinator ruling Q2). The switch is checked again after inference, before
+writing. Successful merges publish their decision and `memory_written` with
+action `inserted` after commit. Kept clusters, including a failed member
+re-verification, still record their metadata-only decision and redacted call
+without a write event. Call records retain
+usage/identity only, with all prompt/output text redacted. Persist the context
+after awaiting the pass, as for settle; the existing host-save/reconciliation
+obligations still apply. Expiry/eviction ids and absorbed-member ids/counts
+are deliberately not context events in M3; aggregate expiry/eviction/merge
+counts live in the returned report only. The new row's `memory_written` action
+remains `inserted`. Hosts needing a durable maintenance audit must persist the
+report separately; context alone cannot reconstruct deletions.
+
+A final short transaction locks, rechecks the switch and re-counts fresh rows.
+At or above the hard threshold, deterministic eviction removes only the oldest
+episodic rows (last-seen/id order), stopping below the threshold. Other kinds
+are never evicted silently. This capacity eviction still removes episodes when
+`retention.episodic` is `null`: persistence exempts expiry, not D4 capacity.
+If the remaining rows still fill it, the report
+sets `full` and logs `full`. Settle now checks capacity before an **insertion**,
+under its candidate transaction, and refuses only that insertion when there is
+no room. It continues later candidates, reports `skipped: full` and
+`compactionDue: true`, even if a later reinforce/update succeeds.
+Existing reinforcements and updates can proceed because they add no row.
+The optional `MemoryWriteTx.evictOldestEpisodes(n)` lets a host reclaim space
+in that same transaction; an absent/ineffective capability refuses growth,
+and an unreadable count cannot authorize an insertion. No existing app adapter
+is changed to supply the capability in this slice.
+
+`sweepMemories(jobs)` consumes host-supplied, owner-bound `MemorySweepJob`s
+(context, config, persist). It runs maintenance and then persists each context;
+a job failure is logged without content and does not stop the next owner.
+`startMemorySweep(jobsSupplier)` schedules an immediate startup sweep (zero-delay
+timer), then daily with a self-unref'ing timer, returning a stop function. It never runs on import, never overlaps
+sweeps, and reschedules after completion. The host supplies the owner directory
+and starts it once; M3 installs no app timer. Daily expiry runs for enabled
+owners below `T_soft` too, while over-threshold owners retry compaction.
+
+`MemoryCompactFn` is the injected summarizer seam. It matches the landed M9
+adapter: `{ kind, members: [{ content, evidence, last_seen }] }`, oldest first,
+returning `{ value: { content, evidence }, call? }`. Member text is untrusted
+data; the host must isolate it from instructions and use tier-routed inference,
+company-run only on the private tier (the Anthropic tier uses DescribeAnthropic).
+Core contains no transport or provider fallback.
+
+`clusterMemories` is pure, exact greedy single-link clustering (default cosine
+threshold 0.85, **unmeasured**). Bridge members join all linked clusters. Tier,
+kind and embedding space each partition the corpus; malformed/zero vectors
+remain singletons. Stable last-seen/id order makes input order irrelevant.
+`maxClusterSize` defaults to 8 (**unmeasured**); oversize clusters stay whole
+and unmerged (fail closed), with no decision call and no splitting. This bounds
+destructive compression; acceptance does not prove semantic fact preservation.
+
+`acceptCompaction` reuses M2's length, identifier-closure and zero-sanitizer
+checks against the members' content and evidence. The kind cannot change, and
+evidence must equal the newest member's evidence exactly. Core carries that
+member's `evidenceEventId`; the model never supplies provenance identifiers.
+An unverifiable result leaves every member intact.
+
+`MemoryConfig.retention` implements D21 as days after `lastSeenAt`, per kind.
+Default `{ episodic: 180, semantic: null, preference: null, trait: null }`;
+`null` persists until forgotten. Any kind may be overridden, including
+persistent episodes and expiring preferences. Equality at expiry is expired.
+Nonfinite/negative days are refused; an invalid timestamp never authorizes a
+deletion. Expiry needs no model call. `expiredMemories` reads the configured
+values, never an embedded 180-day literal.
 
 ## EventView Query API
 
@@ -2123,26 +3140,28 @@ transformed into prompt-friendly types. The table below shows which harness
 
 ### Harness EventType → BAML Input Type
 
-| Harness `EventType`  | Event Payload (TS)                                                                                                                                | BAML Type                                               | Consumed By                                                   |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------- |
-| `tool_call`          | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`)                                                                                       | `ToolCall`                                              | `LoopTurn.tool_call`, `Attempt.action`                        |
-| `tool_result`        | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`, `sanitized?`, `heldBy?`) | `ToolResult`                                            | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult` |
-| `controller_action`  | `ControllerActionEventData`                                                                                                                       | _(embedded in `LoopTurn.reasoning`)_                    | simpleLoop, actorCritic                                       |
-| `critic_result`      | `CriticResultEventData`                                                                                                                           | _(embedded in `Attempt.feedback`)_                      | actorCritic                                                   |
-| `user_message`       | `UserMessageEventData`                                                                                                                            | `Message { role, content }`                             | router (history)                                              |
-| `assistant_message`  | `AssistantMessageEventData`                                                                                                                       | `Message { role, content }`                             | router (history)                                              |
-| `pattern_enter`      | `PatternEnterEventData`                                                                                                                           | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`      |
-| `pattern_exit`       | `PatternExitEventData`                                                                                                                            | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`      |
-| `approval_request`   | _(legacy payload; its type was removed in #433 S3)_                                                                                               | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_request`, not an answer    |
-| `approval_response`  | _(legacy payload; its type was removed in #433 S3)_                                                                                               | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_response`, not an answer   |
-| `hitl_request`       | `HitlRequestEventData`                                                                                                                            | _(metadata only — kind and request id)_                 | `readHitl()` / `answerOf()` (#433)                            |
-| `hitl_response`      | `HitlResponseEventData`                                                                                                                           | _(metadata only — kind, choice and who decided)_        | `readHitl()` / `answerOf()` (#433)                            |
-| `error`              | `ErrorEventData`                                                                                                                                  | _(read via `view.hasErrors()`)_                         | compactExecution (error context), harness error handling      |
-| `reference_attached` | `ReferenceAttachedEventData`                                                                                                                      | _(not sent to BAML)_                                    | withReferences only (observability)                           |
-| `intent_compacted`   | `IntentCompactedEventData`                                                                                                                        | _(not sent to BAML)_                                    | compactIntent only (observability)                            |
-| `plan_created`       | `PlanCreatedEventData`                                                                                                                            | _(the plan reaches BAML as `plan_context` / `context`)_ | planner only; loops read `scope.data.plan`, not the event     |
-| `content_sanitized`  | `ContentSanitizedEventData`                                                                                                                       | _(metadata only — NEVER the verbatim spans)_            | withInjectionGuard only (observability + human audit)         |
-| `loop_recovery`      | `LoopRecoveryEventData` (`failure`, `error`, `tool?`, `turn`, `maxTurns`)                                                                         | _(metadata only — the turn log carries the feedback)_   | simpleLoop / actorCritic only (observability)                 |
+| Harness `EventType`  | Event Payload (TS)                                                                                                                                | BAML Type                                               | Consumed By                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `tool_call`          | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`)                                                                                       | `ToolCall`                                              | `LoopTurn.tool_call`, `Attempt.action`                                      |
+| `tool_result`        | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`, `sanitized?`, `heldBy?`) | `ToolResult`                                            | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult`               |
+| `controller_action`  | `ControllerActionEventData`                                                                                                                       | _(embedded in `LoopTurn.reasoning`)_                    | simpleLoop, actorCritic                                                     |
+| `critic_result`      | `CriticResultEventData`                                                                                                                           | _(embedded in `Attempt.feedback`)_                      | actorCritic                                                                 |
+| `user_message`       | `UserMessageEventData`                                                                                                                            | `Message { role, content }`                             | router (history)                                                            |
+| `assistant_message`  | `AssistantMessageEventData`                                                                                                                       | `Message { role, content }`                             | router (history)                                                            |
+| `pattern_enter`      | `PatternEnterEventData`                                                                                                                           | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`                    |
+| `pattern_exit`       | `PatternExitEventData`                                                                                                                            | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`                    |
+| `approval_request`   | _(legacy payload; its type was removed in #433 S3)_                                                                                               | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_request`, not an answer                  |
+| `approval_response`  | _(legacy payload; its type was removed in #433 S3)_                                                                                               | _(metadata only: `legacy approval event`)_              | legacy (#433): superseded by `hitl_response`, not an answer                 |
+| `hitl_request`       | `HitlRequestEventData`                                                                                                                            | _(metadata only — kind and request id)_                 | `readHitl()` / `answerOf()` (#433)                                          |
+| `hitl_response`      | `HitlResponseEventData`                                                                                                                           | _(metadata only — kind, choice and who decided)_        | `readHitl()` / `answerOf()` (#433)                                          |
+| `error`              | `ErrorEventData`                                                                                                                                  | _(read via `view.hasErrors()`)_                         | compactExecution (error context), harness error handling                    |
+| `reference_attached` | `ReferenceAttachedEventData`                                                                                                                      | _(not sent to BAML)_                                    | withReferences only (observability)                                         |
+| `intent_compacted`   | `IntentCompactedEventData`                                                                                                                        | _(not sent to BAML)_                                    | compactIntent only (observability)                                          |
+| `plan_created`       | `PlanCreatedEventData`                                                                                                                            | _(the plan reaches BAML as `plan_context` / `context`)_ | planner only; loops read `scope.data.plan`, not the event                   |
+| `content_sanitized`  | `ContentSanitizedEventData`                                                                                                                       | _(metadata only — NEVER the verbatim spans)_            | withInjectionGuard only (observability + human audit)                       |
+| `loop_recovery`      | `LoopRecoveryEventData` (`failure`, `error`, `tool?`, `turn`, `maxTurns`)                                                                         | _(metadata only — the turn log carries the feedback)_   | simpleLoop / actorCritic only (observability)                               |
+| `decision_made`      | `DecisionMadeEventData` (typed verdict, endpoint probabilities, failure metadata, `stateChars`, `shadow?`)                                        | _(metadata only — the state's SIZE, never the text)_    | typedDecision / decisionRouter (#418); consumers read `data.decisions[key]` |
+| `memory_recalled`    | `MemoryRecalledEventData` (`attached` ids, `considered`, `survivors`, `tier?`, `tokens`, `skipped?`, `gate?`, `wake?`, `errorKind?`)              | _(metadata only — IDS, never memory content)_           | memoryRecall (#419); consumers read `data.memories` / `data.memoryContext`  |
 
 ### Per-Pattern: Events Read → BAML Inputs → BAML Return
 
@@ -2293,7 +3312,8 @@ BAML Inputs:
   context      : string?           ← config.schema
 
 BAML Return → PlanResult:
-  reasoning : string  → rendered into the plan block
+  reasoning : string  → full in event/call record; scope.data copy capped at
+                         config.maxReasoningChars (default 2000) for the plan block
   plan      : string  → capped at config.maxPlanChars (default 2000)
   n_steps   : int     → soft hint on scope.data.plan; never clamps maxTurns
   → written to scope.data.plan
@@ -2438,9 +3458,9 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── types.ts                # Core types (UnifiedContext, PatternScope, RouterConfig, DIRECT_RESPONSE_ROUTE, the seam callables ControllerFn/PlannerFn/CompactIntentFn/… )
 ├── context.server.ts       # Context factory, createEvent(), generateId()
 ├── tools.server.ts         # Tools({ namespaces }) — groups MCP tools by namespace; the map is REQUIRED (ruling B-iii); inferServer consults transports' namespaceFor → registered resolvers (registerToolNamespaces) → heuristic; NO catalog in core — the 86-entry map lives in app-tools/mcp-catalog.ts and registers at boot
-├── run-frame.server.ts     # THE run frame — one ALS scope per run holding all six slots (guard / transports / config / live / inference / hitl — the last a frozen `{ attended }`), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, hitl passes by reference and is refused below an open one, the rest replace), activeRunFrame() THROWS outside a frame and currentRunFrame() is the soft read
+├── run-frame.server.ts     # THE run frame — one ALS scope per run holding its named slots (guard / transports / config / live / inference / hitl / egressChecks / stashWriteObservers / afterToolCall — hitl is a frozen `{ attended }`), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, hitl passes by reference and is refused below an open one, egressChecks, stashWriteObservers and afterToolCall concatenate, the rest replace), activeRunFrame() THROWS outside a frame and currentRunFrame() is the soft read
 ├── harness.server.ts       # harness() (a bound runner: agent.resume / agent.continue carry its own patterns, S4), resumeHarness(serialized, patterns, answers, { principal, resolve }), continueSession() — each OPENS the run frame (ruling Q17/D5) with a `{ attended: true }` hitl slot unless the frame says otherwise, or joins the host's and adds nothing; resumeHarness binds every answer to a request the run waits on before anything runs, continueSession supersedes what waits; HarnessResultScoped is a union on status — `pending` is non-optional when paused [F18]
-├── hitl.server.ts          # Human in the loop (#433): readHitl() / answerOf() read the hitl_* events; askHuman() raises (or replays, or applies resolveUnattended()) into the run's HITL bookkeeping — an async-context store of its own on a Symbol.for holder, opened by the owning runChain, never on the frame (#477) — held() is a gated executor's placeholder, hitlPending() is the loops' stop check; the owning runChain commits from the buffer only what askHuman could have written, straight into the context, and pauses. S3: checkResume() is the pause binding (HitlAnswerError), recordAnswers() / supersedeHitl() / expireHitl() close requests and substitute held results through sanitizeUntrusted. S4: humanGate() / confirm() are the gate patterns — the custom case and the one-call preset over askHuman
+├── hitl.server.ts          # Human in the loop (#433): readHitl() / answerOf() read the hitl_* events; proposeToHuman() / answerProposal() / readProposals() are the out-of-run, non-blocking form (S11, the memory confirmation); askHuman() raises (or replays, or applies resolveUnattended()) into the run's HITL bookkeeping — an async-context store of its own on a Symbol.for holder, opened by the owning runChain, never on the frame (#477) — held() is a gated executor's placeholder, hitlPending() is the loops' stop check; the owning runChain commits from the buffer only what askHuman could have written, straight into the context, and pauses. S3: checkResume() is the pause binding (HitlAnswerError), recordAnswers() / supersedeHitl() / expireHitl() close requests and substitute held results through sanitizeUntrusted. S4: humanGate() / confirm() are the gate patterns — the custom case and the one-call preset over askHuman
 ├── tool-transport.server.ts # ToolTransport + registerTransport() (process, consulted after every scoped one) / activeTransports() (reads the run frame's `transports` slot); the difference between the two ways to supply one IS the containment invariant — there is no priority field and no argument that could express one
 ├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE phases — scoped transports (innermost first) → process transports (registration order) → MCP gateway (terminal fallback, not a transport); leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element; drops the gateway's own management tools (`mcp-find`, `mcp-add`, `mcp-exec`, …) from the catalog (#412, #420), and `write_neo4j_cypher` and the `database-server` tools, which no agent holds (#403, #412)
 ├── agent-withheld-tools.ts # AGENT_WITHHELD_TOOLS + isAgentWithheldTool() — the tools no agent may hold (#403: `write_neo4j_cypher`; #412: the `database-server` tools), each with the decision and server-side switch its drop warning names (withholdingFor()), seen through a gateway or server-namespace prefix; read by listTools() (the catalog) and by simpleLoop/actorCritic (every allowlist check), never by callTool
@@ -2466,6 +3486,11 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
     ├── compactIntent.server.ts # Rewrites latest message → scope.data.intent for router-less actors; emits intent_compacted
     ├── planner.server.ts       # Upfront decomposition → scope.data.plan (+ formatPlanContext, read by both loop patterns); emits plan_created
     ├── retriever.server.ts     # retriever() — vector-store search as a pattern
+    ├── typedDecision.server.ts # typed systemone evaluation, recording, typedDecision and decisionRouter
+    ├── decisionLoop.server.ts  # #507: decisionLoop() — a loop over routes, a decisions model choosing the next; per-child synthetic context, route-output records sanitized under decision_loop_output
+    ├── decisionLoop-records.server.ts # #507: the per-kind extractors (committed events only, never content_sanitized), stats, and the state/handoff rendering
+    ├── withMemory.server.ts    # #419 M5a: withMemory() + memoryStoreConfig() — one config and switch for both halves
+    ├── memoryRecall.server.ts  # #419: memoryRecall() — the recall step (gate ∥ search ∥ wake, BM25 + cosine, floors before RRF, tier filter, per-turn clear, memory_recalled). The pure ranking half is ../memory-ranking.server.ts
     └── event-view.server.ts    # EventViewImpl (fluent query API, serializeCompact)
 
 packages/harness-baml/                   # The BAML companion PACKAGE (Lane A6) — EVERYTHING that touches baml_client lives here
@@ -2474,6 +3499,7 @@ packages/harness-baml/                   # The BAML companion PACKAGE (Lane A6) 
 ├── defaults.server.ts      # defaultSynthesize (→ bamlPatterns().synthesize) + defaultSelector (→ bamlPatterns().selector) — the composition-root implementations, not pattern defaults
 ├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter (tool list rides ControllerInput.tools — L14), createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, describeToolResultsBatchOp, createInjectionScreen
 ├── clients.server.ts       # The role → client maps (CLIENT_BY_ROLE / VERDA_CLIENT_BY_ROLE), clientOverrideFor, limitsFor, the tier (the run frame's `inference` slot) — moved byte-for-byte from core (Lane A6/A-i)
+├── data-fence.ts           # #419 M5a: escapeDataFence() — neutralise known DATA marker spellings before rendering
 ├── routing.server.ts       # routeMessageOp — the router seam's composition-root implementation (`bamlPatterns().router`) (with limits())
 ├── baml-version-check.server.ts # Boot-time staleness warning for baml_client (#154)
 ├── consumer-clients.server.ts   # defineInferenceClients() / activateConsumerClients() — the bring-your-own-model seam

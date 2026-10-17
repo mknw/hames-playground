@@ -419,7 +419,7 @@ describe('flattenDocument across the families', () => {
     const disarm = vi.fn(async (bytes: Uint8Array) => ({
       bytes,
       removed: { comments: 2 },
-      counted: { whiteText: 0 },
+      counted: { 'colour-contrast': 0 },
     }))
     const convert = convertTo('body')
     const disarmed = await flattenDocument(
@@ -429,7 +429,7 @@ describe('flattenDocument across the families', () => {
     expect(disarm).toHaveBeenCalledWith(pkg, DOCX_MIME)
     expect(disarmed.report.hiddenContent).toBe('removed')
     expect(disarmed.report.removed).toMatchObject({ comments: 2 })
-    expect(disarmed.report.counted).toEqual({ whiteText: 0 })
+    expect(disarmed.report.counted).toEqual({ 'colour-contrast': 0 })
     // The disarmed bytes are what is converted, under the verified type.
     expect(convert).toHaveBeenCalledWith(
       Buffer.from(pkg).toString('base64'),
@@ -447,7 +447,11 @@ describe('flattenDocument across the families', () => {
    * MUTATION: set 'removed' unconditionally whenever a disarm ran → red.
    */
   it('a disarm that counts one hidden row gives not-removed and unattended: false', async () => {
-    const disarm = async (bytes: Uint8Array) => ({ bytes, removed: {}, counted: { hiddenRows: 1 } })
+    const disarm = async (bytes: Uint8Array) => ({
+      bytes,
+      removed: {},
+      counted: { 'hidden-flag': 1 },
+    })
     const doc = await flattenDocument(
       { bytes: ooxmlPackage(), filename: 'a.docx', mimeType: DOCX_MIME },
       { convert: convertTo('body'), disarm },
@@ -809,14 +813,14 @@ describe('Z5 [F14]: classifierFromDecide', () => {
     const classify = classifierFromDecide(
       decideReturning({
         probs: { clean: 0.99, suspicious: 0.01 },
-        method: 'verbalized',
+        method: 'jev',
         calibrated: false,
       }),
     )
     expect(await classify({ text: 'x' })).toEqual({
       suspicious: true,
       abstained: true,
-      method: 'verbalized',
+      method: 'jev',
       calibrated: false,
     })
   })
@@ -825,14 +829,14 @@ describe('Z5 [F14]: classifierFromDecide', () => {
     const classify = classifierFromDecide(
       decideReturning({
         probs: { clean: 0.95, suspicious: 0.05 },
-        method: 'logprob',
+        method: 'jev',
         calibrated: true,
       }),
     )
     expect(await classify({ text: 'x' })).toEqual({
       suspicious: false,
       abstained: false,
-      method: 'logprob',
+      method: 'jev',
       calibrated: true,
     })
   })
@@ -841,7 +845,7 @@ describe('Z5 [F14]: classifierFromDecide', () => {
     const classify = classifierFromDecide(
       decideReturning({
         probs: { clean: 0.85, suspicious: 0.15 },
-        method: 'logprob',
+        method: 'jev',
         calibrated: true,
       }),
     )
@@ -852,7 +856,7 @@ describe('Z5 [F14]: classifierFromDecide', () => {
     const classify = classifierFromDecide(
       decideReturning({
         probs: { clean: 0.02, suspicious: 0.98 },
-        method: 'logprob',
+        method: 'jev',
         calibrated: true,
       }),
     )
@@ -867,7 +871,7 @@ describe('Z5 [F14]: classifierFromDecide', () => {
     const malformed = classifierFromDecide(
       decideReturning({
         probs: { clean: Number.NaN, suspicious: 0 },
-        method: 'logprob',
+        method: 'jev',
         calibrated: true,
       }),
     )
@@ -877,7 +881,7 @@ describe('Z5 [F14]: classifierFromDecide', () => {
   it('asks the decision seam its own fixed question, with the chunk as the state', async () => {
     const decide = vi.fn(async () => ({
       probs: { clean: 1, suspicious: 0 },
-      method: 'logprob',
+      method: 'jev',
       calibrated: true,
     }))
     await classifierFromDecide(decide)({ text: 'the chunk' })

@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mknw/hames-playground/main/docs/images/hames-banner-wide-dark.png">
+  <img src="https://raw.githubusercontent.com/mknw/hames-playground/main/docs/images/hames-banner-wide-light.png" alt="hames: supports of a harness to which its traces are fastened. The @hames-ai packages on npm: harness-patterns, harness-baml, agents, connectors, sandbox. hames app: where harness primitives become your integrated workspace." width="880">
+</picture>
+
 # @hames-ai/sandbox
 
 [![npm](https://img.shields.io/npm/v/@hames-ai/sandbox?style=flat)](https://www.npmjs.com/package/@hames-ai/sandbox)
@@ -193,6 +198,17 @@ containers.
 
 ## Configuration
 
+### Multiple app clones on one Docker daemon
+
+Set a distinct `SANDBOX_ENVIRONMENT` in each app (for example `release` and
+`dev`). Production requires it; local development defaults to `local`. The
+backend captures that label once and applies it to sandbox/proxy containers and
+egress networks. Both startup cleanup sweeps require the environment label as
+well as `kg-sandbox=1`, so a restart leaves other environments and legacy
+unlabelled resources alone. Remove legacy leftovers manually by inspected ID.
+Set a distinct `SANDBOX_CACHE_VOLUME` base per clone too. Labels prevent
+accidental cleanup; access to the Docker socket remains host-wide authority.
+
 ### What your application passes in
 
 Nothing, for the example above. Two things are yours to supply when you need
@@ -205,6 +221,10 @@ them:
   `/work/out` is saved back when it ends. Syncing is off by default. If you turn
   it on without configuring a store, the first turn fails with
   `WorkspaceStoreNotConfiguredError` rather than silently saving nothing.
+  A file a tool stores _during_ the run (for example a Microsoft 365 file copied
+  into the stash) is copied into `/work/in` right after that call returns, so
+  the agent can open it in the same run. If that copy fails, the call is
+  reported as failed rather than as a success that the agent cannot act on.
 - **Whose container it is** — `WithSandboxConfig.tenantId`, the id of the user who
   owns the conversation, as a string or as a function called per run (useful when
   you build your patterns once but the signed-in user changes per request).

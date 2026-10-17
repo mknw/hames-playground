@@ -158,7 +158,7 @@ Default `{ maxChars: 1000, overlap: 200, strategy: 'paragraph' }`. `chunkDocumen
 
 Vectors are only comparable within one model, so there is **no silent cross-provider fallback**. The provider is a deliberate choice:
 
-- **`local`** (dev default) — `llama-server --embedding` on `:8090` (Qwen3-Embedding-0.6B, 1024-dim), OpenAI-compatible `/v1/embeddings`.
+- **`local`** (dev default) — `llama-server --embedding` on `:8090` (Qwen3-Embedding-0.6B, 1024-dim), OpenAI-compatible `/v1/embeddings`. In the container stack the same server is the compose `embedder` service (internal network only, `EMBEDDINGS_LOCAL_URL=http://embedder:8090/v1`; [`DOCKER_COMPOSE.md`](DOCKER_COMPOSE.md)); #419 memory embeds through it too.
 - **`openrouter`** — selectable; requires `OPENROUTER_API_KEY`.
 
 `embed()` returns vectors tagged with `{provider, model, dimensions}`; `assertSameSpace()` enforces comparability. The space is baked into the index name and key prefix, and re-ingesting a session under a different model **throws** (override with `allowSpaceChange`). Env: `EMBEDDINGS_PROVIDER`, `EMBEDDINGS_LOCAL_URL`, `EMBEDDINGS_LOCAL_MODEL`.

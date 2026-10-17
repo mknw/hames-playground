@@ -34,6 +34,7 @@ import {
   wrapAsLLMCallError,
 } from './baml-adapters.server'
 import { clientOverrideFor } from './clients.server'
+import { escapeDataFence } from './data-fence'
 
 assertServerOnImport()
 
@@ -80,6 +81,15 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
         },
       })
     }
+    // #614: every call failed and the controller then Returned an answer from
+    // context — the history above is the failure, this is the answer.
+    if (input.returnText) {
+      turns.push({
+        n: (input.loopHistory.iterations.at(-1)?.turn ?? -1) + 1,
+        reasoning: 'Direct response',
+        tool_result: { tool: 'response', result: input.returnText, success: true },
+      })
+    }
   } else if (input.response) {
     // Create a single turn with the response as a result
     turns.push({
@@ -114,7 +124,7 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
   // is gone. `Synthesize` declares `SynthesizerAnthropic` (Sonnet 5 → Haiku
   // 4.5), overridden onto the self-hosted deployment when
   // `USE_VERDA_INFERENCE=1` re-points the `compactExecution` role.
-  const synthOpts = { collector, ...clientOverrideFor('compactExecution') }
+  const synthOpts = { ...clientOverrideFor('compactExecution'), collector }
   let content: string
   try {
     content = await b.Synthesize(
@@ -123,6 +133,12 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
       trimmedTurns,
       input.hasError ?? false,
       input.errorMessage,
+      // `memory_context` (#419 M9/M5a): `memoryRecall`'s block for this turn, or
+      // null when nothing was recalled. The slot is always passed — the options
+      // bag is the argument AFTER it, and omitting it would hand the bag to the
+      // wrong parameter. Escaped because the template renders it inside a DATA
+      // fence (data-fence.ts).
+      input.memoryContext ? escapeDataFence(input.memoryContext) : null,
       synthOpts,
     )
   } catch (e) {
@@ -169,7 +185,7 @@ export const defaultSelector: SelectorFn = async (input) => {
       candidates,
       // describe-tier, so a verda tier decision moves it: the candidates it
       // ranks are summaries of this conversation's own tool results.
-      { collector, ...clientOverrideFor('describe') },
+      { ...clientOverrideFor('describe'), collector },
     )
   } catch (e) {
     // Non-fatal upstream (the wrapper falls back to attaching nothing), but the

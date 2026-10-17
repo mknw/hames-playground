@@ -150,9 +150,15 @@ export interface SimpleLoopData {
    *  field and `docs/harness-patterns/frontend.md` documents both, so dropping
    *  only this one would leave the pair half-implemented for no gain. Under
    *  `returnStyle: 'summary'` what lands here is a short summary, not a full
-   *  answer — do not treat it as user-facing text. */
+   *  answer — do not treat it as user-facing text — except on a turn in which no
+   *  tool call returned a result, where the prompt asks for the complete answer
+   *  (#615; see `data.returnText`). */
   lastAction?: ControllerAction
   response?: string
+  /** The terminal `Return`'s text, for `compactExecution`'s Return-only case
+   *  (#610) and its every-call-failed case (#614). Written ONLY by this loop's own `Return` exit — an actorCritic
+   *  `Return` is refused and never reaches it. */
+  returnText?: string
 }
 
 /**
@@ -275,6 +281,9 @@ export function simpleLoop<T extends SimpleLoopData>(
     let errorLlmCall: LLMCallRecord | undefined
     let recoveryCapHit = false
     let exitedViaReturn = false
+    // This loop owns the key for its own run: an earlier loop's text (same
+    // turn) must not answer for one that ended without a `Return` (#610).
+    if (scope.data.returnText !== undefined) scope.data = { ...scope.data, returnText: undefined }
 
     // Build structured references to tool results from previous tasks.
     // These are passed as turns_previous_runs (separate from the current task's turns)
@@ -319,7 +328,12 @@ export function simpleLoop<T extends SimpleLoopData>(
     // agent-static tier-1 prefix, and a per-question plan there would turn
     // every tool-catalog cache read into a write (#122). Absent when no
     // planner ran — the loop then behaves exactly as it did before.
-    const planContext = formatPlanContext((scope.data as PlannerData).plan)
+    // #507: an orchestrating pattern's earlier-step results ride the SAME string,
+    // under a separate data heading — never inside the PLAN section.
+    const planContext = formatPlanContext(
+      (scope.data as PlannerData).plan,
+      (scope.data as PlannerData).handoff,
+    )
 
     // THE ALLOWLIST, as one predicate. A tool withheld from agents
     // (`isAgentWithheldTool`, #403) is refused even when `tools` names it — the
@@ -479,6 +493,9 @@ export function simpleLoop<T extends SimpleLoopData>(
             ...scope.data,
             lastAction: action,
             turn,
+            ...(action.tool_name === 'Return' && typeof action.tool_args === 'string'
+              ? { returnText: action.tool_args }
+              : {}),
           }
           exitedViaReturn = true
           break
@@ -1165,5 +1182,8 @@ export function simpleLoop<T extends SimpleLoopData>(
     fn,
     config: resolved,
     estimateTurns: (s) => resolveTurnBudget('maxToolTurns', config?.maxTurns, s.maxToolTurns),
+    // The allowlist this loop will accept (minus what no agent may call), for
+    // static introspection — the planner's agent map reads it (#507).
+    capabilities: { tools: tools.filter((name) => !isAgentWithheldTool(name)) },
   }
 }

@@ -8,7 +8,7 @@ name: hames
 #   * Every `ports:` entry is bound to 127.0.0.1. A bare `5432:5432` publishes
 #     on 0.0.0.0, i.e. to the LAN/café Wi-Fi, and on Linux Docker's iptables
 #     rules bypass `ufw` for those publishes. Containers are unaffected: they
-#     reach each other by service name over `app-network`, never through a
+#     reach each other by service name (Neo4j through `neo4j-relay`), never through a
 #     published port.
 #   * The two database passwords are `${VAR:?}` substitutions read from the
 #     repo-ROOT `.env` (Compose's substitution source — not `app/.env`). A
@@ -19,19 +19,21 @@ name: hames
 
 services:
   neo4j:
-    image: neo4j:5.26
+    build: ./docker/neo4j
+    image: hames-neo4j:local
     container_name: hames-neo4j
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:7474:7474"
-      - "127.0.0.1:7687:7687"
     environment:
       - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD in the repo-root .env — see .env.example}
-      - NEO4J_PLUGINS=["apoc", "n10s"]
+      # Plugins are baked into the image: runtime downloads cannot cross the
+      # internal network. File reads fail closed independently of the network.
+      - NEO4J_dbms_security_allow__csv__import__from__file__urls=false
+      - NEO4J_apoc_import_file_enabled=false
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*,n10s.*
     volumes:
       - neo4j_data:/data
     networks:
-      - app-network
+      - neo4j-internal
     healthcheck:
       test:
         [
@@ -41,6 +43,34 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # Only this fixed-destination TCP relay shares Neo4j's internal network.
+  # It accepts HTTP/Bolt inbound; it provides no HTTP proxy or IP forwarding.
+  neo4j-relay:
+    # Registry index bytes verified against Docker-Content-Digest (G13 runbook).
+    init: true
+    image: alpine/socat@sha256:fb3862c949af7c79996d0e514ee96128644d840835ed5368eeecb14a869de361
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        socat TCP-LISTEN:7474,fork,reuseaddr TCP:neo4j:7474 &
+        socat TCP-LISTEN:7687,fork,reuseaddr TCP:neo4j:7687 &
+        wait -n
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    sysctls:
+      net.ipv4.ip_forward: "0"
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    networks:
+      - neo4j-internal
+      - app-network
 
   mcp-config:
     # One-shot: renders configs/mcp-config.yaml's ${NEO4J_PASSWORD} placeholder
@@ -115,13 +145,28 @@ services:
     networks:
       - app-network
     depends_on:
-      neo4j:
-        condition: service_healthy
+      neo4j-relay:
+        condition: service_started
       mcp-config:
         condition: service_completed_successfully
 
   postgres:
-    image: postgres:16-alpine
+    # pgvector's postgres:16 image (Debian bookworm), pinned by its manifest
+    # INDEX digest — the SAME digest `.github/workflows/ci.yml` runs its
+    # `test · postgres` job on, so dev, compose and CI are one image
+    # (postgres-image-pin.test.ts fails when they part). `withMemory` stores
+    # embeddings in a `vector(1024)` column (#419) and the alpine image cannot
+    # `CREATE EXTENSION vector`. musl -> glibc changes text collation, so a
+    # cluster written by the alpine image must never be mounted by this one: its
+    # b-tree indexes would return wrong rows with no warning. That is why the
+    # volume below is `pg16_glibc_data` and NOT the alpine-era `postgres_data` —
+    # a pull plus any `up -d` can then only create an EMPTY cluster, never
+    # re-point the old one. The old volume stays untouched until the owner
+    # removes it; the data moves by dump-and-restore, once, with
+    # docs/deployment/pgvector-migration.md and scripts/migrate-postgres-pgvector.sh.
+    # Bumping it: take the new INDEX digest, change it here and in ci.yml
+    # together, and re-run the restore drill in that runbook.
+    image: pgvector/pgvector:0.8.0-pg16-bookworm@sha256:a132765ec351c65111b5b675928a3a0515a466a40f97277329db8b8209ad8bc9
     container_name: hames-postgres
     restart: unless-stopped
     ports:
@@ -131,7 +176,7 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the repo-root .env — see .env.example}
       - POSTGRES_DB=hames
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - pg16_glibc_data:/var/lib/postgresql/data
     networks:
       - app-network
     healthcheck:
@@ -183,6 +228,83 @@ services:
     networks:
       - app-network
 
+  embedder:
+    # The memory/Data Stash embedder (#419 M8): `llama-server --embedding` over
+    # Qwen3-Embedding-0.6B, the same invocation as `make embed`, on the compose
+    # network ONLY. It has no `ports:` — nothing on the host or the LAN can
+    # reach it, and the app finds it by service name (`EMBEDDINGS_LOCAL_URL`
+    # below). Memory text is profiling data about employees (SD-10, SD-12), so
+    # the embedder is company-run and unreachable from outside by construction;
+    # compose-embedder.test.ts pins both halves, in this file AND in
+    # docker-compose.prod.yaml, which must close the exposure on its own (SD-18).
+    # A deployment that really needs it on the host (the systemd run shape,
+    # docs/deployment/azure-vm.md §7) adds a git-ignored override bound to
+    # 127.0.0.1 — never here.
+    #
+    # In the `app` profile with the container app: the host dev loop keeps
+    # using `make embed` on :8090 and never needs this. The GGUF is not in git
+    # (models/README.md); the container exits at start if it is missing, which
+    # is why it is not part of the bare `docker compose up -d`.
+    #
+    # Pinned by index digest (multi-arch: linux/amd64 and linux/arm64) under the
+    # floating `server` tag, which is what a re-tag cannot change under us. It
+    # may scale to zero behind the joint memory wake (lib/inference/
+    # memory-wake.server.ts), whose probe is `POST {EMBEDDINGS_LOCAL_URL}/embeddings`
+    # — a forward pass, never this healthcheck — so URL, path and port here are
+    # what that module reads.
+    image: ghcr.io/ggml-org/llama.cpp:server@sha256:33868c035b21dc63f7c60b7438774283fd99215bc319114eb03de5df4ce7cd6b
+    profiles: ["app"]
+    restart: unless-stopped
+    # Snapshot and verify even on restart or a direct compose up. The host
+    # bind can change despite :ro; only the private copy is ever loaded.
+    # $$ defers expansion to the container shell.
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        # The launch seam owns -m; command overrides must not reopen /models.
+        for arg do
+          case "$$arg" in -m|--model|--model=*) exit 1 ;; esac
+        done
+        . /models/embedder.lock
+        source=/models/$$filename
+        [ ! -L "$$source" ] && [ -f "$$source" ] || exit 1
+        # A restart reuses the container filesystem: discard the old copy.
+        rm -rf /tmp/embedder-verified
+        mkdir -m 700 /tmp/embedder-verified
+        snapshot=/tmp/embedder-verified/model.gguf
+        dd if="$$source" of="$$snapshot" iflag=nofollow,nonblock status=none
+        chmod 400 "$$snapshot"
+        printf '%s  %s\n' "$$sha256" "$$snapshot" | sha256sum -c -
+        exec /app/llama-server -m "$$snapshot" "$$@"
+      - --
+    command:
+      - --embedding
+      - --n-gpu-layers
+      - "0"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8090"
+      - --ctx-size
+      - "8192"
+    volumes:
+      - ./models:/models:ro
+    # Placeholder, not a measurement: the GGUF is 639 MB and the RSS of
+    # llama-server on top of it is unmeasured (#419 spec §7).
+    mem_limit: 2g
+    networks:
+      - app-network
+    healthcheck:
+      # /health answers 503 while the weights load and 200 once they are in.
+      # Compose ordering only: readiness for the app is the memory wake's
+      # forward-pass probe, and /health was never proof of that.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
   app:
     # The SolidStart app (#197). Deployment/parity — NOT the dev loop: `pnpm dev`
     # on the host is still the way to develop, and this service is not part of
@@ -217,7 +339,7 @@ services:
       # in-network rewrites of app/.env's host-facing defaults, with the
       # passwords folded in from the same root-.env variables the databases
       # read. The Neo4j URL needs no entry: config/endpoints.ts resolves
-      # bolt://neo4j:7687 in a production build (the localhost form is the
+      # bolt://neo4j-relay:7687 in a production build (the localhost form is the
       # `import.meta.env.DEV` branch) — only the credential is supplied here.
       - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the repo-root .env — see .env.example}@postgres:5432/hames
       - NEO4J_USER=neo4j
@@ -225,12 +347,15 @@ services:
       - MCP_GATEWAY_URL=http://mcp-gateway:8811/mcp
       - REDIS_HOST_DIRECT=redis
       - DOC_CONVERT_URL=http://doc-convert:8000
-      # Data Stash embeddings run on a llama-server on the HOST (port 8090, see
-      # CLAUDE.md), which is not a compose service — hence host.docker.internal.
-      - EMBEDDINGS_LOCAL_URL=http://host.docker.internal:8090/v1
+      # The `embedder` service above, by name, on the compose network. The `/v1`
+      # suffix is required: `/embeddings` is appended verbatim by both the
+      # Data Stash client and the memory wake's probe.
+      - EMBEDDINGS_LOCAL_URL=http://embedder:8090/v1
+      - SANDBOX_ENVIRONMENT=local
     extra_hosts:
       # Linux hosts need this mapping spelled out; Docker Desktop/colima provide
-      # host.docker.internal anyway and ignore it.
+      # host.docker.internal anyway and ignore it. Kept for the one thing that
+      # still lives on the host: `SMALL_LLM_BASE_URL` (`make llm-small`, :8095).
       - "host.docker.internal:host-gateway"
     volumes:
       # The compute sandbox shells `docker run`/`docker exec` (sandbox
@@ -246,13 +371,18 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      neo4j:
-        condition: service_healthy
+      neo4j-relay:
+        condition: service_started
       redis:
         condition: service_healthy
       mcp-gateway:
         # No healthcheck on the gateway image, and the app reconnects per call
         # anyway (mcp-client.server.ts pools + retries), so started is enough.
+        condition: service_started
+      embedder:
+        # Started, not healthy: the embedder may scale to zero and memory is
+        # fail-open behind the joint wake, so a slow weight load must not hold
+        # the app back.
         condition: service_started
       doc-convert:
         # No healthcheck on the doc-convert image; STASH_CONVERT_DOCS defaults
@@ -264,12 +394,18 @@ services:
     # it too; nothing to restate here.
 
 networks:
+  neo4j-internal:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
   app-network:
     driver: bridge
 
 volumes:
   neo4j_data:
-  postgres_data:
+  # Postgres 16 on the pgvector (Debian, glibc) image. A NEW key on purpose — see
+  # the postgres service; the alpine-era `postgres_data` is deliberately gone.
+  pg16_glibc_data:
   redis_data:
   # The gateway's rendered config (derived, rewritten on every `up`).
   mcp_config:

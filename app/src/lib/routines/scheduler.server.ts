@@ -41,7 +41,7 @@
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { listEnabledRoutines, type RoutineRow } from '../db/routines.server'
-import { reapStuckConversations, STUCK_RUN_TIMEOUT_MINUTES } from '../db/conversations.server'
+import { reapStuckConversations, HUNG_TURN_BACKSTOP_MINUTES } from '../db/conversations.server'
 import { nextDueAt } from './triggers'
 import { fireRoutine } from './dispatch.server'
 
@@ -114,13 +114,24 @@ async function tick(): Promise<void> {
 export async function sweepStuckRuns(): Promise<string[]> {
   try {
     const reaped = await reapStuckConversations()
-    if (reaped.length > 0) {
+    const dead = reaped.filter((r) => r.leaseDead).map((r) => r.id)
+    const hung = reaped.filter((r) => !r.leaseDead).map((r) => r.id)
+    if (dead.length > 0) {
       console.warn(
-        `[routines] reconciled ${reaped.length} run(s) stuck at 'running' for more than ` +
-          `${STUCK_RUN_TIMEOUT_MINUTES}m to 'error': ${reaped.join(', ')}`,
+        `[routines] reconciled ${dead.length} run(s) stuck at 'running' to 'error' — no live ` +
+          `turn lease: ${dead.join(', ')}`,
       )
     }
-    return reaped
+    if (hung.length > 0) {
+      // A turn that was still RENEWING its lease, alive for more than the
+      // backstop: the only reap a running process will later overwrite with its
+      // own outcome, and an anomaly worth an error line of its own.
+      console.error(
+        `[routines] reaped ${hung.length} run(s) whose lease was still live but which had sat at ` +
+          `'running' past the ${HUNG_TURN_BACKSTOP_MINUTES}m backstop: ${hung.join(', ')}`,
+      )
+    }
+    return reaped.map((r) => r.id)
   } catch (err) {
     console.error('[routines] could not sweep stuck runs this tick:', err)
     return []

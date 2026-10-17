@@ -585,7 +585,7 @@ index.tsx (view state only)
     │       │          onRunStarted, onRunSettled, onTitleUpdated, onPromoted
     │       │
     │       ├─> AgentSelector (selectedAgent, onAgentChange, disabled)
-    │       ├─> ChatMessages (messages, graphEntityNames, onHighlightEntities, onApproveWrite, onRejectWrite)
+    │       ├─> ChatMessages (messages, graphEntityNames, onHighlightEntities)
     │       │       └─ annotateEntities() — wraps entity names in interactive spans, on the sanitized DOM
     │       └─> ChatInput (onSend, disabled, blockedMessage)
     │

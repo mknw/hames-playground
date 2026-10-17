@@ -29,10 +29,10 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 
 // The wake notice is mocked so the composition root's registered
 // `onPrivateCallStart` filter is OBSERVABLE: a private-tier call on the
-// scale-to-zero client announces itself; a call on the 4B summarizer does not.
-const noteVerdaCallStarting = vi.fn()
+// client announces the matching box, including the 4B summarizer.
+const noteBoxCallStarting = vi.fn()
 vi.mock('../../../lib/inference/cold-start.server', () => ({
-  noteVerdaCallStarting: (...args: unknown[]) => noteVerdaCallStarting(...args),
+  noteBoxCallStarting: (...args: unknown[]) => noteBoxCallStarting(...args),
 }))
 
 const CLIENTS = '@hames-ai/harness-baml/clients.server'
@@ -44,8 +44,11 @@ const ENV_KEYS = [
   'VERDA_INFERENCE_ENDPOINT',
   'VERDA_INFERENCE_API_KEY',
   'SMALL_LLM_BASE_URL',
+  'SMALL_LLM_DECISIONS_URL',
+  'SMALL_LLM_API_KEY',
   'EUR_PER_USD',
   'VERDA_EUR_PER_HOUR',
+  'SMALL_LLM_EUR_PER_HOUR',
 ] as const
 
 let saved: Record<string, string | undefined>
@@ -54,6 +57,8 @@ function enable(): void {
   process.env.USE_VERDA_INFERENCE = '1'
   process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+  process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
 }
 
@@ -61,7 +66,7 @@ beforeEach(() => {
   saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]))
   for (const k of ENV_KEYS) delete process.env[k]
   vi.resetModules()
-  noteVerdaCallStarting.mockClear()
+  noteBoxCallStarting.mockClear()
 })
 
 afterEach(() => {
@@ -109,7 +114,7 @@ describe('the configuration the host registers is the configuration the resoluti
       })
       // The hook fired for the scale-to-zero client — the composition root's
       // registered filter announced the call to the cold-start module.
-      expect(noteVerdaCallStarting).toHaveBeenCalled()
+      expect(noteBoxCallStarting).toHaveBeenCalled()
     })
   })
 
@@ -122,6 +127,8 @@ describe('the configuration the host registers is the configuration the resoluti
     // 'anthropic' while the scope says 'verda' catches it.
     process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
     process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+    process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+    process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
     const clients = await loadWired()
 
@@ -133,13 +140,13 @@ describe('the configuration the host registers is the configuration the resoluti
     expect(clients.activeInferenceTier()).toBe('anthropic')
   })
 
-  it('the 4B summarizer takes the override but never the GPU countdown — the filter is host-side', async () => {
+  it('the 4B summarizer takes the override and announces its own box', async () => {
     enable()
     const clients = await loadWired()
 
     await clients.runWithInferenceTier('verda', async () => {
       expect(clients.clientOverrideFor('describe')).toEqual({ client: 'LocalQwenSmall' })
-      expect(noteVerdaCallStarting).not.toHaveBeenCalled()
+      expect(noteBoxCallStarting).toHaveBeenCalledWith('small')
     })
   })
 
@@ -174,6 +181,93 @@ describe('the configuration the host registers is the configuration the resoluti
     )
     // And the anthropic position is never gated — it needs no endpoint.
     expect(() => clients.assertInferenceTier('anthropic')).not.toThrow()
+  })
+
+  it('prices small summaries through the host mapping, including floors and missing timing', async () => {
+    enable()
+    await loadWired()
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { isTimePricedStep } = await import('@hames-ai/harness-patterns/metrics/aggregate')
+    const collector = (durationMs?: number) => ({
+      logs: [
+        {
+          calls: [
+            {
+              clientName: 'LocalQwenSmall',
+              timing: { durationMs },
+            },
+          ],
+        },
+      ],
+    })
+    const measured = computeEventMetrics(collector(2_000) as never)!
+    expect(measured.attempts).toBe(1)
+    expect(measured.costEur).toBeCloseTo((1.54 * 2) / 3600, 12)
+    expect(measured.basis).toBe('time')
+    expect(measured.timeRate).toEqual({ eurPerHour: 1.54, durationMs: 2_000 })
+    expect(measured.timePricedAttempts).toBe(1)
+    expect(isTimePricedStep(measured)).toBe(true)
+    expect(measured.inputUncachedTokens).toBe(0)
+    for (const rate of ['2.5', '3']) {
+      process.env.SMALL_LLM_EUR_PER_HOUR = rate
+      expect(computeEventMetrics(collector(2_000) as never)!.costEur).toBeCloseTo(
+        (Number(rate) * 2) / 3600,
+        12,
+      )
+    }
+    const unknown = computeEventMetrics(collector() as never)!
+    expect(unknown.attempts).toBe(1)
+    expect(unknown.costEur).toBeUndefined()
+    expect(unknown.basis).toBeUndefined()
+  })
+
+  it('registers exactly the time-priced clients settings.ts prices', async () => {
+    const clients = await loadWired()
+    const { TIME_PRICED_CLIENTS } = await import(SETTINGS)
+    expect(Object.keys(clients.activeCostPricing().timePricedClients ?? {}).sort()).toEqual(
+      Object.keys(TIME_PRICED_CLIENTS).sort(),
+    )
+  })
+
+  it('prices both metered clients independently in the same step', async () => {
+    await loadWired()
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const collector = {
+      logs: [
+        {
+          calls: ['VerdaQwen', 'LocalQwenSmall'].map((clientName) => ({
+            clientName,
+            timing: { durationMs: 2_000 },
+          })),
+        },
+      ],
+    }
+    const measured = computeEventMetrics(collector as never)!
+    expect(measured.costEur).toBeCloseTo(((1.819 + 1.54) * 2) / 3600, 12)
+    expect(measured.timePricedAttempts).toBe(2)
+    expect(measured.timeRate?.durationMs).toBe(4_000)
+  })
+
+  it('retains the published single-client pricing registration', async () => {
+    const clients = await loadWired()
+    const { estimateLlmCostEur } = await import(SETTINGS)
+    clients.configureCostPricing({ estimate: estimateLlmCostEur, timePricedClient: 'VerdaQwen' })
+    process.env.VERDA_EUR_PER_HOUR = '4'
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const measured = computeEventMetrics({
+      logs: [
+        {
+          calls: [
+            {
+              clientName: 'VerdaQwen',
+              timing: { durationMs: 2_000 },
+            },
+          ],
+        },
+      ],
+    } as never)!
+    expect(measured.costEur).toBeCloseTo((4 * 2) / 3600, 12)
+    expect(measured.timePricedAttempts).toBe(1)
   })
 
   it('the host EUR rates flow through the seam, env override included', async () => {

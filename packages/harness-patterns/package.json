@@ -1,6 +1,6 @@
 {
   "name": "@hames-ai/harness-patterns",
-  "version": "0.1.1",
+  "version": "0.3.0",
   "description": "Functional, composable framework for agentic tool execution — patterns, event views, the injection guard, and tool transport.",
   "keywords": [
     "agents",
@@ -43,7 +43,6 @@
     "metrics",
     "stash",
     "retriever",
-    "assets",
     "LICENSE",
     "README.md",
     "GUIDE.md",
@@ -59,7 +58,7 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepublishOnly": "node -e \"const ua=process.env.npm_config_user_agent||'';const ex=process.env.npm_execpath||'';if(ua.startsWith('npm/')||ex.includes('npm-cli'))throw new Error('This package must be published with pnpm publish, not npm: npm does not rewrite workspace: specifiers and ships them literally.')\""
+    "prepublishOnly": "node -e \"const ua=process.env.npm_config_user_agent||'';const ex=process.env.npm_execpath||'';if(ua.startsWith('npm/')||ex.includes('npm-cli'))throw new Error('This package must be published with pnpm publish, not npm: npm does not rewrite workspace: specifiers and ships them literally.')\" && node ../../scripts/check-release-tag.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"

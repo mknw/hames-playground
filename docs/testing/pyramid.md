@@ -139,11 +139,17 @@ environment works too, and wins over the file.
 non-default port and points the run at it:
 
 ```bash
-docker run --rm -d --name hames-test-pg -p 55439:5432 -e POSTGRES_PASSWORD=test postgres:16
+docker run --rm -d --name hames-test-pg -p 55439:5432 -e POSTGRES_PASSWORD=test pgvector/pgvector:0.8.0-pg16-bookworm
 export TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:55439/hames_test
 pnpm test:run                # the DB-backed suites run against it
 docker stop hames-test-pg    # --rm deletes the container
 ```
+
+The image is pgvector's postgres:16 (bookworm), not plain `postgres:16`: the
+memory DB-backed suites (#419 M4) need the `vector` extension, which ships
+only in that image, and every other suite runs on it unchanged. On a plain
+postgres image those suites skip instead — and under `TEST_DATABASE_REQUIRED`
+that skip is a failure.
 
 Two lanes that each start one need different ports and container names.
 `TEST_DATABASE_URL` is one variable for all three suites, so with it set they
@@ -158,6 +164,18 @@ is never left unset, because `lib/db/client.server.ts` reads an unset
 layer. So in a checkout with neither of the first two rows, its unit layer skips
 the DB-backed tests and the two e2e layers refuse.
 
+Explicit URLs must use a test-named database (`test`, `hames_test`, or a
+`*_test_*` name), with a nonempty, unencoded explicit host. Without the
+checkout-bound owner opt-in, **all port-5432 URLs are refused**, regardless of
+host spelling; an omitted port counts as 5432. This structural barrier includes
+numeric IPv4, IPv6 and DNS aliases. The owner opt-in can authorize that port for
+test names only; it cannot authorize missing/encoded hosts, query overrides or
+non-test names, and a copied opt-in never authorizes another checkout. The guard
+cannot establish whether an arbitrary remote server on another port is
+production: the operator must still supply a throwaway server. The exact
+`postgresql://x:x@127.0.0.1:59999/x` URL is accepted only as a dead-port no-DB
+sentinel for dispatched runs; nothing may listen there.
+
 `test-database-guard.test.ts` pins the four rows. `suite-isolation.test.ts` pins
 that every suite's default goes through the guard, because a suite that falls
 back on its own would go round it.
@@ -167,10 +185,10 @@ back on its own would go round it.
 The owner's decision (2026-10-03): "postgres to CI yes, but only pre-merge and
 not every push." So layer 1 runs in two CI jobs, and the event decides which:
 
-| Job (its check name)              | Runs on                               | Database                                                               | Layer 1's DB-backed tests | Uploads coverage |
-| --------------------------------- | ------------------------------------- | ---------------------------------------------------------------------- | ------------------------- | ---------------- |
-| `typecheck · lint · test · build` | every pull request and push to `main` | none: `CI` is set and `TEST_DATABASE_URL` is not (the third row above) | skip                      | yes, to Codecov  |
-| `test · postgres`                 | pull requests only                    | a `postgres:16-alpine` service, pinned by digest, on port 55439        | run                       | no               |
+| Job (its check name)              | Runs on                               | Database                                                                              | Layer 1's DB-backed tests | Uploads coverage |
+| --------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------- | ---------------- |
+| `typecheck · lint · test · build` | every pull request and push to `main` | none: `CI` is set and `TEST_DATABASE_URL` is not (the third row above)                | skip                      | yes, to Codecov  |
+| `test · postgres`                 | pull requests only                    | a `pgvector/pgvector` (postgres:16 bookworm) service, pinned by digest, on port 55439 | run                       | no               |
 
 The second job runs the same `pnpm test:run --coverage` with `TEST_DATABASE_URL`
 set to the service, so the guard takes its first row. It is a job of its own
@@ -283,3 +301,28 @@ edit without a red test.
 - **Concurrency between suites.** Isolation means a concurrent run cannot
   CORRUPT another; it is not a claim that anything is faster in parallel. One
   Postgres and one dev-server port are still shared resources.
+
+## Browser backend pins
+
+| Command (from `app/`)                                                      | Checks                                                                                         | When                                                                                        |
+| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `pnpm exec playwright test --config e2e-browser/pins/playwright.config.ts` | Actual dev-server fake credentials, proxy delivery, fixture enforcement, boot and final drains | `release:check`, before the browser layer; also independently, without Postgres or Chromium |
+
+## Infrastructure isolation checks
+
+The opt-in [Neo4j egress check](neo4j-egress.md) (#241 G13) requires Docker
+and is outside the hermetic layers and default CI. Its layer-1 topology pins
+run in CI; its green/red packet evidence runs only in a throwaway `g13-test`
+project.
+
+## #507 general-next acceptance eval
+
+The [conversation Eval](../../app/evals/general-next/README.md) lives in the existing
+`app/evals` suite and stays outside CI. Its scripted inference mode is hermetic
+wiring evidence; it does not replace layer 2's real app-upload/sandbox integration.
+Its `--live` mode belongs to layer 4, runs the private tier alone, and remains gated
+on the coordinator's “S3 merged: go” message. The USD cap defaults to 20 (maximum
+25), with an 80% stop threshold, observer cost per scenario and an additional
+wall-clock floor for both private GPU boxes. Pure cap, precondition and trace-check
+logic is tested in layer 1. The [catalogue](../../app/evals/general-next/SCENARIOS.md)
+keeps P4 file-path cases visibly gated; no default-agent flip is part of this slice.

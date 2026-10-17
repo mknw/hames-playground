@@ -60,6 +60,7 @@ readonly F2B_JAIL="/etc/fail2ban/jail.local"
 readonly MANAGED_BY="Managed by scripts/bootstrap-vps.sh"
 readonly COMPOSE_FILES="docker-compose.yaml:docker-compose.prod.yaml"
 readonly COMPOSE_PROFILE="app"
+readonly MIN_ENGINE="28.0.0" # Neo4j's isolated bridge gateway mode needs it
 readonly MIN_COMPOSE="2.24.0" # docker-compose.prod.yaml's `!override` needs it
 # Docker's apt signing key (docs.docker.com/engine/install/ubuntu).
 readonly DOCKER_GPG_FPR="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
@@ -298,8 +299,8 @@ readonly OWNER_REQUIRED=(
   "ANTHROPIC_API_KEY|Anthropic API key|1"
   "VITE_ALLOWED_EMAILS|this deployment's allow-list: comma-separated, *@domain wildcards|0"
 )
-# The private tier: all three or none (CLAUDE.md, docs/PREVIEW.md §6).
-readonly VERDA_TRIO=(VERDA_INFERENCE_ENDPOINT VERDA_INFERENCE_API_KEY SMALL_LLM_BASE_URL)
+# The private tier: all five or none (CLAUDE.md, docs/PREVIEW.md §6).
+readonly PRIVATE_TIER_REQUIRED=(VERDA_INFERENCE_ENDPOINT VERDA_INFERENCE_API_KEY SMALL_LLM_BASE_URL SMALL_LLM_DECISIONS_URL SMALL_LLM_API_KEY)
 
 # owner_missing — print each owner-required key that is empty or a placeholder.
 owner_missing() {
@@ -314,7 +315,50 @@ owner_missing() {
   done
 }
 
-# env_problems — docs/PREVIEW.md §6's preflight greps, plus the rest of what a
+# decisions_url_problem — mirror assertPrivateTierConfigured's parsed-URL
+# policy without Node on the host. python3 is installed by stage_updates.
+# Read via stdin, never argv; only a key/problem label may reach the transcript.
+decisions_url_problem() {
+  python3 -c '
+import ipaddress, re, socket, sys
+from urllib.parse import unquote, urlsplit
+try:
+    url = urlsplit(sys.stdin.read())
+    # WHATWG URL canonicalizes escaped/IDNA hosts before the runtime checks.
+    host = unquote(url.hostname or "").encode("idna").decode("ascii").lower()
+    port = url.port  # Reject malformed/out-of-range ports like the runtime parser.
+    host_valid = True
+    try:
+        loopback = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        try:
+            loopback = socket.inet_aton(host)[0] == 127
+        except OSError:
+            loopback = host == "localhost"
+            # WHATWG treats a numeric final label as IPv4, and refuses it
+            # when the full address cannot be parsed (e.g. an octet > 255).
+            host_valid = not re.fullmatch(r"[0-9]+|0x[0-9a-f]*", host.rsplit(".", 1)[-1])
+    # Brackets belong to the parsed IPv6 authority, never a decoded domain.
+    forbidden = "#/%<>?@\\^|[]" + ("" if url.netloc.startswith("[") else ":")
+    valid = (
+        bool(host)
+        and host_valid
+        and not any(ord(c) <= 32 or ord(c) == 127 or c in forbidden for c in host)
+        and (url.scheme == "https" or (url.scheme == "http" and loopback))
+        and not url.username and not url.password
+        and not host.endswith(".")
+        and url.path == "/v1/systemone"
+        and host not in ("api.typesafe.ai", "openrouter.ai")
+        and not host.endswith(".openrouter.ai")
+    )
+except (ValueError, UnicodeError):
+    valid = False
+if not valid:
+    print("SMALL_LLM_DECISIONS_URL must end in /v1/systemone (the full systemone URL): absolute HTTPS or HTTP loopback, no userinfo or trailing-dot host, exact pathname, no public systemone provider")
+'
+}
+
+# env_problems — docs/PREVIEW.md §6's shared preflight, plus the rest of what a
 # boot needs from .env. One line per problem; nothing printed means clean.
 env_problems() {
   local k n=0 v
@@ -323,9 +367,9 @@ env_problems() {
     POSTGRES_PASSWORD NEO4J_PASSWORD; do
     [[ -n "$(env_get "$k")" ]] || printf '%s\n' "$k is empty"
   done
-  for k in "${VERDA_TRIO[@]}"; do [[ -n "$(env_get "$k")" ]] && n=$((n + 1)); done
-  if ((n != 0 && n != 3)); then
-    printf '%s\n' "private tier: $n of ${VERDA_TRIO[*]} set — all three or none (a partial tier is refused at run time)"
+  for k in "${PRIVATE_TIER_REQUIRED[@]}"; do [[ -n "$(env_get "$k")" ]] && n=$((n + 1)); done
+  if ((n != 0 && n != ${#PRIVATE_TIER_REQUIRED[@]})); then
+    printf '%s\n' "private tier: $n of ${PRIVATE_TIER_REQUIRED[*]} set — all five or none (a partial tier is refused at run time)"
   fi
   # Spliced raw into the app's DATABASE_URL (both compose files), where these
   # break the URL. The gateway renderer used to refuse them; since #412 it
@@ -339,7 +383,11 @@ env_problems() {
     v=$(env_get "$k")
     [[ -z $v || $v == */v1 ]] || printf '%s\n' "$k must end in /v1"
   done
-  [[ "$(env_get USE_VERDA_INFERENCE)" == 1 && $n -ne 3 ]] && printf '%s\n' "USE_VERDA_INFERENCE=1 without all of ${VERDA_TRIO[*]}"
+  v=$(env_get SMALL_LLM_DECISIONS_URL)
+  if [[ -n $v ]]; then
+    printf '%s' "$v" | decisions_url_problem || printf '%s\n' 'SMALL_LLM_DECISIONS_URL validation unavailable'
+  fi
+  [[ "$(env_get USE_VERDA_INFERENCE)" == 1 && $n -ne ${#PRIVATE_TIER_REQUIRED[@]} ]] && printf '%s\n' "USE_VERDA_INFERENCE=1 without all of ${PRIVATE_TIER_REQUIRED[*]}"
   [[ "$(env_get STASH_DIRECT_REDIS)" == 1 ]] || printf '%s\n' "STASH_DIRECT_REDIS must be '1' (the preview gateway has no redis server; §3a)"
   grep -qE '^VITE_DEV_BYPASS_AUTH=' "$ENV_FILE" && printf '%s\n' "VITE_DEV_BYPASS_AUTH is set in .env — it must stay unset"
   [[ "$(env_get COMPOSE_FILE)" == "$COMPOSE_FILES" ]] || printf '%s\n' "COMPOSE_FILE must be $COMPOSE_FILES"
@@ -354,6 +402,19 @@ env_problems() {
 # select the laptop file.
 # -----------------------------------------------------------------------------
 dc() { (cd "$APP_DIR" && sudo env COMPOSE_FILE="$COMPOSE_FILES" COMPOSE_PROFILES="$COMPOSE_PROFILE" docker compose "$@"); }
+
+# Python's standard library only; uses the existing stack, no fixture or start.
+vps_check() {
+  [[ -f $APP_DIR/scripts/check-vps.py ]] || refuse "pinned checkout lacks scripts/check-vps.py; use a ref that includes #639"
+  (cd "$APP_DIR" && sudo env COMPOSE_FILE="$COMPOSE_FILES" COMPOSE_PROFILES="$COMPOSE_PROFILE" python3 scripts/check-vps.py "$@")
+}
+
+assert_daemon_isolation() {
+  if ! vps_check --daemon; then
+    refuse "Docker daemon.json isolation settings are unsafe or unreadable; see docs/deployment/docker-engine-upgrade.md"
+    return 0
+  fi
+}
 
 have_compose() { command -v docker >/dev/null 2>&1 && sudo docker compose version >/dev/null 2>&1; }
 
@@ -1043,6 +1104,7 @@ EOF
 
   # Unrotated json-file logs grow until the disk is full; the gateway runs
   # --verbose. Written only when absent, so a hand-tuned daemon.json survives.
+  # The images/boot gates validate its isolation options before deployment.
   if sudo test -f /etc/docker/daemon.json; then
     ok "/etc/docker/daemon.json exists; left as is"
   elif put_file /etc/docker/daemon.json 0644 root:root <<'EOF'; then
@@ -1150,7 +1212,7 @@ stage_checkout() {
 # are exactly the servers docker-compose.prod.yaml's --servers allow-list names.
 neo4j-cypher:
   enabled: true
-  uri: bolt://neo4j:7687
+  uri: bolt://neo4j-relay:7687
   username: neo4j
   password: ${NEO4J_PASSWORD} # filled from .env by the `mcp-config` render service
   database: neo4j
@@ -1209,7 +1271,7 @@ stage_env() {
   # now would not change the database — it would lock the app out of it.
   if [[ -f $ENV_FILE ]] && have_compose; then
     local vol key rc
-    for vol in hames_postgres_data:POSTGRES_PASSWORD hames_postgres_data:DATA_ENCRYPTION_KEY hames_neo4j_data:NEO4J_PASSWORD; do
+    for vol in hames_pg16_glibc_data:POSTGRES_PASSWORD hames_pg16_glibc_data:DATA_ENCRYPTION_KEY hames_postgres_data:POSTGRES_PASSWORD hames_postgres_data:DATA_ENCRYPTION_KEY hames_neo4j_data:NEO4J_PASSWORD; do
       key=${vol#*:}
       [[ -n "$(env_get "$key")" ]] && continue
       rc=0
@@ -1247,22 +1309,28 @@ stage_env() {
       unset v
     fi
   done
-  if ((INTERACTIVE && !DRY_RUN)) && [[ -z "$(env_get VERDA_INFERENCE_ENDPOINT)" ]]; then
-    printf '  Configure the private inference tier (Verda + small model) now? [y/N] ' >/dev/tty
+  local n=0
+  for key in "${PRIVATE_TIER_REQUIRED[@]}"; do [[ -n "$(env_get "$key")" ]] && n=$((n + 1)); done
+  if ((INTERACTIVE && !DRY_RUN && n < ${#PRIVATE_TIER_REQUIRED[@]})); then
+    printf '  Configure the private inference tier now (all five values required)? [y/N] ' >/dev/tty
     IFS= read -r v </dev/tty
     if [[ $v =~ ^[Yy] ]]; then
-      for key in VERDA_INFERENCE_ENDPOINT SMALL_LLM_BASE_URL; do
-        printf '  %s (OpenAI base URL, ends in /v1): ' "$key" >/dev/tty
-        IFS= read -r v </dev/tty
-        [[ -n $v ]] && env_set "$key" "$v" && chg "set $key"
-      done
-      for key in VERDA_INFERENCE_API_KEY SMALL_LLM_API_KEY; do
-        printf '  %s (hidden; Enter to skip): ' "$key" >/dev/tty
-        IFS= read -rs v </dev/tty
-        printf '\n' >/dev/tty
+      for key in "${PRIVATE_TIER_REQUIRED[@]}"; do
+        [[ -n "$(env_get "$key")" ]] && continue
+        case $key in
+          *_API_KEY) label="bearer key, hidden"; secret=1 ;;
+          SMALL_LLM_DECISIONS_URL) label="full systemone URL, ends in /v1/systemone"; secret=0 ;;
+          *) label="OpenAI base URL, ends in /v1"; secret=0 ;;
+        esac
+        printf '  %s (%s): ' "$key" "$label" >/dev/tty
+        if ((secret)); then
+          IFS= read -rs v </dev/tty
+          printf '\n' >/dev/tty
+        else IFS= read -r v </dev/tty; fi
         [[ -n $v ]] && env_set "$key" "$v" && chg "set $key (value not shown)"
       done
-      printf '  Make it the deployment default (USE_VERDA_INFERENCE=1)? [y/N] ' >/dev/tty
+      note "With all five values configured, a user who never chose starts on Private; the first turn may pay a cold start."
+      printf '  Also default non-conversation runs to Private (USE_VERDA_INFERENCE=1)? [y/N] ' >/dev/tty
       IFS= read -r v </dev/tty
       [[ $v =~ ^[Yy] ]] && env_set USE_VERDA_INFERENCE 1 && chg "set USE_VERDA_INFERENCE=1"
     fi
@@ -1275,9 +1343,9 @@ stage_env() {
     while read -r key; do note "- $key"; done <<<"$missing"
     note "Fill them in $ENV_FILE (or re-run this script from a terminal: it prompts)."
   fi
-  local n=0
-  for key in "${VERDA_TRIO[@]}"; do [[ -n "$(env_get "$key")" ]] && n=$((n + 1)); done
-  note "private tier: $n of 3 endpoints set (0 = Anthropic only; 3 = the tier is available)"
+  n=0
+  for key in "${PRIVATE_TIER_REQUIRED[@]}"; do [[ -n "$(env_get "$key")" ]] && n=$((n + 1)); done
+  note "private tier: $n of ${#PRIVATE_TIER_REQUIRED[@]} required values set (0 = Anthropic only; 5 = the tier is configured)"
 
   # docs/PREVIEW.md §7. The keys exist ONLY in this file until the owner copies
   # them out; the backup script deliberately never copies .env.
@@ -1370,6 +1438,8 @@ catalog_image() {
 # shape (docs/PREVIEW.md §13); a single box needs no registry credential.
 stage_images() {
   banner "10/13 images — build on the box, pull the rest"
+  assert_engine_supported
+  assert_daemon_isolation
   if ((!DRY_RUN)) && ! sudo docker info >/dev/null 2>&1; then
     refuse "the Docker daemon is not reachable (sudo systemctl status docker)"
     return 0
@@ -1407,10 +1477,31 @@ stage_images() {
   fi
 }
 
+# Refuse an old or unverified daemon before compose can create any service.
+# Existing installations are not upgraded automatically by stage_docker.
+assert_engine_supported() {
+  local v
+  v=$(sudo docker version --format '{{.Server.Version}}' 2>/dev/null) || v=""
+  if [[ ! $v =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+].*)?$ ]] || ! version_ge "$v" "$MIN_ENGINE"; then
+    refuse "Docker Engine ${v:-unavailable} is unsupported; need >= $MIN_ENGINE for Neo4j's isolated gateway mode. Upgrade the Engine before deploying (docs/deployment/docker-engine-upgrade.md); no compose services were started"
+    return 0
+  fi
+  ok "Docker Engine $v (>= $MIN_ENGINE for isolated gateway mode)"
+}
+
+prepare_embedder() {
+  if ! run python3 "$APP_DIR/scripts/prepare-embedder.py" "$APP_DIR/models"; then
+    refuse "embedder GGUF preparation failed; no compose services were started"
+    return 1
+  fi
+}
+
 stage_boot() {
   banner "11/13 boot — docker compose up -d (base + prod overlay, profile app)"
   # Every gate below runs before anything starts. A real run stops at the
   # first one that fails; a dry run reports all of them.
+  assert_engine_supported
+  assert_daemon_isolation
   assert_gateway_pinned
   local problems missing
   if [[ -f $ENV_FILE ]]; then
@@ -1451,10 +1542,16 @@ stage_boot() {
     fi
   fi
 
+  prepare_embedder || return 1
   run dc up -d --remove-orphans
   ((DRY_RUN)) && return 0
+  if ! vps_check --network; then
+    dc stop || refuse "Neo4j network verification failed and stopping the stack failed; stop it manually and follow docs/deployment/docker-engine-upgrade.md"
+    refuse "Neo4j's running network failed verification; the stack was stopped; follow docs/deployment/docker-engine-upgrade.md"
+    return 0
+  fi
   local svc
-  for svc in postgres neo4j redis app; do
+  for svc in postgres neo4j redis embedder app; do
     if wait_state "$svc" healthy 600; then ok "$svc healthy"; else
       fail "$svc did not become healthy (docker compose logs $svc)"
       return 1
@@ -1551,6 +1648,14 @@ stage_smoke() {
     note "3  dev bypass off: printenv=false, no [dev-bypass] warning, unauthenticated POST /api/events -> 401"
     note "4  no github block / GitHub token on the box; dynamic-tools disabled; no configs/action-tokens.yaml"
     note "5  the graph is not empty (seed imported)"
+    note "6  Engine >= $MIN_ENGINE, daemon.json safe, deployed Neo4j bridge internal/isolated; bounded egress negatives with positive controls"
+    note "7  Cypher RETURN through neo4j-relay:7687 (also with --no-seed)"
+    note "9  CPU embedder: one internal POST /v1/embeddings returns 1024 finite dimensions"
+    if ((PROBE_PRIVATE_HEALTH)); then
+      note "8  OPT-IN: one authenticated GET small-model /health; may wake a box; no completion or retry"
+    else
+      note "8  SKIPPED private /health (default: no provider request; --probe-private-health may wake a box)"
+    fi
     return 0
   fi
   local fails=0 h=$HOSTNAME_ARG out
@@ -1643,6 +1748,29 @@ stage_smoke() {
     fi
   fi
 
+  # Keep these checks independent of seeding: --no-seed must not hide a dead
+  # relay or an open network. Inconclusive is a failure, never containment.
+  assert_engine_supported
+  for out in daemon egress relay; do
+    if vps_check "--$out" --ssh-port "$SSH_PORT"; then ok "6/7 $out"; else
+      fail "6/7 $out check failed or inconclusive"
+      fails=$((fails + 1))
+    fi
+  done
+  if ((PROBE_PRIVATE_HEALTH)); then
+    if SMALL_LLM_BASE_URL="$(env_get SMALL_LLM_BASE_URL)" SMALL_LLM_API_KEY="$(env_get SMALL_LLM_API_KEY)" \
+      python3 "$APP_DIR/scripts/check-vps.py" --private-health; then ok "8  private /health returned 200"; else
+      fail "8  private /health failed (no retry or provider fallback)"
+      fails=$((fails + 1))
+    fi
+  else
+    note "8  SKIPPED private /health: no provider request (--probe-private-health may wake a box)"
+  fi
+  if vps_check --embeddings; then ok "9  embedder returned 1024 dimensions"; else
+    fail "9  embedder forward pass failed or returned the wrong dimensions"
+    fails=$((fails + 1))
+  fi
+
   say ""
   if ((fails)); then
     fail "$fails smoke check(s) failed. Do not invite anyone."
@@ -1672,6 +1800,9 @@ Usage: bootstrap-vps.sh --hostname FQDN --acme-email ADDRESS [options]
                       (ignored on the run that generates them)
   --seed-file PATH    Cypher file for an EMPTY graph (default: neo4j_dumps/seed-data.cypher)
   --no-seed           leave the graph alone
+  --probe-private-health
+                      OPT-IN: one GET small-model /health; may wake a box.
+                      Off by default, even with private endpoints configured
   --sandbox-flavours  also build the three sandbox flavour images
   --no-prompt         never prompt, even with a terminal
   --ssh-port PORT     move SSH to PORT (49152-65535, the dynamic range). Two
@@ -1692,6 +1823,7 @@ main() {
   HOSTNAME_ARG="" ACME_EMAIL_ARG="" REF="" ONLY="" KEYS_ESCROWED=0 F2B_IGNORE=""
   SEED_FILE="neo4j_dumps/seed-data.cypher" NO_SEED=0 SANDBOX_FLAVOURS=0 NO_PROMPT=0
   LOCKOUT_CHANGED=0 SSH_PORT=22 SSH_PORT_VERIFIED=0
+  PROBE_PRIVATE_HEALTH=0
   while (($#)); do
     case $1 in
       --hostname) HOSTNAME_ARG=${2:-} && shift ;;
@@ -1702,6 +1834,7 @@ main() {
       --dry-run) DRY_RUN=1 ;;
       --keys-escrowed) KEYS_ESCROWED=1 ;;
       --no-seed) NO_SEED=1 ;;
+      --probe-private-health) PROBE_PRIVATE_HEALTH=1 ;;
       --sandbox-flavours) SANDBOX_FLAVOURS=1 ;;
       --no-prompt) NO_PROMPT=1 ;;
       --ssh-port) SSH_PORT=${2:-} && shift ;;

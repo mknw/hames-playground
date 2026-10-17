@@ -30,7 +30,8 @@
  * intended. This is why the private share is worth showing: it cannot be
  * inflated by a routing change that did not take effect.
  *
- * The set of names that count is DERIVED from `VERDA_CLIENT_BY_ROLE`, not a
+ * The set of names that count is `PRIVATE_TIER_CLIENTS`: the tier map plus
+ * dormant thinking leaves (#625), not a
  * single literal, and that changed on 2026-08-26 when the private tier became
  * two models: the heavy roles on `VerdaQwen` and `describe` on `LocalQwenSmall`.
  * A hardcoded `=== VERDA_CLIENT_NAME` would have counted every private-tier
@@ -40,9 +41,10 @@
  * that map is counted with no edit here.
  *
  * The WARM CLOCK does not follow the same set, and the difference is the point:
- * only a call naming `VerdaQwen` may stamp it, because only that deployment
- * scales to zero and only its traffic is evidence the GPU is up. A 4B describe
- * call proves nothing about the box (`inference/verda-activity.server.ts`).
+ * each box has its own clock. Only a call naming `VerdaQwen` or its thinking twin stamps the 27B
+ * clock; a 4B describe sample with metrics stamps the small clock instead. A
+ * cold ingress can answer 503 without reaching the model, so a small sample
+ * without metrics is not evidence of warmth.
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
@@ -50,12 +52,13 @@ import {
   type LlmUsageSample,
 } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import { noteVerdaCallCompleted, VERDA_CLIENT_NAME } from '../inference/verda-activity.server'
-import { settleColdStart } from '../inference/cold-start.server'
+import { noteSmallCallCompleted, settleColdStart } from '../inference/cold-start.server'
 import { addUsage, type UsageDelta } from './preview-counters.server'
 import { noteCallLatency } from './call-latency.server'
 import {
   TIER_SWITCHED_FUNCTIONS,
-  VERDA_CLIENT_BY_ROLE,
+  PRIVATE_TIER_CLIENTS,
+  THINKING_CLIENTS,
 } from '@hames-ai/harness-baml/clients.server'
 import type { InferenceTier } from '../inference/config.server'
 
@@ -81,19 +84,6 @@ function bucket(tier: InferenceTier): UsageDelta {
   return delta
 }
 
-/**
- * Every client name the private tier routes to — derived from the tier map, so
- * it cannot go short when the tier gains a model.
- *
- * A Set rather than a comparison because the tier is no longer one client. See
- * the module docstring for why the warm clock deliberately does NOT use this.
- */
-const PRIVATE_TIER_CLIENTS: ReadonlySet<string> = new Set(
-  // `Partial<Record<…>>` types its values as possibly-undefined; the map has
-  // none, and a narrowing filter says so without an assertion.
-  Object.values(VERDA_CLIENT_BY_ROLE).filter((c): c is string => c !== undefined),
-)
-
 /** The tier a sample is attributed to. See the module docstring: the selected
  *  client is the evidence, the intended routing is not. */
 export function tierOfSample(sample: LlmUsageSample): InferenceTier {
@@ -105,12 +95,11 @@ export function tierOfSample(sample: LlmUsageSample): InferenceTier {
 /** Fold one finished call into the pending deltas. Exported for the tests —
  *  the observer registration is what production calls. */
 export function recordSample(sample: LlmUsageSample, at: number = Date.now()): void {
-  // `=== VERDA_CLIENT_NAME`, NOT `PRIVATE_TIER_CLIENTS`. Both lines below are
-  // claims about the scale-to-zero GPU box specifically — it is awake, and this
-  // is how long its cold start took — and a 4B describe call on the same tier is
-  // evidence of neither. The tier attribution above widened; this did not, and
-  // the divergence is deliberate.
-  if (sample.clientName === VERDA_CLIENT_NAME) {
+  // The 27B and its thinking twin, NOT every `PRIVATE_TIER_CLIENTS` member, are
+  // claims about the 27B specifically — it is awake, and this is how long its
+  // cold start took. A 4B describe call is evidence of neither; it has its own
+  // clock below. Tier attribution alone cannot prove either box is warm.
+  if (sample.clientName === VERDA_CLIENT_NAME || THINKING_CLIENTS.has(sample.clientName ?? '')) {
     noteVerdaCallCompleted(at)
     // If this turn announced a cold start, this is the call that paid it, and
     // BAML's own timing for it is the next estimate's raw material. No-op on
@@ -118,6 +107,10 @@ export function recordSample(sample: LlmUsageSample, at: number = Date.now()): v
     // history only ever grows from a wait a user actually sat through.
     settleColdStart(sample.durationMs)
   }
+
+  // The 4B's warm clock. Same evidence rule as the 27B's: a call that spent
+  // tokens is a box that answered. A cold ingress's immediate 503 spends none.
+  if (sample.clientName === 'LocalQwenSmall' && sample.metrics) noteSmallCallCompleted(at)
 
   // Latency is recorded on its own condition, BEFORE the metrics gate below: a
   // call that failed after reaching the model spent the user's wall-clock time

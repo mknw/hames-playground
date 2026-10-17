@@ -46,7 +46,7 @@ import {
   activeTransportContext,
   activeTransports,
 } from '@hames-ai/harness-patterns/tool-transport.server'
-import { Collector, BamlValidationError } from '@boundaryml/baml'
+import { Collector, BamlValidationError, type HTTPRequest } from '@boundaryml/baml'
 import { getBamlFiles } from './baml_client/inlinedbaml'
 import {
   activeCostPricing,
@@ -54,9 +54,15 @@ import {
   clientOverrideFor,
   limitsFor,
   maxOutputTokensFor,
+  THINKING_CLIENTS,
+  THINKING_FUNCTIONS_BY_CLIENT,
+  VERDA_CLIENT_BY_ROLE,
 } from './clients.server'
 import { notifyLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
+import { createJevTransport } from './jev-decide.server'
+import { thinkingFrom, splitAtLastThinkClose } from './thinking-trace'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
+import type { DecideFn, DecideAllFn } from '@hames-ai/harness-patterns/types'
 import type {
   LLMCallRecord,
   ControllerFn,
@@ -200,7 +206,7 @@ export function extractLLMCallData(
   }
   const llmCall = buildLLMCallDataFromLog(last, functionName, variables, startTime, parsedOutput)
   llmCall.metrics = computeEventMetrics(collector)
-  accountBamlCall(collector, functionName, llmCall.metrics)
+  accountBamlCall(collector, functionName, llmCall.metrics, llmCall)
   // Lane A3: the implementation stamps the cap-hit on the record; the pattern
   // layer reads the boolean and never sees the cap table.
   return { ...llmCall, hitOutputCap: llmCallHitOutputCap(llmCall) }
@@ -226,23 +232,57 @@ export function extractLLMCallData(
  * everyone else lets this recompute from the collector.
  *
  * Silent when the collector never saw a call (a pre-flight failure spent
- * nothing), and never throws — `notifyLlmUsage` owns that guarantee.
+ * nothing). After accounting, refuses a thinking leaf selected for a function
+ * without its designated twin (#637). This covers registry chains hidden from
+ * the pre-send name guard, including calls with no observability event. The
+ * refusal is fatal and retains the exchange, never an executable draft.
  */
 export function accountBamlCall(
   collector: Collector | undefined,
   functionName: string,
   metrics?: EventMetrics,
+  llmCall?: LLMCallData,
 ): void {
   const last = collector?.last
   if (!last) return
   const calls = (last.calls ?? []) as CollectorCall[]
   const selectedCall = calls.find((c) => c.selected) ?? calls[calls.length - 1]
+  const callMetrics = metrics ?? computeEventMetrics(collector)
   notifyLlmUsage({
     functionName,
     clientName: selectedCall?.clientName,
-    metrics: metrics ?? computeEventMetrics(collector),
+    metrics: callMetrics,
     durationMs: measuredDurationMs(last),
   })
+  const violation = thinkingFunctionViolation(functionName, selectedCall)
+  if (violation) {
+    const record = llmCall ?? buildLLMCallDataFromLog(last, functionName, {}, Date.now())
+    throw new LLMCallError(violation, {
+      ...record,
+      // A rejected action must not look like an accepted parsed result.
+      parsedOutput: undefined,
+      metrics: callMetrics,
+      hitOutputCap: llmCallHitOutputCap(record),
+    })
+  }
+}
+
+function thinkingFunctionViolation(functionName: string, call?: CollectorCall): string | undefined {
+  const clientName = call?.clientName
+  let requestThinking = false
+  try {
+    const body = call?.httpRequest?.body?.json() as
+      { chat_template_kwargs?: { enable_thinking?: unknown } } | undefined
+    requestThinking = body?.chat_template_kwargs?.enable_thinking === true
+  } catch {
+    // Some failed attempts have no rendered JSON body; the leaf-name policy still applies.
+  }
+  if (
+    ((clientName && THINKING_CLIENTS.has(clientName)) || requestThinking) &&
+    !THINKING_FUNCTIONS_BY_CLIENT[clientName ?? '']?.includes(functionName)
+  ) {
+    return `${functionName} selected a thinking leaf '${clientName ?? 'unknown'}' without a designated counterpart`
+  }
 }
 
 /** How long BAML measured something to take — a whole function call across
@@ -308,7 +348,7 @@ type CollectorCall = {
    *  Read off the same `timing` getter as the function-level reading, which is
    *  why {@link measuredDurationMs} takes both. */
   timing?: { durationMs?: number | null }
-  httpRequest?: { body?: unknown }
+  httpRequest?: HTTPRequest | null
   httpResponse?: { body?: { json?: () => unknown } } | null
   usage?: {
     inputTokens?: number | null
@@ -426,9 +466,15 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
   // composition root — rather than a direct import of the host's
   // `lib/cost-rates.server.ts`, which an installed package cannot resolve.
   const { eurPerUsd: eurPerUsdRate, verdaEurPerHour: verdaEurPerHour } = activeCostRates()
-  const { estimate: estimateLlmCostEur, timePricedClient: TIME_PRICED_CLIENT } = activeCostPricing()
+  const { estimate: estimateLlmCostEur, timePricedClient, timePricedClients } = activeCostPricing()
   const eurPerUsd = eurPerUsdRate()
-  const eurPerHour = verdaEurPerHour()
+  const timeRates = Object.fromEntries(
+    Object.entries(timePricedClients ?? {}).map(([client, readRate]) => [client, readRate()]),
+  )
+  // Keep the published single-client form working for existing consumers.
+  if (timePricedClient && !Object.hasOwn(timeRates, timePricedClient)) {
+    timeRates[timePricedClient] = verdaEurPerHour()
+  }
   let attempts = 0
   let costEur = 0
   let noCacheEur = 0
@@ -445,9 +491,12 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
       // either way. Zero buckets leave the token sums truthful and let the
       // measured duration price the attempt — dropping it instead understated a
       // 15-minute cold start as €0.003 with a `≥` in front of it.
+      const eurPerHour =
+        call.clientName !== undefined && Object.hasOwn(timeRates, call.clientName)
+          ? timeRates[call.clientName]
+          : undefined
       const buckets =
-        callTokenBuckets(call) ??
-        (call.clientName === TIME_PRICED_CLIENT ? NO_TOKEN_USAGE : undefined)
+        callTokenBuckets(call) ?? (eurPerHour !== undefined ? NO_TOKEN_USAGE : undefined)
       if (!buckets) continue
       attempts++
       totals.inputUncachedTokens += buckets.inputUncachedTokens
@@ -469,7 +518,7 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
         if (est.basis === 'time') {
           timePricedAttempts++
           timeRate = {
-            eurPerHour: est.timeRate?.eurPerHour ?? eurPerHour,
+            eurPerHour: est.timeRate?.eurPerHour ?? eurPerHour ?? verdaEurPerHour(),
             durationMs: (timeRate?.durationMs ?? 0) + (est.timeRate?.durationMs ?? 0),
           }
         }
@@ -586,7 +635,7 @@ export function extractFailureLLMCallData(
     // Failed steps still spent tokens (e.g. a truncated 32k-output response
     // before the retry also failed) — account for them.
     llmCall.metrics = computeEventMetrics(collector)
-    accountBamlCall(collector, functionName, llmCall.metrics)
+    accountBamlCall(collector, functionName, llmCall.metrics, llmCall)
     // The FAILURE path stamps hitOutputCap too — this is the twin of the
     // success path above and of the old llmCallHitOutputCap/collectorHitOutputCap
     // pair. Missing it would silently revert the loop patterns'
@@ -700,8 +749,14 @@ function collectorReturnedNoText(collector: Collector | undefined): boolean {
 function planParseRetry(
   error: unknown,
   collector: Collector | undefined,
+  functionName: string,
 ): { guidance: string | null } | null {
   if (!(error instanceof BamlValidationError)) return null
+  const calls = (collector?.last?.calls ?? []) as CollectorCall[]
+  const selected = calls.find((call) => call.selected) ?? calls[calls.length - 1]
+  // A hidden thinking leaf is a policy violation, even if its trace consumed
+  // the whole output cap. Never send a corrective retry to that same leaf.
+  if (thinkingFunctionViolation(functionName, selected)) return null
   if (collectorHitOutputCap(collector)) return { guidance: TRUNCATION_RETRY_GUIDANCE }
   if (collectorReturnedNoText(collector)) return { guidance: null }
   return null
@@ -728,6 +783,9 @@ export function wrapAsLLMCallError(
   startTime: number,
   collector: Collector | undefined,
 ): LLMCallError {
+  // Shared extraction may already have refused and accounted the exchange.
+  // Keep its fatal classification and avoid recording the bill twice.
+  if (err instanceof LLMCallError) return err
   const message = err instanceof Error ? err.message : String(err)
   const llmCall = extractFailureLLMCallData(collector, functionName, variables, startTime)
   return new LLMCallError(message, llmCall, err, {
@@ -759,9 +817,7 @@ function getPromptTemplate(functionName: string): string | undefined {
 function loadTemplatesFromInlinedBaml(cache: Record<string, string>): void {
   try {
     const files = getBamlFiles() as Record<string, string>
-    for (const source of Object.values(files)) {
-      extractPromptTemplates(source, cache)
-    }
+    extractPromptTemplates(Object.values(files).join('\n'), cache)
   } catch {
     // baml_client not generated — caller falls back to disk
   }
@@ -775,19 +831,101 @@ function loadTemplatesFromDisk(cache: Record<string, string>): void {
     const path = require('node:path') as typeof import('node:path')
     const bamlSrc = path.resolve(process.cwd(), 'baml_src')
     if (!fs.existsSync(bamlSrc)) return
-    for (const entry of fs.readdirSync(bamlSrc)) {
-      if (!entry.endsWith('.baml')) continue
-      const source = fs.readFileSync(path.join(bamlSrc, entry), 'utf8')
-      extractPromptTemplates(source, cache)
-    }
+    const sources = fs
+      .readdirSync(bamlSrc)
+      .filter((entry) => entry.endsWith('.baml'))
+      .map((entry) => fs.readFileSync(path.join(bamlSrc, entry), 'utf8'))
+    extractPromptTemplates(sources.join('\n'), cache)
   } catch {
     // filesystem unavailable — templates remain unset
   }
 }
 
-/** Parse BAML source to extract function prompt blocks. Exported for the
- *  parenthesised-signature-comment pinning test. */
+/** Find a signature/call's closing delimiter without interpreting its arguments.
+ * Only BAML declarations have comments; in Jinja arguments `//` is floor division.
+ * Quoted arguments may contain braces or escaped quotes. The cursor only moves
+ * forwards, including on malformed input. */
+function closingParenthesis(text: string, start: number, declarationComments = false): number {
+  let depth = 1
+  let quote = ''
+  for (let i = start; i < text.length; i++) {
+    const char = text[i]
+    if (quote) {
+      if (char === '\\') i++
+      else if (char === quote) quote = ''
+    } else if (char === '"' || char === "'") {
+      quote = char
+    } else if (declarationComments && text.startsWith('//', i)) {
+      const end = text.indexOf('\n', i + 2)
+      if (end === -1) return -1
+      i = end
+    } else if (declarationComments && text.startsWith('/*', i)) {
+      const end = text.indexOf('*/', i + 2)
+      if (end === -1) return -1
+      i = end + 1
+    } else if (char === '(') {
+      depth++
+    } else if (char === ')' && --depth === 0) {
+      return i
+    }
+  }
+  return -1
+}
+
+/** Extract function prompts with labelled textual includes of shared bodies.
+ * Pass the whole corpus so template_strings in other files are available.
+ * This is source inspection: no argument substitution or Jinja evaluation. */
 export function extractPromptTemplates(source: string, cache: Record<string, string>): void {
+  const bodies = new Map<string, string>()
+  const declaration = /\btemplate_string\s+(\w+)\s*\(/g
+  let shared: RegExpExecArray | null
+  while ((shared = declaration.exec(source)) !== null) {
+    const close = closingParenthesis(source, declaration.lastIndex, true)
+    if (close === -1) break
+    declaration.lastIndex = close + 1
+    while (/\s/.test(source[declaration.lastIndex] ?? '')) declaration.lastIndex++
+    if (!source.startsWith('#"', declaration.lastIndex)) continue
+    const bodyStart = declaration.lastIndex + 2
+    const bodyEnd = source.indexOf('"#', bodyStart)
+    if (bodyEnd === -1) break
+    bodies.set(shared[1], source.slice(bodyStart, bodyEnd))
+    // Never retry inside a scanned signature/body: repeated incomplete
+    // declarations and repeated raw-string openers must remain linear.
+    declaration.lastIndex = bodyEnd + 2
+  }
+
+  const include = (text: string, ancestors: string[] = []): string => {
+    const bareCall = /\{\{\s*(\w+)\s*\(/g
+    const parts: string[] = []
+    let cursor = 0
+    let match: RegExpExecArray | null
+    while ((match = bareCall.exec(text)) !== null) {
+      const close = closingParenthesis(text, bareCall.lastIndex)
+      if (close === -1) break
+      bareCall.lastIndex = close + 1
+      while (/\s/.test(text[bareCall.lastIndex] ?? '')) bareCall.lastIndex++
+      if (!text.startsWith('}}', bareCall.lastIndex)) continue
+      bareCall.lastIndex += 2
+      const name = match[1]
+      const call = text.slice(match.index, bareCall.lastIndex)
+      const body = bodies.get(name)
+      parts.push(text.slice(cursor, match.index))
+      // Missing bodies degrade visibly; recursive references stay as source.
+      if (body === undefined) {
+        parts.push(`{# unresolved template_string ${name}: body not found #}\n${call}`)
+      } else if (ancestors.includes(name)) {
+        parts.push(call)
+      } else {
+        parts.push(
+          `{# expanded from ${name} #}\n${include(body, [...ancestors, name])}\n{# end expansion ${name} #}`,
+        )
+      }
+      cursor = bareCall.lastIndex
+    }
+    parts.push(text.slice(cursor))
+    return parts.join('')
+  }
+
   // Match: function FunctionName(...) -> ReturnType { ... prompt #"..."# }
   //
   // The parameter list is `[^{}]*?`, not `[^)]*`: signatures carry `//`
@@ -798,7 +936,7 @@ export function extractPromptTemplates(source: string, cache: Record<string, str
   const funcRegex = /function\s+(\w+)\s*\([^{}]*?\)\s*->\s*\S+\s*\{[^}]*?prompt\s+#"([\s\S]*?)"#/g
   let match: RegExpExecArray | null
   while ((match = funcRegex.exec(source)) !== null) {
-    cache[match[1]] = match[2]
+    cache[match[1]] = include(match[2])
   }
 }
 
@@ -974,7 +1112,7 @@ export function createLoopControllerAdapter(
     // self-hosted deployment (`clients.server.ts`). A structured-output
     // failure that is not a truncation or an empty completion propagates:
     // there is no second provider to escalate to on either route.
-    const baseOpts = { collector, ...clientOverrideFor('controller') }
+    const baseOpts = { ...clientOverrideFor('controller'), collector }
     let action: ControllerAction
     try {
       action = await b.LoopController(
@@ -996,7 +1134,7 @@ export function createLoopControllerAdapter(
       // response at all — not because the model can't do structured output.
       // ONE retry, guidance appended to `context` only when there is something
       // to correct (per-call, transient); a second failure throws.
-      const plan = planParseRetry(e, collector)
+      const plan = planParseRetry(e, collector, 'LoopController')
       if (plan) {
         const retryContext = plan.guidance
           ? [context, plan.guidance].filter(Boolean).join('\n\n')
@@ -1138,6 +1276,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
     user_message: string,
     intent: string,
     context?: string,
+    onRetry?: (failedCall: LLMCallRecord | undefined) => void,
   ): Promise<PlanCallResult> => {
     const { b } = await import('./baml_client')
     const startTime = Date.now()
@@ -1152,42 +1291,143 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
 
     const variables = { user_message, intent, tools, context }
 
-    // `PlannerAnthropic` — what planner.baml declares — unless a verda-tier
-    // run overrides it per call. The retry below is the whole failure policy:
-    // this call runs ONCE per chain, over the largest tool catalog in the repo,
-    // and a throw here means the chain runs unplanned. That failure policy is
-    // why the planner was held off the self-hosted box until 2026-08-26; it is
-    // unchanged, and it now applies on whichever client the tier picked.
-    //
-    // Read the `planner:` entry in `VERDA_CLIENT_BY_ROLE` before changing
-    // anything here: it is the one place the composite consequence of routing
-    // this role is stated whole (no thinking, halved output ceiling, one
-    // retry, then a silently unplanned chain).
-    const baseOpts = { collector, ...clientOverrideFor('planner') }
+    // Read the `planner:` entry in `VERDA_CLIENT_BY_ROLE` for the tier's composite consequence.
+    const override = clientOverrideFor('planner')
+    const requestedThinking = THINKING_CLIENTS.has(override?.client ?? '')
+    const functionName = requestedThinking ? 'PlannerThinking' : 'Planner'
+    const baseOpts = { ...override, collector }
+    const selectedCall = (source = collector) => {
+      const calls = (source.last?.calls ?? []) as CollectorCall[]
+      return calls.find((call) => call.selected) ?? calls[calls.length - 1]
+    }
+    let warning: string | undefined
     let plan: PlanResult
+    let llmCall: LLMCallRecord | undefined
     try {
-      plan = await b.Planner(user_message, intent, tools, context, baseOpts)
+      if (requestedThinking) {
+        const answer = await b.PlannerThinking(user_message, intent, tools, context, baseOpts)
+        const selected = selectedCall()
+        // The collector, not the routing intention, proves that this response
+        // came from a trace-exposing leaf. A mixed chain cannot satisfy this.
+        if (!THINKING_CLIENTS.has(selected?.clientName ?? '')) {
+          throw new Error('PlannerThinking did not select a known thinking client')
+        }
+        const split = splitAtLastThinkClose(collector.last?.rawLlmResponse ?? '')
+        if (split.closed) {
+          // Never inspect BAML's first JSON candidate (it may be a draft).
+          // Even a valid tail is refused: a parser is required by G19 Q7.
+          throw new Error(
+            'PlannerThinking requires a reasoning parser: </think> in content; answer tail rejected',
+          )
+        }
+        if (!answer.plan.trim()) throw new Error('PlannerThinking returned no answer')
+        const trace = thinkingFrom(selected)
+        if (trace.kind !== 'trace') warning = 'no thinking trace'
+        plan = { ...answer, reasoning: trace.kind === 'trace' ? trace.text : '' }
+      } else {
+        plan = await b.Planner(user_message, intent, tools, context, baseOpts)
+      }
+      llmCall = extractLLMCallData(collector, functionName, variables, startTime, plan)
     } catch (e) {
-      // ONE retry on a cut-off or empty completion, with corrective guidance
-      // only when there is something to correct; a genuine structured-output
-      // failure propagates as an LLMCallError the pattern turns into an error
-      // event.
-      const retry = planParseRetry(e, collector)
-      if (!retry) throw wrapAsLLMCallError(e, 'Planner', variables, startTime, collector)
-      const retryContext = retry.guidance
-        ? [context, retry.guidance].filter(Boolean).join('\n\n')
-        : context
-      try {
-        plan = await b.Planner(user_message, intent, tools, retryContext, baseOpts)
-      } catch (eRetry) {
-        throw wrapAsLLMCallError(eRetry, 'Planner', variables, startTime, collector)
+      const selected = selectedCall()
+      const thinking = THINKING_CLIENTS.has(selected?.clientName ?? '')
+      // One failure-record path retains the selected parser trace for both
+      // terminal errors and retry warnings, without replacing malformed content.
+      const failure = () => {
+        const error = wrapAsLLMCallError(e, functionName, variables, startTime, collector)
+        const trace = thinking ? thinkingFrom(selected) : undefined
+        if (trace?.kind === 'trace') error.llmCall.parsedOutput = { reasoning: trace.text }
+        return error
+      }
+      // Q7 is a loud failure even if BAML failed before returning a value.
+      const split = thinking
+        ? splitAtLastThinkClose(collector.last?.rawLlmResponse ?? '')
+        : undefined
+      if (split?.closed) {
+        const failedCall = failure().llmCall
+        // Defence in depth: reparse ONLY the tail after the LAST delimiter.
+        // Retain it as rejected diagnostic data, never as an executable plan.
+        try {
+          failedCall.parsedOutput = {
+            ...(failedCall.parsedOutput as object),
+            ...b.parse.PlannerThinking(split.tail),
+          }
+        } catch {
+          // An invalid tail is still the same parser-policy failure.
+        }
+        throw new LLMCallError(
+          'PlannerThinking requires a reasoning parser: </think> in content; answer tail rejected',
+          failedCall,
+          e,
+        )
+      }
+      const noAnswer =
+        thinking &&
+        ((e instanceof BamlValidationError && collectorReturnedNoText(collector)) ||
+          (e instanceof Error && e.message === 'PlannerThinking returned no answer'))
+      if (
+        thinking &&
+        (noAnswer || (e instanceof BamlValidationError && collectorHitOutputCap(collector)))
+      ) {
+        // Keep the failed thinking attempt and the retry in separate collectors:
+        // each is accounted once and the warning survives a failed retry.
+        const failedCall = failure().llmCall
+        onRetry?.(failedCall)
+        const retryCollector = new Collector('Planner')
+        try {
+          // SAME box and credentials. Never the original's Anthropic default;
+          // no public fallback, and no further corrective retry in this branch.
+          const retryClient = VERDA_CLIENT_BY_ROLE.planner
+          const retryOpts = { ...override, collector: retryCollector, client: retryClient }
+          const retryRequest = await b.request.Planner(
+            user_message,
+            intent,
+            tools,
+            context,
+            retryOpts,
+          )
+          // Compare actual rendered transport to the thinking attempt BEFORE
+          // sending. A registry may redefine either name, including credentials.
+          const transport = (request: HTTPRequest | null | undefined) => {
+            if (!request) throw new Error('Planner retry cannot establish the same transport')
+            return JSON.stringify({
+              url: request.url,
+              method: request.method,
+              headers: Object.entries(request.headers)
+                .map(([key, value]) => [key.toLowerCase(), value])
+                .sort(([a], [b]) => a.localeCompare(b)),
+              model: (request.body.json() as { model?: string }).model,
+            })
+          }
+          if (transport(selected?.httpRequest) !== transport(retryRequest)) {
+            throw new Error(
+              'Planner retry requires the same transport (endpoint, credentials and model)',
+            )
+          }
+          plan = await b.Planner(user_message, intent, tools, context, retryOpts)
+          if (selectedCall(retryCollector)?.clientName !== retryClient) {
+            throw new Error('Planner retry did not select the original private-tier client')
+          }
+          llmCall = extractLLMCallData(retryCollector, 'Planner', variables, startTime, plan)
+        } catch (retryError) {
+          throw wrapAsLLMCallError(retryError, 'Planner', variables, startTime, retryCollector)
+        }
+      } else {
+        const retry = requestedThinking ? null : planParseRetry(e, collector, 'Planner')
+        if (!retry) throw failure()
+        const retryContext = retry.guidance
+          ? [context, retry.guidance].filter(Boolean).join('\n\n')
+          : context
+        try {
+          plan = await b.Planner(user_message, intent, tools, retryContext, baseOpts)
+          llmCall = extractLLMCallData(collector, 'Planner', variables, startTime, plan)
+        } catch (retryError) {
+          throw wrapAsLLMCallError(retryError, 'Planner', variables, startTime, collector)
+        }
       }
     }
 
-    // extractLLMCallData fires warnIfCollectorEmpty itself on an empty collector.
-    const llmCall = extractLLMCallData(collector, 'Planner', variables, startTime, plan)
-
-    return { plan, llmCall, toolCount: tools.length }
+    return { plan, llmCall, toolCount: tools.length, ...(warning ? { warning } : {}) }
   }
 }
 
@@ -1200,10 +1440,9 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
  *  `maxAttempts` are passed by `actorCritic.server.ts` so the actor's prompt
  *  can show "Attempt N of M" and prefer Return as budget runs low.
  *
- *  Note `availableTools` is part of the seam shape (design note §3) but the
- *  implementation resolves its own allowlist from the factory options — it
- *  was accepted-and-ignored positionally before A4 and is accepted-and-ignored
- *  here; the allowlist the adapters and loop enforce is the factory's.
+ *  Note `availableTools` is rendered: the actor's catalogue is that list
+ *  UNIONED with the factory's own `toolNames` (#613), so the pattern's
+ *  allowlist need not be declared twice.
  *
  *  The legacy positional form — same acceptance-test constraint and same A6
  *  deletion as `LegacyControllerFn`'s — rides the factory return as
@@ -1225,7 +1464,9 @@ export type LegacyActorFn = (
  *  that should be visible to subsequent actor calls in the same session). */
 export interface ActorAdapterOptions {
   /** Static tool names always available to the actor. Mutually exclusive
-   *  with `toolNamesProvider`; if both are set, the provider wins. */
+   *  with `toolNamesProvider`; if both are set, the provider wins. Both are
+   *  unioned with the pattern's `input.availableTools`; neither can remove a
+   *  name the pattern allows. */
   toolNames?: string[]
   /** Async closure resolved per actor invocation. Use this when the
    *  allowlist is user-curated and may change between turns of the same
@@ -1287,9 +1528,15 @@ export function createActorControllerAdapter(
     // Resolve the actor's allowlist. `toolNamesProvider` (if set) is called
     // fresh per invocation so user-curated selections persisted to the
     // session context surface live; otherwise fall back to the static array.
-    const names = options.toolNamesProvider
-      ? await options.toolNamesProvider()
-      : (options.toolNames ?? [])
+    // The pattern's allowlist rides the call as `input.availableTools`; it is
+    // unioned in so an agent declares it once (#613). `filterToolDescriptions`
+    // dedupes by name.
+    const names = [
+      ...(options.toolNamesProvider
+        ? await options.toolNamesProvider()
+        : (options.toolNames ?? [])),
+      ...input.availableTools,
+    ]
 
     // Get tool descriptions — optionally refresh + include pattern matches.
     // When a transport is scoped to this run (`withTransport` — today the in-VM
@@ -1362,7 +1609,7 @@ export function createActorControllerAdapter(
     // else — including a genuine structured-output failure, a network error or
     // a pre-call throw — is wrapped as `LLMCallError` so the observability
     // panel keeps the captured prompt/variables drill-down.
-    const baseOpts = { collector, ...clientOverrideFor('controller') }
+    const baseOpts = { ...clientOverrideFor('controller'), collector }
     let action: ControllerAction
     try {
       action = await b.ActorController(
@@ -1380,7 +1627,7 @@ export function createActorControllerAdapter(
     } catch (e) {
       // Truncated or empty response: one retry, guidance only when there is
       // something to correct — see createLoopControllerAdapter for rationale.
-      const plan = planParseRetry(e, collector)
+      const plan = planParseRetry(e, collector, 'ActorController')
       if (plan) {
         const retryContext = plan.guidance
           ? [context, plan.guidance].filter(Boolean).join('\n\n')
@@ -1501,7 +1748,7 @@ export function createCriticAdapter(): CriticAdapterFn {
     // bag, so the old with/without-opts dual call is gone. `actorCritic.baml`
     // declares `CriticAnthropic`, overridden onto the self-hosted deployment
     // when `USE_VERDA_INFERENCE=1` re-points the `critic` role.
-    const criticOpts = { collector, ...clientOverrideFor('critic') }
+    const criticOpts = { ...clientOverrideFor('critic'), collector }
     let result: CriticResult
     try {
       result = await b.Critic(intent, attempts, criticOpts)
@@ -1542,8 +1789,8 @@ export async function describeToolResultOp(
   const { b } = await import('./baml_client')
   return withUsageAccounting('ResultDescribe', (opts) =>
     b.ResultDescribe(tool, toolArgs, reasoning, result, {
-      ...opts,
       ...clientOverrideFor('describe'),
+      ...opts,
     }),
   )
 }
@@ -1584,8 +1831,8 @@ export async function describeToolResultsBatchOp(
   // throws to the caller, which logs the N+1 fallback it then pays for.
   const batch = await withUsageAccounting('ResultDescribeBatch', (opts) =>
     b.ResultDescribeBatch(targets, {
-      ...opts,
       ...clientOverrideFor('describe'),
+      ...opts,
     }),
   )
   for (const entry of batch?.summaries ?? []) {
@@ -1684,8 +1931,8 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
     // seam every other routed call uses.
     const verdict = await withUsageAccounting('ScreenUntrustedContent', (opts) =>
       b.ScreenUntrustedContent(source, body, {
-        ...opts,
         ...clientOverrideFor('screen'),
+        ...opts,
       }),
     )
 
@@ -1704,3 +1951,13 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
 // `createLoopControllerAdapter`, and once the tool list rides the seam they
 // took no arguments at all. Agents call `createLoopControllerAdapter()`
 // directly; the domain name was never more than a comment.
+
+/** The decision role is served only by the systemone transport. It resolves
+ * the client and enforces the tier lock on every request. */
+export function createDecideAdapter(): DecideFn {
+  return createJevTransport().decide
+}
+
+export function createDecideAllAdapter(): DecideAllFn {
+  return createJevTransport().decideAll
+}

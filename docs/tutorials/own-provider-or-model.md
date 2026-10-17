@@ -178,6 +178,6 @@ declare const routes: RouteOption[];
 declare const history: Message[];
 
 const { b } = await import("@hames-ai/harness-baml/baml_client");
-const render = await b.request.Router("q", routes, history, plug("router")!);
+const render = await b.request.Router("q", routes, history, null, plug("router")!);
 render.body.json().model; // → 'meta-llama/Llama-3.3-27B'
 ```

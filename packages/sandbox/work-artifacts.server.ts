@@ -79,7 +79,7 @@ export async function hydrateWorkspace(
   transport: McpTransport,
   sessionId: string,
   callTool?: WorkspaceCallTool,
-): Promise<{ written: number; skipped: SkippedWorkFile[] }> {
+): Promise<{ written: number; skipped: SkippedWorkFile[]; accounted: string[] }> {
   const store = getWorkspaceStore()
   const metas = await store.list(sessionId, callTool)
   // Relative paths (basenames, for anything hydrate wrote) of what is already
@@ -87,16 +87,27 @@ export async function hydrateWorkspace(
   const present = await listWorkFiles(transport, WORK_IN_DIR)
   let written = 0
   const skipped: SkippedWorkFile[] = []
+  // Ids this pass can vouch for: now in `/work/in` (written, or already there),
+  // or deliberately not wanted there (hidden/archived). A document the caller
+  // knows was just stored and is NOT in this set was never seen — a listing
+  // that came back short is not proof it restored (#599 review F2).
+  const accounted: string[] = []
   // Newest first, so when two documents reduce to the same basename (the same
   // filename uploaded twice) the newer one is the one that lands, instead of
   // whichever the store happened to list last.
   const candidates = [...metas].sort((a, b) => b.uploadedAt - a.uploadedAt)
   for (const meta of candidates) {
-    if (meta.hidden || meta.archived) continue
+    if (meta.hidden || meta.archived) {
+      accounted.push(meta.id)
+      continue
+    }
     const name = safeBasename(meta.filename)
     // Already in the workspace (hydrated earlier, promoted from a previous
     // turn's /work/out, or written by the agent) → leave it alone.
-    if (present.has(name)) continue
+    if (present.has(name)) {
+      accounted.push(meta.id)
+      continue
+    }
     const doc = await store.get(sessionId, meta.id, callTool)
     if (!doc) {
       // The list said it existed and the read says it doesn't — a TTL expiry
@@ -112,6 +123,7 @@ export async function hydrateWorkspace(
       // the one that just landed.
       present.set(name, '')
       written++
+      accounted.push(meta.id)
     } catch (err) {
       // Best-effort: a single unwritable file shouldn't block the others — but
       // it is named, not swallowed.
@@ -124,7 +136,7 @@ export async function hydrateWorkspace(
         skipped.map((s) => `${s.filename} (${s.error})`).join(', '),
     )
   }
-  return { written, skipped }
+  return { written, skipped, accounted }
 }
 
 function errText(err: unknown): string {
@@ -173,6 +185,7 @@ export async function promoteOutputs(
           filename,
           mimeType,
           content,
+          provenance: 'sandbox-output',
           ...(text ? {} : { encoding: 'base64' as const }),
         },
         callTool,

@@ -10,6 +10,7 @@ import type {
   ContentSanitizedEventData,
   ContextEvent,
   ControllerActionEventData,
+  DecisionMadeEventData,
   ErrorEventData,
   ToolCallEventData,
   ToolResultEventData,
@@ -381,6 +382,180 @@ const ContentSanitizedDetail = (props: { data: ContentSanitizedEventData }) => (
   </div>
 )
 
+/** Endpoint probabilities, score means and noul readouts. */
+const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
+  const pct = (p: number) => `${(Math.max(0, Math.min(1, p)) * 100).toFixed(1)}%`
+  const finiteMean = () => Number.isFinite(props.data.expected)
+  const finitePTrue = () => Number.isFinite(props.data.pTrue)
+
+  return (
+    <div flex="~ col" gap="3" data-role="decision-made">
+      <div>
+        <div text="xs ui-text-tertiary" m="b-1">
+          Decision · <span font="mono">{props.data.key}</span>
+        </div>
+        <div text="sm ui-text-primary">{props.data.question}</div>
+      </div>
+
+      <div flex="~ wrap" items="center" gap="2">
+        <span text="sm ui-accent" font="mono" data-role="decision-verdict">
+          → {props.data.label}
+        </span>
+        <Show when={props.data.abstained}>
+          <span
+            text="xs ui-danger"
+            bg="ui-danger/10"
+            p="x-1.5 y-0.5"
+            rounded="sm"
+            data-role="decision-abstained"
+          >
+            failed{props.data.reason ? `: ${props.data.reason}` : ''}
+          </span>
+        </Show>
+        <Show when={props.data.shadow}>
+          <span text="xs ui-text-secondary" bg="ui-bg-tertiary" p="x-1.5 y-0.5" rounded="sm">
+            shadow
+          </span>
+        </Show>
+      </div>
+
+      <Show when={props.data.type === 'score'}>
+        <div flex="~ col" gap="2">
+          <div text="xs ui-text-secondary">
+            Mean (level index): {finiteMean() ? props.data.expected!.toFixed(2) : 'unknown'}
+          </div>
+          <Show when={finiteMean() && props.data.labels.length > 1}>
+            <div
+              h="2"
+              bg="ui-bg-tertiary"
+              rounded="sm"
+              relative=""
+              role="meter"
+              aria-label="Score mean (level index)"
+              aria-valuemin={0}
+              aria-valuemax={props.data.labels.length - 1}
+              aria-valuenow={props.data.expected!}
+            >
+              <div
+                data-role="decision-mean"
+                absolute=""
+                inset-y="0"
+                w="0.5"
+                bg="ui-accent"
+                style={{ left: pct(props.data.expected! / (props.data.labels.length - 1)) }}
+                aria-hidden="true"
+              />
+            </div>
+          </Show>
+          <div flex="~" justify="between" text="xs ui-text-secondary" font="mono">
+            <For each={props.data.labels}>
+              {(l, i) => (
+                <span>
+                  {i()} · {l.id}
+                </span>
+              )}
+            </For>
+          </div>
+        </div>
+      </Show>
+
+      <Show when={props.data.type === 'noul'}>
+        <div flex="~ col" gap="2">
+          <div text="xs ui-text-secondary">
+            P(true): {finitePTrue() ? pct(props.data.pTrue!) : 'unknown'}
+          </div>
+          <Show when={finitePTrue()}>
+            <div
+              h="3"
+              bg="ui-bg-tertiary"
+              rounded="sm"
+              relative=""
+              role="meter"
+              aria-label="P(true)"
+              aria-valuemin={0}
+              aria-valuemax={1}
+              aria-valuenow={props.data.pTrue!}
+            >
+              <div
+                h="full"
+                bg="ui-accent"
+                rounded="sm"
+                data-role="decision-bar"
+                style={{ width: pct(props.data.pTrue!) }}
+              />
+            </div>
+          </Show>
+        </div>
+      </Show>
+
+      <Show when={props.data.type !== 'noul'}>
+        <div flex="~ col" gap="2">
+          <For each={props.data.labels}>
+            {(l) => {
+              const p = () => props.data.probs[l.id] ?? 0
+              const available = () => props.data.type !== 'score' || Number.isFinite(p())
+              return (
+                <div flex="~ col" gap="1" data-role="decision-label" data-label={l.id}>
+                  <div flex="~" justify="between" text="xs">
+                    <span text={l.id === props.data.top ? 'ui-text-primary' : 'ui-text-secondary'}>
+                      <span font="mono">{l.id}</span>
+                      <span text="ui-text-tertiary"> — {l.description}</span>
+                    </span>
+                    <span font="mono" text="ui-text-secondary">
+                      {available() ? pct(p()) : 'unknown'}
+                    </span>
+                  </div>
+                  <Show when={available()}>
+                    <div
+                      bg="ui-bg-tertiary"
+                      rounded="sm"
+                      h="2"
+                      style={{ position: 'relative' }}
+                      role="meter"
+                      aria-label={`${l.id} probability`}
+                      aria-valuemin={0}
+                      aria-valuemax={1}
+                      aria-valuenow={p()}
+                    >
+                      <div
+                        h="2"
+                        rounded="sm"
+                        bg={l.id === props.data.top ? 'ui-accent' : 'ui-text-tertiary'}
+                        data-role="decision-bar"
+                        style={{ width: pct(p()) }}
+                      />
+                    </div>
+                  </Show>
+                </div>
+              )
+            }}
+          </For>
+        </div>
+      </Show>
+
+      <div flex="~ wrap" gap="x-6 y-1" text="xs ui-text-tertiary">
+        <span>
+          confidence <span font="mono">{props.data.confidence?.toFixed(3) ?? 'unknown'}</span>
+        </span>
+        <Show when={props.data.type === undefined}>
+          <span>
+            margin <span font="mono">{props.data.margin.toFixed(3)}</span>
+          </span>
+        </Show>
+        <Show when={props.data.method}>
+          <span>
+            method <span font="mono">{props.data.method}</span>
+          </span>
+        </Show>
+
+        <span>
+          state <span font="mono">{props.data.stateChars.toLocaleString()}</span> chars
+        </span>
+      </div>
+    </div>
+  )
+}
+
 const GenericDetail = (props: { data: unknown }) => (
   <div>
     <div text="xs ui-text-tertiary" m="b-2">
@@ -566,7 +741,11 @@ export const EventDetailPanel = (props: {
       style={{
         position: 'absolute',
         inset: '0',
-        'background-color': 'rgba(13, 17, 23, 0.95)',
+        'background-color':
+          type === 'decision_made' &&
+          ['score', 'noul'].includes((data as DecisionMadeEventData).type ?? '')
+            ? 'var(--ui-bg-secondary)'
+            : 'rgba(13, 17, 23, 0.95)',
         'backdrop-filter': 'blur(4px)',
         'z-index': '50',
         display: 'flex',
@@ -655,6 +834,9 @@ export const EventDetailPanel = (props: {
             </Match>
             <Match when={type === 'content_sanitized'}>
               <ContentSanitizedDetail data={data as ContentSanitizedEventData} />
+            </Match>
+            <Match when={type === 'decision_made'}>
+              <DecisionMadeDetail data={data as DecisionMadeEventData} />
             </Match>
           </Switch>
         </Show>

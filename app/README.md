@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../docs/images/hames-banner-wide-dark.png">
+  <img src="../docs/images/hames-banner-wide-light.png" alt="hames: supports of a harness to which its traces are fastened. The @hames-ai packages on npm: harness-patterns, harness-baml, agents, connectors, sandbox. hames app: where harness primitives become your integrated workspace." width="880">
+</picture>
+
 # The hames app — `app/`
 
 The SolidStart application: the chat interface, the server actions, turn
@@ -49,7 +54,7 @@ Two things that are not obvious from here:
 
 `doc-convert` is only used when `STASH_CONVERT_DOCS=1`; the app reads
 `DOC_CONVERT_URL` (default `http://localhost:8000`). All six are defined in the
-repo-root `docker-compose.yaml`. A bare `docker compose up -d` starts every one
+repo-root `docker-compose.yaml` (Docker Engine >= 28 required; run `make check-docker` there first). A bare `docker compose up -d` starts every one
 of them **except `app`** — Neo4j, the MCP gateway, Postgres, redis-stack and
 doc-convert — because the `app` service alone carries a compose profile (see
 [Commands](#commands)).

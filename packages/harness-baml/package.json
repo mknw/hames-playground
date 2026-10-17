@@ -1,6 +1,6 @@
 {
   "name": "@hames-ai/harness-baml",
-  "version": "0.1.1",
+  "version": "0.3.0",
   "description": "The BAML companion for @hames-ai/harness-patterns — the role→client resolution seam, the adapter factories, and a pre-generated baml_client shipped beside its baml_src so a consumer never runs baml-generate.",
   "keywords": [
     "baml",
@@ -52,7 +52,7 @@
   },
   "scripts": {
     "baml-generate": "baml-cli generate",
-    "prepublishOnly": "node -e \"const ua=process.env.npm_config_user_agent||'';const ex=process.env.npm_execpath||'';if(ua.startsWith('npm/')||ex.includes('npm-cli'))throw new Error('This package must be published with pnpm publish, not npm: npm does not rewrite workspace: specifiers and ships them literally.')\""
+    "prepublishOnly": "node -e \"const ua=process.env.npm_config_user_agent||'';const ex=process.env.npm_execpath||'';if(ua.startsWith('npm/')||ex.includes('npm-cli'))throw new Error('This package must be published with pnpm publish, not npm: npm does not rewrite workspace: specifiers and ships them literally.')\" && node ../../scripts/check-release-tag.mjs"
   },
   "dependencies": {
     "@boundaryml/baml": "0.224.0"

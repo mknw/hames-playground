@@ -53,6 +53,7 @@ const REPORT_DIR = path.join(APP_DIR, 'evals', 'reports')
 const SCRATCH = path.join(REPORT_DIR, '.release-check')
 const UNIT_RESULT = path.join(SCRATCH, 'unit.json')
 const E2E_RESULT = path.join(SCRATCH, 'e2e.json')
+const BROWSER_PINS_RESULT = path.join(SCRATCH, 'browser-pins.json')
 const BROWSER_RESULT = path.join(SCRATCH, 'browser.json')
 
 // ============================================================================
@@ -65,7 +66,7 @@ interface Layer {
   readonly title: string
   /** One line on what this layer can see that the one below it cannot. */
   readonly sees: string
-  /** The `pnpm` script, plus whatever it takes to make it write JSON. The two
+  /** The `pnpm` arguments, plus whatever it takes to make it write JSON. The two
    *  runners disagree about how: vitest takes `--outputFile`, Playwright has no
    *  such flag and reads `PLAYWRIGHT_JSON_OUTPUT_NAME` from the environment
    *  instead. Both are spelled out per layer rather than guessed at, because
@@ -143,6 +144,22 @@ const LAYERS: readonly Layer[] = [
     parse: parseVitest,
   },
   {
+    id: 'browser-pins',
+    title: 'Browser backend hermeticity pins (no database or browser)',
+    sees: 'child environment, boot and final egress drains',
+    command: [
+      'exec',
+      'playwright',
+      'test',
+      '--config',
+      'e2e-browser/pins/playwright.config.ts',
+      '--reporter=json',
+    ],
+    env: { PLAYWRIGHT_JSON_OUTPUT_NAME: BROWSER_PINS_RESULT },
+    resultFile: BROWSER_PINS_RESULT,
+    parse: parsePlaywright,
+  },
+  {
     id: 'browser',
     title: 'Browser e2e (Playwright, real dev server, Chromium)',
     sees:
@@ -166,6 +183,10 @@ const LAYERS: readonly Layer[] = [
  * as a full pass.
  */
 const LIVE_STEPS_STILL_OWED = [
+  {
+    what: '`pnpm eval:general-next --live` on the **private** tier, after the PM’s “S3 merged: go”',
+    why: 'whole-conversation model behaviour and the computed candidate flip gate; synthetic tool edges do not certify upload, sandbox execution or file-ingest integration',
+  },
   {
     what: '`pnpm eval:harness` on the **Anthropic** tier (the baseline report)',
     why: 'grades the workflows against a real provider; the only thing that reads model quality at all',

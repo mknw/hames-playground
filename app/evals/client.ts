@@ -92,6 +92,8 @@ const PRODUCTION_ROLE: Record<EvalRole, BamlRole> = {
   planner: 'planner',
   describe: 'describe',
   screen: 'screen',
+  // Systemone uses its own transport and URL, independently of chat overrides.
+  decide: 'decide',
 }
 
 /**

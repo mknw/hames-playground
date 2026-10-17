@@ -17,7 +17,8 @@ thing either of them will ask for.
 The company is the **controller**; the data subjects are its employees using the
 assistant. Anthropic is the **processor** (it is now the only LLM provider —
 the Groq / OpenRouter / OpenAI chains and their `USE_MIXED_CHAINS` switch were
-removed 2026-08-24; see finding 1). The app is internal-only and reached through Entra
+removed 2026-08-24; one narrow exception since #418, the Anthropic tier's `decide`
+role — see finding 1). The app is internal-only and reached through Entra
 SSO, so every record is tied to a named employee — there is no anonymous use and
 no pseudonymisation anywhere in the stack.
 
@@ -27,18 +28,26 @@ no pseudonymisation anywhere in the stack.
 
 Measured on the live dev database, 2026-08-15.
 
-| Store                     | Contents                                                                                                       | Encrypted at rest                  | Retention                           | Rows now |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------- | ---------------------------------- | ----------------------------------- | -------- |
-| Postgres `conversations`  | `context` JSONB — the **full event stream**: `user_message`, `assistant_message`, `tool_call`, `tool_result`   | `title` + `context`                | **none**                            | 28       |
-| Postgres `users`          | Entra `oid`, email, display name, tenant id, first/last login                                                  | `email` + `display_name`           | none                                | 1        |
-| Postgres `auth_sessions`  | oid, email, display name, 8h expiry                                                                            | `email` + `display_name`           | lazy, per-id + hourly sweep         | 22       |
-| Postgres `routines`       | agent id, trigger kind/config, the input prompt, label (#131)                                                  | `input` + `label`                  | none                                | —        |
-| Postgres `skills`         | uploaded `SKILL.md` files: name, description, whole text, author id, global flag (#415)                        | `name` + `description` + `content` | none (until the author deletes)     | —        |
-| Postgres `skill_hides`    | viewer id -> hidden global skill id (#415)                                                                     | nothing (holds no content)         | cascades with the skill             | —        |
-| Postgres `user_tokens`    | MSAL cache, **AES-256-GCM encrypted**, fails closed                                                            | `token_cache`                      | deleted on logout                   | 1        |
-| Postgres `session_claims` | session id -> owner id, for the pre-persistence window                                                         | nothing (holds no content)         | `expires_at`, mirrors the stash TTL | —        |
-| Redis Data Stash          | uploaded and Microsoft 365-ingested documents, chunks, embeddings                                              | **no**                             | **7 days** (`DEFAULT_TTL_SECONDS`)  | —        |
-| Neo4j                     | **the staff directory**: per `Member` — `entraId`, `displayName`, `mail`, `department`, `jobTitle`, `syncedAt` | **no**                             | **none**                            | 49       |
+| Store                                        | Contents                                                                                                                                                                                                                                                                                                                                      | Encrypted at rest                                                                      | Retention                                                                                            | Rows now |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------- |
+| Postgres `conversations`                     | `context` JSONB — the **full event stream**: `user_message`, `assistant_message`, `tool_call`, `tool_result`                                                                                                                                                                                                                                  | `title` + `context`                                                                    | **none**                                                                                             | 28       |
+| Postgres `users`                             | Entra `oid`, email, display name, tenant id, first/last login                                                                                                                                                                                                                                                                                 | `email` + `display_name`                                                               | none                                                                                                 | 1        |
+| Postgres `auth_sessions`                     | oid, email, display name, 8h expiry                                                                                                                                                                                                                                                                                                           | `email` + `display_name`                                                               | lazy, per-id + hourly sweep                                                                          | 22       |
+| Postgres `routines`                          | agent id, trigger kind/config, the input prompt, label (#131)                                                                                                                                                                                                                                                                                 | `input` + `label`                                                                      | none                                                                                                 | —        |
+| Postgres `skills`                            | uploaded `SKILL.md` files: name, description, whole text, author id, global flag (#415)                                                                                                                                                                                                                                                       | `name` + `description` + `content`                                                     | none (until the author deletes)                                                                      | —        |
+| Postgres `skill_hides`                       | viewer id -> hidden global skill id (#415)                                                                                                                                                                                                                                                                                                    | nothing (holds no content)                                                             | cascades with the skill                                                                              | —        |
+| Postgres `user_tokens`                       | MSAL cache, **AES-256-GCM encrypted**, fails closed                                                                                                                                                                                                                                                                                           | `token_cache`                                                                          | deleted on logout                                                                                    | 1        |
+| Postgres `session_claims`                    | session id -> owner id, for the pre-persistence window                                                                                                                                                                                                                                                                                        | nothing (holds no content)                                                             | `expires_at`, mirrors the stash TTL                                                                  | —        |
+| Postgres `memories`                          | per-user long-term memory (#419): one sentence per memory, its evidence span, its `embedding vector(1024)`                                                                                                                                                                                                                                    | `content` + `evidence`; **`embedding` NOT** — a declared exception (owner decision O1) | episodic 180 days after last seen, others until forgotten (D21, configurable per kind)               | —        |
+| Postgres backups                             | the nightly `pg_dump` (`scripts/backup-preview.sh`, `postgres.dump`) — **carries every `memories.embedding` as plaintext**, for the whole life of the file                                                                                                                                                                                    | ciphertext columns stay ciphertext in a dump; the vectors do not                       | `RETENTION_DAYS`, default **7**                                                                      | —        |
+| Postgres migration copies (#419 M8, one-off) | the dump of the alpine-era database (`pgvector-migration-dump/`, deliberately outside the rotated `backups/`), the old cluster's volume `hames_postgres_data`, and the optional `hames_postgres_data_alpine_backup` copy of it — each a **full copy of the database as it was before memory existed**: no `memories` table, so **no vectors** | ciphertext columns stay ciphertext; ids, `user_id` and timestamps are plaintext        | **until the owner deletes them** — nothing rotates them (`backup-preview.sh` only sweeps `backups/`) | —        |
+| Redis Data Stash                             | uploaded and Microsoft 365-ingested documents, chunks, embeddings                                                                                                                                                                                                                                                                             | **no**                                                                                 | **7 days** (`DEFAULT_TTL_SECONDS`)                                                                   | —        |
+| Neo4j                                        | **the staff directory**: per `Member` — `entraId`, `displayName`, `mail`, `department`, `jobTitle`, `syncedAt`                                                                                                                                                                                                                                | **no**                                                                                 | **none**                                                                                             | 49       |
+
+External decision processor (#418, SD-12): on the Anthropic tier, `JEV_DECISIONS_URL`
+receives decision state, question instructions and option descriptions; unset,
+no decision request is made. TypeSafe (Jev) offers zero data retention to enterprise customers; without that agreement, standard retention applies.
+See finding 1 for the direct and OpenRouter routes.
 
 The Postgres column encryption is AES-256-GCM under `DATA_ENCRYPTION_KEY`
 (`app/src/lib/db/crypto.server.ts`), applied in the repository modules on write
@@ -97,7 +106,7 @@ single most important finding in this document.
 
 Every conversation, including the embedded mail and file content described
 above, is sent to **Anthropic's API** — and, since 2026-08-24, to no other LLM
-provider. MCP tool servers (web fetch/search, GitHub, Context7) receive whatever
+provider except the `decide` role's Anthropic-tier client, below. MCP tool servers (web fetch/search, GitHub, Context7) receive whatever
 is passed to them.
 
 Each is a processor under **Art. 28** (needs a data processing agreement) and,
@@ -111,9 +120,64 @@ Two things follow that _are_ in our control:
 - **Anthropic-only is a compliance asset**: one processor to paper rather than
   four. It is no longer a default that a switch could undo — the mixed-provider
   chains and the `USE_MIXED_CHAINS` env flag were deleted outright on
-  2026-08-24, so there is no configuration that sends a prompt to Groq,
-  OpenRouter or OpenAI. Re-introducing one is an Art. 28 / Chapter V decision,
-  not a config change.
+  2026-08-24, so no _chat_ configuration sends a prompt to Groq, OpenRouter or
+  OpenAI. **One exception, stated rather than buried (#418, slice T4):** on the
+  Anthropic tier the `decide` role's default client is a REST adapter to
+  TypeSafe's Jev model directly when `JEV_DECISIONS_URL` names it (there is no default endpoint until the owner confirms the account's ZDR terms) at
+  `https://api.typesafe.ai/v1/systemone` (`jev-1.13.0`;
+  `packages/harness-baml/jev-decide.server.ts`). SD-10's processor map for this
+  route is: consumer-supplied decision state, question instructions and option
+  descriptions → **TypeSafe**, a further third-country processor. Responses
+  include answers and token usage; this transport records the request and
+  response in `LLMCallRecord` (without the authorization header or bearer key).
+  Direct responses document no `usage.cost`, so price stays unknown.
+  The request pins `jev-1.13.0` rather than the moving `jev-latest` alias because
+  the configured request uses a fixed model version.
+  The deployment uses TypeSafe now by explicitly setting
+  `JEV_DECISIONS_URL=https://api.typesafe.ai/v1/systemone` with a non-enterprise
+  key; standard retention applies to that key. The package's default remains disabled.
+
+  **Retention is contractual, not inferred from no-training.** TypeSafe's
+  [model docs](https://docs.typesafe.ai/models) state requests and responses are
+  not used for training. Its [legal page](https://docs.typesafe.ai/legal) offers
+  ZDR **for enterprise customers**, arranged through sales; this is not a
+  default, a per-request flag, or evidence ZDR is enabled for any account.
+  The [privacy policy](https://typesafe.ai/legal/privacy-policy) retains personal
+  data as reasonably necessary for services or business/commercial purposes,
+  with longer legal retention possible, and describes US hosting. The
+  [MCA §4.1–4.3](https://typesafe.ai/legal/mca) permits
+  processing customer data during the term for service/fees and in perpetuity
+  for telemetry, fraud/abuse monitoring and legal compliance; training on
+  customer data requires prior consent. MCA §10.3 also permits standard-backup retention despite deletion obligations. The
+  [DPA](https://typesafe.ai/legal/data-processing) constrains personal-data
+  processing to documented instructions and takes precedence on conflicts.
+  None supplies a fixed general request-retention duration. The current
+  non-enterprise key does not activate enterprise ZDR; standard retention applies.
+  The code does not establish contractual terms or processor/transfer assessments.
+
+  **OpenRouter is an explicitly configured fallback**, using
+  `JEV_DECISIONS_URL=https://openrouter.ai/api/alpha/decisions` and an
+  OpenRouter-issued decision key. That route adds **OpenRouter and TypeSafe**
+  to the processor map. On `openrouter.ai` or a subdomain the request carries
+  `provider: { zdr: true, data_collection: 'deny' }`; the transport refuses
+  bytes lacking either preference. No OpenRouter-only fields go to TypeSafe's
+  direct API. Whether the alpha Decisions endpoint enforces these preferences
+  is unverified. Routing restrictions are not a contract, and a differently
+  named proxy receives no preferences. Before using this fallback, confirm
+  both processors' terms/transfer assessments, set account ZDR-only routing
+  and data-collection deny, disable prompt logging, and verify the endpoint
+  refuses an unsatisfiable provider preference.
+
+  Both routes use the separate `JEV_DECISIONS_API_KEY`, without any other key
+  fallback. `JEV_DECISIONS_URL` allows only parsed HTTPS or HTTP loopback, and redirects are refused, so the state reaches only that host;
+  failure is reported without retrying elsewhere. **SD-12 is preserved:**
+  the private tier resolves to `PrivateSystemOne` and reads only
+  `SMALL_LLM_DECISIONS_URL` plus `SMALL_LLM_API_KEY`. The URL is a full endpoint
+  ending in `/v1/systemone`; an unset value refuses the call without a public
+  fallback. Unknown tiers or a client inconsistent with the tier are refused
+  before a request (`packages/harness-baml/jev-decide.server.ts`). Re-introducing any
+  other provider is an Art. 28 / Chapter V decision, not a config change.
+
 - Whether **zero-retention / no-training-on-inputs** terms apply to the account
   materially changes the risk picture, and is a contract setting rather than a
   code one.
@@ -124,7 +188,8 @@ exists, and it now covers every role without exception.** A verda tier decision
 re-points controller / actor / critic / synthesizer / router / planner /
 describe **and the injection screen** at the company's own Qwen deployment on a
 Verda (DataCrunch) GPU (`packages/harness-baml/baml_src/verda-client.baml`). Read against the paragraph above: no
-configuration still sends a prompt to Groq, OpenRouter or OpenAI, and the new
+chat configuration still sends a prompt to Groq, OpenRouter or OpenAI (the
+`decide` exception above is Anthropic-tier only), and the new
 route moves prompts _off_ a third-country processor rather than onto one, so it
 cuts the exposure this finding is about rather than widening it. Three caveats
 belong in the same breath, because each is the kind of thing this doc exists to
@@ -170,6 +235,18 @@ stop being assumed:
   not a completed Art. 28 / Chapter V analysis: DataCrunch is still a hosting
   provider with its own contract, location and sub-processors, and this doc has
   not looked at any of them.
+- **Update (2026-10-17): the claim depends on the host.** The same model can
+  run on Modal (`deploy/modal/hames_private_27b.py`), selected by
+  `VERDA_INFERENCE_ENDPOINT` alone. On that host the processor is Modal, Inc.
+  (US): its edge sees request bodies (it checks the proxy token there), and
+  images, memory snapshots and container logs are stored in the US whatever the
+  compute region. So "moves prompts _off_ a third-country processor" is true of
+  the Verda host and not of the Modal one. Approval for Modal is G15 (#567
+  comment 6194622280): the owner's own and demo traffic, company data waiting on
+  a DPA. G15's two technical conditions (snapshots hold public weights and
+  synthetic warm-up only; no request content in logs) are what
+  `app/src/__tests__/deploy/modal-pins.test.ts` and `deploy/modal/test_behaviour.py`
+  hold for both Modal apps.
 - The client asks for **no prompt caching** (no `allowed_role_metadata`, so the
   templates' `cache_control` breakpoints are dropped) — nothing in a request
   asks anything to retain a prompt. The deployment's own vLLM prefix cache is a
@@ -303,7 +380,7 @@ questions and can start immediately; only item 4 blocks on someone else.
 | 1   | **ROPA + employee privacy notice.** One page each. Draftable from the data map above; the parts needing company input are legal basis and retention period.                                                                                                  | company input on two fields |
 | 2   | **Decide and enforce a retention period for `conversations`.** A dated sweep is a small amount of code; the number is a business decision. Resolves the asymmetry with the stash's 7 days.                                                                   | retention decision          |
 | 3   | ~~**Arm the session sweep**~~ (done — `startSessionSweepTimer`) and ~~**encrypt Graph-derived `tool_result` content**~~ (done — the whole `context` blob is encrypted, following the `user_tokens` pattern). Remaining: Redis and Neo4j are still plaintext. | —                           |
-| 4   | **Confirm DPAs and the transfer mechanism** for Anthropic — now the only LLM processor. Gates production rollout more than any code here.                                                                                                                    | counsel                     |
+| 4   | **Confirm DPAs and the transfer mechanism** for Anthropic and, before any consumer wires the Anthropic tier's `decide` role (finding 1), for OpenRouter and TypeSafe. Gates production rollout more than any code here.                                      | counsel                     |
 | 5   | **Postgres backups, with the encryption keys escrowed separately.** Now triply justified: Art. 32(1)(c), ops, and the fact that a dump without `DATA_ENCRYPTION_KEY` is unrecoverable ciphertext.                                                            | —                           |
 | 6   | **Before rollout:** works council information, and the CAO 81 purpose statement.                                                                                                                                                                             | HR / works council          |
 | 7   | Drop the dead `auth_sessions.token_cache` column.                                                                                                                                                                                                            | —                           |

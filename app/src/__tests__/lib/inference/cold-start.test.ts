@@ -84,6 +84,8 @@ beforeEach(() => {
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
   // The private tier's second endpoint (the 4B summarizer `describe` runs on).
   // Needed only so a 'verda' frame is allowed to open at all.
+  process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+  process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.SMALL_LLM_BASE_URL = 'https://e2e.invalid/small/v1'
 })
 
@@ -92,6 +94,8 @@ afterEach(() => {
   resetVerdaActivity()
   delete process.env.VERDA_INFERENCE_ENDPOINT
   delete process.env.VERDA_INFERENCE_API_KEY
+  delete process.env.SMALL_LLM_DECISIONS_URL
+  delete process.env.SMALL_LLM_API_KEY
   delete process.env.SMALL_LLM_BASE_URL
   delete process.env.USE_VERDA_INFERENCE
   delete process.env.VERDA_SCALEDOWN_SECONDS
@@ -299,24 +303,13 @@ describe('when the notice fires', () => {
     expect(seen).toHaveLength(1)
   })
 
-  it('is NOT fired by a describe call — the 4B does not scale to zero', async () => {
-    // The describe flip's trap, and it is the one place the hook had to learn
-    // something new. The private tier moves `describe` too, so a describe call
-    // gets a `client` override just like the controller's — but the client is
-    // `LocalQwenSmall`, a llama-server somebody is running, which answers in
-    // milliseconds. Announcing "starting GPU, ~146 seconds" in front of it would
-    // be a countdown for a wait nobody is paying, fired from the tier's
-    // highest-frequency role. So the hook keys on the CLIENT, not on "the tier
-    // moved this role".
+  it('fires for a describe call bound to the small box', async () => {
     const seen = await runWithInferenceTier('verda', () =>
       noticesFrom(() => {
-        beginVerdaTurn()
-        // A real override is produced — this is not "describe is unrouted".
         expect(clientOverrideFor('describe')).toEqual({ client: 'LocalQwenSmall' })
-        endVerdaTurn()
       }),
     )
-    expect(seen).toEqual([])
+    expect(seen).toEqual([{ estimateMs: COLD_START_FALLBACK_MS, basis: 'default', samples: 0 }])
   })
 
   it('still fires for the 27B on a turn that also made describe calls', async () => {

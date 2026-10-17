@@ -40,6 +40,12 @@ const SCHEMA_SQL = `
     inference_tier TEXT,
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
+  -- The user's switch for long-term memory (#419 D11, G9 Q3). DEFAULT FALSE and
+  -- NOT NULL: memory is OFF for everyone until the user turns it on, and a row
+  -- that predates the column reads as off. A plaintext boolean, like the other
+  -- lifted flags. No backfill: nobody has opted in to a feature that did not
+  -- exist. The toggle itself is M7's.
+  ALTER TABLE user_prefs ADD COLUMN IF NOT EXISTS memory_enabled BOOLEAN NOT NULL DEFAULT FALSE;
 `
 
 let _schemaReady: Promise<void> | null = null
@@ -121,5 +127,30 @@ export async function setStoredInferenceTier(userId: string, tier: InferenceTier
        inference_tier = EXCLUDED.inference_tier,
        updated_at     = NOW()`,
     [userId, tier],
+  )
+}
+
+/**
+ * Whether `userId` has long-term memory switched on. FALSE when they have no
+ * `user_prefs` row at all, and for every row until M7's toggle writes true:
+ * absence is "off", never "unknown". A read failure propagates — the caller
+ * (`MemoryConfig.enabled`) turns it into a skipped recall, which is also off.
+ */
+export async function getMemoryEnabled(userId: string): Promise<boolean> {
+  await ensureSchema()
+  const { rows } = await query<{ memory_enabled: boolean }>(
+    `SELECT memory_enabled FROM user_prefs WHERE user_id = $1`,
+    [userId],
+  )
+  return rows[0]?.memory_enabled === true
+}
+
+/** Commit independently before erasure: later writers must observe the switch. */
+export async function setMemoryEnabledForUser(userId: string, enabled: boolean): Promise<void> {
+  await ensureSchema()
+  await query(
+    `INSERT INTO user_prefs (user_id, memory_enabled) VALUES ($1, $2)
+     ON CONFLICT (user_id) DO UPDATE SET memory_enabled = EXCLUDED.memory_enabled, updated_at = NOW()`,
+    [userId, enabled],
   )
 }

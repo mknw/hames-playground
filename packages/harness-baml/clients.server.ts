@@ -221,7 +221,7 @@ export interface CostRates {
 // and cannot be imported here (the extraction's one direction rule). Kept
 // equal to the app's DEFAULT_EUR_PER_USD / DEFAULT_VERDA_EUR_PER_HOUR by
 // clients-seam.test.ts — the same deliberate-copy-with-a-pin pattern as
-// TIME_PRICED_CLIENT in settings.ts.
+// TIME_PRICED_CLIENTS in settings.ts.
 const SEAM_DEFAULT_EUR_PER_USD = 0.86
 const SEAM_DEFAULT_VERDA_EUR_PER_HOUR = 1.819
 
@@ -262,16 +262,23 @@ export type CostEstimator = (
     outputTokens: number
   },
   clientName?: string,
-  opts?: { durationMs?: number; eurPerUsd?: number; eurPerHour?: number },
+  opts?: {
+    durationMs?: number
+    eurPerUsd?: number
+    eurPerHour?: number
+    /** The provider-reported call cost in USD (the fourth basis, `'provider'`). */
+    providerCostUsd?: number
+  },
 ) => CostEstimate | undefined
 
 export interface CostPricing {
   estimate: CostEstimator
-  /** The client billed by the second (settings.ts's `TIME_PRICED_CLIENT`).
-   *  `computeEventMetrics` prices a usage-less attempt on this client against
-   *  wall-clock rather than dropping it. Unregistered → no such client, so a
-   *  usage-less attempt is dropped — registration is what restores the floor. */
+  /** @deprecated Single-client compatibility form; uses verdaEurPerHour.
+   * Includes usage-less attempts for this client in the cost floor. */
   timePricedClient?: string
+  /** Per-client rate readers, resolved once per step. Includes usage-less
+   * attempts in pricing; missing timing leaves the step cost unknown. */
+  timePricedClients?: Readonly<Record<string, () => number>>
 }
 
 let costPricing: CostPricing = {
@@ -337,11 +344,14 @@ export type BamlRole =
   | 'critic' // Critic
   | 'compactExecution' // Synthesize
   | 'router' // Router
-  // The summarization tier — SIX functions. The canonical list (and the
-  // seventh function, `screen`, that shares the chain) is on the
+  // The summarization tier — EIGHT functions (six at the 2026-08-26 flip, plus
+  // the two memory functions of #419). The canonical list (and the ninth
+  // function, `screen`, that shares the chain) is on the
   // DescribeAnthropic block in baml_src/anthropic-only.baml.
   | 'describe'
   | 'screen' // ScreenUntrustedContent (withInjectionGuard's opt-in LLM layer)
+  // The systemone decision transport.
+  | 'decide'
 
 /** The BAML-declared client per role — the Anthropic-only chain each function
  *  declares in `baml_src/`. Keep in sync with the `client X` lines there.
@@ -390,6 +400,8 @@ const CLIENT_BY_ROLE: Record<BamlRole, string> = {
   // it in anthropic-only.baml. The accident this role guards against is still
   // live; only the private tier's deliberate move is settled.
   screen: 'DescribeAnthropic', // injection-screen.baml's declared client
+  // Public systemone transport; no BAML leaf.
+  decide: 'JevDecide',
 }
 
 /**
@@ -512,20 +524,15 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   //     the whole reason that mirror reports the override. The visible effect is
   //     `maxBatchItems()` returning 5 instead of 8, i.e. MORE describe calls per
   //     turn, each far cheaper and none of them on the queue in (1).
-  //  4. COST is €0.00, on a basis of its own. `LocalQwenSmall` is in
-  //     `LOCAL_PRICED_CLIENTS` (settings.ts) rather than in `CLIENT_PRICING` or
-  //     `TIME_PRICED_CLIENT`, so a private-tier step that summarized a result
-  //     renders an exact zero labelled "local" — not cost-unknown, which is what
-  //     it read as until the owner settled this on 2026-08-26. The distinction is
-  //     the whole decision: unknown means unmeasured, and a call served by a
-  //     model process on infrastructure with no marginal bill is not unmeasured.
-  //     It is a claim about the CLIENT, so moving that endpoint onto metered
-  //     infrastructure means moving the client into the priced set — the same
-  //     edit this map already requires.
+  //  4. COST is time-priced on metered infrastructure (owner decision
+  //     2026-10-13): SMALL_LLM_EUR_PER_HOUR (default €1.54/h) times measured
+  //     per-attempt duration. Missing duration reads as unknown; measured
+  //     calls carry the same floor marker as the larger GPU. Attribution
+  //     follows LocalQwenSmall, never the endpoint URL.
   //
   // If `SMALL_LLM_BASE_URL` is unset the tier is REFUSED, not descaled — see
   // `assertPrivateTierConfigured` in lib/inference/config.server.ts.
-  describe: 'LocalQwenSmall', // the six summarization functions
+  describe: 'LocalQwenSmall', // the eight summarization functions
   // The composite consequence of THIS line, in the style the `planner:` entry
   // above sets: the screen now inherits the scale-to-zero LATENCY profile as
   // well as the routing. A guarded tool result can wait a 146s cold start — or
@@ -536,7 +543,43 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   // untouched by it; what the tier buys back is that no such payload leaves the
   // box. Blast radius is zero today because no agent enables the LLM screen.
   screen: 'VerdaQwen', // ScreenUntrustedContent — owner decision 2026-08-26, above
+  // Private systemone URL; never the public endpoint or its key.
+  decide: 'PrivateSystemOne',
 }
+
+/** The only functions designated to consume each trace-exposing leaf (#637).
+ * Loop/actor counterparts still require G19 Q2's live measurement. */
+export const THINKING_FUNCTIONS_BY_CLIENT: Readonly<Record<string, readonly string[]>> = {
+  VerdaQwenThink: ['PlannerThinking'],
+}
+
+/** Trace-exposing leaves, never chains: mode is verified against the collector's
+ * selected client, not inferred from the intended tier (#625 G19). */
+export const THINKING_CLIENTS: ReadonlySet<string> = new Set(
+  Object.keys(THINKING_FUNCTIONS_BY_CLIENT),
+)
+
+/** Only the planner has a trace-aware counterpart in this slice (#625 G19 Q7). */
+export const THINKING_ROLES: ReadonlySet<BamlRole> = new Set(['planner'])
+
+function assertThinkingOverride(role: BamlRole, bag: BamlClientOverride): void {
+  // Routing overrides must never replace implementation-owned accounting.
+  if ('collector' in bag) {
+    throw new Error('Client override must not carry a collector; the adapter owns accounting')
+  }
+  if (
+    THINKING_CLIENTS.has(bag.client) &&
+    (!THINKING_ROLES.has(role) || activeInferenceTier() !== 'verda')
+  ) {
+    throw new Error(`Thinking client '${bag.client}' requires the planner role on the private tier`)
+  }
+}
+
+/** Includes dormant thinking leaves without changing the tier's routing map. */
+export const PRIVATE_TIER_CLIENTS: ReadonlySet<string> = new Set([
+  ...Object.values(VERDA_CLIENT_BY_ROLE).filter((c): c is string => c !== undefined),
+  ...THINKING_CLIENTS,
+])
 
 /**
  * The BAML functions behind each role the map above re-points.
@@ -560,7 +603,7 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
  * The `describe` list IS the second copy of a list whose canonical home is the
  * `DescribeAnthropic` block in `baml_src/anthropic-only.baml`, and there is no
  * way around that once the role moves: this file needs the function NAMES and
- * BAML has no export of them. `clients-verda.test.ts` reads the six `client
+ * BAML has no export of them. `clients-verda.test.ts` reads the eight `client
  * DescribeAnthropic` declarations out of `baml_src/` and pins them equal to
  * this array, which is what stops the copy drifting — and, more to the point,
  * what fails if a seventh describe function is added and forgotten here, since
@@ -572,7 +615,7 @@ export const SWITCHED_FUNCTIONS_BY_ROLE: Partial<Record<BamlRole, readonly strin
   critic: ['Critic'],
   compactExecution: ['Synthesize'],
   router: ['Router'],
-  planner: ['Planner'],
+  planner: ['Planner', 'PlannerThinking'],
   describe: [
     'ResultDescribe',
     'ResultDescribeBatch',
@@ -580,8 +623,19 @@ export const SWITCHED_FUNCTIONS_BY_ROLE: Partial<Record<BamlRole, readonly strin
     'CompactIntent',
     'RetrieveQuery',
     'ReferenceSelector',
+    'ExtractMemory',
+    'CompactMemories',
   ],
   screen: ['ScreenUntrustedContent'],
+  decide: ['Decide'],
+}
+
+/** True only when the run is EXPLICITLY on the Anthropic tier — the
+ *  frame's RAW tier when one is set (an unrecognised value is not the Anthropic tier,
+ *  although `activeInferenceTier()` narrows it to the default), else the default. */
+export function onExplicitAnthropicTier(): boolean {
+  const framed = currentRunFrame()?.inference?.tier
+  return (framed ?? tierPolicy.defaultTier()) === 'anthropic'
 }
 
 /**
@@ -698,7 +752,7 @@ export function activeInferenceTier(): InferenceTier {
  * Spread the result into the BAML call's options bag, and branch on whether
  * the bag ended up empty rather than on `collector`:
  *
- *   const opts = { ...(collector ? { collector } : {}), ...clientOverrideFor('controller') }
+ *   const opts = { ...clientOverrideFor('controller'), ...(collector ? { collector } : {}) }
  *   const hasOpts = Object.keys(opts).length > 0
  *
  * The generated BAML functions take their arguments POSITIONALLY, so passing
@@ -723,10 +777,16 @@ export function clientOverrideFor(role: BamlRole): BamlClientOverride | undefine
   // where the bag becomes this package's own shape.
   const perRun = currentRunFrame()?.inference?.clientOverride?.(role) as
     BamlClientOverride | undefined
-  if (perRun) return perRun
+  if (perRun) {
+    assertThinkingOverride(role, perRun)
+    return perRun
+  }
 
   const consumerBag = consumerClients?.(role)
-  if (consumerBag) return consumerBag
+  if (consumerBag) {
+    assertThinkingOverride(role, consumerBag)
+    return consumerBag
+  }
 
   const client = verdaClientFor(role)
   if (!client) return undefined
@@ -777,7 +837,22 @@ export function resolveClientForRole(role: BamlRole): string {
   // adds it, which falls back SAFELY: a 16 384 window and the fixed batch
   // ceiling (over-trimming, never overflowing) — see the consumer module's
   // header.
-  return consumerClients?.(role)?.client ?? verdaClientFor(role) ?? CLIENT_BY_ROLE[role]
+  //
+  // THE PER-RUN SLOT COMES FIRST, exactly as in `clientOverrideFor` (#418 T3
+  // review, finding 1). This function used to skip it, so the two disagreed
+  // whenever a host put a per-run `inference.clientOverride` in the run frame:
+  // the call went to the plugged client while the name reported — and every
+  // budget and, for `decide`, the TRANSPORT choice derived from it — still named
+  // the tier's. Two resolvers for one question is the defect; this one now
+  // answers it the same way the router of the actual call does.
+  const perRun = currentRunFrame()?.inference?.clientOverride?.(role) as
+    BamlClientOverride | undefined
+  const bag = perRun ?? consumerClients?.(role)
+  if (bag) {
+    assertThinkingOverride(role, bag)
+    return bag.client
+  }
+  return verdaClientFor(role) ?? CLIENT_BY_ROLE[role]
 }
 
 /**

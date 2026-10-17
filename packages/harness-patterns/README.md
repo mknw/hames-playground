@@ -1,10 +1,9 @@
-<div align="center">
-
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/hames_light-text-on-transparent-bg.png">
-  <source media="(prefers-color-scheme: light)" srcset="assets/hames_dark-text-on-transparent-bg.png">
-  <img src="assets/hames_dark-text-on-transparent-bg.png" alt="hames" width="340">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mknw/hames-playground/main/docs/images/hames-banner-wide-dark.png">
+  <img src="https://raw.githubusercontent.com/mknw/hames-playground/main/docs/images/hames-banner-wide-light.png" alt="hames: supports of a harness to which its traces are fastened. The @hames-ai packages on npm: harness-patterns, harness-baml, agents, connectors, sandbox. hames app: where harness primitives become your integrated workspace." width="880">
 </picture>
+
+<div align="center">
 
 ### Build AI agents from small, composable TypeScript pieces.
 

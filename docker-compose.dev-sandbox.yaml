@@ -1,0 +1,10 @@
+# OWNER OPT-IN ONLY, after docker-compose.clones.yaml in COMPOSE_FILE.
+# Enables dev sandbox agents by granting root-equivalent access to the host;
+# dev code can then read sibling secrets/data regardless of DB/key separation.
+x-clone-dev-docker-socket: true
+
+services:
+  app-dev:
+    volumes: !override
+      - ${DEV_CLONE_PATH:?}/configs:/configs:ro
+      - /var/run/docker.sock:/var/run/docker.sock

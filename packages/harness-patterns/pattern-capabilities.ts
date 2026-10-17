@@ -6,7 +6,8 @@
  * running it. Wrapping combinators (`chain`, `routes`, `parallel`,
  * `withReferences`) expose their sub-patterns via
  * `ConfiguredPattern.children`; leaves omit it. Execution never reads `children`
- * — it's introspection-only.
+ * — it describes the graph, never a dispatch mechanism. decisionLoop also
+ * probes declarations before supplying roster-only child data (#507 G14).
  *
  * What a pattern declares, it declares in `ConfiguredPattern.capabilities`
  * ({@link PatternCapabilities}) — a field core owns and other packages fill in.
@@ -70,4 +71,48 @@ export function declaresWorkspaceSync<T>(pattern: ConfiguredPattern<T>): boolean
 export function harnessUsesSyncWorkspace<T>(patterns: ConfiguredPattern<T>[] | undefined): boolean {
   if (!patterns || patterns.length === 0) return false
   return patterns.some((p) => declaresWorkspaceSync(p) || harnessUsesSyncWorkspace(p.children))
+}
+
+/** Decision keys declared anywhere in the nested pattern graph. */
+export function harnessDecisionKeys<T>(patterns: ConfiguredPattern<T>[] | undefined): string[] {
+  if (!patterns || patterns.length === 0) return []
+  const keys: string[] = []
+  const seen = new Set<string>()
+  for (const pattern of patterns) {
+    for (const key of pattern.capabilities?.decisionKeys ?? []) {
+      if (seen.has(key)) continue
+      seen.add(key)
+      keys.push(key)
+    }
+    for (const key of harnessDecisionKeys(pattern.children)) {
+      if (seen.has(key)) continue
+      seen.add(key)
+      keys.push(key)
+    }
+  }
+  return keys
+}
+
+/**
+ * True when any pattern in the (nested) graph declared the memory capability
+ * (#419) — the ONE opt-in probe. A host gates two things on it: starting the
+ * joint memory wake before the chain's first pattern (an agent that never opted
+ * in must not spend GPU seconds waking the memory boxes) and the post-reply
+ * store. `memoryRecall` declares it; `withMemory` prepends `memoryRecall`, so
+ * wrapping an agent in memory is what opts it in.
+ */
+export function harnessUsesMemory<T>(patterns: ConfiguredPattern<T>[] | undefined): boolean {
+  if (!patterns || patterns.length === 0) return false
+  return patterns.some((p) => p.capabilities?.memory === true || harnessUsesMemory(p.children))
+}
+
+/** Whether a route consumes the roster-only input before its inner pattern. */
+export function harnessPseudonymisesInputs<T>(
+  patterns: ConfiguredPattern<T>[] | undefined,
+): boolean {
+  return (
+    patterns?.some(
+      (p) => p.capabilities?.pseudonymisedInputs === true || harnessPseudonymisesInputs(p.children),
+    ) ?? false
+  )
 }

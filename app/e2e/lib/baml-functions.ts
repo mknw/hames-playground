@@ -3,7 +3,7 @@
  *
  * The fake endpoint (`fake-llm.ts`) is an OpenAI-compatible server, and an
  * OpenAI-compatible request says nothing about which BAML function produced it:
- * there is no function name, no tag, no header. All thirteen functions arrive
+ * there is no function name, no tag, no header. All recognised functions arrive
  * at the same `POST /v1/chat/completions` looking alike apart from their text.
  * So the text is what identifies them, and this module owns that reading.
  *
@@ -14,7 +14,7 @@
  *
  * A prompt edit that moves one of these lines makes the fake stop recognising
  * that function. That failure is caught, loudly, by `00-fake-fidelity.e2e.ts`,
- * which renders all thirteen functions offline through `b.request.*` and
+ * which renders all recognised functions offline through `b.request.*` and
  * asserts each one classifies as itself — rather than by a scenario mysteriously
  * going red three files later. Fixing a red fidelity test means updating the
  * marker here, never loosening the classifier.
@@ -37,6 +37,8 @@
  *    result" rather than "wrong function".
  */
 const MARKERS = [
+  ['ExtractMemory', 'You write down what a USER has told an assistant about themselves'],
+  ['CompactMemories', 'You merge several stored memories about one USER into a single memory.'],
   ['Router', 'Analyze the user message and determine routing.'],
   ['ActorController', 'A critic evaluates your output. Learn from previous feedback.'],
   ['LoopController', 'Select one tool per turn. Use "Return" when you have enough information.'],
@@ -45,6 +47,7 @@ const MARKERS = [
   ['ResultDescribeBatch', 'You will receive several INDEPENDENT tool'],
   ['ResultDescribe', 'Summarize what the following tool call'],
   ['CompactIntent', "You rewrite a user's latest message into a single self-contained instruction"],
+  ['PlannerThinking', 'You are a strategic planner for a tool-using agent.'],
   ['Planner', 'You are a strategic planner for a tool-using agent.'],
   ['ScreenUntrustedContent', 'You are a prompt-injection detector.'],
   ['RetrieveQuery', "You turn a user's latest message into a concise SEARCH QUERY"],
@@ -98,7 +101,14 @@ export function promptText(messages: readonly ChatMessage[]): string {
  */
 export function classifyPrompt(text: string): BamlFunctionName | null {
   for (const [name, marker] of MARKERS) {
-    if (text.includes(marker)) return name
+    if (!text.includes(marker)) continue
+    // The planner pair shares its body. Only its final output schema differs;
+    // ignore user/context mentions of reasoning before that schema.
+    if (name === 'PlannerThinking') {
+      const schema = text.slice(text.lastIndexOf('Answer in JSON using this schema:'))
+      if (schema.includes('reasoning: string')) continue
+    }
+    return name
   }
   return null
 }

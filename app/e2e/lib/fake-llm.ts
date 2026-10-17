@@ -91,7 +91,7 @@
  * That asymmetry is not a curiosity, it is the shape of #263: `ActorController`
  * carried two late system blocks, its first attempt passed and every RETRY
  * 400'd, and actorCritic was dead on the self-hosted route with nothing red.
- * `prompt-role-order.test.ts` pins the thirteen TEMPLATES; this pins what a
+ * `prompt-role-order.test.ts` pins the declared TEMPLATES; this pins what a
  * running turn actually put on the wire, which is the half a template audit
  * cannot see.
  */
@@ -104,6 +104,7 @@ import {
   type BamlFunctionName,
   type ChatMessage,
 } from './baml-functions'
+import { MEMORY_WAKE_PROMPT } from '../../src/lib/inference/memory-wake.server'
 import { VERDA_MODEL } from './mode'
 // The wake ping's message text, imported rather than copied: this fake
 // hard-fails on a prompt it cannot classify, so a drift between the constant and
@@ -114,6 +115,10 @@ import { VERDA_WAKE_PROMPT } from '../../src/lib/inference/wake.server'
 // ============================================================================
 // Recorded traffic
 // ============================================================================
+
+/** Path of the public (Anthropic-tier) decision endpoint; the private one is
+ *  `/v1/systemone`, which `SMALL_LLM_DECISIONS_URL` is required to end in. */
+export const JEV_DECISIONS_PATH = '/v1/jev/systemone'
 
 /** One request the fake served, as scenarios read it back. */
 export interface FakeCall {
@@ -133,7 +138,14 @@ export interface FakeCall {
   outcome: 'ok' | 'wake' | 'unrecognised' | 'status' | 'mid-stream' | 'bad-role-order'
   /** Milliseconds the fake deliberately withheld the response. */
   delayedMs: number
+  /** Which decision endpoint served a systemone call (`jev` is the public
+   *  Anthropic-tier one, `private` is `SMALL_LLM_DECISIONS_URL`). The request's
+   *  `model` field cannot say: both clients send the same compatibility id. */
+  endpoint?: DecisionEndpoint
 }
+
+/** The two systemone targets the fake serves, told apart by PATH. */
+export type DecisionEndpoint = 'jev' | 'private'
 
 // ============================================================================
 // Faults
@@ -156,6 +168,8 @@ export interface FakeCall {
  *   - `true`    → the ping only, i.e. "the box will not come up"
  */
 interface FaultFilters {
+  /** Limit a fault to one BAML function, including detached memory extraction. */
+  fn?: BamlFunctionName
   /** Only requests naming this model. */
   model?: string
   /** How many matching requests the fault applies to. Unbounded when absent. */
@@ -232,6 +246,9 @@ export interface FakeLlm {
   /** Let parked requests answer, oldest first. `count` omitted releases all.
    *  Returns how many were actually released. */
   release(count?: number): number
+  /** What the memory store's confirmation question is answered with: `skip`
+   *  (default) or `ask`. Restored by `reset()`. */
+  memoryConfirm(answer: 'ask' | 'skip'): void
   /** Disarm faults, release everything parked, and clear recorded calls. Called
    *  between scenarios. */
   reset(): void
@@ -258,6 +275,11 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
   const startedAt = Date.now()
 
   const handler: http.RequestListener = (req, res) => {
+    // The small box has a truthful, generation-free readiness endpoint.
+    if (req.method === 'GET' && req.url === '/health') {
+      json(res, 200, { status: 'ok' })
+      return
+    }
     if (req.method === 'GET' && req.url?.startsWith('/v1/models')) {
       // The Verda smoke script re-reads the served model id from here rather
       // than trusting the client declaration; the preflight does the same, so
@@ -287,6 +309,59 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       json(res, 200, { list: [] })
       return
     }
+    // Both decision tiers use the systemone request and response format.
+    const decisionEndpoint =
+      req.url === '/v1/systemone' ? 'private' : req.url === JEV_DECISIONS_PATH ? 'jev' : null
+    if (req.method === 'POST' && decisionEndpoint) {
+      let rawJev = ''
+      req.on('data', (chunk) => (rawJev += chunk))
+      req.on('end', () => serveJev(rawJev, res, decisionEndpoint))
+      return
+    }
+    if (req.method === 'POST' && req.url === '/v1/embeddings') {
+      let raw = ''
+      req.on('data', (chunk) => (raw += chunk))
+      req.on('end', () => {
+        let body: { model: string; input: string | string[] }
+        try {
+          body = JSON.parse(raw)
+        } catch {
+          json(res, 400, { error: { message: 'fake-llm: request body was not JSON' } })
+          return
+        }
+        const inputs = typeof body.input === 'string' ? [body.input] : body.input
+        if (
+          !Array.isArray(inputs) ||
+          inputs.length === 0 ||
+          !inputs.every((input) => typeof input === 'string')
+        ) {
+          json(res, 400, {
+            error: { message: 'fake-llm: embeddings require nonempty string input' },
+          })
+          return
+        }
+        calls.push({
+          at: Date.now() - startedAt,
+          model: body.model,
+          fn: null,
+          prompt: JSON.stringify(inputs),
+          outcome: inputs.length === 1 && inputs[0] === MEMORY_WAKE_PROMPT ? 'wake' : 'ok',
+          delayedMs: 0,
+        })
+        json(res, 200, {
+          object: 'list',
+          model: body.model,
+          data: inputs.map((_, index) => ({
+            object: 'embedding',
+            index,
+            // A unit vector keeps cosine search deterministic; lexical ranking still uses real text.
+            embedding: Array.from({ length: 1024 }, (_, i) => (i === 0 ? 1 : 0)),
+          })),
+          usage: { prompt_tokens: inputs.length, total_tokens: inputs.length },
+        })
+      })
+      return
+    }
     if (req.method !== 'POST' || !req.url?.startsWith('/v1/chat/completions')) {
       json(res, 404, { error: { message: `no fake route for ${req.method} ${req.url}` } })
       return
@@ -296,6 +371,101 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
     req.on('data', (chunk) => (raw += chunk))
     req.on('end', () => {
       void serve(raw, res)
+    })
+  }
+
+  /** `POST /v1/systemone`: deterministic typed answers — every question
+   *  answered with its FIRST option at 0.9 (memory confirmation selects `skip`)
+   *  and the rest sharing 0.1, and a
+   *  `usage.cost` — so a scenario asserts routing and accounting, never model
+   *  quality. Honours an armed `status` fault, so a Jev 5xx is reachable. */
+  function serveJev(raw: string, res: http.ServerResponse, endpoint: DecisionEndpoint): void {
+    let body: {
+      model?: string
+      state?: unknown
+      questions?: Record<string, { type?: string; criteria?: unknown; instructions?: string }>
+    }
+    try {
+      body = JSON.parse(raw || '{}')
+    } catch {
+      json(res, 400, { error: { code: 400, message: 'fake-llm: request body was not JSON' } })
+      return
+    }
+    const model = body.model ?? '(no model)'
+    const prompt = JSON.stringify(body)
+    const fault = takeFault(model, false)
+    if (fault?.kind === 'status') {
+      calls.push({
+        at: Date.now() - startedAt,
+        model,
+        fn: null,
+        prompt,
+        outcome: 'status',
+        delayedMs: 0,
+        endpoint,
+      })
+      json(res, fault.status, {
+        error: {
+          code: fault.status,
+          message: fault.message ?? `fake-llm: injected HTTP ${fault.status}`,
+        },
+      })
+      return
+    }
+    const answers: Record<string, unknown> = {}
+    for (const [name, q] of Object.entries(body.questions ?? {})) {
+      if (q.type === 'noul') {
+        answers[name] = { type: 'noul', noul: 0.9 }
+        continue
+      }
+      if (q.type === 'score') {
+        const levels = q.criteria as string[]
+        const probabilities = Object.fromEntries(
+          levels.map((_, i) => [String(i), i === 0 ? 0.9 : 0.1 / (levels.length - 1)]),
+        )
+        answers[name] = {
+          type: 'score',
+          score: levels.reduce((s, _, i) => s + i * probabilities[String(i)], 0),
+          legend: Object.fromEntries(levels.map((l, i) => [String(i), l])),
+          probabilities,
+          confidence: 0.9,
+        }
+        continue
+      }
+      const options = Object.keys((q.criteria ?? {}) as Record<string, unknown>)
+      // S3's graph-count conversation: choose the knowledge route once, then
+      // answer from its record. Other decision scenarios retain their policy.
+      const chosen =
+        name === 'next_step' && options.includes('info-retrieval')
+          ? options.indexOf(
+              String(body.state).includes('1. info-retrieval —') ? 'answer' : 'info-retrieval',
+            )
+          : q.instructions?.includes('Should a person confirm')
+            ? confirmIndex
+            : 0
+      const rest = options.length > 1 ? 0.1 / (options.length - 1) : 0
+      answers[name] = {
+        type: 'choice',
+        choice: options[chosen],
+        confidence: 0.9,
+        probabilities: Object.fromEntries(options.map((o, i) => [o, i === chosen ? 0.9 : rest])),
+      }
+    }
+    calls.push({
+      at: Date.now() - startedAt,
+      model,
+      fn: null,
+      prompt,
+      outcome: 'ok',
+      delayedMs: 0,
+      endpoint,
+    })
+    json(res, 200, {
+      id: 'gen-dec-e2e-fake',
+      model,
+      provider: 'e2e-fake',
+      answers,
+      usage: { input_tokens: 1, output_tokens: 0, cost: 0.00001 },
     })
   }
 
@@ -364,7 +534,7 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       return
     }
 
-    const fault = takeFault(model, wake)
+    const fault = takeFault(model, wake, fn)
 
     if (fault?.kind === 'status') {
       record('status', 0)
@@ -393,7 +563,13 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
 
     // `fn` is non-null for everything but the wake ping, which the `!wake` guard
     // above let through — it wants a token, not a parseable envelope.
-    const payload = JSON.stringify(completion(model, wake ? 'ok' : replyFor(fn!, prompt)))
+    const payload = JSON.stringify(
+      completion(
+        model,
+        wake ? 'ok' : replyFor(fn!, prompt),
+        fn === 'PlannerThinking' ? 'One synthetic lookup is enough.' : undefined,
+      ),
+    )
 
     if (fault?.kind === 'mid-stream') {
       record('mid-stream', delayedMs)
@@ -441,8 +617,13 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
     })
   }
 
-  function takeFault(model: string, wake: boolean): Fault | null {
+  function takeFault(
+    model: string,
+    wake: boolean,
+    fn: BamlFunctionName | null = null,
+  ): Fault | null {
     if (!armed) return null
+    if (armed.fault.fn && armed.fault.fn !== fn) return null
     if (armed.fault.model && armed.fault.model !== model) return null
     // Not spent, either: a fault that skips this request must still be there for
     // the next one, which is the whole point of being able to aim past the ping.
@@ -488,8 +669,12 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       for (const entry of freeing) entry.free()
       return freeing.length
     },
+    memoryConfirm(answer: 'ask' | 'skip') {
+      confirmIndex = answer === 'ask' ? 0 : 1
+    },
     reset() {
       armed = null
+      confirmIndex = 1
       // Release BEFORE clearing the log, and always: a parked request left
       // behind by a failed scenario holds a socket the dev server is waiting on,
       // and the next scenario's first turn would inherit that wait.
@@ -537,6 +722,20 @@ export const FAKE_TOOL_ARGS = '{"query":"MATCH (n) RETURN count(n) AS n"}'
  */
 function replyFor(fn: BamlFunctionName, prompt: string): string {
   switch (fn) {
+    case 'ExtractMemory': {
+      const evidence =
+        prompt
+          .split('LATEST USER MESSAGE (the only source for `evidence`):')[1]
+          ?.split('---BEGIN DATA---')[1]
+          ?.split('---END DATA---')[0]
+          ?.trim() ?? ''
+      return JSON.stringify([{ kind: 'episodic', content: evidence, evidence }])
+    }
+    case 'CompactMemories': {
+      const members = [...prompt.matchAll(/content: ([^\n]+)\n\s*evidence: ([^\n]+)/g)]
+      const latest = members.at(-1)
+      return JSON.stringify({ content: latest?.[1] ?? '', evidence: latest?.[2] ?? '' })
+    }
     case 'Router':
       return JSON.stringify({
         intent: 'e2e intent: count the nodes',
@@ -557,7 +756,9 @@ function replyFor(fn: BamlFunctionName, prompt: string): string {
       }
       return JSON.stringify({
         reasoning: 'Query the graph for a node count.',
-        tool_name: pickTool(prompt),
+        tool_name: prompt.includes('How many Project nodes are in the knowledge graph?')
+          ? 'read_neo4j_cypher'
+          : pickTool(prompt),
         tool_args: FAKE_TOOL_ARGS,
         status: 'Querying the graph',
         is_final: false,
@@ -577,6 +778,12 @@ function replyFor(fn: BamlFunctionName, prompt: string): string {
       return JSON.stringify({
         is_sufficient: true,
         explanation: 'The attempt answers the intent.',
+      })
+
+    case 'PlannerThinking':
+      return JSON.stringify({
+        plan: '1. Query the graph for a node count.',
+        n_steps: 1,
       })
 
     case 'Planner':
@@ -651,13 +858,25 @@ function readBatchIds(prompt: string): string[] {
 // Wire helpers
 // ============================================================================
 
-function completion(model: string, content: string): unknown {
+/** Which answer the fake gives the memory store's "Should a person confirm"
+ *  question: 1 = `skip` (the default — a routine memory is written straight
+ *  through), 0 = `ask` (it is proposed to the person, #419 M6). Set per
+ *  scenario by `memoryConfirm()`, restored by `reset()`. */
+let confirmIndex = 1
+
+function completion(model: string, content: string, reasoning?: string): unknown {
   return {
     id: 'e2e-fake-completion',
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
     model,
-    choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
+    choices: [
+      {
+        index: 0,
+        message: { role: 'assistant', content, ...(reasoning ? { reasoning } : {}) },
+        finish_reason: 'stop',
+      },
+    ],
     usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
   }
 }
@@ -669,8 +888,8 @@ function json(res: http.ServerResponse, status: number, body: unknown): void {
 }
 
 /**
- * True for the wake ping: one user message carrying the fixed literal, asking
- * for a single token.
+ * True for a wake ping: one user message carrying the fixed literal. The 27B
+ * asks for one token, the memory summarizer asks for two (#497).
  *
  * Matched on THREE fields rather than on the content alone. A scenario's own
  * prompt could contain the word by accident, and the ping's whole identity is
@@ -682,7 +901,7 @@ function isWakePing(
   body: { max_tokens?: number; messages?: ChatMessage[] },
 ): boolean {
   return (
-    body.max_tokens === 1 &&
+    (body.max_tokens === 1 || body.max_tokens === 2) &&
     (body.messages ?? []).length === 1 &&
     prompt.trim() === VERDA_WAKE_PROMPT
   )

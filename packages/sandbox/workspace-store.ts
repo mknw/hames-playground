@@ -66,6 +66,8 @@ export interface WorkspaceDocumentInput {
   mimeType: string
   content: string
   encoding?: 'base64'
+  /** Fixed non-content provenance; every sandbox promotion carries this. */
+  provenance?: 'sandbox-output'
 }
 
 /**

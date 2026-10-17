@@ -50,7 +50,7 @@ import { synthesizerGroundedScenario } from './scenarios/synthesizer'
 import { describeBatchScenario } from './scenarios/describe'
 import { referenceSelectorScenario } from './scenarios/reference-selector'
 import { screenScenario } from './scenarios/screen'
-import { plannerScenario } from './scenarios/planner'
+import { isThinkingPlannerRun, plannerScenario } from './scenarios/planner'
 import { reliabilityScenario } from './scenarios/reliability'
 
 /** Declaration order is report order. Cheap structural checks first so a
@@ -125,6 +125,7 @@ async function preflight(client: string | undefined): Promise<void> {
 async function main(): Promise<void> {
   const routing = resolveEvalRouting()
   const scenarios = selected()
+  const thinkingPlanner = isThinkingPlannerRun(routing, scenarios)
   const startedAt = new Date().toISOString()
 
   console.log('🧪 harness/client compatibility eval')
@@ -136,7 +137,9 @@ async function main(): Promise<void> {
   }
   console.log('')
 
-  await preflight(routing.client)
+  // Decide-only runs must not wake a different model or call another provider.
+  if (!thinkingPlanner && scenarios.some((s) => s.role !== 'decide'))
+    await preflight(routing.client)
 
   const t0 = Date.now()
   const results: ScenarioResult[] = []

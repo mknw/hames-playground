@@ -10,6 +10,7 @@
  * or any other composition without special-casing.
  */
 
+import type { RouterMemory } from './withMemory.server'
 import { assertServerOnImport } from '../assert.server'
 import { LLMCallError } from '../types'
 import type {
@@ -52,6 +53,11 @@ export interface RouterData {
   intent?: string
   routerResponse?: string
   response?: string
+  /** Written by `memoryRecall` (#419), cleared by it every turn. The router
+   *  hands it to its `route` function when non-empty. */
+  memoryContext?: string
+  /** The developer choice written each turn by withMemory. */
+  routerMemory?: RouterMemory
 }
 
 /**
@@ -154,7 +160,24 @@ export function router<T extends RouterData>(
 
       // Route the message (Lane A3: no collector is passed — the
       // implementation owns it and returns the call record on the result).
-      const result = await routeFn(userContent, history, routeArray)
+      //
+      // `memoryContext` is `memoryRecall`'s block for THIS turn (it clears it on
+      // every exit, so a stale one cannot be here). The router is one of the two
+      // patterns that author a user-visible answer (the conversational route
+      // below). withMemory's replies-only choice withholds it from every router
+      // (#535); compactExecution still receives it. It is passed
+      // only when non-empty: no recalled memory means no fourth argument, so a
+      // `route` override that predates `RouteExtra` sees the call it always saw.
+      const memoryContext =
+        scope.data.routerMemory !== 'replies-only' && typeof scope.data.memoryContext === 'string'
+          ? scope.data.memoryContext.trim()
+          : ''
+      const result = await routeFn(
+        userContent,
+        history,
+        routeArray,
+        ...(memoryContext ? [{ memoryContext }] : []),
+      )
 
       // No tool needed - return conversational response directly
       if (!result.tool_call_needed) {

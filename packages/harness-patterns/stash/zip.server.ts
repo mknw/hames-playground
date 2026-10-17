@@ -761,6 +761,12 @@ function walkXml(
       refuse('xml-encoding', 'the part is not valid UTF-8')
     }
   }
+  // XML 1.0 §2.2 applies everywhere, including markup skipped below.
+  // Unicode mode matches lone surrogates without rejecting astral pairs.
+  // eslint-disable-next-line no-control-regex -- XML Char explicitly forbids these controls.
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ud800-\udfff\ufffe\uffff]/u.test(text)) {
+    refuse('xml-malformed', 'an illegal XML character')
+  }
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1)
 
   const n = text.length

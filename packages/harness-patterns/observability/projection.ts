@@ -17,6 +17,7 @@ import type {
   IntentCompactedEventData,
   PlanCreatedEventData,
   ContentSanitizedEventData,
+  DecisionMadeEventData,
   WarningEventData,
   LoopRecoveryEventData,
   HitlRequestEventData,
@@ -101,6 +102,19 @@ export function getEventPreview(type: EventType, data: unknown): string {
       // detail view.
       const d = data as LoopRecoveryEventData
       const head = `${d.failure}${d.tool ? ` ${d.tool}` : ''} · ${d.turn + 1}/${d.maxTurns}`
+      return head.length > 50 ? head.slice(0, 50) + '...' : head
+    }
+    case 'decision_made': {
+      // `key: label`, or the abstain reason — the same fields `formatEventData`
+      // renders, and never the question or the state (#418).
+      const d = data as DecisionMadeEventData
+      const head = d.abstained
+        ? `${d.key}: abstained${d.reason ? ` (${d.reason})` : ''} → ${d.label}`
+        : d.type === 'score'
+          ? `${d.key}: ${d.label} (E=${d.expected?.toFixed(2) ?? 'unknown'})`
+          : d.type === 'noul'
+            ? `${d.key}: ${d.label} (p=${d.pTrue?.toFixed(2) ?? 'unknown'})`
+            : `${d.key}: ${d.label}`
       return head.length > 50 ? head.slice(0, 50) + '...' : head
     }
     case 'pattern_enter':

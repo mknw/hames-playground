@@ -8,6 +8,9 @@
  * without parsing, sorting, flattening content parts or normalising whitespace:
  * roles, cache breakpoints, JSON escaping and output schemas are all bytes here.
  * The fixtures are historical evidence; do not regenerate them from a refactor.
+ * The one deliberate edit since: #615 changed the `summary`-style Return wording
+ * and catalog line, so the eight LoopController `first`/`sequential` bodies
+ * (the `parallel` ones render `answer`) carry exactly that text and nothing else.
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'

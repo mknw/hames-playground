@@ -170,6 +170,12 @@ template_string LoopMultiCalls(multi_call_mode: string?) #"
 // precisely because the compactExecution renders the links), across patterns,
 // with `view.hasErrors()` for honest error reporting.
 //
+// A Return-only turn (no tool called) is the exception, #615: nothing is left
+// for the compactExecution to compose from, and simpleLoop hands the Return text
+// to it as the answer (`data.returnText`, #612). The summary branch therefore
+// asks for the complete answer when no tool ran, so that path does not depend on
+// the model volunteering it against "NOT the user-facing answer".
+//
 // "answer" restores the pre-#149 wording verbatim, for a loop whose Return
 // prose IS the deliverable. It is prompt-only: the loop still writes no
 // `data.response`, so a downstream compactExecution remains the author — the
@@ -190,8 +196,10 @@ template_string LoopReturnStyle(return_style: string?) #"
   BRIEF completion summary in tool_args as plain prose (not JSON) — one or two
   sentences on what you found or did, NOT the user-facing answer: a later step
   composes that from the full tool results, so re-stating them here is wasted
-  work. That turn makes no tool call, so there is no progress to report and
-  `status` may be omitted.
+  work. EXCEPTION: if you have called no tool in this task, no tool result
+  exists for that later step to compose from, so put the COMPLETE answer in
+  tool_args instead. That turn makes no tool call, so there is no progress to
+  report and `status` may be omitted.
   {% endif %}
 "#
 

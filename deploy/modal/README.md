@@ -136,15 +136,17 @@ Then, from `app/`, the app's own checks against it: `smoke-verda.ts` and `smoke-
 
 **Switching the app to it is env-only, and these move together:**
 
-| App setting                | Value                                                                              |
-| -------------------------- | ---------------------------------------------------------------------------------- |
-| `VERDA_INFERENCE_ENDPOINT` | `<27B URL>/v1`                                                                     |
-| `VERDA_INFERENCE_API_KEY`  | the Proxy Token, `wk-….ws-…`                                                       |
-| `VERDA_EUR_PER_HOUR`       | this box's rate, not Verda's (an H100 below is ≈ 7.00)                             |
-| `VERDA_SCALEDOWN_SECONDS`  | `HAMES_MODAL_27B_SCALEDOWN_S`, 300 by default                                      |
-| `VERDA_WAKE_TIMEOUT_MS`    | `1200000`: a full boot (next paragraph) takes 8–15 minutes, past the 600 s default |
+| App setting                | Value                                                                                                                                                    |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `VERDA_INFERENCE_ENDPOINT` | `<27B URL>/v1`                                                                                                                                           |
+| `VERDA_INFERENCE_API_KEY`  | the Proxy Token, `wk-….ws-…`                                                                                                                             |
+| `VERDA_EUR_PER_HOUR`       | this box's rate, not Verda's (an H100 below is ≈ 7.00)                                                                                                   |
+| `VERDA_SCALEDOWN_SECONDS`  | `HAMES_MODAL_27B_SCALEDOWN_S`, 300 by default                                                                                                            |
+| `VERDA_WAKE_TIMEOUT_MS`    | `1200000` for as long as the endpoint points here: a full boot (next paragraph) takes 8–15 minutes, past the 600 s default, and one can come unannounced |
 
-**When a cold start is a full boot.** Most cold starts restore the snapshot. Three things make one a full boot instead, which is why the wake budget above is longer than any restore: the first few cold starts after a deploy (Modal takes 2–3 snapshots per GPU type, one per worker type it lands on; in both measured runs the SECOND cold start after a deploy was one), Modal re-taking snapshots for its own runtime updates, and any change to `hames_private_27b.py` or `vllm_box.py`. After a deploy, run `measure.py --box 27b --stop` until a sample reports `restored` from a snapshot that is not the one being created, so no turn meets those boots.
+**Env-only is the mechanism, not the permission.** Modal is approved as a processor for the owner's own and demo traffic only; company data waits on a DPA (G15, #567 comment 6194622280). Every signed-in user defaults to the private tier once the endpoint is set, so pointing a deployment with real users here IS that gate, and on this host the transfer picture changes too (`docs/data-privacy/plan.md`, finding 1, update of 2026-10-17).
+
+**When a cold start is a full boot.** Most cold starts restore the snapshot. Three things make one a full boot instead, which is why the wake budget above is longer than any restore: the first few cold starts after a deploy (Modal takes 2–3 snapshots per GPU type, one per worker type it lands on; in both measured runs the SECOND cold start after a deploy was one), Modal re-taking snapshots for its own runtime updates, and any change to what is baked into its image: `hames_private_27b.py`, `vllm_box.py`, `log_filter.py` or `Caddyfile.27b`. After a deploy, run `measure.py --box 27b --stop` until a sample reports `restored` from a snapshot that is not the one being created, so no turn meets those boots.
 
 **What differs from the small box:**
 

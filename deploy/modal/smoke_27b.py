@@ -45,6 +45,9 @@ THINKING_BODY = {
     "max_tokens": 2048,
 }
 
+# vllm/multimodal/processing/context.py (v0.30.0): `--language-model-only` sets every modality limit to 0.
+IMAGE_REFUSAL = "At most 0 image(s) may be provided in one prompt"
+
 results: list[bool] = []
 
 
@@ -136,8 +139,16 @@ def main() -> int:
             {"type": "image_url", "image_url": {"url": "https://example.invalid/x.png"}},
         ]}],
     }
-    status, _, seconds = call(base, token, "POST", "/v1/chat/completions", image, timeout=60)
-    check("an image part is refused", status == 400, f"status {status}, {seconds:.2f}s")
+    status, body, seconds = call(base, token, "POST", "/v1/chat/completions", image, timeout=60)
+    message = str((body.get("error") or {}).get("message", ""))
+    # vLLM's modality-limit refusal, raised before any media is fetched. A bare
+    # 400 is not enough: an unresolvable URL is a 400 too, after a fetch was tried.
+    check(
+        "an image part is refused before any fetch",
+        status == 400 and IMAGE_REFUSAL in message
+        and not any(word in message.lower() for word in ("fetch", "resolve", "connect", "dns", "timeout")),
+        f"status {status}, {seconds:.2f}s, {message[:80]!r}",
+    )
 
     passed = sum(results)
     print(f"\n{passed}/{len(results)} passed", flush=True)

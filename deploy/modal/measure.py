@@ -185,7 +185,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--samples", type=int, default=3)
     parser.add_argument("--out", default="measurements.local.jsonl")
-    parser.add_argument("--cold-budget-s", type=int, default=900)
+    # Default: 900 s for the small box, 1800 s for the 27B, whose full boot was measured at up to 938 s.
+    parser.add_argument("--cold-budget-s", type=int, default=None)
     parser.add_argument("--box", choices=("small", "27b"), default="small")
     parser.add_argument("--stop", action="store_true", help="stop the container after each sample (ops.py stop)")
     args = parser.parse_args()
@@ -201,16 +202,26 @@ def main() -> int:
     scaledown_s = int(os.environ.get("HAMES_MODAL_27B_SCALEDOWN_S" if big else "HAMES_MODAL_SCALEDOWN_S",
                                      "300" if big else "120"))
 
+    cold_budget_s = args.cold_budget_s or (1800 if big else 900)
+
     for n in range(1, args.samples + 1):
         wait_scaled_to_zero(scaledown_s)
         sample = {"sample": n, "target": args.box, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-        sample.update(cold_start(base, token, args.cold_budget_s))
-        sample["warm"] = warm_calls_27b(base, token) if big else warm_calls(base, token)
-        if args.stop and ops("stop").returncode != 0:
-            raise SystemExit("ops.py stop failed; the container is still billed until its scaledown")
+        stop_failed = False
+        try:
+            sample.update(cold_start(base, token, cold_budget_s))
+            sample["warm"] = warm_calls_27b(base, token) if big else warm_calls(base, token)
+        finally:
+            # Also on a failed sample, whose error still propagates: a box that is
+            # still booting is billed until its scaledown.
+            if args.stop and ops("stop").returncode != 0:
+                stop_failed = True
+                print("ops.py stop failed; the container is still billed until its scaledown", file=sys.stderr)
         with open(args.out, "a", encoding="utf-8") as out:
             out.write(json.dumps(sample) + "\n")
         print(json.dumps(sample), flush=True)
+        if stop_failed:
+            raise SystemExit("ops.py stop failed; the container is still billed until its scaledown")
     return 0
 
 

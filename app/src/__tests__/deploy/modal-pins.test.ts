@@ -54,6 +54,8 @@ const caddyfile = read('../../../../deploy/modal/Caddyfile')
 const caddyfile27b = read('../../../../deploy/modal/Caddyfile.27b')
 const verdaClient = read('../../../../packages/harness-baml/baml_src/verda-client.baml')
 const settings = read('../../lib/settings.ts')
+const verdaActivity = read('../../lib/inference/verda-activity.server.ts')
+const smoke27b = read('../../../../deploy/modal/smoke_27b.py')
 const app = read('../../../../deploy/modal/hames_small_models.py')
 const shared = read('../../../../deploy/modal/vllm_box.py')
 const bigApp = read('../../../../deploy/modal/hames_private_27b.py')
@@ -307,6 +309,21 @@ describe('deploy/modal: the 27B box (Qwen27B)', () => {
     expect(bigBoot).toMatch(/served != \{QWEN27B_MODEL\}/)
   })
 
+  it("idles as long as the app assumes, and the smoke sends the client's own body", () => {
+    // The app's cold-start countdown reads VERDA_SCALEDOWN_SECONDS; its default
+    // and this box's must agree, or the countdown is wrong on a default deploy.
+    const appDefault = verdaActivity.match(/DEFAULT_VERDA_SCALEDOWN_SECONDS = (\d+)/)?.[1]
+    expect(appDefault).toBeTruthy()
+    expect(bigApp).toContain(`_env("HAMES_MODAL_27B_SCALEDOWN_S", "${appDefault}")`)
+    const clientMax = verdaClient.match(/^\s*max_tokens (\d+)$/m)?.[1]
+    const clientTemperature = verdaClient.match(/^\s*temperature ([\d.]+)$/m)?.[1]
+    expect(clientMax && clientTemperature).toBeTruthy()
+    const body = smoke27b.match(/^VERDA_BODY = \{([\s\S]*?)\n\}/m)?.[1] ?? ''
+    expect(body).toContain(`"max_tokens": ${clientMax},`)
+    expect(body).toContain(`"temperature": ${clientTemperature},`)
+    expect(body).toContain('"chat_template_kwargs": {"enable_thinking": False}')
+  })
+
   it('forwards exactly three public paths to the one loopback upstream, the rest is a 404', () => {
     expect(caddyCode27b).not.toMatch(/^\s*@\w+\s+path\s/m)
     expect(caddyPaths(caddyCode27b).sort()).toEqual(
@@ -401,6 +418,7 @@ describe('deploy/modal: the 27B box (Qwen27B)', () => {
     ])
       expect(names).toContain(name)
     expect(bigDownload).toContain('allow_patterns=list(QWEN27B_FILES_SHA256)')
+    expect(bigDownload).toContain('revision=QWEN27B_REVISION')
     expect(bigDownload).toMatch(
       /digest = _sha256_file\(QWEN27B_DIR \/ relative\)\s*if digest != expected:\s*raise SystemExit/,
     )

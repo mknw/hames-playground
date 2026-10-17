@@ -234,7 +234,13 @@ def _qwen27b_argv(mtp_tokens: int) -> list[str]:
 
 
 def _qwen27b_answer() -> dict:
-    """The literal question, thinking off, temperature 0: the parsed JSON answer."""
+    """The literal question, thinking off, temperature 0: the parsed JSON answer.
+
+    The #625 contract for a thinking-off call on a box with a reasoning parser,
+    per call: `content` is non-empty and IS the JSON (parsed whole, no prose
+    around it), and neither reasoning field carries anything. A parser that
+    filed the answer under the reasoning field would leave `content` empty,
+    which the app reads as an empty completion on every call of every role."""
     status, body = _http(
         "POST",
         f"http://127.0.0.1:{VLLM_PORT}/v1/chat/completions",
@@ -248,13 +254,16 @@ def _qwen27b_answer() -> dict:
     )
     if status != 200:
         raise RuntimeError(f"answer check failed: {status}")
-    content = (body["choices"][0]["message"].get("content") or "").strip()
+    message = body["choices"][0]["message"]
+    if message.get("reasoning") or message.get("reasoning_content"):
+        raise RuntimeError("answer check: a reasoning field is filled with thinking off")
+    content = (message.get("content") or "").strip()
     if "<think" in content or "</think>" in content:
         raise RuntimeError("answer check: thinking leaked into content with thinking off")
     try:
-        return json.loads(content[content.index("{") : content.rindex("}") + 1])
+        return json.loads(content)
     except ValueError:
-        raise RuntimeError("answer check: the content is not one JSON object") from None
+        raise RuntimeError("answer check: the content is not exactly one JSON value") from None
 
 
 def _draft_counters() -> tuple[float, float]:

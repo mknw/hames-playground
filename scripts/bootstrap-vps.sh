@@ -403,6 +403,16 @@ env_problems() {
 # -----------------------------------------------------------------------------
 dc() { (cd "$APP_DIR" && sudo env COMPOSE_FILE="$COMPOSE_FILES" COMPOSE_PROFILES="$COMPOSE_PROFILE" docker compose "$@"); }
 
+# Python's standard library only; uses the existing stack, no fixture or start.
+vps_check() { (cd "$APP_DIR" && sudo env COMPOSE_FILE="$COMPOSE_FILES" COMPOSE_PROFILES="$COMPOSE_PROFILE" python3 scripts/check-vps.py "$@"); }
+
+assert_daemon_isolation() {
+  if ! vps_check --daemon; then
+    refuse "Docker daemon.json isolation settings are unsafe or unreadable; see docs/deployment/docker-engine-upgrade.md"
+    return 0
+  fi
+}
+
 have_compose() { command -v docker >/dev/null 2>&1 && sudo docker compose version >/dev/null 2>&1; }
 
 # gateway_image — the mcp-gateway image the stack would run. The rendered
@@ -1091,6 +1101,7 @@ EOF
 
   # Unrotated json-file logs grow until the disk is full; the gateway runs
   # --verbose. Written only when absent, so a hand-tuned daemon.json survives.
+  # The images/boot gates validate its isolation options before deployment.
   if sudo test -f /etc/docker/daemon.json; then
     ok "/etc/docker/daemon.json exists; left as is"
   elif put_file /etc/docker/daemon.json 0644 root:root <<'EOF'; then
@@ -1424,6 +1435,8 @@ catalog_image() {
 # shape (docs/PREVIEW.md §13); a single box needs no registry credential.
 stage_images() {
   banner "10/13 images — build on the box, pull the rest"
+  assert_engine_supported
+  assert_daemon_isolation
   if ((!DRY_RUN)) && ! sudo docker info >/dev/null 2>&1; then
     refuse "the Docker daemon is not reachable (sudo systemctl status docker)"
     return 0
@@ -1467,7 +1480,7 @@ assert_engine_supported() {
   local v
   v=$(sudo docker version --format '{{.Server.Version}}' 2>/dev/null) || v=""
   if [[ ! $v =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+].*)?$ ]] || ! version_ge "$v" "$MIN_ENGINE"; then
-    refuse "Docker Engine ${v:-unavailable} is unsupported; need >= $MIN_ENGINE for Neo4j's isolated gateway mode. Upgrade the Engine before deploying; no compose services were started"
+    refuse "Docker Engine ${v:-unavailable} is unsupported; need >= $MIN_ENGINE for Neo4j's isolated gateway mode. Upgrade the Engine before deploying (docs/deployment/docker-engine-upgrade.md); no compose services were started"
     return 0
   fi
   ok "Docker Engine $v (>= $MIN_ENGINE for isolated gateway mode)"
@@ -1478,6 +1491,7 @@ stage_boot() {
   # Every gate below runs before anything starts. A real run stops at the
   # first one that fails; a dry run reports all of them.
   assert_engine_supported
+  assert_daemon_isolation
   assert_gateway_pinned
   local problems missing
   if [[ -f $ENV_FILE ]]; then
@@ -1520,6 +1534,10 @@ stage_boot() {
 
   run dc up -d --remove-orphans
   ((DRY_RUN)) && return 0
+  if ! vps_check --network; then
+    refuse "Neo4j's running network is not internal and isolated; stop deployment and follow docs/deployment/docker-engine-upgrade.md"
+    return 0
+  fi
   local svc
   for svc in postgres neo4j redis app; do
     if wait_state "$svc" healthy 600; then ok "$svc healthy"; else
@@ -1618,6 +1636,13 @@ stage_smoke() {
     note "3  dev bypass off: printenv=false, no [dev-bypass] warning, unauthenticated POST /api/events -> 401"
     note "4  no github block / GitHub token on the box; dynamic-tools disabled; no configs/action-tokens.yaml"
     note "5  the graph is not empty (seed imported)"
+    note "6  Engine >= $MIN_ENGINE, daemon.json safe, deployed Neo4j bridge internal/isolated; bounded egress negatives with positive controls"
+    note "7  Cypher RETURN through neo4j-relay:7687 (also with --no-seed)"
+    if ((PROBE_PRIVATE_HEALTH)); then
+      note "8  OPT-IN: one authenticated GET small-model /health; may wake a box; no completion or retry"
+    else
+      note "8  SKIPPED private /health (default: no provider request; --probe-private-health may wake a box)"
+    fi
     return 0
   fi
   local fails=0 h=$HOSTNAME_ARG out
@@ -1710,6 +1735,25 @@ stage_smoke() {
     fi
   fi
 
+  # Keep these checks independent of seeding: --no-seed must not hide a dead
+  # relay or an open network. Inconclusive is a failure, never containment.
+  assert_engine_supported
+  for out in daemon egress relay; do
+    if vps_check "--$out" --ssh-port "$SSH_PORT"; then ok "6/7 $out"; else
+      fail "6/7 $out check failed or inconclusive"
+      fails=$((fails + 1))
+    fi
+  done
+  if ((PROBE_PRIVATE_HEALTH)); then
+    if SMALL_LLM_BASE_URL="$(env_get SMALL_LLM_BASE_URL)" SMALL_LLM_API_KEY="$(env_get SMALL_LLM_API_KEY)" \
+      python3 "$APP_DIR/scripts/check-vps.py" --private-health; then ok "8  private /health returned 200"; else
+      fail "8  private /health failed (no retry or provider fallback)"
+      fails=$((fails + 1))
+    fi
+  else
+    note "8  SKIPPED private /health: no provider request (--probe-private-health may wake a box)"
+  fi
+
   say ""
   if ((fails)); then
     fail "$fails smoke check(s) failed. Do not invite anyone."
@@ -1739,6 +1783,9 @@ Usage: bootstrap-vps.sh --hostname FQDN --acme-email ADDRESS [options]
                       (ignored on the run that generates them)
   --seed-file PATH    Cypher file for an EMPTY graph (default: neo4j_dumps/seed-data.cypher)
   --no-seed           leave the graph alone
+  --probe-private-health
+                      OPT-IN: one GET small-model /health; may wake a box.
+                      Off by default, even with private endpoints configured
   --sandbox-flavours  also build the three sandbox flavour images
   --no-prompt         never prompt, even with a terminal
   --ssh-port PORT     move SSH to PORT (49152-65535, the dynamic range). Two
@@ -1759,6 +1806,7 @@ main() {
   HOSTNAME_ARG="" ACME_EMAIL_ARG="" REF="" ONLY="" KEYS_ESCROWED=0 F2B_IGNORE=""
   SEED_FILE="neo4j_dumps/seed-data.cypher" NO_SEED=0 SANDBOX_FLAVOURS=0 NO_PROMPT=0
   LOCKOUT_CHANGED=0 SSH_PORT=22 SSH_PORT_VERIFIED=0
+  PROBE_PRIVATE_HEALTH=0
   while (($#)); do
     case $1 in
       --hostname) HOSTNAME_ARG=${2:-} && shift ;;
@@ -1769,6 +1817,7 @@ main() {
       --dry-run) DRY_RUN=1 ;;
       --keys-escrowed) KEYS_ESCROWED=1 ;;
       --no-seed) NO_SEED=1 ;;
+      --probe-private-health) PROBE_PRIVATE_HEALTH=1 ;;
       --sandbox-flavours) SANDBOX_FLAVOURS=1 ;;
       --no-prompt) NO_PROMPT=1 ;;
       --ssh-port) SSH_PORT=${2:-} && shift ;;

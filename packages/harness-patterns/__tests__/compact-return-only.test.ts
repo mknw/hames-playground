@@ -240,3 +240,100 @@ describe('compactExecution — a Return-only turn', () => {
     expect(seen[0].response).toBeUndefined()
   })
 })
+
+/**
+ * A failed tool call then a `Return` keeps the answer (#614). The failed call is
+ * a real iteration, so `loopHistory` stays (the error is the synthesizer's only
+ * record of it) and the text rides beside it as `returnText` — never as
+ * `response`, which a history-reading synthesizer ignores.
+ */
+describe('compactExecution — failed tool calls then a Return', () => {
+  /** A pattern committing one action's events, as simpleLoop records them. */
+  const turnOf = (calls: Array<{ success: boolean }>, ret: string | undefined, extra = {}) =>
+    configurePattern<Data>(
+      'tool-turn',
+      async (scope) => {
+        for (const c of calls) {
+          scope.events.push(
+            createEvent('controller_action', scope.id, { action: act('lookup', '{}') }),
+            createEvent('tool_result', scope.id, {
+              tool: 'lookup',
+              result: c.success ? { n: 1 } : null,
+              success: c.success,
+              ...(c.success ? {} : { error: 'boom' }),
+            }),
+          )
+        }
+        if (ret !== undefined) {
+          scope.events.push(
+            createEvent('controller_action', scope.id, { action: act('Return', ret) }),
+          )
+        }
+        scope.data = { ...scope.data, ...(ret !== undefined ? { returnText: ret } : {}), ...extra }
+        return scope
+      },
+      { patternId: 'execute' },
+    )
+
+  // Mutations: (a) never set `input.returnText` → undefined; (b) drop the
+  // `!real.some(...)` guard → the next test goes red.
+  it('every call failed: the Return text rides beside the error history', async () => {
+    const seen: CompactExecutionInput[] = []
+    await withRunFrame({}, () =>
+      runChain(ctxOf('q'), [turnOf([{ success: false }], 'From context: 84.'), synth(seen)]),
+    )
+    expect(seen[0].loopHistory?.iterations).toHaveLength(1)
+    expect(seen[0].returnText).toBe('From context: 84.')
+    expect(seen[0].response).toBeUndefined()
+  })
+
+  it('a success among the calls keeps the Return a dropped summary', async () => {
+    const seen: CompactExecutionInput[] = []
+    await withRunFrame({}, () =>
+      runChain(ctxOf('q'), [
+        turnOf([{ success: false }, { success: true }], 'Found it.'),
+        synth(seen),
+      ]),
+    )
+    expect(seen[0].loopHistory?.iterations).toHaveLength(2)
+    expect(seen[0].returnText).toBeUndefined()
+  })
+
+  // Mutation: drop the `data.response === undefined` guard → set.
+  it('an explicit data.response still wins', async () => {
+    const seen: CompactExecutionInput[] = []
+    await withRunFrame({}, () =>
+      runChain(ctxOf('q'), [
+        turnOf([{ success: false }], 'controller text', { response: 'from upstream' }),
+        synth(seen),
+      ]),
+    )
+    expect(seen[0].returnText).toBeUndefined()
+    expect(seen[0].response).toBe('from upstream')
+  })
+
+  // Mutation: drop the `.trim()` check → whitespace is carried.
+  it('a blank Return is not carried', async () => {
+    const seen: CompactExecutionInput[] = []
+    await withRunFrame({}, () =>
+      runChain(ctxOf('q'), [turnOf([{ success: false }], '  '), synth(seen)]),
+    )
+    expect(seen[0].returnText).toBeUndefined()
+  })
+
+  // A failed call whose loop never Returned: a previous loop's text (cleared by
+  // the second loop's start) must not answer. Mutation: stop clearing
+  // `returnText` at loop start in simpleLoop → 'EARLIER LOOP' is carried.
+  it('an earlier loop’s Return text does not answer a later failed-call loop', async () => {
+    const seen: CompactExecutionInput[] = []
+    const failingLoop = simpleLoop<Data>(
+      async (_c) => ({ action: act('lookup', '{}'), llmCall: undefined }),
+      ['lookup'],
+      { patternId: 'execute', maxTurns: 1 },
+    )
+    await withRunFrame({}, () =>
+      runChain(ctxOf('q'), [scripted([act('Return', 'EARLIER LOOP')]), failingLoop, synth(seen)]),
+    )
+    expect(seen[0].returnText).toBeUndefined()
+  })
+})

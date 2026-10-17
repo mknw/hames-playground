@@ -1066,6 +1066,12 @@ export interface CompactExecutionInput {
   response?: string
   data?: unknown
   loopHistory?: LoopHistory
+  /** The controller's own `Return` text, set ONLY alongside a `loopHistory`
+   *  whose every tool call failed (#614) — the one case where the `Return` is
+   *  the turn's answer and `response` (which a history-reading synthesizer
+   *  ignores) would cost it the failure. A synthesizer appends it as a final
+   *  turn after the history. */
+  returnText?: string
   /** Whether an error occurred in upstream patterns */
   hasError?: boolean
   /** Error message from upstream patterns */

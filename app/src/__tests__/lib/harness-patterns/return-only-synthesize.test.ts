@@ -17,6 +17,11 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 }))
 
 const synthesize = vi.fn()
+const callTool = vi.fn()
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', async (orig) => ({
+  ...(await orig<object>()),
+  callTool,
+}))
 vi.mock('@hames-ai/harness-baml/baml_client', () => ({ b: { Synthesize: synthesize } }))
 vi.mock('@boundaryml/baml', () => {
   class MockCollector {
@@ -95,5 +100,55 @@ describe('Return-only turn reaches Synthesize', () => {
     expect(synthesize).toHaveBeenCalledTimes(1)
     expect(synthesize.mock.calls[0][2]).toMatchObject(ONLY_THE_RETURN_TEXT)
     expect(synthesize.mock.calls[0][2]).toHaveLength(1)
+  })
+
+  // #614. The real chain, the real tool-call path: the controller's one call
+  // fails, then it Returns an answer from context. Mutations (each run): drop the
+  // `returnText` field set in compactExecution's all-failed branch → only the
+  // error turn is sent; drop the `input.returnText` append in defaultSynthesize
+  // → same; make `succeeded` count a failed result → the field is never set.
+  it('a failed tool call then a Return keeps the answer beside the error', async () => {
+    callTool.mockResolvedValue({ success: false, error: 'lookup exploded', data: null })
+    const { defaultSynthesize } = await import('@hames-ai/harness-baml/defaults.server')
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
+    const { compactExecution } =
+      await import('@hames-ai/harness-patterns/patterns/compactExecution.server')
+    const { runChain } = await import('@hames-ai/harness-patterns/patterns/chain.server')
+    const { createEvent } = await import('@hames-ai/harness-patterns/context.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+
+    const script = [
+      { tool_name: 'lookup', tool_args: '{}', is_final: false },
+      { tool_name: 'Return', tool_args: 'Twice 42 is 84.', is_final: true },
+    ]
+    let i = 0
+    const loop = simpleLoop(
+      async () => ({
+        action: { reasoning: '', status: 'ok', ...script[Math.min(i++, 1)] },
+        llmCall: undefined,
+      }),
+      ['lookup'],
+      { patternId: 'execute' },
+    )
+    const synth = compactExecution<Record<string, unknown>>({
+      mode: 'thread',
+      patternId: 'response-synth',
+      viewConfig: { fromPatterns: ['harness', 'execute'], fromLastNTurns: 1 },
+      synthesize: defaultSynthesize,
+    })
+    const ctx = {
+      sessionId: 's',
+      createdAt: Date.now(),
+      events: [createEvent('user_message', 'harness', { content: 'double that' })],
+      status: 'running' as const,
+      data: {},
+      input: 'double that',
+    }
+    await withRunFrame({}, () => runChain(ctx, [loop, synth]))
+
+    const turns = synthesize.mock.calls[0][2]
+    expect(turns).toHaveLength(2)
+    expect(turns[0].tool_result.result).toContain('lookup exploded')
+    expect(turns[1].tool_result).toMatchObject({ tool: 'response', result: 'Twice 42 is 84.' })
   })
 })

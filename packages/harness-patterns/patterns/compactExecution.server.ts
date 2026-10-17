@@ -129,6 +129,8 @@ function buildSynthesisInputFromView(
       // The text of a Return-only turn — set below, only when nothing else in
       // the thread reaches the synthesizer.
       let returnOnlyText: string | undefined
+      // True when a loop history was built from failed calls alone.
+      let failedOnlyHistory = false
 
       // Build loop history from events if available
       if (toolEvents.length > 0 || actionEvents.length > 0) {
@@ -146,6 +148,10 @@ function buildSynthesisInputFromView(
         // overwrite it.
         let openExpected = 0
         let openReceived = 0
+        // Iterations with at least one successful result. A failed call is a
+        // real iteration (the synthesizer's only record of the failure), but it
+        // gives the turn nothing to author from (#614).
+        const succeeded = new Set<LoopHistory['iterations'][number]>()
 
         for (const event of threadView.get()) {
           if (event.type === 'controller_action') {
@@ -169,6 +175,7 @@ function buildSynthesisInputFromView(
               // Pair with the controller_action that owns this result.
               unpaired.delete(iterations.length - 1)
               openReceived++
+              if (resultData.success !== false) succeeded.add(open)
               if (openExpected === 1) {
                 // A failed call carries its error in the batch's `__error`
                 // shape. Its `result` is null, and the synthesize step reports
@@ -206,6 +213,7 @@ function buildSynthesisInputFromView(
                 result: resultData.result,
                 timestamp: event.ts,
               })
+              if (resultData.success !== false) succeeded.add(iterations[iterations.length - 1])
             }
           }
         }
@@ -231,6 +239,11 @@ function buildSynthesisInputFromView(
         // Nothing left to reconstruct: fall through to the existing
         // no-loopHistory path below, which downgrades thread → response mode.
         if (real.length > 0) {
+          // Every call failed: the loop's `Return` is the only content the turn
+          // authored, and `loopHistory` alone would render just the error(s)
+          // (#614). Carried beside it, never in `response`: a synthesizer that
+          // takes `response` over the history would lose the failure instead.
+          if (!real.some((it) => succeeded.has(it))) failedOnlyHistory = true
           input.loopHistory = {
             iterations: real,
             startTime: toolEvents[0]?.ts ?? Date.now(),
@@ -254,6 +267,12 @@ function buildSynthesisInputFromView(
       if (!input.loopHistory) {
         const text = typeof data.returnText === 'string' ? data.returnText.trim() : ''
         if (text) returnOnlyText = text
+      } else if (failedOnlyHistory && data.response === undefined) {
+        // #614: a turn whose every tool call failed, then a `Return` from
+        // context. Unlike a turn with a success, nothing here is a summary of
+        // results the synthesizer can read, so the text is the answer.
+        const text = typeof data.returnText === 'string' ? data.returnText.trim() : ''
+        if (text) input.returnText = text
       }
       input.response = data.response ?? returnOnlyText
       break

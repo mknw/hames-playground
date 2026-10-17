@@ -553,6 +553,25 @@ describe('runTurn — the cold-start notice', () => {
     expect(rec.warmings.at(-1)).toBeNull()
   })
 
+  // The notice and the failure are different things: the spinner comes down on
+  // the `error` frame, the bubble must NOT. "Cleared on the next frame of any
+  // kind" is a rule about the warming notice only.
+  // MUTATION: call `sink.appendMessage` nowhere in the catch (or clear the
+  // transcript with the notice) → no error bubble remains and this reddens.
+  it('leaves the wake failure standing as an error bubble after the notice comes down', async () => {
+    const rec = recorder()
+    const message = 'the private inference box did not wake: nothing was sent to any provider.'
+    fetchMock.mockResolvedValue(
+      sseResponse([warmingFrame(), { event: 'error', data: { error: message } }]),
+    )
+    const result = await runTurn(request(), rec.sink)
+
+    expect(rec.order.slice(0, 1)).toEqual(['warming:on'])
+    expect(rec.warmings.at(-1)).toBeNull()
+    expect(rec.messages).toEqual([expect.objectContaining({ role: 'error', content: message })])
+    expect(result.state).toEqual({ status: 'error', message })
+  })
+
   it('clears it when the stream just ends mid-wait, rather than leaving a spinner behind', async () => {
     // A stream that closes with no `done` (a teardown, a dropped connection)
     // still leaves the loop, and the notice has to come down with it — the

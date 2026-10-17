@@ -339,13 +339,14 @@ describe('general-next composition', () => {
   })
 
   it('W4: the office actor is GIVEN the Graph read tools by exact name, never ingest or a write', async () => {
-    await agent.createPatterns('synthetic-session', deps)
-    // The adapter builds the actor prompt's catalogue from its own `toolNames`
-    // option and ignores the pattern's allowlist, so the two must agree.
+    const patterns = await agent.createPatterns('synthetic-session', deps)
+    // The adapter renders the pattern's own allowlist (#613), so the names are
+    // declared once, on the pattern, and the factory carries none.
     expect(mocks.actorOptions).toHaveBeenCalledTimes(1)
-    const options = mocks.actorOptions.mock.calls[0][0] as { toolNames?: string[] }
+    expect(mocks.actorOptions.mock.calls[0][0]).not.toHaveProperty('toolNames')
     const expected = GRAPH.filter((n) => n !== 'graph_file_ingest').sort()
-    expect([...(options.toolNames ?? [])].sort()).toEqual(expected)
+    const actor = walk(patterns).find((p) => p.name === 'actorCritic')!
+    expect([...actor.capabilities!.tools!].sort()).toEqual(expected)
   })
 
   it('keeps a future graph tool outside the explicit office allowlist', async () => {

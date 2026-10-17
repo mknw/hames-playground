@@ -1214,10 +1214,9 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
  *  `maxAttempts` are passed by `actorCritic.server.ts` so the actor's prompt
  *  can show "Attempt N of M" and prefer Return as budget runs low.
  *
- *  Note `availableTools` is part of the seam shape (design note §3) but the
- *  implementation resolves its own allowlist from the factory options — it
- *  was accepted-and-ignored positionally before A4 and is accepted-and-ignored
- *  here; the allowlist the adapters and loop enforce is the factory's.
+ *  Note `availableTools` is rendered: the actor's catalogue is that list
+ *  UNIONED with the factory's own `toolNames` (#613), so the pattern's
+ *  allowlist need not be declared twice.
  *
  *  The legacy positional form — same acceptance-test constraint and same A6
  *  deletion as `LegacyControllerFn`'s — rides the factory return as
@@ -1239,7 +1238,9 @@ export type LegacyActorFn = (
  *  that should be visible to subsequent actor calls in the same session). */
 export interface ActorAdapterOptions {
   /** Static tool names always available to the actor. Mutually exclusive
-   *  with `toolNamesProvider`; if both are set, the provider wins. */
+   *  with `toolNamesProvider`; if both are set, the provider wins. Both are
+   *  unioned with the pattern's `input.availableTools`; neither can remove a
+   *  name the pattern allows. */
   toolNames?: string[]
   /** Async closure resolved per actor invocation. Use this when the
    *  allowlist is user-curated and may change between turns of the same
@@ -1301,9 +1302,15 @@ export function createActorControllerAdapter(
     // Resolve the actor's allowlist. `toolNamesProvider` (if set) is called
     // fresh per invocation so user-curated selections persisted to the
     // session context surface live; otherwise fall back to the static array.
-    const names = options.toolNamesProvider
-      ? await options.toolNamesProvider()
-      : (options.toolNames ?? [])
+    // The pattern's allowlist rides the call as `input.availableTools`; it is
+    // unioned in so an agent declares it once (#613). `filterToolDescriptions`
+    // dedupes by name.
+    const names = [
+      ...(options.toolNamesProvider
+        ? await options.toolNamesProvider()
+        : (options.toolNames ?? [])),
+      ...input.availableTools,
+    ]
 
     // Get tool descriptions — optionally refresh + include pattern matches.
     // When a transport is scoped to this run (`withTransport` — today the in-VM

@@ -23,6 +23,26 @@ scripts:
     [ -f "$ORCA_ROOT_PATH/docker-compose.override.yml" ] && \
       cp "$ORCA_ROOT_PATH/docker-compose.override.yml" "$ORCA_WORKTREE_PATH/" || true
 
+    # Deploy credentials (deploy/modal/*.local.*) are LINKED, never copied. They are
+    # gitignored, so a worktree copy is the only one a lane could ever have written to:
+    # an edit made in the lane writes through the link to the main checkout's file, and
+    # removing the worktree deletes only the link. (2026-10-15: a copy was the sole
+    # surviving one and went with its worktree.) Absent in the root -> skipped silently.
+    # app/.env and .env above stay copies on purpose: lanes may diverge from them.
+    for src in "$ORCA_ROOT_PATH"/deploy/modal/*.local.*; do
+      [ -e "$src" ] || continue
+      rel="${src#"$ORCA_ROOT_PATH"/}"
+      mkdir -p "$ORCA_WORKTREE_PATH/$(dirname "$rel")"
+      # Never replace what the lane already holds (a regular copy, or any link,
+      # dangling included): that file may be its only one. The archive hook reports
+      # a preserved copy that differs from main, for the operator to reconcile.
+      dest="$ORCA_WORKTREE_PATH/$rel"
+      if [ -e "$dest" ] || [ -L "$dest" ]; then
+        continue
+      fi
+      ln -s "$src" "$dest"
+    done
+
     # 2. Claude Code project settings: .mcp.json is tracked but the *enablement*
     #    (enabledMcpjsonServers) and the permission allow-list live in gitignored
     #    .claude/, so without this every lane re-prompts to approve the gateway.
@@ -53,6 +73,10 @@ scripts:
   # survives; uncommitted changes do not.
   archive: |
     set -uo pipefail
+    # Nothing to compare against (or nowhere to look) -> silent, and never a nounset abort.
+    if [ -z "${ORCA_ROOT_PATH:-}" ] || [ -z "${ORCA_WORKTREE_PATH:-}" ]; then
+      exit 0
+    fi
     cd "$ORCA_WORKTREE_PATH" 2>/dev/null || exit 0
 
     if [ -n "$(git status --porcelain)" ]; then
@@ -66,6 +90,26 @@ scripts:
       echo "NOTE: '$branch' has $ahead commit(s) not on main. The branch ref survives;"
       echo "      reattach later with: git worktree add <path> $branch"
     fi
+
+    # Gitignored env-like files that are REGULAR files here (a symlink resolves into
+    # the main checkout, so removal cannot lose it) and are missing from, or differ
+    # from, the main checkout's copy. Paths and a reason only — never contents or a diff.
+    lost=""
+    while IFS= read -r f; do
+      [ -f "$f" ] && [ ! -L "$f" ] || continue
+      git check-ignore -q -- "$f" 2>/dev/null || continue
+      if [ ! -e "$ORCA_ROOT_PATH/$f" ]; then
+        lost="$lost  $f — missing in main\n"
+      elif ! cmp -s "$f" "$ORCA_ROOT_PATH/$f"; then
+        lost="$lost  $f — differs from main\n"
+      fi
+    done < <({ ls .env app/.env 2>/dev/null; find deploy -type f -name '*.local.*' ! -name '*.example' 2>/dev/null; } | sort -u)
+    if [ -n "$lost" ]; then
+      echo "WARNING: gitignored env files exist only in this worktree and are lost on removal:"
+      printf '%b' "$lost"
+      echo "      Copy them to the main checkout before removing the worktree."
+    fi
+    exit 0
 
 # Prompt used when an agent is started from a linked issue or PR. Encodes the
 # house rules so each lane does not have to be told them by hand.

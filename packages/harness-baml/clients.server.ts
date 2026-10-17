@@ -547,14 +547,26 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   decide: 'PrivateSystemOne',
 }
 
+/** The only functions designated to consume each trace-exposing leaf (#637).
+ * Loop/actor counterparts still require G19 Q2's live measurement. */
+export const THINKING_FUNCTIONS_BY_CLIENT: Readonly<Record<string, readonly string[]>> = {
+  VerdaQwenThink: ['PlannerThinking'],
+}
+
 /** Trace-exposing leaves, never chains: mode is verified against the collector's
  * selected client, not inferred from the intended tier (#625 G19). */
-export const THINKING_CLIENTS: ReadonlySet<string> = new Set(['VerdaQwenThink'])
+export const THINKING_CLIENTS: ReadonlySet<string> = new Set(
+  Object.keys(THINKING_FUNCTIONS_BY_CLIENT),
+)
 
 /** Only the planner has a trace-aware counterpart in this slice (#625 G19 Q7). */
 export const THINKING_ROLES: ReadonlySet<BamlRole> = new Set(['planner'])
 
 function assertThinkingOverride(role: BamlRole, bag: BamlClientOverride): void {
+  // Routing overrides must never replace implementation-owned accounting.
+  if ('collector' in bag) {
+    throw new Error('Client override must not carry a collector; the adapter owns accounting')
+  }
   if (
     THINKING_CLIENTS.has(bag.client) &&
     (!THINKING_ROLES.has(role) || activeInferenceTier() !== 'verda')
@@ -740,7 +752,7 @@ export function activeInferenceTier(): InferenceTier {
  * Spread the result into the BAML call's options bag, and branch on whether
  * the bag ended up empty rather than on `collector`:
  *
- *   const opts = { ...(collector ? { collector } : {}), ...clientOverrideFor('controller') }
+ *   const opts = { ...clientOverrideFor('controller'), ...(collector ? { collector } : {}) }
  *   const hasOpts = Object.keys(opts).length > 0
  *
  * The generated BAML functions take their arguments POSITIONALLY, so passing

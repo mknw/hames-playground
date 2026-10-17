@@ -124,7 +124,7 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
   // is gone. `Synthesize` declares `SynthesizerAnthropic` (Sonnet 5 → Haiku
   // 4.5), overridden onto the self-hosted deployment when
   // `USE_VERDA_INFERENCE=1` re-points the `compactExecution` role.
-  const synthOpts = { collector, ...clientOverrideFor('compactExecution') }
+  const synthOpts = { ...clientOverrideFor('compactExecution'), collector }
   let content: string
   try {
     content = await b.Synthesize(
@@ -185,7 +185,7 @@ export const defaultSelector: SelectorFn = async (input) => {
       candidates,
       // describe-tier, so a verda tier decision moves it: the candidates it
       // ranks are summaries of this conversation's own tool results.
-      { collector, ...clientOverrideFor('describe') },
+      { ...clientOverrideFor('describe'), collector },
     )
   } catch (e) {
     // Non-fatal upstream (the wrapper falls back to attaching nothing), but the

@@ -150,8 +150,8 @@ export function createTitleAgent(deps: AgentDeps) {
         // declares.
         const raw = await withUsageAccounting('GenerateConversationTitle', (opts) =>
           b.GenerateConversationTitle(userMessage, {
-            ...opts,
             ...(deps.clientOverride?.('describe') ?? {}),
+            ...opts,
           }),
         )
         // Lane A3: `SynthesisFn` returns the LLMResult envelope — the override

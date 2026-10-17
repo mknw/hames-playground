@@ -351,6 +351,7 @@ services:
       # suffix is required: `/embeddings` is appended verbatim by both the
       # Data Stash client and the memory wake's probe.
       - EMBEDDINGS_LOCAL_URL=http://embedder:8090/v1
+      - SANDBOX_ENVIRONMENT=local
     extra_hosts:
       # Linux hosts need this mapping spelled out; Docker Desktop/colima provide
       # host.docker.internal anyway and ignore it. Kept for the one thing that

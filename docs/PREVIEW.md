@@ -887,7 +887,7 @@ diagnosis, and nothing is reachable from outside.
 ## 12. Two branch clones, one infrastructure stack
 
 The [G20 row 8 ruling](https://github.com/mknw/hames-playground/pull/432#issuecomment-6238143691)
-is **one clone pinned to the release branch and another pinned to the dev
+supports **one clone pinned to the release branch and another pinned to the dev
 branch**. Each builds and runs its own app container. Both use the **same compose
 project**, Postgres server, Neo4j, Redis, gateway, embedder and document converter.
 Do not repeat §§3–7 in a second compose project. This remains provider-neutral
@@ -972,14 +972,15 @@ CREATE DATABASE app_release OWNER release_app;
 CREATE DATABASE app_dev OWNER dev_app;
 REVOKE CONNECT, TEMPORARY ON DATABASE app_release FROM PUBLIC;
 REVOKE CONNECT, TEMPORARY ON DATABASE app_dev FROM PUBLIC;
+REVOKE CONNECT, TEMPORARY ON DATABASE hames, postgres FROM PUBLIC;
 GRANT CONNECT, TEMPORARY ON DATABASE app_release TO release_app;
 GRANT CONNECT, TEMPORARY ON DATABASE app_dev TO dev_app;
 ```
 
 Do not grant either role membership in the other, server administration, or
-rights on the other database. Review other existing databases' `PUBLIC` connect
-grants as well. Install the `vector` extension as administrator **in each new
-database** before app startup. Set each URL to its own role/password and database
+rights on the other database. The explicit revocation above also closes the
+legacy `hames` and maintenance `postgres` databases to `PUBLIC`. Install the
+`vector` extension as administrator **in each new database** before app startup. Set each URL to its own role/password and database
 on `postgres:5432`. The apps must never receive the Postgres administrator
 credential. An existing release database needs an operator-reviewed ownership /
 grant migration and a dump first; the empty-database example is not an in-place
@@ -987,7 +988,13 @@ migration and must not be run over live data. No automated migration is shipped.
 
 Before either app starts, verify the role attributes and `has_database_privilege`
 for both cross-database directions as administrator, and attempt each cross-login:
-both must be denied. Then each app role must be able to bootstrap its own schema.
+both must be denied. Also check the legacy release database as administrator:
+
+```sql
+SELECT has_database_privilege('dev_app', 'hames', 'CONNECT'); -- must be false
+```
+
+Then each app role must be able to bootstrap its own schema.
 The offline config check validates distinct role/database names, not server ACLs;
 these live grant checks remain owed. `SCHEMA_SQL` stays additive/idempotent even
 with separate databases; its unit pin refuses destructive schema or data edits.
@@ -1008,7 +1015,8 @@ whole block. Stop on any failure; do not run startup separately after one. **Nev
 save or print the rendered config**: it contains secrets. The validator's CLI
 prints no input or secret-bearing parse error. It refuses shared encryption /
 signing keys, callbacks, sandbox caches/namespaces and database roles/databases,
-and refuses a dev command override, a shared build path or a published dev port.
+and refuses a dev command override, a shared canonical build path, shared configs,
+a dev socket without owner opt-in or a published dev port.
 Re-run it before every recreate. It is an explicit operator preflight, not a
 runtime Docker authorization boundary.
 
@@ -1026,12 +1034,21 @@ it **does not isolate all clone data**. Both clones can read/write the shared
 Neo4j graph; Redis stash keys and the gateway memory volume are also shared.
 Use synthetic/demo data only until that shared-data posture is acceptable to the
 operator (SD-10, SD-18). Do not describe dev as an untrusted staging boundary.
-The Docker socket in each app remains root-equivalent on the host (SD-19): code
-with that socket can bypass labels, access other containers and recover secrets.
-Namespace labels prevent accidental cleanup, not a malicious sibling container.
+The release app retains the root-equivalent Docker socket (SD-19). Dev has no
+socket by default and mounts only its own checkout's read-only `configs/`;
+sandbox agents on dev therefore remain unavailable. The single owner knob is
+adding `docker-compose.dev-sandbox.yaml` **after** the clones overlay in
+`COMPOSE_FILE`. That opt-in supplies both `x-clone-dev-docker-socket: true` and
+the socket mount; the validator refuses a dev socket without that policy.
+Enabling it lets dev code bypass labels, access sibling containers and recover
+their secrets, regardless of DB/key separation. Namespace labels prevent
+accidental cleanup only. Keep the opt-in out unless the owner accepts this
+exposure. This supported option follows ADR-0008; ADR-0007 is superseded and
+needs no additional note.
 
 Tests use the shared `resolveTestDatabase()` gate before connecting. Explicit
-URLs must name test databases and cannot point at the known live compose server;
+URLs must name test databases with explicit unencoded hosts; all port-5432
+targets (including an omitted port) are refused without owner opt-in;
 the existing checkout-bound **owner-only** local opt-in remains the documented
 exception, for test-named databases only. Agents must use a separate throwaway
 server or the exact dead-port no-DB sentinel; a copied opt-in cannot authorize a

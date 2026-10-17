@@ -1,8 +1,10 @@
 // @vitest-environment node
-import { readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import { parseDocument } from 'yaml'
 import { validateClones } from '../../../../../scripts/validate-clones.mjs'
 
@@ -10,9 +12,24 @@ const repoFile = (name: string) => fileURLToPath(new URL(`../../../../../${name}
 const overlayDoc = parseDocument(readFileSync(repoFile('docker-compose.clones.yaml'), 'utf8'))
 const overlay = overlayDoc.toJS()
 
+const checkouts = mkdtempSync(path.join(tmpdir(), 'clone-preflight-'))
+for (const clone of ['release', 'dev']) {
+  mkdirSync(path.join(checkouts, clone, 'app'), { recursive: true })
+  mkdirSync(path.join(checkouts, clone, 'configs'))
+}
+afterAll(() => rmSync(checkouts, { recursive: true, force: true }))
+
 function configuration() {
   const app = (clone: string) => ({
-    build: { context: `/synthetic/${clone}/app` },
+    build: { context: path.join(checkouts, clone, 'app') },
+    volumes: [
+      {
+        type: 'bind',
+        source: path.join(checkouts, clone, 'configs'),
+        target: '/configs',
+        read_only: true,
+      },
+    ],
     image: `app:${clone}`,
     networks: { 'app-network': null },
     ports: [],
@@ -28,7 +45,10 @@ function configuration() {
       DATABASE_URL: `postgresql://${clone}_app:synthetic@postgres:5432/app_${clone}`,
     },
   })
-  return { services: { app: app('release'), 'app-dev': app('dev') } }
+  return {
+    'x-clone-dev-docker-socket': false,
+    services: { app: app('release'), 'app-dev': app('dev') },
+  }
 }
 
 describe('two built clones, one shared infrastructure (#432 row 8)', () => {
@@ -43,7 +63,10 @@ describe('two built clones, one shared infrastructure (#432 row 8)', () => {
     expect(dev.ports).toEqual([])
     expect(dev.env_file[0].path).toContain('${DEV_RUNTIME_ENV_FILE:?')
     expect(overlay.services.app.env_file[0].path).toContain('${RELEASE_RUNTIME_ENV_FILE:?')
-    expect(overlay.services.app.image).not.toBe(dev.image)
+    expect(overlay.services.app.image).toBeUndefined()
+    const base = parseDocument(readFileSync(repoFile('docker-compose.yaml'), 'utf8')).toJS()
+    expect(base.services.app.image).toBe('hames-app:local')
+    expect(base.services.app.image).not.toBe(dev.image)
   })
 
   it('replaces inherited env files, dev build contexts and ports instead of merging them', () => {
@@ -52,6 +75,7 @@ describe('two built clones, one shared infrastructure (#432 row 8)', () => {
       ['app-dev', 'env_file'],
       ['app-dev', 'build'],
       ['app-dev', 'ports'],
+      ['app-dev', 'volumes'],
     ]) {
       const node = overlayDoc.getIn(['services', service, field], true) as { tag?: string }
       expect(node.tag).toBe('!override')
@@ -118,7 +142,6 @@ describe('two built clones, one shared infrastructure (#432 row 8)', () => {
     ['VITE_DEV_BYPASS_AUTH', 'true'],
     ['SANDBOX_ENVIRONMENT', 'release'],
     ['DATA_ENCRYPTION_KEY', ''],
-    ['AUTH_REDIRECT_URI', 'http://dev.example.com/api/auth/callback'],
     ['AUTH_POST_LOGOUT_REDIRECT_URI', 'https://release.example.com/auth/signin'],
     ['DATABASE_URL', 'postgresql://dev_app:synthetic@other:5432/app_dev'],
     ['DATABASE_URL', 'postgresql://postgres:synthetic@postgres:5432/app_dev'],
@@ -147,6 +170,119 @@ describe('two built clones, one shared infrastructure (#432 row 8)', () => {
       Object.assign(config.services['app-dev'], patch)
       expect(() => validateClones(config)).toThrow()
     }
+  })
+
+  it('refuses a symlink to the same checkout and unresolved build contexts', () => {
+    const config = configuration()
+    const link = path.join(checkouts, 'release-link')
+    symlinkSync(path.join(checkouts, 'release'), link, 'dir')
+    config.services['app-dev'].build.context = path.join(link, 'app')
+    expect(() => validateClones(config)).toThrow(/separate checkouts/)
+    config.services['app-dev'].build.context = path.join(checkouts, 'dev', 'absent-app')
+    expect(() => validateClones(config)).toThrow()
+  })
+
+  it('binds each config directory to its own checkout, refusing release config on dev', () => {
+    expect(overlay.services['app-dev'].volumes).toEqual(['${DEV_CLONE_PATH:?}/configs:/configs:ro'])
+    for (const service of ['app', 'app-dev'] as const) {
+      const config = configuration()
+      config.services[service].volumes[0].source = path.join(
+        checkouts,
+        service === 'app' ? 'dev' : 'release',
+        'configs',
+      )
+      expect(() => validateClones(config)).toThrow(/configs/)
+    }
+    const config = configuration()
+    config.services['app-dev'].volumes = config.services.app.volumes
+    expect(() => validateClones(config)).toThrow(/configs/)
+  })
+
+  it('refuses a third config directory even when the two sources are distinct', () => {
+    const config = configuration()
+    const third = path.join(checkouts, 'third-configs')
+    mkdirSync(third)
+    config.services['app-dev'].volumes[0].source = third
+    expect(() => validateClones(config)).toThrow(/own checkout/)
+  })
+
+  it('refuses shared canonical configs even when both checkout paths are correct', () => {
+    const config = configuration()
+    const devConfigs = config.services['app-dev'].volumes[0].source
+    renameSync(devConfigs, devConfigs + '-original')
+    try {
+      symlinkSync(config.services.app.volumes[0].source, devConfigs, 'dir')
+      expect(() => validateClones(config)).toThrow(/share configs/)
+    } finally {
+      rmSync(devConfigs)
+      renameSync(devConfigs + '-original', devConfigs)
+    }
+  })
+
+  it('requires HTTPS even when both callback and logout use matching HTTP origins', () => {
+    const config = configuration()
+    config.services['app-dev'].environment.AUTH_REDIRECT_URI =
+      'http://dev.example.com/api/auth/callback'
+    config.services['app-dev'].environment.AUTH_POST_LOGOUT_REDIRECT_URI =
+      'http://dev.example.com/auth/signin'
+    expect(() => validateClones(config)).toThrow(/HTTPS/)
+  })
+
+  it.each([
+    ['cache-release', 'cache-release-tenant'],
+    ['cache-dev-tenant', 'cache-dev'],
+  ])('refuses cache bases that overlap a tenant suffix (%s, %s)', (release, dev) => {
+    const config = configuration()
+    config.services.app.environment.SANDBOX_CACHE_VOLUME = release
+    config.services['app-dev'].environment.SANDBOX_CACHE_VOLUME = dev
+    expect(() => validateClones(config)).toThrow(/cache|CACHE/)
+  })
+
+  it('disables the dev Docker socket by default and requires the explicit owner opt-in', () => {
+    expect(overlay['x-clone-dev-docker-socket']).toBe(false)
+    const config = configuration()
+    config.services['app-dev'].volumes.push({
+      type: 'bind',
+      source: '/var/run/docker.sock',
+      target: '/var/run/docker.sock',
+      read_only: false,
+    })
+    expect(() => validateClones(config)).toThrow(/Docker socket/)
+    config['x-clone-dev-docker-socket'] = true
+    expect(() => validateClones(config)).not.toThrow()
+    const optInDoc = parseDocument(
+      readFileSync(repoFile('docker-compose.dev-sandbox.yaml'), 'utf8'),
+    )
+    const optIn = optInDoc.toJS()
+    expect(optIn['x-clone-dev-docker-socket']).toBe(true)
+    expect(optIn.services['app-dev'].volumes).toContain('/var/run/docker.sock:/var/run/docker.sock')
+    expect(optIn.services['app-dev'].volumes).toContain('${DEV_CLONE_PATH:?}/configs:/configs:ro')
+    expect((optInDoc.getIn(['services', 'app-dev', 'volumes'], true) as { tag?: string }).tag).toBe(
+      '!override',
+    )
+  })
+
+  it.each([undefined, 'true', 'false', 1])('refuses an untyped dev socket policy: %s', (policy) => {
+    const config = configuration()
+    Object.assign(config, { 'x-clone-dev-docker-socket': policy })
+    expect(() => validateClones(config)).toThrow(/policy/)
+  })
+
+  it('configures the base sandbox namespace and documents the production requirement', () => {
+    const base = parseDocument(readFileSync(repoFile('docker-compose.yaml'), 'utf8')).toJS()
+    expect(base.services.app.environment).toContain('SANDBOX_ENVIRONMENT=local')
+    expect(readFileSync(repoFile('app/.env.example'), 'utf8')).toContain(
+      "# SANDBOX_ENVIRONMENT='local'",
+    )
+    const changeset = readFileSync(repoFile('.changeset/clone-sandbox-namespace.md'), 'utf8')
+    expect(changeset).toContain('"@hames-ai/sandbox": minor')
+    expect(changeset).toContain('Production backends require an explicit environment namespace')
+  })
+
+  it('documents explicit legacy database grant revocation and the denied dev connection check', () => {
+    const preview = readFileSync(repoFile('docs/PREVIEW.md'), 'utf8')
+    expect(preview).toContain('REVOKE CONNECT, TEMPORARY ON DATABASE hames, postgres FROM PUBLIC;')
+    expect(preview).toContain("has_database_privilege('dev_app', 'hames', 'CONNECT')")
   })
 
   it.each([

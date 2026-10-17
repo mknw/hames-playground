@@ -321,6 +321,20 @@ describe('explicit targets cannot bypass the live-server/name guard (#432 row 8)
     'postgresql://x:x@localhost.:5432/hames_test',
     'postgresql://x:x@127.1:5432/hames_test',
     'postgresql://x:x@127.0.0.2:5432/hames_test',
+    'postgresql:///hames_test',
+    'postgresql://x:x@%6cocalhost:5432/hames_test',
+    'postgresql://x:x@%70ostgres:5432/hames_test',
+    'postgresql://x:x@%31%32%37.0.0.1:5432/hames_test',
+    'postgresql://x:x@2130706433:5432/hames_test',
+    'postgresql://x:x@0x7f000001:5432/hames_test',
+    'postgresql://x:x@0:5432/hames_test',
+    'postgresql://x:x@[::]:5432/hames_test',
+    'postgresql://x:x@hames-postgres:5432/hames_test',
+    'postgresql://x:x@host.docker.internal:5432/hames_test',
+    'postgresql://x:x@throwaway.example.com/hames_test',
+    'postgresql://x:x@throwaway.example.com:5432/hames_test',
+    'postgresql://x:x@%6Cocalhost:55439/hames_test',
+    'postgresql://x:x@%ZZ:55439/hames_test',
     'postgresql://x:x@127.0.0.1:55439/hames',
     'postgresql://x:x@127.0.0.1:55439/app_dev',
     'postgresql://x:x@127.0.0.1:55439/hames_test?host=postgres',
@@ -331,6 +345,75 @@ describe('explicit targets cannot bypass the live-server/name guard (#432 row 8)
     expect(() =>
       resolveTestDatabase('hames_test', { env: { TEST_DATABASE_URL: url }, checkout: checkout() }),
     ).toThrow(/Refusing/)
+  })
+
+  it.each([
+    'postgresql:///hames_test',
+    'postgresql://x:x@%6cocalhost:5432/hames_test',
+    'postgresql://x:x@%ZZ:55439/hames_test',
+  ])('refuses missing or encoded hosts even with the owner exception: %s', (url) => {
+    const root = checkout()
+    expect(() =>
+      resolveTestDatabase('hames_test', {
+        env: { TEST_DATABASE_URL: url, [ALLOW_LOCAL_DB]: root },
+        checkout: root,
+      }),
+    ).toThrow(/host/)
+  })
+
+  it.each([
+    'localhost',
+    'postgres',
+    '127.0.0.1',
+    '2130706433',
+    '0x7f000001',
+    '0',
+    '[::]',
+    'hames-postgres',
+    'host.docker.internal',
+  ])('keeps owner-opted-in test names and refuses non-test names on %s', (host) => {
+    const root = checkout()
+    for (const database of ['test', 'hames_test', 'hames_test_browser']) {
+      const url = `postgresql://x:x@${host}:5432/${database}`
+      expect(
+        resolveTestDatabase('hames_test', {
+          env: { TEST_DATABASE_URL: url, [ALLOW_LOCAL_DB]: root },
+          checkout: root,
+        }).url,
+      ).toBe(url)
+    }
+    for (const owner of [false, true]) {
+      for (const database of ['hames', 'app_dev', 'postgres']) {
+        expect(() =>
+          resolveTestDatabase('hames_test', {
+            env: {
+              TEST_DATABASE_URL: `postgresql://x:x@${host}:5432/${database}`,
+              ...(owner ? { [ALLOW_LOCAL_DB]: root } : {}),
+            },
+            checkout: root,
+          }),
+        ).toThrow(/non-test/)
+      }
+    }
+  })
+
+  it('keeps query overrides and near-sentinel non-test targets refused even for the owner', () => {
+    const root = checkout()
+    for (const owner of [false, true]) {
+      for (const url of [
+        'postgresql://x:x@localhost:55439/hames_test?host=postgres',
+        'postgresql://x:x@localhost:55439/hames_test?dbname=hames',
+        'postgresql://x:x@127.0.0.2:59999/x',
+        'postgresql://x:x@127.0.0.1:59998/x',
+      ]) {
+        expect(() =>
+          resolveTestDatabase('hames_test', {
+            env: { TEST_DATABASE_URL: url, ...(owner ? { [ALLOW_LOCAL_DB]: root } : {}) },
+            checkout: root,
+          }),
+        ).toThrow(/Refusing/)
+      }
+    }
   })
 
   it('keeps the explicit dead-port sentinel accepted', () => {

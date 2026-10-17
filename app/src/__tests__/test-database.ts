@@ -122,11 +122,14 @@ function assertTestDatabaseUrl(connectionString: string, ownerLocal = false): vo
   if (!['postgres:', 'postgresql:'].includes(url.protocol) || url.search || url.hash) {
     throw new Error('[test-db] Refusing URL overrides or a non-Postgres URL')
   }
-  const host = url.hostname.toLowerCase().replace(/\.$/, '')
-  const live =
-    (url.port || '5432') === '5432' &&
-    (['localhost', 'postgres', '[::1]', '[::ffff:7f00:1]', '0.0.0.0'].includes(host) ||
-      /^127\./.test(host))
+  // Empty hosts inherit pg's defaults; percent-encoded hosts are decoded by
+  // pg rather than URL. Require a plain explicit host even on the owner path.
+  if (!url.hostname || url.hostname.includes('%')) {
+    throw new Error('[test-db] Refusing a missing or encoded explicit host')
+  }
+  // A structural port barrier covers numeric IPv4, IPv6 and every DNS alias.
+  // An omitted port is pg's 5432 default. No host spelling can bypass this.
+  const live = (url.port || '5432') === '5432'
   if (live && !ownerLocal) {
     throw new Error(
       '[test-db] Refusing the live compose server without its checkout-bound owner opt-in',

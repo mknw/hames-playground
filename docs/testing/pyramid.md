@@ -165,13 +165,14 @@ layer. So in a checkout with neither of the first two rows, its unit layer skips
 the DB-backed tests and the two e2e layers refuse.
 
 Explicit URLs must use a test-named database (`test`, `hames_test`, or a
-`*_test_*` name) and cannot name the known compose server (`localhost`, loopback
-addresses or `postgres` on port 5432). Query parameters that could override the
-host/database are refused. The checkout-bound owner opt-in is the sole exception
-for that server, and still cannot select a non-test database; a copied opt-in
-never authorizes another checkout. This validates known endpoint names, not DNS
-aliases or arbitrary remote servers: an explicit remote URL must still belong
-to the operator's throwaway server. The exact
+`*_test_*` name), with a nonempty, unencoded explicit host. Without the
+checkout-bound owner opt-in, **all port-5432 URLs are refused**, regardless of
+host spelling; an omitted port counts as 5432. This structural barrier includes
+numeric IPv4, IPv6 and DNS aliases. The owner opt-in can authorize that port for
+test names only; it cannot authorize missing/encoded hosts, query overrides or
+non-test names, and a copied opt-in never authorizes another checkout. The guard
+cannot establish whether an arbitrary remote server on another port is
+production: the operator must still supply a throwaway server. The exact
 `postgresql://x:x@127.0.0.1:59999/x` URL is accepted only as a dead-port no-DB
 sentinel for dispatched runs; nothing may listen there.
 

@@ -10,9 +10,12 @@ x-clone-database-policy:
   release: &release-database ${RELEASE_DATABASE_URL:?set the release app role/database URL}
   dev: &dev-database ${DEV_DATABASE_URL:?set the dev app role/database URL}
 
+# Default: no root-equivalent Docker access on dev. The owner can opt in by
+# adding docker-compose.dev-sandbox.yaml to COMPOSE_FILE (see §12).
+x-clone-dev-docker-socket: false
+
 services:
   app:
-    image: hames-app:release
     env_file: !override
       - path: ${RELEASE_RUNTIME_ENV_FILE:?set the release app-only runtime env file}
         required: true
@@ -37,6 +40,8 @@ services:
       dockerfile: Dockerfile
       additional_contexts:
         root: ${DEV_CLONE_PATH:?}
+    volumes: !override
+      - ${DEV_CLONE_PATH:?}/configs:/configs:ro
     ports: !override []
     env_file: !override
       - path: ${DEV_RUNTIME_ENV_FILE:?set the dev app-only runtime env file}

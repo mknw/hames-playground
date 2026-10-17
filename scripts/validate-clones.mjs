@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /** Offline, secret-silent preflight. Feed `docker compose config --format json`
  * on stdin; never save or print that rendered config (it contains secrets).
- * PENDING_OWNER_DATABASE_POLICY is the only provisional policy below.
+ * PENDING_OWNER_DATABASE_POLICY is provisional; dev Docker access is opt-in.
  */
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export function validateClones(config) {
@@ -35,9 +35,38 @@ export function validateClones(config) {
       "No checkout or runtime env bind mounts",
     );
   }
+  // Lexical paths can hide the same checkout behind a symlink. Missing build
+  // contexts are refused by realpathSync rather than accepted speculatively.
+  const contexts = apps.map((app) => realpathSync(app.build.context));
+  check(contexts[0] !== contexts[1], "Build from separate checkouts");
+  const configs = apps.map((app, i) => {
+    const mounts = (app.volumes ?? []).filter((v) => v.target === "/configs");
+    check(
+      mounts.length === 1 && mounts[0].type === "bind" && mounts[0].read_only,
+      "Each app needs its own read-only configs bind",
+    );
+    const source = realpathSync(mounts[0].source);
+    check(
+      source === realpathSync(join(dirname(contexts[i]), "configs")),
+      "Each app must mount its own checkout's configs",
+    );
+    return source;
+  });
+  check(configs[0] !== configs[1], "Clones must not share configs");
+
+  // One owner opt-in: add docker-compose.dev-sandbox.yaml to COMPOSE_FILE.
+  // It supplies both this policy and the mount; default clones have neither.
+  const devDockerSocket = config["x-clone-dev-docker-socket"];
   check(
-    resolve(release.build.context) !== resolve(dev.build.context),
-    "Build from separate checkouts",
+    typeof devDockerSocket === "boolean",
+    "Declare the dev Docker socket policy",
+  );
+  const devSockets = (dev.volumes ?? []).filter(
+    (v) => v.target === "/var/run/docker.sock",
+  );
+  check(
+    devDockerSocket || devSockets.length === 0,
+    "Dev Docker socket requires the explicit owner opt-in",
   );
   check(release.image !== dev.image, "Built images need distinct names");
   check(
@@ -83,9 +112,12 @@ export function validateClones(config) {
       "App env files must not contain Postgres administrator credentials",
     );
   }
+  const cacheBases = envs.map((env) => env.SANDBOX_CACHE_VOLUME.trim());
   check(
-    envs[0].SANDBOX_CACHE_VOLUME.trim() !== envs[1].SANDBOX_CACHE_VOLUME.trim(),
-    "Clones must not share SANDBOX_CACHE_VOLUME",
+    cacheBases[0] !== cacheBases[1] &&
+      !cacheBases[0].startsWith(`${cacheBases[1]}-`) &&
+      !cacheBases[1].startsWith(`${cacheBases[0]}-`),
+    "Clones must not share or overlap tenant SANDBOX_CACHE_VOLUME names",
   );
   const secrets = envs.flatMap((env) =>
     ["DATA_ENCRYPTION_KEY", "AUTH_SESSION_SECRET", "TOKEN_ENCRYPTION_KEY"].map(

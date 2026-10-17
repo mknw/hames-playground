@@ -150,7 +150,9 @@ export interface SimpleLoopData {
    *  field and `docs/harness-patterns/frontend.md` documents both, so dropping
    *  only this one would leave the pair half-implemented for no gain. Under
    *  `returnStyle: 'summary'` what lands here is a short summary, not a full
-   *  answer — do not treat it as user-facing text. */
+   *  answer — do not treat it as user-facing text — except on a turn in which no
+   *  tool call returned a result, where the prompt asks for the complete answer
+   *  (#615; see `data.returnText`). */
   lastAction?: ControllerAction
   response?: string
   /** The terminal `Return`'s text, for `compactExecution`'s Return-only case

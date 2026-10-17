@@ -170,11 +170,14 @@ template_string LoopMultiCalls(multi_call_mode: string?) #"
 // precisely because the compactExecution renders the links), across patterns,
 // with `view.hasErrors()` for honest error reporting.
 //
-// A Return-only turn (no tool called) is the exception, #615: nothing is left
-// for the compactExecution to compose from, and simpleLoop hands the Return text
-// to it as the answer (`data.returnText`, #612). The summary branch therefore
-// asks for the complete answer when no tool ran, so that path does not depend on
-// the model volunteering it against "NOT the user-facing answer".
+// A turn in which no tool returned a result (none called, or every call failed)
+// is the exception, #615: nothing is left for the compactExecution to compose
+// from, and simpleLoop hands the Return text to it as the answer
+// (`data.returnText`: #612 for no call, #620/#614 for all calls failed). The
+// summary branch therefore asks for the complete answer there, in the system
+// block AND on the tier-1 catalog line, so those paths do not depend on the
+// model volunteering it against "NOT the user-facing answer". An
+// `expandPreviousResult` records a real tool_result, so it stays a summary.
 //
 // "answer" restores the pre-#149 wording verbatim, for a loop whose Return
 // prose IS the deliverable. It is prompt-only: the loop still writes no
@@ -196,10 +199,11 @@ template_string LoopReturnStyle(return_style: string?) #"
   BRIEF completion summary in tool_args as plain prose (not JSON) — one or two
   sentences on what you found or did, NOT the user-facing answer: a later step
   composes that from the full tool results, so re-stating them here is wasted
-  work. EXCEPTION: if you have called no tool in this task, no tool result
-  exists for that later step to compose from, so put the COMPLETE answer in
-  tool_args instead. That turn makes no tool call, so there is no progress to
-  report and `status` may be omitted.
+  work. EXCEPTION: if no tool call in this task has returned a result (you
+  called none, or every call failed), no tool result exists for that later step
+  to compose from, so put the COMPLETE answer in tool_args instead, and say
+  briefly what failed. The Return turn makes no tool call, so there is no
+  progress to report and `status` may be omitted.
   {% endif %}
 "#
 
@@ -325,7 +329,7 @@ function LoopController(
     {% endif %}
     AVAILABLE TOOLS:
     {{ ToolCatalog(tools) }}
-    - Return: Signal task completion (tool_args = {% if return_style == "answer" %}final answer{% else %}brief completion summary{% endif %})
+    - Return: Signal task completion (tool_args = {% if return_style == "answer" %}final answer{% else %}brief completion summary, or the complete answer if no tool returned a result{% endif %})
     {{ LoopMultiCalls(multi_call_mode) }}
     {{ LoopFewShots(few_shots) }}
 

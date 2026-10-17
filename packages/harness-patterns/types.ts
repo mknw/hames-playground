@@ -173,7 +173,10 @@ export type MultiCallMode = 'parallel' | 'sequential' | 'off'
 
 /** What a simpleLoop asks its controller to put in the terminal `Return`
  *  action's `tool_args` (#149).
- *  - 'summary' (default) — a one-or-two-sentence completion summary. The loop's
+ *  - 'summary' (default) — a one-or-two-sentence completion summary, except
+ *    that when no tool call in the task has returned a result (none called, or
+ *    every call failed) the prompt asks for the complete answer instead (#615),
+ *    since the core hands that `Return` text to the synthesizer as the answer. The loop's
  *    prose reaches no user: `Synthesize` renders `tool_result.tool` / `.result`
  *    only and never `tool_call.args`, which is where the terminal action's
  *    prose lands, so a downstream `compactExecution` composes the user-facing

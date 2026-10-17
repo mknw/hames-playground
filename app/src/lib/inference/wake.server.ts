@@ -181,6 +181,7 @@ import {
   type WakeBox,
 } from './cold-start.server'
 import { VERDA_MODEL_ID, noteVerdaCallCompleted } from './verda-activity.server'
+import { WakeFailure } from './wake-failure'
 
 assertServerOnImport()
 
@@ -509,7 +510,7 @@ export async function ensurePrivateTierAwake(): Promise<void> {
 /** A failure that ends the poll on the spot rather than being retried — see
  *  "Which failures are retried" in the module docstring. Its message is already
  *  the user-facing one. */
-class WakeRefused extends Error {}
+class WakeRefused extends WakeFailure {}
 
 /**
  * Poll the box until one attempt answers. Resolves with the TOTAL wait, from the
@@ -576,7 +577,8 @@ async function poll(target: WakeTarget, signal: AbortSignal): Promise<number> {
   }
 
   const waitedS = Math.round((Date.now() - started) / 1000)
-  throw new Error(
+  throw new WakeFailure(
+    target.box,
     `${target.failed}: ${attempts} attempt${attempts === 1 ? '' : 's'} over ${waitedS}s, ` +
       `and the last one ${lastReason}. The deployment scales to zero and its first call is ` +
       (target.box === 'verda'
@@ -624,7 +626,7 @@ async function attempt(
         detail ? ` — ${detail.slice(0, 300)}` : ''
       }`
       if (isRefusal(res.status)) {
-        throw new WakeRefused(`${target.failed}: it ${said}. ${NO_FALLBACK}`)
+        throw new WakeRefused(target.box, `${target.failed}: it ${said}. ${NO_FALLBACK}`)
       }
       return said
     }

@@ -12,7 +12,7 @@ import {
 } from '../../src/lib/eval-support/spend-budget'
 import { createSpendObserver } from '../../src/lib/eval-support/spend-observer'
 import { flipGate } from '../../src/lib/eval-support/flip-gate'
-import { describeWakeFailure } from '../../src/lib/eval-support/wake-failure'
+import { describeWakeFailure, wakeFailureReason } from '../../src/lib/eval-support/wake-failure'
 import {
   assertProxyNode,
   proxyEnvironment,
@@ -227,9 +227,10 @@ async function main() {
             try {
               await ensurePrivateTierAwake()
             } catch (err) {
-              budget.reason = 'VERDA_WAKE_FAILED'
+              const reason = wakeFailureReason(err)
+              budget.reason = reason
               wakeDetail = describeWakeFailure(err)
-              results.push({ ...active, status: 'fail', checks: [], error: 'VERDA_WAKE_FAILED' })
+              results.push({ ...active, status: 'fail', checks: [], error: reason })
               tick()
               stop()
             }

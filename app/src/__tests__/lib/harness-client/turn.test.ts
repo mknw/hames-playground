@@ -34,6 +34,7 @@ import {
 } from '../../../lib/harness-client/request-user.server'
 import { runtimeConfig } from '@hames-ai/harness-patterns/runtime-config.server'
 import { DEFAULT_SETTINGS } from '../../../lib/settings'
+import { replayMessages } from '@hames-ai/agents/replay'
 
 /** Every run records the ambient scope it saw. */
 const seenScopes: Array<{ userId: string | null; sessionId: string | null }> = []
@@ -1296,6 +1297,84 @@ describe('what the header learns from a turn', () => {
       expect.stringContaining('[turn] run failed for run-wake'),
       expect.anything(),
     )
+  })
+
+  describe('a wake failure is recorded in the transcript', () => {
+    // The live stream's `error` frame is the only copy of the failure unless the
+    // blob holds it too: a reload rebuilds the transcript from the blob alone,
+    // and a turn that died before the harness produced one event left an empty
+    // transcript under an `error` badge — the bubble "showed and disappeared".
+    const WAKE_MSG =
+      'the private inference box did not wake (the 27B): 18 attempts over 600s. ' +
+      'The turn was not started; nothing was sent to any other provider.'
+    const seeded = (events: unknown[]) =>
+      JSON.stringify({ sessionId: 'sess-1', status: 'running', events })
+    const userEvent = (content: string) => ({
+      id: `u-${content}`,
+      type: 'user_message',
+      ts: 1,
+      patternId: 'harness',
+      data: { content },
+    })
+    const savedBlob = () => saveSession.mock.calls[0][3] as string
+
+    beforeEach(() => {
+      resolveConversationTier.mockResolvedValue('verda')
+      ensurePrivateTierAwake.mockRejectedValueOnce(new Error(WAKE_MSG))
+    })
+
+    // MUTATION: delete the `recordRunFailure` call in `runAndSave`'s catch →
+    // the blob is never saved, nothing replays, and every assertion reddens.
+    it('replays the first message and the failure after a reload, status error', async () => {
+      dbLoadConversation.mockResolvedValue({
+        serializedContext: seeded([userEvent('first question')]),
+        version: 'v-seed',
+      })
+
+      await expect(runTurnAndPersist(interactive())).rejects.toThrow(WAKE_MSG)
+
+      expect(saveSession).toHaveBeenCalledWith('sess-1', 'user-1', 'search', expect.any(String), {
+        version: 'v-seed',
+        inferenceTier: 'verda',
+      })
+      expect(JSON.parse(savedBlob()).status).toBe('error')
+      expect(replayMessages(savedBlob())).toMatchObject([
+        { role: 'user', content: 'first question' },
+        { role: 'error', content: WAKE_MSG },
+      ])
+      // The save released the claim; a second release would be a no-op at best.
+      expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
+    })
+
+    // MUTATION: drop the `user_message` push for a continued conversation → the
+    // new message is missing from the replay (the second entry reddens).
+    it('keeps the history and the new message of a continued conversation', async () => {
+      const stored = seeded([userEvent('earlier')])
+      claimSession.mockResolvedValue({ ...STORED, serializedContext: stored })
+      dbLoadConversation.mockResolvedValue({ serializedContext: stored, version: 'v-claim' })
+
+      await expect(runTurnAndPersist(interactive({ message: 'again' }))).rejects.toThrow(WAKE_MSG)
+
+      expect(replayMessages(savedBlob())).toMatchObject([
+        { role: 'user', content: 'earlier' },
+        { role: 'user', content: 'again' },
+        { role: 'error', content: WAKE_MSG },
+      ])
+    })
+
+    it('falls back to the plain failed release when the blob cannot be saved', async () => {
+      dbLoadConversation.mockResolvedValue({
+        serializedContext: seeded([userEvent('q')]),
+        version: 'v-seed',
+      })
+      saveSession.mockRejectedValueOnce(new Error('row moved on'))
+
+      await expect(runTurnAndPersist(interactive())).rejects.toThrow(WAKE_MSG)
+
+      expect(dbReleaseConversationClaim).toHaveBeenCalledWith('sess-1', 'user-1', 'v-seed', {
+        failed: true,
+      })
+    })
   })
 
   it('does not touch the gauge for an Anthropic turn', async () => {

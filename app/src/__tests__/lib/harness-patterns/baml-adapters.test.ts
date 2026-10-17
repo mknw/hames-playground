@@ -1583,6 +1583,29 @@ describe('extractPromptTemplates', () => {
     )
   })
 
+  it('includes a floor-division argument and the following call without evaluating either', async () => {
+    const { BamlRuntime } = await import('@boundaryml/baml')
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const source = `client<llm> Offline {
+      provider anthropic
+      options {
+        model "claude-sonnet-4-5"
+        api_key "offline"
+      }
+    }
+    template_string Shared(value: int) #"RAW {{ value }}"#
+    function Example() -> string {
+      client Offline
+      prompt #"before {{ Shared(4 // 2) }} between {{ Shared(1) }} after"#
+    }`
+    // Compile only: this validates the fixture without contacting a provider.
+    BamlRuntime.fromFiles('baml_src', { 'floor-division.baml': source }, {})
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(source, cache)
+    const body = '{# expanded from Shared #}\nRAW {{ value }}\n{# end expansion Shared #}'
+    expect(cache.Example).toBe(`before ${body} between ${body} after`)
+  })
+
   it('labels a formerly available body after it is renamed or removed, retaining the exact call', async () => {
     const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const call = '{{ Shared( "{x}" ) }}'

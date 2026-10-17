@@ -798,9 +798,10 @@ function loadTemplatesFromDisk(cache: Record<string, string>): void {
 }
 
 /** Find a signature/call's closing delimiter without interpreting its arguments.
- * Comments may contain parentheses; quoted arguments may contain braces or
- * escaped quotes. The cursor only moves forwards, including on malformed input. */
-function closingParenthesis(text: string, start: number): number {
+ * Only BAML declarations have comments; in Jinja arguments `//` is floor division.
+ * Quoted arguments may contain braces or escaped quotes. The cursor only moves
+ * forwards, including on malformed input. */
+function closingParenthesis(text: string, start: number, declarationComments = false): number {
   let depth = 1
   let quote = ''
   for (let i = start; i < text.length; i++) {
@@ -810,11 +811,11 @@ function closingParenthesis(text: string, start: number): number {
       else if (char === quote) quote = ''
     } else if (char === '"' || char === "'") {
       quote = char
-    } else if (text.startsWith('//', i)) {
+    } else if (declarationComments && text.startsWith('//', i)) {
       const end = text.indexOf('\n', i + 2)
       if (end === -1) return -1
       i = end
-    } else if (text.startsWith('/*', i)) {
+    } else if (declarationComments && text.startsWith('/*', i)) {
       const end = text.indexOf('*/', i + 2)
       if (end === -1) return -1
       i = end + 1
@@ -835,7 +836,7 @@ export function extractPromptTemplates(source: string, cache: Record<string, str
   const declaration = /\btemplate_string\s+(\w+)\s*\(/g
   let shared: RegExpExecArray | null
   while ((shared = declaration.exec(source)) !== null) {
-    const close = closingParenthesis(source, declaration.lastIndex)
+    const close = closingParenthesis(source, declaration.lastIndex, true)
     if (close === -1) break
     declaration.lastIndex = close + 1
     while (/\s/.test(source[declaration.lastIndex] ?? '')) declaration.lastIndex++

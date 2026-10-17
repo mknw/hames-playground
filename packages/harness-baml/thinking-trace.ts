@@ -34,6 +34,8 @@
  * Both functions are pure, linear in their input and regex-free. The text is
  * model output, so it is untrusted: harness-patterns' `removeThinkBlocks`
  * exists because the think-block regex before it was polynomial on this input.
+ * Extraction and splitting perform no sanitization or authorization; returned
+ * text remains untrusted (SD-1, SD-3, SD-4).
  */
 
 /** The part of a BAML collector call this module reads. Structural, so the
@@ -139,9 +141,14 @@ const THINK_CLOSE = '</think>'
  *
  * With no `</think>` at all, `closed` is false and `tail` is `raw` unchanged:
  * there is nothing to split, and nothing is guessed. An answer that itself
- * contains the literal `</think>` is cut inside the answer. Its remainder then
- * fails to parse, which is loud. The other choice, the first `</think>`, would
- * hand a drafted action to the parser.
+ * contains the literal `</think>` is cut inside the answer. The truncated tail
+ * can still parse successfully, including for string-returning BAML functions.
+ * `closed: true` certifies only a delimiter, not a validated trace/answer
+ * boundary. The caller must independently enforce G19 Q7's loud-failure policy.
+ * The first `</think>` would instead hand a drafted action to the parser.
+ *
+ * Both returned strings remain untrusted. This split performs no sanitization
+ * or authorization (SD-1, SD-3, SD-4).
  */
 export function splitAtLastThinkClose(
   raw: string,

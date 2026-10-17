@@ -404,7 +404,10 @@ env_problems() {
 dc() { (cd "$APP_DIR" && sudo env COMPOSE_FILE="$COMPOSE_FILES" COMPOSE_PROFILES="$COMPOSE_PROFILE" docker compose "$@"); }
 
 # Python's standard library only; uses the existing stack, no fixture or start.
-vps_check() { (cd "$APP_DIR" && sudo env COMPOSE_FILE="$COMPOSE_FILES" COMPOSE_PROFILES="$COMPOSE_PROFILE" python3 scripts/check-vps.py "$@"); }
+vps_check() {
+  [[ -f $APP_DIR/scripts/check-vps.py ]] || refuse "pinned checkout lacks scripts/check-vps.py; use a ref that includes #639"
+  (cd "$APP_DIR" && sudo env COMPOSE_FILE="$COMPOSE_FILES" COMPOSE_PROFILES="$COMPOSE_PROFILE" python3 scripts/check-vps.py "$@")
+}
 
 assert_daemon_isolation() {
   if ! vps_check --daemon; then
@@ -1535,7 +1538,8 @@ stage_boot() {
   run dc up -d --remove-orphans
   ((DRY_RUN)) && return 0
   if ! vps_check --network; then
-    refuse "Neo4j's running network is not internal and isolated; stop deployment and follow docs/deployment/docker-engine-upgrade.md"
+    dc stop || refuse "Neo4j network verification failed and stopping the stack failed; stop it manually and follow docs/deployment/docker-engine-upgrade.md"
+    refuse "Neo4j's running network failed verification; the stack was stopped; follow docs/deployment/docker-engine-upgrade.md"
     return 0
   fi
   local svc

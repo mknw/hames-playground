@@ -13,6 +13,7 @@ store in place. No step here authorizes an agent to access a live server.
 
    ```sh
    cd /opt/hames
+   sudo docker compose stop app caddy || exit 1
    neo4j_id=$(sudo docker compose ps -q neo4j)
    test -n "$neo4j_id" || exit 1
    neo4j_image=$(sudo docker inspect --format '{{.Image}}' "$neo4j_id")
@@ -42,10 +43,11 @@ store in place. No step here authorizes an agent to access a live server.
    The helper refuses malformed/unreadable JSON, disabled `iptables` or
    `ip6tables`, direct routing, `ip-forward-no-drop`, an unverified firewall
    backend, and bridge defaults that bypass NAT or trust host interfaces.
-   Preserve unrelated tuning. Review command-line/systemd overrides as well:
-   checking the file does not prove the running daemon loaded it, and this gate
-   does not certify arbitrary custom firewall rules. Do not proceed with
-   contradictory overrides. [Docker documents why disabling its firewall rules
+   The helper also reads the running daemon's command line from `/proc` and
+   refuses isolation-related overrides or a non-default `--config-file`; an
+   unreadable process is inconclusive and refuses. Preserve unrelated tuning.
+   This gate does not certify arbitrary custom firewall rules. Review service
+   overrides before restarting. [Docker documents why disabling its firewall rules
    breaks isolation](https://docs.docker.com/engine/network/packet-filtering-firewalls/).
 
 3. Stop the stack, then upgrade to the explicitly reviewed package versions.
@@ -55,6 +57,7 @@ store in place. No step here authorizes an agent to access a live server.
    change the Neo4j image, or continue after a failed command.
 
    ```sh
+   cd /opt/hames
    sudo docker compose stop
    : "${ENGINE_PACKAGE_VERSION:?set reviewed Docker apt package version}"
    : "${CLI_PACKAGE_VERSION:?set reviewed Docker CLI apt package version}"
@@ -71,6 +74,14 @@ store in place. No step here authorizes an agent to access a live server.
    the actual network reached from this stack's Neo4j container, including its
    internal/isolated flags, members, bridge addresses and routes. A stale or
    unreadable network is a refusal, never silently accepted or downgraded.
+   Boot stops the stack if verification fails, preserving its volumes and
+   networks. If stopping also fails, it refuses and requires a manual stop.
+
+   ```sh
+   cd /opt/hames
+   # Run scripts/bootstrap-vps.sh with the same pinned ref, normal
+   # hostname/contact arguments and --only images,boot.
+   ```
 
    If a pre-existing network has obsolete options, stop the stack and obtain
    operator approval to remove only the affected containers and that identified
@@ -88,7 +99,6 @@ store in place. No step here authorizes an agent to access a live server.
    deliberately choosing `--probe-private-health` permits one authenticated
    `GET` to the small model: it may wake a scale-to-zero deployment, uses no
    completion, follows no redirect, and never retries or switches provider.
-   Keep it off while the private deployments are paused.
 
 A failed upgrade means keep traffic stopped, retain the dump and investigate.
 Reinstalling an earlier Engine is a separately reviewed operator action using

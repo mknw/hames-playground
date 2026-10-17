@@ -22,7 +22,22 @@ hostname and ACME arguments as the deployment. The marker hashes the current
 three keys; an old attestation cannot unlock boot (scripts/bootstrap-vps.sh:1368).
 That marker covers the root env key set only; keep a separate escrow record for
 each clone's app-only key set. Recreate containers to load changed environments; `restart` retains the old
-environment. Finish with the affected checks below and [PREVIEW §8](../PREVIEW.md#8-smoke-checklist).
+environment. For **every clone-enabled recreate**, including rollback or a
+bootstrap `boot` stage, use PREVIEW §12's preflight below with the deployment's
+production/clone Compose files and profile. A failed render or validator must
+prevent startup: keep `set -o pipefail` and connect validation to the recreate
+(or bootstrap `boot` command with its existing arguments) using `&&`. Never save
+or print rendered configuration; pipe it directly to the validator.
+
+```bash
+set -o pipefail
+docker compose config --format json | node scripts/validate-clones.mjs &&
+  docker compose up -d --no-build --force-recreate app app-dev
+```
+
+For a single app, keep the existing `docker compose up -d --no-build
+--force-recreate app` procedure. Finish with the affected checks below and
+[PREVIEW §8](../PREVIEW.md#8-smoke-checklist).
 
 ## AUTH_SESSION_SECRET
 

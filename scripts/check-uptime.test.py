@@ -8,12 +8,15 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import runpy
 import socket
 import ssl
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from urllib.error import HTTPError
 from unittest.mock import MagicMock, patch
@@ -28,6 +31,13 @@ spec.loader.exec_module(uptime)
 
 class ProbeTests(unittest.TestCase):
     def setUp(self):
+        self.proxy_env = patch.dict(os.environ, {
+            "HTTPS_PROXY": "http://synthetic-proxy.example.invalid:8888",
+            "HTTP_PROXY": "http://synthetic-proxy.example.invalid:8888",
+            "ALL_PROXY": "http://synthetic-proxy.example.invalid:8888",
+        }, clear=True)
+        self.proxy_env.start()
+        self.addCleanup(self.proxy_env.stop)
         # Even a test accidentally bypassing the HTTP mock may not use DNS.
         self.network = patch.object(socket, "getaddrinfo", side_effect=AssertionError("network forbidden"))
         self.network.start()
@@ -101,6 +111,94 @@ class ProbeTests(unittest.TestCase):
                              (1, "FAIL external app liveness\n"))
             self.open.assert_called_once()
 
+    def test_supervisor_budget_and_fixed_output(self):
+        for result in (subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 1),
+                       subprocess.TimeoutExpired("synthetic-secret", 10), OSError("synthetic-secret")):
+            with patch.object(uptime.subprocess, "run") as run:
+                if isinstance(result, Exception):
+                    run.side_effect = result
+                else:
+                    run.return_value = result
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    status = uptime.supervised_main(["https://preview.example.invalid"])
+                success = isinstance(result, subprocess.CompletedProcess) and result.returncode == 0
+                self.assertEqual(status, 0 if success else 1)
+                self.assertEqual(output.getvalue(), ("PASS" if success else "FAIL") + " external app liveness\n")
+                self.assertEqual(run.call_args.kwargs, {
+                    "timeout": 10, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
+                })
+
+    def test_cli_uses_deadline_supervisor(self):
+        output = io.StringIO()
+        with patch.object(sys, "argv", [str(SOURCE), "https://preview.example.invalid"]), \
+                patch.object(uptime.subprocess, "run", side_effect=subprocess.TimeoutExpired("synthetic", 10)), \
+                patch("urllib.request.build_opener", return_value=self.build.return_value), \
+                contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as exit:
+            runpy.run_path(str(SOURCE), run_name="__main__")
+        self.assertEqual(exit.exception.code, 1)
+        self.assertEqual(output.getvalue(), "FAIL external app liveness\n")
+        self.open.assert_not_called()
+
+    def test_deadline_stops_slow_headers_body_and_stalled_resolution(self):
+        # Each fixture runs the real supervisor and a disposable attempt process.
+        # Shorten only its budget; without the deadline each returns PASS later.
+        for phase in ("headers", "body", "resolution"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory(prefix="uptime-deadline-") as directory:
+                driver = Path(directory) / "fixture.py"
+                driver.write_text(textwrap.dedent(f'''
+                    import http.client
+                    import importlib.util
+                    import socket
+                    import sys
+                    import threading
+                    import time
+                    spec = importlib.util.spec_from_file_location("uptime", {str(SOURCE.resolve())!r})
+                    uptime = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(uptime)
+                    uptime.__file__ = __file__
+                    uptime.ATTEMPT_SECONDS = 0.15
+                    def forbidden(*args, **kwargs):
+                        raise AssertionError("network forbidden")
+                    socket.getaddrinfo = forbidden
+                    def main(args):
+                        reader, writer = socket.socketpair()
+                        reader.settimeout(10)
+                        body = b'{{"status":"ok","uptimeSeconds":0}}'
+                        headers = b'HTTP/1.1 200 OK\\r\\nContent-Length: ' + str(len(body)).encode() + b'\\r\\n\\r\\n'
+                        def send():
+                            if {phase!r} == "headers":
+                                for byte in headers:
+                                    writer.sendall(bytes([byte]))
+                                    time.sleep(0.025)
+                            else:
+                                writer.sendall(headers)
+                            for byte in body:
+                                writer.sendall(bytes([byte]))
+                                if {phase!r} == "body":
+                                    time.sleep(0.025)
+                            writer.close()
+                        threading.Thread(target=send, daemon=True).start()
+                        class Opener:
+                            def open(self, request, timeout):
+                                if {phase!r} == "resolution":
+                                    def stalled(*args, **kwargs):
+                                        time.sleep(0.8)
+                                        return []
+                                    socket.getaddrinfo = stalled
+                                    socket.getaddrinfo("synthetic.invalid", 443)
+                                response = http.client.HTTPResponse(reader)
+                                response.begin()
+                                return response
+                        uptime.build_opener = lambda *args: Opener()
+                        return uptime.main(args)
+                    if __name__ == "__main__":
+                        sys.exit(uptime.supervised_main(["https://preview.example.invalid"]))
+                '''))
+                run = subprocess.run([sys.executable, str(driver)], capture_output=True, text=True, timeout=4)
+                self.assertEqual((run.returncode, run.stdout, run.stderr),
+                                 (1, "FAIL external app liveness\n", ""))
+
 
 MUTATIONS = {
     "HTTPS required": ('parsed.scheme != "https"', 'False'),
@@ -109,9 +207,15 @@ MUTATIONS = {
     "control character refusal": ('if any(ord(c) <= 32 or ord(c) == 127 for c in origin):', 'if False:'),
     "health path": ('+ "/api/health"', '+ "/v1/completions"'),
     "GET only": ('method="GET"', 'method="POST"'),
-    "redirect refusal": ('NoRedirect(), ProxyHandler({})', 'HTTPRedirectHandler(), ProxyHandler({})'),
+    "redirect refusal": ('build_opener(NoRedirect(),', 'build_opener(HTTPRedirectHandler(),'),
     "proxy isolation": ('ProxyHandler({})', 'ProxyHandler({"https": "http://proxy.example.invalid"})'),
+    "inherited proxy isolation": ('ProxyHandler({})', 'ProxyHandler()'),
     "bounded timeout": ('timeout=10', 'timeout=1000'),
+    "whole-attempt deadline": ('timeout=ATTEMPT_SECONDS', 'timeout=None'),
+    "CLI deadline boundary": ('sys.exit(supervised_main(', 'sys.exit(main('),
+    "execution budget": ('ATTEMPT_SECONDS = 10', 'ATTEMPT_SECONDS = 1000'),
+    "supervisor failure exit": ('return 0 if success else 1', 'return 0'),
+    "supervisor value-free diagnostics": ('else "FAIL external app liveness")', 'else "FAIL " + repr(args))'),
     "HTTP 200 required": ('response.status != 200', 'False'),
     "body cap": ('len(body) > 4096', 'False'),
     "health status required": ('payload.get("status") != "ok"', 'False'),
@@ -145,4 +249,6 @@ if __name__ == "__main__":
                 run = subprocess.run([sys.executable, __file__, str(mutant)], capture_output=True, text=True)
                 if run.returncode == 0:
                     raise AssertionError("SURVIVED: " + label)
+                if "FAIL:" not in run.stderr:
+                    raise AssertionError("No behavioral assertion killed: " + label + "\n" + run.stderr)
                 print("KILLED " + label)

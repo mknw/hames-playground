@@ -21,8 +21,11 @@ The probe makes one GET to `/api/health`, verifies TLS normally, refuses
 redirects and ignores proxy environment settings. It requires HTTP 200 and the
 health JSON shape; DNS, TLS, connection, status, body and timeout failures exit
 `1`. Success exits `0`. Output is a fixed PASS/FAIL label; no target or exception is
-printed. Its ten-second request timeout and 4096-byte response cap bound one
-attempt; they are not measured service-level or alert thresholds.
+printed. A supervising process enforces a ten-second whole-attempt execution
+budget, including DNS resolution, opening, headers and body, and kills and reaps
+the attempt if it expires. The socket also has a ten-second blocking-operation
+timeout and the response is capped at 4096 bytes. This execution budget is
+separate from the measurement-dependent service-level and alert thresholds below.
 
 This proves public DNS/TLS/Caddy/app **liveness only**. The route deliberately
 does not query data services or inference (app/src/routes/api/health.ts:1).

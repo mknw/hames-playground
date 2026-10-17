@@ -77,9 +77,24 @@ and compatible data is insufficient. Never publish inspect output or env files.
 
 Review the target's bootstrap arguments and release notes. Use bootstrap with
 the existing hostname/ACME/operator arguments and the new **full** `--ref` SHA,
-selecting `--only checkout,env,images,boot --no-seed`. Keep the two-clone inputs
-in place; for clones, build/update each reviewed pin via PREVIEW §12's validated
-Compose path. No automatic update of the dev branch is implied. Boot can start
+selecting `--only checkout,env,images,boot --no-seed` for a **single app**.
+For clones, instead run `--only checkout,env,images --no-seed` first, keep the
+two-clone inputs in place, and build/update each reviewed pin via PREVIEW §12's
+validated Compose path. Before any clone-enabled bootstrap `boot`, validate the
+final production/clone configuration and chain boot with `&&` as below. Replace
+the example hostname, ACME email and full target SHA with the deployment's
+existing bootstrap arguments; retain any other required operator arguments.
+Never print or save the rendered configuration. A failed render or validator
+must prevent boot; do not run boot separately after a failure.
+
+```bash
+set -o pipefail
+docker compose config --format json | node scripts/validate-clones.mjs &&
+  bash scripts/bootstrap-vps.sh --hostname app.example.invalid \
+    --acme-email ops@example.invalid --ref '<full-target-sha>' --only boot --no-seed
+```
+
+No automatic update of the dev branch is implied. Boot can start
 Caddy; keep ingress blocked by the operator's maintenance control until the
 checks pass. Never run the seed stage as an upgrade mechanism. Build only after
 checking measured capacity for the serving data tier plus embedder/build peak.
@@ -122,8 +137,19 @@ For a compatible image-only rollback, return the checkout/configuration to its
 recorded good pin, tag `hames-app:rollback` back to `hames-app:local` (and
 `hames-app:dev-rollback` back to `hames-app:dev` for the other clone), then
 `docker compose up -d --no-build --force-recreate app` (also `app-dev` when
-enabled). Do not rebuild over the retained image. Repeat the full smoke before
-reopening ingress; do not roll back a leaked credential.
+enabled). For clones, use the following immediately before recreation, with the
+deployment's production/clone Compose files and profile; failed validation must
+prevent startup. Never print or save the rendered configuration:
+
+```bash
+set -o pipefail
+docker compose config --format json | node scripts/validate-clones.mjs &&
+  docker compose up -d --no-build --force-recreate app app-dev
+```
+
+The single-app command above is unchanged. Do not rebuild over the retained
+image. Repeat the full smoke before reopening ingress; do not roll back a leaked
+credential.
 
 If compatibility is uncertain, keep writers stopped. Restore the pre-upgrade
 dump into an isolated database using the matching pgvector/Postgres image and

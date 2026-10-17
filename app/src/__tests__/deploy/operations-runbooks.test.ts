@@ -1,6 +1,6 @@
 // @vitest-environment node
 /** Layer 1: runbook drift and the external probe. No live calls or Docker. */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -32,8 +32,10 @@ function missingReferences(doc: string): string[] {
 
 describe('operations runbooks (#432 G20 rows 7, 12, 13)', () => {
   it.each(runbooks)('%s names only existing scripts and configuration inputs', (file) => {
+    const relative = file.replace('docs/', '')
     expect(missingReferences(read(file))).toEqual([])
-    expect(read('docs/PREVIEW.md')).toContain(file.replace('docs/', ''))
+    expect(read('docs/PREVIEW.md')).toContain(relative)
+    expect(read('docs/INDEX.md')).toContain(`| [${relative}](${relative})`)
   })
 
   it('rejects a runbook mutation naming an absent script or env input', () => {
@@ -55,6 +57,66 @@ describe('operations runbooks (#432 G20 rows 7, 12, 13)', () => {
     ).toBe('upgrade-dumps/synthetic/postgres.dump')
   })
 
+  it('indexes the external probe in the scripts inventory', () => {
+    expect(read('docs/INDEX.md')).toMatch(/^Scripts: .*`scripts\/check-uptime.py`/m)
+  })
+
+  it('preflights every documented clone recreate and bootstrap boot without printing config', () => {
+    for (const [file, count] of [
+      ['docs/deployment/secret-rotation.md', 1],
+      ['docs/deployment/app-upgrade.md', 2],
+    ] as const) {
+      const blocks = [...read(file).matchAll(/```bash\n([\s\S]*?)```/g)]
+        .map(([, block]) => block)
+        .filter((block) => block.includes('scripts/validate-clones.mjs'))
+      expect(blocks, file).toHaveLength(count)
+      for (const block of blocks) {
+        for (const [renderExit, validatorExit] of [
+          [0, 0],
+          [1, 0],
+          [0, 1],
+        ]) {
+          // Execute the published shell with inert seams: no Docker or bootstrap.
+          const run = spawnSync(
+            'bash',
+            [
+              '-c',
+              `
+docker() {
+  if [ "$*" = 'compose config --format json' ]; then
+    printf '%s' 'synthetic-rendered-secret'
+    return ${renderExit}
+  fi
+  printf 'START %s\\n' "$*"
+}
+node() { cat >/dev/null; return ${validatorExit}; }
+bash() { printf 'BOOT %s\\n' "$*"; }
+${block}`,
+            ],
+            {
+              encoding: 'utf8',
+              env: { PATH: process.env.PATH } as unknown as NodeJS.ProcessEnv,
+            },
+          )
+          expect(run.error).toBeUndefined()
+          expect(run.stderr).toBe('')
+          if (renderExit || validatorExit) {
+            expect(
+              run.status,
+              `${file}: render=${renderExit}, validator=${validatorExit}`,
+            ).not.toBe(0)
+            expect(run.stdout).toBe('')
+          } else {
+            expect(run.status).toBe(0)
+            expect(run.stdout).toMatch(
+              /^(START compose up -d --no-build --force-recreate app app-dev|BOOT scripts\/bootstrap-vps.sh .*--only boot --no-seed)\n$/,
+            )
+          }
+        }
+      }
+    }
+  })
+
   it('runs the hermetic external probe tests and kills every listed mutation', () => {
     const output = execFileSync('python3', ['scripts/check-uptime.test.py', '--mutations'], {
       cwd: root,
@@ -63,6 +125,6 @@ describe('operations runbooks (#432 G20 rows 7, 12, 13)', () => {
       env: { PATH: process.env.PATH, PYTHONDONTWRITEBYTECODE: '1' } as unknown as NodeJS.ProcessEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
-    expect(output.match(/^KILLED /gm)?.length).toBe(17)
-  }, 30_000) // Includes 17 fresh Python processes; no wall-clock assertion.
+    expect(output.match(/^KILLED /gm)?.length).toBe(23)
+  }, 30_000) // Includes fresh Python processes and the disposable deadline fixtures.
 })

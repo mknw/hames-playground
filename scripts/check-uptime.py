@@ -6,9 +6,12 @@ Run from an independent monitor; exit 0 means liveness only, 1 means failure.
 """
 import json
 import math
+import subprocess
 import sys
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+
+ATTEMPT_SECONDS = 10
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -53,5 +56,22 @@ def main(args):
     return 0
 
 
+def supervised_main(args):
+    # A socket timeout cannot bound DNS or a peer trickling headers/body.
+    # The parent kills and reaps the attempt on timeout, discarding all output.
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c",
+             "import runpy, sys; sys.exit(runpy.run_path(sys.argv[1])['main'](sys.argv[2:]))",
+             __file__, *args],
+            timeout=ATTEMPT_SECONDS, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        success = result.returncode == 0
+    except Exception:
+        success = False
+    print("PASS external app liveness" if success else "FAIL external app liveness")
+    return 0 if success else 1
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(supervised_main(sys.argv[1:]))

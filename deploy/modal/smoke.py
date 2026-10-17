@@ -137,9 +137,11 @@ def main() -> int:
     check("decide: score parses and matches its distribution", consistent, f"score {score.get('score')}")
 
     # The surface that must stay closed, now that the box is up.
+    # Dot segments are resolved before the route list is matched (observed
+    # 2026-10-17), so a traversal is only a bypass if it LANDS on an unlisted route.
     for path in ("/sleep?level=1", "/collective_rpc", "/v1/completions",
-                 "/metrics", "/metrics/../v1/models",
-                 "/api/alpha/decisions/../../../v1/systemone"):
+                 "/metrics", "/v1/models/../../metrics",
+                 "/v1/systemone/../../sleep?level=1", "/health/../collective_rpc"):
         status, _, _ = call(base, token, "POST", path, {})
         check(f"{path.split('?')[0]} is not reachable", status == 404, f"status {status}")
     status, body, _ = call(base, token, "POST", "/v1/systemone", {**DECIDE, "image_url": "https://example.com/x.png"})

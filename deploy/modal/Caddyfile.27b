@@ -1,0 +1,47 @@
+# The ONLY thing reachable on the 27B box's public port (8080). vLLM (:8000)
+# binds loopback inside the container, so this file is the whole public surface;
+# `modal-pins.test.ts` pins its route list. Same reasons as `Caddyfile`: dev mode
+# (sleep needs it) registers /sleep, /wake_up, /collective_rpc and the cache
+# controls unauthenticated, so anything not listed below is a 404.
+#
+# Caddy writes no access log. Its error log deletes request URIs, headers and
+# client addresses before stderr reaches the container log.
+{
+	admin off
+	auto_https off
+	log default {
+		output stderr
+		format filter {
+			request>uri delete
+			request>headers delete
+			request>remote_ip delete
+			request>remote_port delete
+			request>client_ip delete
+		}
+	}
+}
+
+:8080 {
+	# The app's `VerdaQwen` client (chat completions; its wake ping is one) and
+	# vLLM's /health, which Caddy only answers once the post-restore checks pass.
+	@inference expression `{http.request.uri.path} in ['/v1/chat/completions', '/v1/models', '/health']`
+	handle @inference {
+		reverse_proxy 127.0.0.1:8000 {
+			# Modal's proxy already authenticated this request; the upstream
+			# never needs the token, so it is dropped.
+			header_up -Authorization
+			flush_interval -1
+		}
+	}
+
+	# Boot facts: restored-from-snapshot, phase timings, the post-restore checks.
+	handle /status {
+		root * /run/hames
+		rewrite * /status.json
+		file_server
+	}
+
+	handle {
+		respond 404
+	}
+}

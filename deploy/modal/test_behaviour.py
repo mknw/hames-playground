@@ -12,13 +12,15 @@ from log_filter import forward_stderr
 
 # Execute the real pure reference functions, without importing Modal's decorators.
 # CI needs only Python's standard library and never creates a server or client.
-_tree = ast.parse(Path(__file__).with_name("hames_small_models.py").read_text())
 _names = {"_reference_drift", "_assert_adapter_active", "REFERENCE_TOLERANCE", "SUMMARIZER_MODEL", "DECIDER_MODEL"}
-_nodes = [n for n in _tree.body if
-          (isinstance(n, ast.FunctionDef) and n.name in _names) or
-          (isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id in _names for t in n.targets))]
 _scope = {"math": math}
-exec(compile(ast.Module(body=_nodes, type_ignores=[]), "hames_small_models.py", "exec"), _scope)
+for _file in ("vllm_box.py", "hames_small_models.py"):
+    _tree = ast.parse(Path(__file__).with_name(_file).read_text())
+    _nodes = [n for n in _tree.body if
+              (isinstance(n, ast.FunctionDef) and n.name in _names) or
+              (isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id in _names for t in n.targets))]
+    exec(compile(ast.Module(body=_nodes, type_ignores=[]), _file, "exec"), _scope)
+assert _names <= _scope.keys(), _names - _scope.keys()
 
 
 class Behaviour(unittest.TestCase):

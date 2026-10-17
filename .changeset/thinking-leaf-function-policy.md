@@ -1,6 +1,6 @@
 ---
-"@hames-ai/harness-baml": minor
-"@hames-ai/agents": patch
+'@hames-ai/harness-baml': minor
+'@hames-ai/agents': patch
 ---
 
 Refuse thinking leaves selected through registry chains for functions without a designated thinking counterpart, retaining usage accounting and preventing corrective retries on the unsupported leaf.

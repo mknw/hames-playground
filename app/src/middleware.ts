@@ -5,8 +5,8 @@
  * response before the route runs; the refusal of any server-function call that
  * is not a `POST` (#429); and the refusal of any state-changing request that
  * did not come from the app's own origin (#455) — both in
- * `lib/auth/csrf.server.ts`. Those three are the only things this file does on
- * every request in production; see `onRequest` at the bottom.
+ * `lib/auth/csrf.server.ts`; and request admission by verified principal
+ * (`lib/request-rate-limit.server.ts`). See `onRequest` at the bottom.
  *
  * SolidStart imports this module once when the server handler graph loads,
  * before any request is served, which makes it the natural place to arm
@@ -30,6 +30,7 @@
 
 import { createMiddleware } from '@solidjs/start/middleware'
 import { setSecurityHeaders } from './lib/security-headers'
+import { enforceRequestRateLimit } from './lib/request-rate-limit.server'
 import { refuseCrossOriginStateChange, refuseServerFunctionGet } from './lib/auth/csrf.server'
 import { startRoutineScheduler } from './lib/routines/scheduler.server'
 import { installUsageRecorder } from './lib/metrics/usage-recorder.server'
@@ -167,7 +168,7 @@ void probeMemoryAtBoot()
  * `devFakeInferenceUrl()` returns `null` unless `import.meta.env.DEV` — a
  * constant a build replaces with `false` — so the hook is never added to
  * `onRequest` and production's only per-request work is `setSecurityHeaders`,
- * `refuseServerFunctionGet` and `refuseCrossOriginStateChange`.
+ * `refuseServerFunctionGet`, `refuseCrossOriginStateChange` and request admission.
  */
 let fakeInferenceReady: Promise<unknown> | null = null
 
@@ -188,6 +189,7 @@ export default createMiddleware({
     setSecurityHeaders,
     refuseServerFunctionGet,
     refuseCrossOriginStateChange,
+    enforceRequestRateLimit,
     ...(devFakeInferenceUrl()
       ? [
           async () => {

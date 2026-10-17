@@ -10,15 +10,22 @@
 # Both require port 80 and 443 to be reachable from the internet and
 # {$APP_DOMAIN} to resolve to this VM *before* the container starts — see
 # docs/PREVIEW.md §DNS.
-
 {
 	email {$ACME_EMAIL}
 }
 
-{$APP_DOMAIN} {
+(preview) {
+	# Request bytes only; never the SSE response. Stash accepts 5 MiB decoded:
+	# worst-case JSON escapes need 30 MiB, with 2 MiB for the envelope. Binary
+	# base64 needs <7 MiB; multipart needs just over 5 MiB. See PREVIEW §4a.
+	request_body {
+		max_size 32MiB
+	}
+
 	# `app` is the compose service name on app-network. The container publishes
 	# 3444 only on 127.0.0.1, so this reverse proxy is the sole public path in.
-	reverse_proxy app:3444 {
+	# Rate admission is app middleware, not a non-standard Caddy module (§4a).
+	reverse_proxy {args[0]} {
 		# The app builds the OIDC redirect from AUTH_REDIRECT_URI, not from
 		# request headers, so these are for logging and any future
 		# scheme-sensitive code rather than for sign-in correctness.
@@ -48,3 +55,11 @@
 		format console
 	}
 }
+
+{$APP_DOMAIN} {
+	import preview app:3444
+}
+
+# No match in a single-app deployment. The clones overlay alone mounts the
+# second site here; an unset dev domain can never turn into a catch-all site.
+import dev-sites/*.caddy

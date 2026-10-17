@@ -605,6 +605,8 @@ export type RetrieveQueryFn = {
  *  (the resolved one — an active sandbox scope's in-VM tools plus the gateway
  *  tools that resolved — not the raw name list). */
 export interface PlanCallResult {
+  /** Diagnostic degradation on an otherwise usable plan, recorded by the pattern. */
+  warning?: string
   plan: PlanResult
   llmCall?: LLMCallRecord
   toolCount: number
@@ -618,6 +620,8 @@ export type PlannerFn = (
   userMessage: string,
   intent: string,
   context?: string,
+  /** Called before a same-endpoint retry; the pattern records the failed attempt. */
+  onRetry?: (failedCall: LLMCallRecord | undefined) => void,
 ) => Promise<PlanCallResult>
 
 /** One tool result queued for a batched describe call. `id` is a
@@ -1302,6 +1306,8 @@ export type WarningTask =
   | 'web_privacy'
   /** `@hames-ai/sandbox`'s mount of the run's skills into `/skills` (#415). */
   | 'skills_mount'
+  /** The planner retried without thinking or accepted a plan with no trace (#625). */
+  | 'planner'
 
 /**
  * Data payload for a `warning` event: a side task failed and the turn carried
@@ -1417,14 +1423,17 @@ export interface IntentCompactedEventData {
  *  render as a tool call that never happened. `llmCall` (on the ContextEvent)
  *  holds the BAML call detail. */
 export interface PlanCreatedEventData {
-  /** The plan written to `scope.data.plan` (post-truncation). Absent when
-   *  `skipped` is set — there is no plan in that case. */
+  /** Plan text post-truncation, with the FULL reasoning for observability.
+   *  `scope.data.plan` carries the capped reasoning handed to executors.
+   *  Absent when `skipped` is set — there is no plan in that case. */
   plan?: PlanResult
   /** Number of tools the planner was shown — the catalog the adapter actually
    *  resolved (sandbox + gateway), not the raw name list the factory took. */
   toolCount: number
   /** Set when the plan text was capped by `PlannerConfig.maxPlanChars`. */
   truncated?: boolean
+  /** Reasoning was capped for executors; this event still holds the full trace. */
+  reasoningTruncated?: boolean
   /** Set when no LLM call was made: the context held no user message to plan
    *  for, so the chain runs unplanned. Mirrors
    *  `IntentCompactedEventData.skipped`. */

@@ -180,7 +180,7 @@ describe('planner', () => {
     const result = await runInFrame(() => pattern.fn(scope, view))
 
     const plan = (result.data as { plan: { plan: string } }).plan
-    expect(plan.plan.startsWith('x'.repeat(50))).toBe(true)
+    expect(plan.plan).toBe('x'.repeat(50) + '…[truncated]')
     expect(plan.plan).toContain('[truncated]')
     const created = result.events.find((e) => e.type === 'plan_created')!
     expect((created.data as { truncated?: boolean }).truncated).toBe(true)

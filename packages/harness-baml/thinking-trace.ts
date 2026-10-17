@@ -1,8 +1,9 @@
 /**
  * Thinking-trace extraction (#625 S1): read a model's thinking out of a
  * response BAML has already parsed, for the thinking-on counterparts to put in
- * `reasoning`. NOTHING CALLS THIS YET. The adapter mode that will (S4) is gated
- * on the owner rulings recorded as G19 on #625.
+ * `reasoning`. The planner adapter uses it for #625 S3's dormant thinking
+ * counterpart under the owner rulings recorded as G19; other roles remain
+ * deferred.
  *
  * ## Why it reads the raw HTTP body
  *

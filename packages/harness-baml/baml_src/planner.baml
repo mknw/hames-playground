@@ -83,3 +83,19 @@ function Planner(
     {{ ctx.output_format }}
   "#
 }
+
+// #625: dormant private-tier counterpart. The adapter supplies the trace as
+// PlanResult.reasoning; requesting it in content would duplicate the model's work.
+function PlannerThinking(
+  user_message: string,
+  intent: string,
+  tools: ToolDescription[],
+  context: string?
+) -> PlanResultThinking {
+  client VerdaQwenThink
+  prompt #"
+    {{ PlannerBody(user_message, intent, tools, context, false) }}
+
+    {{ ctx.output_format }}
+  "#
+}

@@ -47,6 +47,7 @@ const MARKERS = [
   ['ResultDescribeBatch', 'You will receive several INDEPENDENT tool'],
   ['ResultDescribe', 'Summarize what the following tool call'],
   ['CompactIntent', "You rewrite a user's latest message into a single self-contained instruction"],
+  ['PlannerThinking', 'You are a strategic planner for a tool-using agent.'],
   ['Planner', 'You are a strategic planner for a tool-using agent.'],
   ['ScreenUntrustedContent', 'You are a prompt-injection detector.'],
   ['RetrieveQuery', "You turn a user's latest message into a concise SEARCH QUERY"],
@@ -100,7 +101,14 @@ export function promptText(messages: readonly ChatMessage[]): string {
  */
 export function classifyPrompt(text: string): BamlFunctionName | null {
   for (const [name, marker] of MARKERS) {
-    if (text.includes(marker)) return name
+    if (!text.includes(marker)) continue
+    // The planner pair shares its body. Only its final output schema differs;
+    // ignore user/context mentions of reasoning before that schema.
+    if (name === 'PlannerThinking') {
+      const schema = text.slice(text.lastIndexOf('Answer in JSON using this schema:'))
+      if (schema.includes('reasoning: string')) continue
+    }
+    return name
   }
   return null
 }

@@ -137,6 +137,8 @@ const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
     () => b.request.Router('q', [{ name: 'search', description: 'd' }], MESSAGES, null, VERDA),
   ],
   ['Planner', () => b.request.Planner('q', 'i', TOOLS, null, VERDA)],
+  // The original remains thinking-off even when rendering the dormant counterpart.
+  ['PlannerThinking', () => b.request.PlannerThinking('q', 'i', TOOLS, null, VERDA)],
   // The eight describe functions, on the 4B — the shipped route since the flip
   // (six of them at the flip, the two memory functions of #419 M9 since).
   ['ResultDescribe', () => b.request.ResultDescribe('search', '{}', 'r', 'rows', SMALL)],

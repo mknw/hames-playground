@@ -142,6 +142,7 @@ beforeAll(async () => {
       ),
     CompactIntent: () => rq('CompactIntent')([], 'latest', via),
     Planner: () => rq('Planner')('m', 'i', tools, null, via),
+    PlannerThinking: () => rq('PlannerThinking')('m', 'i', tools, null, via),
     ScreenUntrustedContent: () => rq('ScreenUntrustedContent')('web', 'content', via),
     RetrieveQuery: () => rq('RetrieveQuery')([], 'latest', via),
     ReferenceSelector: () => rq('ReferenceSelector')('i', [], [], via),
@@ -150,8 +151,8 @@ beforeAll(async () => {
 })
 
 describe('the fake recognises every BAML function', () => {
-  it('knows all fifteen functions including memory', () => {
-    expect(declared).toHaveLength(15)
+  it('knows all sixteen functions including memory and the dormant planner twin', () => {
+    expect(declared).toHaveLength(16)
     for (const name of ['ExtractMemory', 'CompactMemories']) {
       expect(declared).toContain(name)
       expect(ALL_BAML_FUNCTIONS).toContain(name)

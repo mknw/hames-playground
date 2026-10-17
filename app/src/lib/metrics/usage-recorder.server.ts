@@ -30,7 +30,8 @@
  * intended. This is why the private share is worth showing: it cannot be
  * inflated by a routing change that did not take effect.
  *
- * The set of names that count is DERIVED from `VERDA_CLIENT_BY_ROLE`, not a
+ * The set of names that count is `PRIVATE_TIER_CLIENTS`: the tier map plus
+ * dormant thinking leaves (#625), not a
  * single literal, and that changed on 2026-08-26 when the private tier became
  * two models: the heavy roles on `VerdaQwen` and `describe` on `LocalQwenSmall`.
  * A hardcoded `=== VERDA_CLIENT_NAME` would have counted every private-tier
@@ -40,7 +41,7 @@
  * that map is counted with no edit here.
  *
  * The WARM CLOCK does not follow the same set, and the difference is the point:
- * each box has its own clock. Only a call naming `VerdaQwen` stamps the 27B
+ * each box has its own clock. Only a call naming `VerdaQwen` or its thinking twin stamps the 27B
  * clock; a 4B describe sample with metrics stamps the small clock instead. A
  * cold ingress can answer 503 without reaching the model, so a small sample
  * without metrics is not evidence of warmth.
@@ -56,7 +57,8 @@ import { addUsage, type UsageDelta } from './preview-counters.server'
 import { noteCallLatency } from './call-latency.server'
 import {
   TIER_SWITCHED_FUNCTIONS,
-  VERDA_CLIENT_BY_ROLE,
+  PRIVATE_TIER_CLIENTS,
+  THINKING_CLIENTS,
 } from '@hames-ai/harness-baml/clients.server'
 import type { InferenceTier } from '../inference/config.server'
 
@@ -82,19 +84,6 @@ function bucket(tier: InferenceTier): UsageDelta {
   return delta
 }
 
-/**
- * Every client name the private tier routes to — derived from the tier map, so
- * it cannot go short when the tier gains a model.
- *
- * A Set rather than a comparison because the tier is no longer one client. See
- * the module docstring for why the warm clock deliberately does NOT use this.
- */
-const PRIVATE_TIER_CLIENTS: ReadonlySet<string> = new Set(
-  // `Partial<Record<…>>` types its values as possibly-undefined; the map has
-  // none, and a narrowing filter says so without an assertion.
-  Object.values(VERDA_CLIENT_BY_ROLE).filter((c): c is string => c !== undefined),
-)
-
 /** The tier a sample is attributed to. See the module docstring: the selected
  *  client is the evidence, the intended routing is not. */
 export function tierOfSample(sample: LlmUsageSample): InferenceTier {
@@ -106,11 +95,11 @@ export function tierOfSample(sample: LlmUsageSample): InferenceTier {
 /** Fold one finished call into the pending deltas. Exported for the tests —
  *  the observer registration is what production calls. */
 export function recordSample(sample: LlmUsageSample, at: number = Date.now()): void {
-  // `=== VERDA_CLIENT_NAME`, NOT `PRIVATE_TIER_CLIENTS`. Both lines below are
+  // The 27B and its thinking twin, NOT every `PRIVATE_TIER_CLIENTS` member, are
   // claims about the 27B specifically — it is awake, and this is how long its
   // cold start took. A 4B describe call is evidence of neither; it has its own
   // clock below. Tier attribution alone cannot prove either box is warm.
-  if (sample.clientName === VERDA_CLIENT_NAME) {
+  if (sample.clientName === VERDA_CLIENT_NAME || THINKING_CLIENTS.has(sample.clientName ?? '')) {
     noteVerdaCallCompleted(at)
     // If this turn announced a cold start, this is the call that paid it, and
     // BAML's own timing for it is the next estimate's raw material. No-op on

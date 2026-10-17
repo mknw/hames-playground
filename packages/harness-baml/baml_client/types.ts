@@ -187,6 +187,15 @@ export interface PlanResult {
 }
 
 /**
+ * Content-only planner answer; the adapter restores reasoning from the parser trace.
+ */
+export interface PlanResultThinking {
+  plan: string
+  n_steps: number
+  
+}
+
+/**
  * A compact reference to a tool result from a previous task/turn.
  * The LLM can pass ref:<ref_id> as a tool argument value to retrieve full data.
  */

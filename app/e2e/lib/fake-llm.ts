@@ -563,7 +563,13 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
 
     // `fn` is non-null for everything but the wake ping, which the `!wake` guard
     // above let through — it wants a token, not a parseable envelope.
-    const payload = JSON.stringify(completion(model, wake ? 'ok' : replyFor(fn!, prompt)))
+    const payload = JSON.stringify(
+      completion(
+        model,
+        wake ? 'ok' : replyFor(fn!, prompt),
+        fn === 'PlannerThinking' ? 'One synthetic lookup is enough.' : undefined,
+      ),
+    )
 
     if (fault?.kind === 'mid-stream') {
       record('mid-stream', delayedMs)
@@ -774,6 +780,12 @@ function replyFor(fn: BamlFunctionName, prompt: string): string {
         explanation: 'The attempt answers the intent.',
       })
 
+    case 'PlannerThinking':
+      return JSON.stringify({
+        plan: '1. Query the graph for a node count.',
+        n_steps: 1,
+      })
+
     case 'Planner':
       return JSON.stringify({
         reasoning: 'One lookup is enough.',
@@ -852,7 +864,7 @@ function readBatchIds(prompt: string): string[] {
  *  scenario by `memoryConfirm()`, restored by `reset()`. */
 let confirmIndex = 1
 
-function completion(model: string, content: string): unknown {
+function completion(model: string, content: string, reasoning?: string): unknown {
   return {
     id: 'e2e-fake-completion',
     object: 'chat.completion',
@@ -861,7 +873,7 @@ function completion(model: string, content: string): unknown {
     choices: [
       {
         index: 0,
-        message: { role: 'assistant', content },
+        message: { role: 'assistant', content, ...(reasoning ? { reasoning } : {}) },
         finish_reason: 'stop',
       },
     ],

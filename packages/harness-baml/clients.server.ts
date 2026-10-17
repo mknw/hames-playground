@@ -547,6 +547,16 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   decide: 'PrivateSystemOne',
 }
 
+/** Trace-exposing leaves, never chains: mode is verified against the collector's
+ * selected client, not inferred from the intended tier (#625 G19). */
+export const THINKING_CLIENTS: ReadonlySet<string> = new Set(['VerdaQwenThink'])
+
+/** Includes dormant thinking leaves without changing the tier's routing map. */
+export const PRIVATE_TIER_CLIENTS: ReadonlySet<string> = new Set([
+  ...Object.values(VERDA_CLIENT_BY_ROLE).filter((c): c is string => c !== undefined),
+  ...THINKING_CLIENTS,
+])
+
 /**
  * The BAML functions behind each role the map above re-points.
  *
@@ -581,7 +591,7 @@ export const SWITCHED_FUNCTIONS_BY_ROLE: Partial<Record<BamlRole, readonly strin
   critic: ['Critic'],
   compactExecution: ['Synthesize'],
   router: ['Router'],
-  planner: ['Planner'],
+  planner: ['Planner', 'PlannerThinking'],
   describe: [
     'ResultDescribe',
     'ResultDescribeBatch',

@@ -717,12 +717,13 @@ describe('extractLLMCallData', () => {
     )
 
     expect(result).toBeDefined()
-    // Raw prompt = the function's wrapper with its arguments intact (#625 S2).
-    // The Template tab displays this source; expansion is follow-up #628.
+    // Shared bodies are included as raw source, including nested sections (#628).
     expect(result!.promptTemplate).toBeDefined()
+    expect(result!.promptTemplate).toContain('{# expanded from LoopControllerBody #}')
     expect(result!.promptTemplate).toContain(
-      '{{ LoopControllerBody(user_message, intent, tools, turns, context, turns_previous_runs, few_shots, multi_call_mode, plan_context, return_style, true) }}',
+      'You are an AI agent that accomplishes tasks by calling tools.',
     )
+    expect(result!.promptTemplate).toContain('{# expanded from ToolCatalog #}')
     expect(result!.promptTemplate).toMatch(/\{\{\s*ctx\.output_format\s*\}\}/)
     // Parsed prompt = the rendered HTTP body containing substituted content
     expect(result!.rawInput).toContain('INTENT: hello')
@@ -1159,11 +1160,9 @@ describe('LLMCallError — failed LLM call capture', () => {
         intent: 'do thing',
       }),
     )
-    // Failed calls capture the same raw wrapper and output-format placeholder.
+    // Failed calls capture the same included source and output-format placeholder.
     expect(err.llmCall.promptTemplate).toBeDefined()
-    expect(err.llmCall.promptTemplate).toContain(
-      '{{ LoopControllerBody(user_message, intent, tools, turns, context, turns_previous_runs, few_shots, multi_call_mode, plan_context, return_style, true) }}',
-    )
+    expect(err.llmCall.promptTemplate).toContain('{# expanded from LoopControllerBody #}')
     expect(err.llmCall.promptTemplate).toMatch(/\{\{\s*ctx\.output_format\s*\}\}/)
     // HTTP body captured before the failure
     expect(err.llmCall.rawInput).toBe('{"messages":[{"role":"user","content":"INTENT: do thing"}]}')
@@ -1553,6 +1552,34 @@ describe('warnIfCollectorEmpty', () => {
 })
 
 describe('extractPromptTemplates', () => {
+  it('includes every call as raw text, preserving placeholders, branches and unknown expressions', async () => {
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const source = `function Example() -> string {
+      prompt #"{{ Shared("first") }}|{{ Shared("second") }}|{{ ctx.output_format }}"#
+    }
+    template_string Shared(value: string) #"{% if value %}{{ value }}{% else %}empty{% endif %}{{ Other(value) }}{{ _.role("user") }}"#`
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(source, cache)
+
+    const included =
+      '{# expanded from Shared #}\n{% if value %}{{ value }}{% else %}empty{% endif %}{{ Other(value) }}{{ _.role("user") }}\n{# end expansion Shared #}'
+    expect(cache.Example).toBe(`${included}|${included}|{{ ctx.output_format }}`)
+  })
+
+  it('leaves a recursive reference visible instead of recursing forever', async () => {
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(
+      `template_string A() #"{{ B() }}"#
+      template_string B() #"{{ A() }}"#
+      function Example() -> string { prompt #"{{ A() }}"# }`,
+      cache,
+    )
+    expect(cache.Example).toBe(
+      '{# expanded from A #}\n{# expanded from B #}\n{{ A() }}\n{# end expansion B #}\n{# end expansion A #}',
+    )
+  })
+
   it('matches a signature whose comment contains a parenthesis', async () => {
     const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const source = `function Planner(

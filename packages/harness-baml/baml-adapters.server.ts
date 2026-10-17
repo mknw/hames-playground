@@ -773,9 +773,7 @@ function getPromptTemplate(functionName: string): string | undefined {
 function loadTemplatesFromInlinedBaml(cache: Record<string, string>): void {
   try {
     const files = getBamlFiles() as Record<string, string>
-    for (const source of Object.values(files)) {
-      extractPromptTemplates(source, cache)
-    }
+    extractPromptTemplates(Object.values(files).join('\n'), cache)
   } catch {
     // baml_client not generated — caller falls back to disk
   }
@@ -789,19 +787,32 @@ function loadTemplatesFromDisk(cache: Record<string, string>): void {
     const path = require('node:path') as typeof import('node:path')
     const bamlSrc = path.resolve(process.cwd(), 'baml_src')
     if (!fs.existsSync(bamlSrc)) return
-    for (const entry of fs.readdirSync(bamlSrc)) {
-      if (!entry.endsWith('.baml')) continue
-      const source = fs.readFileSync(path.join(bamlSrc, entry), 'utf8')
-      extractPromptTemplates(source, cache)
-    }
+    const sources = fs
+      .readdirSync(bamlSrc)
+      .filter((entry) => entry.endsWith('.baml'))
+      .map((entry) => fs.readFileSync(path.join(bamlSrc, entry), 'utf8'))
+    extractPromptTemplates(sources.join('\n'), cache)
   } catch {
     // filesystem unavailable — templates remain unset
   }
 }
 
-/** Parse BAML source to extract function prompt blocks. Exported for the
- *  parenthesised-signature-comment pinning test. */
+/** Extract function prompts with labelled textual includes of shared bodies.
+ * Pass the whole corpus so template_strings in other files are available.
+ * This is source inspection: no argument substitution or Jinja evaluation. */
 export function extractPromptTemplates(source: string, cache: Record<string, string>): void {
+  const bodies = new Map<string, string>()
+  const templateRegex = /template_string\s+(\w+)\s*\([^{}]*?\)\s*#"([\s\S]*?)"#/g
+  for (const match of source.matchAll(templateRegex)) bodies.set(match[1], match[2])
+
+  const include = (text: string, ancestors: string[] = []): string =>
+    text.replace(/\{\{\s*(\w+)\s*\([^{}]*?\)\s*\}\}/g, (call, name: string) => {
+      const body = bodies.get(name)
+      // Leave unknown calls and recursive references visible as source.
+      if (body === undefined || ancestors.includes(name)) return call
+      return `{# expanded from ${name} #}\n${include(body, [...ancestors, name])}\n{# end expansion ${name} #}`
+    })
+
   // Match: function FunctionName(...) -> ReturnType { ... prompt #"..."# }
   //
   // The parameter list is `[^{}]*?`, not `[^)]*`: signatures carry `//`
@@ -812,7 +823,7 @@ export function extractPromptTemplates(source: string, cache: Record<string, str
   const funcRegex = /function\s+(\w+)\s*\([^{}]*?\)\s*->\s*\S+\s*\{[^}]*?prompt\s+#"([\s\S]*?)"#/g
   let match: RegExpExecArray | null
   while ((match = funcRegex.exec(source)) !== null) {
-    cache[match[1]] = match[2]
+    cache[match[1]] = include(match[2])
   }
 }
 

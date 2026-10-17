@@ -696,7 +696,11 @@ loop as well cost **2,134 output tokens and ~22s** (the run's most expensive
 turn) for a text nothing read.
 
 - `'summary'` (default) — the prompt asks for a one-or-two-sentence completion
-  summary: the cheapest text that still terminates the loop.
+  summary: the cheapest text that still terminates the loop. Exception (#615):
+  when no tool call in the task has returned a result (none called, or every
+  call failed) the prompt asks for the COMPLETE answer instead, in the system
+  block and on the tier-1 catalog line, because the core hands that `Return`
+  text to the synthesizer as the answer.
 - `'answer'` — the pre-#149 wording ("put the complete answer in tool_args").
   **Prompt-only**: the loop still sets no `data.response`, so a downstream
   `compactExecution` remains the author. For a loop whose Return prose is itself
@@ -720,8 +724,9 @@ failed iterations stay in `loopHistory` (the error is the synthesizer's only
 record of it) and the text rides beside them as `CompactExecutionInput.returnText`
 for the synthesizer to append as a final turn (`defaultSynthesize` does; `response`
 is not used, because a history-reading synthesizer ignores it). A turn with any
-successful call keeps dropping the `Return` (#149); and under `returnStyle: 'summary'` the controller is told its `Return` is not the
-answer, so whether that text contains the answer depends on the model (#615).
+successful call keeps dropping the `Return` (#149); and under `returnStyle: 'summary'` the controller is told to put the complete
+answer in that `Return` when no tool call in the task has returned a result (#615), which is a prompt instruction, so it is
+unverified live until baseline 06/07 pass.
 
 The default is safe because `compactExecution` is the better-informed author in
 every shipped chain: it reads results at full fidelity (no `maxResultChars`

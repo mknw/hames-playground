@@ -664,8 +664,17 @@ async function runAndSave(
  * refused); the caller then releases the claim without a blob, as before. An
  * interactive first message and a triggered run already have a seeded blob
  * holding their input; only a CONTINUED conversation needs the new message
- * added, and one whose agent changed starts over exactly as `planTurn` does.
+ * added, and one whose agent changed starts over exactly as `planTurn` does
+ * (the stored history is replaced, as a successful turn's save would).
+ *
+ * The persisted text is the SAME string the live `error` frame carries
+ * (`routes/api/events.ts`), capped at {@link PERSISTED_ERROR_MAX}: it is stored
+ * for every failure in `runAndSave`, not only the wake, and a stored blob has no
+ * expiry. The column is encrypted, and the shared-conversation projection drops
+ * error bubbles.
  */
+const PERSISTED_ERROR_MAX = 2000
+
 async function recordRunFailure(
   req: TurnRequest,
   agentId: string,
@@ -688,7 +697,7 @@ async function recordRunFailure(
       }
     }
     const data: ErrorEventData = {
-      error: err instanceof Error ? err.message : String(err),
+      error: (err instanceof Error ? err.message : String(err)).slice(0, PERSISTED_ERROR_MAX),
       severity: 'irrecoverable',
     }
     ctx.events.push(createEvent('error', 'harness', data))

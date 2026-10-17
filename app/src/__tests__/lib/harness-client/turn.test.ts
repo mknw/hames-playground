@@ -1362,6 +1362,78 @@ describe('what the header learns from a turn', () => {
       ])
     })
 
+    // MUTATION: add `if (req.mode === 'triggered') return false` at the top of
+    // `recordRunFailure` → no save, the replay assertion reddens.
+    it('records a TRIGGERED run at its seeded claim, without a second input event', async () => {
+      dbLoadConversation.mockResolvedValue({
+        serializedContext: seeded([userEvent('do it')]),
+        version: 'v-trig',
+      })
+
+      await expect(
+        runTurnAndPersist({
+          mode: 'triggered' as const,
+          sessionId: 'run-wake',
+          userId: 'user-1',
+          agentId: 'search',
+          message: 'do it',
+          data: { trigger: TRIGGER },
+          claimVersion: 'v-claim',
+        }),
+      ).rejects.toThrow(WAKE_MSG)
+
+      expect(saveSession).toHaveBeenCalledWith('run-wake', 'user-1', 'search', expect.any(String), {
+        version: 'v-claim',
+        inferenceTier: 'verda',
+      })
+      expect(JSON.parse(savedBlob()).status).toBe('error')
+      expect(replayMessages(savedBlob())).toMatchObject([
+        { role: 'user', content: 'do it' },
+        { role: 'error', content: WAKE_MSG },
+      ])
+      expect(replayMessages(savedBlob())).toHaveLength(2)
+      expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
+    })
+
+    // MUTATION: replace `createContext(req.message, undefined, sessionId)` with
+    // `ctx` in `recordRunFailure` → the old agent's history survives and the
+    // length assertion reddens. Pins that a changed agent starts over, as
+    // `planTurn`'s success path does.
+    it('starts over when the agent changed, as the success path would', async () => {
+      const stored = seeded([userEvent('earlier')])
+      claimSession.mockResolvedValue({
+        ...STORED,
+        agentId: 'other-agent',
+        serializedContext: stored,
+      })
+      dbLoadConversation.mockResolvedValue({ serializedContext: stored, version: 'v-claim' })
+
+      await expect(runTurnAndPersist(interactive({ message: 'again' }))).rejects.toThrow(WAKE_MSG)
+
+      const replay = replayMessages(savedBlob())
+      expect(replay).toMatchObject([
+        { role: 'user', content: 'again' },
+        { role: 'error', content: WAKE_MSG },
+      ])
+      expect(replay).toHaveLength(2)
+    })
+
+    // MUTATION: remove `.slice(0, PERSISTED_ERROR_MAX)` → the stored text is
+    // the whole message and the length assertion reddens.
+    it('caps the persisted error text', async () => {
+      ensurePrivateTierAwake.mockReset()
+      ensurePrivateTierAwake.mockRejectedValueOnce(new Error('x'.repeat(5000)))
+      dbLoadConversation.mockResolvedValue({
+        serializedContext: seeded([userEvent('q')]),
+        version: 'v-seed',
+      })
+
+      await expect(runTurnAndPersist(interactive())).rejects.toThrow()
+
+      const error = replayMessages(savedBlob()).find((m) => m.role === 'error')
+      expect(error?.content).toHaveLength(2000)
+    })
+
     it('falls back to the plain failed release when the blob cannot be saved', async () => {
       dbLoadConversation.mockResolvedValue({
         serializedContext: seeded([userEvent('q')]),

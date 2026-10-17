@@ -15,9 +15,10 @@
  * takes, because both throw out of `runAndSave`'s try.
  *
  * MUTATION: delete the `recordRunFailure` call from `runAndSave`'s catch in
- * `harness-client/turn.server.ts` → the first bubble still shows (live), and the
- * assertions after `page.reload()` redden: the thread opens with no user
- * message and no error.
+ * `harness-client/turn.server.ts` → the live bubble still shows, and the
+ * error assertions after `page.reload()` redden (the seeded row still holds a
+ * first message's user bubble, so only the error goes missing; a CONTINUED
+ * conversation losing its new message is pinned at the unit layer).
  */
 import { test, expect } from '../lib/fixtures'
 import { VERDA_MODEL } from '../lib/env'
@@ -60,6 +61,7 @@ for (const theme of ['light', 'dark'] as const) {
 
     // ---- Live: the bubble is there, the spinner is not -----------------------
     await expect(errorBubbles(page).first()).toBeVisible({ timeout: 90_000 })
+    await expect(errorBubbles(page)).toHaveCount(1)
     await expect(errorBubbles(page).first()).toContainText(WAKE_FAILED)
     await expect(coldStartNotice(page)).toBeHidden()
     await expect(composer(page)).toBeEditable()

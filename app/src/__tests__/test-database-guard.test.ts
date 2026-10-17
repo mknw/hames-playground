@@ -323,6 +323,7 @@ describe('explicit targets cannot bypass the live-server/name guard (#432 row 8)
     'postgresql://x:x@127.0.0.2:5432/hames_test',
     'postgresql:///hames_test',
     'postgresql://x:x@%6cocalhost:5432/hames_test',
+    'postgresql://x:x@%6Cocalhost:5432/hames_test',
     'postgresql://x:x@%70ostgres:5432/hames_test',
     'postgresql://x:x@%31%32%37.0.0.1:5432/hames_test',
     'postgresql://x:x@2130706433:5432/hames_test',

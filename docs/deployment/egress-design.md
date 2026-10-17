@@ -5,7 +5,7 @@
 build step 7. It builds on #639's Engine/daemon and smoke checks and #643's
 two-clone shape. The coordinator scoped the executable artifact to metadata
 denies; the broader host/LAN policy below remains design only. Required
-coordinator-commissioned **Opus security review** and operator packet/reboot
+coordinator-commissioned **Opus security review convergence** and operator packet/reboot
 evidence remain outstanding. No host access, provider calls or private-tier
 probes are part of this change. Deployment-specific values stay outside the
 public repository ([ADR-0008](../adr/0008-deployment-guidance-is-provider-neutral.md)).
@@ -81,7 +81,7 @@ The single inventory drives both families (`scripts/metadata-egress.py:18`, `:30
 | `169.254.0.0/16`                                                                                    | Includes `169.254.169.254`, ECS-style `169.254.170.2` and other IPv4 link-local variants. This deliberately denies the entire IPv4 link-local range, including non-metadata uses.                                                                                                                                                                             |
 | `100.100.100.200/32`                                                                                | Alternate metadata service documented by [Alibaba Cloud](https://www.alibabacloud.com/help/en/ecs/user-guide/view-instance-metadata). Other CGNAT addresses stay under existing policy.                                                                                                                                                                       |
 | `fd00:ec2::254/128`, `fd20:ce::254/128`                                                             | IPv6 metadata addresses documented by [AWS](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html) and [Google Cloud](https://docs.cloud.google.com/compute/docs/metadata/querying-metadata). These references are examples, not deployment choices.                                                                 |
-| `fe80::a9fe:a9fe/128`                                                                               | Defensive deny of the link-local representation of the familiar metadata literal; no claim that a provider exposes it. Other IPv6 link-local traffic, including neighbor discovery, stays under existing policy.                                                                                                                                              |
+| `fe80::a9fe:a9fe/128`                                                                               | [OpenStack's documented IPv6 metadata address](https://docs.openstack.org/nova/latest/admin/metadata-service.html) (zone-scoped link-local). Other IPv6 link-local traffic, including neighbor discovery, stays under existing policy.                                                                                                                        |
 | IPv4-mapped `::ffff:0:0/96` and deprecated compatible `::/96` representations of **each IPv4 deny** | Only the corresponding embedded ranges are denied, not these whole /96s. A normal mapped socket uses IPv4 filtering; on-wire representations also receive IPv6 rules.                                                                                                                                                                                         |
 | The corresponding ranges under `64:ff9b::/96`; all of `64:ff9b:1::/48`                              | Defensive coverage of the [RFC 6052](https://www.rfc-editor.org/rfc/rfc6052.html) well-known translation form and the [RFC 8215](https://www.rfc-editor.org/rfc/rfc8215.html) local-use translation prefix. The latter intentionally denies all local-use translation, not only metadata; operators needing it must design a narrower policy before adoption. |
 
@@ -94,6 +94,10 @@ different alternate spellings. Unknown provider addresses, custom DNS64
 prefixes, proxies relaying metadata from allowed addresses and tunnels are
 **not covered**. Inventory provider endpoints, resolvers and routes locally
 before adoption; do not infer exhaustive provider coverage from this list.
+Azure WireServer `168.63.129.16` is explicitly **not covered**: [Microsoft requires
+in-VM outbound access](https://learn.microsoft.com/en-us/azure/virtual-network/what-is-ip-address-168-63-129-16),
+so it cannot join the shared deny inventory and could only receive a
+`DOCKER-USER`-only deny.
 
 ### Apply, failure and idempotency contract
 
@@ -139,7 +143,10 @@ offline test is not deployment evidence.
 
 This baseline intentionally leaves non-metadata host/LAN destinations to the
 existing policy. A later policy needs a local topology inventory, not a public
-list of instance addresses. Design its ordering as follows:
+list of instance addresses.
+The destination inventory may need to split into a workload-only set
+(`DOCKER-USER`) and a host set (`INPUT`/`OUTPUT`) to preserve host dependencies
+such as Azure WireServer. Design its ordering as follows:
 
 1. Keep metadata denies first in both families.
 2. At host `INPUT`, match the exact workload bridge interfaces and allow only
@@ -205,7 +212,12 @@ Persistence should be an **operator-owned systemd prerequisite** at a pinned
 path, ordered after Docker and UFW setup/reload and before the Compose workload
 unit. Its oneshot runs the explicit installer; the workload unit requires its
 success. Docker restarts, UFW reloads and network changes must revalidate/reapply
-before workload admission. `RemainAfterExit` alone does not re-run on a firewall
+with `sudo python3 scripts/metadata-egress.py --apply` before workload admission;
+this step is idempotent and reads back both families (`scripts/metadata-egress.py:127`,
+`:137`). No read-only detector exists, so `smoke` does not prove the baseline is
+installed; a read-only `--check` using the existing readback block with zero
+restore calls, wired into `smoke`, is owed together with persistence adoption.
+`RemainAfterExit` alone does not re-run on a firewall
 reload. Prevent Docker's `restart: unless-stopped` containers from bypassing
 that gate on reboot, and test restart, reboot and reload separately. A generic
 `iptables-save` dump restored before Docker creates its chains is not the
@@ -219,29 +231,37 @@ jumps and the owned chain in both families after stopping workloads; never
 flush Docker/UFW tables or blindly restore a stale whole-host snapshot over
 running Docker. Removing the baseline reopens metadata access and is not a
 successful deployment. Unknown provider/host dependencies that need metadata
-must be resolved before adoption; there is no hidden host-process exemption.
+must be resolved before adoption, including host agents using OpenStack's
+`fe80::a9fe:a9fe` because the `OUTPUT` hook blocks it too
+(`scripts/metadata-egress.py:16`, `:31`, `:70`); there is no hidden host-process
+exemption.
 
 ## Claims and the mutations that break them
 
 Layer 1 evidence is an independent small interpreter of the emitted rule syntax,
-plus fake snapshot/test/commit/readback transactions. It models destination,
+plus fake snapshot/test/commit/readback transactions. It validates every generated
+managed rule against a complete allowlist of the modeled match forms and refuses
+unsupported protocol/port/source/interface restrictions. It models destination,
 conntrack original destination/direction, rule order, jumps and state. It does
 not emulate kernel routing, netfilter, Docker or persistence. Every mutation
 below edits production source in a temporary directory and re-runs the **same**
 tests; a syntax/import error does not count as a kill.
 
-| Claim                                                                                                 | Source                                 | Executed source mutation that turns its test red                                                                                                            |
-| ----------------------------------------------------------------------------------------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| IPv4 metadata and alternate service are denied.                                                       | `scripts/metadata-egress.py:18`, `:67` | `metadata-v4`, `alternate-v4` remove a denied range.                                                                                                        |
-| Forwarded traffic reaches the metadata policy.                                                        | `scripts/metadata-egress.py:16`, `:89` | `wrong-chain` removes the DOCKER-USER hook; `unreachable-parent` disables parent validation.                                                                |
-| Host output and local DNAT cannot bypass the same policy.                                             | `scripts/metadata-egress.py:16`, `:73` | `host-output-gap`, `local-dnat-gap` remove their hooks; `post-dnat-gap` changes original-destination matching.                                              |
-| Established/related metadata packets are denied before any existing accept.                           | `scripts/metadata-egress.py:116`       | `established-bypass` appends the jump after existing accepts/returns.                                                                                       |
-| Both address families and the declared alternate forms are covered.                                   | `scripts/metadata-egress.py:17`, `:30` | `ipv6-gap`, `ipv6-service`, `ipv6-gcp`, `ipv6-linklocal`, `mapped-gap`, `compatible-gap`, `nat64-gap`, `local-nat64-gap` each remove a family/address/form. |
-| Required relay/MCP/private-service and public egress keep existing policy; Docker denies stay denied. | `scripts/metadata-egress.py:75`        | `relay-path-cut` adds an RFC1918 blanket deny; `mcp-egress-cut` replaces the final return with drop.                                                        |
-| Default invocation performs no host commands; applying requires Linux root.                           | `scripts/metadata-egress.py:155`       | `dry-run-applies` makes apply unconditional; `root-gate` removes the platform/uid check.                                                                    |
-| Both syntax preflights precede writes.                                                                | `scripts/metadata-egress.py:131`       | `no-syntax-preflight` removes restore's test flag. Missing IPv6 also causes zero writes.                                                                    |
-| Repeated reconciliation leaves one first hook and preserves unrelated rules.                          | `scripts/metadata-egress.py:113`       | `duplicate-hooks` stops deleting old managed jumps; `table-flush` removes the no-flush option.                                                              |
-| Wrong readback cannot report success.                                                                 | `scripts/metadata-egress.py:141`       | `no-readback` accepts any managed policy; `save-canonicalization` stops normalizing option order.                                                           |
+| Claim                                                                                                 | Source                                   | Executed source mutation that turns its test red                                                                                                                |
+| ----------------------------------------------------------------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| IPv4 metadata and alternate service are denied.                                                       | `scripts/metadata-egress.py:18`, `:67`   | `metadata-v4`, `alternate-v4` remove a denied range.                                                                                                            |
+| Denies have no protocol/port/source/interface restrictions the interpreter silently ignores.          | `scripts/metadata-egress.py:48`          | `tcp-only-denies` prepends `-p tcp` to every DROP rule; the shared interpreter grammar assertion fails.                                                         |
+| Forwarded traffic reaches the metadata policy.                                                        | `scripts/metadata-egress.py:16`, `:89`   | `wrong-chain` removes the DOCKER-USER hook; `unreachable-parent` disables parent validation.                                                                    |
+| Host output and local DNAT cannot bypass the same policy.                                             | `scripts/metadata-egress.py:16`, `:73`   | `host-output-gap`, `local-dnat-gap` remove their hooks; `post-dnat-gap` changes original-destination matching.                                                  |
+| Established/related metadata packets are denied before any existing accept.                           | `scripts/metadata-egress.py:116`         | `established-bypass` appends the jump after existing accepts/returns.                                                                                           |
+| Both address families and the declared alternate forms are covered.                                   | `scripts/metadata-egress.py:17`, `:30`   | `ipv6-gap`, `ipv6-service`, `ipv6-gcp`, `ipv6-linklocal`, `mapped-gap`, `compatible-gap`, `nat64-gap`, `local-nat64-gap` each remove a family/address/form.     |
+| Required relay/MCP/private-service and public egress keep existing policy; Docker denies stay denied. | `scripts/metadata-egress.py:75`          | `relay-path-cut` adds an RFC1918 blanket deny; `mcp-egress-cut` replaces the final return with drop.                                                            |
+| Default invocation performs no host commands; applying requires Linux root.                           | `scripts/metadata-egress.py:155`         | `dry-run-applies` makes apply unconditional; `root-gate` removes the platform/uid check.                                                                        |
+| Both syntax preflights precede writes.                                                                | `scripts/metadata-egress.py:131`         | `no-syntax-preflight` removes restore's test flag. Missing IPv6 also causes zero writes.                                                                        |
+| Repeated reconciliation leaves one first hook and preserves unrelated rules.                          | `scripts/metadata-egress.py:113`         | `duplicate-hooks` stops deleting old managed jumps; `table-flush` removes the no-flush option.                                                                  |
+| Wrong readback cannot report success.                                                                 | `scripts/metadata-egress.py:141`         | `no-readback` accepts any managed policy; `save-canonicalization` stops normalizing option order.                                                               |
+| Post-commit readback refuses displaced or duplicate hooks and an unreachable parent in either family. | `scripts/metadata-egress.py:140`, `:143` | `readback-hook-guard-off`, `readback-first-off`, `readback-unique-off`, `readback-hooks-off`, `readback-validate-off` remove each corresponding readback guard. |
+| Reserved chains refuse foreign references and foreign comment markers.                                | `scripts/metadata-egress.py:97`, `:100`  | `foreign-ref-hook-any` permits a FORWARD reference; `no-marker-check` accepts a foreign marker.                                                                 |
 
 Run the two Python commands above for the current counts. CI runs both tests
 and mutations in the existing daemon-free infrastructure step. All service

@@ -39,6 +39,25 @@ def snapshot(chains):
     return "\n".join([*lines, "COMMIT", ""])
 
 
+def validate_managed_rule(rule):
+    """Accept only the complete match forms modeled below, without restrictions."""
+    assert len(rule) % 2 == 0, "unknown managed rule grammar: " + repr(rule)
+    pairs = list(zip(rule[::2], rule[1::2]))
+    base = [("-m", "comment"), ("--comment", "vps-metadata-v1")]
+    forms = [base + [("-j", egress.CHAIN)], base + [("-j", "RETURN")]]
+    for key, value in pairs:
+        if key in ("-d", "--ctorigdst"):
+            try:
+                ipaddress.ip_network(value)
+            except ValueError as error:
+                raise AssertionError("invalid managed destination: " + value) from error
+            match = [(key, value)]
+            if key == "--ctorigdst":
+                match += [("-m", "conntrack"), ("--ctdir", "ORIGINAL")]
+            forms.append(base + match + [("-j", "DROP")])
+    assert sorted(pairs) in [sorted(form) for form in forms], "unknown managed rule grammar: " + repr(rule)
+
+
 def restore(chains, payload):
     """Small independent interpreter of the emitted restore grammar, not a kernel."""
     result = copy.deepcopy(chains)
@@ -48,6 +67,9 @@ def restore(chains, payload):
             result.setdefault(args[0][1:], [])
         elif args and args[0] in ("-F", "-A", "-D", "-I"):
             op, chain, *rule = args
+            managed = rule[1:] if op == "-I" else rule
+            if op != "-F" and (chain == egress.CHAIN or egress.CHAIN in managed):
+                validate_managed_rule(managed)
             if op == "-F":
                 result[chain] = []
             elif op == "-A":
@@ -184,6 +206,14 @@ class Rules(unittest.TestCase):
         chains["INPUT"].insert(0, ["-j", egress.CHAIN])
         with self.assertRaises(egress.Refused):
             egress.render("iptables", snapshot(chains))
+        chains = initial()
+        chains["FORWARD"].insert(1, egress.jump())
+        with self.assertRaises(egress.Refused):
+            egress.render("iptables", snapshot(chains))
+        chains = initial()
+        chains[egress.CHAIN] = [["-m", "comment", "--comment", "other", "-j", "ACCEPT"]]
+        with self.assertRaises(egress.Refused):
+            egress.render("iptables", snapshot(chains))
 
 
 class Apply(unittest.TestCase):
@@ -250,6 +280,33 @@ class Apply(unittest.TestCase):
         with self.assertRaises(egress.Refused):
             egress.apply()
 
+    def test_readback_rejects_displaced_duplicated_or_unparented_hooks(self):
+        real = self.command
+
+        def tamper(family, edit):
+            def command(args, payload=None):
+                out = real(args, payload)
+                if args[0] == family + "-save" and len(self.calls) > 6:
+                    chains = copy.deepcopy(self.states[family])
+                    edit(chains)
+                    return snapshot(chains)
+                return out
+            return command
+
+        accept = ["-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"]
+        edits = [("displaced-" + h, lambda c, h=h: c[h].insert(0, accept))
+                 for h in ("DOCKER-USER", "INPUT", "OUTPUT")]
+        edits += [("duplicated-" + h, lambda c, h=h: c[h].append(egress.jump()))
+                  for h in ("DOCKER-USER", "INPUT", "OUTPUT")]
+        edits += [("unparented", lambda c: c["FORWARD"].insert(0, ["-j", "ACCEPT"]))]
+        for family in ("iptables", "ip6tables"):
+            for name, edit in edits:
+                self.setUp()
+                with self.subTest(family=family, edit=name), \
+                        patch.object(egress, "command", side_effect=tamper(family, edit)):
+                    with self.assertRaises(egress.Refused):
+                        egress.apply()
+
     def test_apply_requires_linux_root(self):
         for platform, uid in (("darwin", 0), ("linux", 1000)):
             with patch.object(egress.sys, "platform", platform), patch.object(egress.os, "geteuid", return_value=uid):
@@ -282,6 +339,17 @@ class Command(unittest.TestCase):
 
 
 MUTATIONS = {
+    "tcp-only-denies": ('    target = args.index("-j")',
+                        '    args = ("-p", "tcp", *args) if args[-1] == "DROP" else args\n    target = args.index("-j")'),
+    "readback-hook-guard-off": ('require(hook_rules and normalized(hook_rules[0]) == normalized(jump()) and\n                    sum(CHAIN in r for r in hook_rules) == 1,',
+                                'require(True,'),
+    "readback-first-off": ('normalized(hook_rules[0]) == normalized(jump())', 'True'),
+    "readback-unique-off": ('sum(CHAIN in r for r in hook_rules) == 1', 'True'),
+    "readback-hooks-off": ('        for hook in HOOKS:\n            hook_rules',
+                           '        for hook in ():\n            hook_rules'),
+    "readback-validate-off": ('rules = validate_snapshot(snapshot)', 'rules = parse_save(snapshot)[1]'),
+    "foreign-ref-hook-any": ('rule[1] in HOOKS', 'True'),
+    "no-marker-check": ('rule[rule.index("--comment") + 1] == MARKER', 'True'),
     "metadata-v4": ('V4 = ("169.254.0.0/16", "100.100.100.200/32")', 'V4 = ("100.100.100.200/32",)'),
     "alternate-v4": ('V4 = ("169.254.0.0/16", "100.100.100.200/32")', 'V4 = ("169.254.0.0/16",)'),
     "wrong-chain": ('HOOKS = ("DOCKER-USER", "INPUT", "OUTPUT")', 'HOOKS = ("INPUT", "OUTPUT")'),

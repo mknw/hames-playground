@@ -33,7 +33,14 @@ scripts:
       [ -e "$src" ] || continue
       rel="${src#"$ORCA_ROOT_PATH"/}"
       mkdir -p "$ORCA_WORKTREE_PATH/$(dirname "$rel")"
-      ln -sfn "$src" "$ORCA_WORKTREE_PATH/$rel"
+      # Never replace what the lane already holds (a regular copy, or any link,
+      # dangling included): that file may be its only one. The archive hook reports
+      # a preserved copy that differs from main, for the operator to reconcile.
+      dest="$ORCA_WORKTREE_PATH/$rel"
+      if [ -e "$dest" ] || [ -L "$dest" ]; then
+        continue
+      fi
+      ln -s "$src" "$dest"
     done
 
     # 2. Claude Code project settings: .mcp.json is tracked but the *enablement*
@@ -66,6 +73,10 @@ scripts:
   # survives; uncommitted changes do not.
   archive: |
     set -uo pipefail
+    # Nothing to compare against (or nowhere to look) -> silent, and never a nounset abort.
+    if [ -z "${ORCA_ROOT_PATH:-}" ] || [ -z "${ORCA_WORKTREE_PATH:-}" ]; then
+      exit 0
+    fi
     cd "$ORCA_WORKTREE_PATH" 2>/dev/null || exit 0
 
     if [ -n "$(git status --porcelain)" ]; then
@@ -98,6 +109,7 @@ scripts:
       printf '%b' "$lost"
       echo "      Copy them to the main checkout before removing the worktree."
     fi
+    exit 0
 
 # Prompt used when an agent is started from a linked issue or PR. Encodes the
 # house rules so each lane does not have to be told them by hand.

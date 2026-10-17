@@ -330,7 +330,8 @@ The multipart intake sends raw file bytes; the JSON intake can send base64
 expand sixfold under JSON escaping: **30 MiB**, plus up to **2 MiB** for the
 envelope/metadata. The 1 MiB cap accommodates the **64 KiB** skill-file limit
 even after sixfold JSON escaping (`packages/sandbox/skills.ts`). Arbitrarily
-padded JSON, metadata or multipart fields are not exempt. The app still enforces its smaller content limits.
+padded JSON, metadata or multipart fields are not exempt. The app still enforces
+its smaller content limits.
 `request_body max_size` rejects reads beyond the cap with 413
 ([Caddy reference](https://caddyserver.com/docs/caddyfile/directives/request_body)).
 The app can receive up to the applicable cap before Caddy aborts an oversized
@@ -367,8 +368,8 @@ another dependency to audit/pin. It uses token buckets:
 
 The per-user refill allows ten requests/second because terminal input sends a
 request per keystroke (`InteractiveTerminal.tsx`). These are preview defaults,
-not measured capacity guarantees. Cookie-bearing requests incur a session lookup
-before admission; route authorization still performs its own check. State is
+not measured capacity guarantees. Session-route requests with cookies incur a
+session lookup before admission; route authorization still performs its own check. State is
 **in memory per process**, shared by the two router bundles, reset on restart,
 and separate for release/dev containers and any replicas. This is admission
 control, not a concurrent-request cap or edge DDoS protection: distributed or

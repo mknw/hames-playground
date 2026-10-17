@@ -21,7 +21,7 @@ absent. A first bring-up builds the image automatically. After merge the owner
 must take a dump with the currently running image before recreating their stack:
 `docker compose up -d` moves an older store to 5.26.32 and that move cannot
 be undone. The backup and restore default is `hames-neo4j:local`, matching compose.
-`bootstrap-vps.sh` checks the daemon version before `dc up` and refuses Engine
+`bootstrap-vps.sh` checks the daemon version before the image build and `dc up` and refuses Engine
 versions below 28.0.0, unreadable versions and an unavailable daemon. It does
 not upgrade an existing Engine automatically. Manual operators must run this
 check before deployment (a failed check means stop and upgrade first). Local dev: `make check-docker` runs the same gate (`scripts/check-docker.sh`, tested by `scripts/check-docker.test.sh`) and names the colima fix (`colima update`, restart the VM); an older Engine otherwise fails `docker compose up -d` with "unknown gateway mode isolated". There is deliberately no fallback that drops the isolation:
@@ -29,6 +29,56 @@ check before deployment (a failed check means stop and upgrade first). Local dev
 ```sh
 test "$(docker version --format '{{.Server.Version}}' | cut -d. -f1)" -ge 28 || { echo 'Docker Engine >= 28.0.0 required; upgrade before deploying.' >&2; exit 1; }
 ```
+
+## Existing deployment smoke (#432 G20, rows 3, 4 and 10)
+
+`bootstrap-vps.sh --only smoke` calls `scripts/check-vps.py` against the existing
+stack; it never starts the synthetic fixture below. Before building or booting,
+it checks the Engine, refuses unsafe `daemon.json` options and inspects the
+running daemon's command line for isolation overrides. After `up`, and
+again in smoke, the probe inspects the network reached from the current Neo4j
+container: internal IPv4 bridge, isolated gateway, only Neo4j and its relay,
+no host IPv4 address on the bridge, and no default route or gateway in Neo4j.
+It also pins the relay's app-network ownership and refuses extra bridge options
+or Neo4j network administration/raw-socket capabilities. It refuses IPv6 because
+this probe's containment proof is IPv4-only. A boot-time network refusal stops
+the stack before returning failure; volumes and networks remain intact.
+
+Smoke requires bounded TCP failures from Neo4j to a public IP, literal backend
+IPs and actual primary/docker0 host addresses, with the same destinations first
+reachable from the app container. The host checks use the selected SSH port;
+a host firewall that blocks that positive control makes smoke inconclusive/red,
+not evidence of containment. If `host.docker.internal` resolves inside Neo4j,
+its IPv4 targets get the same paired test. A working app DNS lookup is the
+control for a failed external lookup of the same name inside Neo4j. A successful
+internal `neo4j-relay` lookup inside Neo4j precedes both negative name checks.
+Missing tools, malformed inspect data and non-network failures are red. The former bridge gateway is
+covered structurally: its absence must not be confused with a failed connection
+to a peer that now owns the numeric address.
+
+An independent `RETURN 432` uses cypher-shell from Neo4j with the **explicit**
+address `bolt://neo4j-relay:7687`; this proves the relay path even when no seed
+is requested, with `--access-mode read`. A separate Node Bolt handshake from
+the app namespace reaches the relay's app-side leg and requires a nonzero
+four-byte version response. Cypher uses the container's own password environment.
+Private health
+is skipped without any provider request by default; `--probe-private-health`
+explicitly permits one small-model `/health` GET that may itself wake the box.
+It generates no completion, follows no redirect and never retries.
+
+These checks fail closed; none changes a network, starts services or removes
+volumes. Unverified daemon isolation flags refuse; host firewall rules remain
+outside this check. The TCP/DNS smoke legs do not repeat the fixture's
+APOC/file-import tests.
+The synthetic fixture remains unchanged and separately opt-in. Source/mocked
+checks do not constitute live packet evidence. See the
+[Engine-upgrade procedure](../deployment/docker-engine-upgrade.md) for the
+dump-first upgrade gate and stale-network handling.
+
+`python3 scripts/check-vps.test.py` tests the command seam and bootstrap wiring
+without a daemon, root or external network; Node programs use synthetic loopback
+listeners, and `--mutations` verifies the negative pins.
+The Linux bootstrap suite remains `scripts/bootstrap-vps.test.sh`.
 
 ## Checks and scope
 

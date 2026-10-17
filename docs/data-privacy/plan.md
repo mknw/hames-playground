@@ -235,6 +235,18 @@ stop being assumed:
   not a completed Art. 28 / Chapter V analysis: DataCrunch is still a hosting
   provider with its own contract, location and sub-processors, and this doc has
   not looked at any of them.
+- **Update (2026-10-17): the claim depends on the host.** The same model can
+  run on Modal (`deploy/modal/hames_private_27b.py`), selected by
+  `VERDA_INFERENCE_ENDPOINT` alone. On that host the processor is Modal, Inc.
+  (US): its edge sees request bodies (it checks the proxy token there), and
+  images, memory snapshots and container logs are stored in the US whatever the
+  compute region. So "moves prompts _off_ a third-country processor" is true of
+  the Verda host and not of the Modal one. Approval for Modal is G15 (#567
+  comment 6194622280): the owner's own and demo traffic, company data waiting on
+  a DPA. G15's two technical conditions (snapshots hold public weights and
+  synthetic warm-up only; no request content in logs) are what
+  `app/src/__tests__/deploy/modal-pins.test.ts` and `deploy/modal/test_behaviour.py`
+  hold for both Modal apps.
 - The client asks for **no prompt caching** (no `allowed_role_metadata`, so the
   templates' `cache_control` breakpoints are dropped) — nothing in a request
   asks anything to retain a prompt. The deployment's own vLLM prefix cache is a

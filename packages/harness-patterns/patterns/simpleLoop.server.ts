@@ -156,7 +156,7 @@ export interface SimpleLoopData {
   lastAction?: ControllerAction
   response?: string
   /** The terminal `Return`'s text, for `compactExecution`'s Return-only case
-   *  (#610). Written ONLY by this loop's own `Return` exit — an actorCritic
+   *  (#610) and its every-call-failed case (#614). Written ONLY by this loop's own `Return` exit — an actorCritic
    *  `Return` is refused and never reaches it. */
   returnText?: string
 }

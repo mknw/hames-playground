@@ -79,7 +79,7 @@ describe.each(['anthropic', 'verda'] as const)('LoopReturnStyle render (%s wire)
     const b = await render('summary', which)
     expect(systemText(b)).toContain(CLAUSE)
     expect(systemText(b)).toContain('you called none, or every call failed')
-    expect(systemText(b)).toContain('say briefly what failed')
+    expect(systemText(b)).toContain('if a call failed, say briefly what failed')
     expect(systemText(b)).toContain('BRIEF completion summary')
     // Not in the volatile tail or the catalog: that would be re-sent uncached.
     expect(restText(b)).not.toContain(CLAUSE)

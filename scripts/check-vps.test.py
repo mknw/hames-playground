@@ -304,7 +304,7 @@ MUTATIONS = [
     ("early-engine", BOOTSTRAP, '  assert_engine_supported\n  assert_daemon_isolation\n', '  assert_daemon_isolation\n'),
     ("daemon-iptables", SOURCE, 'config[key] is True', 'True'),
     ("network-internal", SOURCE, 'net["Internal"] is True', 'True'),
-    ("network-isolated", SOURCE, '== "isolated",', '!= "isolated",'),
+    ("network-isolated", SOURCE, 'net["Options"].get("com.docker.network.bridge.gateway_mode_ipv4") == "isolated"', 'True'),
     ("network-extra", SOURCE, 'len(nets) == 1', 'len(nets) >= 1'),
     ("bridge-address", SOURCE, 'not addresses[0]["addr_info"]', 'True'),
     ("default-route", SOURCE, 'fields[1] != "00000000" and fields[2] == "00000000"', 'True'),

@@ -154,10 +154,25 @@ describe('request admission (#432 row 6)', () => {
     expect((await limit(event('user-255')))?.status).toBe(429)
   })
 
-  it('shares the deployed hook across independently loaded router modules', async () => {
-    vi.resetModules()
-    const secondRouter = await import('~/lib/request-rate-limit.server')
-    expect(secondRouter.enforceRequestRateLimit).toBe(enforceRequestRateLimit)
+  it('shares the deployed allowance across independently loaded router modules', async () => {
+    getSession.mockResolvedValue({ userId: 'shared-router-principal' })
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(0)
+    try {
+      vi.resetModules()
+      const secondRouter = await import('~/lib/request-rate-limit.server')
+      for (let i = 0; i < 60; i++) {
+        expect(await enforceRequestRateLimit(event('router-one-session'))).toBeUndefined()
+        expect(
+          await secondRouter.enforceRequestRateLimit(event('router-two-session')),
+        ).toBeUndefined()
+      }
+      expect((await enforceRequestRateLimit(event('router-one-session')))?.status).toBe(429)
+      expect(
+        (await secondRouter.enforceRequestRateLimit(event('router-two-session')))?.status,
+      ).toBe(429)
+    } finally {
+      clock.mockRestore()
+    }
   })
 })
 

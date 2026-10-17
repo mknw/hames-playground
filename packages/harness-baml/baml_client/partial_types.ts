@@ -20,7 +20,7 @@ $ pnpm add @boundaryml/baml
 
 import type { Image, Audio, Pdf, Video } from "@boundaryml/baml"
 import type { Checked, Check } from "./types"
-import type {  Attempt,  CompactedMemory,  ControllerAction,  CriticResult,  DescribeBatchResult,  DescribeItemSummary,  DescribeTarget,  ExpandedRef,  ExtractedMemory,  FewShot,  LoopTurn,  MemoryMember,  Message,  PlanResult,  PriorResult,  ReferenceCandidate,  ReferenceSelection,  ReferenceSelectorResult,  RouteOption,  RoutingResult,  ScreenVerdict,  ToolCall,  ToolCallRequest,  ToolDescription,  ToolResult } from "./types"
+import type {  Attempt,  CompactedMemory,  ControllerAction,  CriticResult,  DescribeBatchResult,  DescribeItemSummary,  DescribeTarget,  ExpandedRef,  ExtractedMemory,  FewShot,  LoopTurn,  MemoryMember,  Message,  PlanResult,  PlanResultThinking,  PriorResult,  ReferenceCandidate,  ReferenceSelection,  ReferenceSelectorResult,  RouteOption,  RoutingResult,  ScreenVerdict,  ToolCall,  ToolCallRequest,  ToolDescription,  ToolResult } from "./types"
 import type * as types from "./types"
 
 /******************************************************************************
@@ -144,6 +144,13 @@ export namespace partial_types {
        * vocabulary for "why this course of action", wherever it is produced.
        */
       reasoning?: string | null
+      plan?: string | null
+      n_steps?: number | null
+    }
+    /**
+     * Content-only planner answer; the adapter restores reasoning from the parser trace.
+    */
+    export interface PlanResultThinking {
       plan?: string | null
       n_steps?: number | null
     }

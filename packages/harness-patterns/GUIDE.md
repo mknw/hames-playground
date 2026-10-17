@@ -160,6 +160,13 @@ data, never `memories`. And a decision that is not a decision — an error, an
 abstention, a state that would not build — never dispatches a route. See SPEC's
 [decisionLoop](SPEC.md#decisionlooproutes-config-507).
 
+A planner caps the reasoning handed to downstream executors with
+`maxReasoningChars` (default 2000), alongside the existing `maxPlanChars` for
+plan text. Its `plan_created` event and LLM call record retain the full trace.
+A `PlannerFn` may call its optional fourth `onRetry(failedCall)` argument before
+a same-endpoint retry; the pattern records a warning even if that retry fails.
+See SPEC's [planner](SPEC.md#plannerplanfn-tools-config) for the full contract.
+
 ### Protecting the web route's earlier inputs
 
 Place `withPseudonymisedInputs({ pseudonymise: hostFilter })` directly around

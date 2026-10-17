@@ -19,6 +19,7 @@ export {
   HANDOFF_HEADING,
   AGENT_MAP_HEADING,
   DEFAULT_MAX_PLAN_CHARS,
+  DEFAULT_MAX_REASONING_CHARS,
   type PlannerConfig,
   type PlannerData,
 } from './planner.server'

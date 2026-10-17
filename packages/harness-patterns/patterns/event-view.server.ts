@@ -25,6 +25,7 @@ import type {
   DecisionMadeEventData,
   MemoryRecalledEventData,
   MemoryWrittenEventData,
+  PlanCreatedEventData,
 } from '../types'
 
 assertServerOnImport()
@@ -546,6 +547,16 @@ function formatEventData(event: ContextEvent): string {
       }
       const base = `${data.tool}: ${JSON.stringify(data.result)}`
       return data.summary ? `${base}\n[Summary: ${data.summary}]` : base
+    }
+    case 'plan_created': {
+      // The full trace is observability-only (SD-1/SD-3); only the plan
+      // text and structural fields belong in the LLM-facing event view.
+      const data = event.data as PlanCreatedEventData
+      return JSON.stringify({
+        skipped: data.skipped,
+        n_steps: data.plan?.n_steps,
+        plan: data.plan?.plan,
+      })
     }
     case 'content_sanitized': {
       // METADATA ONLY — never `event.data`. `findings[].match` holds the

@@ -28,6 +28,7 @@ import { VERDA_CLIENT_NAME } from './verda-activity.server'
 import { noteBoxCallStarting } from './cold-start.server'
 import {
   VERDA_CLIENT_BY_ROLE,
+  THINKING_CLIENTS,
   configureCostPricing,
   configureCostRates,
   configureInferencePolicy,
@@ -230,6 +231,7 @@ configureCostPricing({
   estimate: estimateLlmCostEur,
   timePricedClients: {
     [VERDA_CLIENT_NAME]: verdaEurPerHour,
+    ...Object.fromEntries([...THINKING_CLIENTS].map((client) => [client, verdaEurPerHour])),
     LocalQwenSmall: smallLlmEurPerHour,
     PrivateSystemOne: smallLlmEurPerHour,
   },

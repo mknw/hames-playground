@@ -414,6 +414,7 @@ describe('the switched-function set follows the routed roles', () => {
       'GenerateConversationTitle',
       'LoopController',
       'Planner',
+      'PlannerThinking',
       'ReferenceSelector',
       'ResultDescribe',
       'ResultDescribeBatch',
@@ -428,7 +429,7 @@ describe('the switched-function set follows the routed roles', () => {
     // Anthropic window by the one call that is slowest per character.
     expect(TIER_SWITCHED_FUNCTIONS.has('ScreenUntrustedContent')).toBe(true)
     // The fifteen BAML functions and the systemone call move with the tier.
-    expect(TIER_SWITCHED_FUNCTIONS.size).toBe(16)
+    expect(TIER_SWITCHED_FUNCTIONS.size).toBe(17)
   })
 
   it('lists every function that declares the describe chain, not a subset', async () => {

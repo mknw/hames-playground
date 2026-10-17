@@ -221,6 +221,14 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
     (o) => () => b.request.Synthesize('q', 'i', TURNS, true, 'boom', 'MEMORY BLOCK', o),
   ],
   ['Planner', (o) => () => b.request.Planner('q', 'i', TOOLS, 'CONTEXT BLOCK', o)],
+  [
+    'PlannerThinking',
+    (o) => () =>
+      b.request.PlannerThinking('q', 'i', TOOLS, 'CONTEXT BLOCK', {
+        ...o,
+        client: 'VerdaQwenThink',
+      }),
+  ],
   ['Router', (o) => () => b.request.Router('q', ROUTES, HISTORY, 'MEMORY BLOCK', o)],
   ['CompactIntent', (o) => () => b.request.CompactIntent(HISTORY, 'latest', o)],
   ['RetrieveQuery', (o) => () => b.request.RetrieveQuery(HISTORY, 'latest', o)],

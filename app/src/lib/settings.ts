@@ -171,6 +171,7 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // for this client said 250k; the deployment says 131072 and the deployment
   // wins. Reached through resolveClientForRole() while USE_VERDA_INFERENCE=1.
   VerdaQwen: 131_072,
+  VerdaQwenThink: 131_072, // Same parser-equipped private 27B box (#625).
   // Strategy-level chain clients — the names patterns actually pass to
   // getContextWindow() (via resolveClientForRole). Without these the lookup
   // fell through to the 16_384 default and over-trimmed prompts, dropping real
@@ -228,6 +229,7 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // outputs that need it. The arithmetic is in verda-client.baml; the
   // inequality is pinned by clients-verda.test.ts.
   VerdaQwen: 4_096,
+  VerdaQwenThink: 4_096, // Provisional / unmeasured; G19 Q5 eval sets the final pair.
   // Strategy-chain FLOORS — the smallest cap of any leaf in the chain, the
   // same conservative-floor pattern as the chain entries in
   // MODEL_CONTEXT_WINDOWS above. Truncation detection never consults these
@@ -339,6 +341,7 @@ export const DEFAULT_SMALL_LLM_EUR_PER_HOUR = 1.54
  * Keys are written as literals because this file is client-safe. */
 export const TIME_PRICED_CLIENTS: Readonly<Record<string, number>> = {
   VerdaQwen: DEFAULT_VERDA_EUR_PER_HOUR,
+  VerdaQwenThink: DEFAULT_VERDA_EUR_PER_HOUR,
   LocalQwenSmall: DEFAULT_SMALL_LLM_EUR_PER_HOUR,
   PrivateSystemOne: DEFAULT_SMALL_LLM_EUR_PER_HOUR,
 }

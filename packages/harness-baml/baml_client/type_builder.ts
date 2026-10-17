@@ -55,6 +55,8 @@ export default class TypeBuilder {
     
     PlanResult: ClassViewer<'PlanResult', "reasoning" | "plan" | "n_steps">;
     
+    PlanResultThinking: ClassViewer<'PlanResultThinking', "plan" | "n_steps">;
+    
     PriorResult: ClassViewer<'PriorResult', "ref_id" | "tool" | "summary" | "expanded_in_turn">;
     
     ReferenceCandidate: ClassViewer<'ReferenceCandidate', "ref_id" | "tool" | "summary" | "tool_args" | "ts_offset_s">;
@@ -82,7 +84,7 @@ export default class TypeBuilder {
     constructor() {
         this.tb = new _TypeBuilder({
           classes: new Set([
-            "Attempt","CompactedMemory","ControllerAction","CriticResult","DescribeBatchResult","DescribeItemSummary","DescribeTarget","ExpandedRef","ExtractedMemory","FewShot","LoopTurn","MemoryMember","Message","PlanResult","PriorResult","ReferenceCandidate","ReferenceSelection","ReferenceSelectorResult","RouteOption","RoutingResult","ScreenVerdict","ToolCall","ToolCallRequest","ToolDescription","ToolResult",
+            "Attempt","CompactedMemory","ControllerAction","CriticResult","DescribeBatchResult","DescribeItemSummary","DescribeTarget","ExpandedRef","ExtractedMemory","FewShot","LoopTurn","MemoryMember","Message","PlanResult","PlanResultThinking","PriorResult","ReferenceCandidate","ReferenceSelection","ReferenceSelectorResult","RouteOption","RoutingResult","ScreenVerdict","ToolCall","ToolCallRequest","ToolDescription","ToolResult",
           ]),
           enums: new Set([
             
@@ -144,6 +146,10 @@ export default class TypeBuilder {
         
         this.PlanResult = this.tb.classViewer("PlanResult", [
           "reasoning","plan","n_steps",
+        ]);
+        
+        this.PlanResultThinking = this.tb.classViewer("PlanResultThinking", [
+          "plan","n_steps",
         ]);
         
         this.PriorResult = this.tb.classViewer("PriorResult", [

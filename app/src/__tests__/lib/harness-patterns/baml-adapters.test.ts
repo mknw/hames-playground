@@ -717,12 +717,13 @@ describe('extractLLMCallData', () => {
     )
 
     expect(result).toBeDefined()
-    // Raw prompt = the function's wrapper with its arguments intact (#625 S2).
-    // The Template tab displays this source; expansion is follow-up #628.
+    // Shared bodies are included as raw source, including nested sections (#628).
     expect(result!.promptTemplate).toBeDefined()
+    expect(result!.promptTemplate).toContain('{# expanded from LoopControllerBody #}')
     expect(result!.promptTemplate).toContain(
-      '{{ LoopControllerBody(user_message, intent, tools, turns, context, turns_previous_runs, few_shots, multi_call_mode, plan_context, return_style, true) }}',
+      'You are an AI agent that accomplishes tasks by calling tools.',
     )
+    expect(result!.promptTemplate).toContain('{# expanded from ToolCatalog #}')
     expect(result!.promptTemplate).toMatch(/\{\{\s*ctx\.output_format\s*\}\}/)
     // Parsed prompt = the rendered HTTP body containing substituted content
     expect(result!.rawInput).toContain('INTENT: hello')
@@ -1159,11 +1160,9 @@ describe('LLMCallError — failed LLM call capture', () => {
         intent: 'do thing',
       }),
     )
-    // Failed calls capture the same raw wrapper and output-format placeholder.
+    // Failed calls capture the same included source and output-format placeholder.
     expect(err.llmCall.promptTemplate).toBeDefined()
-    expect(err.llmCall.promptTemplate).toContain(
-      '{{ LoopControllerBody(user_message, intent, tools, turns, context, turns_previous_runs, few_shots, multi_call_mode, plan_context, return_style, true) }}',
-    )
+    expect(err.llmCall.promptTemplate).toContain('{# expanded from LoopControllerBody #}')
     expect(err.llmCall.promptTemplate).toMatch(/\{\{\s*ctx\.output_format\s*\}\}/)
     // HTTP body captured before the failure
     expect(err.llmCall.rawInput).toBe('{"messages":[{"role":"user","content":"INTENT: do thing"}]}')
@@ -1553,6 +1552,116 @@ describe('warnIfCollectorEmpty', () => {
 })
 
 describe('extractPromptTemplates', () => {
+  it('includes every call as raw text, preserving placeholders, branches and unknown expressions', async () => {
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const source = `function Example() -> string {
+      prompt #"{{ Shared("first") }}|{{ Shared("second") }}|{{ ctx.output_format }}"#
+    }
+    template_string Shared(value: string) #"{% if value %}{{ value }}{% else %}empty{% endif %}{{ Other(value) }}{{ _.role("user") }}"#`
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(source, cache)
+
+    const included =
+      '{# expanded from Shared #}\n{% if value %}{{ value }}{% else %}empty{% endif %}{# unresolved template_string Other: body not found #}\n{{ Other(value) }}{{ _.role("user") }}\n{# end expansion Shared #}'
+    expect(cache.Example).toBe(`${included}|${included}|{{ ctx.output_format }}`)
+  })
+
+  it.each([
+    ['quoted braces', '{{ Shared("{x}") }}'],
+    ['escaped quote', String.raw`{{ Shared("a\"}) still quoted") }}`],
+    ['nested parentheses', '{{ Shared(("x")) }}'],
+  ])('finds the bare call boundary with %s without evaluating arguments', async (_, call) => {
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(
+      `template_string Shared(value: string) #"RAW {{ value }}"#
+      function Example() -> string { prompt #"before ${call} after"# }`,
+      cache,
+    )
+    expect(cache.Example).toBe(
+      'before {# expanded from Shared #}\nRAW {{ value }}\n{# end expansion Shared #} after',
+    )
+  })
+
+  it('includes a floor-division argument and the following call without evaluating either', async () => {
+    const { BamlRuntime } = await import('@boundaryml/baml')
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const source = `client<llm> Offline {
+      provider anthropic
+      options {
+        model "claude-sonnet-4-5"
+        api_key "offline"
+      }
+    }
+    template_string Shared(value: int) #"RAW {{ value }}"#
+    function Example() -> string {
+      client Offline
+      prompt #"before {{ Shared(4 // 2) }} between {{ Shared(1) }} after"#
+    }`
+    // Compile only: this validates the fixture without contacting a provider.
+    BamlRuntime.fromFiles('baml_src', { 'floor-division.baml': source }, {})
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(source, cache)
+    const body = '{# expanded from Shared #}\nRAW {{ value }}\n{# end expansion Shared #}'
+    expect(cache.Example).toBe(`before ${body} between ${body} after`)
+  })
+
+  it('labels a formerly available body after it is renamed or removed, retaining the exact call', async () => {
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const call = '{{ Shared( "{x}" ) }}'
+    const prompt = `function Example() -> string { prompt #"${call}"# }`
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(`template_string Shared(value: string) #"body"#\n${prompt}`, cache)
+    expect(cache.Example).toContain('expanded from Shared')
+    for (const declaration of ['', 'template_string Renamed(value: string) #"body"#']) {
+      extractPromptTemplates(`${declaration}\n${prompt}`, cache)
+      expect(cache.Example).toBe(`{# unresolved template_string Shared: body not found #}\n${call}`)
+    }
+  })
+
+  it('keeps comments in shared-body signatures and does not truncate long raw bodies', async () => {
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const body = 'raw {{ value }}\n'.repeat(10_000)
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(
+      `template_string Shared(
+        value: string, // unmatched ) ( { in a signature comment
+        // another unmatched (
+      ) #"${body}"#
+      function Example() -> string { prompt #"{{ Shared("x") }}"# }`,
+      cache,
+    )
+    expect(cache.Example).toBe(`{# expanded from Shared #}\n${body}\n{# end expansion Shared #}`)
+  })
+
+  it.each([
+    ['unclosed signatures', 'template_string 0('.repeat(32_000)],
+    ['unclosed raw bodies', 'template_string 0()#"' + ')#"z'.repeat(32_000)],
+  ])('scans the CodeQL %s family within a linear CPU budget', async (_, source) => {
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const start = process.cpuUsage()
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(source, cache)
+    const cpu = process.cpuUsage(start)
+    // CPU time excludes scheduler delays; the linear scanner has >10x headroom.
+    expect((cpu.user + cpu.system) / 1_000).toBeLessThan(500)
+    expect(cache).toEqual({})
+  })
+
+  it('leaves a recursive reference visible instead of recursing forever', async () => {
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(
+      `template_string A() #"{{ B() }}"#
+      template_string B() #"{{ A() }}"#
+      function Example() -> string { prompt #"{{ A() }}"# }`,
+      cache,
+    )
+    expect(cache.Example).toBe(
+      '{# expanded from A #}\n{# expanded from B #}\n{{ A() }}\n{# end expansion B #}\n{# end expansion A #}',
+    )
+  })
+
   it('matches a signature whose comment contains a parenthesis', async () => {
     const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const source = `function Planner(

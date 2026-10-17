@@ -305,7 +305,9 @@ const PromptAccordion = (props: { llmCall: LLMCallData }) => {
       <PromptAccordionItem
         value="template"
         label="Template"
-        hint={hasTemplate() ? 'Jinja source with {{ vars }} and conditionals' : 'not captured'}
+        hint={
+          hasTemplate() ? 'Raw Jinja source; shared templates included as text' : 'not captured'
+        }
       >
         <Show
           when={hasTemplate()}

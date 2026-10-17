@@ -55,7 +55,7 @@ it('redacts a cut-off echo of a configured key', () => {
 it('is wired into the runner report beside the stop reason', () => {
   const run = readFileSync(resolve('evals/general-next/run.ts'), 'utf8')
   expect(run).toMatch(
-    /catch \(err\) \{\s*budget\.reason = 'VERDA_WAKE_FAILED'\s*wakeDetail = describeWakeFailure\(err\)/,
+    /catch \(err\) \{\s*const reason = wakeFailureReason\(err\)\s*budget\.reason = reason\s*wakeDetail = describeWakeFailure\(err\)/,
   )
   expect(run).toContain('stopDetail: wakeDetail')
 })

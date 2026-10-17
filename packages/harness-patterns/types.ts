@@ -173,7 +173,10 @@ export type MultiCallMode = 'parallel' | 'sequential' | 'off'
 
 /** What a simpleLoop asks its controller to put in the terminal `Return`
  *  action's `tool_args` (#149).
- *  - 'summary' (default) — a one-or-two-sentence completion summary. The loop's
+ *  - 'summary' (default) — a one-or-two-sentence completion summary, except
+ *    that when no tool call in the task has returned a result (none called, or
+ *    every call failed) the prompt asks for the complete answer instead (#615),
+ *    since the core hands that `Return` text to the synthesizer as the answer. The loop's
  *    prose reaches no user: `Synthesize` renders `tool_result.tool` / `.result`
  *    only and never `tool_call.args`, which is where the terminal action's
  *    prose lands, so a downstream `compactExecution` composes the user-facing
@@ -480,9 +483,8 @@ export interface ControllerInput {
 export interface ActorInput {
   userMessage: string
   intent: string
-  /** Part of the seam shape per the design note; the implementation resolves
-   *  its own allowlist from the factory options and does not read this — it
-   *  was accepted-and-ignored positionally before A4 too. */
+  /** Rendered by `createActorControllerAdapter` as the actor's catalogue,
+   *  unioned with the factory's own `toolNames`/`toolNamesProvider` (#613). */
   availableTools: readonly string[]
   previousAttempts: readonly ScriptExecutionEvent[]
   attemptNumber?: number
@@ -1066,6 +1068,12 @@ export interface CompactExecutionInput {
   response?: string
   data?: unknown
   loopHistory?: LoopHistory
+  /** The controller's own `Return` text, set ONLY alongside a `loopHistory`
+   *  whose every tool call failed (#614) — the one case where the `Return` is
+   *  the turn's answer and `response` (which a history-reading synthesizer
+   *  ignores) would cost it the failure. A synthesizer appends it as a final
+   *  turn after the history. */
+  returnText?: string
   /** Whether an error occurred in upstream patterns */
   hasError?: boolean
   /** Error message from upstream patterns */
@@ -1108,7 +1116,8 @@ export interface CompactExecutionData {
   memoryContext?: string
   /** The text of a `simpleLoop` turn's terminal `Return`, written by that loop
    *  on exit and cleared by `continueSession` (and at the loop's own start).
-   *  Read only when no tool iteration reached the synthesizer (#610). */
+   *  Read only when no tool iteration reached the synthesizer (#610), or when
+   *  every tool call of the turn failed (#614). */
   returnText?: string
 }
 

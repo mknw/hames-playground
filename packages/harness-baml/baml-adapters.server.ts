@@ -773,9 +773,7 @@ function getPromptTemplate(functionName: string): string | undefined {
 function loadTemplatesFromInlinedBaml(cache: Record<string, string>): void {
   try {
     const files = getBamlFiles() as Record<string, string>
-    for (const source of Object.values(files)) {
-      extractPromptTemplates(source, cache)
-    }
+    extractPromptTemplates(Object.values(files).join('\n'), cache)
   } catch {
     // baml_client not generated — caller falls back to disk
   }
@@ -789,19 +787,101 @@ function loadTemplatesFromDisk(cache: Record<string, string>): void {
     const path = require('node:path') as typeof import('node:path')
     const bamlSrc = path.resolve(process.cwd(), 'baml_src')
     if (!fs.existsSync(bamlSrc)) return
-    for (const entry of fs.readdirSync(bamlSrc)) {
-      if (!entry.endsWith('.baml')) continue
-      const source = fs.readFileSync(path.join(bamlSrc, entry), 'utf8')
-      extractPromptTemplates(source, cache)
-    }
+    const sources = fs
+      .readdirSync(bamlSrc)
+      .filter((entry) => entry.endsWith('.baml'))
+      .map((entry) => fs.readFileSync(path.join(bamlSrc, entry), 'utf8'))
+    extractPromptTemplates(sources.join('\n'), cache)
   } catch {
     // filesystem unavailable — templates remain unset
   }
 }
 
-/** Parse BAML source to extract function prompt blocks. Exported for the
- *  parenthesised-signature-comment pinning test. */
+/** Find a signature/call's closing delimiter without interpreting its arguments.
+ * Only BAML declarations have comments; in Jinja arguments `//` is floor division.
+ * Quoted arguments may contain braces or escaped quotes. The cursor only moves
+ * forwards, including on malformed input. */
+function closingParenthesis(text: string, start: number, declarationComments = false): number {
+  let depth = 1
+  let quote = ''
+  for (let i = start; i < text.length; i++) {
+    const char = text[i]
+    if (quote) {
+      if (char === '\\') i++
+      else if (char === quote) quote = ''
+    } else if (char === '"' || char === "'") {
+      quote = char
+    } else if (declarationComments && text.startsWith('//', i)) {
+      const end = text.indexOf('\n', i + 2)
+      if (end === -1) return -1
+      i = end
+    } else if (declarationComments && text.startsWith('/*', i)) {
+      const end = text.indexOf('*/', i + 2)
+      if (end === -1) return -1
+      i = end + 1
+    } else if (char === '(') {
+      depth++
+    } else if (char === ')' && --depth === 0) {
+      return i
+    }
+  }
+  return -1
+}
+
+/** Extract function prompts with labelled textual includes of shared bodies.
+ * Pass the whole corpus so template_strings in other files are available.
+ * This is source inspection: no argument substitution or Jinja evaluation. */
 export function extractPromptTemplates(source: string, cache: Record<string, string>): void {
+  const bodies = new Map<string, string>()
+  const declaration = /\btemplate_string\s+(\w+)\s*\(/g
+  let shared: RegExpExecArray | null
+  while ((shared = declaration.exec(source)) !== null) {
+    const close = closingParenthesis(source, declaration.lastIndex, true)
+    if (close === -1) break
+    declaration.lastIndex = close + 1
+    while (/\s/.test(source[declaration.lastIndex] ?? '')) declaration.lastIndex++
+    if (!source.startsWith('#"', declaration.lastIndex)) continue
+    const bodyStart = declaration.lastIndex + 2
+    const bodyEnd = source.indexOf('"#', bodyStart)
+    if (bodyEnd === -1) break
+    bodies.set(shared[1], source.slice(bodyStart, bodyEnd))
+    // Never retry inside a scanned signature/body: repeated incomplete
+    // declarations and repeated raw-string openers must remain linear.
+    declaration.lastIndex = bodyEnd + 2
+  }
+
+  const include = (text: string, ancestors: string[] = []): string => {
+    const bareCall = /\{\{\s*(\w+)\s*\(/g
+    const parts: string[] = []
+    let cursor = 0
+    let match: RegExpExecArray | null
+    while ((match = bareCall.exec(text)) !== null) {
+      const close = closingParenthesis(text, bareCall.lastIndex)
+      if (close === -1) break
+      bareCall.lastIndex = close + 1
+      while (/\s/.test(text[bareCall.lastIndex] ?? '')) bareCall.lastIndex++
+      if (!text.startsWith('}}', bareCall.lastIndex)) continue
+      bareCall.lastIndex += 2
+      const name = match[1]
+      const call = text.slice(match.index, bareCall.lastIndex)
+      const body = bodies.get(name)
+      parts.push(text.slice(cursor, match.index))
+      // Missing bodies degrade visibly; recursive references stay as source.
+      if (body === undefined) {
+        parts.push(`{# unresolved template_string ${name}: body not found #}\n${call}`)
+      } else if (ancestors.includes(name)) {
+        parts.push(call)
+      } else {
+        parts.push(
+          `{# expanded from ${name} #}\n${include(body, [...ancestors, name])}\n{# end expansion ${name} #}`,
+        )
+      }
+      cursor = bareCall.lastIndex
+    }
+    parts.push(text.slice(cursor))
+    return parts.join('')
+  }
+
   // Match: function FunctionName(...) -> ReturnType { ... prompt #"..."# }
   //
   // The parameter list is `[^{}]*?`, not `[^)]*`: signatures carry `//`
@@ -812,7 +892,7 @@ export function extractPromptTemplates(source: string, cache: Record<string, str
   const funcRegex = /function\s+(\w+)\s*\([^{}]*?\)\s*->\s*\S+\s*\{[^}]*?prompt\s+#"([\s\S]*?)"#/g
   let match: RegExpExecArray | null
   while ((match = funcRegex.exec(source)) !== null) {
-    cache[match[1]] = match[2]
+    cache[match[1]] = include(match[2])
   }
 }
 
@@ -1214,10 +1294,9 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
  *  `maxAttempts` are passed by `actorCritic.server.ts` so the actor's prompt
  *  can show "Attempt N of M" and prefer Return as budget runs low.
  *
- *  Note `availableTools` is part of the seam shape (design note §3) but the
- *  implementation resolves its own allowlist from the factory options — it
- *  was accepted-and-ignored positionally before A4 and is accepted-and-ignored
- *  here; the allowlist the adapters and loop enforce is the factory's.
+ *  Note `availableTools` is rendered: the actor's catalogue is that list
+ *  UNIONED with the factory's own `toolNames` (#613), so the pattern's
+ *  allowlist need not be declared twice.
  *
  *  The legacy positional form — same acceptance-test constraint and same A6
  *  deletion as `LegacyControllerFn`'s — rides the factory return as
@@ -1239,7 +1318,9 @@ export type LegacyActorFn = (
  *  that should be visible to subsequent actor calls in the same session). */
 export interface ActorAdapterOptions {
   /** Static tool names always available to the actor. Mutually exclusive
-   *  with `toolNamesProvider`; if both are set, the provider wins. */
+   *  with `toolNamesProvider`; if both are set, the provider wins. Both are
+   *  unioned with the pattern's `input.availableTools`; neither can remove a
+   *  name the pattern allows. */
   toolNames?: string[]
   /** Async closure resolved per actor invocation. Use this when the
    *  allowlist is user-curated and may change between turns of the same
@@ -1301,9 +1382,15 @@ export function createActorControllerAdapter(
     // Resolve the actor's allowlist. `toolNamesProvider` (if set) is called
     // fresh per invocation so user-curated selections persisted to the
     // session context surface live; otherwise fall back to the static array.
-    const names = options.toolNamesProvider
-      ? await options.toolNamesProvider()
-      : (options.toolNames ?? [])
+    // The pattern's allowlist rides the call as `input.availableTools`; it is
+    // unioned in so an agent declares it once (#613). `filterToolDescriptions`
+    // dedupes by name.
+    const names = [
+      ...(options.toolNamesProvider
+        ? await options.toolNamesProvider()
+        : (options.toolNames ?? [])),
+      ...input.availableTools,
+    ]
 
     // Get tool descriptions — optionally refresh + include pattern matches.
     // When a transport is scoped to this run (`withTransport` — today the in-VM

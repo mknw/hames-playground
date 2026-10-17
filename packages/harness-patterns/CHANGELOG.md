@@ -1,5 +1,60 @@
 # @hames-ai/harness-patterns
 
+## 0.4.0
+
+### Minor Changes
+
+- 959966b: Add `decisionLoop(routes, config)` (#507 S1): a loop over routes in which the systemone `decide` seam picks the next route each time round, until it picks `answer` (a choice that runs nothing, so the synthesizer answers once) or `maxIterations` is reached. Exports `DECISION_LOOP_MAX_ITERATIONS` (6), `DECISION_LOOP_OUTPUT_KEY` and the record/stat types.
+  
+  - Each child runs in its own synthetic context and `viewConfig`, with events of siblings it may not see (`siblingResults`, default none) and the loop's own records physically removed, and with fresh `data` (never `memories`, `memoryContext` or `intent`).
+  - A route's output is a record built by code from the child's committed events by route kind (`simpleLoop`, `actorCritic`, `retriever`, `planner`), never reading `content_sanitized`. Its `result` and `reasoning` are capped and sanitized under the guard key `decision_loop_output`; a screen that threw withholds the output (typed `screenUnavailable` on `SanitizeReport` and `SanitizeSummary`).
+  - `formatPlanContext(plan, handoff?)` renders earlier-step results under their own data heading, outside the PLAN section; `planner` reads `data.handoff` and `data.agentMap` into its existing `context` argument. With neither, both are byte-identical to before.
+  - A non-decision never dispatches a route: an irrecoverable visible error on iteration 1, a stop-as-answer on a later one. A failed route is a failed record and the loop decides again; a child's `error` events are committed as `recoverable`.
+  - New `PatternCapabilities.tools` (declared by `simpleLoop`, `actorCritic` and `withSandbox`, which now always declares its in-VM tool names and merges over the wrapped pattern's capabilities) and `collectToolNames`.
+  - Export `unspotlight(text)` from `@hames-ai/harness-patterns/guard`: strips one guard spotlight fence, for readers that excerpt fenced text. `decisionLoop` refuses routes that share a `patternId` (or use the loop's own) and warns once when no guard in the run declares `decision_loop_output`.
+  - A screen outage in `decisionLoop` also withholds that iteration's child events from every later child context, this turn and later turns (ids persist on the marker record).
+  - `decisionLoop` requires an explicit `patternId` (its records and withheld ids are matched by it across turns) and hides earlier turns' events by the route they were emitted inside, so patterns rebuilt each turn with generated ids cannot leak.
+- d6b58f4: A turn whose every tool call failed and which then `Return`s an answer from context keeps that answer (#614). `compactExecution` thread mode carries the `Return` text as the new optional `CompactExecutionInput.returnText` beside the error history, and `defaultSynthesize` appends it as a final turn. A turn with any successful call is unchanged.
+- c46aa3c: general-next's info route gains `context7` library docs and the memory graph's
+  targeted read tools (`search_nodes`, `open_nodes`) under the same injection
+  guard and web-route pseudonymisation boundary; memory write tools stay withheld.
+  `withPseudonymisedInputs` now treats `memory` as a local namespace beside
+  `neo4j`, keeps `context7` under the outgoing check, and stops extending its outgoing
+  literals from `context7` results (as already for web).
+- e7f697e: Add the out-of-run, non-blocking form of the human-in-the-loop request, and use it for memory confirmation. `proposeToHuman(ctx, request, { attended })` records a proposal in the context (replayed, never raised twice for one identity), `readProposals(ctx, now?)` lists the open ones from the whole log (a proposal outlives the turn that raised it), and `answerProposal(ctx, answers, { principal })` binds an answer to an open proposal with the option, flag and expiry checks a resume applies, all-or-nothing. `settleMemory` takes an optional `confirm` seam (`MemoryConfig.confirm`): an `ask` route then prepares the memories (vectors, read-only dedupe preview), proposes them as `memory.confirm` with counts and kinds only, and holds the payload under the request id, writing nothing; without the seam an `ask` still stores nothing. The report gains `proposed`, the skip reasons gain `already-proposed`. `applyMemoryProposal` writes what a person approved: only the flagged items, one transaction each, refusing an item whose target memory changed since the preview, a payload in another embedding space or a switched-off memory, and a no-op on retry. The organisational-graph target is unchanged: it never proposes and never writes.
+- a65a7b7: `compactExecution` (thread mode) keeps the controller's answer on a Return-only turn (#610): when a `simpleLoop` controller answers without calling a tool, no tool iteration survives the terminal-`Return` drop and the synthesizer used to receive no turns. The loop now records its `Return` text as the new optional `returnText` on `SimpleLoopData` / `CompactExecutionData` (cleared by `continueSession` and at the start of each loop), and the synthesizer receives it as the response. An explicit `data.response` wins; a turn that called a tool is unchanged; an `actorCritic` `Return` never sets it. Affects agents that synthesize from a `simpleLoop` thread (`general`, `search`, `retriever-agent`, `microsoft-365`).
+- 3819eee: Record sandbox output provenance in stored documents and retrieved chunks. Exclude promoted documents from the General Agent Next web route's reference previews and expansions while keeping them available for document search and user answers.
+- 1b84721: `withSandbox({ id, syncWorkspace: true })` now copies a document a tool stored mid-run into `/work/in` straight after that call, instead of only when the route is next entered. Core gains two concatenating run-frame slots to do it without a tool-name list: `stashWriteObservers` (told by `storeDocument` once a document is durably stored) and `afterToolCall` (run by `callTool` after dispatch and guard, may replace the result). The copy is `hydrateWorkspace` for the sandbox's own session only; a write to another conversation's stash is ignored. It fails closed: if the copy throws or skips a file, the storing call's result becomes a failure saying the file is stored but not in the sandbox, and an `error` event is recorded. `callTool` guards a hook's replacement result like a dispatched one, `storeDocument` notifies observers with the id of the tool call it ran inside, and core gains `listDocumentsStrict` / `getDocumentStrict`, which throw on a failed read instead of answering "empty".
+- e39d5a4: Add the opt-in injection guard option screenDespiteFindings. It screens the
+  deterministically sanitized projection even after rule hits, preserving their
+  neutralizations and findings. Nested guards keep this option enabled if either
+  guard requests it; screen failures remain recorded and non-fatal at this layer.
+  
+  Screen detections preserve an existing provenance fence instead of nesting a
+  second one, keeping downstream identity extraction correct.
+- d89bf08: `compactExecution` (#507 W4): the user's message is read past a `viewConfig.fromPatterns` scope (it is a `harness`-level event, so a scoped synthesizer received an empty `userMessage` and `intent`), and a new optional `threadTurns` widens only the scoped `thread` read, so a follow-up turn keeps the previous turn's committed `decisionLoop` records while the error read keeps its own window and an earlier turn's failed or withheld record is not carried forward. `threadTurns` must be an integer >= 1 and is refused at construction unless `mode` is `'thread'` and `viewConfig.fromPatterns` is set; the user message is read only from `harness`. `general-next` sets `threadTurns: 2`. The records stay sanitized and fenced, and a record withheld by a screen outage stays marker-only.
+- 8f8ebd0: Add `withPseudonymisedInputs` and its host `PseudonymiseForWeb` seam for #507 G14.
+  Rewrite and post-check earlier event-data copies and all inherited child data on
+  every run except an explicit Anthropic run, preserving provenance fences,
+  restricting copied events to the child's view and withholding residual identities
+  per string body. Missing or unavailable host wiring still fails closed. Check
+  outgoing arguments for every capability except declared local reads at `callTool`
+  through concatenating run-frame
+  `egressChecks`. `decisionLoop` supplies every preceding iteration's source
+  payloads as roster-only input to declaring routes, removed before inner dispatch.
+  Local results extend the outgoing literal check through `afterToolCall`.
+  ActorCritic output records unfence string leaves before JSON stringification;
+  literal checks normalise JSON escapes and bound compact names to single tokens.
+  `AgentDeps.pseudonymiseForWeb` lets hosts supply the ephemeral implementation.
+
+### Patch Changes
+
+- b1f162c: Document the web-route privacy filter's per-leaf handling of JSON bodies and
+  its fail-closed refusal of a roster whose labelled identity the injection
+  screen had already neutralized (#507).
+- e4c744d: `LoopController`'s default (`returnStyle: 'summary'`) prompt now tells the controller to put the complete answer in `tool_args` when no tool call in the task has returned a result, i.e. it called none or every call failed (#615). A Return-only turn has no tool result for the synthesizer to compose from, and #612 hands that Return text on as the answer; before, the prompt said the Return was "NOT the user-facing answer", so whether the text held the answer depended on the model. A turn that called a tool is unchanged (the Return stays a brief summary, #149); `returnStyle: 'answer'` is unchanged. The regenerated `baml_client` ships with it.
+- 55a780e: `compactExecution` `thread` mode honours `viewConfig.fromPatterns`: when the caller names patterns, the thread is every execution of those patterns within the view's turn window (the caller's `fromLastNTurns`, else the current turn), in log order, instead of the last pattern to enter. Under a wrapper whose children run in nested views, the old read selected a child outside the named set, found nothing, and silently dropped to `response` mode. Without `fromPatterns` nothing changes. Behaviour change for `general` (the only production caller with `fromPatterns`): on a HITL resume the paused `execute` re-enters with no new user message, so synthesis now reads both the pre-pause and post-resume iterations, where it used to read only the post-resume ones; likewise two named patterns that both act are both read. A name that matches no pattern in the window still yields no history and `response` mode (#507)
+
 ## 0.3.0
 
 > The published 0.3.0 tarball also contains #579 (memory confirmation, M6), merged after the tag; it is described under the next release.

@@ -1,5 +1,39 @@
 # @hames-ai/sandbox
 
+## 0.4.0
+
+### Minor Changes
+
+- 959966b: Add `decisionLoop(routes, config)` (#507 S1): a loop over routes in which the systemone `decide` seam picks the next route each time round, until it picks `answer` (a choice that runs nothing, so the synthesizer answers once) or `maxIterations` is reached. Exports `DECISION_LOOP_MAX_ITERATIONS` (6), `DECISION_LOOP_OUTPUT_KEY` and the record/stat types.
+  
+  - Each child runs in its own synthetic context and `viewConfig`, with events of siblings it may not see (`siblingResults`, default none) and the loop's own records physically removed, and with fresh `data` (never `memories`, `memoryContext` or `intent`).
+  - A route's output is a record built by code from the child's committed events by route kind (`simpleLoop`, `actorCritic`, `retriever`, `planner`), never reading `content_sanitized`. Its `result` and `reasoning` are capped and sanitized under the guard key `decision_loop_output`; a screen that threw withholds the output (typed `screenUnavailable` on `SanitizeReport` and `SanitizeSummary`).
+  - `formatPlanContext(plan, handoff?)` renders earlier-step results under their own data heading, outside the PLAN section; `planner` reads `data.handoff` and `data.agentMap` into its existing `context` argument. With neither, both are byte-identical to before.
+  - A non-decision never dispatches a route: an irrecoverable visible error on iteration 1, a stop-as-answer on a later one. A failed route is a failed record and the loop decides again; a child's `error` events are committed as `recoverable`.
+  - New `PatternCapabilities.tools` (declared by `simpleLoop`, `actorCritic` and `withSandbox`, which now always declares its in-VM tool names and merges over the wrapped pattern's capabilities) and `collectToolNames`.
+  - Export `unspotlight(text)` from `@hames-ai/harness-patterns/guard`: strips one guard spotlight fence, for readers that excerpt fenced text. `decisionLoop` refuses routes that share a `patternId` (or use the loop's own) and warns once when no guard in the run declares `decision_loop_output`.
+  - A screen outage in `decisionLoop` also withholds that iteration's child events from every later child context, this turn and later turns (ids persist on the marker record).
+  - `decisionLoop` requires an explicit `patternId` (its records and withheld ids are matched by it across turns) and hides earlier turns' events by the route they were emitted inside, so patterns rebuilt each turn with generated ids cannot leak.
+- 3819eee: Record sandbox output provenance in stored documents and retrieved chunks. Exclude promoted documents from the General Agent Next web route's reference previews and expansions while keeping them available for document search and user answers.
+- 1b84721: `withSandbox({ id, syncWorkspace: true })` now copies a document a tool stored mid-run into `/work/in` straight after that call, instead of only when the route is next entered. Core gains two concatenating run-frame slots to do it without a tool-name list: `stashWriteObservers` (told by `storeDocument` once a document is durably stored) and `afterToolCall` (run by `callTool` after dispatch and guard, may replace the result). The copy is `hydrateWorkspace` for the sandbox's own session only; a write to another conversation's stash is ignored. It fails closed: if the copy throws or skips a file, the storing call's result becomes a failure saying the file is stored but not in the sandbox, and an `error` event is recorded. `callTool` guards a hook's replacement result like a dispatched one, `storeDocument` notifies observers with the id of the tool call it ran inside, and core gains `listDocumentsStrict` / `getDocumentStrict`, which throw on a failed read instead of answering "empty".
+
+### Patch Changes
+
+- Updated dependencies [959966b]
+- Updated dependencies [d6b58f4]
+- Updated dependencies [c46aa3c]
+- Updated dependencies [e7f697e]
+- Updated dependencies [b1f162c]
+- Updated dependencies [e4c744d]
+- Updated dependencies [a65a7b7]
+- Updated dependencies [3819eee]
+- Updated dependencies [1b84721]
+- Updated dependencies [e39d5a4]
+- Updated dependencies [d89bf08]
+- Updated dependencies [55a780e]
+- Updated dependencies [8f8ebd0]
+  - @hames-ai/harness-patterns@0.4.0
+
 ## 0.3.0
 
 ### Patch Changes

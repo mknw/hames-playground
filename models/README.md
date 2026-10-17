@@ -8,7 +8,7 @@ root do the rest.
 | File                             | Served by                                                                                        | Port | Role                                                                                 |
 | -------------------------------- | ------------------------------------------------------------------------------------------------ | ---- | ------------------------------------------------------------------------------------ |
 | `Qwen3-Embedding-0.6B-Q8_0.gguf` | `make embed`, or the compose `embedder` service (mounts `./models` read-only; no published port) | 8090 | Data Stash embeddings (1024-dim) — see [`docs/DATA_STASH.md`](../docs/DATA_STASH.md) |
-| `Qwen3.5-4B-Instruct-Q8_0.gguf`  | `make llm-small`                                                                                 | 8095 | describe/summarization role (`LocalQwenSmall`) — **not present yet**                 |
+| `Qwen3.5-4B-Instruct-Q8_0.gguf`  | `make llm-small`                                                                                 | 8095 | describe/summarization role (`LocalQwenSmall`) (the private tier)                    |
 
 The chat model on port 8080 (GLM-4.7-Flash, `pnpm dev:llama`) is not served from
 here: it lives in llama.cpp's own cache, and `app/package.json` points at it
@@ -22,19 +22,24 @@ format and both are addressed by URL, so pointing them at a hosted endpoint is
 pair for whichever you are moving (values go in `app/.env`, documented in
 [`app/.env.example`](../app/.env.example)):
 
-| Model                               | URL                    | Optional bearer token      |
+| Model                               | URL                    | Bearer token               |
 | ----------------------------------- | ---------------------- | -------------------------- |
 | small summarizer (`LocalQwenSmall`) | `SMALL_LLM_BASE_URL`   | `SMALL_LLM_API_KEY`        |
 | embedder (Data Stash)               | `EMBEDDINGS_LOCAL_URL` | `EMBEDDINGS_LOCAL_API_KEY` |
 
 - **Include the `/v1` suffix** in both URLs. `/chat/completions` and
   `/embeddings` are appended verbatim, so a bare host 404s on every call.
-- **The keys are optional.** llama-server authenticates nothing; leave them
-  unset locally. When set they are sent as `Authorization: Bearer <key>`.
-- `SMALL_LLM_*` has **no in-code default** — a BAML option takes a bare `env.X`
-  reference, so the localhost value has to come from the env file. That is
-  inert today: `LocalQwenSmall` is in no chain until the describe role is
-  re-pointed at it (see `packages/harness-baml/baml_src/local-client.baml`).
+- **The private tier requires `SMALL_LLM_API_KEY`.** It is shared by the
+  summarizer and the systemone endpoint at `SMALL_LLM_DECISIONS_URL` (a full
+  URL ending in `/v1/systemone`), even when a local llama-server accepts
+  unauthenticated summarization. The embedding key is optional for a server
+  without authentication. Keys are sent as `Authorization: Bearer <key>`.
+- `SMALL_LLM_*` has **no in-code default** — set the base URL in the env file.
+  `LocalQwenSmall` already serves the private tier's `describe` role through
+  the per-call override in `packages/harness-baml/clients.server.ts`; the
+  Anthropic BAML chain declarations stay unchanged. The whole tier requires
+  all five values listed in [`docs/PREVIEW.md` §6](../docs/PREVIEW.md#6-boot),
+  as specified in `CLAUDE.md`.
 - **The embedding model must not change with the host.** Vectors are only
   comparable inside one model's space, so a remote embedder has to serve the
   _same_ Qwen3-Embedding-0.6B or the existing index is invalidated — see

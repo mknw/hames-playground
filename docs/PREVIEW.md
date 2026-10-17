@@ -57,8 +57,12 @@ x86/amd64.**
   native image is correct — and the production overlay never loads that file
   (§3), so nothing carries the workaround onto the VM.
 - **16 GiB is not generous.** Neo4j (+apoc+n10s), redis-stack, Postgres, the
-  Node server, Caddy and _N concurrent sandbox containers_ share it. The
-  container build alone peaks near 2.3 GB RSS.
+  Node server, Caddy, the CPU embedder and _N concurrent sandbox containers_
+  share it. Budget separately for a second app container if deployed on the
+  same host (§12). The embedder's 2 GiB
+  compose limit is a placeholder, not measured RSS or a capacity guarantee.
+  Measure peak RSS and ingestion latency alongside serving and builds before
+  choosing a host size. The container build alone peaks near 2.3 GB RSS.
 - **64 GiB disk.** Docker images dominate: redis-stack is ~2.7 GB and neo4j
   ~840 MB before any data.
 - One instance, no HA. The app holds per-session run state, the sandbox
@@ -416,30 +420,43 @@ grep -cE "^($K)=" .env               # must print 4 — fewer means a line is go
 Two checks because the two failures look nothing alike: a value left at the
 template's `''` and a line removed from `.env` altogether.
 
-**Pre-launch check — the private tier is TWO endpoints, and it refuses on one.**
-Only if this host will reach the self-hosted tier at all: either
-`USE_VERDA_INFERENCE='1'`, or nothing set but a user picking **Private** on a
-conversation's switch (beside the Agent selector), which is available whenever
-the endpoints are configured. The
-`describe` role runs on a 4B summarizer at `SMALL_LLM_BASE_URL`, and a private
-tier without it is **refused, not descaled** — deliberately, because falling back
-onto the 27B would be a routing change nobody asked for, invisible in every log,
-on the role that is handed tool results verbatim. So a host with the 27B
-configured and this line missing has a switch whose private position either
-fails every turn or renders disabled, depending on which of the two is
-missing:
+**Pre-launch check — the private tier requires all five values.**
+The 27B chat endpoint, the 4B summarizer and the systemone decisions URL are
+one tier. A partial configuration is refused; there is no public-provider
+fallback and no summarizer fallback onto the 27B. The decisions URL is a
+**full URL ending in `/v1/systemone`**, rather than a base to which the app
+appends a path. Its bearer key, `SMALL_LLM_API_KEY`, is **required** and shared
+with the summarizer, even if a local llama-server accepts unauthenticated
+summarization. `CLAUDE.md`'s private-tier section is the routing contract.
+
+For staging, **configure all five values** with the operator's private-tier
+endpoints and keys. A user who never chose starts on Private whenever the
+whole tier is configured, even with `USE_VERDA_INFERENCE` unset; the first turn
+may pay a metered cold start. The conversation's own tier and the user's
+last-used tier take precedence. `USE_VERDA_INFERENCE=1` also selects the
+private deployment default for runs without a conversation choice. A host
+that intentionally offers only Anthropic leaves all five values and the flag
+unset. These instructions change no tier default in code.
 
 ```bash
-# All three, or none of them — two out of three is the refusal. Must print 3 or 0.
-grep -cE "^(VERDA_INFERENCE_ENDPOINT|VERDA_INFERENCE_API_KEY|SMALL_LLM_BASE_URL)='.+'$" .env
+# Must print 5 for staging (0 only for an Anthropic-only host); any partial set
+# must be completed before boot. Counts only; never print keys or endpoint values.
+K_PRIVATE="VERDA_INFERENCE_ENDPOINT|VERDA_INFERENCE_API_KEY|SMALL_LLM_BASE_URL|SMALL_LLM_DECISIONS_URL|SMALL_LLM_API_KEY"
+grep -cE "^($K_PRIVATE)='.+'$" .env
 
-# And read the two URLs back: both MUST end in `/v1`. Without it every call 404s
-# on `<root>/chat/completions`, which the app refuses at module load for the 27B.
-grep -E "^(VERDA_INFERENCE_ENDPOINT|SMALL_LLM_BASE_URL)=" .env
+# URL checks print only a problem label, never the configured values.
+for key in VERDA_INFERENCE_ENDPOINT SMALL_LLM_BASE_URL; do
+  grep -qE "^${key}='[^']+/v1'$" .env || echo "$key missing or must end in /v1"
+done
+grep -qE "^SMALL_LLM_DECISIONS_URL='[^']+/v1/systemone'$" .env || echo 'SMALL_LLM_DECISIONS_URL missing or must end in /v1/systemone'
 ```
 
-`SMALL_LLM_API_KEY` is **not** required: llama-server authenticates nothing, and
-an endpoint that does check a key 401s loudly on its own.
+The bootstrap asks for missing values on an interactive re-run, including a
+partially configured tier; both bearer-key prompts are hidden. Its preflight
+refuses a partial set, a malformed URL suffix, or a flag enabled without the
+complete set, before starting containers. This checks configuration only and
+makes no provider request. Endpoint values belong with the operator
+(ADR-0008); the env names remain unchanged when the hosting provider changes.
 
 ```bash
 cd /opt/hames
@@ -1222,9 +1239,12 @@ for these:
 - `VITE_ALLOWED_EMAILS`: this deployment's allow-list. The template's
   `*@contoso.com` counts as missing.
 - `ANTHROPIC_API_KEY`.
-- Optionally, the private tier: `VERDA_INFERENCE_ENDPOINT`,
-  `VERDA_INFERENCE_API_KEY` and `SMALL_LLM_BASE_URL` (all three or none, both
-  URLs ending in `/v1`), plus `SMALL_LLM_API_KEY` and `USE_VERDA_INFERENCE`.
+- The private tier (§6): `VERDA_INFERENCE_ENDPOINT`,
+  `VERDA_INFERENCE_API_KEY`, `SMALL_LLM_BASE_URL`, `SMALL_LLM_DECISIONS_URL`
+  and `SMALL_LLM_API_KEY` — all five or none; staging configures all five.
+  The two base URLs end in `/v1`; the full decisions URL ends in
+  `/v1/systemone`. `USE_VERDA_INFERENCE` is a separate deployment-default flag,
+  not a sixth required tier value.
 - `--hostname`, `--acme-email` and `--ref <reviewed commit SHA>` on the command
   line; `--ssh-port` if you want the port moved; `--f2b-ignore` if the operator's
   address is not the one running the script.

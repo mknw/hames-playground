@@ -715,8 +715,12 @@ downgrade then hands it to `Synthesize` as a direct response). Limits: it is
 current-turn only and applies to a `simpleLoop` exit only — an `actorCritic`
 `Return` is refused and never reviewed, so it never sets the key; an explicit
 `data.response` wins; a turn with any tool iteration (even a failed one) is
-unchanged (a failed single call followed by a `Return` is still dropped, #614);
-and under `returnStyle: 'summary'` the controller is told its `Return` is not the
+unchanged — except that when EVERY tool call of the CURRENT turn failed (#614; an earlier turn's successful records in a wider thread window do not count), the
+failed iterations stay in `loopHistory` (the error is the synthesizer's only
+record of it) and the text rides beside them as `CompactExecutionInput.returnText`
+for the synthesizer to append as a final turn (`defaultSynthesize` does; `response`
+is not used, because a history-reading synthesizer ignores it). A turn with any
+successful call keeps dropping the `Return` (#149); and under `returnStyle: 'summary'` the controller is told its `Return` is not the
 answer, so whether that text contains the answer depends on the model (#615).
 
 The default is safe because `compactExecution` is the better-informed author in

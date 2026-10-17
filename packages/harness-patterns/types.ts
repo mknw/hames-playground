@@ -1065,6 +1065,12 @@ export interface CompactExecutionInput {
   response?: string
   data?: unknown
   loopHistory?: LoopHistory
+  /** The controller's own `Return` text, set ONLY alongside a `loopHistory`
+   *  whose every tool call failed (#614) — the one case where the `Return` is
+   *  the turn's answer and `response` (which a history-reading synthesizer
+   *  ignores) would cost it the failure. A synthesizer appends it as a final
+   *  turn after the history. */
+  returnText?: string
   /** Whether an error occurred in upstream patterns */
   hasError?: boolean
   /** Error message from upstream patterns */
@@ -1107,7 +1113,8 @@ export interface CompactExecutionData {
   memoryContext?: string
   /** The text of a `simpleLoop` turn's terminal `Return`, written by that loop
    *  on exit and cleared by `continueSession` (and at the loop's own start).
-   *  Read only when no tool iteration reached the synthesizer (#610). */
+   *  Read only when no tool iteration reached the synthesizer (#610), or when
+   *  every tool call of the turn failed (#614). */
   returnText?: string
 }
 

@@ -80,7 +80,7 @@ Which region is your decision. [Modal's region list](https://modal.com/docs/guid
 has the names and prices. A _narrow_ region pins the box to one area, such as `eu-west`,
 `eu-north` or `eu-south`, at 1.75× the base GPU price. A _broad_ region such as `eu` lets
 Modal place it anywhere in that area, at 1.15×. Everything else in `deploy.env.example` has a
-working default: one L4 GPU, one replica, a 120-second idle window before it scales to zero,
+working default: one L4 GPU, one replica, a 300-second idle window before it scales to zero,
 and memory snapshots on (`HAMES_MODAL_SNAPSHOT=1`; set it to `0` to boot from scratch every
 time, which is only useful for comparison).
 
@@ -237,7 +237,7 @@ From `deploy/modal/`, with `--env-file deploy.local.env` on each `uv run`:
 the 8–10-minute first boot again. Run `smoke.py` right after a redeploy so that wait is yours,
 not a user's.
 
-**Cost:** you pay while a container exists, including its boot and the 120-second idle window
+**Cost:** you pay while a container exists, including its boot and the 300-second idle window
 after its last request. At list prices, an L4 with 2 CPU cores and 24 GiB of memory in a narrow
 region is about $1.80–1.90 per hour. Nothing is billed at zero containers.
 

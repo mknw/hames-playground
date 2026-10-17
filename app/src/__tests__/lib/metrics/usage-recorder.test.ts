@@ -163,7 +163,7 @@ describe('the warm clock does NOT follow the tier attribution', () => {
 describe('the small warm clock requires metrics', () => {
   it('refreshes an expired clock when a describe sample spent tokens', () => {
     const now = Date.now()
-    noteSmallCallCompleted(now - 200_000)
+    noteSmallCallCompleted(now - 400_000)
     expect(smallProvenWarm(now)).toBe(false)
     recordSample(
       {
@@ -178,7 +178,7 @@ describe('the small warm clock requires metrics', () => {
 
   it('leaves an expired clock cold when the sample has no metrics', () => {
     const now = Date.now()
-    noteSmallCallCompleted(now - 200_000)
+    noteSmallCallCompleted(now - 400_000)
     recordSample({ functionName: 'DescribeToolResult', clientName: 'LocalQwenSmall' }, now)
     expect(smallProvenWarm(now)).toBe(false)
   })

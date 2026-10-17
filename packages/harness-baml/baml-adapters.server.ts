@@ -46,17 +46,17 @@ import {
   activeTransportContext,
   activeTransports,
 } from '@hames-ai/harness-patterns/tool-transport.server'
-import { Collector, BamlValidationError } from '@boundaryml/baml'
+import { Collector, BamlValidationError, type HTTPRequest } from '@boundaryml/baml'
 import { getBamlFiles } from './baml_client/inlinedbaml'
 import {
   activeCostPricing,
-  activeInferenceTier,
   activeCostRates,
   clientOverrideFor,
   limitsFor,
   maxOutputTokensFor,
   resolveClientForRole,
   THINKING_CLIENTS,
+  VERDA_CLIENT_BY_ROLE,
 } from './clients.server'
 import { notifyLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import { createJevTransport } from './jev-decide.server'
@@ -315,7 +315,7 @@ type CollectorCall = {
    *  Read off the same `timing` getter as the function-level reading, which is
    *  why {@link measuredDurationMs} takes both. */
   timing?: { durationMs?: number | null }
-  httpRequest?: { body?: unknown }
+  httpRequest?: HTTPRequest | null
   httpResponse?: { body?: { json?: () => unknown } } | null
   usage?: {
     inputTokens?: number | null
@@ -1249,17 +1249,16 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
 
     const variables = { user_message, intent, tools, context }
 
+    // Read the `planner:` entry in `VERDA_CLIENT_BY_ROLE` for the tier's composite consequence.
     const override = clientOverrideFor('planner')
     const requestedThinking = THINKING_CLIENTS.has(override?.client ?? '')
-    if (requestedThinking && activeInferenceTier() !== 'verda') {
-      throw new Error('PlannerThinking is valid only on the private tier')
-    }
     const functionName = requestedThinking ? 'PlannerThinking' : 'Planner'
     const baseOpts = { collector, ...override }
-    const selectedCall = () => {
-      const calls = (collector.last?.calls ?? []) as CollectorCall[]
+    const selectedCall = (source = collector) => {
+      const calls = (source.last?.calls ?? []) as CollectorCall[]
       return calls.find((call) => call.selected) ?? calls[calls.length - 1]
     }
+    let warning: string | undefined
     let plan: PlanResult
     let llmCall: LLMCallRecord | undefined
     try {
@@ -1281,10 +1280,8 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
         }
         if (!answer.plan.trim()) throw new Error('PlannerThinking returned no answer')
         const trace = thinkingFrom(selected)
-        if (trace.kind !== 'trace') {
-          throw new Error(`PlannerThinking returned no thinking trace (${trace.reason})`)
-        }
-        plan = { ...answer, reasoning: trace.text }
+        if (trace.kind !== 'trace') warning = 'no thinking trace'
+        plan = { ...answer, reasoning: trace.kind === 'trace' ? trace.text : '' }
       } else {
         plan = await b.Planner(user_message, intent, tools, context, baseOpts)
         if (THINKING_CLIENTS.has(selectedCall()?.clientName ?? '')) {
@@ -1297,16 +1294,27 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
     } catch (e) {
       const selected = selectedCall()
       const thinking = THINKING_CLIENTS.has(selected?.clientName ?? '')
+      // One failure-record path retains the selected parser trace for both
+      // terminal errors and retry warnings, without replacing malformed content.
+      const failure = () => {
+        const error = wrapAsLLMCallError(e, functionName, variables, startTime, collector)
+        const trace = thinking ? thinkingFrom(selected) : undefined
+        if (trace?.kind === 'trace') error.llmCall.parsedOutput = { reasoning: trace.text }
+        return error
+      }
       // Q7 is a loud failure even if BAML failed before returning a value.
       const split = thinking
         ? splitAtLastThinkClose(collector.last?.rawLlmResponse ?? '')
         : undefined
       if (split?.closed) {
-        const failedCall = extractFailureLLMCallData(collector, functionName, variables, startTime)
+        const failedCall = failure().llmCall
         // Defence in depth: reparse ONLY the tail after the LAST delimiter.
         // Retain it as rejected diagnostic data, never as an executable plan.
         try {
-          failedCall.parsedOutput = b.parse.PlannerThinking(split.tail)
+          failedCall.parsedOutput = {
+            ...(failedCall.parsedOutput as object),
+            ...b.parse.PlannerThinking(split.tail),
+          }
         } catch {
           // An invalid tail is still the same parser-policy failure.
         }
@@ -1326,26 +1334,50 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
       ) {
         // Keep the failed thinking attempt and the retry in separate collectors:
         // each is accounted once and the warning survives a failed retry.
-        const failedCall = extractFailureLLMCallData(collector, functionName, variables, startTime)
-        const trace = thinkingFrom(selected)
-        if (trace.kind === 'trace') failedCall.parsedOutput = { reasoning: trace.text }
+        const failedCall = failure().llmCall
         onRetry?.(failedCall)
         const retryCollector = new Collector('Planner')
         try {
           // SAME box and credentials. Never the original's Anthropic default;
           // no public fallback, and no further corrective retry in this branch.
-          plan = await b.Planner(user_message, intent, tools, context, {
-            ...override,
-            collector: retryCollector,
-            client: 'VerdaQwen',
-          })
+          const retryClient = VERDA_CLIENT_BY_ROLE.planner
+          const retryOpts = { ...override, collector: retryCollector, client: retryClient }
+          const retryRequest = await b.request.Planner(
+            user_message,
+            intent,
+            tools,
+            context,
+            retryOpts,
+          )
+          // Compare actual rendered transport to the thinking attempt BEFORE
+          // sending. A registry may redefine either name, including credentials.
+          const transport = (request: HTTPRequest | null | undefined) => {
+            if (!request) throw new Error('Planner retry cannot establish the same transport')
+            return JSON.stringify({
+              url: request.url,
+              method: request.method,
+              headers: Object.entries(request.headers)
+                .map(([key, value]) => [key.toLowerCase(), value])
+                .sort(([a], [b]) => a.localeCompare(b)),
+              model: (request.body.json() as { model?: string }).model,
+            })
+          }
+          if (transport(selected?.httpRequest) !== transport(retryRequest)) {
+            throw new Error(
+              'Planner retry requires the same transport (endpoint, credentials and model)',
+            )
+          }
+          plan = await b.Planner(user_message, intent, tools, context, retryOpts)
+          if (selectedCall(retryCollector)?.clientName !== retryClient) {
+            throw new Error('Planner retry did not select the original private-tier client')
+          }
           llmCall = extractLLMCallData(retryCollector, 'Planner', variables, startTime, plan)
         } catch (retryError) {
           throw wrapAsLLMCallError(retryError, 'Planner', variables, startTime, retryCollector)
         }
       } else {
         const retry = requestedThinking ? null : planParseRetry(e, collector)
-        if (!retry) throw wrapAsLLMCallError(e, functionName, variables, startTime, collector)
+        if (!retry) throw failure()
         const retryContext = retry.guidance
           ? [context, retry.guidance].filter(Boolean).join('\n\n')
           : context
@@ -1358,7 +1390,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
       }
     }
 
-    return { plan, llmCall, toolCount: tools.length }
+    return { plan, llmCall, toolCount: tools.length, ...(warning ? { warning } : {}) }
   }
 }
 

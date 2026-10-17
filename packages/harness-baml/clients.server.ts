@@ -551,6 +551,18 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
  * selected client, not inferred from the intended tier (#625 G19). */
 export const THINKING_CLIENTS: ReadonlySet<string> = new Set(['VerdaQwenThink'])
 
+/** Only the planner has a trace-aware counterpart in this slice (#625 G19 Q7). */
+export const THINKING_ROLES: ReadonlySet<BamlRole> = new Set(['planner'])
+
+function assertThinkingOverride(role: BamlRole, bag: BamlClientOverride): void {
+  if (
+    THINKING_CLIENTS.has(bag.client) &&
+    (!THINKING_ROLES.has(role) || activeInferenceTier() !== 'verda')
+  ) {
+    throw new Error(`Thinking client '${bag.client}' requires the planner role on the private tier`)
+  }
+}
+
 /** Includes dormant thinking leaves without changing the tier's routing map. */
 export const PRIVATE_TIER_CLIENTS: ReadonlySet<string> = new Set([
   ...Object.values(VERDA_CLIENT_BY_ROLE).filter((c): c is string => c !== undefined),
@@ -753,10 +765,16 @@ export function clientOverrideFor(role: BamlRole): BamlClientOverride | undefine
   // where the bag becomes this package's own shape.
   const perRun = currentRunFrame()?.inference?.clientOverride?.(role) as
     BamlClientOverride | undefined
-  if (perRun) return perRun
+  if (perRun) {
+    assertThinkingOverride(role, perRun)
+    return perRun
+  }
 
   const consumerBag = consumerClients?.(role)
-  if (consumerBag) return consumerBag
+  if (consumerBag) {
+    assertThinkingOverride(role, consumerBag)
+    return consumerBag
+  }
 
   const client = verdaClientFor(role)
   if (!client) return undefined
@@ -817,12 +835,12 @@ export function resolveClientForRole(role: BamlRole): string {
   // answers it the same way the router of the actual call does.
   const perRun = currentRunFrame()?.inference?.clientOverride?.(role) as
     BamlClientOverride | undefined
-  return (
-    perRun?.client ??
-    consumerClients?.(role)?.client ??
-    verdaClientFor(role) ??
-    CLIENT_BY_ROLE[role]
-  )
+  const bag = perRun ?? consumerClients?.(role)
+  if (bag) {
+    assertThinkingOverride(role, bag)
+    return bag.client
+  }
+  return verdaClientFor(role) ?? CLIENT_BY_ROLE[role]
 }
 
 /**

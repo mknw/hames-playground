@@ -2,7 +2,15 @@
 /** #625 S3: real committed BAML + adapter + planner, synthetic loopback only. */
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ClientRegistry } from '@boundaryml/baml'
+import {
+  clientOverrideFor,
+  resolveClientForRole,
+  configureConsumerClients,
+  VERDA_CLIENT_BY_ROLE,
+} from '@hames-ai/harness-baml/clients.server'
+import type { BamlRole } from '@hames-ai/harness-baml/clients.server'
 import '../../../lib/inference/config.server'
 import { createPlannerAdapter } from '@hames-ai/harness-baml/baml-adapters.server'
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
@@ -33,6 +41,7 @@ let replies: Array<{
   status?: number
 }>
 let requests: Array<Record<string, unknown>>
+let transports: Array<{ url: string | undefined; authorization: string | undefined }>
 let samples: LlmUsageSample[]
 let stopObserving: () => void
 
@@ -41,6 +50,7 @@ beforeAll(async () => {
     let raw = ''
     for await (const part of req) raw += part
     requests.push(JSON.parse(raw))
+    transports.push({ url: req.url, authorization: req.headers.authorization })
     const reply = replies.shift()
     if (!reply) {
       res.writeHead(500)
@@ -89,6 +99,7 @@ afterAll(async () => {
 beforeEach(() => {
   replies = []
   requests = []
+  transports = []
   samples = []
 })
 
@@ -112,6 +123,44 @@ function run<T>(fn: () => Promise<T>, client = 'VerdaQwenThink', tier = 'verda')
     fn,
   )
 }
+afterEach(() => {
+  configureConsumerClients(undefined)
+  vi.unstubAllEnvs()
+})
+
+function registryRun<T>(registry: ClientRegistry, fn: () => Promise<T>, client = 'VerdaQwenThink') {
+  return withRunFrame(
+    {
+      inference: {
+        tier: 'verda',
+        clientOverride: () => ({
+          client,
+          clientRegistry: registry,
+          env: {
+            VERDA_INFERENCE_ENDPOINT: endpoint,
+            VERDA_INFERENCE_API_KEY: 'default-synthetic-key',
+          },
+        }),
+      },
+    },
+    fn,
+  )
+}
+function registered(
+  registry: ClientRegistry,
+  name: string,
+  url = endpoint,
+  key = 'synthetic-key',
+  model = 'Qwen/Qwen3.8-27B-FP8',
+) {
+  registry.addLlmClient(name, 'openai-generic', {
+    base_url: url,
+    api_key: key,
+    model,
+    chat_template_kwargs: { enable_thinking: name === 'VerdaQwenThink' },
+  })
+}
+
 const call = () => createPlannerAdapter([])('Synthetic request', 'Synthetic intent')
 function scopeAndView() {
   const ctx: UnifiedContext<Record<string, unknown>> = {
@@ -167,13 +216,219 @@ describe('Planner thinking mode', () => {
   )
 
   it.each([undefined, '', '   '])(
-    'rejects a valid answer without a trace and never retries (trace %j)',
+    'accepts a valid answer without a trace and records a warning without retry (trace %j)',
     async (reasoning) => {
       replies.push({ content: JSON.stringify(ANSWER), reasoning })
-      await expect(run(call)).rejects.toThrow(/no thinking trace/)
+      const { scope, view } = scopeAndView()
+      const result = await run(() => planner(createPlannerAdapter([]), []).fn(scope, view))
+      expect(result.data.plan).toEqual({ ...ANSWER, reasoning: '' })
+      expect(result.events.map((e) => e.type)).toEqual(['warning', 'plan_created'])
+      expect(result.events[0].data).toMatchObject({ task: 'planner', message: 'no thinking trace' })
+      expect(result.events[1].llmCall?.parsedOutput).toEqual({ ...ANSWER, reasoning: '' })
+      expect(samples).toHaveLength(1)
       expect(requests).toHaveLength(1)
     },
   )
+
+  it.each(['per-run', 'consumer'] as const)(
+    'refuses the twin at both seam readers from %s bags before any request',
+    async (layer) => {
+      for (const tier of ['anthropic', 'verda']) {
+        for (const role of [
+          'controller',
+          'critic',
+          'describe',
+          'screen',
+          'router',
+          'synthesizer',
+          'decide',
+          'planner',
+        ] as BamlRole[]) {
+          if (role === 'planner' && tier === 'verda') continue
+          const override = () => ({ client: 'VerdaQwenThink' })
+          if (layer === 'consumer') configureConsumerClients(override)
+          await withRunFrame(
+            { inference: { tier, ...(layer === 'per-run' ? { clientOverride: override } : {}) } },
+            async () => {
+              expect(() => clientOverrideFor(role)).toThrow(/thinking.*planner.*private tier/i)
+              expect(() => resolveClientForRole(role)).toThrow(/thinking.*planner.*private tier/i)
+            },
+          )
+        }
+      }
+      expect(requests).toHaveLength(0)
+    },
+  )
+
+  it.each(['controller', 'planner'] as const)(
+    'refuses a real %s adapter before any request on a disallowed tier/role',
+    async (role) => {
+      const { createLoopControllerAdapter } =
+        await import('@hames-ai/harness-baml/baml-adapters.server')
+      const action: () => Promise<unknown> = () =>
+        role === 'planner' ? call() : createLoopControllerAdapter()('q', 'i', '[]', 0)
+      for (const tier of role === 'planner' ? ['anthropic'] : ['anthropic', 'verda']) {
+        await expect(
+          withRunFrame(
+            { inference: { tier, clientOverride: () => ({ client: 'VerdaQwenThink' }) } },
+            action,
+          ),
+        ).rejects.toThrow(/private tier/i)
+      }
+      expect(requests).toHaveLength(0)
+    },
+  )
+
+  it.each(['endpoint', 'credentials', 'model', 'registered counterpart'] as const)(
+    'refuses a Q6 transport mismatch in %s before sending the retry',
+    async (mismatch) => {
+      const registry = new ClientRegistry()
+      registered(
+        registry,
+        'VerdaQwenThink',
+        endpoint.replace('/v1', '/eval/v1'),
+        'eval-synthetic-key',
+      )
+      if (mismatch !== 'registered counterpart') {
+        registered(
+          registry,
+          'VerdaQwen',
+          mismatch === 'endpoint' ? endpoint : endpoint.replace('/v1', '/eval/v1'),
+          mismatch === 'credentials' ? 'default-synthetic-key' : 'eval-synthetic-key',
+          mismatch === 'model' ? 'other-synthetic-model' : undefined,
+        )
+      }
+      replies.push({ content: '', reasoning: TRACE }, { content: JSON.stringify(OFF) })
+      const failure = await registryRun(registry, call).catch((e: unknown) => e)
+      expect(failure).toMatchObject({ message: expect.stringMatching(/same.*transport/i) })
+      expect(requests).toHaveLength(1)
+      expect(transports).toEqual([
+        { url: '/eval/v1/chat/completions', authorization: 'Bearer eval-synthetic-key' },
+      ])
+    },
+  )
+
+  it('supports a matching registered pair for exactly one thinking-off retry, preserving the bag env over process env', async () => {
+    vi.stubEnv('VERDA_INFERENCE_ENDPOINT', endpoint.replace('/v1', '/process/v1'))
+    vi.stubEnv('VERDA_INFERENCE_API_KEY', 'process-synthetic-key')
+    const registry = new ClientRegistry()
+    for (const name of ['VerdaQwenThink', 'VerdaQwen'])
+      registered(registry, name, endpoint.replace('/v1', '/eval/v1'), 'eval-synthetic-key')
+    replies.push({ content: '', reasoning: TRACE }, { content: JSON.stringify(OFF) })
+    expect((await registryRun(registry, call)).plan).toEqual(OFF)
+    expect(transports).toEqual(
+      Array(2).fill({
+        url: '/eval/v1/chat/completions',
+        authorization: 'Bearer eval-synthetic-key',
+      }),
+    )
+    expect(requests.map((r) => r.chat_template_kwargs)).toEqual([
+      { enable_thinking: true },
+      { enable_thinking: false },
+    ])
+  })
+
+  it('keeps bag env when using the declared counterpart even if process env points elsewhere', async () => {
+    vi.stubEnv('VERDA_INFERENCE_ENDPOINT', endpoint.replace('/v1', '/process/v1'))
+    vi.stubEnv('VERDA_INFERENCE_API_KEY', 'process-synthetic-key')
+    replies.push({ content: '', reasoning: TRACE }, { content: JSON.stringify(OFF) })
+    expect((await run(call)).plan).toEqual(OFF)
+    expect(transports).toEqual(
+      Array(2).fill({ url: '/v1/chat/completions', authorization: 'Bearer synthetic-key' }),
+    )
+  })
+
+  it('refuses a retry whose collector selected another leaf despite a matching rendered transport', async () => {
+    const registry = new ClientRegistry()
+    registered(registry, 'VerdaQwenThink')
+    registered(registry, 'SyntheticOriginal')
+    registry.addLlmClient('VerdaQwen', 'fallback', { strategy: ['SyntheticOriginal'] })
+    replies.push({ content: '', reasoning: TRACE }, { content: JSON.stringify(OFF) })
+    const failure = await registryRun(registry, call).catch((e: unknown) => e)
+    expect(failure).toMatchObject({
+      message: expect.stringMatching(/retry.*select/i),
+      llmCall: { clientName: 'SyntheticOriginal' },
+    })
+    expect(requests).toHaveLength(2)
+  })
+
+  it('derives the thinking-off retry client from the planner role map', async () => {
+    // Deliberately change the fixture's map to distinguish a lookup from a literal.
+    const roleMap = VERDA_CLIENT_BY_ROLE as Partial<Record<BamlRole, string>>
+    const original = roleMap.planner
+    const registry = new ClientRegistry()
+    registered(registry, 'VerdaQwenThink')
+    registered(registry, 'SyntheticOriginal')
+    replies.push({ content: '', reasoning: TRACE }, { content: JSON.stringify(OFF) })
+    try {
+      roleMap.planner = 'SyntheticOriginal'
+      const result = await registryRun(registry, call)
+      expect(result.plan).toEqual(OFF)
+      expect(result.llmCall?.clientName).toBe('SyntheticOriginal')
+      expect(requests).toHaveLength(2)
+    } finally {
+      roleMap.planner = original
+    }
+  })
+
+  it('refuses a thinking leaf selected through an original-schema registry chain', async () => {
+    const registry = new ClientRegistry()
+    registered(registry, 'VerdaQwenThink')
+    registry.addLlmClient('SyntheticOriginalChain', 'fallback', { strategy: ['VerdaQwenThink'] })
+    replies.push({ content: JSON.stringify(OFF), reasoning: TRACE })
+    const failure = await registryRun(registry, call, 'SyntheticOriginalChain').catch(
+      (e: unknown) => e,
+    )
+    expect(failure).toMatchObject({
+      message: expect.stringMatching(/Planner selected a thinking leaf/),
+      llmCall: { clientName: 'VerdaQwenThink' },
+    })
+    expect(requests).toHaveLength(1)
+  })
+
+  it('retains a terminal malformed-answer trace in the durable error call without a downstream plan', async () => {
+    replies.push({ content: 'not a plan', reasoning: TRACE, tokens: 20 })
+    const { scope, view } = scopeAndView()
+    const result = await run(() => planner(createPlannerAdapter([]), []).fn(scope, view))
+    expect(result.data.plan).toBeUndefined()
+    expect(result.events.map((e) => e.type)).toEqual(['error'])
+    expect(result.events[0].llmCall).toMatchObject({
+      rawOutput: 'not a plan',
+      parsedOutput: { reasoning: TRACE },
+    })
+    expect(requests).toHaveLength(1)
+  })
+
+  it('excludes the full event trace from LLM serialization while preserving plan text, n_steps and skipped', () => {
+    const ctx: UnifiedContext = {
+      sessionId: 's',
+      createdAt: 0,
+      status: 'running',
+      input: 'q',
+      data: {},
+      events: [
+        {
+          type: 'plan_created',
+          ts: 0,
+          patternId: 'p',
+          data: { plan: { ...ANSWER, reasoning: TRACE }, toolCount: 0 },
+        },
+        {
+          type: 'plan_created',
+          ts: 1,
+          patternId: 'p',
+          data: { skipped: 'no-message', toolCount: 0 },
+        },
+      ],
+    }
+    const xml = createEventView(ctx).serialize()
+    expect(xml).not.toContain(TRACE)
+    expect(xml).not.toContain('reasoning')
+    expect(xml).toContain(ANSWER.plan)
+    expect(xml).toContain('"n_steps":1')
+    expect(xml).toContain('"skipped":"no-message"')
+    expect((ctx.events[0].data as PlanCreatedEventData).plan?.reasoning).toBe(TRACE)
+  })
 
   it('leaves private thinking-off calls on the original and its written reasoning', async () => {
     replies.push({ content: JSON.stringify(OFF) })
@@ -192,6 +447,7 @@ describe('Planner thinking mode', () => {
   it.each([
     { content: '', reasoning_content: TRACE, tokens: 4096 },
     { content: null, reasoning: TRACE },
+    { content: '' },
     { content: '{"plan":', reasoning: TRACE, tokens: 4096 },
     { content: JSON.stringify({ plan: '', n_steps: 0 }), reasoning_content: TRACE },
   ])(
@@ -216,6 +472,8 @@ describe('Planner thinking mode', () => {
         'VerdaQwen',
       )
       expect(samples.map((s) => s.clientName)).toEqual(['VerdaQwenThink', 'VerdaQwen'])
+      expect(samples.map((s) => s.metrics?.attempts)).toEqual([1, 1])
+      expect(result.events.map((e) => e.llmCall?.metrics?.attempts)).toEqual([1, 1])
       expect(result.data.plan).toEqual(OFF)
     },
   )

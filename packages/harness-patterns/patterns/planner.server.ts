@@ -231,6 +231,7 @@ export function planner<T extends PlannerData>(
         plan: raw,
         llmCall,
         toolCount,
+        warning,
       } = await planFn(
         userContent,
         intent,
@@ -264,6 +265,19 @@ export function planner<T extends PlannerData>(
       if (!raw.plan?.trim()) {
         const message = 'Planner returned an empty plan'
         throw llmCall ? new LLMCallError(message, llmCall) : new Error(message)
+      }
+
+      if (warning) {
+        trackEvent(
+          scope,
+          'warning',
+          {
+            task: 'planner',
+            message: warning,
+            fallback: 'Continue with the valid plan and empty reasoning.',
+          },
+          true,
+        )
       }
 
       // The executor re-reads these fields every turn. Only its copy is capped:

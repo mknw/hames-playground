@@ -605,6 +605,8 @@ export type RetrieveQueryFn = {
  *  (the resolved one — an active sandbox scope's in-VM tools plus the gateway
  *  tools that resolved — not the raw name list). */
 export interface PlanCallResult {
+  /** Diagnostic degradation on an otherwise usable plan, recorded by the pattern. */
+  warning?: string
   plan: PlanResult
   llmCall?: LLMCallRecord
   toolCount: number
@@ -1304,7 +1306,7 @@ export type WarningTask =
   | 'web_privacy'
   /** `@hames-ai/sandbox`'s mount of the run's skills into `/skills` (#415). */
   | 'skills_mount'
-  /** The planner retried without thinking on the same inference endpoint (#625). */
+  /** The planner retried without thinking or accepted a plan with no trace (#625). */
   | 'planner'
 
 /**

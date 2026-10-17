@@ -1492,15 +1492,18 @@ changes:
 `maxReasoningChars` (default 2000), with the same `…[truncated]` suffix as
 `maxPlanChars`. Both loop patterns consume this bounded copy through
 `formatPlanContext`. `plan_created.plan.reasoning` and `llmCall.parsedOutput`
-retain the full trace for observability. The plan text keeps its existing
-`maxPlanChars` behavior.
+retain the full trace for observability only; `view.serialize()` renders the
+plan text, `n_steps` and `skipped` without the trace. The plan text keeps its
+existing `maxPlanChars` behavior.
 
 `PlannerFn` accepts an optional fourth `onRetry(failedCall)` callback. Before
 retrying a thinking planner without thinking on the same endpoint, the BAML
 adapter calls it; the pattern records a `warning` (`task: 'planner'`) with the
 failed call attached. The warning survives even when that single retry fails.
-A parser violation or missing trace fails loudly without retry; only empty,
-trace-only or cap-hit-in-thinking answers take this fallback.
+A parser violation fails loudly without retry. A valid plan with no trace is
+accepted with `reasoning: ''` and a `warning` (`task: 'planner'`, `no thinking trace`);
+only empty, trace-only or cap-hit-in-thinking answers take the retry fallback.
+The adapter's optional `PlanCallResult.warning` carries that diagnostic to the pattern.
 
 **Defaults:** `commitStrategy: 'always'` (the plan survives a downstream error),
 `trackHistory: 'plan_created'`, `errorSeverity: 'recoverable'`, and a

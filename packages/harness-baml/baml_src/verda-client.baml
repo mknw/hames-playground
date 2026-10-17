@@ -242,8 +242,9 @@ client<llm> VerdaQwen {
   }
 }
 
-// #625 G19: Modal replaces the paused Verda deployment, with the SAME endpoint
-// and credentials. Requires a reasoning parser: </think> in content fails loudly.
+// #625 G19: requires the endpoint VERDA_INFERENCE_ENDPOINT names to run a
+// reasoning parser; </think> in content fails loudly.
+// A twin call through a per-run or consumer override shows no warming notice.
 // Dormant: never a VERDA_CLIENT_BY_ROLE value or a fallback-chain member.
 // PROVISIONAL / UNMEASURED: keep the shipped 4096 / 180s pair until the separately
 // authorised eval measures trace + answer at 8192 / ~340s (eval-only).

@@ -215,7 +215,7 @@ configureInferencePolicy({
     // LocalQwenSmallDecide keeps its separate readout and existing notice
     // policy: this change enrolls describe, not every client sharing its host.
     // Changing the decide transport or its failure policy is a separate change.
-    if (client === VERDA_CLIENT_NAME || THINKING_CLIENTS.has(client)) noteBoxCallStarting('verda')
+    if (client === VERDA_CLIENT_NAME) noteBoxCallStarting('verda')
     if (client === VERDA_CLIENT_BY_ROLE.describe) noteBoxCallStarting('small')
   },
 })

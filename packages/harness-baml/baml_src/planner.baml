@@ -21,14 +21,16 @@
 // agent-static CONTEXT + AVAILABLE TOOLS block carries the cache marker, so
 // consecutive planning calls for the same agent reuse the tool catalog.
 
-function Planner(
+// Shared body for #625; with_reasoning controls content-side reasoning,
+// not model-side thinking. Originals keep their contract by passing true.
+// Output format belongs to the calling function, never to this template.
+template_string PlannerBody(
   user_message: string,
   intent: string,
   tools: ToolDescription[],
-  context: string?
-) -> PlanResult {
-  client PlannerAnthropic
-  prompt #"
+  context: string?,
+  with_reasoning: bool
+) #"
     {{ _.role("system") }}
     You are a strategic planner for a tool-using agent. Given the user's intent
     and the tools available, produce a concise plan describing how to
@@ -45,7 +47,7 @@ function Planner(
     - Only plan steps the listed tools can actually perform. If the task needs
       no tools at all, say so in one step.
     - Keep it short — the executor reads this on every turn. Aim for 2-6 steps,
-      one line each, and never more than a short paragraph of reasoning.
+      one line each{% if with_reasoning %}, and never more than a short paragraph of reasoning{% endif %}.
     - Do not answer the user's question yourself, and do not invent findings.
       The plan describes work still to be done.
     - `n_steps` MUST equal the number of steps you actually wrote.
@@ -66,6 +68,17 @@ function Planner(
 
     ---
     REQUEST: {{ user_message }}
+"#
+
+function Planner(
+  user_message: string,
+  intent: string,
+  tools: ToolDescription[],
+  context: string?
+) -> PlanResult {
+  client PlannerAnthropic
+  prompt #"
+    {{ PlannerBody(user_message, intent, tools, context, true) }}
 
     {{ ctx.output_format }}
   "#

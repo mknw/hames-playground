@@ -8,6 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import threading
@@ -357,6 +358,36 @@ class MeasureBehaviour(unittest.TestCase):
         self.assertEqual(self.run_main(["--box", "27b"])["budget"], [1800])
         self.assertEqual(self.run_main([])["budget"], [900])
         self.assertEqual(self.run_main(["--box", "27b", "--cold-budget-s", "1200"])["budget"], [1200])
+
+    def test_a_failed_cleanup_never_replaces_the_sample_failure(self):
+        import measure
+        failed = types.SimpleNamespace(returncode=1)
+        cleanups = (
+            lambda command: failed,
+            mock.Mock(side_effect=subprocess.TimeoutExpired("ops.py stop", 120)),
+            mock.Mock(side_effect=OSError("launch failure")),
+        )
+        env = {"HAMES_MODAL_27B_URL": "https://big.invalid", "HAMES_MODAL_PROXY_TOKEN": "t"}
+        for cleanup in cleanups:
+            for original in (TimeoutError("no 200"), None):
+                err = io.StringIO()
+                cold = mock.Mock(side_effect=original) if original else \
+                    mock.Mock(return_value={"cold_start_s": 1.0, "attempts": 1, "box": {}})
+                with mock.patch.dict(os.environ, env), \
+                        mock.patch.object(measure, "cold_start", cold), \
+                        mock.patch.object(measure, "warm_calls_27b", lambda b, t: {}), \
+                        mock.patch.object(measure, "wait_scaled_to_zero", lambda s: None), \
+                        mock.patch.object(measure, "ops", cleanup), \
+                        mock.patch.object(sys, "argv", ["measure.py", "--box", "27b", "--stop", "--samples", "1",
+                                                        "--out", os.devnull]), \
+                        contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()), \
+                        self.assertRaises(BaseException) as caught:
+                    measure.main()
+                if original:
+                    self.assertIs(caught.exception, original)  # the sample's failure, not the cleanup's
+                else:
+                    self.assertIsInstance(caught.exception, SystemExit)  # a failed stop still fails the run
+                self.assertIn("stop failed", err.getvalue())
 
     def test_stop_runs_on_success_and_on_a_failed_sample(self):
         self.assertEqual(self.run_main(["--box", "27b", "--stop"])["stop"], 1)

@@ -282,7 +282,7 @@ describe('deploy/modal: what the image and a snapshot can contain is pinned publ
     // Values are quoted strings, dicts or ints; no name reference, call or f-string.
     for (const block of [chat, decision]) {
       expect(block).toMatch(/"content": "[^"]+"|"state": "[^"]+"/)
-      expect(block).not.toMatch(/os\.environ|open\(|read|f"|\.get\(|input\(/)
+      expect(block).not.toMatch(/os\.environ|_env\(|open\(|read|f"|\.get\(|input\(/)
     }
   })
 })
@@ -428,8 +428,11 @@ describe('deploy/modal: the 27B box (Qwen27B)', () => {
   it('warms up and checks with string literals only', () => {
     for (const name of ['QWEN27B_WARMUP_MESSAGES', 'QWEN27B_ANSWER_MESSAGES']) {
       const block = bigApp.match(new RegExp(`${name} = \\(([\\s\\S]*?)\\n\\)`))?.[1] ?? ''
-      expect(block).toMatch(/"content": '?"?[^"]+/)
-      expect(block).not.toMatch(/os\.environ|open\(|read|f"|\.get\(|input\(/)
+      // Every content value is one string literal, closed on its own line.
+      const values = [...block.matchAll(/"content": (.*)$/gm)].map((m) => m[1])
+      expect(values.length).toBeGreaterThan(0)
+      for (const value of values) expect(value).toMatch(/^("[^"]*"|'[^']*'),?\s*\}?,?$/)
+      expect(block).not.toMatch(/os\.environ|_env\(|open\(|read|f"|\.get\(|input\(/)
     }
     expect(bigApp.match(/QWEN27B_REFERENCE_PROMPT = (.*)/)?.[1]).toMatch(/^"[^"]+"$/)
     expect(bigBoot).toContain('list(QWEN27B_WARMUP_MESSAGES)')

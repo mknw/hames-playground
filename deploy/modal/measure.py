@@ -213,10 +213,16 @@ def main() -> int:
             sample["warm"] = warm_calls_27b(base, token) if big else warm_calls(base, token)
         finally:
             # Also on a failed sample, whose error still propagates: a box that is
-            # still booting is billed until its scaledown.
-            if args.stop and ops("stop").returncode != 0:
-                stop_failed = True
-                print("ops.py stop failed; the container is still billed until its scaledown", file=sys.stderr)
+            # still booting is billed until its scaledown. A cleanup that fails,
+            # even by raising, is reported and never replaces the sample's error.
+            if args.stop:
+                try:
+                    stop_failed = ops("stop").returncode != 0
+                except (OSError, subprocess.SubprocessError) as error:
+                    stop_failed = True
+                    print(f"ops.py stop: {type(error).__name__}", file=sys.stderr)
+                if stop_failed:
+                    print("ops.py stop failed; the container is still billed until its scaledown", file=sys.stderr)
         with open(args.out, "a", encoding="utf-8") as out:
             out.write(json.dumps(sample) + "\n")
         print(json.dumps(sample), flush=True)

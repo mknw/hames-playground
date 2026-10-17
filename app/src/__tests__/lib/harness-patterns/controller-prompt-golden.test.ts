@@ -12,6 +12,9 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
+import { BamlRuntime, BamlCtxManager } from '@boundaryml/baml'
+import { BamlAsyncClient } from '@hames-ai/harness-baml/baml_client/async_client'
+import { getBamlFiles } from '@hames-ai/harness-baml/baml_client/inlinedbaml'
 import type {
   Attempt,
   FewShot,
@@ -87,16 +90,16 @@ const ATTEMPTS: Attempt[] = [
 ]
 
 type Options = { client: string; env: typeof ENV }
-type Render = (opts: Options) => Promise<{ body: { text(): string } }>
+type Render = (opts: Options, client?: typeof b) => Promise<{ body: { text(): string } }>
 const CASES: Record<string, Record<string, Render>> = {
   LoopController: {
     // No optional sections, default summary style, no history.
-    first: (o) =>
-      b.request.LoopController('q', 'i', TOOLS, [], null, null, null, null, null, null, o),
+    first: (o, client = b) =>
+      client.request.LoopController('q', 'i', TOOLS, [], null, null, null, null, null, null, o),
     // Both populated and legacy history, rolling markers, expansions, errors,
     // batch calls, escaped few-shots, prior results, and a separate plan.
-    parallel: (o) =>
-      b.request.LoopController(
+    parallel: (o, client = b) =>
+      client.request.LoopController(
         'Find the "sample"\nfile',
         'Find the sample',
         TOOLS,
@@ -109,8 +112,8 @@ const CASES: Record<string, Record<string, Render>> = {
         'answer',
         o,
       ),
-    sequential: (o) =>
-      b.request.LoopController(
+    sequential: (o, client = b) =>
+      client.request.LoopController(
         'q',
         'i',
         TOOLS,
@@ -125,10 +128,12 @@ const CASES: Record<string, Record<string, Render>> = {
       ),
   },
   ActorController: {
-    first: (o) => b.request.ActorController('q', 'i', TOOLS, [], null, null, 1, 5, null, o),
-    noBudget: (o) => b.request.ActorController('q', 'i', [], [], '', [], null, null, null, o),
-    parallel: (o) =>
-      b.request.ActorController(
+    first: (o, client = b) =>
+      client.request.ActorController('q', 'i', TOOLS, [], null, null, 1, 5, null, o),
+    noBudget: (o, client = b) =>
+      client.request.ActorController('q', 'i', [], [], '', [], null, null, null, o),
+    parallel: (o, client = b) =>
+      client.request.ActorController(
         'q',
         'i',
         TOOLS,
@@ -140,8 +145,8 @@ const CASES: Record<string, Record<string, Render>> = {
         'parallel',
         o,
       ),
-    sequential: (o) =>
-      b.request.ActorController(
+    sequential: (o, client = b) =>
+      client.request.ActorController(
         'q',
         'i',
         TOOLS,
@@ -155,9 +160,9 @@ const CASES: Record<string, Record<string, Render>> = {
       ),
   },
   Planner: {
-    first: (o) => b.request.Planner('q', 'i', TOOLS, null, o),
-    context: (o) =>
-      b.request.Planner(
+    first: (o, client = b) => client.request.Planner('q', 'i', TOOLS, null, o),
+    context: (o, client = b) =>
+      client.request.Planner(
         'Find the "sample"\nfile',
         'Find the sample',
         TOOLS,
@@ -189,7 +194,13 @@ const GOLDENS = JSON.parse(
 ) as Record<string, string>
 const RENDERS = Object.entries(CASES).flatMap(([fn, cases]) =>
   Object.entries(cases).flatMap(([scenario, render]) =>
-    CLIENTS[fn].map((client) => ({ name: `${fn}/${scenario}/${client}`, render, client })),
+    CLIENTS[fn].map((client) => ({
+      name: `${fn}/${scenario}/${client}`,
+      fn,
+      scenario,
+      render,
+      client,
+    })),
   ),
 )
 
@@ -198,4 +209,52 @@ describe('#625 S2 thinking-off originals match their pre-refactor request bytes'
     const body = (await render({ client, env: ENV })).body.text()
     expect(body).toBe(GOLDENS[name])
   })
+})
+
+// Exercise the dormant flag without adding a BAML function, client, counterpart
+// or runtime route: compile an in-memory copy with only the wrapper's final
+// `true` argument changed. The original output schema intentionally stays put.
+describe('#625 shared bodies can omit content-side reasoning', () => {
+  let withoutReasoning: BamlAsyncClient
+  beforeAll(() => {
+    const files = Object.fromEntries(
+      Object.entries(getBamlFiles()).map(([file, source]) => [
+        file,
+        source.replace(
+          /(\{\{ (?:LoopControllerBody|ActorControllerBody|PlannerBody)\([^\n]+), true(\) \}\})/g,
+          '$1, false$2',
+        ),
+      ]),
+    )
+    const runtime = BamlRuntime.fromFiles('baml_src', files, ENV)
+    withoutReasoning = new BamlAsyncClient(runtime, new BamlCtxManager(runtime))
+  })
+
+  it.each(
+    RENDERS.filter(
+      ({ scenario, client }) =>
+        ['parallel', 'sequential', 'context'].includes(scenario) &&
+        ['AnthropicSonnet5NoThink', 'AnthropicSonnet5', 'VerdaQwen'].includes(client),
+    ),
+  )(
+    '$name omits only reasoning demonstrations and guidance',
+    async ({ name, fn, render, client }) => {
+      const original = GOLDENS[name]
+      const expected = JSON.parse(original, (_key, value: unknown) =>
+        typeof value === 'string'
+          ? value
+              .replace(/"reasoning": "(?:[^"\\]|\\.)*", /g, '')
+              .replace(', and never more than a short paragraph of reasoning', '')
+          : value,
+      )
+      // Non-vacuous: each selected case includes a demonstration or the planner's
+      // reasoning guidance, so dropping or ignoring the flag fails the comparison.
+      expect(JSON.stringify(expected)).not.toBe(JSON.stringify(JSON.parse(original)))
+      const actual = (await render({ client, env: ENV }, withoutReasoning)).body.text()
+      expect(JSON.parse(actual)).toEqual(expected)
+      // The function still owns its original output format in this template-only
+      // test; S3 owns the separate counterpart output type.
+      expect(actual).toContain(fn === 'Planner' ? 'n_steps' : 'tool_name')
+    },
+  )
 })

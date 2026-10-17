@@ -83,6 +83,8 @@ jobs:
           shellcheck -x scripts/bootstrap-vps.sh scripts/bootstrap-vps.test.sh scripts/check-docker.sh scripts/check-docker.test.sh
           scripts/bootstrap-vps.test.sh
           scripts/check-docker.test.sh
+          python3 scripts/check-vps.test.py
+          python3 scripts/check-vps.test.py --mutations
 
       # Pins the Postgres → pgvector migration script (#419 M8) against a docker
       # shim that ALLOW-LISTS the calls it may make: the source mount stays :ro,

@@ -176,6 +176,9 @@ function boot(values: Record<string, string>) {
     source "$1/scripts/bootstrap-vps.sh"
     DRY_RUN=0 HOSTNAME_ARG=staging.example.invalid ACME_EMAIL_ARG=ops@example.invalid
     assert_engine_supported() { :; }; assert_gateway_pinned() { :; }
+    # This fixture exercises tier refusal; host isolation has its own
+    # daemon-free tests in scripts/check-vps.test.py.
+    assert_daemon_isolation() { :; }; vps_check() { :; }
     escrow_recorded() { :; }; dns_points_here() { :; }
     reserved_name() { return 1; }; assert_dynamic_tools_off() { :; }
     rendered_exposure() { :; }; wait_state() { :; }

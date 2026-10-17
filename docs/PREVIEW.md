@@ -1043,10 +1043,9 @@ remains paused: never wake/probe it for these checks.
 None of these workflows exist in this repository yet. This is the shape that
 keeps the artifact that was approved the artifact that ships: an environment
 that pulls runs the digest the environment before it ran, never a rebuild.
-Environment branches and rebuilding prod from a release tag were rejected for
-exactly that reason, because each ships bytes nobody tested
-([ADR-0007](adr/0007-three-environments-digest-promotion.md), considered
-options). A single box that builds its own image from a pinned commit (§14)
+For the current two-branch clone shape, the owner's G20 ruling in §12 governs;
+this future promotion workflow still requires the tested digest, without a
+rebuild. A single box that builds its own image from a pinned commit (§14)
 needs no registry credential, at a cost: nothing can promote "the bytes staging
 ran" until CI builds the images.
 

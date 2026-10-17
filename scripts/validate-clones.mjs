@@ -83,17 +83,19 @@ export function validateClones(config) {
       "App env files must not contain Postgres administrator credentials",
     );
   }
-  for (const key of [
-    "SANDBOX_CACHE_VOLUME",
-    "DATA_ENCRYPTION_KEY",
-    "AUTH_SESSION_SECRET",
-    "TOKEN_ENCRYPTION_KEY",
-  ]) {
-    check(
-      envs[0][key].trim() !== envs[1][key].trim(),
-      `Clones must not share ${key}`,
-    );
-  }
+  check(
+    envs[0].SANDBOX_CACHE_VOLUME.trim() !== envs[1].SANDBOX_CACHE_VOLUME.trim(),
+    "Clones must not share SANDBOX_CACHE_VOLUME",
+  );
+  const secrets = envs.flatMap((env) =>
+    ["DATA_ENCRYPTION_KEY", "AUTH_SESSION_SECRET", "TOKEN_ENCRYPTION_KEY"].map(
+      (key) => env[key].trim(),
+    ),
+  );
+  check(
+    new Set(secrets).size === secrets.length,
+    "All six clone keys must be independent",
+  );
   check(
     new URL(envs[0].AUTH_REDIRECT_URI).hostname !==
       new URL(envs[1].AUTH_REDIRECT_URI).hostname,

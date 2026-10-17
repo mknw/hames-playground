@@ -105,6 +105,15 @@ describe('two built clones, one shared infrastructure (#432 row 8)', () => {
     expect(() => validateClones(config)).toThrow()
   })
 
+  it('refuses key reuse across purposes and clones, including whitespace aliases', () => {
+    for (const clone of ['app', 'app-dev'] as const) {
+      const config = configuration()
+      config.services[clone].environment.TOKEN_ENCRYPTION_KEY =
+        ` ${config.services.app.environment.DATA_ENCRYPTION_KEY} `
+      expect(() => validateClones(config)).toThrow(/All six/)
+    }
+  })
+
   it.each([
     ['VITE_DEV_BYPASS_AUTH', 'true'],
     ['SANDBOX_ENVIRONMENT', 'release'],

@@ -56,10 +56,12 @@ import {
   limitsFor,
   maxOutputTokensFor,
   resolveClientForRole,
+  THINKING_CLIENTS,
 } from './clients.server'
 import { notifyLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import { createJevTransport } from './jev-decide.server'
 import { escapeDataFence } from './data-fence'
+import { thinkingFrom, splitAtLastThinkClose } from './thinking-trace'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
 import type { DecideFn, DecideAllFn } from '@hames-ai/harness-patterns/types'
 import type {
@@ -1232,6 +1234,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
     user_message: string,
     intent: string,
     context?: string,
+    onRetry?: (failedCall: LLMCallRecord | undefined) => void,
   ): Promise<PlanCallResult> => {
     const { b } = await import('./baml_client')
     const startTime = Date.now()
@@ -1246,40 +1249,114 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
 
     const variables = { user_message, intent, tools, context }
 
-    // `PlannerAnthropic` — what planner.baml declares — unless a verda-tier
-    // run overrides it per call. The retry below is the whole failure policy:
-    // this call runs ONCE per chain, over the largest tool catalog in the repo,
-    // and a throw here means the chain runs unplanned. That failure policy is
-    // why the planner was held off the self-hosted box until 2026-08-26; it is
-    // unchanged, and it now applies on whichever client the tier picked.
-    //
-    // Read the `planner:` entry in `VERDA_CLIENT_BY_ROLE` before changing
-    // anything here: it is the one place the composite consequence of routing
-    // this role is stated whole (no thinking, halved output ceiling, one
-    // retry, then a silently unplanned chain).
-    const baseOpts = { collector, ...clientOverrideFor('planner') }
+    const override = clientOverrideFor('planner')
+    const requestedThinking = THINKING_CLIENTS.has(override?.client ?? '')
+    if (requestedThinking && activeInferenceTier() !== 'verda') {
+      throw new Error('PlannerThinking is valid only on the private tier')
+    }
+    const functionName = requestedThinking ? 'PlannerThinking' : 'Planner'
+    const baseOpts = { collector, ...override }
+    const selectedCall = () => {
+      const calls = (collector.last?.calls ?? []) as CollectorCall[]
+      return calls.find((call) => call.selected) ?? calls[calls.length - 1]
+    }
     let plan: PlanResult
+    let llmCall: LLMCallRecord | undefined
     try {
-      plan = await b.Planner(user_message, intent, tools, context, baseOpts)
+      if (requestedThinking) {
+        const answer = await b.PlannerThinking(user_message, intent, tools, context, baseOpts)
+        const selected = selectedCall()
+        // The collector, not the routing intention, proves that this response
+        // came from a trace-exposing leaf. A mixed chain cannot satisfy this.
+        if (!THINKING_CLIENTS.has(selected?.clientName ?? '')) {
+          throw new Error('PlannerThinking did not select a known thinking client')
+        }
+        const split = splitAtLastThinkClose(collector.last?.rawLlmResponse ?? '')
+        if (split.closed) {
+          // Never inspect BAML's first JSON candidate (it may be a draft).
+          // Even a valid tail is refused: a parser is required by G19 Q7.
+          throw new Error(
+            'PlannerThinking requires a reasoning parser: </think> in content; answer tail rejected',
+          )
+        }
+        if (!answer.plan.trim()) throw new Error('PlannerThinking returned no answer')
+        const trace = thinkingFrom(selected)
+        if (trace.kind !== 'trace') {
+          throw new Error(`PlannerThinking returned no thinking trace (${trace.reason})`)
+        }
+        plan = { ...answer, reasoning: trace.text }
+      } else {
+        plan = await b.Planner(user_message, intent, tools, context, baseOpts)
+        if (THINKING_CLIENTS.has(selectedCall()?.clientName ?? '')) {
+          throw new Error(
+            'Planner selected a thinking leaf through an unsupported chain; use the private-tier leaf override',
+          )
+        }
+      }
+      llmCall = extractLLMCallData(collector, functionName, variables, startTime, plan)
     } catch (e) {
-      // ONE retry on a cut-off or empty completion, with corrective guidance
-      // only when there is something to correct; a genuine structured-output
-      // failure propagates as an LLMCallError the pattern turns into an error
-      // event.
-      const retry = planParseRetry(e, collector)
-      if (!retry) throw wrapAsLLMCallError(e, 'Planner', variables, startTime, collector)
-      const retryContext = retry.guidance
-        ? [context, retry.guidance].filter(Boolean).join('\n\n')
-        : context
-      try {
-        plan = await b.Planner(user_message, intent, tools, retryContext, baseOpts)
-      } catch (eRetry) {
-        throw wrapAsLLMCallError(eRetry, 'Planner', variables, startTime, collector)
+      const selected = selectedCall()
+      const thinking = THINKING_CLIENTS.has(selected?.clientName ?? '')
+      // Q7 is a loud failure even if BAML failed before returning a value.
+      const split = thinking
+        ? splitAtLastThinkClose(collector.last?.rawLlmResponse ?? '')
+        : undefined
+      if (split?.closed) {
+        const failedCall = extractFailureLLMCallData(collector, functionName, variables, startTime)
+        // Defence in depth: reparse ONLY the tail after the LAST delimiter.
+        // Retain it as rejected diagnostic data, never as an executable plan.
+        try {
+          failedCall.parsedOutput = b.parse.PlannerThinking(split.tail)
+        } catch {
+          // An invalid tail is still the same parser-policy failure.
+        }
+        throw new LLMCallError(
+          'PlannerThinking requires a reasoning parser: </think> in content; answer tail rejected',
+          failedCall,
+          e,
+        )
+      }
+      const noAnswer =
+        thinking &&
+        ((e instanceof BamlValidationError && collectorReturnedNoText(collector)) ||
+          (e instanceof Error && e.message === 'PlannerThinking returned no answer'))
+      if (
+        thinking &&
+        (noAnswer || (e instanceof BamlValidationError && collectorHitOutputCap(collector)))
+      ) {
+        // Keep the failed thinking attempt and the retry in separate collectors:
+        // each is accounted once and the warning survives a failed retry.
+        const failedCall = extractFailureLLMCallData(collector, functionName, variables, startTime)
+        const trace = thinkingFrom(selected)
+        if (trace.kind === 'trace') failedCall.parsedOutput = { reasoning: trace.text }
+        onRetry?.(failedCall)
+        const retryCollector = new Collector('Planner')
+        try {
+          // SAME box and credentials. Never the original's Anthropic default;
+          // no public fallback, and no further corrective retry in this branch.
+          plan = await b.Planner(user_message, intent, tools, context, {
+            ...override,
+            collector: retryCollector,
+            client: 'VerdaQwen',
+          })
+          llmCall = extractLLMCallData(retryCollector, 'Planner', variables, startTime, plan)
+        } catch (retryError) {
+          throw wrapAsLLMCallError(retryError, 'Planner', variables, startTime, retryCollector)
+        }
+      } else {
+        const retry = requestedThinking ? null : planParseRetry(e, collector)
+        if (!retry) throw wrapAsLLMCallError(e, functionName, variables, startTime, collector)
+        const retryContext = retry.guidance
+          ? [context, retry.guidance].filter(Boolean).join('\n\n')
+          : context
+        try {
+          plan = await b.Planner(user_message, intent, tools, retryContext, baseOpts)
+          llmCall = extractLLMCallData(collector, 'Planner', variables, startTime, plan)
+        } catch (retryError) {
+          throw wrapAsLLMCallError(retryError, 'Planner', variables, startTime, collector)
+        }
       }
     }
-
-    // extractLLMCallData fires warnIfCollectorEmpty itself on an empty collector.
-    const llmCall = extractLLMCallData(collector, 'Planner', variables, startTime, plan)
 
     return { plan, llmCall, toolCount: tools.length }
   }

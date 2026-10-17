@@ -241,3 +241,35 @@ client<llm> VerdaQwen {
     }
   }
 }
+
+// #625 G19: Modal replaces the paused Verda deployment, with the SAME endpoint
+// and credentials. Requires a reasoning parser: </think> in content fails loudly.
+// Dormant: never a VERDA_CLIENT_BY_ROLE value or a fallback-chain member.
+// PROVISIONAL / UNMEASURED: keep the shipped 4096 / 180s pair until the separately
+// authorised eval measures trace + answer at 8192 / ~340s (eval-only).
+// Sampling is the Qwen3.8 model card's thinking preset, not the original's 0.2:
+// https://huggingface.co/Qwen/Qwen3.8-27B-FP8#best-practices
+// No allowed_role_metadata: cache_control must never reach this box.
+client<llm> VerdaQwenThink {
+  provider openai-generic
+  options {
+    base_url env.VERDA_INFERENCE_ENDPOINT
+    api_key env.VERDA_INFERENCE_API_KEY
+    model "Qwen/Qwen3.8-27B-FP8"
+    chat_template_kwargs {
+      enable_thinking true
+    }
+    max_tokens 4096
+    temperature 1.0
+    top_p 0.95
+    top_k 20
+    min_p 0.0
+    presence_penalty 0.0
+    repetition_penalty 1.0
+    http {
+      connect_timeout_ms 30000
+      // Provisional: 4096 / 26 tok/s = 158s, with ~22s prefill/queue allowance.
+      request_timeout_ms 180000
+    }
+  }
+}

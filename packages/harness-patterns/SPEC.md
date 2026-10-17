@@ -1433,6 +1433,7 @@ chain(
 interface PlannerConfig extends PatternConfig {
   schema?: string // Extra context (e.g. neo4j schema) — mirrors simpleLoop's
   maxPlanChars?: number // Cap on the plan text handed downstream (default 2000)
+  maxReasoningChars?: number // Cap on downstream reasoning (default 2000); events keep it whole
 }
 ```
 
@@ -1479,12 +1480,27 @@ changes:
    <plan>
    ```
 
-2. **`plan_created` event** — carries the plan, the tool count and a
+2. **`plan_created` event** — carries the plan, the tool count, a
+   `reasoningTruncated` flag when executor-facing reasoning was capped, and a
    `truncated` flag for the observability panel and any downstream consumer
    (`view.ofType('plan_created')`). A dedicated event type, NOT
    `controller_action`: that payload is a real `ControllerAction`, and the
    compactExecution's thread mode renders every `controller_action` in view as a
    tool iteration — a synthetic one would show a tool call that never happened.
+
+**Reasoning bounds (#625).** `scope.data.plan.reasoning` is capped at
+`maxReasoningChars` (default 2000), with the same `…[truncated]` suffix as
+`maxPlanChars`. Both loop patterns consume this bounded copy through
+`formatPlanContext`. `plan_created.plan.reasoning` and `llmCall.parsedOutput`
+retain the full trace for observability. The plan text keeps its existing
+`maxPlanChars` behavior.
+
+`PlannerFn` accepts an optional fourth `onRetry(failedCall)` callback. Before
+retrying a thinking planner without thinking on the same endpoint, the BAML
+adapter calls it; the pattern records a `warning` (`task: 'planner'`) with the
+failed call attached. The warning survives even when that single retry fails.
+A parser violation or missing trace fails loudly without retry; only empty,
+trace-only or cap-hit-in-thinking answers take this fallback.
 
 **Defaults:** `commitStrategy: 'always'` (the plan survives a downstream error),
 `trackHistory: 'plan_created'`, `errorSeverity: 'recoverable'`, and a
@@ -3293,7 +3309,8 @@ BAML Inputs:
   context      : string?           ← config.schema
 
 BAML Return → PlanResult:
-  reasoning : string  → rendered into the plan block
+  reasoning : string  → full in event/call record; scope.data copy capped at
+                         config.maxReasoningChars (default 2000) for the plan block
   plan      : string  → capped at config.maxPlanChars (default 2000)
   n_steps   : int     → soft hint on scope.data.plan; never clamps maxTurns
   → written to scope.data.plan

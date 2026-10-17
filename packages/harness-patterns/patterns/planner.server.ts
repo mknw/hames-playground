@@ -62,12 +62,17 @@ assertServerOnImport()
  *  plan on every turn, so an unbounded plan is a per-turn cost, not a one-off. */
 export const DEFAULT_MAX_PLAN_CHARS = 2000
 
+/** Prompt-facing reasoning cap; the full trace stays in the event/call record. */
+export const DEFAULT_MAX_REASONING_CHARS = 2000
+
 export interface PlannerConfig extends PatternConfig {
   /** Extra context for the planner (e.g. a graph schema). Mirrors
    *  `SimpleLoopConfig.schema` — injected under the prompt's CONTEXT heading. */
   schema?: string
   /** Cap on the plan text written to `scope.data.plan` (default 2000). */
   maxPlanChars?: number
+  /** Cap on reasoning handed to executors (default 2000); events keep it whole. */
+  maxReasoningChars?: number
 }
 
 export interface PlannerData {
@@ -185,6 +190,7 @@ export function planner<T extends PlannerData>(
     ...config,
   })
   const maxPlanChars = config?.maxPlanChars ?? DEFAULT_MAX_PLAN_CHARS
+  const maxReasoningChars = config?.maxReasoningChars ?? DEFAULT_MAX_REASONING_CHARS
 
   /** Drop a plan carried over from an earlier turn. Every exit path that does
    *  not produce a NEW plan goes through this: `scope.data` survives the turn
@@ -225,7 +231,24 @@ export function planner<T extends PlannerData>(
         plan: raw,
         llmCall,
         toolCount,
-      } = await planFn(userContent, intent, plannerContext(scope.data, config?.schema))
+      } = await planFn(
+        userContent,
+        intent,
+        plannerContext(scope.data, config?.schema),
+        (failedCall) => {
+          trackEvent(
+            scope,
+            'warning',
+            {
+              task: 'planner',
+              message: 'The thinking planner produced no answer.',
+              fallback: 'Retry once without thinking on the same inference endpoint.',
+            },
+            true,
+            failedCall,
+          )
+        },
+      )
 
       // An empty plan parses fine (`PlanResult.plan` is a required string and
       // `""` satisfies it) but injects NOTHING downstream — `formatPlanContext`
@@ -243,18 +266,24 @@ export function planner<T extends PlannerData>(
         throw llmCall ? new LLMCallError(message, llmCall) : new Error(message)
       }
 
-      // Cap the plan text: the executor re-reads it every turn.
+      // The executor re-reads these fields every turn. Only its copy is capped:
+      // observability keeps the complete reasoning trace (#625 G19 Q3).
       const truncated = raw.plan.length > maxPlanChars
-      const plan: PlanResult = truncated
+      const reasoningTruncated = raw.reasoning.length > maxReasoningChars
+      const recordedPlan: PlanResult = truncated
         ? { ...raw, plan: raw.plan.slice(0, maxPlanChars) + '…[truncated]' }
         : raw
+      const plan: PlanResult = reasoningTruncated
+        ? { ...recordedPlan, reasoning: raw.reasoning.slice(0, maxReasoningChars) + '…[truncated]' }
+        : recordedPlan
 
       scope.data = { ...scope.data, plan }
       trackEvent(
         scope,
         'plan_created',
         {
-          plan,
+          plan: recordedPlan,
+          ...(reasoningTruncated ? { reasoningTruncated: true } : {}),
           // The catalog the model was actually shown (resolved by the adapter:
           // sandbox tools + the gateway names that resolved), not the raw name
           // list this factory was handed.

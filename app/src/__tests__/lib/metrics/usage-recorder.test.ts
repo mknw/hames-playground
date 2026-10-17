@@ -74,6 +74,27 @@ describe('tierOfSample — the selected client is the evidence', () => {
     expect(tierOfSample({ functionName: 'LoopController', clientName: 'VerdaQwen' })).toBe('verda')
   })
 
+  it('accounts the dormant thinking planner on the same private box and latency window', async () => {
+    const now = 1_700_000_000_000
+    recordSample(
+      {
+        functionName: 'PlannerThinking',
+        clientName: 'VerdaQwenThink',
+        metrics: metrics(),
+        durationMs: 5000,
+      },
+      now,
+    )
+    expect(tierOfSample({ functionName: 'PlannerThinking', clientName: 'VerdaQwenThink' })).toBe(
+      'verda',
+    )
+    expect(verdaWarmth(now).state).toBe('warm')
+    expect(tierLatency('verda')).toEqual({ p50Ms: 5000, samples: 1 })
+    await flushUsage()
+    expect(written('verda')).toMatchObject({ llmCalls: 1, outputTokens: 20 })
+    expect(written('anthropic')).toBeUndefined()
+  })
+
   it('attributes a LocalQwenSmall call to the private tier too', () => {
     // THE DESCRIBE FLIP'S ACCOUNTING HALF (2026-08-26). The private tier became
     // TWO models — the heavy roles on the 27B, summarization on the 4B — and a

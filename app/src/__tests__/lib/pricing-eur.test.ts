@@ -79,6 +79,7 @@ describe('the time-priced client mapping', () => {
   it('contains exactly the metered clients and their default rates', async () => {
     expect(TIME_PRICED_CLIENTS).toEqual({
       [VERDA_CLIENT_NAME]: 1.819,
+      VerdaQwenThink: 1.819,
       LocalQwenSmall: 1.54,
       PrivateSystemOne: 1.54,
     })

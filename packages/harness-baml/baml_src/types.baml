@@ -215,6 +215,12 @@ class PlanResult {
   n_steps int @description("Number of discrete steps in the plan")
 }
 
+/// Content-only planner answer; the adapter restores reasoning from the parser trace.
+class PlanResultThinking {
+  plan string @description("Numbered, executable plan in natural language")
+  n_steps int @description("Number of discrete steps in the plan")
+}
+
 /// Routing decision
 class RoutingResult {
   intent string @description("Self-contained statement of what the user wants now, with back-references resolved from the history — never a bare 'try again' / 'the second one'")

@@ -36,6 +36,7 @@ const mockCritic = vi.fn()
 const mockResultDescribe = vi.fn()
 const mockResultDescribeBatch = vi.fn()
 const mockPlanner = vi.fn()
+const mockPlannerThinking = vi.fn()
 
 vi.mock('@hames-ai/harness-baml/baml_client', () => ({
   b: {
@@ -45,6 +46,7 @@ vi.mock('@hames-ai/harness-baml/baml_client', () => ({
     ResultDescribe: (...args: unknown[]) => mockResultDescribe(...args),
     ResultDescribeBatch: (...args: unknown[]) => mockResultDescribeBatch(...args),
     Planner: (...args: unknown[]) => mockPlanner(...args),
+    PlannerThinking: (...args: unknown[]) => mockPlannerThinking(...args),
   },
 }))
 
@@ -277,6 +279,42 @@ describe('createPlannerAdapter', () => {
     expect(intent).toBe('intent')
     expect((tools as Array<{ name: string }>).map((t) => t.name)).toEqual(['read_neo4j_cypher'])
     expect(context).toBe('Node: Person')
+  })
+
+  it('rejects a non-thinking selected leaf even when the requested client and an unselected attempt think', async () => {
+    const { createPlannerAdapter, LLMCallError } =
+      await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+    mockPlannerThinking.mockImplementation(async (...args: unknown[]) => {
+      const { collector } = args[4] as { collector: object }
+      Object.defineProperty(collector, 'last', {
+        value: {
+          rawLlmResponse: JSON.stringify({ plan: '1. Search', n_steps: 1 }),
+          calls: [
+            {
+              selected: false,
+              clientName: 'VerdaQwenThink',
+              httpResponse: {
+                body: { json: () => ({ choices: [{ message: { reasoning: 'STALE TRACE' } }] }) },
+              },
+            },
+            { selected: true, clientName: 'VerdaQwen' },
+          ],
+        },
+      })
+      return { plan: '1. Search', n_steps: 1 }
+    })
+    const failure = await withRunFrame(
+      { inference: { tier: 'verda', clientOverride: () => ({ client: 'VerdaQwenThink' }) } },
+      () => createPlannerAdapter([])('msg', 'intent'),
+    ).catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(LLMCallError)
+    expect(failure).toMatchObject({
+      message: 'PlannerThinking did not select a known thinking client',
+      llmCall: { clientName: 'VerdaQwen' },
+    })
+    expect(mockPlannerThinking).toHaveBeenCalledTimes(1)
+    expect(mockPlanner).not.toHaveBeenCalled()
   })
 
   it('does not let a degraded catalog outlive the outage', async () => {

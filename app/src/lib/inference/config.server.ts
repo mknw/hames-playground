@@ -28,6 +28,7 @@ import { VERDA_CLIENT_NAME } from './verda-activity.server'
 import { noteBoxCallStarting } from './cold-start.server'
 import {
   VERDA_CLIENT_BY_ROLE,
+  THINKING_CLIENTS,
   configureCostPricing,
   configureCostRates,
   configureInferencePolicy,
@@ -214,7 +215,7 @@ configureInferencePolicy({
     // LocalQwenSmallDecide keeps its separate readout and existing notice
     // policy: this change enrolls describe, not every client sharing its host.
     // Changing the decide transport or its failure policy is a separate change.
-    if (client === VERDA_CLIENT_NAME) noteBoxCallStarting('verda')
+    if (client === VERDA_CLIENT_NAME || THINKING_CLIENTS.has(client)) noteBoxCallStarting('verda')
     if (client === VERDA_CLIENT_BY_ROLE.describe) noteBoxCallStarting('small')
   },
 })
@@ -230,6 +231,7 @@ configureCostPricing({
   estimate: estimateLlmCostEur,
   timePricedClients: {
     [VERDA_CLIENT_NAME]: verdaEurPerHour,
+    ...Object.fromEntries([...THINKING_CLIENTS].map((client) => [client, verdaEurPerHour])),
     LocalQwenSmall: smallLlmEurPerHour,
     PrivateSystemOne: smallLlmEurPerHour,
   },

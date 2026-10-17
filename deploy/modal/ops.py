@@ -10,7 +10,7 @@ proxy token. Run from this directory with the same env file as the deploy:
     uv run --env-file deploy.local.env ops.py stats     # the last hour's engine stats
     uv run --env-file deploy.local.env ops.py stop      # stop its containers now (measurements)
 
-`HAMES_MODAL_SERVER=Qwen27B` points every command at the 27B class instead.
+`HAMES_MODAL_SERVER=Qwen27B` points every command at the 27B's own app instead.
 
 `status` is the only way to ask "is it up?" WITHOUT starting it: any HTTP
 request to a scaled-to-zero server, a GET included, triggers the cold start.
@@ -27,8 +27,12 @@ import sys
 
 import modal
 
-APP_NAME = os.environ.get("HAMES_MODAL_APP_NAME", "hames-small-models")
 SERVER_NAME = os.environ.get("HAMES_MODAL_SERVER", "SmallModels")
+APP_NAME = (
+    os.environ.get("HAMES_MODAL_27B_APP_NAME", "hames-private-27b")
+    if SERVER_NAME == "Qwen27B"
+    else os.environ.get("HAMES_MODAL_APP_NAME", "hames-small-models")
+)
 
 
 def main(argv: list[str]) -> int:

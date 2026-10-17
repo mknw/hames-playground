@@ -34,9 +34,12 @@
  *   5. The operator's instance files are git-ignored by the pattern the README
  *      promises.
  *
- * The 27B class (`Qwen27B`, `Caddyfile.27b`) gets the same five, plus the one
- * thing that makes it a drop-in for the app's `VerdaQwen` client: the name it
- * serves and the window it allows equal what that client sends and assumes.
+ * The 27B (`hames_private_27b.py`, its own Modal app, `Caddyfile.27b`) gets the
+ * same five, plus the one thing that makes it a drop-in for the app's
+ * `VerdaQwen` client: the name it serves and the window it allows equal what that
+ * client sends and assumes. What both apps share (the vLLM pin, Caddy, the
+ * image env, the restore check) lives in `vllm_box.py`, and neither app file
+ * imports the other, so a change to one never discards the other's snapshots.
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -52,6 +55,8 @@ const caddyfile27b = read('../../../../deploy/modal/Caddyfile.27b')
 const verdaClient = read('../../../../packages/harness-baml/baml_src/verda-client.baml')
 const settings = read('../../lib/settings.ts')
 const app = read('../../../../deploy/modal/hames_small_models.py')
+const shared = read('../../../../deploy/modal/vllm_box.py')
+const bigApp = read('../../../../deploy/modal/hames_private_27b.py')
 const gitignore = read('../../../../.gitignore')
 
 /** The raw-path expression lists, flattened to one set of public paths. */
@@ -126,6 +131,7 @@ describe('deploy/modal: the public surface is the Caddy route list', () => {
 const boot = app.match(/def _boot\(self\)[\s\S]*?(?= {4}def _serve)/)?.[0] ?? ''
 const serve = app.match(/def _serve\(self\)[\s\S]*?hames: ready/)?.[0] ?? ''
 const download = app.match(/def download_public_weights\(\)[\s\S]*?(?=\nimage =)/)?.[0] ?? ''
+const installCaddy = shared.match(/def _install_caddy\(\)[\s\S]*?(?=\n\n\n)/)?.[0] ?? ''
 const vllmArgv = app.match(/def _vllm_argv\(\)[^[]*\[([\s\S]*?)\n\s*\]\n/)?.[1] ?? ''
 
 describe('deploy/modal: the server shape and the vLLM argv', () => {
@@ -176,11 +182,11 @@ describe('deploy/modal: the server shape and the vLLM argv', () => {
   })
 
   it('re-checks the adapter after a restore on the readings taken after it', () => {
-    expect(app).toMatch(/^REFERENCE_TOLERANCE = 0\.1$/m)
+    expect(shared).toMatch(/^REFERENCE_TOLERANCE = 0\.1$/m)
     expect(serve).toContain('_reference_drift(before, after[model], model)')
     expect(boot).not.toContain('["caddy", "run"')
     expect(serve).toContain('["caddy", "run"')
-    expect(app.match(/\["caddy", "run"/g)).toHaveLength(2)
+    expect(app.match(/\["caddy", "run"/g)).toHaveLength(1)
     expect(serve).toMatch(
       /_assert_adapter_active\(after\[SUMMARIZER_MODEL\], after\[DECIDER_MODEL\]\)/,
     )
@@ -188,23 +194,31 @@ describe('deploy/modal: the server shape and the vLLM argv', () => {
   })
 
   it('enables dev mode (sleep needs it) — which is why the route list above exists', () => {
-    expect(app).toMatch(/"VLLM_SERVER_DEV_MODE": "1"/)
-    expect(app).not.toContain('VLLM_LOGGING_LEVEL')
+    for (const file of [app, bigApp]) {
+      expect(file).toMatch(/\.add_local_python_source\("log_filter", "vllm_box", copy=True\)/)
+      expect(file.match(/^\s*\.env\(VLLM_IMAGE_ENV\)$/gm)).toHaveLength(1)
+      expect(file).not.toContain('VLLM_LOGGING_LEVEL')
+      // Neither app file imports the other: a change to one keeps the other's snapshots.
+      expect(file).not.toMatch(/^(from|import) hames_/m)
+    }
+    expect(shared).toMatch(/"VLLM_SERVER_DEV_MODE": "1"/)
+    expect(shared).not.toContain('VLLM_LOGGING_LEVEL')
     for (const [key, value] of Object.entries({
       VLLM_NO_USAGE_STATS: '1',
       DO_NOT_TRACK: '1',
       VLLM_MEDIA_URL_ALLOW_REDIRECTS: '0',
       HF_HUB_OFFLINE: '1',
     })) {
-      expect(app).toContain(`"${key}": "${value}"`)
+      expect(shared).toContain(`"${key}": "${value}"`)
     }
   })
 })
 
 describe('deploy/modal: what the image and a snapshot can contain is pinned public state', () => {
   it('pins both Hub repos to a commit and every card file to a sha256', () => {
-    expect(app).toMatch(/^VLLM_IMAGE = "vllm\/vllm-openai:v0\.30\.0@sha256:[0-9a-f]{64}"$/m)
-    expect(download).toMatch(/if digest != CADDY_SHA512:\s*raise SystemExit/)
+    expect(shared).toMatch(/^VLLM_IMAGE = "vllm\/vllm-openai:v0\.30\.0@sha256:[0-9a-f]{64}"$/m)
+    expect(installCaddy).toMatch(/if digest != CADDY_SHA512:\s*raise SystemExit/)
+    expect(download).toMatch(/\n {4}_install_caddy\(\)\n/)
     for (const [files, dir] of [
       ['CARD_FILES_SHA256', 'CARD_DIR'],
       ['BASE_FILES_SHA256', 'BASE_DIR'],
@@ -247,7 +261,7 @@ describe('deploy/modal: what the image and a snapshot can contain is pinned publ
     )
     for (const [, , sha] of entries) expect(sha).toHaveLength(64)
     expect(
-      app
+      shared
         .match(/CADDY_SHA512 = \(\s*"([0-9a-f]+)"\s*"([0-9a-f]+)"\s*\)/)
         ?.slice(1)
         .join(''),
@@ -272,22 +286,22 @@ describe('deploy/modal: what the image and a snapshot can contain is pinned publ
 })
 
 /** The `Qwen27B` class, its boot and serve methods, its argv and its download. */
-const big = app.slice(app.lastIndexOf('@app.server('))
+const big = bigApp.slice(bigApp.indexOf('@app.server('))
 const bigBoot = big.match(/def _boot\(self\)[\s\S]*?(?= {4}def _serve)/)?.[0] ?? ''
 const bigServe = big.match(/def _serve\(self\)[\s\S]*?hames: ready/)?.[0] ?? ''
 const bigArgv =
-  app.match(/def _qwen27b_argv\(mtp_tokens: int\)[^[]*\[([\s\S]*?)\n\s*\]\n/)?.[1] ?? ''
+  bigApp.match(/def _qwen27b_argv\(mtp_tokens: int\)[^[]*\[([\s\S]*?)\n\s*\]\n/)?.[1] ?? ''
 const bigDownload =
-  app.match(/def download_qwen27b_weights\(\)[\s\S]*?(?=\nqwen27b_image =)/)?.[0] ?? ''
+  bigApp.match(/def download_qwen27b_weights\(\)[\s\S]*?(?=\nqwen27b_image =)/)?.[0] ?? ''
 
 describe('deploy/modal: the 27B box (Qwen27B)', () => {
   it('serves the exact model name and window the VerdaQwen client sends and assumes', () => {
     expect(big).toMatch(/^@app\.server\([^@]*?\n\)\nclass Qwen27B:/)
     const clientModel = verdaClient.match(/^\s*model "([^"]+)"$/m)?.[1]
     expect(clientModel).toBeTruthy()
-    expect(app).toContain(`QWEN27B_MODEL = "${clientModel}"`)
+    expect(bigApp).toContain(`QWEN27B_MODEL = "${clientModel}"`)
     const window = settings.match(/^\s*VerdaQwen: ([\d_]+),$/m)?.[1]?.replaceAll('_', '')
-    expect(app).toContain(`QWEN27B_MAX_MODEL_LEN = ${window}`)
+    expect(bigApp).toContain(`QWEN27B_MAX_MODEL_LEN = ${window}`)
     expect(bigArgv).toContain('"--served-model-name", QWEN27B_MODEL')
     expect(bigArgv).toContain('"--max-model-len", str(QWEN27B_MAX_MODEL_LEN)')
     expect(bigBoot).toMatch(/served != \{QWEN27B_MODEL\}/)
@@ -318,7 +332,7 @@ describe('deploy/modal: the 27B box (Qwen27B)', () => {
     expect(caddyCode27b.slice(0, caddyCode27b.indexOf(':8080'))).toBe(
       caddyCode.slice(0, caddyCode.indexOf(':8080')),
     )
-    expect(app).toContain(
+    expect(bigApp).toContain(
       '.add_local_file(Path(__file__).parent / "Caddyfile.27b", "/etc/hames/Caddyfile", copy=True)',
     )
   })
@@ -346,9 +360,10 @@ describe('deploy/modal: the 27B box (Qwen27B)', () => {
       /target=forward_stderr,\s*args=\(self\.vllm\.stdout, self\.vllm_dropped, self\.public_ready, "vllm"\)/,
     )
     expect(bigServe).toMatch(/self\.public_ready\.set\(\)\s*self\.caddy = subprocess\.Popen/)
-    expect(app.match(/unauthenticated=False/g)).toHaveLength(2)
+    expect(bigApp.match(/unauthenticated=False/g)).toHaveLength(1)
+    expect(bigApp).not.toMatch(/unauthenticated=True/)
     expect(big).toMatch(/^\s*image=qwen27b_image,$/m)
-    expect(app).toMatch(/\.run_function\(download_qwen27b_weights\)\s*\.env\(VLLM_IMAGE_ENV\)/)
+    expect(bigApp).toMatch(/\.run_function\(download_qwen27b_weights\)\s*\.env\(VLLM_IMAGE_ENV\)/)
   })
 
   it('injects the argv inputs into the container, so it runs what was deployed', () => {
@@ -371,8 +386,8 @@ describe('deploy/modal: the 27B box (Qwen27B)', () => {
   })
 
   it('pins the 27B repo to a commit and every file to a sha256, verified at build', () => {
-    expect(app).toMatch(/^QWEN27B_REVISION = "[0-9a-f]{40}"$/m)
-    const pins = app.match(/QWEN27B_FILES_SHA256 = \{([\s\S]*?)\n\}/)?.[1] ?? ''
+    expect(bigApp).toMatch(/^QWEN27B_REVISION = "[0-9a-f]{40}"$/m)
+    const pins = bigApp.match(/QWEN27B_FILES_SHA256 = \{([\s\S]*?)\n\}/)?.[1] ?? ''
     const entries = [...pins.matchAll(/"([^"]+)": "([0-9a-f]{64})"/g)]
     expect(entries).toHaveLength(pins.split('\n').filter((l) => l.trim()).length)
     const names = entries.map((m) => m[1])
@@ -394,11 +409,11 @@ describe('deploy/modal: the 27B box (Qwen27B)', () => {
 
   it('warms up and checks with string literals only', () => {
     for (const name of ['QWEN27B_WARMUP_MESSAGES', 'QWEN27B_ANSWER_MESSAGES']) {
-      const block = app.match(new RegExp(`${name} = \\(([\\s\\S]*?)\\n\\)`))?.[1] ?? ''
+      const block = bigApp.match(new RegExp(`${name} = \\(([\\s\\S]*?)\\n\\)`))?.[1] ?? ''
       expect(block).toMatch(/"content": '?"?[^"]+/)
       expect(block).not.toMatch(/os\.environ|open\(|read|f"|\.get\(|input\(/)
     }
-    expect(app.match(/QWEN27B_REFERENCE_PROMPT = (.*)/)?.[1]).toMatch(/^"[^"]+"$/)
+    expect(bigApp.match(/QWEN27B_REFERENCE_PROMPT = (.*)/)?.[1]).toMatch(/^"[^"]+"$/)
     expect(bigBoot).toContain('list(QWEN27B_WARMUP_MESSAGES)')
   })
 })

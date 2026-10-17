@@ -504,6 +504,9 @@ docker compose exec app printenv VITE_DEV_BYPASS_AUTH   # false
 
 ## 7. Escrow the three keys — do this now, not later
 
+For subsequent changes, use the [per-key rotation runbook](deployment/secret-rotation.md).
+Gateway authentication (#392/#417) and the data re-encrypt tool remain deferred.
+
 ```bash
 grep -E '^(AUTH_SESSION_SECRET|TOKEN_ENCRYPTION_KEY|DATA_ENCRYPTION_KEY)=' .env
 ```
@@ -532,6 +535,10 @@ systemd shape of the same box — including the pre-cutover `pg_dump` to take if
 this VM ever holds rows written before the key was set.
 
 ## 8. Smoke checklist
+
+Configure the [external uptime probe and alerting checklist](deployment/observability.md)
+from an independent runner. Its liveness check makes no inference calls; alert
+thresholds remain named placeholders until the operator measures the deployment.
 
 Bootstrap's on-box smoke also checks the deployed Neo4j bridge and daemon
 isolation settings, paired egress probes and a Cypher round trip through the
@@ -765,6 +772,12 @@ says escrow it before the first sign-in rather than after the first backup.
 
 ## 10. Rollback
 
+Before moving a deployed pin, follow the [application upgrade gate](deployment/app-upgrade.md):
+stop writers, take local dumps, retain the actual last-good images, then require
+post-upgrade smoke including the embedder and explicitly authorized private-tier
+checks. Same-disk dumps are required for this change window even while scheduled
+off-box backups are deferred. That runbook also covers additive schema rollback.
+
 **A bad app release** — the data tier is untouched, so this is a rebuild:
 
 ```bash
@@ -846,15 +859,14 @@ diagnosis, and nothing is reachable from outside.
   runbook's order (dump before any `up`).
 - **Neo4j's password is set once.** `NEO4J_AUTH` is applied only when the data
   volume is empty, so changing `NEO4J_PASSWORD` in `.env` after first boot
-  changes what the app sends and not what the database expects — the symptom is
-  an authentication failure on the graph panel with no other clue. Change it in
-  both places:
-  `docker compose exec neo4j cypher-shell -u neo4j -p <old> "ALTER CURRENT USER SET PASSWORD FROM '<old>' TO '<new>'"`,
-  then update `.env` and `docker compose up -d --force-recreate app`.
+  changes what clients send and not what the database expects. Follow the
+  [Neo4j password rotation procedure](deployment/secret-rotation.md#neo4j_password),
+  including the gateway renderer and every app consumer.
 - **Postgres has the same one-shot trap.** `POSTGRES_PASSWORD` is applied only
   when the data volume is initialised. It only bites on a reused volume, which
-  a from-scratch preview does not have — but it is the same footgun, and worth
-  knowing before you reuse a volume from an earlier attempt.
+  a from-scratch preview does not have. Use the
+  [Postgres password rotation procedure](deployment/secret-rotation.md#postgres_password-and-clone-database-credentials)
+  for the interactive role-password change and matching client configuration.
 - **No off-box backups.** `backups/` sits on the VM's own disk and nothing
   copies it away (§9). Losing the VM loses the data with it. Accepted for this
   alpha by owner decision; not a posture to carry past it.

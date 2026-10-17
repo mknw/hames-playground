@@ -279,6 +279,14 @@ describe('planner thinking eval wiring (manual hermetic)', () => {
     expect(() =>
       isThinkingPlannerRun(routing, [plannerScenario, { ...plannerScenario, id: 'other' }]),
     ).toThrow(/EVAL_ONLY/)
+    expect(() =>
+      isThinkingPlannerRun({ ...routing, routed: ['screen'] }, [plannerScenario]),
+    ).toThrow(/EVAL_ROLES=planner/)
+    expect(() =>
+      isThinkingPlannerRun(routing, [
+        { ...plannerScenario, id: 'screen-on-the-tier', role: 'screen' },
+      ]),
+    ).toThrow(/EVAL_ONLY/)
     expect(isThinkingPlannerRun({ ...routing, client: undefined }, [plannerScenario])).toBe(false)
     expect(requests).toEqual([])
   })

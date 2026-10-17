@@ -2,15 +2,35 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
+// Exercise the real bearer parser/resolver against synthetic config, without
+// reading an operator's gitignored credentials.
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    existsSync: (path: string) => path.endsWith('/action-tokens.yaml') || actual.existsSync(path),
+    readFileSync: (...args: Parameters<typeof actual.readFileSync>) =>
+      String(args[0]).endsWith('/action-tokens.yaml')
+        ? 'tokens:\n  - secret: synthetic-a1\n    userId: user-a\n  - secret: synthetic-a2\n    userId: user-a\n  - secret: synthetic-b\n    userId: user-b\n'
+        : actual.readFileSync(...args),
+  }
+})
+
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport() {} }))
 const { getSession } = vi.hoisted(() => ({ getSession: vi.fn() }))
 vi.mock('~/lib/auth/session-store.server', () => ({ getSession }))
 const { createRequestLimiter, enforceRequestRateLimit } =
   await import('~/lib/request-rate-limit.server')
 
-function event(cookie?: string, extra: Record<string, string> = {}) {
+function event(
+  cookie?: string,
+  extra: Record<string, string> = {},
+  path = '/api/events',
+  method = 'GET',
+) {
   return {
-    request: new Request('https://app.example/api/events', {
+    request: new Request(`https://app.example${path}`, {
+      method,
       headers: { ...(cookie ? { cookie: `kg_session=${cookie}` } : {}), ...extra },
     }),
   }
@@ -90,44 +110,251 @@ describe('request admission (#432 row 6)', () => {
     expect(results.filter((r) => r?.status === 429)).toHaveLength(30)
   })
 
-  it('limits anonymous traffic before any session lookup or request-body read', async () => {
+  it('limits anonymous traffic before body work without spending a verified user allowance', async () => {
     const limit = createRequestLimiter(() => 0)
-    for (let i = 0; i < 1000; i++) expect(await limit(event())).toBeUndefined()
+    for (let i = 0; i < 1000; i++) {
+      // Distributed addresses exercise the remaining anonymous global bound.
+      expect(
+        await limit(event(undefined, { 'X-Forwarded-For': `198.51.100.${i % 10}` })),
+      ).toBeUndefined()
+    }
     const req = {
       request: new Request('https://app.example/api/stash/upload', {
         method: 'POST',
         body: 'synthetic-upload',
-        headers: { cookie: 'kg_session=cookie-after-flood' },
+        headers: { 'X-Forwarded-For': '198.51.100.200' },
       }),
     }
     expect((await limit(req))?.status).toBe(429)
     expect(req.request.bodyUsed).toBe(false)
     expect(getSession).not.toHaveBeenCalled()
+    getSession.mockResolvedValue({ userId: 'victim' })
+    expect(await limit(event('verified'))).toBeUndefined()
   })
 
   it('global refill is 100/second, with burst at most 1000', async () => {
     let time = 0
     const limit = createRequestLimiter(() => time)
-    for (let i = 0; i < 1000; i++) await limit(event())
+    const anonymous = (i: number) => event(undefined, { 'X-Forwarded-For': `198.51.100.${i % 10}` })
+    for (let i = 0; i < 1000; i++) expect(await limit(anonymous(i))).toBeUndefined()
     time = 9.999
-    expect((await limit(event()))?.status).toBe(429)
+    expect((await limit(anonymous(0)))?.status).toBe(429)
     time = 10
+    expect(await limit(anonymous(0))).toBeUndefined()
+    expect((await limit(anonymous(0)))?.status).toBe(429)
+    time = 60_000
+    for (let i = 0; i < 1000; i++) expect(await limit(anonymous(i))).toBeUndefined()
+    expect((await limit(anonymous(0)))?.status).toBe(429)
+  })
+
+  it('unknown or expired cookies share their address allowance and never become principals', async () => {
+    const limit = createRequestLimiter(() => 0)
+    for (let i = 0; i < 120; i++) {
+      expect(await limit(event(`forged-${i}`, { 'X-Forwarded-For': '192.0.2.1' }))).toBeUndefined()
+    }
+    expect((await limit(event('expired', { 'X-Forwarded-For': '192.0.2.1' })))?.status).toBe(429)
+    expect(getSession).toHaveBeenCalledTimes(121)
+    expect(await limit(event('unknown', { 'X-Forwarded-For': '192.0.2.2' }))).toBeUndefined()
+  })
+
+  it('one address cannot empty the anonymous pool for another address or verified users', async () => {
+    let time = 0
+    const limit = createRequestLimiter(() => time)
+    for (let second = 0; second < 10; second++) {
+      time = second * 1000
+      for (let i = 0; i < 1000; i++)
+        await limit(event(undefined, { 'X-Forwarded-For': '192.0.2.1' }))
+      expect(await limit(event(undefined, { 'X-Forwarded-For': '192.0.2.2' }))).toBeUndefined()
+      getSession.mockResolvedValue({ userId: 'victim' })
+      expect(await limit(event('verified', { 'X-Forwarded-For': '192.0.2.1' }))).toBeUndefined()
+    }
+  })
+
+  it('verified refusals do not drain the anonymous pool or another principal', async () => {
+    getSession.mockImplementation(async (id) => ({ userId: id }))
+    const limit = createRequestLimiter(() => 0)
+    for (let i = 0; i < 1000; i++) {
+      expect((await limit(event('a')))?.status).toBe(i < 120 ? undefined : 429)
+    }
+    expect(await limit(event('b'))).toBeUndefined()
+    expect(await limit(event())).toBeUndefined()
+  })
+
+  it('does not put verified users behind a shared office address bucket', async () => {
+    getSession.mockImplementation(async (id) => ({ userId: id }))
+    const limit = createRequestLimiter(() => 0)
+    for (let i = 0; i < 120; i++) await limit(event('a', { 'X-Forwarded-For': '192.0.2.1' }))
+    expect(await limit(event('b', { 'X-Forwarded-For': '192.0.2.1' }))).toBeUndefined()
+    expect(await limit(event(undefined, { 'X-Forwarded-For': '192.0.2.1' }))).toBeUndefined()
+  })
+
+  it('bounds address state, refuses overflow and reclaims only fully refilled addresses', async () => {
+    let time = 0
+    const limit = createRequestLimiter(() => time)
+    const address = (i: number) =>
+      event(undefined, { 'X-Forwarded-For': `192.0.${Math.floor(i / 256)}.${i % 256}` })
+    for (let i = 0; i < 256; i++) expect(await limit(address(i))).toBeUndefined()
+    expect((await limit(address(256)))?.status).toBe(429)
+    time = 99 // entries have 119.99 tokens, so none may be evicted
+    expect((await limit(address(256)))?.status).toBe(429)
+    time = 100
+    for (let i = 0; i < 120; i++) expect(await limit(address(255))).toBeUndefined()
+    expect(await limit(address(256))).toBeUndefined()
+    expect((await limit(address(255)))?.status).toBe(429)
+  })
+
+  it('refills an address at ten requests/second with burst at most 120', async () => {
+    let time = 0
+    const limit = createRequestLimiter(() => time)
+    for (let i = 0; i < 120; i++) expect(await limit(event())).toBeUndefined()
+    time = 99.999
+    expect((await limit(event()))?.status).toBe(429)
+    time = 100
     expect(await limit(event())).toBeUndefined()
     expect((await limit(event()))?.status).toBe(429)
     time = 60_000
-    for (let i = 0; i < 1000; i++) expect(await limit(event())).toBeUndefined()
+    for (let i = 0; i < 120; i++) expect(await limit(event())).toBeUndefined()
     expect((await limit(event()))?.status).toBe(429)
   })
 
-  it('arbitrary/expired cookies and forwarded addresses cannot bypass the flood backstop', async () => {
+  it('missing, malformed and multiple forwarded values share one fallback address', async () => {
     const limit = createRequestLimiter(() => 0)
-    for (let i = 0; i < 1000; i++) {
+    for (let i = 0; i < 120; i++) {
+      expect(await limit(event(undefined, { 'X-Forwarded-For': `untrusted-${i}` }))).toBeUndefined()
+    }
+    expect((await limit(event()))?.status).toBe(429)
+    expect(
+      (await limit(event(undefined, { 'X-Forwarded-For': '192.0.2.1, 192.0.2.2' })))?.status,
+    ).toBe(429)
+    expect(await limit(event(undefined, { 'X-Forwarded-For': '2001:db8::1' }))).toBeUndefined()
+  })
+
+  it('bearer-only action requests exhaust the same verified owner quota', async () => {
+    const limit = createRequestLimiter(() => 0)
+    const action = () =>
+      event(undefined, { authorization: 'Bearer synthetic-a1' }, '/api/agents/general', 'POST')
+    for (let i = 0; i < 120; i++) expect(await limit(action())).toBeUndefined()
+    expect((await limit(action()))?.status).toBe(429)
+    expect(getSession).not.toHaveBeenCalled()
+    expect(
+      await limit(
+        event(undefined, { authorization: 'Bearer synthetic-b' }, '/api/agents/general', 'POST'),
+      ),
+    ).toBeUndefined()
+  })
+
+  it('multiple device tokens and a browser session share one owner budget', async () => {
+    getSession.mockResolvedValue({ userId: 'user-a' })
+    const limit = createRequestLimiter(() => 0)
+    for (let i = 0; i < 40; i++) {
+      expect(await limit(event('browser'))).toBeUndefined()
+      for (const secret of ['synthetic-a1', 'synthetic-a2']) {
+        expect(
+          await limit(
+            event(undefined, { authorization: `Bearer ${secret}` }, '/api/agents/general', 'POST'),
+          ),
+        ).toBeUndefined()
+      }
+    }
+    for (const secret of ['synthetic-a1', 'synthetic-a2']) {
       expect(
-        await limit(event(`forged-${i}`, { 'X-Forwarded-For': `192.0.2.${i}` })),
+        (
+          await limit(
+            event(undefined, { authorization: `Bearer ${secret}` }, '/api/agents/general', 'POST'),
+          )
+        )?.status,
+      ).toBe(429)
+    }
+    expect((await limit(event('browser')))?.status).toBe(429)
+  })
+
+  it('charges only the bearer owner on dual-credential action requests', async () => {
+    getSession.mockResolvedValue({ userId: 'user-b' })
+    const limit = createRequestLimiter(() => 0)
+    for (let i = 0; i < 120; i++) {
+      expect(
+        await limit(
+          event(
+            'browser-b',
+            { authorization: 'Bearer synthetic-a1' },
+            '/api/agents/general',
+            'POST',
+          ),
+        ),
       ).toBeUndefined()
     }
-    expect((await limit(event('another-cookie')))?.status).toBe(429)
-    expect(getSession).toHaveBeenCalledTimes(1000)
+    expect(
+      (
+        await limit(
+          event(
+            'browser-b',
+            { authorization: 'Bearer synthetic-a2' },
+            '/api/agents/general',
+            'POST',
+          ),
+        )
+      )?.status,
+    ).toBe(429)
+    expect(getSession).not.toHaveBeenCalled()
+    for (let i = 0; i < 120; i++) expect(await limit(event('browser-b'))).toBeUndefined()
+    expect((await limit(event('browser-b')))?.status).toBe(429)
+  })
+
+  it('uses session identity on other routes, regardless of a supplied action token', async () => {
+    getSession.mockResolvedValue({ userId: 'user-b' })
+    const limit = createRequestLimiter(() => 0)
+    for (let i = 0; i < 120; i++) expect(await limit(event('b'))).toBeUndefined()
+    for (const [path, method] of [
+      ['/api/events', 'POST'],
+      ['/api/agents/general', 'GET'],
+      ['/api/agents/general/extra', 'POST'],
+    ]) {
+      expect(
+        (await limit(event('b', { authorization: 'Bearer synthetic-a1' }, path, method)))?.status,
+      ).toBe(429)
+    }
+    expect(
+      await limit(
+        event(undefined, { authorization: 'Bearer synthetic-a1' }, '/api/agents/general', 'POST'),
+      ),
+    ).toBeUndefined()
+  })
+
+  it('selects the bearer owner for encoded action paths and trailing slashes', async () => {
+    getSession.mockResolvedValue({ userId: 'user-b' })
+    const limit = createRequestLimiter(() => 0)
+    for (let i = 0; i < 120; i++) {
+      expect(
+        await limit(
+          event('b', { authorization: 'Bearer synthetic-a1' }, '/api/%61gents/general', 'POST'),
+        ),
+      ).toBeUndefined()
+    }
+    expect(
+      (
+        await limit(
+          event('b', { authorization: 'Bearer synthetic-a1' }, '/api/agents/general/', 'POST'),
+        )
+      )?.status,
+    ).toBe(429)
+    expect(getSession).not.toHaveBeenCalled()
+    expect(await limit(event('b', {}, '/malformed%ZZ'))).toBeUndefined()
+    expect(getSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('unknown or absent action tokens use the unresolved path even with a valid cookie', async () => {
+    getSession.mockResolvedValue({ userId: 'user-b' })
+    const limit = createRequestLimiter(() => 0)
+    for (let i = 0; i < 120; i++) {
+      expect(
+        await limit(
+          event('b', { authorization: `Bearer unknown-${i}` }, '/api/agents/general', 'POST'),
+        ),
+      ).toBeUndefined()
+    }
+    expect((await limit(event('b', {}, '/api/agents/general', 'POST')))?.status).toBe(429)
+    expect(getSession).not.toHaveBeenCalled()
+    expect(await limit(event('b'))).toBeUndefined()
   })
 
   it('returns 503 on session-store failure without leaking the error or bypassing the limiter', async () => {

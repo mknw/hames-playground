@@ -1,17 +1,21 @@
 /**
- * Request admission behind stock Caddy (#432 G20 row 6). Per-process token
- * buckets: 600/minute per verified user (burst 120), 6000/minute globally
- * (burst 1000). No timers, IP/header trust, or response-stream work.
+ * Request admission behind stock Caddy (#432 G20 row 6). Verified session and
+ * action-token owners share a 600/minute bucket (burst 120). Unresolved requests
+ * alone use bounded per-address buckets (same rate/burst), then the anonymous
+ * 6000/minute backstop (burst 1000). Refusals by one owner/address cannot drain
+ * another's pool. No body reads, timers or response-stream work.
  *
- * Pre-auth traffic has only the generous global backstop. Session cookies are
- * resolved in the existing store; arbitrary cookies never mint user buckets.
+ * Address trust requires Caddy's explicit X-Forwarded-For overwrite and the
+ * app's loopback-only ingress. Missing/invalid/list values share one fallback.
  * An unavailable session store returns 503, never an anonymous fallback.
  * State resets on restart and is NOT shared across replicas or app clones.
  */
+import { isIP } from 'node:net'
 import type { FetchEvent } from '@solidjs/start/server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { readCookie, SESSION_COOKIE } from './auth/cookies.server'
 import { getSession } from './auth/session-store.server'
+import { bearerSecret, resolveActionUser } from './auth/action-tokens.server'
 
 assertServerOnImport()
 
@@ -20,6 +24,7 @@ const USER_PER_SECOND = 10
 const GLOBAL_BURST = 1000
 const GLOBAL_PER_SECOND = 100
 const MAX_USERS = 256
+const MAX_ADDRESSES = 256
 
 interface Bucket {
   tokens: number
@@ -52,42 +57,66 @@ function refused(seconds: number, status = 429): Response {
   })
 }
 
+/** Reclaim only full buckets; evicting active keys would restore their burst. */
+function takeKey(buckets: Map<string, Bucket>, key: string, max: number, time: number): number {
+  let bucket = buckets.get(key)
+  if (!bucket) {
+    if (buckets.size >= max) {
+      for (const [id, entry] of buckets) {
+        refill(entry, USER_BURST, USER_PER_SECOND, time)
+        if (entry.tokens === USER_BURST) buckets.delete(id)
+      }
+      if (buckets.size >= max) return 60
+    }
+    bucket = { tokens: USER_BURST, updated: time }
+    buckets.set(key, bucket)
+  }
+  return take(bucket, USER_BURST, USER_PER_SECOND, time)
+}
+
 /** Fresh state for tests; the deployed hook below shares one instance across routers. */
 export function createRequestLimiter(now: () => number = () => performance.now()) {
   const global: Bucket = { tokens: GLOBAL_BURST, updated: now() }
   const users = new Map<string, Bucket>()
+  const addresses = new Map<string, Bucket>()
   return async (event: Pick<FetchEvent, 'request'>): Promise<Response | undefined> => {
-    // Before the DB lookup and before any request-body read or route work.
-    const retry = take(global, GLOBAL_BURST, GLOBAL_PER_SECOND, now())
-    if (retry) return refused(retry)
-
-    const sessionId = readCookie(event.request, SESSION_COOKIE)
-    if (!sessionId) return undefined
-    let session
+    // Match the endpoint's credential, including dual-credential requests.
+    // Admission resolves identity only; the route still authorizes the request.
+    let pathname = new URL(event.request.url).pathname
     try {
-      session = await getSession(sessionId)
+      pathname = decodeURIComponent(pathname)
     } catch {
-      return refused(1, 503)
+      // A malformed escape cannot name the action route; route handling decides it.
     }
-    if (!session) return undefined
+    const action = event.request.method === 'POST' && /^\/api\/agents\/[^/]+\/?$/.test(pathname)
+    let userId: string | null = null
+    if (action) {
+      userId = resolveActionUser(bearerSecret(event.request.headers.get('authorization')))
+    } else {
+      const sessionId = readCookie(event.request, SESSION_COOKIE)
+      if (sessionId) {
+        try {
+          userId = (await getSession(sessionId))?.userId ?? null
+        } catch {
+          return refused(1, 503)
+        }
+      }
+    }
 
     const time = now()
-    let bucket = users.get(session.userId)
-    if (!bucket) {
-      if (users.size >= MAX_USERS) {
-        // Reclaim only fully refilled entries. Evicting an active entry would
-        // let key churn restore its burst. Refuse new keys if none are idle.
-        for (const [id, entry] of users) {
-          refill(entry, USER_BURST, USER_PER_SECOND, time)
-          if (entry.tokens === USER_BURST) users.delete(id)
-        }
-        if (users.size >= MAX_USERS) return refused(60)
-      }
-      bucket = { tokens: USER_BURST, updated: time }
-      users.set(session.userId, bucket)
+    if (userId) {
+      const userRetry = takeKey(users, userId, MAX_USERS, time)
+      return userRetry ? refused(userRetry) : undefined
     }
-    const userRetry = take(bucket, USER_BURST, USER_PER_SECOND, time)
-    return userRetry ? refused(userRetry) : undefined
+
+    // Only unresolved traffic shares the anonymous backstop. Check its address
+    // first, so refusals from one address cannot spend the shared allowance.
+    const forwarded = event.request.headers.get('x-forwarded-for') ?? ''
+    const address = isIP(forwarded) ? forwarded : 'unknown'
+    const addressRetry = takeKey(addresses, address, MAX_ADDRESSES, time)
+    if (addressRetry) return refused(addressRetry)
+    const retry = take(global, GLOBAL_BURST, GLOBAL_PER_SECOND, time)
+    return retry ? refused(retry) : undefined
   }
 }
 

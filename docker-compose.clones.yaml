@@ -25,7 +25,7 @@ services:
       AUTH_POST_LOGOUT_REDIRECT_URI: https://${APP_DOMAIN:?}/auth/signin
       SANDBOX_ENVIRONMENT: release
       SANDBOX_CACHE_VOLUME: kg-sandbox-cache-release
-      VITE_DEV_BYPASS_AUTH: 'false'
+      VITE_DEV_BYPASS_AUTH: "false"
 
   app-dev:
     # Inherit the shipped runtime, healthcheck, dependencies and shared network.
@@ -54,13 +54,10 @@ services:
       AUTH_POST_LOGOUT_REDIRECT_URI: https://${DEV_APP_DOMAIN:?}/auth/signin
       SANDBOX_ENVIRONMENT: dev
       SANDBOX_CACHE_VOLUME: kg-sandbox-cache-dev
-      VITE_DEV_BYPASS_AUTH: 'false'
+      VITE_DEV_BYPASS_AUTH: "false"
 
   caddy:
     environment:
       - DEV_APP_DOMAIN=${DEV_APP_DOMAIN:?set the separate dev hostname}
     volumes:
       - ./configs/Caddyfile.dev:/etc/caddy/dev-sites/dev.caddy:ro
-    depends_on:
-      app-dev:
-        condition: service_healthy

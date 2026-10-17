@@ -321,17 +321,20 @@ failures count against Let's Encrypt's rate limits. DNS first, then boot.
 ### 4a. Request admission, uploads and SSE
 
 Both sites use `configs/Caddyfile`'s `preview` snippet. Caddy limits **request
-bodies** to **32 MiB**; this does not limit response bytes or stream duration.
+bodies** to **32 MiB** on `/api/stash/upload` and `/api/agents/*`, and **1 MiB**
+on every other path; this does not limit response bytes or stream duration.
 The app's Data Stash accepts **5 MiB decoded content**
 (`packages/harness-patterns/stash/document-store.server.ts`, `MAX_CONTENT_BYTES`).
 The multipart intake sends raw file bytes; the JSON intake can send base64
 (under 7 MiB for a maximal binary) or escaped text. A maximal text body can
 expand sixfold under JSON escaping: **30 MiB**, plus up to **2 MiB** for the
-envelope/metadata. This also accommodates the **64 KiB** skill-file limit
-(`packages/sandbox/skills.ts`). Arbitrarily padded JSON, metadata or multipart
-fields are not exempt. The app still enforces its smaller content limits.
+envelope/metadata. The 1 MiB cap accommodates the **64 KiB** skill-file limit
+even after sixfold JSON escaping (`packages/sandbox/skills.ts`). Arbitrarily
+padded JSON, metadata or multipart fields are not exempt. The app still enforces its smaller content limits.
 `request_body max_size` rejects reads beyond the cap with 413
 ([Caddy reference](https://caddyserver.com/docs/caddyfile/directives/request_body)).
+The app can receive up to the applicable cap before Caddy aborts an oversized
+request, including a chunked body; the cap does not pre-buffer it at the proxy.
 
 Rate limiting lives in `app/src/lib/request-rate-limit.server.ts`, wired before
 route work in both middleware routers. Stock Caddy has no built-in rate limiter;
@@ -339,18 +342,28 @@ its [rate-limit module](https://caddyserver.com/docs/modules/http.handlers.rate_
 is non-standard. A small app admission gate avoids a custom plugin build and
 another dependency to audit/pin. It uses token buckets:
 
-- Each **database-validated user ID** gets **600 requests/minute**, with a burst
-  of **120** shared across that user's sessions, routes and HTTP methods.
-- A process-wide flood backstop admits **6000 requests/minute**, with a burst of
-  **1000**, before session lookup. Anonymous requests have **only this backstop**.
-  Cookies are never treated as identities without a session-store lookup, and
-  forwarded/IP/identity headers are ignored. The app's existing route auth and
-  allow-list checks still decide access (SD-13/SD-15).
+- Each **verified user ID** gets **600 requests/minute**, with a burst of
+  **120** shared across that owner's browser sessions and action tokens, routes
+  and HTTP methods. Session routes resolve the cookie through the session store;
+  `POST /api/agents/:id` uses `resolveActionUser(bearerSecret(authorization))`,
+  including when a cookie is also present. Only the identity the endpoint honors
+  is charged, once. Route auth and allow-list checks still decide access
+  (SD-13/SD-15/SD-16).
+- Verified principals consume **only their own allowance**. Requests with no
+  verified principal (including unknown/expired cookies and unknown action
+  tokens) first consume a **per-address 600/minute, burst 120** allowance, then
+  the process-wide **anonymous 6000/minute, burst 1000** backstop. Refusals at
+  an earlier bucket do not drain the later one. Cookie lookup precedes address
+  admission, so verified office users do not share a NAT allowance.
+- The unresolved path trusts only the single address Caddy explicitly writes
+  with `header_up X-Forwarded-For {remote_host}`. This requires Caddy as the sole
+  public ingress and the app's loopback-only binding; do not expose the app port
+  or place another proxy in front without revisiting that trust contract.
+  Missing, malformed or multiple forwarded addresses share one fallback bucket.
 - Exhaustion returns **429** with whole-second `Retry-After` and
   `Cache-Control: no-store`. A failed session lookup returns **503**, not an
-  anonymous fallback.
-  The principal table holds at most **256** users; a new user is refused if full,
-  and only fully refilled entries may be reclaimed.
+  anonymous fallback. Both user and address tables hold at most **256** entries;
+  a new key is refused if full, and only fully refilled entries may be reclaimed.
 
 The per-user refill allows ten requests/second because terminal input sends a
 request per keystroke (`InteractiveTerminal.tsx`). These are preview defaults,
@@ -359,7 +372,9 @@ before admission; route authorization still performs its own check. State is
 **in memory per process**, shared by the two router bundles, reset on restart,
 and separate for release/dev containers and any replicas. This is admission
 control, not a concurrent-request cap or edge DDoS protection: distributed or
-anonymous floods can still exhaust the global backstop and affect other users.
+anonymous floods can still exhaust the anonymous backstop and affect other
+anonymous users, and authentication or other shared resources can still be
+overwhelmed. These buckets do not promise availability under distributed floods.
 There is no timer on an admitted SSE response, and exhaustion never cancels one.
 `flush_interval -1` stays on both upstreams, with no response buffering or stream
 timeout ([Caddy streaming reference](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#streaming)).
@@ -1020,8 +1035,9 @@ clone accepting the other's signed login handshake (SD-17).
 The clones overlay mounts `configs/Caddyfile.dev` into Caddy's optional
 `dev-sites/*.caddy` import and requires `DEV_APP_DOMAIN`. That second site routes
 only to `app-dev:3444`, shares the release site's request/SSE settings (§4a), and
-waits for the dev app's healthcheck. Without the overlay there is no mounted dev
-site and no dev-host environment variable in Caddy. Keep the hostnames distinct;
+keeps dev upstream failure confined to the dev hostname (502); Caddy startup
+does not depend on dev health. Without the overlay there is no mounted dev site
+and no dev-host environment variable in Caddy. Keep the hostnames distinct;
 the §12 preflight already refuses shared callback origins. DNS, callback
 registration and allow-list smoke are needed for **each** hostname; offline
 pins do not establish reachability or authentication correctness (SD-18).

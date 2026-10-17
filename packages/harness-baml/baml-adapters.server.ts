@@ -797,21 +797,89 @@ function loadTemplatesFromDisk(cache: Record<string, string>): void {
   }
 }
 
+/** Find a signature/call's closing delimiter without interpreting its arguments.
+ * Comments may contain parentheses; quoted arguments may contain braces or
+ * escaped quotes. The cursor only moves forwards, including on malformed input. */
+function closingParenthesis(text: string, start: number): number {
+  let depth = 1
+  let quote = ''
+  for (let i = start; i < text.length; i++) {
+    const char = text[i]
+    if (quote) {
+      if (char === '\\') i++
+      else if (char === quote) quote = ''
+    } else if (char === '"' || char === "'") {
+      quote = char
+    } else if (text.startsWith('//', i)) {
+      const end = text.indexOf('\n', i + 2)
+      if (end === -1) return -1
+      i = end
+    } else if (text.startsWith('/*', i)) {
+      const end = text.indexOf('*/', i + 2)
+      if (end === -1) return -1
+      i = end + 1
+    } else if (char === '(') {
+      depth++
+    } else if (char === ')' && --depth === 0) {
+      return i
+    }
+  }
+  return -1
+}
+
 /** Extract function prompts with labelled textual includes of shared bodies.
  * Pass the whole corpus so template_strings in other files are available.
  * This is source inspection: no argument substitution or Jinja evaluation. */
 export function extractPromptTemplates(source: string, cache: Record<string, string>): void {
   const bodies = new Map<string, string>()
-  const templateRegex = /template_string\s+(\w+)\s*\([^{}]*?\)\s*#"([\s\S]*?)"#/g
-  for (const match of source.matchAll(templateRegex)) bodies.set(match[1], match[2])
+  const declaration = /\btemplate_string\s+(\w+)\s*\(/g
+  let shared: RegExpExecArray | null
+  while ((shared = declaration.exec(source)) !== null) {
+    const close = closingParenthesis(source, declaration.lastIndex)
+    if (close === -1) break
+    declaration.lastIndex = close + 1
+    while (/\s/.test(source[declaration.lastIndex] ?? '')) declaration.lastIndex++
+    if (!source.startsWith('#"', declaration.lastIndex)) continue
+    const bodyStart = declaration.lastIndex + 2
+    const bodyEnd = source.indexOf('"#', bodyStart)
+    if (bodyEnd === -1) break
+    bodies.set(shared[1], source.slice(bodyStart, bodyEnd))
+    // Never retry inside a scanned signature/body: repeated incomplete
+    // declarations and repeated raw-string openers must remain linear.
+    declaration.lastIndex = bodyEnd + 2
+  }
 
-  const include = (text: string, ancestors: string[] = []): string =>
-    text.replace(/\{\{\s*(\w+)\s*\([^{}]*?\)\s*\}\}/g, (call, name: string) => {
+  const include = (text: string, ancestors: string[] = []): string => {
+    const bareCall = /\{\{\s*(\w+)\s*\(/g
+    const parts: string[] = []
+    let cursor = 0
+    let match: RegExpExecArray | null
+    while ((match = bareCall.exec(text)) !== null) {
+      const close = closingParenthesis(text, bareCall.lastIndex)
+      if (close === -1) break
+      bareCall.lastIndex = close + 1
+      while (/\s/.test(text[bareCall.lastIndex] ?? '')) bareCall.lastIndex++
+      if (!text.startsWith('}}', bareCall.lastIndex)) continue
+      bareCall.lastIndex += 2
+      const name = match[1]
+      const call = text.slice(match.index, bareCall.lastIndex)
       const body = bodies.get(name)
-      // Leave unknown calls and recursive references visible as source.
-      if (body === undefined || ancestors.includes(name)) return call
-      return `{# expanded from ${name} #}\n${include(body, [...ancestors, name])}\n{# end expansion ${name} #}`
-    })
+      parts.push(text.slice(cursor, match.index))
+      // Missing bodies degrade visibly; recursive references stay as source.
+      if (body === undefined) {
+        parts.push(`{# unresolved template_string ${name}: body not found #}\n${call}`)
+      } else if (ancestors.includes(name)) {
+        parts.push(call)
+      } else {
+        parts.push(
+          `{# expanded from ${name} #}\n${include(body, [...ancestors, name])}\n{# end expansion ${name} #}`,
+        )
+      }
+      cursor = bareCall.lastIndex
+    }
+    parts.push(text.slice(cursor))
+    return parts.join('')
+  }
 
   // Match: function FunctionName(...) -> ReturnType { ... prompt #"..."# }
   //

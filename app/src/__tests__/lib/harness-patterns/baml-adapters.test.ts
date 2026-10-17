@@ -1562,8 +1562,67 @@ describe('extractPromptTemplates', () => {
     extractPromptTemplates(source, cache)
 
     const included =
-      '{# expanded from Shared #}\n{% if value %}{{ value }}{% else %}empty{% endif %}{{ Other(value) }}{{ _.role("user") }}\n{# end expansion Shared #}'
+      '{# expanded from Shared #}\n{% if value %}{{ value }}{% else %}empty{% endif %}{# unresolved template_string Other: body not found #}\n{{ Other(value) }}{{ _.role("user") }}\n{# end expansion Shared #}'
     expect(cache.Example).toBe(`${included}|${included}|{{ ctx.output_format }}`)
+  })
+
+  it.each([
+    ['quoted braces', '{{ Shared("{x}") }}'],
+    ['escaped quote', String.raw`{{ Shared("a\"}) still quoted") }}`],
+    ['nested parentheses', '{{ Shared(("x")) }}'],
+  ])('finds the bare call boundary with %s without evaluating arguments', async (_, call) => {
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(
+      `template_string Shared(value: string) #"RAW {{ value }}"#
+      function Example() -> string { prompt #"before ${call} after"# }`,
+      cache,
+    )
+    expect(cache.Example).toBe(
+      'before {# expanded from Shared #}\nRAW {{ value }}\n{# end expansion Shared #} after',
+    )
+  })
+
+  it('labels a formerly available body after it is renamed or removed, retaining the exact call', async () => {
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const call = '{{ Shared( "{x}" ) }}'
+    const prompt = `function Example() -> string { prompt #"${call}"# }`
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(`template_string Shared(value: string) #"body"#\n${prompt}`, cache)
+    expect(cache.Example).toContain('expanded from Shared')
+    for (const declaration of ['', 'template_string Renamed(value: string) #"body"#']) {
+      extractPromptTemplates(`${declaration}\n${prompt}`, cache)
+      expect(cache.Example).toBe(`{# unresolved template_string Shared: body not found #}\n${call}`)
+    }
+  })
+
+  it('keeps comments in shared-body signatures and does not truncate long raw bodies', async () => {
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const body = 'raw {{ value }}\n'.repeat(10_000)
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(
+      `template_string Shared(
+        value: string, // unmatched ) ( { in a signature comment
+        // another unmatched (
+      ) #"${body}"#
+      function Example() -> string { prompt #"{{ Shared("x") }}"# }`,
+      cache,
+    )
+    expect(cache.Example).toBe(`{# expanded from Shared #}\n${body}\n{# end expansion Shared #}`)
+  })
+
+  it.each([
+    ['unclosed signatures', 'template_string 0('.repeat(32_000)],
+    ['unclosed raw bodies', 'template_string 0()#"' + ')#"z'.repeat(32_000)],
+  ])('scans the CodeQL %s family within a linear CPU budget', async (_, source) => {
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const start = process.cpuUsage()
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(source, cache)
+    const cpu = process.cpuUsage(start)
+    // CPU time excludes scheduler delays; the linear scanner has >10x headroom.
+    expect((cpu.user + cpu.system) / 1_000).toBeLessThan(500)
+    expect(cache).toEqual({})
   })
 
   it('leaves a recursive reference visible instead of recursing forever', async () => {

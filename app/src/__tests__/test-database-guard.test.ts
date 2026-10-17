@@ -311,3 +311,56 @@ describe('skipWithoutDatabase: what a DB-backed test does with no database', () 
     }
   })
 })
+
+describe('explicit targets cannot bypass the live-server/name guard (#432 row 8)', () => {
+  it.each([
+    'postgresql://x:x@localhost:5432/hames_test',
+    'postgresql://x:x@127.0.0.1/hames_test',
+    'postgresql://x:x@[::1]:5432/hames_test',
+    'postgresql://x:x@postgres:5432/hames_test',
+    'postgresql://x:x@localhost.:5432/hames_test',
+    'postgresql://x:x@127.1:5432/hames_test',
+    'postgresql://x:x@127.0.0.2:5432/hames_test',
+    'postgresql://x:x@127.0.0.1:55439/hames',
+    'postgresql://x:x@127.0.0.1:55439/app_dev',
+    'postgresql://x:x@127.0.0.1:55439/hames_test?host=postgres',
+    'postgresql://x:x@127.0.0.1:55439/hames_test?dbname=hames',
+    'https://example.com/hames_test',
+    'not a URL',
+  ])('refuses %s before any connection', (url) => {
+    expect(() =>
+      resolveTestDatabase('hames_test', { env: { TEST_DATABASE_URL: url }, checkout: checkout() }),
+    ).toThrow(/Refusing/)
+  })
+
+  it('keeps the explicit dead-port sentinel accepted', () => {
+    const url = 'postgresql://x:x@127.0.0.1:59999/x'
+    expect(
+      resolveTestDatabase('hames_test', { env: { TEST_DATABASE_URL: url }, checkout: checkout() })
+        .url,
+    ).toBe(url)
+  })
+
+  it('keeps the owner-local exception checkout-bound and test-name-only', () => {
+    const root = checkout()
+    const env = {
+      [ALLOW_LOCAL_DB]: root,
+      TEST_DATABASE_URL: 'postgresql://x:x@localhost:5432/hames_test',
+    }
+    expect(resolveTestDatabase('hames_test', { env, checkout: root }).source).toBe('explicit')
+    expect(() => resolveTestDatabase('hames_test', { env, checkout: checkout() })).toThrow(
+      /Refusing/,
+    )
+    for (const database of ['hames', 'app_dev', 'postgres']) {
+      expect(() =>
+        resolveTestDatabase(database, { env: { [ALLOW_LOCAL_DB]: root }, checkout: root }),
+      ).toThrow(/non-test/)
+      expect(() =>
+        resolveTestDatabase('hames_test', {
+          env: { ...env, TEST_DATABASE_URL: `postgresql://x:x@localhost:5432/${database}` },
+          checkout: root,
+        }),
+      ).toThrow(/non-test/)
+    }
+  })
+})

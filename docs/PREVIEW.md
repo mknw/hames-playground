@@ -884,105 +884,159 @@ diagnosis, and nothing is reachable from outside.
   survivable — and changing it needs a re-encryption pass nobody has written.
   Treat `DATA_ENCRYPTION_KEY` as set once for the life of this preview.
 
-## 12. More than one environment
+## 12. Two branch clones, one infrastructure stack
 
-[ADR-0008](adr/0008-deployment-guidance-is-provider-neutral.md) records why
-this is guidance rather than a plan: how many environments a deployment runs,
-and on how many hosts, is its operator's decision. What follows is what a
-second environment (a dev or a prod beside staging, say) adds to §§0–11. None
-of it is built here.
+The [G20 row 8 ruling](https://github.com/mknw/hames-playground/pull/432#issuecomment-6238143691)
+is **one clone pinned to the release branch and another pinned to the dev
+branch**. Each builds and runs its own app container. Both use the **same compose
+project**, Postgres server, Neo4j, Redis, gateway, embedder and document converter.
+Do not repeat §§3–7 in a second compose project. This remains provider-neutral
+operator guidance ([ADR-0008](adr/0008-deployment-guidance-is-provider-neutral.md)).
 
-**Each environment is a complete copy of §§3–7**: its own compose project,
-`.env`, Postgres, Neo4j and Redis volumes, and three keys. That means **one
-escrow per environment in §7**, with no key reused across environments.
-Environments may load the same graph into their own Neo4j, but conversation
-databases are never shared.
+`docker-compose.clones.yaml` is an **opt-in third overlay**, after the base and
+production overlay. It adds only `app-dev`; `app` remains the release app and
+Caddy's existing upstream. The dev app inherits `app/Dockerfile`'s built runtime,
+healthcheck and shared dependencies, while its build contexts point at the dev
+checkout. It has a distinct image tag and container name, and publishes no port.
+It is never `pnpm dev`, Vite, a source bind mount, or a second full environment.
+Both containers explicitly keep `VITE_DEV_BYPASS_AUTH=false` (SD-15).
 
-**Changes to compose and code have to land before two environments can share
-one host.** The committed files assume one stack per Docker daemon, in five
-places:
+### Checkouts, hostnames and app-only configuration
 
-1. **Container names.** Every service except `mcp-config` and `mcp-gateway`
-   pins a `container_name` (`docker-compose.yaml:23,121,149,175,201`;
-   `docker-compose.prod.yaml:157`). Those names are global to the daemon. The
-   top-level `name: hames` (`docker-compose.yaml:4`) also has to differ per
-   project.
-2. **Ports.** Each project publishes the same loopback ports
-   (`docker-compose.yaml:26-204`), and the overlay gives Caddy `80`/`443` in each
-   project (`docker-compose.prod.yaml:162-165`). Only one process can bind each
-   port.
-3. **The sandbox reaper.** It force-removes every `kg-sandbox=1` container on
-   the host when a process starts
-   (`packages/sandbox/docker-backend.server.ts:415-451`, called from
-   `packages/sandbox/with-sandbox.server.ts:198`; the #97 caveat). One
-   environment's restart kills the other's in-flight sandboxes.
-4. **Volumes the gateway creates.** The `memory` server's `claude-memory` volume
-   (`configs/custom-catalog.yaml:103-104`) is created by the gateway, not by
-   compose, so it is not scoped to a project and both environments would share
-   one memory graph. The sandbox cache volume has the same shape
-   (`docker-backend.server.ts:151-152`), but `SANDBOX_CACHE_VOLUME` overrides it
-   per environment.
-5. **Memory.** §1 sizes one stack at 16 GiB and calls that "not generous". Two
-   stacks have not been measured.
+Keep two separate checkouts on the operator's chosen release/dev branches. Record
+and verify **each branch name and full commit SHA before every build**; the
+release checkout is the directory from which compose is run. Do not switch that
+checkout to dev to build the second image. `DEV_CLONE_PATH` is the absolute path
+to the other checkout; its `app/` and workspace root are the dev image's two build
+contexts. Both checkouts must include these guards before enabling two apps.
 
-Until those are fixed, a second project on the same VM collides at
-`docker compose up`. Worse, it may come up and share state. The overlay stays
-load-bearing as it is today (§2), so read any of those changes against this
-runbook, not against the compose file alone.
+Set these operator inputs in the release checkout's root `.env`:
 
-**One Caddy, two hostnames.** On a shared host, a single Caddy outside both
-projects terminates TLS for each environment's hostname and proxies each one
-to its own app. `configs/Caddyfile` has one site block (`{$APP_DOMAIN}`, line
-18), so it needs a second. It also needs distinct upstreams. Line 21 proxies
-to `app:3444` by compose service name, both projects call their app service
-`app`, and the loopback alternative collides on `127.0.0.1:3444` (item 2). A
-host with one environment keeps today's one-site shape.
+| Input                                               | Meaning                                                                   |
+| --------------------------------------------------- | ------------------------------------------------------------------------- |
+| `COMPOSE_FILE`                                      | `docker-compose.yaml:docker-compose.prod.yaml:docker-compose.clones.yaml` |
+| `COMPOSE_PROFILES`                                  | `app`                                                                     |
+| `DEV_CLONE_PATH`                                    | Absolute path to the separate dev-branch checkout                         |
+| `APP_DOMAIN` / `DEV_APP_DOMAIN`                     | Distinct release/dev HTTPS hostnames                                      |
+| `RELEASE_RUNTIME_ENV_FILE` / `DEV_RUNTIME_ENV_FILE` | Separate absolute paths to app-only runtime env files                     |
+| `RELEASE_DATABASE_URL` / `DEV_DATABASE_URL`         | The provisional database policy below                                     |
 
-**Hostnames.** One per environment, under a domain you control (§4), and Entra
-needs one redirect URI per environment hostname (§5a); an app registration
-accepts several. Where DNS is not ready, a provider-assigned name can stand in
-for §4's A record (on Azure, a public IP's `<label>.<region>.cloudapp.azure.com`,
-so two names on one VM means two public IPs). Read §14's note on shared
-provider names and Let's Encrypt's limits before relying on one.
+Create both app-only files with mode 0600, outside the checkout. Use the app
+settings in `.env.production.example` as the inventory, but **do not copy the root
+file wholesale**: omit `POSTGRES_PASSWORD`, compose controls, and the other
+clone's settings/secrets. The overlay supplies each app's `DATABASE_URL`, Entra
+callback/logout URLs, sandbox namespace/cache, shared-service endpoints and
+Neo4j credentials. Keep `VITE_ALLOWED_EMAILS` separate for each app and leave it
+unset at image-build time. Runtime allow-lists win (`app/src/lib/auth/allowList.ts`).
 
-**A registry replaces `--build`.** CI builds each image once and pushes it to
-a private registry, and each host pulls by digest. Images stay private because
-they can carry org data. Prefer a registry the hosts and CI reach with a
-workload identity over one that needs a stored credential: on Azure, that is a
-container registry that GitHub Actions pushes to through OIDC
-workload-identity federation and each VM pulls from with its own managed
-identity, so no long-lived registry secret exists anywhere. A host that has to
-store a pull credential is the thing to avoid, which is why §14's single box
-builds its own image instead. The app service then runs
-`image: <registry>/<repo>@sha256:<digest>` instead of building
-`hames-app:local` (`docker-compose.yaml:188-200`). That compose change comes
-with the workflows, not before them.
+Register **both exact HTTPS callbacks** in Entra (§5), one per hostname:
+`https://<release-host>/api/auth/callback` and
+`https://<dev-host>/api/auth/callback`. An app registration can list both; reusing
+that registration is deliberate, but it does not justify reusing application
+keys. Generate **independent `DATA_ENCRYPTION_KEY`, `AUTH_SESSION_SECRET`, and
+`TOKEN_ENCRYPTION_KEY` for each clone**, and escrow each key set separately (§7).
+Never put release ciphertext or a release database dump into dev. A second key
+alone is not database isolation: it can instead turn a schema/backfill mistake
+into an unreadable database. Auth cookies have no `Domain` attribute
+(`app/src/lib/auth/cookies.server.ts`); independent signing keys also prevent one
+clone accepting the other's signed login handshake (SD-17).
 
-**Each environment has its own allow-list.** A release-candidate environment
-typically lists a subset of users. One image can serve different lists only
-because the runtime value wins over the build-time one
-(`app/src/lib/auth/allowList.ts:24-29`), so **the CI build must not set
-`VITE_ALLOWED_EMAILS`**: if it did, that value would become the fallback
-allow-list in every environment, prod included. §8 step 5 is still the test of
-each gate, so run it once per environment. An Entra group or app-role check
-would replace the lists and is not designed here.
+The second Caddy hostname/site block is **build step 5 (row 6)**. This step
+prepares `app-dev:3444` on the existing network and its distinct Entra redirect;
+it does not publish that hostname. Do not claim the dev site is reachable until
+the Caddy step lands. DNS, callback registration and allow-list smoke are needed
+for each hostname, and no authentication smoke is implied by the offline pins.
 
-**One GPU box for several environments.** If every environment points
-`VERDA_INFERENCE_*` at the same scale-to-zero deployment, a turn in one
-environment can queue behind a turn in another. Each app process keeps its own
-cold-start estimate and its own wake poll
-(`app/src/lib/inference/cold-start.server.ts:71-77`;
-`app/src/lib/inference/wake.server.ts:117,293-303`). So the "starting GPU"
-countdown in one environment does not know about a wake that another
-environment just paid for, and an environment that joins partway through
-another's cold start can record the rest of that wait as a cold start of its
-own, which lowers its estimate. Only the countdown is affected, not routing.
+### PENDING_OWNER_DATABASE_POLICY — awaiting the owner's nod ⚑
 
-**Where the live layer runs.** The coordinated burst, `pnpm eval:harness` and
-`smoke-verda.ts` belong against a remote environment rather than a laptop. A
-laptop on Apple Silicon is aarch64 and the hosts are linux/amd64, and #412
-shows what that difference hides. The hermetic layers do not move
-([`testing/pyramid.md`](testing/pyramid.md)).
+**Provisional row 8c:** both containers use `postgres:5432`, but each has its own
+database and login role. Neo4j and Redis remain shared. This removes cross-clone
+schema-hash churn and prevents either clone's encrypted-column backfill touching
+the other's rows. The policy inputs are isolated in
+`docker-compose.clones.yaml`'s `x-clone-database-policy`; its matching checks are
+marked `PENDING_OWNER_DATABASE_POLICY` in `scripts/validate-clones.mjs`. If the
+owner changes this decision, revise those sections explicitly; there is no
+silent shared-database fallback. **Do not provision or enable this policy on a
+host until the owner has nodded.** No host has been accessed by this step.
+
+After that nod, the operator provisions two databases/roles on the **existing**
+server, using an administrator session (`psql`, not a committed credential).
+For **new empty databases**, the shape is the following generic SQL; choose the
+actual names privately and supply passwords with psql's interactive `\password`
+command, never as shell arguments or committed SQL:
+
+```sql
+CREATE ROLE release_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+CREATE ROLE dev_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+CREATE DATABASE app_release OWNER release_app;
+CREATE DATABASE app_dev OWNER dev_app;
+REVOKE CONNECT, TEMPORARY ON DATABASE app_release FROM PUBLIC;
+REVOKE CONNECT, TEMPORARY ON DATABASE app_dev FROM PUBLIC;
+GRANT CONNECT, TEMPORARY ON DATABASE app_release TO release_app;
+GRANT CONNECT, TEMPORARY ON DATABASE app_dev TO dev_app;
+```
+
+Do not grant either role membership in the other, server administration, or
+rights on the other database. Review other existing databases' `PUBLIC` connect
+grants as well. Install the `vector` extension as administrator **in each new
+database** before app startup. Set each URL to its own role/password and database
+on `postgres:5432`. The apps must never receive the Postgres administrator
+credential. An existing release database needs an operator-reviewed ownership /
+grant migration and a dump first; the empty-database example is not an in-place
+migration and must not be run over live data. No automated migration is shipped.
+
+Before either app starts, verify the role attributes and `has_database_privilege`
+for both cross-database directions as administrator, and attempt each cross-login:
+both must be denied. Then each app role must be able to bootstrap its own schema.
+The offline config check validates distinct role/database names, not server ACLs;
+these live grant checks remain owed. `SCHEMA_SQL` stays additive/idempotent even
+with separate databases; its unit pin refuses destructive schema or data edits.
+
+### Preflight and build
+
+From the release checkout, after reviewing both branch/commit pins and configuring
+the inputs above:
+
+```bash
+set -o pipefail
+docker compose config --format json | node scripts/validate-clones.mjs
+docker compose up -d --build app app-dev
+```
+
+Stop on any preflight failure; do not run the second command after one. **Never
+save or print the rendered config**: it contains secrets. The validator's CLI
+prints no input or secret-bearing parse error. It refuses shared encryption /
+signing keys, callbacks, sandbox caches/namespaces and database roles/databases,
+and refuses a dev command override, a shared build path or a published dev port.
+Re-run it before every recreate. It is an explicit operator preflight, not a
+runtime Docker authorization boundary.
+
+Sandbox resources carry `kg-sandbox-environment=release` or `dev`; the startup
+reaper filters **containers and networks** by both that label and `kg-sandbox=1`.
+Both overlays set distinct `SANDBOX_CACHE_VOLUME` bases. Production backends
+refuse a missing environment label. Unlabelled legacy sandboxes are deliberately
+left alone: after confirming no old run is active, inspect and remove them by
+explicit resource ID, never by an unscoped family-label sweep.
+
+### Shared state and the limits of the claim
+
+This shape isolates application Postgres rows, keys and ordinary sandbox cleanup;
+it **does not isolate all clone data**. Both clones can read/write the shared
+Neo4j graph; Redis stash keys and the gateway memory volume are also shared.
+Use synthetic/demo data only until that shared-data posture is acceptable to the
+operator (SD-10, SD-18). Do not describe dev as an untrusted staging boundary.
+The Docker socket in each app remains root-equivalent on the host (SD-19): code
+with that socket can bypass labels, access other containers and recover secrets.
+Namespace labels prevent accidental cleanup, not a malicious sibling container.
+
+Tests use the shared `resolveTestDatabase()` gate before connecting. Explicit
+URLs must name test databases and cannot point at the known live compose server;
+the existing checkout-bound **owner-only** local opt-in remains the documented
+exception, for test-named databases only. Agents must use a separate throwaway
+server or the exact dead-port no-DB sentinel; a copied opt-in cannot authorize a
+worktree. See [the pyramid](testing/pyramid.md#which-postgres-a-test-run-may-touch).
+No DB/browser or live-provider checks ran for this repo-only step, and Verda
+remains paused: never wake/probe it for these checks.
 
 ## 13. Deploy and promotion, once the workflows exist
 

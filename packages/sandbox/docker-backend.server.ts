@@ -341,6 +341,20 @@ class DockerMcpTransport implements McpTransport {
 
 export class DockerBackend implements ComputeBackend {
   readonly kind = 'docker' as const
+  // Captured once: resources created by this backend and its startup sweep
+  // must use the same namespace even if the caller later changes process.env.
+  private readonly environmentLabel: string
+
+  constructor() {
+    const environment = process.env.SANDBOX_ENVIRONMENT?.trim() || 'local'
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(environment)) {
+      throw new Error('SANDBOX_ENVIRONMENT must be a nonempty label of at most 63 characters')
+    }
+    if (process.env.NODE_ENV === 'production' && !process.env.SANDBOX_ENVIRONMENT?.trim()) {
+      throw new Error('Production requires SANDBOX_ENVIRONMENT to scope sandbox cleanup')
+    }
+    this.environmentLabel = `kg-sandbox-environment=${environment}`
+  }
 
   async boot(rootfs: RootfsId, runtime: RuntimeConfig): Promise<VMHandle> {
     const id = `sbx-${randomUUID().slice(0, 8)}`
@@ -415,7 +429,14 @@ export class DockerBackend implements ComputeBackend {
   async reapOrphans(): Promise<number> {
     let listed: string
     try {
-      listed = await docker(['ps', '-aq', '--filter', 'label=kg-sandbox=1'])
+      listed = await docker([
+        'ps',
+        '-aq',
+        '--filter',
+        'label=kg-sandbox=1',
+        '--filter',
+        `label=${this.environmentLabel}`,
+      ])
     } catch {
       // Docker engine unavailable ⇒ nothing reapable. Not a startup failure.
       return 0
@@ -435,7 +456,15 @@ export class DockerBackend implements ComputeBackend {
     // Labeled per-boot networks are prunable only once their gateways are
     // gone — hence after the container sweep, never before.
     try {
-      const pruned = await docker(['network', 'prune', '-f', '--filter', 'label=kg-sandbox=1'])
+      const pruned = await docker([
+        'network',
+        'prune',
+        '-f',
+        '--filter',
+        'label=kg-sandbox=1',
+        '--filter',
+        `label=${this.environmentLabel}`,
+      ])
       reaped += pruned
         .split('\n')
         .map((s) => s.trim())
@@ -553,7 +582,14 @@ export class DockerBackend implements ComputeBackend {
     }
 
     // Label so orphaned sandboxes are findable/reapable.
-    args.push('--label', 'kg-sandbox=1', '--label', `kg-sandbox-id=${id}`)
+    args.push(
+      '--label',
+      'kg-sandbox=1',
+      '--label',
+      this.environmentLabel,
+      '--label',
+      `kg-sandbox-id=${id}`,
+    )
     args.push(image)
 
     try {
@@ -609,7 +645,16 @@ export class DockerBackend implements ComputeBackend {
       // `kg-sandbox=1` label is what lets reapOrphans' network sweep find
       // this network once its gateway is gone.
       try {
-        await docker(['network', 'create', '--internal', '--label', 'kg-sandbox=1', net])
+        await docker([
+          'network',
+          'create',
+          '--internal',
+          '--label',
+          'kg-sandbox=1',
+          '--label',
+          this.environmentLabel,
+          net,
+        ])
       } catch (err) {
         // LOUD, as the jsdoc promises: an unwrapped error here (the classic
         // case is docker address-pool exhaustion) would surface as a plain
@@ -637,6 +682,8 @@ export class DockerBackend implements ComputeBackend {
         gw,
         '--label',
         'kg-sandbox=1',
+        '--label',
+        this.environmentLabel,
         '--label',
         `kg-sandbox-egress=${profile}`,
         ...hardeningArgs(),

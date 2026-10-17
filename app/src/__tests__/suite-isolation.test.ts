@@ -69,6 +69,9 @@ const TEST_TREES = ['src/__tests__', 'e2e', 'e2e-browser', '../packages/harness-
  *  and connects nowhere. */
 const MAY_BUILD_LIVE_URL = new Set([
   'src/__tests__/test-database.ts',
+  // Pure guard fixtures intentionally construct targets that must be refused;
+  // they never connect. The provisioning tests below mock pg.Client.
+  'src/__tests__/test-database-guard.test.ts',
   'src/__tests__/lib/config/compose-credentials.test.ts',
 ])
 

@@ -1,0 +1,52 @@
+# Opt-in row-8 overlay, AFTER docker-compose.yaml and docker-compose.prod.yaml.
+# One compose project/data tier; two independently built application containers.
+# Read docs/PREVIEW.md §12 before use. Caddy's dev site follows in build step 5.
+# Runtime env files contain app secrets ONLY, never Postgres administrator keys.
+
+# PENDING_OWNER_DATABASE_POLICY: awaiting the owner's nod (#432 G20 row 8c).
+# Both URLs must name postgres:5432, with DIFFERENT databases and limited roles.
+# Keep any later owner-directed policy change in this one section and its guard.
+x-clone-database-policy:
+  release: &release-database ${RELEASE_DATABASE_URL:?set the release app role/database URL}
+  dev: &dev-database ${DEV_DATABASE_URL:?set the dev app role/database URL}
+
+services:
+  app:
+    image: hames-app:release
+    env_file: !override
+      - path: ${RELEASE_RUNTIME_ENV_FILE:?set the release app-only runtime env file}
+        required: true
+    environment:
+      DATABASE_URL: *release-database
+      AUTH_REDIRECT_URI: https://${APP_DOMAIN:?}/api/auth/callback
+      AUTH_POST_LOGOUT_REDIRECT_URI: https://${APP_DOMAIN:?}/auth/signin
+      SANDBOX_ENVIRONMENT: release
+      SANDBOX_CACHE_VOLUME: kg-sandbox-cache-release
+      VITE_DEV_BYPASS_AUTH: "false"
+
+  app-dev:
+    # Inherit the shipped runtime, healthcheck, dependencies and shared network.
+    # Build contexts below point to the OTHER checkout, on the dev branch.
+    extends:
+      file: docker-compose.yaml
+      service: app
+    container_name: hames-app-dev
+    image: hames-app:dev
+    build: !override
+      context: ${DEV_CLONE_PATH:?set the separate dev checkout path}/app
+      dockerfile: Dockerfile
+      additional_contexts:
+        root: ${DEV_CLONE_PATH:?}
+    ports: !override []
+    env_file: !override
+      - path: ${DEV_RUNTIME_ENV_FILE:?set the dev app-only runtime env file}
+        required: true
+    environment:
+      DATABASE_URL: *dev-database
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?}
+      AUTH_REDIRECT_URI: https://${DEV_APP_DOMAIN:?set the separate dev hostname}/api/auth/callback
+      AUTH_POST_LOGOUT_REDIRECT_URI: https://${DEV_APP_DOMAIN:?}/auth/signin
+      SANDBOX_ENVIRONMENT: dev
+      SANDBOX_CACHE_VOLUME: kg-sandbox-cache-dev
+      VITE_DEV_BYPASS_AUTH: "false"

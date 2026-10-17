@@ -164,6 +164,17 @@ is never left unset, because `lib/db/client.server.ts` reads an unset
 layer. So in a checkout with neither of the first two rows, its unit layer skips
 the DB-backed tests and the two e2e layers refuse.
 
+Explicit URLs must use a test-named database (`test`, `hames_test`, or a
+`*_test_*` name) and cannot name the known compose server (`localhost`, loopback
+addresses or `postgres` on port 5432). Query parameters that could override the
+host/database are refused. The checkout-bound owner opt-in is the sole exception
+for that server, and still cannot select a non-test database; a copied opt-in
+never authorizes another checkout. This validates known endpoint names, not DNS
+aliases or arbitrary remote servers: an explicit remote URL must still belong
+to the operator's throwaway server. The exact
+`postgresql://x:x@127.0.0.1:59999/x` URL is accepted only as a dead-port no-DB
+sentinel for dispatched runs; nothing may listen there.
+
 `test-database-guard.test.ts` pins the four rows. `suite-isolation.test.ts` pins
 that every suite's default goes through the guard, because a suite that falls
 back on its own would go round it.

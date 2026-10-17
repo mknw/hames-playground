@@ -81,6 +81,15 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
         },
       })
     }
+    // #614: every call failed and the controller then Returned an answer from
+    // context — the history above is the failure, this is the answer.
+    if (input.returnText) {
+      turns.push({
+        n: (input.loopHistory.iterations.at(-1)?.turn ?? -1) + 1,
+        reasoning: 'Direct response',
+        tool_result: { tool: 'response', result: input.returnText, success: true },
+      })
+    }
   } else if (input.response) {
     // Create a single turn with the response as a result
     turns.push({

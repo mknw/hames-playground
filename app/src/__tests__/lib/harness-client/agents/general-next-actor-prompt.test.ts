@@ -139,7 +139,9 @@ it.each(['anthropic', 'verda'])('E1: info Return contract is rendered on %s', as
       'When you Return, include the URLs of the sources you used as Markdown links',
     )
     expect(prompts[0]).toContain('Copy each source URL verbatim')
-    expect(prompts[0]).toContain('never invent a URL')
+    expect(prompts[0]).toContain('never invent or construct a URL')
+    expect(prompts[0]).toContain('include no link')
+    expect(JSON.parse(prompts[0]).model).toMatch(tier === 'verda' ? /Qwen/ : /^claude-/)
   } finally {
     spy.mockRestore()
   }

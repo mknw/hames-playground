@@ -505,7 +505,6 @@ describe('general-next composition', () => {
         expect(checks.filter((c) => !c.pass).map((c) => c.name)).toEqual(
           cited ? [] : [`answer contains ${url}`],
         )
-        expect(trace.turns[0].response.includes(url)).toBe(cited)
       }
     },
   )

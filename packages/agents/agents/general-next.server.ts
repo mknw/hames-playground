@@ -106,7 +106,9 @@ async function createPatterns(
               NEO4J_READ_ONLY_CONTEXT +
                 '\n\nWhen you Return, include the URLs of the sources you used as Markdown links ' +
                 'alongside the facts they support. Copy each source URL verbatim from the ' +
-                'tool results or the successful search/fetch arguments; never invent a URL. ' +
+                'tool results or from the url argument of a successful fetch; never invent or ' +
+                'construct a URL. If none of the sources you used has a URL (for example a ' +
+                'graph, memory or library-docs lookup), include no link. ' +
                 'Your Return is the source record used to write the final answer, so URLs ' +
                 'left only in tool calls will not reach that answer.',
             ),

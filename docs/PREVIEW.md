@@ -1087,8 +1087,8 @@ Create both app-only files with mode 0600, outside **both** checkouts (canonical
 paths are checked). Bootstrap refuses group/other permission bits. Use the app
 settings in `.env.production.example` as the inventory, but **do not copy the root
 file wholesale**: omit `POSTGRES_PASSWORD`, compose controls, and the other
-clone's settings/secrets. The validator also refuses root-only `*_DATABASE_URL`,
-`*_RUNTIME_ENV_FILE`, `DEV_CLONE_PATH` and `COMPOSE_FILE` inputs in app envs,
+clone's settings/secrets. The validator also refuses root-only `RELEASE_DATABASE_URL`,
+`DEV_DATABASE_URL`, `*_RUNTIME_ENV_FILE`, `DEV_CLONE_PATH` and `COMPOSE_FILE` in app envs,
 sibling passwords/URLs/keys under any variable name, and the rendered Postgres
 administrator password anywhere in either app env. Database role passwords must
 differ, and `postgres`, `template0` and `template1` cannot be app databases.

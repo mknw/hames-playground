@@ -29,6 +29,7 @@ import { withInfoDocumentReferences } from './info-document-references.server'
 import { MICROSOFT_365_TOOLS } from './microsoft-365.server'
 import { getGraphSchema } from './graph-schema.server'
 import { NEO4J_READ_ONLY_CONTEXT } from './neo4j-fewshots.server'
+import type { FewShot } from '@hames-ai/harness-patterns/types'
 
 assertServerOnImport()
 
@@ -36,6 +37,33 @@ assertServerOnImport()
  *  stay withheld by name, and so does `read_graph`: the memory graph is shared by
  *  every user, and that call returns all of it in one result (S3b review F3). */
 const MEMORY_READ_TOOLS = ['search_nodes', 'open_nodes']
+
+// Synthetic office examples use the same JSON envelope as the actor's output
+// format. ActorMultiCalls supplies the mode-gated write-then-run batch beside
+// these single calls; completion belongs to the critic, so no example uses Return.
+const OFFICE_FEW_SHOTS: FewShot[] = [
+  {
+    user: 'Show my three most recent unread inbox messages.',
+    reasoning: 'Read the inbox previews with the supplied Graph tool.',
+    tool: 'graph_mail_recent',
+    args: JSON.stringify({ unread_only: true, limit: 3 }),
+  },
+  {
+    user: 'Find Excel files about the sample budget.',
+    reasoning: 'Search file metadata with plain words and the Excel file-type filter.',
+    tool: 'graph_files_search',
+    args: JSON.stringify({ query: 'sample budget', file_type: 'xlsx' }),
+  },
+  {
+    user: 'Create /work/out/sample.docx containing the sentence "Sample report".',
+    reasoning: 'Run python-docx in a quoted heredoc and save the deliverable under /work/out.',
+    tool: 'sandbox_bash',
+    args: JSON.stringify({
+      command:
+        "python3 - <<'PY'\nfrom docx import Document\ndoc = Document()\ndoc.add_paragraph('Sample report')\ndoc.save('/work/out/sample.docx')\nprint('/work/out/sample.docx')\nPY",
+    }),
+  },
+]
 
 async function createPatterns(
   sessionId: string,
@@ -63,6 +91,7 @@ async function createPatterns(
   })(
     actorCritic<AgentData>(
       createActorControllerAdapter({
+        fewShots: OFFICE_FEW_SHOTS,
         contextPrefix:
           'Work on Microsoft 365 mail and files with the supplied Graph tools. ' +
           'The office sandbox has Python, python-docx, openpyxl, xlsxwriter and PyMuPDF. ' +

@@ -7,7 +7,10 @@ import { spawnSync } from 'node:child_process'
 import { afterAll, describe, expect, it } from 'vitest'
 import { parseDocument } from 'yaml'
 const { validateClones } = await import(
-  process.env.CLONE_VALIDATOR_SCRIPT ?? '../../../../../scripts/validate-clones.mjs'
+  new URL(
+    process.env.CLONE_VALIDATOR_SCRIPT ?? '../../../../../scripts/validate-clones.mjs',
+    import.meta.url,
+  ).href
 )
 
 const repoFile = (name: string) => fileURLToPath(new URL(`../../../../../${name}`, import.meta.url))

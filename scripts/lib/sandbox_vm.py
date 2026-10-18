@@ -568,11 +568,33 @@ class Spike:
             time.sleep(2)
         else:
             raise RuntimeError("guest agent boot timed out")
+        # Agent readiness precedes cloud-init; do not race its network setup.
+        cloud = self.vm("exec", name, "--", "timeout", "--kill-after=5", "600",
+                        "cloud-init", "status", "--wait", "--format", "json", timeout=620, check=False)
+        require(cloud.returncode == 0, "guest cloud-init completion failed")
+        status = json.loads(cloud.stdout)
+        require(isinstance(status, dict) and status.get("status") == "done"
+                and status.get("extended_status") == "done", "guest cloud-init not cleanly done")
+        # The Incus device key is eth0; Ubuntu may name that NIC enp5s0.
+        # Resolve by the generated MAC without changing image seeds or VM guards.
+        mac = self.vm("config", "get", name, "volatile.eth0.hwaddr").stdout.strip().lower()
+        require(re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac), "invalid guest NIC MAC")
+        links = json.loads(self.vm("exec", name, "--", "ip", "-j", "link").stdout)
+        require(isinstance(links, list) and all(isinstance(link, dict)
+                and isinstance(link.get("address"), str) for link in links), "invalid guest link inventory")
+        matches = [link for link in links if link["address"].lower() == mac]
+        require(len(matches) == 1, "unique guest NIC not established")
+        interface = matches[0].get("ifname")
+        require(isinstance(interface, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,14}", interface),
+                "invalid guest interface name")
         # Static addressing avoids changing host INPUT/UFW for DHCP and DNS.
+        # The image's DHCP seed may not cover a predictable-name interface.
         network = self.args.network[index]
+        self.vm("exec", name, "--", "ip", "link", "set", "dev", interface, "up")
         self.vm("exec", name, "--", "ip", "addr", "replace",
-                self.address(index) + "/" + str(network.network.prefixlen), "dev", "eth0")
-        self.vm("exec", name, "--", "ip", "route", "replace", "default", "via", str(network.ip))
+                self.address(index) + "/" + str(network.network.prefixlen), "dev", interface)
+        self.vm("exec", name, "--", "ip", "route", "replace", "default", "via", str(network.ip),
+                "dev", interface)
         self.vm("exec", name, "--", "test", "-x", "/usr/bin/dockerd")
         self.metrics[f"env{index}_vm_agent_boot_ms"] = (time.monotonic() - started) * 1000
 

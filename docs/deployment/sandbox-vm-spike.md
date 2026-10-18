@@ -165,8 +165,20 @@ Install the modules; never loosen the project restriction for this workaround.
 The guest-agent readiness deadline is 600 seconds. On first boot, incus-agent
 6.0.5 applies the seeded image metadata and reboots before opening its exec
 listener ([agent startup](https://github.com/lxc/incus/blob/v6.0.5/cmd/incus-agent/main_agent.go#L91-L107)).
-`env*_vm_agent_boot_ms` includes the seeding reboot as well as static-address
-setup; it is not a single-boot measurement.
+The agent answers before cloud-init has finished, so the harness then waits for
+cloud-init: guest `timeout --kill-after=5 600 cloud-init status --wait --format json`,
+with a 620-second bound on the host. Only exit 0 with `status` and
+`extended_status` both `done` proceeds. Any cloud-init WARNING turns the run into
+`degraded done` with exit 2, and that is refused, as are an error, `disabled`, a
+timeout and missing or malformed output; every refusal reaches rollback. Read the
+cause from the `recoverable_errors` and `errors` keys of that command's JSON. It
+lands in `commands.private.jsonl`, because `command()` logs every call even when
+its exit status is not checked.
+`env*_vm_agent_boot_ms` includes the seeding reboot, the cloud-init completion
+wait and static-address setup; it is not a single-boot measurement.
+Each VM can now stay silent for about 1,225 seconds (600 s readiness plus 620 s
+barrier) before it is refused; any operator dead-man interval for run 4 must
+exceed that.
 
 The witness must attempt a **new key-authenticated SSH connection from an
 independent machine** to the existing SSH endpoint, with connection timeout,

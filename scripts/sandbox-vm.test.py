@@ -62,6 +62,7 @@ class Safety(unittest.TestCase):
         self.regress = False
         self.tables = set()
         self.ufw_rules = []
+        self.cloud_result = result('{"status":"done","extended_status":"done"}')
 
     def fake(self, *args, **kwargs):
         self.calls.append(args)
@@ -124,7 +125,13 @@ class Safety(unittest.TestCase):
             if len(args) > 2 and args[2] == "show":
                 return result() if any(name == args[3] for _, name in self.spike.owned) else result(code=1, stderr="Error: not found")
             if args[1:3] == ("config", "get"):
+                if args[-1] == "volatile.eth0.hwaddr":
+                    return result("00:16:3e:12:34:56\n")
                 return result(self.spike.token)
+            if args[1:2] == ("exec",) and args[4:] == ("ip", "-j", "link"):
+                return result('[{"ifname":"enp5s0","address":"00:16:3e:12:34:56"}]')
+            if args[1:2] == ("exec",) and "cloud-init" in args:
+                return self.cloud_result
             if len(args) > 2 and args[2] == "get":
                 return result(self.spike.token)
             return result()
@@ -349,6 +356,152 @@ class Safety(unittest.TestCase):
         self.assertIn("security.ipv4_filtering=true", nic)
         self.assertIn("security.mac_filtering=true", nic)
 
+    def launch_with_links(self, links, mac="00:16:3e:12:34:56\n"):
+        name = self.spike.name(0)
+        def guest(*args, **kwargs):
+            self.calls.append(args)
+            if "cloud-init" in args:
+                self.assertEqual(args, ("exec", name, "--", "timeout", "--kill-after=5", "600",
+                                        "cloud-init", "status", "--wait", "--format", "json"))
+                self.assertEqual(kwargs, {"timeout": 620, "check": False})
+                return self.cloud_result
+            if args == ("info", name):
+                return result(code=1)
+            if args == ("config", "get", name, "volatile.eth0.hwaddr"):
+                return result(mac)
+            if args == ("exec", name, "--", "ip", "-j", "link"):
+                return result(json.dumps(links))
+            if args[:3] == ("exec", name, "--") and args[3:6] == ("ip", "addr", "replace"):
+                self.assertIn(args[-1], [link["ifname"] for link in links],
+                              'Cannot find device "' + args[-1] + '"')
+            return result()
+        with patch.object(self.spike, "vm", side_effect=guest):
+            self.spike.launch(0, name)
+
+    def assert_guest_nic(self, interface):
+        prefix = ("exec", self.spike.name(0), "--", "ip")
+        up = prefix + ("link", "set", "dev", interface, "up")
+        address = prefix + ("addr", "replace", "192.0.2.2/24", "dev", interface)
+        route = prefix + ("route", "replace", "default", "via", "192.0.2.1", "dev", interface)
+        self.assertIn(up, self.calls)
+        self.assertIn(address, self.calls)
+        self.assertIn(route, self.calls)
+        self.assertLess(self.calls.index(up), self.calls.index(address))
+        self.assertLess(self.calls.index(address), self.calls.index(route))
+
+    def test_guest_predictable_nic(self):
+        for interface in ("enp5s0", "enx00163e123456"):
+            with self.subTest(interface=interface):
+                self.calls.clear()
+                self.launch_with_links([{"ifname": interface, "address": "00:16:3e:12:34:56"}])
+                self.assert_guest_nic(interface)
+
+    def test_guest_legacy_nic(self):
+        self.launch_with_links([{"ifname": "eth0", "address": "00:16:3e:12:34:56"}])
+        self.assert_guest_nic("eth0")
+
+    def test_guest_two_nics_match_mac_not_position(self):
+        self.launch_with_links([{"ifname": "eth0", "address": "00:16:3e:ab:cd:ef"},
+                                {"ifname": "enp5s0", "address": "00:16:3E:12:34:56"}],
+                               mac="00:16:3E:12:34:56\n")
+        self.assert_guest_nic("enp5s0")
+
+    def test_guest_missing_or_ambiguous_nic_refused(self):
+        for links in ([], [{"ifname": "eth0", "address": "00:16:3e:ab:cd:ef"}],
+                      [{"ifname": name, "address": "00:16:3e:12:34:56"}
+                       for name in ("eth0", "enp5s0")]):
+            with self.subTest(links=links):
+                self.calls.clear()
+                with self.assertRaisesRegex(RuntimeError, "unique guest NIC"):
+                    self.launch_with_links(links)
+                self.assertFalse(any(call[3:6] in (("ip", "link", "set"), ("ip", "addr", "replace"),
+                                                  ("ip", "route", "replace")) for call in self.calls))
+
+    def test_guest_hostile_nic_name_refused_before_mutation(self):
+        for name in ("enp5s0;id", "$(id)", "-eth0", "eth 0", "eth0\n", "../eth0", "eth0@peer",
+                     "eth0.100", "a" * 16, "", None, "éth0"):
+            with self.subTest(name=name):
+                self.calls.clear()
+                with self.assertRaisesRegex(RuntimeError, "guest interface name"):
+                    self.launch_with_links([{"ifname": name, "address": "00:16:3e:12:34:56"}])
+                self.assertFalse(any(call[3:5] == ("ip", "addr") or call[3:6] == ("ip", "link", "set")
+                                     for call in self.calls))
+
+    def test_guest_ip_mutation_failure_refuses_before_next_step(self):
+        name = self.spike.name(0)
+        prefix = ("exec", name, "--", "ip")
+        for failing, later in ((("link", "set"), (("addr", "replace"), ("route", "replace"))),
+                               (("addr", "replace"), (("route", "replace"),))):
+            with self.subTest(failing=failing):
+                self.calls.clear()
+                # Fake the process, not vm(), so command()'s own exit check is what refuses.
+                def run(argv, **kwargs):
+                    self.assertEqual(argv[:4], ("incus", "--force-local", "--project", self.spike.project))
+                    args = argv[4:]
+                    self.calls.append(args)
+                    if args == ("info", name):
+                        return result(code=1)
+                    if "cloud-init" in args:
+                        return self.cloud_result
+                    if args == ("config", "get", name, "volatile.eth0.hwaddr"):
+                        return result("00:16:3e:12:34:56\n")
+                    if args == prefix + ("-j", "link"):
+                        return result('[{"ifname":"enp5s0","address":"00:16:3e:12:34:56"}]')
+                    return result(code=int(args[:4] == prefix and args[4:6] == failing))
+                with patch.object(vm.subprocess, "run", side_effect=run), \
+                        self.assertRaisesRegex(RuntimeError, "command failed"):
+                    self.spike.launch(0, name)
+                self.assertTrue(any(call[:4] == prefix and call[4:6] == failing for call in self.calls))
+                self.assertFalse(any(call[:4] == prefix and call[4:6] in later for call in self.calls))
+                self.assertNotIn("env0_vm_agent_boot_ms", self.spike.metrics)
+
+    def test_guest_invalid_mac_or_link_inventory_refused(self):
+        for mac in ("", "00:16:3e:12:34:56\n00:16:3e:ab:cd:ef", "--help", "not-a-mac"):
+            with self.subTest(mac=mac), self.assertRaisesRegex(RuntimeError, "guest NIC MAC"):
+                self.launch_with_links([], mac)
+        for links in ({}, [None], [{"address": None}], "not-an-array"):
+            with self.subTest(links=links), self.assertRaisesRegex(RuntimeError, "guest link inventory"):
+                self.launch_with_links(links)
+
+    def test_guest_cloud_init_done_before_nic_and_included_in_metric(self):
+        elapsed = 0
+        self.cloud_result = result('{"status":"done","extended_status":"done"}')
+        original = self.cloud_result
+        class Completed:
+            returncode = 0
+            @property
+            def stdout(_self):
+                nonlocal elapsed
+                elapsed += 7
+                return original.stdout
+        self.cloud_result = Completed()
+        with patch.object(vm.time, "monotonic", side_effect=lambda: elapsed):
+            self.launch_with_links([{"ifname": "enp5s0", "address": "00:16:3e:12:34:56"}])
+        wait = next(call for call in self.calls if "cloud-init" in call)
+        nic = ("config", "get", self.spike.name(0), "volatile.eth0.hwaddr")
+        self.assertLess(self.calls.index(wait), self.calls.index(nic))
+        self.assertEqual(self.spike.metrics["env0_vm_agent_boot_ms"], 7000)
+
+    def test_guest_cloud_init_failure_refuses_nic_setup(self):
+        for code, status in ((0, '{"status":"disabled","extended_status":"disabled"}'),
+                             (0, '{"status":"disabled","extended_status":"done"}'),
+                             (0, '{"status":"running","extended_status":"running"}'),
+                             (0, '{"status":"not started","extended_status":"not started"}'),
+                             (0, '{"status":"error","extended_status":"error - done"}'),
+                             (0, '{"status":"done","extended_status":"degraded done"}'),
+                             (1, '{"status":"done","extended_status":"done"}'),
+                             (2, '{"status":"done","extended_status":"done"}'),
+                             (124, ''), (137, ''), (127, ''), (0, '{"status":"done"}'),
+                             (0, '{}'), (0, '[]'), (0, 'bad-json')):
+            with self.subTest(code=code, status=status):
+                self.calls.clear()
+                self.cloud_result = result(status, code)
+                with self.assertRaises((RuntimeError, ValueError)):
+                    self.launch_with_links([])
+                self.assertTrue(any("cloud-init" in call for call in self.calls))
+                self.assertFalse(any("volatile.eth0.hwaddr" in call or "ip" in call for call in self.calls))
+                self.assertNotIn("env0_vm_agent_boot_ms", self.spike.metrics)
+
     def test_agent_first_boot_reboot_can_exceed_180_seconds(self):
         elapsed = 0
         probes = []
@@ -358,6 +511,13 @@ class Safety(unittest.TestCase):
         def guest(*args, **kw):
             if args[0] == "info":
                 return result(code=1)
+            if "cloud-init" in args:
+                # Live exec fails until the agent is up, so the barrier must follow readiness.
+                return result(code=1) if elapsed < 302 else self.cloud_result
+            if args == ("config", "get", self.spike.name(0), "volatile.eth0.hwaddr"):
+                return result("00:16:3e:12:34:56\n")
+            if args == ("exec", self.spike.name(0), "--", "ip", "-j", "link"):
+                return result('[{"ifname":"enp5s0","address":"00:16:3e:12:34:56"}]')
             if args == ("exec", self.spike.name(0), "--", "true"):
                 probes.append(elapsed)
                 return result(code=int(elapsed < 302))
@@ -1289,9 +1449,13 @@ class Safety(unittest.TestCase):
                          "`qemu-system-common`", "pin must equal the installed `qemu-system-common`",
                          "`Inst … [old]`", "SPICE is a Recommends of `qemu-system-x86`",
                          "`libspice-server1`", "`ubuntu-virt`", "`libgbm1`", "`libepoxy0`", "`libvirglrenderer1`",
-                         "`env*_vm_agent_boot_ms` includes the seeding reboot", "600 seconds"):
+                         "`env*_vm_agent_boot_ms` includes the seeding reboot, the cloud-init completion wait and static-address setup",
+                         "600 seconds", "Any cloud-init WARNING turns the run into `degraded done` with exit 2, and that is refused",
+                         "Read the cause from the `recoverable_errors` and `errors` keys of that command's JSON. It lands in `commands.private.jsonl`, because `command()` logs every call even when its exit status is not checked.",
+                         "Each VM can now stay silent for about 1,225 seconds (600 s readiness plus 620 s barrier) before it is refused; any operator dead-man interval for run 4 must exceed that."):
             self.assertIn(required, prose)
         self.assertNotIn("/noble/", runbook)
+        self.assertNotIn("includes the seeding reboot as well as static-address setup", prose)
 
     def test_runbook_dnsmasq_existing_version_and_manual_mark(self):
         runbook = Path(os.environ.get("SANDBOX_VM_RUNBOOK", ROOT / "docs/deployment/sandbox-vm-spike.md")).read_text()
@@ -1327,7 +1491,39 @@ def mutations():
     sources = {"core": core, "measure": measurements,
                "runbook": (ROOT / "docs/deployment/sandbox-vm-spike.md").read_text(),
                "index": (ROOT / "docs/INDEX.md").read_text()}
+    readiness = ('        deadline = time.monotonic() + 600\n        while time.monotonic() < deadline:\n'
+                 '            if self.vm("exec", name, "--", "true", check=False).returncode == 0:\n'
+                 '                break\n            time.sleep(2)\n        else:\n'
+                 '            raise RuntimeError("guest agent boot timed out")\n')
+    barrier = ('        # Agent readiness precedes cloud-init; do not race its network setup.\n'
+               '        cloud = self.vm("exec", name, "--", "timeout", "--kill-after=5", "600",\n'
+               '                        "cloud-init", "status", "--wait", "--format", "json", timeout=620, check=False)\n'
+               '        require(cloud.returncode == 0, "guest cloud-init completion failed")\n'
+               '        status = json.loads(cloud.stdout)\n'
+               '        require(isinstance(status, dict) and status.get("status") == "done"\n'
+               '                and status.get("extended_status") == "done", "guest cloud-init not cleanly done")\n')
     changes = [
+        ("guest cloud-init barrier before agent readiness", "core", readiness + barrier, barrier + readiness, "test_agent_first_boot_reboot_can_exceed_180_seconds"),
+        ("guest link-up failure ignored", "core", '"ip", "link", "set", "dev", interface, "up")', '"ip", "link", "set", "dev", interface, "up", check=False)', "test_guest_ip_mutation_failure_refuses_before_next_step"),
+        ("guest address failure ignored", "core", 'str(network.network.prefixlen), "dev", interface)', 'str(network.network.prefixlen), "dev", interface, check=False)', "test_guest_ip_mutation_failure_refuses_before_next_step"),
+        ("guest interface name shortened to 14 characters", "core", '[A-Za-z0-9_-]{0,14}', '[A-Za-z0-9_-]{0,13}', "test_guest_predictable_nic"),
+        ("guest interface name admits dot", "core", '[A-Za-z0-9_-]{0,14}', '[A-Za-z0-9_.-]{0,14}', "test_guest_hostile_nic_name_refused_before_mutation"),
+        ("guest cloud-init barrier removed", "core", '        cloud = self.vm("exec", name, "--", "timeout", "--kill-after=5", "600",\n                        "cloud-init", "status", "--wait", "--format", "json", timeout=620, check=False)\n        require(cloud.returncode == 0, "guest cloud-init completion failed")\n        status = json.loads(cloud.stdout)\n        require(isinstance(status, dict) and status.get("status") == "done"\n                and status.get("extended_status") == "done", "guest cloud-init not cleanly done")', '        pass', "test_guest_cloud_init_done_before_nic_and_included_in_metric"),
+        ("guest cloud-init timeout removed", "core", '"timeout", "--kill-after=5", "600",', '"env",', "test_guest_cloud_init_done_before_nic_and_included_in_metric"),
+        ("guest cloud-init host timeout shortened", "core", '"json", timeout=620, check=False)', '"json", timeout=60, check=False)', "test_guest_cloud_init_done_before_nic_and_included_in_metric"),
+        ("guest cloud-init failure exit ignored", "core", 'require(cloud.returncode == 0, "guest cloud-init completion failed")', 'pass', "test_guest_cloud_init_failure_refuses_nic_setup"),
+        ("guest cloud-init non-done state accepted", "core", 'status.get("status") == "done"', 'True', "test_guest_cloud_init_failure_refuses_nic_setup"),
+        ("guest cloud-init degraded state accepted", "core", 'status.get("extended_status") == "done"', 'True', "test_guest_cloud_init_failure_refuses_nic_setup"),
+        ("guest predictable NIC regresses to eth0", "core", '"dev", interface)', '"dev", "eth0")', "test_guest_predictable_nic"),
+        ("guest legacy NIC forced to predictable name", "core", 'interface = matches[0].get("ifname")', 'interface = "enp5s0"', "test_guest_legacy_nic"),
+        ("guest NIC picked by position instead of MAC", "core", 'matches = [link for link in links if link["address"].lower() == mac]', 'matches = links[:1]', "test_guest_two_nics_match_mac_not_position"),
+        ("guest ambiguous MAC accepted", "core", 'require(len(matches) == 1, "unique guest NIC not established")', 'require(len(matches) >= 1, "unique guest NIC not established")', "test_guest_missing_or_ambiguous_nic_refused"),
+        ("guest missing MAC falls back to first NIC", "core", 'matches = [link for link in links if link["address"].lower() == mac]', 'matches = [link for link in links if link["address"].lower() == mac] or links[:1]', "test_guest_missing_or_ambiguous_nic_refused"),
+        ("guest hostile interface validation removed", "core", 'isinstance(interface, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,14}", interface)', 'True', "test_guest_hostile_nic_name_refused_before_mutation"),
+        ("guest malformed MAC accepted", "core", 're.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac)', 'True', "test_guest_invalid_mac_or_link_inventory_refused"),
+        ("guest malformed inventory validation removed", "core", 'isinstance(links, list) and all(isinstance(link, dict)\n                and isinstance(link.get("address"), str) for link in links)', 'True', "test_guest_invalid_mac_or_link_inventory_refused"),
+        ("guest link left down", "core", 'self.vm("exec", name, "--", "ip", "link", "set", "dev", interface, "up")', 'pass', "test_guest_predictable_nic"),
+        ("guest route interface omitted", "core", 'str(network.ip),\n                "dev", interface)', 'str(network.ip))', "test_guest_two_nics_match_mac_not_position"),
         ("config ID preflight accepts mutable tag", "core", '            require(pinned_image(image),', '            require(True,', "test_config_image_pins_additive_in_preflight"),
         ("host admission accepts mutable tag", "core", 'and pinned_image(tail[image_index])', 'and True', "test_host_run_caps_prefix_label_expiry_and_exec_ownership"),
         ("abbreviated config ID admitted at preflight", "core", 'r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{64}"', 'r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{12,64}"', "test_config_image_pins_additive_in_preflight"),
@@ -1535,7 +1731,12 @@ def mutations():
         ("Opus 5 changed existing package plan omitted", "runbook", '`Inst … [old]`', 'a package plan', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
         ("Opus 5 SPICE Recommends source changed", "runbook", 'SPICE is a Recommends of `qemu-system-x86`', 'SPICE is a Recommends of `incus`', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
         ("Opus 5 dependency guidance omitted", "runbook", '`libspice-server1`', 'other dependencies', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
-        ("Opus 2 boot metric reboot guidance omitted", "runbook", '`env*_vm_agent_boot_ms` includes the seeding reboot', 'Boot metric excludes the reboot', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("Opus 2 boot metric reboot guidance omitted", "runbook", '`env*_vm_agent_boot_ms` includes the seeding reboot, the cloud-init completion\nwait and static-address setup', 'Boot metric excludes the reboot', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("review 3 stale boot metric claim restored", "runbook", '`env*_vm_agent_boot_ms` includes the seeding reboot, the cloud-init completion\nwait and static-address setup', '`env*_vm_agent_boot_ms` includes the seeding reboot, the cloud-init completion\nwait and static-address setup. It includes the seeding reboot as well as static-address\nsetup', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("review 3 degraded-done refusal omitted", "runbook", 'Any cloud-init WARNING turns the run into\n`degraded done` with exit 2, and that is refused', 'Warnings are tolerated', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("review 3 cloud-init cause location omitted", "runbook", '`recoverable_errors` and `errors` keys', 'output', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("review 3 private log for unchecked exit omitted", "runbook", 'because `command()` logs every call even when\nits exit status is not checked', 'when logged', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("review 3 silent stretch understated", "runbook", 'about 1,225 seconds (600 s readiness plus 620 s\nbarrier)', 'about 600 seconds', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
         ("Opus 2 runbook deadline shortened", "runbook", '600 seconds', '180 seconds', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
         ("Opus unpinned QEMU version regex", "core", 'args.qemu_modules_version and re.fullmatch(r"[0-9][A-Za-z0-9.+:~_-]*", args.qemu_modules_version)', 'args.qemu_modules_version', "test_qemu_modules_version_required_before_mutation"),
         ("Codex wrong nft address family", "core", 'command("nft", "delete", "table", "inet", entry["table"])', 'command("nft", "delete", "table", "ip", entry["table"])', "test_every_journaled_reversal_obeys_binary_grammar"),

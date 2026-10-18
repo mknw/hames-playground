@@ -97,6 +97,25 @@ An Incus-compatible `incus-agent.service` and its virtio/vsock support must be
 provided by that package/base combination. Distribution support is a Linux
 boot-validation obligation below, not an offline test claim.
 
+After package configuration, customization discovers cloud-init units from the
+guest's `/usr/lib/systemd/system` or `/lib/systemd/system`. It accepts exactly
+one complete layout: legacy `cloud-init.service`, or newer
+`cloud-init-main.service` plus `cloud-init-network.service`. Missing, partial
+and mixed layouts are refused with the unit names found. It also requires
+`cloud-init-local.service`, `cloud-config.service`, `cloud-final.service`,
+`cloud-init.target`, `incus-agent.service` and `docker.service` before enabling
+any units. The static `cloud-init.target` is pulled in by cloud-init's generator;
+only services are explicitly enabled. A failed enable aborts assembly.
+`guest-inventory.json` records the units passed to the successful
+`systemctl enable` in `enabled_units`; boot validation confirms their state.
+Assembly refuses any recorded list outside the two supported layouts, and the
+existing manifest hashes that inventory. CLI arguments and
+the version-1 lock are unchanged, so reviewed locks can be reused with a fresh
+work directory. On a layout refusal, inspect the pinned guest package/base
+closure rather than skipping units. After merge, rerun `build --apply` on the
+authorized disposable Linux runner and compare the recorded list with the
+guest units before accepting boot readiness.
+
 The sandbox flavours must already be built from reviewed source in a separate
 process. The repo's current `rootfs/Dockerfile*` use mutable upstream package
 repositories; this pipeline does **not** call those Dockerfiles or claim their
@@ -249,6 +268,9 @@ guest Python. Shell sections execute against fake roots and argv-recording
 shims, including the real dockerd fragment. They do not run Docker or boot a VM.
 
 The committed `mutations()` matrix names each edit and its discriminating test.
+The unit-layout checks cover all eight legacy/main/network combinations,
+both unit-file directories, each missing common unit/target, and enable failure;
+mutations also prove selection and inventory recording cannot silently stop.
 It retains all 22 authored mutations and adds stage-entry refusals for image
 identity and disk checks, archive structure, private modes, environment and
 provenance, guest loads/tags/store, adoption and clone cleanup. Every mutation

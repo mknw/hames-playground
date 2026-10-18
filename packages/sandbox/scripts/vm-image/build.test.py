@@ -88,7 +88,7 @@ class Pipeline(unittest.TestCase):
         if name == "guestfish":
             Path(argv[-1]).write_text(json.dumps({"images": {f: self.pin for f in vm.FLAVOURS},
                 "packages": {p["name"]: p["version"] for p in self.lock["packages"]},
-                "docker_driver": "overlay2", "machine_id_state": "uninitialized", "ssh_host_keys": []}))
+                "enabled_units": vm.UNIT_LAYOUTS[1], "docker_driver": "overlay2", "machine_id_state": "uninitialized", "ssh_host_keys": []}))
             return b""
         self.fail("unapproved builder command")
 
@@ -338,6 +338,12 @@ class Pipeline(unittest.TestCase):
     def test_build_wrong_guest_image_refused(self):
         self.inventory_refused(lambda v: v['images'].update(base='sha256:' + 'f' * 64), 'preload inventory')
 
+    def test_build_mixed_enabled_units_refused(self):
+        self.inventory_refused(lambda v: v.update(enabled_units=[*vm.UNIT_LAYOUTS[0], 'cloud-init-main.service']), 'enabled units')
+
+    def test_build_missing_enabled_units_refused(self):
+        self.inventory_refused(lambda v: v.pop('enabled_units'), 'enabled units')
+
     def test_build_wrong_guest_package_refused(self):
         self.inventory_refused(lambda v: v['packages'].update({'docker.io': 'wrong'}), 'package versions')
 
@@ -463,6 +469,10 @@ class Pipeline(unittest.TestCase):
             self.lock['flavours'][flavour] = {'path': path.name, 'sha256': vm.digest(path), 'image_id': pin}
         self.write_lock()
         vm.main(['verify', '--apply', '--lock', str(self.lock_path), '--work-dir', str(self.work)])
+        enabled_units = ['incus-agent.service', 'docker.service', 'cloud-init-local.service',
+                         'cloud-config.service', 'cloud-final.service',
+                         'cloud-init-main.service', 'cloud-init-network.service']
+        (self.work / 'enabled-units.txt').write_text('\n'.join(enabled_units) + '\n')
         def output(argv, **kw):
             if argv[0] == 'dpkg-query':
                 return ''.join(p['name'] + '\t1.2.3\n' for p in self.lock['packages'])
@@ -476,6 +486,7 @@ class Pipeline(unittest.TestCase):
             with patch.object(subprocess, 'check_output', side_effect=output), patch.object(subprocess, 'run') as child:
                 exec(compile(script, 'guest-script', 'exec'), {})
                 self.assertEqual(json.loads(Path('inventory.json').read_text()).get('docker_driver'), driver)
+                self.assertEqual(json.loads(Path('inventory.json').read_text()).get('enabled_units'), enabled_units)
                 return [call.args[0] for call in child.call_args_list]
         finally:
             os.chdir(old)
@@ -504,7 +515,7 @@ class Pipeline(unittest.TestCase):
         source = (vm.HERE / 'customize.sh').read_text()
         section = source[source.index(start):source.index(end, source.index(start))]
         import re
-        section = re.sub(r'/(?:usr|etc|opt|var)/', lambda m: str(guest) + m.group(), section)
+        section = re.sub(r'/(?:usr|lib|etc|opt|var)/', lambda m: str(guest) + m.group(), section)
         return subprocess.run(['sh', '-c', 'set -eu\n' + prelude + '\n' + section],
                               cwd=guest / 'opt/vm-image', capture_output=True, text=True,
                               env={**os.environ, 'PATH': str(guest / 'bin') + ':' + os.environ['PATH']})
@@ -527,10 +538,90 @@ class Pipeline(unittest.TestCase):
         child = self.shell_section('# Refuse site configuration', 'dockerd --config-file', guest)
         self.assertNotEqual(child.returncode, 0)
 
+    def guest_units(self, layout, directory='usr/lib/systemd/system', missing=None, enable_status=0, masked=None):
+        guest = self.fake_root()
+        units = guest / directory
+        units.mkdir(parents=True)
+        common = ['incus-agent.service', 'docker.service', 'cloud-init-local.service',
+                  'cloud-config.service', 'cloud-final.service']
+        for unit in [*common, 'cloud-init.target', *layout]:
+            if unit == masked:
+                (units / unit).symlink_to('/dev/null')
+            elif unit != missing:
+                (units / unit).write_text('[Unit]\n')
+        agent = guest / 'bin/incus-agent'
+        agent.write_text('#!/bin/sh\nexit 0\n')
+        agent.chmod(0o700)
+        systemctl = guest / 'bin/systemctl'
+        systemctl.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > systemctl-call\nexit '
+                             + str(enable_status) + '\n')
+        systemctl.chmod(0o700)
+        child = self.shell_section('# The package/base', '# Provisioning owns', guest)
+        return child, guest / 'opt/vm-image', [*common, *layout]
+
+    def test_guest_legacy_cloud_init_units(self):
+        child, work, expected = self.guest_units(['cloud-init.service'], 'lib/systemd/system')
+        self.assertEqual(child.returncode, 0, child.stderr)
+        self.assertTrue((work / 'systemctl-call').is_file())
+        self.assertEqual((work / 'systemctl-call').read_text().splitlines(), ['enable', *expected])
+        self.assertTrue((work / 'enabled-units.txt').is_file())
+        self.assertEqual((work / 'enabled-units.txt').read_text().splitlines(), expected)
+
+    def test_guest_new_cloud_init_units(self):
+        child, work, expected = self.guest_units(['cloud-init-main.service', 'cloud-init-network.service'])
+        self.assertEqual(child.returncode, 0, child.stderr)
+        self.assertTrue((work / 'systemctl-call').is_file())
+        self.assertEqual((work / 'systemctl-call').read_text().splitlines(), ['enable', *expected])
+        self.assertTrue((work / 'enabled-units.txt').is_file())
+        self.assertEqual((work / 'enabled-units.txt').read_text().splitlines(), expected)
+
+    def test_guest_invalid_cloud_init_layouts_refused(self):
+        from itertools import combinations
+        variants = ['cloud-init.service', 'cloud-init-main.service', 'cloud-init-network.service']
+        # All eight combinations: the two accepted layouts are tested above.
+        for count in range(4):
+            for layout in combinations(variants, count):
+                if list(layout) in ([variants[0]], variants[1:]):
+                    continue
+                with self.subTest(layout=layout), tempfile.TemporaryDirectory() as directory:
+                    self.root = Path(directory)
+                    child, work, _ = self.guest_units(layout)
+                    self.assertNotEqual(child.returncode, 0)
+                    self.assertIn('cloud-init unit layout', child.stderr)
+                    for unit in layout:
+                        self.assertIn(unit, child.stderr)
+                    self.assertFalse((work / 'systemctl-call').exists())
+                    self.assertFalse((work / 'enabled-units.txt').exists())
+
+    def test_guest_partial_common_units_refused(self):
+        for missing in ('incus-agent.service', 'docker.service', 'cloud-init-local.service',
+                        'cloud-config.service', 'cloud-final.service', 'cloud-init.target'):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as directory:
+                self.root = Path(directory)
+                child, work, _ = self.guest_units(['cloud-init.service'], missing=missing)
+                self.assertNotEqual(child.returncode, 0)
+                self.assertIn(missing, child.stderr)
+                self.assertFalse((work / 'systemctl-call').exists())
+                self.assertFalse((work / 'enabled-units.txt').exists())
+
+    def test_guest_masked_vendor_unit_refused(self):
+        for masked in ('cloud-init-main.service', 'docker.service'):
+            with self.subTest(masked=masked), tempfile.TemporaryDirectory() as directory:
+                self.root = Path(directory)
+                child, work, _ = self.guest_units(
+                    ['cloud-init-main.service', 'cloud-init-network.service'], masked=masked)
+                self.assertNotEqual(child.returncode, 0)
+                self.assertFalse((work / 'systemctl-call').exists())
+
+    def test_guest_unit_enable_failure_refused(self):
+        child, work, _ = self.guest_units(['cloud-init.service'], enable_status=1)
+        self.assertNotEqual(child.returncode, 0)
+        self.assertFalse((work / 'enabled-units.txt').exists())
+
     def test_guest_cleanup_and_clone_inventory(self):
         guest = self.fake_root()
         work = guest / 'opt/vm-image'
-        for name in ('input.deb', 'base.tar', 'dockerd.log', 'empty-daemon.json'):
+        for name in ('input.deb', 'base.tar', 'dockerd.log', 'empty-daemon.json', 'enabled-units.txt'):
             (work / name).write_text('private input')
         (work / 'inventory.json').write_text('{}')
         (guest / 'etc/machine-id').write_text('a' * 32)
@@ -549,7 +640,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(child.returncode, 0, child.stderr)
         self.assertTrue((work / 'cloud-call').is_file())
         self.assertEqual((work / 'cloud-call').read_text().strip(), 'clean --logs --machine-id')
-        for name in ('input.deb', 'base.tar', 'dockerd.log', 'empty-daemon.json'):
+        for name in ('input.deb', 'base.tar', 'dockerd.log', 'empty-daemon.json', 'enabled-units.txt'):
             self.assertFalse((work / name).exists(), name)
         self.assertEqual(list((guest / 'etc/ssh').glob('ssh_host_*')), [])
         self.assertFalse((guest / 'var/lib/docker/engine-id').exists())
@@ -761,6 +852,7 @@ class Pipeline(unittest.TestCase):
         # child-process shim. Never execute the guest shell against the host.
         scripts = re_scripts((vm.HERE / "customize.sh").read_text())
         vm.main(["verify", "--apply", "--lock", str(self.lock_path), "--work-dir", str(self.work)])
+        (self.work / 'enabled-units.txt').write_text('cloud-init.service\n')
         def output(argv, **kwargs):
             if argv[0] == "dpkg-query":
                 if "-f=${Version}" in argv:
@@ -826,6 +918,8 @@ def mutations():
         raise RuntimeError("green baseline required\n" + baseline.stderr)
     source = SOURCE.read_text()
     changes = [
+        ('enabled unit inventory ignored', 'inventory.get("enabled_units") in UNIT_LAYOUTS', 'True', 'test_build_mixed_enabled_units_refused'),
+        ('enabled unit inventory ignored (missing key)', 'inventory.get("enabled_units") in UNIT_LAYOUTS', 'True', 'test_build_missing_enabled_units_refused'),
         ("save driver inventory omitted", '"docker_driver": driver,', '', "test_save_requires_absolute_docker_and_records_provenance"),
         ("builder tools run from source paths", 'path = work.copy(source, name, record["sha256"])', 'path = source', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
         ("Docker CLI version not recorded", '"version": version}}, indent=2)', '}}, indent=2)', "test_save_requires_absolute_docker_and_records_provenance"),
@@ -903,6 +997,18 @@ def mutations():
             print("RED verified: " + label)
     guest = (vm.HERE / "customize.sh").read_text()
     guest_changes = [
+        ('guest masked vendor unit admitted', 'test -f "/usr/lib/systemd/system/$1" || test -f "/lib/systemd/system/$1"', 'test -e "/usr/lib/systemd/system/$1" || test -e "/lib/systemd/system/$1"', 'test_guest_masked_vendor_unit_refused'),
+        ('guest enabled unit temporary file retained', './empty-daemon.json ./enabled-units.txt', './empty-daemon.json', 'test_guest_cleanup_and_clone_inventory'),
+        ('guest legacy unit directory ignored', ' || test -f "/lib/systemd/system/$1"', '', 'test_guest_legacy_cloud_init_units'),
+        ('guest modern unit directory ignored', 'test -f "/usr/lib/systemd/system/$1" || ', '', 'test_guest_new_cloud_init_units'),
+        ('guest undiscovered units selected', 'if has_unit "$unit"; then', 'if true; then', 'test_guest_legacy_cloud_init_units'),
+        ('guest mixed partial or absent cloud-init admitted', '"${*:-none}" >&2; exit 1', '"${*:-none}" >&2; :', 'test_guest_invalid_cloud_init_layouts_refused'),
+        ('guest missing required unit admitted', 'if ! has_unit "$unit"; then', 'if false; then', 'test_guest_partial_common_units_refused'),
+        ('guest unit enable omitted', 'systemctl enable "$@"', ':', 'test_guest_new_cloud_init_units'),
+        ('guest legacy unit hardcoded', 'systemctl enable "$@"', 'systemctl enable cloud-init.service', 'test_guest_new_cloud_init_units'),
+        ('guest unit enable failure ignored', 'systemctl enable "$@"', 'systemctl enable "$@" || true', 'test_guest_unit_enable_failure_refused'),
+        ('guest selected unit list omitted', 'printf \'%s\\n\' "$@" > enabled-units.txt', ':', 'test_guest_new_cloud_init_units'),
+        ('guest enabled unit inventory omitted', "'enabled_units': units.read().splitlines()", "'enabled_units': []", 'test_all_images_loaded_from_archives_without_pull'),
         ("guest machine state inventory omitted", "inventory['machine_id_state'] = Path('/etc/machine-id').read_text().strip()", "pass", "test_guest_cleanup_and_clone_inventory"),
         ("guest SSH key inventory omitted", "inventory['ssh_host_keys'] = sorted(glob.glob('/etc/ssh/ssh_host_*'))", "pass", "test_guest_cleanup_and_clone_inventory"),
         ("guest Docker data root changed", '--data-root /var/lib/docker', '--data-root /tmp/wrong-store', "test_guest_dockerd_uses_runtime_store"),

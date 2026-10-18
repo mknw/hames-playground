@@ -30,7 +30,30 @@ fi
 test -x /usr/bin/dockerd
 # The package/base must supply the agent unit and virtio/vsock support.
 test -x /usr/libexec/incus/incus-agent || command -v incus-agent
-systemctl enable incus-agent.service docker.service cloud-init-local.service cloud-init.service cloud-config.service cloud-final.service
+# Discover the installed layout, never guess it from a distro/version label.
+has_unit() {
+  test -f "/usr/lib/systemd/system/$1" || test -f "/lib/systemd/system/$1"
+}
+set --
+for unit in cloud-init.service cloud-init-main.service cloud-init-network.service; do
+  if has_unit "$unit"; then
+    set -- "$@" "$unit"
+  fi
+done
+case "$*" in
+  'cloud-init.service' | 'cloud-init-main.service cloud-init-network.service') ;;
+  *) printf 'Unsupported cloud-init unit layout (found: %s)\n' "${*:-none}" >&2; exit 1 ;;
+esac
+set -- incus-agent.service docker.service cloud-init-local.service cloud-config.service cloud-final.service "$@"
+# The target is static: cloud-init-generator pulls it in at boot.
+for unit in "$@" cloud-init.target; do
+  if ! has_unit "$unit"; then
+    printf 'Missing required guest unit: %s\n' "$unit" >&2
+    exit 1
+  fi
+done
+systemctl enable "$@"
+printf '%s\n' "$@" > enabled-units.txt
 # Provisioning owns daemon.json and docker.service.d, including socket activation.
 # Refuse site configuration rather than adopting it.
 test ! -e /etc/docker/daemon.json
@@ -88,11 +111,13 @@ for flavour, actual in images.items():
 packages = dict(line.split('\t', 1) for line in subprocess.check_output(
     ['dpkg-query', '-W', '-f=${Package}\t${Version}\n'], text=True).splitlines())
 with open('inventory.json', 'w') as stream:
-    json.dump({'images': images, 'packages': packages, 'docker_driver': driver}, stream, sort_keys=True)
+    with open('enabled-units.txt') as units:
+        json.dump({'images': images, 'packages': packages, 'docker_driver': driver,
+                   'enabled_units': units.read().splitlines()}, stream, sort_keys=True)
 PY
 cleanup
 trap - EXIT
-rm -f ./*.deb ./*.tar ./dockerd.log ./empty-daemon.json
+rm -f ./*.deb ./*.tar ./dockerd.log ./empty-daemon.json ./enabled-units.txt
 # Remove clone identity and cached cloud-init instance data, never site values.
 cloud-init clean --logs --machine-id
 rm -f /etc/ssh/ssh_host_*

@@ -1819,7 +1819,8 @@ stage_smoke() {
     note "6  Engine >= $MIN_ENGINE, daemon.json safe, deployed Neo4j bridge internal/isolated; bounded egress negatives with positive controls"
     note "7  Cypher RETURN through neo4j-relay:7687 (also with --no-seed)"
     note "9  CPU embedder: one internal POST /v1/embeddings returns 1024 finite dimensions"
-    [[ $files == "$COMPOSE_FILES" ]] || note "10 both clones: running env matches the validated shape; read-only TCP login checks each limited Postgres role"
+    note "10 forwarded metadata rules and persistence; cap-dropped throwaway bridge probe blocked; app healthy before/after"
+    [[ $files == "$COMPOSE_FILES" ]] || note "11 both clones: running env matches the validated shape; read-only TCP login checks each limited Postgres role"
     if ((PROBE_PRIVATE_HEALTH)); then
       note "8  OPT-IN: one authenticated GET small-model /health; may wake a box; no completion or retry"
     else
@@ -1940,9 +1941,16 @@ stage_smoke() {
     fail "9  embedder forward pass failed or returned the wrong dimensions"
     fails=$((fails + 1))
   fi
+  if (cd "$APP_DIR" && sudo env COMPOSE_FILE="$files" COMPOSE_PROFILES="$COMPOSE_PROFILE" \
+    python3 scripts/metadata-egress.py --docker-user-only --smoke); then
+    ok "10 forwarded metadata denied; persistence enabled; app stays healthy"
+  else
+    fail "10 forwarded metadata policy/persistence/probe failed or inconclusive"
+    fails=$((fails + 1))
+  fi
   if [[ $files != "$COMPOSE_FILES" ]]; then
-    if vps_check --clones; then ok "10 both clones use their configured limited database roles and namespaces"; else
-      fail "10 clone runtime or limited-role check failed or inconclusive"
+    if vps_check --clones; then ok "11 both clones use their configured limited database roles and namespaces"; else
+      fail "11 clone runtime or limited-role check failed or inconclusive"
       fails=$((fails + 1))
     fi
   fi

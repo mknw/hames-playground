@@ -681,6 +681,44 @@ model. No completion or retry is made. See the
 [probe scope](testing/neo4j-egress.md#existing-deployment-smoke-432-g20-rows-3-4-and-10)
 and [dump-first Engine-upgrade runbook](deployment/docker-engine-upgrade.md).
 
+Before admitting containers, install the [forwarded-only metadata policy and
+its opt-in persistence unit](deployment/egress-design.md#forwarded-only-deployment-mode-676)
+from a reviewed pinned artifact:
+
+```sh
+python3 scripts/metadata-egress.py --docker-user-only --persist # offline preview
+sudo python3 scripts/metadata-egress.py --docker-user-only --apply --persist
+sudo systemctl start vps-metadata-egress.service
+sudo python3 scripts/metadata-egress.py --docker-user-only --check # read-only
+```
+
+This mode denies the reviewed IPv4/IPv6 metadata inventory and conntrack
+original destinations in `DOCKER-USER` only; host `INPUT`/`OUTPUT` and host
+metadata access retain their existing policy (`scripts/metadata-egress.py:198`,
+`:427`). `--only smoke` checks the installed rules and persistence, attempts a
+three-second TCP connection to `169.254.169.254:80` from a throwaway default-
+bridge container with all capabilities dropped, and requires app liveness both
+before and after (`scripts/bootstrap-vps.sh:1945`; `scripts/metadata-egress.py:276`).
+It uses the local app image without pulling, makes no metadata HTTP request,
+and needs no public internet or private-tier box. A runtime error fails smoke;
+an endpoint timeout alone is not packet proof. Dual-stack synthetic packet,
+counter and reboot/restart evidence remains operator work.
+
+Docker **will** auto-start restart-policy containers before an After=docker.service
+unit runs. Persistence now enables a required Before=docker.service seed that
+creates DOCKER-USER in both families if missing and inserts the same tagged denies;
+the After unit remains the strict parent/rule readback. This closes the firewall
+window in the ordering design; a real throwaway-host boot/restart trial remains
+required before relying on it. Quiesce workloads during firewall maintenance,
+reapply and verify both units and families before admission. Smoke requires an
+increase in the tagged IPv4 DROP packet counter, plus health before and after.
+Forwarded WireServer TCP 80/32526 is denied; host metadata and DNS 53 stay unchanged.
+See the [gap-free replacement and console recovery procedure](deployment/egress-design.md#operator-adoption-and-temporary-rule-replacement)
+and [policy upgrade procedure](deployment/app-upgrade.md#metadata-policy-upgrade).
+Undo is `--docker-user-only --apply --remove`: it removes only journaled exact
+rules/files/enablement, never a saved full table. Restore interim/manual denies
+first; an upgrade must not remove the active denies without that coverage.
+
 Run all of it yourself before inviting anyone, from a browser that has never
 seen the host.
 

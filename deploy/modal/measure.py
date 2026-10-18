@@ -200,7 +200,7 @@ def main() -> int:
     if big:
         os.environ["HAMES_MODAL_SERVER"] = "Qwen27B"  # for ops.py
     scaledown_s = int(os.environ.get("HAMES_MODAL_27B_SCALEDOWN_S" if big else "HAMES_MODAL_SCALEDOWN_S",
-                                     "300" if big else "120"))
+                                     "300"))
 
     cold_budget_s = args.cold_budget_s or (1800 if big else 900)
 

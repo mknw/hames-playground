@@ -154,8 +154,8 @@ def _fake_modal() -> types.ModuleType:
     return fake
 
 
-def _load_27b(**env):
-    """A fresh import of hames_private_27b.py under `env` (the deploy-time variables)."""
+def _load_modal_app(filename, **env):
+    """A fresh fake-SDK import with only the supplied deploy-time overrides."""
     sys.modules["modal"] = _fake_modal()
     sys.modules.pop("vllm_box", None)
     keys = [k for k in os.environ if k.startswith("HAMES_MODAL_")]
@@ -163,7 +163,7 @@ def _load_27b(**env):
     os.environ.update(env)
     try:
         spec = importlib.util.spec_from_file_location(
-            f"hames_private_27b_{len(env)}_{id(env)}", Path(__file__).with_name("hames_private_27b.py"))
+            f"{filename}_{len(env)}_{id(env)}", Path(__file__).with_name(filename))
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
@@ -171,6 +171,21 @@ def _load_27b(**env):
         for k in env:
             os.environ.pop(k, None)
         os.environ.update(saved)
+
+
+def _load_27b(**env):
+    return _load_modal_app("hames_private_27b.py", **env)
+
+
+class SmallModelsBehaviour(unittest.TestCase):
+    def test_scaledown_decorator_matches_pinned_app_default(self):
+        module = _load_modal_app("hames_small_models.py")
+        # modal-pins.test.ts pins the app's warm-window default to 300 seconds.
+        self.assertEqual(module.app.servers[0][1]["scaledown_window"], 300)
+
+    def test_scaledown_override_reaches_decorator(self):
+        module = _load_modal_app("hames_small_models.py", HAMES_MODAL_SCALEDOWN_S="60")
+        self.assertEqual(module.app.servers[0][1]["scaledown_window"], 60)
 
 
 def _chat(content="", **message):

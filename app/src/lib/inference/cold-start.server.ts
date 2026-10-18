@@ -197,8 +197,8 @@ export type WakeBox = 'verda' | 'small'
 export const SMALL_COLD_START_FALLBACK_MS = 30_000
 // Between sub-second warm health checks and the fastest measured cold start (21s).
 export const SMALL_COLD_START_PLAUSIBILITY_FLOOR_MS = 10_000
-/** The small box releases its GPU after 120s idle. */
-export const DEFAULT_SMALL_LLM_SCALEDOWN_SECONDS = 120
+/** The small box releases its GPU after 300s idle. */
+export const DEFAULT_SMALL_LLM_SCALEDOWN_SECONDS = 300
 const SMALL_KEY = Symbol.for('hames-app.small-cold-start')
 interface SmallState {
   lastCompletedAt: number | null

@@ -541,6 +541,7 @@ def measure(spike):
     # Matching content digests are mandatory; never pull/build on the host.
     for image in (spike.args.base_image, spike.args.data_image, spike.args.office_image):
         host = host_docker("inspect", "--type", "image", "--format", '{{.Id}}', image).stdout.strip()
+        require(not image.startswith("sha256:") or host == image, "requested config ID differs from image content")
         for index in range(2):
             guest = spike.remote(index, "inspect", "--type", "image", "--format", '{{.Id}}', image).stdout.strip()
             require(host == guest and host.startswith("sha256:"), "image content mismatch")

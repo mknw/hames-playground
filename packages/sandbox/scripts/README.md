@@ -1,5 +1,9 @@
 # Sandbox smoke scripts
 
+For operator VM image assembly rather than container smoke checks, see the
+[offline image pipeline and pin design](vm-image/README.md). It defaults to a
+pure plan, consumes checksum-pinned local files and has hermetic stage tests.
+
 Live-container smoke checks for `withSandbox(actorCritic(...))`. Complement
 the hermetic vitest tests under `packages/sandbox/__tests__/` — those mock
 `node:child_process.spawn` and the MCP SDK at the lowest seam to stay

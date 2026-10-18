@@ -475,6 +475,14 @@ class Measurement(unittest.TestCase):
                     measure.measure(self.spike)
                 self.assertEqual(self.boundary(), [])
 
+    def test_config_id_must_match_requested_content(self):
+        self.spike.args.base_image = "sha256:" + "b" * 12 + "a" * 52
+        with self.assertRaisesRegex(RuntimeError, "requested config ID"):
+            measure.measure(self.spike)
+        self.spike.args.base_image = self.spike.args.data_image = self.spike.args.office_image = "sha256:" + "b" * 64
+        measure.measure(self.spike)
+        self.assertTrue(self.spike.metrics["no_host_socket"])
+
     def test_isolation_refusals_and_positive_controls_discriminate(self):
         tls, address = self.spike.args.tls_port, self.spike.address
         leaks = {"metadata": ("guest1", "169.254.169.254", 80), "public": ("guest0", "1.1.1.1", 443),

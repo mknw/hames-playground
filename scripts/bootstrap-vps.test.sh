@@ -29,9 +29,9 @@
 set -u
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-SCRIPT="$ROOT/scripts/bootstrap-vps.sh"
+SCRIPT="${BOOTSTRAP_SCRIPT:-$ROOT/scripts/bootstrap-vps.sh}"
 
-if [[ "$(uname -s)" != Linux ]]; then
+if [[ ${1:-} != --clones-only && ${1:-} != --clone-mutations && "$(uname -s)" != Linux ]]; then
   echo "bootstrap-vps.test.sh needs Linux (GNU stat); CI runs it on ubuntu-latest" >&2
   exit 1
 fi
@@ -81,6 +81,21 @@ cat >"$tmproot/bin/docker" <<'SHIM'
 # No daemon. Unless a case sets SHIM_COMPOSE_JSON (a rendered config) or
 # SHIM_COMPOSE=1, `have_compose` is false, so the static paths run.
 args=" $* "
+if [[ ${SHIM_CLONES:-0} == 1 ]]; then
+  printf '%s|%s|%s\n' "${COMPOSE_FILE:-}" "${COMPOSE_PROFILES:-}" "$*" >>"$CLONE_LOG"
+  if [[ $args == *" config "* ]]; then
+    [[ ${SHIM_RENDER_FAIL:-0} == 0 ]] || { echo synthetic-secret >&2; exit 1; }
+    cat "$SHIM_COMPOSE_JSON"
+    exit 0
+  fi
+  if [[ $args == *" up "* ]]; then
+    if [[ $args == *" --remove-orphans "* && $COMPOSE_FILE != *:docker-compose.clones.yaml* ]]; then
+      rm -f "$CLONE_ALIVE"
+    fi
+    exit 0
+  fi
+  exit 1
+fi
 if [[ $args == *" version "* && $args != *" compose "* ]]; then
   echo "29.2.1"
   exit 0
@@ -208,6 +223,196 @@ lib() {
   DRY_RUN=0 INTERACTIVE=0 KEYS_ESCROWED=0 LOCKOUT_CHANGED=0 NO_SEED=0 SSH_PORT=22 SSH_PORT_VERIFIED=0
   F2B_IGNORE="" REF="" KEYS_GENERATED=0
 }
+
+# Portable subset: the real boot decision and validator, inert Docker only.
+# Linux CI runs this with the full suite; macOS lanes use --clones-only.
+clone_tests() {
+  local dir="$tmproot/clones" base='docker-compose.yaml:docker-compose.prod.yaml'
+  local clones="$base:docker-compose.clones.yaml" out rc key file
+  mkdir -p "$dir/release/app" "$dir/release/configs" "$dir/release/scripts" "$dir/dev/app" "$dir/dev/configs"
+  cp "$ROOT/scripts/validate-clones.mjs" "$dir/release/scripts/"
+  for file in docker-compose.yaml docker-compose.prod.yaml docker-compose.clones.yaml docker-compose.dev-sandbox.yaml configs/Caddyfile configs/Caddyfile.dev configs/mcp-config.yaml; do
+    touch "$dir/release/$file"
+  done
+  touch "$dir/release-runtime.env" "$dir/dev-runtime.env"
+  python3 - "$dir" <<'PY'
+import json, pathlib, sys
+p = pathlib.Path(sys.argv[1])
+apps = {}
+for clone, service in [('release', 'app'), ('dev', 'app-dev')]:
+    apps[service] = dict(build={'context': str(p / clone / 'app')}, image='app:' + clone,
+        networks={'app-network': None}, volumes=[dict(type='bind', source=str(p / clone / 'configs'), target='/configs', read_only=True)],
+        environment=dict(VITE_DEV_BYPASS_AUTH='false', SANDBOX_ENVIRONMENT=clone, SANDBOX_CACHE_VOLUME='cache-' + clone,
+            AUTH_REDIRECT_URI=f'https://{clone}.example.invalid/api/auth/callback',
+            AUTH_POST_LOGOUT_REDIRECT_URI=f'https://{clone}.example.invalid/auth/signin',
+            DATA_ENCRYPTION_KEY=clone + '-synthetic-data-' + '0'*32,
+            AUTH_SESSION_SECRET=clone + '-synthetic-session-' + '1'*32,
+            TOKEN_ENCRYPTION_KEY=clone + '-synthetic-token-' + '2'*32,
+            DATABASE_URL=f'postgresql://{clone}_app:synthetic@postgres:5432/app_{clone}'))
+(p / 'good.json').write_text(json.dumps({'x-clone-dev-docker-socket': False, 'services': apps}))
+PY
+  cat >"$dir/good.env" <<ENV
+COMPOSE_FILE=$clones
+DEV_CLONE_PATH=$dir/dev
+DEV_APP_DOMAIN=dev.example.invalid
+RELEASE_RUNTIME_ENV_FILE=$dir/release-runtime.env
+DEV_RUNTIME_ENV_FILE=$dir/dev-runtime.env
+RELEASE_DATABASE_URL=postgresql://release_app:synthetic@postgres:5432/app_release
+DEV_DATABASE_URL=postgresql://dev_app:synthetic@postgres:5432/app_dev
+ENV
+  # All unrelated boot gates are inert. dc, compose_files, clone_preflight,
+  # validator, command selection, and health-service selection are real.
+  clone_boot() (
+    lib "$dir/release"
+    export SHIM_CLONES=1 CLONE_LOG="$dir/calls" CLONE_ALIVE="$dir/app-dev-alive"
+    export SHIM_COMPOSE_JSON="$dir/render.json"
+    : >"$CLONE_LOG"
+    touch "$CLONE_ALIVE"
+    HOSTNAME_ARG=release.example.invalid ACME_EMAIL_ARG=ops@example.invalid
+    assert_engine_supported() { :; }; assert_daemon_isolation() { :; }; assert_gateway_pinned() { :; }
+    env_problems() { :; }; owner_missing() { :; }; reserved_name() { return 1; }
+    escrow_recorded() { :; }; dns_points_here() { :; }; assert_dynamic_tools_off() { :; }
+    rendered_exposure() { :; }; prepare_embedder() { echo PREPARE >>"$CLONE_LOG"; }
+    vps_check() { :; }; wait_state() { echo "WAIT $*" >>"$CLONE_LOG"; }
+    stage_boot
+  )
+  clone_reset() {
+    cp "$dir/good.env" "$dir/release/.env"
+    cp "$dir/good.json" "$dir/render.json"
+  }
+  clone_refused() {
+    local label=$1 result status
+    result=$(clone_boot 2>&1); status=$?
+    if ((status != 0)) && ! grep -q 'compose up\|^PREPARE\|^WAIT' "$dir/calls"; then
+      pass "clones refuses $label before changes"
+    else flunk "clones accepted $label (rc=$status)" "$result"; fi
+    [[ $result != *synthetic-secret* ]] || flunk "clones leaked renderer error"
+  }
+  clone_reset
+  out=$(clone_boot 2>&1); rc=$?
+  if ((rc == 0)) && grep -Fxq "$clones|app|compose up -d" "$dir/calls" &&
+    grep -Fxq 'WAIT app-dev healthy 600' "$dir/calls" && [[ -f $dir/app-dev-alive ]] &&
+    ! grep -q -- '--remove-orphans' "$dir/calls"; then
+    pass "clones boot keeps app-dev in the same project and waits for its health"
+  else flunk "clones boot shape (rc=$rc)" "$out"; fi
+  clone_reset
+  printf 'COMPOSE_FILE=%s:docker-compose.dev-sandbox.yaml\n' "$clones" >>"$dir/release/.env"
+  out=$(clone_boot 2>&1); rc=$?
+  if ((rc == 0)) && grep -Fxq "$clones:docker-compose.dev-sandbox.yaml|app|compose up -d" "$dir/calls"; then
+    pass "clones retains the explicit owner socket overlay"
+  else flunk "clones owner overlay (rc=$rc)" "$out"; fi
+  # Byte-exact legacy argv/environment: no renderer or dev-health operation.
+  printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
+  out=$(clone_boot 2>&1); rc=$?
+  cat >"$dir/default-expected" <<ENV
+PREPARE
+$base|app|compose up -d --remove-orphans
+WAIT postgres healthy 600
+WAIT neo4j healthy 600
+WAIT redis healthy 600
+WAIT embedder healthy 600
+WAIT app healthy 600
+WAIT mcp-gateway running 120
+WAIT doc-convert running 120
+WAIT caddy running 120
+ENV
+  if ((rc == 0)) && cmp -s "$dir/default-expected" "$dir/calls"; then
+    pass "clones default boot command transcript is byte-identical"
+  else flunk "clones default command transcript changed (rc=$rc)" "$(cat "$dir/calls")"; fi
+  for key in DEV_CLONE_PATH DEV_APP_DOMAIN RELEASE_RUNTIME_ENV_FILE DEV_RUNTIME_ENV_FILE RELEASE_DATABASE_URL DEV_DATABASE_URL; do
+    clone_reset
+    python3 - "$dir/release/.env" "$key" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text('\n'.join(s for s in p.read_text().splitlines() if not s.startswith(sys.argv[2] + '=')) + '\n')
+PY
+    clone_refused "missing $key"
+  done
+  for file in docker-compose.clones.yaml scripts/validate-clones.mjs configs/Caddyfile.dev; do
+    clone_reset
+    mv "$dir/release/$file" "$dir/held"
+    clone_refused "missing $file"
+    mv "$dir/held" "$dir/release/$file"
+  done
+  for key in RELEASE_RUNTIME_ENV_FILE DEV_RUNTIME_ENV_FILE; do
+    clone_reset
+    printf '%s=/absent/synthetic.env\n' "$key" >>"$dir/release/.env"
+    clone_refused "absent $key file"
+  done
+  clone_reset
+  cp "$dir/release/scripts/validate-clones.mjs" "$dir/real-validator"
+  printf "process.stdin.resume(); process.stdin.on('end',()=>process.exit(0));\n" >"$dir/release/scripts/validate-clones.mjs"
+  SHIM_RENDER_FAIL=1 clone_refused 'failed render (even if a downstream validator accepts empty input)'
+  mv "$dir/real-validator" "$dir/release/scripts/validate-clones.mjs"
+  for key in DATA_ENCRYPTION_KEY AUTH_SESSION_SECRET TOKEN_ENCRYPTION_KEY DATABASE_URL role database administrator; do
+    clone_reset
+    python3 - "$dir/render.json" "$key" <<'PY'
+import json, pathlib, sys
+p = pathlib.Path(sys.argv[1]); c = json.loads(p.read_text())
+env = c['services']['app-dev']['environment']; key = sys.argv[2]
+if key in ('role', 'database', 'administrator'):
+    old, new = {'role': ('dev_app:', 'release_app:'), 'database': ('/app_dev', '/app_release'), 'administrator': ('dev_app:', 'postgres:')}[key]
+    env['DATABASE_URL'] = env['DATABASE_URL'].replace(old, new)
+else:
+    env[key] = c['services']['app']['environment'][key]
+p.write_text(json.dumps(c))
+PY
+    clone_refused "shared $key"
+  done
+  for shape in "$base" 'docker-compose.yaml:docker-compose.clones.yaml:docker-compose.prod.yaml'; do
+    clone_reset
+    printf 'COMPOSE_FILE=%s\n' "$shape" >>"$dir/release/.env"
+    clone_refused 'partial or reordered overlay opt-in'
+  done
+  for key in DEV_CLONE_PATH DEV_APP_DOMAIN RELEASE_RUNTIME_ENV_FILE DEV_RUNTIME_ENV_FILE RELEASE_DATABASE_URL DEV_DATABASE_URL; do
+    printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
+    grep "^$key=" "$dir/good.env" >>"$dir/release/.env"
+    clone_refused "a lone $key under the single-app setting"
+  done
+  clone_reset
+  printf 'RELEASE_RUNTIME_ENV_FILE=relative.env\n' >>"$dir/release/.env"
+  clone_refused 'relative runtime env file'
+}
+if [[ ${1:-} == --clone-mutations ]]; then
+  python3 - "$SCRIPT" "$0" <<'PY'
+import os, pathlib, subprocess, sys, tempfile
+source, harness = map(pathlib.Path, sys.argv[1:])
+original = source.read_text()
+mutants = [
+    ('overlay-not-applied', '(cd "$APP_DIR" && sudo env COMPOSE_FILE="$files" COMPOSE_PROFILES="$COMPOSE_PROFILE" docker compose "$@" 2>/dev/null)',
+     '(cd "$APP_DIR" && sudo env COMPOSE_FILE="$COMPOSE_FILES" COMPOSE_PROFILES="$COMPOSE_PROFILE" docker compose "$@" 2>/dev/null)'),
+    ('validator-skipped', 'node scripts/validate-clones.mjs >/dev/null', 'cat >/dev/null'),
+    ('orphan-prune-clones', '    run dc up -d\n', '    run dc up -d --remove-orphans\n'),
+    ('default-command-changed', '    run dc up -d --remove-orphans\n', '    run dc up -d\n'),
+    ('half-config-falls-back', 'if [[ -n "$(env_get "$key")" ]]; then', 'if false; then'),
+    ('required-inputs-skipped', 'for key in "${CLONE_INPUTS[@]}"; do\n    [[ -n', 'for key in; do\n    [[ -n'),
+    ('missing-overlay-accepted', 'for path in "${parts[@]}" scripts/validate-clones.mjs configs/Caddyfile configs/Caddyfile.dev;',
+     'for path in scripts/validate-clones.mjs configs/Caddyfile configs/Caddyfile.dev;'),
+    ('render-failure-ignored', '(set -o pipefail; cd "$APP_DIR"', '(set +o pipefail; cd "$APP_DIR"'),
+    ('dev-health-skipped', 'healthy_services+=(app-dev)', ':'),
+]
+baseline = subprocess.run(['bash', str(harness), '--clones-only'], capture_output=True, text=True, timeout=90)
+if baseline.returncode:
+    sys.exit('Baseline failed: ' + baseline.stdout + baseline.stderr)
+with tempfile.TemporaryDirectory() as tmp:
+    for name, old, new in mutants:
+        if original.count(old) != 1:
+            sys.exit('Mutation anchor must occur once: ' + name)
+        changed = pathlib.Path(tmp) / 'bootstrap-vps.sh'
+        changed.write_text(original.replace(old, new))
+        env = {**os.environ, 'BOOTSTRAP_SCRIPT': str(changed)}
+        result = subprocess.run(['bash', str(harness), '--clones-only'], env=env, capture_output=True, text=True, timeout=90)
+        if not result.returncode or 'FAIL clones' not in result.stdout:
+            sys.exit('SURVIVED or invalid mutation: ' + name + '\n' + result.stdout + result.stderr)
+        print('KILLED ' + name, flush=True)
+PY
+  exit $?
+fi
+clone_tests
+if [[ ${1:-} == --clones-only ]]; then
+  ((failures == 0)) || exit 1
+  echo 'all clone checks passed'
+  exit 0
+fi
 
 # ---------------------------------------------------- 1. public_listeners
 tcp_clean='LISTEN 0 4096 0.0.0.0:22 0.0.0.0:*

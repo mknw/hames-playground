@@ -205,6 +205,41 @@ def embeddings():
     checked("docker", "compose", "exec", "-T", "app", "node", "-e", EMBEDDINGS)
 
 
+CLONE_DATABASE = """(async()=>{
+const {Client}=require('node:module').createRequire('/app/.output/server/index.mjs')('pg');
+const url=new URL(process.env.DATABASE_URL);
+const client=new Client({connectionString:process.env.DATABASE_URL,connectionTimeoutMillis:5000});
+try{await client.connect();
+const {rows}=await client.query(`SELECT current_user AS role, current_database() AS database,
+NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls) AS limited
+FROM pg_roles WHERE rolname = current_user`);
+if(rows.length!==1||rows[0].role!==decodeURIComponent(url.username)||
+rows[0].database!==decodeURIComponent(url.pathname.slice(1))||!rows[0].limited)process.exitCode=1;
+}finally{await client.end();}
+})().catch(()=>{process.exitCode=1;});"""
+
+
+def clones():
+    # Config/inspect stay in memory. The TCP login uses the running app's own
+    # DATABASE_URL; neither credentials nor SQL results reach stdout or argv.
+    config = document("docker", "compose", "config", "--format", "json")
+    projects = set()
+    for service, namespace in (("app", "release"), ("app-dev", "dev")):
+        desired = config["services"][service]["environment"]
+        app = container(service)
+        actual = dict(value.split("=", 1) for value in app["Config"]["Env"])
+        require(app["State"]["Running"] is True and app["State"]["Health"]["Status"] == "healthy",
+                "clone app not healthy")
+        projects.add(app["Config"]["Labels"]["com.docker.compose.project"])
+        for key in ("DATABASE_URL", "SANDBOX_ENVIRONMENT", "SANDBOX_CACHE_VOLUME", "DATA_ENCRYPTION_KEY",
+                    "AUTH_SESSION_SECRET", "TOKEN_ENCRYPTION_KEY", "AUTH_REDIRECT_URI", "VITE_DEV_BYPASS_AUTH"):
+            require(bool(desired.get(key)) and actual.get(key) == desired[key], "clone runtime differs from validated configuration")
+        require(actual["SANDBOX_ENVIRONMENT"] == namespace and not actual.get("POSTGRES_PASSWORD"),
+                "clone namespace or administrator credential mismatch")
+        checked("docker", "exec", app["Id"], "node", "-e", CLONE_DATABASE)
+    require(len(projects) == 1, "clones must share one compose project")
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -234,7 +269,7 @@ def private_health():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_mutually_exclusive_group(required=True)
-    for mode in ("daemon", "network", "egress", "relay", "private-health", "embeddings"):
+    for mode in ("daemon", "network", "egress", "relay", "private-health", "embeddings", "clones"):
         modes.add_argument("--" + mode, action="store_true")
     parser.add_argument("--ssh-port", type=int, default=22)
     args = parser.parse_args()
@@ -252,6 +287,8 @@ def main():
             private_health()
         elif args.embeddings:
             embeddings()
+        elif args.clones:
+            clones()
     except Exception as error:
         # Only our fixed labels are safe to print. Library errors may carry
         # a URL, bearer value or Docker-inspect content.

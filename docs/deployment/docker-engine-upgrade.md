@@ -70,7 +70,11 @@ store in place. No step here authorizes an agent to access a live server.
 
 4. Re-run bootstrap's `images,boot` stages at the same pinned commit and normal
    hostname/contact arguments. `images` checks the Engine **before** building;
-   both stages refuse unsafe daemon configuration. After `up`, `boot` inspects
+   both stages refuse unsafe daemon configuration. For two clones, keep PREVIEW
+   §12's complete ordered `COMPOSE_FILE` and app-only inputs in the release
+   checkout's root `.env`; bootstrap validates that shape, retains both apps in
+   one project, and omits orphan pruning. Its clone smoke additionally checks the
+   running environments and each limited database role through read-only logins. After `up`, `boot` inspects
    the actual network reached from this stack's Neo4j container, including its
    internal/isolated flags, members, bridge addresses and routes. A stale or
    unreadable network is a refusal, never silently accepted or downgraded.

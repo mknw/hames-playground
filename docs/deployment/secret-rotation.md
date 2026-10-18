@@ -22,9 +22,11 @@ hostname and ACME arguments as the deployment. The marker hashes the current
 three keys; an old attestation cannot unlock boot (scripts/bootstrap-vps.sh:1368).
 That marker covers the root env key set only; keep a separate escrow record for
 each clone's app-only key set. Recreate containers to load changed environments; `restart` retains the old
-environment. For **every clone-enabled recreate**, including rollback or a
-bootstrap `boot` stage, use PREVIEW §12's preflight below with the deployment's
-production/clone Compose files and profile. A failed render or validator must
+environment. For **every manual clone-enabled recreate**, including rollback, use PREVIEW
+§12's preflight below with the deployment's production/clone Compose files and
+profile. Bootstrap now reads that complete ordered file list from the release
+checkout's root `.env` and runs the validator itself before clone operations;
+`--only boot` preserves both apps and never orphan-prunes in clone mode. A failed render or validator must
 prevent startup: keep `set -o pipefail` and connect validation to the recreate
 (or bootstrap `boot` command with its existing arguments) using `&&`. Never save
 or print rendered configuration; pipe it directly to the validator.
@@ -34,6 +36,11 @@ set -o pipefail
 docker compose config --format json | node scripts/validate-clones.mjs &&
   docker compose up -d --no-build --force-recreate app app-dev
 ```
+
+After recreation, bootstrap `--only smoke --no-seed` also compares both running
+clone environments with the validated config and checks their limited Postgres
+roles with read-only TCP logins. Repeat browser authentication checks for each
+hostname; this does not replace the §12 cross-database grant checks.
 
 For a single app, keep the existing `docker compose up -d --no-build
 --force-recreate app` procedure. Finish with the affected checks below and

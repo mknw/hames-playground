@@ -315,7 +315,78 @@ class Probes(unittest.TestCase):
                 opener.open.assert_not_called()
 
 
+class CloneProbes(unittest.TestCase):
+    def fixture(self):
+        config = {"services": {}}
+        apps = {}
+        for service, namespace in (("app", "release"), ("app-dev", "dev")):
+            env = {key: namespace + "-synthetic-" + key for key in ("DATA_ENCRYPTION_KEY", "AUTH_SESSION_SECRET", "TOKEN_ENCRYPTION_KEY")}
+            env.update(DATABASE_URL=f"postgresql://{namespace}_app:synthetic@postgres:5432/app_{namespace}",
+                       SANDBOX_ENVIRONMENT=namespace, SANDBOX_CACHE_VOLUME="cache-" + namespace,
+                       AUTH_REDIRECT_URI=f"https://{namespace}.example.invalid/api/auth/callback", VITE_DEV_BYPASS_AUTH="false")
+            config["services"][service] = {"environment": env}
+            apps[service] = {"Id": service, "State": {"Running": True, "Health": {"Status": "healthy"}},
+                             "Config": {"Env": [k + "=" + v for k, v in env.items()], "Labels": {"com.docker.compose.project": "synthetic"}}}
+        return config, apps
+
+    def test_clone_runtime_and_read_only_login(self):
+        config, apps = self.fixture()
+        with patch.object(probe, "document", return_value=config) as document, patch.object(probe, "container", side_effect=apps.__getitem__), patch.object(probe, "checked") as checked:
+            probe.clones()
+            document.assert_called_once_with("docker", "compose", "config", "--format", "json")
+            self.assertEqual(checked.call_args_list, [unittest.mock.call("docker", "exec", service, "node", "-e", probe.CLONE_DATABASE) for service in ("app", "app-dev")])
+            checked.side_effect = probe.Refused("limited role login failed")
+            with self.assertRaises(probe.Refused):
+                probe.clones()
+
+    def test_stale_env_unhealthy_missing_app_and_project_mismatch_fail(self):
+        changes = [lambda a: a["app"]["Config"]["Env"].append("DATABASE_URL=postgresql://postgres:synthetic@postgres:5432/hames"),
+                   lambda a: a["app-dev"]["Config"]["Env"].append("SANDBOX_ENVIRONMENT=release"),
+                   lambda a: a["app-dev"]["Config"]["Env"].append("POSTGRES_PASSWORD=synthetic-admin"),
+                   lambda a: a["app-dev"]["Config"]["Labels"].update({"com.docker.compose.project": "other"}),
+                   lambda a: a["app-dev"]["State"]["Health"].update(Status="starting"),
+                   lambda a: a["app-dev"]["State"].update(Running=False),
+                   lambda a: a.pop("app-dev")]
+        for change in changes:
+            config, apps = self.fixture()
+            change(apps)
+            with self.subTest(change=change), patch.object(probe, "document", return_value=config), patch.object(probe, "container", side_effect=apps.__getitem__), patch.object(probe, "checked"), patch.object(sys, "argv", [str(SOURCE), "--clones"]), contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(probe.main(), 1)
+                self.assertNotIn("synthetic-admin", output.getvalue())
+
+    def test_each_key_and_label_must_match_deployed_config(self):
+        config, apps = self.fixture()
+        for key in config["services"]["app"]["environment"]:
+            for actual in ("", "stale-synthetic"):
+                mutated = copy.deepcopy(apps)
+                mutated["app"]["Config"]["Env"].append(key + "=" + actual)
+                with self.subTest(key=key, actual=actual), patch.object(probe, "document", return_value=config), patch.object(probe, "container", side_effect=mutated.__getitem__), patch.object(probe, "checked"), self.assertRaises(probe.Refused):
+                    probe.clones()
+
+    def test_namespace_is_checked_even_when_config_and_runtime_agree(self):
+        config, apps = self.fixture()
+        config["services"]["app-dev"]["environment"]["SANDBOX_ENVIRONMENT"] = "release"
+        apps["app-dev"]["Config"]["Env"].append("SANDBOX_ENVIRONMENT=release")
+        with patch.object(probe, "document", return_value=config), patch.object(probe, "container", side_effect=apps.__getitem__), patch.object(probe, "checked"), self.assertRaises(probe.Refused):
+            probe.clones()
+
+
 class NodePrograms(unittest.TestCase):
+    def test_clone_database_program_rejects_privileged_or_mismatched_login(self):
+        for changes in ({}, {"limited": False}, {"role": "postgres"}, {"database": "hames"}, {"empty": True}, {"error": True}):
+            row = {"role": "release_app", "database": "app_release", "limited": True, **changes}
+            # Execute the shipped JS with only its pg wire seam replaced.
+            prefix = """const Module=require('node:module');const realLoad=Module._load;
+const row=JSON.parse(process.env.SYNTHETIC_ROW);
+Module._load=function(name,...args){if(name!=='pg')return realLoad.call(this,name,...args);
+return {Client:class{constructor(opts){if(opts.connectionString!==process.env.DATABASE_URL)throw Error();}
+async connect(){if(row.error)throw Error();}async end(){}
+async query(sql){if(!sql.trim().startsWith('SELECT ')||!/NOT \\(rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls\\)/.test(sql))throw Error();
+return {rows:row.empty?[]:[row]};}}};};"""
+            output = subprocess.run(["node", "-e", prefix + probe.CLONE_DATABASE], env={**os.environ, "DATABASE_URL": "postgresql://release_app:synthetic@postgres:5432/app_release", "SYNTHETIC_ROW": json.dumps(row)}, text=True, capture_output=True, timeout=10)
+            self.assertEqual(output.returncode, 1 if changes else 0, output.stderr)
+            self.assertEqual(output.stdout + output.stderr, "")
+
     def test_real_tcp_control_reaches_listener_then_refuses_closed_port(self):
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
@@ -434,6 +505,12 @@ class Wiring(unittest.TestCase):
         for failed in ("egress", "relay", "daemon", "embeddings"):
             output = self.shell(body, "0", failed)
             self.assertEqual(output.returncode, 1, output.stdout + output.stderr)
+        clone_body = 'env_get() { [[ $1 != COMPOSE_FILE ]] || echo "$CLONE_COMPOSE_FILES"; }; ' + body
+        output = self.shell(clone_body, "0", "none")
+        self.assertEqual(output.returncode, 0, output.stdout + output.stderr)
+        self.assertIn("PROBE --clones", output.stdout)
+        output = self.shell(clone_body, "0", "clones")
+        self.assertEqual(output.returncode, 1, output.stdout + output.stderr)
         output = self.shell(body.replace('echo ENGINE;', 'refuse "unsupported Engine";'), "0", "none")
         self.assertEqual(output.returncode, 1, output.stdout + output.stderr)
         self.assertNotIn("PROBE", output.stdout)
@@ -467,6 +544,16 @@ class Wiring(unittest.TestCase):
 
 
 MUTATIONS = [
+    ("clone-smoke-wiring", BOOTSTRAP, 'if vps_check --clones;', 'if true;'),
+    ("clone-runtime-drift", SOURCE, 'actual.get(key) == desired[key]', 'True'),
+    ("clone-project", SOURCE, 'len(projects) == 1', 'True'),
+    ("clone-running", SOURCE, 'app["State"]["Running"] is True', 'True'),
+    ("clone-health", SOURCE, 'app["State"]["Health"]["Status"] == "healthy"', 'True'),
+    ("clone-admin-env", SOURCE, 'not actual.get("POSTGRES_PASSWORD")', 'True'),
+    ("clone-namespace", SOURCE, 'actual["SANDBOX_ENVIRONMENT"] == namespace', 'True'),
+    ("clone-cli-dispatch", SOURCE, 'elif args.clones:\n            clones()', 'elif args.clones:\n            pass'),
+    ("clone-database-program", SOURCE, 'CLONE_DATABASE = """' + probe.CLONE_DATABASE + '"""', 'CLONE_DATABASE = "process.exit(0)"'),
+    ("clone-database-login-skipped", SOURCE, 'checked("docker", "exec", app["Id"], "node", "-e", CLONE_DATABASE)', 'pass'),
     ("dump-first", RUNBOOK, "bash scripts/backup-preview.sh", "true"),
     ("daemon-routing", SOURCE, 'config[key] is False', 'True'),
     ("daemon-wiring", BOOTSTRAP, '  assert_daemon_isolation\n', '  : # removed daemon gate\n'),

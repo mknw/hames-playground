@@ -82,6 +82,7 @@ jobs:
         run: |
           shellcheck -x scripts/bootstrap-vps.sh scripts/bootstrap-vps.test.sh scripts/check-docker.sh scripts/check-docker.test.sh
           scripts/bootstrap-vps.test.sh
+          scripts/bootstrap-vps.test.sh --clone-mutations
           scripts/check-docker.test.sh
           python3 scripts/check-vps.test.py
           python3 scripts/check-vps.test.py --mutations

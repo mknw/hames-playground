@@ -68,6 +68,8 @@ for (const theme of ['dark', 'light'] as const) {
     await page.keyboard.press('Enter')
     const menu = page.getByTestId('hitl-inbox-menu')
     await expect(menu).toBeVisible()
+    // Ark transfers focus on an animation frame after the menu becomes visible.
+    await expect(menu).toBeFocused()
     await expect(menu.getByText(`Trip ${HOSTILE}`)).toBeVisible()
     await expect(menu.locator('img')).toHaveCount(0)
     expect(await page.evaluate(() => (window as { __pwned?: number }).__pwned)).toBeUndefined()
@@ -85,6 +87,7 @@ for (const theme of ['dark', 'light'] as const) {
     await trigger.focus()
     await page.keyboard.press('Enter')
     await expect(menu).toBeVisible()
+    await expect(menu).toBeFocused()
     await page.keyboard.press('ArrowDown')
     await page.keyboard.press('Enter')
     await expect(page).toHaveURL(new RegExp(`[?&]c=${id}`))

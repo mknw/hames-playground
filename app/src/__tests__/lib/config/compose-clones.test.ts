@@ -53,7 +53,7 @@ function configuration() {
 
 describe('two built clones, one shared infrastructure (#432 row 8)', () => {
   it('the overlay only adds an app and inherits the shipped built runtime', () => {
-    expect(Object.keys(overlay.services)).toEqual(['app', 'app-dev'])
+    expect(Object.keys(overlay.services)).toEqual(['app', 'app-dev', 'caddy'])
     const dev = overlay.services['app-dev']
     expect(dev.extends).toEqual({ file: 'docker-compose.yaml', service: 'app' })
     expect(dev.build.context).toContain('${DEV_CLONE_PATH:?')

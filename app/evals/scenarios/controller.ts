@@ -152,7 +152,7 @@ export const controllerToolCallScenario: Scenario = {
   title: 'simpleLoop controller — tool-call turn (turn 0)',
   what: 'first turn with an empty history: picks an offered tool and emits args the loop can JSON.parse',
   run: async (ctx) => {
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     const collector = new Collector('eval-controller-toolcall')
     const opts = ctx.opts('controller', collector)
     const action = await b.LoopController(
@@ -214,7 +214,7 @@ export const controllerFinalAnswerScenario: Scenario = {
   title: 'simpleLoop controller — final-answer turn',
   what: 'the answer is already in the turn log: terminates with Return + is_final rather than re-querying',
   run: async (ctx) => {
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     const collector = new Collector('eval-controller-final')
     const opts = ctx.opts('controller', collector)
     const action = await b.LoopController(
@@ -280,7 +280,7 @@ export const controllerToolErrorScenario: Scenario = {
   title: 'simpleLoop controller — tool-error feedback turn',
   what: 'the previous call errored: reacts to the error instead of re-issuing the identical failing call',
   run: async (ctx) => {
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     const collector = new Collector('eval-controller-toolerror')
     const opts = ctx.opts('controller', collector)
     const action = await b.LoopController(
@@ -348,7 +348,7 @@ export const controllerWriteOnReadOnlyScenario: Scenario = {
   title: 'simpleLoop controller — write-shaped request on a read-only graph',
   what: 'asked to change a graph it can only read: answers or reads, never names a tool it does not hold, never sends a write through the read tool (#401)',
   run: async (ctx) => {
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     const collector = new Collector('eval-controller-write-read-only')
     const opts = ctx.opts('controller', collector)
     const offered = new Set([...TOOLS.map((t) => t.name), 'Return', 'expandPreviousResult'])
@@ -448,7 +448,7 @@ export const controllerUnparseableFeedbackScenario: Scenario = {
   title: 'simpleLoop controller — recovers after its own unparseable answer',
   what: 'the previous answer would not parse and was fed back (#437): the next answer is a valid action naming an offered tool, not the empty one replayed in the log',
   run: async (ctx) => {
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     const offered = new Set([...TOOLS.map((t) => t.name), 'Return', 'expandPreviousResult'])
     const checks: Check[] = []
     const collectors: Collector[] = []

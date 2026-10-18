@@ -408,3 +408,7 @@ any provider. Global teardown prints the complete record, including consumed
 deliberate probes; a normal full run has no targets except those deliberate
 `.invalid` probes. `E2E_LIVE=verda` omits the
 backstop and skips these probes.
+
+Scenario 16 checks a private-only deployment with an empty Anthropic key, legacy
+public rows/seeds, refused public selections, and private turn/title/summary calls.
+It remains hermetic and uses the normal app-path runner.

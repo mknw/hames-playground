@@ -57,6 +57,7 @@ import {
  *  `verdaConfigured()` asks about both, so a fixture setting only the first
  *  describes a deployment on which the private position is refused. */
 const ENV_KEYS = [
+  'INFERENCE_TIERS',
   'VERDA_INFERENCE_ENDPOINT',
   'VERDA_INFERENCE_API_KEY',
   'SMALL_LLM_BASE_URL',
@@ -272,5 +273,41 @@ describe('chooseConversationTier', () => {
     await expect(chooseConversationTier('conv-1', 'user-1', 'verda')).rejects.toThrow(
       /self-hosted inference endpoint is not configured/,
     )
+  })
+})
+
+describe('private-only deployment', () => {
+  beforeEach(() => {
+    process.env.INFERENCE_TIERS = 'private'
+    configureVerda()
+  })
+
+  it.each([
+    ['anthropic', 'anthropic'],
+    ['anthropic', 'verda'],
+    [null, 'anthropic'],
+    [null, null],
+    ['unknown', 'anthropic'],
+    ['verda', 'anthropic'],
+  ] as const)('clamps stored tier %s and seed %s to private', (stored, seed) => {
+    expect(resolveTier(stored, seed)).toBe('verda')
+  })
+
+  it('clamps old rows through the asynchronous resolver', async () => {
+    getConversationInferenceTier.mockResolvedValue('anthropic')
+    getStoredInferenceTier.mockResolvedValue('anthropic')
+    expect(await resolveConversationTier('old-conversation', 'user-1')).toBe('verda')
+  })
+
+  it('refuses a public selection before either write', async () => {
+    await expect(chooseConversationTier('conv-1', 'user-1', 'anthropic')).rejects.toThrow(
+      /private inference only/,
+    )
+    expect(setConversationInferenceTier).not.toHaveBeenCalled()
+    expect(setStoredInferenceTier).not.toHaveBeenCalled()
+  })
+
+  it('allows the private selection', async () => {
+    await expect(chooseConversationTier('conv-1', 'user-1', 'verda')).resolves.toBe('verda')
   })
 })

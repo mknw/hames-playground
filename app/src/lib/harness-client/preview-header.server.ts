@@ -31,7 +31,8 @@
 
 import { getAuthenticatedUser } from '../auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
-import { defaultInferenceTier, getStoredInferenceTier } from '../db/user-prefs.server'
+import { getStoredInferenceTier } from '../db/user-prefs.server'
+import { resolveTier } from '../inference/tier.server'
 import { verdaConfigured, type InferenceTier } from '../inference/config.server'
 import { verdaWarmth, type VerdaWarmth } from '../inference/verda-activity.server'
 import {
@@ -203,7 +204,7 @@ export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
     getUsageToday(),
     verdaConfigured() ? probeVerdaReplicas() : Promise.resolve(null),
   ])
-  const tier = stored ?? defaultInferenceTier()
+  const tier = resolveTier(null, stored)
   return {
     tier,
     verdaAvailable: verdaConfigured(),

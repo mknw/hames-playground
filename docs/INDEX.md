@@ -300,3 +300,4 @@ hames-playground/
 ```
 
 - [`testing/neo4j-egress.md`](testing/neo4j-egress.md) — Neo4j relay isolation, digest provenance and opt-in Docker green/red evidence (#241 G13).
+- [`deployment/egress-design.md`](deployment/egress-design.md) — Row 11 egress design: offline-by-default dual-stack metadata rules, service-path preservation, mutation evidence, proposed reboot ordering, and the open staging sandbox/socket decision (#432 G20).

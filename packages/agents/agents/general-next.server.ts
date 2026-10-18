@@ -149,7 +149,7 @@ async function createPatterns(
         'office-data': {
           pattern: doc,
           description:
-            'Read Microsoft 365 mail and file metadata; run code to analyse uploaded files (spreadsheets, CSV, tables), compute sums and totals, and save deliverables in the office sandbox',
+            'Read Microsoft 365 mail and file metadata; run code over uploaded files (spreadsheets, CSV, tables) to compute or analyse them, and save deliverables in the office sandbox',
           capability:
             'Read Microsoft 365 mail and file metadata; compute and create files in the office sandbox. Graph file ingestion is unavailable.',
         },
@@ -163,7 +163,8 @@ async function createPatterns(
         },
         'read-documents': {
           pattern: retrieve,
-          description: 'Search documents already in this conversation',
+          description:
+            'Search uploaded and indexed documents in this conversation and return cited excerpts',
           capability: 'Search this conversation’s Data Stash and return cited excerpts.',
         },
         think: {

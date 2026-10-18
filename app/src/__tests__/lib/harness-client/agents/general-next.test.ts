@@ -248,16 +248,20 @@ describe('general-next composition', () => {
       expect(requests).toHaveBeenCalledTimes(1)
       const body = JSON.parse(String(requests.mock.calls[0][1].body))
       const criteria = body.questions.next_step.criteria as Record<string, string>
-      expect(criteria['office-data']).toContain('run code to analyse uploaded files')
+      expect(criteria['office-data']).toContain('run code over uploaded files')
       expect(criteria['office-data']).toContain('spreadsheets, CSV, tables')
-      expect(criteria['office-data']).toContain('compute sums and totals')
+      expect(criteria['office-data']).toContain('to compute or analyse them')
       expect(criteria['office-data']).toContain('save deliverables')
       expect(
-        ['office-data', 'read-documents', 'info-retrieval'].filter((route) =>
-          /\b(?:comput\w*|analys\w*|analyz\w*|sums?|totals?)\b/i.test(criteria[route]),
+        Object.keys(criteria).filter((route) =>
+          /\b(?:comput\w*|analys\w*|analyz\w*|sums?|totals?|add(?:s|ing)? up|count\w*|spreadsheets?|csv|tables?|deliverables?|sav(?:e|ing))\b/i.test(
+            criteria[route],
+          ),
         ),
       ).toEqual(['office-data'])
-      expect(criteria['read-documents']).toContain('Search documents')
+      expect(criteria['read-documents']).toContain('Search uploaded and indexed documents')
+      expect(criteria['read-documents']).toContain('uploaded')
+      expect(criteria['read-documents']).toContain('cited excerpts')
       expect(criteria['info-retrieval']).toContain('Look things up')
     },
   )

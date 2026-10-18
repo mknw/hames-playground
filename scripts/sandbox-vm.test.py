@@ -11,6 +11,8 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -47,6 +49,7 @@ class Safety(unittest.TestCase):
         self.args.launcher_unit = "sbxs-run-1234.service"
         self.args.incus_version = "1.2.3"
         self.args.dnsmasq_version = "2.90-1"
+        self.args.qemu_modules_version = "1:8.2.2+ds-0synthetic1"
         self.args.network = [ipaddress.IPv4Interface("192.0.2.1/24"),
                              ipaddress.IPv4Interface("198.51.100.1/24")]
         self.args.app_bridge, self.args.uplink = "app0", "uplink0"
@@ -58,6 +61,7 @@ class Safety(unittest.TestCase):
         self.installed = False
         self.regress = False
         self.tables = set()
+        self.ufw_rules = []
 
     def fake(self, *args, **kwargs):
         self.calls.append(args)
@@ -76,7 +80,7 @@ class Safety(unittest.TestCase):
         if args[:2] == ("apt-get", "install"):
             return result()
         if args[:3] == ("apt-get", "--simulate", "install"):
-            return result("Inst incus (1.2.3 synthetic)\nInst incus-client (1.2.3 synthetic)\nInst dnsmasq-base (2.90-1 synthetic)\n")
+            return result("Inst incus (1.2.3 synthetic)\nInst incus-client (1.2.3 synthetic)\nInst dnsmasq-base (2.90-1 synthetic)\nInst qemu-system-modules-spice (1:8.2.2+ds-0synthetic1 synthetic)\nInst qemu-system-modules-opengl (1:8.2.2+ds-0synthetic1 synthetic)\n")
         if args[:2] == ("apt-get", "remove"):
             return result()
         if args[0] in ("iptables-save", "ip6tables-save"):
@@ -95,6 +99,21 @@ class Safety(unittest.TestCase):
                 self.tables.remove(args[4])
             return result()
         if args[0] == "iptables":
+            return result()
+        if args[:3] == ("ufw", "show", "added"):
+            self.assertEqual(kwargs["env"]["LC_ALL"], "C")
+            return result("Added user rules (see 'ufw status' for running firewall):\n" +
+                          ("\n".join(shlex.join(["ufw", *rule[:-2]]) + " comment '" + rule[-1] + "'"
+                                     if rule[-2:-1] == ["comment"] else shlex.join(["ufw", *rule])
+                                     for rule in self.ufw_rules) if self.ufw_rules else "(None)"))
+        if args[:3] == ("ufw", "route", "allow"):
+            self.assertEqual(kwargs["env"]["LC_ALL"], "C")
+            self.ufw_rules.append(list(args[1:]))
+            return result("Rule added\n")
+        if args[:3] == ("ufw", "route", "delete"):
+            self.assertEqual(kwargs["env"]["LC_ALL"], "C")
+            rule = next(rule for rule in self.ufw_rules if rule[:-2] == ["route", *args[3:]])
+            self.ufw_rules.remove(rule)
             return result()
         if args[0] == "incus":
             self.assertEqual(args[1], "--force-local")
@@ -119,7 +138,7 @@ class Safety(unittest.TestCase):
         patch.object(vm, "sshd_fingerprint", return_value="unchanged").start()
         with contextlib.redirect_stdout(io.StringIO()):
             vm.main(["spike", "--apply", "--install", "--state", str(self.root / "success"),
-                     "--ssh-probe", "/synthetic/ssh-witness", "--incus-version", "1.2.3", "--dnsmasq-version", "2.90-1"])
+                     "--ssh-probe", "/synthetic/ssh-witness", "--incus-version", "1.2.3", "--dnsmasq-version", "2.90-1", "--qemu-modules-version", self.args.qemu_modules_version])
         checks = [i for i, call in enumerate(self.calls) if call[0] == "docker" and "inspect" in call]
         install = next(i for i, call in enumerate(self.calls) if call[:2] == ("apt-get", "install") and "--download-only" not in call)
         self.assertTrue(any(i < install for i in checks) and any(i > install for i in checks))
@@ -132,7 +151,7 @@ class Safety(unittest.TestCase):
         patch.object(vm, "sshd_fingerprint", return_value="unchanged").start()
         with self.assertRaises(RuntimeError), contextlib.redirect_stdout(io.StringIO()):
             vm.main(["spike", "--apply", "--install", "--state", str(self.root / "failure"),
-                     "--ssh-probe", "/synthetic/ssh-witness", "--incus-version", "1.2.3", "--dnsmasq-version", "2.90-1"])
+                     "--ssh-probe", "/synthetic/ssh-witness", "--incus-version", "1.2.3", "--dnsmasq-version", "2.90-1", "--qemu-modules-version", self.args.qemu_modules_version])
         self.assertTrue(any(call[:2] == ("apt-get", "remove") for call in self.calls))
         self.assertFalse(any(call[:2] == ("nft", "-f") for call in self.calls))
         self.assertFalse(any(call[0].endswith("tables-restore") and len(call) == 1 for call in self.calls))
@@ -330,6 +349,26 @@ class Safety(unittest.TestCase):
         self.assertIn("security.ipv4_filtering=true", nic)
         self.assertIn("security.mac_filtering=true", nic)
 
+    def test_agent_first_boot_reboot_can_exceed_180_seconds(self):
+        elapsed = 0
+        probes = []
+        def sleep(seconds):
+            nonlocal elapsed
+            elapsed += seconds
+        def guest(*args, **kw):
+            if args[0] == "info":
+                return result(code=1)
+            if args == ("exec", self.spike.name(0), "--", "true"):
+                probes.append(elapsed)
+                return result(code=int(elapsed < 302))
+            return result()
+        with patch.object(self.spike, "vm", side_effect=guest), \
+                patch.object(vm.time, "monotonic", side_effect=lambda: elapsed), \
+                patch.object(vm.time, "sleep", side_effect=sleep):
+            self.spike.launch(0, self.spike.name(0))
+        self.assertGreater(probes[-1], 180)
+        self.assertEqual(self.spike.metrics["env0_vm_agent_boot_ms"], 302000)
+
     def test_metadata_jump_stays_first_with_marked_rule(self):
         first = '-A DOCKER-USER -m comment --comment vps-metadata-egress-v1 -j VPS-METADATA'
         def boundary(*args, **kw):
@@ -354,18 +393,17 @@ class Safety(unittest.TestCase):
                 self.spike.firewall = entries[:]
                 self.spike.saved = True
                 self.tables = {entry["table"] for entry in entries if entry["kind"] == "nft"}
+                self.ufw_rules = [entry["rule"] for entry in entries if entry["kind"] == "ufw"]
                 attempts = []
                 def reverse(*args, **kw):
                     self.assertNotIn("flush ruleset", str(kw))
                     self.assertFalse(args[0].endswith("tables-restore"), "full restore forbidden")
                     self.assertNotEqual(args[:2], ("nft", "-f"), "full replay forbidden")
-                    if args[:3] in (("nft", "delete", "table"), ("iptables", "-w", "-D"), ("ufw", "--force", "delete")):
+                    if args[:3] in (("nft", "delete", "table"), ("iptables", "-w", "-D"), ("ufw", "route", "delete")):
                         attempts.append(args)
                         entry = next(i for i, e in enumerate(entries) if (e["kind"] == "nft" and e["table"] == args[-1]) or (e["kind"] == "iptables" and args[0] == "iptables") or (e["kind"] == "ufw" and args[0] == "ufw"))
                         if entry == failed:
                             raise RuntimeError("temporary reversal failure")
-                    if args[0] == "ufw":
-                        return result()
                     return self.fake(*args, **kw)
                 with patch.object(vm, "command", side_effect=reverse):
                     with self.assertRaises(RuntimeError):
@@ -375,7 +413,7 @@ class Safety(unittest.TestCase):
                 manifest = json.loads((self.state / "transaction.private.json").read_text())
                 self.assertEqual(manifest["firewall"], [entries[failed]])
                 self.assertTrue(manifest["saved"])
-                with patch.object(vm, "command", side_effect=lambda *a, **kw: result() if a[0] == "ufw" else self.fake(*a, **kw)):
+                with patch.object(vm, "command", side_effect=self.fake):
                     self.spike.restore_firewall()
                 self.assertEqual(self.spike.firewall, [])
                 self.assertFalse(self.spike.saved)
@@ -499,7 +537,7 @@ class Safety(unittest.TestCase):
             self.spike.install()
             self.spike.remove_install()
         manifest = json.loads((self.state / "transaction.private.json").read_text())
-        self.assertEqual(manifest["residual_packages"], ["dnsmasq-base"])
+        self.assertEqual(manifest["residual_packages"], ["dnsmasq-base", "qemu-system-modules-opengl", "qemu-system-modules-spice"])
         removal = next(call for call in self.calls if call[:2] == ("apt-get", "remove"))
         self.assertNotIn("dnsmasq-base", removal)
         self.args.allow_package.remove("dnsmasq-base")
@@ -514,6 +552,53 @@ class Safety(unittest.TestCase):
         with patch.object(vm, "command", side_effect=installed):
             self.spike.install()
         self.assertEqual(self.spike.residual_packages, [])
+
+    def test_qemu_modules_pinned_in_every_apt_phase(self):
+        with patch.object(vm, "command", side_effect=self.fake):
+            self.spike.install()
+        apt = [call for call in self.calls if call[0] == "apt-get"]
+        self.assertEqual(len(apt), 3)
+        for call in apt:
+            modules = {arg for arg in call if arg.startswith("qemu-system-modules-")}
+            self.assertEqual(modules, {name + "=" + self.args.qemu_modules_version for name in
+                                      ("qemu-system-modules-spice", "qemu-system-modules-opengl")})
+            self.assertIn("--no-install-recommends", call)
+
+    def test_qemu_modules_allowlist_residuals_and_existing_versions(self):
+        modules = {"qemu-system-modules-spice", "qemu-system-modules-opengl"}
+        self.assertEqual({p for p in self.args.allow_package if p.startswith("qemu-")}, modules)
+        with patch.object(vm, "command", side_effect=self.fake):
+            self.spike.install()
+            self.spike.remove_install()
+        manifest = json.loads((self.state / "transaction.private.json").read_text())
+        self.assertTrue(modules <= set(manifest["residual_packages"]))
+        removal = next(call for call in self.calls if call[:2] == ("apt-get", "remove"))
+        self.assertTrue(modules.isdisjoint(removal))
+        for package in sorted(modules):
+            with self.subTest(package=package, case="allowlist"):
+                self.args.allow_package.remove(package)
+                with patch.object(vm, "command", side_effect=self.fake), self.assertRaisesRegex(RuntimeError, "allow-list"):
+                    self.spike.install()
+                self.args.allow_package.append(package)
+            for installed in ("1:8.2.1", "1:8.2.3"):
+                plan = "Inst incus (1.2.3)\nInst incus-client (1.2.3)\nInst " + package + " [" + installed + "] (1:8.2.2)\n"
+                with self.subTest(package=package, installed=installed), patch.object(vm, "command", return_value=result(plan)) as runner:
+                    with self.assertRaisesRegex(RuntimeError, "upgrades"):
+                        self.spike.install()
+                    self.assertEqual(runner.call_count, 1)
+        with patch.object(vm, "command", side_effect=lambda *a, **kw: result("Inst incus (1.2.3)\nInst incus-client (1.2.3)\n") if "--simulate" in a else self.fake(*a, **kw)):
+            self.spike.install()
+        self.assertEqual(self.spike.residual_packages, [])
+
+    def test_qemu_modules_version_required_before_mutation(self):
+        self.preflight_fixture()
+        for version in (None, "", "--option", "1.0 extra", "1.0;command"):
+            self.args.qemu_modules_version = version
+            with self.subTest(version=version), self.assertRaisesRegex(RuntimeError, "pin QEMU modules"):
+                vm.preflight(self.args)
+        for version in ("1:8.2.2+ds-0synthetic1", "8.2.2-1~test"):
+            self.args.qemu_modules_version = version
+            vm.preflight(self.args)
 
     def test_download_precedes_bounded_install_and_partial_install_is_journaled(self):
         calls = []
@@ -565,18 +650,132 @@ class Safety(unittest.TestCase):
                 calls.append(args)
                 journal = json.loads((self.state / "transaction.private.json").read_text())
                 self.assertTrue(any(e["kind"] == "ufw" for e in journal["firewall"]))
-                return result()
+                return self.fake(*args, **kw)
             return self.fake(*args, **kw)
         with patch.object(vm, "command", side_effect=boundary), patch.object(self.spike, "launch"):
             self.spike.provision()
             self.spike.restore_firewall()
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), 6)
         for call in calls[:2]:
             self.assertNotIn("any", call)
             self.assertEqual(call[-2:], ("comment", self.spike.token))
             self.assertIn("2376", call)
         for call in calls[:2]:
-            self.assertIn(("ufw", "--force", "delete") + call[1:], calls[2:])
+            self.assertIn(("ufw", "route", "delete") + call[2:-2], calls[2:])
+
+    def ufw_entry(self):
+        return {"kind": "ufw", "rule": ["route", "allow", "in", "on", "app0", "out", "on", self.spike.bridge(0),
+                "to", self.spike.address(0), "port", "2376", "proto", "tcp", "comment", self.spike.token]}
+
+    def test_ufw_creation_requires_new_rule(self):
+        self.args.allow_ufw_route = True
+        for output in ("Rule updated\n", "Skipping adding existing rule\n", "", "Rule added\nextra\n"):
+            self.spike.firewall = []
+            self.spike.owned = []
+            self.tables.clear()
+            def boundary(*args, **kw):
+                if args[:3] == ("ufw", "route", "allow"):
+                    self.assertEqual(kw["env"]["LC_ALL"], "C")
+                    return result(output)
+                return self.fake(*args, **kw)
+            with self.subTest(output=output), patch.object(vm, "command", side_effect=boundary), \
+                    patch.object(self.spike, "launch") as launch:
+                with self.assertRaisesRegex(RuntimeError, "UFW rule was not added"):
+                    self.spike.provision()
+                launch.assert_not_called()
+                self.assertTrue(any(entry["kind"] == "ufw" for entry in self.spike.firewall))
+
+    def test_ufw_absence_and_exact_live_ownership(self):
+        entry = self.ufw_entry()
+        for live, refused in (([], False), ([entry["rule"]], False),
+                              ([entry["rule"][:-1] + ["foreign"]], True),
+                              ([entry["rule"][:-2]], True),
+                              ([entry["rule"][:-1] + [self.spike.token + "extra"]], True),
+                              ([entry["rule"], entry["rule"]], True),
+                              ([["allow", "22", "comment", self.spike.token]], True)):
+            self.spike.firewall = [entry]
+            self.ufw_rules = live[:]
+            self.calls.clear()
+            with self.subTest(live=live), patch.object(vm, "command", side_effect=self.fake):
+                if refused:
+                    with self.assertRaises(RuntimeError):
+                        self.spike.restore_firewall()
+                    self.assertEqual(self.spike.firewall, [entry])
+                    self.assertFalse(any("delete" in call for call in self.calls))
+                else:
+                    self.spike.restore_firewall()
+                    self.assertEqual(self.spike.firewall, [])
+                    self.assertEqual(any("delete" in call for call in self.calls), bool(live))
+            self.assertEqual(self.calls[0], ("ufw", "show", "added"))
+            if not refused:
+                with patch.object(vm, "command") as runner:
+                    self.spike.restore_firewall()
+                    runner.assert_not_called()
+
+    def test_ufw_unknown_listing_or_failed_delete_retains_journal(self):
+        entry = self.ufw_entry()
+        for listing in (result(code=1), result(""), result("Status: inactive\n"),
+                        result("Added user rules (see 'ufw status' for running firewall):\n(None)", code=1),
+                        result("Added user rules (see 'ufw status' for running firewall):\n"),
+                        result("Added user rules (see 'ufw status' for running firewall):\nunknown"),
+                        result("Added user rules (see 'ufw status' for running firewall):\nufw allow 'unterminated")):
+            self.spike.firewall = [entry]
+            with self.subTest(listing=listing), patch.object(vm, "command", return_value=listing) as runner:
+                with self.assertRaises(RuntimeError):
+                    self.spike.restore_firewall()
+                self.assertEqual(runner.call_count, 1)
+                self.assertEqual(self.spike.firewall, [entry])
+        for deletion, refused in ((result(code=1, stderr="ERROR: Invalid syntax"), True),
+                                  (result(code=1, stderr="ERROR: non-existent rule plus unknown failure"), True),
+                                  (result(code=1, stdout="Could not delete non-existent rule\n"), False)):
+            self.spike.firewall = [entry]
+            self.ufw_rules = [entry["rule"]]
+            def boundary(*args, **kw):
+                return deletion if "delete" in args else self.fake(*args, **kw)
+            with self.subTest(deletion=deletion), patch.object(vm, "command", side_effect=boundary):
+                if refused:
+                    with self.assertRaises(RuntimeError):
+                        self.spike.restore_firewall()
+                else:
+                    self.spike.restore_firewall()
+                self.assertEqual(bool(self.spike.firewall), refused)
+
+    def test_every_journaled_reversal_obeys_binary_grammar(self):
+        # Independent CLI grammar, not production-generated expected argv. Sources
+        # and the deliberately unsupported ip reversal are in the runbook notes.
+        name, interface = r"[A-Za-z0-9_.-]+", r"[A-Za-z0-9_.-]{1,15}"
+        address, port = r"(?:[0-9]{1,3}\.){3}[0-9]{1,3}", r"[0-9]{1,5}"
+        scope = rf"incus --force-local(?: --project {name})? "
+        table = {
+            "ufw": [r"ufw show added", rf"ufw route delete allow in on {interface} out on {interface} to {address} port {port} proto tcp"],
+            "nft": [r"nft -j list tables", rf"nft delete table inet {name}"],
+            "iptables": [rf"iptables -w -[CD] DOCKER-USER -i {interface} -o {interface} -d {address} -p tcp --dport {port} -m comment --comment [a-f0-9]{{32}} -j ACCEPT",
+                         rf"iptables -w -[CD] DOCKER-USER -i {interface} -o {interface} -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment [a-f0-9]{{32}} -j ACCEPT"],
+            "ip": [],  # No journaled ip mutation exists; adding one needs review.
+            "incus": [scope + rf"info {name}", scope + rf"config get {name} user.spike-token",
+                      scope + rf"delete --force {name}", scope + rf"(?:project|network|storage) show {name}",
+                      scope + rf"(?:project|network|storage) get {name} user.spike-token",
+                      scope + rf"(?:project|network|storage|image|profile) delete {name}"],
+            "apt-get": [r"apt-get remove -y incus incus-base incus-client"],
+        }
+        self.args.allow_ufw_route = True
+        with patch.object(vm, "command", side_effect=self.fake), patch.object(self.spike, "launch", side_effect=lambda i, name: self.spike.remember("instance", name)):
+            self.spike.provision()
+        self.spike.installed = True
+        checked = []
+        def binary(*args, **kwargs):
+            rendered = shlex.join(args)
+            self.assertTrue(any(re.fullmatch(grammar, rendered) for grammar in table.get(args[0], [])), rendered)
+            self.assertEqual(shlex.split(rendered), list(args))
+            checked.append(args)
+            return self.fake(*args, **kwargs)
+        with patch.object(vm, "command", side_effect=binary):
+            self.spike.rollback()
+        self.assertEqual({call[0] for call in checked}, set(table) - {"ip"})
+        self.assertFalse(self.spike.firewall or self.spike.owned or self.spike.installed)
+        self.assertEqual(len([c for c in checked if c[:3] == ("ufw", "route", "delete")]), 2)
+        self.assertEqual(len([c for c in checked if c[:3] == ("nft", "delete", "table")]), 2)
+        self.assertEqual(len([c for c in checked if c[:3] == ("iptables", "-w", "-D")]), 4)
 
     def preflight_fixture(self):
         self.args.launcher_unit = "sbxs-run-1234.service"
@@ -1075,6 +1274,25 @@ class Safety(unittest.TestCase):
         self.assertIn("`ipv4.dhcp=false`", runbook)
         self.assertIn("`ipv6.address=none`", runbook)
 
+    def test_runbook_qemu_pins_dependencies_and_reversal_notes(self):
+        runbook = Path(os.environ.get("SANDBOX_VM_RUNBOOK", ROOT / "docs/deployment/sandbox-vm-spike.md")).read_text()
+        for package in ("spice", "opengl"):
+            self.assertIn('qemu-system-modules-' + package + '="$QEMU_MODULES_PACKAGE_VERSION"', runbook)
+        self.assertGreaterEqual(runbook.count('--qemu-modules-version "$QEMU_MODULES_PACKAGE_VERSION"'), 2)
+        prose = " ".join(runbook.split())
+        for required in ("depends on `qemu-system-modules-opengl` at the exact same QEMU version",
+                         "Audio and UI modules are not needed", "`restricted.virtual-machines.lowlevel=block`",
+                         "New module packages stay in `residual_packages`", "Rollback never removes them",
+                         "`ufw show added`", "`route delete allow", "No reset, disable or reload is used"):
+            self.assertIn(required, prose)
+        for required in ("https://packages.ubuntu.com/resolute/qemu-system-modules-spice",
+                         "`qemu-system-common`", "pin must equal the installed `qemu-system-common`",
+                         "`Inst … [old]`", "SPICE is a Recommends of `qemu-system-x86`",
+                         "`libspice-server1`", "`ubuntu-virt`", "`libgbm1`", "`libepoxy0`", "`libvirglrenderer1`",
+                         "`env*_vm_agent_boot_ms` includes the seeding reboot", "600 seconds"):
+            self.assertIn(required, prose)
+        self.assertNotIn("/noble/", runbook)
+
     def test_runbook_dnsmasq_existing_version_and_manual_mark(self):
         runbook = Path(os.environ.get("SANDBOX_VM_RUNBOOK", ROOT / "docs/deployment/sandbox-vm-spike.md")).read_text()
         self.assertIn("If `dnsmasq-base` is already installed, set `DNSMASQ_PACKAGE_VERSION` to the installed version (`dpkg-query -W dnsmasq-base`); any other value is refused as an upgrade or downgrade. Naming it marks a previously auto-installed copy as manually installed, which rollback does not revert.", " ".join(runbook.split()))
@@ -1262,10 +1480,10 @@ def mutations():
         ('Opus extra host exec ownership removed', 'core', 'labels.get("sandbox-vm-spike") == host_scope.token', 'True', 'test_host_run_caps_prefix_label_expiry_and_exec_ownership'),
         ('Opus extra UFW token comment changed', 'core', '"comment", self.token]', '"comment", "foreign"]', 'test_ufw_is_opt_in_exact_and_reversed_from_manifest'),
         ('Q5 recorded ruling link removed', 'runbook', 'https://github.com/mknw/hames-playground/issues/648); the owner authorizes', 'ruling removed); the owner authorizes', 'test_runbook_detached_kata_and_index_contract'),
-        ('dnsmasq dropped from install', 'core', '"--no-upgrade", *packages,\n                        env=install_env)', '"--no-upgrade", *packages[:-1],\n                        env=install_env)', 'test_dnsmasq_pinned_in_simulation_download_and_install'),
-        ('dnsmasq dropped from simulate', 'core', '"--simulate", "install", "--no-install-recommends", *packages)', '"--simulate", "install", "--no-install-recommends", *packages[:-1])', 'test_dnsmasq_pinned_in_simulation_download_and_install'),
-        ('dnsmasq dropped from download', 'core', '"--no-upgrade", *packages, timeout=180)', '"--no-upgrade", *packages[:-1], timeout=180)', 'test_dnsmasq_pinned_in_simulation_download_and_install'),
-        ('dnsmasq dropped from allow-list', 'core', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base"]', 'default=["incus", "incus-base", "incus-client"]', 'test_dnsmasq_allowlist_and_residual_journal'),
+        ('dnsmasq dropped from install', 'core', '"--no-upgrade", *packages,\n                        env=install_env)', '"--no-upgrade", *(p for p in packages if not p.startswith("dnsmasq-base=")),\n                        env=install_env)', 'test_dnsmasq_pinned_in_simulation_download_and_install'),
+        ('dnsmasq dropped from simulate', 'core', '"--simulate", "install", "--no-install-recommends", *packages)', '"--simulate", "install", "--no-install-recommends", *(p for p in packages if not p.startswith("dnsmasq-base=")))', 'test_dnsmasq_pinned_in_simulation_download_and_install'),
+        ('dnsmasq dropped from download', 'core', '"--no-upgrade", *packages, timeout=180)', '"--no-upgrade", *(p for p in packages if not p.startswith("dnsmasq-base=")), timeout=180)', 'test_dnsmasq_pinned_in_simulation_download_and_install'),
+        ('dnsmasq dropped from allow-list', 'core', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base", "qemu-system-modules-spice", "qemu-system-modules-opengl"]', 'default=["incus", "incus-base", "incus-client", "qemu-system-modules-spice", "qemu-system-modules-opengl"]', 'test_dnsmasq_allowlist_and_residual_journal'),
         ('dnsmasq dropped from residual manifest', 'core', 'sorted(set(planned) - {"incus", "incus-base", "incus-client"})', 'sorted(set(planned) - {"incus", "incus-base", "incus-client", "dnsmasq-base"})', 'test_dnsmasq_allowlist_and_residual_journal'),
         ('pre-existing dnsmasq misreported as residual', 'core', 'sorted(set(planned) - {"incus", "incus-base", "incus-client"})', 'sorted((set(planned) | {"dnsmasq-base"}) - {"incus", "incus-base", "incus-client"})', 'test_preexisting_dnsmasq_is_not_a_residual'),
         ('dnsmasq automatically removed on rollback', 'core', 'apt_transaction("remove", "-y", "incus", "incus-base", "incus-client")', 'apt_transaction("remove", "-y", "incus", "incus-base", "incus-client", "dnsmasq-base")', 'test_dnsmasq_allowlist_and_residual_journal'),
@@ -1275,7 +1493,7 @@ def mutations():
         ('bridge IPv4 DHCP enabled', 'core', '"ipv4.dhcp=false"', '"ipv4.dhcp=true"', 'test_bridge_dns_and_dhcp_disabled_with_static_ipv4'),
         ('runbook dnsmasq pin omitted', 'runbook', '--dnsmasq-version "$DNSMASQ_PACKAGE_VERSION"', '', 'test_runbook_dnsmasq_pin_and_operator_commands'),
         ('Opus dnsmasq upgrade and downgrade admitted', 'core', r'^Inst \S+ \[', r'^Inst incus\S* \[', 'test_package_plan_guard_and_allowlist'),
-        ('Opus dnsmasq service added to default allow-list', 'core', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base"]', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base", "dnsmasq"]', 'test_dnsmasq_service_package_refused_even_when_allowlisted'),
+        ('Opus dnsmasq service added to default allow-list', 'core', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base", "qemu-system-modules-spice", "qemu-system-modules-opengl"]', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base", "qemu-system-modules-spice", "qemu-system-modules-opengl", "dnsmasq"]', 'test_dnsmasq_service_package_refused_even_when_allowlisted'),
         ('dnsmasq service install protection removed', 'core', r'^Inst (openssh|ufw|docker|containerd|runc|dnsmasq )', r'^Inst (openssh|ufw|docker|containerd|runc)', 'test_dnsmasq_service_package_refused_even_when_allowlisted'),
         ('dnsmasq service configure protection removed', 'core', r'Conf (openssh|ufw|docker|containerd|runc|dnsmasq )', r'Conf (openssh|ufw|docker|containerd|runc)', 'test_dnsmasq_service_package_refused_even_when_allowlisted'),
         ('runbook installed dnsmasq version guidance omitted', 'runbook', 'If `dnsmasq-base` is already installed, set `DNSMASQ_PACKAGE_VERSION` to the installed version (`dpkg-query -W dnsmasq-base`); any other value is refused as an upgrade or downgrade.', '', 'test_runbook_dnsmasq_existing_version_and_manual_mark'),
@@ -1287,6 +1505,69 @@ def mutations():
         ('runbook dnsmasq absence failure criterion removed', 'runbook', 'It must report no matching files; any matching log fails the daemon-absence check.', '', 'test_runbook_dnsmasq_absence_after_cleanup'),
         ('runbook dnsmasq surviving log evidence omitted', 'runbook', 'Incus opens this log only when starting a bridge dnsmasq daemon, and it survives package removal', 'Inspect the bridge after cleanup', 'test_runbook_dnsmasq_absence_after_cleanup'),
     ]
+    for package in ("qemu-system-modules-spice", "qemu-system-modules-opengl"):
+        for phase, before in (("simulate", '"--simulate", "install", "--no-install-recommends", *packages)'),
+                              ("download", '"--no-upgrade", *packages, timeout=180)'),
+                              ("install", '"--no-upgrade", *packages,\n                        env=install_env)')):
+            changes.append((package + " omitted from " + phase, "core", before,
+                            before.replace("*packages", '*(p for p in packages if not p.startswith("' + package + '="))'),
+                            "test_qemu_modules_pinned_in_every_apt_phase"))
+        changes.extend([
+            (package + " omitted from allow-list", "core", ', "' + package + '"]' if package.endswith("opengl") else ', "' + package + '", "qemu-system-modules-opengl"]',
+             ']' if package.endswith("opengl") else ', "qemu-system-modules-opengl"]', "test_qemu_modules_allowlist_residuals_and_existing_versions"),
+            (package + " omitted from residuals", "core", 'sorted(set(planned) - {"incus", "incus-base", "incus-client"})',
+             'sorted(set(planned) - {"incus", "incus-base", "incus-client", "' + package + '"})', "test_qemu_modules_allowlist_residuals_and_existing_versions"),
+            (package + " automatically removed", "core", 'apt_transaction("remove", "-y", "incus", "incus-base", "incus-client")',
+             'apt_transaction("remove", "-y", "incus", "incus-base", "incus-client", "' + package + '")', "test_qemu_modules_allowlist_residuals_and_existing_versions"),
+            (package + " runbook apt pin removed", "runbook", package + '="$QEMU_MODULES_PACKAGE_VERSION"', '', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ])
+    changes.extend([
+        ("Opus 1 quoted UFW comment parsed with posix=False", "core", '[shlex.split(line) for line in lines[1:]]', '[shlex.split(line, posix=False) for line in lines[1:]]', "test_ufw_absence_and_exact_live_ownership"),
+        ("Opus whitespace split", "core", '[shlex.split(line) for line in lines[1:]]', '[line.split() for line in lines[1:]]', "test_ufw_absence_and_exact_live_ownership"),
+        ("Opus 2 agent deadline restored to 180 seconds", "core", 'deadline = time.monotonic() + 600', 'deadline = time.monotonic() + 180', "test_agent_first_boot_reboot_can_exceed_180_seconds"),
+        ("Opus 3 UFW updated rule accepted", "core", '== "Rule added", "UFW rule was not added"', 'in ("Rule added", "Rule updated"), "UFW rule was not added"', "test_ufw_creation_requires_new_rule"),
+        ("Opus 3 UFW output check removed", "core", '== "Rule added", "UFW rule was not added"', 'is not None, "UFW rule was not added"', "test_ufw_creation_requires_new_rule"),
+        ("Opus 3 UFW create locale removed", "core", 'command("ufw", *rule, env=dict(os.environ, LC_ALL="C"))', 'command("ufw", *rule)', "test_ufw_creation_requires_new_rule"),
+        ("Opus 4 UFW show locale removed", "core", 'command("ufw", "show", "added", env=dict(os.environ, LC_ALL="C"))', 'command("ufw", "show", "added")', "test_ufw_absence_and_exact_live_ownership"),
+        ("Opus 4 UFW delete locale removed", "core", '*rule[1:-2], check=False,\n                                           env=dict(os.environ, LC_ALL="C"))', '*rule[1:-2], check=False)', "test_ufw_absence_and_exact_live_ownership"),
+        ("Opus 5 wrong Ubuntu release", "runbook", '/resolute/', '/noble/', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("Opus 5 installed qemu-system-common pin omitted", "runbook", 'pin must equal the installed `qemu-system-common`', 'pin may differ', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("Opus 5 changed existing package plan omitted", "runbook", '`Inst … [old]`', 'a package plan', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("Opus 5 SPICE Recommends source changed", "runbook", 'SPICE is a Recommends of `qemu-system-x86`', 'SPICE is a Recommends of `incus`', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("Opus 5 dependency guidance omitted", "runbook", '`libspice-server1`', 'other dependencies', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("Opus 2 boot metric reboot guidance omitted", "runbook", '`env*_vm_agent_boot_ms` includes the seeding reboot', 'Boot metric excludes the reboot', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("Opus 2 runbook deadline shortened", "runbook", '600 seconds', '180 seconds', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("Opus unpinned QEMU version regex", "core", 'args.qemu_modules_version and re.fullmatch(r"[0-9][A-Za-z0-9.+:~_-]*", args.qemu_modules_version)', 'args.qemu_modules_version', "test_qemu_modules_version_required_before_mutation"),
+        ("Codex wrong nft address family", "core", 'command("nft", "delete", "table", "inet", entry["table"])', 'command("nft", "delete", "table", "ip", entry["table"])', "test_every_journaled_reversal_obeys_binary_grammar"),
+        ("Codex apt purge replaces remove", "core", 'apt_transaction("remove", "-y", "incus", "incus-base", "incus-client")', 'apt_transaction("purge", "-y", "incus", "incus-base", "incus-client")', "test_every_journaled_reversal_obeys_binary_grammar"),
+        ("Codex wrong Incus ownership key", "core", '"get", name, "user.spike-token"', '"get", name, "user.wrong-token"', "test_every_journaled_reversal_obeys_binary_grammar"),
+        ("Codex FORWARD replaces DOCKER-USER delete", "core", 'command("iptables", "-w", "-D", "DOCKER-USER", *rule)', 'command("iptables", "-w", "-D", "FORWARD", *rule)', "test_every_journaled_reversal_obeys_binary_grammar"),
+        ("Codex wrong exact SPICE version in all apt phases", "core", '"qemu-system-modules-spice=" + self.args.qemu_modules_version', '"qemu-system-modules-spice=0.0.0"', "test_qemu_modules_pinned_in_every_apt_phase"),
+        ("Codex wrong UFW deletion destination", "core", '"route", "delete", *rule[1:-2]', '"route", "delete", *rule[1:9], "203.0.113.99", *rule[10:-2]', "test_ufw_absence_and_exact_live_ownership"),
+        ("QEMU pin validation removed", "core", 'args.qemu_modules_version and re.fullmatch(r"[0-9][A-Za-z0-9.+:~_-]*", args.qemu_modules_version)', 'True', "test_qemu_modules_version_required_before_mutation"),
+        ("existing QEMU module misreported as residual", "core", 'sorted(set(planned) - {"incus", "incus-base", "incus-client"})', 'sorted((set(planned) | {"qemu-system-modules-spice"}) - {"incus", "incus-base", "incus-client"})', "test_qemu_modules_allowlist_residuals_and_existing_versions"),
+        ("runbook QEMU argument omitted", "runbook", '--qemu-modules-version "$QEMU_MODULES_PACKAGE_VERSION"', '', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("runbook OpenGL dependency omitted", "runbook", 'depends on `qemu-system-modules-opengl` at the exact same QEMU version', 'may use extra modules', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("runbook lowlevel restriction omitted", "runbook", '`restricted.virtual-machines.lowlevel=block`', '', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("runbook module residual guidance omitted", "runbook", 'New module packages stay in `residual_packages`', '', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("UFW original invalid delete restored", "core", 'command("ufw", "route", "delete", *rule[1:-2]', 'command("ufw", "--force", "delete", *rule', "test_every_journaled_reversal_obeys_binary_grammar"),
+        ("UFW creation comment kept on delete", "core", '"route", "delete", *rule[1:-2]', '"route", "delete", *rule[1:]', "test_every_journaled_reversal_obeys_binary_grammar"),
+        ("UFW delete route order reversed", "core", '"ufw", "route", "delete", *rule[1:-2]', '"ufw", "delete", "route", *rule[1:-2]', "test_every_journaled_reversal_obeys_binary_grammar"),
+        ("UFW live token check removed", "core", 'matches in ([], [expected])', 'True', "test_ufw_absence_and_exact_live_ownership"),
+        ("UFW unexpected owned token ignored", "core", 'all(self.token not in current or current in owned_ufw for current in added)', 'True', "test_ufw_absence_and_exact_live_ownership"),
+        ("UFW absence blindly deleted", "core", '                    if matches:', '                    if True:', "test_ufw_absence_and_exact_live_ownership"),
+        ("UFW empty saved-rule report refused", "core", 'added = [] if lines[1:] == ["(None)"] else [shlex.split(line) for line in lines[1:]]', 'added = [shlex.split(line) for line in lines[1:]]; require(added != [["(None)"]], "absent refused")', "test_ufw_absence_and_exact_live_ownership"),
+        ("UFW failed listing trusted", "core", 'listing.returncode == 0 and len(lines) > 1', 'len(lines) > 1', "test_ufw_unknown_listing_or_failed_delete_retains_journal"),
+        ("UFW failed deletion trusted", "core", 'require(deletion.returncode == 0 or', 'require(True or', "test_ufw_unknown_listing_or_failed_delete_retains_journal"),
+        ("UFW loose absence error accepted", "core", '(deletion.stdout + deletion.stderr).strip()\n                                == "Could not delete non-existent rule"', 're.search(r"non-existent rule", deletion.stdout + deletion.stderr)', "test_ufw_unknown_listing_or_failed_delete_retains_journal"),
+        ("nft invalid reversal noun", "core", 'command("nft", "delete", "table", "inet", entry["table"])', 'command("nft", "delete", "tables", "inet", entry["table"])', "test_every_journaled_reversal_obeys_binary_grammar"),
+        ("iptables invalid reversal option", "core", 'command("iptables", "-w", "-D", "DOCKER-USER", *rule)', 'command("iptables", "-w", "--delete-rule", "DOCKER-USER", *rule)', "test_every_journaled_reversal_obeys_binary_grammar"),
+        ("Incus invalid instance delete", "core", 'self.vm("delete", "--force", name)', 'self.vm("delete", "--forced", name)', "test_every_journaled_reversal_obeys_binary_grammar"),
+        ("Incus invalid resource delete", "core", 'self.incus(kind, "delete", name)', 'self.incus(kind, "remove", name)', "test_every_journaled_reversal_obeys_binary_grammar"),
+        ("unexpected host ip reversal", "core", '        failures = []\n        for name, action in',
+         '        command("ip", "link", "delete", "foreign0")\n        failures = []\n        for name, action in',
+         "test_every_journaled_reversal_obeys_binary_grammar"),
+    ])
     for label, target, before, after, test in changes:
         original = sources[target]
         if before not in original:

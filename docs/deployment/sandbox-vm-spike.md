@@ -15,7 +15,7 @@ changes its compose configuration, or authorizes a provider call.
 
 ## Operator checklist from the independent review
 
-Current round-2 status: Q5 is recorded on [#648](https://github.com/mknw/hames-playground/issues/648); the owner authorizes the target-host spike, SSH and Incus install only. Confirm the [recorded Q5 ruling](https://github.com/mknw/hames-playground/issues/648#issuecomment-6244307698) and its limits before launch. The following review checklist is retained verbatim, including its original point-in-time Q5 status and line references. Its snapshot parse command remains an operator diagnostic; the harness no longer parses the forensic nft snapshot (R1). Package mutation now waits for apt to return without a subprocess kill deadline, then delivers a deferred signal (R2); allow apt to finish before stopping the unit. Recovery enforces the recorded launch unit's inactive/failed state and refuses unknown state (R3).
+Current round-2 status: Q5 is recorded on [#648](https://github.com/mknw/hames-playground/issues/648); the owner authorizes the target-host spike, SSH and Incus install only. Confirm the [recorded Q5 ruling](https://github.com/mknw/hames-playground/issues/648#issuecomment-6244307698) and its limits before launch. The following review checklist retains its original point-in-time Q5 status and line references; the package command includes the dnsmasq fix from the [failed reduced run](https://github.com/mknw/hames-playground/issues/648#issuecomment-6244955991). Its snapshot parse command remains an operator diagnostic; the harness no longer parses the forensic nft snapshot (R1). Package mutation now waits for apt to return without a subprocess kill deadline, then delivers a deferred signal (R2); allow apt to finish before stopping the unit. Recovery enforces the recorded launch unit's inactive/failed state and refuses unknown state (R3).
 
 <!-- prettier-ignore-start -->
 
@@ -28,7 +28,7 @@ Current round-2 status: Q5 is recorded on [#648](https://github.com/mknw/hames-p
    - Pass `--allow-ufw-route`. With UFW active, the default refuses (`sandbox_vm.py:733`).
 3. **Snapshot parse check.** Run `nft list ruleset > f && nft --check -f f`, and it must exit 0. If it does not, the run stops harmlessly at `:326` (R1). Do not patch the code on the host to get past it.
 4. **Packages.**
-   - Review `apt-get --simulate install --no-install-recommends incus=V incus-client=V`, and pass every `Inst` name with `--allow-package`.
+   - Review `apt-get --simulate install --no-install-recommends incus="$INCUS_PACKAGE_VERSION" incus-client="$INCUS_PACKAGE_VERSION" dnsmasq-base="$DNSMASQ_PACKAGE_VERSION"`, and pass every `Inst` name with `--allow-package`.
    - The simulation shows no upgrades and no `Remv` lines.
    - `dpkg --audit` prints nothing, and no apt or unattended-upgrades process is running.
    - Host QEMU, OVMF and `qemu-img` are already present. If the operator installs them, that is a separate, recorded change outside the harness journal (runbook `:68-69`).
@@ -82,6 +82,7 @@ their values in an issue, commit, shell transcript or public result.
 | `--ssh-probe` / `SSH_WITNESS`                                                                   | An absolute executable path to a trusted fresh-login witness                                                                            |
 | `--kvm-user` / `KVM_TEST_USER`                                                                  | Existing non-root member of the host's `kvm` group                                                                                      |
 | `--incus-version` / `INCUS_PACKAGE_VERSION`                                                     | Exact version of native `incus` and `incus-client` apt packages                                                                         |
+| `--dnsmasq-version` / `DNSMASQ_PACKAGE_VERSION`                                                 | Required exact version of `dnsmasq-base`, which supplies the executable Incus checks for managed bridges                                |
 | `--image-metadata` / `VM_METADATA`, `--image-rootfs` / `VM_ROOTFS`                              | Reviewed local Incus VM metadata and disk image; verify their checksums privately                                                       |
 | `--network` / `ENV_A_BRIDGE_CIDR`, `ENV_B_BRIDGE_CIDR`                                          | Two unused, distinct private IPv4 subnets, each gateway at network address + 1                                                          |
 | `--app-bridge` / `APP_BRIDGE`                                                                   | Actual Linux bridge interface for the app's Docker network                                                                              |
@@ -103,7 +104,7 @@ local image files and uses `--pull=never` for every Docker run. It does not run
 image builds or install Kata/Firecracker. Install host QEMU support before the
 window if the native Incus package does not provide it. An apt simulation that
 would upgrade existing software, remove packages, or install/configure
-OpenSSH, UFW, Docker, containerd or runc is refused. Every simulated `Inst` package must also appear in the positive allow-list (`incus`, `incus-base`, `incus-client` by default); supply repeated `--allow-package` only for reviewed additional dependencies. The download-only phase has its own 180s timeout, before mutation. Installation disables recommends, defers disconnect/termination signals until apt returns, has no subprocess kill timeout during dpkg mutation, and records dependencies left for console cleanup in the private manifest. No automatic autoremove runs. No apt index refresh runs.
+OpenSSH, UFW, Docker, containerd or runc is refused. Every simulated `Inst` package must also appear in the positive allow-list (`incus`, `incus-base`, `incus-client`, `dnsmasq-base` by default); supply repeated `--allow-package` only for reviewed additional dependencies. Simulation, download and installation explicitly request the same exact Incus and dnsmasq-base versions. `dnsmasq-base` is required even with DHCP/DNS disabled: Incus checks its executable version during bridge setup. Use `dnsmasq-base`, not the `dnsmasq` service package. If newly installed, it stays in `residual_packages` in the private transaction manifest for reviewed console cleanup; rollback removes only the Incus packages and never automatically removes dnsmasq-base or other dependencies. A pre-existing dnsmasq-base is not recorded as a new residual. The download-only phase has its own 180s timeout, before mutation. Installation disables recommends, defers disconnect/termination signals until apt returns, has no subprocess kill timeout during dpkg mutation, and records dependencies left for console cleanup in the private manifest. No automatic autoremove runs. No apt index refresh runs.
 Incus installs with `NEEDRESTART_MODE=l` to prevent needrestart restarting
 unrelated services.
 
@@ -142,6 +143,7 @@ bash scripts/sandbox-vm-spike.sh \
   --state "$PWD/.sandbox-vm-spike/run" \
   --ssh-probe "$SSH_WITNESS" --kvm-user "$KVM_TEST_USER" \
   --incus-version "$INCUS_PACKAGE_VERSION" \
+  --dnsmasq-version "$DNSMASQ_PACKAGE_VERSION" \
   --image-metadata "$VM_METADATA" --image-rootfs "$VM_ROOTFS" \
   --network "$ENV_A_BRIDGE_CIDR" --network "$ENV_B_BRIDGE_CIDR" \
   --app-bridge "$APP_BRIDGE" --app-network "$APP_NETWORK" \
@@ -162,6 +164,7 @@ sudo systemd-run --unit="$LAUNCH_UNIT" --collect \
   --survey "$PWD/.sandbox-vm-spike/survey" --state "$PWD/.sandbox-vm-spike/run" \
   --ssh-probe "$SSH_WITNESS" --kvm-user "$KVM_TEST_USER" \
   --incus-version "$INCUS_PACKAGE_VERSION" \
+  --dnsmasq-version "$DNSMASQ_PACKAGE_VERSION" \
   --image-metadata "$VM_METADATA" --image-rootfs "$VM_ROOTFS" \
   --network "$ENV_A_BRIDGE_CIDR" --network "$ENV_B_BRIDGE_CIDR" \
   --app-bridge "$APP_BRIDGE" --app-network "$APP_NETWORK" \
@@ -205,7 +208,9 @@ has the same health, the host SSH configuration/key fingerprint is unchanged,
 and the independent SSH witness succeeds. Any command or check failure enters rollback; a signal during package mutation is delivered only after apt returns. Long measurement loops also checkpoint between samples and
 during the ten-minute stream test. No command writes to `sshd` or the SSH port. UFW writes require the explicit, narrow opt-in below.
 
-The two bridges have NAT and DHCP disabled and no uplink allowance. Each NIC's static address carries `security.ipv4_filtering=true` and `security.mac_filtering=true`. A priority -10 nft INPUT chain accepts established/related guest replies before dropping new guest-to-host traffic. The nft FORWARD chain accepts established replies, allows only the app bridge to the exact guest TLS port, drops all other guest ingress, and drops new guest egress. This deny enforcement precedes Docker's broad bridge allowances. The exact two DOCKER-USER allowances per bridge are inserted after a first metadata-policy jump when present; the survey's `iptables -S` is the review evidence for that ordering.
+The two bridges retain static IPv4 gateways, `ipv4.nat=false`, `ipv4.dhcp=false` and `ipv6.address=none`, and now set `dns.mode=none`, with no uplink allowance. The [Incus bridge reference](https://linuxcontainers.org/incus/docs/main/reference/network_bridge/) defines DNS registration mode separately from address allocation. In [Incus 6.0.5 source](https://github.com/lxc/incus/blob/v6.0.5/internal/server/network/driver_bridge.go#L3401), `UsesDNSMasq()` returns false for this combination, so no bridge dnsmasq daemon is started. The earlier [version check](https://github.com/lxc/incus/blob/v6.0.5/internal/server/network/driver_bridge.go#L1336) is unconditional, so the executable is still required. `ipv4.address=none` would remove the gateway used by the guest route and host canary; retain the reviewed static IPv4 configuration instead. No per-family DNS mode is needed. The server lane must verify daemon absence on its pinned package; these offline checks do not prove live compatibility.
+
+Each NIC's static address carries `security.ipv4_filtering=true` and `security.mac_filtering=true`. A priority -10 nft INPUT chain accepts established/related guest replies before dropping new guest-to-host traffic. The nft FORWARD chain accepts established replies, allows only the app bridge to the exact guest TLS port, drops all other guest ingress, and drops new guest egress. This deny enforcement precedes Docker's broad bridge allowances. The exact two DOCKER-USER allowances per bridge are inserted after a first metadata-policy jump when present; the survey's `iptables -S` is the review evidence for that ordering.
 
 With active UFW, the default refuses before mutation. After private rule review, explicit `--allow-ufw-route` authorizes only app-bridge to exact guest address/TLS-port routed allowances. Each carries the spike token and is journaled before addition; rollback deletes those exact rules. Static addressing requires no DHCP/DNS or host INPUT exception. No pre-existing UFW rule, SSH policy, default routed policy, or #646 jump is changed. If a positive control still fails, stop and recover rather than broadening the rules.
 

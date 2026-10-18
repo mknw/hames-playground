@@ -148,7 +148,8 @@ async function createPatterns(
       {
         'office-data': {
           pattern: doc,
-          description: 'Work on Microsoft 365 files and mail; run code over them',
+          description:
+            'Read Microsoft 365 mail and file metadata; run code to analyse uploaded files (spreadsheets, CSV, tables), compute sums and totals, and save deliverables in the office sandbox',
           capability:
             'Read Microsoft 365 mail and file metadata; compute and create files in the office sandbox. Graph file ingestion is unavailable.',
         },

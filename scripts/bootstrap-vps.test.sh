@@ -88,6 +88,11 @@ if [[ ${SHIM_CLONES:-0} == 1 ]]; then
     cat "$SHIM_COMPOSE_JSON"
     exit 0
   fi
+  if [[ $args == *" ps -aq "* ]]; then
+    [[ ${SHIM_PS_FAIL:-0} == 0 ]] || exit 1
+    [[ ! -f $CLONE_ALIVE ]] || echo synthetic-app-dev
+    exit 0
+  fi
   if [[ $args == *" up "* ]]; then
     if [[ $args == *" --remove-orphans "* && $COMPOSE_FILE != *:docker-compose.clones.yaml* ]]; then
       rm -f "$CLONE_ALIVE"
@@ -352,7 +357,8 @@ ENV
   if ((rc == 0)) && grep -Fxq "$clones:docker-compose.dev-sandbox.yaml|app|compose up -d" "$dir/calls"; then
     pass "clones retains the explicit owner socket overlay"
   else flunk "clones owner overlay (rc=$rc)" "$out"; fi
-  # Byte-exact legacy argv/environment: no renderer or dev-health operation.
+  # Compare every box-changing command byte-for-byte, excluding only the two
+  # exact read-only commands added by the coordinator-approved box-state guard.
   printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
   out=$(SHIM_NO_DEV=1 clone_boot 2>&1); rc=$?
   cat >"$dir/default-expected" <<ENV
@@ -367,9 +373,21 @@ WAIT mcp-gateway running 120
 WAIT doc-convert running 120
 WAIT caddy running 120
 ENV
-  if ((rc == 0)) && cmp -s "$dir/default-expected" "$dir/calls"; then
-    pass "clones default boot command transcript is byte-identical"
+  grep -Fxv -e "$base|app|compose config --format json" \
+    -e '||ps -aq --filter label=com.docker.compose.project=synthetic --filter label=com.docker.compose.service=app-dev' \
+    "$dir/calls" >"$dir/default-changing"
+  if ((rc == 0)) && cmp -s "$dir/default-expected" "$dir/default-changing" &&
+    grep -Fxq '||ps -aq --filter label=com.docker.compose.project=synthetic --filter label=com.docker.compose.service=app-dev' "$dir/calls"; then
+    pass "clones default boot box-changing transcript is byte-identical"
   else flunk "clones default command transcript changed (rc=$rc)" "$(cat "$dir/calls")"; fi
+  out=$(clone_boot 2>&1); rc=$?
+  if ((rc != 0)) && [[ -f $dir/app-dev-alive ]] && ! grep -q 'compose up ' "$dir/calls"; then
+    pass 'clones refuses live app-dev under base:prod before orphan pruning'
+  else flunk "clones pruned live app-dev under base:prod (rc=$rc)" "$out"; fi
+  out=$(SHIM_NO_DEV=1 SHIM_PS_FAIL=1 clone_boot 2>&1); rc=$?
+  if ((rc != 0)) && ! grep -q 'compose up ' "$dir/calls"; then
+    pass 'clones refuses inconclusive single-app box-state query'
+  else flunk "clones ignored failed box-state query (rc=$rc)" "$out"; fi
   for key in DEV_CLONE_PATH DEV_REF DEV_APP_DOMAIN RELEASE_RUNTIME_ENV_FILE DEV_RUNTIME_ENV_FILE RELEASE_DATABASE_URL DEV_DATABASE_URL; do
     clone_reset
     python3 - "$dir/release/.env" "$key" <<'PY'
@@ -555,6 +573,8 @@ mutants = [
     ('validator-skipped', 'node scripts/validate-clones.mjs >/dev/null', 'cat >/dev/null'),
     ('orphan-prune-clones', '    run dc up -d\n', '    run dc up -d --remove-orphans\n'),
     ('default-command-changed', '    run dc up -d --remove-orphans\n', '    run dc up -d\n'),
+    ('single-app-live-dev-guard', '[[ -z $existing_dev ]] || { refuse', 'true || { refuse'),
+    ('single-app-state-query-failure', '|| { refuse "cannot inspect app-dev before single-app orphan pruning"; return 1; }', '|| existing_dev=""'),
     ('half-config-falls-back', 'if [[ -n "$(env_get "$key")" ]]; then', 'if false; then'),
     ('required-inputs-skipped', 'for key in "${CLONE_INPUTS[@]}"; do\n    [[ -n', 'for key in; do\n    [[ -n'),
     ('missing-overlay-accepted', 'for path in "${parts[@]}" scripts/validate-clones.mjs configs/Caddyfile configs/Caddyfile.dev;',

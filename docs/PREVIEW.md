@@ -1206,6 +1206,9 @@ from the release checkout for **both** apps, retains the optional dev socket
 overlay, waits for `app-dev` health as well as release health, and does not pass
 `--remove-orphans` in clone mode. The single-app shape retains its existing
 `docker compose up -d --remove-orphans` command unchanged.
+Before that single-app command, a read-only project-scoped container query refuses
+if an `app-dev` container still exists. Restore the clone file list rather than
+letting a single-app boot prune it. An unavailable query also refuses startup.
 
 Run `--only smoke --no-seed` afterwards. When clones are enabled, smoke also
 compares both running apps' database URLs, keys, callbacks, auth bypass and sandbox

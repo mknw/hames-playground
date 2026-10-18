@@ -493,7 +493,8 @@ class Wiring(unittest.TestCase):
         assert_engine_supported() { :; }; assert_daemon_isolation() { :; }; assert_gateway_pinned() { :; };
         env_problems() { :; }; owner_missing() { :; }; reserved_name() { return 1; };
         escrow_recorded() { :; }; dns_points_here() { :; }; assert_dynamic_tools_off() { :; };
-        rendered_exposure() { :; }; run() { echo "RUN $*"; }; dc() { echo "DC $*"; };
+        rendered_exposure() { :; }; run() { echo "RUN $*"; }; sudo() { :; };
+        dc() { if [[ $1 == config ]]; then echo '{"name":"synthetic"}'; else echo "DC $*"; fi; };
         vps_check() { echo "$*"; return 1; }; wait_state() { echo WAIT; };
         stage_boot''')
         self.assertEqual(output.returncode, 1, output.stdout + output.stderr)

@@ -1696,6 +1696,14 @@ stage_boot() {
   clone_preflight "$files" || return 1
   prepare_embedder || return 1
   if [[ $files == "$COMPOSE_FILES" ]]; then
+    if ((!DRY_RUN)); then
+      local project existing_dev
+      project=$(set -o pipefail; dc config --format json 2>/dev/null |
+        python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])' 2>/dev/null) || { refuse "cannot resolve the Compose project for the single-app guard"; return 1; }
+      [[ $project =~ ^[a-z0-9][a-z0-9_-]*$ ]] || { refuse "invalid Compose project for the single-app guard"; return 1; }
+      existing_dev=$(sudo docker ps -aq --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.service=app-dev 2>/dev/null) || { refuse "cannot inspect app-dev before single-app orphan pruning"; return 1; }
+      [[ -z $existing_dev ]] || { refuse "app-dev exists in this project; restore the complete clone COMPOSE_FILE before boot"; return 1; }
+    fi
     run dc up -d --remove-orphans
   else
     run dc up -d

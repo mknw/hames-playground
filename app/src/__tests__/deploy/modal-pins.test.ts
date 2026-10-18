@@ -55,6 +55,7 @@ const caddyfile27b = read('../../../../deploy/modal/Caddyfile.27b')
 const verdaClient = read('../../../../packages/harness-baml/baml_src/verda-client.baml')
 const settings = read('../../lib/settings.ts')
 const verdaActivity = read('../../lib/inference/verda-activity.server.ts')
+const coldStart = read('../../lib/inference/cold-start.server.ts')
 const smoke27b = read('../../../../deploy/modal/smoke_27b.py')
 const app = read('../../../../deploy/modal/hames_small_models.py')
 const shared = read('../../../../deploy/modal/vllm_box.py')
@@ -137,6 +138,14 @@ const installCaddy = shared.match(/def _install_caddy\(\)[\s\S]*?(?=\n\n\n)/)?.[
 const vllmArgv = app.match(/def _vllm_argv\(\)[^[]*\[([\s\S]*?)\n\s*\]\n/)?.[1] ?? ''
 
 describe('deploy/modal: the server shape and the vLLM argv', () => {
+  it('keeps the small-box idle default equal to the app warm-window default', () => {
+    const appDefault = coldStart.match(
+      /^export const DEFAULT_SMALL_LLM_SCALEDOWN_SECONDS = (\d+)$/m,
+    )?.[1]
+    expect(appDefault).toBe('300')
+    expect(app).toContain(`SCALEDOWN_S = int(_env("HAMES_MODAL_SCALEDOWN_S", "${appDefault}"))`)
+  })
+
   it('is deployed behind Modal proxy auth', () => {
     expect(app).toMatch(/unauthenticated=False/)
     expect(app).not.toMatch(/unauthenticated=True/)

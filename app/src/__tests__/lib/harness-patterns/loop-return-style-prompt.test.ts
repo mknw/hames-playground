@@ -75,6 +75,22 @@ const CATALOG =
   '- Return: Signal task completion (tool_args = brief completion summary, or the complete answer if no tool returned a result)'
 
 describe.each(['anthropic', 'verda'] as const)('LoopReturnStyle render (%s wire)', (which) => {
+  // MUTATION: delete the loop-tail line and regenerate the BAML client.
+  // The effective instruction is copied byte-for-byte from the former shared
+  // description; neither the cached head nor its style clauses can replace it.
+  it.each(['summary', 'answer'])(
+    '%s: restores the exact Return carve-out in the tail',
+    async (style) => {
+      const b = await render(style, which)
+      const instruction = 'For Return, use plain prose (not JSON), as your instructions describe.'
+      const tail = restText(b)
+      expect(tail).toContain(`Turn 0. Decide the next action.\n${instruction}`)
+      const effective = tail.match(/For Return,[^\n]+/)?.[0]
+      expect(Buffer.from(effective ?? '')).toEqual(Buffer.from(instruction))
+      expect(systemText(b)).not.toContain(instruction)
+    },
+  )
+
   it('summary: the SYSTEM block asks for the complete answer when no tool returned a result', async () => {
     const b = await render('summary', which)
     expect(systemText(b)).toContain(CLAUSE)

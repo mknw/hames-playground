@@ -347,6 +347,7 @@ template_string LoopControllerBody(
        asks for turn 1. The previous `+ 1` skipped a number, inviting the model
        to infer a turn it had never seen. #}
     Turn {{ turns|length }}. Decide the next action.
+    For Return, use plain prose (not JSON), as your instructions describe.
 "#
 
 function LoopController(

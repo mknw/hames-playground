@@ -96,7 +96,9 @@ describe.each(['AnthropicSonnet5', 'VerdaQwen'])('Return contract (%s wire)', (c
         )
       ).body.text()
       expect(loop).toContain('plain prose (not JSON)')
-      expect(loop).not.toContain('For Return, use plain prose')
+      expect(loop).toContain(
+        'For Return, use plain prose (not JSON), as your instructions describe.',
+      )
     }
   })
 })

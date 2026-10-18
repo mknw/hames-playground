@@ -26,6 +26,7 @@ import { dockerConnectionFromEnv } from '../docker-connection.server'
 type Json = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any -- fake API wire objects
 let root: string, template: string, server: Server, options: IncusEnvironmentOptions
 let managerFingerprint: string
+let serverTLS: { key: string; cert: string }, otherServerTLS: { key: string; cert: string }
 let project: Json | undefined, certificate: Json | undefined, vm: Json | undefined
 let vmStatus = 102
 let image = true
@@ -48,33 +49,40 @@ const identity = 'sandbox-demo'
 
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'sandbox-incus-test-'))
-  execFileSync(
-    'openssl',
-    [
-      'req',
-      '-new',
-      '-x509',
-      '-newkey',
-      'rsa:2048',
-      '-nodes',
-      '-days',
-      '1',
-      '-subj',
-      '/CN=localhost',
-      '-addext',
-      'subjectAltName=IP:127.0.0.1',
-      '-keyout',
-      join(root, 'key.pem'),
-      '-out',
-      join(root, 'cert.pem'),
-    ],
-    { stdio: 'ignore' },
-  )
-  const key = await readFile(join(root, 'key.pem'), 'utf8'),
-    cert = await readFile(join(root, 'cert.pem'), 'utf8')
+  async function serverCertificate(name: string) {
+    execFileSync(
+      'openssl',
+      [
+        'req',
+        '-new',
+        '-x509',
+        '-newkey',
+        'rsa:2048',
+        '-nodes',
+        '-days',
+        '1',
+        '-subj',
+        '/CN=localhost',
+        '-addext',
+        'subjectAltName=IP:127.0.0.1',
+        '-keyout',
+        join(root, `${name}-key.pem`),
+        '-out',
+        join(root, `${name}-cert.pem`),
+      ],
+      { stdio: 'ignore' },
+    )
+    return {
+      key: await readFile(join(root, `${name}-key.pem`), 'utf8'),
+      cert: await readFile(join(root, `${name}-cert.pem`), 'utf8'),
+    }
+  }
+  serverTLS = await serverCertificate('trusted')
+  otherServerTLS = await serverCertificate('untrusted')
+  const { key, cert } = serverTLS
   managerFingerprint = fingerprint(cert)
   server = createServer(
-    { key, cert, requestCert: true, rejectUnauthorized: false },
+    { key, cert, ca: cert, requestCert: true, rejectUnauthorized: true },
     async (req, res) => {
       const url = new URL(req.url!, 'https://localhost')
       const method = req.method!
@@ -131,6 +139,8 @@ beforeAll(async () => {
       if (url.pathname === '/1.0/certificates' && method === 'POST') {
         const raw = Buffer.from(body.certificate, 'base64')
         certificate = { ...body, fingerprint: fingerprint(raw) }
+        // Enrolling a self-signed Incus client also enrolls its TLS trust anchor.
+        server.setSecureContext({ key, cert, ca: [cert, new X509Certificate(raw).toString()] })
         return send(200)
       }
       if (url.pathname.startsWith('/1.0/certificates/')) {
@@ -222,6 +232,7 @@ beforeAll(async () => {
 }, 30_000)
 
 beforeEach(async () => {
+  server.setSecureContext({ ...serverTLS, ca: serverTLS.cert })
   project = undefined
   certificate = undefined
   vm = undefined
@@ -741,6 +752,34 @@ describe('Incus trust and diagnostics', () => {
       { quota: { ...options.quota, diskGiB: 1 } },
     ])
       expect(() => createIncusEnvironment({ ...options, ...patch })).toThrow()
+  })
+  it('refuses a different server certificate with a matching SAN before sending API requests', async () => {
+    expect(new X509Certificate(otherServerTLS.cert).checkIP('127.0.0.1')).toBe('127.0.0.1')
+    expect(fingerprint(otherServerTLS.cert)).not.toBe(fingerprint(serverTLS.cert))
+    let received = false
+    const impostor = createServer(
+      { ...otherServerTLS, ca: serverTLS.cert, requestCert: true, rejectUnauthorized: true },
+      (_req, res) => {
+        received = true
+        res.end(JSON.stringify({ type: 'sync', metadata: {} }))
+      },
+    )
+    await new Promise<void>((resolve) => impostor.listen(0, '127.0.0.1', resolve))
+    try {
+      const c = createIncusEnvironment({
+        ...options,
+        manager: {
+          ...options.manager,
+          url: `https://127.0.0.1:${(impostor.address() as AddressInfo).port}`,
+        },
+        stateDirectory: join(root, 'different-server'),
+      })
+      await expect(c.reconcile()).rejects.toThrow('connection failed')
+      expect(received).toBe(false)
+      expect(requests).toEqual([])
+    } finally {
+      await new Promise<void>((resolve) => impostor.close(() => resolve()))
+    }
   })
   it('never falls back to HTTP, ignores redirects and rejects untrusted server TLS', async () => {
     const cleartext = httpServer((_req, res) => res.end('plaintext'))

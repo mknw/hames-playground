@@ -184,6 +184,42 @@ describe('getUserGraphToken', () => {
 })
 
 describe('graphFetch', () => {
+  // Mutation: remove the delegated method guard; these must fail before cache/MSAL/HTTP.
+  it.each([
+    ['/me/sendMail', 'POST', 'Mail.Send'],
+    ['/me/events', 'POST', 'Calendars.ReadWrite'],
+    ['/me/events', 'PATCH', 'Calendars.ReadWrite'],
+    ['/me/events', 'DELETE', 'Calendars.ReadWrite'],
+    ['/me/events', 'PUT', 'Calendars.ReadWrite'],
+    ['/search/query/extra', 'POST', 'Files.Read.All'],
+    ['https://graph.microsoft.com/v1.0/search/query', 'POST', 'Files.Read.All'],
+    ['/search/query', 'PATCH', 'Files.Read.All'],
+  ])('refuses delegated %s %s before cache access, MSAL or HTTP', async (path, method, scope) => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(graphFetch(USER, path, { method, scopes: [scope] })).rejects.toThrow(/read-only/)
+    expect(loadUserTokenCache).not.toHaveBeenCalled()
+    expect(acquireTokenSilent).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('allows POST only for the exact Microsoft Search query path', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ value: [] }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const body = { requests: [{ entityTypes: ['driveItem'], query: { queryString: 'budget' } }] }
+    await expect(
+      graphFetch(USER, '/search/query', { method: 'POST', scopes: ['Files.Read.All'], body }),
+    ).resolves.toEqual({ value: [] })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${GRAPH_BASE}/search/query`,
+      expect.objectContaining({ method: 'POST', body: JSON.stringify(body) }),
+    )
+  })
+
   it('refuses an unconsented request before MSAL or HTTP', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)

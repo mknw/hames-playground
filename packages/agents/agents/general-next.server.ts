@@ -101,13 +101,24 @@ async function createPatterns(
     withPseudonymisedInputs({ pseudonymise: deps.pseudonymiseForWeb })(
       withInfoDocumentReferences(
         withReferences<AgentData>(
-          simpleLoop<AgentData>(createLoopControllerAdapter(NEO4J_READ_ONLY_CONTEXT), infoTools, {
-            patternId: 'info',
-            schema,
-            liveEvents: true,
-            returnStyle: 'answer',
-            rememberPriorTurns: false,
-          }),
+          simpleLoop<AgentData>(
+            createLoopControllerAdapter(
+              NEO4J_READ_ONLY_CONTEXT +
+                '\n\nWhen you Return, include the URLs of the sources you used as Markdown links ' +
+                'alongside the facts they support. Copy each source URL verbatim from the ' +
+                'tool results or the successful search/fetch arguments; never invent a URL. ' +
+                'Your Return is the source record used to write the final answer, so URLs ' +
+                'left only in tool calls will not reach that answer.',
+            ),
+            infoTools,
+            {
+              patternId: 'info',
+              schema,
+              liveEvents: true,
+              returnStyle: 'answer',
+              rememberPriorTurns: false,
+            },
+          ),
           {
             patternId: 'info',
             selector: baml.selector,

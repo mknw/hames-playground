@@ -617,21 +617,55 @@ export function createIncusEnvironment(options: IncusEnvironmentOptions): IncusE
           })
           vm = await api(c.tls, 'GET', `/1.0/instances/${instance}`)
         }
-        if (
-          vm.type !== 'virtual-machine' ||
-          !same(vm.profiles, []) ||
-          !same(vm.devices, devices) ||
-          !same(
-            Object.fromEntries(
-              Object.entries(vm.config ?? {}).filter(
-                ([k]) => !k.startsWith('volatile.') && !k.startsWith('image.'),
+        function checkVm(value: Entity, expectedConfig: Record<string, string>): void {
+          if (
+            value.type !== 'virtual-machine' ||
+            !same(value.profiles, []) ||
+            !same(value.devices, devices) ||
+            !same(
+              Object.fromEntries(
+                Object.entries(value.config ?? {}).filter(
+                  ([k]) => !k.startsWith('volatile.') && !k.startsWith('image.'),
+                ),
               ),
-            ),
-            config,
+              expectedConfig,
+            )
           )
-        )
-          throw new EnvironmentError('Incus VM configuration has drifted')
+            throw new EnvironmentError('Incus VM configuration has drifted')
+        }
+        const networkKey = 'cloud-init.network-config'
+        const existingSeed = vm.config?.[networkKey]
+        checkVm(vm, existingSeed === undefined ? config : { ...config, [networkKey]: existingSeed })
+        // eth0 is the Incus device key, not necessarily the guest interface name.
+        const mac = vm.config?.['volatile.eth0.hwaddr']
+        if (typeof mac !== 'string' || !/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(mac))
+          throw new EnvironmentError('Incus guest NIC MAC is invalid')
+        const networkConfig = JSON.stringify({
+          version: 2,
+          ethernets: {
+            sandbox: {
+              match: { macaddress: mac.toLowerCase() },
+              dhcp4: true,
+              dhcp6: false,
+              optional: true,
+            },
+          },
+        })
+        const seededConfig = { ...config, [networkKey]: networkConfig }
         const status = await api(c.tls, 'GET', `/1.0/instances/${instance}/state`)
+        if (existingSeed === undefined) {
+          // A stopped VM may already have booted. Only a pending create template
+          // proves the seed can still be installed before cloud-init's first run.
+          if (status.status_code !== 102 || vm.config?.['volatile.apply_template'] !== 'create')
+            throw new EnvironmentError('Incus VM requires network seeding before first boot')
+          await api(c.tls, 'PATCH', `/1.0/instances/${instance}`, {
+            config: { [networkKey]: networkConfig },
+          })
+          vm = await api(c.tls, 'GET', `/1.0/instances/${instance}`)
+          if (vm.config?.['volatile.eth0.hwaddr'] !== mac)
+            throw new EnvironmentError('Incus guest NIC MAC changed during seeding')
+        }
+        checkVm(vm, seededConfig)
         if (status.status_code === 102)
           await api(c.tls, 'PUT', `/1.0/instances/${instance}/state`, {
             action: 'start',

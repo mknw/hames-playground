@@ -159,6 +159,8 @@ beforeAll(async () => {
         )
           return send(403)
         vm = structuredClone(body)
+        vm!.config['volatile.eth0.hwaddr'] = '00:16:3e:12:34:56'
+        vm!.config['volatile.apply_template'] = 'create'
         if (asyncCreate) {
           vmVisible = false
           res.end(
@@ -174,6 +176,10 @@ beforeAll(async () => {
       }
       if (url.pathname === '/1.0/instances/docker') {
         if (!vm || !vmVisible) return send(404)
+        if (method === 'PATCH') {
+          Object.assign(vm.config, body.config)
+          return send(200)
+        }
         if (method === 'DELETE') {
           vm = undefined
           return send(200)
@@ -183,6 +189,7 @@ beforeAll(async () => {
       if (url.pathname === '/1.0/instances/docker/state') {
         if (method === 'PUT') {
           vmStatus = body.action === 'start' ? 103 : 102
+          if (body.action === 'start') delete vm!.config['volatile.apply_template']
           if (asyncNext) {
             asyncNext = false
             res.end(
@@ -227,7 +234,11 @@ beforeAll(async () => {
     stateDirectory: join(root, 'initial'),
   }
   requests = []
-  await createIncusEnvironment(options).reconcile()
+  // Cache only local credentials; provisioning must happen inside each test,
+  // so a broken guard cannot fail setup and masquerade as a discriminating pin.
+  fault = () => ({ status: 503 })
+  await expect(createIncusEnvironment(options).reconcile()).rejects.toThrow('request failed (503)')
+  fault = undefined
   template = options.stateDirectory
 }, 30_000)
 
@@ -267,6 +278,160 @@ function daemonConfig() {
 }
 
 describe('Incus environment wire contract', () => {
+  it('seeds DHCP by MAC before first boot for predictable and legacy guest names', async () => {
+    await controller().reconcile()
+    const seed = JSON.parse(vm!.config['cloud-init.network-config'])
+    expect(seed).toEqual({
+      version: 2,
+      ethernets: {
+        sandbox: {
+          match: { macaddress: '00:16:3e:12:34:56' },
+          dhcp4: true,
+          dhcp6: false,
+          optional: true,
+        },
+      },
+    })
+    const patch = requests.findIndex((r) => r.method === 'PATCH')
+    const start = requests.findIndex((r) => r.body.action === 'start')
+    expect(patch).toBeGreaterThan(-1)
+    expect(patch).toBeLessThan(start)
+    expect(requests[patch].body).toEqual({
+      config: { 'cloud-init.network-config': JSON.stringify(seed) },
+    })
+  })
+
+  it('normalizes the generated MAC and reuses the seed without another write', async () => {
+    fault = (method, url) => {
+      if (method === 'GET' && url.pathname === '/1.0/instances/docker' && vm) {
+        vm.config['volatile.eth0.hwaddr'] = '00:16:3E:AB:CD:EF'
+      }
+      return undefined
+    }
+    const c = controller()
+    await c.reconcile()
+    expect(JSON.parse(vm!.config['cloud-init.network-config']).ethernets.sandbox.match).toEqual({
+      macaddress: '00:16:3e:ab:cd:ef',
+    })
+    requests = []
+    await c.reconcile()
+    vmStatus = 102
+    await c.reconcile()
+    expect(requests.some((r) => r.method === 'PATCH')).toBe(false)
+    expect(requests.filter((r) => r.body.action === 'start')).toHaveLength(1)
+  })
+  it.each(
+    [
+      undefined,
+      null,
+      42,
+      '',
+      'not-a-mac',
+      '00:16:3e:12:34:56\n',
+      '00:16:3e:12:34:56;id',
+      '00-16-3e-12-34-56',
+      '00:16:3e:12:34:5g',
+      '00:16:3e:12:34:56\n00:16:3e:ab:cd:ef',
+      ['00:16:3e:12:34:56'],
+      {},
+    ].map((mac) => ({ mac })),
+  )('refuses invalid generated MAC $mac before seeding or start', async ({ mac }) => {
+    fault = (method, url) => {
+      if (method === 'GET' && url.pathname === '/1.0/instances/docker' && vm)
+        vm.config['volatile.eth0.hwaddr'] = mac
+      return undefined
+    }
+    await expect(controller().reconcile()).rejects.toThrow('NIC MAC is invalid')
+    expect(requests.some((r) => r.method === 'PATCH' || r.body.action === 'start')).toBe(false)
+  })
+  it.each([
+    { status: 103, marker: 'create' },
+    { status: 102, marker: undefined },
+    { status: 102, marker: 'copy' },
+    { status: 102, marker: 'start' },
+  ])(
+    'refuses unseeded VMs without first-boot proof $status $marker',
+    async ({ status, marker }) => {
+      fault = (method, url) => {
+        if (method === 'GET' && url.pathname === '/1.0/instances/docker' && vm) {
+          vmStatus = status
+          vm.config['volatile.apply_template'] = marker
+        }
+        return undefined
+      }
+      await expect(controller().reconcile()).rejects.toThrow('before first boot')
+      expect(requests.some((r) => r.method === 'PATCH' || r.body.action === 'start')).toBe(false)
+    },
+  )
+  it.each(['{}', '', '{"version":2,"ethernets":{"eth0":{"dhcp4":true}}}'])(
+    'refuses drifted network seeds without repairing or starting: %s',
+    async (seed) => {
+      await controller().reconcile()
+      vm!.config['cloud-init.network-config'] = seed
+      vmStatus = 102
+      requests = []
+      await expect(controller().reconcile()).rejects.toThrow('VM configuration has drifted')
+      expect(requests.some((r) => r.method === 'PATCH' || r.body.action === 'start')).toBe(false)
+    },
+  )
+  it('refuses a changed generated MAC on an existing seeded VM', async () => {
+    await controller().reconcile()
+    vm!.config['volatile.eth0.hwaddr'] = '00:16:3e:ab:cd:ef'
+    vmStatus = 102
+    requests = []
+    await expect(controller().reconcile()).rejects.toThrow('VM configuration has drifted')
+    expect(requests.some((r) => r.method === 'PATCH' || r.body.action === 'start')).toBe(false)
+  })
+  it.each(['devices', 'config', 'profiles', 'type'])(
+    'refuses initial VM drift in %s before writing a seed',
+    async (key) => {
+      fault = (method, url) => {
+        if (method === 'GET' && url.pathname === '/1.0/instances/docker' && vm)
+          vm[key] = key === 'type' ? 'container' : {}
+        return undefined
+      }
+      await expect(controller().reconcile()).rejects.toThrow('VM configuration has drifted')
+      expect(requests.some((r) => r.method === 'PATCH' || r.body.action === 'start')).toBe(false)
+    },
+  )
+  it('retains an unbooted VM after a failed seed write and retries safely', async () => {
+    fault = (method) => (method === 'PATCH' ? { status: 500 } : undefined)
+    await expect(controller().reconcile()).rejects.toThrow('request failed (500)')
+    expect(vmStatus).toBe(102)
+    expect(requests.some((r) => r.body.action === 'start')).toBe(false)
+    fault = undefined
+    await controller().reconcile()
+    expect(
+      requests.filter((r) => r.method === 'POST' && r.url.pathname === '/1.0/instances'),
+    ).toHaveLength(1)
+    expect(vmStatus).toBe(103)
+  })
+  it('reads back seed and MAC before starting and refuses ignored or changed writes', async () => {
+    for (const mode of ['ignored', 'mac', 'config', 'devices']) {
+      // Leave the unbooted instance intact to exercise resumable seeding.
+      fault = (method) => {
+        if (method !== 'PATCH') return undefined
+        if (mode === 'ignored') return { data: {} }
+        if (mode === 'mac') vm!.config['volatile.eth0.hwaddr'] = '00:16:3e:ab:cd:ef'
+        if (mode === 'config') vm!.config['limits.cpu'] = '3'
+        if (mode === 'devices') vm!.devices.eth0.network = 'otherbr'
+        return undefined
+      }
+      await expect(controller().reconcile()).rejects.toThrow(
+        mode === 'mac' ? 'MAC changed' : 'VM configuration has drifted',
+      )
+      expect(requests.some((r) => r.body.action === 'start')).toBe(false)
+      if (vm) {
+        delete vm.config['cloud-init.network-config']
+        vm!.config['volatile.eth0.hwaddr'] = '00:16:3e:12:34:56'
+        vm.config['limits.cpu'] = '2'
+        vm.devices.eth0.network = 'testbr'
+      }
+    }
+    fault = undefined
+    await controller().reconcile()
+    expect(vmStatus).toBe(103)
+  })
   it('recovers an expired completed creation operation by inspecting the owned instance', async () => {
     asyncCreate = true
     operationStatus = Array(10).fill(103)
@@ -632,6 +797,9 @@ describe('Incus trust and diagnostics', () => {
     expect(rootEntry).not.toContain('createIncusEnvironment')
     const { createIncusEnvironment: factory } = await import('../incus-environment.server')
     expect(factory).toBe(createIncusEnvironment)
+    expect(Object.keys(await import('../incus-environment.server'))).toEqual([
+      'createIncusEnvironment',
+    ])
   })
   it('generates CA and leaf certificates with explicit roles, issuer, SAN and validity', async () => {
     await controller().reconcile()

@@ -193,25 +193,33 @@ view.fromPatterns(['neo4j-query']).serialize()        // → XML for LLM
 | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `RouterAnthropic`      | Intent classification                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `ControllerAnthropic`  | simpleLoop tool-loop controller — `*NoThink` models, and the backstop stays Sonnet-tier: no Haiku fallback on structured output                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `ActorAnthropic`       | actorCritic actor — the same models as the controller, with thinking left ON                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `PlannerAnthropic`     | planner (#27) upfront decomposition — one call per chain, thinking left ON (the reasoning IS the deliverable)                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `ActorAnthropic`       | actorCritic actor — preserves provider thinking defaults (below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `PlannerAnthropic`     | planner (#27) upfront decomposition — one call per chain, preserves provider thinking defaults (below)                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `CriticAnthropic`      | Evaluation/critique                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `SynthesizerAnthropic` | Response synthesis                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `DescribeAnthropic`    | The cheap tier: eight `describe` functions (batched + per-item result summaries, run titles, intent compaction, the retriever's query rewrite, the citation picker, and the two `withMemory` writers `ExtractMemory` / `CompactMemories`) **plus** `ScreenUntrustedContent` on its own `screen` role. Canonical list: the block on this chain in `anthropic-only.baml`. **Anthropic-tier only** — on the private tier those eight run on `LocalQwenSmall` and the screen on `VerdaQwen`, i.e. the two roles that share this chain diverge |
 
-**Extended thinking (#139):** these models think by default — no request asks for
-it — and the trace is never exposed (empty string + signature), so it cannot feed
-`reasoning`. Measured on 12 captured controller prompts × 6 samples: the simpleLoop
-controller is better WITHOUT it (72/72 valid actions vs 70/72; median output 438 →
-249 tokens; it stops re-querying when it already holds the answer), so
-`ControllerAnthropic` uses the `*NoThink` clients. On the **Anthropic tier** the
-actor, planner, router, critic and compactExecution keep thinking — unmeasured,
-and the corpus had no actor prompts. A thinking-only response with no text is
-retried once by the adapters.
+**Anthropic-tier thinking (#139, #627):** omitting `thinking` preserves each
+leaf's provider default: Sonnet 5 thinks; Sonnet 4.6 and Haiku 4.5 do not.
+See [Anthropic's model defaults](https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting).
+Actor/planner therefore think on their Sonnet 5 lead but not their Sonnet 4.6
+backstop; router/critic think only on their Sonnet 5 backstop; synthesis thinks
+on Sonnet 5 but not its Haiku fallback; the Haiku-only describe chain does not
+think. These are current settings, not measurements of those roles.
 
-**That is an Anthropic-tier property only, and it is now the minority case.**
+#139 measured **Sonnet 5 on captured simpleLoop controller prompts only**:
+12 prompts × 6 samples per variant, 72/72 valid actions without thinking vs
+70/72 with it, median output 438 → 249 tokens, fewer redundant searches.
+`ControllerAnthropic` therefore explicitly disables thinking on BOTH leaves
+via `*NoThink`. The captured Sonnet 5 trace was hidden (empty string +
+signature) and could not feed `reasoning`; the corpus contained no actor or
+planner prompts. Changing another leaf's thinking options needs its own
+measurement. A thinking-only response with no text is retried once by the
+adapters; a planner's output `reasoning` is separate from model-side thinking.
+
+**Private-tier thinking follows its own client options.**
 `VerdaQwen` declares `chat_template_kwargs { enable_thinking false }`, so on the
-self-hosted tier — the deployment default — none of those five roles thinks, and
+self-hosted tier — the deployment default — thinking is also off by default, and
 `verda-body-shape.test.ts` proves the kwarg reaches every one of them. Three of
 the five had been stale here since #263; the widening moved the last two. The
 role this matters most for is the **planner**, whose chain's whole documented

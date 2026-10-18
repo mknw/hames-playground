@@ -486,6 +486,12 @@ class Measurement(unittest.TestCase):
         measure.measure(self.spike)
         self.assertTrue(self.spike.metrics["no_host_socket"])
 
+    def export_process(self, argv, **kwargs):
+        # Priority argv is pinned separately. Scheduling fake Docker at nice 19
+        # would make the unit matrix depend on unrelated work on this machine.
+        prefix = 6 if argv[3:4] == ['ionice'] else 3
+        return REAL_POPEN(argv[prefix:], **kwargs)
+
     def config_fixture(self, entries=None):
         config = json.dumps({"os": "linux", "architecture": "amd64",
                              "rootfs": {"type": "layers", "diff_ids": []}}).encode()
@@ -520,7 +526,7 @@ class Measurement(unittest.TestCase):
                    "mediaType": "application/vnd.oci.image.index.v1+json"}},
                   {"Id": manifest, "Descriptor": {"digest": manifest,
                    "mediaType": "application/vnd.docker.distribution.manifest.v2+json"}}]
-        with patch.object(measure, "host_docker", target), patch.object(measure.subprocess, "Popen", REAL_POPEN):
+        with patch.object(measure, "host_docker", target), patch.object(measure.subprocess, "Popen", self.export_process):
             for store in shapes:
                 with self.subTest(store=store):
                     shape.write_text(json.dumps(store))
@@ -548,10 +554,10 @@ class Measurement(unittest.TestCase):
                         [('config.json', config), ('manifest.json', valid), ('manifest.json', valid)],
                         [('../config.json', config), ('manifest.json', b'[{"Config":"../config.json"}]')]):
             self.config_fixture(entries)
-            with patch.object(measure.subprocess, "Popen", REAL_POPEN), self.assertRaises(RuntimeError):
+            with patch.object(measure.subprocess, "Popen", self.export_process), self.assertRaises(RuntimeError):
                 measure.saved_config_id([str(self.bin / "docker"), "save", IMAGE])
         self.config_fixture()
-        with patch.object(measure.subprocess, "Popen", REAL_POPEN):
+        with patch.object(measure.subprocess, "Popen", self.export_process):
             with patch.object(measure, "EXPORT_BYTES", 512), self.assertRaisesRegex(RuntimeError, "8 GiB"):
                 measure.saved_config_id([str(self.bin / "docker"), "save", IMAGE])
             docker = self.bin / 'docker'

@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import types
 import unittest
 from urllib.error import HTTPError
 from unittest.mock import MagicMock, patch
@@ -239,16 +240,24 @@ if __name__ == "__main__":
                     raise AssertionError("mutation anchor changed: " + label)
                 mutant = Path(directory) / "probe.py"
                 changed = source.replace(before, after)
-                compile(changed, str(mutant), "exec")
                 mutant.write_text(changed)
-                # Distinct source size/mtime avoids stale bytecode across edits.
-                pycache = mutant.parent / "__pycache__"
-                if pycache.exists():
-                    import shutil
-                    shutil.rmtree(pycache)
-                run = subprocess.run([sys.executable, __file__, str(mutant)], capture_output=True, text=True)
-                if run.returncode == 0:
+                # Fresh globals and direct compilation isolate mutants without
+                # restarting Python or consulting its bytecode cache.
+                module = types.ModuleType("uptime")
+                module.__file__ = str(mutant)
+                exec(compile(changed, str(mutant), "exec"), module.__dict__)
+                output = io.StringIO()
+                names = unittest.defaultTestLoader.getTestCaseNames(ProbeTests)
+                # Real subprocess deadlines are exercised once on the original
+                # and again with the deadline removed. Other mutations use the
+                # fast behavioral cases, including the supervisor/CLI contracts.
+                if label != "whole-attempt deadline":
+                    names.remove("test_deadline_stops_slow_headers_body_and_stalled_resolution")
+                with patch.multiple(sys.modules[__name__], uptime=module, SOURCE=mutant):
+                    suite = unittest.TestSuite(ProbeTests(name) for name in names)
+                    run = unittest.TextTestRunner(stream=output).run(suite)
+                if run.wasSuccessful():
                     raise AssertionError("SURVIVED: " + label)
-                if "FAIL:" not in run.stderr:
-                    raise AssertionError("No behavioral assertion killed: " + label + "\n" + run.stderr)
+                if not run.failures:
+                    raise AssertionError("No behavioral assertion killed: " + label + "\n" + output.getvalue())
                 print("KILLED " + label)

@@ -126,5 +126,5 @@ ${block}`,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     expect(output.match(/^KILLED /gm)?.length).toBe(23)
-  }, 30_000) // Includes fresh Python processes and the disposable deadline fixtures.
+  }, 30_000) // One Python runner; real deadline fixtures only for the original/deadline mutant.
 })

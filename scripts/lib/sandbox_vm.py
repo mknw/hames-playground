@@ -391,10 +391,31 @@ class Spike:
                         command("iptables", "-w", "-D", "DOCKER-USER", *rule)
                 elif entry["kind"] == "ufw":
                     rule = entry["rule"]
-                    require(rule[:3] == ["route", "allow", "in"] and "comment" in rule
-                            and rule[-1] == self.token and any(arg.startswith(self.prefix + "-") for arg in rule), "foreign UFW rule")
-                    deletion = command("ufw", "--force", "delete", *rule, check=False)
-                    require(deletion.returncode == 0 or re.search(r"non-existent rule|rule does not exist", deletion.stdout + deletion.stderr, re.I), "UFW reversal failed")
+                    require(rule[:3] == ["route", "allow", "in"] and len(rule) == 16
+                            and rule[3] == "on" and rule[5:7] == ["out", "on"]
+                            and rule[8] == "to" and rule[10] == "port" and rule[12:14] == ["proto", "tcp"]
+                            and rule[-2:] == ["comment", self.token]
+                            and re.fullmatch(re.escape(self.prefix) + r"-n[01]", rule[7]), "foreign UFW rule")
+                    # show added also works when UFW is inactive. Check the saved
+                    # token AND full rule before deleting by spec (no index race).
+                    listing = command("ufw", "show", "added", env=dict(os.environ, LC_ALL="C"))
+                    lines = [line.strip() for line in listing.stdout.splitlines() if line.strip()]
+                    require(listing.returncode == 0 and len(lines) > 1
+                            and lines[0] == "Added user rules (see 'ufw status' for running firewall):"
+                            and (lines[1:] == ["(None)"] or all(line.startswith("ufw ") for line in lines[1:])), "UFW presence unknown")
+                    added = [] if lines[1:] == ["(None)"] else [shlex.split(line) for line in lines[1:]]
+                    expected = ["ufw", *rule]
+                    matches = [current for current in added if current[:15] == expected[:15]]
+                    owned_ufw = [["ufw", *pending["rule"]] for pending in self.firewall if pending["kind"] == "ufw"]
+                    require(matches in ([], [expected])
+                            and all(self.token not in current or current in owned_ufw for current in added), "UFW ownership mismatch")
+                    if matches:
+                        # Route grammar is `route delete allow ...`, not
+                        # `delete route allow ...`; omit the creation comment.
+                        deletion = command("ufw", "route", "delete", *rule[1:-2], check=False,
+                                           env=dict(os.environ, LC_ALL="C"))
+                        require(deletion.returncode == 0 or (deletion.stdout + deletion.stderr).strip()
+                                == "Could not delete non-existent rule", "UFW reversal failed")
                 else:
                     raise RuntimeError("unknown firewall recovery entry")
                 self.firewall.remove(entry)
@@ -415,7 +436,9 @@ class Spike:
 
     def install(self):
         packages = ("incus=" + self.args.incus_version, "incus-client=" + self.args.incus_version,
-                    "dnsmasq-base=" + self.args.dnsmasq_version)
+                    "dnsmasq-base=" + self.args.dnsmasq_version,
+                    "qemu-system-modules-spice=" + self.args.qemu_modules_version,
+                    "qemu-system-modules-opengl=" + self.args.qemu_modules_version)
         plan = command("apt-get", "--simulate", "install", "--no-install-recommends", *packages).stdout
         planned = re.findall(r"^Inst (\S+)", plan, re.M)
         require(planned and set(planned) <= set(self.args.allow_package)
@@ -644,6 +667,7 @@ def arguments(argv):
     parser.add_argument("--kvm-user")
     parser.add_argument("--incus-version")
     parser.add_argument("--dnsmasq-version")
+    parser.add_argument("--qemu-modules-version")
     parser.add_argument("--image-metadata", type=Path)
     parser.add_argument("--image-rootfs", type=Path)
     parser.add_argument("--network", action="append", type=ipaddress.IPv4Interface, default=[])
@@ -656,7 +680,7 @@ def arguments(argv):
     parser.add_argument("--memory-reserve", default="2GiB")
     parser.add_argument("--allow-ufw-route", action="store_true")
     parser.add_argument("--launcher-unit")
-    parser.add_argument("--allow-package", action="append", default=["incus", "incus-base", "incus-client", "dnsmasq-base"])
+    parser.add_argument("--allow-package", action="append", default=["incus", "incus-base", "incus-client", "dnsmasq-base", "qemu-system-modules-spice", "qemu-system-modules-opengl"])
     parser.add_argument("--vm-disk", default="8GiB")
     parser.add_argument("--disk-cap", default="24GiB")
     parser.add_argument("--base-image")
@@ -734,6 +758,7 @@ def preflight(args):
     require(args.install and args.provision, "fresh transaction needs --install --provision")
     require(args.incus_version and re.fullmatch(r"[A-Za-z0-9.+:~_-]+", args.incus_version), "pin Incus package version")
     require(args.dnsmasq_version and re.fullmatch(r"[0-9][A-Za-z0-9.+:~_-]*", args.dnsmasq_version), "pin dnsmasq-base package version")
+    require(args.qemu_modules_version and re.fullmatch(r"[0-9][A-Za-z0-9.+:~_-]*", args.qemu_modules_version), "pin QEMU modules package version")
     require(args.image_metadata and args.image_metadata.is_file() and args.image_rootfs
             and args.image_rootfs.is_file(), "local VM image metadata/rootfs required")
     require(len(args.network) == 2 and not args.network[0].network.overlaps(args.network[1].network),

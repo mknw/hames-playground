@@ -28,7 +28,7 @@ Current round-2 status: Q5 is recorded on [#648](https://github.com/mknw/hames-p
    - Pass `--allow-ufw-route`. With UFW active, the default refuses (`sandbox_vm.py:733`).
 3. **Snapshot parse check.** Run `nft list ruleset > f && nft --check -f f`, and it must exit 0. If it does not, the run stops harmlessly at `:326` (R1). Do not patch the code on the host to get past it.
 4. **Packages.**
-   - Review `apt-get --simulate install --no-install-recommends incus="$INCUS_PACKAGE_VERSION" incus-client="$INCUS_PACKAGE_VERSION" dnsmasq-base="$DNSMASQ_PACKAGE_VERSION"`, and pass every `Inst` name with `--allow-package`.
+   - Review `apt-get --simulate install --no-install-recommends incus="$INCUS_PACKAGE_VERSION" incus-client="$INCUS_PACKAGE_VERSION" dnsmasq-base="$DNSMASQ_PACKAGE_VERSION" qemu-system-modules-spice="$QEMU_MODULES_PACKAGE_VERSION" qemu-system-modules-opengl="$QEMU_MODULES_PACKAGE_VERSION"`, and pass every `Inst` name with `--allow-package`.
    - The simulation shows no upgrades and no `Remv` lines.
    - `dpkg --audit` prints nothing, and no apt or unattended-upgrades process is running.
    - Host QEMU, OVMF and `qemu-img` are already present. If the operator installs them, that is a separate, recorded change outside the harness journal (runbook `:68-69`).
@@ -107,6 +107,7 @@ their values in an issue, commit, shell transcript or public result.
 | `--kvm-user` / `KVM_TEST_USER`                                                                  | Existing non-root member of the host's `kvm` group                                                                                      |
 | `--incus-version` / `INCUS_PACKAGE_VERSION`                                                     | Exact version of native `incus` and `incus-client` apt packages                                                                         |
 | `--dnsmasq-version` / `DNSMASQ_PACKAGE_VERSION`                                                 | Required exact version of `dnsmasq-base`, which supplies the executable Incus checks for managed bridges                                |
+| `--qemu-modules-version` / `QEMU_MODULES_PACKAGE_VERSION`                                       | Required exact QEMU version shared by the SPICE module and its OpenGL module dependency; match the installed host QEMU                  |
 | `--image-metadata` / `VM_METADATA`, `--image-rootfs` / `VM_ROOTFS`                              | Reviewed local Incus VM metadata and disk image; verify their checksums privately                                                       |
 | `--network` / `ENV_A_BRIDGE_CIDR`, `ENV_B_BRIDGE_CIDR`                                          | Two unused, distinct private IPv4 subnets, each gateway at network address + 1                                                          |
 | `--app-bridge` / `APP_BRIDGE`                                                                   | Actual Linux bridge interface for the app's Docker network                                                                              |
@@ -128,9 +129,33 @@ local image files and uses `--pull=never` for every Docker run. It does not run
 image builds or install Kata/Firecracker. Install host QEMU support before the
 window if the native Incus package does not provide it. An apt simulation that
 would upgrade existing software, remove packages, or install/configure
-OpenSSH, UFW, Docker, containerd, runc or the `dnsmasq` service package is refused, even if allow-listed. Every simulated `Inst` package must also appear in the positive allow-list (`incus`, `incus-base`, `incus-client`, `dnsmasq-base` by default); supply repeated `--allow-package` only for reviewed additional dependencies. Simulation, download and installation explicitly request the same exact Incus and dnsmasq-base versions. `dnsmasq-base` is required even with DHCP/DNS disabled: Incus checks its executable version during bridge setup. Use `dnsmasq-base`, not the `dnsmasq` service package. If `dnsmasq-base` is already installed, set `DNSMASQ_PACKAGE_VERSION` to the installed version (`dpkg-query -W dnsmasq-base`); any other value is refused as an upgrade or downgrade. Naming it marks a previously auto-installed copy as manually installed, which rollback does not revert. If newly installed, it stays in `residual_packages` in the private transaction manifest for reviewed console cleanup; rollback removes only the Incus packages and never automatically removes dnsmasq-base or other dependencies. A newly installed `dnsmasq-base` also creates the `dnsmasq` system account (nologin, not journaled); console cleanup is `apt-get purge dnsmasq-base`, because `remove` leaves the account behind. A pre-existing dnsmasq-base is not recorded as a new residual. The download-only phase has its own 180s timeout, before mutation. Installation disables recommends, defers disconnect/termination signals until apt returns, has no subprocess kill timeout during dpkg mutation, and records dependencies left for console cleanup in the private manifest. No automatic autoremove runs. No apt index refresh runs.
+OpenSSH, UFW, Docker, containerd, runc or the `dnsmasq` service package is refused, even if allow-listed. Every simulated `Inst` package must also appear in the positive allow-list (`incus`, `incus-base`, `incus-client`, `dnsmasq-base`, `qemu-system-modules-spice`, `qemu-system-modules-opengl` by default); supply repeated `--allow-package` only for reviewed additional dependencies. Simulation, download and installation explicitly request the same exact Incus, dnsmasq-base and QEMU module versions. `dnsmasq-base` is required even with DHCP/DNS disabled: Incus checks its executable version during bridge setup. Use `dnsmasq-base`, not the `dnsmasq` service package. If `dnsmasq-base` is already installed, set `DNSMASQ_PACKAGE_VERSION` to the installed version (`dpkg-query -W dnsmasq-base`); any other value is refused as an upgrade or downgrade. Naming it marks a previously auto-installed copy as manually installed, which rollback does not revert. If newly installed, it stays in `residual_packages` in the private transaction manifest for reviewed console cleanup; rollback removes only the Incus packages and never automatically removes dnsmasq-base or other dependencies. A newly installed `dnsmasq-base` also creates the `dnsmasq` system account (nologin, not journaled); console cleanup is `apt-get purge dnsmasq-base`, because `remove` leaves the account behind. A pre-existing dnsmasq-base is not recorded as a new residual. The download-only phase has its own 180s timeout, before mutation. Installation disables recommends, defers disconnect/termination signals until apt returns, has no subprocess kill timeout during dpkg mutation, and records dependencies left for console cleanup in the private manifest. No automatic autoremove runs. No apt index refresh runs.
 Incus installs with `NEEDRESTART_MODE=l` to prevent needrestart restarting
 unrelated services.
+
+**QEMU modules (Incus 6.0.x).** Incus 6.0.5 unconditionally adds `-spice` even
+with `-nographic` ([upstream startup argv](https://github.com/lxc/incus/blob/v6.0.5/internal/server/instance/drivers/driver_qemu.go#L1638-L1652)).
+On Ubuntu Noble, [SPICE](https://packages.ubuntu.com/noble/qemu-system-modules-spice)
+depends on `qemu-system-modules-opengl` at the exact same QEMU version. Those
+are the minimal module set here: OpenGL is a package dependency, not a request
+for GPU passthrough. Audio and UI modules are not needed for these headless
+VMs. Before choosing `QEMU_MODULES_PACKAGE_VERSION`, review the target's
+read-only `apt-cache depends incus qemu-system-modules-spice qemu-system-modules-opengl`
+and `apt-cache policy qemu-system-x86 qemu-system-modules-spice qemu-system-modules-opengl`.
+Use the version matching the installed host QEMU, and any already-installed
+module; an upgrade or downgrade is refused. Both module packages are explicitly
+pinned in simulation, download and install despite `--no-install-recommends`.
+New module packages stay in `residual_packages` for reviewed console cleanup;
+pre-existing modules do not. Rollback never removes them. Naming an existing
+module can mark it manually installed, which rollback does not undo.
+
+There is no high-level SPICE-off switch in the 6.0.5 startup path.
+`raw.qemu` appends arguments and `raw.qemu.conf` overrides the generated
+`-readconfig` file; neither removes that unconditional argv entry. A raw
+override is also incompatible with the package environment's
+`restricted.virtual-machines.lowlevel=block`
+([project restrictions](https://github.com/lxc/incus/blob/v6.0.5/doc/reference/projects.md)).
+Install the modules; never loosen the project restriction for this workaround.
 
 The witness must attempt a **new key-authenticated SSH connection from an
 independent machine** to the existing SSH endpoint, with connection timeout,
@@ -145,6 +170,30 @@ It must not edit SSH configuration, UFW inbound rules or SSH ports.
 Keep a console/recovery session and the independent SSH lifeline open. Coordinate package operations for the transaction. Firewall snapshots are private forensic files only: no recovery code replays them. Each exact spike rule/table is journaled before creation and removed independently, preserving later Docker/UFW/fail2ban and metadata-policy changes.
 No reboot, host Docker restart, compose recreation or host stop/rm/kill/prune
 command is part of this procedure.
+
+### Offline reversal grammar notes
+
+The offline fake-binary table checks every command emitted by the journal's
+firewall, resource and package reversals. It accepts only these command forms;
+an unlisted command fails the test, including any new `ip` reversal. Queries
+and mutations both pass through the table. This is syntax evidence, not proof
+of live firewall or Incus behavior.
+
+| Binary     | Accepted reversal/query grammar                                                                                                                           | Primary reference                                                                                                                                                                           |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ufw`      | `show added`; `route delete allow in on IFACE out on IFACE to IPv4 port PORT proto tcp`                                                                   | [Noble ufw(8)](https://manpages.ubuntu.com/manpages/noble/man8/ufw.8.html), route synopsis; [0.36.2 saved-rule rendering](https://git.launchpad.net/ufw/tree/src/frontend.py?h=0.36.2#n358) |
+| `nft`      | `-j list tables`; `delete table inet NAME`                                                                                                                | [nft(8), tables](https://netfilter.org/projects/nftables/manpage.html#lbAF)                                                                                                                 |
+| `iptables` | `-w -C DOCKER-USER RULE`; `-w -D DOCKER-USER RULE`, including the comment match                                                                           | [iptables(8)](https://manpages.ubuntu.com/manpages/noble/man8/iptables.8.html), commands and wait option                                                                                    |
+| `incus`    | `--force-local [--project NAME]` plus `info NAME`, `config get NAME KEY`, `delete --force NAME`, or resource `show/get/delete` (image/profile delete too) | [Incus 6.0 CLI](https://github.com/lxc/incus/tree/v6.0.5/doc/reference/manpages)                                                                                                            |
+| `ip`       | None: IP changes are guest setup, not journaled host mutations; deleting the owned VM removes them                                                        | [ip(8)](https://manpages.ubuntu.com/manpages/noble/man8/ip.8.html)                                                                                                                          |
+| `apt-get`  | `remove -y incus incus-base incus-client`                                                                                                                 | [apt-get(8)](https://manpages.ubuntu.com/manpages/noble/man8/apt-get.8.html), remove                                                                                                        |
+
+For UFW, the route keyword precedes delete. The reversal omits the comment
+clause after confirming the exact saved rule and token with `ufw show added`,
+which also works when the firewall is inactive. A confirmed absent rule
+completes its journal entry; a foreign token, malformed/failed query or failed
+deletion retains the entry for recovery. Numbered deletion is avoided because
+another rule can shift an index. No reset, disable or reload is used.
 
 ## Render, review, then apply explicit steps
 
@@ -168,6 +217,7 @@ bash scripts/sandbox-vm-spike.sh \
   --ssh-probe "$SSH_WITNESS" --kvm-user "$KVM_TEST_USER" \
   --incus-version "$INCUS_PACKAGE_VERSION" \
   --dnsmasq-version "$DNSMASQ_PACKAGE_VERSION" \
+  --qemu-modules-version "$QEMU_MODULES_PACKAGE_VERSION" \
   --image-metadata "$VM_METADATA" --image-rootfs "$VM_ROOTFS" \
   --network "$ENV_A_BRIDGE_CIDR" --network "$ENV_B_BRIDGE_CIDR" \
   --app-bridge "$APP_BRIDGE" --app-network "$APP_NETWORK" \
@@ -189,6 +239,7 @@ sudo systemd-run --unit="$LAUNCH_UNIT" --collect \
   --ssh-probe "$SSH_WITNESS" --kvm-user "$KVM_TEST_USER" \
   --incus-version "$INCUS_PACKAGE_VERSION" \
   --dnsmasq-version "$DNSMASQ_PACKAGE_VERSION" \
+  --qemu-modules-version "$QEMU_MODULES_PACKAGE_VERSION" \
   --image-metadata "$VM_METADATA" --image-rootfs "$VM_ROOTFS" \
   --network "$ENV_A_BRIDGE_CIDR" --network "$ENV_B_BRIDGE_CIDR" \
   --app-bridge "$APP_BRIDGE" --app-network "$APP_NETWORK" \

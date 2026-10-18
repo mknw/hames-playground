@@ -108,5 +108,8 @@ app/playwright-report/
 # state; meaningless outside the session that wrote it.
 .pi/tasks/
 
+# Host surveys, firewall backups, VM credentials and raw spike evidence (ADR-0008).
+.sandbox-vm-spike/
+
 # The front-facing prose standards are kept local and unpublished.
 .claude/agents/public-copywriter.md

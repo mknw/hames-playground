@@ -13,8 +13,10 @@ what the **Entra tenant owner** must provision, plus the env the app needs.
 
 ## 1. App registration
 
-Reuse the existing registration and `AZURE_CLIENT_ID`; the owner adds the new
-redirect URI to that registration. No new app id is needed.
+Use an existing registration (its client id goes in `AZURE_CLIENT_ID`) or
+create one: Entra admin center → **App registrations** → **New registration**.
+A deployment that already has a registration keeps it and its client id, and only
+adds its redirect URI.
 
 - **Supported account types:** _Accounts in this organizational directory only_
   (single tenant). Gives a fixed `AZURE_TENANT_ID` and matches the MS-only
@@ -148,7 +150,7 @@ have no user present to consent mid-run. One consent, done.
 A granted scope is not a capability. The model can only do what a _registered
 tool_ exposes — see
 [MICROSOFT_GRAPH.md](../MICROSOFT_GRAPH.md#what-it-can-do-today) for the current
-set, none of which writes to Microsoft 365. Write approval is currently limited to Neo4j (owner ruling 2026-10-19);
+set, none of which writes to Microsoft 365. Write approval is currently limited to Neo4j (owner ruling, #669);
 Graph write tools are not shipped.
 
 > ⚠️ **Order matters.** Every scope in the request must exist under **API
@@ -158,17 +160,37 @@ Graph write tools are not shipped.
 > `AZURE_GRAPH_SCOPES` env var (space- or comma-separated) and restart — no code
 > change or redeploy needed. Reserved scopes (`openid`/`profile`/
 > `offline_access`) are stripped automatically; MSAL supplies them.
-> Write/send scopes in the override are rejected at boot.
+> Overrides may only trim the six-scope read set above (case-insensitive); any
+> other scope, including every delegated `.default` form, is rejected at boot.
+> The same allowlist refuses unapproved scopes at the delegated token mint before
+> reading the stored cache. Graph-qualified names are not accepted.
 
 ### Remove the old write permissions in Entra
 
-Dropping scopes from the sign-in request does **not** revoke existing consents
-on the reused registration. `Mail.Send` and `Calendars.ReadWrite` remain granted
-until the owner removes those permissions in Entra. Leave exactly these delegated
-connector scopes: `User.Read`, `email`, `Mail.Read`, `Calendars.Read`,
-`Files.Read.All`, `Sites.Read.All`. MSAL also supplies the reserved OIDC scopes
-`openid`, `profile` and `offline_access`. This code change performs no tenant or
-token-cache migration.
+Dropping scopes from code or removing configured API permissions does **not**
+revoke existing consent grants. On a deployment with old write permissions, the
+owner must complete **both** steps on the existing registration:
+
+1. **App registrations → the app → API permissions:** remove `Mail.Send` and
+   `Calendars.ReadWrite` (Microsoft Graph, Delegated).
+2. **Revoke the existing grants for both permissions:** use **Other permissions
+   granted for <tenant>**, or **Enterprise applications → the app → Permissions**
+   to revoke the admin consent. Also revoke any **per-user consent grants**.
+   If the portal revokes the whole grant, regrant only the retained set below.
+
+Keep these Microsoft Graph delegated permissions: **`User.Read`, `email`,
+`Mail.Read`, `Calendars.Read`, `Files.Read.All`, `Sites.Read.All`, `openid`,
+`profile`, `offline_access`**. MSAL supplies the last three in the request; keep
+them in the registration and consent. `offline_access` yields the refresh token
+background runs depend on. Grant the retained read set before users sign in
+again. **Leave application permissions (the roster read) unchanged.**
+
+Previously issued access tokens may retain their old `scp` until expiry (about
+one hour). After revocation and fresh sign-in, inspect a fresh token's `scp`
+locally to confirm the two write permissions are absent; never log or publish
+the token. The code change performs no tenant or token-cache migration. The
+shared mint allowlist refuses requests for unapproved delegated scopes even
+before owner revocation, but does not rewrite permissions on issued tokens.
 
 ### Adding a read scope later
 

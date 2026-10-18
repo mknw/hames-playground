@@ -47,8 +47,8 @@ that _does_ compose a retriever should compose the ingest tool too.
 **Scopes and writes.** Sign-in requests only the read scopes the shipped tools
 need. `graph_calendar_today` requests `Calendars.Read`; no mail-send or calendar-write
 tool is registered. Write approval is currently limited to Neo4j (owner ruling
-2026-10-19). Existing `Mail.Send` and `Calendars.ReadWrite` consents on the reused
-registration remain granted until the owner removes them in Entra — see the
+#669). Existing `Mail.Send` and `Calendars.ReadWrite` consents on the reused
+registration remain granted until the owner removes the configured permissions and revokes admin and per-user grants in Entra — see the
 [setup runbook](deployment/entra-setup.md#remove-the-old-write-permissions-in-entra).
 
 ---

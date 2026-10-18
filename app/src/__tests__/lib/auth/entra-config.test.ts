@@ -25,6 +25,34 @@ const full = {
   AZURE_CLIENT_SECRET: 'secret',
 }
 
+const REJECTED_SCOPES = [
+  'Mail.Send',
+  'Calendars.ReadWrite',
+  'Files.ReadWrite.All',
+  'Tasks.ReadWrite.Shared',
+  'Custom.Write',
+  'Custom.Write.All',
+  'Custom.Send',
+  'Custom.Send.Shared',
+  'Custom.SendMail',
+  'https://graph.microsoft.com/Mail.Send',
+  'mail.sEND',
+  'Sites.Manage.All',
+  'Sites.FullControl.All',
+  'Directory.AccessAsUser.All',
+  'sItEs.mAnAgE.aLl',
+  'https://graph.microsoft.com/.default',
+  '.default',
+  '00000003-0000-0000-c000-000000000000/.default',
+  'EWS.AccessAsUser.All',
+  'https://outlook.office365.com/EWS.AccessAsUser.All',
+  'User.Invite.All',
+  'Group.Create',
+  'Notes.Create',
+  'Unknown.Read',
+  'https://graph.microsoft.com/Mail.Read',
+]
+
 describe('isEntraConfigured', () => {
   it('is true only when all three secrets are present + non-blank', () => {
     expect(isEntraConfigured(full)).toBe(true)
@@ -59,10 +87,16 @@ describe('buildEntraConfig', () => {
     }
   })
 
-  // Mutation: adding Mail.Send, Calendars.ReadWrite, Files.ReadWrite.All or
-  // a new *.Write / *.Send scope to DEFAULT_GRAPH_SCOPES must turn this red.
-  it('never requests a write or send scope in the default set', () => {
-    expect(DEFAULT_GRAPH_SCOPES.filter((scope) => /write|send/i.test(scope))).toEqual([])
+  // Mutation: adding ANY scope (including .default or Sites.Manage.All) must turn red.
+  it('requests exactly the approved six read scopes in the default set', () => {
+    expect([...DEFAULT_GRAPH_SCOPES].sort()).toEqual([
+      'Calendars.Read',
+      'Files.Read.All',
+      'Mail.Read',
+      'Sites.Read.All',
+      'User.Read',
+      'email',
+    ])
   })
 
   it('AZURE_GRAPH_SCOPES trims the set without a code change', () => {
@@ -70,23 +104,26 @@ describe('buildEntraConfig', () => {
     expect(cfg.scopes).toEqual(['User.Read', 'Mail.Read'])
   })
 
-  // Mutation: delete parseScopes' write/send rejection. Every case must fail.
-  it.each([
-    'Mail.Send',
-    'Calendars.ReadWrite',
-    'Files.ReadWrite.All',
-    'Tasks.ReadWrite.Shared',
-    'Custom.Write',
-    'Custom.Write.All',
-    'Custom.Send',
-    'Custom.Send.Shared',
-    'Custom.SendMail',
-    'https://graph.microsoft.com/Mail.Send',
-    'mail.sEND',
-  ])('rejects the write override %s instead of silently dropping it', (scope) => {
-    expect(() =>
-      buildEntraConfig({ ...full, AZURE_GRAPH_SCOPES: `User.Read, ${scope} Mail.Read` }),
-    ).toThrow(/AZURE_GRAPH_SCOPES.*write\/send.*read-only/)
+  // Mutation: delete parseScopes' shared assertion; every rejected scope must fail.
+  it.each(REJECTED_SCOPES)(
+    'rejects the unapproved override %s instead of silently dropping it',
+    (scope) => {
+      expect(() =>
+        buildEntraConfig({ ...full, AZURE_GRAPH_SCOPES: `User.Read, ${scope} Mail.Read` }),
+      ).toThrow(/AZURE_GRAPH_SCOPES.*not in the read-only set/)
+    },
+  )
+
+  it('compares approved scopes case-insensitively and preserves duplicates', () => {
+    expect(
+      buildEntraConfig({
+        ...full,
+        AZURE_GRAPH_SCOPES: 'OPENID, PROFILE\tOFFLINE_ACCESS\nuser.read, MAIL.READ user.read',
+      }).scopes,
+    ).toEqual(['user.read', 'MAIL.READ', 'user.read'])
+    expect(
+      buildEntraConfig({ ...full, AZURE_GRAPH_SCOPES: 'OPENID, PROFILE OFFLINE_ACCESS' }).scopes,
+    ).toEqual([...DEFAULT_GRAPH_SCOPES])
   })
 
   it('accepts all shipped read scopes in an override', () => {
@@ -161,11 +198,14 @@ describe('scope validation at server boot', () => {
   })
 
   // Mutation: delete the module-scope parseScopes call; this must turn red.
-  it('refuses a write override on import before credentials or requests are needed', async () => {
+  it.each(REJECTED_SCOPES)('refuses %s on import without credentials', async (scope) => {
     vi.resetModules()
-    vi.stubEnv('AZURE_GRAPH_SCOPES', 'User.Read Mail.Send')
+    for (const key of ['AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET']) {
+      vi.stubEnv(key, '')
+    }
+    vi.stubEnv('AZURE_GRAPH_SCOPES', `User.Read ${scope}`)
     await expect(import('../../../lib/auth/entra-config.server')).rejects.toThrow(
-      /AZURE_GRAPH_SCOPES.*write\/send.*read-only/,
+      /AZURE_GRAPH_SCOPES.*not in the read-only set/,
     )
   })
 

@@ -1412,10 +1412,21 @@ stage_hostname() {
        to https://$h/auth/signin in .env by this stage.
     c. API permissions -> Microsoft Graph -> Delegated: User.Read, email,
        Mail.Read, Calendars.Read, Files.Read.All,
-       Sites.Read.All -> Grant admin consent. A requested scope that is not
-       consented fails the WHOLE sign-in (trim with AZURE_GRAPH_SCOPES).
-       Keep the same registration/client id. Existing Mail.Send and
-       Calendars.ReadWrite consents remain until the owner removes them in Entra.
+       Sites.Read.All, openid, profile, offline_access -> Grant admin consent.
+       A requested scope without consent fails the WHOLE sign-in
+       (trim with AZURE_GRAPH_SCOPES).
+       Keep the same registration/client id. Complete BOTH steps:
+       1. App registrations -> app -> API permissions: remove Mail.Send and
+          Calendars.ReadWrite (Microsoft Graph, Delegated).
+       2. Revoke their admin grant under Other permissions granted for <tenant>
+          or Enterprise applications -> app -> Permissions. Revoke per-user
+          consent grants too; removing configured permissions does not revoke consent.
+       If the whole grant is revoked, regrant only the retained set above.
+       Keep openid/profile/offline_access; offline_access enables background refresh.
+       Leave application permissions (roster read) unchanged.
+       Overrides may only trim the six read scopes; other scopes refuse boot/mint.
+       Old access tokens retain permissions until expiry; verify a fresh token's
+       scp locally after revocation/sign-in (never log/publish the token).
     d. AZURE_CLIENT_SECRET must be the secret VALUE, not its id; note its expiry.
 EOF
 }

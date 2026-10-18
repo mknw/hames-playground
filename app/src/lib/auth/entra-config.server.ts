@@ -64,7 +64,7 @@ const RESERVED_SCOPES = new Set(['openid', 'profile', 'offline_access'])
  * space- or comma-separated list to drop a problem scope without a code change.
  *
  * Only read scopes are requested: every shipped Graph tool reads Microsoft
- * 365. Write approval is currently limited to Neo4j (owner ruling 2026-10-19).
+ * 365. Write approval is currently limited to Neo4j (owner ruling, #669).
  */
 export const DEFAULT_GRAPH_SCOPES: readonly string[] = [
   'User.Read', // own profile
@@ -75,19 +75,30 @@ export const DEFAULT_GRAPH_SCOPES: readonly string[] = [
   'Sites.Read.All', // SharePoint sites the user can access
 ]
 
-/** Parse a read-only operator override (comma or whitespace separated). */
+/** Refuse delegated requests outside the approved six-scope read-only set. */
+export function assertReadOnlyGraphScopes(scopes: readonly string[]): void {
+  if (
+    scopes.some(
+      (scope) =>
+        !DEFAULT_GRAPH_SCOPES.some((allowed) => allowed.toLowerCase() === scope.toLowerCase()),
+    )
+  ) {
+    throw new Error(
+      '[entra] AZURE_GRAPH_SCOPES or delegated token request includes a write/send or other ' +
+        'scope not in the read-only set; use only User.Read, email, Mail.Read, Calendars.Read, ' +
+        'Files.Read.All, Sites.Read.All.',
+    )
+  }
+}
+
+/** Parse a subset of the approved read scopes (comma or whitespace separated). */
 function parseScopes(raw: string | undefined): string[] | null {
   if (!raw?.trim()) return null
   const list = raw
     .split(/[\s,]+/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0 && !RESERVED_SCOPES.has(s.toLowerCase()))
-  if (list.some((scope) => /write|send/i.test(scope))) {
-    throw new Error(
-      '[entra] AZURE_GRAPH_SCOPES includes a write/send scope. Microsoft Graph access is ' +
-        'read-only; remove write/send scopes before starting the server.',
-    )
-  }
+  assertReadOnlyGraphScopes(list)
   return list.length > 0 ? list : null
 }
 

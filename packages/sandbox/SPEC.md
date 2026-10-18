@@ -1,4 +1,4 @@
-# Sandbox package contract — Docker connections
+# Sandbox package contract — Docker connections and Incus environments
 
 The Docker backend and interactive Shell share `docker-connection.server.ts`.
 This package owns endpoint selection; core harness patterns have no Docker
@@ -72,3 +72,46 @@ Default-path tests pin the legacy argv/env shape. Every claimed path is
 mutation-checked by bypassing its endpoint selection; actual daemon routing,
 certificate authentication and interactive resize remain integration evidence
 owed by the deployment work.
+
+## Operator-only Incus environments
+
+The supported API is the server-only `./incus-environment.server` subpath,
+excluded from the root entry point. It exports `createIncusEnvironment`, the
+`IncusEnvironment` controller and the named credential, options and connection
+types. The operator supplies manager credentials explicitly. Construction makes
+no network calls; `reconcile()` and `teardown()` serialize within a controller.
+See [README — Incus environment VMs](README.md#incus-environment-vms-operator-opt-in)
+for prerequisites, deployment and the live evidence still owed.
+
+Layer 1's `__tests__/incus-environment.test.ts` uses an in-process HTTPS API
+with real certificate generation and pins these fail-closed invariants:
+
+- One owned, restricted project permits one VM and no containers, with explicit
+  CPU, memory and disk limits. Host devices, snapshots, backups, low-level VM
+  settings and nesting are blocked. Network, image-server domain and storage
+  pool access are explicit. Incus 7.3+ is required; unsupported keys fail creation.
+- Instance operations use a separate certificate restricted to exactly that
+  project. Foreign ownership, certificate scope and project restriction drift
+  are refused. VM config is exact except for Incus `volatile.*` and `image.*`
+  metadata; profiles and devices, including NIC address filters, are exact.
+- Manager origins require verified HTTPS; image origins additionally require
+  port 443. No redirects, plaintext retry, alternate provider, credential or
+  provider response body is exposed through diagnostics.
+- Docker requires mTLS on only the reserved guest bridge address. Certificate
+  roles, CA constraints, key usage, server SAN, issuer and validity are explicit.
+  Private keys, `state.json` and `creation.json` have mode 0600; the operator
+  directory is private. The app receives only the Docker client files and endpoint.
+- Creation is journaled and resumed before retry. Teardown checks ownership,
+  removes only its instance and pinned image, deletes the project without force,
+  and revokes the exact certificate. Scoped DELETE queries contain only the own
+  project. Unexpected resources retain the project, resource and certificate.
+- Completed teardown removes generated credentials/state, so reconcile rotates
+  the CA, Docker client key and Incus certificate. Failed teardown retains them
+  for recovery; repeated teardown is safe. Shared bridges/pools are never deleted.
+
+These hermetic tests and their red mutations establish the client contract,
+not a real VM or host firewall boundary. Real Incus image pulls, VM boot,
+cloud-init/agent, routing/firewall, streams/files/PTY and performance remain
+spike evidence. The server key stays in cloud-init data for the VM lifetime;
+the compose overlay leaves the root app and gateway network/socket caveats
+documented in the README.

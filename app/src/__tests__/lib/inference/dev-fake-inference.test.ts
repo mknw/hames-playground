@@ -12,9 +12,10 @@
  * exercised from here — a build is what flips it, and the source pin is what
  * covers it.
  *
- * The install is async because it imports `ClientRegistry` lazily; that is not
- * a detail of the test but the thing that keeps `@boundaryml/baml` out of the
- * production server entry. See the module's own header.
+ * The install stays `async` for its callers' contract, though `ClientRegistry`
+ * is now a plain top-of-file import (#480 decision b) rather than a lazy one:
+ * `src/middleware.ts` loads BAML at module scope deliberately, so this module
+ * no longer has to avoid doing the same. See the module's own header.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 

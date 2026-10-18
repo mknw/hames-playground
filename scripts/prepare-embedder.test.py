@@ -301,8 +301,9 @@ class Wiring(unittest.TestCase):
             env_problems() { :; }; owner_missing() { :; }; reserved_name() { return 1; };
             escrow_recorded() { :; }; dns_points_here() { :; }; assert_dynamic_tools_off() { :; };
             rendered_exposure() { :; }; vps_check() { :; };
-            python3() { echo "PREPARE $*"; return "$PREPARE_STATUS"; };
-            dc() { echo "COMPOSE $*"; };
+            python3() { if [[ $1 == *prepare-embedder.py ]]; then echo "PREPARE $*"; return "$PREPARE_STATUS"; else command python3 "$@"; fi; };
+            dc() { if [[ $1 == config ]]; then echo '{"name":"synthetic"}'; else echo "COMPOSE $*"; fi; };
+            sudo() { :; };
             wait_state() { echo "WAIT $*"; [[ $1 != embedder || $WAIT_STATUS == 0 ]]; };
             stage_boot'''
             for prepare_status, wait_status in ((0, 0), (1, 0), (0, 1)):

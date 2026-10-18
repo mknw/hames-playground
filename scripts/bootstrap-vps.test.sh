@@ -336,6 +336,18 @@ ENV
     cp "$dir/good.env" "$dir/release/.env"
     cp "$dir/good.json" "$dir/render.json"
   }
+  clone_select() {
+    printf 'COMPOSE_FILE=%s\n' "$1" >>"$dir/release/.env"
+    if [[ $1 == *:docker-compose.dev-sandbox.yaml ]]; then
+      python3 - "$dir/render.json" <<'PY'
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1]); c=json.loads(p.read_text())
+c['x-clone-dev-docker-socket']=True
+c['services']['app-dev']['volumes'].append(dict(type='bind',source='/var/run/docker.sock',target='/var/run/docker.sock',read_only=False))
+p.write_text(json.dumps(c))
+PY
+    fi
+  }
   clone_refused() {
     local label=$1 result status
     result=$(clone_boot "${2:-boot}" 2>&1); status=$?
@@ -352,7 +364,7 @@ ENV
     pass "clones boot keeps app-dev in the same project and waits for its health"
   else flunk "clones boot shape (rc=$rc)" "$out"; fi
   clone_reset
-  printf 'COMPOSE_FILE=%s:docker-compose.dev-sandbox.yaml\n' "$clones" >>"$dir/release/.env"
+  clone_select "$clones:docker-compose.dev-sandbox.yaml"
   out=$(clone_boot 2>&1); rc=$?
   if ((rc == 0)) && grep -Fxq "$clones:docker-compose.dev-sandbox.yaml|app|compose up -d" "$dir/calls"; then
     pass "clones retains the explicit owner socket overlay"
@@ -445,7 +457,7 @@ PY
   for operation in dc probe smoke images; do
     for shape in "$clones" "$clones:docker-compose.dev-sandbox.yaml"; do
       clone_reset
-      printf 'COMPOSE_FILE=%s\n' "$shape" >>"$dir/release/.env"
+      clone_select "$shape"
       [[ $operation != images ]] || continue # failure path below; image catalogue is out of scope
       out=$(clone_boot "$operation" 2>&1); rc=$?
       case $operation in
@@ -475,6 +487,9 @@ PY
       else flunk "clones $operation dispatched after $problem (rc=$rc)" "$out $(cat "$dir/calls")"; fi
     done
   done
+  clone_reset
+  sed '/^DEV_DATABASE_URL=/d' "$dir/good.env" >"$dir/release/.env"
+  clone_refused 'incomplete smoke inputs with private health disabled' smoke
   printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
   out=$(SHIM_NO_DEV=1 clone_boot smoke 2>&1); rc=$?
   if ((rc == 0)) && grep -q '^HTTP ' "$dir/calls"; then pass 'clones default smoke still succeeds'; else flunk 'clones default smoke failed' "$out"; fi
@@ -616,7 +631,7 @@ with tempfile.TemporaryDirectory() as tmp:
     # module, including the review's six previously ACCEPTED renders.
     for name, old, new in [
         ('sibling-value-scan', 'ownSecrets.some((secret) => String(value).includes(secret))', 'false'),
-        ('administrator-value-scan', '!administrator || !Object.values(env).some', 'true || !Object.values(env).some'),
+        ('administrator-value-scan', '!administrator ||', 'true ||'),
         ('equal-role-passwords', 'passwords[0] !== passwords[1]', 'true'),
         ('root-only-app-inputs', '!Object.keys(env).some', 'true || !Object.keys(env).some'),
         ('reserved-database', '!["postgres", "template0", "template1"].includes', 'true || !["postgres", "template0", "template1"].includes'),

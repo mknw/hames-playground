@@ -8,7 +8,7 @@ An agent's topology is fixed when it is built, and today's `general` is `planner
 
 ## The shape
 
-This is the target composition, including the core changes specified below, not runnable code on current main. Source checks for this fix round use `origin/main` at `7a3446ca`; that commit is already an ancestor of this branch. In particular, slice 3 follows #418 G11's deletion/client-migration slice (P5), and the file-ingest path stays off until P4.
+This is the target composition, including the core changes specified below, not runnable code on current main. Source checks for round 2 used `origin/main` at `7a3446ca`. The sections PR #682 adds or rewrites (the file path, writes, resume inside a route, slices 5, 6, 8 and 9) were checked against `origin/main` at `821ce6c4`. In particular, slice 3 follows #418 G11's deletion/client-migration slice (P5), and the file-ingest path stays off until P4.
 
 ```typescript
 // P4 (2026-10-19): the file path is open; graph_file_ingest itself refuses any run that is not positively private.
@@ -28,12 +28,12 @@ const info_ag = withInjectionGuard(INFO_GUARD)(                    // knowledge 
 )
 const retrieve = withInjectionGuard({ tools: ['retriever'] })(retriever({ backends: [redis], patternId: 'retriever' }))   // the Data Stash
 const think = planner(createPlannerAdapter(…), PLANNABLE_TOOLS, { patternId: 'think' })
-const graph_edit = withInjectionGuard(GRAPH_EDIT_GUARD)(           // H1: Neo4j writes, each approved by the person
-  simpleLoop(createLoopControllerAdapter(), [...NEO4J_READ, 'cypher_write_request'], { patternId: 'graph-edit', returnStyle: 'answer', rememberPriorTurns: false }),
+const knowledge_edit = withInjectionGuard(KNOWLEDGE_EDIT_GUARD)(   // H1: Neo4j writes, each approved by the person
+  simpleLoop(createLoopControllerAdapter(), [...NEO4J_READ, 'cypher_write_request'], { patternId: 'knowledge-edit', returnStyle: 'answer', rememberPriorTurns: false, multiToolCalls: 'off' }),
 )
 
 const orchestrator = withInjectionGuard({
-  ...GUARD_UNION, // INFO_GUARD + DOC_GUARD + GRAPH_EDIT_GUARD + retriever, with the catalog for namespace validation
+  ...GUARD_UNION, // INFO_GUARD + DOC_GUARD + KNOWLEDGE_EDIT_GUARD + retriever, with the catalog for namespace validation
   tools: [...GUARD_UNION.tools, 'decision_loop_output'],
   spotlight: 'always',
   screen,
@@ -42,7 +42,7 @@ const orchestrator = withInjectionGuard({
     'office-data': { pattern: doc_ag, description: 'Work on Microsoft 365 files and mail; run code over them' },
     'info-retrieval': { pattern: info_ag, description: 'Look things up in the knowledge graph, on the web, in library docs and in the memory graph' },
     'read-documents': { pattern: retrieve, description: 'Search documents already in this conversation' },
-    'graph-edit': { pattern: graph_edit, description: "Change the knowledge graph; every change waits for the person's approval" },
+    'knowledge-edit': { pattern: knowledge_edit, description: "Change the knowledge graph; every change waits for the person's approval" },
     think: { pattern: think, description: 'Decide the steps before acting' },
   },
   { decide, answer: 'Generate the answer for the user now, from the conversation and any results so far', handoff: { lastN: 2 }, maxIterations: 6, patternId: 'orchestrator' },
@@ -223,7 +223,7 @@ The child's own `error` events stay inside its `pattern_enter`/`pattern_exit`, b
 - **`read-documents` is its own route** rather than a tool inside `info_ag`. The retriever is a pattern, not an MCP tool. Putting it in `simpleLoop`'s tool list would need round 1's `patternTool` primitive. The redis server's `search_redis_documents` cannot stand in for it: it is not scoped to the conversation, so the model could name another conversation's keys (the same reason `graph_file_ingest` takes its session from the request). As a route it needs nothing new, and `harnessHasRedisRetriever` still finds it through `children`.
 - **`info_ag` holds Neo4j reads, web tools, the two `context7` library-doc tools and the memory graph's READ tools** (`search_nodes`, `open_nodes`; `read_graph` stays out because the memory graph is shared by every user and the call returns all of it; S3b, to match what `general` can do for scenarios 04/05). The memory create/add/delete tools stay withheld by name. `context7` is an outbound public service, checked like web search by the G14 egress check; `memory` is declared local beside `neo4j`. The Neo4j-and-web grouping was the owner's. Free-form Cypher stays. The agent slice waits for [G13's network isolation and required evidence](https://github.com/mknw/hames-playground/issues/241#issuecomment-6181475778), which supersedes G12 S-a's procedure allow-list dependency; see P3.
 - **`doc_ag` holds the Microsoft 365 tools, inside a sandbox.** Until slice 5, `graph_file_ingest` stays withheld by exact name, as slice 3 pinned. With P4 ruled (2026-10-19), slice 5 adds it to the allowlist; the tool itself refuses any run that is not positively private ([The file path (P4)](#the-file-path-p4)).
-- **`graph-edit` holds the Neo4j read tools and the write request** (H1, accepted 2026-10-19). It has no web tools and no pseudonymisation wrapper, and it is built with slices 6 and 8 ([Writes, gated by a person](#writes-gated-by-a-person)).
+- **`knowledge-edit` holds the Neo4j read tools and the write request** (H1, accepted 2026-10-19, as `graph-edit`; renamed because the UI edit module already has that name). It has no web tools and no pseudonymisation wrapper, and it is built with slices 6 and 8 ([Writes, gated by a person](#writes-gated-by-a-person)).
 
 ## Where memory, guards and the sandbox sit
 
@@ -365,38 +365,42 @@ Mutations: drop the `apply` call; skip the data rewrite; narrow the roster input
 
 ### The file path (P4)
 
-Ruled by the owner on 2026-10-19. S-f said to pseudonymise the `graph_file_ingest` → `/work/in` path; G14 later stated what pseudonymisation is for here, which is keeping identities from leaving through an outbound call. Read together: **the file path is protected at its exits, not by rewriting the file.** No byte is rewritten and no table is kept, and a document the person asked for keeps its real names.
+Ruled by the owner on 2026-10-19 (recorded in [the fix-round comment on PR #682](https://github.com/mknw/hames-playground/pull/682)). S-f said to pseudonymise the `graph_file_ingest` → `/work/in` path; G14 later stated what pseudonymisation is for here, which is keeping identities from leaving through an outbound call. Read together: **the file path is protected at its exits, not by rewriting the file.** No byte is rewritten and no table is kept, and a document the person asked for keeps its real names.
 
 **Why not rewrite the bytes.** On the private tier, a rewritten copy would protect nothing that can leave:
 
 - the `office-data` sandbox has no network at all: `egress: 'mcp-only'` (`packages/agents/agents/general-next.server.ts:61`) boots it with `--network none` (`packages/sandbox/docker-backend.server.ts:670-671`);
 - the actor's model calls go only to the private tier's own deployments;
-- its Microsoft 365 tools read the person's own tenant, and none of them writes (`packages/connectors/graph/graph-tools.server.ts:1318-1903`);
+- no tool can write to Microsoft 365: delegated `graphFetch` refuses every method except GET and the Search POST before a token is touched (#680, `app/src/lib/auth/graph-token.server.ts:186-190`). `graph_file_ingest` writes only to this conversation's stash;
 - the one route with outbound tools, `info-retrieval`, receives `office-data`'s output only through G14's filter, whose roster input holds every payload of the turn (E1).
 
-Rewriting would also cost a rewriter per format, since Office files are zipped XML and PDFs and images cannot be rewritten reliably. It would need a reversible table, too, to put real names back into the deliverable, and G14 chose not to keep one.
+What the file says reaches the actor fenced: `DOC_GUARD` names the sandbox tools (`general-next.server.ts:84-87`), and the retriever sanitizes its matches when it records them (SD-1, SD-6). Rewriting would also cost a rewriter per format (Office files are zipped XML; PDFs and images cannot be rewritten reliably), plus a reversible table to put real names back into the deliverable, which G14 chose not to keep.
 
 **The exits, and what holds each:**
 
-| Exit                                                                                                       | What holds it                                                                                         | Pin                                                                                       |
-| ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| a model call on the Anthropic tier (the actor reading the file; the decision state at the decide endpoint) | the tool refuses any run whose raw tier is not exactly the private one (below)                        | frameless, unrecognised and `'anthropic'` frames refused; a private frame allowed         |
-| the sandbox's network                                                                                      | `egress: 'mcp-only'`, i.e. no network                                                                 | `office-data`'s egress value; any other value fails                                       |
-| a web call from `info-retrieval`                                                                           | G14: the view, the handoff data and the outgoing check                                                | G14's pins, plus a synthetic ingested file whose text names a directory member            |
-| a Microsoft 365 write                                                                                      | none exists; a future one ships only as a write request ([Writes](#writes-gated-by-a-person))         | the registered `graph` tool names; a new name fails until it is classified                |
-| a Neo4j write                                                                                              | the person's approval ([Writes](#writes-gated-by-a-person))                                           | slice 8                                                                                   |
-| a remote embedder                                                                                          | ingestion indexes the file, and `EMBEDDINGS_PROVIDER=openrouter` would send its text to that provider | the tool refuses while the provider is not `local` (`stash/embeddings.server.ts:110-113`) |
+| Exit                                                      | What holds it                                                                                                                                                                                                                                                                                              | Pin                                                                                                                                  |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| a model call on the Anthropic tier, **at ingestion**      | the tool refuses any run whose raw tier is not exactly the private one (below)                                                                                                                                                                                                                             | frameless, unrecognised and `'anthropic'` frames refused; a private frame allowed                                                    |
+| a model call on the Anthropic tier, **after a tier flip** | the ingested copy is tagged; hydrate and retrieval skip it on a run that is not positively private ([below](#a-tier-flip-mid-conversation-owner-decision-open))                                                                                                                                            | a flipped turn neither hydrates nor retrieves the tagged copy                                                                        |
+| the sandbox's network                                     | `egress: 'mcp-only'`, i.e. no network                                                                                                                                                                                                                                                                      | already pinned (`app/src/__tests__/lib/harness-client/agents/general-next.test.ts:253`)                                              |
+| a web call from `info-retrieval`                          | G14: the view, the handoff data and the outgoing check                                                                                                                                                                                                                                                     | G14's pins, plus a synthetic ingested file whose text names a directory member                                                       |
+| a Microsoft 365 write                                     | the #680 barrier above. None is designed here, and a writer would be a new owner decision                                                                                                                                                                                                                  | already pinned (`app/src/__tests__/lib/auth/graph-token.test.ts`; `packages/connectors/__tests__/graph/graph-connectors.test.ts:29`) |
+| a Neo4j write                                             | the person's approval. An approved write also leaves the private tier and the person's Microsoft 365 permissions: every user reads the graph, on either tier ([Writes](#writes-gated-by-a-person))                                                                                                         | slice 8                                                                                                                              |
+| memory                                                    | content reaches memory only through the final reply, and D9 holds it: a memory's evidence must be a verbatim span of the current user message, and every identifier in it must occur in a user message (`packages/harness-patterns/SPEC.md:2635-2653`; `packages/harness-baml/baml_src/memory.baml:21-25`) | already pinned (`input-isolation`)                                                                                                   |
+| the embedder                                              | the tool refuses while `EMBEDDINGS_PROVIDER` is `openrouter`. `local` names the wire format, not the host (`stash/embeddings.server.ts:126-139`), so the endpoint behind it must be a service the deployment runs: a deployment rule, not a code check                                                     | the `openrouter` refusal only                                                                                                        |
+| the conversion sidecar                                    | the same deployment rule: `DOC_CONVERT_URL` receives a convertible file's bytes (`packages/harness-patterns/stash/doc-convert.server.ts:40`)                                                                                                                                                               | none                                                                                                                                 |
 
-The conversion sidecar also receives a convertible file's bytes (`DOC_CONVERT_URL`, `packages/harness-patterns/stash/doc-convert.server.ts:40`). That is a deployment rule rather than a code check: it must be a service the deployment runs. A check on the URL would decide the same call differently on two hosts.
+A check on a URL would decide the same call differently on two hosts, which is why the two endpoint rules are deployment rules.
 
 **The tier check (decision 3).** `graph_file_ingest` runs only when the run frame's raw tier is exactly the private tier's value. This is the mirror image of G14's rule. G14 errs toward protecting by **applying** unless a run is explicitly Anthropic; this check errs toward protecting by **refusing** unless a run is explicitly private.
 
-- A frame with no tier slot, or with an unrecognised value, is refused even when the deployment default is private. That is the safe error, since turns on the turn path always fill the slot.
-- The check sits in the tool's executor, through a predicate the host injects when it registers the graph tools (as it injects the stash). Core and the connectors stay tier-agnostic.
-- Because it is in the executor rather than in `general-next`'s allowlist, it covers every caller. `general` passes `tools.all` to both its loops (`packages/agents/agents/general.server.ts:59, 69`), and `tools.all` lists the app tools too (`packages/harness-patterns/tools.server.ts:111`). So, by reading, `general` can ingest a file on either tier today; slice 5 should confirm that with a test before relying on it.
+- A frame with no tier slot, or with an unrecognised value, is refused even when the deployment default is private. That is the safe error, since turns on the turn path always fill the slot. On a private-tier-only server (#653) the Anthropic tier cannot be selected at all.
+- The check sits in the tool's executor, through a predicate the host injects when it registers the graph tools (as it injects the stash). Core and the connectors stay tier-agnostic. The embedder refusal sits beside it.
 - A refused call returns fixed feedback: "copying a file into the conversation runs only on the private tier".
 
-**Stored copies (decision 2, Q2).** Unchanged. The stash keeps the original file for 7 days (`packages/harness-patterns/stash/document-store.server.ts:154`), like an upload, and indexes its chunks in plaintext when the format allows. SD-11's session-not-owner key scoping applies to it as it does to every stash document.
+**This closes a live gap on main.** `listTools` appends the process-registered app tools (`packages/harness-patterns/mcp-client.server.ts:663, 675`), so `tools.all` lists `graph_file_ingest`, and `general` hands `tools.all` to both of its loops (`packages/agents/agents/general.server.ts:59, 69`). So `general` can ingest a file today on the Anthropic tier, or with an OpenRouter embedder, which is exactly what P4 forbids; the security review confirmed it with a scratch test. Because the check is in the executor, it covers `general` too, and it ships first, as slice 5a.
+
+**Stored copies (decision 2, Q2).** The stash copy is unchanged: the stash keeps the original file for 7 days (`packages/harness-patterns/stash/document-store.server.ts:154`), like an upload, and indexes its chunks in plaintext when the format allows. SD-11's session-not-owner key scoping applies to it as to every stash document. **The conversation blob is a second store:** the file text the actor reads through sandbox tools, and the route records built from it, persist in `conversations.context` with no expiry, encrypted at rest (SD-10, SD-11).
 
 **The table (Q3).** There is none: nothing is rewritten, so nothing is reversed.
 
@@ -406,71 +410,110 @@ The conversion sidecar also receives a convertible file's bytes (`DOC_CONVERT_UR
 
 **Accepted limitation (decision 4).** A person named only inside a file's body, who is neither in the directory nor in a labelled field of the turn, reaches `info-retrieval`'s prompt in clear through the handoff. That is exactly what happens today to a person named only in a mail body ("What it does not catch", above). The outgoing check still denies a web call carrying a roster literal, but that person is not in the roster.
 
-**A consequence to state: a tier flip mid-conversation.** The tier is set per turn, and the stash copy outlives the turn. If the person flips a conversation to the Anthropic tier after a file was ingested, later turns hydrate the file into `/work/in` and can retrieve its chunks, so its content can reach the Anthropic tier. The same already holds for everything else the conversation contains, since a flipped turn reads the conversation's history, and the flip is the person's own act. If that is ever unwanted, the fix is a stash provenance value for ingested files, checked at hydrate and at retrieval, the way `sandbox-output` is today.
+#### A tier flip mid-conversation (owner decision, open)
+
+The tier is set per turn, and the stash copy outlives the turn. If the person flips a conversation to the Anthropic tier after a file was ingested, later turns would hydrate the file into `/work/in` and could retrieve its chunks. **Owner decision:** "accept this consequence, as the conversation's history already carries over on a flip, or keep the check below." Until the owner rules, the doc keeps the safer reading:
+
+- `graph_file_ingest` stores its copy with a new fixed provenance value, `graph-file`, beside today's `sandbox-output` (`document-store.server.ts:46, 331`);
+- hydrate skips a `graph-file` document, and the retriever drops its hits, on any run that is not positively private, through the same host predicate.
+
+What the check does not cover: files the sandbox derives from the copy (they are `sandbox-output`, the deliverable), and the conversation history. It is moot on a private-tier-only server (#653).
 
 **Pins (layer 1)**, each checked by mutation:
 
-- `graph_file_ingest` is refused on a frameless frame, an unrecognised tier and `'anthropic'`, and runs on the private tier. Mutation: test `!== 'anthropic'` instead.
-- It is refused while the embedding provider is not `local`. Mutation: drop the check.
-- `office-data`'s sandbox egress is `mcp-only`. Mutation: change it to `pypi`.
-- The registered `graph` tool names equal a pinned list. Mutation: register one more.
+- `graph_file_ingest` is refused on a frameless frame, an unrecognised tier and `'anthropic'`, and runs on the private tier, whichever agent calls it, `general` included. Mutation: test `!== 'anthropic'` instead.
+- It is refused while the embedding provider is `openrouter`. Mutation: drop the check.
+- A flipped turn neither hydrates nor retrieves a `graph-file` copy. Mutation: skip the tag at hydrate.
 - A synthetic ingested file whose text names a directory member reaches `info-retrieval`'s `plan_context` as a placeholder. Mutation: skip G14's data rewrite.
-- `general-next`'s effective allowlist includes `graph_file_ingest`, slice 3's absence pin is removed, and neither the actor prompt nor the route description says ingestion is unavailable (`general-next.server.ts:70, 153`).
+- `general-next`'s **own** office list includes `graph_file_ingest`, not the shared `MICROSOFT_365_TOOLS`: the `microsoft-365` agent has no retriever (`packages/agents/agents/microsoft-365.server.ts:44-63`). Slice 3's absence pin is removed, and neither the actor prompt nor the route description says ingestion is unavailable (`general-next.server.ts:70, 153`).
 
 Scenarios 15 and 16 stop being gated and become rollout criterion 2's Graph-file variant (G18).
 
 ## Writes, gated by a person
 
-Ruled by the owner on 2026-10-16, closing #396 (read-only Cypher by default) in favour of this: `general-next` may write, and **every write waits for the person's approval**. On 2026-10-17 the owner set the bar for the resume: **after an approval the run continues as if it had not stopped**, inside the route that proposed the write, including whatever the agent planned to do after it. Slice 6 (resume inside a route), slice 8 (the gated write) and slice 9 (the UI) build it.
+Ruled by the owner on 2026-10-16, closing #396 (read-only Cypher by default) in favour of this: `general-next` may write, and **every write waits for the person's approval**. On 2026-10-17 the owner set the bar for the resume: **after an approval the run continues as if it had not stopped**, inside the route that proposed the write, including whatever the agent planned to do after it. **Approval covers Neo4j writes only** (owner, 2026-10-19). Slice 6 (resume inside a route), slice 8 (the gated write) and slice 9 (the UI) build it.
 
 ### What is gated
 
-- **Neo4j writes.** No agent can write today: `write_neo4j_cypher` is withheld from every agent (`packages/harness-patterns/agent-withheld-tools.ts:35-45, 67-68`), and the gateway serves `neo4j-cypher` with `read_only: true`. **Both stay.** The agent gets a different tool, a **write request** (working name `cypher_write_request`), whose executor never writes. It checks the statement, stores it, asks the person and returns the `held()` placeholder (`packages/harness-patterns/hitl.server.ts:451-456`). The write runs only in the host's `resolve`, after an approval ([below](#where-the-write-runs-the-hosts-resolve)). An allowlist slip therefore cannot hand an agent a writing tool: the barrier stays structural (SD-14), and a person's answer is the only path to a write session.
-- **Microsoft 365 writes.** None exist. Every registered `graph` tool reads (`packages/connectors/graph/graph-tools.server.ts:1318-1903`), although the consented scopes include `Mail.Send` and `Calendars.ReadWrite`, with the note that any future write tool carries its own confirmation gate (`app/src/lib/auth/entra-config.server.ts:66-72`). The rule here: a Microsoft 365 write ships only as a write request of the same shape. It would live in `office-data`, which runs in a sandbox, and v1 does not resume a sandbox route ([below](#resume-inside-a-route-slice-6)), so it also waits for that.
+- **Neo4j writes.** No agent can write today: `write_neo4j_cypher` is withheld from every agent (`packages/harness-patterns/agent-withheld-tools.ts:35-45, 67-68`), and the gateway serves `neo4j-cypher` with `read_only: true`. **Both stay.** The agent gets a different tool, a **write request** (working name `cypher_write_request`), whose executor never writes. It checks the statement, stores it, asks the person and returns the `held()` placeholder (`packages/harness-patterns/hitl.server.ts:451-456`). The write runs only in the host's `resolve`, after an approval ([below](#where-the-write-runs-the-hosts-resolve)). So, **for an agent**, a person's answer is the only path to a write session, and the barrier stays structural (SD-14). The app's own UI edit actions already write (`app/src/lib/neo4j/graph-edit.server.ts`, gated per SD-13); they are not agent paths.
+- **Microsoft 365 writes: not designed here.** None exist, the #680 barrier refuses them structurally (`app/src/lib/auth/graph-token.server.ts:186-190`), and the consented scopes stay as they are. A Microsoft 365 writer would be a new owner decision and a design of its own.
 - **Sandbox promotion: not gated.** Promotion is the owner-scoped `/work` ⇄ Data Stash sync that S-e names as the only way derived files leave the sandbox. It writes into this conversation's stash, never outside our environment, and it already runs in a `finally`, even on a pause (`packages/sandbox/with-sandbox.server.ts:835-841`). Gating it would ask the person about every chart.
 
 ### Where the write request lives (H1, accepted 2026-10-19)
 
-**A separate route, `graph-edit`**: a `simpleLoop` over the Neo4j read tools plus the write request, guarded on `neo4j`, with no web tools and no pseudonymisation wrapper. Its description: "Change the knowledge graph; every change waits for the person's approval". Two reasons:
+**A separate route, `knowledge-edit`**: a `simpleLoop` over the Neo4j read tools plus the write request, guarded on `neo4j`, with `multiToolCalls: 'off'`, no web tools and no pseudonymisation wrapper. Its description: "Change the knowledge graph; every change waits for the person's approval". (H1 called it `graph-edit`; it is renamed because that is already the name of the UI edit module.) Two reasons for a separate route:
 
 1. A write composed in the same loop as `web_search` and `fetch` puts untrusted web text one step from a write. The separate route reads only the graph and the handoff, which is sanitized, fenced and capped.
 2. On the private tier `info-retrieval` sees earlier results through G14's rewrite, so a statement composed there can carry `PERSON_3` where a real name belongs. No table is kept, so nothing could turn it back.
 
-The alternative, the write request inside `info-retrieval`, saves one route option and keeps both problems.
-
-### What the request checks before it asks
+### What the request refuses before it asks
 
 Each refusal is a recoverable tool failure with fixed feedback, as G14's egress denials are:
 
 - **A placeholder token** (`PERSON_<n>` with any suffix, matched as a pattern as in E3) anywhere in the statement or parameters: "this is a privacy placeholder, not a real value; ask the person for it". `info-retrieval`'s route output keeps its placeholders (G14), so even the separate route can receive one through the handoff.
-- **A guard marker** (a `⟦` provenance fence or a `⟦neutralized:…⟧` marker) in the arguments. A span neutralized upstream must never be written back into the graph, where later reads would serve it as trusted data.
+- **A guard marker** (a `⟦` provenance fence or a `⟦neutralized:…⟧` marker) in the arguments. A span neutralized upstream must never be written back into the graph, where later reads would serve it as data.
+- **Text that would display as something else.** Any statement or parameter string `s` with `s !== s.normalize('NFKC')`, or containing `\p{Cf}`, `\p{Zl}`, `\p{Zp}` or a `\p{Cc}` other than newline and tab. This is what lets the dialog show exactly the text that runs ([below](#what-the-person-sees)).
 - **Size.** The statement and its parameters are capped (e.g. 8 KB).
-- **A statement Neo4j cannot plan.** The request runs `EXPLAIN` on it, which plans and never executes. A planning error goes back to the controller to fix.
-- **A batch.** A write request is never part of a multi-call turn: a batch containing one is refused with "send a write request on its own". So every pause sits on a single call, which is what the resume rebuilds.
+- **A statement Neo4j cannot plan.** The request runs `EXPLAIN` in a **read** session (SD-14); `EXPLAIN` plans and never executes. A planning error goes back to the controller to fix. A pin asserts that a write statement does plan in a read session; if Neo4j refuses that, the slice reports back rather than opening a write session to plan.
+- **Any procedure call, and any `CALL { … } IN TRANSACTIONS`**, found in the plan. v1 allows none; a reviewed allowlist of read-only procedures can come later. This keeps every effect of the statement inside the one transaction the executor opens. `apoc.periodic.*` commits batches of its own, which no rollback or marker can undo, and `apoc.cypher.runWrite` / `doIt` carry a write inside a string, so their plan shows one `ProcedureCall` and no delete. `apoc.*` is unrestricted (`docker-compose.yaml:32`), and the Community image (`docker/neo4j/Dockerfile:2`) has no role-based access behind the app's single credential.
+- **The `Member` label**, in the statement or the plan. G14's directory roster is read from `Member` nodes (`app/src/lib/org-graph/roster-source.server.ts:60-62`), so a write that renamed or deleted members would silently narrow it; only an empty directory fails closed. The execution check below also catches a statement that reaches members without naming the label. **Owner decision:** "refuse writes to `Member` nodes, or allow them behind a danger-toned warning." The doc refuses until the owner rules.
+- **A batch.** `simpleLoop`'s whole-action validation refuses an action that contains a gated name together with any other call, before it dispatches any of them, using slice 6's declared list of gated names. That includes `multiToolCalls: 'off'`, which still runs batches the model was not offered (`simpleLoop.server.ts:263-267`). An executor sees only its own arguments, so it cannot do this.
+- **More than three write requests in one turn.** There is no "approve all", and the cap keeps approval from becoming a reflex.
+
+### Raising the request
+
+The order matters, because core mints the `requestId` only after the request, including its `payloadRef`, exists (`hitl.server.ts:398-411`):
+
+1. The executor computes `digest`, the sha256 of the canonical JSON of `(statement, parameters)`.
+2. It writes the frozen payload to a **blocking-payload row**, keyed by a fresh random `payloadRef` and holding the owner, the session, the digest, the statement and the parameters, encrypted at rest. The row is insert-only: no path rebinds it to other content. This needs a new writer: today's only payload writer, `putHitlProposal`, writes non-blocking proposals and refuses unless memory is enabled (`app/src/lib/db/hitl.server.ts:254-258`).
+3. It calls `askHuman` with:
+   - `kind: 'graph-write'`;
+   - `key: ${digest}:${currentToolCallId()}` (`run-frame.server.ts:245`). Core's default key hashes only the question, the option ids and the summary (`hitl.server.ts:305-316`), and `askHuman` answers a repeated identity from its journal without asking. Two different statements with the same summary would therefore share one identity, and the second would be approved by replay. The digest makes the key cover everything the decision authorises (F8, `types.ts:1524-1525`), and the call id makes two deliberate, identical writes two requests;
+   - the `payloadRef`; Reject as the default option; `unattended: 'apply-default'`, never `'park'`; and `expiresInMs` of 24 hours.
+4. It branches on the outcome. **Pending:** return `held()`. **Answered**, by replay or by the unattended rule: return the ordinary outcome ("rejected; nothing was written" for Reject) and delete the payload row it just wrote. The executor never writes, and never reports a write it did not see in `resolve`.
 
 ### What the person sees
 
-The request event carries display primitives only (`summary` is "display only, and untrusted", `packages/harness-patterns/types.ts:1535-1536`). The statement itself goes into the host store behind `payloadRef` (`:1537-1538`): the `hitl_requests` payload column is encrypted at rest, keyed by `requestId` and owner. The dialog shows:
+The request event carries display primitives only (`summary` is "display only, and untrusted", `packages/harness-patterns/types.ts:1535-1536`); the statement is in the payload row behind `payloadRef` (`:1537-1538`). The dialog shows:
 
-1. **The statement and its parameters, verbatim**, as monospace text nodes after the server-side `displayText` pass (`app/src/lib/memory/display-text.ts:14-22`), never as markup.
-2. **What it does**, read from the `EXPLAIN` plan's operators: creates, merges, property sets and removals, deletes and detach-deletes, and every procedure call by name. A plan containing a delete gives Approve the danger tone. There are no counts, because counting needs execution.
-3. **Which route proposed it, and what this turn read first**: counts by untrusted source ("3 web results, 2 mails") and how many spans the guard neutralized this turn. Code computes both from the run's `tool_result` events and their `sanitized` summaries.
-4. **Approve** and **Reject.** Reject is the default and the option the unattended rule picks; Approve carries no unattended flag. So a triggered run or a routine never writes. Reject does not stop the run: the loop continues with "rejected; nothing was written", and the agent says so.
+1. **The statement and its parameters, losslessly**: monospace text nodes with line breaks and whitespace preserved, parameters as canonical JSON. **Not** `displayText`, which normalises NFKC, strips format characters and collapses whitespace (`app/src/lib/memory/display-text.ts:14-22`): `MATCH (n) // inspect only`, a newline, then `DETACH DELETE n` would display on one line with the delete inside the comment. The request-time refusal of characters that display differently is what makes this rendering the exact text that runs. `displayText` stays for labels.
+2. **What it does**, from the `EXPLAIN` plan's operators: creates, merges, property sets and removals, deletes and detach-deletes. A plan with a delete gives Approve the danger tone. There are no counts, because counting needs execution.
+3. **Which route proposed it, and what this turn read first**: counts by untrusted source ("3 web results, 2 mails"), how many Microsoft 365 items, and how many spans the guard neutralized, all computed by code from the run's `tool_result` events and their `sanitized` summaries. And one fixed line: **"What you approve is readable by every user, on either tier."**
+4. **Approve** and **Reject.** Reject is the default and the option the unattended rule picks; Approve carries no unattended flag. So a triggered run or a routine never writes. Reject does not stop the run: the loop continues with "rejected; nothing was written", and the agent says so. **If the write already committed** (an earlier resume wrote it and then failed), the dialog says "already applied" and offers no choice.
 
-**No dry run.** Running the statement in a transaction and rolling it back would give real counts, but some procedures commit transactions of their own (APOC's periodic procedures among them). A rolled-back "preview" could therefore still write: a statement composed after reading untrusted content would have taken effect before anyone approved it. `EXPLAIN` names the operations without running anything.
+**No dry run.** Running the statement in a transaction and rolling it back would give real counts, but a procedure that commits on its own would write anyway, before anyone approved. Procedures are now refused, but `EXPLAIN` stays the preview: nothing a person has not approved ever executes.
 
 **Who may approve (H2, accepted 2026-10-19).** Every user reads the same graph. For v1, any allow-listed user may approve a write proposed in their own conversation, the same boundary every other action uses (SD-15). Revisit with roles under Entra SSO (#119).
 
 ### Where the write runs: the host's `resolve`
 
-`resumeHarness` calls the host's `resolve(request, answer)` once per answer, after every check and before re-entry. What it returns is recorded, and sanitized it becomes the held result (`packages/harness-patterns/harness.server.ts:368-391`; SPEC resume step 9). Today the host passes one function, the quarantine delete (`app/src/lib/harness-client/turn.server.ts:973-983`). Slice 8 makes it dispatch on `request.kind`:
+`resumeHarness` calls the host's `resolve(request, answer)` once per answer, after every check and before re-entry. What it returns is recorded, and sanitized it becomes the held result (`packages/harness-patterns/harness.server.ts:368-391`; SPEC resume step 9). Today the host passes one function, the quarantine delete (`app/src/lib/harness-client/turn.server.ts:973-983`). Slice 8 makes it dispatch on `request.kind`. For `graph-write`:
 
-- **`graph-write`, Approve.** Load the frozen statement by `payloadRef`; check that its owner is the resuming user and that its `requestId` matches; run it in a write transaction; return `{ status: 'written', counters }` (nodes and relationships created or deleted, properties set). A Neo4j error returns `{ status: 'failed', error }`: the run continues, and the agent reports it.
-- **Reject.** `{ status: 'rejected' }`. Nothing is opened.
-- **Idempotent per `requestId`.** This is required (Δ4): when a later `resolve` throws, the retry calls every `resolve` again. The write transaction checks for, and creates, one bookkeeping node keyed by `requestId` that holds the counters. A retry finds it and returns the stored counters without writing. Only a marker inside the same transaction makes the write exactly-once, because it commits or rolls back with the write. The cost is one marker node per approved write, under a label readers ignore.
+1. **Load and bind.** Load the payload row by `payloadRef`. Refuse, writing nothing, unless its owner is the resuming principal, its session is this conversation, and its digest equals the digest in the request's `key`.
+2. **Check the marker first, on every answer, Reject included.** A marker for this `requestId` means the write already committed: return `{ status: 'written', counters, alreadyApplied: true }` from the marker.
+3. **Reject** with no marker: `{ status: 'rejected' }`. Nothing is opened.
+4. **Approve**: one write transaction, in this order.
+   1. Create the marker `(:_HitlWrite { requestId, digest })`. A **uniqueness constraint on `requestId`** makes a concurrent retry of the same request block and then fail, so retries are serialised before the person's statement runs.
+   2. Fingerprint the **protected sets**: every `_HitlWrite` marker, and every `Member` node with the properties the roster reads.
+   3. Run the statement as its own query, and keep **its** summary counters, separate from the marker's.
+   4. Fingerprint the protected sets again. Any change rolls the whole transaction back and returns `{ status: 'refused', reason: 'the statement would change protected records' }`. This is what catches a broad `MATCH (n) DETACH DELETE n`, which names no label: a later approved deletion can never erase an earlier marker or the directory.
+   5. Store the statement's counters on the marker, and commit. Return `{ status: 'written', counters }`. A Neo4j error returns `{ status: 'failed', error }`; the run continues, and the agent reports it.
+
+Because procedures are refused before the person is asked, every effect of the statement is inside this transaction, so the marker commits or rolls back with all of it. That is what makes the write exactly-once, as Δ4 requires (a later `resolve` throwing makes the retry call every `resolve` again).
+
+- **The marker holds no user content:** the `requestId`, the digest and the counters. The principal and the time are already on the `hitl_response`. Markers are visible to free-form Cypher reads; that is accepted, and readers can ignore the label.
+- **Retention.** The payload row is purged when the request closes, by the existing purge after the save (`turn.server.ts:994-1000`), extended to blocking rows. The digest and counters stay on the marker; the principal and time stay in the conversation blob.
 - The executor is an app-side module and never a `'use server'` export, because it takes an owner (SD-13). A source-scan pin keeps the request tool's module from opening a write session.
 
-The run then re-enters and continues from the held call, whose result is now that outcome.
+**The host protocol is unchanged**: claim, checked resume, version-conditional save and release (`turn.server.ts:886-907, 985-1041`). Under it:
+
+- concurrent retries of one request write once;
+- a failure before commit writes nothing, and the retry writes once;
+- a commit followed by a failed conversation save leaves the run `paused` (`turn.server.ts:1032-1046`); the retry finds the marker, writes nothing and reports "already applied", and a later Reject also reports "already applied";
+- a statement that would change a marker or a `Member` node is rolled back;
+- **#624:** the wake precedes `resolve` (`turn.server.ts:965-983`), so a wake failure writes nothing, appends a persistent recoverable error and keeps the run `paused` with the answer retryable. A retry is a fresh press; the client never resends an answer on its own.
+
+Each of these is pinned.
 
 ### Resume inside a route (slice 6)
 
@@ -484,9 +527,17 @@ What core lacks is patterns that read their own progress back. SPEC resume step 
 
 Slice 6 completes the existing design rather than adding a mechanism. On re-entry, each pattern on the path to the gate rebuilds its state from its own events in the current run, meaning the events since the latest `user_message` (`hitl.server.ts:1126-1131`). It then continues from the next step without calling a model.
 
+- **The continuation is checked before any side effect.** Today `checkResume` compares only the top-level names and index (`hitl.server.ts:667-683`), and `resumeHarness` calls `resolve` before re-entry (`harness.server.ts:431-448`). The architecture review's probe removed the paused route while keeping the top-level orchestrator, and `resolve` still ran. So each request records a **continuation**: the path of resumable patterns from the top-level pattern to the gate (pattern ids, and the route label and iteration at each `decisionLoop`), with a fingerprint of each one's replay-relevant configuration (route names, allowlists, the gated-name list, history recording). Patterns add themselves to it through the run frame as they nest. `checkResume` validates it against the current composition before **any** `resolve`. An absent, changed or non-resumable continuation takes the existing `chain-changed` terminal path. This extends core's top-level check.
 - **`decisionLoop`** rebuilds its records, the latest plan, the roster inputs and the withheld ids from its own events. It counts the iterations already run against `maxIterations`, makes **no decide call** for the paused iteration, and re-enters that route with the child data the records reproduce.
 - **Per-invocation identity** (architecture review §5, addition 1). A route can run twice in one turn under the same child `patternId`, so each child `pattern_enter` carries its `iteration`. Today it carries only the route and the loop id (`decisionLoop.server.ts:473-477`). A paused child's `pattern_exit` says `paused` rather than `completed` (`:560-562`). The paused iteration still writes no record (`:566`), so no stale "waiting" preview reaches the decision state (addition 2). That iteration's stats and record span both halves; its wall time excludes the wait.
-- **`simpleLoop`** rebuilds its turn log from its own `controller_action`, `tool_call` and `tool_result` events in the open bracket. It applies the same projection it used when it first built each entry (`resultOmit` and the result cap, `simpleLoop.server.ts:1061-1080`), keeps its turn count against `maxTurns`, and calls the controller next. The held call's entry now carries the outcome, so that next controller call sees "written: 3 nodes created". This path is separate from the prior-results path, so `rememberPriorTurns: false` keeps its meaning.
+- **`simpleLoop`: one projection for every consumed round.** The turn log is rebuilt from every event a round records:
+  - `controller_action`;
+  - `tool_call` and `tool_result`, with batches grouped by `batchId`;
+  - `loop_recovery`, for a parse or allowlist recovery, which consumes a round and leaves controller feedback but no tool event (`simpleLoop.server.ts:447-466`);
+  - the reference expansions each turn carries, which later prior-result annotations read (`:205-216`, `:397-401`). Where a round's events do not yet record them, the slice adds them.
+
+  The turn count and the recovery streak are rebuilt with it, against `maxTurns`. **One projection function builds an entry both live and on replay**, so the two cannot drift. Every one of these events obeys `trackHistory` (e.g. `:440-446`), so construction refuses a gated name under a loop configured not to record them. The held call's entry now carries the outcome, so the next controller call sees "written: 3 nodes created". This path is separate from the prior-results path, so `rememberPriorTurns: false` keeps its meaning.
+
 - **The wrappers in between.**
   - `withReferences` replays its recorded selection (the `reference_attached` event, `with-references.server.ts:293`) instead of calling the selector again.
   - `withInjectionGuard` holds no per-invocation state.
@@ -498,26 +549,37 @@ Slice 6 completes the existing design rather than adding a mechanism. On re-entr
 
 **Pins (layer 1)**, each checked by mutation:
 
-- After an approval, no earlier tool is dispatched again, and no decide call is made for a finished iteration or the paused one. Mutation: decide again on re-entry.
-- The resumed controller's rendered prompt equals the pre-pause one, with only the held entry replaced. Mutation: rebuild an empty turn log.
-- A route that ran twice in the turn resumes its second invocation, not its first. Mutation: drop `iteration` from `pattern_enter`.
-- The selector is not called on resume. Mutation: call it.
-- A write request under `withSandbox` or `actorCritic` is refused at construction. Mutation: allow it.
-- `maxIterations` and `maxTurns` count across the pause.
-- A placeholder, a guard marker, an unplannable statement and a batched request are each refused before any request is raised.
-- `resolve` retried after a successful write writes nothing new and returns the same counters. Mutation: drop the marker check.
-- Reject writes nothing, and the run continues. An unattended run picks Reject.
+- Resume:
+  - After an approval, no earlier tool is dispatched again, and no decide call is made for a finished iteration or the paused one. Mutation: decide again on re-entry.
+  - The resumed next-controller input equals that of an uninterrupted control run given the same outcome. (The pre-pause input is the wrong reference: it did not contain the held call.) Mutation: rebuild an empty turn log.
+  - A recovery, then a read with a reference expansion, then the pause: after resume the turn log, the counters and the expansion annotations match the control run.
+  - A loop with history recording off refuses a gated name at construction.
+  - Removing or renaming the paused route while keeping the top-level names ends in `chain-changed` with **zero** `resolve` calls. Mutation: drop the continuation check.
+  - A route that ran twice in the turn resumes its second invocation, not its first. Mutation: drop `iteration` from `pattern_enter`.
+  - The selector is not called on resume. Mutation: call it.
+  - A write request under `withSandbox` or `actorCritic` is refused at construction. Mutation: allow it.
+  - `maxIterations` and `maxTurns` count across the pause.
+- The request:
+  - Two different statements with identical summaries raise two requests. Mutation: drop the explicit key.
+  - Two identical statements in two calls raise two requests.
+  - An unattended run gets the rejected outcome, with no `held()`, no write and no orphaned payload row.
+  - A write request works with memory switched off.
+  - A placeholder, a guard marker, a U+200B, a U+FF21, an unplannable statement, an `apoc.periodic.iterate`, an `apoc.cypher.runWrite`, a `CALL { … } IN TRANSACTIONS`, a `Member` label and a fourth request in a turn are each refused before any request is raised. Mutation: drop the procedure check.
+  - A batch containing a write request is refused before any of its calls is dispatched, including under `multiToolCalls: 'off'`. Mutation: leave the check to the executor.
+- The dialog (component layer): the line-comment statement renders on two lines, and a parameter `'A  B'` keeps both spaces. Mutation: render through `displayText`.
+- The write: each host outcome listed above, with its own mutation (drop the marker check; drop the uniqueness constraint; drop the protected-set check; check the marker on Approve only).
 
-**Layer 2 (app-path e2e)** drives a scripted turn through the real resume path (`POST /api/events` with `mode: 'resume'`, `app/src/routes/api/events.ts:52-60, 110-116`): a read, a proposed write, the pause, an approval, exactly one write, then the loop continuing to a read-back and an answer that names the counts. A reject variant runs the same turn. The Eval can grade both by answering through `resumeHarness`.
+**Layer 2 (app-path e2e)** drives a scripted turn through the real resume path (`POST /api/events` with `mode: 'resume'`, `app/src/routes/api/events.ts:52-60, 110-116`): a read, a proposed write, the pause, an approval, exactly one write, then the loop continuing to a read-back and an answer that names the counts. Variants: a reject; and a save failure after the commit, retried. The Eval can grade the approve and reject turns by answering through `resumeHarness`.
 
 ### The injection angle
 
-A write composed after reading untrusted content is the riskiest thing this agent does, and the person is the control. Four things make that control informed rather than decorative:
+A write composed after reading untrusted content is the riskiest thing this agent does, and the person is the control. Five things make that control informed rather than decorative:
 
-- the statement is shown verbatim;
-- its destructive operations are named from the plan;
-- the dialog says what untrusted content the turn read and how much of it the guard neutralized;
-- a statement carrying a guard marker or a placeholder never reaches the dialog, and a run with nobody attending never writes.
+- the statement is shown exactly as it will run, and text that would display differently is refused;
+- its destructive operations are named from the plan, and procedures, which could hide them, are refused;
+- the dialog says what untrusted content the turn read, how much of it the guard neutralized, and that every user will be able to read what is written;
+- a statement carrying a guard marker or a placeholder never reaches the dialog, and a run with nobody attending never writes;
+- the markers and the directory are protected at execution, whatever the statement says.
 
 What it does not catch: a plausible but harmful statement that the person approves. The dialog turns that into a reading task; it does not guarantee anything.
 
@@ -525,10 +587,10 @@ What it does not catch: a plausible but harmful statement that the person approv
 
 None of this has a client yet. `HitlDialog` renders memory proposals only (`app/src/components/ark-ui/HitlDialog.tsx:82-84`), and no client code sends a resume. Slice 9 adds:
 
-- a blocking-request card in the transcript for a paused turn;
-- a `graph-write` body in the shared dialog shell;
+- a blocking-request card in the transcript for a paused turn, with the request's expiry;
+- a `graph-write` body in the shared dialog shell, rendering the statement losslessly, and its "already applied" state;
 - pending blocking requests in the inbox, beside proposals;
-- the client resume over the existing SSE path;
+- the client resume over the existing SSE path, sent only on the person's press;
 - an owner-gated read of the frozen statement by `payloadRef`: a `'use server'` read, gated like every other one and taking no owner argument (SD-13).
 
 A new message sent while a write waits supersedes it (`continueSession`), and the card says so.
@@ -565,7 +627,7 @@ The fix is small and stated as a slice item: `thread` mode honours `viewConfig.f
   - **Q5, a stable pseudonym:** not applicable;
   - plus the private-tier-only tool and the accepted limitation for people named only inside a file's body.
 
-  `graph_file_ingest` stays withheld by exact name until slice 5 lands. Materialisation of results that are not files is not part of P4 and stays deferred ([Data between routes](#data-between-routes)).
+  One question is open for the owner: whether a mid-conversation tier flip is accepted, or ingested copies are tagged and skipped on a run that is not private ([below](#a-tier-flip-mid-conversation-owner-decision-open)). The doc keeps the tag until the owner rules. The tool's own checks close a live gap in `general` and ship first (slice 5a); `graph_file_ingest` stays out of `general-next` until slice 5b. Materialisation of results that are not files is not part of P4 and stays deferred ([Data between routes](#data-between-routes)).
 
 - **P5 — The decisions model on the private tier.** **Order slice 3 after #418 G11's deletion/client-migration slice.** At the checked main commit the private decide role still resolves to `LocalQwenSmallDecide` (`packages/harness-baml/clients.server.ts:564-572`), so today's code would not enforce the shim-only refusal described here. After that prerequisite, G11 requires private-tier decisions to use a separately configured systemone URL (the self-hosted shim), refused when unset. Until the shim is served, this agent then works on the Anthropic tier only and shows a visible error on the private tier; this is target behaviour after G11, not a claim about current main.
 
@@ -587,8 +649,8 @@ All 11 round-2 calls and the 3 departures from the sketch were accepted as recom
 - **N5, the iteration bound.** `maxIterations` defaults to 6. At the bound the loop stops as `answer`, with the answer marked partial.
 - **G14 (2026-10-15), pseudonymisation.** An outbound filter around `withReferences` on the web route (`info_ag`), on the private tier only, with no table kept and no reverse. The filter applies unless a run is explicitly on the Anthropic tier, and it covers the handoff data as well as the view. A roster that cannot be built withholds the references; they are never passed in clear. Designed in [Pseudonymisation guard on the web route](#pseudonymisation-guard-on-the-web-route).
 - **The three departures:** the retriever is its own route; `doc_ag` is the sketch's second form; `answer` (`done` in G12) is a choice, so the synthesizer answers once.
-- **Writes (owner, 2026-10-16 and 2026-10-17).** #396 is closed: writes are gated by a person, not prevented by read-only defaults. After an approval the run continues inside the route as if it had not stopped. Designed in [Writes, gated by a person](#writes-gated-by-a-person). On 2026-10-19 the owner accepted H1 (a separate `graph-edit` route) and H2 (any allow-listed user approves writes proposed in their own conversation).
-- **P4 (owner, 2026-10-19), the file path.** It is protected at its exits, not by rewriting bytes; the stash copy is unchanged and no table is kept; the tool runs only on a positively private tier; people named only inside a file's body are an accepted limitation. This settles S-f as G14 reads it. Designed in [The file path (P4)](#the-file-path-p4).
+- **Writes (owner, 2026-10-16 and 2026-10-17).** #396 is closed: writes are gated by a person, not prevented by read-only defaults. After an approval the run continues inside the route as if it had not stopped. Designed in [Writes, gated by a person](#writes-gated-by-a-person). On 2026-10-19 the owner accepted H1 (a separate route, named `knowledge-edit` here) and H2 (any allow-listed user approves writes proposed in their own conversation), and limited approval to Neo4j writes. Open for the owner: whether writes to `Member` nodes are refused (the doc's reading) or allowed behind a warning.
+- **P4 (owner, 2026-10-19), the file path.** It is protected at its exits, not by rewriting bytes; the stash copy is unchanged and no table is kept; the tool runs only on a positively private tier; people named only inside a file's body are an accepted limitation. This settles S-f as G14 reads it. Open: the tier-flip consequence, with the safer tag check kept meanwhile. Recorded on [PR #682](https://github.com/mknw/hames-playground/pull/682). Designed in [The file path (P4)](#the-file-path-p4).
 
 The round-1 reviewers' terms (architecture 6068693140, security 6068708025) bind the delta review. Nothing is built before that review converges.
 
@@ -605,7 +667,7 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
 3. P2, P3 (G13 landed with its evidence) and P5 (G11 deletion/client migration first) are met;
 4. P1 is met, or "no gates in routes" is pinned. A write request enters an allowlist only with slices 6, 8 and 9;
 5. the M7 memory opt-in moves with it;
-6. until slice 5 lands, `graph_file_ingest` is absent by name and its file path stays off. With slice 5 it is present, behind the tool's private-tier and embedder checks and their pins. No turn-results materialisation capability is declared either way.
+6. until slice 5b lands, `graph_file_ingest` is absent from `general-next` by name and its file path stays off. With 5a and 5b it is present, behind the tool's private-tier and embedder checks and their pins. No turn-results materialisation capability is declared either way.
 
 ## Slices (dispatched only after owner approval)
 
@@ -628,27 +690,30 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
 3. **The agent**: `general-next`, its orchestrator and per-route guards, and the exact-tool-name walk pin, with an app-path e2e over a synthetic case supported by the enabled capabilities. Gated on P2, **G13 landed with its evidence** (P3), and **G11 deletion/client migration** (P5). Use `patternId: 'retriever'` consistently with reference sources, and pin that the nested Redis capability probe sees it. Until P4, pin by name that the effective `MS365_TOOLS` excludes `graph_file_ingest` and `general-next` declares no turn-results capability.
    The source/formatter/failure/data-isolation pins in slice 1 and these composition pins belong to layer 1 (unit); this slice's real-turn scenario belongs to layer 2 (app-path e2e). They are implementation obligations, not tests added or run by this design PR.
 4. **`withSandbox` re-hydrate on stash write** (N4). A core change with its own review.
-5. **The Graph file path (P4)**, as [specified](#the-file-path-p4):
-   - `graph_file_ingest` in `office-data`'s allowlist;
-   - the host-injected private-tier predicate and the embedder check, both in the tool's executor, so they cover every caller;
-   - the actor prompt and the route description updated;
-   - the pins listed there (layer 1), and scenarios 15/16 ungated in the Eval.
+5. **The Graph file path (P4)**, as [specified](#the-file-path-p4), in two parts:
+   - **5a, first, before anything else in this doc**: the host-injected private-tier predicate and the `openrouter` refusal in `graph_file_ingest`'s executor. It closes the live gap in `general`, and its pins cover every caller.
+   - **5b**: `graph_file_ingest` in `general-next`'s own office list (not the shared `MICROSOFT_365_TOOLS`); the `graph-file` provenance tag, with hydrate and retrieval skipping it on a run that is not positively private, unless the owner accepts the tier-flip consequence instead; the actor prompt and the route description updated; the remaining pins listed there (layer 1); scenarios 15/16 ungated in the Eval.
 
    N4 is already built (slice 4). **Materialisation** of results that are not files is not part of this slice and stays deferred. When it is designed, its conditions still bind: no boolean or env-var switch (pinned by source scan), wipes on entry and exit, the verbatim-hash promotion block, and a materialiser that never reads `content_sanitized` data (pinned with slice 1's two-event fixture).
 
 6. **Resume inside a route** (P1), in core, as [specified](#resume-inside-a-route-slice-6):
-   - `decisionLoop`, `simpleLoop` and the wrappers between them rebuild their state from their own events in the current run;
+   - the continuation recorded on each request, validated by `checkResume` before any `resolve`, with `chain-changed` on any mismatch;
+   - `decisionLoop`, `simpleLoop` and the wrappers between them rebuild their state from their own events in the current run, `simpleLoop` through one projection shared by the live and replay paths and covering recoveries and expansions;
    - `iteration` on each child `pattern_enter`, and `paused` on a paused child's `pattern_exit`;
-   - the `resumable` capability, and the construction refusal of a gated tool name under a pattern that is not resumable.
-     The pins listed there belong to layer 1; the scripted approve and reject turns belong to layer 2.
+   - the `resumable` capability and the declared list of gated names; construction refuses a gated name under a pattern that is not resumable or that does not record history; `simpleLoop` refuses a batch containing a gated name before dispatch.
+
+   The pins listed there belong to layer 1; the scripted turns belong to layer 2. SPEC and GUIDE gain nested resume and the new capability, and the slice declares its package version intent.
+
 7. **The web-route pseudonymisation guard ([G14](https://github.com/mknw/hames-playground/issues/507#issuecomment-6191473862)).** `withPseudonymisedInputs` (rewriting the view and the child's plan/handoff data) and the `callTool` outgoing check on a new concatenating `egressChecks` run-frame slot, in core; `decisionLoop` passing the handoff's source payloads as roster input; `AgentDeps.pseudonymiseForWeb` built by the app's `createWebPseudonymiser` from `lib/privacy/`; the `egress-wiring` tripwire **narrowed** to that one import site, not deleted, with Q1–Q3 stated in the commit as in [the section](#pseudonymisation-guard-on-the-web-route). The pins listed there belong to layer 1. On the private tier, slice 3's `info_ag` ships only with this guard in place.
 8. **The gated Neo4j write**, after slice 6:
-   - the write request tool and its checks (placeholder, guard marker, size, `EXPLAIN`, no batch);
-   - the frozen statement in the encrypted host row behind `payloadRef`;
-   - the host's `resolve` dispatching on `request.kind`, with the idempotent write and its same-transaction marker;
-   - the `graph-edit` route (H1);
-   - `write_neo4j_cypher` still withheld and the gateway still read-only, each pinned.
-9. **The UI for blocking requests**, which can be built alongside slice 8: the transcript card, the `graph-write` dialog body, inbox entries, the client resume, and the owner-gated read of the frozen statement. Its checks belong to the component and browser layers.
+   - the write request tool and its refusals (placeholder, guard marker, characters that display differently, size, an unplannable statement, procedures and `IN TRANSACTIONS`, the `Member` label, more than three per turn);
+   - the request's explicit key, and the pending / answered branch;
+   - the blocking-payload writer (insert-only, encrypted, not gated on memory) and its purge on close;
+   - the host's `resolve` dispatching on `request.kind`: the binding checks, the marker checked on every answer, and the write transaction with the marker's uniqueness constraint and the protected-set check;
+   - the `knowledge-edit` route (H1), with `multiToolCalls: 'off'`;
+   - `write_neo4j_cypher` still withheld and the gateway still read-only, each pinned;
+   - the host outcomes listed in [Where the write runs](#where-the-write-runs-the-hosts-resolve), at layers 1 and 2.
+9. **The UI for blocking requests**, which can be built alongside slice 8: the transcript card with the expiry, the `graph-write` dialog body with the lossless statement and its "already applied" state, inbox entries, the client resume sent only on a press, and the owner-gated read of the frozen statement. Its checks belong to the component and browser layers.
 
 ## See also
 

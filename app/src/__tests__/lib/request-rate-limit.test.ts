@@ -125,8 +125,10 @@ describe('request admission (#432 row 6)', () => {
         headers: { 'X-Forwarded-For': '198.51.100.200' },
       }),
     }
+    const clone = vi.spyOn(req.request, 'clone')
     expect((await limit(req))?.status).toBe(429)
     expect(req.request.bodyUsed).toBe(false)
+    expect(clone).not.toHaveBeenCalled()
     expect(getSession).not.toHaveBeenCalled()
     getSession.mockResolvedValue({ userId: 'victim' })
     expect(await limit(event('verified'))).toBeUndefined()
@@ -229,6 +231,68 @@ describe('request admission (#432 row 6)', () => {
     expect(await limit(event(undefined, { 'X-Forwarded-For': '2001:db8::1' }))).toBeUndefined()
   })
 
+  it.each(['127.0.0.1', '::1', '::ffff:127.0.0.1'])(
+    'direct loopback RPCs from %s use the anonymous global allowance without an address bucket',
+    async (remoteAddress) => {
+      let time = 0
+      const limit = createRequestLimiter(() => time)
+      const direct = () => ({
+        ...event(undefined, {}, '/_server', 'POST'),
+        nativeEvent: { node: { req: { socket: { remoteAddress } } } },
+      })
+      for (let i = 0; i < 1000; i++) expect(await limit(direct())).toBeUndefined()
+      expect((await limit(direct()))?.status).toBe(429)
+      time = 9.999
+      expect((await limit(direct()))?.status).toBe(429)
+      time = 10
+      expect(await limit(direct())).toBeUndefined()
+      expect((await limit(direct()))?.status).toBe(429)
+      expect(getSession).not.toHaveBeenCalled()
+      getSession.mockResolvedValue({ userId: 'verified' })
+      expect(await limit({ ...direct(), ...event('valid') })).toBeUndefined()
+    },
+  )
+
+  it('direct loopback requests still share the global backstop with forwarded anonymous traffic', async () => {
+    const limit = createRequestLimiter(() => 0)
+    for (let i = 0; i < 900; i++) {
+      await limit(event(undefined, { 'X-Forwarded-For': `192.0.2.${i % 10}` }))
+    }
+    const direct = {
+      ...event(),
+      nativeEvent: { node: { req: { socket: { remoteAddress: '127.0.0.1' } } } },
+    }
+    for (let i = 0; i < 100; i++) expect(await limit(direct)).toBeUndefined()
+    expect((await limit(direct))?.status).toBe(429)
+    expect((await limit(event(undefined, { 'X-Forwarded-For': '192.0.2.200' })))?.status).toBe(429)
+  })
+
+  it('missing forwarding data with a remote or unknown peer keeps the bounded fallback', async () => {
+    for (const remoteAddress of ['192.0.2.1', undefined]) {
+      const limit = createRequestLimiter(() => 0)
+      const request = new Request('http://localhost/_server', {
+        method: 'POST',
+        headers: { 'X-Real-IP': '127.0.0.1', Forwarded: 'for=127.0.0.1' },
+      })
+      const direct = { request, nativeEvent: { node: { req: { socket: { remoteAddress } } } } }
+      for (let i = 0; i < 120; i++) expect(await limit(direct)).toBeUndefined()
+      expect((await limit(direct))?.status).toBe(429)
+    }
+  })
+
+  it.each(['192.0.2.1', '', 'bad-address', '192.0.2.1, 192.0.2.2'])(
+    'a loopback proxy peer does not bypass a supplied forwarding value: %j',
+    async (forwarded) => {
+      const limit = createRequestLimiter(() => 0)
+      const proxied = {
+        ...event(undefined, { 'X-Forwarded-For': forwarded }),
+        nativeEvent: { node: { req: { socket: { remoteAddress: '127.0.0.1' } } } },
+      }
+      for (let i = 0; i < 120; i++) expect(await limit(proxied)).toBeUndefined()
+      expect((await limit(proxied))?.status).toBe(429)
+    },
+  )
+
   it('bearer-only action requests exhaust the same verified owner quota', async () => {
     const limit = createRequestLimiter(() => 0)
     const action = () =>
@@ -307,6 +371,7 @@ describe('request admission (#432 row 6)', () => {
     for (const [path, method] of [
       ['/api/events', 'POST'],
       ['/api/agents/general', 'GET'],
+      ['/api/agents/general', 'PUT'],
       ['/api/agents/general/extra', 'POST'],
     ]) {
       expect(

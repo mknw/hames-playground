@@ -65,6 +65,7 @@ describe('Caddy public request boundary (#432 G20 row 6)', () => {
     expect(shared).toContain('header_up X-Forwarded-Host {host}')
     expect(shared).toMatch(/^\s*header_up X-Forwarded-For \{remote_host\}\s*$/m)
     expect(main.match(/header_up X-Forwarded-For/g)).toHaveLength(1)
+    expect(main).not.toMatch(/header_up\s+-X-Forwarded-For/i)
   })
 
   it('routes release/dev hosts to their own upstream through exactly the shared guards', () => {

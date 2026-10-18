@@ -352,7 +352,7 @@ another dependency to audit/pin. It uses token buckets:
   (SD-13/SD-15/SD-16).
 - Verified principals consume **only their own allowance**. Requests with no
   verified principal (including unknown/expired cookies and unknown action
-  tokens) first consume a **per-address 600/minute, burst 120** allowance, then
+  tokens) normally consume a **per-address 600/minute, burst 120** allowance, then
   the process-wide **anonymous 6000/minute, burst 1000** backstop. Refusals at
   an earlier bucket do not drain the later one. Cookie lookup precedes address
   admission, so verified office users do not share a NAT allowance.
@@ -361,6 +361,15 @@ another dependency to audit/pin. It uses token buckets:
   public ingress and the app's loopback-only binding; do not expose the app port
   or place another proxy in front without revisiting that trust contract.
   Missing, malformed or multiple forwarded addresses share one fallback bucket.
+  The sole exception is a direct socket from `127.0.0.1`, `::1` or
+  `::ffff:127.0.0.1` with **no** forwarding header: local dev/browser-suite RPCs
+  consume only the anonymous global backstop (100/second, burst 1000). The
+  socket peer, never the URL or another header, establishes this exception;
+  absent peer metadata keeps the fallback. An empty or malformed forwarding
+  header does not qualify. This is admission, not authentication or a dev-auth
+  bypass. Caddy supplies the overwritten address even over a loopback socket,
+  so public unresolved requests retain their per-address bound. The config pin
+  also forbids removing that header after overwriting it (Opus Y1).
 - Exhaustion returns **429** with whole-second `Retry-After` and
   `Cache-Control: no-store`. A failed session lookup returns **503**, not an
   anonymous fallback. Both user and address tables hold at most **256** entries;

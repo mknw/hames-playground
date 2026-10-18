@@ -6,7 +6,9 @@
  * another's pool. No body reads, timers or response-stream work.
  *
  * Address trust requires Caddy's explicit X-Forwarded-For overwrite and the
- * app's loopback-only ingress. Missing/invalid/list values share one fallback.
+ * app's loopback-only ingress. Missing/invalid/list values share one fallback,
+ * except direct loopback sockets with NO forwarding header: these consume only
+ * the anonymous global backstop, so local RPCs do not share an invented address.
  * An unavailable session store returns 503, never an anonymous fallback.
  * State resets on restart and is NOT shared across replicas or app clones.
  */
@@ -79,7 +81,11 @@ export function createRequestLimiter(now: () => number = () => performance.now()
   const global: Bucket = { tokens: GLOBAL_BURST, updated: now() }
   const users = new Map<string, Bucket>()
   const addresses = new Map<string, Bucket>()
-  return async (event: Pick<FetchEvent, 'request'>): Promise<Response | undefined> => {
+  return async (
+    event: Pick<FetchEvent, 'request'> & {
+      nativeEvent?: { node: { req: { socket: { remoteAddress?: string } } } }
+    },
+  ): Promise<Response | undefined> => {
     // Match the endpoint's credential, including dual-credential requests.
     // Admission resolves identity only; the route still authorizes the request.
     let pathname = new URL(event.request.url).pathname
@@ -111,10 +117,17 @@ export function createRequestLimiter(now: () => number = () => performance.now()
 
     // Only unresolved traffic shares the anonymous backstop. Check its address
     // first, so refusals from one address cannot spend the shared allowance.
-    const forwarded = event.request.headers.get('x-forwarded-for') ?? ''
-    const address = isIP(forwarded) ? forwarded : 'unknown'
-    const addressRetry = takeKey(addresses, address, MAX_ADDRESSES, time)
-    if (addressRetry) return refused(addressRetry)
+    const forwarded = event.request.headers.get('x-forwarded-for')
+    const peer = event.nativeEvent?.node.req.socket.remoteAddress
+    // Socket metadata, never the URL/Host or a client-supplied identity header.
+    // Caddy always supplies XFF, including when its own socket is loopback.
+    const direct =
+      forwarded === null && (peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1')
+    if (!direct) {
+      const address = isIP(forwarded ?? '') ? forwarded! : 'unknown'
+      const addressRetry = takeKey(addresses, address, MAX_ADDRESSES, time)
+      if (addressRetry) return refused(addressRetry)
+    }
     const retry = take(global, GLOBAL_BURST, GLOBAL_PER_SECOND, time)
     return retry ? refused(retry) : undefined
   }

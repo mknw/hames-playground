@@ -93,7 +93,14 @@ with real certificate generation and pins these fail-closed invariants:
 - Instance operations use a separate certificate restricted to exactly that
   project. Foreign ownership, certificate scope and project restriction drift
   are refused. VM config is exact except for Incus `volatile.*` and `image.*`
-  metadata; profiles and devices, including NIC address filters, are exact.
+  metadata, with `volatile.eth0.hwaddr` and `volatile.apply_template` additionally
+  gating network seeding as below; profiles and devices, including NIC address
+  filters, are exact.
+- The guest network seed is derived only from the Incus-generated
+  `volatile.eth0.hwaddr` (full colon-separated MAC, lowercased). It is written
+  only while the VM is stopped with `volatile.apply_template=create`, and read
+  back with the MAC before start. Seed or MAC drift is refused. A booted VM
+  with no seed is refused and must be recreated.
 - Manager origins require verified HTTPS; image origins additionally require
   port 443. No redirects, plaintext retry, alternate provider, credential or
   provider response body is exposed through diagnostics.

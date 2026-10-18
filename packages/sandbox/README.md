@@ -279,7 +279,7 @@ The earlier 7.0.1 system-container experiment predates these restrictions and
 does not verify this configuration. The operator supplies an Incus HTTPS manager certificate permitted to create
 projects and register certificates, a bridge, a storage pool and a pinned VM
 image. The image must already contain **Docker (`/usr/bin/dockerd`), systemd,
-cloud-init and the Incus VM agent**, and support `cloud-init.user-data`; arbitrary
+cloud-init and the Incus VM agent**, and support `cloud-init.user-data` and `cloud-init.network-config`; arbitrary
 OCI images cannot boot as Incus VMs. Installing the host, preparing images,
 loading the four `kg-sandbox` images into the guest, bridge routing, firewall
 coexistence with Docker, and nested-KVM measurements belong to the operator's
@@ -330,6 +330,20 @@ errors, and never retry through plaintext or a different origin.
 A slow image pull is recorded as an Incus operation in the private state directory;
 retrying reconcile resumes it before submitting another create. Teardown also waits
 for that create and handles completed operations that Incus has expired.
+
+Before first boot, reconcile reads and validates `volatile.eth0.hwaddr` (the
+Incus device key, independent of the guest name), then writes a per-instance
+`cloud-init.network-config` with a static address matched by MAC, using the
+validated guest address, bridge prefix and default gateway. DHCPv4 and DHCPv6
+are disabled, and no nameservers are set; this works on the reviewed bridges
+with `ipv4.dhcp=false` and `dns.mode=none` without a host INPUT exception.
+The guest can keep `eth0`, `enp5s0` or another predictable name. The shared image seed and the
+operator spike harness's static addressing are unchanged. Reconcile reads the
+seed back before starting; missing/malformed MACs, failed writes and seed/MAC
+drift are refused. An unseeded VM must be stopped with a pending `create`
+template: an already-booted legacy VM requires operator teardown and recreation,
+because changing its cloud-init seed cannot repair its first boot. Interrupted
+creation/seeding can be retried while the VM is still unbooted.
 
 Repeated reconcile verifies ownership/configuration and starts a stopped VM;
 it refuses drift rather than silently rebuilding a running environment. A

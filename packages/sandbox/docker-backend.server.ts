@@ -37,7 +37,6 @@ import { V0_IN_VM_SERVERS } from './types'
 import {
   dockerConnectionFromEnv,
   dockerInvocation,
-  dockerDiagnostic,
   type DockerConnection,
 } from './docker-connection.server'
 import type { ToolCallResult, MCPToolDescription } from '@hames-ai/harness-patterns/types'
@@ -175,6 +174,15 @@ interface DockerNative extends Record<string, unknown> {
   dockerConnection: DockerConnection
   /** Preserved across `reset` so the recycle reboots with the same caps. */
   runtime: RuntimeConfig
+}
+
+/** Docker may echo its endpoint or TLS filenames in an error. */
+function dockerDiagnostic(connection: DockerConnection, message: string): string {
+  for (const flag of connection) {
+    const equals = flag.indexOf('=')
+    if (equals >= 0) message = message.replaceAll(flag.slice(equals + 1), '<redacted>')
+  }
+  return message
 }
 
 /** Run `docker <args>`, resolving stdout (trimmed). Rejects on non-zero exit. */

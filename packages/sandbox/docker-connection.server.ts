@@ -92,12 +92,3 @@ export function dockerInvocation(
   }
   return { args: [...connection, ...args], env }
 }
-
-/** Docker may echo its endpoint or TLS filenames in an error. */
-export function dockerDiagnostic(connection: DockerConnection, message: string): string {
-  for (const flag of connection) {
-    const equals = flag.indexOf('=')
-    if (equals >= 0) message = message.replaceAll(flag.slice(equals + 1), '<redacted>')
-  }
-  return message
-}

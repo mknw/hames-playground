@@ -220,6 +220,13 @@ See [GUIDE.md](GUIDE.md) for configuration and [SPEC.md](SPEC.md) for the
 contract and test boundaries. This selects a daemon; it does not provision VMs,
 remove socket mounts or establish network isolation.
 
+The existing wildcard export also makes `./docker-connection.server` available:
+`DockerConnection` is its readonly CLI-flag type, `dockerConnectionFromEnv(env?)`
+validates the generic environment settings, and `dockerInvocation(connection,
+args, baseEnv?)` prepares child argv/env. These server-only helpers are shared by
+the backend and PTY; ordinary consumers configure the environment and keep using
+`DockerBackend` or `withSandbox`. No new root-entry export is added.
+
 ### Multiple app clones on one Docker daemon
 
 Set a distinct `SANDBOX_ENVIRONMENT` in each app (for example `release` and

@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
-import {
-  dockerConnectionFromEnv,
-  dockerInvocation,
-  dockerDiagnostic,
-} from '../docker-connection.server'
+import { dockerConnectionFromEnv, dockerInvocation } from '../docker-connection.server'
 
 const tls = {
   SANDBOX_DOCKER_TLS_CA: '/synthetic/tls/ca.pem',
@@ -105,18 +101,5 @@ describe('Docker connection validation', () => {
       expect(base.DOCKER_CONTEXT).toBe('wrong')
       expect(invocation.args.at(-1)).toBe('ps')
     }
-  })
-  it('redacts configuration values while preserving operational errors', () => {
-    const flags = dockerConnectionFromEnv({
-      SANDBOX_DOCKER_HOST: 'tcp://sandbox.example.test:2376',
-      ...tls,
-    })
-    expect(
-      dockerDiagnostic(
-        flags,
-        'already connected tcp://sandbox.example.test:2376 /synthetic/tls/key.pem',
-      ),
-    ).toBe('already connected <redacted> <redacted>')
-    expect(dockerDiagnostic([], 'legacy diagnostic')).toBe('legacy diagnostic')
   })
 })

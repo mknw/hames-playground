@@ -76,6 +76,10 @@ Records: [0001](adr/0001-anthropic-only-default-chains.md) Anthropic-only defaul
 
 ## Testing (`docs/testing/`)
 
+[Nested VM sandbox spike](deployment/sandbox-vm-spike.md): read-only host survey,
+guarded opt-in Incus provisioning and measurement, rollback, private inputs,
+generic results, offline mutations and operator-run variants for #648.
+
 | Document                                 | Description                                                                                                                                                                                                                                                                                                                   |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [testing/pyramid.md](testing/pyramid.md) | **The four layers and the one command.** What each layer sees that the one below cannot, `pnpm release:check` (order, stop-at-first-failure, the go/no-go report and its "live steps still owed" section), why the three hermetic suites have three databases and three dev-bypass identities, and the #280 determinism table |

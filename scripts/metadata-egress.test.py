@@ -866,12 +866,6 @@ class Forwarded(unittest.TestCase):
         for family, rule in manual.items():
             self.assertNotIn(rule, self.states[family]['DOCKER-USER'])
 
-    def test_documented_seed_recovery_names_the_real_units(self):
-        for relative in ('docs/deployment/egress-design.md', 'docs/PREVIEW.md'):
-            doc = (ROOT / relative).read_text()
-            self.assertIn(f"systemctl reset-failed {egress.SEED_UNIT.name} docker.socket", doc, relative)
-            self.assertIn(f"systemctl restart {egress.UNIT.name}", doc, relative)
-
     def test_documented_upgrade_keeps_entire_inventory_denied_at_every_step(self):
         doc = Path(os.environ.get('METADATA_UPGRADE_DOC', ROOT / 'docs/deployment/app-upgrade.md')).read_text()
         self.assertEqual(self.invoke('--apply', '--persist'), 0)
@@ -1172,6 +1166,16 @@ def mutations():
     total = len(MUTATIONS) + len(DOCUMENT_MUTATIONS)
     print(str(total) + "/" + str(total) + " mutations killed")
     return 0
+
+
+class OperatorDocs(unittest.TestCase):
+    # Outside Forwarded: its setUp patches the unit paths to fixed names, which would make this vacuous.
+    def test_documented_seed_recovery_names_the_real_units(self):
+        for relative in ('docs/deployment/egress-design.md', 'docs/PREVIEW.md'):
+            doc = (ROOT / relative).read_text()
+            for command in (f"systemctl reset-failed {egress.SEED_UNIT.name} docker.socket",
+                            f"systemctl restart {egress.UNIT.name}"):
+                self.assertTrue(command in doc, f"{relative} lacks {command!r}")
 
 
 if __name__ == "__main__":

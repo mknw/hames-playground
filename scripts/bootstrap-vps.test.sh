@@ -230,7 +230,7 @@ clone_tests() {
   local dir="$tmproot/clones" base='docker-compose.yaml:docker-compose.prod.yaml'
   local clones="$base:docker-compose.clones.yaml" out rc key file
   mkdir -p "$dir/release/app" "$dir/release/configs" "$dir/release/scripts" "$dir/dev/app" "$dir/dev/configs"
-  cp "$ROOT/scripts/validate-clones.mjs" "$dir/release/scripts/"
+  cp "${CLONE_VALIDATOR_SCRIPT:-$ROOT/scripts/validate-clones.mjs}" "$dir/release/scripts/validate-clones.mjs"
   for file in docker-compose.yaml docker-compose.prod.yaml docker-compose.clones.yaml docker-compose.dev-sandbox.yaml configs/Caddyfile configs/Caddyfile.dev configs/mcp-config.yaml; do
     touch "$dir/release/$file"
   done
@@ -400,6 +400,21 @@ with tempfile.TemporaryDirectory() as tmp:
         changed = pathlib.Path(tmp) / 'bootstrap-vps.sh'
         changed.write_text(original.replace(old, new))
         env = {**os.environ, 'BOOTSTRAP_SCRIPT': str(changed)}
+        result = subprocess.run(['bash', str(harness), '--clones-only'], env=env, capture_output=True, text=True, timeout=90)
+        if not result.returncode or 'FAIL clones' not in result.stdout:
+            sys.exit('SURVIVED or invalid mutation: ' + name + '\n' + result.stdout + result.stderr)
+        print('KILLED ' + name, flush=True)
+    validator = source.parent / 'validate-clones.mjs'
+    policy = validator.read_text()
+    for name, old in [
+        ('separate-database-policy', 'decodeURIComponent(databases[0].pathname) !==\n      decodeURIComponent(databases[1].pathname)'),
+        ('separate-role-policy', 'decodeURIComponent(databases[0].username) !==\n      decodeURIComponent(databases[1].username)'),
+    ]:
+        if policy.count(old) != 1:
+            sys.exit('Mutation anchor must occur once: ' + name)
+        changed = pathlib.Path(tmp) / 'validate-clones.mjs'
+        changed.write_text(policy.replace(old, 'true'))
+        env = {**os.environ, 'CLONE_VALIDATOR_SCRIPT': str(changed)}
         result = subprocess.run(['bash', str(harness), '--clones-only'], env=env, capture_output=True, text=True, timeout=90)
         if not result.returncode or 'FAIL clones' not in result.stdout:
             sys.exit('SURVIVED or invalid mutation: ' + name + '\n' + result.stdout + result.stderr)

@@ -12,8 +12,9 @@ for those. Never use `down -v`, reset data volumes or prune retained images.
 Stop ingress, both app containers if enabled, gateway clients and any external
 writer. Stop routines by stopping their apps. Keep Postgres/Redis/Neo4j running
 for capture. Confirm that the matching application keys are escrowed **off the
-host and separately from dumps** (SD-17). The two-clone database policy still
-needs the owner's nod in PREVIEW §12; this procedure does not grant it.
+host and separately from dumps** (SD-17). PREVIEW §12 records the approved two-clone
+policy: dev has its own database and limited role, separate from release. Confirm
+that both databases and their grants are provisioned before upgrading.
 
 The following is the **single-app** shape, run as the deployment's Docker user:
 

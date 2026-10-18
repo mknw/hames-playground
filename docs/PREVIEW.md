@@ -1068,7 +1068,7 @@ Set these operator inputs in the release checkout's root `.env`:
 | `DEV_CLONE_PATH`                                    | Absolute path to the separate dev-branch checkout                         |
 | `APP_DOMAIN` / `DEV_APP_DOMAIN`                     | Distinct release/dev HTTPS hostnames                                      |
 | `RELEASE_RUNTIME_ENV_FILE` / `DEV_RUNTIME_ENV_FILE` | Separate absolute paths to app-only runtime env files                     |
-| `RELEASE_DATABASE_URL` / `DEV_DATABASE_URL`         | The provisional database policy below                                     |
+| `RELEASE_DATABASE_URL` / `DEV_DATABASE_URL`         | The separate-database policy below                                        |
 
 The persisted `COMPOSE_FILE` is also bootstrap's explicit clone opt-in; no new
 flag is needed. Bootstrap accepts exactly the file order above, optionally followed
@@ -1109,19 +1109,18 @@ the §12 preflight already refuses shared callback origins. DNS, callback
 registration and allow-list smoke are needed for **each** hostname; offline
 pins do not establish reachability or authentication correctness (SD-18).
 
-### PENDING_OWNER_DATABASE_POLICY — awaiting the owner's nod ⚑
+### Database policy — separate databases and limited roles
 
-**Provisional row 8c:** both containers use `postgres:5432`, but each has its own
+**Owner-approved row 8c:** both containers use `postgres:5432`, but each has its own
 database and login role. Neo4j and Redis remain shared. This removes cross-clone
 schema-hash churn and prevents either clone's encrypted-column backfill touching
 the other's rows. The policy inputs are isolated in
 `docker-compose.clones.yaml`'s `x-clone-database-policy`; its matching checks are
-marked `PENDING_OWNER_DATABASE_POLICY` in `scripts/validate-clones.mjs`. If the
-owner changes this decision, revise those sections explicitly; there is no
-silent shared-database fallback. **Do not provision or enable this policy on a
-host until the owner has nodded.** No host has been accessed by this step.
+in the database-policy section of `scripts/validate-clones.mjs`. Keep this one
+policy section and its matching guard aligned if the owner changes the decision;
+there is no silent shared-database fallback. No host has been accessed by this step.
 
-After that nod, the operator provisions two databases/roles on the **existing**
+The operator provisions two databases/roles on the **existing**
 server, using an administrator session (`psql`, not a committed credential).
 For **new empty databases**, the shape is the following generic SQL; choose the
 actual names privately and supply passwords with psql's interactive `\password`
@@ -1294,9 +1293,9 @@ For §12's two-clone shape, bootstrap reads the complete ordered `COMPOSE_FILE`
 from the release checkout's root `.env`, validates both apps before Compose
 operations, and keeps `app-dev` in the same project through `images`, `boot` and
 smoke. Prepare both app-only env files, the separate checkout and limited database
-roles first; bootstrap does not provision them or grant the provisional database
-policy. Node.js on the host is required only for the clone validator. Omitting
-clone inputs keeps the single-app command path unchanged.
+roles first; bootstrap does not provision databases or grants. Node.js on the
+host is required only for the clone validator. Omitting clone inputs keeps the
+single-app command path unchanged.
 
 **Before the first run:**
 

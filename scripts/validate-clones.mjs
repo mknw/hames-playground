@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Offline, secret-silent preflight. Feed `docker compose config --format json`
  * on stdin; never save or print that rendered config (it contains secrets).
- * PENDING_OWNER_DATABASE_POLICY is provisional; dev Docker access is opt-in.
+ * Each clone has its own database and role; dev Docker access is opt-in.
  */
 import { readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -134,8 +134,8 @@ export function validateClones(config) {
     "Clones need distinct hostnames and Entra redirects",
   );
 
-  // PENDING_OWNER_DATABASE_POLICY: one server, separate DBs and limited roles.
-  // Do not add a silent shared-database fallback; revise here after owner ruling.
+  // Owner-approved policy: one server, separate databases and limited roles.
+  // Keep this guard aligned with x-clone-database-policy; no shared-DB fallback.
   const databases = envs.map((env) => new URL(env.DATABASE_URL));
   for (const db of databases) {
     check(

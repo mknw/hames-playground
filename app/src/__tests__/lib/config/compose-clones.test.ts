@@ -89,7 +89,7 @@ describe('two built clones, one shared infrastructure (#432 row 8)', () => {
     )
   })
 
-  it('declares distinct callbacks, labels, cache volumes and provisional database inputs', () => {
+  it('declares distinct callbacks, labels, cache volumes and approved database inputs', () => {
     const release = overlay.services.app.environment
     const dev = overlay.services['app-dev'].environment
     for (const env of [release, dev]) expect(env.VITE_DEV_BYPASS_AUTH).toBe('false')

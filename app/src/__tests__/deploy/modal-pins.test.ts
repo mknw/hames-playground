@@ -61,6 +61,14 @@ const app = read('../../../../deploy/modal/hames_small_models.py')
 const shared = read('../../../../deploy/modal/vllm_box.py')
 const bigApp = read('../../../../deploy/modal/hames_private_27b.py')
 const gitignore = read('../../../../.gitignore')
+const modalLock = read('../../../../deploy/modal/uv.lock')
+
+it('requires reassessing the outbound restriction when the Modal SDK changes', () => {
+  const modal = modalLock.split('[[package]]').find((block) => /^name = "modal"$/m.test(block))
+  expect(modal, 'Reassess deploy/modal/README.md §Outbound restriction on an SDK upgrade').toMatch(
+    /^version = "1\.6\.1"$/m,
+  )
+})
 
 /** The raw-path expression lists, flattened to one set of public paths. */
 const caddyPaths = (text: string): string[] =>

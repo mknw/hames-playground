@@ -178,9 +178,9 @@ describe('two built clones, one shared infrastructure (#432 row 8)', () => {
   it('compares decoded role passwords even with different URL encodings', () => {
     const config = configuration()
     config.services.app.environment.DATABASE_URL =
-      'postgresql://release_app:%73ynthetic@postgres:5432/app_release'
+      'postgresql://release_app:credential-x%73eq-900@postgres:5432/app_release'
     config.services['app-dev'].environment.DATABASE_URL =
-      'postgresql://dev_app:syntheti%63@postgres:5432/app_dev'
+      'postgresql://dev_app:credential-xse%71-900@postgres:5432/app_dev'
     expect(() => validateClones(config)).toThrow(/passwords must differ/)
   })
 

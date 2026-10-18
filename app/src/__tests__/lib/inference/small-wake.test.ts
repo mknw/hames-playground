@@ -120,7 +120,7 @@ describe('small box wake', () => {
       smallScaledownSeconds(),
       SMALL_COLD_START_FALLBACK_MS,
       SMALL_COLD_START_PLAUSIBILITY_FLOOR_MS,
-    ]).toEqual([720_000, 10_000, 5_000, 120, 30_000, 10_000])
+    ]).toEqual([720_000, 10_000, 5_000, 300, 30_000, 10_000])
     vi.stubEnv('SMALL_LLM_WAKE_TIMEOUT_MS', '12000')
     vi.stubEnv('SMALL_LLM_WAKE_ATTEMPT_TIMEOUT_MS', '3000')
     vi.stubEnv('SMALL_LLM_WAKE_POLL_INTERVAL_MS', '1000')
@@ -132,16 +132,20 @@ describe('small box wake', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('skips a proven warm box until its own scale-down window expires', async () => {
-    vi.stubEnv('SMALL_LLM_SCALEDOWN_SECONDS', '60')
-    noteSmallCallCompleted()
-    await vi.advanceTimersByTimeAsync(59_999)
-    await ensureSmallAwake()
-    expect(fetchMock).not.toHaveBeenCalled()
-    await vi.advanceTimersByTimeAsync(1)
-    await ensureSmallAwake()
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-  })
+  it.each([undefined, '60'])(
+    'skips a proven warm box until its scale-down window expires (override=%s)',
+    async (override) => {
+      vi.stubEnv('SMALL_LLM_SCALEDOWN_SECONDS', override)
+      const windowMs = (override === undefined ? 300 : 60) * 1000
+      noteSmallCallCompleted()
+      await vi.advanceTimersByTimeAsync(windowMs - 1)
+      await ensureSmallAwake()
+      expect(fetchMock).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      await ensureSmallAwake()
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    },
+  )
 
   it('waits for both boxes in parallel and concurrent turns share each poll', async () => {
     const started = Date.now()
@@ -169,7 +173,7 @@ describe('small box wake', () => {
   it.each([400, 401])(
     'refuses small HTTP %s immediately, cancels an unshared sibling and records nothing',
     async (status) => {
-      noteSmallCallCompleted(Date.now() - 200_000)
+      noteSmallCallCompleted(Date.now() - 400_000)
       const notices: ColdStartEstimate[] = []
       fetchMock.mockImplementation((url: string, init: RequestInit) =>
         url === SMALL ? Promise.resolve(new Response('refused', { status })) : stalled(url, init),
@@ -227,7 +231,7 @@ describe('small box wake', () => {
   })
 
   it('records total small wait only for the starter, with independent history', async () => {
-    noteSmallCallCompleted(Date.now() - 200_000)
+    noteSmallCallCompleted(Date.now() - 400_000)
     // Four 503s then 200: total 20s, winning health request effectively 0ms.
     let calls = 0
     fetchMock.mockImplementation(async () =>
@@ -251,7 +255,7 @@ describe('small box wake', () => {
   it.each([false, true])(
     'drops implausibly fast small waits, even with coldness evidence=%s',
     async (seen) => {
-      if (seen) noteSmallCallCompleted(Date.now() - 200_000)
+      if (seen) noteSmallCallCompleted(Date.now() - 400_000)
       await runWithColdStartWatch(
         () => {},
         async () => {
@@ -275,7 +279,7 @@ describe('small box wake', () => {
 
   it('shows the larger cold estimate and carries the chosen estimate basis', async () => {
     const notices: ColdStartEstimate[] = []
-    noteSmallCallCompleted(Date.now() - 200_000)
+    noteSmallCallCompleted(Date.now() - 400_000)
     await runWithColdStartWatch(
       () => {},
       async () => {

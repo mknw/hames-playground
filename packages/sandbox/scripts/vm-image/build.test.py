@@ -192,15 +192,37 @@ class Pipeline(unittest.TestCase):
                          'sha256': vm.digest(self.root / 'docker'), 'version': 'Docker synthetic 1.0'})
         self.assertEqual(evidence.get('docker_driver'), 'overlay2')
 
-    def test_save_containerd_snapshotter_refused(self):
+    def test_save_containerd_uses_archive_config(self):
+        manifest = 'sha256:' + 'a' * 64
+        args = self.save_args()
+        for flavour in vm.FLAVOURS:
+            args[args.index('--' + flavour + '-image') + 1] = 'synthetic@' + manifest
         def boundary(argv, work):
             if argv[3:] == ['info', '--format', '{{.Driver}}']:
                 return b'overlayfs\n'
+            if argv[3:5] == ['image', 'inspect']:
+                return manifest.encode()
             return self.save_boundary(argv, work)
-        with patch.object(vm, 'run', side_effect=boundary), self.assertRaisesRegex(RuntimeError, 'containerd snapshotter'):
-            vm.main(self.save_args())
+        with patch.object(vm, 'run', side_effect=boundary):
+            vm.main(args)
+        evidence = json.loads((self.work / 'flavours.json').read_text())
+        self.assertEqual(evidence['docker_driver'], 'overlayfs')
+        self.assertEqual({f: row['image_id'] for f, row in evidence['flavours'].items()},
+                         {f: self.pin for f in vm.FLAVOURS})
+
+    def test_save_containerd_manifest_not_accepted_as_config(self):
+        args = self.save_args()
+        manifest = 'sha256:' + 'a' * 64
+        args[args.index('--base-image') + 1] = manifest
+        def boundary(argv, work):
+            if argv[3:] == ['info', '--format', '{{.Driver}}']:
+                return b'overlayfs\n'
+            if argv[3:5] == ['image', 'inspect']:
+                return manifest.encode()
+            return self.save_boundary(argv, work)
+        with patch.object(vm, 'run', side_effect=boundary), self.assertRaisesRegex(RuntimeError, 'config digest'):
+            vm.main(args)
         self.assertFalse((self.work / 'flavours.json').exists())
-        self.assertFalse(any(a[3:5] == ['image', 'save'] for a in self.calls))
 
     def inventory_refused(self, change, message):
         original = self.fake
@@ -713,9 +735,9 @@ def mutations():
         ("duplicate tar members admitted", 'len(names) == len(set(names))', 'True', "test_duplicate_tar_member_rejected"),
         ("surplus layer escapes verification", 'isinstance(layers, list) and len(layers) == len(diff_ids)', 'True', "test_extra_layer_cannot_escape_diff_id_verification"),
         ("verify skips archive config check", '        archive_id(output, record["image_id"], lock["architecture"])', '        pass', "test_verify_mismatched_config_refused_without_evidence"),
-        ("save skips inspect ID equality", 'actual == pin', 'True', "test_save_inspect_mismatch_refused_before_save"),
-        ("save skips archive ID equality", '        archive_id(output, pin, args.architecture)', '        pass', "test_save_wrong_archive_refused"),
-        ("save admits mutable ID", 'all(image_id(getattr(args, f + "_image")) for f in FLAVOURS)', 'True', "test_save_mutable_id_refused_before_work"),
+        ("save skips inspect ID equality", 'actual == pin.rsplit("@", 1)[-1]', 'True', "test_save_inspect_mismatch_refused_before_save"),
+        ("save skips archive ID equality", 'expected is None or actual == expected', 'True', "test_save_wrong_archive_refused"),
+        ("save admits mutable ID", 'image_id(getattr(args, f + "_image")) or re.fullmatch(', 'True or re.fullmatch(', "test_save_mutable_id_refused_before_work"),
         ("save admits TCP daemon", 're.fullmatch(r"unix:///[^\\s]+", args.docker_host)', 'True', "test_save_tcp_host_refused_before_work"),
         ("guest image inventory ignored", 'inventory["images"] == {f: lock["flavours"][f]["image_id"] for f in FLAVOURS}', 'True', "test_build_wrong_guest_image_refused"),
         ("guest package inventory ignored", 'all(inventory["packages"].get(p["name"]) == p["version"] for p in lock["packages"])', 'True', "test_build_wrong_guest_package_refused"),
@@ -732,7 +754,8 @@ def mutations():
         ("staged file world readable", '        path.chmod(0o600)\n        require(digest(path)', '        path.chmod(0o644)\n        require(digest(path)', "test_work_and_files_private_modes"),
         ("machine identity inventory ignored", 'inventory["machine_id_state"] in ("", "uninitialized")', 'True', "test_build_unclean_machine_id_refused"),
         ("SSH identity inventory ignored", 'inventory["ssh_host_keys"] == []', 'True', "test_build_ssh_host_keys_refused"),
-        ("save containerd snapshotter admitted", 'driver and driver != "overlayfs" and "containerd" not in driver.lower()', 'True', "test_save_containerd_snapshotter_refused"),
+        ("save containerd uses manifest as config", '"image_id": config}', '"image_id": actual}', "test_save_containerd_uses_archive_config"),
+        ("save containerd bare manifest accepted as config", 'None if manifest_pin else pin', 'None', "test_save_containerd_manifest_not_accepted_as_config"),
         ("relative Docker CLI admitted", 'args.docker is not None and args.docker.is_absolute()', 'True', "test_save_requires_absolute_docker_and_records_provenance"),
         ("Docker CLI hash not recorded", '"sha256": checksum, "version": version', '"version": version', "test_save_requires_absolute_docker_and_records_provenance"),
         ("runner closure claim absent", '"runner_closure": "operator-pinned, not recorded",', '', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
@@ -745,7 +768,7 @@ def mutations():
         ("unpinned input accepted", '    require(isinstance(record, dict)', '    record.setdefault("sha256", digest(directory / record["path"]))\n    require(isinstance(record, dict)', "test_unpinned_input_is_rejected"),
         ("input checksum not verified", 'digest(path) == record["sha256"]', 'True', "test_digest_mismatch_rejected_before_staging"),
         ("staged checksum not verified", 'digest(path) == expected', 'True', "test_staged_digest_is_rechecked"),
-        ("config digest not verified", '"sha256:" + hashlib.sha256(config).hexdigest() == expected', 'True', "test_config_id_layer_and_platform_are_verified"),
+        ("config digest not verified", 'expected is None or actual == expected', 'True', "test_config_id_layer_and_platform_are_verified"),
         ("layer digest not verified", '"sha256:" + value.hexdigest() == expected_layer', 'True', "test_config_id_layer_and_platform_are_verified"),
         ("manifest missing disk hash", '"outputs": hashes', '"outputs": {k: v for k, v in hashes.items() if k != "disk.qcow2"}', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
         ("stage writes outside work directory", 'path.resolve().is_relative_to(self.root) and not path.is_symlink()', 'True', "test_write_cannot_escape_or_follow_symlinks"),

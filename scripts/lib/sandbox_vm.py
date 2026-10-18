@@ -60,6 +60,12 @@ def authorize_host_docker(args, host_scope=None):
         return
     require(host_scope is not None and re.fullmatch(r"[a-f0-9]{32}", host_scope.token)
             and host_scope.prefix == "sbxs-" + host_scope.token[:6], "host mutation requires spike ownership")
+    if verb == "save":
+        require(len(tail) == 1 and tail[0] in (host_scope.args.base_image,
+                host_scope.args.data_image, host_scope.args.office_image)
+                and pinned_image(tail[0]) and not tail[0].startswith(("sha256:", "-")),
+                "host export requires an exact flavour manifest reference")
+        return
     if verb == "exec":
         cid = next((arg for arg in tail if not arg.startswith("-")), "")
         labels = json.loads(host_docker("inspect", "--format", '{{json .Config.Labels}}', cid).stdout)
@@ -657,6 +663,14 @@ class Spike:
                     "-out", str(directory / (role + ".pem")))
 
     def remote(self, index, *args, **kwargs):
+        images = getattr(self, "guest_image_ids", {})
+        if args[:1] == ("run",) and images:
+            # Measurement runs use this fixed entrypoint grammar. No other
+            # argument or Docker operation is rewritten.
+            require(args.count("--entrypoint") == 1, "guest image selector unknown")
+            position = args.index("--entrypoint") + 2
+            require(position < len(args) and args[position] in images, "guest image config unverified")
+            args = (*args[:position], images[args[position]], *args[position + 1:])
         clean = docker_env()
         return command("docker", "--config", str(self.state / f"client{index}/.docker"),
                        *args, env=clean, **kwargs)

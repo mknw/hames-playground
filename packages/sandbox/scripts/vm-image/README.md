@@ -17,25 +17,48 @@ establish trust.
 
 ## Three different pins
 
-| Pin                                                | Meaning and consumer                                                                                                                                                                                                                                                                                            |
-| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sha256:<64 lowercase hex>` Docker image config ID | With Docker's **classic image store**, `docker image inspect --format '{{.Id}}' IMAGE`; survives `docker save` / `docker load`, is accepted directly by `docker run --pull=never`, and needs no registry. Use it for the spike's `--base-image`, `--data-image`, `--office-image` and optionally `--app-image`. |
-| SHA256 of the saved archive                        | Verifies transfer/staging of that exact tar; **never** a Docker run selector. Different tar serializations can contain the same image config. The builder also hashes the config bytes and every uncompressed layer against its config's `rootfs.diff_ids`.                                                     |
-| Incus fingerprint                                  | SHA256 of `metadata.tar` followed by `disk.qcow2`, in that order; identifies the complete split VM image. Supply this to #654's `image.fingerprint`. It is unrelated to a flavour's config ID.                                                                                                                  |
+| Pin                                                | Meaning and consumer                                                                                                                                                                                                                                                                                                                                                                                   |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `sha256:<64 lowercase hex>` Docker image config ID | SHA256 of the original config bytes referenced by `manifest.json` in `docker save`. On the **classic store** this also equals `docker image inspect --format '{{.Id}}' IMAGE`; survives `docker save` / `docker load`, is accepted directly by `docker run --pull=never`, and needs no registry. Use it for the spike's `--base-image`, `--data-image`, `--office-image` and optionally `--app-image`. |
+| SHA256 of the saved archive                        | Verifies transfer/staging of that exact tar; **never** a Docker run selector. Different tar serializations can contain the same image config. The builder also hashes the config bytes and every uncompressed layer against its config's `rootfs.diff_ids`.                                                                                                                                            |
+| Incus fingerprint                                  | SHA256 of `metadata.tar` followed by `disk.qcow2`, in that order; identifies the complete split VM image. Supply this to #654's `image.fingerprint`. It is unrelated to a flavour's config ID.                                                                                                                                                                                                         |
 
-The config-ID invariant requires Docker's **classic image store** on the save
-daemon, the guest build daemon and the boot daemon. Containerd snapshotters
-are refused by name in `save` and guest customization; their inspect IDs are
-not the config IDs this pipeline pins. Both stages record
-`docker info --format '{{.Driver}}'`. Compare the boot daemon's driver with
-`guest-inventory.json` before accepting the owed boot evidence.
+The **save daemon and spike host may use either image store**. On Docker 29's
+containerd store, inspect `.Id` and `.Descriptor.digest` name a manifest/index;
+`.RootFS` contains layer digests, not the config digest. Re-serializing inspect
+`.Config` cannot recover the original config bytes. The save stage accepts an
+existing immutable `name@sha256:<manifest digest>` in the same image flags on a
+containerd daemon, verifies inspect against that selector, and records the hash
+of the exported config bytes as `image_id`. A bare `sha256:` input continues to
+promise a config ID; passing a manifest ID that way is refused. Classic save
+commands, output config IDs and archive verification remain unchanged.
 
-The spike accepts config IDs additively alongside `name@sha256:<digest>`:
-only its host-run admission and measure preflight validators change. Before
-workloads, config inputs must equal host `inspect .Id`, and host/guest IDs
-must match in both guests. Mutable tags and abbreviated IDs stay refused.
-Existing flags, registry-pin behavior and `--pull=never` are unchanged. A
-registry digest names a manifest; it must not be guessed from a config ID.
+**Guest build and boot daemons still require the classic store.** Customization
+refuses containerd snapshotters: it loads, inspects and tags by config ID, and
+preloads `/var/lib/docker`. Docker 29's containerd resolver uses manifest targets,
+and its default content store also needs `/var/lib/containerd`; enabling it here
+would require a separate preload/boot design. Compare the boot daemon's driver
+with `guest-inventory.json` before accepting the owed boot evidence.
+
+Before workloads, the spike compares config digests in both guests and on the
+host, and checks a requested bare config ID for exact equality. For a confirmed
+classic graph driver it uses inspect `.Id`. For a containerd descriptor it hashes
+the original config bytes in a streaming `docker save`, never a manifest digest.
+Ambiguous stores, malformed/duplicate/multiple-image exports, nonzero exits,
+exports over 8 GiB and exports taking over 120 seconds are refused. Streaming
+uses `nice -n 19` and `ionice -c 3` when available, retains only bounded metadata,
+and writes no archive to disk. These priorities apply to the CLI, not dockerd;
+the export still consumes daemon I/O and CPU. Host export admission permits only
+the three exact immutable flavour references, with no additional flags. Existing
+spike flags, registry-pin behavior and `--pull=never` are unchanged. A config-only
+selector unavailable on containerd fails closed; use the existing manifest
+reference flags for that host. For a containerd host, preflight inspects each
+host-verified config ID in both classic guests before publishing an internal
+selector map. Guest runs then use those config IDs; host runs retain the
+original manifest references. Missing configs, conflicting mappings or a guest
+run outside that verified map are refused. A registry reference need not
+survive archive transfer into the classic guests. Classic-host selectors are
+unchanged.
 
 #654's environment controller selects a **VM image**, not individual flavour
 images. Its existing 64-hex Incus fingerprint input needs no change. That PR's
@@ -98,7 +121,7 @@ extracted to the host. `flavours.json` contains a `flavours` lock fragment with 
 hashes/IDs, plus the save daemon driver and Docker CLI path/hash/version.
 The outer save tar must be uncompressed. Individual layer blobs may be raw or
 gzip-compressed; verification also accepts separately prepared containerd-style
-layer archives, but this does not enable a containerd daemon. Hashes use the
+layer archives from either save-daemon store. Guest customization still requires the classic store. Hashes use the
 **uncompressed** bytes, with
 an 8 GiB total expansion cap per image. Other layer codecs fail verification.
 Copy its `flavours` object into the complete build lock. Add absolute paths to those
@@ -225,3 +248,9 @@ Sources: [Incus split image format](https://linuxcontainers.org/incus/docs/main/
 [Incus cloud-init seed requirements](https://linuxcontainers.org/incus/docs/main/cloud-init/),
 [Docker save](https://docs.docker.com/reference/cli/docker/image/save/) and
 [Docker load](https://docs.docker.com/reference/cli/docker/image/load/).
+
+Docker 29 evidence: [containerd inspect target and exposed fields](https://github.com/moby/moby/blob/docker-v29.0.0/daemon/containerd/image_inspect.go#L89-L111),
+[manifest-target resolver](https://github.com/moby/moby/blob/docker-v29.0.0/daemon/containerd/image.go#L132-L156),
+[Docker-compatible save metadata](https://github.com/moby/moby/blob/docker-v29.0.0/daemon/containerd/image_exporter.go#L41-L51),
+[config blob reference in manifest.json](https://github.com/moby/moby/blob/docker-v29.0.0/vendor/github.com/containerd/containerd/v2/core/images/archive/exporter.go#L496-L525),
+and [containerd store paths](https://docs.docker.com/engine/storage/containerd/).

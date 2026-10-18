@@ -122,3 +122,25 @@ cloud-init/agent, routing/firewall, streams/files/PTY and performance remain
 spike evidence. The server key stays in cloud-init data for the VM lifetime;
 the compose overlay leaves the root app and gateway network/socket caveats
 documented in the README.
+
+## Offline VM image identity
+
+The operator scripts (outside the published runtime) pin Docker **config**
+digests, archive checksums and Incus fingerprints separately. Save and measurement
+hosts may use classic or containerd image stores; containerd manifest/index IDs
+are never accepted as config IDs. Original config bytes in Docker's save metadata
+provide the cross-store identity; a confirmed classic driver retains its inspect
+config ID. Measurement exports stream without disk files, at low client priority,
+with a 120-second deadline and 8 GiB limit; unknown stores or ambiguous content
+fail closed. Host export admission is restricted to the three supplied immutable
+flavour references with no extra flags. For a containerd host, both guests
+resolve all three host-verified config IDs before an internal map is published;
+guest run image selectors use that map, while host runs and classic-host
+selectors stay unchanged. Missing/conflicting configs or unmapped guest images
+are refused before workloads.
+
+Guest assembly and boot remain classic: they preload `/var/lib/docker` and
+inspect/tag/run by config ID. These offline checks prove identity handling, not
+Docker/VM boot compatibility or containment (SD-19–SD-21). See the
+[VM image pipeline](https://github.com/mknw/hames-playground/tree/main/packages/sandbox/scripts/vm-image) for evidence, store requirements
+and owed Linux checks. Existing spike launch flags are preserved.

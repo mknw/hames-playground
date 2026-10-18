@@ -91,11 +91,26 @@ manifest records hashes and the Incus fingerprint; actual customization and
 boot compatibility still require a disposable Linux runner. Full Docker
 config IDs (`sha256:` plus 64 lowercase hex characters) are also accepted by
 the image flags below, alongside registry `name@sha256` references. Use the
-config ID from `docker image inspect .Id`, never the saved tar's checksum.
-The builder's config-ID/save/load contract requires Docker's **classic image
-store**; save and customization refuse containerd snapshotters by name. Compare
-the boot daemon's `docker info --format '{{.Driver}}'` with the driver recorded
-in `guest-inventory.json` as part of the owed Linux boot check.
+config ID from classic-store `docker image inspect .Id` or the SHA256 of the
+original config bytes referenced by `manifest.json` in `docker save`, never the
+saved tar's checksum. On Docker 29's containerd store `.Id` is a manifest/index
+digest; do not supply it as a bare config ID. Use the existing immutable
+`name@sha256` image flags for that host. Measure compares config digests across
+stores before any workloads. For a containerd host it resolves each guest
+flavour by the verified config ID and translates only guest run image selectors
+to those IDs; host selectors and all CLI flags stay unchanged. It publishes the
+map only after all three images match in both guests. Missing or conflicting
+configs refuse before workloads. Its read-only export streams under a 120-second,
+8 GiB bound, at low client priority, without writing an archive to disk; unknown
+stores or ambiguous exports refuse the measurement. Daemon export I/O remains
+real work, so keep the live window coordinated.
+
+The save daemon and spike host may use containerd; **guest customization and boot
+remain classic** because preload and runtime selectors use config IDs and the
+populated store is `/var/lib/docker`. Compare the boot daemon's
+`docker info --format '{{.Driver}}'` with `guest-inventory.json` during the owed
+Linux boot check. Full rationale and Docker 29 source links are in the pipeline
+README. All operator launch flags below are unchanged.
 
 Prepare these locally on the target host before the live window. Do not put
 their values in an issue, commit, shell transcript or public result.

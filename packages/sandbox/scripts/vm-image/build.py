@@ -140,7 +140,8 @@ def archive_id(path, expected, architecture):
         manifest = json.loads(read("manifest.json"))
         require(isinstance(manifest, list) and len(manifest) == 1, "one image per save archive required")
         config = read(manifest[0]["Config"])
-        require("sha256:" + hashlib.sha256(config).hexdigest() == expected, "Docker config digest mismatch")
+        actual = "sha256:" + hashlib.sha256(config).hexdigest()
+        require(expected is None or actual == expected, "Docker config digest mismatch")
         metadata = json.loads(config)
         arch = {"x86_64": "amd64", "aarch64": "arm64"}[architecture]
         require(metadata.get("os") == "linux" and metadata.get("architecture") == arch, "image platform mismatch")
@@ -163,6 +164,8 @@ def archive_id(path, expected, architecture):
                 value.update(block)
             require("sha256:" + value.hexdigest() == expected_layer, "saved layer digest mismatch")
 
+        return actual
+
 
 def run(argv, work):
     # Fixed allowlist: no inherited loaders, search paths or routing selectors.
@@ -177,8 +180,10 @@ def run(argv, work):
 
 def save(args):
     require(args.docker_host and re.fullmatch(r"unix:///[^\s]+", args.docker_host),
-            "explicit disposable Docker Unix endpoint required")
-    require(all(image_id(getattr(args, f + "_image")) for f in FLAVOURS), "full config IDs required")
+            "explicit Docker Unix endpoint required")
+    require(all(image_id(getattr(args, f + "_image")) or re.fullmatch(
+        r"[a-zA-Z0-9][a-zA-Z0-9./:_-]*@sha256:" + HEX, getattr(args, f + "_image") or "")
+        for f in FLAVOURS), "full config IDs or immutable manifest references required")
     require(args.docker is not None and args.docker.is_absolute(), "absolute Docker CLI path required")
     source = local_file(args.docker)
     work = Work(args.work_dir)
@@ -189,17 +194,25 @@ def save(args):
     require(version, "Docker CLI version required")
     docker = [executable, "--host", args.docker_host]
     driver = run([*docker, "info", "--format", "{{.Driver}}"], work).decode().strip()
-    require(driver and driver != "overlayfs" and "containerd" not in driver.lower(),
-            "containerd snapshotter unsupported; classic Docker image store required")
+    require(driver, "Docker image store required")
+    containerd = driver == "overlayfs" or "containerd" in driver.lower()
     result = {}
     for flavour in FLAVOURS:
         pin = getattr(args, flavour + "_image")
+        require(containerd or image_id(pin), "classic store requires a config ID")
+        manifest_pin = containerd and "@" in pin
         actual = run([*docker, "image", "inspect", "--format", "{{.Id}}", pin], work).decode().strip()
-        require(actual == pin, "daemon image ID differs from pin")
+        require(actual == pin.rsplit("@", 1)[-1], "daemon image ID differs from pin")
+        size = int(run([*docker, "image", "inspect", "--format", "{{.Size}}", pin], work).decode().strip())
+        require(shutil.disk_usage(work.root).free >= 2 * size + 10 * 1024**3,
+                "insufficient free space for save")
+        low_priority = ["nice", "-n", "19"]
+        if shutil.which("ionice"):
+            low_priority += ["ionice", "-c", "3"]
         output = work.output(flavour + ".tar")
-        run([*docker, "image", "save", "--output", output, pin], work)
-        archive_id(output, pin, args.architecture)
-        result[flavour] = {"path": output.name, "sha256": digest(output), "image_id": pin}
+        run([*low_priority, *docker, "image", "save", "--output", output, pin], work)
+        config = archive_id(output, None if manifest_pin else pin, args.architecture)
+        result[flavour] = {"path": output.name, "sha256": digest(output), "image_id": config}
     work.write("flavours.json", json.dumps({"flavours": result, "docker_driver": driver,
                "docker": {"path": str(source), "sha256": checksum, "version": version}}, indent=2) + "\n")
 

@@ -1,19 +1,24 @@
 """Opt-in synthetic measurements; imported only by Spike.measure()."""
 import concurrent.futures
 import fcntl
+import hashlib
 import ipaddress
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import pty
 import re
 import selectors
+import shutil
 import socket
 import struct
 import subprocess
 import termios
+import tarfile
+import threading
 import time
 
+import sandbox_vm
 from sandbox_vm import HOST_SOCKET, authorize_host_docker, command, docker_env, host_docker, percentiles, require
 
 PROC = Path("/proc")
@@ -536,15 +541,140 @@ def isolation(spike):
                          ingress_other_network_refused=True)
 
 
+# A save changes no image, tag or content but can be large. Bound client work
+# and memory; no archive is written to disk or the private command log.
+EXPORT_BYTES = 8 * 1024 ** 3
+EXPORT_RATE = 64 * 1024**2
+EXPORT_SECONDS = EXPORT_BYTES / EXPORT_RATE + 60
+METADATA_BYTES = 16 * 1024 ** 2
+EXPORT_MEMBERS = 100000
+
+
+def saved_config_id(argv):
+    low_priority = ["nice", "-n", "19"]
+    if shutil.which("ionice"):
+        low_priority += ["ionice", "-c", "3"]
+    process = subprocess.Popen([*low_priority, *argv], stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, env=docker_env())
+    expired = threading.Event()
+    def expire():
+        expired.set()
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+    timer = threading.Timer(EXPORT_SECONDS, expire)
+    timer.start()
+    try:
+        start = time.monotonic()
+        class Bounded:
+            total = 0
+            def read(self, count):
+                data = process.stdout.read(count)
+                self.total += len(data)
+                require(self.total <= EXPORT_BYTES, "image export exceeds 8 GiB limit")
+                time.sleep(max(0, self.total / EXPORT_RATE - (time.monotonic() - start)))
+                return data
+        stream = Bounded()
+        hashes, configs, manifest = {}, set(), None
+        with tarfile.open(fileobj=stream, mode="r|") as archive:
+            for member in archive:
+                name = PurePosixPath(member.name)
+                require(len(hashes) < EXPORT_MEMBERS and member.name not in hashes
+                        and not name.is_absolute() and ".." not in name.parts
+                        and (member.isfile() or member.isdir()), "ambiguous image export member")
+                require(member.size <= EXPORT_BYTES, "image export exceeds 8 GiB limit")
+                hashes[member.name] = None
+                if not member.isfile():
+                    continue
+                value, metadata = hashlib.sha256(), bytearray()
+                source = archive.extractfile(member)
+                for block in iter(lambda: source.read(1024 * 1024), b""):
+                    value.update(block)
+                    if member.size <= METADATA_BYTES:
+                        metadata.extend(block)
+                hashes[member.name] = "sha256:" + value.hexdigest()
+                if member.name == "manifest.json":
+                    require(member.size <= METADATA_BYTES, "bounded image manifest required")
+                    manifest = json.loads(metadata)
+                elif metadata:
+                    try:
+                        config = json.loads(metadata)
+                    except (ValueError, UnicodeError):
+                        continue
+                    if isinstance(config, dict) and config.get("os") == "linux" and config.get("architecture") \
+                            and isinstance(config.get("rootfs"), dict) and config["rootfs"].get("type") == "layers":
+                        configs.add(member.name)
+        # Consume trailing padding too: the byte limit and exit status cover the
+        # entire export, not only the tar members preceding the end marker.
+        while stream.read(1024 * 1024):
+            pass
+        require(process.wait() == 0 and not expired.is_set(), "image export failed or timed out")
+        require(isinstance(manifest, list) and len(manifest) == 1
+                and isinstance(manifest[0], dict) and manifest[0].get("Config") in configs,
+                "one unambiguous image config required")
+        return hashes[manifest[0]["Config"]]
+    except (tarfile.TarError, ValueError, KeyError, TypeError) as error:
+        raise RuntimeError("image export config unreadable") from error
+    finally:
+        timer.cancel()
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        process.stdout.close()
+        if sandbox_vm.PRIVATE_LOG is not None:
+            with sandbox_vm.PRIVATE_LOG.open("a") as log:
+                log.write(json.dumps({"argv": [*low_priority, *argv], "exit": process.returncode}) + "\n")
+
+
+def image_config_id(spike, image, index=None, config_ids=None):
+    target = host_docker if index is None else lambda *args: spike.remote(index, *args)
+    inspected = json.loads(target("inspect", "--type", "image", "--format",
+        '{"Id":{{json .Id}},"Descriptor":{{json .Descriptor}},"GraphDriver":{{json .GraphDriver}}}', image).stdout)
+    require(isinstance(inspected, dict), "image inspect object required")
+    identity = inspected.get("Id")
+    require(isinstance(identity, str) and re.fullmatch(r"sha256:[a-f0-9]{64}", identity),
+            "full image identity required")
+    descriptor = inspected.get("Descriptor")
+    if descriptor is None:
+        driver = inspected.get("GraphDriver")
+        require(isinstance(driver, dict) and driver.get("Name") in
+                ("overlay2", "overlay", "vfs", "btrfs", "zfs", "aufs", "devicemapper"),
+                "classic image store unconfirmed")
+        return identity
+    require(isinstance(descriptor, dict) and descriptor.get("digest") == identity
+            and descriptor.get("mediaType") in ("application/vnd.oci.image.index.v1+json",
+                "application/vnd.oci.image.manifest.v1+json",
+                "application/vnd.docker.distribution.manifest.list.v2+json",
+                "application/vnd.docker.distribution.manifest.v2+json"), "image descriptor ambiguous")
+    require(not "@" in image or identity == image.rsplit("@", 1)[-1], "image manifest selector mismatch")
+    # A bare sha256 input promises a CONFIG ID. Containerd resolves manifest IDs
+    # instead, so never silently reinterpret that promise.
+    require(not image.startswith("sha256:"), "requested config ID cannot select a containerd manifest")
+    if index is None:
+        argv = ["docker", "--host", HOST_SOCKET, "save", image]
+        authorize_host_docker(argv, spike)
+    else:
+        argv = ["docker", "--config", str(spike.state / f"client{index}/.docker"), "save", image]
+    config = saved_config_id(argv)
+    if config_ids is not None:
+        require(image not in config_ids or config_ids[image] == config, "ambiguous host config identity")
+        config_ids[image] = config
+    return config
+
+
 def measure(spike):
     data_canary(spike)  # Refuse before any measurement starts a container.
+    # Publish translations only after all three configs pass in BOTH guests.
+    guest_images = {}
     # Matching content digests are mandatory; never pull/build on the host.
     for image in (spike.args.base_image, spike.args.data_image, spike.args.office_image):
-        host = host_docker("inspect", "--type", "image", "--format", '{{.Id}}', image).stdout.strip()
+        host = image_config_id(spike, image, config_ids=guest_images)
         require(not image.startswith("sha256:") or host == image, "requested config ID differs from image content")
         for index in range(2):
-            guest = spike.remote(index, "inspect", "--type", "image", "--format", '{{.Id}}', image).stdout.strip()
+            guest = image_config_id(spike, guest_images.get(image, image), index)
             require(host == guest and host.startswith("sha256:"), "image content mismatch")
+    spike.guest_image_ids = guest_images
     no_socket_path(spike)
     isolation(spike)
     for nested in (False, True):

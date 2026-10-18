@@ -1769,6 +1769,47 @@ def mutations():
          '        command("ip", "link", "delete", "foreign0")\n        failures = []\n        for name, action in',
          "test_every_journaled_reversal_obeys_binary_grammar"),
     ])
+    changes.extend([
+        ("guest run selector not translated", "core", 'if args[:1] == ("run",) and images:', 'if False:', "test_containerd_config_matches_classic_before_workloads"),
+        ("guest run selector translated to wrong config", "core", 'images[args[position]]', '\'sha256:\' + \'c\' * 64', "test_containerd_config_matches_classic_before_workloads"),
+        ("guest inspect selector not translated", "measure", 'guest_images.get(image, image), index', 'image, index', "test_containerd_config_matches_classic_before_workloads"),
+        ("conflicting host config mapping accepted", "measure", 'image not in config_ids or config_ids[image] == config', 'True', "test_conflicting_guest_mapping_refused_before_workloads"),
+        ("unverified guest run image admitted", "core", 'require(position < len(args) and args[position] in images, "guest image config unverified")\n            args = (*args[:position], images[args[position]], *args[position + 1:])', 'require(position < len(args), "guest image config unverified")\n            args = (*args[:position], images.get(args[position], args[position]), *args[position + 1:])', "test_guest_mapping_refuses_unknown_run_image"),
+        ("containerd inspect manifest compared as config", "measure", '    config = saved_config_id(argv)', '    config = identity', "test_config_identity_fake_docker_store_table"),
+        ("host guest config mismatch accepted", "measure", 'host == guest and host.startswith("sha256:")', 'True', "test_containerd_config_matches_classic_before_workloads"),
+        ("bare containerd manifest accepted as config", "measure", 'require(not image.startswith("sha256:"), "requested config ID cannot select a containerd manifest")', 'pass', "test_config_identity_fake_docker_store_table"),
+        ("manifest bytes accepted as config", "measure", 'manifest[0].get("Config") in configs', 'manifest[0].get("Config") in hashes', "test_export_ambiguity_size_timeout_and_exit_refused"),
+        ("multiple exported configs admitted", "measure", 'isinstance(manifest, list) and len(manifest) == 1', 'isinstance(manifest, list)', "test_export_ambiguity_size_timeout_and_exit_refused"),
+        ("duplicate export member admitted", "measure", 'member.name not in hashes', 'True', "test_export_ambiguity_size_timeout_and_exit_refused"),
+        ("export path traversal admitted", "measure", 'not name.is_absolute() and ".." not in name.parts', 'True', "test_export_ambiguity_size_timeout_and_exit_refused"),
+        ("unconfirmed containerd store treated as classic", "measure", '("overlay2", "overlay", "vfs",', '("overlayfs", "overlay2", "overlay", "vfs",', "test_config_identity_fake_docker_store_table"),
+        ("containerd manifest selector mismatch admitted", "measure", 'not "@" in image or identity == image.rsplit("@", 1)[-1]', 'True', "test_config_identity_fake_docker_store_table"),
+        ("export CPU priority removed", "measure", 'low_priority = ["nice", "-n", "19"]', 'low_priority = []', "test_export_priority_and_environment"),
+        ("export I/O priority removed", "measure", 'low_priority += ["ionice", "-c", "3"]', 'low_priority += []', "test_export_priority_and_environment"),
+        ("export inherits Docker routing environment", "measure", 'stderr=subprocess.DEVNULL, env=docker_env())', 'stderr=subprocess.DEVNULL, env=None)', "test_export_priority_and_environment"),
+        ("export byte limit removed", "measure", 'self.total <= EXPORT_BYTES', 'True', "test_export_ambiguity_size_timeout_and_exit_refused"),
+        ("export timeout removed", "measure", '    timer.start()', '    pass', "test_export_ambiguity_size_timeout_and_exit_refused"),
+        ("failed export accepted", "measure", 'process.wait() == 0 and not expired.is_set()', 'not expired.is_set()', "test_export_ambiguity_size_timeout_and_exit_refused"),
+        ("host save allows foreign image", "core", 'tail[0] in (host_scope.args.base_image,\n                host_scope.args.data_image, host_scope.args.office_image)', 'True', "test_host_export_exact_flavours_only"),
+        ("host save admits extra flag", "core", 'len(tail) == 1 and tail[0]', 'len(tail) >= 1 and tail[0]', "test_host_export_exact_flavours_only"),
+        ("host save admits mutable flavour", "core", 'and pinned_image(tail[0]) and not tail[0].startswith(("sha256:", "-"))', 'and True', "test_host_export_exact_flavours_only"),
+    ])
+    changes.extend([
+        ('review descriptor digest check removed', 'measure', 'descriptor.get("digest") == identity', 'True', 'test_descriptor_digest_and_media_type_refuse_independently'),
+        ('review descriptor media type allowlist removed', 'measure', 'descriptor.get("mediaType") in ("application/vnd.oci.image.index.v1+json",\n                "application/vnd.oci.image.manifest.v1+json",\n                "application/vnd.docker.distribution.manifest.list.v2+json",\n                "application/vnd.docker.distribution.manifest.v2+json")', 'True', 'test_descriptor_digest_and_media_type_refuse_independently'),
+        ('review first config substituted for every flavour', 'core', 'images[args[position]]', 'next(iter(images.values()))', 'test_three_distinct_flavours_preserve_each_identity'),
+        ('review host save admits base only', 'core', 'tail[0] in (host_scope.args.base_image,\n                host_scope.args.data_image, host_scope.args.office_image)', 'tail[0] == host_scope.args.base_image', 'test_host_export_exact_flavours_only'),
+        ('review classic host publishes translation map', 'measure', '        return identity\n', '        if config_ids is not None:\n            config_ids[image] = identity\n        return identity\n', 'test_measure_orchestration_end_to_end'),
+        ('review config identity taken from filename', 'measure', 'return hashes[manifest[0]["Config"]]', 'return "sha256:" + PurePosixPath(manifest[0]["Config"]).name', 'test_export_hashes_config_bytes_independent_of_filename'),
+        ('review nonregular export member admitted', 'measure', '(member.isfile() or member.isdir())', 'True', 'test_export_member_type_count_manifest_and_trailing_bounds'),
+        ('review export member count removed', 'measure', 'len(hashes) < EXPORT_MEMBERS', 'True', 'test_export_member_type_count_manifest_and_trailing_bounds'),
+        ('review manifest metadata bound removed', 'measure', 'require(member.size <= METADATA_BYTES, "bounded image manifest required")', 'pass', 'test_export_member_type_count_manifest_and_trailing_bounds'),
+        ('review trailing export padding not drained', 'measure', '        while stream.read(1024 * 1024):\n            pass\n', '        pass\n', 'test_export_member_type_count_manifest_and_trailing_bounds'),
+        ('export rate sleep removed', 'measure', 'time.sleep(max(0, self.total / EXPORT_RATE - (time.monotonic() - start)))', 'pass', 'test_export_backpressure_and_deadline_budget'),
+        ('export deadline below rate budget', 'measure', 'EXPORT_SECONDS = EXPORT_BYTES / EXPORT_RATE + 60', 'EXPORT_SECONDS = 120', 'test_export_backpressure_and_deadline_budget'),
+        ('inspect records full config instead of identity projection', 'measure', '\'{"Id":{{json .Id}},"Descriptor":{{json .Descriptor}},"GraphDriver":{{json .GraphDriver}}}\'', "'{{json .}}'", 'test_inspect_projects_only_identity_fields'),
+        ('export operation omitted from private audit', 'measure', 'if sandbox_vm.PRIVATE_LOG is not None:', 'if False:', 'test_export_audit_records_argv_exit_without_content'),
+    ])
     for label, target, before, after, test in changes:
         original = sources[target]
         if before not in original:

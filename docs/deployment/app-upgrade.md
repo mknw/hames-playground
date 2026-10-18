@@ -12,8 +12,9 @@ for those. Never use `down -v`, reset data volumes or prune retained images.
 Stop ingress, both app containers if enabled, gateway clients and any external
 writer. Stop routines by stopping their apps. Keep Postgres/Redis/Neo4j running
 for capture. Confirm that the matching application keys are escrowed **off the
-host and separately from dumps** (SD-17). The two-clone database policy still
-needs the owner's nod in PREVIEW §12; this procedure does not grant it.
+host and separately from dumps** (SD-17). PREVIEW §12 records the approved two-clone
+policy: dev has its own database and limited role, separate from release. Confirm
+that both databases and their grants are provisioned before upgrading.
 
 The following is the **single-app** shape, run as the deployment's Docker user:
 
@@ -78,14 +79,21 @@ and compatible data is insufficient. Never publish inspect output or env files.
 Review the target's bootstrap arguments and release notes. Use bootstrap with
 the existing hostname/ACME/operator arguments and the new **full** `--ref` SHA,
 selecting `--only checkout,env,images,boot --no-seed` for a **single app**.
-For clones, instead run `--only checkout,env,images --no-seed` first, keep the
-two-clone inputs in place, and build/update each reviewed pin via PREVIEW §12's
-validated Compose path. Before any clone-enabled bootstrap `boot`, validate the
-final production/clone configuration and chain boot with `&&` as below. Replace
-the example hostname, ACME email and full target SHA with the deployment's
-existing bootstrap arguments; retain any other required operator arguments.
-Never print or save the rendered configuration. A failed render or validator
-must prevent boot; do not run boot separately after a failure.
+For clones, the same bootstrap stages preserve §12's complete ordered
+`COMPOSE_FILE` in the release checkout's root `.env`, including the optional dev
+socket overlay. Set `DEV_REF` to the reviewed full SHA before `images`;
+bootstrap refuses a different dev HEAD or a dirty dev checkout and does not
+update that branch. Both app-only runtime files (mode 0600, outside both
+canonical checkout paths) and limited
+role/database URLs must be in place. Bootstrap now runs `validate-clones.mjs`
+itself before clone Compose operations, including `boot`, and refuses a failed
+render or validation without starting containers. It boots both apps in one
+project without orphan pruning and waits for both apps' health.
+
+The explicit external preflight below is also useful before boot. Replace the
+example hostname, ACME email and full target SHA with the deployment's existing
+arguments and retain other required operator arguments. Never print or save the
+rendered configuration; a failed render or validator must prevent boot.
 
 ```bash
 set -o pipefail
@@ -93,6 +101,11 @@ docker compose config --format json | node scripts/validate-clones.mjs &&
   bash scripts/bootstrap-vps.sh --hostname app.example.invalid \
     --acme-email ops@example.invalid --ref '<full-target-sha>' --only boot --no-seed
 ```
+
+If Caddyfile contents or imported sites changed, recreate only Caddy with
+`docker compose up -d --no-deps --force-recreate caddy` under the full deployment
+Compose list; keep `caddy_data` and its certificates. Automatic detection remains
+#672.
 
 No automatic update of the dev branch is implied. Boot can start
 Caddy; keep ingress blocked by the operator's maintenance control until the
@@ -103,7 +116,9 @@ Run bootstrap `--only smoke --no-seed` with the deployment's normal hostname and
 ACME arguments. This covers the relay/isolation checks and the local CPU
 embedder's `/v1/embeddings` response with **1024 finite dimensions**
 (scripts/bootstrap-vps.sh:1769). Repeat app/auth checks for each enabled clone;
-bootstrap's on-box app checks target the release app. Run PREVIEW §8's browser
+bootstrap's clone smoke also compares both running app environments with the
+validated configuration and verifies each limited database role by a read-only
+TCP login. The browser checks still need both hostnames. Run PREVIEW §8's browser
 sign-in/allow-list, persisted synthetic conversation, graph and stash checks.
 Run the [external uptime probe](observability.md) from off-box for each hostname.
 

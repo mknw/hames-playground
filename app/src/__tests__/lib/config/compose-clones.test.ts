@@ -6,7 +6,12 @@ import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import { afterAll, describe, expect, it } from 'vitest'
 import { parseDocument } from 'yaml'
-import { validateClones } from '../../../../../scripts/validate-clones.mjs'
+const { validateClones } = await import(
+  new URL(
+    process.env.CLONE_VALIDATOR_SCRIPT ?? '../../../../../scripts/validate-clones.mjs',
+    import.meta.url,
+  ).href
+)
 
 const repoFile = (name: string) => fileURLToPath(new URL(`../../../../../${name}`, import.meta.url))
 const overlayDoc = parseDocument(readFileSync(repoFile('docker-compose.clones.yaml'), 'utf8'))
@@ -42,12 +47,16 @@ function configuration() {
       DATA_ENCRYPTION_KEY: `${clone}-synthetic-data-key-000000000000000000000`,
       AUTH_SESSION_SECRET: `${clone}-synthetic-session-key-0000000000000000`,
       TOKEN_ENCRYPTION_KEY: `${clone}-synthetic-token-key-0000000000000000000`,
-      DATABASE_URL: `postgresql://${clone}_app:synthetic@postgres:5432/app_${clone}`,
+      DATABASE_URL: `postgresql://${clone}_app:${clone}-synthetic-password@postgres:5432/app_${clone}`,
     },
   })
   return {
     'x-clone-dev-docker-socket': false,
-    services: { app: app('release'), 'app-dev': app('dev') },
+    services: {
+      app: app('release'),
+      'app-dev': app('dev'),
+      postgres: { environment: { POSTGRES_PASSWORD: 'synthetic-administrator-password' } },
+    },
   }
 }
 
@@ -89,7 +98,7 @@ describe('two built clones, one shared infrastructure (#432 row 8)', () => {
     )
   })
 
-  it('declares distinct callbacks, labels, cache volumes and provisional database inputs', () => {
+  it('declares distinct callbacks, labels, cache volumes and approved database inputs', () => {
     const release = overlay.services.app.environment
     const dev = overlay.services['app-dev'].environment
     for (const env of [release, dev]) expect(env.VITE_DEV_BYPASS_AUTH).toBe('false')
@@ -112,6 +121,91 @@ describe('two built clones, one shared infrastructure (#432 row 8)', () => {
 
   it('accepts independent secrets, redirects and databases', () => {
     expect(() => validateClones(configuration())).not.toThrow()
+  })
+
+  it.each([
+    ['dev receives RELEASE_DATABASE_URL', 'app-dev', 'RELEASE_DATABASE_URL', 'url'],
+    ['release receives DEV_DATABASE_URL', 'app', 'DEV_DATABASE_URL', 'url'],
+    ['dev receives a release key under an alias', 'app-dev', 'ALIAS', 'DATA_ENCRYPTION_KEY'],
+    ['equal decoded role passwords', 'app-dev', 'DATABASE_URL', 'password'],
+    ['dev password equals the administrator password', 'app-dev', 'DATABASE_URL', 'admin'],
+    ['dev uses the maintenance database', 'app-dev', 'DATABASE_URL', 'postgres'],
+  ])('refuses the security review synthetic render: %s', (_label, service, key, value) => {
+    const config = configuration()
+    const target = config.services[service as 'app' | 'app-dev'].environment as Record<
+      string,
+      string
+    >
+    const sibling = config.services[service === 'app' ? 'app-dev' : 'app'].environment
+    if (value === 'url') target[key] = sibling.DATABASE_URL
+    else if (value === 'password' || value === 'admin') {
+      const url = new URL(target.DATABASE_URL)
+      url.password =
+        value === 'password'
+          ? new URL(sibling.DATABASE_URL).password
+          : config.services.postgres.environment.POSTGRES_PASSWORD
+      target[key] = url.href
+    } else if (value === 'postgres') target[key] = target[key].replace('/app_dev', '/postgres')
+    else target[key] = (sibling as Record<string, string>)[value]
+    expect(() => validateClones(config)).toThrow()
+  })
+
+  it.each(['app', 'app-dev'] as const)(
+    'refuses sibling and admin values anywhere in %s env',
+    (service) => {
+      for (const key of [
+        'DATA_ENCRYPTION_KEY',
+        'AUTH_SESSION_SECRET',
+        'TOKEN_ENCRYPTION_KEY',
+        'DATABASE_URL',
+        'password',
+        'admin',
+      ]) {
+        const config = configuration()
+        const sibling = config.services[service === 'app' ? 'app-dev' : 'app'].environment
+        const value =
+          key === 'password'
+            ? decodeURIComponent(new URL(sibling.DATABASE_URL).password)
+            : key === 'admin'
+              ? config.services.postgres.environment.POSTGRES_PASSWORD
+              : (sibling as Record<string, string>)[key]
+        Object.assign(config.services[service].environment, { UNRELATED: `prefix:${value}:suffix` })
+        expect(() => validateClones(config), key).toThrow()
+      }
+    },
+  )
+
+  it('compares decoded role passwords even with different URL encodings', () => {
+    const config = configuration()
+    config.services.app.environment.DATABASE_URL =
+      'postgresql://release_app:credential-x%73eq-900@postgres:5432/app_release'
+    config.services['app-dev'].environment.DATABASE_URL =
+      'postgresql://dev_app:credential-xse%71-900@postgres:5432/app_dev'
+    expect(() => validateClones(config)).toThrow(/passwords must differ/)
+  })
+
+  it.each([
+    'RELEASE_DATABASE_URL',
+    'DEV_DATABASE_URL',
+    'RELEASE_RUNTIME_ENV_FILE',
+    'DEV_RUNTIME_ENV_FILE',
+    'OTHER_RUNTIME_ENV_FILE',
+    'DEV_CLONE_PATH',
+    'COMPOSE_FILE',
+  ])('refuses root-only %s in either app env', (key) => {
+    for (const service of ['app', 'app-dev'] as const) {
+      const config = configuration()
+      Object.assign(config.services[service].environment, { [key]: '' })
+      expect(() => validateClones(config)).toThrow()
+    }
+  })
+
+  it.each(['postgres', 'template0', 'template1'])('refuses reserved database %s', (database) => {
+    const config = configuration()
+    config.services['app-dev'].environment.DATABASE_URL = config.services[
+      'app-dev'
+    ].environment.DATABASE_URL.replace('/app_dev', '/' + database)
+    expect(() => validateClones(config)).toThrow()
   })
 
   it.each([

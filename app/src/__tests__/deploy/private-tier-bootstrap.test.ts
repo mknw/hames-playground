@@ -183,7 +183,8 @@ function boot(values: Record<string, string>) {
     reserved_name() { return 1; }; assert_dynamic_tools_off() { :; }
     rendered_exposure() { :; }; wait_state() { :; }
     prepare_embedder() { :; } # model preparation has daemon-free fixture tests
-    dc() { printf 'COMPOSE_CALLED\\n'; }
+    dc() { if [[ $1 == config ]]; then printf '{"name":"synthetic"}'; else printf 'COMPOSE_CALLED\\n'; fi; }
+    sudo() { :; }
     stage_boot
   `,
       '_',

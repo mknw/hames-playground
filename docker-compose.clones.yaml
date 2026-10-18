@@ -3,7 +3,7 @@
 # Read docs/PREVIEW.md §12 before use. Only this overlay enables Caddy's dev site.
 # Runtime env files contain app secrets ONLY, never Postgres administrator keys.
 
-# PENDING_OWNER_DATABASE_POLICY: awaiting the owner's nod (#432 G20 row 8c).
+# Owner-approved database policy (#432 G20 row 8c).
 # Both URLs must name postgres:5432, with DIFFERENT databases and limited roles.
 # Keep any later owner-directed policy change in this one section and its guard.
 x-clone-database-policy:

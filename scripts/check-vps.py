@@ -15,7 +15,7 @@ import re
 import subprocess
 import sys
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 
 class Refused(Exception):
@@ -205,6 +205,57 @@ def embeddings():
     checked("docker", "compose", "exec", "-T", "app", "node", "-e", EMBEDDINGS)
 
 
+CLONE_DATABASE = """(async()=>{
+const {Client}=require('node:module').createRequire('/app/.output/server/index.mjs')('pg');
+const url=new URL(process.env.DATABASE_URL);
+const other=JSON.parse(process.env.CLONE_OTHER_DATABASES);
+if(!Array.isArray(other)||other.length!==2||other.some(name=>typeof name!=='string'||!name))throw Error();
+const client=new Client({connectionString:process.env.DATABASE_URL,connectionTimeoutMillis:5000});
+try{await client.connect();
+const {rows}=await client.query(`SELECT current_user AS role, current_database() AS database,
+NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls) AS limited,
+NOT EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.member WHERE r.rolname=current_user) AS no_membership,
+NOT has_database_privilege(current_user, $1, 'CONNECT') AND
+NOT has_database_privilege(current_user, $2, 'CONNECT') AS isolated
+FROM pg_roles WHERE rolname = current_user`,other);
+if(rows.length!==1||rows[0].role!==decodeURIComponent(url.username)||
+rows[0].database!==decodeURIComponent(url.pathname.slice(1))||!rows[0].limited||!rows[0].no_membership||!rows[0].isolated)process.exitCode=1;
+}finally{await client.end();}
+})().catch(()=>{process.exitCode=1;});"""
+
+
+def clones():
+    # Config/inspect stay in memory. The TCP login uses the running app's own
+    # DATABASE_URL; neither credentials nor SQL results reach stdout or argv.
+    config = document("docker", "compose", "config", "--format", "json")
+    projects = set()
+    for service, namespace in (("app", "release"), ("app-dev", "dev")):
+        desired = config["services"][service]["environment"]
+        app = container(service)
+        actual = dict(value.split("=", 1) for value in app["Config"]["Env"])
+        require(app["State"]["Running"] is True and app["State"]["Health"]["Status"] == "healthy",
+                "clone app not healthy")
+        projects.add(app["Config"]["Labels"]["com.docker.compose.project"])
+        for key in ("DATABASE_URL", "SANDBOX_ENVIRONMENT", "SANDBOX_CACHE_VOLUME", "DATA_ENCRYPTION_KEY",
+                    "AUTH_SESSION_SECRET", "TOKEN_ENCRYPTION_KEY", "AUTH_REDIRECT_URI", "VITE_DEV_BYPASS_AUTH"):
+            require(bool(desired.get(key)) and actual.get(key) == desired[key], "clone runtime differs from validated configuration")
+        require(actual["SANDBOX_ENVIRONMENT"] == namespace and not actual.get("POSTGRES_PASSWORD"),
+                "clone namespace or administrator credential mismatch")
+        targets = ("/configs", "/var/run/docker.sock")
+        expected_mounts = sorted((v["target"], v["source"], v["type"], not v.get("read_only", False))
+                                 for v in config["services"][service].get("volumes", []) if v["target"] in targets)
+        actual_mounts = sorted((v["Destination"], v["Source"], v["Type"], v["RW"])
+                               for v in app["Mounts"] if v["Destination"] in targets)
+        require(actual_mounts == expected_mounts, "clone mounts differ from validated configuration")
+        if namespace == "dev":
+            require(config.get("x-clone-dev-docker-socket") is True or
+                    not any(v[0] == "/var/run/docker.sock" for v in actual_mounts), "dev socket requires owner opt-in")
+        sibling = "app-dev" if service == "app" else "app"
+        other = unquote(urlsplit(config["services"][sibling]["environment"]["DATABASE_URL"]).path.lstrip("/"))
+        checked("docker", "exec", "-e", "CLONE_OTHER_DATABASES=" + json.dumps([other, "postgres"]), app["Id"], "node", "-e", CLONE_DATABASE)
+    require(len(projects) == 1, "clones must share one compose project")
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -234,7 +285,7 @@ def private_health():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_mutually_exclusive_group(required=True)
-    for mode in ("daemon", "network", "egress", "relay", "private-health", "embeddings"):
+    for mode in ("daemon", "network", "egress", "relay", "private-health", "embeddings", "clones"):
         modes.add_argument("--" + mode, action="store_true")
     parser.add_argument("--ssh-port", type=int, default=22)
     args = parser.parse_args()
@@ -252,6 +303,8 @@ def main():
             private_health()
         elif args.embeddings:
             embeddings()
+        elif args.clones:
+            clones()
     except Exception as error:
         # Only our fixed labels are safe to print. Library errors may carry
         # a URL, bearer value or Docker-inspect content.

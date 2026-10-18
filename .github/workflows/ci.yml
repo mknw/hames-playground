@@ -21,7 +21,8 @@ jobs:
   check:
     name: typecheck · lint · test · build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The expanded clone mutation corpus precedes full coverage and the build.
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v4
@@ -82,6 +83,7 @@ jobs:
         run: |
           shellcheck -x scripts/bootstrap-vps.sh scripts/bootstrap-vps.test.sh scripts/check-docker.sh scripts/check-docker.test.sh
           scripts/bootstrap-vps.test.sh
+          scripts/bootstrap-vps.test.sh --clone-mutations
           scripts/check-docker.test.sh
           python3 scripts/check-vps.test.py
           python3 scripts/check-vps.test.py --mutations

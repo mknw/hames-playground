@@ -158,12 +158,14 @@ chmod 600 .env
 $EDITOR .env       # every placeholder; the file explains each variable
 ```
 
-`.env` at the **repo root** is the single source of runtime configuration. It is
+For the single-app shape, `.env` at the **repo root** is the single source of runtime configuration. It is
 read twice, deliberately: Compose reads it for `${VAR}` substitution (that is how
 `COMPOSE_FILE`, the two database passwords and `APP_DOMAIN` reach the overlay),
 and the `app` service loads the same file as its `env_file`. There is no
 `app/.env` on this host — the overlay pins the app's `env_file` to the root file
-so a stray one cannot contribute anything.
+so a stray one cannot contribute anything. The opt-in two-clone shape (§12) replaces
+that app env file with separate app-only files while keeping Compose inputs in
+the release checkout’s root `.env`.
 
 The two lines at the top of `.env` are what make the bring-up a single command:
 
@@ -1092,19 +1094,38 @@ contexts. Both checkouts must include these guards before enabling two apps.
 
 Set these operator inputs in the release checkout's root `.env`:
 
-| Input                                               | Meaning                                                                   |
-| --------------------------------------------------- | ------------------------------------------------------------------------- |
-| `COMPOSE_FILE`                                      | `docker-compose.yaml:docker-compose.prod.yaml:docker-compose.clones.yaml` |
-| `COMPOSE_PROFILES`                                  | `app`                                                                     |
-| `DEV_CLONE_PATH`                                    | Absolute path to the separate dev-branch checkout                         |
-| `APP_DOMAIN` / `DEV_APP_DOMAIN`                     | Distinct release/dev HTTPS hostnames                                      |
-| `RELEASE_RUNTIME_ENV_FILE` / `DEV_RUNTIME_ENV_FILE` | Separate absolute paths to app-only runtime env files                     |
-| `RELEASE_DATABASE_URL` / `DEV_DATABASE_URL`         | The provisional database policy below                                     |
+| Input                                               | Meaning                                                                      |
+| --------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `COMPOSE_FILE`                                      | `docker-compose.yaml:docker-compose.prod.yaml:docker-compose.clones.yaml`    |
+| `COMPOSE_PROFILES`                                  | `app`                                                                        |
+| `DEV_CLONE_PATH`                                    | Absolute path to the separate dev-branch checkout                            |
+| `DEV_REF`                                           | Reviewed full commit SHA; dev HEAD must match and its checkout must be clean |
+| `APP_DOMAIN` / `DEV_APP_DOMAIN`                     | Distinct release/dev HTTPS hostnames                                         |
+| `RELEASE_RUNTIME_ENV_FILE` / `DEV_RUNTIME_ENV_FILE` | Separate absolute paths to app-only runtime env files                        |
+| `RELEASE_DATABASE_URL` / `DEV_DATABASE_URL`         | The separate-database policy below                                           |
 
-Create both app-only files with mode 0600, outside the checkout. Use the app
+The persisted `COMPOSE_FILE` is also bootstrap's explicit clone opt-in; no new
+flag is needed. Bootstrap accepts exactly the file order above, optionally followed
+by `:docker-compose.dev-sandbox.yaml` for the existing owner socket opt-in. Keep
+`COMPOSE_PROFILES=app`. Set these as literal values (quote paths if needed), not
+shell exports or interpolated expressions. Bootstrap refuses clone-specific inputs
+under the single-app file list, unsupported file orders, missing inputs, relative
+or missing runtime files, and missing overlay/validator/Caddy files. Alternate
+`export KEY=value` or `KEY = value` spellings of the Compose/clone inputs are
+refused in both shapes. Bootstrap requires `DEV_REF` to match the clean dev
+checkout's HEAD; it does not update that checkout for you. It never
+silently falls back to the root app env or the administrator database URL.
+
+Create both app-only files with mode 0600, outside **both** checkouts (canonical
+paths are checked). Bootstrap refuses group/other permission bits. Use the app
 settings in `.env.production.example` as the inventory, but **do not copy the root
 file wholesale**: omit `POSTGRES_PASSWORD`, compose controls, and the other
-clone's settings/secrets. The overlay supplies each app's `DATABASE_URL`, Entra
+clone's settings/secrets. The validator also refuses root-only `RELEASE_DATABASE_URL`,
+`DEV_DATABASE_URL`, `*_RUNTIME_ENV_FILE`, `DEV_CLONE_PATH` and `COMPOSE_FILE` in app envs,
+sibling passwords/URLs/keys under any variable name, and the rendered Postgres
+administrator password anywhere in either app env. Database role passwords must
+differ, and `postgres`, `template0` and `template1` cannot be app databases.
+The overlay supplies each app's `DATABASE_URL`, Entra
 callback/logout URLs, sandbox namespace/cache, shared-service endpoints and
 Neo4j credentials. Keep `VITE_ALLOWED_EMAILS` separate for each app and leave it
 unset at image-build time. Runtime allow-lists win (`app/src/lib/auth/allowList.ts`).
@@ -1115,6 +1136,10 @@ Register **both exact HTTPS callbacks** in Entra (§5), one per hostname:
 that registration is deliberate, but it does not justify reusing application
 keys. Generate **independent `DATA_ENCRYPTION_KEY`, `AUTH_SESSION_SECRET`, and
 `TOKEN_ENCRYPTION_KEY` for each clone**, and escrow each key set separately (§7).
+In clone mode, `--only env --keys-escrowed` fingerprints all six runtime-file
+keys; changing any one invalidates the attestation. Unused root application
+keys do not satisfy this gate. Boot also checks the owner-required settings in
+each runtime file, including its Entra secret and allow-list.
 Never put release ciphertext or a release database dump into dev. A second key
 alone is not database isolation: it can instead turn a schema/backfill mistake
 into an unreadable database. Auth cookies have no `Domain` attribute
@@ -1131,19 +1156,18 @@ the §12 preflight already refuses shared callback origins. DNS, callback
 registration and allow-list smoke are needed for **each** hostname; offline
 pins do not establish reachability or authentication correctness (SD-18).
 
-### PENDING_OWNER_DATABASE_POLICY — awaiting the owner's nod ⚑
+### Database policy — separate databases and limited roles
 
-**Provisional row 8c:** both containers use `postgres:5432`, but each has its own
+**Owner-approved row 8c:** both containers use `postgres:5432`, but each has its own
 database and login role. Neo4j and Redis remain shared. This removes cross-clone
 schema-hash churn and prevents either clone's encrypted-column backfill touching
 the other's rows. The policy inputs are isolated in
 `docker-compose.clones.yaml`'s `x-clone-database-policy`; its matching checks are
-marked `PENDING_OWNER_DATABASE_POLICY` in `scripts/validate-clones.mjs`. If the
-owner changes this decision, revise those sections explicitly; there is no
-silent shared-database fallback. **Do not provision or enable this policy on a
-host until the owner has nodded.** No host has been accessed by this step.
+in the database-policy section of `scripts/validate-clones.mjs`. Keep this one
+policy section and its matching guard aligned if the owner changes the decision;
+there is no silent shared-database fallback. No host has been accessed by this step.
 
-After that nod, the operator provisions two databases/roles on the **existing**
+The operator provisions two databases/roles on the **existing**
 server, using an administrator session (`psql`, not a committed credential).
 For **new empty databases**, the shape is the following generic SQL; choose the
 actual names privately and supply passwords with psql's interactive `\password`
@@ -1201,8 +1225,43 @@ prints no input or secret-bearing parse error. It refuses shared encryption /
 signing keys, callbacks, sandbox caches/namespaces and database roles/databases,
 and refuses a dev command override, a shared canonical build path, shared configs,
 a dev socket without owner opt-in or a published dev port.
-Re-run it before every recreate. It is an explicit operator preflight, not a
-runtime Docker authorization boundary.
+Re-run it before every manual recreate. Bootstrap runs this same validator
+itself before clone Compose operations, including `images`, `boot`, and smoke
+probes. It requires Node.js on the host (use the supported Node 22 or newer);
+missing Node, a failed render, or failed validation prevents the operation.
+Rendered configuration goes directly to the validator; it is never saved or
+printed. This is an operator preflight, not a runtime Docker authorization boundary.
+
+Once configured, re-run bootstrap with the deployment's existing hostname/ACME
+arguments and reviewed full `--ref`, selecting `--only images,boot --no-seed`
+(or `--only boot --no-seed` for already-built images). It uses one Compose project
+from the release checkout for **both** apps, retains the optional dev socket
+overlay, waits for `app-dev` health as well as release health, and does not pass
+`--remove-orphans` in clone mode. The single-app shape retains its existing
+`docker compose up -d --remove-orphans` command unchanged.
+Before that single-app command, a read-only project-scoped container query refuses
+if an `app-dev` container still exists. Restore the clone file list rather than
+letting a single-app boot prune it. An unavailable query also refuses startup.
+
+Run `--only smoke --no-seed` afterwards. When clones are enabled, smoke also
+compares both running apps' database URLs, keys, callbacks, auth bypass and sandbox
+namespaces/cache names with the validated configuration, and requires both apps
+to be healthy in one Compose project. It makes a read-only TCP database login
+with each running app's own credentials and checks the effective role/database
+and non-admin role attributes, no role memberships, and denied `CONNECT` on the
+sibling database and `postgres`. Database names are passed separately and queried
+as parameters; no credentials are printed. Smoke compares each running `/configs`
+and Docker socket mount with the render, and refuses a dev socket without the
+owner opt-in. An old release still using the root administrator URL fails this
+check. Administrator checks on the legacy `hames` database and browser sign-in
+checks on **both** hostnames remain operator work. Offline tests do not establish
+live grants or host isolation (SD-18/SD-19).
+
+Caddy file-content detection remains tracked in #672. After changing a Caddyfile
+or its imported sites, explicitly recreate only Caddy with
+`docker compose up -d --no-deps --force-recreate caddy` using the same full Compose
+file list. Keep the existing `caddy_data` volume so its certificates are retained;
+never delete it as part of an app update.
 
 Sandbox resources carry `kg-sandbox-environment=release` or `dev`; the startup
 reaper filters **containers and networks** by both that label and `kg-sandbox=1`.
@@ -1284,6 +1343,14 @@ idempotent: each stage checks before it changes anything, so you resume by
 re-running it. Its header and `--help` hold the details. A deployment that
 keeps its own parameters and runbook elsewhere runs this script at a pinned
 commit of this repository; nothing in it is specific to one host.
+
+For §12's two-clone shape, bootstrap reads the complete ordered `COMPOSE_FILE`
+from the release checkout's root `.env`, validates both apps before Compose
+operations, and keeps `app-dev` in the same project through `images`, `boot` and
+smoke. Prepare both app-only env files, the separate checkout and limited database
+roles first; bootstrap does not provision databases or grants. Node.js on the
+host is required only for the clone validator. Omitting clone inputs keeps the
+single-app command path unchanged.
 
 **Before the first run:**
 
@@ -1555,7 +1622,10 @@ and no root, and it pins the gates: the listener check, the gateway pin,
 values. It also runs the `ssh` and `firewall` stages and the checkpoint against
 a fake box (shims for sudo, sshd, ufw, ss and systemctl), asserting what was
 called and in which order, plus the rendered-exposure and volume gates. Each
-pin was shown to go red by a mutation. Before the script was made
+pin was shown to go red by a mutation. The portable `--clones-only` subset uses
+the real validator and an inert Docker shim to pin the ordered overlay, both-app
+lifecycle, failed preflight, partial configuration refusal and byte-exact default
+boot command transcript; `--clone-mutations` turns each guard red in CI. Before the script was made
 provider-neutral (a change of wording, of the managed-file header and of one
 removed provider-specific warning, not of logic), its real stages were
 exercised in throwaway Ubuntu 24.04 and 26.04 containers, including with

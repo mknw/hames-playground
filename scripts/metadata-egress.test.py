@@ -1168,6 +1168,16 @@ def mutations():
     return 0
 
 
+class OperatorDocs(unittest.TestCase):
+    # Outside Forwarded: its setUp patches the unit paths to fixed names, which would make this vacuous.
+    def test_documented_seed_recovery_names_the_real_units(self):
+        for relative in ('docs/deployment/egress-design.md', 'docs/PREVIEW.md'):
+            doc = (ROOT / relative).read_text()
+            for command in (f"systemctl reset-failed {egress.SEED_UNIT.name} docker.socket",
+                            f"systemctl restart {egress.UNIT.name}"):
+                self.assertTrue(command in doc, f"{relative} lacks {command!r}")
+
+
 if __name__ == "__main__":
     if sys.argv[1:] == ["--mutations"]:
         sys.exit(mutations())

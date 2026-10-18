@@ -692,6 +692,27 @@ sudo systemctl start vps-metadata-egress.service
 sudo python3 scripts/metadata-egress.py --docker-user-only --check # read-only
 ```
 
+**Operator notes** (from the #676 throwaway-host boot/restart trial):
+
+- **On a host that still has the interim manual denies, do not use the block
+  above.** Run the [replacement sequence](deployment/egress-design.md#operator-adoption-and-temporary-rule-replacement)
+  verbatim, from `$APP_DIR` at the merged commit. Keep the manual denies until
+  the second `--check`, and run the full bootstrap smoke before reopening
+  ingress.
+- **Never restart or stop the seed directly**: that restarts or stops Docker
+  and every container. Reapply with
+  `sudo systemctl restart vps-metadata-egress.service` or
+  `sudo python3 -I scripts/metadata-egress.py --docker-user-only --apply`
+  (from `$APP_DIR`), then `--check`.
+- **From `--persist` on, a seed failure takes Docker and every container
+  down** (fail-closed), at boot or on a Docker restart. Fix the cause named by
+  the seed's `FAIL …` line (`journalctl -u vps-metadata-egress-seed.service`),
+  then `sudo systemctl start docker`. If systemd reports "start request
+  repeated too quickly", first run
+  `sudo systemctl reset-failed vps-metadata-egress-seed.service docker.socket`.
+- **Keep provider-console access available before persisting** and through
+  the apply.
+
 This mode denies the reviewed IPv4/IPv6 metadata inventory and conntrack
 original destinations in `DOCKER-USER` only; host `INPUT`/`OUTPUT` and host
 metadata access retain their existing policy (`scripts/metadata-egress.py:198`,
@@ -702,21 +723,25 @@ before and after (`scripts/bootstrap-vps.sh:1945`; `scripts/metadata-egress.py:2
 It uses the local app image without pulling, makes no metadata HTTP request,
 and needs no public internet or private-tier box. A runtime error fails smoke;
 an endpoint timeout alone is not packet proof. Dual-stack synthetic packet,
-counter and reboot/restart evidence remains operator work.
+counter and reboot/restart evidence remains operator work. #676's trial
+supplied it on a throwaway host; the live host relies on readback and smoke.
 
 Docker **will** auto-start restart-policy containers before an After=docker.service
 unit runs. Persistence now enables a required Before=docker.service seed that
 creates DOCKER-USER in both families if missing and inserts the same tagged denies;
-the After unit remains the strict parent/rule readback. This closes the firewall
-window in the ordering design; a real throwaway-host boot/restart trial remains
-required before relying on it. Quiesce workloads during firewall maintenance,
+the After unit remains the strict parent/rule readback. #676's throwaway-host
+boot/restart trial confirmed that this closes the firewall window across Docker
+restarts and reboots ([report](https://github.com/mknw/hames-playground/issues/676#issuecomment-6253496890)).
+Quiesce workloads during firewall maintenance,
 reapply and verify both units and families before admission. Smoke requires an
 increase in the tagged IPv4 DROP packet counter, plus health before and after.
 Forwarded WireServer TCP 80/32526 is denied; host metadata and DNS 53 stay unchanged.
 See the [gap-free replacement and console recovery procedure](deployment/egress-design.md#operator-adoption-and-temporary-rule-replacement)
 and [policy upgrade procedure](deployment/app-upgrade.md#metadata-policy-upgrade).
 Undo is `--docker-user-only --apply --remove`: it removes only journaled exact
-rules/files/enablement, never a saved full table. Restore interim/manual denies
+rules/files/enablement, never a saved full table. On systemd 255 the trial saw
+`--remove` keep Docker up; on another systemd, check `systemctl is-active docker`
+afterwards. Restore interim/manual denies
 first; an upgrade must not remove the active denies without that coverage.
 
 Run all of it yourself before inviting anyone, from a browser that has never

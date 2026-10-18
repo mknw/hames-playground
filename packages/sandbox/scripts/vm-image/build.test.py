@@ -2,6 +2,7 @@
 """Hermetic stage tests and individual, restored-source red mutations."""
 import contextlib
 import copy
+import gzip
 import hashlib
 import importlib.util
 import io
@@ -157,6 +158,22 @@ class Pipeline(unittest.TestCase):
         (self.root / "linked").symlink_to(self.root / "cloud.qcow2")
         with self.assertRaises(RuntimeError):
             vm.local_file(self.root / "linked")
+
+    def test_containerd_gzip_layers_use_uncompressed_diff_ids(self):
+        self.entries["layer.tar"] = gzip.compress(self.entries["layer.tar"], mtime=0)
+        tar(self.root / "image.tar", self.entries)
+        try:
+            vm.archive_id(self.root / "image.tar", self.pin, "x86_64")
+        except RuntimeError as error:
+            self.fail(str(error))
+        self.entries["layer.tar"] = gzip.compress(b"tampered", mtime=0)
+        tar(self.root / "image.tar", self.entries)
+        with self.assertRaisesRegex(RuntimeError, "layer digest"):
+            vm.archive_id(self.root / "image.tar", self.pin, "x86_64")
+
+    def test_expanded_layer_budget(self):
+        with patch.object(vm, "LAYER_BUDGET", 3), self.assertRaisesRegex(RuntimeError, "expanded layer budget"):
+            vm.archive_id(self.root / "image.tar", self.pin, "x86_64")
 
     def test_write_cannot_escape_or_follow_symlinks(self):
         work = vm.Work(self.work)
@@ -331,6 +348,9 @@ def mutations():
         ("required Incus agent package omitted", 'REQUIRED <= set(names)', 'True', "test_required_packages_and_full_ids"),
         ("mutable flavour input accepted", 'require(image_id(record.get("image_id")),', 'require(True,', "test_required_packages_and_full_ids"),
         ("argument error echoes values", 'self.exit(2, "Invalid image pipeline arguments; consult --help (values suppressed).\\n")', 'self.exit(2, _message)', "test_invalid_arguments_do_not_echo_values"),
+        ("compressed diff ID not verified", '"sha256:" + value.hexdigest() == expected_layer', 'True', "test_containerd_gzip_layers_use_uncompressed_diff_ids"),
+        ("compressed layer not decoded", 'if magic == b"\\x1f\\x8b":', 'if False:', "test_containerd_gzip_layers_use_uncompressed_diff_ids"),
+        ("expanded layer budget removed", 'expanded <= LAYER_BUDGET', 'True', "test_expanded_layer_budget"),
     ]
     for label, before, after, case in changes:
         if before not in source:

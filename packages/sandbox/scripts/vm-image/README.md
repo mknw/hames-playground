@@ -86,6 +86,9 @@ contains exactly one Linux image of the selected architecture; multi-image
 archives, compressed archives, symlinks, duplicate members, traversal members,
 config-ID mismatches and layer-hash mismatches are refused. No archive is
 extracted to the host. `flavours.json` contains the three archive hashes/IDs.
+The outer save tar must be uncompressed. Individual layer blobs may be raw or
+gzip-compressed (containerd store); hashes use the **uncompressed** bytes, with
+an 8 GiB total expansion cap per image. Other layer codecs fail verification.
 It is a lock fragment, not a complete build lock. Add absolute paths to those
 archives when placing the final lock elsewhere.
 
@@ -171,9 +174,10 @@ guest package version, guest archive checksum and loaded image ID check;
 each must cause an assertion failure in its named test.
 
 The remaining mutations admit a missing Incus agent package, a mutable flavour
-selector and an argument error containing the supplied value. These must also
-produce assertion failures. A final mutation removes the provisioning-compatible
-`/usr/bin/dockerd` path, for 17 independently verified builder mutations.
+selector and an argument error containing the supplied value, remove the
+provisioning-compatible `/usr/bin/dockerd` path, or remove compressed-layer
+decoding, diff-ID verification or the expansion cap. All produce assertion
+failures, for 20 independently verified builder mutations.
 
 **Still owed to a disposable native Linux runner:** supply authenticated real
 base/deb archives and pinned tools/appliance; run conversion and offline dpkg;

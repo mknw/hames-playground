@@ -5,6 +5,7 @@ Every command is a pure plan unless --apply is passed. See README.md for the
 local lock format and the Linux-only build's remaining runtime obligations.
 """
 import argparse
+import gzip
 import hashlib
 import io
 import json
@@ -21,6 +22,7 @@ HERE = Path(__file__).resolve().parent
 FLAVOURS = ("base", "data", "office")
 REQUIRED = {"incus-agent", "docker.io", "systemd", "python3", "iproute2", "cloud-init"}
 HEX = r"[a-f0-9]{64}"
+LAYER_BUDGET = 8 * 1024 ** 3
 
 
 def require(ok, message):
@@ -145,12 +147,19 @@ def archive_id(path, expected, architecture):
         layers = manifest[0]["Layers"]
         diff_ids = metadata.get("rootfs", {}).get("diff_ids", [])
         require(isinstance(layers, list) and len(layers) == len(diff_ids), "layer inventory mismatch")
+        expanded = 0
         for name, expected_layer in zip(layers, diff_ids):
             member = archive.getmember(name)
             require(member.isfile() and image_id(expected_layer), "layer digest required")
             value = hashlib.sha256()
             stream = archive.extractfile(member)
+            magic = stream.read(2)
+            stream.seek(0)
+            if magic == b"\x1f\x8b":
+                stream = gzip.GzipFile(fileobj=stream)
             for block in iter(lambda: stream.read(1024 * 1024), b""):
+                expanded += len(block)
+                require(expanded <= LAYER_BUDGET, "expanded layer budget exceeded")
                 value.update(block)
             require("sha256:" + value.hexdigest() == expected_layer, "saved layer digest mismatch")
 
@@ -301,5 +310,5 @@ def main(argv=None):
 if __name__ == "__main__":
     try:
         main()
-    except (RuntimeError, OSError, ValueError, KeyError, TypeError, tarfile.TarError, subprocess.SubprocessError):
+    except (RuntimeError, OSError, EOFError, ValueError, KeyError, TypeError, tarfile.TarError, subprocess.SubprocessError):
         sys.exit("Image pipeline refused or failed; no complete manifest was produced. Consult the local lock and runner prerequisites.")

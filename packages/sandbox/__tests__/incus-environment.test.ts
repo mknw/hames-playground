@@ -2,7 +2,18 @@ import { execFileSync } from 'node:child_process'
 import { X509Certificate } from 'node:crypto'
 import { createServer, type Server } from 'node:https'
 import { createServer as httpServer } from 'node:http'
-import { mkdtemp, readFile, writeFile, rm, cp, chmod, symlink } from 'node:fs/promises'
+import {
+  mkdtemp,
+  readFile,
+  writeFile,
+  rm,
+  cp,
+  chmod,
+  symlink,
+  stat,
+  readdir,
+  mkdir,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
@@ -18,6 +29,7 @@ let managerFingerprint: string
 let project: Json | undefined, certificate: Json | undefined, vm: Json | undefined
 let vmStatus = 102
 let image = true
+let unexpectedResource: Json | undefined
 let requests: { method: string; url: URL; body: Json; manager: boolean }[]
 let fault:
   | ((
@@ -104,6 +116,12 @@ beforeAll(async () => {
         if (!manager) return send(403)
         if (!project) return send(404)
         if (method === 'DELETE') {
+          // Model Incus's nonempty-project refusal, including its unsafe force override.
+          if ((vm || image || unexpectedResource) && !url.searchParams.has('force'))
+            return send(400)
+          vm = undefined
+          image = false
+          unexpectedResource = undefined
           project = undefined
           if (certificate) certificate.projects = []
           return send(200)
@@ -125,6 +143,11 @@ beforeAll(async () => {
         return send(200, certificate)
       }
       if (url.pathname === '/1.0/instances' && method === 'POST') {
+        if (
+          project?.config['restricted.virtual-machines.nesting'] === 'block' &&
+          body.config['security.nesting'] !== 'false'
+        )
+          return send(403)
         vm = structuredClone(body)
         if (asyncCreate) {
           vmVisible = false
@@ -204,6 +227,7 @@ beforeEach(async () => {
   vm = undefined
   vmStatus = 102
   image = true
+  unexpectedResource = undefined
   requests = []
   fault = undefined
   operationStatus = []
@@ -271,7 +295,9 @@ describe('Incus environment wire contract', () => {
       'limits.disk': '12GiB',
       'restricted.networks.access': 'testbr',
       'restricted.images.servers': 'images.example.test',
+      'restricted.storage-pools.access': 'pool',
       'restricted.virtual-machines.lowlevel': 'block',
+      'restricted.virtual-machines.nesting': 'block',
       'restricted.snapshots': 'block',
       'restricted.backups': 'block',
       'restricted.devices.disk': 'block',
@@ -298,8 +324,15 @@ describe('Incus environment wire contract', () => {
       name: 'docker',
       type: 'virtual-machine',
       profiles: [],
+      config: { 'security.nesting': 'false' },
       devices: {
-        eth0: { network: 'testbr', 'ipv4.address': options.address },
+        eth0: {
+          network: 'testbr',
+          'ipv4.address': options.address,
+          'security.mac_filtering': 'true',
+          'security.ipv4_filtering': 'true',
+          'security.ipv6_filtering': 'true',
+        },
         root: { pool: 'pool', size: '8GiB' },
       },
       source: { server: 'https://images.example.test', fingerprint: options.image.fingerprint },
@@ -353,6 +386,8 @@ describe('Incus environment wire contract', () => {
     'limits.cpu',
     'restricted.networks.access',
     'restricted.images.servers',
+    'restricted.storage-pools.access',
+    'restricted.virtual-machines.nesting',
     'restricted.snapshots',
     'restricted.backups',
     'restricted.devices.proxy',
@@ -394,6 +429,28 @@ describe('Incus environment wire contract', () => {
     vm![key] = key === 'type' ? 'container' : {}
     await expect(c.reconcile()).rejects.toThrow('VM configuration has drifted')
   })
+  it('refuses one changed VM config key even when other keys still match', async () => {
+    const c = controller()
+    await c.reconcile()
+    vm!.config['limits.cpu'] = '3'
+    await expect(c.reconcile()).rejects.toThrow('VM configuration has drifted')
+  })
+  it.each(['security.nesting', 'security.secureboot'])(
+    'refuses an extra VM config key: %s',
+    async (key) => {
+      const c = controller()
+      await c.reconcile()
+      vm!.config[key] = 'true'
+      await expect(c.reconcile()).rejects.toThrow('VM configuration has drifted')
+    },
+  )
+  it('accepts only volatile and image metadata additions to VM config', async () => {
+    const c = controller()
+    const first = await c.reconcile()
+    vm!.config['volatile.uuid'] = 'generated-by-incus'
+    vm!.config['image.description'] = 'image metadata'
+    expect(await c.reconcile()).toEqual(first)
+  })
   it.each([101, 110])('refuses unexpected VM state %s', async (code) => {
     const c = controller()
     await c.reconcile()
@@ -412,12 +469,16 @@ describe('Incus environment wire contract', () => {
       expect(requests.some((r) => r.method === 'POST')).toBe(false)
     },
   )
-  it('refuses an invalid bridge type/subnet', async () => {
+  it.each([
+    { type: 'physical', cidr: '10.77.0.1/24' },
+    { type: 'bridge', cidr: '10.77.0.1/32' },
+  ])('refuses an invalid bridge type/subnet independently: $type $cidr', async ({ type, cidr }) => {
     fault = (_m, u) =>
       u.pathname.includes('/networks/')
-        ? { data: { type: 'physical', config: { 'ipv4.address': '10.77.0.1/32' } } }
+        ? { data: { type, config: { 'ipv4.address': cidr } } }
         : undefined
     await expect(controller().reconcile()).rejects.toThrow('guest address')
+    expect(requests.some((r) => r.method === 'POST')).toBe(false)
   })
 })
 
@@ -475,6 +536,11 @@ describe('Incus teardown boundary', () => {
         expect(r.url.searchParams.get('project')).toBe(identity)
       if (r.method === 'DELETE' && r.url.pathname.includes('/projects/'))
         expect(r.url.pathname).toBe(`/1.0/projects/${identity}`)
+      if (r.method === 'DELETE') {
+        expect(r.url.searchParams.has('force')).toBe(false)
+        const scoped = /\/instances\/|\/images\//.test(r.url.pathname)
+        expect(r.url.search).toBe(scoped ? `?project=${identity}` : '')
+      }
     }
     expect(requests.filter((r) => r.method === 'DELETE').map((r) => r.url.pathname)).toEqual([
       '/1.0/instances/docker',
@@ -515,16 +581,133 @@ describe('Incus teardown boundary', () => {
     const c = controller()
     await c.reconcile()
     vm = undefined
-    fault = (m, u) =>
-      m === 'DELETE' && u.pathname.includes('/projects/')
-        ? { status: 400, raw: 'secret-provider-body' }
-        : undefined
+    unexpectedResource = { name: 'operator-volume', contents: 'retain-me' }
+    const retainedProject = structuredClone(project)
+    const retainedCertificate = structuredClone(certificate)
     await expect(c.teardown()).rejects.toThrow('request failed (400)')
-    expect(certificate).toBeDefined()
+    expect(unexpectedResource).toEqual({ name: 'operator-volume', contents: 'retain-me' })
+    expect(project).toEqual(retainedProject)
+    expect(certificate).toEqual(retainedCertificate)
+    expect(
+      requests.filter((r) => r.method === 'DELETE' && r.url.pathname.includes('/projects/')),
+    ).toHaveLength(1)
+    for (const r of requests.filter((r) => r.method === 'DELETE'))
+      expect(r.url.searchParams.has('force')).toBe(false)
+    expect(await readFile(join(options.stateDirectory, 'client-key.pem'), 'utf8')).toContain(
+      'PRIVATE KEY',
+    )
+  })
+  it('rotates the CA, Docker client key and Incus certificate after complete teardown', async () => {
+    const c = controller()
+    await c.reconcile()
+    const oldCA = fingerprint(await readFile(join(options.stateDirectory, 'ca.pem')))
+    const oldClientKey = await readFile(join(options.stateDirectory, 'client-key.pem'), 'utf8')
+    const oldIncus = certificate!.fingerprint
+    await c.teardown()
+    expect(await readdir(options.stateDirectory)).toEqual([])
+    await c.reconcile()
+    expect(fingerprint(await readFile(join(options.stateDirectory, 'ca.pem')))).not.toBe(oldCA)
+    expect(await readFile(join(options.stateDirectory, 'client-key.pem'), 'utf8')).not.toBe(
+      oldClientKey,
+    )
+    expect(certificate!.fingerprint).not.toBe(oldIncus)
   })
 })
 
 describe('Incus trust and diagnostics', () => {
+  it('keeps the operator-only API outside the root entry point', async () => {
+    const rootEntry = await readFile(new URL('../index.ts', import.meta.url), 'utf8')
+    expect(rootEntry).not.toContain('incus-environment')
+    expect(rootEntry).not.toContain('createIncusEnvironment')
+    const { createIncusEnvironment: factory } = await import('../incus-environment.server')
+    expect(factory).toBe(createIncusEnvironment)
+  })
+  it('generates CA and leaf certificates with explicit roles, issuer, SAN and validity', async () => {
+    await controller().reconcile()
+    const ca = new X509Certificate(await readFile(join(options.stateDirectory, 'ca.pem')))
+    expect(ca.ca).toBe(true)
+    expect(ca.issuer).toBe(ca.subject)
+    expect(ca.verify(ca.publicKey)).toBe(true)
+    for (const role of ['ca', 'server', 'client', 'incus']) {
+      const cert = new X509Certificate(await readFile(join(options.stateDirectory, `${role}.pem`)))
+      const start = Date.parse(cert.validFrom),
+        end = Date.parse(cert.validTo)
+      expect(start).toBeLessThanOrEqual(Date.now())
+      expect(end).toBeGreaterThan(Date.now())
+      expect(end - start).toBe(365 * 24 * 60 * 60 * 1000)
+      if (role === 'server' || role === 'client') {
+        expect(cert.ca).toBe(false)
+        expect(cert.issuer).toBe(ca.subject)
+        expect(cert.checkIssued(ca)).toBe(true)
+        expect(cert.verify(ca.publicKey)).toBe(true)
+        expect(cert.keyUsage).toEqual([
+          role === 'server' ? '1.3.6.1.5.5.7.3.1' : '1.3.6.1.5.5.7.3.2',
+        ])
+        expect(cert.subjectAltName).toBe(
+          role === 'server' ? `IP Address:${options.address}` : undefined,
+        )
+      }
+      if (role !== 'incus') {
+        const text = execFileSync(
+          'openssl',
+          ['x509', '-in', join(options.stateDirectory, `${role}.pem`), '-noout', '-text'],
+          { encoding: 'utf8' },
+        )
+        expect(text).toMatch(/Basic Constraints: critical/)
+        expect(text).toMatch(role === 'ca' ? /CA:TRUE, pathlen:0/ : /CA:FALSE/)
+        expect(text).toMatch(/Key Usage: critical/)
+        expect(text).toContain(
+          role === 'ca' ? 'Certificate Sign, CRL Sign' : 'Digital Signature, Key Encipherment',
+        )
+      }
+    }
+  })
+  it('sets all private keys and state journals to 0600 even with a 0644-writing openssl', async () => {
+    // Exercise real generation while modelling LibreSSL's keyout permissions on
+    // every toolchain, so OpenSSL's safer default cannot hide a missing chmod.
+    const openssl = execFileSync('which', ['openssl'], { encoding: 'utf8' }).trim()
+    const bin = join(root, 'legacy-openssl')
+    await mkdir(bin)
+    await writeFile(
+      join(bin, 'openssl'),
+      '#!/bin/sh\n"$INCUS_TEST_OPENSSL" "$@" || exit $?\nwhile [ "$#" -gt 1 ]; do\n  if [ "$1" = "-keyout" ]; then /bin/chmod 0644 "$2"; break; fi\n  shift\ndone\n',
+      { mode: 0o700 },
+    )
+    vi.stubEnv('INCUS_TEST_OPENSSL', openssl)
+    vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+    options.stateDirectory = join(root, 'private-modes')
+    asyncCreate = true
+    operationStatus = Array(10).fill(103)
+    try {
+      await expect(controller().reconcile()).rejects.toThrow('did not finish')
+      for (const name of [
+        'ca-key.pem',
+        'incus-key.pem',
+        'server-key.pem',
+        'client-key.pem',
+        'state.json',
+        'creation.json',
+      ])
+        expect((await stat(join(options.stateDirectory, name))).mode & 0o777, name).toBe(0o600)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+  it('refuses non-default image-server ports before any request', () => {
+    expect(() =>
+      createIncusEnvironment({
+        ...options,
+        image: { ...options.image, server: 'https://images.example.test:8443' },
+      }),
+    ).toThrow('default HTTPS port')
+    expect(requests).toEqual([])
+    expect(() =>
+      createIncusEnvironment({
+        ...options,
+        image: { ...options.image, server: 'https://images.example.test:443' },
+      }),
+    ).not.toThrow()
+  })
   it.each(['not-json', '{"id":"https://other.example.test/operation"}'])(
     'refuses invalid journal state without following a foreign operation',
     async (contents) => {

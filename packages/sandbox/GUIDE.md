@@ -56,3 +56,15 @@ Shell retain the connection with which their containers were created.
 Endpoint selection alone does not remove the host socket or provision an Incus
 VM. It does not prove environment isolation; those deployment changes and live
 checks follow separately. The full contract is in [SPEC.md](SPEC.md).
+
+## Operator-provisioned Incus VM
+
+Import `createIncusEnvironment` only from
+`@hames-ai/sandbox/incus-environment.server`, outside the app process. Follow
+the [README's operator example](README.md#incus-environment-vms-operator-opt-in)
+for Incus 7.3+, image/bridge/pool prerequisites, manager credentials and private
+state. The returned `dockerEnv` configures the existing connection seam above;
+wait for Docker readiness before starting the app. A completed teardown followed
+by reconcile rotates credentials; failed teardown keeps them for recovery.
+The [Incus contract](SPEC.md#operator-only-incus-environments) lists the pinned
+invariants and distinguishes hermetic checks from evidence owed to the spike.

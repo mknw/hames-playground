@@ -12,7 +12,7 @@ import { dockerConnectionFromEnv } from './docker-connection.server'
 assertServerOnImport()
 
 /** PEM contents, not filenames. TLS verification is always enabled. */
-interface IncusCredential {
+export interface IncusCredential {
   ca: string
   cert: string
   key: string
@@ -47,6 +47,11 @@ export interface IncusEnvironmentConnection {
     SANDBOX_DOCKER_TLS_CERT: string
     SANDBOX_DOCKER_TLS_KEY: string
   }
+}
+
+export interface IncusEnvironment {
+  reconcile(): Promise<IncusEnvironmentConnection>
+  teardown(): Promise<void>
 }
 
 interface State {
@@ -165,14 +170,13 @@ function ipv4(value: string): number {
 /** Create a controller, without network access. Serialize calls per state directory.
  * Reconcile refuses drift/foreign resources; teardown never enumerates other projects.
  * The operator owns bridge, pool, images, routing and firewall installation. */
-export function createIncusEnvironment(options: IncusEnvironmentOptions): {
-  reconcile(): Promise<IncusEnvironmentConnection>
-  teardown(): Promise<void>
-} {
+export function createIncusEnvironment(options: IncusEnvironmentOptions): IncusEnvironment {
   // Capture configuration, so later caller mutation cannot widen scope mid-operation.
   const o = structuredClone(options)
   const origin = httpsUrl(o.manager.url)
   const imageServer = httpsUrl(o.image.server)
+  if (imageServer.port)
+    throw new EnvironmentError('Incus image servers require the default HTTPS port (443)')
   if (
     !/^[a-z][a-z0-9-]{0,39}$/.test(o.environment) ||
     !/^[a-zA-Z0-9_-]{1,63}$/.test(o.bridge) ||
@@ -348,6 +352,10 @@ export function createIncusEnvironment(options: IncusEnvironmentOptions): {
       'ca-key.pem',
       '-out',
       'ca.pem',
+      '-addext',
+      'basicConstraints=critical,CA:TRUE,pathlen:0',
+      '-addext',
+      'keyUsage=critical,keyCertSign,cRLSign',
     ])
     await run([
       ...req,
@@ -373,7 +381,7 @@ export function createIncusEnvironment(options: IncusEnvironmentOptions): {
       ])
       await writeFile(
         path(`${role}.ext`),
-        `extendedKeyUsage=${role === 'server' ? 'serverAuth' : 'clientAuth'}\n${role === 'server' ? `subjectAltName=IP:${o.address}\n` : ''}`,
+        `basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=${role === 'server' ? 'serverAuth' : 'clientAuth'}\n${role === 'server' ? `subjectAltName=IP:${o.address}\n` : ''}`,
         { mode: 0o600, flag: 'wx' },
       )
       await run([
@@ -412,6 +420,7 @@ export function createIncusEnvironment(options: IncusEnvironmentOptions): {
       'limits.memory': `${o.quota.memoryMiB}MiB`,
       'limits.disk': `${o.quota.diskGiB}GiB`,
       'restricted.virtual-machines.lowlevel': 'block',
+      'restricted.virtual-machines.nesting': 'block',
       'restricted.devices.disk': 'block',
       'restricted.devices.nic': 'managed',
       'restricted.devices.unix-char': 'block',
@@ -425,7 +434,8 @@ export function createIncusEnvironment(options: IncusEnvironmentOptions): {
       'restricted.snapshots': 'block',
       'restricted.backups': 'block',
       'restricted.networks.access': o.bridge,
-      'restricted.images.servers': imageServer.host,
+      'restricted.storage-pools.access': o.storagePool,
+      'restricted.images.servers': imageServer.hostname,
     }
   }
   function ownProject(value: Entity, id: string): void {
@@ -572,13 +582,22 @@ export function createIncusEnvironment(options: IncusEnvironmentOptions): {
         await resumeCreation(c.tls)
         const config = {
           'user.sandbox.owner': s.id,
+          'security.nesting': 'false',
           'limits.cpu': String(o.quota.cpu),
           'limits.memory': `${o.quota.memoryMiB}MiB`,
           'cloud-init.user-data': await cloudConfig(),
         }
         const devices = {
           root: { type: 'disk', path: '/', pool: o.storagePool, size: `${o.quota.rootDiskGiB}GiB` },
-          eth0: { type: 'nic', network: o.bridge, 'ipv4.address': o.address, name: 'eth0' },
+          eth0: {
+            type: 'nic',
+            network: o.bridge,
+            'ipv4.address': o.address,
+            name: 'eth0',
+            'security.mac_filtering': 'true',
+            'security.ipv4_filtering': 'true',
+            'security.ipv6_filtering': 'true',
+          },
         }
         let vm = await optional(c.tls, `/1.0/instances/${instance}`)
         if (!vm) {
@@ -602,7 +621,14 @@ export function createIncusEnvironment(options: IncusEnvironmentOptions): {
           vm.type !== 'virtual-machine' ||
           !same(vm.profiles, []) ||
           !same(vm.devices, devices) ||
-          !Object.entries(config).every(([k, v]) => vm.config?.[k] === v)
+          !same(
+            Object.fromEntries(
+              Object.entries(vm.config ?? {}).filter(
+                ([k]) => !k.startsWith('volatile.') && !k.startsWith('image.'),
+              ),
+            ),
+            config,
+          )
         )
           throw new EnvironmentError('Incus VM configuration has drifted')
         const status = await api(c.tls, 'GET', `/1.0/instances/${instance}/state`)
@@ -660,7 +686,11 @@ export function createIncusEnvironment(options: IncusEnvironmentOptions): {
           ownCertificate(cert, true)
           await api(o.manager, 'DELETE', certPath, undefined, false)
         }
-        // Preserve local credentials for explicit operator disposal and repeat teardown.
+        // Only retire credentials once project deletion and exact revocation succeeded.
+        // Failed teardown retains them for recovery; a later reconcile generates new keys.
+        for (const name of await readdir(o.stateDirectory))
+          if (/\.(pem|csr|ext|srl)$/.test(name) || name === 'creation.json') await rm(path(name))
+        await rm(path('state.json'))
       }),
   }
 }

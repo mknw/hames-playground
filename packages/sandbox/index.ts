@@ -45,11 +45,6 @@ export type {
   InVmMcpServer,
 } from './types'
 export { SANDBOX_TOOL_PREFIX, V0_IN_VM_SERVERS } from './types'
-export {
-  createIncusEnvironment,
-  type IncusEnvironmentOptions,
-  type IncusEnvironmentConnection,
-} from './incus-environment.server'
 export { DockerBackend, SandboxBootError } from './docker-backend.server'
 export { withSandbox, type WithSandboxConfig } from './with-sandbox.server'
 export {

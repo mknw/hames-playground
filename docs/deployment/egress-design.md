@@ -219,11 +219,14 @@ Persistence enables two units (`scripts/metadata-egress.py:33`, `:52`, `:368`):
 define these relationships. `RequiredBy` pulls the seed into Docker starts and
 requires its success; `PartOf` propagates Docker restarts. Never restart or
 stop the seed directly: that restarts or stops Docker and every container.
-Reapply with `systemctl restart vps-metadata-egress.service` or
-`--docker-user-only --apply`, then `--check`. A seed refusal leaves Docker and
-every container down. Fix the cause the journal names, then
-`systemctl start docker`; if a start limit was hit, first run
-`systemctl reset-failed vps-metadata-egress-seed.service docker.socket`. The
+Reapply with `sudo systemctl restart vps-metadata-egress.service` or
+`sudo python3 -I scripts/metadata-egress.py --docker-user-only --apply` (from
+`$APP_DIR`), then `--check`. A seed refusal leaves Docker and every container
+down. Fix the cause named by the seed's `FAIL …` line
+(`journalctl -u vps-metadata-egress-seed.service`), then
+`sudo systemctl start docker`. If systemd reports "start request repeated too
+quickly", first run
+`sudo systemctl reset-failed vps-metadata-egress-seed.service docker.socket`. The
 repo's Compose startup remains manual and no workload unit is redesigned.
 
 [Docker documents DOCKER-USER's forwarding and post-DNAT position](https://docs.docker.com/engine/network/firewall-iptables/).
@@ -232,11 +235,15 @@ operations/restarts](https://github.com/moby/moby/blob/v28.5.2/libnetwork/firewa
 Docker **will** start restart-policy containers before an After=docker.service
 unit runs. The Before=docker.service seed closes that firewall window by
 installing denies before Docker starts those containers; the After unit remains
-the strict readback. This ordering is tested offline, **not yet proven by a real
-boot trial**. Run #676's approved throwaway-host boot/restart trial before
-relying on it, and verify both enabled units and dual-family readback. UFW/other
-reloads, manual flushes, daemon backend changes and failures after seeding need
-operator reapply/readback; the units do not watch arbitrary firewall changes.
+the strict readback. This ordering is tested offline and was confirmed by #676's
+throwaway-host boot/restart trial
+([report](https://github.com/mknw/hames-playground/issues/676#issuecomment-6253496890)).
+The seed finished before every Docker start across Docker restarts and reboots,
+with 0 OPEN probes. A seed-neutralised control reproduced the window. The trial
+ran systemd 255, Docker 29.2.1 and ufw 0.36.2. On the live host, still verify
+both enabled units and dual-family readback. UFW/other reloads, manual flushes,
+daemon backend changes and failures after seeding need
+[operator reapply/readback](#persistence-before-and-after-docker); the units do not watch arbitrary firewall changes.
 Keep workloads stopped through such maintenance and admit them after verification.
 
 ### Smoke and evidence boundary
@@ -259,7 +266,8 @@ The probe is safe without internet or a live metadata service: known network
 refusal/timeout is expected, but is **not by itself evidence the firewall bites**.
 Readback supplies installation evidence and the IPv4 counter supplies rule-bite
 evidence. Dual-stack synthetic packet controls and restart/reboot trials remain
-operator evidence. A host-local listener would use INPUT and cannot prove this
+operator evidence. #676's trial supplied it on a throwaway host; the live host
+relies on readback and smoke. A host-local listener would use INPUT and cannot prove this
 forwarded-only policy.
 The smoke probes the default bridge's IPv4 path; IPv6 and alternate forms are
 verified by readback/offline policy tests, not by this one network probe.

@@ -866,6 +866,12 @@ class Forwarded(unittest.TestCase):
         for family, rule in manual.items():
             self.assertNotIn(rule, self.states[family]['DOCKER-USER'])
 
+    def test_documented_seed_recovery_names_the_real_units(self):
+        for relative in ('docs/deployment/egress-design.md', 'docs/PREVIEW.md'):
+            doc = (ROOT / relative).read_text()
+            self.assertIn(f"systemctl reset-failed {egress.SEED_UNIT.name} docker.socket", doc, relative)
+            self.assertIn(f"systemctl restart {egress.UNIT.name}", doc, relative)
+
     def test_documented_upgrade_keeps_entire_inventory_denied_at_every_step(self):
         doc = Path(os.environ.get('METADATA_UPGRADE_DOC', ROOT / 'docs/deployment/app-upgrade.md')).read_text()
         self.assertEqual(self.invoke('--apply', '--persist'), 0)

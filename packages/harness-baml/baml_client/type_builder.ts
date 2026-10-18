@@ -71,6 +71,8 @@ export default class TypeBuilder {
     
     ScreenVerdict: ClassViewer<'ScreenVerdict', "injection_detected" | "reason" | "spans">;
     
+    SynthesisReference: ClassViewer<'SynthesisReference', "source" | "docId" | "startOffset" | "endOffset" | "url">;
+    
     ToolCall: ClassViewer<'ToolCall', "tool" | "args">;
     
     ToolCallRequest: ClassViewer<'ToolCallRequest', "tool_name" | "tool_args">;
@@ -84,7 +86,7 @@ export default class TypeBuilder {
     constructor() {
         this.tb = new _TypeBuilder({
           classes: new Set([
-            "Attempt","CompactedMemory","ControllerAction","CriticResult","DescribeBatchResult","DescribeItemSummary","DescribeTarget","ExpandedRef","ExtractedMemory","FewShot","LoopTurn","MemoryMember","Message","PlanResult","PlanResultThinking","PriorResult","ReferenceCandidate","ReferenceSelection","ReferenceSelectorResult","RouteOption","RoutingResult","ScreenVerdict","ToolCall","ToolCallRequest","ToolDescription","ToolResult",
+            "Attempt","CompactedMemory","ControllerAction","CriticResult","DescribeBatchResult","DescribeItemSummary","DescribeTarget","ExpandedRef","ExtractedMemory","FewShot","LoopTurn","MemoryMember","Message","PlanResult","PlanResultThinking","PriorResult","ReferenceCandidate","ReferenceSelection","ReferenceSelectorResult","RouteOption","RoutingResult","ScreenVerdict","SynthesisReference","ToolCall","ToolCallRequest","ToolDescription","ToolResult",
           ]),
           enums: new Set([
             
@@ -178,6 +180,10 @@ export default class TypeBuilder {
         
         this.ScreenVerdict = this.tb.classViewer("ScreenVerdict", [
           "injection_detected","reason","spans",
+        ]);
+        
+        this.SynthesisReference = this.tb.classViewer("SynthesisReference", [
+          "source","docId","startOffset","endOffset","url",
         ]);
         
         this.ToolCall = this.tb.classViewer("ToolCall", [

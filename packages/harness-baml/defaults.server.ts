@@ -35,6 +35,7 @@ import {
 } from './baml-adapters.server'
 import { clientOverrideFor } from './clients.server'
 import { escapeDataFence } from './data-fence'
+import type { SynthesisReference } from './baml_client/types'
 
 assertServerOnImport()
 
@@ -109,7 +110,13 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
   // through to a 16K default, and dropped real tool results before the LLM saw
   // them (see .harness-logs/neo4j-no-results.json).
   const contextWindow = getContextWindow(resolveClientForRole('compactExecution'))
-  const trimmedTurns = trimToFit(turns, (t) => JSON.stringify(t), 500, contextWindow)
+  const trimmedTurns = trimToFit(
+    turns,
+    (retained) => JSON.stringify(retained) + JSON.stringify(synthesisReferences(retained)),
+    1300, // Existing estimate plus 800 characters of citation instructions.
+    contextWindow,
+  )
+  const references = synthesisReferences(trimmedTurns)
 
   const variables = {
     userMessage: input.userMessage,
@@ -117,6 +124,7 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
     turns: trimmedTurns,
     hasError: input.hasError ?? false,
     errorMessage: input.errorMessage,
+    references,
   }
 
   // Call with options always: the implementation-owned collector is in the
@@ -134,11 +142,12 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
       input.hasError ?? false,
       input.errorMessage,
       // `memory_context` (#419 M9/M5a): `memoryRecall`'s block for this turn, or
-      // null when nothing was recalled. The slot is always passed — the options
-      // bag is the argument AFTER it, and omitting it would hand the bag to the
-      // wrong parameter. Escaped because the template renders it inside a DATA
+      // null when nothing was recalled. Both optional slots are always passed:
+      // the options bag follows references, and omitting either slot moves it
+      // to the wrong parameter. Escaped because it renders inside a DATA
       // fence (data-fence.ts).
       input.memoryContext ? escapeDataFence(input.memoryContext) : null,
+      references.length ? references : null,
       synthOpts,
     )
   } catch (e) {
@@ -159,6 +168,78 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
   const llmCall = extractLLMCallData(collector, 'Synthesize', variables, startTime, content)
 
   return { value: content, call: llmCall }
+}
+
+/** Only locators in the retained, already-sanitized results reach this prompt.
+ * decisionLoop supplies locator lines; a retriever supplies result.references.
+ * Never widen the event view or recover raw content to build this projection. */
+function synthesisReferences(turns: LoopTurn[]): SynthesisReference[] {
+  const references = new Map<string, SynthesisReference>()
+  const add = (reference: SynthesisReference) => {
+    // Every projected string is rendered inside the template's DATA fence.
+    const escaped = Object.fromEntries(
+      Object.entries(reference).map(([key, value]) => [
+        key,
+        typeof value === 'string' ? escapeDataFence(value) : value,
+      ]),
+    ) as SynthesisReference
+    references.set(JSON.stringify(escaped), escaped)
+  }
+  const pending: unknown[] = []
+  for (const turn of turns) {
+    if (!turn.tool_result?.success) continue
+    try {
+      pending.push(JSON.parse(turn.tool_result.result))
+    } catch {
+      // Direct response text is not a structured tool result.
+    }
+  }
+  for (let index = 0; index < pending.length; index++) {
+    const value = pending[index]
+    if (typeof value === 'string') {
+      for (const line of value.split('\n')) {
+        const at = line.lastIndexOf(' [doc ')
+        if (!line.startsWith('- ') || at <= 2) continue
+        const locator = /^\[doc ([^,\r\n]+), chars (\d+)-(\d+)\]:/.exec(line.slice(at + 1))
+        if (!locator) continue
+        const startOffset = Number(locator[2])
+        const endOffset = Number(locator[3])
+        if (!Number.isSafeInteger(endOffset) || startOffset > endOffset) continue
+        add({ source: line.slice(2, at), docId: locator[1], startOffset, endOffset })
+      }
+    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const object = value as Record<string, unknown>
+      if (Array.isArray(object.references)) {
+        for (const reference of object.references) {
+          if (!reference || typeof reference !== 'object') continue
+          const { source, docId, startOffset, endOffset, url } = reference
+          if (typeof source !== 'string' || !source.trim()) continue
+          const document =
+            typeof docId === 'string' &&
+            docId.trim() &&
+            typeof startOffset === 'number' &&
+            Number.isSafeInteger(startOffset) &&
+            startOffset >= 0 &&
+            typeof endOffset === 'number' &&
+            Number.isSafeInteger(endOffset) &&
+            endOffset >= startOffset
+          if (!document && !(typeof url === 'string' && url.trim())) continue
+          add({
+            source,
+            ...(document ? { docId, startOffset, endOffset } : {}),
+            ...(typeof url === 'string' && url.trim() ? { url } : {}),
+          })
+        }
+      }
+      // Multi-call turns are maps keyed by call index, each holding result.
+      for (const [key, call] of Object.entries(object)) {
+        if (/^\d+$/.test(key) && call && typeof call === 'object' && 'result' in call) {
+          pending.push(call.result)
+        }
+      }
+    }
+  }
+  return [...references.values()]
 }
 
 // ============================================================================

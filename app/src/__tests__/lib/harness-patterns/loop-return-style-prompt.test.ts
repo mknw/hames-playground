@@ -81,6 +81,9 @@ describe.each(['anthropic', 'verda'] as const)('LoopReturnStyle render (%s wire)
     expect(systemText(b)).toContain('you called none, or every call failed')
     expect(systemText(b)).toContain('if a call failed, say briefly what failed')
     expect(systemText(b)).toContain('BRIEF completion summary')
+    // MUTATION: remove the plain-prose clause from LoopReturnStyle and
+    // regenerate. The shared ControllerAction description cannot supply it.
+    expect(systemText(b)).toContain('tool_args as plain prose (not JSON)')
     // Not in the volatile tail or the catalog: that would be re-sent uncached.
     expect(restText(b)).not.toContain(CLAUSE)
   })
@@ -99,5 +102,6 @@ describe.each(['anthropic', 'verda'] as const)('LoopReturnStyle render (%s wire)
     expect(all).not.toContain('BRIEF completion summary')
     expect(all).not.toContain('returned a result')
     expect(systemText(b)).toContain('put the complete answer in tool_args')
+    expect(systemText(b)).toContain('plain prose (not JSON)')
   })
 })

@@ -894,9 +894,9 @@ async function planResume(
  * leaves the person able to try again: a refusal records nothing (core's
  * steps 1–6 checked before any `resolve`), a `resolve` that threw records
  * nothing (nothing durable was written), and a wake or pattern-build
- * failure never reached the run. A wake failure appends a recoverable error
- * to the claimed blob and saves it still `paused`, releasing in that same
- * write (#624). Its text is the live error frame's, capped at
+ * failure never reached the run. A wake failure of a row still `paused`
+ * appends a recoverable error to the claimed blob and saves it still `paused`,
+ * releasing in that same write (#624). Its text is the live error frame's, capped at
  * `PERSISTED_ERROR_MAX`; replay paints a warning and the answer stays in
  * transit for a retry. Otherwise (including a failed recording write), the
  * original release RESTORES `paused` when the row it claimed said `paused`,
@@ -1006,7 +1006,7 @@ async function runResumeAndSave(
     console.error(`[turn] resume failed for %s:`, sessionId, err)
     held.released = true
     let recorded = false
-    if (wakeFailed) {
+    if (wakeFailed && loaded.status === 'paused') {
       try {
         // The claim already loaded this blob; nothing in the run or its
         // answer journal was consumed. Preserve it and append only the failure.

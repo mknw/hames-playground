@@ -2065,6 +2065,28 @@ describe('resume turns (#433 S7)', () => {
     )
   })
 
+  // MUTATION: remove loaded.status === 'paused' from the recording guard.
+  // A chain-changed row can still hold a paused blob; a recording save must
+  // not resurrect it or clear its terminal marker just because the wake failed.
+  it('a wake failure preserves the release policy of a row already ended in error', async () => {
+    resolveConversationTier.mockResolvedValue('verda')
+    claimSession.mockResolvedValue(
+      claimedPaused(pausedBlob({}, pendingRequest({ tier: 'verda' })), 'error'),
+    )
+    const failure = new Error('the private inference box did not wake')
+    ensurePrivateTierAwake.mockRejectedValueOnce(failure)
+
+    await expect(runTurnAndPersist(resume())).rejects.toBe(failure)
+
+    expect(saveSession).not.toHaveBeenCalled()
+    expect(dbReleaseConversationClaim).toHaveBeenCalledExactlyOnceWith(
+      'sess-r',
+      'user-1',
+      'v-claim',
+      { failed: false, paused: false, hitlTerminal: false },
+    )
+  })
+
   // MUTATION: record every resume catch, including a pattern build failure.
   it('a pattern build failure after the wake restores paused without recording a wake failure', async () => {
     resolveConversationTier.mockResolvedValue('verda')

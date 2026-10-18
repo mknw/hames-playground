@@ -894,8 +894,13 @@ async function planResume(
  * leaves the person able to try again: a refusal records nothing (core's
  * steps 1–6 checked before any `resolve`), a `resolve` that threw records
  * nothing (nothing durable was written), and a wake or pattern-build
- * failure never reached the run. So the release RESTORES `paused` when the
- * row it claimed said `paused`, and `chain-changed` alone — the one refusal
+ * failure never reached the run. A wake failure of a row still `paused`
+ * appends a recoverable error to the claimed blob and saves it still `paused`,
+ * releasing in that same write (#624). Its text is the live error frame's, capped at
+ * `PERSISTED_ERROR_MAX`; replay paints a warning and the answer stays in
+ * transit for a retry. Otherwise (including a failed recording write), the
+ * original release RESTORES `paused` when the row it claimed said `paused`,
+ * and `chain-changed` alone — the one refusal
  * that says this paused run can never continue — flips to `error` and
  * stamps `hitl_ended_at`, so the m3 load-restore exempts it (owner item 1 on
  * review 6004200697) rather than resurrecting `paused` from a blob that
@@ -916,6 +921,7 @@ async function runResumeAndSave(
   // here; the assertion keeps the type honest without a cast.
   const loaded = held.loaded
   if (!loaded) throw new Error('No active session')
+  let wakeFailed = false
   try {
     const plan = await planResume(loaded, tier, sessionId, userId)
 
@@ -956,7 +962,12 @@ async function runResumeAndSave(
     // WAKE THEN RUN — the same rule as `runAndSave`, minus the stop-only
     // case (A5): a resume whose answers all stop the run makes no model
     // call, so it must not pay a cold start either.
-    if (tier === 'verda' && !plan.stopOnly) await ensurePrivateTierAwake()
+    if (tier === 'verda' && !plan.stopOnly) {
+      await ensurePrivateTierAwake().catch((err: unknown) => {
+        wakeFailed = true
+        throw err
+      })
+    }
     const patterns = await getOrBuildPatterns(sessionId, loaded.agentId)
     const memory = !plan.stopOnly ? await startTurnMemory(patterns, agentDeps().memory) : undefined
     const result = await amendRunFrame(
@@ -994,26 +1005,48 @@ async function runResumeAndSave(
   } catch (err) {
     console.error(`[turn] resume failed for %s:`, sessionId, err)
     held.released = true
-    const failed = err instanceof HitlAnswerError && err.code === 'chain-changed'
-    await dbReleaseConversationClaim(sessionId, userId, held.version, {
-      failed,
-      // The A4 restore applies only to a row that was paused — a row this
-      // resume claimed at anything else ('done', say) is released without a
-      // flip, which is the re-pin of the old approval refusal.
-      paused: !failed && loaded.status === 'paused',
-      // And `chain-changed` is TERMINAL for the pause (owner item 1 on review
-      // 6004200697): the release stamps `hitl_ended_at` beside the `error`,
-      // so the m3 load-restore exempts this row instead of resurrecting
-      // `paused` from a blob that still says `paused`. Every other failure
-      // leaves the pause alive, and the marker unset.
-      hitlTerminal: failed,
-    }).catch((releaseErr: unknown) => {
-      console.error(
-        `[turn] could not release %s; it refuses new turns for up to ${TURN_CLAIM_TTL_SECONDS}s:`,
-        sessionId,
-        releaseErr,
-      )
-    })
+    let recorded = false
+    if (wakeFailed && loaded.status === 'paused') {
+      try {
+        // The claim already loaded this blob; nothing in the run or its
+        // answer journal was consumed. Preserve it and append only the failure.
+        const ctx = deserializeContext<SessionData>(loaded.serializedContext)
+        const data: ErrorEventData = {
+          error: (err instanceof Error ? err.message : String(err)).slice(0, PERSISTED_ERROR_MAX),
+          severity: 'recoverable',
+        }
+        ctx.events.push(createEvent('error', 'harness', data))
+        await saveSession(sessionId, userId, loaded.agentId, serializeContext(ctx), {
+          version: held.version,
+          inferenceTier: tier,
+        })
+        recorded = true
+      } catch (writeErr) {
+        console.error('[turn] could not record the resume wake failure in %s:', sessionId, writeErr)
+      }
+    }
+    if (!recorded) {
+      const failed = err instanceof HitlAnswerError && err.code === 'chain-changed'
+      await dbReleaseConversationClaim(sessionId, userId, held.version, {
+        failed,
+        // The A4 restore applies only to a row that was paused — a row this
+        // resume claimed at anything else ('done', say) is released without a
+        // flip, which is the re-pin of the old approval refusal.
+        paused: !failed && loaded.status === 'paused',
+        // And `chain-changed` is TERMINAL for the pause (owner item 1 on review
+        // 6004200697): the release stamps `hitl_ended_at` beside the `error`,
+        // so the m3 load-restore exempts this row instead of resurrecting
+        // `paused` from a blob that still says `paused`. Every other failure
+        // leaves the pause alive, and the marker unset.
+        hitlTerminal: failed,
+      }).catch((releaseErr: unknown) => {
+        console.error(
+          `[turn] could not release %s; it refuses new turns for up to ${TURN_CLAIM_TTL_SECONDS}s:`,
+          sessionId,
+          releaseErr,
+        )
+      })
+    }
     throw err
   }
 }

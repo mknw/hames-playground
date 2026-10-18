@@ -313,11 +313,13 @@ const loadHitlAnswerRows = vi.fn<
     }>
   >
 >(async () => [])
-const closeHitlRows = vi.fn(async () => 0)
+const closeHitlRows = vi.fn<typeof import('../../../lib/db/hitl.server').closeHitlRows>(
+  async () => 0,
+)
 const deleteQuarantine = vi.fn(async () => {})
 vi.mock('../../../lib/db/hitl.server', () => ({
   loadHitlAnswerRows: (s: string, u: string) => loadHitlAnswerRows(s, u),
-  closeHitlRows: (...a: unknown[]) => closeHitlRows(...(a as [])),
+  closeHitlRows: (...a: Parameters<typeof closeHitlRows>) => closeHitlRows(...a),
   deleteQuarantine: (...a: unknown[]) => deleteQuarantine(...(a as [])),
 }))
 
@@ -343,7 +345,7 @@ const { runTurnAndPersist, TITLE_GEN_TIMEOUT_MS, mergeTrailingPass } =
   await import('../../../lib/harness-client/turn.server')
 // The REAL refusal class, through the mock that passes it verbatim: the tests
 // throw exactly what core's resume would.
-const { HitlAnswerError } = await import('@hames-ai/harness-patterns')
+const { HitlAnswerError, readHitl, deserializeContext } = await import('@hames-ai/harness-patterns')
 
 const TRIGGER = { transcribedCommand: 'do it', shortDescription: 'Do it' }
 
@@ -1856,7 +1858,7 @@ function resume(over: Record<string, unknown> = {}) {
 }
 
 /** The claimed row a paused conversation reads as. */
-function claimedPaused(blob: string, status = 'paused'): Loaded {
+function claimedPaused(blob: string, status = 'paused'): NonNullable<Loaded> {
   return {
     serializedContext: blob,
     agentId: 'search',
@@ -1987,19 +1989,153 @@ describe('resume turns (#433 S7)', () => {
     ])
   })
 
-  it('a failure before the run leaves the row paused (A4)', async () => {
+  // MUTATION: remove the wake-failure record in runResumeAndSave's catch.
+  // The pause survives, but the saved warning and its replay disappear.
+  it('a resume wake failure replays as a warning and preserves the answerable pause (#624)', async () => {
     resolveConversationTier.mockResolvedValue('verda')
-    claimSession.mockResolvedValue(claimedPaused(pausedBlob({}, pendingRequest({ tier: 'verda' }))))
+    const blob = pausedBlob({}, pendingRequest({ tier: 'verda' }))
+    claimSession.mockResolvedValue(claimedPaused(blob))
     const wakeFailed = new Error('the private inference box did not wake')
     ensurePrivateTierAwake.mockRejectedValueOnce(wakeFailed)
 
     await expect(runTurnAndPersist(resume())).rejects.toThrow(wakeFailed)
 
-    expect(resumeHarness).not.toHaveBeenCalled()
-    expect(flippedToError()).toEqual([])
-    expect(restoredPaused()).toEqual([
-      ['sess-r', 'user-1', 'v-claim', { failed: false, paused: true, hitlTerminal: false }],
+    expect(saveSession).toHaveBeenCalledTimes(1)
+    expect(saveSession).toHaveBeenCalledWith('sess-r', 'user-1', 'search', expect.any(String), {
+      version: 'v-claim',
+      inferenceTier: 'verda',
+    })
+    const saved = saveSession.mock.calls[0][3] as string
+    const ctx = deserializeContext(saved)
+    expect(ctx.status).toBe('paused')
+    expect(ctx.events.slice(0, -1)).toEqual(JSON.parse(blob).events)
+    expect(ctx.events.at(-1)).toMatchObject({
+      type: 'error',
+      data: { error: wakeFailed.message, severity: 'recoverable' },
+    })
+    expect(readHitl(ctx).pending).toEqual(readHitl(deserializeContext(blob)).pending)
+    expect(replayMessages(saved)).toMatchObject([
+      { role: 'user', content: 'do it' },
+      { role: 'warning', content: wakeFailed.message },
     ])
+    expect(replayMessages(saved)).toHaveLength(2)
+    expect(resumeHarness).not.toHaveBeenCalled()
+    expect(deleteQuarantine).not.toHaveBeenCalled()
+    expect(closeHitlRows.mock.calls).toEqual([
+      [[], 'user-1', 'applied'],
+      [[], 'user-1', 'expired'],
+      [[], 'user-1', 'superseded'],
+    ])
+    // saveSession releases in its context write; the catch and finally must
+    // not release a second time. MUTATION: remove held.released = true.
+    expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
+  })
+
+  it('retains every prior event and records each failed attempt once across repeated resumes', async () => {
+    resolveConversationTier.mockResolvedValue('verda')
+    const original = pausedBlob(
+      { data: { retained: { value: 'unchanged' } } },
+      pendingRequest({ tier: 'verda' }),
+    )
+    let blob = original
+    for (const [i, message] of ['first failed wake', 'second failed wake'].entries()) {
+      claimSession.mockResolvedValueOnce({ ...claimedPaused(blob), version: 'claim-' + i })
+      ensurePrivateTierAwake.mockRejectedValueOnce(new Error(message))
+      await expect(runTurnAndPersist(resume())).rejects.toThrow(message)
+      expect(saveSession).toHaveBeenCalledTimes(i + 1)
+      const call = saveSession.mock.calls[i]
+      expect(call[4]).toEqual({ version: 'claim-' + i, inferenceTier: 'verda' })
+      const ctx = deserializeContext(call[3] as string)
+      expect(ctx.status).toBe('paused')
+      expect(ctx.data).toEqual({ retained: { value: 'unchanged' } })
+      expect(ctx.events.slice(0, -1)).toEqual(deserializeContext(blob).events)
+      expect(readHitl(ctx).pending).toEqual(readHitl(deserializeContext(original)).pending)
+      expect(replayMessages(call[3] as string).filter((m) => m.role === 'warning')).toHaveLength(
+        i + 1,
+      )
+      blob = call[3] as string
+    }
+    expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
+    expect(resumeHarness).not.toHaveBeenCalled()
+    expect(deleteQuarantine).not.toHaveBeenCalled()
+    expect(closeHitlRows.mock.calls.every((call) => (call[0] as string[]).length === 0)).toBe(true)
+  })
+
+  // MUTATION: remove the persisted text cap in the resume failure record.
+  it.each(['Error', 'string'])('caps a resume wake failure thrown as %s', async (shape) => {
+    resolveConversationTier.mockResolvedValue('verda')
+    claimSession.mockResolvedValue(claimedPaused(pausedBlob({}, pendingRequest({ tier: 'verda' }))))
+    const text = 'x'.repeat(5000)
+    const failure = shape === 'Error' ? new Error(text) : text
+    ensurePrivateTierAwake.mockRejectedValueOnce(failure)
+
+    await expect(runTurnAndPersist(resume())).rejects.toBe(failure)
+
+    const saved = saveSession.mock.calls[0][3] as string
+    expect(replayMessages(saved).at(-1)).toMatchObject({
+      role: 'warning',
+      content: 'x'.repeat(2000),
+    })
+  })
+
+  // MUTATION: skip the paused-restoring release when the recording save fails.
+  it('a refused wake-failure save restores paused once and rethrows the wake failure', async () => {
+    resolveConversationTier.mockResolvedValue('verda')
+    claimSession.mockResolvedValue(claimedPaused(pausedBlob({}, pendingRequest({ tier: 'verda' }))))
+    const failure = new Error('the private inference box did not wake')
+    ensurePrivateTierAwake.mockRejectedValueOnce(failure)
+    saveSession.mockRejectedValue(new Error('row moved on'))
+
+    await expect(runTurnAndPersist(resume())).rejects.toBe(failure)
+
+    expect(saveSession).toHaveBeenCalledTimes(1)
+    expect(dbReleaseConversationClaim).toHaveBeenCalledExactlyOnceWith(
+      'sess-r',
+      'user-1',
+      'v-claim',
+      { failed: false, paused: true, hitlTerminal: false },
+    )
+  })
+
+  // MUTATION: remove loaded.status === 'paused' from the recording guard.
+  // A chain-changed row can still hold a paused blob; a recording save must
+  // not resurrect it or clear its terminal marker just because the wake failed.
+  it('a wake failure preserves the release policy of a row already ended in error', async () => {
+    resolveConversationTier.mockResolvedValue('verda')
+    claimSession.mockResolvedValue(
+      claimedPaused(pausedBlob({}, pendingRequest({ tier: 'verda' })), 'error'),
+    )
+    const failure = new Error('the private inference box did not wake')
+    ensurePrivateTierAwake.mockRejectedValueOnce(failure)
+
+    await expect(runTurnAndPersist(resume())).rejects.toBe(failure)
+
+    expect(saveSession).not.toHaveBeenCalled()
+    expect(dbReleaseConversationClaim).toHaveBeenCalledExactlyOnceWith(
+      'sess-r',
+      'user-1',
+      'v-claim',
+      { failed: false, paused: false, hitlTerminal: false },
+    )
+  })
+
+  // MUTATION: record every resume catch, including a pattern build failure.
+  it('a pattern build failure after the wake restores paused without recording a wake failure', async () => {
+    resolveConversationTier.mockResolvedValue('verda')
+    claimSession.mockResolvedValue(claimedPaused(pausedBlob({}, pendingRequest({ tier: 'verda' }))))
+    const failure = new Error('could not build patterns')
+    getOrBuildPatterns.mockRejectedValueOnce(failure)
+
+    await expect(runTurnAndPersist(resume())).rejects.toBe(failure)
+
+    expect(ensurePrivateTierAwake).toHaveBeenCalledTimes(1)
+    expect(saveSession).not.toHaveBeenCalled()
+    expect(dbReleaseConversationClaim).toHaveBeenCalledExactlyOnceWith(
+      'sess-r',
+      'user-1',
+      'v-claim',
+      { failed: false, paused: true, hitlTerminal: false },
+    )
   })
 
   it('a stop-only resume never wakes the box (A5)', async () => {

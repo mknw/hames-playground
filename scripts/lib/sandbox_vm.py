@@ -413,9 +413,9 @@ class Spike:
         planned = re.findall(r"^Inst (\S+)", plan, re.M)
         require(planned and set(planned) <= set(self.args.allow_package)
                 and {"incus", "incus-client"} <= set(planned), "package plan outside explicit allow-list")
-        require(not re.search(r"^(Remv|Conf (openssh|ufw|docker|containerd|runc))", plan, re.M)
+        require(not re.search(r"^(Remv|Conf (openssh|ufw|docker|containerd|runc|dnsmasq ))", plan, re.M)
                 and not re.search(r"^Inst \S+ \[", plan, re.M)
-                and not re.search(r"^Inst (openssh|ufw|docker|containerd|runc)", plan, re.M),
+                and not re.search(r"^Inst (openssh|ufw|docker|containerd|runc|dnsmasq )", plan, re.M),
                 "package plan touches protected packages or upgrades existing software")
         command("apt-get", "install", "--download-only", "-y", "--no-install-recommends",
                 "--no-remove", "--no-upgrade", *packages, timeout=180)

@@ -318,6 +318,103 @@ Caddy requests the certificate the moment it starts. If the name does not yet
 resolve, the ACME challenge fails, Caddy backs off and retries, and repeated
 failures count against Let's Encrypt's rate limits. DNS first, then boot.
 
+### 4a. Request admission, uploads and SSE
+
+Both sites use `configs/Caddyfile`'s `preview` snippet. Caddy limits **request
+bodies** to **32 MiB** on `/api/stash/upload` and `/api/agents/*`, and **1 MiB**
+on every other path; this does not limit response bytes or stream duration.
+The app's Data Stash accepts **5 MiB decoded content**
+(`packages/harness-patterns/stash/document-store.server.ts`, `MAX_CONTENT_BYTES`).
+The multipart intake sends raw file bytes; the JSON intake can send base64
+(under 7 MiB for a maximal binary) or escaped text. A maximal text body can
+expand sixfold under JSON escaping: **30 MiB**, plus up to **2 MiB** for the
+envelope/metadata. The 1 MiB cap accommodates the **64 KiB** skill-file limit
+even after sixfold JSON escaping (`packages/sandbox/skills.ts`). Arbitrarily
+padded JSON, metadata or multipart fields are not exempt. The app still enforces
+its smaller content limits.
+`request_body max_size` rejects reads beyond the cap with 413
+([Caddy reference](https://caddyserver.com/docs/caddyfile/directives/request_body)).
+The app can receive up to the applicable cap before Caddy aborts an oversized
+request, including a chunked body; the cap does not pre-buffer it at the proxy.
+
+Rate limiting lives in `app/src/lib/request-rate-limit.server.ts`, wired before
+route work in both middleware routers. Stock Caddy has no built-in rate limiter;
+its [rate-limit module](https://caddyserver.com/docs/modules/http.handlers.rate_limit)
+is non-standard. A small app admission gate avoids a custom plugin build and
+another dependency to audit/pin. It uses token buckets:
+
+- Each **verified user ID** gets **600 requests/minute**, with a burst of
+  **120** shared across that owner's browser sessions and action tokens, routes
+  and HTTP methods. Session routes resolve the cookie through the session store;
+  `POST /api/agents/:id` uses `resolveActionUser(bearerSecret(authorization))`,
+  including when a cookie is also present. Only the identity the endpoint honors
+  is charged, once. Route auth and allow-list checks still decide access
+  (SD-13/SD-15/SD-16).
+- Verified principals consume **only their own allowance**. Requests with no
+  verified principal (including unknown/expired cookies and unknown action
+  tokens) normally consume a **per-address 600/minute, burst 120** allowance, then
+  the process-wide **anonymous 6000/minute, burst 1000** backstop. Refusals at
+  an earlier bucket do not drain the later one. Cookie lookup precedes address
+  admission, so verified office users do not share a NAT allowance.
+- The unresolved path trusts only the single address Caddy explicitly writes
+  with `header_up X-Forwarded-For {remote_host}`. This requires Caddy as the sole
+  public ingress and the app's loopback-only binding; do not expose the app port
+  or place another proxy in front without revisiting that trust contract.
+  Missing, malformed or multiple forwarded addresses share one fallback bucket.
+  The sole exception is a direct socket from `127.0.0.1`, `::1` or
+  `::ffff:127.0.0.1` with **no** forwarding header: local dev/browser-suite RPCs
+  consume only the anonymous global backstop (100/second, burst 1000). The
+  socket peer, never the URL or another header, establishes this exception;
+  absent peer metadata keeps the fallback. An empty or malformed forwarding
+  header does not qualify. This is admission, not authentication or a dev-auth
+  bypass. Caddy supplies the overwritten address even over a loopback socket,
+  so public unresolved requests retain their per-address bound. The config pin
+  also forbids removing that header after overwriting it (Opus Y1).
+- Exhaustion returns **429** with whole-second `Retry-After` and
+  `Cache-Control: no-store`. A failed session lookup returns **503**, not an
+  anonymous fallback. Both user and address tables hold at most **256** entries;
+  a new key is refused if full, and only fully refilled entries may be reclaimed.
+
+The per-user refill allows ten requests/second because terminal input sends a
+request per keystroke (`InteractiveTerminal.tsx`). These are preview defaults,
+not measured capacity guarantees. Session-route requests with cookies incur a
+session lookup before admission; route authorization still performs its own check. State is
+**in memory per process**, shared by the two router bundles, reset on restart,
+and separate for release/dev containers and any replicas. This is admission
+control, not a concurrent-request cap or edge DDoS protection: distributed or
+anonymous floods can still exhaust the anonymous backstop and affect other
+anonymous users, and authentication or other shared resources can still be
+overwhelmed. These buckets do not promise availability under distributed floods.
+There is no timer on an admitted SSE response, and exhaustion never cancels one.
+`flush_interval -1` stays on both upstreams, with no response buffering or stream
+timeout ([Caddy streaming reference](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#streaming)).
+
+Validate syntax offline using a local **stock Caddy 2.10** binary, never a running
+deployment. From the repo root, this uses synthetic inputs and temporary storage;
+it does not start a server or perform ACME/DNS/live-provider checks:
+
+```bash
+check_dir=$(mktemp -d)
+cp configs/Caddyfile "$check_dir/Caddyfile"
+mkdir "$check_dir/dev-sites"
+# Single-app config, with no dev site mounted:
+APP_DOMAIN=release.example.invalid ACME_EMAIL=operator@example.invalid \
+  XDG_DATA_HOME="$check_dir/data" XDG_CONFIG_HOME="$check_dir/config" \
+  caddy validate --adapter caddyfile --config "$check_dir/Caddyfile" &&
+  cp configs/Caddyfile.dev "$check_dir/dev-sites/dev.caddy" &&
+  APP_DOMAIN=release.example.invalid DEV_APP_DOMAIN=dev.example.invalid \
+  ACME_EMAIL=operator@example.invalid XDG_DATA_HOME="$check_dir/data" \
+  XDG_CONFIG_HOME="$check_dir/config" \
+  caddy validate --adapter caddyfile --config "$check_dir/Caddyfile"
+rm -rf "$check_dir"
+```
+
+Unit text pins: `app/src/__tests__/lib/config/caddy.test.ts`; admission and failure
+policy: `app/src/__tests__/lib/request-rate-limit.test.ts`. These checks do not
+prove live ACME, uploads or SSE timing; operator smoke on **both** hostnames
+remains required after deployment. No host access or private-tier probe is part
+of this step.
+
 ## 5. Entra app registration — the exact changes
 
 Use your existing app registration or a new single-tenant one
@@ -906,12 +1003,16 @@ Do not repeat §§3–7 in a second compose project. This remains provider-neutr
 operator guidance ([ADR-0008](adr/0008-deployment-guidance-is-provider-neutral.md)).
 
 `docker-compose.clones.yaml` is an **opt-in third overlay**, after the base and
-production overlay. It adds only `app-dev`; `app` remains the release app and
-Caddy's existing upstream. The dev app inherits `app/Dockerfile`'s built runtime,
+production overlay. It adds only `app-dev` and extends the existing Caddy service;
+`app` remains the release app and Caddy's existing upstream.
+The dev app inherits `app/Dockerfile`'s built runtime,
 healthcheck and shared dependencies, while its build contexts point at the dev
 checkout. It has a distinct image tag and container name, and publishes no port.
 It is never `pnpm dev`, Vite, a source bind mount, or a second full environment.
 Both containers explicitly keep `VITE_DEV_BYPASS_AUTH=false` (SD-15).
+Both checkouts must include the request-admission middleware (§4a), and both
+app images must be rebuilt for the rate limit to apply. Updating Caddy alone
+cannot add rate admission to an older app image.
 
 ### Checkouts, hostnames and app-only configuration
 
@@ -953,11 +1054,15 @@ into an unreadable database. Auth cookies have no `Domain` attribute
 (`app/src/lib/auth/cookies.server.ts`); independent signing keys also prevent one
 clone accepting the other's signed login handshake (SD-17).
 
-The second Caddy hostname/site block is **build step 5 (row 6)**. This step
-prepares `app-dev:3444` on the existing network and its distinct Entra redirect;
-it does not publish that hostname. Do not claim the dev site is reachable until
-the Caddy step lands. DNS, callback registration and allow-list smoke are needed
-for each hostname, and no authentication smoke is implied by the offline pins.
+The clones overlay mounts `configs/Caddyfile.dev` into Caddy's optional
+`dev-sites/*.caddy` import and requires `DEV_APP_DOMAIN`. That second site routes
+only to `app-dev:3444`, shares the release site's request/SSE settings (§4a), and
+keeps dev upstream failure confined to the dev hostname (502); Caddy startup
+does not depend on dev health. Without the overlay there is no mounted dev site
+and no dev-host environment variable in Caddy. Keep the hostnames distinct;
+the §12 preflight already refuses shared callback origins. DNS, callback
+registration and allow-list smoke are needed for **each** hostname; offline
+pins do not establish reachability or authentication correctness (SD-18).
 
 ### PENDING_OWNER_DATABASE_POLICY — awaiting the owner's nod ⚑
 

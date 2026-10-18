@@ -217,8 +217,14 @@ Persistence enables two units (`scripts/metadata-egress.py:33`, `:52`, `:368`):
 
 [systemd's dependency semantics](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html)
 define these relationships. `RequiredBy` pulls the seed into Docker starts and
-requires its success; `PartOf` propagates Docker restarts. The repo's Compose
-startup remains manual and no workload unit is redesigned.
+requires its success; `PartOf` propagates Docker restarts. Never restart or
+stop the seed directly: that restarts or stops Docker and every container.
+Reapply with `systemctl restart vps-metadata-egress.service` or
+`--docker-user-only --apply`, then `--check`. A seed refusal leaves Docker and
+every container down. Fix the cause the journal names, then
+`systemctl start docker`; if a start limit was hit, first run
+`systemctl reset-failed vps-metadata-egress-seed.service docker.socket`. The
+repo's Compose startup remains manual and no workload unit is redesigned.
 
 [Docker documents DOCKER-USER's forwarding and post-DNAT position](https://docs.docker.com/engine/network/firewall-iptables/).
 Its [upstream implementation explicitly preserves existing rules across daemon

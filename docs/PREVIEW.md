@@ -692,6 +692,19 @@ sudo systemctl start vps-metadata-egress.service
 sudo python3 scripts/metadata-egress.py --docker-user-only --check # read-only
 ```
 
+**Operator notes** (from the #676 throwaway-host boot/restart trial):
+
+- **Never restart or stop the seed directly**: that restarts or stops Docker
+  and every container. Reapply with
+  `systemctl restart vps-metadata-egress.service` or
+  `--docker-user-only --apply`, then `--check`.
+- **From `--persist` on, a seed failure takes Docker and every container
+  down** (fail-closed), at boot or on a Docker restart. Fix the cause the
+  journal names, then `systemctl start docker`; if a start limit was hit,
+  first run `systemctl reset-failed vps-metadata-egress-seed.service docker.socket`.
+- **Keep provider-console access available before persisting** and through
+  the apply.
+
 This mode denies the reviewed IPv4/IPv6 metadata inventory and conntrack
 original destinations in `DOCKER-USER` only; host `INPUT`/`OUTPUT` and host
 metadata access retain their existing policy (`scripts/metadata-egress.py:198`,

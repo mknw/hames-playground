@@ -292,7 +292,7 @@ describe('Incus environment wire contract', () => {
           dhcp4: false,
           dhcp6: false,
           addresses: ['10.77.0.2/24'],
-          routes: [{ to: 'default', via: '10.77.0.1' }],
+          routes: [{ to: '0.0.0.0/0', via: '10.77.0.1' }],
           optional: true,
         },
       },
@@ -303,6 +303,33 @@ describe('Incus environment wire contract', () => {
     expect(patch).toBeLessThan(start)
     expect(requests[patch].body).toEqual({
       config: { 'cloud-init.network-config': JSON.stringify(seed) },
+    })
+  })
+
+  it('seeds a static address using the bridge prefix and gateway', async () => {
+    fault = (method, url) => {
+      if (method === 'GET' && url.pathname === '/1.0/networks/testbr')
+        return {
+          data: {
+            type: 'bridge',
+            config: { 'ipv4.address': '10.77.0.254/16', 'ipv4.dhcp': 'false', 'dns.mode': 'none' },
+          },
+        }
+      return undefined
+    }
+    await controller().reconcile()
+    expect(JSON.parse(vm!.config['cloud-init.network-config'])).toEqual({
+      version: 2,
+      ethernets: {
+        sandbox: {
+          match: { macaddress: '00:16:3e:12:34:56' },
+          dhcp4: false,
+          dhcp6: false,
+          addresses: ['10.77.0.2/16'],
+          routes: [{ to: '0.0.0.0/0', via: '10.77.0.254' }],
+          optional: true,
+        },
+      },
     })
   })
 

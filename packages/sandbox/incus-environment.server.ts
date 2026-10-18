@@ -648,7 +648,7 @@ export function createIncusEnvironment(options: IncusEnvironmentOptions): IncusE
               dhcp4: false,
               dhcp6: false,
               addresses: [`${o.address}/${prefix}`],
-              routes: [{ to: 'default', via: gateway }],
+              routes: [{ to: '0.0.0.0/0', via: gateway }],
               optional: true,
             },
           },

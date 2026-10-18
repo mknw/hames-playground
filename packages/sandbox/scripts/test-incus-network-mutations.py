@@ -13,7 +13,10 @@ MUTATIONS = [
     ('name-based seed', 'match: { macaddress: mac.toLowerCase() }', "match: { name: 'eth0' }", 'seeds a static address'),
     ('address omitted', 'addresses: [`${o.address}/${prefix}`],', '', 'seeds a static address'),
     ('wrong prefix', '${o.address}/${prefix}', '${o.address}/${prefix + 1}', 'seeds a static address'),
-    ('route omitted', "routes: [{ to: 'default', via: gateway }],", '', 'seeds a static address'),
+    ('route omitted', "routes: [{ to: '0.0.0.0/0', via: gateway }],", '', 'seeds a static address'),
+    ('reviewer: non-netplan default route rejected', "to: '0.0.0.0/0'", "to: 'default'", 'seeds a static address'),
+    ('reviewer: bridge prefix ignored', '${prefix}', '24', 'seeds a static address using the bridge prefix and gateway'),
+    ('reviewer: bridge gateway ignored', 'via: gateway', "via: '10.77.0.1'", 'seeds a static address using the bridge prefix and gateway'),
     ('DHCPv4 re-enabled', 'dhcp4: false', 'dhcp4: true', 'seeds a static address'),
     ('DHCPv6 enabled', 'dhcp6: false', 'dhcp6: true', 'seeds a static address'),
     ('wrong MAC', 'mac.toLowerCase()', "'00:16:3e:12:34:56'", 'normalizes the generated MAC'),
@@ -41,7 +44,7 @@ MUTATIONS = [
     ('reviewer: drifted seed repaired', '        checkVm(vm, seededConfig)', "        if (existingSeed !== undefined) {\n          await api(c.tls, 'PATCH', `/1.0/instances/${instance}`, { config: { [networkKey]: networkConfig } })\n          vm = await api(c.tls, 'GET', `/1.0/instances/${instance}`)\n        }\n        checkVm(vm, seededConfig)", 'refuses drifted network seeds'),
     ('reviewer: set-name introduced', 'optional: true,', "optional: true, 'set-name': 'eth0',", 'seeds a static address'),
     ('reviewer: seed PATCH project scope omitted', 'config: { [networkKey]: networkConfig },\n          })', 'config: { [networkKey]: networkConfig },\n          }, false)', 'seeds a static address'),
-    ('wrong gateway', "routes: [{ to: 'default', via: gateway }],", "routes: [{ to: 'default', via: o.address }],", 'seeds a static address'),
+    ('wrong gateway', "routes: [{ to: '0.0.0.0/0', via: gateway }],", "routes: [{ to: '0.0.0.0/0', via: o.address }],", 'seeds a static address'),
     ('nameservers introduced', 'optional: true,', 'optional: true, nameservers: { addresses: [gateway] },', 'seeds a static address'),
 ]
 

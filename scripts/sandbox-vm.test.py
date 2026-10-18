@@ -46,6 +46,7 @@ class Safety(unittest.TestCase):
         self.args = vm.arguments(["spike", "--install", "--provision"])
         self.args.launcher_unit = "sbxs-run-1234.service"
         self.args.incus_version = "1.2.3"
+        self.args.dnsmasq_version = "2.90-1"
         self.args.network = [ipaddress.IPv4Interface("192.0.2.1/24"),
                              ipaddress.IPv4Interface("198.51.100.1/24")]
         self.args.app_bridge, self.args.uplink = "app0", "uplink0"
@@ -75,7 +76,7 @@ class Safety(unittest.TestCase):
         if args[:2] == ("apt-get", "install"):
             return result()
         if args[:3] == ("apt-get", "--simulate", "install"):
-            return result("Inst incus (1.2.3 synthetic)\nInst incus-client (1.2.3 synthetic)\n")
+            return result("Inst incus (1.2.3 synthetic)\nInst incus-client (1.2.3 synthetic)\nInst dnsmasq-base (2.90-1 synthetic)\n")
         if args[:2] == ("apt-get", "remove"):
             return result()
         if args[0] in ("iptables-save", "ip6tables-save"):
@@ -118,7 +119,7 @@ class Safety(unittest.TestCase):
         patch.object(vm, "sshd_fingerprint", return_value="unchanged").start()
         with contextlib.redirect_stdout(io.StringIO()):
             vm.main(["spike", "--apply", "--install", "--state", str(self.root / "success"),
-                     "--ssh-probe", "/synthetic/ssh-witness", "--incus-version", "1.2.3"])
+                     "--ssh-probe", "/synthetic/ssh-witness", "--incus-version", "1.2.3", "--dnsmasq-version", "2.90-1"])
         checks = [i for i, call in enumerate(self.calls) if call[0] == "docker" and "inspect" in call]
         install = next(i for i, call in enumerate(self.calls) if call[:2] == ("apt-get", "install") and "--download-only" not in call)
         self.assertTrue(any(i < install for i in checks) and any(i > install for i in checks))
@@ -131,7 +132,7 @@ class Safety(unittest.TestCase):
         patch.object(vm, "sshd_fingerprint", return_value="unchanged").start()
         with self.assertRaises(RuntimeError), contextlib.redirect_stdout(io.StringIO()):
             vm.main(["spike", "--apply", "--install", "--state", str(self.root / "failure"),
-                     "--ssh-probe", "/synthetic/ssh-witness", "--incus-version", "1.2.3"])
+                     "--ssh-probe", "/synthetic/ssh-witness", "--incus-version", "1.2.3", "--dnsmasq-version", "2.90-1"])
         self.assertTrue(any(call[:2] == ("apt-get", "remove") for call in self.calls))
         self.assertFalse(any(call[:2] == ("nft", "-f") for call in self.calls))
         self.assertFalse(any(call[0].endswith("tables-restore") and len(call) == 1 for call in self.calls))
@@ -460,6 +461,8 @@ class Safety(unittest.TestCase):
 
     def test_package_plan_guard_and_allowlist(self):
         plans = ["Inst incus [1.0] (1.2.3)\nInst incus-client (1.2.3)\n",
+                 "Inst incus (1.2.3)\nInst incus-client (1.2.3)\nInst dnsmasq-base [2.89-1] (2.90-1 synthetic)\n",
+                 "Inst incus (1.2.3)\nInst incus-client (1.2.3)\nInst dnsmasq-base [2.91-1] (2.90-1 synthetic)\n",
                  "Inst incus (1.2.3)\nInst incus-client (1.2.3)\nRemv existing\n",
                  "Inst incus (1.2.3)\nInst incus-client (1.2.3)\nInst surprise-service (1.2.3)\n"]
         for plan in plans:
@@ -468,6 +471,50 @@ class Safety(unittest.TestCase):
                     self.spike.install()
                 self.assertEqual(runner.call_count, 1)
 
+    def test_dnsmasq_service_package_refused_even_when_allowlisted(self):
+        self.assertNotIn("dnsmasq", self.args.allow_package)
+        self.args.allow_package.append("dnsmasq")
+        for action in ("Inst", "Conf"):
+            plan = "Inst incus (1.2.3)\nInst incus-client (1.2.3)\n" + action + " dnsmasq (2.90-1)\n"
+            with self.subTest(action=action), patch.object(vm, "command", return_value=result(plan)) as runner:
+                with self.assertRaisesRegex(RuntimeError, "protected packages"):
+                    self.spike.install()
+                self.assertEqual(runner.call_count, 1)
+
+    def test_dnsmasq_pinned_in_simulation_download_and_install(self):
+        with patch.object(vm, "command", side_effect=self.fake):
+            self.spike.install()
+        apt = [call for call in self.calls if call[0] == "apt-get"]
+        self.assertEqual(len(apt), 3)
+        self.assertIn("--simulate", apt[0])
+        self.assertIn("--download-only", apt[1])
+        self.assertNotIn("--download-only", apt[2])
+        for call in apt:
+            self.assertIn("dnsmasq-base=2.90-1", call)
+            self.assertIn("--no-install-recommends", call)
+
+    def test_dnsmasq_allowlist_and_residual_journal(self):
+        self.assertIn("dnsmasq-base", self.args.allow_package)
+        with patch.object(vm, "command", side_effect=self.fake):
+            self.spike.install()
+            self.spike.remove_install()
+        manifest = json.loads((self.state / "transaction.private.json").read_text())
+        self.assertEqual(manifest["residual_packages"], ["dnsmasq-base"])
+        removal = next(call for call in self.calls if call[:2] == ("apt-get", "remove"))
+        self.assertNotIn("dnsmasq-base", removal)
+        self.args.allow_package.remove("dnsmasq-base")
+        with patch.object(vm, "command", side_effect=self.fake), self.assertRaisesRegex(RuntimeError, "allow-list"):
+            self.spike.install()
+
+    def test_preexisting_dnsmasq_is_not_a_residual(self):
+        def installed(*args, **kwargs):
+            if "--simulate" in args:
+                return result("Inst incus (1.2.3)\nInst incus-client (1.2.3)\n")
+            return self.fake(*args, **kwargs)
+        with patch.object(vm, "command", side_effect=installed):
+            self.spike.install()
+        self.assertEqual(self.spike.residual_packages, [])
+
     def test_download_precedes_bounded_install_and_partial_install_is_journaled(self):
         calls = []
         self.args.incus_version = "1.2.3"
@@ -475,7 +522,7 @@ class Safety(unittest.TestCase):
         def apt(*args, **kw):
             calls.append((args, kw))
             if "--simulate" in args:
-                return result("Inst incus (1.2.3)\nInst incus-client (1.2.3)\nInst reviewed-dependency (1.0)\n")
+                return result("Inst incus (1.2.3)\nInst incus-client (1.2.3)\nInst dnsmasq-base (2.90-1)\nInst reviewed-dependency (1.0)\n")
             if args[:2] == ("apt-get", "install") and "--download-only" not in args:
                 self.assertTrue(json.loads((self.state / "transaction.private.json").read_text())["installed"])
                 raise RuntimeError("partial install")
@@ -487,7 +534,7 @@ class Safety(unittest.TestCase):
         self.assertTrue(all("--no-install-recommends" in call[0] for call in calls))
         self.assertIsNone(calls[2][1]["timeout"])
         self.assertEqual(calls[2][1]["env"]["NEEDRESTART_MODE"], "l")
-        self.assertEqual(self.spike.residual_packages, ["reviewed-dependency"])
+        self.assertEqual(self.spike.residual_packages, ["dnsmasq-base", "reviewed-dependency"])
 
     def test_witness_rate_limit_and_memory_reserve(self):
         witness = vm.Witness(Path("/synthetic/ssh-witness"), 2 * 1024 ** 3)
@@ -576,6 +623,18 @@ class Safety(unittest.TestCase):
         self.routes = [{"dst": "10.231.0.0/16"}]
         with self.assertRaisesRegex(RuntimeError, "overlaps route"):
             vm.preflight(self.args)
+
+    def test_dnsmasq_version_required_before_package_mutation(self):
+        self.preflight_fixture()
+        self.assertEqual(vm.arguments(["spike", "--install", "--dnsmasq-version", "2.90-1"]).dnsmasq_version, "2.90-1")
+        for version in ("2.90-1", "1:2.90-1ubuntu0.1"):
+            self.args.dnsmasq_version = version
+            vm.preflight(self.args)
+        for version in (None, "", "--option", "2.90 with spaces", "2.90;command"):
+            self.args.dnsmasq_version = version
+            with self.subTest(version=version), self.assertRaisesRegex(RuntimeError, "pin dnsmasq-base"):
+                vm.preflight(self.args)
+        self.assertFalse(any(call.args[:1] == ("apt-get",) for call in vm.command.call_args_list))
 
     def test_real_preflight_checks_incus_filesystem_and_memory(self):
         self.preflight_fixture()
@@ -883,6 +942,18 @@ class Safety(unittest.TestCase):
         self.assertEqual(len(networks), 2)
         self.assertTrue(all("ipv6.address=none" in call for call in networks))
 
+    def test_bridge_dns_and_dhcp_disabled_with_static_ipv4(self):
+        with patch.object(vm, "command", side_effect=self.fake), patch.object(self.spike, "launch"):
+            self.spike.provision()
+        networks = [call for call in self.calls if call[:4] == ("incus", "--force-local", "network", "create")]
+        self.assertEqual(len(networks), 2)
+        for index, call in enumerate(networks):
+            config = dict(arg.split("=", 1) for arg in call[5:])
+            self.assertEqual(config, {"ipv4.address": str(self.args.network[index]),
+                                     "ipv4.nat": "false", "ipv4.dhcp": "false",
+                                     "ipv6.address": "none", "dns.mode": "none",
+                                     "user.spike-token": self.spike.token})
+
     def test_runbook_detached_kata_and_index_contract(self):
         runbook = Path(os.environ.get("SANDBOX_VM_RUNBOOK", ROOT / "docs/deployment/sandbox-vm-spike.md")).read_text()
         prose = " ".join(runbook.split())
@@ -901,6 +972,30 @@ class Safety(unittest.TestCase):
         scripts = infrastructure.split("Scripts:", 1)[1]
         self.assertIn("scripts/sandbox-vm-survey.sh", scripts)
         self.assertIn("scripts/sandbox-vm-spike.sh", scripts)
+
+    def test_runbook_dnsmasq_pin_and_operator_commands(self):
+        runbook = Path(os.environ.get("SANDBOX_VM_RUNBOOK", ROOT / "docs/deployment/sandbox-vm-spike.md")).read_text()
+        self.assertIn("dnsmasq-base=\"$DNSMASQ_PACKAGE_VERSION\"", runbook)
+        self.assertGreaterEqual(runbook.count('--dnsmasq-version "$DNSMASQ_PACKAGE_VERSION"'), 2)
+        self.assertIn("`dnsmasq-base`", runbook)
+        self.assertIn("`dns.mode=none`", runbook)
+        self.assertIn("`ipv4.dhcp=false`", runbook)
+        self.assertIn("`ipv6.address=none`", runbook)
+
+    def test_runbook_dnsmasq_existing_version_and_manual_mark(self):
+        runbook = Path(os.environ.get("SANDBOX_VM_RUNBOOK", ROOT / "docs/deployment/sandbox-vm-spike.md")).read_text()
+        self.assertIn("If `dnsmasq-base` is already installed, set `DNSMASQ_PACKAGE_VERSION` to the installed version (`dpkg-query -W dnsmasq-base`); any other value is refused as an upgrade or downgrade. Naming it marks a previously auto-installed copy as manually installed, which rollback does not revert.", " ".join(runbook.split()))
+
+    def test_runbook_dnsmasq_account_purge(self):
+        runbook = Path(os.environ.get("SANDBOX_VM_RUNBOOK", ROOT / "docs/deployment/sandbox-vm-spike.md")).read_text()
+        self.assertIn("A newly installed `dnsmasq-base` also creates the `dnsmasq` system account (nologin, not journaled); console cleanup is `apt-get purge dnsmasq-base`, because `remove` leaves the account behind.", " ".join(runbook.split()))
+
+    def test_runbook_dnsmasq_absence_after_cleanup(self):
+        runbook = Path(os.environ.get("SANDBOX_VM_RUNBOOK", ROOT / "docs/deployment/sandbox-vm-spike.md")).read_text()
+        self.assertIn("After the reduced `--install --provision --cleanup` run, execute this on the host from a root shell:", " ".join(runbook.split()))
+        self.assertIn("```bash\nls /var/log/incus/dnsmasq.sbxs-*-n*.log\n```", runbook)
+        self.assertIn("It must report no matching files; any matching log fails the daemon-absence check.", " ".join(runbook.split()))
+        self.assertIn("Incus opens this log only when starting a bridge dnsmasq daemon, and it survives package removal", " ".join(runbook.split()))
 
 
 def load_tests(loader, tests, _pattern):
@@ -941,7 +1036,7 @@ def mutations():
         ("Opus original mark install after apt", "core", '        self.installed = True  # Mark BEFORE apt: a failed/partial install also rolls back.', '        self.installed = False  # mutant: mark only after apt', "test_download_precedes_bounded_install_and_partial_install_is_journaled"),
         ("Opus original nft restore removed: surgical replacement", "core", 'command("nft", "delete", "table", "inet", entry["table"])', 'pass', "test_surgical_firewall_recovery_attempts_every_entry_and_resumes"),
         ("Opus survivor 1 signal handlers removed", "core", '        signal.signal(sig, interrupted)', '        pass', "test_signal_handlers_enter_rollback"),
-        ("Opus survivor 2 apt plan guard removed", "core", 'require(not re.search(r"^(Remv|Conf (openssh|ufw|docker|containerd|runc))", plan, re.M)', 'require(True or not re.search(r"^(Remv|Conf (openssh|ufw|docker|containerd|runc))", plan, re.M)', "test_package_plan_guard_and_allowlist"),
+        ("Opus survivor 2 apt plan guard removed", "core", 'require(not re.search(r"^(Remv|Conf (openssh|ufw|docker|containerd|runc|dnsmasq ))", plan, re.M)', 'require(True or not re.search(r"^(Remv|Conf (openssh|ufw|docker|containerd|runc|dnsmasq ))", plan, re.M)', "test_package_plan_guard_and_allowlist"),
         ("Opus survivor 3 recovery prefix check removed", "core", 'manifest["prefix"] == "sbxs-" + manifest["token"][:6]', 'True', "test_recovery_manifest_rejects_foreign_prefix_and_unsafe_mode"),
         ("Opus survivor 4 private subnet preflight removed", "core", 'network.ip.is_private and network.network.prefixlen <= 29', 'True and network.network.prefixlen <= 29', "test_real_preflight_private_subnet_and_route_overlap"),
         ("Opus survivor 5 bridge INPUT drop removed", "core", 'command("nft", "add", "rule", "inet", table, "input", "iifname", bridge, "drop")', 'pass', "test_input_and_forward_packet_behavior"),
@@ -1042,6 +1137,30 @@ def mutations():
         ('Opus extra host exec ownership removed', 'core', 'labels.get("sandbox-vm-spike") == host_scope.token', 'True', 'test_host_run_caps_prefix_label_expiry_and_exec_ownership'),
         ('Opus extra UFW token comment changed', 'core', '"comment", self.token]', '"comment", "foreign"]', 'test_ufw_is_opt_in_exact_and_reversed_from_manifest'),
         ('Q5 recorded ruling link removed', 'runbook', 'https://github.com/mknw/hames-playground/issues/648); the owner authorizes', 'ruling removed); the owner authorizes', 'test_runbook_detached_kata_and_index_contract'),
+        ('dnsmasq dropped from install', 'core', '"--no-upgrade", *packages,\n                        env=install_env)', '"--no-upgrade", *packages[:-1],\n                        env=install_env)', 'test_dnsmasq_pinned_in_simulation_download_and_install'),
+        ('dnsmasq dropped from simulate', 'core', '"--simulate", "install", "--no-install-recommends", *packages)', '"--simulate", "install", "--no-install-recommends", *packages[:-1])', 'test_dnsmasq_pinned_in_simulation_download_and_install'),
+        ('dnsmasq dropped from download', 'core', '"--no-upgrade", *packages, timeout=180)', '"--no-upgrade", *packages[:-1], timeout=180)', 'test_dnsmasq_pinned_in_simulation_download_and_install'),
+        ('dnsmasq dropped from allow-list', 'core', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base"]', 'default=["incus", "incus-base", "incus-client"]', 'test_dnsmasq_allowlist_and_residual_journal'),
+        ('dnsmasq dropped from residual manifest', 'core', 'sorted(set(planned) - {"incus", "incus-base", "incus-client"})', 'sorted(set(planned) - {"incus", "incus-base", "incus-client", "dnsmasq-base"})', 'test_dnsmasq_allowlist_and_residual_journal'),
+        ('pre-existing dnsmasq misreported as residual', 'core', 'sorted(set(planned) - {"incus", "incus-base", "incus-client"})', 'sorted((set(planned) | {"dnsmasq-base"}) - {"incus", "incus-base", "incus-client"})', 'test_preexisting_dnsmasq_is_not_a_residual'),
+        ('dnsmasq automatically removed on rollback', 'core', 'apt_transaction("remove", "-y", "incus", "incus-base", "incus-client")', 'apt_transaction("remove", "-y", "incus", "incus-base", "incus-client", "dnsmasq-base")', 'test_dnsmasq_allowlist_and_residual_journal'),
+        ('dnsmasq required pin check removed', 'core', 'args.dnsmasq_version and re.fullmatch(r"[0-9][A-Za-z0-9.+:~_-]*", args.dnsmasq_version)', 'True', 'test_dnsmasq_version_required_before_package_mutation'),
+        ('bridge DNS mode loosened', 'core', '"dns.mode=none"', '"dns.mode=managed"', 'test_bridge_dns_and_dhcp_disabled_with_static_ipv4'),
+        ('bridge DNS mode omitted', 'core', ', "dns.mode=none"', '', 'test_bridge_dns_and_dhcp_disabled_with_static_ipv4'),
+        ('bridge IPv4 DHCP enabled', 'core', '"ipv4.dhcp=false"', '"ipv4.dhcp=true"', 'test_bridge_dns_and_dhcp_disabled_with_static_ipv4'),
+        ('runbook dnsmasq pin omitted', 'runbook', '--dnsmasq-version "$DNSMASQ_PACKAGE_VERSION"', '', 'test_runbook_dnsmasq_pin_and_operator_commands'),
+        ('Opus dnsmasq upgrade and downgrade admitted', 'core', r'^Inst \S+ \[', r'^Inst incus\S* \[', 'test_package_plan_guard_and_allowlist'),
+        ('Opus dnsmasq service added to default allow-list', 'core', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base"]', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base", "dnsmasq"]', 'test_dnsmasq_service_package_refused_even_when_allowlisted'),
+        ('dnsmasq service install protection removed', 'core', r'^Inst (openssh|ufw|docker|containerd|runc|dnsmasq )', r'^Inst (openssh|ufw|docker|containerd|runc)', 'test_dnsmasq_service_package_refused_even_when_allowlisted'),
+        ('dnsmasq service configure protection removed', 'core', r'Conf (openssh|ufw|docker|containerd|runc|dnsmasq )', r'Conf (openssh|ufw|docker|containerd|runc)', 'test_dnsmasq_service_package_refused_even_when_allowlisted'),
+        ('runbook installed dnsmasq version guidance omitted', 'runbook', 'If `dnsmasq-base` is already installed, set `DNSMASQ_PACKAGE_VERSION` to the installed version (`dpkg-query -W dnsmasq-base`); any other value is refused as an upgrade or downgrade.', '', 'test_runbook_dnsmasq_existing_version_and_manual_mark'),
+        ('runbook dnsmasq manual mark warning omitted', 'runbook', 'Naming it marks a previously auto-installed copy as manually installed, which rollback does not revert.', '', 'test_runbook_dnsmasq_existing_version_and_manual_mark'),
+        ('runbook dnsmasq unjournaled account omitted', 'runbook', 'also creates the `dnsmasq` system account (nologin, not journaled)', 'has no account side effects', 'test_runbook_dnsmasq_account_purge'),
+        ('runbook dnsmasq purge changed to remove', 'runbook', '`apt-get purge dnsmasq-base`', '`apt-get remove dnsmasq-base`', 'test_runbook_dnsmasq_account_purge'),
+        ('runbook dnsmasq post-cleanup timing omitted', 'runbook', 'After the reduced `--install --provision --cleanup` run', 'Before the reduced run', 'test_runbook_dnsmasq_absence_after_cleanup'),
+        ('runbook dnsmasq post-cleanup log command omitted', 'runbook', 'ls /var/log/incus/dnsmasq.sbxs-*-n*.log', '', 'test_runbook_dnsmasq_absence_after_cleanup'),
+        ('runbook dnsmasq absence failure criterion removed', 'runbook', 'It must report no matching files; any matching log fails the daemon-absence check.', '', 'test_runbook_dnsmasq_absence_after_cleanup'),
+        ('runbook dnsmasq surviving log evidence omitted', 'runbook', 'Incus opens this log only when starting a bridge dnsmasq daemon, and it survives package removal', 'Inspect the bridge after cleanup', 'test_runbook_dnsmasq_absence_after_cleanup'),
     ]
     for label, target, before, after, test in changes:
         original = sources[target]

@@ -414,14 +414,15 @@ class Spike:
             self.persist()
 
     def install(self):
-        packages = ("incus=" + self.args.incus_version, "incus-client=" + self.args.incus_version)
+        packages = ("incus=" + self.args.incus_version, "incus-client=" + self.args.incus_version,
+                    "dnsmasq-base=" + self.args.dnsmasq_version)
         plan = command("apt-get", "--simulate", "install", "--no-install-recommends", *packages).stdout
         planned = re.findall(r"^Inst (\S+)", plan, re.M)
         require(planned and set(planned) <= set(self.args.allow_package)
                 and {"incus", "incus-client"} <= set(planned), "package plan outside explicit allow-list")
-        require(not re.search(r"^(Remv|Conf (openssh|ufw|docker|containerd|runc))", plan, re.M)
+        require(not re.search(r"^(Remv|Conf (openssh|ufw|docker|containerd|runc|dnsmasq ))", plan, re.M)
                 and not re.search(r"^Inst \S+ \[", plan, re.M)
-                and not re.search(r"^Inst (openssh|ufw|docker|containerd|runc)", plan, re.M),
+                and not re.search(r"^Inst (openssh|ufw|docker|containerd|runc|dnsmasq )", plan, re.M),
                 "package plan touches protected packages or upgrades existing software")
         command("apt-get", "install", "--download-only", "-y", "--no-install-recommends",
                 "--no-remove", "--no-upgrade", *packages, timeout=180)
@@ -458,7 +459,7 @@ class Spike:
                     "network already exists")
             self.remember("network", bridge)
             self.incus("network", "create", bridge, "ipv4.address=" + str(network),
-                       "ipv4.nat=false", "ipv4.dhcp=false", "ipv6.address=none",
+                       "ipv4.nat=false", "ipv4.dhcp=false", "ipv6.address=none", "dns.mode=none",
                        "user.spike-token=" + self.token)
             # Incus namespaces cannot override UFW drops. An active UFW that
             # prevents forwarding is a failed spike; we never edit its rules.
@@ -642,6 +643,7 @@ def arguments(argv):
     parser.add_argument("--ssh-probe", type=Path)
     parser.add_argument("--kvm-user")
     parser.add_argument("--incus-version")
+    parser.add_argument("--dnsmasq-version")
     parser.add_argument("--image-metadata", type=Path)
     parser.add_argument("--image-rootfs", type=Path)
     parser.add_argument("--network", action="append", type=ipaddress.IPv4Interface, default=[])
@@ -654,7 +656,7 @@ def arguments(argv):
     parser.add_argument("--memory-reserve", default="2GiB")
     parser.add_argument("--allow-ufw-route", action="store_true")
     parser.add_argument("--launcher-unit")
-    parser.add_argument("--allow-package", action="append", default=["incus", "incus-base", "incus-client"])
+    parser.add_argument("--allow-package", action="append", default=["incus", "incus-base", "incus-client", "dnsmasq-base"])
     parser.add_argument("--vm-disk", default="8GiB")
     parser.add_argument("--disk-cap", default="24GiB")
     parser.add_argument("--base-image")
@@ -726,6 +728,7 @@ def preflight(args):
     require("kvm" in command("id", "-nG", args.kvm_user).stdout.split(), "KVM group membership required")
     require(args.install and args.provision, "fresh transaction needs --install --provision")
     require(args.incus_version and re.fullmatch(r"[A-Za-z0-9.+:~_-]+", args.incus_version), "pin Incus package version")
+    require(args.dnsmasq_version and re.fullmatch(r"[0-9][A-Za-z0-9.+:~_-]*", args.dnsmasq_version), "pin dnsmasq-base package version")
     require(args.image_metadata and args.image_metadata.is_file() and args.image_rootfs
             and args.image_rootfs.is_file(), "local VM image metadata/rootfs required")
     require(len(args.network) == 2 and not args.network[0].network.overlaps(args.network[1].network),

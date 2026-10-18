@@ -986,6 +986,7 @@ def mutations():
         ('O6 no checkpoint after last sample before cleanup', 'measure', 'if done or checked is None or time.monotonic() - checked >= 1:', 'if checked is None or time.monotonic() - checked >= 1:', 'test_concurrency_checkpoints_after_last_sample_before_cleanup'),
     ]
     changes += [
+        ('R4 unlimited launcher runtime removed', 'core', 'properties.get("RuntimeMaxUSec") == "infinity"', 'True', 'test_launch_properties_each_refused_independently'),
         ('Opus survivor 10 IPv6 restore syntax validation removed', 'core', 'command("ip6tables-restore", "--test", input=(self.state / "ip6tables.before").read_text())', 'pass', 'test_snapshot_validation_is_forensic_only'),
         ('R2 actual subprocess survives parent signal', 'core', 'previous[sig] = signal.signal(sig, defer)', 'previous[sig] = signal.getsignal(sig)', 'test_apt_real_child_finishes_before_deferred_signal'),
         ('R1 forensic nft parse restored', 'core', '        # Forensics only: no apply path ever replays these snapshots.', '        # Forensics only: no apply path ever replays these snapshots.\n        command("nft", "--check", "-f", str(self.state / "nft.before"))', 'test_snapshot_validation_is_forensic_only'),

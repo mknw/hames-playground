@@ -52,6 +52,11 @@
  */
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import {
+  dockerConnectionFromEnv,
+  dockerInvocation,
+  type DockerConnection,
+} from './docker-connection.server'
 import { DEFAULT_SANDBOX_SETTINGS } from './settings'
 import { getDefaultAttachments } from './with-sandbox.server'
 import { hydrateWorkspace } from './work-artifacts.server'
@@ -150,7 +155,15 @@ export class PtyManager {
       attachment.isFirstBoot = false
     }
 
-    const containerId = (attachment.vm.native as { containerId: string }).containerId
+    const { containerId, dockerConnection } = attachment.vm.native as {
+      containerId: string
+      dockerConnection?: DockerConnection
+    }
+    const invocation = dockerInvocation(
+      dockerConnection ?? dockerConnectionFromEnv(),
+      ['exec', '-it', containerId, 'bash'],
+      process.env,
+    )
 
     const cols = 80
     const rows = 24
@@ -158,12 +171,12 @@ export class PtyManager {
     // caches the module, so only the first shell of the process pays the
     // resolution; every later one is a hit on the same record.
     const { spawn } = await import('node-pty')
-    const term = spawn(DOCKER_BIN, ['exec', '-it', containerId, 'bash'], {
+    const term = spawn(DOCKER_BIN, invocation.args, {
       name: 'xterm-color',
       cols,
       rows,
       cwd: process.cwd(),
-      env: process.env as Record<string, string>,
+      env: invocation.env as Record<string, string>,
     })
 
     const session: PtySession = {

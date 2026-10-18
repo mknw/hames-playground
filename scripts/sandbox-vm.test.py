@@ -101,12 +101,17 @@ class Safety(unittest.TestCase):
         if args[0] == "iptables":
             return result()
         if args[:3] == ("ufw", "show", "added"):
+            self.assertEqual(kwargs["env"]["LC_ALL"], "C")
             return result("Added user rules (see 'ufw status' for running firewall):\n" +
-                          ("\n".join(shlex.join(["ufw", *rule]) for rule in self.ufw_rules) if self.ufw_rules else "(None)"))
+                          ("\n".join(shlex.join(["ufw", *rule[:-2]]) + " comment '" + rule[-1] + "'"
+                                     if rule[-2:-1] == ["comment"] else shlex.join(["ufw", *rule])
+                                     for rule in self.ufw_rules) if self.ufw_rules else "(None)"))
         if args[:3] == ("ufw", "route", "allow"):
+            self.assertEqual(kwargs["env"]["LC_ALL"], "C")
             self.ufw_rules.append(list(args[1:]))
-            return result()
+            return result("Rule added\n")
         if args[:3] == ("ufw", "route", "delete"):
+            self.assertEqual(kwargs["env"]["LC_ALL"], "C")
             rule = next(rule for rule in self.ufw_rules if rule[:-2] == ["route", *args[3:]])
             self.ufw_rules.remove(rule)
             return result()
@@ -343,6 +348,26 @@ class Safety(unittest.TestCase):
         self.assertIn("ipv4.address=" + self.spike.address(0), nic)
         self.assertIn("security.ipv4_filtering=true", nic)
         self.assertIn("security.mac_filtering=true", nic)
+
+    def test_agent_first_boot_reboot_can_exceed_180_seconds(self):
+        elapsed = 0
+        probes = []
+        def sleep(seconds):
+            nonlocal elapsed
+            elapsed += seconds
+        def guest(*args, **kw):
+            if args[0] == "info":
+                return result(code=1)
+            if args == ("exec", self.spike.name(0), "--", "true"):
+                probes.append(elapsed)
+                return result(code=int(elapsed < 302))
+            return result()
+        with patch.object(self.spike, "vm", side_effect=guest), \
+                patch.object(vm.time, "monotonic", side_effect=lambda: elapsed), \
+                patch.object(vm.time, "sleep", side_effect=sleep):
+            self.spike.launch(0, self.spike.name(0))
+        self.assertGreater(probes[-1], 180)
+        self.assertEqual(self.spike.metrics["env0_vm_agent_boot_ms"], 302000)
 
     def test_metadata_jump_stays_first_with_marked_rule(self):
         first = '-A DOCKER-USER -m comment --comment vps-metadata-egress-v1 -j VPS-METADATA'
@@ -641,6 +666,24 @@ class Safety(unittest.TestCase):
     def ufw_entry(self):
         return {"kind": "ufw", "rule": ["route", "allow", "in", "on", "app0", "out", "on", self.spike.bridge(0),
                 "to", self.spike.address(0), "port", "2376", "proto", "tcp", "comment", self.spike.token]}
+
+    def test_ufw_creation_requires_new_rule(self):
+        self.args.allow_ufw_route = True
+        for output in ("Rule updated\n", "Skipping adding existing rule\n", "", "Rule added\nextra\n"):
+            self.spike.firewall = []
+            self.spike.owned = []
+            self.tables.clear()
+            def boundary(*args, **kw):
+                if args[:3] == ("ufw", "route", "allow"):
+                    self.assertEqual(kw["env"]["LC_ALL"], "C")
+                    return result(output)
+                return self.fake(*args, **kw)
+            with self.subTest(output=output), patch.object(vm, "command", side_effect=boundary), \
+                    patch.object(self.spike, "launch") as launch:
+                with self.assertRaisesRegex(RuntimeError, "UFW rule was not added"):
+                    self.spike.provision()
+                launch.assert_not_called()
+                self.assertTrue(any(entry["kind"] == "ufw" for entry in self.spike.firewall))
 
     def test_ufw_absence_and_exact_live_ownership(self):
         entry = self.ufw_entry()
@@ -1242,6 +1285,13 @@ class Safety(unittest.TestCase):
                          "New module packages stay in `residual_packages`", "Rollback never removes them",
                          "`ufw show added`", "`route delete allow", "No reset, disable or reload is used"):
             self.assertIn(required, prose)
+        for required in ("https://packages.ubuntu.com/resolute/qemu-system-modules-spice",
+                         "`qemu-system-common`", "pin must equal the installed `qemu-system-common`",
+                         "`Inst … [old]`", "SPICE is a Recommends of `qemu-system-x86`",
+                         "`libspice-server1`", "`ubuntu-virt`", "`libgbm1`", "`libepoxy0`", "`libvirglrenderer1`",
+                         "`env*_vm_agent_boot_ms` includes the seeding reboot", "600 seconds"):
+            self.assertIn(required, prose)
+        self.assertNotIn("/noble/", runbook)
 
     def test_runbook_dnsmasq_existing_version_and_manual_mark(self):
         runbook = Path(os.environ.get("SANDBOX_VM_RUNBOOK", ROOT / "docs/deployment/sandbox-vm-spike.md")).read_text()
@@ -1472,6 +1522,28 @@ def mutations():
             (package + " runbook apt pin removed", "runbook", package + '="$QEMU_MODULES_PACKAGE_VERSION"', '', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
         ])
     changes.extend([
+        ("Opus 1 quoted UFW comment parsed with posix=False", "core", '[shlex.split(line) for line in lines[1:]]', '[shlex.split(line, posix=False) for line in lines[1:]]', "test_ufw_absence_and_exact_live_ownership"),
+        ("Opus whitespace split", "core", '[shlex.split(line) for line in lines[1:]]', '[line.split() for line in lines[1:]]', "test_ufw_absence_and_exact_live_ownership"),
+        ("Opus 2 agent deadline restored to 180 seconds", "core", 'deadline = time.monotonic() + 600', 'deadline = time.monotonic() + 180', "test_agent_first_boot_reboot_can_exceed_180_seconds"),
+        ("Opus 3 UFW updated rule accepted", "core", '== "Rule added", "UFW rule was not added"', 'in ("Rule added", "Rule updated"), "UFW rule was not added"', "test_ufw_creation_requires_new_rule"),
+        ("Opus 3 UFW output check removed", "core", '== "Rule added", "UFW rule was not added"', 'is not None, "UFW rule was not added"', "test_ufw_creation_requires_new_rule"),
+        ("Opus 3 UFW create locale removed", "core", 'command("ufw", *rule, env=dict(os.environ, LC_ALL="C"))', 'command("ufw", *rule)', "test_ufw_creation_requires_new_rule"),
+        ("Opus 4 UFW show locale removed", "core", 'command("ufw", "show", "added", env=dict(os.environ, LC_ALL="C"))', 'command("ufw", "show", "added")', "test_ufw_absence_and_exact_live_ownership"),
+        ("Opus 4 UFW delete locale removed", "core", '*rule[1:-2], check=False,\n                                           env=dict(os.environ, LC_ALL="C"))', '*rule[1:-2], check=False)', "test_ufw_absence_and_exact_live_ownership"),
+        ("Opus 5 wrong Ubuntu release", "runbook", '/resolute/', '/noble/', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("Opus 5 installed qemu-system-common pin omitted", "runbook", 'pin must equal the installed `qemu-system-common`', 'pin may differ', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("Opus 5 changed existing package plan omitted", "runbook", '`Inst … [old]`', 'a package plan', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("Opus 5 SPICE Recommends source changed", "runbook", 'SPICE is a Recommends of `qemu-system-x86`', 'SPICE is a Recommends of `incus`', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("Opus 5 dependency guidance omitted", "runbook", '`libspice-server1`', 'other dependencies', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("Opus 2 boot metric reboot guidance omitted", "runbook", '`env*_vm_agent_boot_ms` includes the seeding reboot', 'Boot metric excludes the reboot', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("Opus 2 runbook deadline shortened", "runbook", '600 seconds', '180 seconds', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("Opus unpinned QEMU version regex", "core", 'args.qemu_modules_version and re.fullmatch(r"[0-9][A-Za-z0-9.+:~_-]*", args.qemu_modules_version)', 'args.qemu_modules_version', "test_qemu_modules_version_required_before_mutation"),
+        ("Codex wrong nft address family", "core", 'command("nft", "delete", "table", "inet", entry["table"])', 'command("nft", "delete", "table", "ip", entry["table"])', "test_every_journaled_reversal_obeys_binary_grammar"),
+        ("Codex apt purge replaces remove", "core", 'apt_transaction("remove", "-y", "incus", "incus-base", "incus-client")', 'apt_transaction("purge", "-y", "incus", "incus-base", "incus-client")', "test_every_journaled_reversal_obeys_binary_grammar"),
+        ("Codex wrong Incus ownership key", "core", '"get", name, "user.spike-token"', '"get", name, "user.wrong-token"', "test_every_journaled_reversal_obeys_binary_grammar"),
+        ("Codex FORWARD replaces DOCKER-USER delete", "core", 'command("iptables", "-w", "-D", "DOCKER-USER", *rule)', 'command("iptables", "-w", "-D", "FORWARD", *rule)', "test_every_journaled_reversal_obeys_binary_grammar"),
+        ("Codex wrong exact SPICE version in all apt phases", "core", '"qemu-system-modules-spice=" + self.args.qemu_modules_version', '"qemu-system-modules-spice=0.0.0"', "test_qemu_modules_pinned_in_every_apt_phase"),
+        ("Codex wrong UFW deletion destination", "core", '"route", "delete", *rule[1:-2]', '"route", "delete", *rule[1:9], "203.0.113.99", *rule[10:-2]', "test_ufw_absence_and_exact_live_ownership"),
         ("QEMU pin validation removed", "core", 'args.qemu_modules_version and re.fullmatch(r"[0-9][A-Za-z0-9.+:~_-]*", args.qemu_modules_version)', 'True', "test_qemu_modules_version_required_before_mutation"),
         ("existing QEMU module misreported as residual", "core", 'sorted(set(planned) - {"incus", "incus-base", "incus-client"})', 'sorted((set(planned) | {"qemu-system-modules-spice"}) - {"incus", "incus-base", "incus-client"})', "test_qemu_modules_allowlist_residuals_and_existing_versions"),
         ("runbook QEMU argument omitted", "runbook", '--qemu-modules-version "$QEMU_MODULES_PACKAGE_VERSION"', '', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),

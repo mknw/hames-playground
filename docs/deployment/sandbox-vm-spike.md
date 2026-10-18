@@ -135,15 +135,20 @@ unrelated services.
 
 **QEMU modules (Incus 6.0.x).** Incus 6.0.5 unconditionally adds `-spice` even
 with `-nographic` ([upstream startup argv](https://github.com/lxc/incus/blob/v6.0.5/internal/server/instance/drivers/driver_qemu.go#L1638-L1652)).
-On Ubuntu Noble, [SPICE](https://packages.ubuntu.com/noble/qemu-system-modules-spice)
+On Ubuntu 26.04 (resolute), [SPICE](https://packages.ubuntu.com/resolute/qemu-system-modules-spice)
 depends on `qemu-system-modules-opengl` at the exact same QEMU version. Those
 are the minimal module set here: OpenGL is a package dependency, not a request
 for GPU passthrough. Audio and UI modules are not needed for these headless
 VMs. Before choosing `QEMU_MODULES_PACKAGE_VERSION`, review the target's
 read-only `apt-cache depends incus qemu-system-modules-spice qemu-system-modules-opengl`
 and `apt-cache policy qemu-system-x86 qemu-system-modules-spice qemu-system-modules-opengl`.
-Use the version matching the installed host QEMU, and any already-installed
-module; an upgrade or downgrade is refused. Both module packages are explicitly
+The pin must equal the installed `qemu-system-common`, and any already-installed
+module; another value plans `Inst … [old]`, which is refused before anything changes.
+SPICE is a Recommends of `qemu-system-x86`, not of `incus` 6.0.5-8, which has no
+Recommends. SPICE also depends on `qemu-system-common`, `libspice-server1` and
+`ubuntu-virt`; OpenGL brings `libgbm1`, `libepoxy0` and `libvirglrenderer1`.
+Expect additional reviewed `--allow-package` entries in the target's plan.
+Both module packages are explicitly
 pinned in simulation, download and install despite `--no-install-recommends`.
 New module packages stay in `residual_packages` for reviewed console cleanup;
 pre-existing modules do not. Rollback never removes them. Naming an existing
@@ -156,6 +161,12 @@ override is also incompatible with the package environment's
 `restricted.virtual-machines.lowlevel=block`
 ([project restrictions](https://github.com/lxc/incus/blob/v6.0.5/doc/reference/projects.md)).
 Install the modules; never loosen the project restriction for this workaround.
+
+The guest-agent readiness deadline is 600 seconds. On first boot, incus-agent
+6.0.5 applies the seeded image metadata and reboots before opening its exec
+listener ([agent startup](https://github.com/lxc/incus/blob/v6.0.5/cmd/incus-agent/main_agent.go#L91-L107)).
+`env*_vm_agent_boot_ms` includes the seeding reboot as well as static-address
+setup; it is not a single-boot measurement.
 
 The witness must attempt a **new key-authenticated SSH connection from an
 independent machine** to the existing SSH endpoint, with connection timeout,
@@ -179,14 +190,14 @@ an unlisted command fails the test, including any new `ip` reversal. Queries
 and mutations both pass through the table. This is syntax evidence, not proof
 of live firewall or Incus behavior.
 
-| Binary     | Accepted reversal/query grammar                                                                                                                           | Primary reference                                                                                                                                                                           |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ufw`      | `show added`; `route delete allow in on IFACE out on IFACE to IPv4 port PORT proto tcp`                                                                   | [Noble ufw(8)](https://manpages.ubuntu.com/manpages/noble/man8/ufw.8.html), route synopsis; [0.36.2 saved-rule rendering](https://git.launchpad.net/ufw/tree/src/frontend.py?h=0.36.2#n358) |
-| `nft`      | `-j list tables`; `delete table inet NAME`                                                                                                                | [nft(8), tables](https://netfilter.org/projects/nftables/manpage.html#lbAF)                                                                                                                 |
-| `iptables` | `-w -C DOCKER-USER RULE`; `-w -D DOCKER-USER RULE`, including the comment match                                                                           | [iptables(8)](https://manpages.ubuntu.com/manpages/noble/man8/iptables.8.html), commands and wait option                                                                                    |
-| `incus`    | `--force-local [--project NAME]` plus `info NAME`, `config get NAME KEY`, `delete --force NAME`, or resource `show/get/delete` (image/profile delete too) | [Incus 6.0 CLI](https://github.com/lxc/incus/tree/v6.0.5/doc/reference/manpages)                                                                                                            |
-| `ip`       | None: IP changes are guest setup, not journaled host mutations; deleting the owned VM removes them                                                        | [ip(8)](https://manpages.ubuntu.com/manpages/noble/man8/ip.8.html)                                                                                                                          |
-| `apt-get`  | `remove -y incus incus-base incus-client`                                                                                                                 | [apt-get(8)](https://manpages.ubuntu.com/manpages/noble/man8/apt-get.8.html), remove                                                                                                        |
+| Binary     | Accepted reversal/query grammar                                                                                                                           | Primary reference                                                                                                                                                                                 |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ufw`      | `show added`; `route delete allow in on IFACE out on IFACE to IPv4 port PORT proto tcp`                                                                   | [Resolute ufw(8)](https://manpages.ubuntu.com/manpages/resolute/man8/ufw.8.html), route synopsis; [0.36.2 saved-rule rendering](https://git.launchpad.net/ufw/tree/src/frontend.py?h=0.36.2#n358) |
+| `nft`      | `-j list tables`; `delete table inet NAME`                                                                                                                | [nft(8), tables](https://netfilter.org/projects/nftables/manpage.html#lbAF)                                                                                                                       |
+| `iptables` | `-w -C DOCKER-USER RULE`; `-w -D DOCKER-USER RULE`, including the comment match                                                                           | [iptables(8)](https://manpages.ubuntu.com/manpages/resolute/man8/iptables.8.html), commands and wait option                                                                                       |
+| `incus`    | `--force-local [--project NAME]` plus `info NAME`, `config get NAME KEY`, `delete --force NAME`, or resource `show/get/delete` (image/profile delete too) | [Incus 6.0 CLI](https://github.com/lxc/incus/tree/v6.0.5/doc/reference/manpages)                                                                                                                  |
+| `ip`       | None: IP changes are guest setup, not journaled host mutations; deleting the owned VM removes them                                                        | [ip(8)](https://manpages.ubuntu.com/manpages/resolute/man8/ip.8.html)                                                                                                                             |
+| `apt-get`  | `remove -y incus incus-base incus-client`                                                                                                                 | [apt-get(8)](https://manpages.ubuntu.com/manpages/resolute/man8/apt-get.8.html), remove                                                                                                           |
 
 For UFW, the route keyword precedes delete. The reversal omits the comment
 clause after confirming the exact saved rule and token with `ufw show added`,

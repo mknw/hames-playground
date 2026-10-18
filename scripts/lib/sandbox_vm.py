@@ -521,7 +521,8 @@ class Spike:
                         "comment", self.token]
                 self.firewall.append({"kind": "ufw", "rule": rule})
                 self.persist()
-                command("ufw", *rule)
+                require(command("ufw", *rule, env=dict(os.environ, LC_ALL="C")).stdout.strip()
+                        == "Rule added", "UFW rule was not added")
             self.launch(index, self.name(index))
 
     def bridge(self, index):
@@ -560,7 +561,7 @@ class Spike:
                 "name=eth0", "ipv4.address=" + self.address(index),
                 "security.ipv4_filtering=true", "security.mac_filtering=true")
         self.vm("start", name)
-        deadline = time.monotonic() + 180
+        deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
             if self.vm("exec", name, "--", "true", check=False).returncode == 0:
                 break

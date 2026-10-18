@@ -211,6 +211,22 @@ describe('configured Docker paths', () => {
     await expect(backend.reset(vm)).resolves.toBeUndefined()
     expectRouted()
   })
+  it.each(['already', 'a'])('preserves already-connected reset with host %s', async (host) => {
+    vi.stubEnv('SANDBOX_DOCKER_HOST', `tcp://${host}:2376`)
+    const backend = new DockerBackend()
+    const vm = await backend.boot('base', { egress: 'pypi' })
+    plan = (args) =>
+      args.includes('connect') ? { code: 1, stderr: 'already connected' } : { stdout: 'cid' }
+    await expect(backend.reset(vm)).resolves.toBeUndefined()
+  })
+  it.each(['already', 'a'])('rejects other reset failures with host %s', async (host) => {
+    vi.stubEnv('SANDBOX_DOCKER_HOST', `tcp://${host}:2376`)
+    const backend = new DockerBackend()
+    const vm = await backend.boot('base', { egress: 'pypi' })
+    plan = (args) =>
+      args.includes('connect') ? { code: 1, stderr: 'permission denied' } : { stdout: 'cid' }
+    await expect(backend.reset(vm)).rejects.toThrow(/permission denied/)
+  })
   it('rejects malformed config before any child or reaper can run', () => {
     vi.stubEnv('SANDBOX_DOCKER_HOST', 'http://invalid.example.test')
     expect(() => new DockerBackend()).toThrow(/SANDBOX_DOCKER_HOST/)
@@ -332,11 +348,13 @@ describe('configured Docker paths', () => {
       expect(warn.mock.calls[0][0]).toContain('SANDBOX_DOCKER_HOST')
     },
   )
-  it('does not warn when an explicit connection resolves inherited routing or none is inherited', () => {
+  it('does not warn when an explicit connection resolves inherited routing or none is inherited', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    new DockerBackend()
+    vi.resetModules()
+    const { DockerBackend: FreshBackend } = await import('../docker-backend.server')
+    new FreshBackend()
     for (const name of [...settingEnv, ...routingEnv]) vi.stubEnv(name, undefined)
-    new DockerBackend()
+    new FreshBackend()
     expect(warn).not.toHaveBeenCalled()
   })
   it('preserves legacy backend/MCP argv and env inheritance when unset', async () => {

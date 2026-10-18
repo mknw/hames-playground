@@ -204,6 +204,17 @@ function dockerDiagnostic(connection: DockerConnection, message: string): string
   return message
 }
 
+/** Keep operational classification independent of the displayed diagnostic.
+ *  Retain only the classification, never the raw stderr. */
+class DockerCommandError extends Error {
+  readonly alreadyConnected: boolean
+
+  constructor(message: string, stderr: string) {
+    super(message)
+    this.alreadyConnected = /already/i.test(stderr)
+  }
+}
+
 /** Run `docker <args>`, resolving stdout (trimmed). Rejects on non-zero exit. */
 function docker(connection: DockerConnection, args: string[], timeoutMs = 30_000): Promise<string> {
   const invocation = dockerInvocation(connection, args)
@@ -235,10 +246,11 @@ function docker(connection: DockerConnection, args: string[], timeoutMs = 30_000
       if (code === 0) resolve(stdout.trim())
       else
         reject(
-          new Error(
+          new DockerCommandError(
             connection.length
               ? `docker ${args[0]} exited ${code}: ${dockerDiagnostic(connection, stderr.trim())}`
               : `docker ${args.join(' ')} exited ${code}: ${stderr.trim()}`,
+            stderr,
           ),
         )
     })
@@ -818,7 +830,7 @@ export class DockerBackend implements ComputeBackend {
       await this.docker(['network', 'connect', net, gw])
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      if (!/already/i.test(msg)) {
+      if (!(err instanceof DockerCommandError && err.alreadyConnected)) {
         throw new SandboxBootError(
           `egress gateway ${gw} could not join ${net}: ${msg} — refusing to start a ` +
             `networked sandbox without its allowlist proxy`,

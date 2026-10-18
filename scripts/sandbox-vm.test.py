@@ -14,6 +14,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import tarfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -29,8 +30,8 @@ measure = importlib.util.module_from_spec(measure_spec)
 measure_spec.loader.exec_module(measure)
 
 
-def result(stdout="", code=0):
-    return SimpleNamespace(stdout=stdout, stderr="", returncode=code)
+def result(stdout="", code=0, stderr=""):
+    return SimpleNamespace(stdout=stdout, stderr=stderr, returncode=code)
 
 
 class Safety(unittest.TestCase):
@@ -41,7 +42,9 @@ class Safety(unittest.TestCase):
         self.addCleanup(patch.stopall)
         patch.object(vm, "DEFAULT_STATE", self.root).start()
         patch.object(vm, "PRIVATE_LOG", None).start()
+        patch.object(vm, "available_memory", return_value=32 * 1024 ** 3).start()
         self.args = vm.arguments(["spike", "--install", "--provision"])
+        self.args.incus_version = "1.2.3"
         self.args.network = [ipaddress.IPv4Interface("192.0.2.1/24"),
                              ipaddress.IPv4Interface("198.51.100.1/24")]
         self.args.app_bridge, self.args.uplink = "app0", "uplink0"
@@ -52,6 +55,7 @@ class Safety(unittest.TestCase):
         self.calls = []
         self.installed = False
         self.regress = False
+        self.tables = set()
 
     def fake(self, *args, **kwargs):
         self.calls.append(args)
@@ -64,8 +68,10 @@ class Safety(unittest.TestCase):
                 healthy = not (self.regress and self.installed)
                 return result(json.dumps({"Running": healthy, "Health": {"Status": "healthy"}}))
             self.fail("unexpected host Docker capability")
-        if args[:2] == ("apt-get", "install"):
+        if args[:2] == ("apt-get", "install") and "--download-only" not in args:
             self.installed = True
+            return result()
+        if args[:2] == ("apt-get", "install"):
             return result()
         if args[:3] == ("apt-get", "--simulate", "install"):
             return result("Inst incus (1.2.3 synthetic)\nInst incus-client (1.2.3 synthetic)\n")
@@ -79,8 +85,14 @@ class Safety(unittest.TestCase):
             self.assertIn("synthetic firewall snapshot", kwargs["input"])
             return result()
         if args[0] == "nft":
+            if args[1:] == ("-j", "list", "tables"):
+                return result(json.dumps({"nftables": [{"table": {"family": "inet", "name": name}} for name in self.tables]}))
+            if args[1:3] == ("add", "table"):
+                self.tables.add(args[4])
+            if args[1:3] == ("delete", "table"):
+                self.tables.remove(args[4])
             return result()
-        if args[0] == "iptables" and args[1:4] == ("-I", "DOCKER-USER", "1"):
+        if args[0] == "iptables":
             return result()
         if args[0] == "incus":
             self.assertEqual(args[1], "--force-local")
@@ -89,10 +101,10 @@ class Safety(unittest.TestCase):
                 self.assertEqual(args[2], self.spike.project)
                 args = (args[0],) + args[3:]
             if len(args) > 2 and args[2] == "show":
-                return result(code=1)
+                return result() if any(name == args[3] for _, name in self.spike.owned) else result(code=1, stderr="Error: not found")
             if args[1:3] == ("config", "get"):
                 return result(self.spike.token)
-            if args[1:3] == ("project", "get"):
+            if len(args) > 2 and args[2] == "get":
                 return result(self.spike.token)
             return result()
         if args[0] == "/synthetic/ssh-witness":
@@ -106,8 +118,8 @@ class Safety(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             vm.main(["spike", "--apply", "--install", "--state", str(self.root / "success"),
                      "--ssh-probe", "/synthetic/ssh-witness", "--incus-version", "1.2.3"])
-        checks = [i for i, call in enumerate(self.calls) if call[0] == "/synthetic/ssh-witness"]
-        install = next(i for i, call in enumerate(self.calls) if call[:2] == ("apt-get", "install"))
+        checks = [i for i, call in enumerate(self.calls) if call[0] == "docker" and "inspect" in call]
+        install = next(i for i, call in enumerate(self.calls) if call[:2] == ("apt-get", "install") and "--download-only" not in call)
         self.assertTrue(any(i < install for i in checks) and any(i > install for i in checks))
         self.assertFalse(any(call[:2] == ("apt-get", "remove") for call in self.calls))
 
@@ -120,9 +132,9 @@ class Safety(unittest.TestCase):
             vm.main(["spike", "--apply", "--install", "--state", str(self.root / "failure"),
                      "--ssh-probe", "/synthetic/ssh-witness", "--incus-version", "1.2.3"])
         self.assertTrue(any(call[:2] == ("apt-get", "remove") for call in self.calls))
-        self.assertTrue(any(call[:2] == ("nft", "-f") for call in self.calls))
-        self.assertTrue(any(call[0] == "iptables-restore" and len(call) == 1 for call in self.calls))
-        self.assertTrue(any(call[0] == "ip6tables-restore" and len(call) == 1 for call in self.calls))
+        self.assertFalse(any(call[:2] == ("nft", "-f") for call in self.calls))
+        self.assertFalse(any(call[0].endswith("tables-restore") and len(call) == 1 for call in self.calls))
+        self.assertEqual(json.loads((self.root / "failure/rollback.private.json").read_text()), [])
         public = json.loads((self.root / "failure/results.json").read_text())
         self.assertEqual(public["status"], "failed")
 
@@ -137,21 +149,21 @@ class Safety(unittest.TestCase):
         patch.object(vm, "sshd_fingerprint", return_value="changed").start()
         runner = patch.object(vm, "command").start()
         with self.assertRaises(RuntimeError):
-            vm.health_check({}, "before", Path("/synthetic/ssh-witness"))
+            vm.health_check({}, "before", vm.Witness(Path("/synthetic/ssh-witness"), 0))
         runner.assert_not_called()
 
     def test_ssh_failure_is_not_success(self):
         patch.object(vm, "sshd_fingerprint", return_value="same").start()
         patch.object(vm, "command", return_value=result(code=1)).start()
         with self.assertRaises(RuntimeError):
-            vm.health_check({}, "same", Path("/synthetic/ssh-witness"))
+            vm.health_check({}, "same", vm.Witness(Path("/synthetic/ssh-witness"), 0))
 
     def test_bridge_allow_reaches_docker_user(self):
         patch.object(vm, "command", side_effect=self.fake).start()
         patch.object(self.spike, "launch").start()
         self.spike.provision()
         allows = [call for call in self.calls if call[:4] == ("iptables", "-I", "DOCKER-USER", "1")]
-        self.assertEqual(len(allows), 8)
+        self.assertEqual(len(allows), 4)
         for index in range(2):
             rule = tuple(self.spike.bridge_rules(index)[0])
             self.assertIn(("iptables", "-I", "DOCKER-USER", "1") + rule, allows)
@@ -260,6 +272,477 @@ class Safety(unittest.TestCase):
         self.assertEqual(error.exception.code, 2)
         self.assertNotIn("synthetic-private-host", out.getvalue())
 
+    def test_input_and_forward_packet_behavior(self):
+        patch.object(vm, "command", side_effect=self.fake).start()
+        patch.object(self.spike, "launch").start()
+        self.spike.provision()
+        def verdict(chain, incoming, outgoing="", address="", port=0, established=False):
+            for call in self.calls:
+                if call[:4] != ("nft", "add", "rule", "inet") or call[5] != chain:
+                    continue
+                rule, match, i = call[6:-1], True, 0
+                while i < len(rule):
+                    key = rule[i]
+                    if key in ("iifname", "oifname"):
+                        match &= rule[i + 1] == (incoming if key == "iifname" else outgoing)
+                        i += 2
+                    elif key == "ct":
+                        match &= established
+                        i += 3
+                    elif key == "ip":
+                        match &= rule[i + 2] == address
+                        i += 3
+                    elif key == "tcp":
+                        match &= rule[i + 2] == str(port)
+                        i += 3
+                    else:
+                        self.fail("unexpected generated rule token " + key)
+                if match:
+                    return call[-1]
+            return "accept"
+        for i in range(2):
+            bridge, address = self.spike.bridge(i), self.spike.address(i)
+            self.assertEqual(verdict("input", bridge, established=True), "accept", "TLS SYN-ACK dropped")
+            self.assertEqual(verdict("input", bridge), "drop", "new guest->host accepted")
+            self.assertEqual(verdict("forward", bridge, "public0"), "drop", "guest egress accepted")
+            self.assertEqual(verdict("forward", bridge, "app0", established=True), "accept")
+            self.assertEqual(verdict("forward", "app0", bridge, address, 2376), "accept")
+            self.assertEqual(verdict("forward", "app0", bridge, address, 22), "drop")
+            self.assertEqual(verdict("forward", "other0", bridge, address, 2376), "drop")
+            self.assertEqual(verdict("forward", bridge, "app0", address, 5432), "drop")
+        creates = [call for call in self.calls if "network" in call and "create" in call]
+        self.assertTrue(all("ipv4.nat=false" in call and "ipv4.dhcp=false" in call for call in creates))
+
+    def test_nic_static_address_requires_filters(self):
+        patch.object(vm, "command", side_effect=self.fake).start()
+        # Existing-instance probe is absent; all other guest calls succeed.
+        original = self.spike.vm
+        def guest(*args, **kw):
+            if args[:1] == ("info",):
+                return result(code=1)
+            return original(*args, **kw)
+        patch.object(self.spike, "vm", side_effect=guest).start()
+        self.spike.launch(0, self.spike.name(0))
+        nic = next(call for call in self.calls if "nic" in call)
+        self.assertIn("ipv4.address=" + self.spike.address(0), nic)
+        self.assertIn("security.ipv4_filtering=true", nic)
+        self.assertIn("security.mac_filtering=true", nic)
+
+    def test_metadata_jump_stays_first_with_marked_rule(self):
+        first = '-A DOCKER-USER -m comment --comment vps-metadata-egress-v1 -j VPS-METADATA'
+        def boundary(*args, **kw):
+            if args == ("iptables", "-S", "DOCKER-USER"):
+                return result('-N DOCKER-USER\n' + first + '\n-A DOCKER-USER -j RETURN\n')
+            return self.fake(*args, **kw)
+        with patch.object(vm, "command", side_effect=boundary), patch.object(self.spike, "launch"):
+            self.spike.provision()
+        inserts = [call for call in self.calls if call[:3] == ("iptables", "-I", "DOCKER-USER")]
+        self.assertEqual(len(inserts), 4)
+        self.assertTrue(all(call[3] == "2" for call in inserts))
+        with patch.object(vm, "command", return_value=result('-A DOCKER-USER -j RETURN\n' + first)), self.assertRaises(RuntimeError):
+            self.spike.bridge_insert_position()
+
+    def test_surgical_firewall_recovery_attempts_every_entry_and_resumes(self):
+        entries = [{"kind": "nft", "table": self.spike.prefix.replace("-", "_") + str(i)} for i in range(2)]
+        entries += [{"kind": "iptables", "rule": self.spike.bridge_rules(0)[0]}]
+        entries += [{"kind": "ufw", "rule": ["route", "allow", "in", "on", "app0", "out", "on", self.spike.bridge(0),
+                    "to", self.spike.address(0), "port", "2376", "proto", "tcp", "comment", self.spike.token]}]
+        for failed in range(4):
+            with self.subTest(failed=failed):
+                self.spike.firewall = entries[:]
+                self.spike.saved = True
+                self.tables = {entry["table"] for entry in entries if entry["kind"] == "nft"}
+                attempts = []
+                def reverse(*args, **kw):
+                    self.assertNotIn("flush ruleset", str(kw))
+                    self.assertFalse(args[0].endswith("tables-restore"), "full restore forbidden")
+                    self.assertNotEqual(args[:2], ("nft", "-f"), "full replay forbidden")
+                    if args[:3] in (("nft", "delete", "table"), ("iptables", "-w", "-D"), ("ufw", "--force", "delete")):
+                        attempts.append(args)
+                        entry = next(i for i, e in enumerate(entries) if (e["kind"] == "nft" and e["table"] == args[-1]) or (e["kind"] == "iptables" and args[0] == "iptables") or (e["kind"] == "ufw" and args[0] == "ufw"))
+                        if entry == failed:
+                            raise RuntimeError("temporary reversal failure")
+                    if args[0] == "ufw":
+                        return result()
+                    return self.fake(*args, **kw)
+                with patch.object(vm, "command", side_effect=reverse):
+                    with self.assertRaises(RuntimeError):
+                        self.spike.restore_firewall()
+                self.assertEqual(len(attempts), 4)
+                self.assertEqual(self.spike.firewall, [entries[failed]])
+                manifest = json.loads((self.state / "transaction.private.json").read_text())
+                self.assertEqual(manifest["firewall"], [entries[failed]])
+                self.assertTrue(manifest["saved"])
+                with patch.object(vm, "command", side_effect=lambda *a, **kw: result() if a[0] == "ufw" else self.fake(*a, **kw)):
+                    self.spike.restore_firewall()
+                self.assertEqual(self.spike.firewall, [])
+                self.assertFalse(self.spike.saved)
+                # Another recovery sees an empty journal and writes no commands.
+                with patch.object(vm, "command") as runner:
+                    self.spike.restore_firewall()
+                runner.assert_not_called()
+
+    def test_cleanup_journals_partial_progress_and_retries_only_pending(self):
+        entries = [("storage", self.spike.prefix + "-pool"), ("project", self.spike.project),
+                   ("network", self.spike.bridge(0))]
+        self.spike.owned = entries[:]
+        deleted, failures = set(), [True]
+        def resource(*args, **kw):
+            if args[0] == "incus":
+                short = args[2:]
+                if len(short) > 2 and short[1] == "show":
+                    return result(code=1, stderr="Error: not found") if short[2] in deleted else result()
+                if len(short) > 2 and short[1] == "delete":
+                    if short[0] == "storage" and failures[0]:
+                        failures[0] = False
+                        raise RuntimeError("temporary pool failure")
+                    self.assertNotIn(short[2], deleted)
+                    deleted.add(short[2])
+                if len(short) > 2 and short[1] == "get":
+                    return result(self.spike.token)
+            return result()
+        with patch.object(vm, "command", side_effect=resource):
+            with self.assertRaises(RuntimeError):
+                self.spike.remove_owned()
+            self.assertEqual(self.spike.owned, [entries[0]])
+            manifest = json.loads((self.state / "transaction.private.json").read_text())
+            self.assertEqual(manifest["owned"], [list(entries[0])])
+            # Recover from disk, including a confirmed absence left by a crash
+            # between delete and journal write.
+            self.spike.owned = manifest["owned"] + [list(entries[2])]
+            self.spike.remove_owned()
+        self.assertEqual(self.spike.owned, [])
+        self.assertEqual(deleted, {entry[1] for entry in entries})
+
+    def test_cleanup_continues_after_first_resource_failure(self):
+        pool, network = self.spike.prefix + "-pool", self.spike.bridge(0)
+        self.spike.owned = [("storage", pool), ("network", network)]
+        deleted = []
+        def boundary(*args, **kw):
+            if args[:4] == ("incus", "--force-local", "network", "delete"):
+                raise RuntimeError("transient network delete failure")
+            if args[:4] == ("incus", "--force-local", "storage", "delete"):
+                deleted.append(args[4])
+            return self.fake(*args, **kw)
+        with patch.object(vm, "command", side_effect=boundary), self.assertRaises(RuntimeError):
+            self.spike.remove_owned()
+        self.assertEqual(deleted, [pool])
+        self.assertEqual(self.spike.owned, [("network", network)])
+
+    def test_firewall_reversal_precedes_resources_and_packages(self):
+        order = []
+        for name in ("restore_firewall", "remove_owned", "remove_install"):
+            patch.object(self.spike, name, side_effect=lambda n=name: order.append(n)).start()
+        self.spike.rollback()
+        self.assertEqual(order, ["restore_firewall", "remove_owned", "remove_install"])
+
+    def test_signal_handlers_enter_rollback(self):
+        handlers = {}
+        patch.object(vm, "command", side_effect=self.fake).start()
+        patch.object(vm, "preflight").start()
+        patch.object(vm, "sshd_fingerprint", return_value="same").start()
+        patch.object(vm.signal, "signal", side_effect=lambda sig, handler: handlers.setdefault(sig, handler)).start()
+        def interrupt(spike):
+            spike.installed = True
+            spike.persist()
+            handler = handlers.get(vm.signal.SIGTERM)
+            if callable(handler):
+                handler(vm.signal.SIGTERM, None)
+        patch.object(vm.Spike, "install", interrupt).start()
+        with contextlib.redirect_stdout(io.StringIO()):
+            try:
+                vm.main(["spike", "--apply", "--install", "--state", str(self.root / "signal"), "--ssh-probe", "/synthetic/ssh-witness"])
+            except RuntimeError:
+                pass
+        self.assertTrue(any(call[:2] == ("apt-get", "remove") for call in self.calls), "signal failed to roll back")
+        self.assertTrue(all(callable(handlers.get(sig)) for sig in (vm.signal.SIGHUP, vm.signal.SIGINT, vm.signal.SIGTERM)))
+
+    def test_package_plan_guard_and_allowlist(self):
+        plans = ["Inst incus [1.0] (1.2.3)\nInst incus-client (1.2.3)\n",
+                 "Inst incus (1.2.3)\nInst incus-client (1.2.3)\nRemv existing\n",
+                 "Inst incus (1.2.3)\nInst incus-client (1.2.3)\nInst surprise-service (1.2.3)\n"]
+        for plan in plans:
+            with self.subTest(plan=plan), patch.object(vm, "command", return_value=result(plan)) as runner:
+                with self.assertRaises(RuntimeError):
+                    self.spike.install()
+                self.assertEqual(runner.call_count, 1)
+
+    def test_download_precedes_bounded_install_and_partial_install_is_journaled(self):
+        calls = []
+        self.args.incus_version = "1.2.3"
+        self.args.allow_package.append("reviewed-dependency")
+        def apt(*args, **kw):
+            calls.append((args, kw))
+            if "--simulate" in args:
+                return result("Inst incus (1.2.3)\nInst incus-client (1.2.3)\nInst reviewed-dependency (1.0)\n")
+            if args[:2] == ("apt-get", "install") and "--download-only" not in args:
+                self.assertTrue(json.loads((self.state / "transaction.private.json").read_text())["installed"])
+                raise RuntimeError("partial install")
+            return result()
+        with patch.object(vm, "command", side_effect=apt), self.assertRaises(RuntimeError):
+            self.spike.install()
+        self.assertEqual(len(calls), 3)
+        self.assertIn("--download-only", calls[1][0])
+        self.assertTrue(all("--no-install-recommends" in call[0] for call in calls))
+        self.assertGreaterEqual(calls[2][1]["timeout"], 900)
+        self.assertEqual(self.spike.residual_packages, ["reviewed-dependency"])
+
+    def test_witness_rate_limit_and_memory_reserve(self):
+        witness = vm.Witness(Path("/synthetic/ssh-witness"), 2 * 1024 ** 3)
+        with patch.object(vm.time, "monotonic", return_value=100) as now, patch.object(vm, "command", return_value=result()) as runner:
+            witness()
+            now.return_value = 129
+            witness()
+            self.assertEqual(runner.call_count, 1)
+            now.return_value = 130
+            witness()
+            self.assertEqual(runner.call_count, 2)
+            with patch.object(vm, "available_memory", return_value=0), self.assertRaises(RuntimeError):
+                witness()
+
+    def test_snapshot_validation_is_forensic_only(self):
+        with patch.object(vm, "command", side_effect=self.fake):
+            self.spike.snapshot_firewall()
+        self.assertFalse((self.state / "nft.before").read_text().startswith("flush ruleset"))
+        for binary in ("iptables-restore", "ip6tables-restore"):
+            self.assertIn((binary, "--test"), self.calls)
+        self.assertIn(("nft", "--check", "-f", str(self.state / "nft.before")), self.calls)
+
+    def test_ufw_is_opt_in_exact_and_reversed_from_manifest(self):
+        self.args.allow_ufw_route = True
+        calls = []
+        def boundary(*args, **kw):
+            if args[0] == "ufw":
+                calls.append(args)
+                journal = json.loads((self.state / "transaction.private.json").read_text())
+                self.assertTrue(any(e["kind"] == "ufw" for e in journal["firewall"]))
+                return result()
+            return self.fake(*args, **kw)
+        with patch.object(vm, "command", side_effect=boundary), patch.object(self.spike, "launch"):
+            self.spike.provision()
+            self.spike.restore_firewall()
+        self.assertEqual(len(calls), 4)
+        for call in calls[:2]:
+            self.assertNotIn("any", call)
+            self.assertEqual(call[-2:], ("comment", self.spike.token))
+            self.assertIn("2376", call)
+        for call in calls[:2]:
+            self.assertIn(("ufw", "--force", "delete") + call[1:], calls[2:])
+
+    def preflight_fixture(self):
+        self.args.launcher_unit = "sbxs-run-1234.service"
+        patch.dict(vm.os.environ, {"INVOCATION_ID": "a" * 32}).start()
+        self.args.network = [ipaddress.IPv4Interface("10.231.0.1/24"), ipaddress.IPv4Interface("10.232.0.1/24")]
+        self.args.survey = self.root / "survey"
+        self.args.survey.mkdir()
+        (self.args.survey / "survey-complete").touch()
+        self.args.ssh_probe = self.root / "witness"
+        self.args.ssh_probe.touch()
+        self.args.kvm_user, self.args.incus_version = "synthetic-kvm-user", "1.2.3"
+        self.args.image_metadata, self.args.image_rootfs = self.root / "meta.tar", self.root / "disk.qcow2"
+        with tarfile.open(self.args.image_metadata, "w"):
+            pass
+        self.args.image_rootfs.write_bytes(b"synthetic-qcow2")
+        self.incus_state = self.root.resolve() / "incus-state"
+        self.incus_state.mkdir()
+        patch.object(vm, "INCUS_STATE", self.incus_state).start()
+        patch.object(vm.os, "geteuid", return_value=0).start()
+        patch.object(vm.sys, "platform", "linux").start()
+        patch.object(vm, "paging", return_value=True).start()
+        patch.object(vm.Path, "is_char_device", return_value=True).start()
+        patch.object(vm.shutil, "disk_usage", return_value=SimpleNamespace(free=100 * 1024 ** 3)).start()
+        def boundary(*args, **kw):
+            if args[0] == "systemctl":
+                return result("InvocationID=" + "a" * 32 + "\nKillMode=mixed\nTimeoutStopUSec=15min\nRuntimeMaxUSec=infinity\n")
+            if args[0] == "qemu-img":
+                return result(json.dumps({"format": "qcow2", "virtual-size": 2 * 1024 ** 3}))
+            if args[:2] == ("id", "-nG"):
+                return result("kvm")
+            if args[:4] == ("ip", "-j", "-4", "route"):
+                return result(json.dumps(self.routes))
+            return result()
+        self.routes = []
+        patch.object(vm, "command", side_effect=boundary).start()
+
+    def test_real_preflight_private_subnet_and_route_overlap(self):
+        self.preflight_fixture()
+        vm.preflight(self.args)
+        self.args.network[0] = ipaddress.IPv4Interface("8.8.8.1/24")
+        with self.assertRaisesRegex(RuntimeError, "private subnet"):
+            vm.preflight(self.args)
+        self.args.network[0] = ipaddress.IPv4Interface("10.231.0.1/24")
+        self.routes = [{"dst": "10.231.0.0/16"}]
+        with self.assertRaisesRegex(RuntimeError, "overlaps route"):
+            vm.preflight(self.args)
+
+    def test_real_preflight_checks_incus_filesystem_and_memory(self):
+        self.preflight_fixture()
+        queried = []
+        def usage(path):
+            queried.append(path)
+            return SimpleNamespace(free=0 if path.is_relative_to(self.incus_state) else 100 * 1024 ** 3)
+        with patch.object(vm.shutil, "disk_usage", side_effect=usage), self.assertRaises(RuntimeError):
+            vm.preflight(self.args)
+        self.assertTrue(queried and all(path.is_relative_to(self.incus_state) for path in queried))
+        with patch.object(vm, "available_memory", return_value=9 * 1024 ** 3), self.assertRaisesRegex(RuntimeError, "insufficient memory"):
+            vm.preflight(self.args)
+
+    def test_real_preflight_requires_reviewed_measure_probe_inputs(self):
+        self.preflight_fixture()
+        self.args.measure = self.args.tls = True
+        self.args.app_network, self.args.probe_network = "app-net", "other-net"
+        self.args.data_canary = "10.231.1.5:15432"
+        self.args.base_image = self.args.data_image = self.args.office_image = self.args.app_image = "synthetic@sha256:" + "a" * 64
+        vm.preflight(self.args)
+        self.args.probe_network = self.args.app_network
+        with self.assertRaisesRegex(RuntimeError, "distinct app/probe"):
+            vm.preflight(self.args)
+        self.args.probe_network, self.args.data_canary = "other-net", "invalid-canary"
+        with self.assertRaisesRegex(RuntimeError, "canary"):
+            vm.preflight(self.args)
+
+    def test_real_preflight_active_ufw_requires_explicit_opt_in(self):
+        self.preflight_fixture()
+        previous = vm.command.side_effect
+        def boundary(*args, **kw):
+            return result("Status: active\nDefault: deny (incoming), deny (routed)\n") if args[0] == "ufw" else previous(*args, **kw)
+        with patch.object(vm, "command", side_effect=boundary):
+            with self.assertRaisesRegex(RuntimeError, "explicit --allow-ufw-route"):
+                vm.preflight(self.args)
+            self.args.allow_ufw_route = True
+            vm.preflight(self.args)
+
+    def test_concurrency_schema_distinguishes_baseline_and_nested(self):
+        metrics = {f"{kind}_concurrency{count}_{field}": 1 for kind in ("baseline", "nested")
+                   for count in (4, 8) for field in ("work_p50_ms", "work_p95_ms", "memory_kib", "headroom_kib")}
+        vm.report(self.state, ["measure"], metrics)
+        self.assertEqual(json.loads((self.state / "results.json").read_text())["metrics"], metrics)
+        with self.assertRaises(RuntimeError):
+            vm.report(self.state, [], {"concurrency4_work_p95_ms": 1})
+
+    def test_image_expansion_unknown_or_backing_chain_refused(self):
+        self.preflight_fixture()
+        for image in ({"format": "raw", "virtual-size": 1}, {"format": "qcow2"},
+                      {"format": "qcow2", "virtual-size": 1024 ** 4},
+                      {"format": "qcow2", "virtual-size": 1, "backing-filename": "foreign"}):
+            with patch.object(vm, "command", return_value=result(json.dumps(image))), self.assertRaises(RuntimeError):
+                vm.storage_preflight(self.args)
+
+    def test_recovery_manifest_rejects_foreign_prefix_and_unsafe_mode(self):
+        self.spike.persist()
+        manifest = json.loads((self.state / "transaction.private.json").read_text())
+        patch.object(vm.os, "geteuid", return_value=0).start()
+        patch.object(vm.sys, "platform", "linux").start()
+        patch.object(vm.Path, "stat", return_value=SimpleNamespace(st_uid=0, st_mode=0o700)).start()
+        runner = patch.object(vm.Spike, "rollback").start()
+        self.state.chmod(0o700)
+        with contextlib.redirect_stdout(io.StringIO()):
+            vm.main(["rollback", "--apply", "--state", str(self.state)])
+        runner.assert_called_once()
+        runner.reset_mock()
+        manifest["prefix"] = "foreign"
+        manifest["project"] = "foreign"
+        vm.private_file(self.state / "transaction.private.json", json.dumps(manifest))
+        with self.assertRaisesRegex(RuntimeError, "invalid recovery"):
+            vm.main(["rollback", "--apply", "--state", str(self.state)])
+        manifest["prefix"] = self.spike.prefix
+        manifest["project"] = self.spike.project
+        vm.private_file(self.state / "transaction.private.json", json.dumps(manifest))
+        with patch.object(vm.Path, "stat", return_value=SimpleNamespace(st_uid=0, st_mode=0o755)), self.assertRaisesRegex(RuntimeError, "unsafe recovery"):
+            vm.main(["rollback", "--apply", "--state", str(self.state)])
+        runner.assert_not_called()
+
+    def test_detached_launch_required_before_install(self):
+        self.preflight_fixture()
+        with patch.dict(vm.os.environ, {"INVOCATION_ID": ""}), patch.object(vm, "command") as runner:
+            with self.assertRaisesRegex(RuntimeError, "detached"):
+                vm.preflight(self.args)
+            runner.assert_not_called()
+        with patch.object(vm, "command", return_value=result("InvocationID=" + "a" * 32 + "\nKillMode=mixed\nTimeoutStopUSec=30s\nRuntimeMaxUSec=1h\n")), self.assertRaisesRegex(RuntimeError, "stop budget"):
+            vm.preflight(self.args)
+
+    def test_tls_cross_refusal_requires_certificate_evidence(self):
+        for i, (code, stderr, accepted) in enumerate(((1, "connection refused", False), (0, "", False), (1, "remote error: tls: bad certificate", True))):
+            state = self.root / ("tls" + str(i))
+            state.mkdir()
+            spike = vm.Spike(self.args, state)
+            with patch.object(spike, "make_certs"), patch.object(spike, "guest"), patch.object(spike, "vm"), patch.object(spike, "remote"), patch.object(vm, "command", return_value=result(code=code, stderr=stderr)):
+                if accepted:
+                    spike.tls()
+                    self.assertTrue(spike.metrics["tls_cross_refused"])
+                else:
+                    with self.assertRaises(RuntimeError):
+                        spike.tls()
+
+    def test_production_host_docker_gate_refuses_destructive_verbs(self):
+        with patch.object(vm.subprocess, "run", return_value=result()) as runner:
+            for verb in ("stop", "rm", "kill", "prune", "restart", "system"):
+                with self.subTest(verb=verb), self.assertRaises(RuntimeError):
+                    vm.command("docker", "--host", vm.HOST_SOCKET, verb, "preexisting", host_scope=self.spike)
+            for verb in ("ps", "inspect", "info", "version", "wait"):
+                vm.command("docker", "--host", vm.HOST_SOCKET, verb)
+            self.assertEqual(runner.call_count, 5)
+            with self.assertRaises(RuntimeError):
+                vm.command("docker", "stop", "preexisting")
+
+    def test_host_run_caps_prefix_label_expiry_and_exec_ownership(self):
+        image = "synthetic@sha256:" + "a" * 64
+        argv = ("run", "--rm", "--pull=never", "--name", self.spike.prefix + "-test", "--label", "sandbox-vm-spike=" + self.spike.token,
+                "--memory", "512m", "--cpus", "0.5", "--pids-limit", "128", "--cap-drop", "ALL", "--read-only", "--security-opt", "no-new-privileges",
+                "--network", "none", "--entrypoint", "timeout", image, "60", "sleep", "59")
+        with patch.object(vm.subprocess, "run", return_value=result()) as runner:
+            vm.command("docker", "--host", vm.HOST_SOCKET, *argv, host_scope=self.spike)
+            for bad in (argv[:1] + argv[2:], tuple("foreign" if arg.startswith(self.spike.prefix) else arg for arg in argv),
+                        tuple("sandbox-vm-spike=foreign" if arg.startswith("sandbox-vm-spike=") else arg for arg in argv),
+                        tuple("3600" if arg == "60" else arg for arg in argv), tuple("" if arg == "512m" else arg for arg in argv)):
+                with self.assertRaises(RuntimeError):
+                    vm.command("docker", "--host", vm.HOST_SOCKET, *bad, host_scope=self.spike)
+            self.assertEqual(runner.call_count, 1)
+        for label in ("foreign", self.spike.token):
+            with patch.object(vm.subprocess, "run", return_value=result(json.dumps({"sandbox-vm-spike": label}))) as runner:
+                if label == "foreign":
+                    with self.assertRaises(RuntimeError):
+                        vm.command("docker", "--host", vm.HOST_SOCKET, "exec", "-i", "cid", "true", host_scope=self.spike)
+                    self.assertEqual(runner.call_count, 1)
+                else:
+                    vm.command("docker", "--host", vm.HOST_SOCKET, "exec", "-i", "cid", "true", host_scope=self.spike)
+                    self.assertEqual(runner.call_count, 2)
+
+    def test_default_state_has_one_directory_component(self):
+        for mode in ("survey", "spike"):
+            state = vm.arguments([mode]).state
+            self.assertEqual(state.parent, vm.DEFAULT_STATE)
+            self.assertRegex(state.name, r"^(survey|run)-[a-f0-9]{32}$")
+
+    def test_survey_flags_connection_limit_rules(self):
+        with patch.object(vm, "command", return_value=result("22/tcp LIMIT IN synthetic")):
+            destination = self.root / "limit-survey"
+            vm.survey(destination)
+        self.assertIn("Review connection limit rules", (destination / "ufw-review.private.txt").read_text())
+
+    def test_runbook_detached_kata_and_index_contract(self):
+        runbook = Path(os.environ.get("SANDBOX_VM_RUNBOOK", ROOT / "docs/deployment/sandbox-vm-spike.md")).read_text()
+        prose = " ".join(runbook.split())
+        for required in ("never in a foreground or time-boxed tool invocation", "KillMode=mixed", "TimeoutStopSec=900", "RuntimeMaxSec=infinity",
+                         "Never edit the host's `/etc/docker/daemon.json`", "never restart the host's dockerd for Kata", "Kata runs only inside a spike VM or on a separate host"):
+            self.assertIn(required, prose)
+        index = Path(os.environ.get("SANDBOX_VM_INDEX", ROOT / "docs/INDEX.md")).read_text()
+        testing = index.split("## Testing", 1)[1].split("## Architecture", 1)[0]
+        self.assertNotIn("sandbox-vm-spike.md", testing)
+        infrastructure = index.split("## Infrastructure Documentation", 1)[1]
+        self.assertIn("| [deployment/sandbox-vm-spike.md]", infrastructure)
+        scripts = infrastructure.split("Scripts:", 1)[1]
+        self.assertIn("scripts/sandbox-vm-survey.sh", scripts)
+        self.assertIn("scripts/sandbox-vm-spike.sh", scripts)
+
+
+def load_tests(loader, tests, _pattern):
+    spec = importlib.util.spec_from_file_location("sandbox_vm_measure_tests", ROOT / "scripts/sandbox-vm-measure.test.py")
+    consumer_tests = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(consumer_tests)
+    tests.addTests(loader.loadTestsFromModule(consumer_tests))
+    return tests
+
 
 def mutations():
     baseline = subprocess.run([sys.executable, str(Path(__file__).resolve())],
@@ -268,39 +751,111 @@ def mutations():
         raise RuntimeError("baseline must pass before mutations")
     core = SOURCE.read_text()
     measurements = SOURCE.with_name("sandbox_vm_measure.py").read_text()
-    changes = {
-        "drop rollback": ("core", "            spike.rollback()", "            pass"),
-        "drop sshd guard": ("core", 'sshd_fingerprint() == ssh_guard', "True"),
-        "drop DOCKER-USER allow": ("core", 'command("iptables", "-I", "DOCKER-USER", "1", *rule)', "pass"),
-        "stop an existing container": ("core", '        self.installed = True  # Mark BEFORE',
-                                      '        command("docker", "stop", "preexisting")\n        self.installed = True  # Mark BEFORE'),
-        "leak hostname": ("core", '    private_file(path / "results.json",',
-                          '    result["hostname"] = os.uname().nodename\n    private_file(path / "results.json",'),
-        "widen cleanup prefix": ("core", 'name.startswith(self.prefix + "-")', 'name.startswith("")'),
-        "widen exec label": ("measure", 'labels.get("sandbox-vm-spike") == spike.token', "True"),
-        "move project flag into guest argv": ("core", 'self.incus("--project", self.project, *args, **kwargs)',
-                                              'self.incus(*args, "--project", self.project, **kwargs)'),
-        "echo invalid site input": ("core", 'self.exit(2, "Invalid arguments; consult --help (values suppressed).\\n")',
-                                    'self.exit(2, _message)'),
-    }
-    expected = ("test_regression_rolls_back_install_and_firewall", "test_sshd_guard_fails_before_witness",
-                "test_bridge_allow_reaches_docker_user", "test_main_success_checks_health_before_and_after",
-                "test_public_result_schema_and_no_hostname", "test_project_prefix_and_token_cleanup",
-                "test_guest_exec_refuses_foreign_label", "test_project_flag_precedes_exec_separator",
-                "test_argument_errors_do_not_echo_site_values")
-    for (label, (target, before, after)), test in zip(changes.items(), expected):
-        original = core if target == "core" else measurements
+    sources = {"core": core, "measure": measurements,
+               "runbook": (ROOT / "docs/deployment/sandbox-vm-spike.md").read_text(),
+               "index": (ROOT / "docs/INDEX.md").read_text()}
+    changes = [
+        ("author 1 drop rollback", "core", "            spike.rollback()", "            pass", "test_regression_rolls_back_install_and_firewall"),
+        ("author 2 drop sshd guard", "core", "sshd_fingerprint() == ssh_guard", "True", "test_sshd_guard_fails_before_witness"),
+        ("author 3 drop DOCKER-USER allow", "core", 'command("iptables", "-I", "DOCKER-USER", position, *rule)', "pass", "test_bridge_allow_reaches_docker_user"),
+        ("author 4 stop existing host container", "core", "        self.installed = True  # Mark BEFORE", '        command("docker", "stop", "preexisting")\n        self.installed = True  # Mark BEFORE', "test_main_success_checks_health_before_and_after"),
+        ("author 5 leak hostname", "core", '    private_file(path / "results.json",', '    result["hostname"] = os.uname().nodename\n    private_file(path / "results.json",', "test_public_result_schema_and_no_hostname"),
+        ("author 6 widen cleanup prefix", "core", 'name.startswith(self.prefix + "-")', 'name.startswith("")', "test_project_prefix_and_token_cleanup"),
+        ("author 7 widen exec label", "measure", 'labels.get("sandbox-vm-spike") == spike.token', "True", "test_guest_exec_refuses_foreign_label"),
+        ("author 8 project flag in guest argv", "core", 'self.incus("--project", self.project, *args, **kwargs)', 'self.incus(*args, "--project", self.project, **kwargs)', "test_project_flag_precedes_exec_separator"),
+        ("author 9 echo site value", "core", 'self.exit(2, "Invalid arguments; consult --help (values suppressed).\\n")', 'self.exit(2, _message)', "test_argument_errors_do_not_echo_site_values"),
+        ("Opus original dry-run default off", "core", '    if not args.apply:', '    if False:', "test_dry_run_has_no_probes_or_writes"),
+        ("Opus original mark install after apt", "core", '        self.installed = True  # Mark BEFORE apt: a failed/partial install also rolls back.', '        self.installed = False  # mutant: mark only after apt', "test_download_precedes_bounded_install_and_partial_install_is_journaled"),
+        ("Opus original nft restore removed: surgical replacement", "core", 'command("nft", "delete", "table", "inet", entry["table"])', 'pass', "test_surgical_firewall_recovery_attempts_every_entry_and_resumes"),
+        ("Opus survivor 1 signal handlers removed", "core", '        signal.signal(sig, interrupted)', '        pass', "test_signal_handlers_enter_rollback"),
+        ("Opus survivor 2 apt plan guard removed", "core", 'require(not re.search(r"^(Remv|Conf (openssh|ufw|docker|containerd|runc))", plan, re.M)', 'require(True or not re.search(r"^(Remv|Conf (openssh|ufw|docker|containerd|runc))", plan, re.M)', "test_package_plan_guard_and_allowlist"),
+        ("Opus survivor 3 recovery prefix check removed", "core", 'manifest["prefix"] == "sbxs-" + manifest["token"][:6]', 'True', "test_recovery_manifest_rejects_foreign_prefix_and_unsafe_mode"),
+        ("Opus survivor 4 private subnet preflight removed", "core", 'network.ip.is_private and network.network.prefixlen <= 29', 'True and network.network.prefixlen <= 29', "test_real_preflight_private_subnet_and_route_overlap"),
+        ("Opus survivor 5 bridge INPUT drop removed", "core", 'command("nft", "add", "rule", "inet", table, "input", "iifname", bridge, "drop")', 'pass', "test_input_and_forward_packet_behavior"),
+        ("Opus survivor 6 forward drop becomes accept", "core", 'command("nft", "add", "rule", "inet", table, "forward", "iifname", bridge, "drop")', 'command("nft", "add", "rule", "inet", table, "forward", "iifname", bridge, "accept")', "test_input_and_forward_packet_behavior"),
+        ("Opus survivor 8 cross-cert refusal removed", "core", 'cross.returncode != 0 and re.search', 'True or re.search', "test_tls_cross_refusal_requires_certificate_evidence"),
+        ("Opus survivor 10 restore syntax validation removed", "core", 'command("iptables-restore", "--test", input=(self.state / "iptables.before").read_text())', 'pass', "test_snapshot_validation_is_forensic_only"),
+        ("Opus survivor 11 recovery state mode check removed", "core", 'state.stat().st_mode & 0o777 == 0o700', 'True', "test_recovery_manifest_rejects_foreign_prefix_and_unsafe_mode"),
+        ("Opus survivor 12 route overlap removed", "core", 'not any(existing.overlaps(n.network) for n in args.network)', 'True', "test_real_preflight_private_subnet_and_route_overlap"),
+        ("Codex 1 INPUT replies dropped", "core", 'command("nft", "add", "rule", "inet", table, "input", "iifname", bridge,\n                    "ct", "state", "established,related", "accept")', 'pass', "test_input_and_forward_packet_behavior"),
+        ("Codex 2 forbidden full replay", "core", '    def restore_firewall(self):', '    def restore_firewall(self):\n        command("nft", "-f", str(self.state / "nft.before"))', "test_surgical_firewall_recovery_attempts_every_entry_and_resumes"),
+        ("Codex 3 deletion progress not persisted", "core", '                self.owned.remove(entry)', '                pass', "test_cleanup_journals_partial_progress_and_retries_only_pending"),
+        ("Codex 4 checkout disk budget", "core", 'shutil.disk_usage(path).free >= budget', 'shutil.disk_usage(ROOT).free >= budget', "test_real_preflight_checks_incus_filesystem_and_memory"),
+        ("Codex 5 INPUT isolation removed", "core", 'command("nft", "add", "rule", "inet", table, "input", "iifname", bridge, "drop")', 'pass', "test_input_and_forward_packet_behavior"),
+        ("Codex 5 route refusal removed", "core", 'not any(existing.overlaps(n.network) for n in args.network)', 'True', "test_real_preflight_private_subnet_and_route_overlap"),
+        ("Opus 1 missing NIC filtering", "core", '"security.ipv4_filtering=true", "security.mac_filtering=true"', '"security.ipv4_filtering=false", "security.mac_filtering=false"', "test_nic_static_address_requires_filters"),
+        ("Opus 5 unrestricted guest ingress", "core", 'command("nft", "add", "rule", "inet", table, "forward", "oifname", bridge, "drop")', 'pass', "test_input_and_forward_packet_behavior"),
+        ("Opus 6 memory preflight removed", "core", 'available_memory() >= size_bytes(args.memory_cap) + size_bytes(args.memory_reserve)', 'True', "test_real_preflight_checks_incus_filesystem_and_memory"),
+        ("Opus 6 memory checkpoint removed", "core", 'available_memory() >= self.reserve', 'True', "test_witness_rate_limit_and_memory_reserve"),
+        ("Opus 8 production host gate bypassed", "core", '                authorize_host_docker(args, host_scope)', '                pass', "test_production_host_docker_gate_refuses_destructive_verbs"),
+        ("Opus 9 package allow-list removed", "core", 'planned and set(planned) <= set(self.args.allow_package)', 'True', "test_package_plan_guard_and_allowlist"),
+        ("Opus 9 recommends allowed", "core", '"--no-install-recommends", ', '', "test_download_precedes_bounded_install_and_partial_install_is_journaled"),
+        ("Opus 9 install timeout 180", "core", 'timeout=900, env=install_env', 'timeout=180, env=install_env', "test_download_precedes_bounded_install_and_partial_install_is_journaled"),
+        ("Opus 10 cross-cert accepts connection failure", "core", 'cross.returncode != 0 and re.search', 'cross.returncode != 0 or re.search', "test_tls_cross_refusal_requires_certificate_evidence"),
+        ("Opus 11 witness throttle removed", "core", 'now - self.last_success >= 30', 'True', "test_witness_rate_limit_and_memory_reserve"),
+        ("Opus 12 firewall last", "core", '(("restore_firewall", self.restore_firewall),\n                             ("remove_owned", self.remove_owned),\n                             ("remove_install", self.remove_install))', '(("remove_owned", self.remove_owned), ("remove_install", self.remove_install), ("restore_firewall", self.restore_firewall))', "test_firewall_reversal_precedes_resources_and_packages"),
+        ("detached launch guard removed", "core", 're.fullmatch(r"[a-f0-9]{32}", os.environ.get("INVOCATION_ID", ""))', 'True', "test_detached_launch_required_before_install"),
+        ("image expansion guard removed", "core", 'image.get("format") == "qcow2"', 'True', "test_image_expansion_unknown_or_backing_chain_refused"),
+        ("Opus 14 nested default state folder", "core", 'DEFAULT_STATE / (("survey-" if args.mode == "survey" else "run-") + uuid.uuid4().hex)', 'DEFAULT_STATE / ("survey-" if args.mode == "survey" else "run-") / uuid.uuid4().hex', "test_default_state_has_one_directory_component"),
+        ("Opus 11 survey limit flag removed", "core", 're.search(r"\\blimit\\b", content, re.I)', 'False', "test_survey_flags_connection_limit_rules"),
+        ("metadata first hook bypassed", "core", 'return "2" if hooks else "1"', 'return "1"', "test_metadata_jump_stays_first_with_marked_rule"),
+        ("UFW preflight opt-in removed", "core", 'args.allow_ufw_route or not re.search', 'True or not re.search', "test_real_preflight_active_ufw_requires_explicit_opt_in"),
+        ("distinct probe network admission removed", "core", 'args.probe_network != args.app_network', 'True', "test_real_preflight_requires_reviewed_measure_probe_inputs"),
+        ("paired concurrency schema collapsed", "core", '"baseline_concurrency4", "baseline_concurrency8", ', '', "test_concurrency_schema_distinguishes_baseline_and_nested"),
+        ("cleanup stops on first failed resource", "core", '                failures.append(kind)', '                raise', "test_cleanup_continues_after_first_resource_failure"),
+        ("firewall stops on first failed reversal", "core", '                failures.append(entry["kind"])', '                raise', "test_surgical_firewall_recovery_attempts_every_entry_and_resumes"),
+        ("UFW journal entry omitted", "core", 'self.firewall.append({"kind": "ufw", "rule": rule})', 'pass', "test_ufw_is_opt_in_exact_and_reversed_from_manifest"),
+        ("Opus 3 detached launch runbook rule removed", "runbook", 'never in a foreground or time-boxed tool invocation', 'in an invocation', "test_runbook_detached_kata_and_index_contract"),
+        ("Opus 13 Kata host boundary removed", "runbook", "never restart the host's dockerd for Kata", "restart the host's dockerd for Kata", "test_runbook_detached_kata_and_index_contract"),
+        ("Opus 14 index script entry removed", "index", '`scripts/sandbox-vm-survey.sh`', '`script removed`', "test_runbook_detached_kata_and_index_contract"),
+        ('Codex 5 destroy_box call-site ownership removed', 'measure', 'def destroy_box(spike, cid):\n    # Destruction exists only behind the guest context and exact token check.\n    owned_container(spike, endpoint(spike, True), cid)\n', 'def destroy_box(spike, cid):\n    # Destruction exists only behind the guest context and exact token check.\n', 'test_destroy_box_refuses_foreign_container_at_call_site'),
+        ('Codex 5 injected host stop at measure start', 'measure', '    data_canary(spike)  # Refuse before any measurement starts a container.', '    endpoint(spike, False)("stop", "preexisting")\n    data_canary(spike)  # Refuse before any measurement starts a container.', 'test_measure_orchestration_end_to_end'),
+        ('Codex 5 host endpoint drops production gate scope', 'measure', 'host_scope=spike, **kw)', '**kw)', 'test_measure_orchestration_end_to_end'),
+        ('Opus 8 measure host wait becomes stop', 'measure', '        else:\n            target("wait", cid, timeout=70)', '        else:\n            target("stop", cid, timeout=70)', 'test_measure_orchestration_end_to_end'),
+        ('Opus 8 measurement checkpoints disabled', 'measure', '            spike.checkpoint()  # Every container creation follows a passing health check.', '            pass', 'test_checkpoint_failure_stops_before_any_container'),
+        ('Opus 8 attach hold checkpoint removed', 'measure', '            spike.checkpoint()\n            for stream in pair:', '            for stream in pair:', 'test_attach_pty_child_gets_sanitized_env_and_guest_context'),
+        ('Codex 6 PTY inherits DOCKER_* env', 'measure', 'stdin=slave, stdout=slave, stderr=slave, env=docker_env())', 'stdin=slave, stdout=slave, stderr=slave)', 'test_attach_pty_child_gets_sanitized_env_and_guest_context'),
+        ('Codex 6 MCP streams inherit DOCKER_* env', 'measure', '                            docker_env()))', '                            None))', 'test_measure_orchestration_end_to_end'),
+        ('Codex 5 host stream spawned before gate', 'measure', '    authorize_host_docker(args, spike)\n', '', 'test_mcp_streams_pass_ownership_gate_before_spawn'),
+        ('Codex 5 nested stream ownership removed', 'measure', '        owned_container(spike, endpoint(spike, True), cid)\n        return ["docker", "--config"', '        return ["docker", "--config"', 'test_mcp_streams_pass_ownership_gate_before_spawn'),
+        ('Codex 7 host-runc concurrency baseline dropped', 'measure', '            concurrency(spike, count, nested)', '            concurrency(spike, count, True)', 'test_measure_orchestration_end_to_end'),
+        ('Codex 7 paired host boxes not waited out', 'measure', '            owned_container(spike, target, cid)\n            target("wait", cid, timeout=70)', '            pass', 'test_measure_orchestration_end_to_end'),
+        ('Opus 4 guest metadata refusal removed', 'measure', '        require(not from_guest(spike, index, *METADATA), "metadata reachable from VM")', '        pass', 'test_isolation_refusals_and_positive_controls_discriminate'),
+        ('Opus 4 guest public refusal removed', 'measure', '        require(not from_guest(spike, index, *PUBLIC), "public address reachable from VM")', '        pass', 'test_isolation_refusals_and_positive_controls_discriminate'),
+        ('Opus 4 public host positive control removed', 'measure', '    require(host_reaches(*PUBLIC), "public egress positive control failed")', '    pass', 'test_isolation_refusals_and_positive_controls_discriminate'),
+        ('Opus 4 host metadata control reintroduced (#646 denies it)', 'measure', '    require(host_reaches(*PUBLIC), "public egress positive control failed")', '    require(host_reaches(*METADATA) and host_reaches(*PUBLIC), "public egress positive control failed")', 'test_isolation_refusals_and_positive_controls_discriminate'),
+        ('Opus 4/10 any probe failure accepted as refusal', 'measure', '    require(result.returncode in (0, 3), "network probe inconclusive")', '    pass', 'test_isolation_refusals_and_positive_controls_discriminate'),
+        ('Opus 4 guest own-TLS positive control removed', 'measure', '        require(from_guest(spike, index, own, tls), "guest probe positive control failed")', '        pass', 'test_isolation_refusals_and_positive_controls_discriminate'),
+        ('Opus 5 guest to app data refusal removed', 'measure', '        require(not from_guest(spike, index, *canary), "app data network reachable from VM")', '        pass', 'test_isolation_refusals_and_positive_controls_discriminate'),
+        ('Opus 5 data canary positive control removed', 'measure', '    require(from_network(spike, spike.args.app_network, *canary, "data"), "data canary positive control failed")', '    pass', 'test_isolation_refusals_and_positive_controls_discriminate'),
+        ('Opus 5 app to non-TLS guest port refusal removed', 'measure', '        require(not from_network(spike, spike.args.app_network, own, plain, "plain" + label),\n                "app network reaches a non-TLS guest port")', '        pass', 'test_isolation_refusals_and_positive_controls_discriminate'),
+        ('Opus 5 guest listener positive control removed', 'measure', '        require(from_guest(spike, index, own, plain, attempts=10), "guest listener positive control failed")', '        pass', 'test_isolation_refusals_and_positive_controls_discriminate'),
+        ('Opus 5 app to guest TLS positive control removed', 'measure', '        require(from_network(spike, spike.args.app_network, own, tls, "tls" + label), "app to guest TLS refused")', '        pass', 'test_isolation_refusals_and_positive_controls_discriminate'),
+        ('Opus 5 other Docker network refusal removed', 'measure', '        require(not from_network(spike, spike.args.probe_network, own, tls, "other" + label),\n                "another Docker network reaches the guest")', '        pass', 'test_isolation_refusals_and_positive_controls_discriminate'),
+        ('Opus 5 public data canary admitted', 'measure', 'address and address.is_private and 0 < port', 'address and 0 < port', 'test_missing_probe_inputs_refuse_before_any_command'),
+        ('Opus 5 probe network may equal app network', 'measure', 'spike.args.probe_network and spike.args.probe_network != spike.args.app_network', 'spike.args.probe_network', 'test_missing_probe_inputs_refuse_before_any_command'),
+        ('O6 concurrency reserve not enforced while sampling', 'measure', 'if done or checked is None or time.monotonic() - checked >= 1:', 'if done:', 'test_concurrency_sampling_checkpoint_aborts_running_workloads'),
+        ('O6 no checkpoint after last sample before cleanup', 'measure', 'if done or checked is None or time.monotonic() - checked >= 1:', 'if checked is None or time.monotonic() - checked >= 1:', 'test_concurrency_checkpoints_after_last_sample_before_cleanup'),
+    ]
+    for label, target, before, after, test in changes:
+        original = sources[target]
         if before not in original:
             raise RuntimeError("mutation anchor missing: " + label)
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
             (directory / "sandbox_vm.py").write_text(core.replace(before, after) if target == "core" else core)
             (directory / "sandbox_vm_measure.py").write_text(measurements.replace(before, after) if target == "measure" else measurements)
-            environment = dict(os.environ, SANDBOX_VM_SOURCE=str(directory / "sandbox_vm.py"))
-            run = subprocess.run([sys.executable, str(Path(__file__).resolve())], env=environment,
+            for key, filename in (("runbook", "runbook.md"), ("index", "INDEX.md")):
+                (directory / filename).write_text(sources[key].replace(before, after) if target == key else sources[key])
+            environment = dict(os.environ, SANDBOX_VM_SOURCE=str(directory / "sandbox_vm.py"),
+                               SANDBOX_VM_RUNBOOK=str(directory / "runbook.md"), SANDBOX_VM_INDEX=str(directory / "INDEX.md"))
+            consumer = ROOT / "scripts/sandbox-vm-measure.test.py"
+            is_consumer = ("    def " + test + "(") in consumer.read_text()
+            script, case = (consumer, "Measurement") if is_consumer else (Path(__file__).resolve(), "Safety")
+            run = subprocess.run([sys.executable, str(script), case + "." + test], env=environment,
                                  capture_output=True, text=True, timeout=60)
-            if run.returncode == 0 or "FAILED" not in run.stderr or ("FAIL: " + test) not in run.stderr:
-                raise RuntimeError("mutation survived or tests did not execute: " + label)
+            if run.returncode == 0 or "FAILED" not in run.stderr or not any((kind + test) in run.stderr for kind in ("FAIL: ", "ERROR: ")):
+                raise RuntimeError("mutation survived or tests did not execute: " + label + "\n" + run.stderr[-6000:])
             print("RED verified: " + label)
 
 

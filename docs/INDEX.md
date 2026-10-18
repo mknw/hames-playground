@@ -76,10 +76,6 @@ Records: [0001](adr/0001-anthropic-only-default-chains.md) Anthropic-only defaul
 
 ## Testing (`docs/testing/`)
 
-[Nested VM sandbox spike](deployment/sandbox-vm-spike.md): read-only host survey,
-guarded opt-in Incus provisioning and measurement, rollback, private inputs,
-generic results, offline mutations and operator-run variants for #648.
-
 | Document                                 | Description                                                                                                                                                                                                                                                                                                                   |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [testing/pyramid.md](testing/pyramid.md) | **The four layers and the one command.** What each layer sees that the one below cannot, `pnpm release:check` (order, stop-at-first-failure, the go/no-go report and its "live steps still owed" section), why the three hermetic suites have three databases and three dev-bypass identities, and the #280 determinism table |
@@ -165,6 +161,7 @@ Source-level index: see [app/README.md](../app/README.md#documentation-index).
 
 | Document                                                             | Description                                                                                                                                                                                                        |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [deployment/sandbox-vm-spike.md](deployment/sandbox-vm-spike.md)     | Nested VM sandbox spike: read-only survey, detached opt-in Incus run, journaled rollback, private inputs and generic measurements (#648)                                                                           |
 | [DOCKER_COMPOSE.md](DOCKER_COMPOSE.md)                               | Neo4j, MCP Gateway, Redis service configuration                                                                                                                                                                    |
 | [MCP_GATEWAY.md](MCP_GATEWAY.md)                                     | MCP Gateway reference, CLI, troubleshooting                                                                                                                                                                        |
 | [sandbox-flavours.md](sandbox-flavours.md)                           | Sandbox rootfs flavours (#78) — the `image-processing` + `data` + `office` images, the router-over-flavoured-sandboxes recipe, ephemeral vs persistent, and deferred hardening (#116)                              |
@@ -195,7 +192,7 @@ Source-level index: see [app/README.md](../app/README.md#documentation-index).
 | [../neo4j_dumps/README.md](../neo4j_dumps/README.md) | Database versioning: export, import, reset                                                                                                                                                                                                                                                                                                                                |
 | [../models/README.md](../models/README.md)           | **The local GGUF weights** — which file each `make` target (`embed` :8090, `llm-small` :8095) expects under `models/`, why the directory is gitignored, the `MODELS_DIR` override a git worktree needs, and how to point either model at a remote endpoint instead                                                                                                        |
 
-Scripts: `scripts/check-uptime.py` (credential-free external HTTPS liveness probe, [observability runbook](deployment/observability.md)) · `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/reset-neo4j.sh` · `scripts/bootstrap-vps.sh` (single-VPS hardening + bootstrap, [PREVIEW.md §14](PREVIEW.md)) · `app/src/lib/org-graph/scripts/` ([README](../app/src/lib/org-graph/scripts/README.md))
+Scripts: `scripts/sandbox-vm-survey.sh` · `scripts/sandbox-vm-spike.sh` ([nested VM spike](deployment/sandbox-vm-spike.md)) · `scripts/check-uptime.py` (credential-free external HTTPS liveness probe, [observability runbook](deployment/observability.md)) · `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/reset-neo4j.sh` · `scripts/bootstrap-vps.sh` (single-VPS hardening + bootstrap, [PREVIEW.md §14](PREVIEW.md)) · `app/src/lib/org-graph/scripts/` ([README](../app/src/lib/org-graph/scripts/README.md))
 
 ---
 

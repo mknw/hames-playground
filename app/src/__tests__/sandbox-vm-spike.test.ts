@@ -16,6 +16,7 @@ describe('nested VM spike offline safety checks', () => {
       })
       expect(result.status, result.stdout + result.stderr).toBe(0)
     },
+    130_000, // The mutation matrix launches a fresh Python process for every named pin.
   )
 
   it('renders the wrapper plan without a daemon', () => {

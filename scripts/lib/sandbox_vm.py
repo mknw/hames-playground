@@ -13,9 +13,11 @@ import os
 from pathlib import Path
 import re
 import shutil
+import shlex
 import signal
 import subprocess
 import sys
+import tarfile
 import time
 import uuid
 
@@ -24,6 +26,8 @@ DEFAULT_STATE = ROOT / ".sandbox-vm-spike"
 PRIVATE_LOG = None
 STEPS = ("install", "provision", "tls", "measure", "cleanup")
 UNMEASURED = ("vm_per_sandbox_q35", "vm_per_sandbox_minimal", "kata", "firecracker")
+HOST_SOCKET = "unix:///var/run/docker.sock"
+INCUS_STATE = Path("/var/lib/incus")
 
 
 def require(condition, message):
@@ -36,9 +40,56 @@ def size_bytes(value):
     return int(value[:-3]) * (1024 ** (2 if value.endswith("MiB") else 3))
 
 
-def command(*args, input=None, timeout=60, check=True, env=None):
-    if args[0] == "docker" and env is None:
-        env = {key: value for key, value in os.environ.items() if not key.startswith("DOCKER_")}
+def docker_env():
+    return {key: value for key, value in os.environ.items() if not key.startswith("DOCKER_")}
+
+
+def authorize_host_docker(args, host_scope=None):
+    """The production gate, including callers which spawn streaming children."""
+    args = tuple(args)
+    require(args[:3] == ("docker", "--host", HOST_SOCKET), "explicit host socket required")
+    verb, tail = args[3], args[4:]
+    if verb in ("ps", "inspect", "info", "version", "wait"):
+        return
+    require(host_scope is not None and re.fullmatch(r"[a-f0-9]{32}", host_scope.token)
+            and host_scope.prefix == "sbxs-" + host_scope.token[:6], "host mutation requires spike ownership")
+    if verb == "exec":
+        cid = next((arg for arg in tail if not arg.startswith("-")), "")
+        labels = json.loads(host_docker("inspect", "--format", '{{json .Config.Labels}}', cid).stdout)
+        require(labels.get("sandbox-vm-spike") == host_scope.token, "refuse non-spike host exec")
+        return
+    require(verb == "run", "host Docker command refused")
+    def option(flag):
+        require(tail.count(flag) == 1 and tail.index(flag) + 1 < len(tail), "missing or duplicate host run option")
+        return tail[tail.index(flag) + 1]
+    require("--rm" in tail and "--pull=never" in tail and "--read-only" in tail
+            and option("--cap-drop") == "ALL" and option("--security-opt") == "no-new-privileges",
+            "host baseline containment required")
+    require(option("--name").startswith(host_scope.prefix + "-")
+            and option("--label") == "sandbox-vm-spike=" + host_scope.token,
+            "host baseline ownership required")
+    require(re.fullmatch(r"[1-9][0-9]*[mg]", option("--memory"))
+            and 0 < float(option("--cpus")) <= 1
+            and 0 < int(option("--pids-limit")) <= 128 and option("--network"), "host baseline caps required")
+    require(option("--entrypoint") == "timeout", "host baseline must self expire")
+    image_index = tail.index("--entrypoint") + 2
+    require(image_index + 2 < len(tail)
+            and re.fullmatch(r"[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}", tail[image_index])
+            and tail[image_index + 1].isdigit() and 0 < int(tail[image_index + 1]) <= 900,
+            "host baseline expiry/image required")
+
+
+def command(*args, input=None, timeout=60, check=True, env=None, host_scope=None):
+    if args[0] == "docker":
+        if "--host" in args:
+            endpoint = args[args.index("--host") + 1]
+            if endpoint.startswith("unix:"):
+                authorize_host_docker(args, host_scope)
+            else:
+                require(endpoint.startswith("tcp://"), "unsupported Docker endpoint")
+        else:
+            require(args[1:2] == ("--config",), "unscoped host Docker command refused")
+        env = docker_env() if env is None else {k: v for k, v in env.items() if not k.startswith("DOCKER_")}
     result = subprocess.run(args, input=input, text=True, capture_output=True,
                             timeout=timeout, env=env)
     if PRIVATE_LOG is not None:
@@ -102,8 +153,26 @@ def health_check(baseline, ssh_guard, probe):
         require(current.get("Running") and current.get("Health", {}).get("Status", "none") == health,
                 "pre-existing container regressed")
     require(sshd_fingerprint() == ssh_guard, "sshd guard failed")
-    require(command(str(probe), timeout=20, check=False).returncode == 0,
-            "independent fresh SSH probe failed")
+    probe()
+
+
+def available_memory():
+    match = re.search(r"^MemAvailable:\s+(\d+) kB", Path("/proc/meminfo").read_text(), re.M)
+    require(match, "memory headroom unavailable")
+    return int(match[1]) * 1024
+
+
+class Witness:
+    def __init__(self, path, reserve):
+        self.path, self.reserve, self.last_success = path, reserve, None
+
+    def __call__(self):
+        require(available_memory() >= self.reserve, "memory recovery reserve exhausted")
+        now = time.monotonic()
+        if self.last_success is None or now - self.last_success >= 30:
+            require(command(str(self.path), timeout=20, check=False).returncode == 0,
+                    "independent fresh SSH probe failed")
+            self.last_success = time.monotonic()
 
 
 def paging():
@@ -134,6 +203,8 @@ def survey(path):
         except (OSError, subprocess.TimeoutExpired):
             content = "unavailable\n"
         private_file(path / (label + ".private.txt"), content)
+        if label == "ufw":
+            private_file(path / "ufw-review.private.txt", "Review connection limit rules before using the SSH witness.\n" if re.search(r"\blimit\b", content, re.I) else "No limit rule reported; review raw UFW evidence.\n")
     for module, parameter in (("kvm_intel", "ept"), ("kvm_intel", "nested"),
                               ("kvm_amd", "npt"), ("kvm_amd", "nested")):
         source = Path("/sys/module") / module / "parameters" / parameter
@@ -146,7 +217,7 @@ def report(path, completed, metrics, failed=False):
     # Never accept arbitrary JSON, strings, names or metadata from an operator hook.
     require(set(completed) <= set(STEPS), "invalid result step")
     require(all(re.fullmatch(r"[a-z0-9_]+", key) for key in metrics), "invalid metric")
-    allowed = {f"{kind}_{metric}" for kind in ("baseline", "nested", "concurrency4", "concurrency8")
+    allowed = {f"{kind}_{metric}" for kind in ("baseline", "nested", "baseline_concurrency4", "baseline_concurrency8", "nested_concurrency4", "nested_concurrency8")
                for metric in ("boot_p50_ms", "boot_p95_ms", "reset_p50_ms", "reset_p95_ms",
                               "work_p50_ms", "work_p95_ms", "memory_kib", "headroom_kib")}
     allowed |= {f"{kind}_{work}_{metric}" for kind in ("baseline", "nested")
@@ -157,6 +228,8 @@ def report(path, completed, metrics, failed=False):
                 "no_egress", "host_unreachable", "other_env_unreachable",
                 "kernel_major", "kernel_minor", "qemu_major", "qemu_minor"}
     allowed |= {"env0_vm_agent_boot_ms", "env1_vm_agent_boot_ms", "kernel_patch", "qemu_patch"}
+    allowed |= {"guest_metadata_unreachable", "guest_public_unreachable", "ingress_tls_only",
+                "ingress_other_network_refused", "guest_app_data_refused"}
     require(set(metrics) <= allowed, "unknown result field")
     require(all(type(value) in (int, float, bool) and math.isfinite(value)
                 and value >= 0 for value in metrics.values()), "non-numeric result")
@@ -187,6 +260,8 @@ class Spike:
         self.owned = []
         self.installed = False
         self.saved = False
+        self.firewall = []
+        self.residual_packages = []
         self.metrics = {}
         self.completed = []
         self.checkpoint = lambda: None
@@ -206,40 +281,48 @@ class Spike:
         self.persist()
 
     def persist(self):
-        private_file(self.state / "transaction.private.json", json.dumps({
+        pending = self.state / "transaction.pending.json"
+        private_file(pending, json.dumps({
             "token": self.token, "prefix": self.prefix, "project": self.project,
-            "owned": self.owned, "installed": self.installed, "saved": self.saved}))
+            "owned": self.owned, "installed": self.installed, "saved": self.saved,
+            "firewall": self.firewall, "residual_packages": self.residual_packages}))
+        os.replace(pending, self.state / "transaction.private.json")
 
     def remove_owned(self):
-        for kind, name in reversed(self.owned):
-            require((name == self.project or name.startswith(self.prefix + "-"))
-                    and self.project == self.prefix, "refuse non-spike cleanup")
-            if kind == "instance":
-                marker = self.vm("config", "get", name, "user.spike-token", check=False)
-                if marker.returncode:
-                    continue  # Failed create; never widen to all project instances.
-                require(marker.stdout.strip() == self.token, "instance ownership mismatch")
-                self.vm("delete", "--force", name)
-            elif kind == "project":
-                marker = self.incus("project", "get", name, "user.spike-token", check=False)
-                require(marker.stdout.strip() == self.token, "project ownership mismatch")
-                self.vm("image", "delete", self.prefix + "-image", check=False)
-                self.vm("profile", "delete", "default", check=False)
-                self.incus("project", "delete", name)
-            elif kind == "network":
-                self.incus("network", "delete", name)
-            elif kind == "storage":
-                self.incus("storage", "delete", name)
-        self.owned.clear()
-        self.persist()
+        failures = []
+        for entry in reversed(self.owned[:]):
+            kind, name = entry
+            try:
+                require((name == self.project or name.startswith(self.prefix + "-"))
+                        and self.project == self.prefix, "refuse non-spike cleanup")
+                require(kind in ("instance", "project", "network", "storage"), "unknown recovery resource")
+                show = self.vm("info", name, check=False) if kind == "instance" else self.incus(kind, "show", name, check=False)
+                absent = show.returncode != 0 and re.search(r"not found|does not exist", show.stderr, re.I)
+                require(show.returncode == 0 or absent, "resource presence unknown")
+                if not absent:
+                    marker = self.vm("config", "get", name, "user.spike-token") if kind == "instance" else self.incus(kind, "get", name, "user.spike-token")
+                    require(marker.stdout.strip() == self.token, "resource ownership mismatch")
+                    if kind == "instance":
+                        self.vm("delete", "--force", name)
+                    elif kind == "project":
+                        self.vm("image", "delete", self.prefix + "-image", check=False)
+                        self.vm("profile", "delete", "default", check=False)
+                        self.incus("project", "delete", name)
+                    else:
+                        self.incus(kind, "delete", name)
+                self.owned.remove(entry)
+                self.persist()
+            except Exception:
+                failures.append(kind)
+        require(not failures, "resource cleanup incomplete; pending entries retained")
 
     def snapshot_firewall(self):
         for binary, filename in (("iptables-save", "iptables.before"),
                                  ("ip6tables-save", "ip6tables.before")):
             private_file(self.state / filename, command(binary).stdout)
         rules = command("nft", "list", "ruleset").stdout
-        private_file(self.state / "nft.before", "flush ruleset\n" + rules)
-        # Validate rollback inputs before the first mutation.
+        private_file(self.state / "nft.before", rules)
+        # Forensics only: no apply path ever replays these snapshots.
         command("nft", "--check", "-f", str(self.state / "nft.before"))
         command("iptables-restore", "--test", input=(self.state / "iptables.before").read_text())
         command("ip6tables-restore", "--test", input=(self.state / "ip6tables.before").read_text())
@@ -247,11 +330,11 @@ class Spike:
         self.persist()
 
     def rollback(self):
-        # Always restore the firewall, even when Incus cleanup/package removal fails.
+        # Revoke access first; independent failures never suppress other reversals.
         failures = []
-        for name, action in (("remove_owned", self.remove_owned),
-                             ("remove_install", self.remove_install),
-                             ("restore_firewall", self.restore_firewall)):
+        for name, action in (("restore_firewall", self.restore_firewall),
+                             ("remove_owned", self.remove_owned),
+                             ("remove_install", self.remove_install)):
             try:
                 action()
             except Exception:
@@ -260,31 +343,64 @@ class Spike:
         require(not failures, "rollback incomplete; operator console required")
 
     def restore_firewall(self):
-        if self.saved:
-            command("nft", "-f", str(self.state / "nft.before"))
-            command("iptables-restore", input=(self.state / "iptables.before").read_text())
-            command("ip6tables-restore", input=(self.state / "ip6tables.before").read_text())
+        failures = []
+        for entry in reversed(self.firewall[:]):
+            try:
+                if entry["kind"] == "nft":
+                    require(re.fullmatch(re.escape(self.prefix.replace("-", "_")) + r"[01]", entry["table"]), "foreign firewall table")
+                    tables = json.loads(command("nft", "-j", "list", "tables").stdout)
+                    if any(item.get("table", {}).get("family") == "inet" and item["table"].get("name") == entry["table"] for item in tables["nftables"]):
+                        command("nft", "delete", "table", "inet", entry["table"])
+                elif entry["kind"] == "iptables":
+                    rule = entry["rule"]
+                    require("--comment" in rule and rule[rule.index("--comment") + 1] == self.token
+                            and any(arg.startswith(self.prefix + "-") for arg in rule), "foreign firewall rule")
+                    check = command("iptables", "-w", "-C", "DOCKER-USER", *rule, check=False)
+                    require(check.returncode in (0, 1), "firewall rule presence unknown")
+                    if check.returncode == 0:
+                        command("iptables", "-w", "-D", "DOCKER-USER", *rule)
+                elif entry["kind"] == "ufw":
+                    rule = entry["rule"]
+                    require(rule[:3] == ["route", "allow", "in"] and "comment" in rule
+                            and rule[-1] == self.token and any(arg.startswith(self.prefix + "-") for arg in rule), "foreign UFW rule")
+                    deletion = command("ufw", "--force", "delete", *rule, check=False)
+                    require(deletion.returncode == 0 or re.search(r"non-existent rule|rule does not exist", deletion.stdout + deletion.stderr, re.I), "UFW reversal failed")
+                else:
+                    raise RuntimeError("unknown firewall recovery entry")
+                self.firewall.remove(entry)
+                self.persist()
+            except Exception:
+                failures.append(entry["kind"])
+        if not self.firewall:
             self.saved = False
             self.persist()
+        require(not failures, "firewall recovery incomplete; pending entries retained")
 
     def remove_install(self):
         if self.installed:
-            command("apt-get", "remove", "-y", "incus", "incus-base", "incus-client", timeout=180)
+            require(not self.owned, "retain Incus until pending resources can be recovered")
+            command("apt-get", "remove", "-y", "incus", "incus-base", "incus-client", timeout=900)
             self.installed = False
             self.persist()
 
     def install(self):
         packages = ("incus=" + self.args.incus_version, "incus-client=" + self.args.incus_version)
-        plan = command("apt-get", "--simulate", "install", *packages).stdout
+        plan = command("apt-get", "--simulate", "install", "--no-install-recommends", *packages).stdout
+        planned = re.findall(r"^Inst (\S+)", plan, re.M)
+        require(planned and set(planned) <= set(self.args.allow_package)
+                and {"incus", "incus-client"} <= set(planned), "package plan outside explicit allow-list")
         require(not re.search(r"^(Remv|Conf (openssh|ufw|docker|containerd|runc))", plan, re.M)
                 and not re.search(r"^Inst \S+ \[", plan, re.M)
                 and not re.search(r"^Inst (openssh|ufw|docker|containerd|runc)", plan, re.M),
                 "package plan touches protected packages or upgrades existing software")
+        command("apt-get", "install", "--download-only", "-y", "--no-install-recommends",
+                "--no-remove", "--no-upgrade", *packages, timeout=180)
+        self.residual_packages = sorted(set(planned) - {"incus", "incus-base", "incus-client"})
         self.installed = True  # Mark BEFORE apt: a failed/partial install also rolls back.
         self.persist()
         install_env = dict(os.environ, DEBIAN_FRONTEND="noninteractive", NEEDRESTART_MODE="l")
-        command("apt-get", "install", "-y", "--no-remove", "--no-upgrade", *packages,
-                timeout=180, env=install_env)
+        command("apt-get", "install", "-y", "--no-install-recommends", "--no-remove", "--no-upgrade", *packages,
+                timeout=900, env=install_env)
         self.incus("admin", "waitready", "--timeout=60")
 
     def provision(self):
@@ -292,7 +408,7 @@ class Spike:
         require(self.incus("storage", "show", pool, check=False).returncode != 0,
                 "storage already exists")
         self.remember("storage", pool)
-        self.incus("storage", "create", pool, "dir")
+        self.incus("storage", "create", pool, "dir", "user.spike-token=" + self.token)
         require(self.incus("project", "show", self.project, check=False).returncode != 0,
                 "project already exists")
         self.remember("project", self.project)
@@ -312,24 +428,46 @@ class Spike:
                     "network already exists")
             self.remember("network", bridge)
             self.incus("network", "create", bridge, "ipv4.address=" + str(network),
-                       "ipv4.nat=true", "ipv4.dhcp=false", "ipv6.address=none")
+                       "ipv4.nat=false", "ipv4.dhcp=false", "ipv6.address=none",
+                       "user.spike-token=" + self.token)
             # Incus namespaces cannot override UFW drops. An active UFW that
             # prevents forwarding is a failed spike; we never edit its rules.
             table = self.prefix.replace("-", "_") + str(index)
+            existing_tables = json.loads(command("nft", "-j", "list", "tables").stdout)
+            require(not any(item.get("table", {}).get("name") == table for item in existing_tables["nftables"]), "firewall table exists")
+            self.firewall.append({"kind": "nft", "table": table})
+            self.persist()
             command("nft", "add", "table", "inet", table)
             command("nft", "add", "chain", "inet", table, "input",
                     "{ type filter hook input priority -10; policy accept; }")
+            command("nft", "add", "rule", "inet", table, "input", "iifname", bridge,
+                    "ct", "state", "established,related", "accept")
             command("nft", "add", "rule", "inet", table, "input", "iifname", bridge, "drop")
             command("nft", "add", "chain", "inet", table, "forward",
                     "{ type filter hook forward priority -10; policy accept; }")
             command("nft", "add", "rule", "inet", table, "forward", "iifname", bridge,
                     "ct", "state", "established,related", "accept")
-            command("nft", "add", "rule", "inet", table, "forward", "iifname", bridge,
-                    "oifname", "!=", self.args.uplink, "drop")
-            # Narrow path for app -> guest daemon, plus outbound/return traffic.
-            # This does not change FORWARD policy, Docker configuration or UFW rules.
+            command("nft", "add", "rule", "inet", table, "forward", "iifname", bridge, "drop")
+            command("nft", "add", "rule", "inet", table, "forward", "oifname", bridge,
+                    "ct", "state", "established,related", "accept")
+            command("nft", "add", "rule", "inet", table, "forward", "oifname", bridge,
+                    "iifname", self.args.app_bridge, "ip", "daddr", self.address(index),
+                    "tcp", "dport", str(self.args.tls_port), "accept")
+            command("nft", "add", "rule", "inet", table, "forward", "oifname", bridge, "drop")
+            # Keep #646's metadata jump first. nft also enforces denials before
+            # Docker's broad bridge ACCEPT rules (an allow alone cannot do that).
+            position = self.bridge_insert_position()
             for rule in self.bridge_rules(index):
-                command("iptables", "-I", "DOCKER-USER", "1", *rule)
+                self.firewall.append({"kind": "iptables", "rule": rule})
+                self.persist()
+                command("iptables", "-I", "DOCKER-USER", position, *rule)
+            if self.args.allow_ufw_route:
+                rule = ["route", "allow", "in", "on", self.args.app_bridge, "out", "on", bridge,
+                        "to", self.address(index), "port", str(self.args.tls_port), "proto", "tcp",
+                        "comment", self.token]
+                self.firewall.append({"kind": "ufw", "rule": rule})
+                self.persist()
+                command("ufw", *rule)
             self.launch(index, self.name(index))
 
     def bridge(self, index):
@@ -345,13 +483,16 @@ class Spike:
         bridge, address = self.bridge(index), self.address(index)
         return [
             ["-i", self.args.app_bridge, "-o", bridge, "-d", address,
-             "-p", "tcp", "--dport", str(self.args.tls_port), "-j", "ACCEPT"],
+             "-p", "tcp", "--dport", str(self.args.tls_port), "-m", "comment", "--comment", self.token, "-j", "ACCEPT"],
             ["-i", bridge, "-o", self.args.app_bridge, "-m", "conntrack",
-             "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
-            ["-i", bridge, "-o", self.args.uplink, "-j", "ACCEPT"],
-            ["-i", self.args.uplink, "-o", bridge, "-m", "conntrack",
-             "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
+             "--ctstate", "ESTABLISHED,RELATED", "-m", "comment", "--comment", self.token, "-j", "ACCEPT"],
         ]
+
+    def bridge_insert_position(self):
+        rules = [shlex.split(line) for line in command("iptables", "-S", "DOCKER-USER").stdout.splitlines() if line.startswith("-A ")]
+        hooks = [i for i, rule in enumerate(rules) if "-j" in rule and rule[rule.index("-j") + 1] == "VPS-METADATA"]
+        require(not hooks or hooks == [0], "metadata jump must remain first and unique")
+        return "2" if hooks else "1"
 
     def launch(self, index, name):
         require(name.startswith(self.prefix + "-"), "non-spike instance")
@@ -362,7 +503,8 @@ class Spike:
                 "user.spike-token=" + self.token, "-c", "limits.cpu=" + str(self.args.vm_cpus),
                 "-c", "limits.memory=" + self.args.vm_memory)
         self.vm("config", "device", "add", name, "eth0", "nic", "network=" + self.bridge(index),
-                "name=eth0", "ipv4.address=" + self.address(index))
+                "name=eth0", "ipv4.address=" + self.address(index),
+                "security.ipv4_filtering=true", "security.mac_filtering=true")
         self.vm("start", name)
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
@@ -414,7 +556,8 @@ class Spike:
                         "--tlsverify", "--tlscacert", str(self.state / "client1/ca.pem"),
                         "--tlscert", str(self.state / "client0/client.pem"), "--tlskey",
                         str(self.state / "client0/client-key.pem"), "info", check=False)
-        require(cross.returncode != 0, "cross-environment certificate accepted")
+        require(cross.returncode != 0 and re.search(r"tls:.*(bad certificate|unknown certificate authority|certificate required)|remote error: tls", cross.stderr, re.I),
+                "cross-environment TLS rejection not established")
         self.metrics["tls_cross_refused"] = True
 
     @staticmethod
@@ -437,14 +580,13 @@ class Spike:
                     "-out", str(directory / (role + ".pem")))
 
     def remote(self, index, *args, **kwargs):
-        clean = {key: value for key, value in os.environ.items()
-                 if not key.startswith("DOCKER_")}
+        clean = docker_env()
         return command("docker", "--config", str(self.state / f"client{index}/.docker"),
                        *args, env=clean, **kwargs)
 
     def measure(self):
         # The workload driver runs inside fresh guest containers, never on real data.
-        # Baseline input is a sacrificial host container provided by the operator.
+        # Baselines create fresh, token-labelled, self-expiring host containers.
         from sandbox_vm_measure import measure
         measure(self)
 
@@ -474,12 +616,15 @@ def arguments(argv):
     parser.add_argument("--image-rootfs", type=Path)
     parser.add_argument("--network", action="append", type=ipaddress.IPv4Interface, default=[])
     parser.add_argument("--app-bridge")
-    parser.add_argument("--uplink")
     parser.add_argument("--tls-port", type=int, default=2376)
     parser.add_argument("--vm-cpus", type=int, default=2)
     parser.add_argument("--vm-memory", default="2GiB")
     parser.add_argument("--cpu-cap", type=int, default=4)
     parser.add_argument("--memory-cap", default="8GiB")
+    parser.add_argument("--memory-reserve", default="2GiB")
+    parser.add_argument("--allow-ufw-route", action="store_true")
+    parser.add_argument("--launcher-unit")
+    parser.add_argument("--allow-package", action="append", default=["incus", "incus-base", "incus-client"])
     parser.add_argument("--vm-disk", default="8GiB")
     parser.add_argument("--disk-cap", default="24GiB")
     parser.add_argument("--base-image")
@@ -487,13 +632,57 @@ def arguments(argv):
     parser.add_argument("--office-image")
     parser.add_argument("--app-image")
     parser.add_argument("--app-network")
+    parser.add_argument("--probe-network")
+    parser.add_argument("--data-canary")
     args = parser.parse_args(argv)
-    args.state = args.state or DEFAULT_STATE / ("survey-" if args.mode == "survey" else "run-") / uuid.uuid4().hex
+    args.state = args.state or DEFAULT_STATE / (("survey-" if args.mode == "survey" else "run-") + uuid.uuid4().hex)
     return args
+
+
+def storage_preflight(args):
+    """Bound accepted local image expansion, then budget Incus' actual filesystem."""
+    # Deliberately accept a single standalone qcow2 and an uncompressed metadata
+    # tar only. No arbitrary compressed rootfs, backing chain or external data file.
+    image = json.loads(command("qemu-img", "info", "--output=json", str(args.image_rootfs)).stdout)
+    require(image.get("format") == "qcow2" and not image.get("backing-filename")
+            and not image.get("full-backing-filename") and not image.get("encrypted")
+            and not image.get("format-specific", {}).get("data", {}).get("data-file"), "unbounded VM image refused")
+    virtual = image.get("virtual-size")
+    require(type(virtual) is int and 0 < virtual <= size_bytes(args.vm_disk), "VM image expansion exceeds disk cap")
+    expanded_metadata = 0
+    with tarfile.open(args.image_metadata, "r:") as archive:
+        for member in archive:
+            require((member.isfile() or member.isdir()) and not Path(member.name).is_absolute()
+                    and ".." not in Path(member.name).parts, "unsupported metadata archive member")
+            expanded_metadata += member.size
+            require(expanded_metadata <= 64 * 1024 ** 2, "metadata expansion exceeds bound")
+    input_bytes = args.image_metadata.stat().st_size + args.image_rootfs.stat().st_size
+    require(input_bytes <= size_bytes(args.disk_cap), "VM image exceeds disk budget")
+    # A fresh native install uses /var/lib/incus for both images and dir pools.
+    # Resolve symlinks/mounts even when the final subdirectory does not exist yet.
+    paths = (INCUS_STATE / "images", INCUS_STATE / "storage-pools")
+    filesystems = {}
+    for path in paths:
+        path = path.resolve()
+        while not path.exists():
+            path = path.parent
+        filesystems[path.stat().st_dev] = path
+    budget = size_bytes(args.disk_cap) + 2 * virtual + input_bytes + expanded_metadata + 2 * 1024 ** 3
+    for path in filesystems.values():
+        require(shutil.disk_usage(path).free >= budget, "insufficient Incus backing storage including import/expansion and recovery reserve")
 
 
 def preflight(args):
     require(os.geteuid() == 0 and sys.platform == "linux", "apply requires Linux root")
+    require(args.launcher_unit and re.fullmatch(r"sbxs-run-[a-f0-9]+(?:\.service)?", args.launcher_unit)
+            and re.fullmatch(r"[a-f0-9]{32}", os.environ.get("INVOCATION_ID", "")), "apply requires a detached systemd-run unit")
+    properties = dict(line.split("=", 1) for line in command("systemctl", "show", args.launcher_unit,
+                      "--property=InvocationID,KillMode,TimeoutStopUSec,RuntimeMaxUSec").stdout.splitlines() if "=" in line)
+    stop = re.fullmatch(r"([0-9]+)(s|min|h)", properties.get("TimeoutStopUSec", ""))
+    require(properties.get("InvocationID") == os.environ["INVOCATION_ID"] and properties.get("KillMode") == "mixed"
+            and properties.get("RuntimeMaxUSec") == "infinity" and stop
+            and int(stop[1]) * {"s": 1, "min": 60, "h": 3600}[stop[2]] >= 900,
+            "detached unit needs unlimited runtime and at least 900s rollback stop budget")
     require(args.survey and (args.survey / "survey-complete").is_file(), "survey first")
     require(args.ssh_probe and args.ssh_probe.is_absolute() and args.ssh_probe.is_file(),
             "independent SSH witness executable required")
@@ -514,16 +703,14 @@ def preflight(args):
     for network in args.network:
         require(network.ip.is_private and network.network.prefixlen <= 29
                 and network.ip == network.network.network_address + 1, "bridge must use private subnet gateway .1")
-    for name in (args.app_bridge, args.uplink):
+    for name in (args.app_bridge,):
         require(name and re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", name), "interface name required")
-    require(args.app_bridge != args.uplink, "distinct app/uplink interfaces required")
     require(args.vm_cpus > 0 and args.cpu_cap >= 2 * args.vm_cpus, "insufficient project CPU cap")
     require(2 * size_bytes(args.vm_memory) <= size_bytes(args.memory_cap), "insufficient project memory cap")
     require(2 * size_bytes(args.vm_disk) <= size_bytes(args.disk_cap), "insufficient project disk cap")
-    input_bytes = args.image_metadata.stat().st_size + args.image_rootfs.stat().st_size
-    require(input_bytes <= size_bytes(args.disk_cap), "VM image exceeds disk budget")
-    require(shutil.disk_usage(ROOT).free >= size_bytes(args.disk_cap) + input_bytes + 2 * 1024 ** 3,
-            "insufficient free disk including image import and recovery reserve")
+    storage_preflight(args)
+    require(available_memory() >= size_bytes(args.memory_cap) + size_bytes(args.memory_reserve),
+            "insufficient memory including recovery reserve")
     # Refuse overlapping existing routes, except the default. No bridge guessing.
     routes = json.loads(command("ip", "-j", "-4", "route", "show", "table", "all").stdout)
     for route in routes:
@@ -531,14 +718,20 @@ def preflight(args):
             existing = ipaddress.ip_network(route["dst"], strict=False)
             require(not any(existing.overlaps(n.network) for n in args.network), "bridge subnet overlaps route")
     if args.measure:
-        require(args.tls and args.app_network, "measure requires TLS and app network")
+        require(args.tls and args.app_network and args.probe_network and args.probe_network != args.app_network,
+                "measure requires TLS and distinct app/probe networks")
+        canary = re.fullmatch(r"([0-9.]+):([0-9]+)", args.data_canary or "")
+        require(canary and ipaddress.IPv4Address(canary[1]).is_private and 1 <= int(canary[2]) <= 65535,
+                "private data-network canary IPv4:port required")
         for image in (args.base_image, args.data_image, args.office_image, args.app_image):
             require(image and re.fullmatch(r"[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}", image),
                     "preloaded digest-pinned images required")
-    require(1024 <= args.tls_port <= 65535, "unprivileged TLS port required")
-    command("iptables", "-S", "DOCKER-USER")  # nft-only Docker backend is not supported.
+    require(1024 <= args.tls_port <= 65534, "unprivileged TLS port and adjacent canary port required")
+    Spike(args, DEFAULT_STATE).bridge_insert_position()  # nft-only Docker backend is not supported.
     command("ip", "link", "show", args.app_bridge)
-    command("ip", "link", "show", args.uplink)
+    ufw = command("ufw", "status", "verbose").stdout
+    require(args.allow_ufw_route or not re.search(r"Status: active", ufw),
+            "active UFW requires explicit --allow-ufw-route and reviewed narrow forwarding")
 
 
 def main(argv=None):
@@ -555,7 +748,7 @@ def main(argv=None):
                 and manifest["prefix"] == "sbxs-" + manifest["token"][:6]
                 and manifest["project"] == manifest["prefix"], "invalid recovery ownership")
         spike = Spike(args, state)
-        for key in ("token", "prefix", "project", "owned", "installed", "saved"):
+        for key in ("token", "prefix", "project", "owned", "installed", "saved", "firewall", "residual_packages"):
             setattr(spike, key, manifest[key])
         PRIVATE_LOG = state / "commands.private.jsonl"
         spike.rollback()
@@ -583,8 +776,9 @@ def main(argv=None):
     PRIVATE_LOG = state / "commands.private.jsonl"
     spike = Spike(args, state)
     baseline, ssh_guard = containers(), sshd_fingerprint()
-    spike.checkpoint = lambda: health_check(baseline, ssh_guard, args.ssh_probe)
-    health_check(baseline, ssh_guard, args.ssh_probe)
+    witness = Witness(args.ssh_probe, size_bytes(args.memory_reserve))
+    spike.checkpoint = lambda: health_check(baseline, ssh_guard, witness)
+    spike.checkpoint()
     spike.snapshot_firewall()
     def interrupted(_signum, _frame):
         raise RuntimeError("interrupted; rollback required")
@@ -592,9 +786,9 @@ def main(argv=None):
         signal.signal(sig, interrupted)
     try:
         for step in selected:
-            health_check(baseline, ssh_guard, args.ssh_probe)
+            spike.checkpoint()
             getattr(spike, step)()
-            health_check(baseline, ssh_guard, args.ssh_probe)
+            spike.checkpoint()
             spike.completed.append(step)
         report(state, spike.completed, spike.metrics)
     except BaseException as error:

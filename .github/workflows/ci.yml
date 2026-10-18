@@ -87,6 +87,8 @@ jobs:
           python3 scripts/check-vps.test.py --mutations
           python3 scripts/prepare-embedder.test.py
           python3 scripts/prepare-embedder.test.py --mutations
+          python3 scripts/metadata-egress.test.py
+          python3 scripts/metadata-egress.test.py --mutations
 
       # Pins the Postgres → pgvector migration script (#419 M8) against a docker
       # shim that ALLOW-LISTS the calls it may make: the source mount stays :ro,

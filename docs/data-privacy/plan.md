@@ -242,9 +242,11 @@ stop being assumed:
   images, memory snapshots and container logs are stored in the US whatever the
   compute region. So "moves prompts _off_ a third-country processor" is true of
   the Verda host and not of the Modal one. Approval for Modal is G15 (#567
-  comment 6194622280): the owner's own and demo traffic, company data waiting on
-  a DPA. G15's two technical conditions (snapshots hold public weights and
-  synthetic warm-up only; no request content in logs) are what
+  comment 6194622280), whose company-data condition, a DPA with Modal, the
+  owner confirmed met on 2026-10-18; Modal's answer on which country backs the
+  narrow EU region is still owed. G15's two technical conditions (snapshots
+  hold public weights and synthetic warm-up only; no request content in logs)
+  are what
   `app/src/__tests__/deploy/modal-pins.test.ts` and `deploy/modal/test_behaviour.py`
   hold for both Modal apps.
 - The client asks for **no prompt caching** (no `allowed_role_metadata`, so the

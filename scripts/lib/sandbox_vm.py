@@ -108,6 +108,29 @@ def private_file(path, data):
         stream.write(data)
 
 
+def apt_transaction(*args, env=None):
+    # Never kill apt/dpkg on a deadline or raise from its signal handler. The
+    # detached launcher's stop budget remains the operator's final safety net.
+    pending = []
+    previous = {}
+    def defer(signum, frame):
+        pending.append((signum, frame))
+    try:
+        for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+            previous[sig] = signal.signal(sig, defer)
+        command("apt-get", *args, timeout=None, env=env)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+    if pending:
+        sig, frame = pending[0]
+        handler = previous[sig]
+        if callable(handler):
+            handler(sig, frame)
+        elif handler != signal.SIG_IGN:
+            raise RuntimeError("interrupted after apt returned; rollback required")
+
+
 def new_state(path):
     path = Path(path).resolve()
     require(not path.exists(), "choose a fresh state directory")
@@ -285,7 +308,8 @@ class Spike:
         private_file(pending, json.dumps({
             "token": self.token, "prefix": self.prefix, "project": self.project,
             "owned": self.owned, "installed": self.installed, "saved": self.saved,
-            "firewall": self.firewall, "residual_packages": self.residual_packages}))
+            "firewall": self.firewall, "residual_packages": self.residual_packages,
+            "launcher_unit": self.args.launcher_unit}))
         os.replace(pending, self.state / "transaction.private.json")
 
     def remove_owned(self):
@@ -323,7 +347,6 @@ class Spike:
         rules = command("nft", "list", "ruleset").stdout
         private_file(self.state / "nft.before", rules)
         # Forensics only: no apply path ever replays these snapshots.
-        command("nft", "--check", "-f", str(self.state / "nft.before"))
         command("iptables-restore", "--test", input=(self.state / "iptables.before").read_text())
         command("ip6tables-restore", "--test", input=(self.state / "ip6tables.before").read_text())
         self.saved = True
@@ -379,7 +402,7 @@ class Spike:
     def remove_install(self):
         if self.installed:
             require(not self.owned, "retain Incus until pending resources can be recovered")
-            command("apt-get", "remove", "-y", "incus", "incus-base", "incus-client", timeout=900)
+            apt_transaction("remove", "-y", "incus", "incus-base", "incus-client")
             self.installed = False
             self.persist()
 
@@ -399,8 +422,8 @@ class Spike:
         self.installed = True  # Mark BEFORE apt: a failed/partial install also rolls back.
         self.persist()
         install_env = dict(os.environ, DEBIAN_FRONTEND="noninteractive", NEEDRESTART_MODE="l")
-        command("apt-get", "install", "-y", "--no-install-recommends", "--no-remove", "--no-upgrade", *packages,
-                timeout=900, env=install_env)
+        apt_transaction("install", "-y", "--no-install-recommends", "--no-remove", "--no-upgrade", *packages,
+                        env=install_env)
         self.incus("admin", "waitready", "--timeout=60")
 
     def provision(self):
@@ -747,6 +770,13 @@ def main(argv=None):
         require(re.fullmatch(r"[a-f0-9]{32}", manifest["token"])
                 and manifest["prefix"] == "sbxs-" + manifest["token"][:6]
                 and manifest["project"] == manifest["prefix"], "invalid recovery ownership")
+        unit = manifest.get("launcher_unit") or args.launcher_unit
+        require(unit and re.fullmatch(r"sbxs-run-[a-f0-9]+(?:\.service)?", unit)
+                and (not args.launcher_unit or args.launcher_unit == unit), "recovery requires the recorded launch unit")
+        status = command("systemctl", "show", unit, "--property=ActiveState", check=False)
+        require(status.stdout.strip() in ("ActiveState=inactive", "ActiveState=failed"),
+                "refuse recovery while launch unit is active or its state is unknown")
+        args.launcher_unit = unit
         spike = Spike(args, state)
         for key in ("token", "prefix", "project", "owned", "installed", "saved", "firewall", "residual_packages"):
             setattr(spike, key, manifest[key])

@@ -79,6 +79,24 @@ def destroy_box(spike, cid):
     spike.remote(0, "rm", "-f", cid)
 
 
+def wait_host_box(spike, target, cid):
+    # These exact IDs came from this run's --rm, self-expiring host baselines.
+    # Missing is normal; permission/transport/daemon failures remain fatal.
+    require(re.fullmatch(r"[a-f0-9]{64}", cid), "invalid recorded host container ID")
+    def absent(result):
+        return result.returncode != 0 and re.fullmatch(
+            r"(?:Error: No such object|Error response from daemon: No such container)(?:: "
+            + re.escape(cid) + r")?\s*", result.stderr) is not None
+    inspected = target("inspect", "--format", '{{json .Config.Labels}}', cid, check=False)
+    if absent(inspected):
+        return
+    require(inspected.returncode == 0, "host container presence unknown")
+    require(json.loads(inspected.stdout).get("sandbox-vm-spike") == spike.token,
+            "refuse non-spike container")
+    waited = target("wait", cid, timeout=70, check=False)
+    require(waited.returncode == 0 or absent(waited), "host container expiration unconfirmed")
+
+
 def endpoint(spike, nested):
     def target(*args, **kw):
         if args[0] == "run":
@@ -195,11 +213,10 @@ def boot_samples(spike, nested):
         # Natural TTL teardown avoids ANY destructive host Docker command.
         # Include the whole expiration + replacement cycle, report it separately.
         start = time.monotonic()
-        owned_container(spike, target, cid)
         if nested:
             destroy_box(spike, cid)
         else:
-            target("wait", cid, timeout=70)
+            wait_host_box(spike, target, cid)
         replacement = start_box(spike, target, spike.args.base_image,
                                 f"{'vm' if nested else 'host'}-reset{run}", ttl=10)
         pair = mcp_pair(spike, replacement, nested)
@@ -435,8 +452,7 @@ def concurrency(spike, count, nested):
         if nested:
             destroy_box(spike, cid)
         else:
-            owned_container(spike, target, cid)
-            target("wait", cid, timeout=70)
+            wait_host_box(spike, target, cid)
 
 
 def reached(result):

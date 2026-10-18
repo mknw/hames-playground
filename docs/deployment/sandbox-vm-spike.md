@@ -13,6 +13,40 @@ Only `results.json` and `results.md` are intended for posting after review;
 they refer to **the target host**. Nothing in this procedure deploys an app,
 changes its compose configuration, or authorizes a provider call.
 
+## Operator checklist from the independent review
+
+Current round-2 status: Q5 is recorded on [#648](https://github.com/mknw/hames-playground/issues/648); the owner authorizes the target-host spike, SSH and Incus install only. Confirm the [recorded Q5 ruling](https://github.com/mknw/hames-playground/issues/648#issuecomment-6244307698) and its limits before launch. The following review checklist is retained verbatim, including its original point-in-time Q5 status and line references. Its snapshot parse command remains an operator diagnostic; the harness no longer parses the forensic nft snapshot (R1). Package mutation now waits for apt to return without a subprocess kill deadline, then delivers a deferred signal (R2); allow apt to finish before stopping the unit. Recovery enforces the recorded launch unit's inactive/failed state and refuses unknown state (R3).
+
+<!-- prettier-ignore-start -->
+
+**Before tonight's run, the operator must confirm all of these. If any one fails, do not run.**
+1. **Q5.** Record the owner's authorisation on #648 itself: the target host, SSH and Incus install, this spike only. It is currently only on the PR.
+2. **Firewall evidence, from a fresh survey.**
+   - FORWARD's first rule is `-j DOCKER-USER`.
+   - DOCKER-USER rule 1 is the `VPS-METADATA` jump, or there is no jump.
+   - UFW `limit` rules have been reviewed.
+   - Pass `--allow-ufw-route`. With UFW active, the default refuses (`sandbox_vm.py:733`).
+3. **Snapshot parse check.** Run `nft list ruleset > f && nft --check -f f`, and it must exit 0. If it does not, the run stops harmlessly at `:326` (R1). Do not patch the code on the host to get past it.
+4. **Packages.**
+   - Review `apt-get --simulate install --no-install-recommends incus=V incus-client=V`, and pass every `Inst` name with `--allow-package`.
+   - The simulation shows no upgrades and no `Remv` lines.
+   - `dpkg --audit` prints nothing, and no apt or unattended-upgrades process is running.
+   - Host QEMU, OVMF and `qemu-img` are already present. If the operator installs them, that is a separate, recorded change outside the harness journal (runbook `:68-69`).
+5. **Launch.** Use only the runbook's `systemd-run` block (`:122`). Never run it in the foreground or inside a tool call. Do not stop the unit while the install step is running (R2).
+6. **SSH access.**
+   - Test the witness by hand: a fresh key-authenticated login over the public path, not loopback.
+   - Keep a second SSH session open.
+   - Confirm provider console access before starting.
+7. **Window.**
+   - `MemAvailable` is at least memory-cap plus reserve (10 GiB at the defaults).
+   - No deploy, and no compose recreate or restart, during the run. Either one fails the health checkpoint and triggers rollback, by design.
+8. **Recovery.**
+   - Run `rollback --apply` by hand only after `systemctl is-active "$LAUNCH_UNIT"` reports inactive (R3).
+   - After any rollback, run a fresh SSH check and a container check.
+   - Remove the residual packages listed in the manifest from the console.
+
+<!-- prettier-ignore-end -->
+
 ## First: survey, without installing anything
 
 From a pinned checkout on the target host, run only the survey first:
@@ -69,7 +103,7 @@ local image files and uses `--pull=never` for every Docker run. It does not run
 image builds or install Kata/Firecracker. Install host QEMU support before the
 window if the native Incus package does not provide it. An apt simulation that
 would upgrade existing software, remove packages, or install/configure
-OpenSSH, UFW, Docker, containerd or runc is refused. Every simulated `Inst` package must also appear in the positive allow-list (`incus`, `incus-base`, `incus-client` by default); supply repeated `--allow-package` only for reviewed additional dependencies. The download-only phase has its own 180s timeout, before mutation. Installation disables recommends, uses a 900s timeout and records dependencies left for console cleanup in the private manifest. No automatic autoremove runs. No apt index refresh runs.
+OpenSSH, UFW, Docker, containerd or runc is refused. Every simulated `Inst` package must also appear in the positive allow-list (`incus`, `incus-base`, `incus-client` by default); supply repeated `--allow-package` only for reviewed additional dependencies. The download-only phase has its own 180s timeout, before mutation. Installation disables recommends, defers disconnect/termination signals until apt returns, has no subprocess kill timeout during dpkg mutation, and records dependencies left for console cleanup in the private manifest. No automatic autoremove runs. No apt index refresh runs.
 Incus installs with `NEEDRESTART_MODE=l` to prevent needrestart restarting
 unrelated services.
 
@@ -150,7 +184,7 @@ Preflight requires `MemAvailable >= memory-cap + memory-reserve`; the reserve de
 
 | Step          | What happens and what is checked                                                                                                                                                                                                                                                                                                                                                                                   |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--install`   | Save and syntax-check nftables, IPv4 and IPv6 snapshots for forensics only; simulate the package plan, then install the pinned native Incus packages and wait for local readiness.                                                                                                                                                                                                                                 |
+| `--install`   | Save nftables, IPv4 and IPv6 snapshots for forensics only; syntax-check only the IPv4/IPv6 snapshots; simulate the package plan, then install the pinned native Incus packages and wait for local readiness.                                                                                                                                                                                                       |
 | `--provision` | Create a fresh `sbxs-` project, pool and two bridges, with two VM instances and CPU/memory limits. Containers are disallowed in the Incus project. Static guest addresses avoid changes to host DHCP/DNS inbound rules. Record create-to-agent timing.                                                                                                                                                             |
 | `--tls`       | Create distinct two-day CAs and client certificates per environment. Push only each guest's CA and server material into that VM. Docker listens on its guest socket and its exact private bridge address with mutual TLS. Create default Docker contexts under private `client0/.docker` and `client1/.docker`. Verify both daemons, then require one environment's client certificate to be refused by the other. |
 | `--measure`   | Run the synthetic measurements below, with checkpoints. No user uploads or live inference calls.                                                                                                                                                                                                                                                                                                                   |
@@ -168,8 +202,7 @@ neither compose nor application code.
 The transaction snapshots every pre-existing running container's identity and
 health state. Every step checks each original container is still running and
 has the same health, the host SSH configuration/key fingerprint is unchanged,
-and the independent SSH witness succeeds. Any command, signal or check failure
-enters rollback. Long measurement loops also checkpoint between samples and
+and the independent SSH witness succeeds. Any command or check failure enters rollback; a signal during package mutation is delivered only after apt returns. Long measurement loops also checkpoint between samples and
 during the ten-minute stream test. No command writes to `sshd` or the SSH port. UFW writes require the explicit, narrow opt-in below.
 
 The two bridges have NAT and DHCP disabled and no uplink allowance. Each NIC's static address carries `security.ipv4_filtering=true` and `security.mac_filtering=true`. A priority -10 nft INPUT chain accepts established/related guest replies before dropping new guest-to-host traffic. The nft FORWARD chain accepts established replies, allows only the app bridge to the exact guest TLS port, drops all other guest ingress, and drops new guest egress. This deny enforcement precedes Docker's broad bridge allowances. The exact two DOCKER-USER allowances per bridge are inserted after a first metadata-policy jump when present; the survey's `iptables -S` is the review evidence for that ordering.
@@ -182,11 +215,11 @@ process cannot run Python recovery; from the console, inspect the private
 journal and run the explicit recovery entry point:
 
 ```bash
-sudo python3 scripts/lib/sandbox_vm.py rollback --apply \
+sudo python3 scripts/lib/sandbox_vm.py rollback --apply --launcher-unit "$LAUNCH_UNIT" \
   --state "$PWD/.sandbox-vm-spike/run"
 ```
 
-The recovery path requires root-owned 0700 state under the ignored directory
+The recovery path refuses a running or unknown launch-unit state, using the unit recorded in the manifest (or explicit `--launcher-unit` for older manifests). It requires root-owned 0700 state under the ignored directory
 and validates the recorded project/prefix/token before deleting any instance.
 It is not a general Incus cleanup tool. If ownership checks refuse, inspect the
 specific recorded resources from the console; never widen a prefix or delete
@@ -312,15 +345,15 @@ Implementation map for review (source locations on this change):
 
 | Contract                                         | Source                                                                                                                                                                                                                                |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Survey and private output                        | [`sandbox_vm.py:187`](../../scripts/lib/sandbox_vm.py#L187), [`sandbox_vm.py:111`](../../scripts/lib/sandbox_vm.py#L111)                                                                                                              |
-| Health/SSH checks and transaction failure policy | [`sandbox_vm.py:150`](../../scripts/lib/sandbox_vm.py#L150), [`sandbox_vm.py:165`](../../scripts/lib/sandbox_vm.py#L165), [`sandbox_vm.py:737`](../../scripts/lib/sandbox_vm.py#L737)                                                 |
-| Ownership, surgical recovery and forwarding      | [`sandbox_vm.py:291`](../../scripts/lib/sandbox_vm.py#L291), [`sandbox_vm.py:345`](../../scripts/lib/sandbox_vm.py#L345), [`sandbox_vm.py:406`](../../scripts/lib/sandbox_vm.py#L406)                                                 |
-| TLS/context setup                                | [`sandbox_vm.py:527`](../../scripts/lib/sandbox_vm.py#L527)                                                                                                                                                                           |
-| Generic result schema                            | [`sandbox_vm.py:216`](../../scripts/lib/sandbox_vm.py#L216)                                                                                                                                                                           |
-| Storage, memory and detached launch preflight    | [`sandbox_vm.py:642`](../../scripts/lib/sandbox_vm.py#L642), [`sandbox_vm.py:675`](../../scripts/lib/sandbox_vm.py#L675)                                                                                                              |
-| Bounded baseline and boot samples                | [`sandbox_vm_measure.py:103`](../../scripts/lib/sandbox_vm_measure.py#L103), [`sandbox_vm_measure.py:185`](../../scripts/lib/sandbox_vm_measure.py#L185)                                                                              |
-| Staging, streams, PTY and context proof          | [`sandbox_vm_measure.py:232`](../../scripts/lib/sandbox_vm_measure.py#L232), [`sandbox_vm_measure.py:306`](../../scripts/lib/sandbox_vm_measure.py#L306)                                                                              |
-| Memory, concurrency and isolation probes         | [`sandbox_vm_measure.py:384`](../../scripts/lib/sandbox_vm_measure.py#L384), [`sandbox_vm_measure.py:397`](../../scripts/lib/sandbox_vm_measure.py#L397), [`sandbox_vm_measure.py:481`](../../scripts/lib/sandbox_vm_measure.py#L481) |
+| Survey and private output                        | [`sandbox_vm.py:210`](../../scripts/lib/sandbox_vm.py#L210), [`sandbox_vm.py:104`](../../scripts/lib/sandbox_vm.py#L104)                                                                                                              |
+| Health/SSH checks and transaction failure policy | [`sandbox_vm.py:173`](../../scripts/lib/sandbox_vm.py#L173), [`sandbox_vm.py:192`](../../scripts/lib/sandbox_vm.py#L192), [`sandbox_vm.py:760`](../../scripts/lib/sandbox_vm.py#L760)                                                 |
+| Ownership, surgical recovery and forwarding      | [`sandbox_vm.py:315`](../../scripts/lib/sandbox_vm.py#L315), [`sandbox_vm.py:368`](../../scripts/lib/sandbox_vm.py#L368), [`sandbox_vm.py:429`](../../scripts/lib/sandbox_vm.py#L429)                                                 |
+| TLS/context setup                                | [`sandbox_vm.py:550`](../../scripts/lib/sandbox_vm.py#L550)                                                                                                                                                                           |
+| Generic result schema                            | [`sandbox_vm.py:239`](../../scripts/lib/sandbox_vm.py#L239)                                                                                                                                                                           |
+| Storage, memory and detached launch preflight    | [`sandbox_vm.py:665`](../../scripts/lib/sandbox_vm.py#L665), [`sandbox_vm.py:698`](../../scripts/lib/sandbox_vm.py#L698)                                                                                                              |
+| Bounded baseline and boot samples                | [`sandbox_vm_measure.py:121`](../../scripts/lib/sandbox_vm_measure.py#L121), [`sandbox_vm_measure.py:203`](../../scripts/lib/sandbox_vm_measure.py#L203)                                                                              |
+| Staging, streams, PTY and context proof          | [`sandbox_vm_measure.py:249`](../../scripts/lib/sandbox_vm_measure.py#L249), [`sandbox_vm_measure.py:323`](../../scripts/lib/sandbox_vm_measure.py#L323)                                                                              |
+| Memory, concurrency and isolation probes         | [`sandbox_vm_measure.py:401`](../../scripts/lib/sandbox_vm_measure.py#L401), [`sandbox_vm_measure.py:414`](../../scripts/lib/sandbox_vm_measure.py#L414), [`sandbox_vm_measure.py:497`](../../scripts/lib/sandbox_vm_measure.py#L497) |
 
 Upstream operational references:
 [Incus firewall coexistence](https://linuxcontainers.org/incus/docs/main/howto/network_bridge_firewalld/),

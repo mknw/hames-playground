@@ -44,6 +44,7 @@ class Safety(unittest.TestCase):
         patch.object(vm, "PRIVATE_LOG", None).start()
         patch.object(vm, "available_memory", return_value=32 * 1024 ** 3).start()
         self.args = vm.arguments(["spike", "--install", "--provision"])
+        self.args.launcher_unit = "sbxs-run-1234.service"
         self.args.incus_version = "1.2.3"
         self.args.network = [ipaddress.IPv4Interface("192.0.2.1/24"),
                              ipaddress.IPv4Interface("198.51.100.1/24")]
@@ -484,7 +485,8 @@ class Safety(unittest.TestCase):
         self.assertEqual(len(calls), 3)
         self.assertIn("--download-only", calls[1][0])
         self.assertTrue(all("--no-install-recommends" in call[0] for call in calls))
-        self.assertGreaterEqual(calls[2][1]["timeout"], 900)
+        self.assertIsNone(calls[2][1]["timeout"])
+        self.assertEqual(calls[2][1]["env"]["NEEDRESTART_MODE"], "l")
         self.assertEqual(self.spike.residual_packages, ["reviewed-dependency"])
 
     def test_witness_rate_limit_and_memory_reserve(self):
@@ -506,7 +508,7 @@ class Safety(unittest.TestCase):
         self.assertFalse((self.state / "nft.before").read_text().startswith("flush ruleset"))
         for binary in ("iptables-restore", "ip6tables-restore"):
             self.assertIn((binary, "--test"), self.calls)
-        self.assertIn(("nft", "--check", "-f", str(self.state / "nft.before")), self.calls)
+        self.assertFalse(any(call[:2] == ("nft", "--check") for call in self.calls))
 
     def test_ufw_is_opt_in_exact_and_reversed_from_manifest(self):
         self.args.allow_ufw_route = True
@@ -634,6 +636,7 @@ class Safety(unittest.TestCase):
         patch.object(vm.os, "geteuid", return_value=0).start()
         patch.object(vm.sys, "platform", "linux").start()
         patch.object(vm.Path, "stat", return_value=SimpleNamespace(st_uid=0, st_mode=0o700)).start()
+        patch.object(vm, "command", return_value=result("ActiveState=inactive\n")).start()
         runner = patch.object(vm.Spike, "rollback").start()
         self.state.chmod(0o700)
         with contextlib.redirect_stdout(io.StringIO()):
@@ -720,12 +723,157 @@ class Safety(unittest.TestCase):
             vm.survey(destination)
         self.assertIn("Review connection limit rules", (destination / "ufw-review.private.txt").read_text())
 
+    def test_launch_properties_each_refused_independently(self):
+        self.preflight_fixture()
+        good = {"InvocationID": "a" * 32, "KillMode": "mixed", "TimeoutStopUSec": "15min", "RuntimeMaxUSec": "infinity"}
+        for key, value in (("InvocationID", "b" * 32), ("KillMode", "control-group"), ("TimeoutStopUSec", "899s"), ("RuntimeMaxUSec", "1h")):
+            with self.subTest(key=key):
+                properties = dict(good, **{key: value})
+                with patch.object(vm, "command", return_value=result("\n".join(k + "=" + v for k, v in properties.items()))), self.assertRaisesRegex(RuntimeError, "stop budget"):
+                    vm.preflight(self.args)
+
+    def test_preexisting_incus_each_package_refused(self):
+        self.preflight_fixture()
+        original = vm.command.side_effect
+        for package in ("incus", "incus-base", "incus-client"):
+            def boundary(*args, **kw):
+                if args[0] == "dpkg-query" and args[-1] == package:
+                    return result("install ok installed\n")
+                return original(*args, **kw)
+            with self.subTest(package=package), patch.object(vm, "command", side_effect=boundary), self.assertRaisesRegex(RuntimeError, "pre-existing Incus"):
+                vm.preflight(self.args)
+
+    def test_pending_resources_prevent_package_removal(self):
+        self.spike.installed = True
+        self.spike.owned = [("network", self.spike.bridge(0))]
+        with patch.object(vm, "command") as runner, self.assertRaisesRegex(RuntimeError, "pending resources"):
+            self.spike.remove_install()
+        runner.assert_not_called()
+        self.assertTrue(self.spike.installed)
+
+    def test_firewall_foreign_entries_refused_without_commands(self):
+        valid_rule = self.spike.bridge_rules(0)[0]
+        ufw = ["route", "allow", "in", "on", "app0", "out", "on", self.spike.bridge(0), "comment", self.spike.token]
+        entries = [{"kind": "nft", "table": "foreign"}]
+        for rule in (valid_rule, ufw):
+            kind = "iptables" if rule is valid_rule else "ufw"
+            entries.append({"kind": kind, "rule": ["foreign" if arg == self.spike.token else arg for arg in rule]})
+            entries.append({"kind": kind, "rule": ["foreign" if arg.startswith(self.spike.prefix + "-") else arg for arg in rule]})
+        entries.append({"kind": "ufw", "rule": ["allow"] + ufw[1:]})
+        for entry in entries:
+            self.spike.firewall = [entry]
+            self.spike.persist()
+            with self.subTest(entry=entry), patch.object(vm, "command") as runner, self.assertRaises(RuntimeError):
+                self.spike.restore_firewall()
+            runner.assert_not_called()
+            self.assertEqual(json.loads((self.state / "transaction.private.json").read_text())["firewall"], [entry])
+
+    def test_firewall_absent_rule_is_not_blindly_deleted(self):
+        entry = {"kind": "iptables", "rule": self.spike.bridge_rules(0)[0]}
+        for code in (0, 1, 2):
+            self.spike.firewall = [entry]
+            calls = []
+            def boundary(*args, **kw):
+                calls.append(args)
+                return result(code=code if "-C" in args else 0)
+            with self.subTest(code=code), patch.object(vm, "command", side_effect=boundary):
+                if code == 2:
+                    with self.assertRaises(RuntimeError):
+                        self.spike.restore_firewall()
+                else:
+                    self.spike.restore_firewall()
+            self.assertIn("-C", calls[0])
+            self.assertEqual(any("-D" in call for call in calls), code == 0)
+            self.assertEqual(bool(self.spike.firewall), code == 2)
+
+    def test_rollback_ignores_all_disconnect_signals(self):
+        handlers = {}
+        patch.object(vm, "preflight").start()
+        patch.object(vm, "command", side_effect=self.fake).start()
+        patch.object(vm, "sshd_fingerprint", return_value="same").start()
+        patch.object(vm.signal, "signal", side_effect=lambda sig, handler: handlers.update({sig: handler})).start()
+        patch.object(vm.Spike, "install", side_effect=RuntimeError("fail")).start()
+        def rollback(spike):
+            for sig in (vm.signal.SIGHUP, vm.signal.SIGINT, vm.signal.SIGTERM):
+                self.assertEqual(handlers[sig], vm.signal.SIG_IGN)
+        with patch.object(vm.Spike, "rollback", rollback), self.assertRaisesRegex(RuntimeError, "fail"):
+            vm.main(["spike", "--apply", "--install", "--state", str(self.root / "ignore"), "--ssh-probe", "/synthetic/ssh-witness"])
+
+    def test_apt_defers_each_signal_until_install_returns(self):
+        for sig in (vm.signal.SIGHUP, vm.signal.SIGINT, vm.signal.SIGTERM):
+            events, handlers = [], {}
+            def interrupted(signum, frame):
+                events.append("interrupted")
+                raise RuntimeError("deferred interruption")
+            handlers.update({s: interrupted for s in (vm.signal.SIGHUP, vm.signal.SIGINT, vm.signal.SIGTERM)})
+            def register(signum, handler):
+                old = handlers[signum]
+                handlers[signum] = handler
+                return old
+            def boundary(*args, **kw):
+                if args[:2] == ("apt-get", "install") and "--download-only" not in args:
+                    self.assertIsNone(kw["timeout"])
+                    handlers[sig](sig, None)
+                    events.append("apt returned")
+                    return result()
+                return self.fake(*args, **kw)
+            with self.subTest(sig=sig), patch.object(vm.signal, "signal", side_effect=register), patch.object(vm, "command", side_effect=boundary):
+                with self.assertRaisesRegex(RuntimeError, "deferred interruption"):
+                    self.spike.install()
+            self.assertEqual(events, ["apt returned", "interrupted"])
+            self.assertTrue(all(handler is interrupted for handler in handlers.values()))
+            self.assertTrue(self.spike.installed)
+
+    def test_apt_real_child_finishes_before_deferred_signal(self):
+        binary = self.root / "bin"
+        binary.mkdir()
+        shim = binary / "apt-get"
+        shim.write_text("#!" + sys.executable + "\nimport os,signal,sys,time\nos.kill(os.getppid(), signal.SIGTERM)\ntime.sleep(.05)\nopen(sys.argv[1], 'w').write('finished')\n")
+        shim.chmod(0o700)
+        marker = self.root / "apt-finished"
+        def interrupted(*_):
+            raise RuntimeError("deferred after child")
+        old = vm.signal.signal(vm.signal.SIGTERM, interrupted)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "deferred after child"):
+                vm.apt_transaction(str(marker), env=dict(os.environ, PATH=str(binary)))
+            self.assertEqual(marker.read_text(), "finished")
+        finally:
+            vm.signal.signal(vm.signal.SIGTERM, old)
+
+    def test_manual_recovery_refuses_live_or_unknown_launcher(self):
+        self.spike.persist()
+        self.state.chmod(0o700)
+        patch.object(vm.os, "geteuid", return_value=0).start()
+        patch.object(vm.sys, "platform", "linux").start()
+        patch.object(vm.Path, "stat", return_value=SimpleNamespace(st_uid=0, st_mode=0o700)).start()
+        for status in ("active", "activating", "deactivating", "reloading", "unknown", "", "inactive", "failed"):
+            with self.subTest(status=status), patch.object(vm, "command", return_value=result("ActiveState=" + status + "\n")), patch.object(vm.Spike, "rollback") as rollback, contextlib.redirect_stdout(io.StringIO()):
+                if status in ("inactive", "failed"):
+                    vm.main(["rollback", "--apply", "--state", str(self.state)])
+                    rollback.assert_called_once()
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "launch unit"):
+                        vm.main(["rollback", "--apply", "--state", str(self.state)])
+                    rollback.assert_not_called()
+
+    def test_ipv6_disabled_on_both_bridges(self):
+        with patch.object(vm, "command", side_effect=self.fake), patch.object(self.spike, "launch"):
+            self.spike.provision()
+        networks = [call for call in self.calls if call[:4] == ("incus", "--force-local", "network", "create")]
+        self.assertEqual(len(networks), 2)
+        self.assertTrue(all("ipv6.address=none" in call for call in networks))
+
     def test_runbook_detached_kata_and_index_contract(self):
         runbook = Path(os.environ.get("SANDBOX_VM_RUNBOOK", ROOT / "docs/deployment/sandbox-vm-spike.md")).read_text()
         prose = " ".join(runbook.split())
         for required in ("never in a foreground or time-boxed tool invocation", "KillMode=mixed", "TimeoutStopSec=900", "RuntimeMaxSec=infinity",
                          "Never edit the host's `/etc/docker/daemon.json`", "never restart the host's dockerd for Kata", "Kata runs only inside a spike VM or on a separate host"):
             self.assertIn(required, prose)
+        self.assertIn("https://github.com/mknw/hames-playground/issues/648); the owner authorizes", runbook)
+        checklist = runbook.split("**Before tonight", 1)[1].split("## First:", 1)[0]
+        for number, title in enumerate(("Q5.", "Firewall evidence, from a fresh survey.", "Snapshot parse check.", "Packages.", "Launch.", "SSH access.", "Window.", "Recovery."), 1):
+            self.assertIn(str(number) + ". **" + title + "**", checklist)
         index = Path(os.environ.get("SANDBOX_VM_INDEX", ROOT / "docs/INDEX.md")).read_text()
         testing = index.split("## Testing", 1)[1].split("## Architecture", 1)[0]
         self.assertNotIn("sandbox-vm-spike.md", testing)
@@ -790,7 +938,7 @@ def mutations():
         ("Opus 8 production host gate bypassed", "core", '                authorize_host_docker(args, host_scope)', '                pass', "test_production_host_docker_gate_refuses_destructive_verbs"),
         ("Opus 9 package allow-list removed", "core", 'planned and set(planned) <= set(self.args.allow_package)', 'True', "test_package_plan_guard_and_allowlist"),
         ("Opus 9 recommends allowed", "core", '"--no-install-recommends", ', '', "test_download_precedes_bounded_install_and_partial_install_is_journaled"),
-        ("Opus 9 install timeout 180", "core", 'timeout=900, env=install_env', 'timeout=180, env=install_env', "test_download_precedes_bounded_install_and_partial_install_is_journaled"),
+        ("Opus 9 install timeout 180 (R2 no kill deadline)", "core", 'timeout=None, env=env', 'timeout=180, env=env', "test_download_precedes_bounded_install_and_partial_install_is_journaled"),
         ("Opus 10 cross-cert accepts connection failure", "core", 'cross.returncode != 0 and re.search', 'cross.returncode != 0 or re.search', "test_tls_cross_refusal_requires_certificate_evidence"),
         ("Opus 11 witness throttle removed", "core", 'now - self.last_success >= 30', 'True', "test_witness_rate_limit_and_memory_reserve"),
         ("Opus 12 firewall last", "core", '(("restore_firewall", self.restore_firewall),\n                             ("remove_owned", self.remove_owned),\n                             ("remove_install", self.remove_install))', '(("remove_owned", self.remove_owned), ("remove_install", self.remove_install), ("restore_firewall", self.restore_firewall))', "test_firewall_reversal_precedes_resources_and_packages"),
@@ -811,7 +959,7 @@ def mutations():
         ('Codex 5 destroy_box call-site ownership removed', 'measure', 'def destroy_box(spike, cid):\n    # Destruction exists only behind the guest context and exact token check.\n    owned_container(spike, endpoint(spike, True), cid)\n', 'def destroy_box(spike, cid):\n    # Destruction exists only behind the guest context and exact token check.\n', 'test_destroy_box_refuses_foreign_container_at_call_site'),
         ('Codex 5 injected host stop at measure start', 'measure', '    data_canary(spike)  # Refuse before any measurement starts a container.', '    endpoint(spike, False)("stop", "preexisting")\n    data_canary(spike)  # Refuse before any measurement starts a container.', 'test_measure_orchestration_end_to_end'),
         ('Codex 5 host endpoint drops production gate scope', 'measure', 'host_scope=spike, **kw)', '**kw)', 'test_measure_orchestration_end_to_end'),
-        ('Opus 8 measure host wait becomes stop', 'measure', '        else:\n            target("wait", cid, timeout=70)', '        else:\n            target("stop", cid, timeout=70)', 'test_measure_orchestration_end_to_end'),
+        ('Opus 8 measure host wait becomes stop', 'measure', '        else:\n            wait_host_box(spike, target, cid)', '        else:\n            target("stop", cid, timeout=70)', 'test_measure_orchestration_end_to_end'),
         ('Opus 8 measurement checkpoints disabled', 'measure', '            spike.checkpoint()  # Every container creation follows a passing health check.', '            pass', 'test_checkpoint_failure_stops_before_any_container'),
         ('Opus 8 attach hold checkpoint removed', 'measure', '            spike.checkpoint()\n            for stream in pair:', '            for stream in pair:', 'test_attach_pty_child_gets_sanitized_env_and_guest_context'),
         ('Codex 6 PTY inherits DOCKER_* env', 'measure', 'stdin=slave, stdout=slave, stderr=slave, env=docker_env())', 'stdin=slave, stdout=slave, stderr=slave)', 'test_attach_pty_child_gets_sanitized_env_and_guest_context'),
@@ -819,7 +967,7 @@ def mutations():
         ('Codex 5 host stream spawned before gate', 'measure', '    authorize_host_docker(args, spike)\n', '', 'test_mcp_streams_pass_ownership_gate_before_spawn'),
         ('Codex 5 nested stream ownership removed', 'measure', '        owned_container(spike, endpoint(spike, True), cid)\n        return ["docker", "--config"', '        return ["docker", "--config"', 'test_mcp_streams_pass_ownership_gate_before_spawn'),
         ('Codex 7 host-runc concurrency baseline dropped', 'measure', '            concurrency(spike, count, nested)', '            concurrency(spike, count, True)', 'test_measure_orchestration_end_to_end'),
-        ('Codex 7 paired host boxes not waited out', 'measure', '            owned_container(spike, target, cid)\n            target("wait", cid, timeout=70)', '            pass', 'test_measure_orchestration_end_to_end'),
+        ('Codex 7 paired host boxes not waited out', 'measure', '            wait_host_box(spike, target, cid)', '            pass', 'test_measure_orchestration_end_to_end'),
         ('Opus 4 guest metadata refusal removed', 'measure', '        require(not from_guest(spike, index, *METADATA), "metadata reachable from VM")', '        pass', 'test_isolation_refusals_and_positive_controls_discriminate'),
         ('Opus 4 guest public refusal removed', 'measure', '        require(not from_guest(spike, index, *PUBLIC), "public address reachable from VM")', '        pass', 'test_isolation_refusals_and_positive_controls_discriminate'),
         ('Opus 4 public host positive control removed', 'measure', '    require(host_reaches(*PUBLIC), "public egress positive control failed")', '    pass', 'test_isolation_refusals_and_positive_controls_discriminate'),
@@ -836,6 +984,38 @@ def mutations():
         ('Opus 5 probe network may equal app network', 'measure', 'spike.args.probe_network and spike.args.probe_network != spike.args.app_network', 'spike.args.probe_network', 'test_missing_probe_inputs_refuse_before_any_command'),
         ('O6 concurrency reserve not enforced while sampling', 'measure', 'if done or checked is None or time.monotonic() - checked >= 1:', 'if done:', 'test_concurrency_sampling_checkpoint_aborts_running_workloads'),
         ('O6 no checkpoint after last sample before cleanup', 'measure', 'if done or checked is None or time.monotonic() - checked >= 1:', 'if checked is None or time.monotonic() - checked >= 1:', 'test_concurrency_checkpoints_after_last_sample_before_cleanup'),
+    ]
+    changes += [
+        ('Opus survivor 10 IPv6 restore syntax validation removed', 'core', 'command("ip6tables-restore", "--test", input=(self.state / "ip6tables.before").read_text())', 'pass', 'test_snapshot_validation_is_forensic_only'),
+        ('R2 actual subprocess survives parent signal', 'core', 'previous[sig] = signal.signal(sig, defer)', 'previous[sig] = signal.getsignal(sig)', 'test_apt_real_child_finishes_before_deferred_signal'),
+        ('R1 forensic nft parse restored', 'core', '        # Forensics only: no apply path ever replays these snapshots.', '        # Forensics only: no apply path ever replays these snapshots.\n        command("nft", "--check", "-f", str(self.state / "nft.before"))', 'test_snapshot_validation_is_forensic_only'),
+        ('R2 signal not deferred during apt', 'core', 'previous[sig] = signal.signal(sig, defer)', 'previous[sig] = signal.getsignal(sig)', 'test_apt_defers_each_signal_until_install_returns'),
+        ('R2 deferred interruption discarded', 'core', '    if pending:', '    if False:', 'test_apt_defers_each_signal_until_install_returns'),
+        ('R3 active launch recovery admitted', 'core', 'status.stdout.strip() in ("ActiveState=inactive", "ActiveState=failed")', 'True', 'test_manual_recovery_refuses_live_or_unknown_launcher'),
+        ('R4 KillMode match removed', 'core', 'properties.get("KillMode") == "mixed"', 'True', 'test_launch_properties_each_refused_independently'),
+        ('R4 stop budget removed', 'core', 'int(stop[1]) * {"s": 1, "min": 60, "h": 3600}[stop[2]] >= 900', 'True', 'test_launch_properties_each_refused_independently'),
+        ('R4 InvocationID match removed', 'core', 'properties.get("InvocationID") == os.environ["INVOCATION_ID"]', 'True', 'test_launch_properties_each_refused_independently'),
+        ('R4 rollback SIG_IGN removed', 'core', '            signal.signal(sig, signal.SIG_IGN)', '            pass', 'test_rollback_ignores_all_disconnect_signals'),
+        ('R4 pre-existing Incus refusal removed', 'core', 'require(not command("dpkg-query",', 'require(True or not command("dpkg-query",', 'test_preexisting_incus_each_package_refused'),
+        ('R4 remove_install pending resources guard removed', 'core', 'require(not self.owned, "retain Incus until pending resources can be recovered")', 'pass', 'test_pending_resources_prevent_package_removal'),
+        ('R4 nft recovery ownership removed', 'core', 'require(re.fullmatch(re.escape(self.prefix.replace("-", "_"))', 'require(True or re.fullmatch(re.escape(self.prefix.replace("-", "_"))', 'test_firewall_foreign_entries_refused_without_commands'),
+        ('R4 iptables recovery ownership removed', 'core', 'require("--comment" in rule', 'require(True or "--comment" in rule', 'test_firewall_foreign_entries_refused_without_commands'),
+        ('R4 UFW recovery ownership removed', 'core', 'require(rule[:3] == ["route", "allow", "in"]', 'require(True or rule[:3] == ["route", "allow", "in"]', 'test_firewall_foreign_entries_refused_without_commands'),
+        ('R4 blind delete without presence check', 'core', 'if check.returncode == 0:', 'if True:', 'test_firewall_absent_rule_is_not_blindly_deleted'),
+        ('R4 needrestart list mode removed', 'core', 'NEEDRESTART_MODE="l"', 'NEEDRESTART_MODE="a"', 'test_download_precedes_bounded_install_and_partial_install_is_journaled'),
+        ('R4 IPv6 enabled', 'core', '"ipv6.address=none"', '"ipv6.address=auto"', 'test_ipv6_disabled_on_both_bridges'),
+        ('C7 absence before inspect rejected', 'measure', '    if absent(inspected):', '    if False:', 'test_host_expiry_cleanup_accepts_exact_absence_at_both_windows'),
+        ('C7 inspect wait disappearance rejected', 'measure', 'waited.returncode == 0 or absent(waited)', 'waited.returncode == 0', 'test_host_expiry_cleanup_accepts_exact_absence_at_both_windows'),
+        ('C7 ambiguous inspect treated as absent', 'measure', '    if absent(inspected):', '    if inspected.returncode != 0:', 'test_host_expiry_cleanup_refuses_ambiguous_errors_and_foreign_labels'),
+        ('C7 ambiguous wait treated as absent', 'measure', 'waited.returncode == 0 or absent(waited)', 'True', 'test_host_expiry_cleanup_refuses_ambiguous_errors_and_foreign_labels'),
+        ('C7 existing host ownership removed', 'measure', 'json.loads(inspected.stdout).get("sandbox-vm-spike") == spike.token', 'True', 'test_host_expiry_cleanup_refuses_ambiguous_errors_and_foreign_labels'),
+        ('Opus extra NAT enabled', 'core', '"ipv4.nat=false"', '"ipv4.nat=true"', 'test_input_and_forward_packet_behavior'),
+        ('Opus extra any ingress interface admitted', 'core', '"iifname", self.args.app_bridge, "ip"', '"iifname", "any", "ip"', 'test_input_and_forward_packet_behavior'),
+        ('Opus extra host gate any verb', 'core', 'require(verb == "run", "host Docker command refused")', 'return', 'test_production_host_docker_gate_refuses_destructive_verbs'),
+        ('Opus extra host --rm not required', 'core', '"--rm" in tail and "--pull=never" in tail', '"--pull=never" in tail', 'test_host_run_caps_prefix_label_expiry_and_exec_ownership'),
+        ('Opus extra host exec ownership removed', 'core', 'labels.get("sandbox-vm-spike") == host_scope.token', 'True', 'test_host_run_caps_prefix_label_expiry_and_exec_ownership'),
+        ('Opus extra UFW token comment changed', 'core', '"comment", self.token]', '"comment", "foreign"]', 'test_ufw_is_opt_in_exact_and_reversed_from_manifest'),
+        ('Q5 recorded ruling link removed', 'runbook', 'https://github.com/mknw/hames-playground/issues/648); the owner authorizes', 'ruling removed); the owner authorizes', 'test_runbook_detached_kata_and_index_contract'),
     ]
     for label, target, before, after, test in changes:
         original = sources[target]

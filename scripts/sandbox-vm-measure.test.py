@@ -299,6 +299,46 @@ class Measurement(unittest.TestCase):
         return [i for i, event in enumerate(self.world.timeline) if event[0] == "run"
                 and event[1][0] == "docker" and event[1][3] == "run"]
 
+    def test_host_expiry_cleanup_accepts_exact_absence_at_both_windows(self):
+        for count in (4, 8):
+            for window in ("before inspect", "between inspect and wait"):
+                with self.subTest(count=count, window=window):
+                    original = self.world.docker
+                    def boundary(where, argv):
+                        if where == "host" and argv[0] == "wait":
+                            if window == "between inspect and wait":
+                                del self.world.boxes[argv[1]]
+                                return result(code=1, stderr="Error response from daemon: No such container: " + argv[1])
+                            response = original(where, argv)
+                            self.world.boxes.clear()
+                            return response
+                        if where == "host" and argv[0] == "inspect" and argv[-1] not in self.world.boxes:
+                            return result(code=1, stderr="Error: No such object: " + argv[-1])
+                        return original(where, argv)
+                    self.world.docker = boundary
+                    try:
+                        measure.concurrency(self.spike, count, False)
+                        self.assertFalse(any(box["alive"] for box in self.world.boxes.values()))
+                    finally:
+                        self.world.docker = original
+                        self.world.boxes.clear()
+
+    def test_host_expiry_cleanup_refuses_ambiguous_errors_and_foreign_labels(self):
+        cid = measure.start_box(self.spike, measure.endpoint(self.spike, False), IMAGE, "expiry")
+        original = self.world.docker
+        for operation in ("inspect", "wait"):
+            for message in ("permission denied", "Cannot connect to the Docker daemon", "Error: No such object: " + "f" * 64):
+                def boundary(where, argv):
+                    if where == "host" and argv[0] == operation:
+                        return result(code=1, stderr=message)
+                    return original(where, argv)
+                with self.subTest(operation=operation, message=message), patch.object(self.world, "docker", side_effect=boundary), self.assertRaises(RuntimeError):
+                    measure.wait_host_box(self.spike, measure.endpoint(self.spike, False), cid)
+        self.world.boxes[cid]["label"] = "foreign"
+        with self.assertRaisesRegex(RuntimeError, "non-spike"):
+            measure.wait_host_box(self.spike, measure.endpoint(self.spike, False), cid)
+        self.assertFalse(any(event[1][3:4] == ("wait",) for event in self.boundary("run")[-1:]))
+
     def test_measure_orchestration_end_to_end(self):
         measure.measure(self.spike)
         metrics = self.spike.metrics

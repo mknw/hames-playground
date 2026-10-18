@@ -6,6 +6,7 @@
  * runs in Node.
  */
 
+import { dockerConnectionFromEnv, dockerInvocation } from '../docker-connection.server'
 import type { ContextEvent, PatternScope } from '@hames-ai/harness-patterns/types'
 
 /** Print every tracked event in execution order, summarized to one line each.
@@ -76,9 +77,15 @@ function safeJson(x: unknown): string {
  *  would fail more cryptically later. */
 export async function checkRootfsImage(): Promise<void> {
   const { spawn } = await import('node:child_process')
+  const invocation = dockerInvocation(dockerConnectionFromEnv(), [
+    'image',
+    'inspect',
+    'kg-sandbox:base',
+  ])
   await new Promise<void>((resolve, reject) => {
-    const child = spawn('docker', ['image', 'inspect', 'kg-sandbox:base'], {
+    const child = spawn('docker', invocation.args, {
       stdio: ['ignore', 'ignore', 'ignore'],
+      ...(invocation.env ? { env: invocation.env as NodeJS.ProcessEnv } : {}),
     })
     child.on('error', reject)
     child.on('close', (code) => {

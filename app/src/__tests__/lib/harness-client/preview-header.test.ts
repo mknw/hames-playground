@@ -489,3 +489,13 @@ describe('igniteVerdaBox', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })
+
+it('uses the conversation resolver for a legacy public seed on a private-only server', async () => {
+  vi.stubEnv('INFERENCE_TIERS', 'private')
+  try {
+    getStoredInferenceTier.mockResolvedValue('anthropic')
+    expect((await getPreviewHeaderState()).tier).toBe('verda')
+  } finally {
+    vi.unstubAllEnvs()
+  }
+})

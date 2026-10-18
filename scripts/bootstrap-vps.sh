@@ -307,6 +307,7 @@ owner_missing() {
   local entry key v
   for entry in "${OWNER_REQUIRED[@]}"; do
     key=${entry%%|*}
+    [[ $key == ANTHROPIC_API_KEY && "$(env_get INFERENCE_TIERS)" == private ]] && continue
     v=$(env_get "$key")
     # The template's allow-list is the contoso placeholder, not a real list.
     if [[ -z $v || ($key == VITE_ALLOWED_EMAILS && $v == '*@contoso.com') ]]; then
@@ -361,13 +362,20 @@ if not valid:
 # env_problems — docs/PREVIEW.md §6's shared preflight, plus the rest of what a
 # boot needs from .env. One line per problem; nothing printed means clean.
 env_problems() {
-  local k n=0 v
+  local k n=0 v tiers
+  tiers=$(env_get INFERENCE_TIERS)
   grep -q 'example\.com' "$ENV_FILE" && printf '%s\n' ".env still carries an example.com placeholder (§6: grep -n 'example\\.com' .env)"
   for k in AUTH_SESSION_SECRET TOKEN_ENCRYPTION_KEY DATA_ENCRYPTION_KEY ANTHROPIC_API_KEY \
     POSTGRES_PASSWORD NEO4J_PASSWORD; do
+    [[ $k == ANTHROPIC_API_KEY && $tiers == private ]] && continue
     [[ -n "$(env_get "$k")" ]] || printf '%s\n' "$k is empty"
   done
+  case $tiers in
+    private|'') ;;
+    *) printf '%s\n' "INFERENCE_TIERS must be unset or private" ;;
+  esac
   for k in "${PRIVATE_TIER_REQUIRED[@]}"; do [[ -n "$(env_get "$k")" ]] && n=$((n + 1)); done
+  [[ $tiers == private && $n -ne ${#PRIVATE_TIER_REQUIRED[@]} ]] && printf '%s\n' "INFERENCE_TIERS=private requires all of ${PRIVATE_TIER_REQUIRED[*]}"
   if ((n != 0 && n != ${#PRIVATE_TIER_REQUIRED[@]})); then
     printf '%s\n' "private tier: $n of ${PRIVATE_TIER_REQUIRED[*]} set — all five or none (a partial tier is refused at run time)"
   fi

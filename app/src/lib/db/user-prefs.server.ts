@@ -30,7 +30,11 @@
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { query } from './client.server'
-import { type InferenceTier, verdaConfigured } from '../inference/config.server'
+import {
+  type InferenceTier,
+  privateInferenceOnly,
+  verdaConfigured,
+} from '../inference/config.server'
 
 assertServerOnImport()
 
@@ -91,7 +95,7 @@ export function isInferenceTier(value: unknown): value is InferenceTier {
  * naming the gap here.
  */
 export function defaultInferenceTier(): InferenceTier {
-  return verdaConfigured() ? 'verda' : 'anthropic'
+  return privateInferenceOnly() || verdaConfigured() ? 'verda' : 'anthropic'
 }
 
 /**

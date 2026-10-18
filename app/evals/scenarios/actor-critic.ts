@@ -104,7 +104,7 @@ export const actorUnparseableFeedbackScenario: Scenario = {
   title: 'actorCritic — the actor recovers after its own unparseable answer',
   what: 'the previous answer would not parse and was fed back as an attempt (#437): the next proposal is a valid action naming the offered tool, not the empty one replayed in the log',
   run: async (ctx) => {
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     const checks: Check[] = []
     const collectors: Collector[] = []
     for (const [label, cut] of [
@@ -156,7 +156,7 @@ export const criticAcceptScenario: Scenario = {
   title: 'actorCritic — critic accepts a sufficient attempt',
   what: 'an attempt that answers the intent is passed, so the pattern is not an expensive simpleLoop',
   run: async (ctx) => {
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     const collector = new Collector('eval-critic-accept')
     const result = await b.Critic(INTENT, [GOOD_ATTEMPT], ctx.opts('critic', collector))
     return {
@@ -183,7 +183,7 @@ export const criticRejectAndReviseScenario: Scenario = {
   title: 'actorCritic — critic rejects, actor revises',
   what: 'a wrong-but-successful attempt is rejected, and the rejection reaches the actor as feedback that changes the next proposal (SA-C1)',
   run: async (ctx) => {
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     const checks: Check[] = []
     const collectors: Collector[] = []
 

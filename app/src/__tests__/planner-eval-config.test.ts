@@ -23,7 +23,7 @@ describe('#636 eval-only thinking configuration', () => {
       'const thinkingPlanner = isThinkingPlannerRun(routing, scenarios)',
     )
     expect(validate).toBeGreaterThan(0)
-    expect(validate).toBeLessThan(runner.indexOf('await preflight(routing.client)'))
+    expect(validate).toBeLessThan(runner.indexOf('await preflight('))
     expect(runner).toMatch(/if \(!thinkingPlanner && scenarios.some\(/)
   })
 })

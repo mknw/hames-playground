@@ -431,3 +431,35 @@ describe('operator docs agree with the private-tier contract', () => {
     expect(sizing).toContain('placeholder, not measured RSS or a capacity guarantee')
   })
 })
+
+describe('private-only bootstrap (#653)', () => {
+  it('accepts an empty Anthropic key only with the restriction and all five values', () => {
+    expect(problems({ ...REQUIRED, INFERENCE_TIERS: 'private', ANTHROPIC_API_KEY: '' })).toBe('')
+    expect(problems({ ...REQUIRED, ANTHROPIC_API_KEY: '' })).toBe('ANTHROPIC_API_KEY is empty\n')
+    expect(problems({ ...REQUIRED, USE_VERDA_INFERENCE: '1', ANTHROPIC_API_KEY: '' })).toContain(
+      'ANTHROPIC_API_KEY is empty',
+    )
+  })
+  it.each(Object.keys(REQUIRED))('requires %s in private-only mode', (key) => {
+    expect(problems({ ...REQUIRED, INFERENCE_TIERS: 'private', [key]: '' })).toContain(
+      'INFERENCE_TIERS=private requires all',
+    )
+  })
+  it('refuses an entirely absent private tier and invalid settings', () => {
+    expect(problems({ INFERENCE_TIERS: 'private' })).toContain(
+      'INFERENCE_TIERS=private requires all',
+    )
+    expect(problems({ INFERENCE_TIERS: 'typo' })).toContain(
+      'INFERENCE_TIERS must be unset or private',
+    )
+  })
+  it('does not ask the operator for an Anthropic key on a private-only host', () => {
+    const dir = fixture({ ...REQUIRED, INFERENCE_TIERS: 'private', ANTHROPIC_API_KEY: '' })
+    const out = execFileSync(
+      'bash',
+      ['-c', 'source "$1/scripts/bootstrap-vps.sh"; owner_missing', '_', REPO],
+      { env: shellEnv(dir) as unknown as NodeJS.ProcessEnv, encoding: 'utf8' },
+    )
+    expect(out).toBe('')
+  })
+})

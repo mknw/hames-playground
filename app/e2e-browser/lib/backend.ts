@@ -160,7 +160,11 @@ export async function startBackend(): Promise<Backend> {
  *     the only tier from which the redirect is reachable now, so it is the only
  *     place the fail-closed check can live.
  */
-export async function assertHermetic(backend: Backend, appUrl: string): Promise<void> {
+export async function assertHermetic(
+  backend: Backend,
+  appUrl: string,
+  privateOnly = false,
+): Promise<void> {
   const onDefaultTier = await probeTurn(backend, appUrl, 'default')
   if (onDefaultTier.length === 0) {
     throw new Error(
@@ -177,6 +181,17 @@ export async function assertHermetic(backend: Backend, appUrl: string): Promise<
   // writes it. Only reachable now that the turn above has run `ensureSchema()`.
   await setStoredTier('anthropic')
   const onAnthropicTier = await probeTurn(backend, appUrl, 'anthropic')
+  if (privateOnly) {
+    if (
+      !onAnthropicTier.length ||
+      onAnthropicTier.some((call) => call.model === FAKE_ANTHROPIC_TIER_MODEL)
+    ) {
+      throw new Error(
+        'Private-only browser preflight: legacy public seed did not route exclusively to the private fake.',
+      )
+    }
+    return
+  }
   if (!onAnthropicTier.some((call) => call.model === FAKE_ANTHROPIC_TIER_MODEL)) {
     throw new Error(
       'e2e-browser preflight: a turn forced onto the ANTHROPIC tier produced no call ' +

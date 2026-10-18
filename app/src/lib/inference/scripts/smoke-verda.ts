@@ -293,7 +293,7 @@ async function critic(): Promise<void> {
 
 async function controller(): Promise<void> {
   console.log('\n▶ 2/7 LoopController — the action envelope')
-  const { b } = await import('@hames-ai/harness-baml/baml_client')
+  const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
   const collector = new Collector('smoke-verda-controller')
   const opts = { collector, ...clientOverrideFor('controller') }
   const t0 = Date.now()
@@ -353,7 +353,7 @@ async function controller(): Promise<void> {
  */
 async function actorRetry(): Promise<void> {
   console.log('\n▶ 3/7 ActorController — retry shape (attempt log + context)')
-  const { b } = await import('@hames-ai/harness-baml/baml_client')
+  const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
   const collector = new Collector('smoke-verda-actor-retry')
   // 'controller' — the one role covers BOTH loop patterns' controllers, which
   // is exactly why the actor's 400 rode in on the same map entry that the

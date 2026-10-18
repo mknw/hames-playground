@@ -514,8 +514,9 @@ from pages on https://preview.example.com`.
 grep -n 'example\.com' .env       # must return nothing
 ```
 
-The other half of the preflight is the four values that have no default and no
-fallback. `DATA_ENCRYPTION_KEY` is the one that hides: it does **not** fail at
+The other half of the preflight is the required values with no default or
+fallback. `ANTHROPIC_API_KEY` may be empty only on a private-only server
+(`INFERENCE_TIERS=private`); the three encryption/session keys remain required. `DATA_ENCRYPTION_KEY` is the one that hides: it does **not** fail at
 boot on a fresh database. The schema init finds no encrypted rows, logs a
 warning and continues
 (`app/src/lib/db/migrate-encryption.server.ts:363-379`), so the stack comes up
@@ -526,9 +527,14 @@ healthy and the first sign-in is what dies — `encryptField` throws with no key
 opaque error and takes steps 5–9 with it. Catch it here instead:
 
 ```bash
-K="AUTH_SESSION_SECRET|TOKEN_ENCRYPTION_KEY|DATA_ENCRYPTION_KEY|ANTHROPIC_API_KEY"
+K="AUTH_SESSION_SECRET|TOKEN_ENCRYPTION_KEY|DATA_ENCRYPTION_KEY"
+# Ordinary deployments also require ANTHROPIC_API_KEY (4 keys total).
+# A private-only deployment requires only these 3; env_problems below checks policy.
+if ! grep -qE "^INFERENCE_TIERS=[\"']?private[\"']?$" .env; then
+  K="$K|ANTHROPIC_API_KEY"
+fi
 grep -nE "^($K)=(''|\"\")?$" .env    # must return nothing — a hit is still empty
-grep -cE "^($K)=" .env               # must print 4 — fewer means a line is gone
+grep -cE "^($K)=" .env               # must print 3 (private-only) or 4 — fewer means a line is gone
 ```
 
 Two checks because the two failures look nothing alike: a value left at the
@@ -542,6 +548,17 @@ fallback and no summarizer fallback onto the 27B. The decisions URL is a
 appends a path. Its bearer key, `SMALL_LLM_API_KEY`, is **required** and shared
 with the summarizer, even if a local llama-server accepts unauthenticated
 summarization. `CLAUDE.md`'s private-tier section is the routing contract.
+
+**Private-only server (#653):** set `INFERENCE_TIERS=private` in the runtime `.env`.
+The bootstrap and server boot then require all five private-tier values and accept
+an empty `ANTHROPIC_API_KEY`. Existing Anthropic conversation rows and last-used
+seeds resolve to private for their next turn, without rewriting the history.
+Server actions refuse new Anthropic selections. The switch keeps Anthropic visible
+but greyed out, disabled, with an explanation. Explicit public run frames and
+public/unverified client overrides fail before a provider request; summaries,
+screening, memory and titles use their private role clients. Unset preserves
+all existing behavior. `USE_VERDA_INFERENCE=1` by itself does **not** disable
+Anthropic or waive its key. This is a configuration check, never a health probe.
 
 For staging, **configure all five values** with the operator's private-tier
 endpoints and keys. A user who never chose starts on Private whenever the

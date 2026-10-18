@@ -77,7 +77,7 @@ export const reliabilityScenario: Scenario = {
   what: 'parse-failure rate on the escaping-heavy envelope, the shape malformed actions come from',
   run: async (ctx) => {
     const n = reliabilityCount()
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     let parsed = 0
     const failures: string[] = []
     let outputTokens = 0

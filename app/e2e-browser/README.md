@@ -337,3 +337,12 @@ The standalone `test:e2e:browser:pins` alias is deferred to
 [follow-up #539](https://github.com/mknw/hames-playground/issues/539): the existing
 CI-isolation pin refuses additional package scripts that reference this suite.
 `release:check --only browser-pins` runs this config through the release reporter.
+
+Private-only server scenario (#653), against the same throwaway database and fakes:
+
+```bash
+E2E_PRIVATE_ONLY=1 pnpm test:e2e:browser e2e-browser/scenarios/16-private-only.browser.ts
+```
+
+The server starts with `INFERENCE_TIERS=private` and an empty Anthropic key.
+The ordinary suite keeps the restriction unset and pins the existing switch behavior.

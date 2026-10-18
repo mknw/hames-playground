@@ -58,7 +58,7 @@ export const synthesizerGroundedScenario: Scenario = {
   title: 'Synthesize — grounded summary over a partial tool log',
   what: 'reports the counts that are in the log, does not invent the one that is missing, and admits the failed call',
   run: async (ctx) => {
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     const collector = new Collector('eval-synthesize-grounded')
     const answer = await b.Synthesize(
       'How big is the graph?',

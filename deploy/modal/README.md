@@ -66,11 +66,34 @@ Modal pins compute and routing to the configured regions and never moves a pinne
 
 - The image and the snapshot hold public weights (Apache-2.0, pinned to a commit and a hash), code, and the synthetic warm-up state. No request has run before the snapshot is taken, by construction. The vLLM image is pinned by index digest, and the base model, adapter and card files are verified by sha256 at build time.
 - Request and response bodies are proxied to the container and not stored by Modal.
-- Outbound requests: none on a request's behalf. vLLM reads no images (`--limit-mm-per-prompt` 0 refuses an image part before anything is fetched), and the shim, whose pinned config enables an image path that would fetch an image named by URL, runs with its own `LIGHTNING_IMAGE_URLS=off` lock.
-- Usage reporting is disabled with `VLLM_NO_USAGE_STATS=1` and `DO_NOT_TRACK=1`; startup and periodic usage-stat posts are blocked. `HF_HUB_OFFLINE=1` applies after the build-time downloads, and media redirects are disabled.
+- Outbound requests: the known media-fetch paths are disabled in the processes. vLLM reads no images (`--limit-mm-per-prompt` 0 on the small box, `--language-model-only` on the 27B), and the shim runs with `LIGHTNING_IMAGE_URLS=off`. **Container egress remains open**; see the limitation and compensating checks below.
+- Usage reporting is disabled with `VLLM_NO_USAGE_STATS=1` and `DO_NOT_TRACK=1`; these are process settings, not a network policy. `HF_HUB_OFFLINE=1` applies after the build-time downloads, and media redirects are disabled.
 - Logs: vLLM request/output and uvicorn access logging are off. `--no-log-error-stack` disables the registered handlers' stacks; a shared reducer also reduces streaming tracebacks to a validated exception class and truncates WARNING/ERROR/CRITICAL lines at their source tag. INFO lines pass. The shim's startup lines pass only before the public listener starts; afterwards only synthesized exception metadata passes. Caddy writes no access log, and its error-log filter deletes request URIs, headers and client addresses.
 
 Those are mechanisms. Whether Modal is an acceptable processor for the private tier, and whether a narrow EU region satisfies a residency requirement when Modal does not publish which country backs it, are the operator's decisions. The pointers: Modal's trust center (DPA, subprocessors), `modal.com/docs/guide/data-residency`, and Modal themselves for the country question.
+
+## Outbound restriction: Server API limitation (#635, acceptance b)
+
+Checked 2026-10-18 against Modal's [Server API](https://modal.com/docs/sdk/py/latest/App#server) and the **1.6.1 SDK pinned here**: `App.server` has neither `block_network` nor a CIDR allowlist. Its implementation (`modal/app.py:1294–1331,1471–1508` in the pinned wheel) constructs the internal function without a network restriction; `_Function._from_local` defaults `block_network` to `False` (`modal/_functions.py:717`) and serializes it as such (`:1080`). Reproduce against the [official wheel](https://files.pythonhosted.org/packages/d2/3c/6b7d9a15dab9af2833ce674bbc72b5654d4099d5b088f1cc1eda3f8249ca/modal-1.6.1-py3-none-any.whl), whose SHA256 is recorded in `uv.lock`.
+
+Functions/classes expose `block_network`; [Sandboxes](https://modal.com/docs/sdk/py/latest/Sandbox#create) expose an outbound CIDR allowlist. Those are different APIs. The documented Server `experimental_options` provides no supported network-policy key; guessing one would not establish enforcement. Modal's [GPU-snapshot Server example](https://modal.com/docs/examples/lfm_snapshot) supports the snapshot pattern used here, but does not demonstrate it with blocked egress. Thus compatibility with Server ingress, health probes and snapshot restore **has not been established**. Neither app receives an unsupported option or changes serving primitives.
+
+The [Servers guide](https://modal.com/docs/guide/servers#defining-a-server) identifies `@modal.web_server` as the analogous Function primitive: `@app.cls(block_network=True)` plus `@modal.web_server` is accepted client-side in the pinned SDK (`modal/app.py:1077–1085,1266`; `modal/_partial_function.py:497–548`), but ingress, health checks and GPU snapshots with that block remain unverified (the Sandbox API explicitly refuses open ports with `block_network`, `modal/sandbox.py:896–897`). Moving off `@app.server` would also change proxy authentication from the current Bearer header to `Modal-Key`/`Modal-Secret` and the [503/no-queue behavior](https://modal.com/docs/guide/servers#zero-to-one-scaling) the app relies on. A synthetic-only throwaway compatibility spike is a proposed follow-up requiring the owner's decision and authorization; none was built or run here.
+
+Both apps bake weights and Caddy during image build, before `HF_HUB_OFFLINE=1`; their vLLM argv uses local model directories (`hames_small_models.py:154–181,189–217`; `hames_private_27b.py:187–224`). Local health, sleep/wake and Caddy upstreams use loopback. These remove known runtime download needs, but do not prove that every dependency can boot offline.
+
+**Compensating check, not network containment (SD-14):** `modal-pins.test.ts` pins both vLLM media refusals, the shim's effective URL lock, offline/telemetry settings, build-time model pins and Caddy's loopback route list. `smoke.py` probes small-box chat `image_url` and `video_url` parts, plus the decision shim's top-level `image_url` and an image part nested in structured `state`; `smoke_27b.py` probes a chat `image_url` part. The structured-state shape follows the [pinned shim](https://huggingface.co/h2oai/h2o-lightning-4b/blob/b43f759b6385d21182f87c3829931ec3d4dfa98a/h2o_lightning_shim.py#L506) (`:506–528,547–597`), whose SHA256 matches `CARD_FILES_SHA256`. All probes use the shared `PROBE_URL` on a reserved `.invalid` HTTPS host: a fetch must fail, so fetch-then-refuse cannot pass as pre-fetch refusal. They require each specific pre-fetch refusal, rather than treating a generic error from a failed download as success. `test_behaviour.py` validates the outgoing requests and exercises those real smoke entry points with independent fixed HTTP fixtures, wrong statuses and each fetch-failure indicator separately. These checks cover the listed paths; they cannot contain arbitrary future outbound code or a compromised process. Reassess the Server API on an SDK upgrade (the `uv.lock` Modal 1.6.1 pin forces this review) or a documented Modal-supported solution.
+
+**Owner verification after an authorized deploy** (not run by this change): from this directory, with synthetic inputs and operator-local configuration only:
+
+```bash
+uv run --env-file deploy.local.env smoke.py
+uv run --env-file deploy.local.env smoke_27b.py
+uv run --env-file deploy.local.env measure.py --box small --samples 1
+uv run --env-file deploy.local.env measure.py --box 27b --samples 1
+```
+
+Run each smoke after a confirmed full boot and again after a confirmed snapshot restore. Each measure waits for scale-to-zero before waking the box; repeat until both report `box.restored: true`, then rerun the smokes while warm. Correlate with lifecycle logs because `restored` is inferred from snapshot age. Require both smokes to exit 0, successful health/model routes, the small-box adapter check, and the 27B answer/MTP and reference checks. Retain the results locally. This verifies the compensating behavior through boot and restore; it is **not evidence of blocked egress**. No deploy, Modal API call, or live smoke was made for this change.
 
 ## Operator commands
 
@@ -181,7 +204,7 @@ The deploy above serves synthetic data. Pointing a real user's `.env` at the URL
 
 ## Local verification
 
-`python3 deploy/modal/test_behaviour.py` from the repository root runs the stdlib-only behavior checks without Modal, a model, or a network request. The deploy Vitest suite invokes the same command in CI (`ubuntu-latest` supplies `python3`). It tests traceback and warning reduction, the public-listener event gate, exception-class validation, argmax preservation and refusal of nonfinite readings.
+`python3 deploy/modal/test_behaviour.py` from the repository root runs the stdlib-only behavior checks without Modal, a model, or a network request. The deploy Vitest suite invokes the same command in CI (`ubuntu-latest` supplies `python3`). It tests traceback and warning reduction, the public-listener event gate, exception-class validation, argmax preservation, refusal of nonfinite readings, and the smoke checks' pre-fetch URL refusals.
 
 ## Layout
 

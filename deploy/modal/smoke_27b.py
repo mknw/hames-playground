@@ -22,6 +22,7 @@ import os
 import sys
 
 from measure import call, cold_start
+from smoke_probes import PROBE_URL
 
 QWEN27B_MODEL = "Qwen/Qwen3.8-27B-FP8"
 
@@ -136,7 +137,7 @@ def main() -> int:
         **VERDA_BODY,
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": "Describe this."},
-            {"type": "image_url", "image_url": {"url": "https://example.invalid/x.png"}},
+            {"type": "image_url", "image_url": {"url": PROBE_URL}},
         ]}],
     }
     status, body, seconds = call(base, token, "POST", "/v1/chat/completions", image, timeout=60)

@@ -93,3 +93,7 @@ trap - EXIT
 rm -f ./*.deb ./*.tar ./dockerd.log ./empty-daemon.json
 # Remove clone identity and cached cloud-init instance data, never site values.
 cloud-init clean --logs --machine-id
+# Agent-rendered NoCloud seeds take precedence over the source cloud's driver.
+mkdir -p /etc/cloud/cloud.cfg.d
+printf 'datasource_list: [NoCloud]\n' > /etc/cloud/cloud.cfg.d/99-sandbox-vm.cfg
+rm -f /etc/cloud/cloud-init.disabled

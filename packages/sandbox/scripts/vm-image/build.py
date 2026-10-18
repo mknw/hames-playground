@@ -220,13 +220,27 @@ def disk_info(tool, disk, lock, work):
 
 
 def finalize(lock, work, tools):
-    metadata = (f"architecture: {lock['architecture']}\ncreation_date: {lock['epoch']}\n"
-                "properties:\n  os: Linux\n  description: Offline sandbox VM\n")
-    payload = metadata.encode()
-    info = tarfile.TarInfo("metadata.yaml")
-    info.size, info.mode, info.mtime = len(payload), 0o644, lock["epoch"]
+    # The agent needs these seed templates to deliver #654's cloud-init data.
+    # JSON is a YAML subset; this avoids quoting site-supplied data into YAML.
+    defaults = {"user-data": "#cloud-config\n{}\n", "vendor-data": "#cloud-config\n{}\n",
+                "network-config": "version: 2\nethernets:\n  eth0:\n    dhcp4: true\n    dhcp6: false\n    optional: true\n",
+                "meta-data": ""}
+    metadata = {"architecture": lock["architecture"], "creation_date": lock["epoch"],
+                "properties": {"os": "Linux", "description": "Offline sandbox VM"}, "templates": {}}
+    files = {}
+    for name, default in defaults.items():
+        metadata["templates"]["/var/lib/cloud/seed/nocloud-net/" + name] = {
+            "when": ["create", "copy"], "template": name + ".tpl", "properties": {"default": default}}
+        files["templates/" + name + ".tpl"] = (
+            'instance-id: {{ instance.name }}\nlocal-hostname: {{ instance.name }}\n' if name == "meta-data"
+            else '{{ config_get("cloud-init.' + name + '", properties.default) }}\n')
+    files["metadata.yaml"] = json.dumps(metadata, sort_keys=True, indent=2) + "\n"
     with tarfile.open(work.output("metadata.tar"), "w", format=tarfile.USTAR_FORMAT) as archive:
-        archive.addfile(info, io.BytesIO(payload))
+        for name, content in sorted(files.items()):
+            payload = content.encode()
+            info = tarfile.TarInfo(name)
+            info.size, info.mode, info.mtime = len(payload), 0o644, lock["epoch"]
+            archive.addfile(info, io.BytesIO(payload))
     files = ["metadata.tar", "disk.qcow2", "guest-inventory.json", "lock.json", "customize.sh"]
     hashes = {name: digest(work.root / name) for name in files}
     require(set(hashes) == set(files) and all(re.fullmatch(HEX, h) for h in hashes.values()), "manifest hash missing")

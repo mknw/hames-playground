@@ -203,8 +203,18 @@ class Pipeline(unittest.TestCase):
         combined = (self.work / "metadata.tar").read_bytes() + (self.work / "disk.qcow2").read_bytes()
         self.assertEqual(manifest["incus_fingerprint"], hashlib.sha256(combined).hexdigest())
         with tarfile.open(self.work / "metadata.tar", "r:") as archive:
-            self.assertEqual(archive.getnames(), ["metadata.yaml"])
-            self.assertIn(b"architecture: x86_64", archive.extractfile("metadata.yaml").read())
+            metadata = json.load(archive.extractfile("metadata.yaml"))
+            self.assertEqual(metadata["architecture"], "x86_64")
+            self.assertEqual(set(metadata["templates"]), {
+                "/var/lib/cloud/seed/nocloud-net/" + name
+                for name in ("meta-data", "user-data", "vendor-data", "network-config")})
+            for name in ("meta-data", "user-data", "vendor-data", "network-config"):
+                definition = metadata["templates"]["/var/lib/cloud/seed/nocloud-net/" + name]
+                self.assertEqual(definition["when"], ["create", "copy"])
+                content = archive.extractfile("templates/" + definition["template"]).read()
+                self.assertIn(b"instance.name" if name == "meta-data" else ("cloud-init." + name).encode(), content)
+            self.assertEqual(len(archive.getmembers()), 5)
+            self.assertTrue(all(member.isfile() for member in archive.getmembers()))
         self.assertTrue(self.calls)
         self.assertEqual(manifest["status"], "assembled-not-boot-validated")
 
@@ -322,6 +332,11 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(child.returncode, 0, child.stderr)
         self.assertEqual((guest / "usr/bin/dockerd").resolve(), binary)
 
+    def test_cloud_init_driver_uses_agent_seed(self):
+        source = (vm.HERE / "customize.sh").read_text()
+        self.assertIn("datasource_list: [NoCloud]", source)
+        self.assertIn("rm -f /etc/cloud/cloud-init.disabled", source)
+
 
 def re_scripts(source):
     import re
@@ -351,6 +366,7 @@ def mutations():
         ("compressed diff ID not verified", '"sha256:" + value.hexdigest() == expected_layer', 'True', "test_containerd_gzip_layers_use_uncompressed_diff_ids"),
         ("compressed layer not decoded", 'if magic == b"\\x1f\\x8b":', 'if False:', "test_containerd_gzip_layers_use_uncompressed_diff_ids"),
         ("expanded layer budget removed", 'expanded <= LAYER_BUDGET', 'True', "test_expanded_layer_budget"),
+        ("cloud-init seed templates removed", 'files["metadata.yaml"] = json.dumps(metadata,', 'metadata["templates"].clear()\n    files["metadata.yaml"] = json.dumps(metadata,', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
     ]
     for label, before, after, case in changes:
         if before not in source:
@@ -370,6 +386,7 @@ def mutations():
         ("guest archive checksum not verified", "value.hexdigest() != record['sha256']", "False", "test_guest_python_checks_run_against_synthetic_data"),
         ("guest loaded config ID not verified", "actual != record['image_id']", "False", "test_guest_python_checks_run_against_synthetic_data"),
         ("provisioner daemon path absent", "  ln -s /usr/sbin/dockerd /usr/bin/dockerd", "  :", "test_provisioner_dockerd_path"),
+        ("cloud-init retains source cloud driver", "datasource_list: [NoCloud]", "datasource_list: [Azure]", "test_cloud_init_driver_uses_agent_seed"),
     ]
     for label, before, after, case in guest_changes:
         if before not in guest:

@@ -151,7 +151,14 @@ The completed `manifest.json` records the complete lock (base identity/version
 and all input hashes), tool versions/hashes, builder hash/Python version,
 actual guest package inventory, flavour IDs, output hashes and Incus split
 fingerprint. `guest-inventory.json` contains all installed package versions.
-The metadata tar uses a fixed timestamp and regular `metadata.yaml` only.
+The metadata tar uses a fixed timestamp and five regular files: `metadata.yaml`
+and four agent-rendered cloud-init seed templates (meta-data, user-data,
+vendor-data, network-config). They consume `cloud-init.*`; the guest selects
+NoCloud and clears any cloud-init-disabled marker. The default network seed
+uses DHCPv4 on `eth0`, with IPv6 disabled; provisioning can supply its own
+`cloud-init.network-config`. The spike still applies its reviewed static
+address itself. Incus applies seed templates on create/copy and may reboot the
+guest once; the owed readiness check must wait for that transition to settle.
 Manifest status remains `assembled-not-boot-validated`; verify-only produces
 `verified.json`, which must never be treated as a built-image manifest.
 
@@ -177,7 +184,8 @@ The remaining mutations admit a missing Incus agent package, a mutable flavour
 selector and an argument error containing the supplied value, remove the
 provisioning-compatible `/usr/bin/dockerd` path, or remove compressed-layer
 decoding, diff-ID verification or the expansion cap. All produce assertion
-failures, for 20 independently verified builder mutations.
+failures. Two additional mutations remove the cloud-init seed map or select a
+different datasource, for 22 independently verified builder mutations.
 
 **Still owed to a disposable native Linux runner:** supply authenticated real
 base/deb archives and pinned tools/appliance; run conversion and offline dpkg;
@@ -193,5 +201,6 @@ throwaway profile created.
 
 Sources: [Incus split image format](https://linuxcontainers.org/incus/docs/main/reference/image_format/),
 [virt-customize](https://libguestfs.org/virt-customize.1.html),
+[Incus cloud-init seed requirements](https://linuxcontainers.org/incus/docs/main/cloud-init/),
 [Docker save](https://docs.docker.com/reference/cli/docker/image/save/) and
 [Docker load](https://docs.docker.com/reference/cli/docker/image/load/).

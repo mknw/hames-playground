@@ -65,11 +65,23 @@ detail and are **never** public attachments.
 
 Review every private survey file before proceeding. Missing paging parameters,
 unreadable firewall rules or unhealthy containers mean stop and investigate. Flag every SSH `limit` rule during survey review; the fresh-login witness is throttled to at most once per 30 seconds to avoid consuming its connection budget.
-The apply preflight separately requires Linux/root, native apt packages, an
-unused Incus installation, a non-root `kvm` group member who can open `/dev/kvm`
-and issue `KVM_GET_API_VERSION`, and active nested paging. It refuses an
-existing Incus/Incus-base/client installation rather than adopting its resources.
+The apply preflight separately requires Linux/root, native apt packages, a
+non-root `kvm` group member who can open `/dev/kvm` and issue
+`KVM_GET_API_VERSION`, and active nested paging. Installed, partial, held or
+`reinstreq` Incus packages are refused; removed packages are admitted, including
+`config-files` residue. Retained `/var/lib/incus` state is reused by the reinstall.
 Do not reboot or change kernel parameters to make a failed preflight green.
+
+Before launch, perform this read-only check of
+`/var/lib/incus/{virtual-machines,containers,storage-pools,images}` from a root shell:
+
+```bash
+sudo find /var/lib/incus/{virtual-machines,containers,storage-pools,images} -mindepth 1 -maxdepth 1 -print
+```
+
+These directories must hold nothing beyond this harness's earlier rollback;
+stop if any entry is foreign or unexplained. Missing directories are acceptable.
+Preflight does not enforce this check.
 
 ## Prepare the private inputs
 

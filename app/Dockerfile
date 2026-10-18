@@ -175,15 +175,17 @@ FROM node:${NODE_VERSION} AS runtime
 # and the Shell tab drives it over `docker exec`. With the host socket mounted
 # (see the compose service) sandbox containers are siblings on the host, not
 # children of this one — which is why the sandbox `docker run` calls carry no
-# bind mounts and work unchanged from in here. Without the socket the CLI is
-# inert and only the sandbox agents fail, exactly as on a host without docker.
+# bind mounts and work unchanged from in here. The opt-in sandbox-vm overlay
+# replaces that socket with a verified remote Docker endpoint and client files.
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 
 # There is deliberately no `USER node`: the socket mount is already
 # root-equivalent on the host, so an unprivileged in-image user would buy no
 # isolation while losing access to /var/run/docker.sock (whose owning gid varies
-# per host and per VM). If you do not need the compute sandbox, drop the socket
-# mount from the compose service and add `USER node` here — they go together.
+# per host and per VM). Under the sandbox-vm overlay no host socket is needed;
+# a future `USER node` change must give that user access to the read-only 0600
+# client key files through matching ownership. The app still shares app-network
+# with the gateway, whose host socket remains mounted.
 
 ENV NODE_ENV=production \
     PORT=3444 \

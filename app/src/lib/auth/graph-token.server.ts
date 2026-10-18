@@ -33,7 +33,11 @@ import {
 } from '@azure/msal-node'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { GraphAuthRequiredError } from '@hames-ai/connectors/graph/graph-auth'
-import { buildEntraConfig, msalConfiguration } from './entra-config.server'
+import {
+  assertReadOnlyGraphScopes,
+  buildEntraConfig,
+  msalConfiguration,
+} from './entra-config.server'
 import { loadUserTokenCache, saveUserTokenCache } from './user-tokens.server'
 
 assertServerOnImport()
@@ -68,6 +72,7 @@ export async function getUserGraphToken(
   userId: string,
   scopes: readonly string[] = DEFAULT_GRAPH_SCOPES,
 ): Promise<string> {
+  assertReadOnlyGraphScopes(scopes)
   const stored = await loadUserTokenCache(userId)
   if (!stored) {
     throw new GraphAuthRequiredError(

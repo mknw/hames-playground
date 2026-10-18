@@ -1344,7 +1344,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
           `&$select=subject,start,end,isAllDay,location,organizer,onlineMeetingUrl` +
           `&$orderby=start/dateTime&$top=50`,
         {
-          scopes: ['Calendars.ReadWrite'],
+          scopes: ['Calendars.Read'],
           headers: { Prefer: `outlook.timezone="${tz}"` },
         },
       )

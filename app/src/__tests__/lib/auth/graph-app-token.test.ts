@@ -39,7 +39,8 @@ vi.mock('@azure/msal-node', () => ({
   InteractionRequiredAuthError: class extends Error {},
 }))
 
-vi.mock('../../../lib/auth/entra-config.server', () => ({
+vi.mock('../../../lib/auth/entra-config.server', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../lib/auth/entra-config.server')>()),
   buildEntraConfig: () => ({
     tenantId: 't',
     clientId: 'c',

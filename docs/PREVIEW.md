@@ -468,12 +468,29 @@ separate registration.
 
 **c. Consent every delegated Graph scope, before anyone signs in.** _API
 permissions → Microsoft Graph → Delegated_: `User.Read`, `email`, `Mail.Read`,
-`Mail.Send`, `Calendars.ReadWrite`, `Files.Read.All`, `Sites.Read.All`, then
+`Calendars.Read`, `Files.Read.All`, `Sites.Read.All`, then
 **Grant admin consent**. The full set is requested at sign-in
 (`DEFAULT_GRAPH_SCOPES`, `entra-config.server.ts`), and **a scope that is
 requested but not consented fails the entire sign-in**, not just the connector
 that wanted it. If a scope turns out to be blocked, trim it via
-`AZURE_GRAPH_SCOPES` in `.env` and restart — no code change.
+`AZURE_GRAPH_SCOPES` in `.env` and restart — no code change. Only subsets of the six read scopes are accepted (case-insensitive); all other
+scopes, including delegated `.default`, refuse boot and delegated token minting.
+
+Keep the same app registration and client id; the owner adds only the new
+redirect URI there. Complete both owner steps for old write permissions:
+
+1. **App registrations → the app → API permissions:** remove `Mail.Send` and
+   `Calendars.ReadWrite` (Microsoft Graph, Delegated).
+2. **Revoke their existing admin grant** under **Other permissions granted for
+   <tenant>** or **Enterprise applications → the app → Permissions**. Also revoke
+   any per-user consent grants; removing configured permissions alone is insufficient.
+
+Keep `User.Read`, `email`, `Mail.Read`, `Calendars.Read`, `Files.Read.All`,
+`Sites.Read.All`, **`openid`, `profile`, `offline_access`**. MSAL supplies the last
+three in its request; `offline_access` enables background refresh. If revocation
+removes the whole grant, regrant only this retained set. Leave application
+permissions (the roster read) unchanged. Existing access tokens retain their old
+permissions until expiry; follow the [fresh-token verification](deployment/entra-setup.md#remove-the-old-write-permissions-in-entra).
 
 Also confirm the client secret in `.env` is the secret **value**, not its id, and
 note its expiry somewhere you will see it.

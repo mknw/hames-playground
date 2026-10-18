@@ -23,6 +23,8 @@ from measure import call, cold_start
 SUMMARIZER_MODEL = "qwen3.5-4b-instruct"
 DECIDER_MODEL = "h2oai/h2o-lightning-4b"
 MASS_TOLERANCE = 0.01  # the app's decide transport refuses an answer further from 1
+# vLLM's modality-limit refusal precedes media fetching; a generic 400 does not.
+IMAGE_REFUSAL = "At most 0 image(s) may be provided in one prompt"
 
 # The body `LocalQwenSmall` sends (packages/harness-baml/baml_src/local-client.baml).
 SUMMARIZE = {
@@ -144,7 +146,22 @@ def main() -> int:
                  "/v1/systemone/../../sleep?level=1", "/health/../collective_rpc"):
         status, _, _ = call(base, token, "POST", path, {})
         check(f"{path.split('?')[0]} is not reachable", status == 404, f"status {status}")
-    status, body, _ = call(base, token, "POST", "/v1/systemone", {**DECIDE, "image_url": "https://example.com/x.png"})
+    image = {
+        **SUMMARIZE,
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": "Describe this."},
+            {"type": "image_url", "image_url": {"url": "https://example.invalid/x.png"}},
+        ]}],
+    }
+    status, body, seconds = call(base, token, "POST", "/v1/chat/completions", image, timeout=60)
+    message = str((body.get("error") or {}).get("message", ""))
+    check(
+        "an image part is refused before any fetch",
+        status == 400 and IMAGE_REFUSAL in message
+        and not any(word in message.lower() for word in ("fetch", "resolve", "connect", "dns", "timeout")),
+        f"status {status}, {seconds:.2f}s, {message[:80]!r}",
+    )
+    status, body, _ = call(base, token, "POST", "/v1/systemone", {**DECIDE, "image_url": "https://example.invalid/x.png"})
     check(
         "an image URL is refused without a fetch",
         status == 422 and str(body.get("detail", "")).startswith("image URLs are not accepted here"),

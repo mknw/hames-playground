@@ -333,6 +333,72 @@ class Qwen27BBehaviour(unittest.TestCase):
             self.assertEqual(started, [])
 
 
+class SmokeEgressBehaviour(unittest.TestCase):
+    """Exercise the real smoke entry points with synthetic HTTP responses only."""
+
+    def run_smoke(self, name, image_response=None, shim_response=None):
+        module = __import__(name)
+        seen = []
+
+        def fake_call(base, token, method, path, body=None, **kwargs):
+            if path == "/health":
+                return (200 if token else 401), {}, 0.0
+            if path == "/v1/models":
+                models = [module.QWEN27B_MODEL] if name == "smoke_27b" else \
+                    [module.SUMMARIZER_MODEL, module.DECIDER_MODEL]
+                return 200, {"data": [{"id": m} for m in models]}, 0.0
+            if path == "/v1/chat/completions":
+                if isinstance(body["messages"][0]["content"], list):
+                    seen.append("chat-image")
+                    status, response = image_response or (400, {"error": {"message": module.IMAGE_REFUSAL}})
+                    return status, response, 0.0
+                message = {"content": "412 units"}
+                if name == "smoke_27b":
+                    message = {"content": '{"usable": 409}'}
+                    if body == module.THINKING_BODY:
+                        message = {"content": "no", "reasoning": "synthetic reasoning"}
+                return 200, {"choices": [{"message": message, "finish_reason": "stop"}]}, 0.0
+            if path == "/v1/systemone":
+                if "image_url" in body:
+                    seen.append("shim-image")
+                    status, response = shim_response or (422, {"detail": "image URLs are not accepted here"})
+                    return status, response, 0.0
+                return 200, {"probability_source": "native", "answers": {
+                    "kind": {"choice": "billing", "probabilities": {"billing": 1, "shipping": 0, "other": 0}},
+                    "needs_reply": {"type": "noul", "noul": 0.8},
+                    "urgency": {"score": 1, "probabilities": {"0": 0, "1": 1, "2": 0}},
+                }}, 0.0
+            return 404, {}, 0.0
+
+        env = {"HAMES_MODAL_URL": "https://small.invalid", "HAMES_MODAL_27B_URL": "https://big.invalid",
+               "HAMES_MODAL_PROXY_TOKEN": "synthetic-token"}
+        boot = {"cold_start_s": 0.0, "box": {"adapter_check": "ok", "answer_check": "ok"}}
+        with mock.patch.dict(os.environ, env), mock.patch.object(module, "call", fake_call), \
+                mock.patch.object(module, "cold_start", return_value=boot), \
+                mock.patch.object(module, "results", []), contextlib.redirect_stdout(io.StringIO()):
+            result = module.main()
+        self.assertEqual(seen, ["chat-image"] if name == "smoke_27b" else ["chat-image", "shim-image"])
+        return result
+
+    def test_both_chat_smokes_require_the_pre_fetch_refusal(self):
+        for name in ("smoke", "smoke_27b"):
+            with self.subTest(smoke=name):
+                self.assertEqual(self.run_smoke(name), 0)
+                for status, message in (
+                    (200, "At most 0 image(s) may be provided in one prompt"),
+                    (400, "invalid request"),
+                    (400, "fetch failed: DNS resolution error"),
+                    (400, "At most 0 image(s) may be provided in one prompt; fetch timeout"),
+                ):
+                    self.assertEqual(self.run_smoke(name, (status, {"error": {"message": message}})), 1)
+
+    def test_shim_smoke_requires_its_specific_refusal(self):
+        for status, message in ((200, "image URLs are not accepted here"),
+                                (422, "fetch failed"), (422, "invalid request")):
+            with self.subTest(status=status, message=message):
+                self.assertEqual(self.run_smoke("smoke", shim_response=(status, {"detail": message})), 1)
+
+
 class MeasureBehaviour(unittest.TestCase):
     def run_main(self, argv, cold=None, warm=None):
         import measure

@@ -1672,6 +1672,7 @@ stage_smoke() {
     note "6  Engine >= $MIN_ENGINE, daemon.json safe, deployed Neo4j bridge internal/isolated; bounded egress negatives with positive controls"
     note "7  Cypher RETURN through neo4j-relay:7687 (also with --no-seed)"
     note "9  CPU embedder: one internal POST /v1/embeddings returns 1024 finite dimensions"
+    note "10 forwarded metadata rules and persistence; cap-dropped throwaway bridge probe blocked; app healthy before/after"
     if ((PROBE_PRIVATE_HEALTH)); then
       note "8  OPT-IN: one authenticated GET small-model /health; may wake a box; no completion or retry"
     else
@@ -1789,6 +1790,13 @@ stage_smoke() {
   fi
   if vps_check --embeddings; then ok "9  embedder returned 1024 dimensions"; else
     fail "9  embedder forward pass failed or returned the wrong dimensions"
+    fails=$((fails + 1))
+  fi
+  if (cd "$APP_DIR" && sudo env COMPOSE_FILE="$COMPOSE_FILES" COMPOSE_PROFILES="$COMPOSE_PROFILE" \
+    python3 scripts/metadata-egress.py --docker-user-only --smoke); then
+    ok "10 forwarded metadata denied; persistence enabled; app stays healthy"
+  else
+    fail "10 forwarded metadata policy/persistence/probe failed or inconclusive"
     fails=$((fails + 1))
   fi
 

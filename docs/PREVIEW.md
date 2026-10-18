@@ -679,6 +679,39 @@ model. No completion or retry is made. See the
 [probe scope](testing/neo4j-egress.md#existing-deployment-smoke-432-g20-rows-3-4-and-10)
 and [dump-first Engine-upgrade runbook](deployment/docker-engine-upgrade.md).
 
+Before admitting containers, install the [forwarded-only metadata policy and
+its opt-in persistence unit](deployment/egress-design.md#forwarded-only-deployment-mode-676)
+from a reviewed pinned artifact:
+
+```sh
+python3 scripts/metadata-egress.py --docker-user-only --persist # offline preview
+sudo python3 scripts/metadata-egress.py --docker-user-only --apply --persist
+sudo systemctl start vps-metadata-egress.service
+sudo python3 scripts/metadata-egress.py --docker-user-only --check # read-only
+```
+
+This mode denies the reviewed IPv4/IPv6 metadata inventory and conntrack
+original destinations in `DOCKER-USER` only; host `INPUT`/`OUTPUT` and host
+metadata access retain their existing policy (`scripts/metadata-egress.py:179`,
+`:372`). `--only smoke` checks the installed rules and persistence, attempts a
+three-second TCP connection to `169.254.169.254:80` from a throwaway default-
+bridge container with all capabilities dropped, and requires app liveness both
+before and after (`scripts/bootstrap-vps.sh:1796`; `scripts/metadata-egress.py:234`).
+It uses the local app image without pulling, makes no metadata HTTP request,
+and needs no public internet or private-tier box. A runtime error fails smoke;
+an endpoint timeout alone is not packet proof. Dual-stack synthetic packet,
+counter and reboot/restart evidence remains operator work.
+
+The unit reapplies after Docker starts and participates in Docker restarts.
+**Known limit:** Docker can auto-start restart-policy containers before this
+unit runs on boot; that exposure window is unmeasured and a failed unit can
+leave it open. Workload startup gating is a follow-up. Until then, explicitly
+stop/quiesce workloads before reboot or Docker/firewall maintenance and admit
+them only after unit success and dual-family readback. See the
+[replacement and dead-man rollback procedure](deployment/egress-design.md#operator-adoption-and-temporary-rule-replacement)
+before replacing temporary rules. Undo is `--docker-user-only --apply --remove`:
+it removes only journaled exact rules/files/enablement, never a saved full table.
+
 Run all of it yourself before inviting anyone, from a browser that has never
 seen the host.
 

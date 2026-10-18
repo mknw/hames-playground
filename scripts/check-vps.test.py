@@ -413,7 +413,7 @@ class Wiring(unittest.TestCase):
     def test_smoke_no_seed_still_probes_and_health_requires_flag(self):
         body = '''DRY_RUN=0 NO_SEED=1 SSH_PORT=50022 HOSTNAME_ARG=app.example.invalid;
         PROBE_PRIVATE_HEALTH=$1; failure_mode=$2; touch "$ENV_FILE"; mkdir "$APP_DIR/configs"; touch "$APP_DIR/configs/mcp-config.yaml";
-        desired_ssh_ports() { echo 50022; }; sudo() { return 0; }; public_listeners() { cat >/dev/null; };
+        desired_ssh_ports() { echo 50022; }; sudo() { case "$*" in *metadata-egress.py*) echo "METADATA $*"; [[ $failure_mode != metadata ]];; *) return 0;; esac; }; public_listeners() { cat >/dev/null; };
         dc() { case "$*" in *mcp-gateway*) echo 'Those servers are enabled: context7,fetch,memory,neo4j-cypher,web_search';; *printenv*) echo false;; esac; };
         curl() { case "$*" in *http://*) echo '301 https://app.example.invalid/';; *'/api/health') echo '{"status":"ok"}';; *) echo 401;; esac; };
         dynamic_tools_state() { echo disabled; }; assert_engine_supported() { echo ENGINE; };
@@ -427,11 +427,12 @@ class Wiring(unittest.TestCase):
             for mode in ("daemon", "egress", "relay"):
                 self.assertIn("PROBE --" + mode + " --ssh-port 50022", output.stdout)
             self.assertIn("PROBE --embeddings", output.stdout)
+            self.assertIn("python3 scripts/metadata-egress.py --docker-user-only --smoke", output.stdout)
             self.assertEqual("HEALTH" in output.stdout, flag == "1")
         output = self.shell(body.replace('echo HEALTH;', 'echo HEALTH; return 1;'), "1", "none")
         self.assertEqual(output.returncode, 1, output.stdout + output.stderr)
         self.assertIn("private /health failed", output.stdout)
-        for failed in ("egress", "relay", "daemon", "embeddings"):
+        for failed in ("egress", "relay", "daemon", "embeddings", "metadata"):
             output = self.shell(body, "0", failed)
             self.assertEqual(output.returncode, 1, output.stdout + output.stderr)
         output = self.shell(body.replace('echo ENGINE;', 'refuse "unsupported Engine";'), "0", "none")
@@ -467,6 +468,10 @@ class Wiring(unittest.TestCase):
 
 
 MUTATIONS = [
+    ("metadata-smoke-wiring", BOOTSTRAP, 'python3 scripts/metadata-egress.py --docker-user-only --smoke', 'true'),
+    ("metadata-smoke-failure-ignored", BOOTSTRAP,
+     'fail "10 forwarded metadata policy/persistence/probe failed or inconclusive"\n    fails=$((fails + 1))',
+     'note "10 forwarded metadata policy/persistence/probe failed or inconclusive"'),
     ("dump-first", RUNBOOK, "bash scripts/backup-preview.sh", "true"),
     ("daemon-routing", SOURCE, 'config[key] is False', 'True'),
     ("daemon-wiring", BOOTSTRAP, '  assert_daemon_isolation\n', '  : # removed daemon gate\n'),

@@ -1,12 +1,13 @@
 # Container egress and cloud metadata: design and offline rules
 
-**Status: design, with an opt-in rule installer; nothing deployed.** This is
+**Status: opt-in rule installers; broader egress policy remains design only.** This is
 [#432 G20 row 11](https://github.com/mknw/hames-playground/pull/432#issuecomment-6238143691),
 build step 7. It builds on #639's Engine/daemon and smoke checks and #643's
 two-clone shape. The coordinator scoped the executable artifact to metadata
-denies; the broader host/LAN policy below remains design only. Required
-coordinator-commissioned **Opus security review convergence** and operator packet/reboot
-evidence remain outstanding. No host access, provider calls or private-tier
+denies; the broader host/LAN policy below remains design only.
+The #646 installer passed independent Codex and Opus delta reviews; #676 adds
+the forwarded-only mode below, which needs its own commissioned reviews.
+Operator packet/reboot evidence remains outstanding. No host access, provider calls or private-tier
 probes are part of this change. Deployment-specific values stay outside the
 public repository ([ADR-0008](../adr/0008-deployment-guidance-is-provider-neutral.md)).
 
@@ -33,8 +34,10 @@ not a security boundary against a compromised socket holder (SD-19/SD-20).
 [`scripts/metadata-egress.py`](../../scripts/metadata-egress.py) has no instance
 inputs. With no arguments it renders both families entirely offline, without
 calling Docker, iptables, a resolver or any endpoint
-(`scripts/metadata-egress.py:150`). Only explicit `--apply` enters Linux-root
-firewall handling (`:127`); bootstrap and Compose never invoke it.
+(`scripts/metadata-egress.py:410`). Only explicit `--apply` enters Linux-root
+firewall writes (`:156`, `:372`); bootstrap checks the forwarded-only mode but
+never applies it. The original mode below includes host traffic; deployments
+that must preserve host metadata use `--docker-user-only` instead.
 
 The host uses Docker's **iptables firewall backend**. The iptables-nft
 compatibility frontend is distinct from Docker's native nftables backend;
@@ -66,15 +69,15 @@ external proxies and network namespaces with a different routing path require
 separate operator analysis. It does not inspect HTTP headers, paths or TLS.
 
 The managed chain has no `ACCEPT`, established exception, interface assumption,
-subnet allowlist or private-address blanket deny (`scripts/metadata-egress.py:67`).
+subnet allowlist or private-address blanket deny (`scripts/metadata-egress.py:96`).
 The jump comes before **every** existing rule, including established accepts
-and Docker's terminal return (`:105`). Thus established metadata flows are
+and Docker's terminal return (`:134`). Thus established metadata flows are
 blocked too, without flushing global conntrack or disrupting unrelated flows.
 Other traffic returns to Docker/UFW; an existing deny remains a deny.
 
 ### Destination inventory and alternate forms
 
-The single inventory drives both families (`scripts/metadata-egress.py:18`, `:30`):
+The single inventory drives both families (`scripts/metadata-egress.py:24`, `:59`):
 
 | Deny                                                                                                | Reason and boundary                                                                                                                                                                                                                                                                                                                                           |
 | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -115,29 +118,132 @@ from a reviewed, pinned checkout, only under the rollout conditions below.
 
 The installer reads both filter tables, requires real `DOCKER-USER`, `INPUT`,
 `OUTPUT` and `FORWARD` chains, and refuses a parent rule before the unconditional
-`FORWARD -> DOCKER-USER` jump (`scripts/metadata-egress.py:89`). Missing IPv6
+`FORWARD -> DOCKER-USER` jump (`scripts/metadata-egress.py:118`). Missing IPv6
 support is a refusal, never a silent IPv4-only success. It does **not** create
 an uncalled `DOCKER-USER` chain. A default IPv4-only Docker installation may
 therefore refuse: enabling and validating the IPv6 hook is operator work before
 adoption; merely seeing IPv4-only Neo4j does not prove the whole host has no IPv6.
 
 It syntax-tests **both** `*-restore --noflush` transactions before writing
-either (`scripts/metadata-egress.py:127`). Each transaction replaces only
+either (`scripts/metadata-egress.py:156`). Each transaction replaces only
 `VPS-METADATA`, removes all old managed jumps and inserts one at position 1.
 Unrelated chains/rules remain intact; existing foreign references or unmarked
 rules in the reserved chain refuse. Readback verifies both policy contents and
-first/unique hooks, tolerating xtables' canonical IP and option ordering (`:51`,
-`:137`). Repeat application produces the same policy, aside from counters.
+first/unique hooks, tolerating xtables' canonical IP and option ordering (`:80`,
+`:166`). Repeat application produces the same policy, aside from counters.
 
 Each family has its own transaction; there is **no cross-family atomicity**.
 A failure after the IPv4 write can leave IPv6 unchanged. Errors return nonzero,
-print fixed labels without command output, and never report success (`:163`).
+print fixed labels without command output, and never report success (`:435`).
 This is fail-closed **admission to service**, not an automatic global network
 shutdown: the installer cannot stop callers. Keep workloads stopped until both
 families pass. Run only one installer at a time, with Docker/firewall lifecycle
 changes quiesced. The xtables wait lock is per command, not a lock against
 changes between snapshot, test, commit and readback. This is why a successful
 offline test is not deployment evidence.
+
+## Forwarded-only deployment mode (#676)
+
+`--docker-user-only` shares the complete destination inventory and original-
+destination matches above, but installs direct tagged `DROP` rules only in
+`DOCKER-USER` (`scripts/metadata-egress.py:179`, `:372`). It creates no chain,
+changes no policy and never writes host `INPUT`/`OUTPUT`. Host agents retain
+their existing metadata access. Forwarded non-metadata traffic falls through
+to existing rules. A metadata request DNATed to a host-local listener follows
+`INPUT` and is deliberately outside this mode; host networking, metadata
+proxies, Docker authority and the other exclusions above also remain outside it.
+
+```sh
+# Entirely offline previews, including the proposed unit:
+python3 scripts/metadata-egress.py --docker-user-only --persist
+python3 scripts/metadata-egress.py --docker-user-only --remove
+# Operator only, from a reviewed pinned artifact:
+sudo python3 scripts/metadata-egress.py --docker-user-only --apply --persist
+sudo python3 scripts/metadata-egress.py --docker-user-only --check
+```
+
+Apply validates both live `FORWARD -> DOCKER-USER` paths before firewall writes.
+Missing IPv6 refuses; this tool does not manufacture an uncalled chain. Each
+exact rule is checked with `-C` before insertion with `-I DOCKER-USER 1`, ahead
+of established accepts and returns (`scripts/metadata-egress.py:192`, `:372`).
+Repeated application inserts nothing. Dual-family readback requires every deny
+exactly once in the first block of rules (`:210`). Existing displaced/duplicate
+managed rules refuse admission rather than silently trusting `-C`. Operations
+are incremental, not atomic across rules or families: keep workloads stopped
+until readback succeeds. Failure is nonzero, with fixed labels and bounded
+subprocesses; no global conntrack flush or full-ruleset restore is used (`:149`).
+
+The private state directory `/var/lib/vps-metadata-egress` contains a locked,
+fsynced write-ahead journal. Only newly inserted exact rules, newly created
+persistence files and enablement performed by this installer are recorded
+(`scripts/metadata-egress.py:271`, `:317`). `--docker-user-only --apply --remove`
+reverses those entries, checks rule existence and deletes each by its complete
+argv; it never deletes by line number or restores a historical table (`:351`).
+Foreign/manual rules survive. An edited persistence file or an invalid journal
+entry refuses undo. Do not delete the journal or change its mode/ownership;
+another install/undo holding its lock causes immediate refusal. Serialize host
+firewall changes too: the tool's lock cannot serialize unrelated operators.
+
+### Persistence and its boot-window limit
+
+There was no custom-rule persistence installer in this deployment: UFW persists
+its own host policy, while the old design described a future systemd prerequisite.
+`--persist --apply` now installs a root-owned copy of the reviewed script at
+`/usr/local/lib/vps-metadata-egress.py` and enables
+`/etc/systemd/system/vps-metadata-egress.service` (`scripts/metadata-egress.py:323`).
+It refuses foreign/different existing files, so a later script upgrade requires
+operator review and a stopped-workload remove/reinstall. It never executes a
+mutable checkout on boot and adds no package dependency or saved-rules restore.
+
+The oneshot has `After=docker.service ufw.service`, `Requires=docker.service`,
+`PartOf=docker.service`, `Before=hames-app.service`, and
+`WantedBy=docker.service` (`scripts/metadata-egress.py:31`). The enablement pulls
+it into Docker starts; `PartOf` propagates Docker restarts. `RemainAfterExit`
+alone would not provide that propagation. An operator's separate workload unit
+must also **require** this unit's success; `Before` alone is only ordering.
+[systemd's dependency semantics](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html)
+define these relationships. The repo's Compose startup stays manual.
+
+[Docker documents DOCKER-USER's forwarding and post-DNAT position](https://docs.docker.com/engine/network/firewall-iptables/).
+Its [upstream implementation explicitly preserves existing rules across daemon
+operations/restarts](https://github.com/moby/moby/blob/v28.5.2/libnetwork/firewall_linux.go#L45-L53).
+The reapply unit nevertheless validates both parents and rules after Docker
+starts. Reboot loses kernel rules and requires reapplication. UFW/other firewall
+reloads and manual flushes are separate events: quiesce workloads, restart the
+oneshot and recheck before admitting them; this unit does not watch every reload.
+
+**Known residual:** Docker may start `restart: unless-stopped` containers before
+an `After=docker.service` oneshot runs on boot. Exposure lasts from those starts
+until successful dual-family readback; its duration is **unmeasured**, and a
+failed unit can leave it open indefinitely. This is persistence, not a guaranteed
+boot admission barrier. Changing the workload startup mechanism is deferred per
+the #676 scope decision. Until that follow-up lands, stop workloads explicitly
+before reboot or Docker maintenance, verify that restart policies will not
+auto-admit them, then start Docker, start/check this unit and only then admit
+workloads. Keep an independent console. Never claim an unattended reboot has
+zero exposure based on this unit; record separate boot/restart/reload evidence
+on an approved throwaway host before relying on it.
+
+### Smoke and evidence boundary
+
+`bootstrap-vps.sh --only smoke` invokes `--docker-user-only --smoke`
+(`scripts/bootstrap-vps.sh:1796`). This first runs the read-only rule check,
+verifies the pinned persistence files and enabled unit, checks app liveness,
+then runs a throwaway container on the default bridge using the already-local
+app image ID, `--pull never`, `--cap-drop ALL`, no new privileges and no mounts
+(`scripts/metadata-egress.py:234`). Node attempts TCP to **169.254.169.254:80**
+with a three-second timeout. No HTTP metadata body, DNS, configurable endpoint
+or provider/model request is sent. TCP success fails smoke; a start/runtime
+error or unexpected output is inconclusive and also fails. App liveness must
+still pass after refusal. The existing relay, isolation and embedder checks
+remain independent.
+
+The probe is safe without internet or a live metadata service: known network
+refusal/timeout is expected, but is **not by itself evidence the firewall bites**.
+Readback supplies installation evidence; synthetic live listeners, counters,
+dual-stack packet controls and restart/reboot trials remain operator evidence.
+The smoke probes the default bridge's IPv4 path; IPv6 and alternate forms are
+verified by readback/offline policy tests, not by this one network probe.
 
 ## Broader host/LAN policy: design only
 
@@ -190,56 +296,74 @@ or alter either clone's Compose files.
   removal. Keep the metadata baseline for remaining fetch/tool requests and
   host clients. Recheck the service inventory before selecting broader denies.
 
-## Rollout, reboot persistence and rollback: described, not installed
+## Operator adoption and temporary-rule replacement
 
-An operator first validates this on an explicitly approved **throwaway Linux
-daemon**, never the owner's default VM or a shared project. Follow the existing
+No live host access is part of this PR. First validate packet paths on an
+approved throwaway Linux daemon using synthetic listeners/routes, including
+established flows and forwarded DNAT. Follow the existing
 [Engine-upgrade runbook](docker-engine-upgrade.md) and
-[G13 test protocol](../testing/neo4j-egress.md) for the baseline prerequisites.
-Reuse #639's daemon/network guards before admitting workloads. This installer
-does not replace Engine >=28, isolated networking or those daemon guards.
+[G13 test protocol](../testing/neo4j-egress.md); do not start the owner's default
+VM or a shared project. Run the daemon/network guards before admitting workloads.
 
-For later adoption, stop service workloads and prevent restart-policy containers
-from starting ahead of the firewall. Start the configured Docker daemon without
-workload admission; verify both live hooks, run the explicit apply, then run
-synthetic dual-stack packet controls and the existing paired G13/relay checks.
-Do not call a real metadata endpoint: use synthetic listeners/routes in the
-throwaway fixture, including established flows and local DNAT. Test real rule
-counters, successful permitted destinations, and failed forbidden connections;
-a bare timeout with no positive control is inconclusive.
+For the live replacement, keep an independent console, quiesce workloads/builds,
+and keep the existing temporary rules through the new rule checks. Take local
+`iptables-save`/`ip6tables-save` snapshots for **diff/forensics only**, never for a
+full-table rollback over running Docker. Keep these host-specific artifacts off
+GitHub. In a pinned reviewed checkout:
 
-Persistence should be an **operator-owned systemd prerequisite** at a pinned
-path, ordered after Docker and UFW setup/reload and before the Compose workload
-unit. Its oneshot runs the explicit installer; the workload unit requires its
-success. Docker restarts, UFW reloads and network changes must revalidate/reapply
-with `sudo python3 scripts/metadata-egress.py --apply` before workload admission;
-this step is idempotent and reads back both families (`scripts/metadata-egress.py:127`,
-`:137`). No read-only detector exists, so `smoke` does not prove the baseline is
-installed; a read-only `--check` using the existing readback block with zero
-restore calls, wired into `smoke`, is owed together with persistence adoption.
-`RemainAfterExit` alone does not re-run on a firewall
-reload. Prevent Docker's `restart: unless-stopped` containers from bypassing
-that gate on reboot, and test restart, reboot and reload separately. A generic
-`iptables-save` dump restored before Docker creates its chains is not the
-persistence design. No systemd unit, persistent rules or restart policy is
-changed by this PR.
+```sh
+# Root-owned artifact also gives the dead-man timer a stable undo executable.
+sudo install -o root -g root -m 0644 scripts/metadata-egress.py /root/metadata-egress-reviewed.py
+sudo systemd-run --unit=vps-metadata-undo --on-active=5m \
+  /usr/bin/python3 /root/metadata-egress-reviewed.py --docker-user-only --apply --remove
+sudo python3 /root/metadata-egress-reviewed.py --docker-user-only --apply --persist
+sudo systemctl start vps-metadata-egress.service
+sudo python3 /root/metadata-egress-reviewed.py --docker-user-only --check
+```
 
-Keep an independent console and a local pre-change snapshot for recovery.
-On failure keep workloads stopped, inspect the labeled error locally, and
-reapply the reviewed policy. An intentional rollback removes only tagged
-jumps and the owned chain in both families after stopping workloads; never
-flush Docker/UFW tables or blindly restore a stale whole-host snapshot over
-running Docker. Removing the baseline reopens metadata access and is not a
-successful deployment. Unknown provider/host dependencies that need metadata
-must be resolved before adoption, including host agents using OpenStack's
-`fe80::a9fe:a9fe` because the `OUTPUT` hook blocks it too
-(`scripts/metadata-egress.py:16`, `:31`, `:70`); there is no hidden host-process
-exemption.
+Now verify that the **new tagged** rules bite: use a capped throwaway probe and
+local before/after counters, with an independent known-live synthetic endpoint
+for packet proof. The offline-safe metadata smoke is a required check but a
+negative endpoint result alone cannot prove which rule denied it. Confirm app,
+relay and permitted traffic still work. Only after this evidence remove the
+old manual rules. If the local snapshots show exactly these untagged rules,
+the exact replacements are:
+
+```sh
+sudo iptables -w 5 -C DOCKER-USER -d 169.254.0.0/16 -j DROP
+sudo iptables -w 5 -D DOCKER-USER -d 169.254.0.0/16 -j DROP
+sudo ip6tables -w 5 -C DOCKER-USER -d fe80::a9fe:a9fe/128 -j DROP
+sudo ip6tables -w 5 -D DOCKER-USER -d fe80::a9fe:a9fe/128 -j DROP
+```
+
+If those exact checks fail, stop and use the **actual complete argv** from the
+local snapshots, retaining any interface/comment/match options; do not guess,
+flush, delete by line number, or delete the new tagged rules. Re-save/re-diff
+both tables: only the new tagged `DOCKER-USER` denies and the intended old-rule
+removals may differ, apart from counters. Host `INPUT`/`OUTPUT`, unrelated rules
+and policies must remain unchanged. Re-run the read-only check and complete
+`bootstrap-vps.sh --only smoke` (with the deployment's normal required flags).
+Then cancel the dead-man timer:
+
+```sh
+sudo systemctl stop vps-metadata-undo.timer
+```
+
+Undo while that timer is armed removes only journaled changes and leaves the
+old manual rules if they are still present. Once the old rules are deleted,
+undo reopens container metadata access: keep workloads stopped and reinstate
+the exact old rules if rolling back. Never call that a successful deployment.
+The full-host legacy `--apply` mode remains separate and unpersisted; it blocks
+host metadata too and requires its original host-agent inventory and rollout
+review. This forwarded-only mode does not migrate or remove any pre-existing
+legacy host hooks.
 
 ## Claims and the mutations that break them
 
 Layer 1 evidence is an independent small interpreter of the emitted rule syntax,
-plus fake snapshot/test/commit/readback transactions. It validates every generated
+plus fake snapshot/test/commit/readback transactions. The forwarded-only mode
+also has a fake direct-rule/systemctl table, private filesystem fixtures and an
+executed Node probe program with synthetic sockets. It validates every generated
 managed rule against a complete allowlist of the modeled match forms and refuses
 unsupported protocol/port/source/interface restrictions. It models destination,
 conntrack original destination/direction, rule order, jumps and state. It does
@@ -247,21 +371,40 @@ not emulate kernel routing, netfilter, Docker or persistence. Every mutation
 below edits production source in a temporary directory and re-runs the **same**
 tests; a syntax/import error does not count as a kill.
 
+The forwarded-only pins add these production-source mutations (all run by the
+same committed runner). Bootstrap's two integration mutations run through
+`python3 scripts/check-vps.test.py --mutations`:
+
+| Forwarded-only claim                                                                                                   | Source                                           | Mutation                                                                                                                                                               |
+| ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Both families deny forwarded metadata while host chains stay intact                                                    | `scripts/metadata-egress.py:179`, `:372`         | `forward-v6-missing`, `forward-host-touched`; the shared address/form mutations below also run                                                                         |
+| Every insert is first and preceded by an exact existence check; repeat apply writes no rule                            | `scripts/metadata-egress.py:192`, `:372`         | `forward-appended`, `forward-not-idempotent`                                                                                                                           |
+| Parent, first block, complete/unique policy and lookup errors fail closed                                              | `scripts/metadata-egress.py:186`, `:196`, `:210` | `forward-parent-off`, `forward-readback-off`, `forward-first-off`, `forward-unique-off`, `forward-lookup-error-is-absence`                                             |
+| Dry-run does no work; writes require Linux root                                                                        | `scripts/metadata-egress.py:259`, `:372`         | `forward-dry-run-applies`, `forward-root-off`                                                                                                                          |
+| Journaled undo deletes exact owned rules and refuses foreign state                                                     | `scripts/metadata-egress.py:271`, `:317`, `:351` | `forward-removal-not-exact`, `forward-journal-write-off`, `forward-journal-rule-validation-off`, `forward-journal-file-validation-off`, `forward-state-ownership-off`  |
+| Persistence is installed, enabled, ordered after Docker/before the app and participates in restarts                    | `scripts/metadata-egress.py:31`, `:323`          | `persistence-missing`, `persistence-order-wrong`, `persistence-before-missing`, `persistence-restart-off`, `persistence-disabled`                                      |
+| Persistence installation/undo refuses foreign or edited files                                                          | `scripts/metadata-egress.py:323`, `:351`         | `persistence-file-clobber`, `persistence-undo-clobber`                                                                                                                 |
+| Smoke detects policy/unit absence, requires app health, uses no pulls/all caps dropped and rejects inconclusive output | `scripts/metadata-egress.py:234`                 | `smoke-rules-unchecked`, `smoke-unit-unchecked`, `smoke-enabled-unchecked`, `smoke-caps-kept`, `smoke-image-pull`, `smoke-refusal-unchecked`, `smoke-health-unchecked` |
+| The actual TCP program refuses success and enforces a short deadline                                                   | `scripts/metadata-egress.py:220`                 | `smoke-probe-false-success`, `smoke-probe-unbounded`                                                                                                                   |
+| Bootstrap invokes this smoke and propagates failure                                                                    | `scripts/bootstrap-vps.sh:1796`                  | `metadata-smoke-wiring`, `metadata-smoke-failure-ignored`                                                                                                              |
+
+The original full-host mode retains these pins:
+
 | Claim                                                                                                 | Source                                   | Executed source mutation that turns its test red                                                                                                                |
 | ----------------------------------------------------------------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| IPv4 metadata and alternate service are denied.                                                       | `scripts/metadata-egress.py:18`, `:67`   | `metadata-v4`, `alternate-v4` remove a denied range.                                                                                                            |
-| Denies have no protocol/port/source/interface restrictions the interpreter silently ignores.          | `scripts/metadata-egress.py:48`          | `tcp-only-denies` prepends `-p tcp` to every DROP rule; the shared interpreter grammar assertion fails.                                                         |
-| Forwarded traffic reaches the metadata policy.                                                        | `scripts/metadata-egress.py:16`, `:89`   | `wrong-chain` removes the DOCKER-USER hook; `unreachable-parent` disables parent validation.                                                                    |
-| Host output and local DNAT cannot bypass the same policy.                                             | `scripts/metadata-egress.py:16`, `:73`   | `host-output-gap`, `local-dnat-gap` remove their hooks; `post-dnat-gap` changes original-destination matching.                                                  |
-| Established/related metadata packets are denied before any existing accept.                           | `scripts/metadata-egress.py:116`         | `established-bypass` appends the jump after existing accepts/returns.                                                                                           |
-| Both address families and the declared alternate forms are covered.                                   | `scripts/metadata-egress.py:17`, `:30`   | `ipv6-gap`, `ipv6-service`, `ipv6-gcp`, `ipv6-linklocal`, `mapped-gap`, `compatible-gap`, `nat64-gap`, `local-nat64-gap` each remove a family/address/form.     |
-| Required relay/MCP/private-service and public egress keep existing policy; Docker denies stay denied. | `scripts/metadata-egress.py:75`          | `relay-path-cut` adds an RFC1918 blanket deny; `mcp-egress-cut` replaces the final return with drop.                                                            |
-| Default invocation performs no host commands; applying requires Linux root.                           | `scripts/metadata-egress.py:155`         | `dry-run-applies` makes apply unconditional; `root-gate` removes the platform/uid check.                                                                        |
-| Both syntax preflights precede writes.                                                                | `scripts/metadata-egress.py:131`         | `no-syntax-preflight` removes restore's test flag. Missing IPv6 also causes zero writes.                                                                        |
-| Repeated reconciliation leaves one first hook and preserves unrelated rules.                          | `scripts/metadata-egress.py:113`         | `duplicate-hooks` stops deleting old managed jumps; `table-flush` removes the no-flush option.                                                                  |
-| Wrong readback cannot report success.                                                                 | `scripts/metadata-egress.py:141`         | `no-readback` accepts any managed policy; `save-canonicalization` stops normalizing option order.                                                               |
-| Post-commit readback refuses displaced or duplicate hooks and an unreachable parent in either family. | `scripts/metadata-egress.py:140`, `:143` | `readback-hook-guard-off`, `readback-first-off`, `readback-unique-off`, `readback-hooks-off`, `readback-validate-off` remove each corresponding readback guard. |
-| Reserved chains refuse foreign references and foreign comment markers.                                | `scripts/metadata-egress.py:97`, `:100`  | `foreign-ref-hook-any` permits a FORWARD reference; `no-marker-check` accepts a foreign marker.                                                                 |
+| IPv4 metadata and alternate service are denied.                                                       | `scripts/metadata-egress.py:24`, `:96`   | `metadata-v4`, `alternate-v4` remove a denied range.                                                                                                            |
+| Denies have no protocol/port/source/interface restrictions the interpreter silently ignores.          | `scripts/metadata-egress.py:77`          | `tcp-only-denies` prepends `-p tcp` to every DROP rule; the shared interpreter grammar assertion fails.                                                         |
+| Forwarded traffic reaches the metadata policy.                                                        | `scripts/metadata-egress.py:22`, `:118`  | `wrong-chain` removes the DOCKER-USER hook; `unreachable-parent` disables parent validation.                                                                    |
+| Host output and local DNAT cannot bypass the same policy.                                             | `scripts/metadata-egress.py:22`, `:102`  | `host-output-gap`, `local-dnat-gap` remove their hooks; `post-dnat-gap` changes original-destination matching.                                                  |
+| Established/related metadata packets are denied before any existing accept.                           | `scripts/metadata-egress.py:145`         | `established-bypass` appends the jump after existing accepts/returns.                                                                                           |
+| Both address families and the declared alternate forms are covered.                                   | `scripts/metadata-egress.py:23`, `:59`   | `ipv6-gap`, `ipv6-service`, `ipv6-gcp`, `ipv6-linklocal`, `mapped-gap`, `compatible-gap`, `nat64-gap`, `local-nat64-gap` each remove a family/address/form.     |
+| Required relay/MCP/private-service and public egress keep existing policy; Docker denies stay denied. | `scripts/metadata-egress.py:104`         | `relay-path-cut` adds an RFC1918 blanket deny; `mcp-egress-cut` replaces the final return with drop.                                                            |
+| Default invocation performs no host commands; applying requires Linux root.                           | `scripts/metadata-egress.py:429`         | `dry-run-applies` makes apply unconditional; `root-gate` removes the platform/uid check.                                                                        |
+| Both syntax preflights precede writes.                                                                | `scripts/metadata-egress.py:160`         | `no-syntax-preflight` removes restore's test flag. Missing IPv6 also causes zero writes.                                                                        |
+| Repeated reconciliation leaves one first hook and preserves unrelated rules.                          | `scripts/metadata-egress.py:142`         | `duplicate-hooks` stops deleting old managed jumps; `table-flush` removes the no-flush option.                                                                  |
+| Wrong readback cannot report success.                                                                 | `scripts/metadata-egress.py:170`         | `no-readback` accepts any managed policy; `save-canonicalization` stops normalizing option order.                                                               |
+| Post-commit readback refuses displaced or duplicate hooks and an unreachable parent in either family. | `scripts/metadata-egress.py:169`, `:172` | `readback-hook-guard-off`, `readback-first-off`, `readback-unique-off`, `readback-hooks-off`, `readback-validate-off` remove each corresponding readback guard. |
+| Reserved chains refuse foreign references and foreign comment markers.                                | `scripts/metadata-egress.py:126`, `:129` | `foreign-ref-hook-any` permits a FORWARD reference; `no-marker-check` accepts a foreign marker.                                                                 |
 
 Run the two Python commands above for the current counts. CI runs both tests
 and mutations in the existing daemon-free infrastructure step. All service
@@ -274,5 +417,5 @@ coordinator instruction; no daemon may be started for this lane. No live model
 call or private-tier wake/probe is authorized.
 
 The command seam also pins a bounded subprocess call and fixed command-failure
-labels (`scripts/metadata-egress.py:120`): `command-timeout` removes its timeout
+labels (`scripts/metadata-egress.py:149`): `command-timeout` removes its timeout
 and `command-failure` ignores a failed command; both turn the tests red.

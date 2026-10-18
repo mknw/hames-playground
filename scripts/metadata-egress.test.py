@@ -9,6 +9,7 @@ import copy
 import importlib.util
 import io
 import ipaddress
+import json
 import os
 from pathlib import Path
 import shlex
@@ -16,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -39,11 +41,11 @@ def snapshot(chains):
     return "\n".join([*lines, "COMMIT", ""])
 
 
-def validate_managed_rule(rule):
+def validate_managed_rule(rule, marker="vps-metadata-v1"):
     """Accept only the complete match forms modeled below, without restrictions."""
     assert len(rule) % 2 == 0, "unknown managed rule grammar: " + repr(rule)
     pairs = list(zip(rule[::2], rule[1::2]))
-    base = [("-m", "comment"), ("--comment", "vps-metadata-v1")]
+    base = [("-m", "comment"), ("--comment", marker)]
     forms = [base + [("-j", egress.CHAIN)], base + [("-j", "RETURN")]]
     for key, value in pairs:
         if key in ("-d", "--ctorigdst"):
@@ -338,7 +340,344 @@ class Command(unittest.TestCase):
                 egress.command(["synthetic-command"])
 
 
+class Forwarded(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        self.root = Path(self.folder.name)
+        self.states = {family: initial() for family in ("iptables", "ip6tables")}
+        self.calls = []
+        self.enabled = False
+        self.lookup_error = False
+        self.fail_insert = False
+        self.probe_result = "BLOCKED\n"
+        self.unhealthy = False
+        self.image = "sha256:" + "a" * 64
+        self.app = "b" * 64
+        for name, value in (("STATE", self.root / "state"), ("UNIT", self.root / "vps-metadata-egress.service"),
+                            ("INSTALLED_SCRIPT", self.root / "installed.py")):
+            p = patch.object(egress, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+        p = patch.object(egress, "forwarded_root")
+        p.start()
+        self.addCleanup(p.stop)
+        p = patch.object(egress.subprocess, "run", side_effect=self.fake_run)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def fake_run(self, args, **kwargs):
+        self.calls.append(list(args))
+        self.assertEqual(kwargs.get("timeout"), 20)
+        self.assertFalse(kwargs.get("shell", False))
+        rc, out = 0, ""
+        if args[0].endswith("-save"):
+            out = snapshot(self.states[args[0].removesuffix("-save")])
+        elif args[0] in ("iptables", "ip6tables"):
+            family = args[0]
+            self.assertEqual(args[1:3], ["-w", "5"])
+            op, chain, *rule = args[3:]
+            self.assertEqual(chain, "DOCKER-USER", "forwarded operation touched host/foreign chain")
+            rules = self.states[family][chain]
+            if op in ("-I", "-A"):
+                if self.fail_insert:
+                    return SimpleNamespace(returncode=2, stdout="", stderr="synthetic failure")
+                if op == "-I":
+                    self.assertEqual(rule.pop(0), "1")
+                validate_managed_rule(rule, "vps-metadata-forward-v1")
+                rules.insert(0, rule) if op == "-I" else rules.append(rule)
+            elif op == "-C":
+                rc = 2 if self.lookup_error else (0 if rule in rules else 1)
+            elif op == "-D":
+                # Accept a real numeric deletion too: assertions below, rather
+                # than a fake grammar error, must kill non-exact undo mutants.
+                rules.pop(int(rule[0]) - 1) if len(rule) == 1 else rules.remove(rule)
+            elif op == "-F":
+                rules.clear()
+            else:
+                raise AssertionError("unknown fake firewall operation: " + op)
+        elif args[0] == "systemctl":
+            if args[1] == "is-enabled":
+                rc, out = (0, "enabled\n") if self.enabled else (1, "disabled\n")
+            elif args[1] == "enable":
+                self.enabled = True
+            elif args[1] == "disable":
+                self.enabled = False
+            else:
+                self.assertEqual(args[1:], ["daemon-reload"])
+        elif args[:4] == ["docker", "compose", "ps", "-q"]:
+            out = self.app
+        elif args[:2] == ["docker", "inspect"]:
+            out = self.image
+        elif args[:2] == ["docker", "exec"]:
+            out = "UNHEALTHY" if self.unhealthy else "HEALTHY\n"
+        elif args[:2] == ["docker", "run"]:
+            out = self.probe_result
+            if out == "OPEN":
+                rc = 42
+            elif out == "BROKEN":
+                rc = 125
+        else:
+            raise AssertionError("unexpected host call: " + repr(args))
+        return SimpleNamespace(returncode=rc, stdout=out, stderr="")
+
+    def invoke(self, *args):
+        with patch.object(sys, "argv", [str(SOURCE), "--docker-user-only", *args]), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return egress.main()
+
+    def test_forwarded_dual_stack_denies_preserve_host_and_foreign_policy(self):
+        for rules in self.states.values():
+            rules["DOCKER-USER"].append(["!", "-s", "192.0.2.23/32", "-j", "DROP"])
+        before = copy.deepcopy(self.states)
+        self.assertEqual(self.invoke("--apply"), 0)
+        targets = {"iptables": ["169.254.169.254", "169.254.0.23", "100.100.100.200"],
+                   "ip6tables": ["fe80::a9fe:a9fe", "fd00:ec2::254", "fd20:ce::254",
+                                 "::ffff:a9fe:a9fe", "::a9fe:a9fe", "64:ff9b::a9fe:a9fe",
+                                 "64:ff9b:1:1234::1"]}
+        for family, addresses in targets.items():
+            for chain in ("INPUT", "OUTPUT", "FORWARD", "UNRELATED"):
+                self.assertEqual(self.states[family][chain], before[family][chain])
+            for address in addresses:
+                for state in ("NEW", "ESTABLISHED", "RELATED", "UNTRACKED"):
+                    self.assertEqual(verdict(self.states[family], "FORWARD", address, state=state), "DROP")
+                for chain in ("INPUT", "OUTPUT"):
+                    self.assertEqual(verdict(self.states[family], chain, address), "ACCEPT")
+                translated = "192.0.2.20" if family == "iptables" else "2001:db8::20"
+                self.assertEqual(verdict(self.states[family], "FORWARD", translated, address), "DROP")
+            self.assertEqual(verdict(self.states[family], "FORWARD", "192.0.2.20" if family == "iptables"
+                                     else "2001:db8::20"), "ACCEPT")
+
+    def test_exact_check_precedes_each_first_insert_and_second_apply_writes_nothing(self):
+        self.assertEqual(self.invoke("--apply"), 0)
+        for i, call in enumerate(self.calls):
+            if "-I" in call:
+                self.assertEqual(self.calls[i - 1], call[:3] + ["-C", "DOCKER-USER"] + call[6:])
+        first = copy.deepcopy(self.states)
+        saved = (egress.STATE / "journal.json").read_bytes()
+        self.calls.clear()
+        self.assertEqual(self.invoke("--apply"), 0)
+        self.assertEqual(self.states, first)
+        self.assertFalse(any("-I" in c or "-D" in c for c in self.calls))
+        self.assertEqual((egress.STATE / "journal.json").read_bytes(), saved)
+
+    def test_missing_ipv6_or_unreachable_parent_refuses_before_firewall_writes(self):
+        del self.states["ip6tables"]["DOCKER-USER"]
+        self.assertEqual(self.invoke("--apply"), 1)
+        self.assertTrue(all(c[0].endswith("-save") for c in self.calls))
+        self.states["ip6tables"] = initial()
+        self.states["ip6tables"]["FORWARD"].insert(0, ["-j", "ACCEPT"])
+        self.calls.clear()
+        self.assertEqual(self.invoke("--apply"), 1)
+        self.assertTrue(all(c[0].endswith("-save") for c in self.calls))
+
+    def test_read_only_check_detects_missing_duplicate_displaced_rules_and_parent(self):
+        self.assertEqual(self.invoke("--check"), 1)
+        self.assertFalse(egress.STATE.exists())
+        self.assertEqual(self.invoke("--apply"), 0)
+        good = copy.deepcopy(self.states)
+        for family in ("iptables", "ip6tables"):
+            for corruption in ("missing", "duplicate", "displaced", "parent"):
+                self.states = copy.deepcopy(good)
+                rules = self.states[family]["DOCKER-USER"]
+                if corruption == "missing":
+                    rules.pop(0)
+                elif corruption == "duplicate":
+                    rules.append(rules[0])
+                elif corruption == "displaced":
+                    rules.insert(0, ["-j", "ACCEPT"])
+                else:
+                    self.states[family]["FORWARD"].insert(0, ["-j", "ACCEPT"])
+                self.calls.clear()
+                self.assertEqual(self.invoke("--check"), 1, corruption)
+                self.assertTrue(all(c[0].endswith("-save") for c in self.calls))
+
+    def test_default_and_removal_preview_execute_nothing(self):
+        self.assertEqual(self.invoke("--persist"), 0)
+        self.assertEqual(self.invoke("--remove"), 0)
+        self.assertEqual(self.calls, [])
+        self.assertFalse(egress.STATE.exists())
+
+    def test_state_symlinks_and_busy_journal_refuse_without_host_commands(self):
+        foreign = self.root / "foreign"
+        foreign.mkdir()
+        egress.STATE.symlink_to(foreign)
+        self.assertEqual(self.invoke("--apply"), 1)
+        self.assertEqual(self.calls, [])
+        egress.STATE.unlink()
+        egress.STATE.mkdir(mode=0o700)
+        with (egress.STATE / "lock").open("w") as lock:
+            egress.fcntl.flock(lock, egress.fcntl.LOCK_EX)
+            self.assertEqual(self.invoke("--apply"), 1)
+        self.assertEqual(self.calls, [])
+
+    def test_exact_journaled_undo_preserves_manual_and_later_foreign_rules(self):
+        manual = ["-d", "169.254.0.0/16", "-j", "DROP"]
+        self.states["iptables"]["DOCKER-USER"].insert(0, manual)
+        before = copy.deepcopy(self.states)
+        self.assertEqual(self.invoke("--apply"), 0)
+        foreign = ["-d", "192.0.2.99/32", "-j", "DROP"]
+        for family in before:
+            self.states[family]["DOCKER-USER"].insert(0, foreign)
+            before[family]["DOCKER-USER"].insert(0, foreign)
+        self.calls.clear()
+        self.assertEqual(self.invoke("--apply", "--remove"), 0)
+        self.assertEqual(self.states, before)
+        self.assertTrue(all(c[3:5] == ["-D", "DOCKER-USER"] and len(c) > 6
+                            for c in self.calls if "-D" in c))
+        self.assertEqual(json.loads((egress.STATE / "journal.json").read_text()), [])
+        self.assertEqual(self.invoke("--apply", "--remove"), 0)
+
+    def test_failed_apply_is_journaled_and_lookup_error_cannot_be_absence(self):
+        self.lookup_error = True
+        self.assertEqual(self.invoke("--apply"), 1)
+        self.assertFalse(any("-I" in c for c in self.calls))
+        self.lookup_error = False
+        self.fail_insert = True
+        self.assertEqual(self.invoke("--apply"), 1)
+        entries = json.loads((egress.STATE / "journal.json").read_text())
+        self.assertEqual(len(entries), 1)
+        self.fail_insert = False
+        self.assertEqual(self.invoke("--apply", "--remove"), 0)
+        self.assertEqual(self.states, {f: initial() for f in self.states})
+
+    def test_persistence_is_pinned_ordered_enabled_and_surgically_removed(self):
+        self.assertEqual(self.invoke("--apply", "--persist"), 0)
+        self.assertTrue(self.enabled)
+        self.assertEqual(egress.INSTALLED_SCRIPT.read_text(), SOURCE.read_text())
+        unit = egress.UNIT.read_text()
+        for directive in ("After=docker.service ufw.service", "Requires=docker.service", "PartOf=docker.service",
+                          "Before=hames-app.service", "Type=oneshot", "RemainAfterExit=yes", "WantedBy=docker.service",
+                          "ExecStart=/usr/bin/python3 /usr/local/lib/vps-metadata-egress.py --docker-user-only --apply"):
+            self.assertIn(directive + "\n", unit)
+        self.calls.clear()
+        self.assertEqual(self.invoke("--apply", "--persist"), 0)
+        self.assertNotIn(["systemctl", "enable", egress.UNIT.name], self.calls)
+        self.assertEqual(self.invoke("--apply", "--remove"), 0)
+        self.assertFalse(self.enabled)
+        self.assertFalse(egress.UNIT.exists())
+        self.assertFalse(egress.INSTALLED_SCRIPT.exists())
+
+    def test_foreign_files_or_journal_entries_refuse_without_deletion(self):
+        egress.UNIT.write_text("foreign operator unit")
+        self.assertEqual(self.invoke("--apply", "--persist"), 1)
+        self.assertEqual(egress.UNIT.read_text(), "foreign operator unit")
+        self.assertFalse(self.enabled)
+        egress.UNIT.unlink()
+        self.assertEqual(self.invoke("--apply", "--persist"), 0)
+        egress.UNIT.write_text("operator edit")
+        self.calls.clear()
+        self.assertEqual(self.invoke("--apply", "--remove"), 1)
+        self.assertEqual(self.calls, [])
+        for entry in ({"kind": "rule", "family": "iptables", "rule": ["-j", "ACCEPT"]},
+                      {"kind": "file", "path": str(self.root / "foreign"), "content": "x"}):
+            (egress.STATE / "journal.json").write_text(json.dumps([entry]))
+            self.assertEqual(self.invoke("--apply", "--remove"), 1)
+            self.assertEqual(self.calls, [])
+
+    def test_smoke_uses_local_cap_dropped_probe_and_app_health_with_no_firewall_writes(self):
+        self.assertEqual(self.invoke("--apply", "--persist"), 0)
+        self.calls.clear()
+        self.assertEqual(self.invoke("--smoke"), 0)
+        run = next(c for c in self.calls if c[:2] == ["docker", "run"])
+        for flag, value in (("--cap-drop", "ALL"), ("--network", "bridge"), ("--pull", "never"),
+                            ("--entrypoint", "node")):
+            self.assertEqual(run[run.index(flag) + 1], value)
+        self.assertIn("--rm", run)
+        self.assertIn(self.image, run)
+        self.assertIn("169.254.169.254", run[-1])
+        self.assertIn("3000", run[-1])
+        self.assertNotIn("fetch(", run[-1])
+        self.assertEqual(len([c for c in self.calls if c[:2] == ["docker", "exec"]]), 2)
+        self.assertFalse(any("-I" in c or "-D" in c or c[0].endswith("-restore") for c in self.calls))
+        for result in ("OPEN", "BROKEN", "", "unexpected"):
+            self.probe_result = result
+            self.assertEqual(self.invoke("--smoke"), 1, result)
+        self.probe_result = "BLOCKED\n"
+        self.unhealthy = True
+        self.calls.clear()
+        self.assertEqual(self.invoke("--smoke"), 1)
+        self.assertFalse(any(c[:2] == ["docker", "run"] for c in self.calls))
+        self.unhealthy = False
+        self.states["ip6tables"]["DOCKER-USER"].pop(0)
+        self.assertEqual(self.invoke("--smoke"), 1)
+        self.assertEqual(self.invoke("--apply"), 0)
+        self.enabled = False
+        self.assertEqual(self.invoke("--smoke"), 1)
+        self.enabled = True
+        egress.UNIT.unlink()
+        self.assertEqual(self.invoke("--smoke"), 1)
+
+
+class ProbeProgram(unittest.TestCase):
+    def test_probe_program_refuses_success_distinguishes_errors_and_has_short_deadline(self):
+        # Execute the actual JS in a VM with a synthetic socket. No network,
+        # including metadata, is contacted by this test.
+        harness = """const vm=require('node:vm'),assert=require('node:assert/strict');
+const handlers={},logs=[];let deadline,code;
+const stop={};const socket={destroy(){},setTimeout(ms,fn){assert.equal(ms,3000);deadline=fn},
+on(name,fn){handlers[name]=fn}};
+try{vm.runInNewContext(process.argv[1],{require(name){assert.equal(name,'node:net');
+return {connect(port,host){assert.equal(port,80);assert.equal(host,'169.254.169.254');return socket}}},
+console:{log(value){logs.push(value)}},process:{exit(value){code=value;throw stop}}});
+assert.equal(typeof deadline,'function');
+if(process.argv[2]==='timeout')deadline();else if(process.argv[2]==='connect')handlers.connect();
+else handlers.error({code:process.argv[2]});
+}catch(error){if(error!==stop)throw error}
+console.log(JSON.stringify({code,logs}));"""
+        for outcome, code, logs in (("timeout", 0, ["BLOCKED"]), ("connect", 42, []),
+                                    ("ENETUNREACH", 0, ["BLOCKED"]), ("ECONNREFUSED", 0, ["BLOCKED"]),
+                                    ("UNKNOWN", 43, [])):
+            result = subprocess.run(["node", "-e", harness, egress.METADATA_PROBE, outcome],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), {"code": code, "logs": logs})
+
+    def test_forwarded_root_gate(self):
+        for platform, uid in (("darwin", 0), ("linux", 1000)):
+            with patch.object(egress.sys, "platform", platform), patch.object(egress.os, "geteuid", return_value=uid):
+                with self.assertRaises(egress.Refused):
+                    egress.forwarded_root()
+
+
 MUTATIONS = {
+    "forward-v6-missing": ('for rule in policy(family) if rule[-1] == "DROP"]',
+                           'for rule in policy(family) if rule[-1] == "DROP" and family == "iptables"]'),
+    "forward-appended": ('command([family, "-w", "5", "-I", "DOCKER-USER", "1", *rule])',
+                         'command([family, "-w", "5", "-A", "DOCKER-USER", *rule])'),
+    "forward-host-touched": ('command([family, "-w", "5", "-I", "DOCKER-USER", "1", *rule])',
+                             'command([family, "-w", "5", "-I", "OUTPUT", "1", *rule])'),
+    "forward-not-idempotent": ('if not present(family, rule):', 'if True:'),
+    "forward-removal-not-exact": ('"-D", "DOCKER-USER", *entry["rule"]', '"-D", "DOCKER-USER", "1"'),
+    "forward-parent-off": ('parent and parent[0] == ["-A", "FORWARD", "-j", "DOCKER-USER"]', 'True'),
+    "forward-readback-off": ('require(all(FORWARD_MARKER in r for r in rules[:len(expected)]) and\n                all(actual.count(r) == 1 for r in expected),', 'require(True,'),
+    "forward-first-off": ('all(FORWARD_MARKER in r for r in rules[:len(expected)]) and', 'True and'),
+    "forward-unique-off": ('all(actual.count(r) == 1 for r in expected)', 'True'),
+    "forward-lookup-error-is-absence": ('result.returncode in (0, 1)', 'True'),
+    "forward-dry-run-applies": ('if not args.apply and not args.check and not args.smoke:', 'if False:'),
+    "forward-root-off": ('require(sys.platform == "linux" and os.geteuid() == 0,\n            "forwarded operations require Linux root")', 'pass'),
+    "forward-journal-write-off": ('save_journal(entries)  # write-ahead', 'pass  # write-ahead'),
+    "forward-journal-rule-validation-off": ('entry["rule"] in forwarded_rules(entry["family"])', 'True'),
+    "forward-journal-file-validation-off": ('entry["path"] in (str(INSTALLED_SCRIPT), str(UNIT))', 'True'),
+    "forward-state-ownership-off": ('private_file(STATE)\n', 'pass\n'),
+    "persistence-missing": ('            persist_forwarded(entries)', '            pass'),
+    "persistence-order-wrong": ('After=docker.service ufw.service', 'After=network.target'),
+    "persistence-before-missing": ('Before=hames-app.service', 'Before=unrelated.service'),
+    "persistence-restart-off": ('PartOf=docker.service', 'PartOf=unrelated.service'),
+    "persistence-disabled": ('command(["systemctl", "enable", UNIT.name])', 'pass'),
+    "persistence-file-clobber": ('path.stat().st_mode & 0o022 == 0 and path.read_text() == content',
+                                 'path.stat().st_mode & 0o022 == 0'),
+    "persistence-undo-clobber": ('path.read_text() == entry["content"]', 'True'),
+    "smoke-rules-unchecked": ('    check_forwarded()  # absence/drift', '    pass  # absence/drift'),
+    "smoke-unit-unchecked": ('UNIT.is_file() and not UNIT.is_symlink() and UNIT.read_text() == service_unit()', 'True'),
+    "smoke-enabled-unchecked": ('probe(["systemctl", "is-enabled", UNIT.name]).stdout.strip() == "enabled"', 'True'),
+    "smoke-caps-kept": ('"--cap-drop", "ALL"', '"--cap-drop", "NET_RAW"'),
+    "smoke-image-pull": ('"--pull", "never"', '"--pull", "always"'),
+    "smoke-refusal-unchecked": ('result.strip() == "BLOCKED"', 'True'),
+    "smoke-health-unchecked": ('require(command(health).strip() == "HEALTHY", "app unhealthy before metadata probe")', 'pass'),
+    "smoke-probe-false-success": ("socket.on('connect',()=>{socket.destroy();process.exit(42)});",
+                                  "socket.on('connect',blocked);"),
+    "smoke-probe-unbounded": ('socket.setTimeout(3000,blocked);', 'socket.setTimeout(300000,blocked);'),
     "tcp-only-denies": ('    target = args.index("-j")',
                         '    args = ("-p", "tcp", *args) if args[-1] == "DROP" else args\n    target = args.index("-j")'),
     "readback-hook-guard-off": ('require(hook_rules and normalized(hook_rules[0]) == normalized(jump()) and\n                    sum(CHAIN in r for r in hook_rules) == 1,',
@@ -374,7 +713,8 @@ MUTATIONS = {
                     'command([family + "-restore", "--wait", "5"], payload)'),
     "root-gate": ('require(sys.platform == "linux" and os.geteuid() == 0, "apply requires Linux root")', 'pass'),
     "command-failure": ('require(result.returncode == 0, "firewall command failed; keep workloads stopped")', 'pass'),
-    "command-timeout": ('timeout=20, check=False', 'timeout=None, check=False'),
+    "command-timeout": ('timeout=20, check=False)\n    require(result.returncode == 0',
+                        'timeout=None, check=False)\n    require(result.returncode == 0'),
     "save-canonicalization": ('return tuple(sorted(pairs))', 'return tuple(pairs)'),
     "duplicate-hooks": ('lines.append(shlex.join(["-D", *rule[1:]]))', 'pass'),
     "no-readback": ('==\n                [normalized(r) for r in policy(family)]', 'is not None'),

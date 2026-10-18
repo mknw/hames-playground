@@ -462,15 +462,30 @@ Each refusal is a recoverable tool failure with fixed feedback, as G14's egress 
 
 ### Raising the request
 
-The order matters, because core mints the `requestId` only after the request, including its `payloadRef`, exists (`hitl.server.ts:398-411`):
+**The logical call identity.** Each write request is bound to a `callKey`: the sha256 of the run's id (the one `hitl_request` events carry, `packages/harness-patterns/types.ts:1523`), the continuation path to the loop (route label and iteration at each `decisionLoop`, as [recorded for resume](#resume-inside-a-route-slice-6)), the loop's turn number and the call's position in that turn's action. `simpleLoop` computes it before dispatch and records it on the call's `tool_call` event; core exposes it to the executor through the run frame. Every input is durable state of the run, so:
+
+- a retry of the same logical call, in this process or another, recomputes the same `callKey`, because replay rebuilds the same turn counter;
+- a later, deliberate identical write sits at another turn or position, so it gets another `callKey`, across a pause, a restart or another host process.
+
+`currentToolCallId()` cannot serve. It is a process-local counter, `call-${++seq}` (`run-frame.server.ts:230-246`), so a restarted process reissues `call-1`. The architecture delta review showed that with two fresh processes: a later identical write was answered by the earlier approval instead of being asked.
+
+The order then matters, because core mints the `requestId` only after the request, including its `payloadRef`, exists (`hitl.server.ts:398-411`):
 
 1. The executor computes `digest`, the sha256 of the canonical JSON of `(statement, parameters)`.
-2. It writes the frozen payload to a **blocking-payload row**, keyed by a fresh random `payloadRef` and holding the owner, the session, the digest, the statement and the parameters, encrypted at rest. The row is insert-only: no path rebinds it to other content. This needs a new writer: today's only payload writer, `putHitlProposal`, writes non-blocking proposals and refuses unless memory is enabled (`app/src/lib/db/hitl.server.ts:254-258`).
+2. It **binds** the frozen payload to the `callKey` in a **blocking-payload row**: owner, session, `callKey`, digest, statement and parameters, encrypted at rest, unique on `(owner, session, callKey)`.
+   - If no row exists, it inserts one under a fresh `payloadRef`, with `expires_at` equal to the request's expiry, in a table the existing expiry sweep covers (`sweepExpiredHitl`, `app/src/lib/db/hitl.server.ts:626-632`), so it is purged on supersede, expiry and abandonment too.
+   - If a row exists with the same digest, it reuses that row's `payloadRef`. A same-call retry therefore never allocates a second row.
+   - If a row exists with a different digest, the call is refused: a logical call is never rebound to another statement.
+   - Rows are never updated. This needs a new writer: today's only payload writer, `putHitlProposal`, writes non-blocking proposals and refuses unless memory is enabled (`app/src/lib/db/hitl.server.ts:254-258`).
 3. It calls `askHuman` with:
    - `kind: 'graph-write'`;
-   - `key: ${digest}:${currentToolCallId()}` (`run-frame.server.ts:245`). Core's default key hashes only the question, the option ids and the summary (`hitl.server.ts:305-316`), and `askHuman` answers a repeated identity from its journal without asking. Two different statements with the same summary would therefore share one identity, and the second would be approved by replay. The digest makes the key cover everything the decision authorises (F8, `types.ts:1524-1525`), and the call id makes two deliberate, identical writes two requests;
+   - `key: ${digest}:${callKey}`. Core's default key hashes only the question, the option ids and the summary (`hitl.server.ts:305-316`), and `askHuman` answers a repeated identity from its journal without asking. Two different statements with the same summary would therefore share one identity, and the second would be approved by replay. The digest makes the key cover everything the decision authorises (F8, `types.ts:1524-1525`); the `callKey` separates deliberate repeats from retries of one call;
    - the `payloadRef`; Reject as the default option; `unattended: 'apply-default'`, never `'park'`; and `expiresInMs` of 24 hours.
-4. It branches on the outcome. **Pending:** return `held()`. **Answered**, by replay or by the unattended rule: return the ordinary outcome ("rejected; nothing was written" for Reject) and delete the payload row it just wrote. The executor never writes, and never reports a write it did not see in `resolve`.
+4. It branches on the outcome. The executor never writes, and never reports a write it did not see in `resolve`.
+   - **Pending:** return `held()`. A same-call retry while pending gets core's existing request back, with the same `requestId` and the same `payloadRef` (`hitl.server.ts:386-393`).
+   - **Answered Reject**, by replay or by the unattended rule: return "rejected; nothing was written".
+   - **Answered Approve**, which only a retry of the same logical call can meet: return "approved earlier; this call wrote nothing". The write, if any, ran in that request's `resolve`.
+   - On an answered outcome with **no request ever pending** (the unattended rule), delete the row this call inserted.
 
 ### What the person sees
 
@@ -479,7 +494,7 @@ The request event carries display primitives only (`summary` is "display only, a
 1. **The statement and its parameters, losslessly**: monospace text nodes with line breaks and whitespace preserved, parameters as canonical JSON. **Not** `displayText`, which normalises NFKC, strips format characters and collapses whitespace (`app/src/lib/memory/display-text.ts:14-22`): `MATCH (n) // inspect only`, a newline, then `DETACH DELETE n` would display on one line with the delete inside the comment. The request-time refusal of characters that display differently is what makes this rendering the exact text that runs. `displayText` stays for labels.
 2. **What it does**, from the `EXPLAIN` plan's operators: creates, merges, property sets and removals, deletes and detach-deletes. A plan with a delete gives Approve the danger tone. There are no counts, because counting needs execution.
 3. **Which route proposed it, and what this turn read first**: counts by untrusted source ("3 web results, 2 mails"), how many Microsoft 365 items, and how many spans the guard neutralized, all computed by code from the run's `tool_result` events and their `sanitized` summaries. And one fixed line: **"What you approve is readable by every user, on either tier."**
-4. **Approve** and **Reject.** Reject is the default and the option the unattended rule picks; Approve carries no unattended flag. So a triggered run or a routine never writes. Reject does not stop the run: the loop continues with "rejected; nothing was written", and the agent says so. **If the write already committed** (an earlier resume wrote it and then failed), the dialog says "already applied" and offers no choice.
+4. **Approve** and **Reject.** Reject is the default and the option the unattended rule picks; Approve carries no unattended flag. So a triggered run or a routine never writes. Reject does not stop the run: the loop continues with "rejected; nothing was written", and the agent says so. **If the write already committed** (an earlier resume wrote it and then failed), the dialog says "already applied" and offers a single Continue. Continue sends the default answer, which `resolve` maps to `alreadyApplied`. The dialog learns that state from the owner-gated read by `payloadRef` (SD-13), which reports whether the marker exists.
 
 **No dry run.** Running the statement in a transaction and rolling it back would give real counts, but a procedure that commits on its own would write anyway, before anyone approved. Procedures are now refused, but `EXPLAIN` stays the preview: nothing a person has not approved ever executes.
 
@@ -489,11 +504,11 @@ The request event carries display primitives only (`summary` is "display only, a
 
 `resumeHarness` calls the host's `resolve(request, answer)` once per answer, after every check and before re-entry. What it returns is recorded, and sanitized it becomes the held result (`packages/harness-patterns/harness.server.ts:368-391`; SPEC resume step 9). Today the host passes one function, the quarantine delete (`app/src/lib/harness-client/turn.server.ts:973-983`). Slice 8 makes it dispatch on `request.kind`. For `graph-write`:
 
-1. **Load and bind.** Load the payload row by `payloadRef`. Refuse, writing nothing, unless its owner is the resuming principal, its session is this conversation, and its digest equals the digest in the request's `key`.
+1. **Load and bind.** Load the payload row by `payloadRef`. Refuse, writing nothing, unless its owner is the resuming principal, its session is this conversation, its `callKey` equals the one in the request's `key`, and the sha256 **recomputed** from its statement and parameters equals the key's digest. Recomputing, rather than trusting the row's stored digest, keeps the binding whatever the writer did.
 2. **Check the marker first, on every answer, Reject included.** A marker for this `requestId` means the write already committed: return `{ status: 'written', counters, alreadyApplied: true }` from the marker.
 3. **Reject** with no marker: `{ status: 'rejected' }`. Nothing is opened.
 4. **Approve**: one write transaction, in this order.
-   1. Create the marker `(:_HitlWrite { requestId, digest })`. A **uniqueness constraint on `requestId`** makes a concurrent retry of the same request block and then fail, so retries are serialised before the person's statement runs.
+   1. Create the marker `(:_HitlWrite { requestId, digest })`. A **uniqueness constraint on `requestId`** makes a concurrent retry of the same request block and then fail, so retries are serialised before the person's statement runs. The losing retry's uniqueness violation is not reported as `failed`: it re-reads the marker and returns `alreadyApplied`, which is the truth.
    2. Fingerprint the **protected sets**: every `_HitlWrite` marker, and every `Member` node with the properties the roster reads.
    3. Run the statement as its own query, and keep **its** summary counters, separate from the marker's.
    4. Fingerprint the protected sets again. Any change rolls the whole transaction back and returns `{ status: 'refused', reason: 'the statement would change protected records' }`. This is what catches a broad `MATCH (n) DETACH DELETE n`, which names no label: a later approved deletion can never erase an earlier marker or the directory.
@@ -502,7 +517,7 @@ The request event carries display primitives only (`summary` is "display only, a
 Because procedures are refused before the person is asked, every effect of the statement is inside this transaction, so the marker commits or rolls back with all of it. That is what makes the write exactly-once, as Δ4 requires (a later `resolve` throwing makes the retry call every `resolve` again).
 
 - **The marker holds no user content:** the `requestId`, the digest and the counters. The principal and the time are already on the `hitl_response`. Markers are visible to free-form Cypher reads; that is accepted, and readers can ignore the label.
-- **Retention.** The payload row is purged when the request closes, by the existing purge after the save (`turn.server.ts:994-1000`), extended to blocking rows. The digest and counters stay on the marker; the principal and time stay in the conversation blob.
+- **Retention.** The payload row is purged when the request closes, by the existing purge after the save (`turn.server.ts:994-1000`), extended to blocking rows, and by the expiry sweep as a backstop, since `closeHitlRows` and `syncAnswerRows` find rows by `requestId` and this row is found by `payloadRef`. The digest and counters stay on the marker; the principal and time stay in the conversation blob.
 - The executor is an app-side module and never a `'use server'` export, because it takes an owner (SD-13). A source-scan pin keeps the request tool's module from opening a write session.
 
 **The host protocol is unchanged**: claim, checked resume, version-conditional save and release (`turn.server.ts:886-907, 985-1041`). Under it:
@@ -561,10 +576,12 @@ Slice 6 completes the existing design rather than adding a mechanism. On re-entr
   - `maxIterations` and `maxTurns` count across the pause.
 - The request:
   - Two different statements with identical summaries raise two requests. Mutation: drop the explicit key.
-  - Two identical statements in two calls raise two requests.
+  - Two identical statements in two calls raise two requests, including when the second call runs in a fresh process after a pause. Mutation: key on `currentToolCallId()`.
+  - A same-call retry while pending returns the same `requestId` and `payloadRef`, and leaves one payload row. Mutation: insert before looking the `callKey` up.
+  - A second statement under an existing `callKey` is refused, and the row is unchanged. Mutation: update the row.
   - An unattended run gets the rejected outcome, with no `held()`, no write and no orphaned payload row.
   - A write request works with memory switched off.
-  - A placeholder, a guard marker, a U+200B, a U+FF21, an unplannable statement, an `apoc.periodic.iterate`, an `apoc.cypher.runWrite`, a `CALL { … } IN TRANSACTIONS`, a `Member` label and a fourth request in a turn are each refused before any request is raised. Mutation: drop the procedure check.
+  - A placeholder, a guard marker, a U+200B, a U+FF21, an unplannable statement, an `apoc.periodic.iterate`, an `apoc.cypher.runWrite`, a `CALL { … } IN TRANSACTIONS`, a `Member` label and a fourth request in a turn are each refused before any request is raised. Mutations: drop the procedure check; drop the NFKC and format-character check.
   - A batch containing a write request is refused before any of its calls is dispatched, including under `multiToolCalls: 'off'`. Mutation: leave the check to the executor.
 - The dialog (component layer): the line-comment statement renders on two lines, and a parameter `'A  B'` keeps both spaces. Mutation: render through `displayText`.
 - The write: each host outcome listed above, with its own mutation (drop the marker check; drop the uniqueness constraint; drop the protected-set check; check the marker on Approve only).
@@ -707,8 +724,8 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
 7. **The web-route pseudonymisation guard ([G14](https://github.com/mknw/hames-playground/issues/507#issuecomment-6191473862)).** `withPseudonymisedInputs` (rewriting the view and the child's plan/handoff data) and the `callTool` outgoing check on a new concatenating `egressChecks` run-frame slot, in core; `decisionLoop` passing the handoff's source payloads as roster input; `AgentDeps.pseudonymiseForWeb` built by the app's `createWebPseudonymiser` from `lib/privacy/`; the `egress-wiring` tripwire **narrowed** to that one import site, not deleted, with Q1–Q3 stated in the commit as in [the section](#pseudonymisation-guard-on-the-web-route). The pins listed there belong to layer 1. On the private tier, slice 3's `info_ag` ships only with this guard in place.
 8. **The gated Neo4j write**, after slice 6:
    - the write request tool and its refusals (placeholder, guard marker, characters that display differently, size, an unplannable statement, procedures and `IN TRANSACTIONS`, the `Member` label, more than three per turn);
-   - the request's explicit key, and the pending / answered branch;
-   - the blocking-payload writer (insert-only, encrypted, not gated on memory) and its purge on close;
+   - the logical `callKey` computed and recorded by `simpleLoop`, the request's explicit key, and the pending / answered branch;
+   - the blocking-payload writer (bound to the `callKey`, insert-only, encrypted, not gated on memory, with `expires_at`) and its purge on close;
    - the host's `resolve` dispatching on `request.kind`: the binding checks, the marker checked on every answer, and the write transaction with the marker's uniqueness constraint and the protected-set check;
    - the `knowledge-edit` route (H1), with `multiToolCalls: 'off'`;
    - `write_neo4j_cypher` still withheld and the gateway still read-only, each pinned;

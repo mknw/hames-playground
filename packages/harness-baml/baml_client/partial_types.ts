@@ -205,7 +205,6 @@ export namespace partial_types {
       docId?: string | null
       startOffset?: number | null
       endOffset?: number | null
-      url?: string | null
     }
     /**
      * Tool call event

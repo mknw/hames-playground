@@ -71,7 +71,7 @@ export default class TypeBuilder {
     
     ScreenVerdict: ClassViewer<'ScreenVerdict', "injection_detected" | "reason" | "spans">;
     
-    SynthesisReference: ClassViewer<'SynthesisReference', "source" | "docId" | "startOffset" | "endOffset" | "url">;
+    SynthesisReference: ClassViewer<'SynthesisReference', "source" | "docId" | "startOffset" | "endOffset">;
     
     ToolCall: ClassViewer<'ToolCall', "tool" | "args">;
     
@@ -183,7 +183,7 @@ export default class TypeBuilder {
         ]);
         
         this.SynthesisReference = this.tb.classViewer("SynthesisReference", [
-          "source","docId","startOffset","endOffset","url",
+          "source","docId","startOffset","endOffset",
         ]);
         
         this.ToolCall = this.tb.classViewer("ToolCall", [

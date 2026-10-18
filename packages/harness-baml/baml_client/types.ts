@@ -260,7 +260,6 @@ export interface SynthesisReference {
   docId?: string | null
   startOffset?: number | null
   endOffset?: number | null
-  url?: string | null
   
 }
 

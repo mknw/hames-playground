@@ -26,6 +26,7 @@ import type {
   SelectorFn,
 } from '@hames-ai/harness-patterns/types'
 import { trimToFit } from '@hames-ai/harness-patterns/token-budget.server'
+import { unspotlight } from '@hames-ai/harness-patterns/guard'
 import { getContextWindow, resolveClientForRole } from './clients.server'
 import {
   accountBamlCall,
@@ -112,8 +113,11 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
   const contextWindow = getContextWindow(resolveClientForRole('compactExecution'))
   const trimmedTurns = trimToFit(
     turns,
-    (retained) => JSON.stringify(retained) + JSON.stringify(synthesisReferences(retained)),
-    1300, // Existing estimate plus 800 characters of citation instructions.
+    (retained) => {
+      const refs = synthesisReferences(retained)
+      return JSON.stringify(retained) + (refs.length ? JSON.stringify(refs) + ' '.repeat(800) : '')
+    },
+    500,
     contextWindow,
   )
   const references = synthesisReferences(trimmedTurns)
@@ -170,9 +174,12 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
   return { value: content, call: llmCall }
 }
 
-/** Only locators in the retained, already-sanitized results reach this prompt.
- * decisionLoop supplies locator lines; a retriever supplies result.references.
- * Never widen the event view or recover raw content to build this projection. */
+/** Project retained retriever locators, without widening the event view.
+ * Structured references require the retriever producer. The approved text seam
+ * accepts only read-documents records whose every line has extractRetriever's
+ * grammar; custom route ids receive no text-derived citations. Residual risk:
+ * a read-documents result made entirely of forged record lines still passes.
+ * Typed locator metadata on core records needs a separate owner API decision. */
 function synthesisReferences(turns: LoopTurn[]): SynthesisReference[] {
   const references = new Map<string, SynthesisReference>()
   const add = (reference: SynthesisReference) => {
@@ -185,34 +192,70 @@ function synthesisReferences(turns: LoopTurn[]): SynthesisReference[] {
     ) as SynthesisReference
     references.set(JSON.stringify(escaped), escaped)
   }
-  const pending: unknown[] = []
+  const pending: { tool: string; result: unknown }[] = []
   for (const turn of turns) {
-    if (!turn.tool_result?.success) continue
+    // defaultSynthesize constructs only successful result turns above.
+    const toolResult = turn.tool_result!
     try {
-      pending.push(JSON.parse(turn.tool_result.result))
+      const result: unknown = JSON.parse(toolResult.result)
+      if (turn.additional_calls?.length) {
+        // The call roster is transport metadata, not a tool-supplied JSON field.
+        // A fetch result cannot manufacture a nested retriever producer.
+        if (!result || typeof result !== 'object' || Array.isArray(result)) continue
+        const tools = [toolResult.tool, ...turn.additional_calls.map((call) => call.tool_name)]
+        for (const [index, tool] of tools.entries()) {
+          const call = (result as Record<string, unknown>)[String(index + 1)]
+          if (
+            call &&
+            typeof call === 'object' &&
+            'tool' in call &&
+            call.tool === tool &&
+            'result' in call
+          ) {
+            pending.push({ tool, result: call.result })
+          }
+        }
+      } else {
+        pending.push({ tool: toolResult.tool, result })
+      }
     } catch {
       // Direct response text is not a structured tool result.
     }
   }
-  for (let index = 0; index < pending.length; index++) {
-    const value = pending[index]
-    if (typeof value === 'string') {
-      for (const line of value.split('\n')) {
-        const at = line.lastIndexOf(' [doc ')
-        if (!line.startsWith('- ') || at <= 2) continue
-        const locator = /^\[doc ([^,\r\n]+), chars (\d+)-(\d+)\]:/.exec(line.slice(at + 1))
-        if (!locator) continue
-        const startOffset = Number(locator[2])
-        const endOffset = Number(locator[3])
-        if (!Number.isSafeInteger(endOffset) || startOffset > endOffset) continue
-        add({ source: line.slice(2, at), docId: locator[1], startOffset, endOffset })
-      }
-    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+  for (const { tool, result: value } of pending) {
+    if (tool === 'read-documents' && typeof value === 'string') {
+      // general-next fences its sanitized records. Remove only that framework
+      // envelope; neutralized spans remain neutralized and excerpts stay out.
+      const records = unspotlight(value)
+        .split('\n')
+        .filter((line) => line.trim())
+        .map((line) => {
+          if (!line.startsWith('- ')) return undefined
+          // Select the first locator: an excerpt may contain a second one.
+          const at = line.indexOf(' [doc ')
+          if (at < 0) return line.indexOf(': ', 2) > 2 ? null : undefined
+          const source = line.slice(2, at)
+          if (!source.trim()) return undefined
+          const locator = /^\[doc ([^,\]\r\n]+), chars (\d+)-(\d+)\]: /.exec(line.slice(at + 1))
+          if (!locator || !locator[1].trim()) return undefined
+          const startOffset = Number(locator[2])
+          const endOffset = Number(locator[3])
+          if (!Number.isSafeInteger(endOffset) || startOffset > endOffset) return undefined
+          return { source, docId: locator[1], startOffset, endOffset }
+        })
+      if (!records.every((record) => record !== undefined)) continue
+      for (const record of records) if (record) add(record)
+    } else if (
+      tool === 'retriever' &&
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value)
+    ) {
       const object = value as Record<string, unknown>
       if (Array.isArray(object.references)) {
         for (const reference of object.references) {
           if (!reference || typeof reference !== 'object') continue
-          const { source, docId, startOffset, endOffset, url } = reference
+          const { source, docId, startOffset, endOffset } = reference
           if (typeof source !== 'string' || !source.trim()) continue
           const document =
             typeof docId === 'string' &&
@@ -223,18 +266,7 @@ function synthesisReferences(turns: LoopTurn[]): SynthesisReference[] {
             typeof endOffset === 'number' &&
             Number.isSafeInteger(endOffset) &&
             endOffset >= startOffset
-          if (!document && !(typeof url === 'string' && url.trim())) continue
-          add({
-            source,
-            ...(document ? { docId, startOffset, endOffset } : {}),
-            ...(typeof url === 'string' && url.trim() ? { url } : {}),
-          })
-        }
-      }
-      // Multi-call turns are maps keyed by call index, each holding result.
-      for (const [key, call] of Object.entries(object)) {
-        if (/^\d+$/.test(key) && call && typeof call === 'object' && 'result' in call) {
-          pending.push(call.result)
+          if (document) add({ source, docId, startOffset, endOffset })
         }
       }
     }

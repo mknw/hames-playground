@@ -1,5 +1,5 @@
 /**
- * DockerBackend — `ComputeBackend` over the local Docker engine.
+ * DockerBackend — `ComputeBackend` over a configurable Docker engine.
  *
  * v0 substrate (see docs/plan/sandbox.md → "Backend interface" / "macOS
  * development"). Works on macOS dev hosts; same MCP-in-VM architecture and
@@ -21,7 +21,10 @@ import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import {
+  StdioClientTransport,
+  getDefaultEnvironment,
+} from '@modelcontextprotocol/sdk/client/stdio.js'
 import type {
   ComputeBackend,
   HealthStatus,
@@ -31,6 +34,12 @@ import type {
   VMHandle,
 } from './types'
 import { V0_IN_VM_SERVERS } from './types'
+import {
+  dockerConnectionFromEnv,
+  dockerInvocation,
+  dockerDiagnostic,
+  type DockerConnection,
+} from './docker-connection.server'
 import type { ToolCallResult, MCPToolDescription } from '@hames-ai/harness-patterns/types'
 import { bashGuardPolicyFromEnv, screenBashCommand, type BashGuardPolicy } from './bash-guard'
 import {
@@ -163,14 +172,19 @@ function cacheVolumeArgs(runtime: RuntimeConfig): string[] {
 
 interface DockerNative extends Record<string, unknown> {
   containerId: string
+  dockerConnection: DockerConnection
   /** Preserved across `reset` so the recycle reboots with the same caps. */
   runtime: RuntimeConfig
 }
 
 /** Run `docker <args>`, resolving stdout (trimmed). Rejects on non-zero exit. */
-function docker(args: string[], timeoutMs = 30_000): Promise<string> {
+function docker(connection: DockerConnection, args: string[], timeoutMs = 30_000): Promise<string> {
+  const invocation = dockerInvocation(connection, args)
   return new Promise((resolve, reject) => {
-    const child = spawn(DOCKER_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(DOCKER_BIN, invocation.args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      ...(invocation.env ? { env: invocation.env as NodeJS.ProcessEnv } : {}),
+    })
     let stdout = ''
     let stderr = ''
     const timer = setTimeout(() => {
@@ -181,12 +195,25 @@ function docker(args: string[], timeoutMs = 30_000): Promise<string> {
     child.stderr.on('data', (b) => (stderr += b.toString('utf8')))
     child.on('error', (err) => {
       clearTimeout(timer)
-      reject(err)
+      reject(
+        connection.length
+          ? new Error(
+              `docker ${args[0]} could not start: ${dockerDiagnostic(connection, err.message)}`,
+            )
+          : err,
+      )
     })
     child.on('close', (code) => {
       clearTimeout(timer)
       if (code === 0) resolve(stdout.trim())
-      else reject(new Error(`docker ${args.join(' ')} exited ${code}: ${stderr.trim()}`))
+      else
+        reject(
+          new Error(
+            connection.length
+              ? `docker ${args[0]} exited ${code}: ${dockerDiagnostic(connection, stderr.trim())}`
+              : `docker ${args.join(' ')} exited ${code}: ${stderr.trim()}`,
+          ),
+        )
     })
   })
 }
@@ -229,16 +256,24 @@ class DockerMcpTransport implements McpTransport {
   }
 
   /** Connect to every v0 in-VM server over `docker exec -i` stdio. */
-  static async open(vmId: string, cid: string): Promise<DockerMcpTransport> {
+  static async open(
+    vmId: string,
+    cid: string,
+    connection: DockerConnection,
+  ): Promise<DockerMcpTransport> {
     const t = new DockerMcpTransport(vmId, cid)
     try {
       for (const server of V0_IN_VM_SERVERS) {
         const transport = new StdioClientTransport({
           command: DOCKER_BIN,
-          args: ['exec', '-i', cid, ...server.launch],
-          // stderr from the in-VM server is diagnostic; let it surface to the
-          // host process stderr rather than being swallowed.
-          stderr: 'inherit',
+          ...dockerInvocation(
+            connection,
+            ['exec', '-i', cid, ...server.launch],
+            connection.length ? getDefaultEnvironment() : undefined,
+          ),
+          // Preserve legacy diagnostics. A configured CLI may echo TLS paths
+          // or endpoint values, so do not forward its raw stderr.
+          stderr: connection.length ? 'ignore' : 'inherit',
         })
         const client = new Client({ name: `sandbox-${server.key}`, version: '1.0.0' })
         await client.connect(transport)
@@ -260,7 +295,9 @@ class DockerMcpTransport implements McpTransport {
     } catch (err) {
       // Partial connect: tear down whatever opened so we don't leak exec pipes.
       await t.close().catch(() => {})
-      throw err
+      throw connection.length
+        ? new Error('Sandbox Docker MCP connection failed (configured endpoint)')
+        : err
     }
   }
 
@@ -344,8 +381,10 @@ export class DockerBackend implements ComputeBackend {
   // Captured once: resources created by this backend and its startup sweep
   // must use the same namespace even if the caller later changes process.env.
   private readonly environmentLabel: string
+  private readonly connection: DockerConnection
 
   constructor() {
+    this.connection = dockerConnectionFromEnv()
     const environment = process.env.SANDBOX_ENVIRONMENT?.trim() || 'local'
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(environment)) {
       throw new Error('SANDBOX_ENVIRONMENT must be a nonempty label of at most 63 characters')
@@ -356,6 +395,10 @@ export class DockerBackend implements ComputeBackend {
     this.environmentLabel = `kg-sandbox-environment=${environment}`
   }
 
+  private docker(args: string[], timeoutMs?: number): Promise<string> {
+    return docker(this.connection, args, timeoutMs)
+  }
+
   async boot(rootfs: RootfsId, runtime: RuntimeConfig): Promise<VMHandle> {
     const id = `sbx-${randomUUID().slice(0, 8)}`
     const containerId = await this.runContainer(id, rootfs, runtime)
@@ -364,7 +407,7 @@ export class DockerBackend implements ComputeBackend {
       backend: 'docker',
       rootfs,
       bootedAt: Date.now(),
-      native: { containerId, runtime } satisfies DockerNative,
+      native: { containerId, runtime, dockerConnection: this.connection } satisfies DockerNative,
     }
   }
 
@@ -372,7 +415,7 @@ export class DockerBackend implements ComputeBackend {
     const cid = containerId(vm)
     // `--rm` means a stop auto-removes; force-rm covers the not-yet-stopped
     // and already-gone cases without throwing.
-    await docker(['rm', '-f', cid]).catch(() => {
+    await this.docker(['rm', '-f', cid]).catch(() => {
       /* already gone — destroy is idempotent */
     })
     const native = vm.native as DockerNative
@@ -396,17 +439,17 @@ export class DockerBackend implements ComputeBackend {
     if (!(isEgressProfile(egress) && isProxiedProfile(egress))) return
     const gw = egressGatewayName(egress, bootId)
     const net = egressNetworkName(egress, bootId)
-    await docker(['rm', '-f', gw]).catch(() => {
+    await this.docker(['rm', '-f', gw]).catch(() => {
       /* already gone */
     })
-    await docker(['network', 'rm', net]).catch(() => {
+    await this.docker(['network', 'rm', net]).catch(() => {
       /* already gone, or still attached (a gateway that would not die —
          reapOrphans' labeled sweep catches the leftovers at next start) */
     })
   }
 
   async connectMcp(vm: VMHandle): Promise<McpTransport> {
-    return DockerMcpTransport.open(vm.id, containerId(vm))
+    return DockerMcpTransport.open(vm.id, containerId(vm), this.connection)
   }
 
   /**
@@ -429,7 +472,7 @@ export class DockerBackend implements ComputeBackend {
   async reapOrphans(): Promise<number> {
     let listed: string
     try {
-      listed = await docker([
+      listed = await this.docker([
         'ps',
         '-aq',
         '--filter',
@@ -447,7 +490,7 @@ export class DockerBackend implements ComputeBackend {
       .filter(Boolean)
     let reaped = 0
     if (ids.length > 0) {
-      await docker(['rm', '-f', ...ids]).catch(() => {
+      await this.docker(['rm', '-f', ...ids]).catch(() => {
         // Best-effort: a container may have exited/auto-removed between the
         // `ps` and the `rm`. The id count still reflects what we found.
       })
@@ -456,7 +499,7 @@ export class DockerBackend implements ComputeBackend {
     // Labeled per-boot networks are prunable only once their gateways are
     // gone — hence after the container sweep, never before.
     try {
-      const pruned = await docker([
+      const pruned = await this.docker([
         'network',
         'prune',
         '-f',
@@ -483,7 +526,7 @@ export class DockerBackend implements ComputeBackend {
   async health(vm: VMHandle): Promise<HealthStatus> {
     const cid = containerId(vm)
     try {
-      const status = await docker(['inspect', '-f', '{{.State.Status}}', cid])
+      const status = await this.docker(['inspect', '-f', '{{.State.Status}}', cid])
       if (status === 'running') return { state: 'healthy', detail: status }
       return { state: 'unhealthy', detail: status }
     } catch {
@@ -497,7 +540,7 @@ export class DockerBackend implements ComputeBackend {
     const oldCid = containerId(vm)
     // Caller is responsible for closing any open McpTransport; its stdio pipes
     // target the container we're about to remove.
-    await docker(['rm', '-f', oldCid]).catch(() => {
+    await this.docker(['rm', '-f', oldCid]).catch(() => {
       /* already gone — recycle still proceeds */
     })
     const newCid = await this.runContainer(vm.id, vm.rootfs, native.runtime)
@@ -593,7 +636,7 @@ export class DockerBackend implements ComputeBackend {
     args.push(image)
 
     try {
-      return await docker(args)
+      return await this.docker(args)
     } catch (err) {
       // A networked boot that fails AFTER its gateway came up must not leak
       // the gateway container or its per-boot network: no VMHandle is ever
@@ -638,14 +681,14 @@ export class DockerBackend implements ComputeBackend {
     const net = egressNetworkName(profile, bootId)
     const gw = egressGatewayName(profile, bootId)
     try {
-      await docker(['network', 'inspect', net])
+      await this.docker(['network', 'inspect', net])
     } catch {
       // --internal: no external route for attached containers — the proxy is
       // the ONLY way out, which is what makes the allowlist enforced. The
       // `kg-sandbox=1` label is what lets reapOrphans' network sweep find
       // this network once its gateway is gone.
       try {
-        await docker([
+        await this.docker([
           'network',
           'create',
           '--internal',
@@ -667,9 +710,11 @@ export class DockerBackend implements ComputeBackend {
         )
       }
     }
-    const running = await docker(['inspect', '-f', '{{.State.Running}}', gw]).catch(() => 'false')
+    const running = await this.docker(['inspect', '-f', '{{.State.Running}}', gw]).catch(
+      () => 'false',
+    )
     if (running !== 'true') {
-      await docker(['rm', '-f', gw]).catch(() => {
+      await this.docker(['rm', '-f', gw]).catch(() => {
         /* not there yet — the run below creates it */
       })
       const allowlist = egressAllowlist(profile, process.env)
@@ -703,7 +748,7 @@ export class DockerBackend implements ComputeBackend {
         ...allowlist.flatMap((host) => ['--host', host]),
       ]
       try {
-        await docker(gwArgs)
+        await this.docker(gwArgs)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         throw new SandboxBootError(
@@ -718,7 +763,7 @@ export class DockerBackend implements ComputeBackend {
     // re-ensuring the same boot's names); any other failure is a real boot
     // failure.
     try {
-      await docker(['network', 'connect', net, gw])
+      await this.docker(['network', 'connect', net, gw])
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       if (!/already/i.test(msg)) {

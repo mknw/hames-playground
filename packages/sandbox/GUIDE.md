@@ -1,0 +1,52 @@
+# Selecting a sandbox Docker daemon
+
+The [README](README.md) covers composing sandboxed patterns. This guide covers
+connecting every sandbox path to an already provisioned daemon.
+
+## Verified TLS endpoint
+
+Configure the application environment before creating a `DockerBackend`:
+
+```dotenv
+SANDBOX_DOCKER_HOST=tcp://sandbox.example.test:2376
+SANDBOX_DOCKER_TLS_CA=/run/sandbox-tls/ca.pem
+SANDBOX_DOCKER_TLS_CERT=/run/sandbox-tls/cert.pem
+SANDBOX_DOCKER_TLS_KEY=/run/sandbox-tls/key.pem
+```
+
+Use the CA and client material for that environment's daemon. The app must be
+able to read these files; Docker reads and validates them. A bad endpoint or
+missing path is refused before launching Docker. An unreadable file, rejected
+certificate or unreachable daemon fails the requested operation under its
+existing error policy, without a fallback to another daemon. The reaper remains
+best-effort. Backend error diagnostics redact configured endpoint and filename
+values; configured MCP raw stderr is suppressed to keep those values out of logs.
+
+The same endpoint reaches container operations, both MCP exec streams, cleanup,
+proxies and networks, and the interactive Shell. Do not rely on inherited
+`DOCKER_HOST` or `DOCKER_CONTEXT`: they are removed from configured children.
+MCP uses the SDK's restricted environment plus explicit connection flags, so it
+needs no Docker variables on that allowlist.
+
+## Explicit Unix socket
+
+```dotenv
+SANDBOX_DOCKER_HOST=unix:///run/sandbox/docker.sock
+```
+
+Omit all three TLS settings. This explicit socket also wins over inherited
+remote contexts and TLS environment variables. These paths belong to the app's
+filesystem; when the app runs in a container, make the selected socket or TLS
+files available there through deployment configuration.
+
+## Existing local setup
+
+Leave all four settings absent to preserve existing argv and environment
+inheritance byte for byte. This usually means the local Docker socket, and
+continues to honor any Docker CLI environment/default context already in use.
+Restart after changing configuration: backends and the handles consumed by the
+Shell retain the connection with which their containers were created.
+
+Endpoint selection alone does not remove the host socket or provision an Incus
+VM. It does not prove environment isolation; those deployment changes and live
+checks follow separately. The full contract is in [SPEC.md](SPEC.md).

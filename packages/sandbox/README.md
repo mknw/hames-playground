@@ -198,6 +198,28 @@ containers.
 
 ## Configuration
 
+### Docker endpoint
+
+`SANDBOX_DOCKER_HOST` selects one sandbox-only Docker endpoint for backend
+operations, both MCP exec streams, startup cleanup, proxy/network lifecycle and
+the interactive Shell. Supported values are `unix:///absolute/socket` and
+`tcp://host:port`. TCP requires all three absolute file paths:
+`SANDBOX_DOCKER_TLS_CA`, `SANDBOX_DOCKER_TLS_CERT`, `SANDBOX_DOCKER_TLS_KEY`;
+Docker verifies the server and presents the client certificate. For Unix sockets,
+omit the TLS settings. Invalid configuration throws before backend operations;
+connection failures never retry against another endpoint.
+
+An explicit setting overrides inherited `DOCKER_HOST`, `DOCKER_CONTEXT` and
+Docker TLS variables in every child, without changing the app's environment.
+With all four settings absent, CLI arguments and environment inheritance stay
+unchanged, including existing Docker CLI defaults. Configure these settings
+before constructing backends and restart to change them: each backend captures
+its endpoint, and its Shell uses the connection on the acquired handle.
+
+See [GUIDE.md](GUIDE.md) for configuration and [SPEC.md](SPEC.md) for the
+contract and test boundaries. This selects a daemon; it does not provision VMs,
+remove socket mounts or establish network isolation.
+
 ### Multiple app clones on one Docker daemon
 
 Set a distinct `SANDBOX_ENVIRONMENT` in each app (for example `release` and
@@ -294,6 +316,7 @@ What each image contains: [rootfs/README.md](https://github.com/mknw/hames-playg
 | `./workspace-store`          | `configureWorkspaceStore(...)` — where you plug in storage for `/work` files                      | server                                         |
 | `./with-sandbox.server`      | the wrapper itself, for code that skips the root entry point                                      | server                                         |
 | `./pty-manager.server`       | an interactive terminal into a running container (uses `node-pty`, see Troubleshooting)           | server                                         |
+| `./docker-connection.server` | Endpoint validation and child invocation shared by backend, MCP and PTY                           | server                                         |
 | `./docker-backend.server`    | the Docker compute backend                                                                        | server                                         |
 
 **The root entry point is server-only and it pulls Docker with it**, because

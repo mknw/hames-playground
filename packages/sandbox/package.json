@@ -37,7 +37,9 @@
     "*.ts",
     "!vitest.config.ts",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "SPEC.md",
+    "GUIDE.md"
   ],
   "engines": {
     "node": ">=22"

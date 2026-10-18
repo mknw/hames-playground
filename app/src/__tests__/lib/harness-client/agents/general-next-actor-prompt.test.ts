@@ -8,6 +8,8 @@ import '../../../../lib/inference/config.server'
 import { harness, withRunFrame, type ConfiguredPattern } from '@hames-ai/harness-patterns'
 import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
+import { registerGraphConnectorTools } from '@hames-ai/connectors/graph/graph-tools.server'
+import type { AppToolDefinition } from '@hames-ai/connectors/app-tools/registry'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 
@@ -76,12 +78,28 @@ const walk = (ps: ConfiguredPattern<AgentData>[]): ConfiguredPattern<AgentData>[
 
 const rendered: string[] = []
 const examples: string[] = []
+const graphTools = new Map<string, AppToolDefinition>()
 const ENV = {
   ANTHROPIC_API_KEY: 'offline-render-test',
   VERDA_INFERENCE_ENDPOINT: 'https://example.invalid/v1',
   VERDA_INFERENCE_API_KEY: 'offline-render-test',
 }
 beforeAll(async () => {
+  // Register the real schemas without executing a tool or contacting Graph.
+  const unexpectedCall = () => {
+    throw new Error('schema-only test must not execute Graph or stash operations')
+  }
+  registerGraphConnectorTools({
+    registerAppTool: (tool) => graphTools.set(tool.name, tool),
+    graphFetch: unexpectedCall,
+    content: {
+      conversionEnabled: unexpectedCall,
+      isConvertible: unexpectedCall,
+      guessMimeType: unexpectedCall,
+      isTextMime: unexpectedCall,
+    },
+    stash: { loadStore: unexpectedCall, ingest: unexpectedCall },
+  })
   vi.stubEnv('ANTHROPIC_API_KEY', 'offline-render-test')
   vi.stubEnv('USE_VERDA_INFERENCE', '0')
   const { b } = await import('@hames-ai/harness-baml/baml_client')
@@ -157,6 +175,27 @@ describe.each([0, 1])('#507 office envelope (wire %i)', (wire) => {
     expect(JSON.parse(actions[3].tool_args).command).toContain("doc.save('/work/out/sample.docx')")
     expect(JSON.parse(actions[3].tool_args).command).toContain("python3 - <<'PY'\n")
   })
+
+  // MUTATIONS: rename unread_only / file_type in the registered Graph
+  // schemas, or add a required property. The examples must fail this contract.
+  it.each(['graph_mail_recent', 'graph_files_search'])(
+    'keeps the %s example arguments within the registered schema',
+    (name) => {
+      const action = examples[wire]
+        .split('\n')
+        .filter((line) => line.trim().startsWith('{"reasoning":'))
+        .map((line) => JSON.parse(line))
+        .find((a) => a.tool_name === name)
+      expect(action).toBeDefined()
+      const args = JSON.parse(action.tool_args)
+      const schema = graphTools.get(name)!.inputSchema as {
+        properties: Record<string, unknown>
+        required?: string[]
+      }
+      for (const key of Object.keys(args)) expect(schema.properties).toHaveProperty(key)
+      for (const key of schema.required ?? []) expect(args).toHaveProperty(key)
+    },
+  )
 
   it('demonstrates writing and then running the same script in a sequential batch', () => {
     const prompt = examples[wire]

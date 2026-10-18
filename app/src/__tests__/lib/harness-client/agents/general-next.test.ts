@@ -349,6 +349,24 @@ describe('general-next composition', () => {
     expect([...actor.capabilities!.tools!].sort()).toEqual(expected)
   })
 
+  // MUTATION: remove the OFFICE_FEW_SHOTS filter. Each unavailable Graph
+  // example must disappear while the other Graph and sandbox examples survive.
+  it.each(['graph_mail_recent', 'graph_files_search'])(
+    'omits the %s example when that tool is unavailable',
+    async (unavailable) => {
+      gateway.names = gateway.names.filter((name) => name !== unavailable)
+      await agent.createPatterns('synthetic-session', deps)
+      const { fewShots } = mocks.actorOptions.mock.calls[0][0] as {
+        fewShots: { tool: string }[]
+      }
+      expect(fewShots.map((s) => s.tool)).toEqual(
+        ['graph_mail_recent', 'graph_files_search', 'sandbox_bash'].filter(
+          (name) => name !== unavailable,
+        ),
+      )
+    },
+  )
+
   it('keeps a future graph tool outside the explicit office allowlist', async () => {
     gateway.names.push('graph_future_write')
     const patterns = await agent.createPatterns('synthetic-session', {

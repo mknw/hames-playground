@@ -77,7 +77,7 @@ async function createPatterns(
 
   // S-f/P4: the Graph file-to-stash path stays off until its own wiring lands.
   const available = new Set(tools.graph ?? [])
-  const officeTools = MICROSOFT_365_TOOLS.filter((name) => available.has(name))
+  const officeTools: string[] = MICROSOFT_365_TOOLS.filter((name) => available.has(name))
   const memoryAvailable = new Set(tools.memory ?? [])
   const memoryReads = MEMORY_READ_TOOLS.filter((name) => memoryAvailable.has(name))
   const docTools = tools.context7 ?? []
@@ -91,7 +91,9 @@ async function createPatterns(
   })(
     actorCritic<AgentData>(
       createActorControllerAdapter({
-        fewShots: OFFICE_FEW_SHOTS,
+        fewShots: OFFICE_FEW_SHOTS.filter(
+          (s) => s.tool.startsWith('sandbox_') || officeTools.includes(s.tool),
+        ),
         contextPrefix:
           'Work on Microsoft 365 mail and files with the supplied Graph tools. ' +
           'The office sandbox has Python, python-docx, openpyxl, xlsxwriter and PyMuPDF. ' +

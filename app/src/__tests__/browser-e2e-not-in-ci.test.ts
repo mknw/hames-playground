@@ -52,100 +52,6 @@ function walk(dir: string): string[] {
 const FILES = walk(path.join(APP, SUITE))
 const TS = FILES.filter((f) => f.endsWith('.ts'))
 
-// ============================================================================
-// The server-entry static-import closure
-// ============================================================================
-
-/** The module SolidStart loads once when the server handler graph loads. */
-const ENTRY = 'src/middleware.ts'
-
-/**
- * Source with comments removed.
- *
- * Load-bearing, not hygiene: the two modules this file is about both DISCUSS
- * `import('…/baml_client')` in their doc comments, and a scanner that read
- * prose as code would report the very idiom it exists to require.
- */
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
-}
-
-interface StaticImport {
-  /** The specifier as written. */
-  spec: string
-  /** `import type` / `export type` — erased before a bundler sees it, so it
-   *  neither creates a graph edge nor pulls a runtime into the entry chunk. */
-  typeOnly: boolean
-  /** The statement, whitespace-collapsed, for a legible failure message. */
-  text: string
-}
-
-/**
- * Every STATIC import/re-export in a module. Dynamic `import()` is deliberately
- * not matched — it is the house idiom this whole check exists to require, and it
- * lands in a lazy chunk rather than in the entry.
- */
-function staticImports(source: string): StaticImport[] {
-  const clean = stripComments(source)
-  const out: StaticImport[] = []
-  // Multi-line named-import lists are covered: the gap between the keyword and
-  // `from` is matched with a negated class, which crosses newlines.
-  const withFrom = /^[ \t]*(?:import|export)[ \t]+(type[ \t]+)?[^'"]*?from[ \t]*['"]([^'"]+)['"]/gm
-  for (const m of clean.matchAll(withFrom)) {
-    out.push({ spec: m[2], typeOnly: m[1] !== undefined, text: m[0].replace(/\s+/g, ' ').trim() })
-  }
-  // `import './x'` for side effects only.
-  for (const m of clean.matchAll(/^[ \t]*import[ \t]*['"]([^'"]+)['"]/gm)) {
-    out.push({ spec: m[1], typeOnly: false, text: m[0].trim() })
-  }
-  return out
-}
-
-/** A relative or `~/`-aliased specifier resolved to an app-relative file, or
- *  `null` for a package import (not walked — a package's own graph is nitro's
- *  problem, and `@boundaryml/baml` is the thing being asserted ABOUT). */
-function resolveLocal(fromFile: string, spec: string): string | null {
-  let base: string
-  if (spec.startsWith('~/')) base = path.join(APP, 'src', spec.slice(2))
-  else if (spec.startsWith('.')) base = path.resolve(path.dirname(path.join(APP, fromFile)), spec)
-  else return null
-  for (const candidate of [
-    base,
-    `${base}.ts`,
-    `${base}.tsx`,
-    path.join(base, 'index.ts'),
-    path.join(base, 'index.tsx'),
-  ]) {
-    try {
-      if (statSync(candidate).isFile()) {
-        return path.relative(APP, candidate).split(path.sep).join('/')
-      }
-    } catch {
-      // Not this candidate.
-    }
-  }
-  return null
-}
-
-/** Everything reachable from `ENTRY` by STATIC imports, transitively. */
-function entryClosure(): string[] {
-  const seen = new Set<string>([ENTRY])
-  const queue = [ENTRY]
-  while (queue.length > 0) {
-    const file = queue.shift()!
-    for (const imported of staticImports(readFileSync(path.join(APP, file), 'utf8'))) {
-      if (imported.typeOnly) continue
-      const resolved = resolveLocal(file, imported.spec)
-      if (resolved === null || seen.has(resolved)) continue
-      seen.add(resolved)
-      queue.push(resolved)
-    }
-  }
-  return [...seen]
-}
-
-const ENTRY_CLOSURE = entryClosure()
-
 describe('the browser e2e suite is not reachable from CI', () => {
   // Guards against the guard becoming vacuous: if the directory were emptied
   // or moved, every assertion below would pass while proving nothing.
@@ -285,69 +191,32 @@ describe('the dev-only inference redirect cannot be enabled in production', () =
     expect(seam).toMatch(/process\.env\.E2E_FAKE_INFERENCE_URL/)
   })
 
-  it('the server-entry closure is WALKED, so the pin cannot go vacuous', () => {
-    // The assertion below is only as good as this list. A resolver that stopped
-    // returning anything would make it green over nothing, so the three
-    // landmarks the invariant is about are named: the entry, the seam it
-    // reaches, and the deepest module the reviewer's walk turned up — the one
-    // whose acquiring a `Collector` import is the realistic regression.
-    expect(ENTRY_CLOSURE).toContain(ENTRY)
-    expect(ENTRY_CLOSURE).toContain('src/lib/inference/dev-fake-inference.server.ts')
-    expect(ENTRY_CLOSURE).toContain('src/lib/metrics/usage-recorder.server.ts')
-    // The harness-baml landmark was removed by the extraction (PR-1b):
-    // clients.server.ts now lives in @hames-ai/harness-baml and resolveLocal()
-    // stops at package specifiers by policy — a package's own graph is nitro's
-    // problem. The Collector-acquiring modules moved with it; the closure
-    // still walks every app-side module on the path TO the package edges.
-    // The app-tool transport registration (#225 L3) is the newest edge and the
-    // largest: the boot hook imports the barrel, and the barrel's own side
-    // effect drags the Graph auth stack, doc-convert and the stash behind it.
-    // If that subtree ever acquires a module-scope `Collector` the assertion
-    // below is what catches it, so the edge is named here to keep it walked.
-    // The graph.server.ts landmark moved into @hames-ai/connectors (PR-C2) and
-    // the walk stops at package specifiers by policy — same story as the
-    // harness-baml landmark above; the Graph auth stack the barrel drags in
-    // is the deepest app-side module on that path now.
-    expect(ENTRY_CLOSURE).toContain('src/lib/app-tools/index.server.ts')
-    expect(ENTRY_CLOSURE).toContain('src/lib/auth/graph-token.server.ts')
-    expect(ENTRY_CLOSURE.length).toBeGreaterThan(10)
-  })
-
-  it('nothing in the server-entry closure imports BAML at module scope', () => {
-    // The regression CI caught on the first push of this suite: a static
-    // `import { ClientRegistry } from '@boundaryml/baml'` in the seam reaches
-    // the server ENTRY chunk through `src/middleware.ts` (which imports the
-    // seam statically), nitro links the native runtime into
-    // `.output/server/index.mjs`, and the production container dies at boot
-    // with `Cannot find module '…/@boundaryml/baml/native'` before serving a
-    // request. `pnpm typecheck`, `pnpm test:run` and `pnpm build` ALL pass with
-    // that in place — only the docker boot job fails — which is exactly why it
-    // is pinned here, in the suite that runs on every push.
+  it('loads BAML at module scope, so a broken native binding fails boot instead of 500ing behind a healthy container (#480 b)', () => {
+    // This replaces the prohibition this suite used to enforce (a walk of the
+    // server-entry closure asserting NOTHING in it imported `@boundaryml/baml`
+    // or `baml_client` at module scope). That rule's reason was the #469 boot
+    // crash: nitro BUNDLING the package wrong, so a static import pulled a
+    // build-host-only path into `.output/server/index.mjs`. #478 fixed the
+    // bundling (the rollup `external` in `app.config.ts`) and pinned it in CI
+    // (`ci.yml`'s "Assert a BAML-loading route loads"), so the reason no
+    // longer holds — and the owner's #480 call was to invert it: BAML should
+    // load at boot ON PURPOSE, so a genuinely broken native binding fails
+    // startup (and the container healthcheck) rather than leaving the app
+    // `(healthy)` while every BAML route answers 500, which is what hid #469
+    // in the first place.
     //
-    // THE CLOSURE, not two files. The first version of this checked
-    // `dev-fake-inference.server.ts` and `middleware.ts` by name and said
-    // "nothing else in `src/` imports BAML at module scope either". That was
-    // false when it was written: `harness-baml/routing.server.ts`,
-    // `baml-adapters.server.ts`, eight `patterns/*.server.ts` and
-    // `agents/title-generator.server.ts` all do. They are SAFE — none of them
-    // is in the entry graph — and that is the actual rule, so it is the rule
-    // that is asserted. An independent review walked this closure and found
-    // ~19 modules, including `metrics/usage-recorder.server.ts` →
-    // `harness-baml/clients.server.ts`: any one of those acquiring a
-    // module-scope `Collector` restores the boot regression with the old
-    // two-file pin, `typecheck`, `test:run` and `build` all green.
+    // A source scan, like this suite's other middleware assertions, for the
+    // reason they all give: importing `src/middleware.ts` for real would arm
+    // the routine scheduler and the usage recorder in a unit run.
     //
-    // `import type` is not an offender: it is erased before a bundler sees it,
-    // which is why several modules in the closure legitimately import BAML
-    // TYPES. The house idiom for values stays
-    // `const { b } = await import('…/baml_client')` inside an async function.
-    const offenders = ENTRY_CLOSURE.flatMap((file) =>
-      staticImports(readFileSync(path.join(APP, file), 'utf8'))
-        .filter((imported) => !imported.typeOnly)
-        .filter((imported) => /@boundaryml\/baml|baml_client/.test(imported.spec))
-        .map((imported) => `${file}: ${imported.text}`),
+    // Mutation: delete this import from `middleware.ts` and this test reddens
+    // — that is the pin for the owner's "a test must go red" requirement. The
+    // real-boot half (the native binding itself missing) is proved against a
+    // throwaway image rather than here, because a unit test cannot delete a
+    // dependency from its own process; see the PR description for that run.
+    expect(middleware).toMatch(
+      /^import \{ b \} from ['"]@hames-ai\/harness-baml\/baml_client['"]$/m,
     )
-    expect(offenders, 'a module in the server-entry graph imports BAML at module scope').toEqual([])
   })
 
   it('is only ever reached from the boot hook behind that same gate', () => {

@@ -643,10 +643,12 @@ class Measurement(unittest.TestCase):
 
     def test_guest_mapping_refuses_unknown_run_image(self):
         self.spike.guest_image_ids = {IMAGE: "sha256:" + "b" * 64}
-        for argv in (("run", IMAGE), ("run", "--entrypoint", "timeout", "foreign"),
-                     ("run", "--entrypoint", "timeout")):
-            with self.subTest(argv=argv), self.assertRaises(RuntimeError):
-                self.spike.remote(0, *argv)
+        with patch.object(vm, "command", return_value=result()) as runner:
+            for argv in (("run", IMAGE), ("run", "--entrypoint", "timeout", "foreign"),
+                         ("run", "--entrypoint", "timeout")):
+                with self.subTest(argv=argv), self.assertRaises(RuntimeError):
+                    self.spike.remote(0, *argv)
+            self.assertFalse(runner.called)
         self.assertEqual(self.creations(), [])
 
     def test_isolation_refusals_and_positive_controls_discriminate(self):

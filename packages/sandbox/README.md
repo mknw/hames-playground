@@ -485,9 +485,10 @@ The operator-only [offline VM image pipeline](https://github.com/mknw/hames-play
 assembles pinned local inputs into Incus metadata and qcow2, preloads the
 three sandbox flavours, and records provenance. Its design note distinguishes
 Docker config IDs, save-archive hashes and Incus fingerprints, including the
-classic Docker image-store precondition, additive spike pin support and the
-Linux boot checks still owed. The save and guest stages refuse containerd
-snapshotters and record the driver for comparison at boot. This is repo
+additive spike pin support and the Linux boot checks still owed. Save and
+measurement hosts support either classic or containerd stores with archive-derived
+config identity; guest assembly and boot require the classic store. The driver
+is recorded for comparison at boot. This is repo
 tooling outside the published tarball and TypeScript API.
 
 ### Opening an interactive shell

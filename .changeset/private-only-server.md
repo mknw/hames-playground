@@ -1,5 +1,5 @@
 ---
-'@hames-ai/harness-baml': patch
+'@hames-ai/harness-baml': minor
 '@hames-ai/agents': patch
 ---
 

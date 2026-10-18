@@ -1,3 +1,4 @@
+import '@testing-library/jest-dom/vitest'
 /**
  * ConversationTierSwitch — the control beside the agent selector.
  *
@@ -223,6 +224,7 @@ describe('private-only deployment', () => {
     const input = radio(container, 'anthropic')
     expect(input).toBeDefined()
     expect(input.disabled).toBe(true)
+    expect(input.closest('[data-part="item"]')).toBeVisible()
     expect(input.closest('[data-part="item"]')?.getAttribute('title')).toMatch(
       /private inference only/,
     )

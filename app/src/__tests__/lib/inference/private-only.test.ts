@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
+import { runInNewContext } from 'node:vm'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
@@ -205,6 +206,13 @@ it('production BAML value imports use the guarded boundary; middleware only init
               check(node.moduleSpecifier.text)
           }
           if (
+            ts.isExportDeclaration(node) &&
+            node.moduleSpecifier &&
+            ts.isStringLiteral(node.moduleSpecifier) &&
+            !node.isTypeOnly
+          )
+            check(node.moduleSpecifier.text)
+          if (
             ts.isCallExpression(node) &&
             node.expression.kind === ts.SyntaxKind.ImportKeyword &&
             node.arguments[0] &&
@@ -221,7 +229,58 @@ it('production BAML value imports use the guarded boundary; middleware only init
   scan('app/evals')
   scan('packages')
   expect(violations).toEqual([])
-  expect(readFileSync(path.join(root, 'app/src/middleware.ts'), 'utf8')).toContain(
-    'assertInferenceDeploymentConfigured()',
+})
+
+// Execute the actual boot statement with its real validator, without importing
+// middleware's unrelated services. The AST requires its imported binding and
+// unconditional module-level execution; comments and dead branches do not count.
+function bootGate() {
+  const source = ts.createSourceFile(
+    'middleware.ts',
+    readFileSync(new URL('../../../middleware.ts', import.meta.url), 'utf8'),
+    ts.ScriptTarget.Latest,
+    true,
   )
+  const imported = source.statements.some(
+    (node) =>
+      ts.isImportDeclaration(node) &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      node.moduleSpecifier.text === './lib/inference/tier-config.server' &&
+      !node.importClause?.isTypeOnly &&
+      node.importClause?.namedBindings &&
+      ts.isNamedImports(node.importClause.namedBindings) &&
+      node.importClause.namedBindings.elements.some(
+        (binding) =>
+          !binding.isTypeOnly &&
+          !binding.propertyName &&
+          binding.name.text === 'assertInferenceDeploymentConfigured',
+      ),
+  )
+  expect(imported).toBe(true)
+  const statement = source.statements.find(
+    (node) =>
+      ts.isExpressionStatement(node) &&
+      ts.isCallExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'assertInferenceDeploymentConfigured' &&
+      node.expression.arguments.length === 0,
+  )
+  expect(statement, 'boot must unconditionally invoke its imported validator').toBeDefined()
+  return () => runInNewContext(statement!.getText(source), { assertInferenceDeploymentConfigured })
+}
+
+describe('normal boot inference gate', () => {
+  it('accepts complete private configuration with an empty public key', () => {
+    expect(bootGate()).not.toThrow()
+  })
+  it.each([
+    'VERDA_INFERENCE_ENDPOINT',
+    'VERDA_INFERENCE_API_KEY',
+    'SMALL_LLM_BASE_URL',
+    'SMALL_LLM_DECISIONS_URL',
+    'SMALL_LLM_API_KEY',
+  ])('refuses missing %s through the middleware invocation', (key) => {
+    vi.stubEnv(key, '')
+    expect(bootGate()).toThrow(new RegExp(key))
+  })
 })

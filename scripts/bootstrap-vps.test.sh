@@ -221,13 +221,17 @@ echo "apt-get $*" >>"${CALLLOG:-/dev/null}"
 SHIM
 printf '#!/usr/bin/env bash\nexit 0\n' >"$tmproot/bin/fail2ban-client"
 chmod +x "$tmproot/bin/"*
-# Only the deployment probe is inert; fixture generation uses real Python.
+# Only deployment probes are inert; fixture generation uses real Python.
 export CLONE_PYTHON
 CLONE_PYTHON=${CLONE_PYTHON:-$(command -v python3)}
 cat >"$tmproot/bin/python3" <<'SHIM'
 #!/usr/bin/env bash
-if [[ ${SHIM_CLONES:-0} == 1 && $1 == *check-vps.py ]]; then
+if [[ ${SHIM_CLONES:-0} == 1 && ( $1 == *check-vps.py || $1 == *metadata-egress.py ) ]]; then
   printf '%s|%s|python3 %s\n' "${COMPOSE_FILE:-}" "${COMPOSE_PROFILES:-}" "$*" >>"$CLONE_LOG"
+  if [[ $1 == *metadata-egress.py ]]; then
+    [[ $* == 'scripts/metadata-egress.py --docker-user-only --smoke' ]] || exit 2
+    [[ ${SHIM_METADATA_FAIL:-0} == 0 ]] || exit 1
+  fi
   exit 0
 fi
 exec "$CLONE_PYTHON" "$@"
@@ -253,7 +257,7 @@ clone_tests() {
   local clones="$base:docker-compose.clones.yaml" out rc key file
   mkdir -p "$dir/release/app" "$dir/release/configs" "$dir/release/scripts" "$dir/dev/app" "$dir/dev/configs"
   cp "${CLONE_VALIDATOR_SCRIPT:-$ROOT/scripts/validate-clones.mjs}" "$dir/release/scripts/validate-clones.mjs"
-  touch "$dir/release/scripts/check-vps.py"
+  touch "$dir/release/scripts/check-vps.py" "$dir/release/scripts/metadata-egress.py"
   for file in docker-compose.yaml docker-compose.prod.yaml docker-compose.clones.yaml docker-compose.dev-sandbox.yaml configs/Caddyfile configs/Caddyfile.dev configs/mcp-config.yaml; do
     touch "$dir/release/$file"
   done
@@ -468,6 +472,11 @@ PY
       if ((rc == 0)) && grep -Fxq "$expected" "$dir/calls"; then
         pass "clones $operation preserves complete file list/profile ($shape)"
       else flunk "clones $operation lost selected environment (rc=$rc)" "$out"; fi
+      if [[ $operation == smoke ]]; then
+        if grep -Fxq "$shape|app|python3 scripts/metadata-egress.py --docker-user-only --smoke" "$dir/calls"; then
+          pass "clones metadata smoke preserves selected environment ($shape)"
+        else flunk "clones metadata smoke lost selected environment" "$(cat "$dir/calls")"; fi
+      fi
     done
     for problem in incomplete malformed render validator; do
       clone_reset
@@ -490,6 +499,11 @@ PY
   clone_reset
   sed '/^DEV_DATABASE_URL=/d' "$dir/good.env" >"$dir/release/.env"
   clone_refused 'incomplete smoke inputs with private health disabled' smoke
+  clone_reset
+  out=$(SHIM_METADATA_FAIL=1 clone_boot smoke 2>&1); rc=$?
+  if ((rc != 0)) && grep -q 'forwarded metadata policy/persistence/probe failed' <<<"$out"; then
+    pass 'clones metadata smoke failure refuses admission'
+  else flunk 'clones metadata smoke failure was ignored' "$out"; fi
   printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
   out=$(SHIM_NO_DEV=1 clone_boot smoke 2>&1); rc=$?
   if ((rc == 0)) && grep -q '^HTTP ' "$dir/calls"; then pass 'clones default smoke still succeeds'; else flunk 'clones default smoke failed' "$out"; fi
@@ -596,6 +610,7 @@ mutants = [
      'for path in scripts/validate-clones.mjs configs/Caddyfile configs/Caddyfile.dev;'),
     ('render-failure-ignored', '(set -o pipefail; cd "$APP_DIR"', '(set +o pipefail; cd "$APP_DIR"'),
     ('dev-health-skipped', 'healthy_services+=(app-dev)', ':'),
+    ('metadata-smoke-compose-selection', 'if (cd "$APP_DIR" && sudo env COMPOSE_FILE="$files" COMPOSE_PROFILES="$COMPOSE_PROFILE" \\\n    python3 scripts/metadata-egress.py', 'if (cd "$APP_DIR" && sudo env COMPOSE_FILE="$COMPOSE_FILES" COMPOSE_PROFILES="$COMPOSE_PROFILE" \\\n    python3 scripts/metadata-egress.py'),
     ('smoke-stage-preflight', '  clone_preflight "$files" || return 1\n  local fails=0', '  :\n  local fails=0'),
     ('dc-wrapper-preflight', 'if [[ ${1:-} != config ]]; then clone_preflight "$files" || return 1; fi', 'if [[ ${1:-} != config ]]; then :; fi'),
     ('vps-wrapper-preflight', '  clone_preflight "$files" || return 1\n  (cd "$APP_DIR"', '  :\n  (cd "$APP_DIR"'),

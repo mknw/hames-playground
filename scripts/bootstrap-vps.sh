@@ -1941,7 +1941,7 @@ stage_smoke() {
     fail "9  embedder forward pass failed or returned the wrong dimensions"
     fails=$((fails + 1))
   fi
-  if (cd "$APP_DIR" && sudo env COMPOSE_FILE="$COMPOSE_FILES" COMPOSE_PROFILES="$COMPOSE_PROFILE" \
+  if (cd "$APP_DIR" && sudo env COMPOSE_FILE="$files" COMPOSE_PROFILES="$COMPOSE_PROFILE" \
     python3 scripts/metadata-egress.py --docker-user-only --smoke); then
     ok "10 forwarded metadata denied; persistence enabled; app stays healthy"
   else

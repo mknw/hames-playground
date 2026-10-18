@@ -21,6 +21,10 @@ import tarfile
 HERE = Path(__file__).resolve().parent
 FLAVOURS = ("base", "data", "office")
 REQUIRED = {"incus-agent", "docker.io", "systemd", "python3", "iproute2", "cloud-init"}
+COMMON_UNITS = ["incus-agent.service", "docker.service", "cloud-init-local.service",
+                "cloud-config.service", "cloud-final.service"]
+UNIT_LAYOUTS = ([*COMMON_UNITS, "cloud-init.service"],
+                [*COMMON_UNITS, "cloud-init-main.service", "cloud-init-network.service"])
 HEX = r"[a-f0-9]{64}"
 LAYER_BUDGET = 8 * 1024 ** 3
 
@@ -317,6 +321,7 @@ def build(args):
             "guest package versions differ from lock")
     require(inventory["machine_id_state"] in ("", "uninitialized"), "guest machine identity not cleaned")
     require(inventory["ssh_host_keys"] == [], "guest SSH host keys not cleaned")
+    require(inventory.get("enabled_units") in UNIT_LAYOUTS, "guest enabled units differ from a supported layout")
     disk_info(paths["qemu-img"], disk, lock, work)
     finalize(lock, work, tools)
 

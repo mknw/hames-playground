@@ -117,7 +117,7 @@ with open('inventory.json', 'w') as stream:
 PY
 cleanup
 trap - EXIT
-rm -f ./*.deb ./*.tar ./dockerd.log ./empty-daemon.json
+rm -f ./*.deb ./*.tar ./dockerd.log ./empty-daemon.json ./enabled-units.txt
 # Remove clone identity and cached cloud-init instance data, never site values.
 cloud-init clean --logs --machine-id
 rm -f /etc/ssh/ssh_host_*

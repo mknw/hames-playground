@@ -88,7 +88,7 @@ class Pipeline(unittest.TestCase):
         if name == "guestfish":
             Path(argv[-1]).write_text(json.dumps({"images": {f: self.pin for f in vm.FLAVOURS},
                 "packages": {p["name"]: p["version"] for p in self.lock["packages"]},
-                "docker_driver": "overlay2", "machine_id_state": "uninitialized", "ssh_host_keys": []}))
+                "enabled_units": vm.UNIT_LAYOUTS[1], "docker_driver": "overlay2", "machine_id_state": "uninitialized", "ssh_host_keys": []}))
             return b""
         self.fail("unapproved builder command")
 
@@ -338,6 +338,12 @@ class Pipeline(unittest.TestCase):
     def test_build_wrong_guest_image_refused(self):
         self.inventory_refused(lambda v: v['images'].update(base='sha256:' + 'f' * 64), 'preload inventory')
 
+    def test_build_mixed_enabled_units_refused(self):
+        self.inventory_refused(lambda v: v.update(enabled_units=[*vm.UNIT_LAYOUTS[0], 'cloud-init-main.service']), 'enabled units')
+
+    def test_build_missing_enabled_units_refused(self):
+        self.inventory_refused(lambda v: v.pop('enabled_units'), 'enabled units')
+
     def test_build_wrong_guest_package_refused(self):
         self.inventory_refused(lambda v: v['packages'].update({'docker.io': 'wrong'}), 'package versions')
 
@@ -532,14 +538,16 @@ class Pipeline(unittest.TestCase):
         child = self.shell_section('# Refuse site configuration', 'dockerd --config-file', guest)
         self.assertNotEqual(child.returncode, 0)
 
-    def guest_units(self, layout, directory='usr/lib/systemd/system', missing=None, enable_status=0):
+    def guest_units(self, layout, directory='usr/lib/systemd/system', missing=None, enable_status=0, masked=None):
         guest = self.fake_root()
         units = guest / directory
         units.mkdir(parents=True)
         common = ['incus-agent.service', 'docker.service', 'cloud-init-local.service',
                   'cloud-config.service', 'cloud-final.service']
         for unit in [*common, 'cloud-init.target', *layout]:
-            if unit != missing:
+            if unit == masked:
+                (units / unit).symlink_to('/dev/null')
+            elif unit != missing:
                 (units / unit).write_text('[Unit]\n')
         agent = guest / 'bin/incus-agent'
         agent.write_text('#!/bin/sh\nexit 0\n')
@@ -596,6 +604,15 @@ class Pipeline(unittest.TestCase):
                 self.assertFalse((work / 'systemctl-call').exists())
                 self.assertFalse((work / 'enabled-units.txt').exists())
 
+    def test_guest_masked_vendor_unit_refused(self):
+        for masked in ('cloud-init-main.service', 'docker.service'):
+            with self.subTest(masked=masked), tempfile.TemporaryDirectory() as directory:
+                self.root = Path(directory)
+                child, work, _ = self.guest_units(
+                    ['cloud-init-main.service', 'cloud-init-network.service'], masked=masked)
+                self.assertNotEqual(child.returncode, 0)
+                self.assertFalse((work / 'systemctl-call').exists())
+
     def test_guest_unit_enable_failure_refused(self):
         child, work, _ = self.guest_units(['cloud-init.service'], enable_status=1)
         self.assertNotEqual(child.returncode, 0)
@@ -604,7 +621,7 @@ class Pipeline(unittest.TestCase):
     def test_guest_cleanup_and_clone_inventory(self):
         guest = self.fake_root()
         work = guest / 'opt/vm-image'
-        for name in ('input.deb', 'base.tar', 'dockerd.log', 'empty-daemon.json'):
+        for name in ('input.deb', 'base.tar', 'dockerd.log', 'empty-daemon.json', 'enabled-units.txt'):
             (work / name).write_text('private input')
         (work / 'inventory.json').write_text('{}')
         (guest / 'etc/machine-id').write_text('a' * 32)
@@ -623,7 +640,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(child.returncode, 0, child.stderr)
         self.assertTrue((work / 'cloud-call').is_file())
         self.assertEqual((work / 'cloud-call').read_text().strip(), 'clean --logs --machine-id')
-        for name in ('input.deb', 'base.tar', 'dockerd.log', 'empty-daemon.json'):
+        for name in ('input.deb', 'base.tar', 'dockerd.log', 'empty-daemon.json', 'enabled-units.txt'):
             self.assertFalse((work / name).exists(), name)
         self.assertEqual(list((guest / 'etc/ssh').glob('ssh_host_*')), [])
         self.assertFalse((guest / 'var/lib/docker/engine-id').exists())
@@ -901,6 +918,8 @@ def mutations():
         raise RuntimeError("green baseline required\n" + baseline.stderr)
     source = SOURCE.read_text()
     changes = [
+        ('enabled unit inventory ignored', 'inventory.get("enabled_units") in UNIT_LAYOUTS', 'True', 'test_build_mixed_enabled_units_refused'),
+        ('enabled unit inventory ignored (missing key)', 'inventory.get("enabled_units") in UNIT_LAYOUTS', 'True', 'test_build_missing_enabled_units_refused'),
         ("save driver inventory omitted", '"docker_driver": driver,', '', "test_save_requires_absolute_docker_and_records_provenance"),
         ("builder tools run from source paths", 'path = work.copy(source, name, record["sha256"])', 'path = source', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
         ("Docker CLI version not recorded", '"version": version}}, indent=2)', '}}, indent=2)', "test_save_requires_absolute_docker_and_records_provenance"),
@@ -978,6 +997,8 @@ def mutations():
             print("RED verified: " + label)
     guest = (vm.HERE / "customize.sh").read_text()
     guest_changes = [
+        ('guest masked vendor unit admitted', 'test -f "/usr/lib/systemd/system/$1" || test -f "/lib/systemd/system/$1"', 'test -e "/usr/lib/systemd/system/$1" || test -e "/lib/systemd/system/$1"', 'test_guest_masked_vendor_unit_refused'),
+        ('guest enabled unit temporary file retained', './empty-daemon.json ./enabled-units.txt', './empty-daemon.json', 'test_guest_cleanup_and_clone_inventory'),
         ('guest legacy unit directory ignored', ' || test -f "/lib/systemd/system/$1"', '', 'test_guest_legacy_cloud_init_units'),
         ('guest modern unit directory ignored', 'test -f "/usr/lib/systemd/system/$1" || ', '', 'test_guest_new_cloud_init_units'),
         ('guest undiscovered units selected', 'if has_unit "$unit"; then', 'if true; then', 'test_guest_legacy_cloud_init_units'),

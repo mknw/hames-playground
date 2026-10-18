@@ -106,8 +106,10 @@ and mixed layouts are refused with the unit names found. It also requires
 `cloud-init.target`, `incus-agent.service` and `docker.service` before enabling
 any units. The static `cloud-init.target` is pulled in by cloud-init's generator;
 only services are explicitly enabled. A failed enable aborts assembly.
-`guest-inventory.json` records the exact successful enable list in
-`enabled_units`; the existing manifest hashes that inventory. CLI arguments and
+`guest-inventory.json` records the units passed to the successful
+`systemctl enable` in `enabled_units`; boot validation confirms their state.
+Assembly refuses any recorded list outside the two supported layouts, and the
+existing manifest hashes that inventory. CLI arguments and
 the version-1 lock are unchanged, so reviewed locks can be reused with a fresh
 work directory. On a layout refusal, inspect the pinned guest package/base
 closure rather than skipping units. After merge, rerun `build --apply` on the

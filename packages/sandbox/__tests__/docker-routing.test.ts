@@ -227,6 +227,41 @@ describe('configured Docker paths', () => {
       args.includes('connect') ? { code: 1, stderr: 'permission denied' } : { stdout: 'cid' }
     await expect(backend.reset(vm)).rejects.toThrow(/permission denied/)
   })
+  it.each(['already', 'already.example.test'])(
+    'rejects endpoint-bearing unrelated reset failure with host %s',
+    async (host) => {
+      vi.stubEnv('SANDBOX_DOCKER_HOST', `tcp://${host}:2376`)
+      const backend = new DockerBackend()
+      const vm = await backend.boot('base', { egress: 'pypi' })
+      plan = (args) =>
+        args.includes('connect')
+          ? {
+              code: 1,
+              stderr: `error during connect: Post "https://${host}:2376/v1.47/networks/test/connect": permission denied`,
+            }
+          : { stdout: 'cid' }
+      await expect(backend.reset(vm)).rejects.toThrow(/permission denied/)
+    },
+  )
+  it.each([
+    'Error response from daemon: already connected',
+    'Error response from daemon: endpoint with name gateway already exists in network test',
+  ])('recognizes the daemon attachment diagnostic: %s', async (stderr) => {
+    const backend = new DockerBackend()
+    const vm = await backend.boot('base', { egress: 'pypi' })
+    plan = (args) => (args.includes('connect') ? { code: 1, stderr } : { stdout: 'cid' })
+    await expect(backend.reset(vm)).resolves.toBeUndefined()
+  })
+  it.each([
+    'permission denied: already connected',
+    'permission denied: endpoint with name gateway already exists in network test',
+    'permission denied: /synthetic/tls/already connected/key.pem',
+  ])('rejects attachment words embedded in an unrelated diagnostic: %s', async (stderr) => {
+    const backend = new DockerBackend()
+    const vm = await backend.boot('base', { egress: 'pypi' })
+    plan = (args) => (args.includes('connect') ? { code: 1, stderr } : { stdout: 'cid' })
+    await expect(backend.reset(vm)).rejects.toThrow(/permission denied/)
+  })
   it('rejects malformed config before any child or reaper can run', () => {
     vi.stubEnv('SANDBOX_DOCKER_HOST', 'http://invalid.example.test')
     expect(() => new DockerBackend()).toThrow(/SANDBOX_DOCKER_HOST/)

@@ -211,7 +211,13 @@ class DockerCommandError extends Error {
 
   constructor(message: string, stderr: string) {
     super(message)
-    this.alreadyConnected = /already/i.test(stderr)
+    const diagnostic = stderr.trim().replace(/^Error response from daemon:\s*/, '')
+    // Recognize an attachment diagnostic at its start. Endpoint/TLS material
+    // embedded in a transport failure must never supply the success condition.
+    this.alreadyConnected =
+      /^(?:already connected|endpoint(?: with name \S+)? already exists in network)(?:[ \t]|$)/i.test(
+        diagnostic,
+      )
   }
 }
 

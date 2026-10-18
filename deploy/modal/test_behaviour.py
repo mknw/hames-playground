@@ -15,6 +15,7 @@ import threading
 import types
 import unittest
 from unittest import mock
+from urllib.parse import urlparse
 
 from log_filter import forward_stderr
 
@@ -336,11 +337,26 @@ class Qwen27BBehaviour(unittest.TestCase):
 class SmokeEgressBehaviour(unittest.TestCase):
     """Exercise the real smoke entry points with synthetic HTTP responses only."""
 
-    def run_smoke(self, name, image_response=None, shim_response=None):
+    # Fixed wire fixtures, deliberately independent of the smoke's expectations.
+    IMAGE_REFUSAL = "At most 0 image(s) may be provided in one prompt"
+    VIDEO_REFUSAL = "At most 0 video(s) may be provided in one prompt"
+    SHIM_REFUSAL = "image URLs are not accepted here: send the image as a data:image/...;base64 URI"
+
+    def assert_probe_url(self, url):
+        parsed = urlparse(url)
+        self.assertEqual(parsed.scheme, "https")
+        self.assertTrue(parsed.hostname and parsed.hostname.endswith(".invalid"), url)
+        self.assertEqual(url, "https://example.invalid/x.png")
+
+    def run_smoke(self, name, image_response=None, shim_response=None,
+                  video_response=None, shim_state_response=None):
         module = __import__(name)
         seen = []
 
         def fake_call(base, token, method, path, body=None, **kwargs):
+            if body and ("messages" in body or "questions" in body):
+                self.assertEqual(method, "POST")
+                self.assertEqual(path, "/v1/chat/completions" if "messages" in body else "/v1/systemone")
             if path == "/health":
                 return (200 if token else 401), {}, 0.0
             if path == "/v1/models":
@@ -348,9 +364,20 @@ class SmokeEgressBehaviour(unittest.TestCase):
                     [module.SUMMARIZER_MODEL, module.DECIDER_MODEL]
                 return 200, {"data": [{"id": m} for m in models]}, 0.0
             if path == "/v1/chat/completions":
+                self.assertEqual(body["model"], "Qwen/Qwen3.8-27B-FP8" if name == "smoke_27b"
+                                 else "qwen3.5-4b-instruct")
                 if isinstance(body["messages"][0]["content"], list):
-                    seen.append("chat-image")
-                    status, response = image_response or (400, {"error": {"message": module.IMAGE_REFUSAL}})
+                    parts = [part for part in body["messages"][0]["content"]
+                             if part.get("type") in ("image_url", "video_url")]
+                    self.assertEqual(len(parts), 1, "a media probe must contain an actual URL part")
+                    part = parts[0]
+                    self.assert_probe_url(part[part["type"]]["url"])
+                    if part["type"] == "image_url":
+                        seen.append("chat-image")
+                        status, response = image_response or (400, {"error": {"message": self.IMAGE_REFUSAL}})
+                    else:
+                        seen.append("chat-video")
+                        status, response = video_response or (400, {"error": {"message": self.VIDEO_REFUSAL}})
                     return status, response, 0.0
                 message = {"content": "412 units"}
                 if name == "smoke_27b":
@@ -359,9 +386,19 @@ class SmokeEgressBehaviour(unittest.TestCase):
                         message = {"content": "no", "reasoning": "synthetic reasoning"}
                 return 200, {"choices": [{"message": message, "finish_reason": "stop"}]}, 0.0
             if path == "/v1/systemone":
+                self.assertEqual(body["model"], "h2oai/h2o-lightning-4b")
                 if "image_url" in body:
+                    self.assert_probe_url(body["image_url"])
                     seen.append("shim-image")
-                    status, response = shim_response or (422, {"detail": "image URLs are not accepted here"})
+                    status, response = shim_response or (422, {"detail": self.SHIM_REFUSAL})
+                    return status, response, 0.0
+                if isinstance(body["state"], dict):
+                    parts = body["state"]["content"]
+                    self.assertEqual(len(parts), 1)
+                    self.assertEqual(parts[0]["type"], "image_url")
+                    self.assert_probe_url(parts[0]["image_url"]["url"])
+                    seen.append("shim-state-image")
+                    status, response = shim_state_response or (422, {"detail": self.SHIM_REFUSAL})
                     return status, response, 0.0
                 return 200, {"probability_source": "native", "answers": {
                     "kind": {"choice": "billing", "probabilities": {"billing": 1, "shipping": 0, "other": 0}},
@@ -377,26 +414,39 @@ class SmokeEgressBehaviour(unittest.TestCase):
                 mock.patch.object(module, "cold_start", return_value=boot), \
                 mock.patch.object(module, "results", []), contextlib.redirect_stdout(io.StringIO()):
             result = module.main()
-        self.assertEqual(seen, ["chat-image"] if name == "smoke_27b" else ["chat-image", "shim-image"])
+        self.assertEqual(seen, ["chat-image"] if name == "smoke_27b" else
+                         ["chat-image", "chat-video", "shim-image", "shim-state-image"])
         return result
+
+    def bad_chat_responses(self, refusal):
+        for status in (200, 201, 401, 403, 404, 422, 500, 503):
+            yield status, refusal
+        yield 400, "invalid request"
+        yield 400, "fetch failed: DNS resolution error"
+        for indicator in ("fetch", "resolve", "connect", "dns", "timeout"):
+            yield 400, f"{refusal}; {indicator.upper()} failed"
 
     def test_both_chat_smokes_require_the_pre_fetch_refusal(self):
         for name in ("smoke", "smoke_27b"):
-            with self.subTest(smoke=name):
+            with self.subTest(smoke=name, case="valid fixed refusal"):
                 self.assertEqual(self.run_smoke(name), 0)
-                for status, message in (
-                    (200, "At most 0 image(s) may be provided in one prompt"),
-                    (400, "invalid request"),
-                    (400, "fetch failed: DNS resolution error"),
-                    (400, "At most 0 image(s) may be provided in one prompt; fetch timeout"),
-                ):
+            for status, message in self.bad_chat_responses(self.IMAGE_REFUSAL):
+                with self.subTest(smoke=name, status=status, message=message):
                     self.assertEqual(self.run_smoke(name, (status, {"error": {"message": message}})), 1)
 
-    def test_shim_smoke_requires_its_specific_refusal(self):
-        for status, message in ((200, "image URLs are not accepted here"),
-                                (422, "fetch failed"), (422, "invalid request")):
+    def test_small_video_smoke_requires_the_pre_fetch_refusal(self):
+        self.assertEqual(self.run_smoke("smoke"), 0)
+        for status, message in self.bad_chat_responses(self.VIDEO_REFUSAL):
             with self.subTest(status=status, message=message):
-                self.assertEqual(self.run_smoke("smoke", shim_response=(status, {"detail": message})), 1)
+                self.assertEqual(self.run_smoke("smoke", video_response=(status, {"error": {"message": message}})), 1)
+
+    def test_shim_smoke_requires_its_specific_refusal(self):
+        for channel in ("shim_response", "shim_state_response"):
+            for status, message in ((200, self.SHIM_REFUSAL), (400, self.SHIM_REFUSAL),
+                                    (500, self.SHIM_REFUSAL), (503, self.SHIM_REFUSAL),
+                                    (422, "fetch failed"), (422, "invalid request")):
+                with self.subTest(channel=channel, status=status, message=message):
+                    self.assertEqual(self.run_smoke("smoke", **{channel: (status, {"detail": message})}), 1)
 
 
 class MeasureBehaviour(unittest.TestCase):

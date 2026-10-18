@@ -19,6 +19,7 @@ import os
 import sys
 
 from measure import call, cold_start
+from smoke_probes import PROBE_URL
 
 SUMMARIZER_MODEL = "qwen3.5-4b-instruct"
 DECIDER_MODEL = "h2oai/h2o-lightning-4b"
@@ -150,7 +151,7 @@ def main() -> int:
         **SUMMARIZE,
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": "Describe this."},
-            {"type": "image_url", "image_url": {"url": "https://example.invalid/x.png"}},
+            {"type": "image_url", "image_url": {"url": PROBE_URL}},
         ]}],
     }
     status, body, seconds = call(base, token, "POST", "/v1/chat/completions", image, timeout=60)
@@ -161,12 +162,35 @@ def main() -> int:
         and not any(word in message.lower() for word in ("fetch", "resolve", "connect", "dns", "timeout")),
         f"status {status}, {seconds:.2f}s, {message[:80]!r}",
     )
-    status, body, _ = call(base, token, "POST", "/v1/systemone", {**DECIDE, "image_url": "https://example.invalid/x.png"})
+    video = {
+        **SUMMARIZE,
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": "Describe this."},
+            {"type": "video_url", "video_url": {"url": PROBE_URL}},
+        ]}],
+    }
+    status, body, seconds = call(base, token, "POST", "/v1/chat/completions", video, timeout=60)
+    message = str((body.get("error") or {}).get("message", ""))
     check(
-        "an image URL is refused without a fetch",
-        status == 422 and str(body.get("detail", "")).startswith("image URLs are not accepted here"),
-        f"status {status}",
+        "a video part is refused before any fetch",
+        status == 400 and "At most 0 video(s) may be provided in one prompt" in message
+        and not any(word in message.lower() for word in ("fetch", "resolve", "connect", "dns", "timeout")),
+        f"status {status}, {seconds:.2f}s, {message[:80]!r}",
     )
+    # The pinned shim accepts image parts recursively inside structured state
+    # (h2o_lightning_shim.py:506–528,547–597), as well as top-level image_url.
+    for label, request in (
+        ("top-level", {**DECIDE, "image_url": PROBE_URL}),
+        ("structured-state", {**DECIDE, "state": {"content": [
+            {"type": "image_url", "image_url": {"url": PROBE_URL}},
+        ]}}),
+    ):
+        status, body, _ = call(base, token, "POST", "/v1/systemone", request)
+        check(
+            f"a {label} image URL is refused without a fetch",
+            status == 422 and str(body.get("detail", "")).startswith("image URLs are not accepted here"),
+            f"status {status}",
+        )
 
     passed = sum(results)
     print(f"\n{passed}/{len(results)} passed", flush=True)

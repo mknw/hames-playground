@@ -75,6 +75,14 @@ export function validateClones(config) {
   );
   for (const [i, env] of envs.entries()) {
     check(
+      !Object.keys(env).some((key) =>
+        /^(RELEASE_DATABASE_URL|DEV_DATABASE_URL|.*_RUNTIME_ENV_FILE|DEV_CLONE_PATH|COMPOSE_FILE)$/.test(
+          key,
+        ),
+      ),
+      "App env files must not contain root Compose inputs",
+    );
+    check(
       env.VITE_DEV_BYPASS_AUTH === "false",
       "Auth bypass must be off in both clones",
     );
@@ -148,10 +156,44 @@ export function validateClones(config) {
     );
     check(
       db.pathname.length > 1 &&
+        !["postgres", "template0", "template1"].includes(
+          decodeURIComponent(db.pathname.slice(1)),
+        ) &&
         db.username &&
         db.password &&
         !["postgres", "root"].includes(decodeURIComponent(db.username)),
       "Each clone needs a non-admin database role",
+    );
+  }
+  const passwords = databases.map((db) => decodeURIComponent(db.password));
+  check(passwords[0] !== passwords[1], "Clone role passwords must differ");
+  const administrator =
+    config.services.postgres?.environment?.POSTGRES_PASSWORD;
+  for (const [i, env] of envs.entries()) {
+    const ownSecrets = [
+      passwords[i],
+      env.DATABASE_URL,
+      ...[
+        "DATA_ENCRYPTION_KEY",
+        "AUTH_SESSION_SECRET",
+        "TOKEN_ENCRYPTION_KEY",
+      ].map((key) => env[key].trim()),
+    ];
+    check(
+      !Object.values(envs[1 - i]).some((value) =>
+        ownSecrets.some((secret) => String(value).includes(secret)),
+      ),
+      "App env contains sibling credentials",
+    );
+    check(
+      !administrator ||
+        !Object.values(env).some(
+          (value) =>
+            String(value).includes(administrator) ||
+            (value === env.DATABASE_URL &&
+              passwords[i].includes(administrator)),
+        ),
+      "App env contains Postgres administrator credentials",
     );
   }
   check(

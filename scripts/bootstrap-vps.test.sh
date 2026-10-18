@@ -94,7 +94,12 @@ if [[ ${SHIM_CLONES:-0} == 1 ]]; then
     fi
     exit 0
   fi
-  exit 1
+  if [[ $args == *" logs "* && $args == *" mcp-gateway "* ]]; then
+    echo 'Those servers are enabled: context7,fetch,memory,neo4j-cypher,web_search'
+    echo '16 tools listed'
+  fi
+  [[ $args != *" printenv "* ]] || echo false
+  exit 0
 fi
 if [[ $args == *" version "* && $args != *" compose "* ]]; then
   echo "29.2.1"
@@ -211,6 +216,18 @@ echo "apt-get $*" >>"${CALLLOG:-/dev/null}"
 SHIM
 printf '#!/usr/bin/env bash\nexit 0\n' >"$tmproot/bin/fail2ban-client"
 chmod +x "$tmproot/bin/"*
+# Only the deployment probe is inert; fixture generation uses real Python.
+export CLONE_PYTHON
+CLONE_PYTHON=${CLONE_PYTHON:-$(command -v python3)}
+cat >"$tmproot/bin/python3" <<'SHIM'
+#!/usr/bin/env bash
+if [[ ${SHIM_CLONES:-0} == 1 && $1 == *check-vps.py ]]; then
+  printf '%s|%s|python3 %s\n' "${COMPOSE_FILE:-}" "${COMPOSE_PROFILES:-}" "$*" >>"$CLONE_LOG"
+  exit 0
+fi
+exec "$CLONE_PYTHON" "$@"
+SHIM
+chmod +x "$tmproot/bin/python3"
 export PATH="$tmproot/bin:$PATH"
 
 # lib DIR — a subshell prelude: the script's functions, pointed at DIR. The
@@ -231,10 +248,25 @@ clone_tests() {
   local clones="$base:docker-compose.clones.yaml" out rc key file
   mkdir -p "$dir/release/app" "$dir/release/configs" "$dir/release/scripts" "$dir/dev/app" "$dir/dev/configs"
   cp "${CLONE_VALIDATOR_SCRIPT:-$ROOT/scripts/validate-clones.mjs}" "$dir/release/scripts/validate-clones.mjs"
+  touch "$dir/release/scripts/check-vps.py"
   for file in docker-compose.yaml docker-compose.prod.yaml docker-compose.clones.yaml docker-compose.dev-sandbox.yaml configs/Caddyfile configs/Caddyfile.dev configs/mcp-config.yaml; do
     touch "$dir/release/$file"
   done
-  touch "$dir/release-runtime.env" "$dir/dev-runtime.env"
+  for file in release dev; do
+    cat >"$dir/$file-runtime.env" <<ENV
+AUTH_SESSION_SECRET=$file-synthetic-session-11111111111111111111111111111111
+TOKEN_ENCRYPTION_KEY=$file-synthetic-token-22222222222222222222222222222222
+DATA_ENCRYPTION_KEY=$file-synthetic-data-00000000000000000000000000000000
+AZURE_TENANT_ID=synthetic-tenant
+AZURE_CLIENT_ID=synthetic-client
+AZURE_CLIENT_SECRET=synthetic-client-secret
+ANTHROPIC_API_KEY=synthetic-api-key
+VITE_ALLOWED_EMAILS=owner@example.invalid
+ENV
+    chmod 600 "$dir/$file-runtime.env"
+  done
+  git -C "$dir/dev" init -q
+  git -C "$dir/dev" -c user.name=Fixture -c user.email=fixture@example.invalid -c core.hooksPath=/dev/null commit -qm fixture --allow-empty
   python3 - "$dir" <<'PY'
 import json, pathlib, sys
 p = pathlib.Path(sys.argv[1])
@@ -248,17 +280,18 @@ for clone, service in [('release', 'app'), ('dev', 'app-dev')]:
             DATA_ENCRYPTION_KEY=clone + '-synthetic-data-' + '0'*32,
             AUTH_SESSION_SECRET=clone + '-synthetic-session-' + '1'*32,
             TOKEN_ENCRYPTION_KEY=clone + '-synthetic-token-' + '2'*32,
-            DATABASE_URL=f'postgresql://{clone}_app:synthetic@postgres:5432/app_{clone}'))
-(p / 'good.json').write_text(json.dumps({'x-clone-dev-docker-socket': False, 'services': apps}))
+            DATABASE_URL=f'postgresql://{clone}_app:{clone}-synthetic@postgres:5432/app_{clone}'))
+(p / 'good.json').write_text(json.dumps({'name': 'synthetic', 'x-clone-dev-docker-socket': False, 'services': apps}))
 PY
   cat >"$dir/good.env" <<ENV
 COMPOSE_FILE=$clones
 DEV_CLONE_PATH=$dir/dev
+DEV_REF=$(git -C "$dir/dev" rev-parse HEAD)
 DEV_APP_DOMAIN=dev.example.invalid
 RELEASE_RUNTIME_ENV_FILE=$dir/release-runtime.env
 DEV_RUNTIME_ENV_FILE=$dir/dev-runtime.env
-RELEASE_DATABASE_URL=postgresql://release_app:synthetic@postgres:5432/app_release
-DEV_DATABASE_URL=postgresql://dev_app:synthetic@postgres:5432/app_dev
+RELEASE_DATABASE_URL=postgresql://release_app:release-synthetic@postgres:5432/app_release
+DEV_DATABASE_URL=postgresql://dev_app:dev-synthetic@postgres:5432/app_dev
 ENV
   # All unrelated boot gates are inert. dc, compose_files, clone_preflight,
   # validator, command selection, and health-service selection are real.
@@ -268,13 +301,31 @@ ENV
     export SHIM_COMPOSE_JSON="$dir/render.json"
     : >"$CLONE_LOG"
     touch "$CLONE_ALIVE"
+    [[ ${SHIM_NO_DEV:-0} == 0 ]] || rm "$CLONE_ALIVE"
     HOSTNAME_ARG=release.example.invalid ACME_EMAIL_ARG=ops@example.invalid
     assert_engine_supported() { :; }; assert_daemon_isolation() { :; }; assert_gateway_pinned() { :; }
-    env_problems() { :; }; owner_missing() { :; }; reserved_name() { return 1; }
+    env_problems() { :; }; reserved_name() { return 1; }
+    if [[ ${1:-boot} != owner ]]; then owner_missing() { :; }; fi
     escrow_recorded() { :; }; dns_points_here() { :; }; assert_dynamic_tools_off() { :; }
     rendered_exposure() { :; }; prepare_embedder() { echo PREPARE >>"$CLONE_LOG"; }
-    vps_check() { :; }; wait_state() { echo "WAIT $*" >>"$CLONE_LOG"; }
-    stage_boot
+    wait_state() { echo "WAIT $*" >>"$CLONE_LOG"; }
+    # shellcheck disable=SC2032 # smoke calls this function directly, never via sudo
+    curl() {
+      echo "HTTP $*" >>"$CLONE_LOG"
+      case $* in *http://*) echo '301 https://release.example.invalid/';; *'/api/health') echo '{"status":"ok"}';; *) echo 401;; esac
+    }
+    dynamic_tools_state() { echo disabled; }
+    sudo() {
+      if [[ $1 == ss ]]; then echo "PROBE ss" >>"$CLONE_LOG"; return 0; fi
+      command sudo "$@"
+    }
+    case ${1:-boot} in
+      boot|owner) vps_check() { :; }; stage_boot ;;
+      smoke) NO_SEED=1 PROBE_PRIVATE_HEALTH=${SHIM_HEALTH:-0}; stage_smoke ;;
+      dc) dc exec -T app true ;;
+      images) stage_images ;;
+      probe) vps_check --clones ;;
+    esac
   )
   clone_reset() {
     cp "$dir/good.env" "$dir/release/.env"
@@ -282,8 +333,8 @@ ENV
   }
   clone_refused() {
     local label=$1 result status
-    result=$(clone_boot 2>&1); status=$?
-    if ((status != 0)) && ! grep -q 'compose up\|^PREPARE\|^WAIT' "$dir/calls"; then
+    result=$(clone_boot "${2:-boot}" 2>&1); status=$?
+    if ((status != 0)) && ! grep -Ev 'compose config --format json$' "$dir/calls" | grep -q .; then
       pass "clones refuses $label before changes"
     else flunk "clones accepted $label (rc=$status)" "$result"; fi
     [[ $result != *synthetic-secret* ]] || flunk "clones leaked renderer error"
@@ -303,7 +354,7 @@ ENV
   else flunk "clones owner overlay (rc=$rc)" "$out"; fi
   # Byte-exact legacy argv/environment: no renderer or dev-health operation.
   printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
-  out=$(clone_boot 2>&1); rc=$?
+  out=$(SHIM_NO_DEV=1 clone_boot 2>&1); rc=$?
   cat >"$dir/default-expected" <<ENV
 PREPARE
 $base|app|compose up -d --remove-orphans
@@ -319,7 +370,7 @@ ENV
   if ((rc == 0)) && cmp -s "$dir/default-expected" "$dir/calls"; then
     pass "clones default boot command transcript is byte-identical"
   else flunk "clones default command transcript changed (rc=$rc)" "$(cat "$dir/calls")"; fi
-  for key in DEV_CLONE_PATH DEV_APP_DOMAIN RELEASE_RUNTIME_ENV_FILE DEV_RUNTIME_ENV_FILE RELEASE_DATABASE_URL DEV_DATABASE_URL; do
+  for key in DEV_CLONE_PATH DEV_REF DEV_APP_DOMAIN RELEASE_RUNTIME_ENV_FILE DEV_RUNTIME_ENV_FILE RELEASE_DATABASE_URL DEV_DATABASE_URL; do
     clone_reset
     python3 - "$dir/release/.env" "$key" <<'PY'
 import pathlib, sys
@@ -363,7 +414,7 @@ PY
     printf 'COMPOSE_FILE=%s\n' "$shape" >>"$dir/release/.env"
     clone_refused 'partial or reordered overlay opt-in'
   done
-  for key in DEV_CLONE_PATH DEV_APP_DOMAIN RELEASE_RUNTIME_ENV_FILE DEV_RUNTIME_ENV_FILE RELEASE_DATABASE_URL DEV_DATABASE_URL; do
+  for key in DEV_CLONE_PATH DEV_REF DEV_APP_DOMAIN RELEASE_RUNTIME_ENV_FILE DEV_RUNTIME_ENV_FILE RELEASE_DATABASE_URL DEV_DATABASE_URL; do
     printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
     grep "^$key=" "$dir/good.env" >>"$dir/release/.env"
     clone_refused "a lone $key under the single-app setting"
@@ -371,6 +422,127 @@ PY
   clone_reset
   printf 'RELEASE_RUNTIME_ENV_FILE=relative.env\n' >>"$dir/release/.env"
   clone_refused 'relative runtime env file'
+
+  # The real shared wrappers: only Docker/Python/HTTP effects are inert.
+  for operation in dc probe smoke images; do
+    for shape in "$clones" "$clones:docker-compose.dev-sandbox.yaml"; do
+      clone_reset
+      printf 'COMPOSE_FILE=%s\n' "$shape" >>"$dir/release/.env"
+      [[ $operation != images ]] || continue # failure path below; image catalogue is out of scope
+      out=$(clone_boot "$operation" 2>&1); rc=$?
+      case $operation in
+        dc) expected="$shape|app|compose exec -T app true" ;;
+        probe) expected="$shape|app|python3 scripts/check-vps.py --clones" ;;
+        smoke) expected="$shape|app|python3 scripts/check-vps.py --clones" ;;
+      esac
+      if ((rc == 0)) && grep -Fxq "$expected" "$dir/calls"; then
+        pass "clones $operation preserves complete file list/profile ($shape)"
+      else flunk "clones $operation lost selected environment (rc=$rc)" "$out"; fi
+    done
+    for problem in incomplete malformed render validator; do
+      clone_reset
+      case $problem in
+        incomplete) sed '/^DEV_DATABASE_URL=/d' "$dir/good.env" >"$dir/release/.env" ;;
+        malformed) printf 'COMPOSE_FILE=%s\n' "$base:docker-compose.clones.yaml:docker-compose.prod.yaml" >>"$dir/release/.env" ;;
+        validator) python3 - "$dir/render.json" <<'PY'
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1]); c=json.loads(p.read_text()); c['services']['app-dev']['environment']['SANDBOX_ENVIRONMENT']='release'; p.write_text(json.dumps(c))
+PY
+          ;;
+      esac
+      # Images may inspect daemon availability, but cannot build or pull.
+      out=$(SHIM_RENDER_FAIL=$([[ $problem == render ]] && echo 1 || echo 0) SHIM_HEALTH=1 clone_boot "$operation" 2>&1); rc=$?
+      if ((rc != 0)) && ! grep -Ev 'compose config --format json$|\|info$' "$dir/calls" | grep -q .; then
+        pass "clones $operation refuses $problem before dispatch"
+      else flunk "clones $operation dispatched after $problem (rc=$rc)" "$out $(cat "$dir/calls")"; fi
+    done
+  done
+  printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
+  out=$(SHIM_NO_DEV=1 clone_boot smoke 2>&1); rc=$?
+  if ((rc == 0)) && grep -q '^HTTP ' "$dir/calls"; then pass 'clones default smoke still succeeds'; else flunk 'clones default smoke failed' "$out"; fi
+
+  for shape in "$base" "$clones"; do
+    for spelling in export spaced; do
+      clone_reset
+      python3 - "$dir/release/.env" "$shape" "$spelling" <<'PY'
+import pathlib, sys
+p=pathlib.Path(sys.argv[1]); lines=p.read_text().splitlines()
+lines[0]='COMPOSE_FILE='+sys.argv[2]
+p.write_text('\n'.join((('export '+s) if sys.argv[3]=='export' else s.replace('=', ' = ', 1)) if not s.startswith('COMPOSE_FILE=') else s for s in lines)+'\n')
+PY
+      clone_refused "$spelling clone inputs under $shape"
+    done
+    for spelling in 'export COMPOSE_FILE' 'COMPOSE_FILE '; do
+      clone_reset
+      printf '%s=%s\n' "$spelling" "$shape" >>"$dir/release/.env"
+      clone_refused "ambiguous $spelling under $shape"
+    done
+  done
+  clone_reset
+  chmod 644 "$dir/dev-runtime.env"
+  clone_refused '0644 runtime env'
+  chmod 600 "$dir/dev-runtime.env"
+  mkdir -m 700 "$dir/runtime-directory"
+  clone_reset
+  printf 'DEV_RUNTIME_ENV_FILE=%s/runtime-directory\n' "$dir" >>"$dir/release/.env"
+  clone_refused 'directory in place of runtime env file'
+  for checkout in release dev; do
+    cp "$dir/dev-runtime.env" "$dir/$checkout/runtime.env"
+    clone_reset
+    printf 'DEV_RUNTIME_ENV_FILE=%s/%s/runtime.env\n' "$dir" "$checkout" >>"$dir/release/.env"
+    clone_refused "runtime env inside $checkout checkout"
+    rm "$dir/$checkout/runtime.env"
+  done
+  clone_reset
+  printf 'DEV_CLONE_PATH=relative-dev\n' >>"$dir/release/.env"
+  clone_refused 'relative dev checkout'
+  clone_reset
+  printf 'DEV_REF=%040d\n' 0 >>"$dir/release/.env"
+  clone_refused 'unreviewed dev HEAD'
+  clone_reset
+  printf 'DEV_REF=short\n' >>"$dir/release/.env"
+  clone_refused 'non-full dev SHA'
+  clone_reset
+  touch "$dir/dev/unreviewed"
+  clone_refused 'dirty dev checkout'
+  rm "$dir/dev/unreviewed"
+
+  clone_reset
+  out=$(clone_boot owner 2>&1); rc=$?
+  if ((rc == 0)); then pass 'clones owner gate uses complete runtime values instead of unused root values'; else flunk 'clones owner gate ignored runtime values' "$out"; fi
+  for file in release dev; do
+    clone_reset
+    cp "$dir/$file-runtime.env" "$dir/saved-owner"
+    printf 'AZURE_CLIENT_SECRET=\n' >>"$dir/$file-runtime.env"
+    clone_refused "missing $file runtime owner value" owner
+    cp "$dir/saved-owner" "$dir/$file-runtime.env"
+  done
+
+  # The marker must cover all six runtime keys and ignore unused root keys.
+  clone_reset
+  out=$(
+    lib "$dir/release"
+    mkdir -p "$STATE_DIR"
+    printf 'fixture %s\n' "$(keys_fingerprint)" >"$ESCROW_MARKER"
+    escrow_recorded || exit 1
+    printf 'DATA_ENCRYPTION_KEY=unused-root-key\n' >>"$ENV_FILE"
+    escrow_recorded || exit 2
+    for file in release dev; do
+      cp "$dir/$file-runtime.env" "$dir/saved-runtime"
+      for key in AUTH_SESSION_SECRET TOKEN_ENCRYPTION_KEY DATA_ENCRYPTION_KEY; do
+        cp "$dir/saved-runtime" "$dir/$file-runtime.env"
+        printf '%s=changed-runtime-key-00000000000000000000000000000000\n' "$key" >>"$dir/$file-runtime.env"
+        if escrow_recorded; then exit 3; fi
+      done
+      cp "$dir/saved-runtime" "$dir/$file-runtime.env"
+    done
+    # Each owner's missing setting is read from that app's runtime file.
+    for file in release dev; do
+      printf 'AZURE_CLIENT_SECRET=\n' >>"$dir/$file-runtime.env"
+      owner_missing "$dir/$file-runtime.env" | grep -qx AZURE_CLIENT_SECRET || exit 4
+    done
+  ); rc=$?
+  if ((rc == 0)); then pass 'clones escrow covers each runtime key and runtime owner values'; else flunk "clones runtime escrow/owner gate failed (rc=$rc)" "$out"; fi
 }
 if [[ ${1:-} == --clone-mutations ]]; then
   python3 - "$SCRIPT" "$0" <<'PY'
@@ -389,11 +561,27 @@ mutants = [
      'for path in scripts/validate-clones.mjs configs/Caddyfile configs/Caddyfile.dev;'),
     ('render-failure-ignored', '(set -o pipefail; cd "$APP_DIR"', '(set +o pipefail; cd "$APP_DIR"'),
     ('dev-health-skipped', 'healthy_services+=(app-dev)', ':'),
+    ('smoke-stage-preflight', '  clone_preflight "$files" || return 1\n  local fails=0', '  :\n  local fails=0'),
+    ('dc-wrapper-preflight', 'if [[ ${1:-} != config ]]; then clone_preflight "$files" || return 1; fi', 'if [[ ${1:-} != config ]]; then :; fi'),
+    ('vps-wrapper-preflight', '  clone_preflight "$files" || return 1\n  (cd "$APP_DIR"', '  :\n  (cd "$APP_DIR"'),
+    ('vps-wrapper-compose-selection', 'COMPOSE_FILE="$files" COMPOSE_PROFILES="$COMPOSE_PROFILE" python3 scripts/check-vps.py', 'COMPOSE_FILE="$COMPOSE_FILES" COMPOSE_PROFILES="$COMPOSE_PROFILE" python3 scripts/check-vps.py'),
+    ('boot-stage-preflight-R1', '  clone_preflight "$files" || return 1\n  prepare_embedder', '  :\n  prepare_embedder'),
+    ('ambiguous-assignments', "  if grep -E '^[[:space:]]*(export", "  if false && grep -E '^[[:space:]]*(export"),
+    ('runtime-file-R5', '[[ $path == /* && -r $path && -f $path ]]', 'true'),
+    ('runtime-permissions', '(( (8#$mode & 077) != 0 ))', 'false'),
+    ('runtime-location', '"$(realpath "$APP_DIR")"/*|"$dev_path"/*)', '/never-match-synthetic/*)'),
+    ('runtime-escrow', 'if [[ $files != "$COMPOSE_FILES" ]]; then\n    (', 'if false; then\n    ('),
+    ('runtime-owner-values', 'missing+=$(owner_missing "$file" | sed "s/^/$key: /")', 'missing+=""'),
+    ('runtime-owner-file-parser', 'v=$(env_get "$key" "$file")', 'v=$(env_get "$key")'),
+    ('dev-ref-head', '[[ $head == "$ref" && -z $dirty ]]', '[[ -z $dirty ]]'),
+    ('dev-checkout-clean', '[[ $head == "$ref" && -z $dirty ]]', '[[ $head == "$ref" ]]'),
 ]
 baseline = subprocess.run(['bash', str(harness), '--clones-only'], capture_output=True, text=True, timeout=90)
 if baseline.returncode:
     sys.exit('Baseline failed: ' + baseline.stdout + baseline.stderr)
 with tempfile.TemporaryDirectory() as tmp:
+    validator = source.parent / 'validate-clones.mjs'
+    policy = validator.read_text()
     for name, old, new in mutants:
         if original.count(old) != 1:
             sys.exit('Mutation anchor must occur once: ' + name)
@@ -404,8 +592,24 @@ with tempfile.TemporaryDirectory() as tmp:
         if not result.returncode or 'FAIL clones' not in result.stdout:
             sys.exit('SURVIVED or invalid mutation: ' + name + '\n' + result.stdout + result.stderr)
         print('KILLED ' + name, flush=True)
-    validator = source.parent / 'validate-clones.mjs'
-    policy = validator.read_text()
+    # New validator pins run the actual unit fixtures against a temporary
+    # module, including the review's six previously ACCEPTED renders.
+    for name, old, new in [
+        ('sibling-value-scan', 'ownSecrets.some((secret) => String(value).includes(secret))', 'false'),
+        ('administrator-value-scan', '!administrator || !Object.values(env).some', 'true || !Object.values(env).some'),
+        ('equal-role-passwords', 'passwords[0] !== passwords[1]', 'true'),
+        ('root-only-app-inputs', '!Object.keys(env).some', 'true || !Object.keys(env).some'),
+        ('reserved-database', '!["postgres", "template0", "template1"].includes', 'true || !["postgres", "template0", "template1"].includes'),
+    ]:
+        if policy.count(old) != 1:
+            sys.exit('Mutation anchor must occur once: ' + name)
+        changed = pathlib.Path(tmp) / 'validate-clones.mjs'
+        changed.write_text(policy.replace(old, new))
+        result = subprocess.run(['corepack', 'pnpm', 'test:run', 'src/__tests__/lib/config/compose-clones.test.ts'],
+            cwd=source.parent.parent / 'app', env={**os.environ, 'CI': '1', 'TEST_DATABASE_URL': 'postgresql://x:x@127.0.0.1:59999/x', 'CLONE_VALIDATOR_SCRIPT': str(changed)}, capture_output=True, text=True, timeout=90)
+        if not result.returncode or 'AssertionError' not in result.stdout + result.stderr:
+            sys.exit('SURVIVED or invalid mutation: ' + name + '\n' + result.stdout + result.stderr)
+        print('KILLED ' + name, flush=True)
     for name, old in [
         ('separate-database-policy', 'decodeURIComponent(databases[0].pathname) !==\n      decodeURIComponent(databases[1].pathname)'),
         ('separate-role-policy', 'decodeURIComponent(databases[0].username) !==\n      decodeURIComponent(databases[1].username)'),

@@ -15,7 +15,7 @@ import re
 import subprocess
 import sys
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 
 class Refused(Exception):
@@ -208,13 +208,18 @@ def embeddings():
 CLONE_DATABASE = """(async()=>{
 const {Client}=require('node:module').createRequire('/app/.output/server/index.mjs')('pg');
 const url=new URL(process.env.DATABASE_URL);
+const other=JSON.parse(process.env.CLONE_OTHER_DATABASES);
+if(!Array.isArray(other)||other.length!==2||other.some(name=>typeof name!=='string'||!name))throw Error();
 const client=new Client({connectionString:process.env.DATABASE_URL,connectionTimeoutMillis:5000});
 try{await client.connect();
 const {rows}=await client.query(`SELECT current_user AS role, current_database() AS database,
-NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls) AS limited
-FROM pg_roles WHERE rolname = current_user`);
+NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls) AS limited,
+NOT EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.member WHERE r.rolname=current_user) AS no_membership,
+NOT has_database_privilege(current_user, $1, 'CONNECT') AND
+NOT has_database_privilege(current_user, $2, 'CONNECT') AS isolated
+FROM pg_roles WHERE rolname = current_user`,other);
 if(rows.length!==1||rows[0].role!==decodeURIComponent(url.username)||
-rows[0].database!==decodeURIComponent(url.pathname.slice(1))||!rows[0].limited)process.exitCode=1;
+rows[0].database!==decodeURIComponent(url.pathname.slice(1))||!rows[0].limited||!rows[0].no_membership||!rows[0].isolated)process.exitCode=1;
 }finally{await client.end();}
 })().catch(()=>{process.exitCode=1;});"""
 
@@ -236,7 +241,18 @@ def clones():
             require(bool(desired.get(key)) and actual.get(key) == desired[key], "clone runtime differs from validated configuration")
         require(actual["SANDBOX_ENVIRONMENT"] == namespace and not actual.get("POSTGRES_PASSWORD"),
                 "clone namespace or administrator credential mismatch")
-        checked("docker", "exec", app["Id"], "node", "-e", CLONE_DATABASE)
+        targets = ("/configs", "/var/run/docker.sock")
+        expected_mounts = sorted((v["target"], v["source"], v["type"], not v.get("read_only", False))
+                                 for v in config["services"][service].get("volumes", []) if v["target"] in targets)
+        actual_mounts = sorted((v["Destination"], v["Source"], v["Type"], v["RW"])
+                               for v in app["Mounts"] if v["Destination"] in targets)
+        require(actual_mounts == expected_mounts, "clone mounts differ from validated configuration")
+        if namespace == "dev":
+            require(config.get("x-clone-dev-docker-socket") is True or
+                    not any(v[0] == "/var/run/docker.sock" for v in actual_mounts), "dev socket requires owner opt-in")
+        sibling = "app-dev" if service == "app" else "app"
+        other = unquote(urlsplit(config["services"][sibling]["environment"]["DATABASE_URL"]).path.lstrip("/"))
+        checked("docker", "exec", "-e", "CLONE_OTHER_DATABASES=" + json.dumps([other, "postgres"]), app["Id"], "node", "-e", CLONE_DATABASE)
     require(len(projects) == 1, "clones must share one compose project")
 
 

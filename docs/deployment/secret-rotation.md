@@ -19,9 +19,11 @@ never copy one clone's independent application keys into the other.
 After any of the three application keys changes, escrow the new key set and
 re-attest it with bootstrap's `--only env --keys-escrowed` stage, using the same
 hostname and ACME arguments as the deployment. The marker hashes the current
-three keys; an old attestation cannot unlock boot (scripts/bootstrap-vps.sh:1368).
-That marker covers the root env key set only; keep a separate escrow record for
-each clone's app-only key set. Recreate containers to load changed environments; `restart` retains the old
+three root keys for a single app, or all six keys from both app-only runtime
+files in clone mode; an old attestation cannot unlock boot after any runtime key
+changes (`scripts/bootstrap-vps.sh`, `keys_fingerprint` / `escrow_recorded`). Keep
+a separate escrow record for each clone's key set. Boot also requires the
+owner-supplied settings in each runtime file. Recreate containers to load changed environments; `restart` retains the old
 environment. For **every manual clone-enabled recreate**, including rollback, use PREVIEW
 §12's preflight below with the deployment's production/clone Compose files and
 profile. Bootstrap now reads that complete ordered file list from the release

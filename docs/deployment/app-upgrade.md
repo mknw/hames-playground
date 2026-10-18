@@ -81,8 +81,10 @@ the existing hostname/ACME/operator arguments and the new **full** `--ref` SHA,
 selecting `--only checkout,env,images,boot --no-seed` for a **single app**.
 For clones, the same bootstrap stages preserve §12's complete ordered
 `COMPOSE_FILE` in the release checkout's root `.env`, including the optional dev
-socket overlay. Review the dev checkout's branch and full pin before `images`;
-bootstrap does not update that branch. Both app-only runtime files and limited
+socket overlay. Set `DEV_REF` to the reviewed full SHA before `images`;
+bootstrap refuses a different dev HEAD or a dirty dev checkout and does not
+update that branch. Both app-only runtime files (mode 0600, outside both
+canonical checkout paths) and limited
 role/database URLs must be in place. Bootstrap now runs `validate-clones.mjs`
 itself before clone Compose operations, including `boot`, and refuses a failed
 render or validation without starting containers. It boots both apps in one

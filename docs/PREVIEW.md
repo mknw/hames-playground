@@ -1061,14 +1061,15 @@ contexts. Both checkouts must include these guards before enabling two apps.
 
 Set these operator inputs in the release checkout's root `.env`:
 
-| Input                                               | Meaning                                                                   |
-| --------------------------------------------------- | ------------------------------------------------------------------------- |
-| `COMPOSE_FILE`                                      | `docker-compose.yaml:docker-compose.prod.yaml:docker-compose.clones.yaml` |
-| `COMPOSE_PROFILES`                                  | `app`                                                                     |
-| `DEV_CLONE_PATH`                                    | Absolute path to the separate dev-branch checkout                         |
-| `APP_DOMAIN` / `DEV_APP_DOMAIN`                     | Distinct release/dev HTTPS hostnames                                      |
-| `RELEASE_RUNTIME_ENV_FILE` / `DEV_RUNTIME_ENV_FILE` | Separate absolute paths to app-only runtime env files                     |
-| `RELEASE_DATABASE_URL` / `DEV_DATABASE_URL`         | The separate-database policy below                                        |
+| Input                                               | Meaning                                                                      |
+| --------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `COMPOSE_FILE`                                      | `docker-compose.yaml:docker-compose.prod.yaml:docker-compose.clones.yaml`    |
+| `COMPOSE_PROFILES`                                  | `app`                                                                        |
+| `DEV_CLONE_PATH`                                    | Absolute path to the separate dev-branch checkout                            |
+| `DEV_REF`                                           | Reviewed full commit SHA; dev HEAD must match and its checkout must be clean |
+| `APP_DOMAIN` / `DEV_APP_DOMAIN`                     | Distinct release/dev HTTPS hostnames                                         |
+| `RELEASE_RUNTIME_ENV_FILE` / `DEV_RUNTIME_ENV_FILE` | Separate absolute paths to app-only runtime env files                        |
+| `RELEASE_DATABASE_URL` / `DEV_DATABASE_URL`         | The separate-database policy below                                           |
 
 The persisted `COMPOSE_FILE` is also bootstrap's explicit clone opt-in; no new
 flag is needed. Bootstrap accepts exactly the file order above, optionally followed
@@ -1076,13 +1077,22 @@ by `:docker-compose.dev-sandbox.yaml` for the existing owner socket opt-in. Keep
 `COMPOSE_PROFILES=app`. Set these as literal values (quote paths if needed), not
 shell exports or interpolated expressions. Bootstrap refuses clone-specific inputs
 under the single-app file list, unsupported file orders, missing inputs, relative
-or missing runtime files, and missing overlay/validator/Caddy files. It never
+or missing runtime files, and missing overlay/validator/Caddy files. Alternate
+`export KEY=value` or `KEY = value` spellings of the Compose/clone inputs are
+refused in both shapes. Bootstrap requires `DEV_REF` to match the clean dev
+checkout's HEAD; it does not update that checkout for you. It never
 silently falls back to the root app env or the administrator database URL.
 
-Create both app-only files with mode 0600, outside the checkout. Use the app
+Create both app-only files with mode 0600, outside **both** checkouts (canonical
+paths are checked). Bootstrap refuses group/other permission bits. Use the app
 settings in `.env.production.example` as the inventory, but **do not copy the root
 file wholesale**: omit `POSTGRES_PASSWORD`, compose controls, and the other
-clone's settings/secrets. The overlay supplies each app's `DATABASE_URL`, Entra
+clone's settings/secrets. The validator also refuses root-only `*_DATABASE_URL`,
+`*_RUNTIME_ENV_FILE`, `DEV_CLONE_PATH` and `COMPOSE_FILE` inputs in app envs,
+sibling passwords/URLs/keys under any variable name, and the rendered Postgres
+administrator password anywhere in either app env. Database role passwords must
+differ, and `postgres`, `template0` and `template1` cannot be app databases.
+The overlay supplies each app's `DATABASE_URL`, Entra
 callback/logout URLs, sandbox namespace/cache, shared-service endpoints and
 Neo4j credentials. Keep `VITE_ALLOWED_EMAILS` separate for each app and leave it
 unset at image-build time. Runtime allow-lists win (`app/src/lib/auth/allowList.ts`).
@@ -1093,6 +1103,10 @@ Register **both exact HTTPS callbacks** in Entra (§5), one per hostname:
 that registration is deliberate, but it does not justify reusing application
 keys. Generate **independent `DATA_ENCRYPTION_KEY`, `AUTH_SESSION_SECRET`, and
 `TOKEN_ENCRYPTION_KEY` for each clone**, and escrow each key set separately (§7).
+In clone mode, `--only env --keys-escrowed` fingerprints all six runtime-file
+keys; changing any one invalidates the attestation. Unused root application
+keys do not satisfy this gate. Boot also checks the owner-required settings in
+each runtime file, including its Entra secret and allow-list.
 Never put release ciphertext or a release database dump into dev. A second key
 alone is not database isolation: it can instead turn a schema/backfill mistake
 into an unreadable database. Auth cookies have no `Domain` attribute
@@ -1198,9 +1212,14 @@ compares both running apps' database URLs, keys, callbacks, auth bypass and sand
 namespaces/cache names with the validated configuration, and requires both apps
 to be healthy in one Compose project. It makes a read-only TCP database login
 with each running app's own credentials and checks the effective role/database
-and non-admin role attributes. An old release still using the root administrator
-URL fails this check. Cross-database ACL checks above and browser sign-in checks
-on **both** hostnames remain operator work; this smoke does not prove those grants.
+and non-admin role attributes, no role memberships, and denied `CONNECT` on the
+sibling database and `postgres`. Database names are passed separately and queried
+as parameters; no credentials are printed. Smoke compares each running `/configs`
+and Docker socket mount with the render, and refuses a dev socket without the
+owner opt-in. An old release still using the root administrator URL fails this
+check. Administrator checks on the legacy `hames` database and browser sign-in
+checks on **both** hostnames remain operator work. Offline tests do not establish
+live grants or host isolation (SD-18/SD-19).
 
 Caddy file-content detection remains tracked in #672. After changing a Caddyfile
 or its imported sites, explicitly recreate only Caddy with

@@ -1,6 +1,6 @@
 # Opt-in row-8 overlay, AFTER docker-compose.yaml and docker-compose.prod.yaml.
 # One compose project/data tier; two independently built application containers.
-# Read docs/PREVIEW.md §12 before use. Caddy's dev site follows in build step 5.
+# Read docs/PREVIEW.md §12 before use. Only this overlay enables Caddy's dev site.
 # Runtime env files contain app secrets ONLY, never Postgres administrator keys.
 
 # PENDING_OWNER_DATABASE_POLICY: awaiting the owner's nod (#432 G20 row 8c).
@@ -55,3 +55,9 @@ services:
       SANDBOX_ENVIRONMENT: dev
       SANDBOX_CACHE_VOLUME: kg-sandbox-cache-dev
       VITE_DEV_BYPASS_AUTH: "false"
+
+  caddy:
+    environment:
+      - DEV_APP_DOMAIN=${DEV_APP_DOMAIN:?set the separate dev hostname}
+    volumes:
+      - ./configs/Caddyfile.dev:/etc/caddy/dev-sites/dev.caddy:ro

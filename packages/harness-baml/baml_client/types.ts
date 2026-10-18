@@ -255,6 +255,14 @@ export interface ScreenVerdict {
   
 }
 
+export interface SynthesisReference {
+  source: string
+  docId?: string | null
+  startOffset?: number | null
+  endOffset?: number | null
+  
+}
+
 /**
  * Tool call event
  */

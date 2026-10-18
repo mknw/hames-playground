@@ -1943,6 +1943,7 @@ describe('#482 F2: the rules cost CPU linear in the part', () => {
     // Stop at the budget so the quadratic mutation fails promptly, rather
     // than tying up the runner. Delegate every lookup and restore on failure.
     let lookups = 0
+    const perChain: Record<string, number> = { c: 0, p: 0, t: 0 }
     const get = Map.prototype.get
     const spy = vi.spyOn(Map.prototype, 'get').mockImplementation(function (
       this: Map<unknown, unknown>,
@@ -1950,6 +1951,7 @@ describe('#482 F2: the rules cost CPU linear in the part', () => {
     ) {
       if (typeof key === 'string' && /^[cpt]\d+$/i.test(key)) {
         lookups++
+        perChain[key[0].toLowerCase()]++
         if (lookups > 10_000) throw new Error('style chain lookup budget exceeded')
       }
       return get.call(this, key)
@@ -1957,7 +1959,7 @@ describe('#482 F2: the rules cost CPU linear in the part', () => {
     try {
       expect(everything((await ooxmlDisarm(bytes, MIME.docx)).bytes)).toContain('VISIBLE')
       // Parsing alone reads each id once; the chains must also be traversed.
-      expect(lookups).toBeGreaterThan(3 * 3 * 255)
+      for (const prefix of ['c', 'p', 't']) expect(perChain[prefix]).toBeGreaterThan(3 * 255)
       expect(lookups).toBeLessThanOrEqual(10_000)
     } finally {
       spy.mockRestore()

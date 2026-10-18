@@ -47,11 +47,11 @@ set a rotation reminder. (Rotate out any secret previously shared with Stack.)
 
 ## 4. API permissions — **API permissions** → Microsoft Graph → _Delegated_
 
-| Permission                                                        | Admin consent                                                                                        |
-| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `openid`, `profile`, `email`, `offline_access`                    | not required (user consent)                                                                          |
-| `User.Read`                                                       | grant tenant-wide admin consent                                                                      |
-| `Mail.Read`, `Calendars.Read`, `Files.Read.All`, `Sites.Read.All` | add + grant admin consent before enabling the connectors — see "Scopes are requested up front" below |
+| Permission                                                                          | Admin consent                                                                                        |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `openid`, `profile`, `email`, `offline_access`                                      | not required (user consent)                                                                          |
+| `User.Read`                                                                         | grant tenant-wide admin consent                                                                      |
+| `Mail.Read`, `Mail.Send`, `Calendars.ReadWrite`, `Files.Read.All`, `Sites.Read.All` | add + grant admin consent before enabling the connectors — see "Scopes are requested up front" below |
 
 `offline_access` is what yields the refresh token the app persists so Graph calls
 can be made later without dragging the user back through sign-in (#110).
@@ -135,13 +135,14 @@ API"** and there is no `api://…/access_as_user` scope. Leave that blade empty.
 `DEFAULT_GRAPH_SCOPES` in `lib/auth/entra-config.server.ts` requests the whole
 connector set at sign-in:
 
-| Scope                | For                                             | Kind |
-| -------------------- | ----------------------------------------------- | ---- |
-| `User.Read`, `email` | own profile                                     | read |
-| `Mail.Read`          | mailbox search / summarise                      | read |
-| `Calendars.Read`     | read calendar events                            | read |
-| `Files.Read.All`     | OneDrive + SharePoint files the user can access | read |
-| `Sites.Read.All`     | SharePoint sites the user can access            | read |
+| Scope                 | For                                             | Kind  |
+| --------------------- | ----------------------------------------------- | ----- |
+| `User.Read`, `email`  | own profile                                     | read  |
+| `Mail.Read`           | mailbox search / summarise                      | read  |
+| `Mail.Send`           | already consented; no send tool                 | write |
+| `Calendars.ReadWrite` | calendar reads; no calendar-write tool          | write |
+| `Files.Read.All`      | OneDrive + SharePoint files the user can access | read  |
+| `Sites.Read.All`      | SharePoint sites the user can access            | read  |
 
 Why up front rather than incrementally: **adding a scope later forces every user
 to sign in again** (their stored refresh token must cover it), and background runs
@@ -160,37 +161,28 @@ Graph write tools are not shipped.
 > `AZURE_GRAPH_SCOPES` env var (space- or comma-separated) and restart — no code
 > change or redeploy needed. Reserved scopes (`openid`/`profile`/
 > `offline_access`) are stripped automatically; MSAL supplies them.
-> Overrides may only trim the six-scope read set above (case-insensitive); any
+> Overrides may only trim the seven-scope consented set above (case-insensitive); any
 > other scope, including every delegated `.default` form, is rejected at boot.
 > The same allowlist refuses unapproved scopes at the delegated token mint before
 > reading the stored cache. Graph-qualified names are not accepted.
 
-### Remove the old write permissions in Entra
+### Keep the consented permissions in Entra
 
-Dropping scopes from code or removing configured API permissions does **not**
-revoke existing consent grants. On a deployment with old write permissions, the
-owner must complete **both** steps on the existing registration:
+Keep the existing registration/client id and its already-consented delegated
+set: **`User.Read`, `email`, `Mail.Read`, `Mail.Send`, `Calendars.ReadWrite`,
+`Files.Read.All`, `Sites.Read.All`**. Keep **`openid`, `profile`, `offline_access`**
+as well; MSAL supplies those three and `offline_access` enables background refresh.
+The owner is no longer asked to remove `Mail.Send` or `Calendars.ReadWrite`,
+or revoke their grants. Leave application permissions (the roster read) unchanged.
 
-1. **App registrations → the app → API permissions:** remove `Mail.Send` and
-   `Calendars.ReadWrite` (Microsoft Graph, Delegated).
-2. **Revoke the existing grants for both permissions:** use **Other permissions
-   granted for <tenant>**, or **Enterprise applications → the app → Permissions**
-   to revoke the admin consent. Also revoke any **per-user consent grants**.
-   If the portal revokes the whole grant, regrant only the retained set below.
-
-Keep these Microsoft Graph delegated permissions: **`User.Read`, `email`,
-`Mail.Read`, `Calendars.Read`, `Files.Read.All`, `Sites.Read.All`, `openid`,
-`profile`, `offline_access`**. MSAL supplies the last three in the request; keep
-them in the registration and consent. `offline_access` yields the refresh token
-background runs depend on. Grant the retained read set before users sign in
-again. **Leave application permissions (the roster read) unchanged.**
-
-Previously issued access tokens may retain their old `scp` until expiry (about
-one hour). After revocation and fresh sign-in, inspect a fresh token's `scp`
-locally to confirm the two write permissions are absent; never log or publish
-the token. The code change performs no tenant or token-cache migration. The
-shared mint allowlist refuses requests for unapproved delegated scopes even
-before owner revocation, but does not rewrite permissions on issued tokens.
+The app requests `Mail.Send` and `Calendars.ReadWrite` but ships no Graph write
+tool; requesting these scopes adds no write tool. HITL write gating stays
+Neo4j-only. The calendar reader uses the consented `Calendars.ReadWrite` scope
+for reads. Requesting `Calendars.Read` would require new consent and block
+sign-in where user consent is disabled, so the shared boot/mint allowlist refuses it.
+The allowlist permits minting `Mail.Send` and `Calendars.ReadWrite`; it is a
+consented-scope boundary, not a read-only permission boundary. This change
+performs no tenant action or token-cache migration.
 
 ### Adding a read scope later
 

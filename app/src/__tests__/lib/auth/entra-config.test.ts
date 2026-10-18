@@ -26,8 +26,8 @@ const full = {
 }
 
 const REJECTED_SCOPES = [
-  'Mail.Send',
-  'Calendars.ReadWrite',
+  'Calendars.Read',
+  'Mail.ReadWrite',
   'Files.ReadWrite.All',
   'Tasks.ReadWrite.Shared',
   'Custom.Write',
@@ -36,7 +36,7 @@ const REJECTED_SCOPES = [
   'Custom.Send.Shared',
   'Custom.SendMail',
   'https://graph.microsoft.com/Mail.Send',
-  'mail.sEND',
+  'mail.readWRITE',
   'Sites.Manage.All',
   'Sites.FullControl.All',
   'Directory.AccessAsUser.All',
@@ -79,7 +79,8 @@ describe('buildEntraConfig', () => {
       'User.Read',
       'email',
       'Mail.Read',
-      'Calendars.Read',
+      'Mail.Send',
+      'Calendars.ReadWrite',
       'Files.Read.All',
       'Sites.Read.All',
     ]) {
@@ -87,12 +88,13 @@ describe('buildEntraConfig', () => {
     }
   })
 
-  // Mutation: adding ANY scope (including .default or Sites.Manage.All) must turn red.
-  it('requests exactly the approved six read scopes in the default set', () => {
+  // Mutation: removing any scope, or adding Calendars.Read / any other scope, must turn red.
+  it('requests exactly the seven already-consented scopes in the default set', () => {
     expect([...DEFAULT_GRAPH_SCOPES].sort()).toEqual([
-      'Calendars.Read',
+      'Calendars.ReadWrite',
       'Files.Read.All',
       'Mail.Read',
+      'Mail.Send',
       'Sites.Read.All',
       'User.Read',
       'email',
@@ -110,7 +112,7 @@ describe('buildEntraConfig', () => {
     (scope) => {
       expect(() =>
         buildEntraConfig({ ...full, AZURE_GRAPH_SCOPES: `User.Read, ${scope} Mail.Read` }),
-      ).toThrow(/AZURE_GRAPH_SCOPES.*not in the read-only set/)
+      ).toThrow(/AZURE_GRAPH_SCOPES.*not in the consented set/)
     },
   )
 
@@ -118,15 +120,16 @@ describe('buildEntraConfig', () => {
     expect(
       buildEntraConfig({
         ...full,
-        AZURE_GRAPH_SCOPES: 'OPENID, PROFILE\tOFFLINE_ACCESS\nuser.read, MAIL.READ user.read',
+        AZURE_GRAPH_SCOPES:
+          'OPENID, PROFILE\tOFFLINE_ACCESS\nuser.read, MAIL.SEND calendars.READWRITE user.read',
       }).scopes,
-    ).toEqual(['user.read', 'MAIL.READ', 'user.read'])
+    ).toEqual(['user.read', 'MAIL.SEND', 'calendars.READWRITE', 'user.read'])
     expect(
       buildEntraConfig({ ...full, AZURE_GRAPH_SCOPES: 'OPENID, PROFILE OFFLINE_ACCESS' }).scopes,
     ).toEqual([...DEFAULT_GRAPH_SCOPES])
   })
 
-  it('accepts all shipped read scopes in an override', () => {
+  it('accepts all consented scopes in an override', () => {
     expect(
       buildEntraConfig({ ...full, AZURE_GRAPH_SCOPES: DEFAULT_GRAPH_SCOPES.join(', ') }).scopes,
     ).toEqual([...DEFAULT_GRAPH_SCOPES])
@@ -205,13 +208,13 @@ describe('scope validation at server boot', () => {
     }
     vi.stubEnv('AZURE_GRAPH_SCOPES', `User.Read ${scope}`)
     await expect(import('../../../lib/auth/entra-config.server')).rejects.toThrow(
-      /AZURE_GRAPH_SCOPES.*not in the read-only set/,
+      /AZURE_GRAPH_SCOPES.*not in the consented set/,
     )
   })
 
-  it('allows a read-only override on import without credentials', async () => {
+  it('allows a consented override on import without credentials', async () => {
     vi.resetModules()
-    vi.stubEnv('AZURE_GRAPH_SCOPES', 'Mail.Read Calendars.Read')
+    vi.stubEnv('AZURE_GRAPH_SCOPES', 'Mail.Send Calendars.ReadWrite')
     await expect(import('../../../lib/auth/entra-config.server')).resolves.toBeDefined()
   })
 })

@@ -24,6 +24,55 @@ beforeEach(() => {
 })
 
 describe('tool advertisement', () => {
+  // Mutations: request Mail.Send; request Calendars.ReadWrite outside the calendar;
+  // omit scopes; or change a reader to POST. Every one must turn this pin red.
+  it('keeps every registered Graph tool on explicit reader scopes and methods', async () => {
+    const inputs: Record<string, Record<string, unknown>> = {
+      graph_calendar_today: {},
+      graph_mail_recent: {},
+      graph_me: {},
+      graph_file_ingest: { item_id: 'file-1' },
+      graph_files_search: { query: 'budget' },
+      graph_files_list: {},
+      graph_files_recent: {},
+      graph_files_shared: {},
+      graph_mail_attachments: {},
+    }
+    expect(
+      appToolDescriptions()
+        .map((tool) => tool.name)
+        .sort(),
+    ).toEqual(Object.keys(inputs).sort())
+
+    for (const { name } of appToolDescriptions()) {
+      graphFetch.mockClear()
+      if (name === 'graph_file_ingest') {
+        graphFetch
+          .mockResolvedValueOnce({
+            id: 'file-1',
+            name: 'note.txt',
+            size: 4,
+            file: { mimeType: 'text/plain' },
+          })
+          .mockResolvedValueOnce(Buffer.from('note').toString('base64'))
+      }
+      expect((await runAppTool(name, inputs[name])).success, name).toBe(true)
+      expect(graphFetch.mock.calls.length, name).toBe(name === 'graph_file_ingest' ? 2 : 1)
+      for (const [, path, init] of graphFetch.mock.calls) {
+        expect(init?.scopes?.length, `${name} must declare scopes`).toBeGreaterThan(0)
+        const scopes = (init.scopes as string[]).map((scope) => scope.toLowerCase())
+        expect(scopes, name).not.toContain('mail.send')
+        if (name === 'graph_calendar_today') {
+          expect(scopes, name).toEqual(['calendars.readwrite'])
+        } else {
+          expect(scopes, name).not.toContain('calendars.readwrite')
+        }
+        expect(init.method ?? 'GET', name).toBe(name === 'graph_files_search' ? 'POST' : 'GET')
+        if (name === 'graph_files_search') expect(path).toBe('/search/query')
+      }
+    }
+  })
+
   it('registers both connectors with no credential field', () => {
     const names = appToolDescriptions().map((t) => t.name)
     expect(names).toContain('graph_calendar_today')
@@ -62,7 +111,7 @@ describe('graph_calendar_today', () => {
     expect(path).toContain('/me/calendarView') // expands recurring series
     expect(path).toContain('startDateTime=')
     expect(path).toContain('$orderby=start/dateTime')
-    expect(init.scopes).toEqual(['Calendars.Read'])
+    expect(init.scopes).toEqual(['Calendars.ReadWrite'])
     expect(init.headers?.Prefer).toMatch(/^outlook\.timezone="/)
   })
 

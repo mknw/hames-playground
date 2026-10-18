@@ -91,19 +91,28 @@ beforeEach(() => {
 describe('getUserGraphToken', () => {
   // Mutation: remove the mint assertion; refusal and no-I/O checks must turn red.
   it.each([
-    'Mail.Send',
+    'Calendars.Read',
+    'Mail.ReadWrite',
     'Sites.Manage.All',
     '.default',
     'https://graph.microsoft.com/.default',
     'Unknown.Read',
-    'mail.sEND',
+    'mail.readWRITE',
   ])('refuses %s before reading the token cache or invoking MSAL', async (scope) => {
     await expect(getUserGraphToken(USER, ['User.Read', scope])).rejects.toThrow(
-      /not in the read-only set/,
+      /not in the consented set/,
     )
     expect(loadUserTokenCache).not.toHaveBeenCalled()
     expect(acquireTokenSilent).not.toHaveBeenCalled()
   })
+
+  it.each(['Mail.Send', 'Calendars.ReadWrite', 'mail.sEND', 'calendars.READWRITE'])(
+    'allows the already-consented scope %s at the delegated mint',
+    async (scope) => {
+      await expect(getUserGraphToken(USER, [scope])).resolves.toBe('tok-abc')
+      expect(acquireTokenSilent).toHaveBeenCalledWith(expect.objectContaining({ scopes: [scope] }))
+    },
+  )
 
   it("returns a delegated token and rehydrates the user's cache", async () => {
     await expect(getUserGraphToken(USER)).resolves.toBe('tok-abc')
@@ -175,12 +184,48 @@ describe('getUserGraphToken', () => {
 })
 
 describe('graphFetch', () => {
-  it('refuses a send request before MSAL or HTTP', async () => {
+  // Mutation: remove the delegated method guard; these must fail before cache/MSAL/HTTP.
+  it.each([
+    ['/me/sendMail', 'POST', 'Mail.Send'],
+    ['/me/events', 'POST', 'Calendars.ReadWrite'],
+    ['/me/events', 'PATCH', 'Calendars.ReadWrite'],
+    ['/me/events', 'DELETE', 'Calendars.ReadWrite'],
+    ['/me/events', 'PUT', 'Calendars.ReadWrite'],
+    ['/search/query/extra', 'POST', 'Files.Read.All'],
+    ['https://graph.microsoft.com/v1.0/search/query', 'POST', 'Files.Read.All'],
+    ['/search/query', 'PATCH', 'Files.Read.All'],
+  ])('refuses delegated %s %s before cache access, MSAL or HTTP', async (path, method, scope) => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
+    await expect(graphFetch(USER, path, { method, scopes: [scope] })).rejects.toThrow(/read-only/)
+    expect(loadUserTokenCache).not.toHaveBeenCalled()
+    expect(acquireTokenSilent).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('allows POST only for the exact Microsoft Search query path', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ value: [] }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const body = { requests: [{ entityTypes: ['driveItem'], query: { queryString: 'budget' } }] }
     await expect(
-      graphFetch(USER, '/me/sendMail', { method: 'POST', scopes: ['Mail.Send'] }),
-    ).rejects.toThrow(/not in the read-only set/)
+      graphFetch(USER, '/search/query', { method: 'POST', scopes: ['Files.Read.All'], body }),
+    ).resolves.toEqual({ value: [] })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${GRAPH_BASE}/search/query`,
+      expect.objectContaining({ method: 'POST', body: JSON.stringify(body) }),
+    )
+  })
+
+  it('refuses an unconsented request before MSAL or HTTP', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(graphFetch(USER, '/me/messages', { scopes: ['Mail.ReadWrite'] })).rejects.toThrow(
+      /not in the consented set/,
+    )
     expect(loadUserTokenCache).not.toHaveBeenCalled()
     expect(acquireTokenSilent).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()

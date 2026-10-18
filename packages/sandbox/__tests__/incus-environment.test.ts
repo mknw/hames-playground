@@ -115,7 +115,10 @@ beforeAll(async () => {
         return send(403)
       if (/\/instances|\/profiles/.test(url.pathname) && manager) return send(403)
       if (url.pathname === '/1.0/networks/testbr')
-        return send(200, { type: 'bridge', config: { 'ipv4.address': '10.77.0.1/24' } })
+        return send(200, {
+          type: 'bridge',
+          config: { 'ipv4.address': '10.77.0.1/24', 'ipv4.dhcp': 'false', 'dns.mode': 'none' },
+        })
       if (url.pathname === '/1.0/projects' && method === 'POST') {
         project = structuredClone(body)
         return send(200)
@@ -278,7 +281,7 @@ function daemonConfig() {
 }
 
 describe('Incus environment wire contract', () => {
-  it('seeds DHCP by MAC before first boot for predictable and legacy guest names', async () => {
+  it('seeds a static address by MAC before first boot for predictable and legacy guest names', async () => {
     await controller().reconcile()
     const seed = JSON.parse(vm!.config['cloud-init.network-config'])
     expect(seed).toEqual({
@@ -286,8 +289,10 @@ describe('Incus environment wire contract', () => {
       ethernets: {
         sandbox: {
           match: { macaddress: '00:16:3e:12:34:56' },
-          dhcp4: true,
+          dhcp4: false,
           dhcp6: false,
+          addresses: ['10.77.0.2/24'],
+          routes: [{ to: 'default', via: '10.77.0.1' }],
           optional: true,
         },
       },
@@ -327,6 +332,8 @@ describe('Incus environment wire contract', () => {
       42,
       '',
       'not-a-mac',
+      '00:16:3e:12:34',
+      '0:16:3e:12:34:56',
       '00:16:3e:12:34:56\n',
       '00:16:3e:12:34:56;id',
       '00-16-3e-12-34-56',

@@ -333,8 +333,11 @@ for that create and handles completed operations that Incus has expired.
 
 Before first boot, reconcile reads and validates `volatile.eth0.hwaddr` (the
 Incus device key, independent of the guest name), then writes a per-instance
-`cloud-init.network-config` with DHCPv4 matched by that MAC. The guest can keep
-`eth0`, `enp5s0` or another predictable name. The shared image seed and the
+`cloud-init.network-config` with a static address matched by MAC, using the
+validated guest address, bridge prefix and default gateway. DHCPv4 and DHCPv6
+are disabled, and no nameservers are set; this works on the reviewed bridges
+with `ipv4.dhcp=false` and `dns.mode=none` without a host INPUT exception.
+The guest can keep `eth0`, `enp5s0` or another predictable name. The shared image seed and the
 operator spike harness's static addressing are unchanged. Reconcile reads the
 seed back before starting; missing/malformed MACs, failed writes and seed/MAC
 drift are refused. An unseeded VM must be stopped with a pending `create`

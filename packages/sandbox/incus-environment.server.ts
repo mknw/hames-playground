@@ -645,8 +645,10 @@ export function createIncusEnvironment(options: IncusEnvironmentOptions): IncusE
           ethernets: {
             sandbox: {
               match: { macaddress: mac.toLowerCase() },
-              dhcp4: true,
+              dhcp4: false,
               dhcp6: false,
+              addresses: [`${o.address}/${prefix}`],
+              routes: [{ to: 'default', via: gateway }],
               optional: true,
             },
           },

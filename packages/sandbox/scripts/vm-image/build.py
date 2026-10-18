@@ -180,9 +180,9 @@ def run(argv, work):
 
 def save(args):
     require(args.docker_host and re.fullmatch(r"unix:///[^\s]+", args.docker_host),
-            "explicit disposable Docker Unix endpoint required")
+            "explicit Docker Unix endpoint required")
     require(all(image_id(getattr(args, f + "_image")) or re.fullmatch(
-        r"[a-zA-Z0-9./:_-]+@sha256:" + HEX, getattr(args, f + "_image") or "")
+        r"[a-zA-Z0-9][a-zA-Z0-9./:_-]*@sha256:" + HEX, getattr(args, f + "_image") or "")
         for f in FLAVOURS), "full config IDs or immutable manifest references required")
     require(args.docker is not None and args.docker.is_absolute(), "absolute Docker CLI path required")
     source = local_file(args.docker)
@@ -203,8 +203,14 @@ def save(args):
         manifest_pin = containerd and "@" in pin
         actual = run([*docker, "image", "inspect", "--format", "{{.Id}}", pin], work).decode().strip()
         require(actual == pin.rsplit("@", 1)[-1], "daemon image ID differs from pin")
+        size = int(run([*docker, "image", "inspect", "--format", "{{.Size}}", pin], work).decode().strip())
+        require(shutil.disk_usage(work.root).free >= 2 * size + 10 * 1024**3,
+                "insufficient free space for save")
+        low_priority = ["nice", "-n", "19"]
+        if shutil.which("ionice"):
+            low_priority += ["ionice", "-c", "3"]
         output = work.output(flavour + ".tar")
-        run([*docker, "image", "save", "--output", output, pin], work)
+        run([*low_priority, *docker, "image", "save", "--output", output, pin], work)
         config = archive_id(output, None if manifest_pin else pin, args.architecture)
         result[flavour] = {"path": output.name, "sha256": digest(output), "image_id": config}
     work.write("flavours.json", json.dumps({"flavours": result, "docker_driver": driver,

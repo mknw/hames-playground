@@ -9,6 +9,7 @@ import io
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import subprocess
 import sys
 import tarfile
@@ -34,6 +35,8 @@ class Pipeline(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        self.addCleanup(patch.stopall)
+        patch.object(vm.shutil, 'disk_usage', return_value=SimpleNamespace(free=100 * 1024**3)).start()
         self.root = Path(self.temp.name).resolve()
         self.work = self.root / "work"
         self.lock_path = self.root / "input.json"
@@ -130,12 +133,16 @@ class Pipeline(unittest.TestCase):
     def save_boundary(self, argv, work):
         argv = [str(a) for a in argv]
         self.calls.append(argv)
+        if argv[:3] == ['nice', '-n', '19']:
+            argv = argv[6:] if argv[3:4] == ['ionice'] else argv[3:]
         if argv[1:] == ['--version']:
             return b'Docker synthetic 1.0\n'
         self.assertEqual(argv[1:3], ['--host', 'unix:///synthetic/disposable.sock'])
         if argv[3:] == ['info', '--format', '{{.Driver}}']:
             return b'overlay2\n'
         if argv[3:5] == ['image', 'inspect']:
+            if argv[-2] == '{{.Size}}':
+                return b'1024'
             return self.pin.encode()
         self.assertEqual(argv[3:6], ['image', 'save', '--output'])
         tar(Path(argv[6]), self.entries)
@@ -143,7 +150,7 @@ class Pipeline(unittest.TestCase):
 
     def test_save_inspect_mismatch_refused_before_save(self):
         def boundary(argv, work):
-            if argv[3:5] == ['image', 'inspect']:
+            if argv[3:5] == ['image', 'inspect'] and argv[-2] == '{{.Id}}':
                 self.calls.append([str(a) for a in argv])
                 return ('sha256:' + 'f' * 64).encode()
             return self.save_boundary(argv, work)
@@ -151,6 +158,51 @@ class Pipeline(unittest.TestCase):
             vm.main(self.save_args())
         self.assertFalse(any(a[3:5] == ['image', 'save'] for a in self.calls))
         self.assertFalse((self.work / 'flavours.json').exists())
+
+    def test_save_free_space_refuses_before_each_export(self):
+        args = self.save_args()
+        free = 10 * 1024**3 + 2 * 1024
+        with patch.object(vm, 'run', side_effect=self.save_boundary), \
+             patch.object(vm.shutil, 'disk_usage', side_effect=[SimpleNamespace(free=free),
+                          SimpleNamespace(free=free - 1), SimpleNamespace(free=free - 1)]), \
+             self.assertRaisesRegex(RuntimeError, 'insufficient free space for save'):
+            vm.main(args)
+        saves = [a for a in self.calls if 'save' in a]
+        self.assertEqual(len(saves), 1)
+        self.assertEqual(saves[0][-1], self.pin)
+        self.assertFalse((self.work / 'data.tar').exists())
+        self.assertFalse((self.work / 'flavours.json').exists())
+
+    def test_save_insufficient_space_refuses_before_any_export(self):
+        with patch.object(vm, 'run', side_effect=self.save_boundary), \
+             patch.object(vm.shutil, 'disk_usage', return_value=SimpleNamespace(free=0)), \
+             self.assertRaisesRegex(RuntimeError, 'insufficient free space for save'):
+            vm.main(self.save_args())
+        self.assertFalse(any('save' in a for a in self.calls))
+
+    def test_save_priorities_with_and_without_ionice(self):
+        for available in (None, '/synthetic/ionice'):
+            self.work = self.root / ('with-ionice' if available else 'without-ionice')
+            self.calls.clear()
+            with patch.object(vm, 'run', side_effect=self.save_boundary), \
+                 patch.object(vm.shutil, 'which', return_value=available):
+                vm.main(self.save_args())
+            saves = [a for a in self.calls if 'save' in a]
+            self.assertEqual(len(saves), 3)
+            prefix = ['nice', '-n', '19'] + (['ionice', '-c', '3'] if available else [])
+            for argv in saves:
+                self.assertEqual(argv[:len(prefix)], prefix)
+                self.assertEqual(argv[len(prefix):len(prefix) + 3],
+                                 [str(self.work / 'docker'), '--host', 'unix:///synthetic/disposable.sock'])
+
+    def test_save_option_shaped_manifest_refused_before_work(self):
+        args = self.save_args()
+        position = args.index('--base-image')
+        args[position:position + 2] = ['--base-image=-o@sha256:' + 'a' * 64]
+        with patch.object(vm, 'run', side_effect=self.save_boundary), self.assertRaisesRegex(RuntimeError, 'full config IDs'):
+            vm.main(args)
+        self.assertFalse(self.work.exists())
+        self.assertEqual(self.calls, [])
 
     def test_save_wrong_archive_refused(self):
         self.entries['config.json'] += b' '
@@ -193,22 +245,66 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(evidence.get('docker_driver'), 'overlay2')
 
     def test_save_containerd_uses_archive_config(self):
-        manifest = 'sha256:' + 'a' * 64
         args = self.save_args()
-        for flavour in vm.FLAVOURS:
-            args[args.index('--' + flavour + '-image') + 1] = 'synthetic@' + manifest
+        selectors, entries, configs = {}, {}, {}
+        for flavour, letter in zip(vm.FLAVOURS, 'abc'):
+            selector = 'synthetic/' + flavour + '@sha256:' + letter * 64
+            selectors[flavour] = selector
+            args[args.index('--' + flavour + '-image') + 1] = selector
+            entries[selector] = dict(self.entries)
+            config = json.loads(self.entries['config.json'])
+            config['variant'] = flavour
+            entries[selector]['config.json'] = json.dumps(config).encode()
+            configs[flavour] = 'sha256:' + hashlib.sha256(entries[selector]['config.json']).hexdigest()
         def boundary(argv, work):
             if argv[3:] == ['info', '--format', '{{.Driver}}']:
                 return b'overlayfs\n'
             if argv[3:5] == ['image', 'inspect']:
-                return manifest.encode()
+                self.assertIn(argv[-1], selectors.values())
+                if argv[-2] == '{{.Size}}':
+                    return b'1024'
+                return argv[-1].split('@')[1].encode()
+            if 'save' in argv:
+                self.calls.append([str(a) for a in argv])
+                tar(Path(argv[argv.index('--output') + 1]), entries[argv[-1]])
+                return b''
             return self.save_boundary(argv, work)
         with patch.object(vm, 'run', side_effect=boundary):
             vm.main(args)
         evidence = json.loads((self.work / 'flavours.json').read_text())
         self.assertEqual(evidence['docker_driver'], 'overlayfs')
         self.assertEqual({f: row['image_id'] for f, row in evidence['flavours'].items()},
-                         {f: self.pin for f in vm.FLAVOURS})
+                         configs)
+        self.assertEqual([a[-1] for a in self.calls if 'save' in a], list(selectors.values()))
+
+    def test_save_containerd_manifest_inspect_mismatch_refused(self):
+        args = self.save_args()
+        args[args.index('--base-image') + 1] = 'synthetic@sha256:' + 'a' * 64
+        def boundary(argv, work):
+            if argv[3:] == ['info', '--format', '{{.Driver}}']:
+                return b'overlayfs\n'
+            if argv[3:5] == ['image', 'inspect'] and argv[-2] == '{{.Id}}':
+                return ('sha256:' + 'b' * 64).encode()
+            return self.save_boundary(argv, work)
+        with patch.object(vm, 'run', side_effect=boundary), self.assertRaisesRegex(RuntimeError, 'daemon image ID'):
+            vm.main(args)
+        self.assertFalse(any('save' in a for a in self.calls))
+
+    def test_save_containerd_manifest_wrong_platform_refused(self):
+        args = self.save_args()
+        args[args.index('--base-image') + 1] = 'synthetic@sha256:' + 'a' * 64
+        config = json.loads(self.entries['config.json'])
+        config['architecture'] = 'arm64'
+        self.entries['config.json'] = json.dumps(config).encode()
+        def boundary(argv, work):
+            if argv[3:] == ['info', '--format', '{{.Driver}}']:
+                return b'overlayfs\n'
+            if argv[3:5] == ['image', 'inspect'] and argv[-2] == '{{.Id}}':
+                return ('sha256:' + 'a' * 64).encode()
+            return self.save_boundary(argv, work)
+        with patch.object(vm, 'run', side_effect=boundary), self.assertRaisesRegex(RuntimeError, 'image platform mismatch'):
+            vm.main(args)
+        self.assertFalse((self.work / 'flavours.json').exists())
 
     def test_save_containerd_manifest_not_accepted_as_config(self):
         args = self.save_args()
@@ -217,7 +313,7 @@ class Pipeline(unittest.TestCase):
         def boundary(argv, work):
             if argv[3:] == ['info', '--format', '{{.Driver}}']:
                 return b'overlayfs\n'
-            if argv[3:5] == ['image', 'inspect']:
+            if argv[3:5] == ['image', 'inspect'] and argv[-2] == '{{.Id}}':
                 return manifest.encode()
             return self.save_boundary(argv, work)
         with patch.object(vm, 'run', side_effect=boundary), self.assertRaisesRegex(RuntimeError, 'config digest'):
@@ -654,10 +750,11 @@ class Pipeline(unittest.TestCase):
     def test_save_uses_only_explicit_endpoint_inspect_and_save(self):
         with patch.object(vm, "run", side_effect=self.save_boundary):
             vm.main(self.save_args())
-        self.assertEqual(len(self.calls), 8)  # version, driver, three inspects and saves
+        self.assertEqual(len(self.calls), 11)  # version, driver, six inspects and three saves
         evidence = json.loads((self.work / "flavours.json").read_text())
         self.assertEqual(set(evidence["flavours"]), set(vm.FLAVOURS))
-        self.assertTrue(all(Path(a[0]) == self.work / "docker" for a in self.calls))
+        for argv in self.calls:
+            self.assertIn(str(self.work / 'docker'), argv)
 
     def test_guest_python_checks_run_against_synthetic_data(self):
         # Execute the actual embedded Python against a tiny save archive and a
@@ -783,6 +880,15 @@ def mutations():
         ("expanded layer budget removed", 'expanded <= LAYER_BUDGET', 'True', "test_expanded_layer_budget"),
         ("cloud-init seed templates removed", 'files["metadata.yaml"] = json.dumps(metadata,', 'metadata["templates"].clear()\n    files["metadata.yaml"] = json.dumps(metadata,', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
     ]
+    changes.extend([
+        ('review manifest pin inspect equality removed', 'actual == pin.rsplit("@", 1)[-1]', 'True', 'test_save_containerd_manifest_inspect_mismatch_refused'),
+        ('review manifest pin platform equality removed', 'metadata.get("os") == "linux" and metadata.get("architecture") == arch', 'True', 'test_save_containerd_manifest_wrong_platform_refused'),
+        ('save free space gate removed', 'shutil.disk_usage(work.root).free >= 2 * size + 10 * 1024**3', 'True', 'test_save_insufficient_space_refuses_before_any_export'),
+        ('save free space reserve removed', '2 * size + 10 * 1024**3', '0', 'test_save_free_space_refuses_before_each_export'),
+        ('save CPU priority removed', 'low_priority = ["nice", "-n", "19"]', 'low_priority = []', 'test_save_priorities_with_and_without_ionice'),
+        ('save I/O priority removed', 'low_priority += ["ionice", "-c", "3"]', 'low_priority += []', 'test_save_priorities_with_and_without_ionice'),
+        ('save admits option shaped manifest', '[a-zA-Z0-9][a-zA-Z0-9./:_-]*@sha256:', '[a-zA-Z0-9./:_-]+@sha256:', 'test_save_option_shaped_manifest_refused_before_work'),
+    ])
     for label, before, after, case in changes:
         if before not in source:
             raise RuntimeError("missing mutation anchor " + label)

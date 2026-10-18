@@ -100,10 +100,24 @@ stores before any workloads. For a containerd host it resolves each guest
 flavour by the verified config ID and translates only guest run image selectors
 to those IDs; host selectors and all CLI flags stay unchanged. It publishes the
 map only after all three images match in both guests. Missing or conflicting
-configs refuse before workloads. Its read-only export streams under a 120-second,
-8 GiB bound, at low client priority, without writing an archive to disk; unknown
+configs refuse before workloads. Its export makes no image, tag or content change
+(containerd may take a lease and emit a save event), and streams under a 188-second,
+8 GiB bound at 64 MiB/s consumer backpressure, at low client priority, without writing an archive to disk; unknown
 stores or ambiguous exports refuse the measurement. Daemon export I/O remains
-real work, so keep the live window coordinated.
+real work, so keep the live window coordinated. nice/ionice apply only to the CLI;
+hashing in the parent is throughput-bounded by the same consumer backpressure,
+not independently niced. The deadline is the full byte/rate budget plus 60 seconds.
+
+**Live-run gate for host-side `build.py save`:** a non-disposable daemon may be
+used only inside
+`systemd-run --scope -p MemoryMax=… -p IOWriteBandwidthMax="<work-dir device> <rate>" -p Nice=19`.
+Choose and record the memory cap, work-directory device and write rate before
+launch. Put the work directory on a filesystem other than the Docker/DB volumes
+where one exists. The CLI's write throttle back-pressures dockerd; nice/ionice
+alone do not bound daemon work. The save CLI separately inspects each image's
+size, requires twice that size plus 10 GiB free before each export, and lowers
+CLI priorities. It does not enforce the outer systemd scope. Low live-stack
+impact remains owed in the coordinated live window, not established by fakes.
 
 The save daemon and spike host may use containerd; **guest customization and boot
 remain classic** because preload and runtime selectors use config IDs and the

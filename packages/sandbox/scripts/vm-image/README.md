@@ -45,10 +45,13 @@ host, and checks a requested bare config ID for exact equality. For a confirmed
 classic graph driver it uses inspect `.Id`. For a containerd descriptor it hashes
 the original config bytes in a streaming `docker save`, never a manifest digest.
 Ambiguous stores, malformed/duplicate/multiple-image exports, nonzero exits,
-exports over 8 GiB and exports taking over 120 seconds are refused. Streaming
+exports over 8 GiB and exports taking over 188 seconds are refused. Streaming
 uses `nice -n 19` and `ionice -c 3` when available, retains only bounded metadata,
 and writes no archive to disk. These priorities apply to the CLI, not dockerd;
-the export still consumes daemon I/O and CPU. Host export admission permits only
+the export still consumes daemon I/O and CPU. Consumer backpressure caps average
+stream throughput at 64 MiB/s, including the parent hashing path. The deadline
+allows the full 8 GiB at that rate plus 60 seconds. This is no image, tag or
+content change; containerd may take a lease and emit a save event. Host export admission permits only
 the three exact immutable flavour references, with no additional flags. Existing
 spike flags, registry-pin behavior and `--pull=never` are unchanged. A config-only
 selector unavailable on containerd fails closed; use the existing manifest
@@ -99,9 +102,9 @@ process. The repo's current `rootfs/Dockerfile*` use mutable upstream package
 repositories; this pipeline does **not** call those Dockerfiles or claim their
 builds are reproducible. It consumes their exact config IDs and save archives.
 
-To save from an explicitly selected **disposable** local daemon, review the
-plan first; append `--apply` only when ready. The command performs three image
-inspections and three saves, plus CLI version and daemon driver inspection,
+To save from an explicitly selected local daemon, review the
+plan first; append `--apply` only when ready. Prefer a disposable daemon. The command performs six image
+inspections (identity and size) and three saves, plus CLI version and daemon driver inspection,
 never pull/build/run/tag on that daemon. Supply an absolute reviewed Docker CLI
 path; its staged copy is hashed and its version recorded:
 
@@ -109,8 +112,31 @@ path; its staged copy is hashed and its version recorded:
 python3 packages/sandbox/scripts/vm-image/build.py save \
   --docker "$DOCKER_CLI" --docker-host "$DISPOSABLE_DOCKER_SOCKET" --work-dir "$FRESH_SAVE_DIR" \
   --architecture x86_64 \
-  --base-image "$BASE_CONFIG_ID" --data-image "$DATA_CONFIG_ID" \
-  --office-image "$OFFICE_CONFIG_ID"
+  --base-image "$BASE_IMAGE" --data-image "$DATA_IMAGE" \
+  --office-image "$OFFICE_IMAGE"
+```
+
+Each image selector is a config ID (classic) or `name@sha256` manifest ref
+(containerd). Before each save the CLI requires free space of at least twice
+the inspected image size plus 10 GiB, and uses `nice -n 19` plus `ionice -c 3`
+when available. These priorities apply to the CLI, not dockerd.
+
+**Live-run gate:** a save from a non-disposable daemon runs only inside
+`systemd-run --scope -p MemoryMax=… -p IOWriteBandwidthMax="<work-dir device> <rate>" -p Nice=19`.
+Choose and record the memory cap, work-directory block device and write rate
+before the coordinated live window; the CLI does not enforce this outer scope.
+Place the work directory on a filesystem other than the Docker/DB volumes
+where one exists. The CLI's write throttle back-pressures dockerd; neither
+nice/ionice nor synthetic tests prove low impact on live stacks. A scope prefix
+for the command above (with `--apply` after review) is:
+
+```bash
+systemd-run --scope -p MemoryMax="$SAVE_MEMORY_MAX" \
+  -p IOWriteBandwidthMax="$WORK_DIR_DEVICE $SAVE_WRITE_RATE" -p Nice=19 \
+  python3 packages/sandbox/scripts/vm-image/build.py save --apply \
+  --docker "$DOCKER_CLI" --docker-host "$SAVE_DOCKER_SOCKET" --work-dir "$FRESH_SAVE_DIR" \
+  --architecture x86_64 \
+  --base-image "$BASE_IMAGE" --data-image "$DATA_IMAGE" --office-image "$OFFICE_IMAGE"
 ```
 
 Use `--architecture aarch64` only for a native ARM64 target. Each save archive

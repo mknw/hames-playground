@@ -344,6 +344,14 @@ class Measurement(unittest.TestCase):
 
     def test_measure_orchestration_end_to_end(self):
         measure.measure(self.spike)
+        self.assertEqual(self.spike.guest_image_ids, {})
+        for event in self.boundary('run'):
+            argv = event[1]
+            if argv[:2] == ('docker', '--config'):
+                if argv[3:4] == ('run',):
+                    self.assertEqual(argv[argv.index('--entrypoint') + 2], IMAGE)
+                if argv[3:5] == ('inspect', '--type'):
+                    self.assertEqual(argv[-1], IMAGE)
         metrics = self.spike.metrics
         for kind in ("baseline", "nested"):
             for count in (4, 8):
@@ -492,14 +500,15 @@ class Measurement(unittest.TestCase):
         prefix = 6 if argv[3:4] == ['ionice'] else 3
         return REAL_POPEN(argv[prefix:], **kwargs)
 
-    def config_fixture(self, entries=None):
+    def config_fixture(self, entries=None, config_path=None):
         config = json.dumps({"os": "linux", "architecture": "amd64",
                              "rootfs": {"type": "layers", "diff_ids": []}}).encode()
         pin = "sha256:" + hashlib.sha256(config).hexdigest()
+        config_path = config_path or "blobs/sha256/" + pin[7:]
         archive = self.bin / "export.tar"
         entries = entries if entries is not None else [
-            ("blobs/sha256/" + pin[7:], config),
-            ("manifest.json", json.dumps([{"Config": "blobs/sha256/" + pin[7:], "Layers": []}]).encode())]
+            (config_path, config),
+            ("manifest.json", json.dumps([{"Config": config_path, "Layers": []}]).encode())]
         with tarfile.open(archive, "w") as stream:
             for name, value in entries:
                 member = tarfile.TarInfo(name)
@@ -517,6 +526,94 @@ class Measurement(unittest.TestCase):
             self.assertEqual(child.returncode, 0)
             return result(output.decode())
         return pin, shape, target
+
+    def test_export_hashes_config_bytes_independent_of_filename(self):
+        for path in ('config.json', 'blobs/sha256/' + '0' * 64):
+            with self.subTest(path=path):
+                pin, _, _ = self.config_fixture(config_path=path)
+                with patch.object(measure.subprocess, 'Popen', self.export_process):
+                    self.assertEqual(measure.saved_config_id([str(self.bin / 'docker'), 'save', IMAGE]), pin)
+
+    def test_descriptor_digest_and_media_type_refuse_independently(self):
+        pin, shape, target = self.config_fixture()
+        manifest = 'sha256:' + 'a' * 64
+        supported = ('application/vnd.oci.image.index.v1+json',
+                     'application/vnd.oci.image.manifest.v1+json',
+                     'application/vnd.docker.distribution.manifest.list.v2+json',
+                     'application/vnd.docker.distribution.manifest.v2+json')
+        with patch.object(measure, 'host_docker', target), \
+             patch.object(measure, 'saved_config_id', return_value=pin) as saved:
+            for media in supported:
+                shape.write_text(json.dumps({'Id': manifest, 'Descriptor': {'digest': manifest, 'mediaType': media}}))
+                self.assertEqual(measure.image_config_id(self.spike, IMAGE), pin)
+            invalid = [(pin, media) for media in supported]
+            invalid += [(manifest, media + suffix) for media in supported for suffix in (' ', '.evil')]
+            invalid += [(manifest, 'unknown'), (manifest, 'application/vnd.oci.image.index.v2+json')]
+            saved.reset_mock()
+            for digest, media in invalid:
+                with self.subTest(digest=digest, media=media):
+                    shape.write_text(json.dumps({'Id': manifest, 'Descriptor': {'digest': digest, 'mediaType': media}}))
+                    with self.assertRaisesRegex(RuntimeError, 'descriptor ambiguous'):
+                        measure.image_config_id(self.spike, IMAGE)
+                    saved.assert_not_called()
+
+    def test_export_member_type_count_manifest_and_trailing_bounds(self):
+        self.config_fixture()
+        archive = self.bin / 'export.tar'
+        with tarfile.open(archive, 'a') as stream:
+            member = tarfile.TarInfo('symlink')
+            member.type, member.linkname = tarfile.SYMTYPE, 'config.json'
+            stream.addfile(member)
+        with patch.object(measure.subprocess, 'Popen', self.export_process):
+            with self.assertRaisesRegex(RuntimeError, 'ambiguous image export member'):
+                measure.saved_config_id([str(self.bin / 'docker'), 'save', IMAGE])
+            self.config_fixture()
+            with patch.object(measure, 'EXPORT_MEMBERS', 1), self.assertRaisesRegex(RuntimeError, 'ambiguous image export member'):
+                measure.saved_config_id([str(self.bin / 'docker'), 'save', IMAGE])
+            # The config fits; the larger, padded manifest exceeds the metadata ceiling.
+            with tarfile.open(archive) as stream:
+                entries = [(m.name, stream.extractfile(m).read()) for m in stream if m.isfile()]
+            entries[-1] = (entries[-1][0], entries[-1][1] + b' ' * 1024)
+            self.config_fixture(entries)
+            with patch.object(measure, 'METADATA_BYTES', 512), self.assertRaisesRegex(RuntimeError, 'bounded image manifest'):
+                measure.saved_config_id([str(self.bin / 'docker'), 'save', IMAGE])
+            self.config_fixture()
+            with archive.open('ab') as stream:
+                stream.write(b'\0' * (32 * 1024))
+            with patch.object(measure, 'EXPORT_BYTES', 30 * 1024), self.assertRaisesRegex(RuntimeError, '8 GiB'):
+                measure.saved_config_id([str(self.bin / 'docker'), 'save', IMAGE])
+
+    def test_export_backpressure_and_deadline_budget(self):
+        self.config_fixture()
+        self.assertGreater(measure.EXPORT_SECONDS, measure.EXPORT_BYTES / measure.EXPORT_RATE)
+        clock = Clock()
+        with patch.object(measure.subprocess, 'Popen', self.export_process), \
+             patch.object(measure, 'time', clock), patch.object(measure, 'EXPORT_RATE', 1024):
+            measure.saved_config_id([str(self.bin / 'docker'), 'save', IMAGE])
+        self.assertGreaterEqual(clock.now, (self.bin / 'export.tar').stat().st_size / 1024)
+
+    def test_export_audit_records_argv_exit_without_content(self):
+        pin, _, _ = self.config_fixture()
+        log = self.bin / 'commands.private.jsonl'
+        with patch.object(vm, 'PRIVATE_LOG', log), patch.object(measure.subprocess, 'Popen', self.export_process):
+            self.assertEqual(measure.saved_config_id([str(self.bin / 'docker'), 'save', IMAGE]), pin)
+            docker = self.bin / 'docker'
+            docker.write_text(docker.read_text() + 'sys.exit(1)\n')
+            with self.assertRaisesRegex(RuntimeError, 'export failed'):
+                measure.saved_config_id([str(docker), 'save', IMAGE])
+        self.assertTrue(log.is_file(), 'export operation missing from audit log')
+        records = [json.loads(line) for line in log.read_text().splitlines()]
+        self.assertEqual([r['exit'] for r in records], [0, 1])
+        for record in records:
+            self.assertEqual(set(record), {'argv', 'exit'})
+            self.assertEqual(record['argv'][-3:], [str(self.bin / 'docker'), 'save', IMAGE])
+
+    def test_inspect_projects_only_identity_fields(self):
+        with patch.object(measure, 'host_docker', return_value=result(json.dumps({
+                'Id': 'sha256:' + 'b' * 64, 'GraphDriver': {'Name': 'overlay2'}}))) as inspect:
+            measure.image_config_id(self.spike, IMAGE)
+        self.assertEqual(inspect.call_args.args[-2],
+            '{"Id":{{json .Id}},"Descriptor":{{json .Descriptor}},"GraphDriver":{{json .GraphDriver}}}')
 
     def test_config_identity_fake_docker_store_table(self):
         pin, shape, target = self.config_fixture()
@@ -584,11 +681,14 @@ class Measurement(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
     def test_host_export_exact_flavours_only(self):
-        args = ('docker', '--host', vm.HOST_SOCKET, 'save', IMAGE)
-        vm.authorize_host_docker(args, self.spike)
+        for flavour, letter in zip(('base', 'data', 'office'), 'abc'):
+            setattr(self.spike.args, flavour + '_image', 'synthetic/' + flavour + '@sha256:' + letter * 64)
+        args = ('docker', '--host', vm.HOST_SOCKET, 'save', self.spike.args.base_image)
+        for flavour in ('base', 'data', 'office'):
+            vm.authorize_host_docker(args[:4] + (getattr(self.spike.args, flavour + '_image'),), self.spike)
         for tail in (('foreign@sha256:' + 'a' * 64,), ('synthetic:latest',),
                      ('--output=/tmp/foreign',), ('--output', '/tmp/foreign', IMAGE),
-                     (IMAGE, IMAGE), (IMAGE, "--output=/tmp/foreign"), ('sha256:' + 'a' * 64,)):
+                     (args[-1], args[-1]), (args[-1], "--output=/tmp/foreign"), ('sha256:' + 'a' * 64,)):
             with self.subTest(tail=tail), self.assertRaises(RuntimeError):
                 vm.authorize_host_docker(args[:4] + tail, self.spike)
         for invalid in ('synthetic:latest', '--output=/tmp/foreign', '-o@sha256:' + 'a' * 64, 'sha256:' + 'a' * 64):
@@ -596,6 +696,44 @@ class Measurement(unittest.TestCase):
                 vm.authorize_host_docker(args[:4] + (invalid,), self.spike)
         with self.assertRaises(RuntimeError):
             vm.authorize_host_docker(args)
+
+    def test_three_distinct_flavours_preserve_each_identity(self):
+        flavours = ('base', 'data', 'office')
+        selectors = {f: 'synthetic/' + f + '@sha256:' + c * 64 for f, c in zip(flavours, 'abc')}
+        configs = {selectors[f]: 'sha256:' + c * 64 for f, c in zip(flavours, 'def')}
+        for f in flavours:
+            setattr(self.spike.args, f + '_image', selectors[f])
+        original = self.world.docker
+        def paired(where, argv):
+            if argv[:2] == ('inspect', '--type'):
+                if where == 'host':
+                    identity = argv[-1].split('@')[1]
+                    return result(json.dumps({'Id': identity, 'Descriptor': {'digest': identity,
+                        'mediaType': 'application/vnd.oci.image.index.v1+json'}}))
+                self.assertIn(argv[-1], configs.values())
+                return result(json.dumps({'Id': argv[-1], 'GraphDriver': {'Name': 'overlay2'}}))
+            if argv[:1] == ('run',) and '--entrypoint' in argv:
+                kind = option(argv, '--name').split('-')[-1]
+                flavour = 'data' if kind in ('pandas', 'polars') else 'office' if kind in ('docx', 'pdf') else 'base'
+                expected = selectors[flavour] if where == 'host' else configs[selectors[flavour]]
+                if option(argv, '--name').endswith('-app-probe'):
+                    expected = self.spike.args.app_image
+                self.assertEqual(argv[argv.index('--entrypoint') + 2], expected)
+            return original(where, argv)
+        self.world.docker = paired
+        def saved(argv):
+            vm.authorize_host_docker(argv, self.spike)
+            return configs[argv[-1]]
+        with patch.object(measure, 'saved_config_id', side_effect=saved) as export:
+            measure.measure(self.spike)
+        self.assertEqual([call.args[0][-1] for call in export.call_args_list], list(selectors.values()))
+        self.assertEqual(self.spike.guest_image_ids, configs)
+        inspections = [e[1] for e in self.boundary('run') if e[1][:2] == ('docker', '--config')
+                       and e[1][3:5] == ('inspect', '--type')]
+        self.assertEqual([(a[2], a[-1]) for a in inspections],
+                         [(str(self.spike.state / f'client{i}/.docker'), configs[s])
+                          for s in selectors.values() for i in range(2)])
+        self.assertEqual({f: getattr(self.spike.args, f + '_image') for f in flavours}, selectors)
 
     def test_containerd_config_matches_classic_before_workloads(self):
         original = self.world.docker

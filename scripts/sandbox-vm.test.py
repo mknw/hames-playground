@@ -1794,6 +1794,22 @@ def mutations():
         ("host save admits extra flag", "core", 'len(tail) == 1 and tail[0]', 'len(tail) >= 1 and tail[0]', "test_host_export_exact_flavours_only"),
         ("host save admits mutable flavour", "core", 'and pinned_image(tail[0]) and not tail[0].startswith(("sha256:", "-"))', 'and True', "test_host_export_exact_flavours_only"),
     ])
+    changes.extend([
+        ('review descriptor digest check removed', 'measure', 'descriptor.get("digest") == identity', 'True', 'test_descriptor_digest_and_media_type_refuse_independently'),
+        ('review descriptor media type allowlist removed', 'measure', 'descriptor.get("mediaType") in ("application/vnd.oci.image.index.v1+json",\n                "application/vnd.oci.image.manifest.v1+json",\n                "application/vnd.docker.distribution.manifest.list.v2+json",\n                "application/vnd.docker.distribution.manifest.v2+json")', 'True', 'test_descriptor_digest_and_media_type_refuse_independently'),
+        ('review first config substituted for every flavour', 'core', 'images[args[position]]', 'next(iter(images.values()))', 'test_three_distinct_flavours_preserve_each_identity'),
+        ('review host save admits base only', 'core', 'tail[0] in (host_scope.args.base_image,\n                host_scope.args.data_image, host_scope.args.office_image)', 'tail[0] == host_scope.args.base_image', 'test_host_export_exact_flavours_only'),
+        ('review classic host publishes translation map', 'measure', '        return identity\n', '        if config_ids is not None:\n            config_ids[image] = identity\n        return identity\n', 'test_measure_orchestration_end_to_end'),
+        ('review config identity taken from filename', 'measure', 'return hashes[manifest[0]["Config"]]', 'return "sha256:" + PurePosixPath(manifest[0]["Config"]).name', 'test_export_hashes_config_bytes_independent_of_filename'),
+        ('review nonregular export member admitted', 'measure', '(member.isfile() or member.isdir())', 'True', 'test_export_member_type_count_manifest_and_trailing_bounds'),
+        ('review export member count removed', 'measure', 'len(hashes) < EXPORT_MEMBERS', 'True', 'test_export_member_type_count_manifest_and_trailing_bounds'),
+        ('review manifest metadata bound removed', 'measure', 'require(member.size <= METADATA_BYTES, "bounded image manifest required")', 'pass', 'test_export_member_type_count_manifest_and_trailing_bounds'),
+        ('review trailing export padding not drained', 'measure', '        while stream.read(1024 * 1024):\n            pass\n', '        pass\n', 'test_export_member_type_count_manifest_and_trailing_bounds'),
+        ('export rate sleep removed', 'measure', 'time.sleep(max(0, self.total / EXPORT_RATE - (time.monotonic() - start)))', 'pass', 'test_export_backpressure_and_deadline_budget'),
+        ('export deadline below rate budget', 'measure', 'EXPORT_SECONDS = EXPORT_BYTES / EXPORT_RATE + 60', 'EXPORT_SECONDS = 120', 'test_export_backpressure_and_deadline_budget'),
+        ('inspect records full config instead of identity projection', 'measure', '\'{"Id":{{json .Id}},"Descriptor":{{json .Descriptor}},"GraphDriver":{{json .GraphDriver}}}\'', "'{{json .}}'", 'test_inspect_projects_only_identity_fields'),
+        ('export operation omitted from private audit', 'measure', 'if sandbox_vm.PRIVATE_LOG is not None:', 'if False:', 'test_export_audit_records_argv_exit_without_content'),
+    ])
     for label, target, before, after, test in changes:
         original = sources[target]
         if before not in original:

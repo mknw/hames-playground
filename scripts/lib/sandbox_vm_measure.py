@@ -18,6 +18,7 @@ import tarfile
 import threading
 import time
 
+import sandbox_vm
 from sandbox_vm import HOST_SOCKET, authorize_host_docker, command, docker_env, host_docker, percentiles, require
 
 PROC = Path("/proc")
@@ -540,11 +541,13 @@ def isolation(spike):
                          ingress_other_network_refused=True)
 
 
-# A save is read-only but can be large. Bound client work and memory; no archive
-# is written to disk or the private command log.
+# A save changes no image, tag or content but can be large. Bound client work
+# and memory; no archive is written to disk or the private command log.
 EXPORT_BYTES = 8 * 1024 ** 3
-EXPORT_SECONDS = 120
+EXPORT_RATE = 64 * 1024**2
+EXPORT_SECONDS = EXPORT_BYTES / EXPORT_RATE + 60
 METADATA_BYTES = 16 * 1024 ** 2
+EXPORT_MEMBERS = 100000
 
 
 def saved_config_id(argv):
@@ -563,19 +566,21 @@ def saved_config_id(argv):
     timer = threading.Timer(EXPORT_SECONDS, expire)
     timer.start()
     try:
+        start = time.monotonic()
         class Bounded:
             total = 0
             def read(self, count):
                 data = process.stdout.read(count)
                 self.total += len(data)
                 require(self.total <= EXPORT_BYTES, "image export exceeds 8 GiB limit")
+                time.sleep(max(0, self.total / EXPORT_RATE - (time.monotonic() - start)))
                 return data
         stream = Bounded()
         hashes, configs, manifest = {}, set(), None
         with tarfile.open(fileobj=stream, mode="r|") as archive:
             for member in archive:
                 name = PurePosixPath(member.name)
-                require(len(hashes) < 100000 and member.name not in hashes
+                require(len(hashes) < EXPORT_MEMBERS and member.name not in hashes
                         and not name.is_absolute() and ".." not in name.parts
                         and (member.isfile() or member.isdir()), "ambiguous image export member")
                 require(member.size <= EXPORT_BYTES, "image export exceeds 8 GiB limit")
@@ -617,11 +622,15 @@ def saved_config_id(argv):
             process.kill()
         process.wait()
         process.stdout.close()
+        if sandbox_vm.PRIVATE_LOG is not None:
+            with sandbox_vm.PRIVATE_LOG.open("a") as log:
+                log.write(json.dumps({"argv": [*low_priority, *argv], "exit": process.returncode}) + "\n")
 
 
 def image_config_id(spike, image, index=None, config_ids=None):
     target = host_docker if index is None else lambda *args: spike.remote(index, *args)
-    inspected = json.loads(target("inspect", "--type", "image", "--format", '{{json .}}', image).stdout)
+    inspected = json.loads(target("inspect", "--type", "image", "--format",
+        '{"Id":{{json .Id}},"Descriptor":{{json .Descriptor}},"GraphDriver":{{json .GraphDriver}}}', image).stdout)
     require(isinstance(inspected, dict), "image inspect object required")
     identity = inspected.get("Id")
     require(isinstance(identity, str) and re.fullmatch(r"sha256:[a-f0-9]{64}", identity),

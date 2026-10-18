@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,7 @@ FORWARD_MARKER = "vps-metadata-forward-v1"
 STATE = Path("/var/lib/vps-metadata-egress")
 INSTALLED_SCRIPT = Path("/usr/local/lib/vps-metadata-egress.py")
 UNIT = Path("/etc/systemd/system/vps-metadata-egress.service")
+SEED_UNIT = Path("/etc/systemd/system/vps-metadata-egress-seed.service")
 
 
 def service_unit():
@@ -35,15 +37,32 @@ Description=Block forwarded cloud metadata traffic
 Requires=docker.service
 After=docker.service ufw.service
 PartOf=docker.service
-Before=hames-app.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/python3 /usr/local/lib/vps-metadata-egress.py --docker-user-only --apply
+ExecStart=/usr/bin/python3 -I /usr/local/lib/vps-metadata-egress.py --docker-user-only --apply
 
 [Install]
 WantedBy=docker.service
+"""
+
+
+def seed_unit():
+    return """# Managed by metadata-egress.py; do not edit.
+[Unit]
+Description=Seed forwarded metadata denies before Docker starts containers
+Before=docker.service
+After=ufw.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 -I /usr/local/lib/vps-metadata-egress.py --docker-user-only --seed --apply
+
+[Install]
+RequiredBy=docker.service
 """
 
 
@@ -179,8 +198,12 @@ def apply():
 def forwarded_rules(family):
     # Share the reviewed address/original-destination policy, but no RETURN:
     # these direct denies fall through to the existing DOCKER-USER rules.
-    return [[FORWARD_MARKER if value == MARKER else value for value in rule]
-            for rule in policy(family) if rule[-1] == "DROP"]
+    rules = [[FORWARD_MARKER if value == MARKER else value for value in rule]
+             for rule in policy(family) if rule[-1] == "DROP"]
+    if family == "iptables":
+        rules.append(["-d", "168.63.129.16/32", "-p", "tcp", "-m", "multiport",
+                      "--dports", "80,32526", "-m", "comment", "--comment", FORWARD_MARKER, "-j", "DROP"])
+    return rules
 
 
 def probe(args):
@@ -193,11 +216,11 @@ def present(family, rule):
     return probe([family, "-w", "5", "-C", "DOCKER-USER", *rule]).returncode == 0
 
 
-def forwarded_snapshot(family):
+def forwarded_snapshot(family, seed=False):
     chains, rules = parse_save(command([family + "-save", "-t", "filter"]))
-    require({"FORWARD", "DOCKER-USER"} <= chains, "forwarded firewall chain missing (including IPv6)")
+    require(seed or {"FORWARD", "DOCKER-USER"} <= chains, "forwarded firewall chain missing (including IPv6)")
     parent = [r for r in rules if r[1] == "FORWARD"]
-    require(parent and parent[0] == ["-A", "FORWARD", "-j", "DOCKER-USER"],
+    require(seed or (parent and parent[0] == ["-A", "FORWARD", "-j", "DOCKER-USER"]),
             "forwarded DOCKER-USER parent must be first")
     allowed = {normalized(r) for r in forwarded_rules(family)}
     for rule in rules:
@@ -207,9 +230,9 @@ def forwarded_snapshot(family):
     return [r[2:] for r in rules if r[1] == "DOCKER-USER"]
 
 
-def check_forwarded():
+def check_forwarded(seed=False):
     for family in FAMILIES:
-        rules = forwarded_snapshot(family)
+        rules = forwarded_snapshot(family, seed)
         actual = [normalized(r) for r in rules if FORWARD_MARKER in r]
         expected = {normalized(r) for r in forwarded_rules(family)}
         require(all(FORWARD_MARKER in r for r in rules[:len(expected)]) and
@@ -231,15 +254,34 @@ if(r.status!==200||(await r.json()).status!=='ok')process.exit(1);
 console.log('HEALTHY')}).catch(()=>process.exit(1));"""
 
 
+def safe_persistence_file(path):
+    info = path.lstat()
+    require(stat.S_ISREG(info.st_mode) and not path.is_symlink() and info.st_uid == 0 and
+            info.st_mode & 0o022 == 0 and path.parent.stat().st_mode & 0o022 == 0,
+            "unsafe metadata persistence file or parent")
+
+
+def metadata_packets():
+    snapshot = command(["iptables-save", "-c", "-t", "filter"])
+    expected = normalized(["-d", "169.254.0.0/16", "-m", "comment", "--comment", FORWARD_MARKER, "-j", "DROP"])
+    counts = []
+    for line in snapshot.splitlines():
+        match = re.fullmatch(r"\[(\d+):\d+\] (-A DOCKER-USER .+)", line)
+        if match and FORWARD_MARKER in shlex.split(match[2]) and normalized(shlex.split(match[2])[2:]) == expected:
+            counts.append(int(match[1]))
+    require(len(counts) == 1, "metadata packet counter missing or ambiguous")
+    return counts[0]
+
+
 def smoke_forwarded():
     check_forwarded()  # absence/drift cannot pass merely because metadata is down
-    require(UNIT.is_file() and not UNIT.is_symlink() and UNIT.read_text() == service_unit(),
-            "metadata persistence unit missing or changed")
-    require(INSTALLED_SCRIPT.is_file() and not INSTALLED_SCRIPT.is_symlink() and
-            INSTALLED_SCRIPT.read_text() == Path(__file__).read_text(),
-            "metadata persistence script missing or changed")
-    require(probe(["systemctl", "is-enabled", UNIT.name]).stdout.strip() == "enabled",
-            "metadata persistence unit is not enabled")
+    for path, content in ((UNIT, service_unit()), (SEED_UNIT, seed_unit()),
+                          (INSTALLED_SCRIPT, Path(__file__).read_text())):
+        safe_persistence_file(path)
+        require(path.read_text() == content, "metadata persistence file missing or changed")
+    for unit in (UNIT, SEED_UNIT):
+        require(probe(["systemctl", "is-enabled", unit.name]).stdout.strip() == "enabled",
+                "metadata persistence unit is not enabled")
     app = command(["docker", "compose", "ps", "-q", "app"]).strip()
     require(bool(re.fullmatch(r"[a-f0-9]{12,64}", app)), "expected one running app")
     image = command(["docker", "inspect", "--format", "{{.Image}}", app]).strip()
@@ -248,11 +290,13 @@ def smoke_forwarded():
     require(command(health).strip() == "HEALTHY", "app unhealthy before metadata probe")
     # Local image only; no pull, DNS, provider HTTP payload or configurable URL.
     # Failure to start the probe is inconclusive, never evidence of containment.
+    before = metadata_packets()
     result = command(["docker", "run", "--rm", "--pull", "never", "--network", "bridge",
                       "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
                       "--read-only", "--user", "65534:65534", "--pids-limit", "32",
                       "--memory", "256m", "--entrypoint", "node", image, "-e", METADATA_PROBE])
     require(result.strip() == "BLOCKED", "metadata probe did not report bounded refusal")
+    require(metadata_packets() >= before + 1, "metadata probe inconclusive: tagged DROP counter did not increase")
     require(command(health).strip() == "HEALTHY", "app unhealthy after metadata probe")
 
 
@@ -289,10 +333,11 @@ def journal():
                         entry["rule"] in forwarded_rules(entry["family"]), "unowned journal rule")
             elif entry.get("kind") == "file":
                 require(set(entry) == {"kind", "path", "content"} and
-                        entry["path"] in (str(INSTALLED_SCRIPT), str(UNIT)) and
+                        entry["path"] in (str(INSTALLED_SCRIPT), str(UNIT), str(SEED_UNIT)) and
                         isinstance(entry["content"], str), "unowned journal file")
             else:
-                require(entry == {"kind": "enable"}, "unowned journal operation")
+                require(entry == {"kind": "enable"} or entry == {"kind": "enable", "unit": SEED_UNIT.name},
+                        "unowned journal operation")
         yield entries
 
 
@@ -323,13 +368,14 @@ def record(entries, entry):
 def persist_forwarded(entries):
     # Copy to a root-owned fixed location: never execute a mutable checkout as
     # root on boot. Refuse updates/foreign files rather than overwriting them.
-    files = ((INSTALLED_SCRIPT, Path(__file__).read_text()), (UNIT, service_unit()))
+    files = ((INSTALLED_SCRIPT, Path(__file__).read_text()), (UNIT, service_unit()), (SEED_UNIT, seed_unit()))
     for path, content in files:
         if path.exists() or path.is_symlink():
-            require(not path.is_symlink() and path.stat().st_uid == os.geteuid() and
-                    path.stat().st_mode & 0o022 == 0 and path.read_text() == content,
+            safe_persistence_file(path)
+            require(path.read_text() == content,
                     "existing persistence file differs; operator review required")
     for path, content in files:
+        require(path.parent.stat().st_mode & 0o022 == 0, "unsafe persistence parent")
         if not path.exists():
             # Publish complete files without replacing a raced-in foreign file.
             # A killed write must not leave a partial unit/script that undo
@@ -346,13 +392,14 @@ def persist_forwarded(entries):
                 finally:
                     os.close(directory)
     command(["systemctl", "daemon-reload"])
-    enabled = probe(["systemctl", "is-enabled", UNIT.name])
-    require((enabled.returncode == 0 and enabled.stdout.strip() == "enabled") or
-            (enabled.returncode == 1 and enabled.stdout.strip() == "disabled"),
-            "metadata service enablement inconclusive")
-    if enabled.returncode != 0:
-        record(entries, {"kind": "enable"})
-        command(["systemctl", "enable", UNIT.name])
+    for unit in (UNIT, SEED_UNIT):
+        enabled = probe(["systemctl", "is-enabled", unit.name])
+        require((enabled.returncode == 0 and enabled.stdout.strip() == "enabled") or
+                (enabled.returncode == 1 and enabled.stdout.strip() == "disabled"),
+                "metadata service enablement inconclusive")
+        if enabled.returncode != 0:
+            record(entries, {"kind": "enable"} if unit == UNIT else {"kind": "enable", "unit": unit.name})
+            command(["systemctl", "enable", unit.name])
     # No --now while holding the journal lock: apply already installed rules.
 
 
@@ -367,7 +414,7 @@ def remove_forwarded(entries):
     while entries:
         entry = entries[-1]
         if entry["kind"] == "enable":
-            command(["systemctl", "disable", "--now", UNIT.name])
+            command(["systemctl", "disable", "--now", entry.get("unit", UNIT.name)])
         elif entry["kind"] == "file":
             Path(entry["path"]).unlink(missing_ok=True)
             command(["systemctl", "daemon-reload"])
@@ -389,6 +436,7 @@ def forwarded(args):
                 print(shlex.join([family, "-w", "5", "-C", "DOCKER-USER", *rule]) + " || " +
                       shlex.join([family, "-w", "5", "-I", "DOCKER-USER", "1", *rule]))
         if args.persist:
+            print(seed_unit(), end="")
             print(service_unit(), end="")
         return
     forwarded_root()
@@ -402,15 +450,20 @@ def forwarded(args):
         if args.remove:
             remove_forwarded(entries)
             return
-        # Refuse missing/unreachable IPv6 before the first mutation.
-        for family in FAMILIES:
-            forwarded_snapshot(family)
+        # Normal apply requires Docker's parent; seed only prepares the chain.
+        # Read BOTH families before creating anything so unavailable IPv6 refuses.
+        snapshots = {family: forwarded_snapshot(family, args.seed) for family in FAMILIES}
+        if args.seed:
+            for family in snapshots:
+                chains, _ = parse_save(command([family + "-save", "-t", "filter"]))
+                if "DOCKER-USER" not in chains:
+                    command([family, "-w", "5", "-N", "DOCKER-USER"])
         for family in FAMILIES:
             for rule in reversed(forwarded_rules(family)):
                 if not present(family, rule):
                     record(entries, {"kind": "rule", "family": family, "rule": rule})
                     command([family, "-w", "5", "-I", "DOCKER-USER", "1", *rule])
-        check_forwarded()
+        check_forwarded(args.seed)
         if args.persist:
             persist_forwarded(entries)
 
@@ -422,9 +475,12 @@ def main():
     action.add_argument("--check", action="store_true", help="read-only forwarded-policy check")
     action.add_argument("--smoke", action="store_true", help="check policy/persistence and run a bounded bridge probe")
     parser.add_argument("--docker-user-only", action="store_true", help="forwarded traffic only; preserve host metadata")
+    parser.add_argument("--seed", action="store_true", help="pre-Docker stage; create missing DOCKER-USER chains")
     parser.add_argument("--persist", action="store_true", help="install the opt-in Docker-ordered systemd reapply unit")
     parser.add_argument("--remove", action="store_true", help="undo only this mode's journaled changes")
     args = parser.parse_args()
+    if args.seed and (not args.docker_user_only or not args.apply or args.remove or args.persist):
+        parser.error("--seed requires --docker-user-only --apply alone")
     if (args.persist or args.remove or args.check or args.smoke) and not args.docker_user_only:
         parser.error("--persist/--remove/--check require --docker-user-only")
     if (args.persist and args.remove) or ((args.check or args.smoke) and (args.persist or args.remove)):

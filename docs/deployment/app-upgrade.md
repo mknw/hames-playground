@@ -112,6 +112,78 @@ Caddy; keep ingress blocked by the operator's maintenance control until the
 checks pass. Never run the seed stage as an upgrade mechanism. Build only after
 checking measured capacity for the serving data tier plus embedder/build peak.
 
+### Metadata policy upgrade
+
+Check 10 compares `/usr/local/lib/vps-metadata-egress.py` byte-for-byte with the
+new checkout. Every change to that script therefore requires this gap-free
+refresh before the upgrade smoke. Persistence intentionally refuses to overwrite
+different installed files. Never remove/reinstall the policy without interim
+denies: that would expose metadata. Keep external ingress held closed and other
+workloads/builds stopped; one healthy app is needed for smoke.
+
+Before moving the pin, retain the old root-owned installed script (mode 0644)
+at `/root/metadata-egress-before.py`. Create this root-owned helper at
+`/root/metadata-egress-interim.py` (mode 0600) using the independent console.
+It uses the old script's entire exact inventory, with a distinct interim tag,
+including both families and WireServer when present. Never import a mutable
+checkout for this root operation. Do not replace either backup until the
+upgrade completes.
+
+```sh
+sudo install -o root -g root -m 0644 /usr/local/lib/vps-metadata-egress.py /root/metadata-egress-before.py
+```
+
+```python
+import runpy
+import sys
+
+old = runpy.run_path('/root/metadata-egress-before.py')
+mode = sys.argv[1]
+assert mode in ('insert', 'delete')
+for family in old['FAMILIES']:
+    for owned in reversed(old['forwarded_rules'](family)):
+        rule = ['vps-metadata-upgrade-interim-v1' if value == old['FORWARD_MARKER'] else value
+                for value in owned]
+        check = [family, '-w', '5', '-C', 'DOCKER-USER', *rule]
+        if mode == 'insert':
+            if not old['present'](family, rule):
+                old['command']([family, '-w', '5', '-I', 'DOCKER-USER', '1', *rule])
+            old['command'](check)
+        else:
+            old['command'](check)
+            old['command']([family, '-w', '5', '-D', 'DOCKER-USER', *rule])
+```
+
+Run the following from `$APP_DIR` at the target merged commit. Stop at any
+failure and keep interim denies installed. Use the **old** artifact for undo,
+because its journal and persistence bytes describe the old version; use the
+new checkout for reinstallation. If the old policy predates the seed service,
+new persistence also installs/enables that pre-Docker unit.
+
+<!-- metadata-upgrade-commands -->
+
+```sh
+set -e
+cd "$APP_DIR"
+sudo python3 -I /root/metadata-egress-interim.py insert
+sudo python3 -I /root/metadata-egress-before.py --docker-user-only --apply --remove
+sudo python3 -I scripts/metadata-egress.py --docker-user-only --apply --persist
+sudo systemctl start vps-metadata-egress.service
+sudo python3 -I scripts/metadata-egress.py --docker-user-only --check
+sudo python3 -I scripts/metadata-egress.py --docker-user-only --smoke
+sudo python3 -I /root/metadata-egress-interim.py delete
+sudo python3 -I scripts/metadata-egress.py --docker-user-only --check
+```
+
+The probe must increment the **new tagged** IPv4 DROP counter by at least one;
+BLOCKED without an increment fails as inconclusive. Both persistence units must
+be enabled and their trusted root-owned files match the target. Complete the
+normal bootstrap smoke below, including check 10, before reopening ingress.
+If undo encounters a journal lock, resolve the active operation from the console
+and retry; never bypass it or delete the journal. Console recovery restores the
+interim denies **first**, before any intentional undo. Retain the old artifact,
+helper and journal privately until both families and recovery have been verified.
+
 Run bootstrap `--only smoke --no-seed` with the deployment's normal hostname and
 ACME arguments. This covers the relay/isolation checks and the local CPU
 embedder's `/v1/embeddings` response with **1024 finite dimensions**

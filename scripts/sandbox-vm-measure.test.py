@@ -476,7 +476,7 @@ class Measurement(unittest.TestCase):
                 self.assertEqual(self.boundary(), [])
 
     def test_config_id_must_match_requested_content(self):
-        self.spike.args.base_image = "sha256:" + "a" * 64
+        self.spike.args.base_image = "sha256:" + "b" * 12 + "a" * 52
         with self.assertRaisesRegex(RuntimeError, "requested config ID"):
             measure.measure(self.spike)
         self.spike.args.base_image = self.spike.args.data_image = self.spike.args.office_image = "sha256:" + "b" * 64

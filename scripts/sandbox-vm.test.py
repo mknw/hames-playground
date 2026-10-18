@@ -622,7 +622,7 @@ class Safety(unittest.TestCase):
         for pin in ("sha256:" + "a" * 64, "synthetic@sha256:" + "a" * 64):
             self.args.base_image = self.args.data_image = self.args.office_image = self.args.app_image = pin
             vm.preflight(self.args)
-        for pin in ("synthetic:latest", "a" * 64, "sha256:" + "A" * 64, "sha256:abcd", None):
+        for pin in ("synthetic:latest", "a" * 64, "sha256:" + "A" * 64, "sha256:abcd", "sha256:" + "a" * 12, "sha256:" + "a" * 63, None):
             self.args.base_image = pin
             with self.assertRaisesRegex(RuntimeError, "digest-pinned"):
                 vm.preflight(self.args)
@@ -716,7 +716,7 @@ class Safety(unittest.TestCase):
             self.assertEqual(runner.call_count, 1)
             config_argv = tuple("sha256:" + "a" * 64 if arg == image else arg for arg in argv)
             vm.command("docker", "--host", vm.HOST_SOCKET, *config_argv, host_scope=self.spike)
-            for pin in ("synthetic:latest", "sha256:abcd", "a" * 64):
+            for pin in ("synthetic:latest", "sha256:abcd", "sha256:" + "a" * 12, "sha256:" + "a" * 63, "a" * 64):
                 with self.assertRaises(RuntimeError):
                     vm.command("docker", "--host", vm.HOST_SOCKET,
                                *tuple(pin if arg == image else arg for arg in argv), host_scope=self.spike)
@@ -924,6 +924,9 @@ def mutations():
     changes = [
         ("config ID preflight accepts mutable tag", "core", '            require(pinned_image(image),', '            require(True,', "test_config_image_pins_additive_in_preflight"),
         ("host admission accepts mutable tag", "core", 'and pinned_image(tail[image_index])', 'and True', "test_host_run_caps_prefix_label_expiry_and_exec_ownership"),
+        ("abbreviated config ID admitted at preflight", "core", 'r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{64}"', 'r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{12,64}"', "test_config_image_pins_additive_in_preflight"),
+        ("abbreviated config ID admitted at host admission", "core", 'r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{64}"', 'r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{12,64}"', "test_host_run_caps_prefix_label_expiry_and_exec_ownership"),
+        ("requested config ID compared by prefix", "measure", 'host == image', 'host[:19] == image[:19]', "test_config_id_must_match_requested_content"),
         ("requested config ID not verified", "measure", 'not image.startswith("sha256:") or host == image', 'True', "test_config_id_must_match_requested_content"),
         ("author 1 drop rollback", "core", "            spike.rollback()", "            pass", "test_regression_rolls_back_install_and_firewall"),
         ("author 2 drop sshd guard", "core", "sshd_fingerprint() == ssh_guard", "True", "test_sshd_guard_fails_before_witness"),

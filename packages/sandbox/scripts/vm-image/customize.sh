@@ -31,9 +31,8 @@ test -x /usr/bin/dockerd
 # The package/base must supply the agent unit and virtio/vsock support.
 test -x /usr/libexec/incus/incus-agent || command -v incus-agent
 systemctl enable incus-agent.service docker.service cloud-init-local.service cloud-init.service cloud-config.service cloud-final.service
-# This image has no endpoint, certificate or site configuration. Provisioning
-# owns daemon.json and docker.service.d. Disable socket activation until then.
-systemctl disable docker.socket
+# Provisioning owns daemon.json and docker.service.d, including socket activation.
+# Refuse site configuration rather than adopting it.
 test ! -e /etc/docker/daemon.json
 printf '{}\n' > /opt/vm-image/empty-daemon.json
 dockerd --config-file /opt/vm-image/empty-daemon.json \
@@ -65,6 +64,9 @@ import hashlib, json, subprocess
 with open('guest-lock.json') as stream:
     lock = json.load(stream)
 docker = ['docker', '--host', 'unix:///run/vm-image-docker.sock']
+driver = subprocess.check_output([*docker, 'info', '--format', '{{.Driver}}'], text=True).strip()
+if not driver or driver == 'overlayfs' or 'containerd' in driver.lower():
+    raise SystemExit('containerd snapshotter unsupported; classic Docker image store required')
 images = {}
 for flavour, record in lock['flavours'].items():
     path = flavour + '.tar'
@@ -86,13 +88,25 @@ for flavour, actual in images.items():
 packages = dict(line.split('\t', 1) for line in subprocess.check_output(
     ['dpkg-query', '-W', '-f=${Package}\t${Version}\n'], text=True).splitlines())
 with open('inventory.json', 'w') as stream:
-    json.dump({'images': images, 'packages': packages}, stream, sort_keys=True)
+    json.dump({'images': images, 'packages': packages, 'docker_driver': driver}, stream, sort_keys=True)
 PY
 cleanup
 trap - EXIT
 rm -f ./*.deb ./*.tar ./dockerd.log ./empty-daemon.json
 # Remove clone identity and cached cloud-init instance data, never site values.
 cloud-init clean --logs --machine-id
+rm -f /etc/ssh/ssh_host_*
+rm -f /var/lib/docker/engine-id /var/lib/docker/key.json
+python3 - <<'PY'
+import glob, json
+from pathlib import Path
+with open('inventory.json') as stream:
+    inventory = json.load(stream)
+inventory['machine_id_state'] = Path('/etc/machine-id').read_text().strip()
+inventory['ssh_host_keys'] = sorted(glob.glob('/etc/ssh/ssh_host_*'))
+with open('inventory.json', 'w') as stream:
+    json.dump(inventory, stream, sort_keys=True)
+PY
 # Agent-rendered NoCloud seeds take precedence over the source cloud's driver.
 mkdir -p /etc/cloud/cloud.cfg.d
 printf 'datasource_list: [NoCloud]\n' > /etc/cloud/cloud.cfg.d/99-sandbox-vm.cfg

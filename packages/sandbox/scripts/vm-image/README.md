@@ -17,11 +17,18 @@ establish trust.
 
 ## Three different pins
 
-| Pin                                                | Meaning and consumer                                                                                                                                                                                                                                                     |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `sha256:<64 lowercase hex>` Docker image config ID | `docker image inspect --format '{{.Id}}' IMAGE`; survives `docker save` / `docker load`, is accepted directly by `docker run --pull=never`, and needs no registry. Use it for the spike's `--base-image`, `--data-image`, `--office-image` and optionally `--app-image`. |
-| SHA256 of the saved archive                        | Verifies transfer/staging of that exact tar; **never** a Docker run selector. Different tar serializations can contain the same image config. The builder also hashes the config bytes and every uncompressed layer against its config's `rootfs.diff_ids`.              |
-| Incus fingerprint                                  | SHA256 of `metadata.tar` followed by `disk.qcow2`, in that order; identifies the complete split VM image. Supply this to #654's `image.fingerprint`. It is unrelated to a flavour's config ID.                                                                           |
+| Pin                                                | Meaning and consumer                                                                                                                                                                                                                                                                                            |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sha256:<64 lowercase hex>` Docker image config ID | With Docker's **classic image store**, `docker image inspect --format '{{.Id}}' IMAGE`; survives `docker save` / `docker load`, is accepted directly by `docker run --pull=never`, and needs no registry. Use it for the spike's `--base-image`, `--data-image`, `--office-image` and optionally `--app-image`. |
+| SHA256 of the saved archive                        | Verifies transfer/staging of that exact tar; **never** a Docker run selector. Different tar serializations can contain the same image config. The builder also hashes the config bytes and every uncompressed layer against its config's `rootfs.diff_ids`.                                                     |
+| Incus fingerprint                                  | SHA256 of `metadata.tar` followed by `disk.qcow2`, in that order; identifies the complete split VM image. Supply this to #654's `image.fingerprint`. It is unrelated to a flavour's config ID.                                                                                                                  |
+
+The config-ID invariant requires Docker's **classic image store** on the save
+daemon, the guest build daemon and the boot daemon. Containerd snapshotters
+are refused by name in `save` and guest customization; their inspect IDs are
+not the config IDs this pipeline pins. Both stages record
+`docker info --format '{{.Driver}}'`. Compare the boot daemon's driver with
+`guest-inventory.json` before accepting the owed boot evidence.
 
 The spike accepts config IDs additively alongside `name@sha256:<digest>`:
 only its host-run admission and measure preflight validators change. Before
@@ -71,11 +78,13 @@ builds are reproducible. It consumes their exact config IDs and save archives.
 
 To save from an explicitly selected **disposable** local daemon, review the
 plan first; append `--apply` only when ready. The command performs three image
-inspections and three saves, never pull/build/run/tag on that daemon:
+inspections and three saves, plus CLI version and daemon driver inspection,
+never pull/build/run/tag on that daemon. Supply an absolute reviewed Docker CLI
+path; its staged copy is hashed and its version recorded:
 
 ```bash
 python3 packages/sandbox/scripts/vm-image/build.py save \
-  --docker-host "$DISPOSABLE_DOCKER_SOCKET" --work-dir "$FRESH_SAVE_DIR" \
+  --docker "$DOCKER_CLI" --docker-host "$DISPOSABLE_DOCKER_SOCKET" --work-dir "$FRESH_SAVE_DIR" \
   --architecture x86_64 \
   --base-image "$BASE_CONFIG_ID" --data-image "$DATA_CONFIG_ID" \
   --office-image "$OFFICE_CONFIG_ID"
@@ -85,11 +94,14 @@ Use `--architecture aarch64` only for a native ARM64 target. Each save archive
 contains exactly one Linux image of the selected architecture; multi-image
 archives, compressed archives, symlinks, duplicate members, traversal members,
 config-ID mismatches and layer-hash mismatches are refused. No archive is
-extracted to the host. `flavours.json` contains the three archive hashes/IDs.
+extracted to the host. `flavours.json` contains a `flavours` lock fragment with the three archive
+hashes/IDs, plus the save daemon driver and Docker CLI path/hash/version.
 The outer save tar must be uncompressed. Individual layer blobs may be raw or
-gzip-compressed (containerd store); hashes use the **uncompressed** bytes, with
+gzip-compressed; verification also accepts separately prepared containerd-style
+layer archives, but this does not enable a containerd daemon. Hashes use the
+**uncompressed** bytes, with
 an 8 GiB total expansion cap per image. Other layer codecs fail verification.
-It is a lock fragment, not a complete build lock. Add absolute paths to those
+Copy its `flavours` object into the complete build lock. Add absolute paths to those
 archives when placing the final lock elsewhere.
 
 ## Local lock schema (version 1)
@@ -120,7 +132,10 @@ Incus fingerprints are calculated from each actual output, never predicted.
 
 The work directory's parent must exist; the work directory itself must be
 fresh. Reuse, overwrite, symlinks and escaping output paths are refused.
-Every input is verified before staging and again after copying. Partial state
+Every input is verified before staging and again after copying. Linux tools
+run from private executable copies in that directory. Subprocesses receive only
+a fixed system PATH, HOME/TMPDIR/cache paths in the work directory, the direct
+libguestfs backend and `LC_ALL=C`; inherited loader settings are excluded. Partial state
 is retained for private inspection on failure; no complete manifest is written.
 Use a **different fresh directory** for each command; `build` repeats verify.
 
@@ -145,12 +160,20 @@ at assembly and boot. No custom storage driver is baked into daemon.json.
 The actual appliance must support that Docker storage backend; failure is
 fatal rather than falling back to another driver. Package/image inputs and
 temporary logs are removed from the guest after loading. Cloud-init state
-and machine identity are cleaned for cloning.
+and machine identity are cleaned for cloning. SSH host keys and Docker engine
+identity files are removed after daemon shutdown. The guest inventory records
+`machine_id_state` and `ssh_host_keys`; assembly refuses a machine-id other than
+empty/`uninitialized` or any SSH host key. Socket activation remains owned by
+the provisioners; disabling a socket alone would not clear Docker
+service dependencies.
 
 The completed `manifest.json` records the complete lock (base identity/version
 and all input hashes), tool versions/hashes, builder hash/Python version,
 actual guest package inventory, flavour IDs, output hashes and Incus split
-fingerprint. `guest-inventory.json` contains all installed package versions.
+fingerprint. `guest-inventory.json` contains all installed package versions, the Docker
+storage driver and clone-identity state. The manifest explicitly labels
+`runner_closure` as `operator-pinned, not recorded`; it does not record the
+runner appliance/library closure.
 The metadata tar uses a fixed timestamp and five regular files: `metadata.yaml`
 and four agent-rendered cloud-init seed templates (meta-data, user-data,
 vendor-data, network-config). They consume `cloud-init.*`; the guest selects
@@ -172,20 +195,17 @@ shellcheck packages/sandbox/scripts/vm-image/customize.sh
 
 The package's layer-1 vitest suite runs these hermetic Python tests and source
 mutations. They use tiny synthetic archives, real file hashing/staging and
-metadata assembly, subprocess shims for the Linux stages, and execute the
-actual embedded guest Python against synthetic data. They do not run Docker
-or boot a VM. Mutations individually remove the input pin, input/staged/config/
-layer checksum checks, output disk hash, work-directory confinement,
-customizer network prohibition, backing-file refusal, tool version check,
-guest package version, guest archive checksum and loaded image ID check;
-each must cause an assertion failure in its named test.
+metadata assembly, subprocess shims for Linux stages, and the actual embedded
+guest Python. Shell sections execute against fake roots and argv-recording
+shims, including the real dockerd fragment. They do not run Docker or boot a VM.
 
-The remaining mutations admit a missing Incus agent package, a mutable flavour
-selector and an argument error containing the supplied value, remove the
-provisioning-compatible `/usr/bin/dockerd` path, or remove compressed-layer
-decoding, diff-ID verification or the expansion cap. All produce assertion
-failures. Two additional mutations remove the cloud-init seed map or select a
-different datasource, for 22 independently verified builder mutations.
+The committed `mutations()` matrix names each edit and its discriminating test.
+It retains all 22 authored mutations and adds stage-entry refusals for image
+identity and disk checks, archive structure, private modes, environment and
+provenance, guest loads/tags/store, adoption and clone cleanup. Every mutation
+must cause an assertion failure in its named test, rather than an import or
+subprocess error. The root harness matrix also pins 12/63-character config-ID
+refusals and full equality when the first 12 hex characters match.
 
 **Still owed to a disposable native Linux runner:** supply authenticated real
 base/deb archives and pinned tools/appliance; run conversion and offline dpkg;
@@ -193,7 +213,8 @@ prove temporary dockerd starts, loads and shuts down with its actual storage
 backend; inspect the resulting image store at boot; import metadata+disk into
 a fresh Incus VM; prove agent exec, systemd/cloud-init readiness, Python and
 `ip`, and all three `inspect .Id` values after provisioning's Docker mTLS
-configuration. Then run the separately authorized spike to establish the
+configuration. Compare `docker info --format '{{.Driver}}'` with the recorded
+guest build driver. Then run the separately authorized spike to establish the
 host/guest paired measurements and isolation controls. No real base/deb/image
 build, Docker-side daemon stage, disk customization, Incus import or boot was
 performed on macOS for this change. No default colima VM was touched or

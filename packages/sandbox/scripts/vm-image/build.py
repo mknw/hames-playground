@@ -165,11 +165,10 @@ def archive_id(path, expected, architecture):
 
 
 def run(argv, work):
-    # Fixed argv only; commands never inherit Docker/libguestfs routing selectors.
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("DOCKER_", "LIBGUESTFS_"))}
-    env.update(TMPDIR=str(work.root), XDG_CACHE_HOME=str(work.root),
-               LIBGUESTFS_CACHEDIR=str(work.root), LIBGUESTFS_TMPDIR=str(work.root),
-               LIBGUESTFS_BACKEND="direct", LC_ALL="C")
+    # Fixed allowlist: no inherited loaders, search paths or routing selectors.
+    env = dict(PATH="/usr/sbin:/usr/bin:/sbin:/bin", HOME=str(work.root), TMPDIR=str(work.root),
+               XDG_CACHE_HOME=str(work.root), LIBGUESTFS_CACHEDIR=str(work.root),
+               LIBGUESTFS_TMPDIR=str(work.root), LIBGUESTFS_BACKEND="direct", LC_ALL="C")
     result = subprocess.run([str(a) for a in argv], cwd=work.root, env=env,
                             capture_output=True, timeout=1800)
     require(result.returncode == 0, "stage command failed; build remains incomplete")
@@ -180,8 +179,18 @@ def save(args):
     require(args.docker_host and re.fullmatch(r"unix:///[^\s]+", args.docker_host),
             "explicit disposable Docker Unix endpoint required")
     require(all(image_id(getattr(args, f + "_image")) for f in FLAVOURS), "full config IDs required")
+    require(args.docker is not None and args.docker.is_absolute(), "absolute Docker CLI path required")
+    source = local_file(args.docker)
     work = Work(args.work_dir)
-    docker = ["docker", "--host", args.docker_host]
+    checksum = digest(source)
+    executable = work.copy(source, "docker", checksum)
+    executable.chmod(0o700)
+    version = run([executable, "--version"], work).decode().strip()
+    require(version, "Docker CLI version required")
+    docker = [executable, "--host", args.docker_host]
+    driver = run([*docker, "info", "--format", "{{.Driver}}"], work).decode().strip()
+    require(driver and driver != "overlayfs" and "containerd" not in driver.lower(),
+            "containerd snapshotter unsupported; classic Docker image store required")
     result = {}
     for flavour in FLAVOURS:
         pin = getattr(args, flavour + "_image")
@@ -191,7 +200,8 @@ def save(args):
         run([*docker, "image", "save", "--output", output, pin], work)
         archive_id(output, pin, args.architecture)
         result[flavour] = {"path": output.name, "sha256": digest(output), "image_id": pin}
-    work.write("flavours.json", json.dumps(result, indent=2) + "\n")
+    work.write("flavours.json", json.dumps({"flavours": result, "docker_driver": driver,
+               "docker": {"path": str(source), "sha256": checksum, "version": version}}, indent=2) + "\n")
 
 
 def stage(lock, lock_path, work):
@@ -211,7 +221,7 @@ def stage(lock, lock_path, work):
 
 
 def disk_info(tool, disk, lock, work):
-    value = json.loads(run([tool, "info", "--output=json", disk], work))
+    value = json.loads(run([tool, "info", "-f", "qcow2", "--output=json", disk], work))
     require(value.get("format") == "qcow2" and not value.get("backing-filename")
             and not value.get("full-backing-filename") and not value.get("encrypted")
             and not value.get("format-specific", {}).get("data", {}).get("data-file")
@@ -250,6 +260,7 @@ def finalize(lock, work, tools):
             for block in iter(lambda: stream.read(1024 * 1024), b""):
                 combined.update(block)
     manifest = {"schema": 1, "status": "assembled-not-boot-validated", "inputs": lock,
+                "runner_closure": "operator-pinned, not recorded",
                 "outputs": hashes, "incus_fingerprint": combined.hexdigest(), "tools": tools,
                 "builder_sha256": digest(Path(__file__)), "python": platform.python_version()}
     work.write("manifest.json", json.dumps(manifest, sort_keys=True, indent=2) + "\n")
@@ -267,7 +278,9 @@ def build(args):
         return
     tools, paths = {}, {}
     for name, record in lock["tools"].items():
-        path = checked_asset(record, lock_path.parent)
+        source = checked_asset(record, lock_path.parent)
+        path = work.copy(source, name, record["sha256"])
+        path.chmod(0o700)
         version = run([path, "--version"], work).decode().strip()
         require(version == record["version"], "builder tool version mismatch")
         tools[name], paths[name] = {"version": version, "sha256": digest(path)}, path
@@ -289,6 +302,8 @@ def build(args):
             "guest preload inventory differs from lock")
     require(all(inventory["packages"].get(p["name"]) == p["version"] for p in lock["packages"]),
             "guest package versions differ from lock")
+    require(inventory["machine_id_state"] in ("", "uninitialized"), "guest machine identity not cleaned")
+    require(inventory["ssh_host_keys"] == [], "guest SSH host keys not cleaned")
     disk_info(paths["qemu-img"], disk, lock, work)
     finalize(lock, work, tools)
 
@@ -305,6 +320,7 @@ def main(argv=None):
     parser.add_argument("--work-dir", type=Path)
     parser.add_argument("--lock", type=Path)
     parser.add_argument("--docker-host")
+    parser.add_argument("--docker", type=Path)
     parser.add_argument("--architecture", choices=("x86_64", "aarch64"), default="x86_64")
     for flavour in FLAVOURS:
         parser.add_argument("--" + flavour + "-image")
@@ -324,5 +340,7 @@ def main(argv=None):
 if __name__ == "__main__":
     try:
         main()
-    except (RuntimeError, OSError, EOFError, ValueError, KeyError, TypeError, tarfile.TarError, subprocess.SubprocessError):
+    except RuntimeError as error:
+        sys.exit(str(error))  # require() messages are fixed, never supplied values.
+    except (OSError, EOFError, ValueError, KeyError, TypeError, tarfile.TarError, subprocess.SubprocessError):
         sys.exit("Image pipeline refused or failed; no complete manifest was produced. Consult the local lock and runner prerequisites.")

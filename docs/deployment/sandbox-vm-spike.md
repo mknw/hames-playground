@@ -80,6 +80,10 @@ boot compatibility still require a disposable Linux runner. Full Docker
 config IDs (`sha256:` plus 64 lowercase hex characters) are also accepted by
 the image flags below, alongside registry `name@sha256` references. Use the
 config ID from `docker image inspect .Id`, never the saved tar's checksum.
+The builder's config-ID/save/load contract requires Docker's **classic image
+store**; save and customization refuse containerd snapshotters by name. Compare
+the boot daemon's `docker info --format '{{.Driver}}'` with the driver recorded
+in `guest-inventory.json` as part of the owed Linux boot check.
 
 Prepare these locally on the target host before the live window. Do not put
 their values in an issue, commit, shell transcript or public result.

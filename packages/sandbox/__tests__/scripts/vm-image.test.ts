@@ -14,5 +14,7 @@ describe('VM image offline stages', () => {
       })
       expect(result.status, result.stdout + result.stderr).toBe(0)
     },
+    // The expanded per-mutation child matrix exceeds Vitest's 5 s default.
+    60_000,
   )
 })

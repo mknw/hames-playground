@@ -34,7 +34,7 @@ import {
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { GraphAuthRequiredError } from '@hames-ai/connectors/graph/graph-auth'
 import {
-  assertReadOnlyGraphScopes,
+  assertConsentedGraphScopes,
   buildEntraConfig,
   msalConfiguration,
 } from './entra-config.server'
@@ -72,7 +72,7 @@ export async function getUserGraphToken(
   userId: string,
   scopes: readonly string[] = DEFAULT_GRAPH_SCOPES,
 ): Promise<string> {
-  assertReadOnlyGraphScopes(scopes)
+  assertConsentedGraphScopes(scopes)
   const stored = await loadUserTokenCache(userId)
   if (!stored) {
     throw new GraphAuthRequiredError(

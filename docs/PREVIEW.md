@@ -468,31 +468,25 @@ https://<APP_DOMAIN>/auth/signin
 `entra-config.server.ts:40`). Front-channel logout with the v2 endpoint needs no
 separate registration.
 
-**c. Consent every delegated Graph scope, before anyone signs in.** _API
-permissions → Microsoft Graph → Delegated_: `User.Read`, `email`, `Mail.Read`,
-`Calendars.Read`, `Files.Read.All`, `Sites.Read.All`, then
-**Grant admin consent**. The full set is requested at sign-in
-(`DEFAULT_GRAPH_SCOPES`, `entra-config.server.ts`), and **a scope that is
-requested but not consented fails the entire sign-in**, not just the connector
-that wanted it. If a scope turns out to be blocked, trim it via
-`AZURE_GRAPH_SCOPES` in `.env` and restart — no code change. Only subsets of the six read scopes are accepted (case-insensitive); all other
-scopes, including delegated `.default`, refuse boot and delegated token minting.
+**c. Keep the already-consented delegated Graph scopes.** _API permissions →
+Microsoft Graph → Delegated_: `User.Read`, `email`, `Mail.Read`, `Mail.Send`,
+`Calendars.ReadWrite`, `Files.Read.All`, `Sites.Read.All`. MSAL also supplies
+`openid`, `profile`, `offline_access`; keep their consent for background refresh.
+The full set is requested at sign-in (`DEFAULT_GRAPH_SCOPES`), and **a requested
+scope without consent fails the entire sign-in**. With user consent disabled,
+adding `Calendars.Read` causes “Approval required” even though the existing
+`Calendars.ReadWrite` permission already covers the calendar reader.
 
-Keep the same app registration and client id; the owner adds only the new
-redirect URI there. Complete both owner steps for old write permissions:
+`AZURE_GRAPH_SCOPES` may trim only this seven-scope set (case-insensitive);
+all other scopes, including `Calendars.Read` and delegated `.default`, refuse
+boot and delegated token minting. Keep the same registration/client id and add
+only the redirect URI. The owner is no longer asked to remove `Mail.Send` or
+`Calendars.ReadWrite` or revoke their existing grants. Leave application
+permissions (the roster read) unchanged.
 
-1. **App registrations → the app → API permissions:** remove `Mail.Send` and
-   `Calendars.ReadWrite` (Microsoft Graph, Delegated).
-2. **Revoke their existing admin grant** under **Other permissions granted for
-   <tenant>** or **Enterprise applications → the app → Permissions**. Also revoke
-   any per-user consent grants; removing configured permissions alone is insufficient.
-
-Keep `User.Read`, `email`, `Mail.Read`, `Calendars.Read`, `Files.Read.All`,
-`Sites.Read.All`, **`openid`, `profile`, `offline_access`**. MSAL supplies the last
-three in its request; `offline_access` enables background refresh. If revocation
-removes the whole grant, regrant only this retained set. Leave application
-permissions (the roster read) unchanged. Existing access tokens retain their old
-permissions until expiry; follow the [fresh-token verification](deployment/entra-setup.md#remove-the-old-write-permissions-in-entra).
+The app requests `Mail.Send` and `Calendars.ReadWrite` but ships no Graph write
+tool; requesting these scopes adds no write tool. HITL write gating stays
+Neo4j-only. See the [consent runbook](deployment/entra-setup.md#keep-the-consented-permissions-in-entra).
 
 Also confirm the client secret in `.env` is the secret **value**, not its id, and
 note its expiry somewhere you will see it.

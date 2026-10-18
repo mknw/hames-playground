@@ -20,7 +20,7 @@ Nine registered `graph` tools. All of them only ever **read** from Microsoft 365
 | Tool                     | Reads                                                                         | Scope used                          |
 | ------------------------ | ----------------------------------------------------------------------------- | ----------------------------------- |
 | `graph_me`               | own profile (name, UPN, job title, office)                                    | `User.Read`                         |
-| `graph_calendar_today`   | own calendar for a given day (`day_offset`)                                   | `Calendars.Read`                    |
+| `graph_calendar_today`   | own calendar for a given day (`day_offset`)                                   | `Calendars.ReadWrite`               |
 | `graph_mail_recent`      | own inbox, newest first, optional `unread_only`                               | `Mail.Read`                         |
 | `graph_mail_attachments` | own sent/received mail carrying attachments, by person/date                   | `Mail.Read`                         |
 | `graph_files_search`     | files across own OneDrive **and** every reachable SharePoint site             | `Files.Read.All` + `Sites.Read.All` |
@@ -44,12 +44,15 @@ ingest a file, get a document id, and be unable to read a word of it. Search and
 browse are the half of the file story that works without a retriever. An agent
 that _does_ compose a retriever should compose the ingest tool too.
 
-**Scopes and writes.** Sign-in requests only the read scopes the shipped tools
-need. `graph_calendar_today` requests `Calendars.Read`; no mail-send or calendar-write
-tool is registered. Write approval is currently limited to Neo4j (owner ruling
-#669). Existing `Mail.Send` and `Calendars.ReadWrite` consents on the reused
-registration remain granted until the owner removes the configured permissions and revokes admin and per-user grants in Entra — see the
-[setup runbook](deployment/entra-setup.md#remove-the-old-write-permissions-in-entra).
+**Scopes and writes.** Sign-in requests the seven already-consented scopes:
+`User.Read`, `email`, `Mail.Read`, `Mail.Send`, `Calendars.ReadWrite`,
+`Files.Read.All`, `Sites.Read.All`; MSAL adds `openid`/`profile`/`offline_access`.
+`graph_calendar_today` uses `Calendars.ReadWrite` for reads. The app requests
+`Mail.Send` and `Calendars.ReadWrite` but ships no Graph write tool; requesting
+these scopes adds no write tool. HITL write gating stays Neo4j-only. The owner
+is no longer asked to remove those permissions or revoke their grants. The shared
+boot/mint allowlist permits only the consented set, including those two scopes;
+see the [setup runbook](deployment/entra-setup.md#keep-the-consented-permissions-in-entra).
 
 ---
 

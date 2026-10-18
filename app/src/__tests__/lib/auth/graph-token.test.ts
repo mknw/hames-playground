@@ -91,19 +91,28 @@ beforeEach(() => {
 describe('getUserGraphToken', () => {
   // Mutation: remove the mint assertion; refusal and no-I/O checks must turn red.
   it.each([
-    'Mail.Send',
+    'Calendars.Read',
+    'Mail.ReadWrite',
     'Sites.Manage.All',
     '.default',
     'https://graph.microsoft.com/.default',
     'Unknown.Read',
-    'mail.sEND',
+    'mail.readWRITE',
   ])('refuses %s before reading the token cache or invoking MSAL', async (scope) => {
     await expect(getUserGraphToken(USER, ['User.Read', scope])).rejects.toThrow(
-      /not in the read-only set/,
+      /not in the consented set/,
     )
     expect(loadUserTokenCache).not.toHaveBeenCalled()
     expect(acquireTokenSilent).not.toHaveBeenCalled()
   })
+
+  it.each(['Mail.Send', 'Calendars.ReadWrite', 'mail.sEND', 'calendars.READWRITE'])(
+    'allows the already-consented scope %s at the delegated mint',
+    async (scope) => {
+      await expect(getUserGraphToken(USER, [scope])).resolves.toBe('tok-abc')
+      expect(acquireTokenSilent).toHaveBeenCalledWith(expect.objectContaining({ scopes: [scope] }))
+    },
+  )
 
   it("returns a delegated token and rehydrates the user's cache", async () => {
     await expect(getUserGraphToken(USER)).resolves.toBe('tok-abc')
@@ -175,12 +184,12 @@ describe('getUserGraphToken', () => {
 })
 
 describe('graphFetch', () => {
-  it('refuses a send request before MSAL or HTTP', async () => {
+  it('refuses an unconsented request before MSAL or HTTP', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
-    await expect(
-      graphFetch(USER, '/me/sendMail', { method: 'POST', scopes: ['Mail.Send'] }),
-    ).rejects.toThrow(/not in the read-only set/)
+    await expect(graphFetch(USER, '/me/messages', { scopes: ['Mail.ReadWrite'] })).rejects.toThrow(
+      /not in the consented set/,
+    )
     expect(loadUserTokenCache).not.toHaveBeenCalled()
     expect(acquireTokenSilent).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()

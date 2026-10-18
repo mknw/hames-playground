@@ -1537,23 +1537,18 @@ stage_hostname() {
        Keep the existing entries (dev's localhost URI included).
     b. Sign-out needs no registration: AUTH_POST_LOGOUT_REDIRECT_URI is set
        to https://$h/auth/signin in .env by this stage.
-    c. API permissions -> Microsoft Graph -> Delegated: User.Read, email,
-       Mail.Read, Calendars.Read, Files.Read.All,
-       Sites.Read.All, openid, profile, offline_access -> Grant admin consent.
-       A requested scope without consent fails the WHOLE sign-in
-       (trim with AZURE_GRAPH_SCOPES).
-       Keep the same registration/client id. Complete BOTH steps:
-       1. App registrations -> app -> API permissions: remove Mail.Send and
-          Calendars.ReadWrite (Microsoft Graph, Delegated).
-       2. Revoke their admin grant under Other permissions granted for <tenant>
-          or Enterprise applications -> app -> Permissions. Revoke per-user
-          consent grants too; removing configured permissions does not revoke consent.
-       If the whole grant is revoked, regrant only the retained set above.
-       Keep openid/profile/offline_access; offline_access enables background refresh.
-       Leave application permissions (roster read) unchanged.
-       Overrides may only trim the six read scopes; other scopes refuse boot/mint.
-       Old access tokens retain permissions until expiry; verify a fresh token's
-       scp locally after revocation/sign-in (never log/publish the token).
+    c. Keep the consented Microsoft Graph delegated set: User.Read, email,
+       Mail.Read, Mail.Send, Calendars.ReadWrite, Files.Read.All, Sites.Read.All.
+       MSAL adds openid/profile/offline_access; keep their consent for background refresh.
+       A requested scope without consent fails the WHOLE sign-in.
+       Keep the same registration/client id and existing consent grants.
+       The owner is no longer asked to remove Mail.Send/Calendars.ReadWrite
+       or revoke their grants. Leave application permissions (roster read) unchanged.
+       Overrides may only trim these seven scopes; other scopes, including
+       Calendars.Read and delegated .default, refuse boot/mint.
+       Calendars.ReadWrite covers calendar reads. The app requests Mail.Send
+       and Calendars.ReadWrite but ships no Graph write tool; requesting these
+       scopes adds no write tool. HITL write gating stays Neo4j-only.
     d. AZURE_CLIENT_SECRET must be the secret VALUE, not its id; note its expiry.
 EOF
 }

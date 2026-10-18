@@ -30,16 +30,19 @@ Three-sentence answer:
    per-agent scoping, no rate limit, and no audit. What that buys today, stated
    precisely: **read access to the victim's mailbox, calendar and files** (all
    nine registered `graph` tools read — `graph_calendar_today` calls
-   `/me/calendarView` with `Calendars.Read`, and
+   `/me/calendarView` with `Calendars.ReadWrite`, and
    `graph_files_search`'s POST is a Microsoft Search query), plus **execution
    under the org's own shared credentials** (Neo4j, filesystem, the GitHub org
    token, the sandbox), plus **unmetered LLM spend**. It does _not_ buy mailbox
-   or calendar writes, because no registered Graph tool writes. The owner ruling
-   (#669) removes `Mail.Send` and `Calendars.ReadWrite` from the sign-in
-   request. The shared [delegated token-mint allowlist](../../app/src/lib/auth/graph-token.server.ts)
-   refuses unapproved scope requests before reading the stored refresh-token cache,
-   so a newly registered write tool cannot silently acquire `Mail.Send`. Existing grants
-   remain until the owner removes configured permissions and revokes admin and per-user grants in Entra; see the [setup runbook](../deployment/entra-setup.md#remove-the-old-write-permissions-in-entra).
+   or calendar writes, because no registered Graph tool writes. Sign-in requests the
+   already-consented `Mail.Send` and `Calendars.ReadWrite` scopes, but requesting
+   them adds no write tool; HITL write gating stays Neo4j-only. The shared
+   [delegated token-mint allowlist](../../app/src/lib/auth/graph-token.server.ts)
+   permits those scopes and refuses scopes outside the consented set before
+   reading the stored cache. A future registered Graph writer could silently
+   acquire those consented scopes; the allowlist is not a read-only permission
+   boundary. The owner is no longer asked to remove the restored permissions or
+   revoke their grants; see the [setup runbook](../deployment/entra-setup.md#keep-the-consented-permissions-in-entra).
    Even without writes,
    **stealing this string is strictly better for an attacker than stealing the
    refresh token it fronts**, because it needs no encryption key, no database

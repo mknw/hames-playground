@@ -229,6 +229,110 @@ args, baseEnv?)` prepares child argv/env. These server-only helpers are shared b
 the backend and PTY; ordinary consumers configure the environment and keep using
 `DockerBackend` or `withSandbox`. No new root-entry export is added.
 
+### Incus environment VMs (operator opt-in)
+
+`createIncusEnvironment` provisions **one VM per environment**, with Docker still
+providing the individual sandboxes. It is an operator-side, server-only API;
+import it from `@hames-ai/sandbox` or
+`@hames-ai/sandbox/incus-environment.server`. It does not depend on the app.
+Existing Docker deployments keep their current behavior until explicitly opted in.
+
+```typescript
+import { createIncusEnvironment } from '@hames-ai/sandbox'
+import { readFile } from 'node:fs/promises'
+
+const ca = await readFile('/operator-private/incus-ca.pem', 'utf8')
+const cert = await readFile('/operator-private/incus-cert.pem', 'utf8')
+const key = await readFile('/operator-private/incus-key.pem', 'utf8')
+const imageFingerprint = 'a'.repeat(64) // replace with your verified image digest
+
+const environment = createIncusEnvironment({
+  environment: 'preview', // owns only the project sandbox-preview
+  manager: { url: 'https://incus.example.test:8443', ca, cert, key }, // PEM strings
+  bridge: 'previewbr', // dedicated, operator-created managed bridge
+  address: '10.77.0.2', // reserve this guest IPv4 on that bridge
+  storagePool: 'sandbox-pool',
+  image: {
+    server: 'https://images.example.test', // HTTPS simplestreams origin
+    fingerprint: imageFingerprint, // pinned 64-character SHA-256
+  },
+  quota: { cpu: 2, memoryMiB: 2048, diskGiB: 24, rootDiskGiB: 16 },
+  stateDirectory: '/operator-private/sandbox-preview', // parent must exist
+})
+const { project, dockerEnv } = await environment.reconcile()
+// Deliver only dockerEnv and its three files to this environment's app.
+// Remap file paths in dockerEnv if the app runs in a container.
+// Wait for the Docker TLS endpoint to become ready before starting the app.
+// Later, from the operator process:
+await environment.teardown()
+```
+
+The Incus server must support every configured restriction (tested with 7.0 LTS;
+6.0 rejects `restricted.images.servers` and is refused). The operator supplies an Incus HTTPS manager certificate permitted to create
+projects and register certificates, a bridge, a storage pool and a pinned VM
+image. The image must already contain **Docker (`/usr/bin/dockerd`), systemd,
+cloud-init and the Incus VM agent**, and support `cloud-init.user-data`; arbitrary
+OCI images cannot boot as Incus VMs. Installing the host, preparing images,
+loading the four `kg-sandbox` images into the guest, bridge routing, firewall
+coexistence with Docker, and nested-KVM measurements belong to the operator's
+scripts and runbook. No installation or firewall change happens on import or
+controller creation. Node 22+ and `openssl` on the operator machine are required.
+
+`reconcile()` creates a restricted `sandbox-<environment>` project, then verifies
+its restrictions on every call. Containers are disabled, one VM is allowed,
+CPU/memory/disk totals are explicit, and host devices, snapshots, backups and
+low-level VM settings are blocked. Root storage and the selected managed NIC are
+the necessary exceptions. Both network access and image-server allowlists are
+nonempty. It registers a separate restricted Incus client certificate confined to
+exactly that project, verifies the registered scope, and uses **that certificate**
+for instance operations. The manager credential is never sent to the guest.
+
+Cloud-init writes a per-environment Docker CA/server certificate, configures
+`tlsverify`, and binds the daemon **only** to the reserved guest IPv4 on the
+Incus bridge at port 2376. It disables socket activation and replaces Docker's
+inherited `-H fd://` command. The app receives the CA certificate and Docker
+client certificate/key as absolute-file settings understood by the existing
+backend, MCP streams and PTY. The app has root-equivalent authority inside its
+own disposable environment VM. It receives **neither** the Incus manager nor
+the project certificate, Docker server key or CA private key. An operator that
+chooses to call the provisioner inside the app explicitly supplies that stronger
+credential through `manager`; doing so broadens the app's authority.
+
+State and private keys stay in `stateDirectory` (0700; keys 0600). Keep this
+operator-only directory across restarts, out of source control, logs and app
+mounts. Serialize controllers using the same directory; concurrency across
+processes is the operator's responsibility. Credentials are valid for 365 days;
+rotation is an explicit teardown/reprovision operation. Failed reconciliation
+keeps owned resources and state for retry or teardown. An interrupted initial
+key generation may require operator recovery of the incomplete local directory.
+Transport/API errors omit response bodies, credential values and underlying TLS
+errors, and never retry through plaintext or a different origin.
+
+A slow image pull is recorded as an Incus operation in the private state directory;
+retrying reconcile resumes it before submitting another create. Teardown also waits
+for that create and handles completed operations that Incus has expired.
+
+Repeated reconcile verifies ownership/configuration and starts a stopped VM;
+it refuses drift rather than silently rebuilding a running environment. A
+successful return means Incus accepted creation/start, **not** cloud-init or
+Docker readiness. `teardown()` is idempotent, checks ownership, stops/deletes only
+the named instance, removes its pinned cached image and empty default profile,
+deletes the project without force, and revokes only its exact restricted
+certificate. Incus clears a certificate's project references on project deletion;
+an empty scope is accepted only for that final revocation, never for provisioning
+or instance access. Unexpected resources block project deletion. Shared bridges/pools
+are never deleted, and local keys remain for operator disposal. This API does
+not establish firewall isolation from host services or other bridges: prove that
+separately before routing an app to the guest.
+
+In the repository compose deployment, opt in with
+`-f docker-compose.yaml -f docker-compose.sandbox-vm.yaml` (put this overlay last;
+Compose 2.24.4+). Supply the four `SANDBOX_DOCKER_*` settings in the compose
+process environment. The overlay **replaces** the app's mount list, drops its
+host socket and mounts only the three Docker client files read-only. Adapt any
+other app mounts explicitly. The MCP gateway's own socket remains out of scope.
+No compose defaults change without this overlay.
+
 ### Multiple app clones on one Docker daemon
 
 Set a distinct `SANDBOX_ENVIRONMENT` in each app (for example `release` and
@@ -314,19 +418,19 @@ What each image contains: [rootfs/README.md](https://github.com/mknw/hames-playg
 
 ### Exports
 
-| Subpath                      | What lives there                                                                                  | Browser-safe?                                  |
-| ---------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| `.` (root entry point)       | `withSandbox`, `DockerBackend`, `getComputeBackend`, the compute types, `configureWorkspaceStore` | **no** — server-only, pulls the Docker backend |
-| `./types`                    | `ComputeBackend` / `VMHandle` / `RuntimeConfig` / …, `SANDBOX_TOOL_PREFIX`, `V0_IN_VM_SERVERS`    | yes — types + constants, no `node:` imports    |
-| `./settings`                 | `SandboxSettings` + `DEFAULT_SANDBOX_SETTINGS` (the caps and per-call defaults)                   | yes — same rule                                |
-| `./guard` (= `./bash-guard`) | `screenBashCommand` / `bashGuardPolicyFromEnv` — the shell-command screen                         | yes                                            |
-| `./egress-policy`            | the three selectable egress profiles and the per-boot network naming                              | yes                                            |
-| `./skills`                   | `SandboxSkill`, the skill limits and checks (`isSkillName`, `isSkillDescription`), the index text | yes                                            |
-| `./workspace-store`          | `configureWorkspaceStore(...)` — where you plug in storage for `/work` files                      | server                                         |
-| `./with-sandbox.server`      | the wrapper itself, for code that skips the root entry point                                      | server                                         |
-| `./pty-manager.server`       | an interactive terminal into a running container (uses `node-pty`, see Troubleshooting)           | server                                         |
-| `./docker-connection.server` | Endpoint validation and child invocation shared by backend, MCP and PTY                           | server                                         |
-| `./docker-backend.server`    | the Docker compute backend                                                                        | server                                         |
+| Subpath                      | What lives there                                                                                                            | Browser-safe?                                  |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `.` (root entry point)       | `withSandbox`, `DockerBackend`, `getComputeBackend`, `createIncusEnvironment`, the compute types, `configureWorkspaceStore` | **no** — server-only, pulls the Docker backend |
+| `./types`                    | `ComputeBackend` / `VMHandle` / `RuntimeConfig` / …, `SANDBOX_TOOL_PREFIX`, `V0_IN_VM_SERVERS`                              | yes — types + constants, no `node:` imports    |
+| `./settings`                 | `SandboxSettings` + `DEFAULT_SANDBOX_SETTINGS` (the caps and per-call defaults)                                             | yes — same rule                                |
+| `./guard` (= `./bash-guard`) | `screenBashCommand` / `bashGuardPolicyFromEnv` — the shell-command screen                                                   | yes                                            |
+| `./egress-policy`            | the three selectable egress profiles and the per-boot network naming                                                        | yes                                            |
+| `./skills`                   | `SandboxSkill`, the skill limits and checks (`isSkillName`, `isSkillDescription`), the index text                           | yes                                            |
+| `./workspace-store`          | `configureWorkspaceStore(...)` — where you plug in storage for `/work` files                                                | server                                         |
+| `./with-sandbox.server`      | the wrapper itself, for code that skips the root entry point                                                                | server                                         |
+| `./pty-manager.server`       | an interactive terminal into a running container (uses `node-pty`, see Troubleshooting)                                     | server                                         |
+| `./docker-connection.server` | Endpoint validation and child invocation shared by backend, MCP and PTY                                                     | server                                         |
+| `./docker-backend.server`    | the Docker compute backend                                                                                                  | server                                         |
 
 **The root entry point is server-only and it pulls Docker with it**, because
 `withSandbox` constructs a `DockerBackend` by default. Browser code imports

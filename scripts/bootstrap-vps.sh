@@ -307,6 +307,7 @@ owner_missing() {
   local entry key v
   for entry in "${OWNER_REQUIRED[@]}"; do
     key=${entry%%|*}
+    [[ $key == ANTHROPIC_API_KEY && "$(env_get INFERENCE_TIERS)" == private ]] && continue
     v=$(env_get "$key")
     # The template's allow-list is the contoso placeholder, not a real list.
     if [[ -z $v || ($key == VITE_ALLOWED_EMAILS && $v == '*@contoso.com') ]]; then
@@ -361,13 +362,20 @@ if not valid:
 # env_problems — docs/PREVIEW.md §6's shared preflight, plus the rest of what a
 # boot needs from .env. One line per problem; nothing printed means clean.
 env_problems() {
-  local k n=0 v
+  local k n=0 v tiers
+  tiers=$(env_get INFERENCE_TIERS)
   grep -q 'example\.com' "$ENV_FILE" && printf '%s\n' ".env still carries an example.com placeholder (§6: grep -n 'example\\.com' .env)"
   for k in AUTH_SESSION_SECRET TOKEN_ENCRYPTION_KEY DATA_ENCRYPTION_KEY ANTHROPIC_API_KEY \
     POSTGRES_PASSWORD NEO4J_PASSWORD; do
+    [[ $k == ANTHROPIC_API_KEY && $tiers == private ]] && continue
     [[ -n "$(env_get "$k")" ]] || printf '%s\n' "$k is empty"
   done
+  case $tiers in
+    private|'') ;;
+    *) printf '%s\n' "INFERENCE_TIERS must be unset or private" ;;
+  esac
   for k in "${PRIVATE_TIER_REQUIRED[@]}"; do [[ -n "$(env_get "$k")" ]] && n=$((n + 1)); done
+  [[ $tiers == private && $n -ne ${#PRIVATE_TIER_REQUIRED[@]} ]] && printf '%s\n' "INFERENCE_TIERS=private requires all of ${PRIVATE_TIER_REQUIRED[*]}"
   if ((n != 0 && n != ${#PRIVATE_TIER_REQUIRED[@]})); then
     printf '%s\n' "private tier: $n of ${PRIVATE_TIER_REQUIRED[*]} set — all five or none (a partial tier is refused at run time)"
   fi
@@ -1411,9 +1419,22 @@ stage_hostname() {
     b. Sign-out needs no registration: AUTH_POST_LOGOUT_REDIRECT_URI is set
        to https://$h/auth/signin in .env by this stage.
     c. API permissions -> Microsoft Graph -> Delegated: User.Read, email,
-       Mail.Read, Mail.Send, Calendars.ReadWrite, Files.Read.All,
-       Sites.Read.All -> Grant admin consent. A requested scope that is not
-       consented fails the WHOLE sign-in (trim with AZURE_GRAPH_SCOPES).
+       Mail.Read, Calendars.Read, Files.Read.All,
+       Sites.Read.All, openid, profile, offline_access -> Grant admin consent.
+       A requested scope without consent fails the WHOLE sign-in
+       (trim with AZURE_GRAPH_SCOPES).
+       Keep the same registration/client id. Complete BOTH steps:
+       1. App registrations -> app -> API permissions: remove Mail.Send and
+          Calendars.ReadWrite (Microsoft Graph, Delegated).
+       2. Revoke their admin grant under Other permissions granted for <tenant>
+          or Enterprise applications -> app -> Permissions. Revoke per-user
+          consent grants too; removing configured permissions does not revoke consent.
+       If the whole grant is revoked, regrant only the retained set above.
+       Keep openid/profile/offline_access; offline_access enables background refresh.
+       Leave application permissions (roster read) unchanged.
+       Overrides may only trim the six read scopes; other scopes refuse boot/mint.
+       Old access tokens retain permissions until expiry; verify a fresh token's
+       scp locally after revocation/sign-in (never log/publish the token).
     d. AZURE_CLIENT_SECRET must be the secret VALUE, not its id; note its expiry.
 EOF
 }

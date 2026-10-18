@@ -62,7 +62,7 @@ describe('graph_calendar_today', () => {
     expect(path).toContain('/me/calendarView') // expands recurring series
     expect(path).toContain('startDateTime=')
     expect(path).toContain('$orderby=start/dateTime')
-    expect(init.scopes).toEqual(['Calendars.ReadWrite'])
+    expect(init.scopes).toEqual(['Calendars.Read'])
     expect(init.headers?.Prefer).toMatch(/^outlook\.timezone="/)
   })
 

@@ -41,7 +41,8 @@ vi.mock('@azure/msal-node', () => ({
   InteractionRequiredAuthError: FakeInteractionRequiredAuthError,
 }))
 
-vi.mock('../../../lib/auth/entra-config.server', () => ({
+vi.mock('../../../lib/auth/entra-config.server', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../lib/auth/entra-config.server')>()),
   buildEntraConfig: () => ({
     tenantId: 't',
     clientId: 'c',
@@ -88,6 +89,22 @@ beforeEach(() => {
 })
 
 describe('getUserGraphToken', () => {
+  // Mutation: remove the mint assertion; refusal and no-I/O checks must turn red.
+  it.each([
+    'Mail.Send',
+    'Sites.Manage.All',
+    '.default',
+    'https://graph.microsoft.com/.default',
+    'Unknown.Read',
+    'mail.sEND',
+  ])('refuses %s before reading the token cache or invoking MSAL', async (scope) => {
+    await expect(getUserGraphToken(USER, ['User.Read', scope])).rejects.toThrow(
+      /not in the read-only set/,
+    )
+    expect(loadUserTokenCache).not.toHaveBeenCalled()
+    expect(acquireTokenSilent).not.toHaveBeenCalled()
+  })
+
   it("returns a delegated token and rehydrates the user's cache", async () => {
     await expect(getUserGraphToken(USER)).resolves.toBe('tok-abc')
     expect(cacheState.deserialize).toHaveBeenCalledWith('{"cache":"stored"}')
@@ -158,6 +175,17 @@ describe('getUserGraphToken', () => {
 })
 
 describe('graphFetch', () => {
+  it('refuses a send request before MSAL or HTTP', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(
+      graphFetch(USER, '/me/sendMail', { method: 'POST', scopes: ['Mail.Send'] }),
+    ).rejects.toThrow(/not in the read-only set/)
+    expect(loadUserTokenCache).not.toHaveBeenCalled()
+    expect(acquireTokenSilent).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('attaches the bearer token and returns parsed JSON', async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,

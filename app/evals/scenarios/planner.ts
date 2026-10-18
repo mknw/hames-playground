@@ -193,7 +193,7 @@ const INTENT =
 const CONTEXT = 'The graph is a knowledge graph of documents and the entities mentioned in them.'
 
 async function evaluatePlan(ctx: ScenarioContext, client: string, registry?: ClientRegistry) {
-  const { b } = await import('@hames-ai/harness-baml/baml_client')
+  const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
   const collector = new Collector('eval-planner')
   const thinking = client === 'VerdaQwenThink'
   const opts = {
@@ -359,7 +359,7 @@ export const plannerScenario: Scenario = {
     const n = Number(process.env.EVAL_PLANNER_N ?? 20)
     if (!Number.isSafeInteger(n) || n < 1)
       throw new Error('EVAL_PLANNER_N must be a positive integer')
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     const collector = new Collector('eval-planner-template')
     const opts = ctx.opts('planner', collector)
     const template = await b.request.PlannerThinking(REQUEST, INTENT, TOOLS, CONTEXT, opts)

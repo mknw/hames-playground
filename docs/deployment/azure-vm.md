@@ -178,16 +178,16 @@ published port to loopback, and change the default passwords:
 # /opt/hames/docker-compose.override.yml  (production)
 services:
   postgres:
-    ports: ["127.0.0.1:5432:5432"]
-    environment: ["POSTGRES_PASSWORD=<STRONG_PW>"]
+    ports: ['127.0.0.1:5432:5432']
+    environment: ['POSTGRES_PASSWORD=<STRONG_PW>']
   neo4j:
-    environment: ["NEO4J_AUTH=neo4j/<STRONG_PW>"]
+    environment: ['NEO4J_AUTH=neo4j/<STRONG_PW>']
   neo4j-relay:
-    ports: ["127.0.0.1:7474:7474", "127.0.0.1:7687:7687"]
+    ports: ['127.0.0.1:7474:7474', '127.0.0.1:7687:7687']
   redis:
-    ports: ["127.0.0.1:6379:6379"]
+    ports: ['127.0.0.1:6379:6379']
   mcp-gateway:
-    ports: ["127.0.0.1:8811:8811"]
+    ports: ['127.0.0.1:8811:8811']
   # (drop the arm64 `platform: linux/amd64` override — you're on x86 now)
 ```
 
@@ -321,7 +321,7 @@ Every var the server reads (`grep process.env src/`), with its localhost default
 | `TOKEN_ENCRYPTION_KEY`                                                    | encrypts the per-user MSAL token cache at rest (#110)                  | HKDF-derived from `AUTH_SESSION_SECRET` when unset; **set it explicitly in prod** so the two can rotate independently                   |
 | `DATA_ENCRYPTION_KEY`                                                     | **Required** — encrypts stored conversations and personal data at rest | `openssl rand -base64 32`. No fallback, by design. See the escrow warning below                                                         |
 | `AUTH_REDIRECT_URI` / `AUTH_POST_LOGOUT_REDIRECT_URI`                     | OIDC redirect / post-logout URIs                                       | default to port **3444**; the redirect MUST match one registered on the app. Its origin gates every write (#455): **required in prod**  |
-| `AZURE_GRAPH_SCOPES`                                                      | override the delegated Graph scope set                                 | defaults to the full connector set; every scope must be consented under API permissions **first**, or sign-in fails                     |
+| `AZURE_GRAPH_SCOPES`                                                      | override the delegated Graph scope set                                 | subsets of the six read defaults only; other scopes refuse boot/token mint; consent required — see [`entra-setup.md`](entra-setup.md)   |
 | `VITE_ALLOWED_EMAILS`                                                     | email allow-list for real auth                                         | comma-separated; supports `*@domain.com`                                                                                                |
 | `VITE_DEV_BYPASS_AUTH`                                                    | skips sign-in entirely                                                 | `'true'` in `.env.example`. **Must be `'false'` in prod** — and note the name: `DEV_BYPASS_AUTH` (no `VITE_` prefix) is read by nothing |
 

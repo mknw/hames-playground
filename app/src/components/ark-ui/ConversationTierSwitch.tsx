@@ -105,6 +105,7 @@ export const ConversationTierSwitch = (props: ConversationTierSwitchProps) => {
   })
 
   const choose = (value: string) => {
+    if (value === 'anthropic' && state()?.anthropicAvailable === false) return
     if (value !== 'verda' && value !== 'anthropic') return
     if (value === state()?.tier) return
     const sid = props.sessionId
@@ -190,6 +191,8 @@ export const ConversationTierSwitch = (props: ConversationTierSwitchProps) => {
                 </SegmentGroup.Item>
                 <SegmentGroup.Item
                   value="anthropic"
+                  disabled={s().anthropicAvailable === false}
+                  op={s().anthropicAvailable === false ? '50' : undefined}
                   flex="~"
                   items="center"
                   gap="1"
@@ -200,7 +203,11 @@ export const ConversationTierSwitch = (props: ConversationTierSwitchProps) => {
                   ring="2 transparent focus-within:ui-accent/40"
                   text={s().tier === 'anthropic' ? 'xs ui-accent' : 'xs ui-text-secondary'}
                   bg={s().tier === 'anthropic' ? 'ui-accent/10' : 'transparent hover:ui-bg-hover'}
-                  title={TIER_HINTS.anthropic}
+                  title={
+                    s().anthropicAvailable === false
+                      ? 'Anthropic is disabled: this deployment allows private inference only.'
+                      : TIER_HINTS.anthropic
+                  }
                 >
                   <span class={TIER_ICONS.anthropic} w="3.5" h="3.5" aria-hidden="true" />
                   <SegmentGroup.ItemText>{TIER_LABELS.anthropic}</SegmentGroup.ItemText>

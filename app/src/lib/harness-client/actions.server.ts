@@ -31,7 +31,12 @@ import {
 } from '../db/conversations.server'
 import { getAuthenticatedUser } from '../auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
-import { chooseConversationTier, resolveTier, verdaConfigured } from '../inference/tier.server'
+import {
+  chooseConversationTier,
+  privateInferenceOnly,
+  resolveTier,
+  verdaConfigured,
+} from '../inference/tier.server'
 import { getStoredInferenceTier } from '../db/user-prefs.server'
 import type { InferenceTier } from '../inference/config.server'
 
@@ -294,6 +299,8 @@ export interface ConversationTierState {
    *  its private position disabled rather than offering a choice the server
    *  refuses (and that `assertInferenceTier` would throw on). */
   verdaAvailable: boolean
+  /** Omitted on ordinary deployments to preserve the existing RPC response. */
+  anthropicAvailable?: boolean
 }
 
 /**
@@ -310,7 +317,11 @@ export async function getConversationTier(sessionId: string): Promise<Conversati
     dbGetConversationInferenceTier(sessionId, user.id),
     getStoredInferenceTier(user.id),
   ])
-  return { tier: resolveTier(stored, seed), verdaAvailable: verdaConfigured() }
+  return {
+    tier: resolveTier(stored, seed),
+    verdaAvailable: verdaConfigured(),
+    ...(privateInferenceOnly() ? { anthropicAvailable: false } : {}),
+  }
 }
 
 /**
@@ -330,7 +341,11 @@ export async function setConversationTier(
 ): Promise<ConversationTierState> {
   const user = await requireUser()
   const chosen = await chooseConversationTier(sessionId, user.id, tier)
-  return { tier: chosen, verdaAvailable: verdaConfigured() }
+  return {
+    tier: chosen,
+    verdaAvailable: verdaConfigured(),
+    ...(privateInferenceOnly() ? { anthropicAvailable: false } : {}),
+  }
 }
 
 // Replay helper extracted to a dependency-free module so it can be unit-tested

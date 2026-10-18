@@ -29,6 +29,7 @@
  */
 
 import { Collector } from '@boundaryml/baml'
+import { privateInferenceOnly, VERDA_CLIENT_BY_ROLE } from '@hames-ai/harness-baml/clients.server'
 import { resolveEvalRouting } from './client'
 import { runScenario, scenarioPassed, type Scenario, type ScenarioResult } from './harness'
 import { renderReport, writeReport } from './report'
@@ -103,7 +104,7 @@ function selected(): Scenario[] {
  * would prove the box is up without proving this key can complete on it.
  */
 async function preflight(client: string | undefined): Promise<void> {
-  const { b } = await import('@hames-ai/harness-baml/baml_client')
+  const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
   const collector = new Collector('eval-preflight')
   const opts = { collector, ...(client ? { client } : {}) }
   const t0 = Date.now()
@@ -139,7 +140,10 @@ async function main(): Promise<void> {
 
   // Decide-only runs must not wake a different model or call another provider.
   if (!thinkingPlanner && scenarios.some((s) => s.role !== 'decide'))
-    await preflight(routing.client)
+    await preflight(
+      routing.client ??
+        (privateInferenceOnly() && routing.byRole ? VERDA_CLIENT_BY_ROLE.critic : undefined),
+    )
 
   const t0 = Date.now()
   const results: ScenarioResult[] = []

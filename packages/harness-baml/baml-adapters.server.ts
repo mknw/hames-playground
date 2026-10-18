@@ -1044,7 +1044,7 @@ export function createLoopControllerAdapter(
     input: ControllerInput,
     passedCollector?: Collector,
   ): Promise<ControllerCallResult> => {
-    const { b } = await import('./baml_client')
+    const { b } = await import('./guarded-client.server')
     const startTime = Date.now()
 
     // Lane A3: the implementation owns the collector when the caller does not
@@ -1278,7 +1278,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
     context?: string,
     onRetry?: (failedCall: LLMCallRecord | undefined) => void,
   ): Promise<PlanCallResult> => {
-    const { b } = await import('./baml_client')
+    const { b } = await import('./guarded-client.server')
     const startTime = Date.now()
 
     // The implementation owns its collector (Lane A3) — the seam type carries
@@ -1517,7 +1517,7 @@ export function createActorControllerAdapter(
     input: ActorInput,
     passedCollector?: Collector,
   ): Promise<ControllerCallResult> => {
-    const { b } = await import('./baml_client')
+    const { b } = await import('./guarded-client.server')
     const startTime = Date.now()
 
     // Lane A3: the implementation owns the collector when the caller does not
@@ -1715,7 +1715,7 @@ export function createCriticAdapter(): CriticAdapterFn {
     previous_attempts: ScriptExecutionEvent[],
     passedCollector?: Collector,
   ): Promise<CriticCallResult> => {
-    const { b } = await import('./baml_client')
+    const { b } = await import('./guarded-client.server')
     const startTime = Date.now()
 
     // Lane A3: the implementation owns the collector when the caller does not
@@ -1786,7 +1786,7 @@ export async function describeToolResultOp(
   reasoning: string,
   result: string,
 ): Promise<string> {
-  const { b } = await import('./baml_client')
+  const { b } = await import('./guarded-client.server')
   return withUsageAccounting('ResultDescribe', (opts) =>
     b.ResultDescribe(tool, toolArgs, reasoning, result, {
       ...clientOverrideFor('describe'),
@@ -1819,7 +1819,7 @@ export async function describeToolResultsBatchOp(
   const byId = new Map<string, string>()
   if (items.length === 0) return byId
   const wanted = new Set(items.map((i) => i.id))
-  const { b } = await import('./baml_client')
+  const { b } = await import('./guarded-client.server')
   const targets = items.map((i) => ({
     id: i.id,
     tool: i.tool,
@@ -1906,7 +1906,7 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
     // evaded it while still reading as a fence to the screening model.
     const body = head.replace(/(?:BEGIN|END)\s{1,4}UNTRUSTED\s{1,4}CONTENT[^\n]{0,40}/gi, '[fence]')
 
-    const { b } = await import('./baml_client')
+    const { b } = await import('./guarded-client.server')
     const source = `${namespace}/${tool}`
     // THE ONE SPREAD THAT ROUTES A SECURITY CONTROL, and the only call site of
     // `clientOverrideFor('screen')` in the repo. Until 2026-08-26 this call

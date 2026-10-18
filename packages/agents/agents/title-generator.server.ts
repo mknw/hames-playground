@@ -35,7 +35,7 @@ import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { harness, compactExecution } from '@hames-ai/harness-patterns'
 import { withUsageAccounting } from '@hames-ai/harness-baml'
 import type { HarnessData, UnifiedContext, UserMessageEventData } from '@hames-ai/harness-patterns'
-import { b } from '@hames-ai/harness-baml/baml_client'
+import { b } from '@hames-ai/harness-baml/guarded-client.server'
 import type { AgentDeps } from '../types'
 
 // The directive is gone, so nothing else keeps this module off the client. The

@@ -84,6 +84,10 @@ import './lib/redis-direct.server'
 import { probeMemoryAtBoot } from './lib/memory/boot.server'
 import { composeSecret } from './lib/config/compose-credentials.server'
 
+// Validate restrictions synchronously before serving. Unset does not activate routing.
+import { assertInferenceDeploymentConfigured } from './lib/inference/tier-config.server'
+assertInferenceDeploymentConfigured()
+
 // Neo4j config seam (design S5, #225 PR-3): the driver's connection is handed
 // over explicitly at app boot — `getEndpoints().neo4j.bolt` plus the same env
 // credentials the fallback reads — so the client module (and the package it

@@ -106,6 +106,7 @@ vi.mock('../../../lib/inference/tier.server', async () => {
     // to reach the same answer the turn runner does, and a stubbed resolver here
     // would assert that this module calls something rather than that it agrees.
     resolveTier: actual.resolveTier,
+    privateInferenceOnly: actual.privateInferenceOnly,
     chooseConversationTier: (s: string, u: string, t: unknown) => chooseConversationTier(s, u, t),
     verdaConfigured: () => verdaConfigured(),
   }
@@ -431,4 +432,24 @@ describe('setConversationPinned (server action)', () => {
     await expect(actions.setConversationPinned('c1', true)).rejects.toThrow('no session')
     expect(dbSetConversationPinned).not.toHaveBeenCalled()
   })
+})
+
+it('reports the public position disabled on private-only servers without changing ordinary responses', async () => {
+  vi.stubEnv('INFERENCE_TIERS', 'private')
+  try {
+    dbGetConversationInferenceTier.mockResolvedValue('anthropic')
+    getStoredInferenceTier.mockResolvedValue('anthropic')
+    expect(await actions.getConversationTier('legacy')).toEqual({
+      tier: 'verda',
+      verdaAvailable: true,
+      anthropicAvailable: false,
+    })
+    expect(await actions.setConversationTier('legacy', 'verda')).toEqual({
+      tier: 'verda',
+      verdaAvailable: true,
+      anthropicAvailable: false,
+    })
+  } finally {
+    vi.unstubAllEnvs()
+  }
 })

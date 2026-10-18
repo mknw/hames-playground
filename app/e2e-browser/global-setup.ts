@@ -231,7 +231,8 @@ export function browserServerEnv(
     E2E_FAKE_INFERENCE_URL: backend.llm.baseUrl,
     // Poisoned, so a redirect that failed to install fails LOUDLY (a 401)
     // instead of quietly billing a run advertised as hermetic.
-    ANTHROPIC_API_KEY: POISONED_ANTHROPIC_KEY,
+    ANTHROPIC_API_KEY: process.env.E2E_PRIVATE_ONLY === '1' ? '' : POISONED_ANTHROPIC_KEY,
+    INFERENCE_TIERS: process.env.E2E_PRIVATE_ONLY === '1' ? 'private' : '',
     // Never the process default: each scenario decides its tier the way the
     // switch does, so a stray deployment default would mask a broken
     // preference read.
@@ -258,7 +259,7 @@ async function runPreflight(
   backend: Awaited<ReturnType<typeof startBackend>>,
   appUrl: string,
 ): Promise<void> {
-  await assertHermetic(backend, appUrl)
+  await assertHermetic(backend, appUrl, process.env.E2E_PRIVATE_ONLY === '1')
 
   const rows = await conversationRows()
   if (rows.length === 0) {

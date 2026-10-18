@@ -63,7 +63,7 @@ assertServerOnImport()
  *  keeps reporting the length it actually sent. */
 export function createCompactIntentAdapter(): CompactIntentFn {
   const fn = async ({ history, latest }: HistoryQueryInput): Promise<LLMResult<string>> => {
-    const { b } = await import('./baml_client')
+    const { b } = await import('./guarded-client.server')
     const startTime = Date.now()
     const collector = new Collector('compactIntent')
     const variables = { history, latest }
@@ -100,7 +100,7 @@ export function createCompactIntentAdapter(): CompactIntentFn {
  *  `LLMCallError` so the fallback path can carry the record. */
 export function createRetrieveQueryAdapter(): RetrieveQueryFn {
   const fn = async ({ history, latest }: HistoryQueryInput): Promise<LLMResult<string>> => {
-    const { b } = await import('./baml_client')
+    const { b } = await import('./guarded-client.server')
     const startTime = Date.now()
     const collector = new Collector('retriever')
     const variables = { history, latest }
@@ -160,7 +160,7 @@ export function createMemoryExtractAdapter(): (
     window,
     latestUser,
   }: MemoryExtractInput): Promise<LLMResult<ExtractedMemory[]>> => {
-    const { b } = await import('./baml_client')
+    const { b } = await import('./guarded-client.server')
     const startTime = Date.now()
     const collector = new Collector('memory-extract')
     const variables = { kindHint, window, latestUser }
@@ -202,7 +202,7 @@ export function createMemoryCompactAdapter(): (
   input: MemoryCompactInput,
 ) => Promise<LLMResult<CompactedMemory>> {
   return async ({ kind, members }: MemoryCompactInput): Promise<LLMResult<CompactedMemory>> => {
-    const { b } = await import('./baml_client')
+    const { b } = await import('./guarded-client.server')
     const startTime = Date.now()
     const collector = new Collector('memory-compact')
     const variables = { kind, members }

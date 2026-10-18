@@ -18,7 +18,7 @@ assertServerOnImport()
 // ============================================================================
 
 async function getBAML() {
-  const { b } = await import('./baml_client')
+  const { b } = await import('./guarded-client.server')
   return b
 }
 

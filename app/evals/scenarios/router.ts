@@ -76,7 +76,7 @@ export const routerScenario: Scenario = {
   title: 'Router — 5 canonical utterances → expected route',
   what: 'route name is one of the offered ones, the tool/no-tool branch is right, and a back-reference is resolved into a self-contained intent',
   run: async (ctx) => {
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     const checks: Check[] = []
     const collectors: Collector[] = []
     const offered = new Set(ROUTES.map((r) => r.name))

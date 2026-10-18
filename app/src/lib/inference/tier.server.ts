@@ -47,7 +47,7 @@ import {
   isInferenceTier,
   setStoredInferenceTier,
 } from '../db/user-prefs.server'
-import { verdaConfigured, type InferenceTier } from './config.server'
+import { privateInferenceOnly, verdaConfigured, type InferenceTier } from './config.server'
 
 assertServerOnImport()
 
@@ -64,6 +64,8 @@ export function resolveTier(
   conversationTier: string | null,
   seed: InferenceTier | null,
 ): InferenceTier {
+  // Old rows remain historical facts; their next turn is clamped to private.
+  if (privateInferenceOnly()) return 'verda'
   if (isInferenceTier(conversationTier)) return conversationTier
   return seed ?? defaultInferenceTier()
 }
@@ -163,6 +165,9 @@ export async function chooseConversationTier(
   if (!isInferenceTier(tier)) {
     throw new Error(`Unknown inference tier: ${JSON.stringify(tier)}`)
   }
+  if (privateInferenceOnly() && tier === 'anthropic') {
+    throw new Error('Anthropic is disabled: this deployment allows private inference only.')
+  }
   if (tier === 'verda' && !verdaConfigured()) {
     throw new Error(
       'The self-hosted inference endpoint is not configured on this deployment, so it cannot ' +
@@ -189,4 +194,4 @@ export async function chooseConversationTier(
 /** Whether the private tier may be OFFERED on this deployment — the switch's
  *  disabled state. Re-exported here so the one server action behind the switch
  *  has a single import for everything it answers. */
-export { verdaConfigured }
+export { privateInferenceOnly, verdaConfigured }

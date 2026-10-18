@@ -214,3 +214,22 @@ describe('a read that fails', () => {
     expect(live!.textContent).toBe('')
   })
 })
+
+describe('private-only deployment', () => {
+  it('keeps Anthropic visible, greyed, disabled and explained, and never writes it', async () => {
+    getConversationTier.mockResolvedValue({ ...state(), anthropicAvailable: false })
+    const { container } = render(() => <ConversationTierSwitch sessionId="private-only" />)
+    await mounted(container)
+    const input = radio(container, 'anthropic')
+    expect(input).toBeDefined()
+    expect(input.disabled).toBe(true)
+    expect(input.closest('[data-part="item"]')?.getAttribute('title')).toMatch(
+      /private inference only/,
+    )
+    expect(input.closest('[data-part="item"]')?.getAttribute('op')).toBe('50')
+    expect(radio(container, 'verda').checked).toBe(true)
+    fireEvent.click(input)
+    await Promise.resolve()
+    expect(setConversationTier).not.toHaveBeenCalled()
+  })
+})

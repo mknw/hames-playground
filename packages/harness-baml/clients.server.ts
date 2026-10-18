@@ -7,7 +7,7 @@
  * routing" on that map below). The ONE exception is `clientOverrideFor()`,
  * which really does route — it returns a per-call `client` override that a
  * call site spreads into its BAML options bag, and it is non-empty only while
- * `USE_VERDA_INFERENCE=1` (below).
+ * the active tier is private (including a host-enforced private-only deployment).
  *
  * Every BAML function declares an Anthropic-only chain in `baml_src/` —
  * `ControllerAnthropic`, `CriticAnthropic`, and so on. That is what runs
@@ -190,6 +190,8 @@ export interface InferenceTierPolicy {
    *  `USE_VERDA_INFERENCE` here; the package-side default is 'anthropic' — the
    *  safe direction, never confidential traffic. */
   defaultTier: () => InferenceTier
+  /** Restrict this deployment to the built-in private clients. Unset preserves all routing. */
+  privateOnly?: () => boolean
   /** Fail-closed reachability check, run by {@link assertInferenceTier} before
    *  a host puts 'verda' in a run frame (the host's
    *  `assertPrivateTierConfigured`).
@@ -679,6 +681,11 @@ export const TIER_SWITCHED_FUNCTIONS: ReadonlySet<string> = new Set(
   ),
 )
 
+/** Whether the host restricts this deployment to the built-in private tier. */
+export function privateInferenceOnly(): boolean {
+  return tierPolicy.privateOnly?.() === true
+}
+
 /**
  * Refuse a tier this deployment cannot actually take — the check that used to
  * live inside `runWithInferenceTier` before the run frame replaced it.
@@ -702,6 +709,11 @@ export const TIER_SWITCHED_FUNCTIONS: ReadonlySet<string> = new Set(
  * no callback, so there is no such caller to protect.
  */
 export function assertInferenceTier(tier: InferenceTier): void {
+  if (privateInferenceOnly() && tier !== 'verda') {
+    throw new Error(
+      'Private-only inference: the Anthropic tier is disabled on this deployment; no request was made.',
+    )
+  }
   if (tier !== 'verda') return
   const assertReachable = tierPolicy.assertTierReachable
   if (!assertReachable) {
@@ -735,8 +747,9 @@ export function assertInferenceTier(tier: InferenceTier): void {
  */
 export function activeInferenceTier(): InferenceTier {
   const tier = currentRunFrame()?.inference?.tier
-  if (tier === 'verda' || tier === 'anthropic') return tier
-  return tierPolicy.defaultTier()
+  const active = tier === 'verda' || tier === 'anthropic' ? tier : tierPolicy.defaultTier()
+  if (privateInferenceOnly()) assertInferenceTier(active)
+  return active
 }
 
 /**
@@ -778,12 +791,14 @@ export function clientOverrideFor(role: BamlRole): BamlClientOverride | undefine
   const perRun = currentRunFrame()?.inference?.clientOverride?.(role) as
     BamlClientOverride | undefined
   if (perRun) {
+    assertPrivateClient(role, perRun)
     assertThinkingOverride(role, perRun)
     return perRun
   }
 
   const consumerBag = consumerClients?.(role)
   if (consumerBag) {
+    assertPrivateClient(role, consumerBag)
     assertThinkingOverride(role, consumerBag)
     return consumerBag
   }
@@ -849,6 +864,7 @@ export function resolveClientForRole(role: BamlRole): string {
     BamlClientOverride | undefined
   const bag = perRun ?? consumerClients?.(role)
   if (bag) {
+    assertPrivateClient(role, bag)
     assertThinkingOverride(role, bag)
     return bag.client
   }
@@ -896,4 +912,39 @@ export function limitsFor(role: BamlRole): ModelLimits {
     contextWindow: getContextWindow(client),
     maxOutputTokens: modelTables.maxOutputTokens[client],
   }
+}
+
+/** Enforce host restrictions before BAML can construct a provider request.
+ * Registries and per-call env can redefine a trusted client, so are refused.
+ * The generated client's own options remain owned by the host (hermetic fakes).
+ */
+function assertPrivateClient(role: BamlRole, options: unknown): void {
+  if (!privateInferenceOnly()) return
+  activeInferenceTier() // also enforces reachability under this restriction
+  const bag = options as Record<string, unknown> | undefined
+  const client = bag?.client
+  const thinking = role === 'planner' && typeof client === 'string' && THINKING_CLIENTS.has(client)
+  if (
+    !bag ||
+    (client !== VERDA_CLIENT_BY_ROLE[role] && !thinking) ||
+    'clientRegistry' in bag ||
+    'env' in bag
+  ) {
+    throw new Error(
+      `Private-only inference: ${role} requires its built-in private client; public or unverified overrides are refused before any request.`,
+    )
+  }
+}
+
+/** Also guards missing/shifted options at the generated-client boundary. */
+export function assertBamlCallAllowed(name: string, options: unknown): void {
+  if (!privateInferenceOnly()) return
+  const role = (Object.keys(SWITCHED_FUNCTIONS_BY_ROLE) as BamlRole[]).find((r) =>
+    SWITCHED_FUNCTIONS_BY_ROLE[r]?.includes(name),
+  )
+  if (!role)
+    throw new Error(
+      `Private-only inference: unrecognised BAML function ${name}; no request was made.`,
+    )
+  assertPrivateClient(role, options)
 }

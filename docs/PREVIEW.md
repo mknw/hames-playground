@@ -468,12 +468,19 @@ separate registration.
 
 **c. Consent every delegated Graph scope, before anyone signs in.** _API
 permissions → Microsoft Graph → Delegated_: `User.Read`, `email`, `Mail.Read`,
-`Mail.Send`, `Calendars.ReadWrite`, `Files.Read.All`, `Sites.Read.All`, then
+`Calendars.Read`, `Files.Read.All`, `Sites.Read.All`, then
 **Grant admin consent**. The full set is requested at sign-in
 (`DEFAULT_GRAPH_SCOPES`, `entra-config.server.ts`), and **a scope that is
 requested but not consented fails the entire sign-in**, not just the connector
 that wanted it. If a scope turns out to be blocked, trim it via
-`AZURE_GRAPH_SCOPES` in `.env` and restart — no code change.
+`AZURE_GRAPH_SCOPES` in `.env` and restart — no code change. Write/send scopes in the override are rejected at boot.
+
+Keep the same app registration and client id; the owner adds only the new
+redirect URI there. Dropping scopes from the code does not revoke existing
+consents: `Mail.Send` and `Calendars.ReadWrite` remain granted until the owner
+removes those permissions in Entra. Leave the delegated set listed above
+(`User.Read`, `email`, `Mail.Read`, `Calendars.Read`, `Files.Read.All`,
+`Sites.Read.All`); MSAL supplies `openid`, `profile` and `offline_access`.
 
 Also confirm the client secret in `.env` is the secret **value**, not its id, and
 note its expiry somewhere you will see it.

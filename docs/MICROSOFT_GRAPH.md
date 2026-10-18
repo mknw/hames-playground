@@ -20,7 +20,7 @@ Nine registered `graph` tools. All of them only ever **read** from Microsoft 365
 | Tool                     | Reads                                                                         | Scope used                          |
 | ------------------------ | ----------------------------------------------------------------------------- | ----------------------------------- |
 | `graph_me`               | own profile (name, UPN, job title, office)                                    | `User.Read`                         |
-| `graph_calendar_today`   | own calendar for a given day (`day_offset`)                                   | `Calendars.ReadWrite`               |
+| `graph_calendar_today`   | own calendar for a given day (`day_offset`)                                   | `Calendars.Read`                    |
 | `graph_mail_recent`      | own inbox, newest first, optional `unread_only`                               | `Mail.Read`                         |
 | `graph_mail_attachments` | own sent/received mail carrying attachments, by person/date                   | `Mail.Read`                         |
 | `graph_files_search`     | files across own OneDrive **and** every reachable SharePoint site             | `Files.Read.All` + `Sites.Read.All` |
@@ -44,20 +44,12 @@ ingest a file, get a document id, and be unable to read a word of it. Search and
 browse are the half of the file story that works without a retriever. An agent
 that _does_ compose a retriever should compose the ingest tool too.
 
-**Consented scopes still exceed implemented tools.** The sign-in request also
-carries `Mail.Send` (see the setup doc for why consent is taken up front). No
-tool exposes it, so the model cannot use it: a granted scope is not a capability
-— capability comes from a registered tool. `Sites.Read.All` was in that unused
-set until `graph_files_search` claimed it.
-
-**Writes.** None yet. Adding one is the same shape as a read tool, but it should
-carry a confirmation gate: creating an event emails real invitations, and
-`Mail.Send` sends real mail. The gate is #433's: the tool's executor calls
-`askHuman(…)` and returns `held(outcome)` while the person decides, and the run
-continues through `resumeHarness(serialized, patterns, answers, opts)` with an
-answer bound to that request. (The boolean `resumeHarness`, the
-`approveAction`/`rejectAction` server actions and `setPaused` were removed in
-#433 S3.)
+**Scopes and writes.** Sign-in requests only the read scopes the shipped tools
+need. `graph_calendar_today` requests `Calendars.Read`; no mail-send or calendar-write
+tool is registered. Write approval is currently limited to Neo4j (owner ruling
+2026-10-19). Existing `Mail.Send` and `Calendars.ReadWrite` consents on the reused
+registration remain granted until the owner removes them in Entra — see the
+[setup runbook](deployment/entra-setup.md#remove-the-old-write-permissions-in-entra).
 
 ---
 

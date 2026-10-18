@@ -2,7 +2,7 @@
  * Entra config validation (#119). `buildEntraConfig` is pure w.r.t. its `env`
  * arg, so no `process.env` juggling.
  */
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 
 // Bypass the server-only guard in the jsdom test env.
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -47,14 +47,52 @@ describe('buildEntraConfig', () => {
     const cfg = buildEntraConfig(full)
     // One consent must cover every connector: background runs have no user
     // present to consent later.
-    for (const s of ['User.Read', 'Mail.Read', 'Files.Read.All', 'Calendars.ReadWrite']) {
+    for (const s of [
+      'User.Read',
+      'email',
+      'Mail.Read',
+      'Calendars.Read',
+      'Files.Read.All',
+      'Sites.Read.All',
+    ]) {
       expect(cfg.scopes).toContain(s)
     }
+  })
+
+  // Mutation: adding Mail.Send, Calendars.ReadWrite, Files.ReadWrite.All or
+  // a new *.Write / *.Send scope to DEFAULT_GRAPH_SCOPES must turn this red.
+  it('never requests a write or send scope in the default set', () => {
+    expect(DEFAULT_GRAPH_SCOPES.filter((scope) => /write|send/i.test(scope))).toEqual([])
   })
 
   it('AZURE_GRAPH_SCOPES trims the set without a code change', () => {
     const cfg = buildEntraConfig({ ...full, AZURE_GRAPH_SCOPES: 'User.Read, Mail.Read' })
     expect(cfg.scopes).toEqual(['User.Read', 'Mail.Read'])
+  })
+
+  // Mutation: delete parseScopes' write/send rejection. Every case must fail.
+  it.each([
+    'Mail.Send',
+    'Calendars.ReadWrite',
+    'Files.ReadWrite.All',
+    'Tasks.ReadWrite.Shared',
+    'Custom.Write',
+    'Custom.Write.All',
+    'Custom.Send',
+    'Custom.Send.Shared',
+    'Custom.SendMail',
+    'https://graph.microsoft.com/Mail.Send',
+    'mail.sEND',
+  ])('rejects the write override %s instead of silently dropping it', (scope) => {
+    expect(() =>
+      buildEntraConfig({ ...full, AZURE_GRAPH_SCOPES: `User.Read, ${scope} Mail.Read` }),
+    ).toThrow(/AZURE_GRAPH_SCOPES.*write\/send.*read-only/)
+  })
+
+  it('accepts all shipped read scopes in an override', () => {
+    expect(
+      buildEntraConfig({ ...full, AZURE_GRAPH_SCOPES: DEFAULT_GRAPH_SCOPES.join(', ') }).scopes,
+    ).toEqual([...DEFAULT_GRAPH_SCOPES])
   })
 
   it('accepts whitespace-separated overrides and ignores blanks', () => {
@@ -113,5 +151,27 @@ describe('buildEntraConfig', () => {
     expect(msal.auth.clientId).toBe('cid')
     expect(msal.auth.authority).toBe(`${AAD_HOST}/tid`)
     expect(msal.auth.clientSecret).toBe('secret')
+  })
+})
+
+describe('scope validation at server boot', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.resetModules()
+  })
+
+  // Mutation: delete the module-scope parseScopes call; this must turn red.
+  it('refuses a write override on import before credentials or requests are needed', async () => {
+    vi.resetModules()
+    vi.stubEnv('AZURE_GRAPH_SCOPES', 'User.Read Mail.Send')
+    await expect(import('../../../lib/auth/entra-config.server')).rejects.toThrow(
+      /AZURE_GRAPH_SCOPES.*write\/send.*read-only/,
+    )
+  })
+
+  it('allows a read-only override on import without credentials', async () => {
+    vi.resetModules()
+    vi.stubEnv('AZURE_GRAPH_SCOPES', 'Mail.Read Calendars.Read')
+    await expect(import('../../../lib/auth/entra-config.server')).resolves.toBeDefined()
   })
 })

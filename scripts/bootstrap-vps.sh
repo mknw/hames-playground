@@ -1411,9 +1411,11 @@ stage_hostname() {
     b. Sign-out needs no registration: AUTH_POST_LOGOUT_REDIRECT_URI is set
        to https://$h/auth/signin in .env by this stage.
     c. API permissions -> Microsoft Graph -> Delegated: User.Read, email,
-       Mail.Read, Mail.Send, Calendars.ReadWrite, Files.Read.All,
+       Mail.Read, Calendars.Read, Files.Read.All,
        Sites.Read.All -> Grant admin consent. A requested scope that is not
        consented fails the WHOLE sign-in (trim with AZURE_GRAPH_SCOPES).
+       Keep the same registration/client id. Existing Mail.Send and
+       Calendars.ReadWrite consents remain until the owner removes them in Entra.
     d. AZURE_CLIENT_SECRET must be the secret VALUE, not its id; note its expiry.
 EOF
 }

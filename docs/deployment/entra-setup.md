@@ -13,8 +13,8 @@ what the **Entra tenant owner** must provision, plus the env the app needs.
 
 ## 1. App registration
 
-Use an existing registration (its client id goes in `AZURE_CLIENT_ID`) or
-create one: Entra admin center → **App registrations** → **New registration**.
+Reuse the existing registration and `AZURE_CLIENT_ID`; the owner adds the new
+redirect URI to that registration. No new app id is needed.
 
 - **Supported account types:** _Accounts in this organizational directory only_
   (single tenant). Gives a fixed `AZURE_TENANT_ID` and matches the MS-only
@@ -45,11 +45,11 @@ set a rotation reminder. (Rotate out any secret previously shared with Stack.)
 
 ## 4. API permissions — **API permissions** → Microsoft Graph → _Delegated_
 
-| Permission                                                                          | Admin consent                                                                                        |
-| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `openid`, `profile`, `email`, `offline_access`                                      | not required (user consent)                                                                          |
-| `User.Read`                                                                         | grant tenant-wide admin consent                                                                      |
-| `Mail.Read`, `Mail.Send`, `Calendars.ReadWrite`, `Files.Read.All`, `Sites.Read.All` | add + grant admin consent before enabling the connectors — see "Scopes are requested up front" below |
+| Permission                                                        | Admin consent                                                                                        |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `openid`, `profile`, `email`, `offline_access`                    | not required (user consent)                                                                          |
+| `User.Read`                                                       | grant tenant-wide admin consent                                                                      |
+| `Mail.Read`, `Calendars.Read`, `Files.Read.All`, `Sites.Read.All` | add + grant admin consent before enabling the connectors — see "Scopes are requested up front" below |
 
 `offline_access` is what yields the refresh token the app persists so Graph calls
 can be made later without dragging the user back through sign-in (#110).
@@ -133,14 +133,13 @@ API"** and there is no `api://…/access_as_user` scope. Leave that blade empty.
 `DEFAULT_GRAPH_SCOPES` in `lib/auth/entra-config.server.ts` requests the whole
 connector set at sign-in:
 
-| Scope                 | For                                             | Kind      |
-| --------------------- | ----------------------------------------------- | --------- |
-| `User.Read`, `email`  | own profile                                     | read      |
-| `Mail.Read`           | mailbox search / summarise                      | read      |
-| `Mail.Send`           | send as the user                                | **write** |
-| `Calendars.ReadWrite` | availability + scheduling                       | **write** |
-| `Files.Read.All`      | OneDrive + SharePoint files the user can access | read      |
-| `Sites.Read.All`      | SharePoint sites the user can access            | read      |
+| Scope                | For                                             | Kind |
+| -------------------- | ----------------------------------------------- | ---- |
+| `User.Read`, `email` | own profile                                     | read |
+| `Mail.Read`          | mailbox search / summarise                      | read |
+| `Calendars.Read`     | read calendar events                            | read |
+| `Files.Read.All`     | OneDrive + SharePoint files the user can access | read |
+| `Sites.Read.All`     | SharePoint sites the user can access            | read |
 
 Why up front rather than incrementally: **adding a scope later forces every user
 to sign in again** (their stored refresh token must cover it), and background runs
@@ -149,8 +148,8 @@ have no user present to consent mid-run. One consent, done.
 A granted scope is not a capability. The model can only do what a _registered
 tool_ exposes — see
 [MICROSOFT_GRAPH.md](../MICROSOFT_GRAPH.md#what-it-can-do-today) for the current
-set, none of which writes to Microsoft 365. Any future write tool should carry
-its own confirmation gate.
+set, none of which writes to Microsoft 365. Write approval is currently limited to Neo4j (owner ruling 2026-10-19);
+Graph write tools are not shipped.
 
 > ⚠️ **Order matters.** Every scope in the request must exist under **API
 > permissions** with consent granted _before_ anyone signs in. A scope that is
@@ -159,10 +158,21 @@ its own confirmation gate.
 > `AZURE_GRAPH_SCOPES` env var (space- or comma-separated) and restart — no code
 > change or redeploy needed. Reserved scopes (`openid`/`profile`/
 > `offline_access`) are stripped automatically; MSAL supplies them.
+> Write/send scopes in the override are rejected at boot.
 
-### Adding a scope later
+### Remove the old write permissions in Entra
 
-Adding a scope to the sign-in request **forces every user to sign in again**
+Dropping scopes from the sign-in request does **not** revoke existing consents
+on the reused registration. `Mail.Send` and `Calendars.ReadWrite` remain granted
+until the owner removes those permissions in Entra. Leave exactly these delegated
+connector scopes: `User.Read`, `email`, `Mail.Read`, `Calendars.Read`,
+`Files.Read.All`, `Sites.Read.All`. MSAL also supplies the reserved OIDC scopes
+`openid`, `profile` and `offline_access`. This code change performs no tenant or
+token-cache migration.
+
+### Adding a read scope later
+
+Adding a read scope to the sign-in request **forces every user to sign in again**
 (their stored refresh token must cover it), which is the reason the full set is
 taken up front. Grant it in the portal first, then extend
 `DEFAULT_GRAPH_SCOPES`. Writing the tool that uses it is

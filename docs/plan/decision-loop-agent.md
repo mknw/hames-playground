@@ -11,8 +11,8 @@ An agent's topology is fixed when it is built, and today's `general` is `planner
 This is the target composition, including the core changes specified below, not runnable code on current main. Source checks for this fix round use `origin/main` at `7a3446ca`; that commit is already an ancestor of this branch. In particular, slice 3 follows #418 G11's deletion/client-migration slice (P5), and the file-ingest path stays off until P4.
 
 ```typescript
-// S-f: withhold by exact tool name until the P4 file-path wiring lands.
-const OFFICE_TOOLS = MS365_TOOLS.filter((name) => name !== 'graph_file_ingest')
+// P4 (2026-10-19): the file path is open; graph_file_ingest itself refuses any run that is not positively private.
+const OFFICE_TOOLS = MS365_TOOLS
 const screen = createInjectionScreen() // role-resolved; outage handling is specified below
 const doc_ag = withInjectionGuard(DOC_GUARD)(                      // office + data work
   withSandbox({ id: `${sessionId}:office`, rootfs: 'office', egress: 'mcp-only', syncWorkspace: true })(
@@ -28,9 +28,12 @@ const info_ag = withInjectionGuard(INFO_GUARD)(                    // knowledge 
 )
 const retrieve = withInjectionGuard({ tools: ['retriever'] })(retriever({ backends: [redis], patternId: 'retriever' }))   // the Data Stash
 const think = planner(createPlannerAdapter(…), PLANNABLE_TOOLS, { patternId: 'think' })
+const graph_edit = withInjectionGuard(GRAPH_EDIT_GUARD)(           // H1: Neo4j writes, each approved by the person
+  simpleLoop(createLoopControllerAdapter(), [...NEO4J_READ, 'cypher_write_request'], { patternId: 'graph-edit', returnStyle: 'answer', rememberPriorTurns: false }),
+)
 
 const orchestrator = withInjectionGuard({
-  ...GUARD_UNION, // INFO_GUARD + DOC_GUARD + retriever, with the catalog for namespace validation
+  ...GUARD_UNION, // INFO_GUARD + DOC_GUARD + GRAPH_EDIT_GUARD + retriever, with the catalog for namespace validation
   tools: [...GUARD_UNION.tools, 'decision_loop_output'],
   spotlight: 'always',
   screen,
@@ -39,6 +42,7 @@ const orchestrator = withInjectionGuard({
     'office-data': { pattern: doc_ag, description: 'Work on Microsoft 365 files and mail; run code over them' },
     'info-retrieval': { pattern: info_ag, description: 'Look things up in the knowledge graph, on the web, in library docs and in the memory graph' },
     'read-documents': { pattern: retrieve, description: 'Search documents already in this conversation' },
+    'graph-edit': { pattern: graph_edit, description: "Change the knowledge graph; every change waits for the person's approval" },
     think: { pattern: think, description: 'Decide the steps before acting' },
   },
   { decide, answer: 'Generate the answer for the user now, from the conversation and any results so far', handoff: { lastN: 2 }, maxIterations: 6, patternId: 'orchestrator' },
@@ -126,7 +130,7 @@ There are four channels, from cheapest to richest:
 3. **The Data Stash, for documents.** Documents uploaded by the user, ingested by an agent or promoted from `/work/out` are read by the `read-documents` route. The retriever emits its matches as a `tool_result` (`retriever.server.ts:28-29`). So they ride the handoff as a summary, and channel 2 can offer their previews and on-demand full expansion to a loop that has no stash access of its own.
    - `info_ag` has no stash tool, deliberately. The only existing one, the redis server's search, is not scoped to the conversation.
    - If a stash search _inside_ a loop is ever needed, the way to do it is a conversation-scoped app tool that takes its session from the request, the way `graph_file_ingest` does.
-4. **Files, for the sandbox; the Graph-ingest path is gated on P4.** Stash → `/work/in` on entry, plus the re-hydrate fix (N4); the Graph-ingest path is withheld until pseudonymisation is wired (S-f). Materialisation follows once P4 is met ([Data between routes](#data-between-routes)).
+4. **Files, for the sandbox.** Stash → `/work/in` on entry, and again after any stash-storing call in the same run (N4, built in slice 4). The Graph-ingest path runs on a positively private tier only ([The file path (P4)](#the-file-path-p4)). Materialisation of results that are not files stays deferred ([Data between routes](#data-between-routes)).
 
 **Each child's view is its own, within the allowed sibling boundary (review, 2026-10-15).** `decisionLoop` supplies a synthetic **context** containing the committed events and this turn's earlier children's events, restricted to the siblings allowed for that child. Result visibility is enforced in that context, not just as a selector filter; excluded sibling `tool_result` payloads (including copies in orchestrator records) must be unavailable even to an unfiltered expansion lookup. Preserve the user-message input independently, so filtering sibling results cannot remove the task. It does that the way `chain()` does, a synthetic context plus `dropHitl` (`chain.server.ts:331-341`). The child's view is then built from that context and **the child's own `viewConfig`**, as `chain()` builds `createEventView(syntheticCtx, pattern.config.viewConfig, subId)`. `routes`' pass-through of the parent's view is the thing not to copy.
 
@@ -147,16 +151,16 @@ So the selection is declared on the child, independently per child:
 
 **Data Stash or `withReferences`: every case in this agent.** The boundary: **the stash holds documents (bytes), and a route reads them through a stash-connected step. `withReferences` re-uses earlier tool results, for a loop that has no stash connection.**
 
-| Data                                                                          | Needed by                                          | Channel                                               | Why                                                       |
-| ----------------------------------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------- |
-| an uploaded or ingested file (Graph-ingest path gated on P4)                  | `doc_ag` (code over it)                            | stash → `/work/in`                                    | the sandbox reads files; its actor takes no attached refs |
-| a file `doc_ag` produced (`/work/out`)                                        | a later turn, or `read-documents`                  | promotion → stash                                     | durable, conversation-scoped bytes                        |
-| text inside stash documents                                                   | `read-documents`                                   | stash vector search                                   | the retriever is the stash's reader                       |
-| `read-documents`' matches, in full                                            | `info_ag` (e.g. a web search seeded by a document) | selected preview + expansion, `source: ['retriever']` | `info_ag` has no stash connection                         |
-| Cypher rows or web results from an earlier iteration this turn                | `info_ag`                                          | selected preview + expansion, `source: ['info']`      | avoids re-querying; the summary alone may drop the rows   |
-| Cypher rows or web results                                                    | `doc_ag` (compute over them)                       | handoff summary; full rows via materialisation (P4)   | the actor takes no attached refs                          |
-| any route's result + reasoning                                                | the next decision, `think`, every child            | state / planner context / `plan_context`              | always on, capped                                         |
-| everything this turn and the previous one produced (earlier failures dropped) | the synthesizer                                    | `fromPatterns: ['orchestrator']`, `threadTurns: 2`    | it reads the route-output records                         |
+| Data                                                                          | Needed by                                          | Channel                                                   | Why                                                       |
+| ----------------------------------------------------------------------------- | -------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- |
+| an uploaded or ingested file (Graph-ingest: private tier only, P4)            | `doc_ag` (code over it)                            | stash → `/work/in`                                        | the sandbox reads files; its actor takes no attached refs |
+| a file `doc_ag` produced (`/work/out`)                                        | a later turn, or `read-documents`                  | promotion → stash                                         | durable, conversation-scoped bytes                        |
+| text inside stash documents                                                   | `read-documents`                                   | stash vector search                                       | the retriever is the stash's reader                       |
+| `read-documents`' matches, in full                                            | `info_ag` (e.g. a web search seeded by a document) | selected preview + expansion, `source: ['retriever']`     | `info_ag` has no stash connection                         |
+| Cypher rows or web results from an earlier iteration this turn                | `info_ag`                                          | selected preview + expansion, `source: ['info']`          | avoids re-querying; the summary alone may drop the rows   |
+| Cypher rows or web results                                                    | `doc_ag` (compute over them)                       | handoff summary; full rows via materialisation (deferred) | the actor takes no attached refs                          |
+| any route's result + reasoning                                                | the next decision, `think`, every child            | state / planner context / `plan_context`                  | always on, capped                                         |
+| everything this turn and the previous one produced (earlier failures dropped) | the synthesizer                                    | `fromPatterns: ['orchestrator']`, `threadTurns: 2`        | it reads the route-output records                         |
 
 So `withReferences` is needed in this agent in exactly one place, around `info_ag`, and the stash in three. Neither replaces the other.
 
@@ -218,7 +222,8 @@ The child's own `error` events stay inside its `pattern_enter`/`pattern_exit`, b
 
 - **`read-documents` is its own route** rather than a tool inside `info_ag`. The retriever is a pattern, not an MCP tool. Putting it in `simpleLoop`'s tool list would need round 1's `patternTool` primitive. The redis server's `search_redis_documents` cannot stand in for it: it is not scoped to the conversation, so the model could name another conversation's keys (the same reason `graph_file_ingest` takes its session from the request). As a route it needs nothing new, and `harnessHasRedisRetriever` still finds it through `children`.
 - **`info_ag` holds Neo4j reads, web tools, the two `context7` library-doc tools and the memory graph's READ tools** (`search_nodes`, `open_nodes`; `read_graph` stays out because the memory graph is shared by every user and the call returns all of it; S3b, to match what `general` can do for scenarios 04/05). The memory create/add/delete tools stay withheld by name. `context7` is an outbound public service, checked like web search by the G14 egress check; `memory` is declared local beside `neo4j`. The Neo4j-and-web grouping was the owner's. Free-form Cypher stays. The agent slice waits for [G13's network isolation and required evidence](https://github.com/mknw/hames-playground/issues/241#issuecomment-6181475778), which supersedes G12 S-a's procedure allow-list dependency; see P3.
-- **`doc_ag` holds the Microsoft 365 tools, inside a sandbox.** S-f means **the file path stays off until wired**: withhold `graph_file_ingest` from `MS365_TOOLS` in the agent's effective allowlist until P4's file-path pseudonymisation is wired. Pin the exact name's absence in slice 3. Its eventual presence is conditional on that wiring, not permission for slice 3 to carry real Graph file bytes into `/work/in`.
+- **`doc_ag` holds the Microsoft 365 tools, inside a sandbox.** Until slice 5, `graph_file_ingest` stays withheld by exact name, as slice 3 pinned. With P4 ruled (2026-10-19), slice 5 adds it to the allowlist; the tool itself refuses any run that is not positively private ([The file path (P4)](#the-file-path-p4)).
+- **`graph-edit` holds the Neo4j read tools and the write request** (H1, accepted 2026-10-19). It has no web tools and no pseudonymisation wrapper, and it is built with slices 6 and 8 ([Writes, gated by a person](#writes-gated-by-a-person)).
 
 ## Where memory, guards and the sandbox sit
 
@@ -240,13 +245,13 @@ Recall, wake and settle still run only on interactive turns (#553).
 
 **Sandbox.** `doc_ag` is `withInjectionGuard(withSandbox(actorCritic(…)))`, the sketch's second form. The first form, `actorCritic({ tools: [sandbox, ms-365] })`, cannot be written today: a sandbox's tools exist only inside a `withSandbox` scope. `withSandbox` stays the grouping that shares one machine (owner, round 1).
 
-**One gap inside `doc_ag`.** `withSandbox` hydrates `/work/in` once, on entry, before the actor runs (`with-sandbox.server.ts:665`, then `:703`). A file ingested with `graph_file_ingest` during the same run is in the stash but **not** on disk until the route is entered again. This is the current core gap; in this agent that path remains withheld until P4, and N4 must land before it is enabled. There are three fixes, in order of preference:
+**One gap inside `doc_ag`.** `withSandbox` hydrates `/work/in` once, on entry, before the actor runs (`with-sandbox.server.ts:665`, then `:703`). A file ingested with `graph_file_ingest` during the same run is in the stash but **not** on disk until the route is entered again. This was the core gap, and the file path waited for it. There were three fixes, in order of preference:
 
 1. `withSandbox` re-hydrates after any tool call in its scope that stored a stash document. This is code-driven, needs no model step, and reuses `hydrateWorkspace`'s diff.
 2. The decisions model runs `office-data` twice.
 3. A separate ingest route.
 
-Ruled N4 in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323): fix (1). It is a core change, so it gets its own slice and its own review.
+Ruled N4 in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323): fix (1). It was a core change with its own slice and review, and it is built: slice 4 (`1b847214`) re-hydrates through `stashWriteObservers` (`packages/sandbox/with-sandbox.server.ts:700-757`).
 
 ### Untrusted content on the way up
 
@@ -358,6 +363,62 @@ This is consistent with ADR-0006. The input half rewrites the view and data a ch
 
 Mutations: drop the `apply` call; skip the data rewrite; narrow the roster input to the last-N records; move the key deletion out of the `finally`; drop the placeholder-token rule; skip the expansion path; turn the tier rule back into a positive private-tier match; let a missing pseudonymiser pass through; delete the outgoing check; make a nested `egressChecks` replace instead of concatenate.
 
+### The file path (P4)
+
+Ruled by the owner on 2026-10-19. S-f said to pseudonymise the `graph_file_ingest` → `/work/in` path; G14 later stated what pseudonymisation is for here, which is keeping identities from leaving through an outbound call. Read together: **the file path is protected at its exits, not by rewriting the file.** No byte is rewritten and no table is kept, and a document the person asked for keeps its real names.
+
+**Why not rewrite the bytes.** On the private tier, a rewritten copy would protect nothing that can leave:
+
+- the `office-data` sandbox has no network at all: `egress: 'mcp-only'` (`packages/agents/agents/general-next.server.ts:61`) boots it with `--network none` (`packages/sandbox/docker-backend.server.ts:670-671`);
+- the actor's model calls go only to the private tier's own deployments;
+- its Microsoft 365 tools read the person's own tenant, and none of them writes (`packages/connectors/graph/graph-tools.server.ts:1318-1903`);
+- the one route with outbound tools, `info-retrieval`, receives `office-data`'s output only through G14's filter, whose roster input holds every payload of the turn (E1).
+
+Rewriting would also cost a rewriter per format, since Office files are zipped XML and PDFs and images cannot be rewritten reliably. It would need a reversible table, too, to put real names back into the deliverable, and G14 chose not to keep one.
+
+**The exits, and what holds each:**
+
+| Exit                                                                                                       | What holds it                                                                                         | Pin                                                                                       |
+| ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| a model call on the Anthropic tier (the actor reading the file; the decision state at the decide endpoint) | the tool refuses any run whose raw tier is not exactly the private one (below)                        | frameless, unrecognised and `'anthropic'` frames refused; a private frame allowed         |
+| the sandbox's network                                                                                      | `egress: 'mcp-only'`, i.e. no network                                                                 | `office-data`'s egress value; any other value fails                                       |
+| a web call from `info-retrieval`                                                                           | G14: the view, the handoff data and the outgoing check                                                | G14's pins, plus a synthetic ingested file whose text names a directory member            |
+| a Microsoft 365 write                                                                                      | none exists; a future one ships only as a write request ([Writes](#writes-gated-by-a-person))         | the registered `graph` tool names; a new name fails until it is classified                |
+| a Neo4j write                                                                                              | the person's approval ([Writes](#writes-gated-by-a-person))                                           | slice 8                                                                                   |
+| a remote embedder                                                                                          | ingestion indexes the file, and `EMBEDDINGS_PROVIDER=openrouter` would send its text to that provider | the tool refuses while the provider is not `local` (`stash/embeddings.server.ts:110-113`) |
+
+The conversion sidecar also receives a convertible file's bytes (`DOC_CONVERT_URL`, `packages/harness-patterns/stash/doc-convert.server.ts:40`). That is a deployment rule rather than a code check: it must be a service the deployment runs. A check on the URL would decide the same call differently on two hosts.
+
+**The tier check (decision 3).** `graph_file_ingest` runs only when the run frame's raw tier is exactly the private tier's value. This is the mirror image of G14's rule. G14 errs toward protecting by **applying** unless a run is explicitly Anthropic; this check errs toward protecting by **refusing** unless a run is explicitly private.
+
+- A frame with no tier slot, or with an unrecognised value, is refused even when the deployment default is private. That is the safe error, since turns on the turn path always fill the slot.
+- The check sits in the tool's executor, through a predicate the host injects when it registers the graph tools (as it injects the stash). Core and the connectors stay tier-agnostic.
+- Because it is in the executor rather than in `general-next`'s allowlist, it covers every caller. `general` passes `tools.all` to both its loops (`packages/agents/agents/general.server.ts:59, 69`), and `tools.all` lists the app tools too (`packages/harness-patterns/tools.server.ts:111`). So, by reading, `general` can ingest a file on either tier today; slice 5 should confirm that with a test before relying on it.
+- A refused call returns fixed feedback: "copying a file into the conversation runs only on the private tier".
+
+**Stored copies (decision 2, Q2).** Unchanged. The stash keeps the original file for 7 days (`packages/harness-patterns/stash/document-store.server.ts:154`), like an upload, and indexes its chunks in plaintext when the format allows. SD-11's session-not-owner key scoping applies to it as it does to every stash document.
+
+**The table (Q3).** There is none: nothing is rewritten, so nothing is reversed.
+
+**Formats.** There are no format rules. `/work/in` receives the original bytes whatever the format (`packages/sandbox/work-artifacts.server.ts:119-121`), and the actor's code reads them. Indexing covers text formats and, with conversion on, PDF plus the Word, OpenDocument and PowerPoint formats (`stash/doc-convert.server.ts:50-61`); spreadsheets, images and everything else are stored `not_indexed`. Scenario 16's spreadsheets are read by code in the sandbox, and what gets indexed is the report that code writes.
+
+**Q5, a stable pseudonym.** Not applicable: this path mints no placeholders.
+
+**Accepted limitation (decision 4).** A person named only inside a file's body, who is neither in the directory nor in a labelled field of the turn, reaches `info-retrieval`'s prompt in clear through the handoff. That is exactly what happens today to a person named only in a mail body ("What it does not catch", above). The outgoing check still denies a web call carrying a roster literal, but that person is not in the roster.
+
+**A consequence to state: a tier flip mid-conversation.** The tier is set per turn, and the stash copy outlives the turn. If the person flips a conversation to the Anthropic tier after a file was ingested, later turns hydrate the file into `/work/in` and can retrieve its chunks, so its content can reach the Anthropic tier. The same already holds for everything else the conversation contains, since a flipped turn reads the conversation's history, and the flip is the person's own act. If that is ever unwanted, the fix is a stash provenance value for ingested files, checked at hydrate and at retrieval, the way `sandbox-output` is today.
+
+**Pins (layer 1)**, each checked by mutation:
+
+- `graph_file_ingest` is refused on a frameless frame, an unrecognised tier and `'anthropic'`, and runs on the private tier. Mutation: test `!== 'anthropic'` instead.
+- It is refused while the embedding provider is not `local`. Mutation: drop the check.
+- `office-data`'s sandbox egress is `mcp-only`. Mutation: change it to `pypi`.
+- The registered `graph` tool names equal a pinned list. Mutation: register one more.
+- A synthetic ingested file whose text names a directory member reaches `info-retrieval`'s `plan_context` as a placeholder. Mutation: skip G14's data rewrite.
+- `general-next`'s effective allowlist includes `graph_file_ingest`, slice 3's absence pin is removed, and neither the actor prompt nor the route description says ingestion is unavailable (`general-next.server.ts:70, 153`).
+
+Scenarios 15 and 16 stop being gated and become rollout criterion 2's Graph-file variant (G18).
+
 ## Writes, gated by a person
 
 Ruled by the owner on 2026-10-16, closing #396 (read-only Cypher by default) in favour of this: `general-next` may write, and **every write waits for the person's approval**. On 2026-10-17 the owner set the bar for the resume: **after an approval the run continues as if it had not stopped**, inside the route that proposed the write, including whatever the agent planned to do after it. Slice 6 (resume inside a route), slice 8 (the gated write) and slice 9 (the UI) build it.
@@ -366,11 +427,11 @@ Ruled by the owner on 2026-10-16, closing #396 (read-only Cypher by default) in 
 
 - **Neo4j writes.** No agent can write today: `write_neo4j_cypher` is withheld from every agent (`packages/harness-patterns/agent-withheld-tools.ts:35-45, 67-68`), and the gateway serves `neo4j-cypher` with `read_only: true`. **Both stay.** The agent gets a different tool, a **write request** (working name `cypher_write_request`), whose executor never writes. It checks the statement, stores it, asks the person and returns the `held()` placeholder (`packages/harness-patterns/hitl.server.ts:451-456`). The write runs only in the host's `resolve`, after an approval ([below](#where-the-write-runs-the-hosts-resolve)). An allowlist slip therefore cannot hand an agent a writing tool: the barrier stays structural (SD-14), and a person's answer is the only path to a write session.
 - **Microsoft 365 writes.** None exist. Every registered `graph` tool reads (`packages/connectors/graph/graph-tools.server.ts:1318-1903`), although the consented scopes include `Mail.Send` and `Calendars.ReadWrite`, with the note that any future write tool carries its own confirmation gate (`app/src/lib/auth/entra-config.server.ts:66-72`). The rule here: a Microsoft 365 write ships only as a write request of the same shape. It would live in `office-data`, which runs in a sandbox, and v1 does not resume a sandbox route ([below](#resume-inside-a-route-slice-6)), so it also waits for that.
-- **Sandbox promotion: not gated.** Promotion is the owner-scoped `/work` ⇄ Data Stash sync that S-e names as the only way derived files leave the sandbox. It writes into this conversation's stash, never outside our environment, and it already runs in a `finally`, even on a pause (`packages/sandbox/with-sandbox.server.ts:833-842`). Gating it would ask the person about every chart.
+- **Sandbox promotion: not gated.** Promotion is the owner-scoped `/work` ⇄ Data Stash sync that S-e names as the only way derived files leave the sandbox. It writes into this conversation's stash, never outside our environment, and it already runs in a `finally`, even on a pause (`packages/sandbox/with-sandbox.server.ts:835-841`). Gating it would ask the person about every chart.
 
-### Where the write request lives (owner call H1)
+### Where the write request lives (H1, accepted 2026-10-19)
 
-Recommended: **a separate route, `graph-edit`**: a `simpleLoop` over the Neo4j read tools plus the write request, guarded on `neo4j`, with no web tools and no pseudonymisation wrapper. Its description: "Change the knowledge graph; every change waits for the person's approval". Two reasons:
+**A separate route, `graph-edit`**: a `simpleLoop` over the Neo4j read tools plus the write request, guarded on `neo4j`, with no web tools and no pseudonymisation wrapper. Its description: "Change the knowledge graph; every change waits for the person's approval". Two reasons:
 
 1. A write composed in the same loop as `web_search` and `fetch` puts untrusted web text one step from a write. The separate route reads only the graph and the handoff, which is sanitized, fenced and capped.
 2. On the private tier `info-retrieval` sees earlier results through G14's rewrite, so a statement composed there can carry `PERSON_3` where a real name belongs. No table is kept, so nothing could turn it back.
@@ -389,7 +450,7 @@ Each refusal is a recoverable tool failure with fixed feedback, as G14's egress 
 
 ### What the person sees
 
-The request event carries display primitives only (`summary` is "display only, and untrusted", `packages/harness-patterns/types.ts:1517-1518`). The statement itself goes into the host store behind `payloadRef` (`:1519-1520`): the `hitl_requests` payload column is encrypted at rest, keyed by `requestId` and owner. The dialog shows:
+The request event carries display primitives only (`summary` is "display only, and untrusted", `packages/harness-patterns/types.ts:1535-1536`). The statement itself goes into the host store behind `payloadRef` (`:1537-1538`): the `hitl_requests` payload column is encrypted at rest, keyed by `requestId` and owner. The dialog shows:
 
 1. **The statement and its parameters, verbatim**, as monospace text nodes after the server-side `displayText` pass (`app/src/lib/memory/display-text.ts:14-22`), never as markup.
 2. **What it does**, read from the `EXPLAIN` plan's operators: creates, merges, property sets and removals, deletes and detach-deletes, and every procedure call by name. A plan containing a delete gives Approve the danger tone. There are no counts, because counting needs execution.
@@ -398,11 +459,11 @@ The request event carries display primitives only (`summary` is "display only, a
 
 **No dry run.** Running the statement in a transaction and rolling it back would give real counts, but some procedures commit transactions of their own (APOC's periodic procedures among them). A rolled-back "preview" could therefore still write: a statement composed after reading untrusted content would have taken effect before anyone approved it. `EXPLAIN` names the operations without running anything.
 
-**Who may approve (owner call H2).** Every user reads the same graph. Recommended for v1: any allow-listed user may approve a write proposed in their own conversation, the same boundary every other action uses (SD-15). Revisit with roles under Entra SSO (#119).
+**Who may approve (H2, accepted 2026-10-19).** Every user reads the same graph. For v1, any allow-listed user may approve a write proposed in their own conversation, the same boundary every other action uses (SD-15). Revisit with roles under Entra SSO (#119).
 
 ### Where the write runs: the host's `resolve`
 
-`resumeHarness` calls the host's `resolve(request, answer)` once per answer, after every check and before re-entry. What it returns is recorded, and sanitized it becomes the held result (`packages/harness-patterns/harness.server.ts:368-391`; SPEC resume step 9). Today the host passes one function, the quarantine delete (`app/src/lib/harness-client/turn.server.ts:893-901`). Slice 8 makes it dispatch on `request.kind`:
+`resumeHarness` calls the host's `resolve(request, answer)` once per answer, after every check and before re-entry. What it returns is recorded, and sanitized it becomes the held result (`packages/harness-patterns/harness.server.ts:368-391`; SPEC resume step 9). Today the host passes one function, the quarantine delete (`app/src/lib/harness-client/turn.server.ts:973-983`). Slice 8 makes it dispatch on `request.kind`:
 
 - **`graph-write`, Approve.** Load the frozen statement by `payloadRef`; check that its owner is the resuming user and that its `requestId` matches; run it in a write transaction; return `{ status: 'written', counters }` (nodes and relationships created or deleted, properties set). A Neo4j error returns `{ status: 'failed', error }`: the run continues, and the agent reports it.
 - **Reject.** `{ status: 'rejected' }`. Nothing is opened.
@@ -415,17 +476,17 @@ The run then re-enters and continues from the held call, whose result is now tha
 
 The context already holds what a resume needs (ADR-0009):
 
-- at a pause, the paused child's events are committed together with the loop's (`packages/harness-patterns/patterns/decisionLoop.server.ts:550-566`);
+- at a pause, the paused child's events are committed together with the loop's (`packages/harness-patterns/patterns/decisionLoop.server.ts:549-566`);
 - the loop's earlier records are committed events;
 - the resume replaces the held result with its outcome.
 
-What core lacks is patterns that read their own progress back. SPEC resume step 11 re-enters the paused top-level pattern "from its start" (`packages/harness-patterns/SPEC.md:2064-2068`). `decisionLoop` then starts with no records (`decisionLoop.server.ts:402`), and `simpleLoop` starts with an empty turn log (`simpleLoop.server.ts:275`).
+What core lacks is patterns that read their own progress back. SPEC resume step 11 re-enters the paused top-level pattern "from its start" (`packages/harness-patterns/SPEC.md:2092-2096`). `decisionLoop` then starts with no records (`decisionLoop.server.ts:402`), and `simpleLoop` starts with an empty turn log (`simpleLoop.server.ts:277`).
 
 Slice 6 completes the existing design rather than adding a mechanism. On re-entry, each pattern on the path to the gate rebuilds its state from its own events in the current run, meaning the events since the latest `user_message` (`hitl.server.ts:1126-1131`). It then continues from the next step without calling a model.
 
 - **`decisionLoop`** rebuilds its records, the latest plan, the roster inputs and the withheld ids from its own events. It counts the iterations already run against `maxIterations`, makes **no decide call** for the paused iteration, and re-enters that route with the child data the records reproduce.
-- **Per-invocation identity** (architecture review §5, addition 1). A route can run twice in one turn under the same child `patternId`, so each child `pattern_enter` carries its `iteration`. Today it carries only the route and the loop id (`decisionLoop.server.ts:473-477`). A paused child's `pattern_exit` says `paused` rather than `completed` (`:557-560`). The paused iteration still writes no record (`:566`), so no stale "waiting" preview reaches the decision state (addition 2). That iteration's stats and record span both halves; its wall time excludes the wait.
-- **`simpleLoop`** rebuilds its turn log from its own `controller_action`, `tool_call` and `tool_result` events in the open bracket. It applies the same projection it used when it first built each entry (`resultOmit` and the result cap, `simpleLoop.server.ts:1056-1075`), keeps its turn count against `maxTurns`, and calls the controller next. The held call's entry now carries the outcome, so that next controller call sees "written: 3 nodes created". This path is separate from the prior-results path, so `rememberPriorTurns: false` keeps its meaning.
+- **Per-invocation identity** (architecture review §5, addition 1). A route can run twice in one turn under the same child `patternId`, so each child `pattern_enter` carries its `iteration`. Today it carries only the route and the loop id (`decisionLoop.server.ts:473-477`). A paused child's `pattern_exit` says `paused` rather than `completed` (`:560-562`). The paused iteration still writes no record (`:566`), so no stale "waiting" preview reaches the decision state (addition 2). That iteration's stats and record span both halves; its wall time excludes the wait.
+- **`simpleLoop`** rebuilds its turn log from its own `controller_action`, `tool_call` and `tool_result` events in the open bracket. It applies the same projection it used when it first built each entry (`resultOmit` and the result cap, `simpleLoop.server.ts:1061-1080`), keeps its turn count against `maxTurns`, and calls the controller next. The held call's entry now carries the outcome, so that next controller call sees "written: 3 nodes created". This path is separate from the prior-results path, so `rememberPriorTurns: false` keeps its meaning.
 - **The wrappers in between.**
   - `withReferences` replays its recorded selection (the `reference_attached` event, `with-references.server.ts:293`) instead of calling the selector again.
   - `withInjectionGuard` holds no per-invocation state.
@@ -474,14 +535,14 @@ A new message sent while a write waits supersedes it (`continueSession`), and th
 
 ## Data between routes
 
-- **Files**, once P4 is wired, move through the stash: `graph_file_ingest` → stash → `/work/in` on `doc_ag`'s next entry, or within one entry after N4. Those are real bytes (security review §5), so the path itself stays off until file-path pseudonymisation is wired (S-f), with `graph_file_ingest` withheld by exact name beforehand.
+- **Files** move through the stash: `graph_file_ingest` → stash → `/work/in`, within the same entry since N4. Those are real bytes (security review §5). P4 keeps them real and protects the exits instead ([The file path (P4)](#the-file-path-p4)).
 - **Results that are not files.** Under round 1's option (c), as ruled, these reach the sandbox by being materialised into `/work/in/turn/` on entry. This shape narrows (c) to the **handoff**: only the last N route outputs are materialised, the same records the child already sees in `plan_context`, not every tool result of the turn. That settles round 1's "every result, or only referenced ones" question without a `ref:` argument, since routes take no arguments.
 
-  It stays gated on P4, and keeps both review conditions:
+  It is **deferred**: neither the file path nor scenarios 15/16 need it. P4's ruling does not enable it. It keeps both review conditions:
   - the materialised files are wiped on entry **and** on exit;
   - promotion skips any `/work/out` file whose hash matches a materialised one.
 
-  The S3 option takes a pseudonymiser, with no boolean form, so "on without P4" cannot be written (security review §6).
+  Security review §6 asked for an option with no boolean form, so that "on without P4" could not be written; it proposed a pseudonymiser-valued option. P4 now keeps no pseudonymiser on the file path, so the option's form is settled when materialisation is designed. Neither a boolean nor an env var may switch it on.
 
 ## Synthesis
 
@@ -497,7 +558,15 @@ The fix is small and stated as a slice item: `thread` mode honours `viewConfig.f
   - No production code pauses today.
 - **P2 — The stuck-run reaper.** Its 25-call bound assumes one loop per turn. This shape is up to 6 iterations of up to 15-call children. Arithmetic: 6 × 15 + 6 decisions + 1 synthesis = 97. The architecture review's fix applies unchanged: reap on a dead turn lease, with an age backstop. Ruled A1 in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323): the age bound is a named constant with its justification beside it.
 - **P3 — The injection boundary.** As stated in [the guards section](#where-memory-guards-and-the-sandbox-sit), plus **G13 landed, with its evidence**: no egress from Neo4j, and `file://` closed. [G13](https://github.com/mknw/hames-playground/issues/241#issuecomment-6181475778) replaces the historical [G12 S-a](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323) procedure allow-list dependency; free-form Cypher stays. In both compose files, Neo4j must be isolated on its internal network behind the relay, file-URL CSV imports disabled, and APOC file imports off. The G13 implementation PR must carry the specified throwaway-project evidence: public `apoc.load.json` and gateway `apoc.load.jsonParams` POST fail from Neo4j; Redis and Postgres are unreachable; host and gateway Bolt through the relay work; dropping `internal: true` or reconnecting Neo4j to `app-network` makes the egress test fail. These are dependency evidence requirements, not checks run by this docs PR. Historical residual wording: **`LOAD CSV` survives the allow-list**; that network/file-read exposure is closed by G13, rather than left as an allow-list residual. The surviving risk is in `info_ag`: graph rows and untrusted web text share a loop with a model-chosen `fetch` URL or `web_search` query. The guard reduces this risk but cannot stop every paraphrased instruction; Neo4j isolation does not constrain those app-side web calls.
-- **P4 — Pseudonymisation** on the materialisation path, unchanged from round 1. It depends on `graph-pseudonymisation.md`'s Q1, Q2, Q3 and Q5. The file path carries real bytes too, so **the path**, not just its pseudonymiser, stays off until wired: `graph_file_ingest` is withheld from the slice-3 effective tool allowlist by exact name. Ruled S-f in [G12](https://github.com/mknw/hames-playground/issues/507#issuecomment-6143165323): the `graph_file_ingest` → `/work/in` path is pseudonymised as well, and stays off until wired.
+- **P4 — The file path. Ruled by the owner on 2026-10-19**, specified in [The file path (P4)](#the-file-path-p4). It answers `graph-pseudonymisation.md`'s questions for this path:
+  - **Q1, the hook:** the exits rather than the bytes;
+  - **Q2, the store:** the stash copy unchanged;
+  - **Q3, the table:** none;
+  - **Q5, a stable pseudonym:** not applicable;
+  - plus the private-tier-only tool and the accepted limitation for people named only inside a file's body.
+
+  `graph_file_ingest` stays withheld by exact name until slice 5 lands. Materialisation of results that are not files is not part of P4 and stays deferred ([Data between routes](#data-between-routes)).
+
 - **P5 — The decisions model on the private tier.** **Order slice 3 after #418 G11's deletion/client-migration slice.** At the checked main commit the private decide role still resolves to `LocalQwenSmallDecide` (`packages/harness-baml/clients.server.ts:564-572`), so today's code would not enforce the shim-only refusal described here. After that prerequisite, G11 requires private-tier decisions to use a separately configured systemone URL (the self-hosted shim), refused when unset. Until the shim is served, this agent then works on the Anthropic tier only and shows a visible error on the private tier; this is target behaviour after G11, not a claim about current main.
 
 ## Rulings (G12, G14)
@@ -518,7 +587,8 @@ All 11 round-2 calls and the 3 departures from the sketch were accepted as recom
 - **N5, the iteration bound.** `maxIterations` defaults to 6. At the bound the loop stops as `answer`, with the answer marked partial.
 - **G14 (2026-10-15), pseudonymisation.** An outbound filter around `withReferences` on the web route (`info_ag`), on the private tier only, with no table kept and no reverse. The filter applies unless a run is explicitly on the Anthropic tier, and it covers the handoff data as well as the view. A roster that cannot be built withholds the references; they are never passed in clear. Designed in [Pseudonymisation guard on the web route](#pseudonymisation-guard-on-the-web-route).
 - **The three departures:** the retriever is its own route; `doc_ag` is the sketch's second form; `answer` (`done` in G12) is a choice, so the synthesizer answers once.
-- **Writes (owner, 2026-10-16 and 2026-10-17).** #396 is closed: writes are gated by a person, not prevented by read-only defaults. After an approval the run continues inside the route as if it had not stopped. Designed in [Writes, gated by a person](#writes-gated-by-a-person). Calls H1 (a separate `graph-edit` route) and H2 (who may approve) are open.
+- **Writes (owner, 2026-10-16 and 2026-10-17).** #396 is closed: writes are gated by a person, not prevented by read-only defaults. After an approval the run continues inside the route as if it had not stopped. Designed in [Writes, gated by a person](#writes-gated-by-a-person). On 2026-10-19 the owner accepted H1 (a separate `graph-edit` route) and H2 (any allow-listed user approves writes proposed in their own conversation).
+- **P4 (owner, 2026-10-19), the file path.** It is protected at its exits, not by rewriting bytes; the stash copy is unchanged and no table is kept; the tool runs only on a positively private tier; people named only inside a file's body are an accepted limitation. This settles S-f as G14 reads it. Designed in [The file path (P4)](#the-file-path-p4).
 
 The round-1 reviewers' terms (architecture 6068693140, security 6068708025) bind the delta review. Nothing is built before that review converges.
 
@@ -535,7 +605,7 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
 3. P2, P3 (G13 landed with its evidence) and P5 (G11 deletion/client migration first) are met;
 4. P1 is met, or "no gates in routes" is pinned. A write request enters an allowlist only with slices 6, 8 and 9;
 5. the M7 memory opt-in moves with it;
-6. until P4, `graph_file_ingest` is absent by name, its file path stays off, and no turn-results materialisation capability is declared. The fetch → read back → compute case that needs this path remains gated on P4.
+6. until slice 5 lands, `graph_file_ingest` is absent by name and its file path stays off. With slice 5 it is present, behind the tool's private-tier and embedder checks and their pins. No turn-results materialisation capability is declared either way.
 
 ## Slices (dispatched only after owner approval)
 
@@ -558,7 +628,14 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
 3. **The agent**: `general-next`, its orchestrator and per-route guards, and the exact-tool-name walk pin, with an app-path e2e over a synthetic case supported by the enabled capabilities. Gated on P2, **G13 landed with its evidence** (P3), and **G11 deletion/client migration** (P5). Use `patternId: 'retriever'` consistently with reference sources, and pin that the nested Redis capability probe sees it. Until P4, pin by name that the effective `MS365_TOOLS` excludes `graph_file_ingest` and `general-next` declares no turn-results capability.
    The source/formatter/failure/data-isolation pins in slice 1 and these composition pins belong to layer 1 (unit); this slice's real-turn scenario belongs to layer 2 (app-path e2e). They are implementation obligations, not tests added or run by this design PR.
 4. **`withSandbox` re-hydrate on stash write** (N4). A core change with its own review.
-5. **Materialisation and enabling the file path**, gated on P4. The pseudonymiser-valued option has no boolean form. Include a source-scan pin that no env var can enable materialisation; pin entry/exit wipes and the verbatim-hash promotion block; pin that the materialiser never reads `content_sanitized` data with the same two-event fixture as slice 1. Only after file-path pseudonymisation and N4 are wired may `graph_file_ingest` enter the effective allowlist and its file path run. These deterministic pins belong to layer 1.
+5. **The Graph file path (P4)**, as [specified](#the-file-path-p4):
+   - `graph_file_ingest` in `office-data`'s allowlist;
+   - the host-injected private-tier predicate and the embedder check, both in the tool's executor, so they cover every caller;
+   - the actor prompt and the route description updated;
+   - the pins listed there (layer 1), and scenarios 15/16 ungated in the Eval.
+
+   N4 is already built (slice 4). **Materialisation** of results that are not files is not part of this slice and stays deferred. When it is designed, its conditions still bind: no boolean or env-var switch (pinned by source scan), wipes on entry and exit, the verbatim-hash promotion block, and a materialiser that never reads `content_sanitized` data (pinned with slice 1's two-event fixture).
+
 6. **Resume inside a route** (P1), in core, as [specified](#resume-inside-a-route-slice-6):
    - `decisionLoop`, `simpleLoop` and the wrappers between them rebuild their state from their own events in the current run;
    - `iteration` on each child `pattern_enter`, and `paused` on a paused child's `pattern_exit`;
@@ -569,7 +646,7 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
    - the write request tool and its checks (placeholder, guard marker, size, `EXPLAIN`, no batch);
    - the frozen statement in the encrypted host row behind `payloadRef`;
    - the host's `resolve` dispatching on `request.kind`, with the idempotent write and its same-transaction marker;
-   - the `graph-edit` route, if H1 is accepted;
+   - the `graph-edit` route (H1);
    - `write_neo4j_cypher` still withheld and the gateway still read-only, each pinned.
 9. **The UI for blocking requests**, which can be built alongside slice 8: the transcript card, the `graph-write` dialog body, inbox entries, the client resume, and the owner-gated read of the frozen statement. Its checks belong to the component and browser layers.
 

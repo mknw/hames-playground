@@ -44,6 +44,13 @@ def docker_env():
     return {key: value for key, value in os.environ.items() if not key.startswith("DOCKER_")}
 
 
+def pinned_image(value):
+    # Config IDs survive docker save/load without a registry. An archive's hash
+    # is provenance, never a Docker image selector.
+    return isinstance(value, str) and re.fullmatch(
+        r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{64}", value) is not None
+
+
 def authorize_host_docker(args, host_scope=None):
     """The production gate, including callers which spawn streaming children."""
     args = tuple(args)
@@ -74,7 +81,7 @@ def authorize_host_docker(args, host_scope=None):
     require(option("--entrypoint") == "timeout", "host baseline must self expire")
     image_index = tail.index("--entrypoint") + 2
     require(image_index + 2 < len(tail)
-            and re.fullmatch(r"[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}", tail[image_index])
+            and pinned_image(tail[image_index])
             and tail[image_index + 1].isdigit() and 0 < int(tail[image_index + 1]) <= 900,
             "host baseline expiry/image required")
 
@@ -750,7 +757,7 @@ def preflight(args):
         require(canary and ipaddress.IPv4Address(canary[1]).is_private and 1 <= int(canary[2]) <= 65535,
                 "private data-network canary IPv4:port required")
         for image in (args.base_image, args.data_image, args.office_image, args.app_image):
-            require(image and re.fullmatch(r"[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}", image),
+            require(pinned_image(image),
                     "preloaded digest-pinned images required")
     require(1024 <= args.tls_port <= 65534, "unprivileged TLS port and adjacent canary port required")
     Spike(args, DEFAULT_STATE).bridge_insert_position()  # nft-only Docker backend is not supported.

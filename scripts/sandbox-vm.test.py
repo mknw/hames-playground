@@ -673,6 +673,19 @@ class Safety(unittest.TestCase):
             self.args.allow_ufw_route = True
             vm.preflight(self.args)
 
+    def test_config_image_pins_additive_in_preflight(self):
+        self.preflight_fixture()
+        self.args.measure = self.args.tls = True
+        self.args.app_network, self.args.probe_network = "app-net", "other-net"
+        self.args.data_canary = "10.231.1.5:15432"
+        for pin in ("sha256:" + "a" * 64, "synthetic@sha256:" + "a" * 64):
+            self.args.base_image = self.args.data_image = self.args.office_image = self.args.app_image = pin
+            vm.preflight(self.args)
+        for pin in ("synthetic:latest", "a" * 64, "sha256:" + "A" * 64, "sha256:abcd", "sha256:" + "a" * 12, "sha256:" + "a" * 63, None):
+            self.args.base_image = pin
+            with self.assertRaisesRegex(RuntimeError, "digest-pinned"):
+                vm.preflight(self.args)
+
     def test_concurrency_schema_distinguishes_baseline_and_nested(self):
         metrics = {f"{kind}_concurrency{count}_{field}": 1 for kind in ("baseline", "nested")
                    for count in (4, 8) for field in ("work_p50_ms", "work_p95_ms", "memory_kib", "headroom_kib")}
@@ -760,6 +773,12 @@ class Safety(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     vm.command("docker", "--host", vm.HOST_SOCKET, *bad, host_scope=self.spike)
             self.assertEqual(runner.call_count, 1)
+            config_argv = tuple("sha256:" + "a" * 64 if arg == image else arg for arg in argv)
+            vm.command("docker", "--host", vm.HOST_SOCKET, *config_argv, host_scope=self.spike)
+            for pin in ("synthetic:latest", "sha256:abcd", "sha256:" + "a" * 12, "sha256:" + "a" * 63, "a" * 64):
+                with self.assertRaises(RuntimeError):
+                    vm.command("docker", "--host", vm.HOST_SOCKET,
+                               *tuple(pin if arg == image else arg for arg in argv), host_scope=self.spike)
         for label in ("foreign", self.spike.token):
             with patch.object(vm.subprocess, "run", return_value=result(json.dumps({"sandbox-vm-spike": label}))) as runner:
                 if label == "foreign":
@@ -998,6 +1017,12 @@ def mutations():
                "runbook": (ROOT / "docs/deployment/sandbox-vm-spike.md").read_text(),
                "index": (ROOT / "docs/INDEX.md").read_text()}
     changes = [
+        ("config ID preflight accepts mutable tag", "core", '            require(pinned_image(image),', '            require(True,', "test_config_image_pins_additive_in_preflight"),
+        ("host admission accepts mutable tag", "core", 'and pinned_image(tail[image_index])', 'and True', "test_host_run_caps_prefix_label_expiry_and_exec_ownership"),
+        ("abbreviated config ID admitted at preflight", "core", 'r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{64}"', 'r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{12,64}"', "test_config_image_pins_additive_in_preflight"),
+        ("abbreviated config ID admitted at host admission", "core", 'r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{64}"', 'r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{12,64}"', "test_host_run_caps_prefix_label_expiry_and_exec_ownership"),
+        ("requested config ID compared by prefix", "measure", 'host == image', 'host[:19] == image[:19]', "test_config_id_must_match_requested_content"),
+        ("requested config ID not verified", "measure", 'not image.startswith("sha256:") or host == image', 'True', "test_config_id_must_match_requested_content"),
         ("author 1 drop rollback", "core", "            spike.rollback()", "            pass", "test_regression_rolls_back_install_and_firewall"),
         ("author 2 drop sshd guard", "core", "sshd_fingerprint() == ssh_guard", "True", "test_sshd_guard_fails_before_witness"),
         ("author 3 drop DOCKER-USER allow", "core", 'command("iptables", "-I", "DOCKER-USER", position, *rule)', "pass", "test_bridge_allow_reaches_docker_user"),

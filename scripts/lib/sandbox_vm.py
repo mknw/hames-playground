@@ -719,8 +719,13 @@ def preflight(args):
     require(args.ssh_probe and args.ssh_probe.is_absolute() and args.ssh_probe.is_file(),
             "independent SSH witness executable required")
     for package in ("incus", "incus-base", "incus-client"):
-        require(not command("dpkg-query", "-W", "-f=${Status}", package, check=False).stdout.strip()
-                .endswith("installed"), "pre-existing Incus refused")
+        query = command("dpkg-query", "-W", "-f=${Status}", package, check=False)
+        status = query.stdout.split()
+        # remove leaves conffiles, not installed payload. Refuse holds, broken
+        # flags, installed/partial states and failed or contradictory queries.
+        require((query.returncode == 1 and not status) or (query.returncode == 0 and len(status) == 3 and status[0] in ("unknown", "install", "deinstall", "purge")
+                and status[1] == "ok" and status[2] in ("not-installed", "config-files")),
+                "pre-existing Incus refused")
     require(paging() and Path("/dev/kvm").is_char_device(), "nested paging/KVM unavailable")
     require(args.kvm_user and args.kvm_user != "root", "non-root KVM user required")
     command("runuser", "-u", args.kvm_user, "--", "python3", "-c",

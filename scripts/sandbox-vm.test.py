@@ -603,6 +603,8 @@ class Safety(unittest.TestCase):
         def boundary(*args, **kw):
             if args[0] == "systemctl":
                 return result("InvocationID=" + "a" * 32 + "\nKillMode=mixed\nTimeoutStopUSec=15min\nRuntimeMaxUSec=infinity\n")
+            if args[0] == "dpkg-query":
+                return result(code=1)
             if args[0] == "qemu-img":
                 return result(json.dumps({"format": "qcow2", "virtual-size": 2 * 1024 ** 3}))
             if args[:2] == ("id", "-nG"):
@@ -820,6 +822,97 @@ class Safety(unittest.TestCase):
                 return original(*args, **kw)
             with self.subTest(package=package), patch.object(vm, "command", side_effect=boundary), self.assertRaisesRegex(RuntimeError, "pre-existing Incus"):
                 vm.preflight(self.args)
+
+    def test_preexisting_incus_dpkg_status_matrix(self):
+        self.preflight_fixture()
+        original = vm.command.side_effect
+        states = {"not-installed": True, "config-files": True, "half-installed": False,
+                  "unpacked": False, "half-configured": False, "triggers-awaited": False,
+                  "triggers-pending": False, "installed": False}
+        for package in ("incus", "incus-base", "incus-client"):
+            for selection in ("unknown", "install", "hold", "deinstall", "purge"):
+                for flag in ("ok", "reinstreq"):
+                    for state, absent in states.items():
+                        status = selection + " " + flag + " " + state
+                        def boundary(*args, **kw):
+                            if args[0] == "dpkg-query" and args[-1] == package:
+                                self.assertEqual(args[:3], ("dpkg-query", "-W", "-f=${Status}"))
+                                return result(status + "\n")
+                            return original(*args, **kw)
+                        with self.subTest(package=package, status=status), patch.object(vm, "command", side_effect=boundary):
+                            if absent and selection != "hold" and flag == "ok":
+                                vm.preflight(self.args)
+                            else:
+                                with self.assertRaisesRegex(RuntimeError, "pre-existing Incus"):
+                                    vm.preflight(self.args)
+
+    def test_removed_incus_records_allow_preflight(self):
+        self.spike.installed = True
+        with patch.object(vm, "command", side_effect=self.fake):
+            self.spike.remove_install()
+        self.assertFalse(self.spike.installed)
+        self.preflight_fixture()
+        original = vm.command.side_effect
+        # apt remove leaves these records; a never-recorded package has no stdout.
+        for statuses in ({"incus": "unknown ok not-installed", "incus-client": "unknown ok not-installed",
+                          "incus-base": "deinstall ok config-files"}, {}):
+            def boundary(*args, **kw):
+                if args[0] == "dpkg-query":
+                    return result(statuses[args[-1]] + "\n") if statuses else result(code=1)
+                return original(*args, **kw)
+            with self.subTest(statuses=statuses), patch.object(vm, "command", side_effect=boundary):
+                vm.preflight(self.args)
+
+    def test_preexisting_incus_query_results(self):
+        self.preflight_fixture()
+        original = vm.command.side_effect
+        cases = [("", 1, True), ("unknown ok not-installed\n", 0, True),
+                 ("deinstall ok config-files\n", 0, True),
+                 (" \tunknown\tok\nnot-installed \n", 0, True),
+                 ("", 2, False), ("", -15, False), ("", 0, False), ("", 127, False),
+                 ("unknown ok not-installed", 2, False),
+                 ("unknown ok not-installed", 1, False),
+                 ("unknown ok not-installed", -15, False),
+                 ("install ok installed", 1, False)]
+        for package in ("incus", "incus-base", "incus-client"):
+            for stdout, code, allowed in cases:
+                def boundary(*args, **kw):
+                    if args[0] == "dpkg-query" and args[-1] == package:
+                        return result(stdout, code=code, stderr="dpkg-query: error: parsing file /var/lib/dpkg/status" if code == 2 else "")
+                    return original(*args, **kw)
+                with self.subTest(package=package, stdout=stdout, code=code), patch.object(vm, "command", side_effect=boundary) as runner:
+                    if allowed:
+                        vm.preflight(self.args)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "pre-existing Incus"):
+                            vm.preflight(self.args)
+                        self.assertEqual(runner.call_args.args, ("dpkg-query", "-W", "-f=${Status}", package))
+                        self.assertTrue(all(call.args[0] in ("systemctl", "dpkg-query") for call in runner.call_args_list))
+
+    def test_preexisting_incus_malformed_status_refused(self):
+        self.preflight_fixture()
+        original = vm.command.side_effect
+        statuses = ("future ok not-installed", "unknown future not-installed", "unknown ok future",
+                    "unknown ok not-installed extra", "unknown", "unknown ok",
+                    "unknown ok not-installed\ninstall ok installed")
+        for package in ("incus", "incus-base", "incus-client"):
+            for status in statuses:
+                def boundary(*args, **kw):
+                    if args[0] == "dpkg-query" and args[-1] == package:
+                        return result(status)
+                    return original(*args, **kw)
+                with self.subTest(package=package, status=status), patch.object(vm, "command", side_effect=boundary) as runner:
+                    with self.assertRaisesRegex(RuntimeError, "pre-existing Incus"):
+                        vm.preflight(self.args)
+                    self.assertEqual(runner.call_args.args, ("dpkg-query", "-W", "-f=${Status}", package))
+
+    def test_runbook_removed_incus_state_and_prelaunch_check(self):
+        runbook = Path(os.environ.get("SANDBOX_VM_RUNBOOK", ROOT / "docs/deployment/sandbox-vm-spike.md")).read_text()
+        prose = " ".join(runbook.split())
+        self.assertIn("Installed, partial, held or `reinstreq` Incus packages are refused; removed packages are admitted, including `config-files` residue. Retained `/var/lib/incus` state is reused by the reinstall.", prose)
+        self.assertIn("Before launch, perform this read-only check of `/var/lib/incus/{virtual-machines,containers,storage-pools,images}`", prose)
+        self.assertIn("sudo find /var/lib/incus/{virtual-machines,containers,storage-pools,images} -mindepth 1 -maxdepth 1 -print", runbook)
+        self.assertIn("These directories must hold nothing beyond this harness's earlier rollback; stop if any entry is foreign or unexplained. Missing directories are acceptable. Preflight does not enforce this check.", prose)
 
     def test_pending_resources_prevent_package_removal(self):
         self.spike.installed = True
@@ -1117,7 +1210,39 @@ def mutations():
         ('R4 stop budget removed', 'core', 'int(stop[1]) * {"s": 1, "min": 60, "h": 3600}[stop[2]] >= 900', 'True', 'test_launch_properties_each_refused_independently'),
         ('R4 InvocationID match removed', 'core', 'properties.get("InvocationID") == os.environ["INVOCATION_ID"]', 'True', 'test_launch_properties_each_refused_independently'),
         ('R4 rollback SIG_IGN removed', 'core', '            signal.signal(sig, signal.SIG_IGN)', '            pass', 'test_rollback_ignores_all_disconnect_signals'),
-        ('R4 pre-existing Incus refusal removed', 'core', 'require(not command("dpkg-query",', 'require(True or not command("dpkg-query",', 'test_preexisting_incus_each_package_refused'),
+        ('R4 pre-existing Incus refusal removed', 'core', 'require((query.returncode == 1 and not status) or (', 'require(True or (', 'test_preexisting_incus_each_package_refused'),
+        ('dpkg endswith installed restored', 'core', '(query.returncode == 1 and not status) or (query.returncode == 0 and len(status) == 3 and status[0] in ("unknown", "install", "deinstall", "purge")\n                and status[1] == "ok" and status[2] in ("not-installed", "config-files"))', 'not " ".join(status).endswith("installed")', 'test_removed_incus_records_allow_preflight'),
+        ('dpkg absent record refused', 'core', 'query.returncode == 1 and not status', 'False', 'test_removed_incus_records_allow_preflight'),
+        ('dpkg config-files refused', 'core', 'status[2] in ("not-installed", "config-files")', 'status[2] in ("not-installed",)', 'test_preexisting_incus_dpkg_status_matrix'),
+        ('dpkg half-installed accepted', 'core', 'status[2] in ("not-installed", "config-files")', 'status[2] in ("not-installed", "config-files", "half-installed")', 'test_preexisting_incus_dpkg_status_matrix'),
+        ('dpkg unpacked accepted', 'core', 'status[2] in ("not-installed", "config-files")', 'status[2] in ("not-installed", "config-files", "unpacked")', 'test_preexisting_incus_dpkg_status_matrix'),
+        ('dpkg half-configured accepted', 'core', 'status[2] in ("not-installed", "config-files")', 'status[2] in ("not-installed", "config-files", "half-configured")', 'test_preexisting_incus_dpkg_status_matrix'),
+        ('dpkg triggers-awaited accepted', 'core', 'status[2] in ("not-installed", "config-files")', 'status[2] in ("not-installed", "config-files", "triggers-awaited")', 'test_preexisting_incus_dpkg_status_matrix'),
+        ('dpkg triggers-pending accepted', 'core', 'status[2] in ("not-installed", "config-files")', 'status[2] in ("not-installed", "config-files", "triggers-pending")', 'test_preexisting_incus_dpkg_status_matrix'),
+        ('dpkg installed accepted', 'core', 'status[2] in ("not-installed", "config-files")', 'status[2] in ("not-installed", "config-files", "installed")', 'test_preexisting_incus_dpkg_status_matrix'),
+        ('dpkg hold accepted', 'core', 'status[0] in ("unknown", "install", "deinstall", "purge")', 'status[0] in ("unknown", "install", "hold", "deinstall", "purge")', 'test_preexisting_incus_dpkg_status_matrix'),
+        ('dpkg reinstreq accepted', 'core', 'status[1] == "ok"', 'True', 'test_preexisting_incus_dpkg_status_matrix'),
+        ('Codex P1 and Opus 1 absent return code ignored', 'core', 'query.returncode == 1 and not status', 'not status', 'test_preexisting_incus_query_results'),
+        ('Codex P1 empty success accepted', 'core', 'query.returncode == 1 and not status', 'query.returncode in (0, 1) and not status', 'test_preexisting_incus_query_results'),
+        ('Codex P1 successful return code ignored', 'core', 'query.returncode == 0 and ', '', 'test_preexisting_incus_query_results'),
+        ('Codex P1 nonzero status contradiction accepted', 'core', 'query.returncode == 1 and not status', 'query.returncode == 1', 'test_preexisting_incus_query_results'),
+        ('Codex P2 unknown selection accepted', 'core', 'status[0] in ("unknown", "install", "deinstall", "purge")', 'status[0] != "hold"', 'test_preexisting_incus_malformed_status_refused'),
+        ('Codex P2 unknown flag accepted', 'core', 'status[1] == "ok"', 'status[1] != "reinstreq"', 'test_preexisting_incus_malformed_status_refused'),
+        ('Codex P2 extra tokens accepted', 'core', 'len(status) == 3', 'len(status) >= 3', 'test_preexisting_incus_malformed_status_refused'),
+        ('Codex P2 unknown state accepted', 'core', 'status[2] in ("not-installed", "config-files")', 'status[2] not in ("half-installed", "unpacked", "half-configured", "triggers-awaited", "triggers-pending", "installed")', 'test_preexisting_incus_malformed_status_refused'),
+        ('Opus 3 exact token count removed', 'core', 'len(status) == 3 and ', '', 'test_preexisting_incus_malformed_status_refused'),
+        ('Opus drop unknown selection', 'core', 'status[0] in ("unknown", "install", "deinstall", "purge")', 'status[0] in ("install", "deinstall", "purge")', 'test_preexisting_incus_dpkg_status_matrix'),
+        ('Opus drop install selection', 'core', 'status[0] in ("unknown", "install", "deinstall", "purge")', 'status[0] in ("unknown", "deinstall", "purge")', 'test_preexisting_incus_dpkg_status_matrix'),
+        ('Opus drop purge selection', 'core', 'status[0] in ("unknown", "install", "deinstall", "purge")', 'status[0] in ("unknown", "install", "deinstall")', 'test_preexisting_incus_dpkg_status_matrix'),
+        ('Opus installed-only state deny-list', 'core', 'status[2] in ("not-installed", "config-files")', 'status[2] != "installed"', 'test_preexisting_incus_dpkg_status_matrix'),
+        ('Opus split on literal spaces', 'core', 'status = query.stdout.split()', 'status = query.stdout.strip().split(" ")', 'test_preexisting_incus_query_results'),
+        ('Opus check only incus', 'core', 'for package in ("incus", "incus-base", "incus-client"):', 'for package in ("incus",):', 'test_preexisting_incus_each_package_refused'),
+        ('Opus 2 runbook residue rule removed', 'runbook', 'Installed, partial, held or\n`reinstreq` Incus packages are refused; removed packages are admitted, including\n`config-files` residue.', '', 'test_runbook_removed_incus_state_and_prelaunch_check'),
+        ('Opus 2 runbook retained state reuse removed', 'runbook', 'Retained `/var/lib/incus` state is reused by the reinstall.', '', 'test_runbook_removed_incus_state_and_prelaunch_check'),
+        ('Opus 2 runbook prelaunch check removed', 'runbook', 'Before launch, perform this read-only check of', 'After launch, perform this check of', 'test_runbook_removed_incus_state_and_prelaunch_check'),
+        ('Opus 2 runbook read-only command removed', 'runbook', 'sudo find /var/lib/incus/{virtual-machines,containers,storage-pools,images} -mindepth 1 -maxdepth 1 -print', '', 'test_runbook_removed_incus_state_and_prelaunch_check'),
+        ('Opus 2 runbook foreign residue stop removed', 'runbook', "stop if any entry is foreign or unexplained.", '', 'test_runbook_removed_incus_state_and_prelaunch_check'),
+        ('Opus 2 runbook manual check boundary removed', 'runbook', 'Preflight does not enforce this check.', '', 'test_runbook_removed_incus_state_and_prelaunch_check'),
         ('R4 remove_install pending resources guard removed', 'core', 'require(not self.owned, "retain Incus until pending resources can be recovered")', 'pass', 'test_pending_resources_prevent_package_removal'),
         ('R4 nft recovery ownership removed', 'core', 'require(re.fullmatch(re.escape(self.prefix.replace("-", "_"))', 'require(True or re.fullmatch(re.escape(self.prefix.replace("-", "_"))', 'test_firewall_foreign_entries_refused_without_commands'),
         ('R4 iptables recovery ownership removed', 'core', 'require("--comment" in rule', 'require(True or "--comment" in rule', 'test_firewall_foreign_entries_refused_without_commands'),

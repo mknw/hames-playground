@@ -34,8 +34,8 @@ not a security boundary against a compromised socket holder (SD-19/SD-20).
 [`scripts/metadata-egress.py`](../../scripts/metadata-egress.py) has no instance
 inputs. With no arguments it renders both families entirely offline, without
 calling Docker, iptables, a resolver or any endpoint
-(`scripts/metadata-egress.py:410`). Only explicit `--apply` enters Linux-root
-firewall writes (`:156`, `:372`); bootstrap checks the forwarded-only mode but
+(`scripts/metadata-egress.py:418`). Only explicit `--apply` enters Linux-root
+firewall writes (`:156`, `:380`); bootstrap checks the forwarded-only mode but
 never applies it. The original mode below includes host traffic; deployments
 that must preserve host metadata use `--docker-user-only` instead.
 
@@ -146,7 +146,7 @@ offline test is not deployment evidence.
 
 `--docker-user-only` shares the complete destination inventory and original-
 destination matches above, but installs direct tagged `DROP` rules only in
-`DOCKER-USER` (`scripts/metadata-egress.py:179`, `:372`). It creates no chain,
+`DOCKER-USER` (`scripts/metadata-egress.py:179`, `:380`). It creates no chain,
 changes no policy and never writes host `INPUT`/`OUTPUT`. Host agents retain
 their existing metadata access. Forwarded non-metadata traffic falls through
 to existing rules. A metadata request DNATed to a host-local listener follows
@@ -165,7 +165,7 @@ sudo python3 scripts/metadata-egress.py --docker-user-only --check
 Apply validates both live `FORWARD -> DOCKER-USER` paths before firewall writes.
 Missing IPv6 refuses; this tool does not manufacture an uncalled chain. Each
 exact rule is checked with `-C` before insertion with `-I DOCKER-USER 1`, ahead
-of established accepts and returns (`scripts/metadata-egress.py:192`, `:372`).
+of established accepts and returns (`scripts/metadata-egress.py:192`, `:380`).
 Repeated application inserts nothing. Dual-family readback requires every deny
 exactly once in the first block of rules (`:210`). Existing displaced/duplicate
 managed rules refuse admission rather than silently trusting `-C`. Operations
@@ -178,7 +178,7 @@ fsynced write-ahead journal. Only newly inserted exact rules, newly created
 persistence files and enablement performed by this installer are recorded
 (`scripts/metadata-egress.py:271`, `:317`). `--docker-user-only --apply --remove`
 reverses those entries, checks rule existence and deletes each by its complete
-argv; it never deletes by line number or restores a historical table (`:351`).
+argv; it never deletes by line number or restores a historical table (`:359`).
 Foreign/manual rules survive. An edited persistence file or an invalid journal
 entry refuses undo. Do not delete the journal or change its mode/ownership;
 another install/undo holding its lock causes immediate refusal. Serialize host
@@ -191,7 +191,7 @@ its own host policy, while the old design described a future systemd prerequisit
 `--persist --apply` now installs a root-owned copy of the reviewed script at
 `/usr/local/lib/vps-metadata-egress.py` and enables
 `/etc/systemd/system/vps-metadata-egress.service` (`scripts/metadata-egress.py:323`).
-It refuses foreign/different existing files, so a later script upgrade requires
+Files are published complete without overwriting raced-in files and their directory entries are synced. It refuses foreign/different existing files, so a later script upgrade requires
 operator review and a stopped-workload remove/reinstall. It never executes a
 mutable checkout on boot and adds no package dependency or saved-rules restore.
 
@@ -377,13 +377,13 @@ same committed runner). Bootstrap's two integration mutations run through
 
 | Forwarded-only claim                                                                                                   | Source                                           | Mutation                                                                                                                                                               |
 | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Both families deny forwarded metadata while host chains stay intact                                                    | `scripts/metadata-egress.py:179`, `:372`         | `forward-v6-missing`, `forward-host-touched`; the shared address/form mutations below also run                                                                         |
-| Every insert is first and preceded by an exact existence check; repeat apply writes no rule                            | `scripts/metadata-egress.py:192`, `:372`         | `forward-appended`, `forward-not-idempotent`                                                                                                                           |
+| Both families deny forwarded metadata while host chains stay intact                                                    | `scripts/metadata-egress.py:179`, `:380`         | `forward-v6-missing`, `forward-host-touched`; the shared address/form mutations below also run                                                                         |
+| Every insert is first and preceded by an exact existence check; repeat apply writes no rule                            | `scripts/metadata-egress.py:192`, `:380`         | `forward-appended`, `forward-not-idempotent`                                                                                                                           |
 | Parent, first block, complete/unique policy and lookup errors fail closed                                              | `scripts/metadata-egress.py:186`, `:196`, `:210` | `forward-parent-off`, `forward-readback-off`, `forward-first-off`, `forward-unique-off`, `forward-lookup-error-is-absence`                                             |
-| Dry-run does no work; writes require Linux root                                                                        | `scripts/metadata-egress.py:259`, `:372`         | `forward-dry-run-applies`, `forward-root-off`                                                                                                                          |
-| Journaled undo deletes exact owned rules and refuses foreign state                                                     | `scripts/metadata-egress.py:271`, `:317`, `:351` | `forward-removal-not-exact`, `forward-journal-write-off`, `forward-journal-rule-validation-off`, `forward-journal-file-validation-off`, `forward-state-ownership-off`  |
+| Dry-run does no work; writes require Linux root                                                                        | `scripts/metadata-egress.py:259`, `:380`         | `forward-dry-run-applies`, `forward-root-off`                                                                                                                          |
+| Journaled undo deletes exact owned rules and refuses foreign state                                                     | `scripts/metadata-egress.py:271`, `:317`, `:359` | `forward-removal-not-exact`, `forward-journal-write-off`, `forward-journal-rule-validation-off`, `forward-journal-file-validation-off`, `forward-state-ownership-off`  |
 | Persistence is installed, enabled, ordered after Docker/before the app and participates in restarts                    | `scripts/metadata-egress.py:31`, `:323`          | `persistence-missing`, `persistence-order-wrong`, `persistence-before-missing`, `persistence-restart-off`, `persistence-disabled`                                      |
-| Persistence installation/undo refuses foreign or edited files                                                          | `scripts/metadata-egress.py:323`, `:351`         | `persistence-file-clobber`, `persistence-undo-clobber`                                                                                                                 |
+| Persistence installation/undo refuses foreign or edited files                                                          | `scripts/metadata-egress.py:323`, `:359`         | `persistence-file-clobber`, `persistence-undo-clobber`, `persistence-partial-write`                                                                                    |
 | Smoke detects policy/unit absence, requires app health, uses no pulls/all caps dropped and rejects inconclusive output | `scripts/metadata-egress.py:234`                 | `smoke-rules-unchecked`, `smoke-unit-unchecked`, `smoke-enabled-unchecked`, `smoke-caps-kept`, `smoke-image-pull`, `smoke-refusal-unchecked`, `smoke-health-unchecked` |
 | The actual TCP program refuses success and enforces a short deadline                                                   | `scripts/metadata-egress.py:220`                 | `smoke-probe-false-success`, `smoke-probe-unbounded`                                                                                                                   |
 | Bootstrap invokes this smoke and propagates failure                                                                    | `scripts/bootstrap-vps.sh:1796`                  | `metadata-smoke-wiring`, `metadata-smoke-failure-ignored`                                                                                                              |
@@ -399,7 +399,7 @@ The original full-host mode retains these pins:
 | Established/related metadata packets are denied before any existing accept.                           | `scripts/metadata-egress.py:145`         | `established-bypass` appends the jump after existing accepts/returns.                                                                                           |
 | Both address families and the declared alternate forms are covered.                                   | `scripts/metadata-egress.py:23`, `:59`   | `ipv6-gap`, `ipv6-service`, `ipv6-gcp`, `ipv6-linklocal`, `mapped-gap`, `compatible-gap`, `nat64-gap`, `local-nat64-gap` each remove a family/address/form.     |
 | Required relay/MCP/private-service and public egress keep existing policy; Docker denies stay denied. | `scripts/metadata-egress.py:104`         | `relay-path-cut` adds an RFC1918 blanket deny; `mcp-egress-cut` replaces the final return with drop.                                                            |
-| Default invocation performs no host commands; applying requires Linux root.                           | `scripts/metadata-egress.py:429`         | `dry-run-applies` makes apply unconditional; `root-gate` removes the platform/uid check.                                                                        |
+| Default invocation performs no host commands; applying requires Linux root.                           | `scripts/metadata-egress.py:437`         | `dry-run-applies` makes apply unconditional; `root-gate` removes the platform/uid check.                                                                        |
 | Both syntax preflights precede writes.                                                                | `scripts/metadata-egress.py:160`         | `no-syntax-preflight` removes restore's test flag. Missing IPv6 also causes zero writes.                                                                        |
 | Repeated reconciliation leaves one first hook and preserves unrelated rules.                          | `scripts/metadata-egress.py:142`         | `duplicate-hooks` stops deleting old managed jumps; `table-flush` removes the no-flush option.                                                                  |
 | Wrong readback cannot report success.                                                                 | `scripts/metadata-egress.py:170`         | `no-readback` accepts any managed policy; `save-canonicalization` stops normalizing option order.                                                               |

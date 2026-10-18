@@ -331,12 +331,20 @@ def persist_forwarded(entries):
                     "existing persistence file differs; operator review required")
     for path, content in files:
         if not path.exists():
-            record(entries, {"kind": "file", "path": str(path), "content": content})
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-            with os.fdopen(fd, "w") as stream:
+            # Publish complete files without replacing a raced-in foreign file.
+            # A killed write must not leave a partial unit/script that undo
+            # cannot distinguish from an operator edit.
+            with tempfile.NamedTemporaryFile(mode="w", dir=path.parent) as stream:
                 stream.write(content)
                 stream.flush()
                 os.fsync(stream.fileno())
+                record(entries, {"kind": "file", "path": str(path), "content": content})
+                os.link(stream.name, path)
+                directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
     command(["systemctl", "daemon-reload"])
     enabled = probe(["systemctl", "is-enabled", UNIT.name])
     require((enabled.returncode == 0 and enabled.stdout.strip() == "enabled") or

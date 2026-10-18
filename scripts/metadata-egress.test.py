@@ -575,6 +575,25 @@ class Forwarded(unittest.TestCase):
             self.assertEqual(self.invoke("--apply", "--remove"), 1)
             self.assertEqual(self.calls, [])
 
+    def test_failed_persistence_write_publishes_no_partial_file_and_undo_works(self):
+        original = egress.tempfile.NamedTemporaryFile
+
+        @contextlib.contextmanager
+        def interrupted(**kwargs):
+            with original(**kwargs) as stream:
+                def write(content):
+                    stream.write(content[:len(content) // 2])
+                    raise OSError("synthetic interrupted write")
+                yield SimpleNamespace(write=write)
+
+        with patch.object(egress.tempfile, "NamedTemporaryFile", interrupted):
+            self.assertEqual(self.invoke("--apply", "--persist"), 1)
+        self.assertFalse(egress.INSTALLED_SCRIPT.exists())
+        self.assertFalse(egress.UNIT.exists())
+        self.assertFalse(self.enabled)
+        self.assertEqual(self.invoke("--apply", "--remove"), 0)
+        self.assertEqual(self.states, {f: initial() for f in self.states})
+
     def test_smoke_uses_local_cap_dropped_probe_and_app_health_with_no_firewall_writes(self):
         self.assertEqual(self.invoke("--apply", "--persist"), 0)
         self.calls.clear()
@@ -668,6 +687,25 @@ MUTATIONS = {
     "persistence-file-clobber": ('path.stat().st_mode & 0o022 == 0 and path.read_text() == content',
                                  'path.stat().st_mode & 0o022 == 0'),
     "persistence-undo-clobber": ('path.read_text() == entry["content"]', 'True'),
+    "persistence-partial-write": ('''            # Publish complete files without replacing a raced-in foreign file.
+            # A killed write must not leave a partial unit/script that undo
+            # cannot distinguish from an operator edit.
+            with tempfile.NamedTemporaryFile(mode="w", dir=path.parent) as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+                record(entries, {"kind": "file", "path": str(path), "content": content})
+                os.link(stream.name, path)
+                directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)''', '''            record(entries, {"kind": "file", "path": str(path), "content": content})
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            with os.fdopen(fd, "w") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())'''),
     "smoke-rules-unchecked": ('    check_forwarded()  # absence/drift', '    pass  # absence/drift'),
     "smoke-unit-unchecked": ('UNIT.is_file() and not UNIT.is_symlink() and UNIT.read_text() == service_unit()', 'True'),
     "smoke-enabled-unchecked": ('probe(["systemctl", "is-enabled", UNIT.name]).stdout.strip() == "enabled"', 'True'),

@@ -693,7 +693,7 @@ sudo python3 scripts/metadata-egress.py --docker-user-only --check # read-only
 This mode denies the reviewed IPv4/IPv6 metadata inventory and conntrack
 original destinations in `DOCKER-USER` only; host `INPUT`/`OUTPUT` and host
 metadata access retain their existing policy (`scripts/metadata-egress.py:179`,
-`:372`). `--only smoke` checks the installed rules and persistence, attempts a
+`:380`). `--only smoke` checks the installed rules and persistence, attempts a
 three-second TCP connection to `169.254.169.254:80` from a throwaway default-
 bridge container with all capabilities dropped, and requires app liveness both
 before and after (`scripts/bootstrap-vps.sh:1796`; `scripts/metadata-egress.py:234`).

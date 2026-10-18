@@ -1,4 +1,4 @@
-# Sandbox Docker connection contract
+# Sandbox package contract — Docker connections
 
 The Docker backend and interactive Shell share `docker-connection.server.ts`.
 This package owns endpoint selection; core harness patterns have no Docker
@@ -10,6 +10,9 @@ configuration.
   command argv and environment inheritance are unchanged. This preserves the
   existing local-socket setup and any operator-configured Docker CLI defaults;
   absence does not force a socket when the app already inherits a context.
+  If `DOCKER_HOST` or `DOCKER_CONTEXT` is inherited in this mode, the backend
+  warns once per process that backend/PTY and MCP streams can reach different
+  daemons and points to `SANDBOX_DOCKER_HOST`.
 - An explicit `SANDBOX_DOCKER_HOST` accepts an absolute `unix:///path` socket or
   `tcp://host:port` (DNS name, IPv4 or IPv6 literal). Empty/malformed endpoints,
   other schemes, credentials, query strings, fragments, encoded characters and
@@ -38,17 +41,20 @@ mutated. Explicit flags override Docker's saved default context as well.
 This applies to container run/inspect/remove/reset, reaper ps/remove/network
 prune, both MCP `exec -i` streams, proxy run/inspect/remove and network
 inspect/create/connect/remove, including failed-boot cleanup, and the Shell's
-`exec -it`. MCP retains the SDK's default environment allowlist rather than
+`exec -it`. The smoke scripts' image-inspection preflight uses it too. MCP
+retains the SDK's default environment allowlist rather than
 copying the whole app environment. Files still cross over MCP; no host mount
-or `docker cp` path is introduced (SD-21).
+or `docker cp` path is introduced.
 
 Configured backend errors omit full argv and redact endpoint/TLS filename
-values from Docker diagnostics. Configured MCP exec stderr is not forwarded to
-host logs, and handshake errors report a generic connection failure; legacy
+values from Docker diagnostics, including normalized HTTP(S) URLs, authorities,
+hostnames and bare Unix socket paths. Configured MCP exec stderr passes through
+the same redactor, on complete lines so chunk boundaries cannot expose values.
+Handshake errors attach the redacted original diagnostic as their cause; legacy
 stderr/error behavior remains unchanged. Certificate/key contents are never
 read by this module. Interactive shell output continues to reach its owner.
 
-This is connection plumbing, not an isolation claim (SD-19/SD-20). Daemon/VM
+This is connection plumbing, not an isolation claim. Daemon/VM
 provisioning, socket removal, firewall rules and cross-environment certificate
 rejection require separate deployment work and live evidence.
 
@@ -57,7 +63,11 @@ rejection require separate deployment work and live evidence.
 Layer 1 tests mock child boundaries, not this connection helper:
 `__tests__/docker-routing.test.ts` drives backend operations, both MCP streams,
 reaper, proxy/network lifecycle and PTY with conflicting inherited routing/TLS.
-`__tests__/docker-connection.test.ts` checks validation and diagnostic redaction.
+`__tests__/docker-connection.test.ts` checks validation without masking Unix
+refusals with TLS errors. Diagnostic redaction (CLI errors, MCP stderr and
+handshake causes) is checked in `__tests__/docker-routing.test.ts`. The smoke
+preflight also uses the selected endpoint, pinned in
+`__tests__/scripts/shared.test.ts`.
 Default-path tests pin the legacy argv/env shape. Every claimed path is
 mutation-checked by bypassing its endpoint selection; actual daemon routing,
 certificate authentication and interactive resize remain integration evidence

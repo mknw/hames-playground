@@ -46,18 +46,24 @@ describe('Docker connection validation', () => {
     'unix:///tmp/socket?x=y',
     'unix:///',
     'unix:///tmp/%00',
+    'unix:///tmp/a b',
+    'unix:///tmp/a\\b',
   ])('refuses malformed endpoint %j without echoing its value', (host) => {
-    expect(() => dockerConnectionFromEnv({ SANDBOX_DOCKER_HOST: host, ...tls })).toThrow(
-      /SANDBOX_DOCKER_/,
-    )
-    if (host.length > 3) {
-      try {
-        dockerConnectionFromEnv({ SANDBOX_DOCKER_HOST: host, ...tls })
-      } catch (error) {
-        expect(String(error)).not.toContain(host)
+    for (const settings of [{}, ...(host.startsWith('tcp:') ? [tls] : [])]) {
+      const env = { SANDBOX_DOCKER_HOST: host, ...settings }
+      expect(() => dockerConnectionFromEnv(env)).toThrow(
+        /requires an absolute Unix socket|is malformed|must not contain/,
+      )
+      if (host.length > 3) {
+        try {
+          dockerConnectionFromEnv(env)
+        } catch (error) {
+          expect(String(error)).not.toContain(host)
+        }
       }
     }
   })
+
   it.each(Object.keys(tls))('requires %s for TCP and refuses malformed file paths', (name) => {
     for (const value of [
       undefined,

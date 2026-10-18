@@ -220,7 +220,9 @@ See [GUIDE.md](GUIDE.md) for configuration and [SPEC.md](SPEC.md) for the
 contract and test boundaries. This selects a daemon; it does not provision VMs,
 remove socket mounts or establish network isolation.
 
-The existing wildcard export also makes `./docker-connection.server` available:
+The existing wildcard export makes `./docker-connection.server` available, but
+this subpath is **internal and unstable**, shared by the backend and PTY; it is
+**not a supported entry point**.
 `DockerConnection` is its readonly CLI-flag type, `dockerConnectionFromEnv(env?)`
 validates the generic environment settings, and `dockerInvocation(connection,
 args, baseEnv?)` prepares child argv/env. These server-only helpers are shared by

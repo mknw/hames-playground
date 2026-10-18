@@ -1,4 +1,5 @@
 /** #648: real backend/PTY callers, mocked child boundaries; no Docker or native addon. */
+import { PassThrough } from 'node:stream'
 import { EventEmitter } from 'node:events'
 import type { SpawnOptions } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -19,6 +20,7 @@ vi.mock('../with-sandbox.server', () => ({
 
 const children: Array<{ args: string[]; opts: SpawnOptions }> = []
 const streams: Array<{ args: string[]; env?: NodeJS.ProcessEnv; stderr?: string }> = []
+const stderrStreams: PassThrough[] = []
 let plan: (args: string[]) => {
   stdout?: string
   stderr?: string
@@ -51,8 +53,10 @@ vi.mock('@modelcontextprotocol/sdk/client/stdio.js', async (importOriginal) => (
     await importOriginal<typeof import('@modelcontextprotocol/sdk/client/stdio.js')>()
   ).getDefaultEnvironment,
   StdioClientTransport: class {
+    readonly stderr = new PassThrough()
     constructor(opts: { args: string[]; env?: NodeJS.ProcessEnv; stderr?: string }) {
       streams.push(opts)
+      stderrStreams.push(this.stderr)
     }
   },
 }))
@@ -92,6 +96,7 @@ let exitPty: () => void = () => {}
 beforeEach(() => {
   children.length = 0
   streams.length = 0
+  stderrStreams.length = 0
   plan = () => ({ stdout: 'cid' })
   mocks.connect.mockReset().mockResolvedValue(undefined)
   mocks.close.mockReset().mockResolvedValue(undefined)
@@ -116,7 +121,10 @@ beforeEach(() => {
   vi.stubEnv('DOCKER_TLS_VERIFY', '1')
   vi.stubEnv('DOCKER_CERT_PATH', '/synthetic/wrong-tls')
 })
-afterEach(() => vi.unstubAllEnvs())
+afterEach(() => {
+  vi.unstubAllEnvs()
+  vi.restoreAllMocks()
+})
 
 function expectRouted() {
   expect(children.length).toBeGreaterThan(0)
@@ -144,6 +152,7 @@ describe('configured Docker paths', () => {
   it('routes BOTH MCP exec streams despite the SDK env allowlist', async () => {
     const backend = new DockerBackend()
     const vm = await backend.boot('base', {})
+    vi.stubEnv('SANDBOX_DOCKER_HOST', 'tcp://changed.example.test:2376')
     const transport = await backend.connectMcp(vm)
     expect(streams).toHaveLength(2)
     expect(streams.map(({ args }) => args.at(-1))).toEqual(['filesystem', 'shell'])
@@ -152,7 +161,7 @@ describe('configured Docker paths', () => {
       expect(opts.env).toBeDefined()
       for (const key of [...routingEnv, 'SANDBOX_DOCKER_TLS_KEY'])
         expect(opts.env).not.toHaveProperty(key)
-      expect(opts.stderr).toBe('ignore')
+      expect(opts.stderr).toBe('pipe')
     }
     await transport.close()
   })
@@ -227,6 +236,109 @@ describe('configured Docker paths', () => {
       'Sandbox Docker MCP connection failed (configured endpoint)',
     )
   })
+  it.each([
+    [
+      'tcp://sandbox.example.test:2376',
+      'failed to connect to the docker API at tcp://sandbox.example.test:2376: lookup sandbox.example.test: no such host',
+      ['sandbox.example.test', 'sandbox.example.test:2376'],
+    ],
+    [
+      'tcp://sandbox.example.test:2376',
+      'error during connect: Get "https://sandbox.example.test:2376/v1.47/containers/json": dial tcp: lookup sandbox.example.test: no such host',
+      ['sandbox.example.test', 'https://sandbox.example.test:2376'],
+    ],
+    [
+      'tcp://sandbox.example.test:2376',
+      'tls: failed to verify certificate: x509: certificate is valid for other.example.test, not sandbox.example.test',
+      ['sandbox.example.test'],
+    ],
+    [
+      'unix:///synthetic/sandbox.sock',
+      'failed to connect at unix:///synthetic/sandbox.sock; dial unix /synthetic/sandbox.sock: connect: no such file or directory',
+      ['/synthetic/sandbox.sock'],
+    ],
+    [
+      'tcp://[::1]:2376',
+      'tls: failed to verify certificate: x509: cannot validate certificate for ::1 because it does not contain any IP SANs',
+      ['::1'],
+    ],
+    [
+      'unix:///synthetic/café.sock',
+      'failed to connect at unix:///synthetic/café.sock; dial unix /synthetic/café.sock: connect: no such file or directory',
+      ['/synthetic/café.sock'],
+    ],
+  ])('retains redacted diagnostics for %s: %s', async (endpoint, detail, forbidden) => {
+    vi.stubEnv('SANDBOX_DOCKER_HOST', endpoint)
+    if (endpoint.startsWith('unix:'))
+      for (const key of settingEnv.slice(1)) vi.stubEnv(key, undefined)
+    const backend = new DockerBackend()
+    for (const failure of [{ code: 1, stderr: detail }, { error: new Error(detail) }]) {
+      plan = () => failure
+      const error = await backend.boot('base', {}).catch((err: Error) => err)
+      expect(error).toBeInstanceOf(Error)
+      expect(String(error)).toContain('<redacted>')
+      expect(String(error)).toContain(
+        detail.includes('x509')
+          ? 'x509'
+          : detail.includes('lookup')
+            ? 'no such host'
+            : 'no such file or directory',
+      )
+      for (const value of forbidden) expect(String(error)).not.toContain(value)
+    }
+    plan = () => ({ stdout: 'cid' })
+    const vm = await backend.boot('base', {})
+    const writes = vi.spyOn(process.stderr, 'write').mockReturnValue(true)
+    mocks.connect.mockImplementation(async () => {
+      // Docker/SDK chunks can split an endpoint: redact complete lines.
+      const cut = detail.indexOf('sandbox') + 3
+      stderrStreams.at(-1)!.write(detail.slice(0, cut))
+      stderrStreams.at(-1)!.end(detail.slice(cut))
+      throw new Error(detail)
+    })
+    const error = await backend.connectMcp(vm).catch((err: Error) => err)
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(error).toBeInstanceOf(Error)
+    const cause = (error as Error).cause
+    expect(cause).toBeInstanceOf(Error)
+    expect(String(cause)).toContain('<redacted>')
+    const logged = writes.mock.calls.map(([chunk]) => String(chunk)).join('')
+    expect(logged).toContain('<redacted>')
+    expect(logged).toContain(
+      detail.includes('x509')
+        ? 'x509'
+        : detail.includes('lookup')
+          ? 'no such host'
+          : 'no such file or directory',
+    )
+    for (const value of forbidden) {
+      expect(String(error)).not.toContain(value)
+      expect(String(cause)).not.toContain(value)
+      expect(logged).not.toContain(value)
+    }
+  })
+  it.each(['DOCKER_HOST', 'DOCKER_CONTEXT'])(
+    'warns once about inherited %s splitting backend/PTY and MCP daemons',
+    async (key) => {
+      for (const name of [...settingEnv, ...routingEnv]) vi.stubEnv(name, undefined)
+      vi.stubEnv(key, 'inherited-setting')
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.resetModules()
+      const { DockerBackend: FreshBackend } = await import('../docker-backend.server')
+      new FreshBackend()
+      new FreshBackend()
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls[0][0]).toMatch(/backend.*PTY.*MCP.*different Docker daemons/)
+      expect(warn.mock.calls[0][0]).toContain('SANDBOX_DOCKER_HOST')
+    },
+  )
+  it('does not warn when an explicit connection resolves inherited routing or none is inherited', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    new DockerBackend()
+    for (const name of [...settingEnv, ...routingEnv]) vi.stubEnv(name, undefined)
+    new DockerBackend()
+    expect(warn).not.toHaveBeenCalled()
+  })
   it('preserves legacy backend/MCP argv and env inheritance when unset', async () => {
     for (const key of settingEnv) vi.stubEnv(key, undefined)
     const backend = new DockerBackend()
@@ -271,6 +383,23 @@ describe('configured PTY path', () => {
     for (const key of routingEnv) expect(opts.env).not.toHaveProperty(key)
     expect(opts.env.PATH).toBe(process.env.PATH)
     expect(process.env.DOCKER_HOST).toBe(inherited)
+    exitPty()
+  })
+  it('resolves configured PTY routing for an older/custom handle without captured connection', async () => {
+    const vm = {
+      id: 'custom',
+      backend: 'docker',
+      rootfs: 'base',
+      bootedAt: 0,
+      native: { containerId: 'custom-cid' },
+    }
+    mocks.acquire.mockResolvedValue({ vm, isFirstBoot: false })
+    await new PtyManager().ensure('custom-session')
+    const [bin, args, opts] = mocks.pty.mock.calls[0]
+    expect(bin).toBe('docker')
+    expect(args).toEqual([...tlsFlags, 'exec', '-it', 'custom-cid', 'bash'])
+    for (const key of routingEnv) expect(opts.env).not.toHaveProperty(key)
+    expect(opts.env.PATH).toBe(process.env.PATH)
     exitPty()
   })
   it('preserves legacy PTY argv and exact process env when unset', async () => {

@@ -1,4 +1,4 @@
-# Selecting a sandbox Docker daemon
+# Sandbox package guide — Docker connections
 
 The [README](README.md) covers composing sandboxed patterns. This guide covers
 connecting every sandbox path to an already provisioned daemon.
@@ -20,10 +20,13 @@ missing path is refused before launching Docker. An unreadable file, rejected
 certificate or unreachable daemon fails the requested operation under its
 existing error policy, without a fallback to another daemon. The reaper remains
 best-effort. Backend error diagnostics redact configured endpoint and filename
-values; configured MCP raw stderr is suppressed to keep those values out of logs.
+values, including normalized URLs, hostnames and bare socket paths. Configured
+MCP stderr is forwarded through the same redactor; handshake failures retain a
+redacted diagnostic cause.
 
 The same endpoint reaches container operations, both MCP exec streams, cleanup,
-proxies and networks, and the interactive Shell. Do not rely on inherited
+proxies and networks, the interactive Shell, and the smoke-script image
+preflight. Do not rely on inherited
 `DOCKER_HOST` or `DOCKER_CONTEXT`: they are removed from configured children.
 MCP uses the SDK's restricted environment plus explicit connection flags, so it
 needs no Docker variables on that allowlist.
@@ -44,6 +47,9 @@ files available there through deployment configuration.
 Leave all four settings absent to preserve existing argv and environment
 inheritance byte for byte. This usually means the local Docker socket, and
 continues to honor any Docker CLI environment/default context already in use.
+If `DOCKER_HOST` or `DOCKER_CONTEXT` is inherited, the backend warns once: the
+SDK environment allowlist means MCP streams can reach a different daemon from
+backend operations and the Shell. Set `SANDBOX_DOCKER_HOST` to align them.
 Restart after changing configuration: backends and the handles consumed by the
 Shell retain the connection with which their containers were created.
 

@@ -19,6 +19,8 @@
 
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { createInterface } from 'node:readline'
+import type { Readable } from 'node:stream'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import {
@@ -176,11 +178,28 @@ interface DockerNative extends Record<string, unknown> {
   runtime: RuntimeConfig
 }
 
-/** Docker may echo its endpoint or TLS filenames in an error. */
+/** Docker diagnostics use URL, authority, hostname and bare Unix path forms. */
 function dockerDiagnostic(connection: DockerConnection, message: string): string {
-  for (const flag of connection) {
+  const values = connection.flatMap((flag) => {
     const equals = flag.indexOf('=')
-    if (equals >= 0) message = message.replaceAll(flag.slice(equals + 1), '<redacted>')
+    if (equals < 0) return []
+    const value = flag.slice(equals + 1)
+    if (!flag.startsWith('--host=')) return [value]
+    const endpoint = new URL(value)
+    return endpoint.protocol === 'unix:'
+      ? [value, endpoint.pathname, value.slice('unix://'.length)]
+      : [
+          value,
+          `https://${endpoint.host}`,
+          `http://${endpoint.host}`,
+          endpoint.host,
+          endpoint.hostname,
+          endpoint.hostname.replace(/^\[|\]$/g, ''),
+        ]
+  })
+  // Longest first: replacing a hostname first would strand its port/URL prefix.
+  for (const value of [...new Set(values)].sort((a, b) => b.length - a.length)) {
+    message = message.replaceAll(value, '<redacted>')
   }
   return message
 }
@@ -279,10 +298,19 @@ class DockerMcpTransport implements McpTransport {
             ['exec', '-i', cid, ...server.launch],
             connection.length ? getDefaultEnvironment() : undefined,
           ),
-          // Preserve legacy diagnostics. A configured CLI may echo TLS paths
-          // or endpoint values, so do not forward its raw stderr.
-          stderr: connection.length ? 'ignore' : 'inherit',
+          // Keep diagnostics; configured stderr passes through the same redactor.
+          stderr: connection.length ? 'pipe' : 'inherit',
         })
+        if (connection.length && transport.stderr) {
+          // Redact complete lines, including a final line without a newline,
+          // because a child can split an endpoint across stream chunks.
+          createInterface({
+            input: transport.stderr as Readable,
+            crlfDelay: Infinity,
+          }).on('line', (line) => {
+            process.stderr.write(`${dockerDiagnostic(connection, line)}\n`)
+          })
+        }
         const client = new Client({ name: `sandbox-${server.key}`, version: '1.0.0' })
         await client.connect(transport)
         t.clients.push(client)
@@ -304,7 +332,11 @@ class DockerMcpTransport implements McpTransport {
       // Partial connect: tear down whatever opened so we don't leak exec pipes.
       await t.close().catch(() => {})
       throw connection.length
-        ? new Error('Sandbox Docker MCP connection failed (configured endpoint)')
+        ? new Error('Sandbox Docker MCP connection failed (configured endpoint)', {
+            cause: new Error(
+              dockerDiagnostic(connection, err instanceof Error ? err.message : String(err)),
+            ),
+          })
         : err
     }
   }
@@ -384,6 +416,8 @@ class DockerMcpTransport implements McpTransport {
 // Backend
 // ============================================================================
 
+let warnedInheritedRouting = false
+
 export class DockerBackend implements ComputeBackend {
   readonly kind = 'docker' as const
   // Captured once: resources created by this backend and its startup sweep
@@ -393,6 +427,16 @@ export class DockerBackend implements ComputeBackend {
 
   constructor() {
     this.connection = dockerConnectionFromEnv()
+    if (
+      !this.connection.length &&
+      !warnedInheritedRouting &&
+      (process.env.DOCKER_HOST || process.env.DOCKER_CONTEXT)
+    ) {
+      warnedInheritedRouting = true
+      console.warn(
+        '[sandbox] Inherited Docker routing can send backend/PTY and MCP streams to different Docker daemons; set SANDBOX_DOCKER_HOST to select one endpoint.',
+      )
+    }
     const environment = process.env.SANDBOX_ENVIRONMENT?.trim() || 'local'
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(environment)) {
       throw new Error('SANDBOX_ENVIRONMENT must be a nonempty label of at most 63 characters')

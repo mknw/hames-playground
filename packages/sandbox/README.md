@@ -334,6 +334,15 @@ What each image contains: [rootfs/README.md](https://github.com/mknw/hames-playg
 
 ## Troubleshooting
 
+### Building a private VM image
+
+The operator-only [offline VM image pipeline](https://github.com/mknw/hames-playground/tree/main/packages/sandbox/scripts/vm-image)
+assembles pinned local inputs into Incus metadata and qcow2, preloads the
+three sandbox flavours, and records provenance. Its design note distinguishes
+Docker config IDs, save-archive hashes and Incus fingerprints, including the
+additive spike pin support and the Linux boot checks still owed. This is repo
+tooling outside the published tarball and TypeScript API.
+
 ### Opening an interactive shell
 
 The interactive terminal (`./pty-manager.server`) uses `node-pty`, a native

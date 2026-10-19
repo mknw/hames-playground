@@ -22,7 +22,7 @@ import type { BamlRuntime, FunctionResult, BamlCtxManager, Image, Audio, Pdf, Vi
 import { toBamlError, BamlAbortError, ClientRegistry, type HTTPRequest } from "@boundaryml/baml"
 import type { Checked, Check, RecursivePartialNull as MovedRecursivePartialNull } from "./types"
 import type * as types from "./types"
-import type {Attempt, CompactedMemory, ControllerAction, CriticResult, DescribeBatchResult, DescribeItemSummary, DescribeTarget, ExpandedRef, ExtractedMemory, FewShot, LoopTurn, MemoryMember, Message, PlanResult, PlanResultThinking, PriorResult, ReferenceCandidate, ReferenceSelection, ReferenceSelectorResult, RouteOption, RoutingResult, ScreenVerdict, ToolCall, ToolCallRequest, ToolDescription, ToolResult} from "./types"
+import type {Attempt, CompactedMemory, ControllerAction, CriticResult, DescribeBatchResult, DescribeItemSummary, DescribeTarget, ExpandedRef, ExtractedMemory, FewShot, LoopTurn, MemoryMember, Message, PlanResult, PlanResultThinking, PriorResult, ReferenceCandidate, ReferenceSelection, ReferenceSelectorResult, RouteOption, RoutingResult, ScreenVerdict, SynthesisReference, ToolCall, ToolCallRequest, ToolDescription, ToolResult} from "./types"
 import type TypeBuilder from "./type_builder"
 import { HttpRequest, HttpStreamRequest } from "./sync_request"
 import { LlmResponseParser, LlmStreamParser } from "./parser"
@@ -848,7 +848,7 @@ export class BamlSyncClient {
   }
   
   Synthesize(
-      user_message: string,intent: string,turns: types.LoopTurn[],has_error: boolean,error_message?: string | null,memory_context?: string | null,
+      user_message: string,intent: string,turns: types.LoopTurn[],has_error: boolean,error_message?: string | null,memory_context?: string | null,references?: types.SynthesisReference[] | null,
       __baml_options__?: BamlCallOptions<never>
   ): string {
     try {
@@ -880,7 +880,7 @@ export class BamlSyncClient {
       const __raw__ = this.runtime.callFunctionSync(
         "Synthesize",
         {
-          "user_message": user_message,"intent": intent,"turns": turns,"has_error": has_error,"error_message": error_message?? null,"memory_context": memory_context?? null
+          "user_message": user_message,"intent": intent,"turns": turns,"has_error": has_error,"error_message": error_message?? null,"memory_context": memory_context?? null,"references": references?? null
         },
         this.ctxManager.cloneContext(),
         __options__.tb?.__tb(),

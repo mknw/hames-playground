@@ -131,7 +131,7 @@ const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
     () => b.request.ActorController('q', 'i', TOOLS, [], null, null, 1, 5, null, VERDA),
   ],
   ['Critic', () => b.request.Critic('i', [], VERDA)],
-  ['Synthesize', () => b.request.Synthesize('q', 'i', TURNS, false, null, null, VERDA)],
+  ['Synthesize', () => b.request.Synthesize('q', 'i', TURNS, false, null, null, null, VERDA)],
   [
     'Router',
     () => b.request.Router('q', [{ name: 'search', description: 'd' }], MESSAGES, null, VERDA),
@@ -261,7 +261,7 @@ describe('private-tier request bodies', () => {
             ? b.request.Router('q', ROUTES, MESSAGES, undefined, VERDA)
             : b.request.Router('q', ROUTES, MESSAGES, m, VERDA),
       ],
-      ['Synthesize', (m) => b.request.Synthesize('q', 'i', TURNS, false, null, m, VERDA)],
+      ['Synthesize', (m) => b.request.Synthesize('q', 'i', TURNS, false, null, m, null, VERDA)],
     ]
     for (const [name, render] of renders) {
       const bodyOf = async (m: string | null | undefined) =>

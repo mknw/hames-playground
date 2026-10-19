@@ -132,13 +132,26 @@ async function createPatterns(
     withPseudonymisedInputs({ pseudonymise: deps.pseudonymiseForWeb })(
       withInfoDocumentReferences(
         withReferences<AgentData>(
-          simpleLoop<AgentData>(createLoopControllerAdapter(NEO4J_READ_ONLY_CONTEXT), infoTools, {
-            patternId: 'info',
-            schema,
-            liveEvents: true,
-            returnStyle: 'answer',
-            rememberPriorTurns: false,
-          }),
+          simpleLoop<AgentData>(
+            createLoopControllerAdapter(
+              NEO4J_READ_ONLY_CONTEXT +
+                '\n\nWhen you Return, include the URLs of the sources you used as Markdown links ' +
+                'alongside the facts they support. Copy each source URL verbatim from the ' +
+                'tool results or from the url argument of a successful fetch; never invent or ' +
+                'construct a URL. If none of the sources you used has a URL (for example a ' +
+                'graph, memory or library-docs lookup), include no link. ' +
+                'Your Return is the source record used to write the final answer, so URLs ' +
+                'left only in tool calls will not reach that answer.',
+            ),
+            infoTools,
+            {
+              patternId: 'info',
+              schema,
+              liveEvents: true,
+              returnStyle: 'answer',
+              rememberPriorTurns: false,
+            },
+          ),
           {
             patternId: 'info',
             selector: baml.selector,
@@ -179,7 +192,8 @@ async function createPatterns(
       {
         'office-data': {
           pattern: doc,
-          description: 'Work on Microsoft 365 files and mail; run code over them',
+          description:
+            'Read Microsoft 365 mail and file metadata; run code over uploaded files (spreadsheets, CSV, tables) to compute or analyse them, and save deliverables in the office sandbox',
           capability:
             'Read Microsoft 365 mail and file metadata; compute and create files in the office sandbox. Graph file ingestion is unavailable.',
         },
@@ -193,7 +207,8 @@ async function createPatterns(
         },
         'read-documents': {
           pattern: retrieve,
-          description: 'Search documents already in this conversation',
+          description:
+            'Search uploaded and indexed documents in this conversation and return cited excerpts',
           capability: 'Search this conversation’s Data Stash and return cited excerpts.',
         },
         think: {

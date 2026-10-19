@@ -24,6 +24,11 @@ import {
 import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
 import { MCP_TOOL_CATALOG, mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
+import { grade } from '../../../../lib/eval-support/conversation-checks'
+import type {
+  ConversationScenario,
+  ConversationTrace,
+} from '../../../../lib/eval-support/conversation'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 
@@ -172,6 +177,7 @@ let states: string[]
 let requests: ReturnType<typeof vi.fn>
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.synthesize.mockResolvedValue({ value: 'synthetic answer' })
   gateway.names = [
     ...GRAPH,
     ...INFO,
@@ -239,6 +245,33 @@ async function run(tier = 'anthropic', supplied = deps) {
 }
 
 describe('general-next composition', () => {
+  it.each(['anthropic', 'verda'])(
+    'E2: sends uploaded-file computation only to the office-data Decide criterion (%s)',
+    async (tier) => {
+      // Script answer only to stop execution: this pins wording delivery, not model choices.
+      choices = ['answer']
+      await run(tier)
+      expect(requests).toHaveBeenCalledTimes(1)
+      const body = JSON.parse(String(requests.mock.calls[0][1].body))
+      const criteria = body.questions.next_step.criteria as Record<string, string>
+      expect(criteria['office-data']).toContain('run code over uploaded files')
+      expect(criteria['office-data']).toContain('spreadsheets, CSV, tables')
+      expect(criteria['office-data']).toContain('to compute or analyse them')
+      expect(criteria['office-data']).toContain('save deliverables')
+      expect(
+        Object.keys(criteria).filter((route) =>
+          /\b(?:comput\w*|analys\w*|analyz\w*|sums?|totals?|add(?:s|ing)? up|count\w*|spreadsheets?|csv|tables?|deliverables?|sav(?:e|ing))\b/i.test(
+            criteria[route],
+          ),
+        ),
+      ).toEqual(['office-data'])
+      expect(criteria['read-documents']).toContain('Search uploaded and indexed documents')
+      expect(criteria['read-documents']).toContain('uploaded')
+      expect(criteria['read-documents']).toContain('cited excerpts')
+      expect(criteria['info-retrieval']).toContain('Look things up')
+    },
+  )
+
   it('keeps the office workspace owner-scoped and the nested Redis retriever discoverable', async () => {
     const patterns = await agent.createPatterns('synthetic-session', deps)
     expect(agent.id).toBe('general-next')
@@ -426,6 +459,100 @@ describe('general-next composition', () => {
     ).toEqual(['info-retrieval'])
     expect(mocks.controller.mock.calls[0][0].userMessage).toBe('synthetic task')
   })
+
+  // E1: fake synthesis copies ONLY the production route record, never
+  // answerIncludes or raw child calls (the eval fixture's shortcut).
+  // MUTATION: drop the URL from the positive Return below: the eval goes red.
+  it.each(['anthropic', 'verda'])(
+    'E1: URL-free Return fails the unchanged eval check on %s',
+    async (tier) => {
+      const url = 'https://example.invalid/lantern'
+      const scenario: ConversationScenario = {
+        id: '03-web-read',
+        title: 'Search, then read a source',
+        priority: 'must',
+        baseline: true,
+        p4: false,
+        messages: ['Read the Lantern release notes.'],
+        expectedTools: ['search', 'fetch'],
+        expectedArgs: {
+          search: (a) => /Lantern/i.test(String(a.query)),
+          fetch: (a) => a.url === url,
+        },
+        expectedRoutes: ['info-retrieval'],
+        answerIncludes: ['CSV', url],
+        artifacts: [],
+        forbiddenTools: [],
+        maxIterations: 6,
+      }
+      mocks.synthesize.mockImplementation(async (input) => ({
+        value: String(input.loopHistory!.iterations[0].result),
+      }))
+      for (const cited of [false, true]) {
+        choices = ['info-retrieval', 'answer']
+        gateway.result = 'Version 2 adds CSV export.'
+        mocks.controller
+          .mockResolvedValueOnce({
+            action: {
+              reasoning: 'search',
+              tool_name: 'search',
+              tool_args: '{"query":"Lantern release notes"}',
+              is_final: false,
+            },
+          })
+          .mockResolvedValueOnce({
+            action: {
+              reasoning: 'read',
+              tool_name: 'fetch',
+              tool_args: JSON.stringify({ url }),
+              is_final: false,
+            },
+          })
+          .mockResolvedValueOnce({
+            action: {
+              reasoning: 'done',
+              tool_name: 'Return',
+              tool_args: cited
+                ? `Version 2 adds CSV export. [Release notes](${url})`
+                : 'Version 2 adds CSV export.',
+              is_final: true,
+            },
+          })
+        const result = await run(tier)
+        const trace: ConversationTrace = {
+          turns: [
+            {
+              response: result.context.data.response!,
+              status: result.status,
+              events: result.context.events,
+            },
+          ],
+          tools: result.context.events
+            .filter((e) => e.type === 'tool_result')
+            .map((e) => {
+              const data = e.data as {
+                tool: string
+                callId: string
+                success: boolean
+              }
+              const call = result.context.events.find(
+                (e) =>
+                  e.type === 'tool_call' && (e.data as { callId: string }).callId === data.callId,
+              )
+              const args = (call?.data as { args: Record<string, unknown> } | undefined)?.args ?? {}
+              return { name: data.tool, args, success: data.success, turn: 0 }
+            }),
+          artifacts: [],
+          indexed: [],
+          retrievals: [],
+        }
+        const checks = grade(scenario, trace, false)
+        expect(checks.filter((c) => !c.pass).map((c) => c.name)).toEqual(
+          cited ? [] : [`answer contains ${url}`],
+        )
+      }
+    },
+  )
 
   it('screens office mail record results even with a realistic Outlook permalink', async () => {
     const { shapeMessages } = await import('@hames-ai/connectors/graph/graph-tools.server')

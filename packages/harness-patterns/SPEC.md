@@ -1678,6 +1678,7 @@ interface DecisionLoopRoute<T> {
   description: string // the ONLY text the decisions model sees for this option
   capability?: string // one or two lines for the planner's agent map
   siblingResults?: readonly string[] // patternIds of OTHER routes whose events it may see; default none
+  allowReplan?: boolean // planner routes only, refused elsewhere: offer it every iteration (default: see "What is offered")
 }
 
 interface DecisionLoopConfig extends PatternConfig {
@@ -1694,10 +1695,27 @@ interface DecisionLoopConfig extends PatternConfig {
 One iteration: build the state, ask one `choice` question over the route names
 plus **`answer`** (a choice, not a route — it runs nothing, so the synthesizer
 after the loop answers once), run the chosen route in a child scope, record what
-it produced, go again. `answer` is offered on every iteration, including the
-first. The decision is recorded as `decision_made` (`data.decisions.next_step`);
+it produced, go again. `answer` is never withheld (see _What is offered_). The decision is recorded as `decision_made` (`data.decisions.next_step`);
 no calibration, no threshold: the endpoint's probabilities are used for nothing
 beyond the label.
+
+**What is offered (#692).** `answer` and every route are offered on every
+iteration, except a `planner` route: it is withheld from the spec straight after
+its own iteration (even a failed one) and for the rest of the turn once any
+successful plan exists. The decisions model sees only each option's description
+and the state, so a model that favours `think` takes it every time it is offered
+(six of six in a recorded run, which spent the whole bound and never answered);
+the guard is therefore on the option SET, not in a prompt. A plan belongs to
+one run of the loop (its records are per call): the next turn may plan again.
+The guard reads only this run's records and latest plan, so it follows whatever
+the loop holds. Today a resume re-enters the loop with neither (resume step 11).
+Once resume inside a route (slice 6) rebuilds them, a plan made before the pause
+keeps the planner withheld.
+`allowReplan: true` on a planner route offers it every time, for a host that wants
+replanning (a later plan replaces the earlier one under PLAN); on any other kind of
+route it is refused at construction. If only `answer` is left, nothing is asked
+and the loop ends as `answer`. No `decision_made` is recorded for that ending, and
+`data.decisions.next_step` keeps the previous decision.
 
 **The state** is one string, append-only within a turn: the conversation window
 (`routerTurnWindow`, the router's), then **This turn so far** — one line per

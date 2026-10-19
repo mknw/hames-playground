@@ -157,7 +157,9 @@ guard's `tools` (undeclared, the guard is a no-op for it) and a screen that
 cannot run withholds the output instead of waving it through. A child sees only
 what it is allowed to (`siblingResults`, default none) and starts with fresh
 data, never `memories`. And a decision that is not a decision — an error, an
-abstention, a state that would not build — never dispatches a route. See SPEC's
+abstention, a state that would not build — never dispatches a route. A `planner`
+route is offered at most once per run of the loop: not straight after itself, and
+not once a plan exists; `allowReplan: true` on the route opts out. See SPEC's
 [decisionLoop](SPEC.md#decisionlooproutes-config-507).
 
 A planner caps the reasoning handed to downstream executors with

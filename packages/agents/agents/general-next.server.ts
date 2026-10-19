@@ -200,7 +200,7 @@ async function createPatterns(
         'info-retrieval': {
           pattern: info,
           description:
-            'Look things up in the knowledge graph, on the web, in library docs and in the memory graph',
+            'Look things up in the knowledge graph, on the web, in library docs and in the memory graph; it cannot open a file the user uploaded or names (that is read-documents)',
           capability:
             'Read the knowledge graph and the memory graph; search or fetch public web sources and library documentation.',
           siblingResults: ['retriever'],
@@ -208,7 +208,7 @@ async function createPatterns(
         'read-documents': {
           pattern: retrieve,
           description:
-            'Search uploaded and indexed documents in this conversation and return cited excerpts',
+            'Search uploaded and indexed documents in this conversation, including any file the user names (such as notes.md or a PDF), and return cited excerpts; use it whenever part of the answer must come from such a file',
           capability: 'Search this conversation’s Data Stash and return cited excerpts.',
         },
         think: {

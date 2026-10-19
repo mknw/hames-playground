@@ -272,6 +272,44 @@ describe('general-next composition', () => {
     },
   )
 
+  // E4/#507 live pass 3, scenario 13: Decide chose info-retrieval, the info
+  // child could not find the notes (it can only search the graph and web), and
+  // the SECOND Decide chose answer: read-documents was never selected. The
+  // question names the file but never says "uploaded", which is the only word of
+  // the old read-documents criterion it could match. Replays that recorded
+  // sequence and pins what the second Decide request carries; it cannot say what
+  // the model then chooses. MUTATION: revert the info-retrieval or the
+  // read-documents description in general-next.server.ts: this goes red.
+  it.each(['anthropic', 'verda'])(
+    'E4: the second Decide of the two-source question sees a criterion for the named file (%s)',
+    async (tier) => {
+      // Scenario 13's question, read from the eval file so a reworded scenario cannot drift.
+      const question = /messages: \[\s*'([^']+)'/.exec(
+        readFileSync('evals/general-next/scenarios/13-two-sources.ts', 'utf8'),
+      )![1]
+      choices = ['info-retrieval', 'answer']
+      mocks.controller.mockResolvedValueOnce({
+        action: {
+          reasoning: 'done',
+          tool_name: 'Return',
+          tool_args:
+            'The graph holds 42 Project nodes. The target count in lantern-notes.md is unavailable: a web search returned only a placeholder URL and the graph has no node for the notes.',
+          is_final: true,
+        },
+      })
+      const patterns = await agent.createPatterns('synthetic-session', deps)
+      await withRunFrame({ inference: { tier } }, () => harness(...patterns)(question))
+      expect(requests).toHaveBeenCalledTimes(2)
+      const second = JSON.parse(String(requests.mock.calls[1][1].body))
+      expect(second.state).toContain(question)
+      expect(second.state).toContain('is unavailable')
+      const criteria = second.questions.next_step.criteria as Record<string, string>
+      expect(criteria['read-documents']).toContain('any file the user names')
+      expect(criteria['read-documents']).toContain('part of the answer must come from such a file')
+      expect(criteria['info-retrieval']).toContain('cannot open a file the user uploaded or names')
+    },
+  )
+
   it('keeps the office workspace owner-scoped and the nested Redis retriever discoverable', async () => {
     const patterns = await agent.createPatterns('synthetic-session', deps)
     expect(agent.id).toBe('general-next')
@@ -345,7 +383,7 @@ describe('general-next composition', () => {
     expect(composition.routes['info-retrieval']).toMatchObject({ siblingResults: ['retriever'] })
     expect(composition.routes['info-retrieval']).toMatchObject({
       description:
-        'Look things up in the knowledge graph, on the web, in library docs and in the memory graph',
+        'Look things up in the knowledge graph, on the web, in library docs and in the memory graph; it cannot open a file the user uploaded or names (that is read-documents)',
       capability:
         'Read the knowledge graph and the memory graph; search or fetch public web sources and library documentation.',
     })

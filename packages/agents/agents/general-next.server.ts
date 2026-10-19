@@ -229,7 +229,7 @@ async function createPatterns(
         think: {
           pattern: think,
           description: 'Decide the steps before acting',
-          capability: 'Write or revise a plan using the agent map and earlier step results.',
+          capability: 'Write a plan using the agent map and earlier step results.',
         },
       },
       {

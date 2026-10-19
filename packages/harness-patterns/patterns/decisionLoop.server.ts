@@ -48,6 +48,12 @@
  *     loop decides again (A3). Its own `error` events are committed as
  *     `recoverable`, or `runChain` would end the turn on a child's irrecoverable
  *     error.
+ *   - a planner route is not OFFERED again straight after itself, nor once a plan
+ *     exists this turn (`allowReplan` opts a route out). The decisions model sees
+ *     only each option's description and the state, so a model that likes
+ *     `think` picks it every time it is offered — six of six in a recorded run,
+ *     which spent the whole bound and never answered. The guard is on the
+ *     option SET, not in a prompt: the label is absent from that decision's spec.
  *   - `maxIterations` (default {@link DECISION_LOOP_MAX_ITERATIONS}) stops the
  *     loop as `answer`, with a recoverable `budget_exhausted` error so the
  *     synthesizer says the work is partial (N5).
@@ -138,6 +144,10 @@ export interface DecisionLoopRoute<T> {
    *  its own work, the committed non-route events and the handoff text, and
    *  nothing else. Naming an id no route's pattern emits under is refused. */
   readonly siblingResults?: readonly string[]
+  /** A `planner` route is withheld from the options straight after its own
+   *  iteration and once a plan exists this turn. `true` offers it every time;
+   *  ignored on any other kind of route. */
+  readonly allowReplan?: boolean
 }
 
 /** What an overridden `state` builder receives. */
@@ -284,12 +294,9 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     ...names.map((id) => ({ id, description: routes[id].description })),
     { id: DECISION_LOOP_ANSWER, description: answer },
   ]
-  const spec: DecisionSpec = {
-    key: DECISION_LOOP_KEY,
-    question: 'Which step should run next?',
-    labels,
-  }
-  const optionIds = labels.map((l) => l.id)
+  const guardedPlanners = new Set(
+    names.filter((n) => kinds.get(n) === 'planner' && !routes[n].allowReplan),
+  )
   const agentMap = buildAgentMap(routes)
 
   // Records and withheld ids are matched by the loop's own patternId, and a
@@ -417,6 +424,24 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     let ended: 'answer' | 'stopped' | 'bound' = 'bound'
 
     for (let iteration = 1; iteration <= maxIterations; iteration++) {
+      // The options THIS decision offers: a guarded planner is absent straight
+      // after itself and once a plan exists. Only `answer` left means nothing to ask.
+      const offered = labels.filter(
+        (l) =>
+          !guardedPlanners.has(l.id) ||
+          (latestPlan === undefined && records[records.length - 1]?.route !== l.id),
+      )
+      if (offered.length === 1) {
+        ended = 'answer'
+        break
+      }
+      const optionIds = offered.map((l) => l.id)
+      const spec: DecisionSpec = {
+        key: DECISION_LOOP_KEY,
+        question: 'Which step should run next?',
+        labels: offered,
+      }
+
       // 1. State and decision. Any failure to get a usable decision stops here.
       let state = ''
       let stateError: string | undefined

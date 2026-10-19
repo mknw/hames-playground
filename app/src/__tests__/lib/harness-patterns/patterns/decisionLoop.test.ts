@@ -653,7 +653,7 @@ describe('decisionLoop — the planner route and the PLAN / handoff separation',
     const failing = fake('retriever', 'ret-p', () => {})
     const loop = build(
       {
-        think: route(think, { description: 'Decide the steps' }),
+        think: route(think, { description: 'Decide the steps', allowReplan: true }),
         ret: route(failing, {
           description: 'Search documents',
           capability: 'search stored documents',
@@ -703,7 +703,9 @@ describe('decisionLoop — the planner route and the PLAN / handoff separation',
     })
     const loop = build(
       {
-        think: route(planner<Data>(planFn as never, ['search'], { patternId: 'think-p' })),
+        think: route(planner<Data>(planFn as never, ['search'], { patternId: 'think-p' }), {
+          allowReplan: true,
+        }),
         info: route(simpleLoop<Data>(controller as never, ['search'], { patternId: 'info-p' })),
       },
       decide,
@@ -769,8 +771,13 @@ describe('decisionLoop — the planner route and the PLAN / handoff separation',
     })
     const loop = build(
       {
-        think: route(planner<Data>(planFn as never, [], { patternId: 'think-p' })),
-        badthink: route(fake('planner', 'bad-p', () => {})),
+        think: route(planner<Data>(planFn as never, [], { patternId: 'think-p' }), {
+          allowReplan: true,
+        }),
+        badthink: route(
+          fake('planner', 'bad-p', () => {}),
+          { allowReplan: true },
+        ),
         info: route(simpleLoop<Data>(controller as never, ['search'], { patternId: 'info-p' })),
       },
       decide,
@@ -1273,6 +1280,119 @@ describe('decisionLoop — route failure', () => {
     expect(last).toContain('2. ac — failed: no attempt was accepted by the critic')
     expect(last).toContain('3. rt — failed: no documents matched')
     expect(last).toContain('4. pl — failed: no plan was produced')
+  })
+})
+
+describe('decisionLoop — a planner route is not offered twice in a row, nor once a plan exists (#692)', () => {
+  /** What a decisions model that likes `think` does, as the run-2 report recorded it
+   *  for 06-read-only: `think` x6. It takes `think` whenever the spec offers it, else
+   *  the first of `then` it has not taken yet, else `answer`. */
+  function fond(then: string[] = []) {
+    const offeredAt: string[][] = []
+    const taken: string[] = []
+    const fn = (async ({ spec }: { spec: { labels: readonly { id: string }[] } }) => {
+      const ids = spec.labels.map((l) => l.id)
+      offeredAt.push(ids)
+      const label = ids.includes('think')
+        ? 'think'
+        : (then.find((id) => ids.includes(id) && !taken.includes(id)) ?? 'answer')
+      taken.push(label)
+      return {
+        probs: Object.fromEntries(ids.map((id) => [id, id === label ? 1 : 0])),
+        method: 'jev',
+        calibrated: false,
+      }
+    }) as unknown as DecideFn
+    Object.assign(fn, { supportedTypes: ['choice'], limits: () => ({ contextWindow: 131_072 }) })
+    return { decide: fn, offeredAt, taken }
+  }
+  const planning = (text: string | undefined) =>
+    planner<Data>(
+      vi.fn(async () => ({
+        plan: { reasoning: 'r', plan: text ?? '', n_steps: text ? 1 : 0 },
+        llmCall: undefined,
+        toolCount: 0,
+      })) as never,
+      [],
+      { patternId: 'think-p' },
+    )
+  const decided = (ctx: { events: ContextEvent[] }) =>
+    eventsOf(ctx, 'orchestrator', 'decision_made')
+      .map((e) => e.data as { label: string })
+      .map((d) => d.label)
+
+  // MUTATION: make `offered` in decisionLoop.server.ts equal to `labels` (no guard):
+  // the decider takes think on all six iterations, as it did in the recorded run.
+  it('replays 06’s think x6: think is offered once, then absent, and the loop answers', async () => {
+    const { decide, offeredAt } = fond()
+    const ctx = await run([
+      build(
+        { think: route(planning('1) say it cannot write.')), info: route(returning('i', 'x')) },
+        decide,
+      ),
+    ])
+    expect(offeredAt[0]).toEqual(['think', 'info', 'answer'])
+    expect(offeredAt[1]).toEqual(['info', 'answer'])
+    expect(decided(ctx)).toEqual(['think', 'answer'])
+    expect(eventsOf(ctx, 'orchestrator', 'error')).toHaveLength(0)
+  })
+
+  // MUTATION: drop the `latestPlan === undefined &&` clause: think comes back after info.
+  it('once a plan exists it stays withheld after OTHER routes ran, not only the next iteration', async () => {
+    const { decide, offeredAt } = fond(['info'])
+    const ctx = await run([
+      build({ think: route(planning('1) look it up.')), info: route(returning('i', 'x')) }, decide),
+    ])
+    expect(decided(ctx)).toEqual(['think', 'info', 'answer'])
+    expect(offeredAt.slice(1).flat()).not.toContain('think')
+  })
+
+  // MUTATION: drop the `records[records.length - 1]?.route !== l.id` clause: the
+  // failed think is offered, and taken, straight away.
+  it('a think that produced NO plan is still not offered straight after itself, but is again after another route', async () => {
+    const { decide, offeredAt } = fond(['info'])
+    const ctx = await run([
+      build({ think: route(planning(undefined)), info: route(returning('i', 'x')) }, decide),
+    ])
+    // think (fails) → not offered → info → no plan exists, last route is not think → think again → …
+    const labels = decided(ctx)
+    expect(labels.slice(0, 3)).toEqual(['think', 'info', 'think'])
+    expect(labels.some((l, i) => l === 'think' && labels[i + 1] === 'think')).toBe(false)
+    expect(offeredAt[1]).toEqual(['info', 'answer'])
+  })
+
+  // MUTATION: delete the `allowReplan` term from `guardedPlanners`: this goes red.
+  it('allowReplan offers the route every time (replanning stays available to a host that wants it)', async () => {
+    const { decide, taken } = fond()
+    await run([
+      build(
+        {
+          think: route(planning('1) again.'), { allowReplan: true }),
+          info: route(returning('i', 'x')),
+        },
+        decide,
+        { maxIterations: 3 },
+      ),
+    ])
+    expect(taken).toEqual(['think', 'think', 'think'])
+  })
+
+  // MUTATION: delete the `offered.length === 1` early exit: the decision is asked over
+  // `answer` alone: the decider is called a second time and `offeredAt` has length 2.
+  it('with only `answer` left there is nothing to ask: the loop ends as answer without a decision', async () => {
+    const { decide, offeredAt } = fond()
+    const ctx = await run([build({ think: route(planning('1) done.')) }, decide)])
+    expect(offeredAt).toHaveLength(1)
+    expect(decided(ctx)).toEqual(['think'])
+    expect(eventsOf(ctx, 'orchestrator', 'error')).toHaveLength(0)
+  })
+
+  // MUTATION: drop `kinds.get(n) === 'planner' &&` from `guardedPlanners`: the second
+  // `info` is withheld and the loop exits early with ['info'].
+  it('only a planner route is guarded: any other route may repeat', async () => {
+    const { decide } = scriptedDecide(['info', 'info', 'answer'])
+    const ctx = await run([build({ info: route(returning('i', 'x')) }, decide)])
+    expect(decided(ctx)).toEqual(['info', 'info', 'answer'])
   })
 })
 

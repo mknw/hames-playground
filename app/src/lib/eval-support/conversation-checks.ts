@@ -101,14 +101,29 @@ export function grade(
     checks.push(check(`successful ordered tool: ${tool}`, next >= 0, `call index ${next}`))
     if (next >= 0) at = next
     const expectedArgs = s.expectedArgs?.[tool]
-    if (expectedArgs)
+    if (expectedArgs) {
+      // Any successful call that meets the predicate: an earlier successful inspection
+      // (`head` on the input) must not fail the grade of the call that did the work.
+      const valid = trace.tools.find(
+        (t, index) =>
+          next >= 0 &&
+          index >= next &&
+          t.name === tool &&
+          t.success &&
+          (t.valid ?? expectedArgs(t.args)),
+      )
       checks.push(
         check(
           `valid arguments: ${tool}`,
-          next >= 0 && expectedArgs(trace.tools[next].args),
-          next >= 0 ? JSON.stringify(trace.tools[next].args) : 'missing',
+          valid !== undefined,
+          valid
+            ? JSON.stringify(valid.args)
+            : next >= 0
+              ? JSON.stringify(trace.tools[next].args)
+              : 'missing',
         ),
       )
+    }
   }
   for (const tool of s.forbiddenTools)
     checks.push(check(`no ${tool}`, !trace.tools.some((t) => t.name === tool), 'all calls checked'))

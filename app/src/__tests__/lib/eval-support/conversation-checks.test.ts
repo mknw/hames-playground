@@ -208,6 +208,50 @@ describe('review grading regressions', () => {
     t.tools[0].args = { query: 'MATCH (p:Project) RETURN count(p)' }
     expect(failed(t, s)).toEqual([])
   })
+  it('grades the call that did the work, not the first successful one', () => {
+    const t = successful()
+    const s = {
+      ...scenario,
+      expectedArgs: {
+        sandbox_bash: (a: Record<string, unknown>) => a.command === 'python3 run.py',
+      },
+    }
+    t.tools[1] = { name: 'sandbox_bash', args: { command: 'head in.csv' }, success: true, turn: 0 }
+    expect(failed(t, s)).toContain('valid arguments: sandbox_bash')
+    t.tools.push({
+      name: 'sandbox_bash',
+      args: { command: 'python3 run.py' },
+      success: true,
+      turn: 0,
+    })
+    expect(failed(t, s)).toEqual([])
+  })
+  it('trusts the transport’s verdict over the raw arguments, in both directions', () => {
+    const t = successful()
+    const s = {
+      ...scenario,
+      expectedArgs: {
+        sandbox_bash: (a: Record<string, unknown>) => a.command === 'python3 run.py',
+      },
+    }
+    // A write-then-run command names nothing itself: the transport judged it with the script.
+    t.tools[1] = {
+      name: 'sandbox_bash',
+      args: { command: 'python3 /work/x.py' },
+      success: true,
+      turn: 0,
+      valid: true,
+    }
+    expect(failed(t, s)).toEqual([])
+    t.tools[1] = {
+      name: 'sandbox_bash',
+      args: { command: 'python3 run.py' },
+      success: true,
+      turn: 0,
+      valid: false,
+    }
+    expect(failed(t, s)).toContain('valid arguments: sandbox_bash')
+  })
   it('matches whole numeric facts on every turn, never substrings', () => {
     const t = successful()
     t.turns[1].response = '148 [analysis.md](stash://fixture/analysis.md); graph is read-only'

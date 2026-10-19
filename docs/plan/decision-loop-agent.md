@@ -530,11 +530,11 @@ Each refusal is a recoverable tool failure with fixed feedback, as G14's egress 
 - **Not refused: writes to `Member` nodes, allowed behind a warning (owner, 2026-10-19:** _"allow behind warning."_**), and bounded.** G14's directory roster is read from `Member` nodes (`app/src/lib/org-graph/roster-source.server.ts:60-62`), so a write that renamed or deleted members would narrow it silently; only an empty directory fails closed.
   - **When the warning shows.** One pure function computes `touchesDirectory` from the statement and its plan: the statement names `Member`, **and** the plan contains an operator that can change a node (a property set or removal, a label change, a delete, or a create or merge of a `Member` node). A relationship to a member, such as the ontology's ordinary `Knowledge-[:ABOUT]->Member` and `Member-[:AUTHORED]->Knowledge` (`app/src/lib/org-graph/ontology.ts:96-106`), does not show it, so the warning keeps carrying information. `resolve` recomputes the flag from the digest-verified statement, and the dialog reads it from the owner-gated payload read; the request event's copy is display only.
   - **What is allowed.** The directory is always fingerprinted at execution ([below](#where-the-write-runs-the-hosts-resolve)). An unchanged directory commits, whatever the statement named. A changed one commits only if: the request carried the warning; the approver holds `write_org_members` (below); no member's `entraId` changed; and every changed member is among the **declared members** the person was shown (below). Any number of members may change (owner, 2026-10-19: _"multiple is fine, they just need to be listed clearly in the message and warning"_). The ingest `MERGE`s on `entraId` and sets `mail` in the same transaction, and both are unique (`app/src/lib/org-graph/roster-ingest.server.ts:209-223`; `ontology.ts:128-131`), so a changed `entraId` would break the next sync for the whole tenant.
-  - **The declared members.** Listing the members means knowing them before approval, which `EXPLAIN` cannot tell. Running the statement to find out would open a write session before approval, which the round-3 reviews refused. So the agent declares them: a statement with `touchesDirectory` requires a `members` argument on the write request, the `entraId`s of every member it will change or delete. A statement with `touchesDirectory` and no `members` is refused.
-    - `members` is one of the request's arguments, so the digest and the key cover it as they cover the statement (`${digest}:${callKey}`, unchanged).
-    - On a new request only, after every other refusal and the role check, the executor looks the declared members up in a **read** session (SD-14). It stores what it found (display name, mail and the other Entra-sourced values) in the payload row as the **member list** shown to the person. A same-call retry reuses the row and its list, and does not look them up again.
+  - **The declared members.** Listing the members means knowing them before approval, which `EXPLAIN` cannot tell. Running the statement to find out would open a write session before approval, which the round-3 reviews refused. So the agent declares them: a statement with `touchesDirectory` requires `members`, the `entraId`s of every member it **may** change or delete. A statement with `touchesDirectory` and no `members` is refused. An empty list is allowed, for a statement that names `Member` but changes only a linked node; then any member change rolls back.
+    - **`members` is a reserved key of the statement's `parameters`**, which the statement uses as `$members`. The canonical form sorts and deduplicates it, and a request without `touchesDirectory` carries no `members` key. So the one digest over the canonical `(statement, parameters)` covers the declared set, at raise, at the existing-row comparison and in `resolve`, and the key stays `${digest}:${callKey}`. The execution allowlist is read from those digest-verified parameters, never from the display list.
+    - On a new request only, after every other refusal and the role check, the executor looks the declared members up in a **read** session (SD-14). It stores what it found (display name, mail and the other Entra-sourced values) in the payload row as the **member list** shown to the person: a display field, kept apart from the digested ids and never read by execution. A same-call retry reuses the row and its list, and does not look them up again.
     - An `entraId` that matches no member is refused ("unknown directory member"), so an agent cannot create a member: members come from Entra. A failed lookup is a recoverable tool failure and raises no request.
-    - At execution the directory diff may touch only the declared members. A change to any other member, or a created one, rolls back. The new values are whatever the statement, shown verbatim, sets.
+    - At execution the directory diff, keyed by node identity, may touch only the declared members. A change to any other member, or a created one, rolls back, so deleting and recreating an undeclared member reads as a delete plus a create. Which declared members actually change, and to what, is whatever the statement, shown verbatim, does; nothing before execution can say.
     - No write session opens before approval, so the barrier in [What is gated](#what-is-gated) holds without exception, and its source-scan pin keeps its meaning.
     - **Owner rulings (2026-10-19):** listing the members the agent declares, checked at execution, is accepted, with the requirement that it be displayed clearly and ergonomically ([The approval dialogs](#the-approval-dialogs-slice-9)). Creating a `Member` is refused, because members come from Entra (owner: _"correct"_).
   - **The role (owner, 2026-10-19:** _"role write_org_members could be used to grant permission to write to graph"_**).** A request that changes the directory requires its approver to hold the Entra app role `write_org_members`.
@@ -560,11 +560,12 @@ Each refusal is a recoverable tool failure with fixed feedback, as G14's egress 
 
 The order then matters, because core mints the `requestId` only after the request, including its `payloadRef`, exists (`hitl.server.ts:398-411`):
 
-1. The executor computes `digest`, the sha256 of the canonical JSON of `(statement, parameters)`.
-2. It **binds** the frozen payload to the `callKey` in a **blocking-payload row**: owner, session, `callKey`, digest, statement and parameters, encrypted at rest, unique on `(owner, session, callKey)`.
+1. The executor computes `digest`, the sha256 of the canonical JSON of `(statement, parameters)`, with `parameters.members`, when present, sorted and deduplicated.
+2. It **binds** the frozen payload to the `callKey` in a **blocking-payload row**: owner, session, `callKey`, digest, statement and parameters (the declared ids among them), plus, for a directory request, the display member list, encrypted at rest, unique on `(owner, session, callKey)`.
    - If no row exists, it inserts one under a fresh `payloadRef`. For a directory request, this insert path alone first runs the role check and the read-session member lookup, and stores the member list in the row. The row is inserted with `expires_at` equal to the request's expiry, in a table the existing expiry sweep covers (`sweepExpiredHitl`, `app/src/lib/db/hitl.server.ts:626-632`), so it is purged on supersede, expiry and abandonment too.
    - If a row exists with the same digest, it reuses that row's `payloadRef`. A same-call retry therefore never allocates a second row.
-   - If a row exists with a different digest, the call is refused: a logical call is never rebound to another statement.
+   - If a row exists with a different digest, the call is refused: a logical call is never rebound to another statement or another declared set.
+   - Two concurrent inserts for one `callKey`: the loser's insert conflicts on the unique key, so it re-reads the winning row, reuses its `payloadRef` when the digests match, and refuses otherwise. One row, one request.
    - Rows are never updated. This needs a new writer: today's only payload writer, `putHitlProposal`, writes non-blocking proposals and refuses unless memory is enabled (`app/src/lib/db/hitl.server.ts:254-258`).
 3. It calls `askHuman` with:
    - `kind: 'graph-write'`;
@@ -581,7 +582,7 @@ The order then matters, because core mints the `requestId` only after the reques
 The request event carries display primitives only (`summary` is "display only, and untrusted", `packages/harness-patterns/types.ts:1535-1536`); the statement is in the payload row behind `payloadRef` (`:1537-1538`). The dialog shows:
 
 1. **The statement and its parameters, losslessly**: monospace text nodes with line breaks and whitespace preserved, parameters as canonical JSON. **Not** `displayText`, which normalises NFKC, strips format characters and collapses whitespace (`app/src/lib/memory/display-text.ts:14-22`): `MATCH (n) // inspect only`, a newline, then `DETACH DELETE n` would display on one line with the delete inside the comment. The request-time refusal of characters that display differently is what makes this rendering the exact text that runs. `displayText` stays for labels.
-2. **What it does**, from the `EXPLAIN` plan's operators: creates, merges, property sets and removals, deletes and detach-deletes. A plan with a delete gives Approve the danger tone. There are no counts, because counting needs execution. A request with `touchesDirectory` shows its **member list**: every declared member, by display name and mail, with their current directory values. It appears in the message and again in the warning, in the danger tone: **"This changes N entries in the staff directory that the privacy filter reads: [the names]. A renamed or deleted member is no longer recognised as a person, so their name can reach web searches in clear. The next directory sync from Entra reverts this."** The list is never truncated: a long one scrolls, with the count first.
+2. **What it does**, from the `EXPLAIN` plan's operators: creates, merges, property sets and removals, deletes and detach-deletes. A plan with a delete gives Approve the danger tone. There are no counts, because counting needs execution. A request with `touchesDirectory` shows its **member list**: every declared member, by display name and mail, with their current directory values. It appears in the message and in the warning, in the danger tone: **"This may change up to N entries in the staff directory that the privacy filter reads: [the names]. A renamed or deleted member is no longer recognised as a person, so their name can reach web searches in clear. The next directory sync from Entra reverts this."** The list is never truncated: a long one scrolls, with the count first. It names the declared members, which is as far as anything before execution can go; which of them actually change is up to the statement ([The approval dialogs](#the-approval-dialogs-slice-9)).
 3. **Which route proposed it, and what this turn read first**: counts by untrusted source ("3 web results, 2 mails"), how many Microsoft 365 items, and how many spans the guard neutralized, all computed by code from the run's `tool_result` events and their `sanitized` summaries. And one fixed line: **"What you approve is readable by every user, on either tier."**
 4. **Approve** and **Reject.** Reject is the default and the option the unattended rule picks; Approve carries no unattended flag. So a triggered run or a routine never writes. Reject does not stop the run: the loop continues with "rejected; nothing was written", and the agent says so. **If the write already committed** (an earlier resume wrote it and then failed), the dialog says "already applied" and offers a single Continue. Continue sends the default answer, which `resolve` maps to `alreadyApplied`. The dialog learns that state from the owner-gated read by `payloadRef` (SD-13), which reports whether the marker exists.
 
@@ -593,7 +594,7 @@ The request event carries display primitives only (`summary` is "display only, a
 
 `resumeHarness` calls the host's `resolve(request, answer)` once per answer, after every check and before re-entry. What it returns is recorded, and sanitized it becomes the held result (`packages/harness-patterns/harness.server.ts:368-391`; SPEC resume step 9). Today the host passes one function, the quarantine delete (`app/src/lib/harness-client/turn.server.ts:973-983`). Slice 8 makes it dispatch on `request.kind`. For `graph-write`:
 
-1. **Load and bind.** Load the payload row by `payloadRef`. Refuse, writing nothing, unless its owner is the resuming principal, its session is this conversation, its `callKey` equals the one in the request's `key`, and the sha256 **recomputed** from its statement and parameters equals the key's digest. Recomputing, rather than trusting the row's stored digest, keeps the binding whatever the writer did. For a directory request it also checks that the answering session holds `write_org_members`.
+1. **Load and bind.** Load the payload row by `payloadRef`. Refuse, writing nothing, unless its owner is the resuming principal, its session is this conversation, its `callKey` equals the one in the request's `key`, and the sha256 **recomputed** from its statement and parameters, canonicalised as at raise (the declared ids included), equals the key's digest. Recomputing, rather than trusting the row's stored digest, keeps the binding whatever the writer did. For a directory request it also checks that the answering session holds `write_org_members`.
 2. **Check the marker first, on every answer, Reject included.** A marker for this `requestId` means the write already committed: return `{ status: 'written', counters, alreadyApplied: true }` from the marker.
 3. **Reject** with no marker: `{ status: 'rejected' }`. Nothing is opened.
 4. **Approve**: one write transaction, in this order.
@@ -604,7 +605,7 @@ The request event carries display primitives only (`summary` is "display only, a
       - any marker changed: "the statement would change the write records". A warning never lifts this;
       - a member changed and the request carried no warning: "the statement changes directory members, which the approval did not show";
       - a member changed and the principal does not hold `write_org_members`: "changing directory members needs the write_org_members role";
-      - a member outside the declared list changed, or a member was created: "the statement changes directory members it did not declare";
+      - a member outside the digest-verified `parameters.members` changed, or a member was created: "the statement changes directory members it did not declare";
       - a member's `entraId` changed: "a directory member's id cannot change".
 
       This is what catches a broad `MATCH (n) DETACH DELETE n` or a dynamic label, which name no label. A later approved deletion can never erase an earlier marker, and the directory never changes beyond the members the person approved.
@@ -685,6 +686,7 @@ Slice 6 completes the existing design rather than adding a mechanism. On re-entr
   - No write session opens before approval: the source scan keeps the request module free of write sessions, and the member lookup uses a read session. Mutation: open a write session in the request module.
   - A `touchesDirectory` statement without `members`, and one with an unknown `entraId`, are each refused before any request. Mutation: allow the unknown id.
   - A same-call retry looks the members up once and reuses the row. Mutation: look them up on every call.
+  - A same-call retry with a changed declared set is refused; a declared set altered in the row fails `resolve`'s digest check; two concurrent inserts leave one row and one request. Mutations: digest `(statement, parameters)` without the canonical `members`; trust the row's display list at execution.
   - A warned change to three declared members, approved by a role holder, commits, with all three in the member list, the dialog and the audit row. Mutations: list only the first; skip the audit.
   - A change to an undeclared member, or a created member, rolls back. Mutation: skip the declared-set check.
   - An unwarned, label-less `SET n.jobTitle` rolls back. Mutation: drop `jobTitle` from the fingerprint.
@@ -718,7 +720,11 @@ None of this has a client yet. `HitlDialog` renders memory proposals only (`app/
 **One shell, one body per kind.** `HitlDialog` (#589) stays the only confirmation component. It chooses its body by `kind`: today's `memory.confirm`, and the two below, `graph-write` and `private-content-release`. The shell:
 
 - **Ark UI primitives.** `Dialog` (`Root`, `Backdrop`, `Positioner`, `Content`, `Title`, `Description`, `CloseTrigger`); `ScrollArea` for every bounded region; `Collapsible` for expansion; `Checkbox` with its `Label` for per-file inclusion. All of these are already in the app. No native replacements.
-- **The layout.** The header (title and expiry) and the footer (the actions) stay fixed, and only the body scrolls. The content is at most `48rem` wide and `90vh` tall, wider than the memory body, because statements are code.
+- **The layout.** The content is at most `48rem` wide and `90vh` tall, wider than the memory body, because statements are code. Three areas stay fixed and one scrolls:
+  - the header (title and expiry);
+  - the **compact warning** (one or two sentences with the count) in a sticky band below the header, outside the body's scroller, capped at about a third of the dialog's height so that, at 200% zoom or on a small viewport, it can never cover the statement or a focused control (`focus-not-obscured`);
+  - the footer (the actions);
+  - the body, which scrolls and holds everything long: the member table, the statement, history and files.
 - **One order for every kind:**
   1. the title, a plain question;
   2. the **warning**, if there is one;
@@ -727,7 +733,7 @@ None of this has a client yet. `HitlDialog` renders memory proposals only (`app/
   5. what this turn read;
   6. the actions.
 
-  The warning comes second so it can never be scrolled past. `Dialog.Description` points at the warning and the summary, so a screen reader announces both when the dialog opens.
+  The compact warning stays visible because it sits outside the scroller, not because of its position. `Dialog.Description` references the compact warning and the summary only, so opening the dialog never reads out a whole table.
 
 - **The danger tone** is the `ui-danger` role only, because there is no warning token yet (`kg-dtalk-ui` §4: no new tokens on the proposal table's authority).
   - A warning is a region with a `ui-danger` left border, a `ui-danger/10` fill, the `i-material-symbols-warning-outline` glyph and the visible word "Warning". Hue never carries the meaning alone (`color-not-only`).
@@ -739,7 +745,7 @@ None of this has a client yet. `HitlDialog` renders memory proposals only (`app/
   - Tab order follows visual order. Every control is a `<button>`, an Ark `Checkbox` or an Ark `Collapsible` trigger, which carries `aria-expanded`.
   - Focus rings use `ring="2 transparent focus:ui-accent/40"` (`focus-appearance`), and every target is at least 24×24 px.
   - The member list is a real `<table>`, with a `<caption>` and `scope` headers, so a screen reader can move by row and column.
-- **Untrusted text.** Every string that came from content or a model is rendered as a text node, never as markup. History and file previews make format and bidi characters visible (e.g. `⟨U+202E⟩`) instead of applying them. A statement cannot contain them, because the request refuses them.
+- **Untrusted text.** Every string that came from content, a model or the graph is rendered as a text node, never as markup. **Every such label also makes format and bidi characters visible** (e.g. `⟨U+202E⟩`) instead of applying them: filenames, which are the checkbox labels, member names, mail, departments and job titles, processor names, history labels and previews. So `invoice⟨U+202E⟩fdp.exe` cannot display as `invoiceexe.pdf`. `displayText` is not used for these, because silently removing a character hides it. A statement cannot contain such characters at all, because the request refuses them.
 - **Truncation is visual, never hidden.** A bounded region scrolls, but everything it holds is in the DOM and read in full by a screen reader. Where text is cut, the cut is labelled ("first 2,000 of 18,400 characters"), and expanding fetches the rest through the owner-gated read.
 - **Live arrival.** When a request arrives, one `aria-live="polite"` region announces it ("Approval needed: a change to the knowledge graph"), without moving focus (`contextual-live-badge-updates`). Then the transcript card and the inbox entry each offer **Review**, which opens the dialog.
 
@@ -747,39 +753,38 @@ None of this has a client yet. `HitlDialog` renders memory proposals only (`app/
 
 ```
 ┌ Change the knowledge graph? ───────────────────── expires in 23 h ─ [×] ┐
-│ ▌⚠ Warning                                                              │
-│ ▌ This changes 3 entries in the staff directory that the privacy        │
-│ ▌ filter reads. A renamed or deleted member is no longer recognised as  │
-│ ▌ a person, so their name can reach web searches in clear. The next     │
-│ ▌ directory sync from Entra reverts this.                               │
-│ ▌ ┌ Directory members (3) ──────────────────────────────────────────┐  │
-│ ▌ │ Name         Mail                  Department  Job title  Change│  │
-│ ▌ │ Ada Example  ada@example.com       Research    Analyst    sets  │  │
-│ ▌ │ Ben Example  ben@example.com       Research    Lead       sets  │  │
-│ ▌ │ Cy Example   cy@example.com        Sales       Advisor    sets  │  │
-│ ▌ └─────────────────────────────────────────── scrolls past 8 rows ┘  │
-│ Sets jobTitle = "Senior analyst" on 3 members.   [sets] [merges]       │
-│ ┌ Statement, exactly as it will run ────────────────────────────────┐  │
-│ │ 1  MATCH (m:Member) WHERE m.entraId IN $members                   │  │
-│ │ 2  SET m.jobTitle = $title                                        │  │
-│ └───────────────────────────────────────────────────────────────────┘  │
-│ ┌ Parameters ───────────────────────────────────────────────────────┐  │
-│ │ { "members": ["…", "…", "…"], "title": "Senior analyst" }         │  │
-│ └───────────────────────────────────────────────────────────────────┘  │
-│ Proposed by knowledge-edit. Before proposing it, this turn read:        │
-│ 3 web results · 2 mails · 1 neutralized instruction.                    │
-│ What you approve is readable by every user, on either tier.             │
+│ ▌⚠ Warning: this may change up to 3 staff-directory entries that the    │ ← sticky
+│ ▌ privacy filter reads. The next Entra sync reverts it.                 │   band
+├─────────────────────────────────────────────────────────────────────────┤
+│ Statement-wide: [sets m.jobTitle]                                       │ ↑
+│ ┌ Members this statement may change or delete (3 declared) ─────────┐  │ │
+│ │ Name         Mail                  Department  Job title          │  │ │
+│ │ Ada Example  ada@example.com       Research    Analyst            │  │ │
+│ │ Ben Example  ben@example.com       Research    Lead               │  │ │ body
+│ │ Cy Example   cy@example.com        Sales       Advisor            │  │ │ scrolls
+│ └─────────────────────────────────────────────────── all rows ──────┘  │ │
+│ A renamed or deleted member is no longer recognised as a person, so    │ │
+│ their name can reach web searches in clear.                            │ │
+│ ┌ Statement, exactly as it will run ────────────────────────────────┐  │ │
+│ │ 1  MATCH (m:Member) WHERE m.entraId IN $members                   │  │ │
+│ │ 2  SET m.jobTitle = $title                                        │  │ │
+│ └───────────────────────────────────────────────────────────────────┘  │ │
+│ ┌ Parameters ───────────────────────────────────────────────────────┐  │ │
+│ │ { "members": ["…", "…", "…"], "title": "Senior analyst" }         │  │ │
+│ └───────────────────────────────────────────────────────────────────┘  │ │
+│ Proposed by knowledge-edit. Before proposing it, this turn read:        │ │
+│ 3 web results · 2 mails · 1 neutralized instruction.                    │ │
+│ What you approve is readable by every user, on either tier.             │ ↓
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                   [ Reject ]  [ ⚠ Approve this change ] │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **The order.** The directory warning and its member table come first, and only when `touchesDirectory` is set. Then the operations summary, then the statement and the parameters, then the provenance.
-- **The member table is the list both the message and the warning name.** It shows each member's name, mail, department and job title (their current values from the read-session lookup) and what happens to them: "sets", "removes" or "deletes". For a long list, the warning sentence carries the count and the table carries every row, scrolling past about eight rows. A `deletes` row carries the danger tint as well as the word.
-- **What changes for each member.** It is read from the plan's operators and the parameters: the property a `SET` names, with its new value when that value is a literal or a parameter, otherwise "computed by the statement". It does not predict values the statement computes per member; the statement below is the authority, and the owner accepted that (2026-10-19).
+- **The order.** The compact directory warning, in the sticky band, only when `touchesDirectory` is set; then the statement-wide operations, the member table, the full warning text, the statement and the parameters, and the provenance.
+- **The member table lists the declared members**, which is what both the message and the warning name: "members this statement may change or delete". It shows each one's name, mail, department and job title, i.e. the current values from the read-session lookup. It has **no per-row operation and no affected count**. The plan's operators are statement-wide, so before execution nothing can say which declared member is set, deleted or left alone (a filter such as `AND m.department = $d` may touch only some). The count is the declared count, worded "up to N". An empty declaration says "no directory member may change".
+- **What the statement does** is shown statement-wide only, as R4 chips with the `SET` targets read from the plan's details (`sets m.jobTitle`, `deletes`, `removes m.department`), with `deletes` in `ui-danger`. The statement below is the authority, as the owner accepted (2026-10-19).
 - **The statement** is shown in full, with line numbers, so a soft wrap is never mistaken for a line break, which is the comment-hiding case. It is never collapsed: it is what is approved. Its region scrolls beyond about 20 lines. The parameters follow as canonical JSON.
-- **Chips** use recipe R4 for the operations; `deletes` uses `ui-danger`.
-- **The Approve label names the action**: "Approve this change", or "Approve deleting 2 members" when the plan deletes. Approve is disabled until the body has loaded.
+- **The Approve label names the kind of action without a count**: "Approve this change", or "Approve a change that deletes" when the plan deletes.
 - **The "already applied" state** replaces the body with "This change was already written" and its counts, and offers a single **Continue**, which sends the default answer.
 - **Without the warning**, the table and the warning are absent; the rest is the same.
 
@@ -828,12 +833,30 @@ None of this has a client yet. `HitlDialog` renders memory proposals only (`app/
 - **The actions.** "Stay private" is the safe default and has initial focus. The danger action's label counts what it sends ("Send history and 1 file", or "Send history only"), so the press states exactly what goes.
 - **Withdrawal** lives in the Data Stash panel, not in this dialog: a per-file toggle, with the line "a released history cannot be recalled".
 
-**Pins (component layer; browser layer for focus and Escape):**
+**The controller and its states.** The shell stays presentational, as today (`HitlDialog` takes props; `MemoryProposalPrompt` owns selection, busy state and the bound answer). A blocking-request controller is added beside the memory one, and memory's non-blocking answer path is unchanged.
+
+- It reads one discriminated view per request, `{ kind, requestId, … }`, through the owner-gated payload read.
+- It answers with `{ [requestId]: { choice, flags } }` only. Core accepts a choice and declared flags, never a principal or a resolution from the browser (`packages/harness-patterns/types.ts:1623-1632`; `hitl.server.ts:565-591`).
+- Its states:
+  - **loading**: Approve disabled;
+  - **read failed**: an error beside the body, Approve never enabled, and a Retry;
+  - **submitting**: both actions disabled from the first press until the outcome arrives, as today's `busy` (`HitlDialog.tsx:169, 184`);
+  - **bound**: an answer already recorded, shown as such;
+  - **expired** and **superseded**: the dialog says so and offers only Close;
+  - **already applied**: as above.
+- On supersede, on expiry, or on an answer from another tab, an open dialog refreshes through the owner-gated read instead of keeping a live Approve. The server stays the guarantee.
+- **Several pending requests.** Core requires every pending request of a run to be answered in one resume. So the controller shows them one after another, collects the answers, and sends a single resume when the last is answered. The transcript card counts them ("2 approvals needed").
+
+**Pins (component layer; browser layer for focus, Escape and layout):**
 
 - The warning renders before the details, and `Dialog.Description` references it.
 - Initial focus is on the safe action. Mutation: focus the danger action.
 - Escape and the backdrop decide nothing.
-- The member table renders every row, with a caption and header scopes. Mutation: render only the first rows.
+- The member table renders every declared row, with a caption and header scopes. Mutation: render only the first rows.
+- A statement that sets one declared member and deletes another renders no per-member operation and no count. Mutation: derive a per-row operation.
+- A filename containing U+202E renders the visible escape. Mutation: render the raw label.
+- With 200 members and a 60-line statement, at 200% zoom, the compact warning stays visible and no focused control is covered (browser layer). Mutation: put the warning inside the scroller.
+- Both actions are disabled from the first press until the outcome arrives; a superseded request refreshes to Close only.
 - The statement keeps its line breaks and numbers its lines. Mutation: render through `displayText`.
 - A cut preview states its cut, and **Show full text** fetches the rest.
 - An uninspectable file has no checkbox.

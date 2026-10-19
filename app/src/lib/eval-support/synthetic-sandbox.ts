@@ -10,6 +10,7 @@
  * (`packages/sandbox/work-sync.server.ts`); here only an accepted shell request records
  * the scenario's artifacts, and a `sandbox_write` to /work/out is deliberately not graded. */
 import type { MCPToolDescription, ToolTransport } from '@hames-ai/harness-patterns'
+import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
 import { sandboxShapeError, type ArgsPredicate } from './tool-arguments'
 import type { ConversationScenario, ConversationTrace } from './conversation'
 
@@ -63,6 +64,19 @@ export const SANDBOX_FILE_TOOLS: MCPToolDescription[] = [
     inputSchema: schema({ path: PATH, query: { type: 'string' } }, ['path', 'query']),
   },
 ]
+
+/** Live mode: the sandbox's file tools ARE the gateway's rust-mcp-filesystem entries, renamed by
+ * V0_IN_VM_SERVERS. Derived, never restated, so the description is the server's own text; an
+ * entry the gateway does not list is an error, not a stand-in. */
+export function sandboxFileToolsFromGateway(gateway: MCPToolDescription[]): MCPToolDescription[] {
+  return V0_IN_VM_SERVERS.flatMap((server) => Object.entries(server.tools))
+    .filter(([, exposed]) => exposed !== 'sandbox_bash')
+    .map(([native, exposed]) => {
+      const tool = gateway.find((t) => t.name === native)
+      if (!tool) throw new Error(`Production tool metadata missing: ${native} (${exposed})`)
+      return { ...tool, name: exposed }
+    })
+}
 
 export interface SyntheticSandboxState {
   scenario: () => ConversationScenario

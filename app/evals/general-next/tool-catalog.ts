@@ -1,7 +1,7 @@
 /** Live mode reads production gateway metadata only; no gateway tool is executed. */
 import type { MCPToolDescription } from '@hames-ai/harness-patterns'
 import { registerGraphConnectorTools } from '@hames-ai/connectors/graph/graph-tools.server'
-import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
+import { sandboxFileToolsFromGateway } from '../../src/lib/eval-support/synthetic-sandbox'
 
 export async function productionCatalog(gatewayUrl: string): Promise<MCPToolDescription[]> {
   const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
@@ -61,15 +61,6 @@ export async function productionCatalog(gatewayUrl: string): Promise<MCPToolDesc
       additionalProperties: false,
     },
   })
-  // The production sandbox's file tools ARE the gateway's rust-mcp-filesystem entries, renamed
-  // by V0_IN_VM_SERVERS; derived, never restated, so the description is the server's own text.
-  const gateway = [...tools]
-  for (const server of V0_IN_VM_SERVERS)
-    for (const [native, exposed] of Object.entries(server.tools)) {
-      if (exposed === 'sandbox_bash') continue
-      const tool = gateway.find((t) => t.name === native)
-      if (!tool) throw new Error(`Production tool metadata missing: ${native} (${exposed})`)
-      tools.push({ ...tool, name: exposed })
-    }
+  tools.push(...sandboxFileToolsFromGateway(tools))
   return tools
 }

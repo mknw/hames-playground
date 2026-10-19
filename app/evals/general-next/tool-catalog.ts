@@ -1,6 +1,7 @@
 /** Live mode reads production gateway metadata only; no gateway tool is executed. */
 import type { MCPToolDescription } from '@hames-ai/harness-patterns'
 import { registerGraphConnectorTools } from '@hames-ai/connectors/graph/graph-tools.server'
+import { SANDBOX_FILE_TOOLS } from '../../src/lib/eval-support/synthetic-sandbox'
 
 export async function productionCatalog(gatewayUrl: string): Promise<MCPToolDescription[]> {
   const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
@@ -60,5 +61,7 @@ export async function productionCatalog(gatewayUrl: string): Promise<MCPToolDesc
       additionalProperties: false,
     },
   })
+  // The production sandbox also exposes its file tools, which a model's script-writing habit uses.
+  tools.push(...SANDBOX_FILE_TOOLS)
   return tools
 }

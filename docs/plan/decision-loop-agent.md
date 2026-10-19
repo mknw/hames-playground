@@ -536,7 +536,7 @@ Each refusal is a recoverable tool failure with fixed feedback, as G14's egress 
     - An `entraId` that matches no member is refused ("unknown directory member"), so an agent cannot create a member: members come from Entra. A failed lookup is a recoverable tool failure and raises no request.
     - At execution the directory diff may touch only the declared members. A change to any other member, or a created one, rolls back. The new values are whatever the statement, shown verbatim, sets.
     - No write session opens before approval, so the barrier in [What is gated](#what-is-gated) holds without exception, and its source-scan pin keeps its meaning.
-    - **Owner confirmation:** _"Is listing the members the agent declares, checked at execution, enough for 'listed clearly', given that the screen shows the statement verbatim rather than computed before-and-after values? And is creating a `Member` refused, since members come from Entra?"_ The doc assumes yes to both.
+    - **Owner rulings (2026-10-19):** listing the members the agent declares, checked at execution, is accepted, with the requirement that it be displayed clearly and ergonomically ([The approval dialogs](#the-approval-dialogs-slice-9)). Creating a `Member` is refused, because members come from Entra (owner: _"correct"_).
   - **The role (owner, 2026-10-19:** _"role write_org_members could be used to grant permission to write to graph"_**).** A request that changes the directory requires its approver to hold the Entra app role `write_org_members`.
     - The app reads no roles today. The sign-in path reads the ID token's `roles` claim and stores it on the session, and every check reads the session server-side, never the client (SD-13, SD-15).
     - The role is checked three times. Before the member lookup, a user without it gets "changing directory members needs the write_org_members role", and nothing runs. In `resolve`, the answering session is checked. At execution, a member diff under a principal without the role rolls back.
@@ -711,18 +711,143 @@ A write composed after reading untrusted content is the riskiest thing this agen
 
 What it does not catch: a plausible but harmful statement that the person approves. The dialog turns that into a reading task; it does not guarantee anything.
 
-### The UI (slice 9)
+### The approval dialogs (slice 9)
 
-None of this has a client yet. `HitlDialog` renders memory proposals only (`app/src/components/ark-ui/HitlDialog.tsx:82-84`), and no client code sends a resume. Slice 9 adds:
+None of this has a client yet. `HitlDialog` renders memory proposals only (`app/src/components/ark-ui/HitlDialog.tsx:82-84`), and no client code sends a resume. The owner's requirement (2026-10-19): _"We will need to ensure that HITL info is displayed clearly and ergonomically."_ This section is the design; the house rules are the `kg-dtalk-ui` skill and its accessibility checklist.
 
-- a blocking-request card in the transcript for a paused turn, with the request's expiry;
-- a `graph-write` body in the shared dialog shell, rendering the statement losslessly, with its directory warning and its "already applied" state;
-- a `private-content-release` body: the processors, the history, each file's labelled and expandable preview with its download and per-file checkbox, and the tier-flip warning ([P4](#a-tier-flip-mid-conversation-owner-2026-10-19)); the Data Stash panel's withdraw toggle;
+**One shell, one body per kind.** `HitlDialog` (#589) stays the only confirmation component. It chooses its body by `kind`: today's `memory.confirm`, and the two below, `graph-write` and `private-content-release`. The shell:
+
+- **Ark UI primitives.** `Dialog` (`Root`, `Backdrop`, `Positioner`, `Content`, `Title`, `Description`, `CloseTrigger`); `ScrollArea` for every bounded region; `Collapsible` for expansion; `Checkbox` with its `Label` for per-file inclusion. All of these are already in the app. No native replacements.
+- **The layout.** The header (title and expiry) and the footer (the actions) stay fixed, and only the body scrolls. The content is at most `48rem` wide and `90vh` tall, wider than the memory body, because statements are code.
+- **One order for every kind:**
+  1. the title, a plain question;
+  2. the **warning**, if there is one;
+  3. a one-line summary with counts;
+  4. the details;
+  5. what this turn read;
+  6. the actions.
+
+  The warning comes second so it can never be scrolled past. `Dialog.Description` points at the warning and the summary, so a screen reader announces both when the dialog opens.
+
+- **The danger tone** is the `ui-danger` role only, because there is no warning token yet (`kg-dtalk-ui` §4: no new tokens on the proposal table's authority).
+  - A warning is a region with a `ui-danger` left border, a `ui-danger/10` fill, the `i-material-symbols-warning-outline` glyph and the visible word "Warning". Hue never carries the meaning alone (`color-not-only`).
+  - The danger action is styled the same way (border, text and tint in `ui-danger`), never as `cyber-button`, which is reserved for a safe primary action.
+- **Light and dark.** Only `ui-*` roles, so the palette flips and the component does not. Statements and previews sit on `--ui-code-bg`, which both palettes define (`app/uno.config.ts:244, 278`). No `dark:` variants and no literal hexes.
+- **Keyboard and screen readers.**
+  - Ark's dialog traps focus. **Initial focus goes to the safe action** (Reject / Stay private), never to the danger one, so Enter on open decides nothing harmful.
+  - Escape, the close button and the backdrop all close the dialog and **decide nothing**: the request stays pending, as today.
+  - Tab order follows visual order. Every control is a `<button>`, an Ark `Checkbox` or an Ark `Collapsible` trigger, which carries `aria-expanded`.
+  - Focus rings use `ring="2 transparent focus:ui-accent/40"` (`focus-appearance`), and every target is at least 24×24 px.
+  - The member list is a real `<table>`, with a `<caption>` and `scope` headers, so a screen reader can move by row and column.
+- **Untrusted text.** Every string that came from content or a model is rendered as a text node, never as markup. History and file previews make format and bidi characters visible (e.g. `⟨U+202E⟩`) instead of applying them. A statement cannot contain them, because the request refuses them.
+- **Truncation is visual, never hidden.** A bounded region scrolls, but everything it holds is in the DOM and read in full by a screen reader. Where text is cut, the cut is labelled ("first 2,000 of 18,400 characters"), and expanding fetches the rest through the owner-gated read.
+- **Live arrival.** When a request arrives, one `aria-live="polite"` region announces it ("Approval needed: a change to the knowledge graph"), without moving focus (`contextual-live-badge-updates`). Then the transcript card and the inbox entry each offer **Review**, which opens the dialog.
+
+#### `graph-write`
+
+```
+┌ Change the knowledge graph? ───────────────────── expires in 23 h ─ [×] ┐
+│ ▌⚠ Warning                                                              │
+│ ▌ This changes 3 entries in the staff directory that the privacy        │
+│ ▌ filter reads. A renamed or deleted member is no longer recognised as  │
+│ ▌ a person, so their name can reach web searches in clear. The next     │
+│ ▌ directory sync from Entra reverts this.                               │
+│ ▌ ┌ Directory members (3) ──────────────────────────────────────────┐  │
+│ ▌ │ Name         Mail                  Department  Job title  Change│  │
+│ ▌ │ Ada Example  ada@example.com       Research    Analyst    sets  │  │
+│ ▌ │ Ben Example  ben@example.com       Research    Lead       sets  │  │
+│ ▌ │ Cy Example   cy@example.com        Sales       Advisor    sets  │  │
+│ ▌ └─────────────────────────────────────────── scrolls past 8 rows ┘  │
+│ Sets jobTitle = "Senior analyst" on 3 members.   [sets] [merges]       │
+│ ┌ Statement, exactly as it will run ────────────────────────────────┐  │
+│ │ 1  MATCH (m:Member) WHERE m.entraId IN $members                   │  │
+│ │ 2  SET m.jobTitle = $title                                        │  │
+│ └───────────────────────────────────────────────────────────────────┘  │
+│ ┌ Parameters ───────────────────────────────────────────────────────┐  │
+│ │ { "members": ["…", "…", "…"], "title": "Senior analyst" }         │  │
+│ └───────────────────────────────────────────────────────────────────┘  │
+│ Proposed by knowledge-edit. Before proposing it, this turn read:        │
+│ 3 web results · 2 mails · 1 neutralized instruction.                    │
+│ What you approve is readable by every user, on either tier.             │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                   [ Reject ]  [ ⚠ Approve this change ] │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+- **The order.** The directory warning and its member table come first, and only when `touchesDirectory` is set. Then the operations summary, then the statement and the parameters, then the provenance.
+- **The member table is the list both the message and the warning name.** It shows each member's name, mail, department and job title (their current values from the read-session lookup) and what happens to them: "sets", "removes" or "deletes". For a long list, the warning sentence carries the count and the table carries every row, scrolling past about eight rows. A `deletes` row carries the danger tint as well as the word.
+- **What changes for each member.** It is read from the plan's operators and the parameters: the property a `SET` names, with its new value when that value is a literal or a parameter, otherwise "computed by the statement". It does not predict values the statement computes per member; the statement below is the authority, and the owner accepted that (2026-10-19).
+- **The statement** is shown in full, with line numbers, so a soft wrap is never mistaken for a line break, which is the comment-hiding case. It is never collapsed: it is what is approved. Its region scrolls beyond about 20 lines. The parameters follow as canonical JSON.
+- **Chips** use recipe R4 for the operations; `deletes` uses `ui-danger`.
+- **The Approve label names the action**: "Approve this change", or "Approve deleting 2 members" when the plan deletes. Approve is disabled until the body has loaded.
+- **The "already applied" state** replaces the body with "This change was already written" and its counts, and offers a single **Continue**, which sends the default answer.
+- **Without the warning**, the table and the warning are absent; the rest is the same.
+
+#### `private-content-release`
+
+```
+┌ Send this conversation to the Anthropic tier? ─── expires in 23 h ─ [×] ┐
+│ ▌⚠ Warning                                                              │
+│ ▌ This conversation holds content produced on the private tier.         │
+│ ▌ Continuing sends it to Anthropic and decisions.example.com, outside   │
+│ ▌ the private tier.                                                     │
+│ 4 earlier turns · 2 files copied on the private tier                    │
+│ ▸ Earlier turns (4)                                                     │
+│   Turn 3 · you: "Summarise the Lantern brief"            [Show full]    │
+│   Turn 3 · answer: "The brief proposes…" (first 300 of 1,950) [Show]    │
+│   …                                                                     │
+│ Files                                                                   │
+│ ┌──────────────────────────────────────────────────────────────────────┐│
+│ │ ☐ Include  lantern-brief.docx · Word · 48 KB · copied 10:14          ││
+│ │   Extracted text; the model may read the original file.              ││
+│ │   ┌ first 2,000 of 18,400 characters ──────────────────────────┐     ││
+│ │   │ Lantern brief. Scope: …                                    │     ││
+│ │   └────────────────────────────────────────────────────────────┘     ││
+│ │   [ Show full text ]  [ Download original ]                          ││
+│ ├──────────────────────────────────────────────────────────────────────┤│
+│ │ ☐ Include  budget.xlsx · Excel · 22 KB · copied 10:16                ││
+│ │   Sent whole; no text preview.  [ Download original ]                ││
+│ ├──────────────────────────────────────────────────────────────────────┤│
+│ │ ⊘ notes.pdf: cannot be shown, so it cannot be included.              ││
+│ └──────────────────────────────────────────────────────────────────────┘│
+├─────────────────────────────────────────────────────────────────────────┤
+│                     [ Stay private ]  [ ⚠ Send history and 1 file ]     │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+- **The order.** The warning names the processors, computed from configuration. Then the summary counts, then the history, then the files.
+- **History.**
+  - It is an Ark `Collapsible`, closed by default. Its trigger states the count, so it is never empty or silent.
+  - Each turn shows the person's message and the answer, labelled with the turn number. A long entry shows its first 300 characters, with "Show full" expanding it in place.
+- **Files.** One card per file.
+  - Each card has an Ark `Checkbox`, unchecked by default, whose label is the filename.
+  - It shows the type, size and copy time, and the representation notice: "extracted text" for a converted file, "sent whole; no text preview" for a binary.
+  - The preview region is labelled with its cut ("first 2,000 of N characters"). **Show full text** expands it in place, through the owner-gated read.
+  - **Download original** is a programmatic download anchor, which stays in the tab (`kg-dtalk-ui` §6).
+  - A file that cannot be inspected shows ⊘ and the reason, in a card with no checkbox.
+- **The actions.** "Stay private" is the safe default and has initial focus. The danger action's label counts what it sends ("Send history and 1 file", or "Send history only"), so the press states exactly what goes.
+- **Withdrawal** lives in the Data Stash panel, not in this dialog: a per-file toggle, with the line "a released history cannot be recalled".
+
+**Pins (component layer; browser layer for focus and Escape):**
+
+- The warning renders before the details, and `Dialog.Description` references it.
+- Initial focus is on the safe action. Mutation: focus the danger action.
+- Escape and the backdrop decide nothing.
+- The member table renders every row, with a caption and header scopes. Mutation: render only the first rows.
+- The statement keeps its line breaks and numbers its lines. Mutation: render through `displayText`.
+- A cut preview states its cut, and **Show full text** fetches the rest.
+- An uninspectable file has no checkbox.
+- The danger action's label counts the files it sends.
+- Neither palette uses a literal hex. The existing `theme-migration` test already fails on a `dark-*` token under `src/components`.
+
+**Also in slice 9:**
+
+- the transcript card for a paused turn, with **Review** and the expiry;
 - pending blocking requests in the inbox, beside proposals;
 - the client resume over the existing SSE path, sent only on the person's press;
-- an owner-gated read of the frozen statement by `payloadRef`: a `'use server'` read, gated like every other one and taking no owner argument (SD-13).
+- the owner-gated read of a payload by `payloadRef`: a `'use server'` read, gated like every other one and taking no owner argument (SD-13).
 
-A new message sent while a write waits supersedes it (`continueSession`), and the card says so.
+A new message sent while a request waits supersedes it (`continueSession`), and the card says so.
 
 ## Data between routes
 
@@ -778,7 +903,7 @@ All 11 round-2 calls and the 3 departures from the sketch were accepted as recom
 - **N5, the iteration bound.** `maxIterations` defaults to 6. At the bound the loop stops as `answer`, with the answer marked partial.
 - **G14 (2026-10-15), pseudonymisation.** An outbound filter around `withReferences` on the web route (`info_ag`), on the private tier only, with no table kept and no reverse. The filter applies unless a run is explicitly on the Anthropic tier, and it covers the handoff data as well as the view. A roster that cannot be built withholds the references; they are never passed in clear. Designed in [Pseudonymisation guard on the web route](#pseudonymisation-guard-on-the-web-route).
 - **The three departures:** the retriever is its own route; `doc_ag` is the sketch's second form; `answer` (`done` in G12) is a choice, so the synthesizer answers once.
-- **Writes (owner, 2026-10-16 and 2026-10-17).** #396 is closed: writes are gated by a person, not prevented by read-only defaults. After an approval the run continues inside the route as if it had not stopped. Designed in [Writes, gated by a person](#writes-gated-by-a-person). On 2026-10-19 the owner accepted H1 (a separate route, named `knowledge-edit` here) and H2 (any allow-listed user approves writes proposed in their own conversation), and limited approval to Neo4j writes. Writes to `Member` nodes are allowed behind a warning (owner, 2026-10-19), with any number of members, each listed in the message and the warning, `entraId` immutable, audited for 12 months, and approval requiring the Entra app role `write_org_members`. The rulings are recorded at [#682](https://github.com/mknw/hames-playground/pull/682#issuecomment-6269324396) and on #693.
+- **Writes (owner, 2026-10-16 and 2026-10-17).** #396 is closed: writes are gated by a person, not prevented by read-only defaults. After an approval the run continues inside the route as if it had not stopped. Designed in [Writes, gated by a person](#writes-gated-by-a-person). On 2026-10-19 the owner accepted H1 (a separate route, named `knowledge-edit` here) and H2 (any allow-listed user approves writes proposed in their own conversation), and limited approval to Neo4j writes. Writes to `Member` nodes are allowed behind a warning (owner, 2026-10-19), with any number of members, each listed in the message and the warning, `entraId` immutable, audited for 12 months, and approval requiring the Entra app role `write_org_members`. Declared members are accepted, displayed "clearly and ergonomically", and creating a `Member` is refused. The rulings are recorded at [#682](https://github.com/mknw/hames-playground/pull/682#issuecomment-6269324396) and on #693.
 - **P4 (owner, 2026-10-19), the file path.** It is protected at its exits, not by rewriting bytes; the stash copy is unchanged and no table is kept; the tool runs only on a positively private tier; people named only inside a file's body are an accepted limitation. This settles S-f as G14 reads it. Recorded on [PR #682](https://github.com/mknw/hames-playground/pull/682#issuecomment-6256235215). A tier flip shows a confirmation screen with the data that would be transferred to Anthropic, with a warning ([record](https://github.com/mknw/hames-playground/pull/682#issuecomment-6269324396)). "Anthropic" is read as the Anthropic tier's processors, the decisions endpoint included. It covers the conversation's history as well as the files. Designed in [The file path (P4)](#the-file-path-p4).
 
 The round-1 reviewers' terms (architecture 6068693140, security 6068708025) bind the delta review. Nothing is built before that review converges.
@@ -842,7 +967,7 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
    - the `knowledge-edit` route (H1), with `multiToolCalls: 'off'`;
    - `write_neo4j_cypher` still withheld and the gateway still read-only, each pinned;
    - the host outcomes listed in [Where the write runs](#where-the-write-runs-the-hosts-resolve), at layers 1 and 2.
-9. **The UI for blocking requests**, which can be built alongside slice 8: the transcript card with the expiry, the `graph-write` dialog body with the lossless statement, its directory warning and its "already applied" state, the `private-content-release` body, inbox entries, the client resume sent only on a press, and the owner-gated read of the frozen statement. With it lands the `privateContentRelease` gate: the manifest, the release service shared by the gate, `resolve`, hydrate and retrieval, and the versioned `publicTierRelease` record, with the pins in [P4](#a-tier-flip-mid-conversation-owner-2026-10-19). Its UI checks belong to the component and browser layers.
+9. **The UI for blocking requests**, as designed in [The approval dialogs](#the-approval-dialogs-slice-9), which can be built alongside slice 8: the transcript card with the expiry, the `graph-write` dialog body with the lossless statement, its directory warning and its "already applied" state, the `private-content-release` body, inbox entries, the client resume sent only on a press, and the owner-gated read of the frozen statement. With it lands the `privateContentRelease` gate: the manifest, the release service shared by the gate, `resolve`, hydrate and retrieval, and the versioned `publicTierRelease` record, with the pins in [P4](#a-tier-flip-mid-conversation-owner-2026-10-19). Its UI checks belong to the component and browser layers.
 
 ## See also
 

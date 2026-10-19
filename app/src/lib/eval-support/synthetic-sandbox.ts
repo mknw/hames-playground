@@ -8,7 +8,9 @@
  *
  * Not modelled: production promotes any new file under /work/out to an artifact
  * (`packages/sandbox/work-sync.server.ts`); here only an accepted shell request records
- * the scenario's artifacts, and a `sandbox_write` to /work/out is deliberately not graded. */
+ * the scenario's artifacts, and a `sandbox_write` to /work/out is deliberately not graded.
+ * Also not modelled: `cd`, `ls` on files or in long format, multi-file `head` headers,
+ * and pipe output. */
 import type { MCPToolDescription, ToolTransport } from '@hames-ai/harness-patterns'
 import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
 import { sandboxShapeError, type ArgsPredicate } from './tool-arguments'
@@ -118,12 +120,21 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
     data: { artifacts, stdout, stderr, exit_code: code, timed_out: false },
   })
 
-  /** `head`, `cat`, `wc` and `ls` on files the actor can see: read-only, nothing recorded. */
-  const inspect = (command: string, cwd: string) => {
+  /** One `head`, `cat`, `wc` or `ls` on files the actor can see; undefined for anything else. */
+  const inspectOne = (command: string, cwd: string) => {
     const [program, ...rest] = command.trim().split(/\s+/)
-    if (!/^(head|cat|wc|ls)$/.test(program) || /[;|&<>$`()]/.test(command)) return undefined
+    if (!/^(head|cat|wc|ls)$/.test(program) || /[|&<>$`()]/.test(command)) return undefined
     const all = files()
-    const targets = rest
+    // `head -3`, `head -n3`, `head -n 3`: the count is an option's value, not a file.
+    let lines = 10
+    let operands = rest
+    if (program === 'head') {
+      const glued = /^-n?(\d+)$/.exec(rest[0] ?? '')
+      if (glued) [lines, operands] = [Number(glued[1]), rest.slice(1)]
+      else if (rest[0] === '-n' && /^\d+$/.test(rest[1] ?? ''))
+        [lines, operands] = [Number(rest[1]), rest.slice(2)]
+    }
+    const targets = operands
       .filter((a) => !a.startsWith('-'))
       .map((a) => (a.startsWith('/') ? a : `${cwd.replace(/\/$/, '')}/${a}`))
     if (program === 'ls') {
@@ -140,8 +151,33 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
     const text = targets.map((p) => all.get(p)!)
     if (program === 'cat') return shell(text.join(''))
     if (program === 'head')
-      return shell(text.map((t) => t.split('\n').slice(0, 10).join('\n')).join('\n'))
+      return shell(text.map((t) => t.split('\n').slice(0, lines).join('\n')).join('\n'))
     return shell(text.map((t, i) => `${t.split('\n').length - 1} ${targets[i]}`).join('\n'))
+  }
+
+  /** Read-only inspection, nothing recorded: one such command, or several joined by `&&`,
+   * `;` or newlines as a shell would run them (`&&` stops at the first failure).
+   * Anything else — a pipe, a redirect, an interpreter — is judged as a request. */
+  const inspect = (command: string, cwd: string) => {
+    const parts = command.split(/(&&|;|\n)/)
+    let stdout = ''
+    let stderr = ''
+    let code = 0
+    for (let i = 0; i < parts.length; i += 2) {
+      const part = parts[i].trim()
+      if (!part) {
+        if (i === 0 || parts[i - 1] === '&&') return undefined
+        continue
+      }
+      if (i > 0 && code !== 0 && parts[i - 1] === '&&') continue
+      const run = inspectOne(part, cwd)
+      if (!run) return undefined
+      const data = run.data as { stdout: string; stderr: string; exit_code: number }
+      stdout += data.stdout && stdout && !stdout.endsWith('\n') ? `\n${data.stdout}` : data.stdout
+      stderr += data.stderr
+      code = data.exit_code
+    }
+    return shell(stdout, code, stderr)
   }
 
   const bash = (args: Record<string, unknown>): { result: Result; valid?: boolean } => {

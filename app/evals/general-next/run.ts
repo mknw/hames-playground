@@ -24,6 +24,7 @@ import {
   poisonPublicProviders,
 } from '../../src/lib/eval-support/live-preconditions'
 import { grade } from '../../src/lib/eval-support/conversation-checks'
+import { CaptureLog, captureEnabled } from '../../src/lib/eval-support/capture'
 import type { ConversationDriver, ConversationResult } from './types'
 import { scenarios } from './index'
 
@@ -121,6 +122,10 @@ async function main() {
     `${new Date().toISOString().replace(/[:.]/g, '-')}-general-next.json`,
   )
   mkdirSync(resolve('evals/reports'), { recursive: true })
+  // Off unless EVAL_GENERAL_CAPTURE=1: decision requests/choices and raw controller outputs,
+  // beside the report and gitignored with it.
+  const capture = captureEnabled(process.env) ? new CaptureLog() : undefined
+  const captureFile = file.replace(/\.json$/, '-capture.json')
   let active: SpendKey | undefined
   let started = 0
   let driver: ConversationDriver | undefined
@@ -161,6 +166,7 @@ async function main() {
           eurPerUsd: budget.eurPerUsd,
           verdaEurPerHour: verdaRate,
           smallEurPerHour: smallRate,
+          captureFile: capture ? captureFile : undefined,
           limitation:
             'The observer prices completed calls, so a final call can overshoot the 80% stop threshold and even the configured cap. Private infrastructure is an additional conservative floor: elapsed private-scenario time (including setup and endpoint wake wait) times both GPU hourly rates; observer call-time cost is also counted. Configured scale-down tails are reserved once per run and after idle gaps longer than each box window. Provider rounding and unobserved infrastructure are not measured. This is not an invoice ceiling. Hermetic results certify scripted wiring only; they cannot authorize the default flip.',
           results: rows.map((r) => {
@@ -172,6 +178,7 @@ async function main() {
         2,
       ) + '\n',
     )
+    if (capture) writeFileSync(captureFile, JSON.stringify(capture, null, 2) + '\n')
   }
   const tick = () => {
     if (active && live) budget.infrastructure(active, Date.now() - started, verdaRate + smallRate)
@@ -243,11 +250,9 @@ async function main() {
               pass: false,
               detail: 'Hermetic egress backstop refused requests',
             })
-          results.push({
-            ...active,
-            status: checks.length > 0 && checks.every((c) => c.pass) ? 'pass' : 'fail',
-            checks,
-          })
+          const status = checks.length > 0 && checks.every((c) => c.pass) ? 'pass' : 'fail'
+          capture?.add(active, trace, status === 'fail')
+          results.push({ ...active, status, checks })
         } catch (err) {
           results.push({
             ...active,

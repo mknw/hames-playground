@@ -245,6 +245,33 @@ async function run(tier = 'anthropic', supplied = deps) {
 }
 
 describe('general-next composition', () => {
+  it.each(['anthropic', 'verda'])(
+    'E2: sends uploaded-file computation only to the office-data Decide criterion (%s)',
+    async (tier) => {
+      // Script answer only to stop execution: this pins wording delivery, not model choices.
+      choices = ['answer']
+      await run(tier)
+      expect(requests).toHaveBeenCalledTimes(1)
+      const body = JSON.parse(String(requests.mock.calls[0][1].body))
+      const criteria = body.questions.next_step.criteria as Record<string, string>
+      expect(criteria['office-data']).toContain('run code over uploaded files')
+      expect(criteria['office-data']).toContain('spreadsheets, CSV, tables')
+      expect(criteria['office-data']).toContain('to compute or analyse them')
+      expect(criteria['office-data']).toContain('save deliverables')
+      expect(
+        Object.keys(criteria).filter((route) =>
+          /\b(?:comput\w*|analys\w*|analyz\w*|sums?|totals?|add(?:s|ing)? up|count\w*|spreadsheets?|csv|tables?|deliverables?|sav(?:e|ing))\b/i.test(
+            criteria[route],
+          ),
+        ),
+      ).toEqual(['office-data'])
+      expect(criteria['read-documents']).toContain('Search uploaded and indexed documents')
+      expect(criteria['read-documents']).toContain('uploaded')
+      expect(criteria['read-documents']).toContain('cited excerpts')
+      expect(criteria['info-retrieval']).toContain('Look things up')
+    },
+  )
+
   it('keeps the office workspace owner-scoped and the nested Redis retriever discoverable', async () => {
     const patterns = await agent.createPatterns('synthetic-session', deps)
     expect(agent.id).toBe('general-next')

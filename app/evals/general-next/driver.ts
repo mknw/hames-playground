@@ -5,6 +5,10 @@ import type { AgentDefinition, AgentDeps } from '@hames-ai/agents'
 import type { MCPToolDescription } from '@hames-ai/harness-patterns'
 import type { ConversationDriver, ConversationScenario, ConversationTrace } from './types'
 import { liveDescriptions } from '../../src/lib/eval-support/live-descriptions'
+import {
+  SANDBOX_FILE_TOOLS,
+  createSyntheticSandbox,
+} from '../../src/lib/eval-support/synthetic-sandbox'
 import type { fixtureInference } from './fixture-inference'
 
 const NOTES =
@@ -36,7 +40,13 @@ const NAMESPACES: Record<string, string> = {
   search_nodes: 'memory',
   graph_mail_recent: 'graph',
   sandbox_bash: 'sandbox',
+  sandbox_write: 'sandbox',
+  sandbox_read: 'sandbox',
+  sandbox_list: 'sandbox',
+  sandbox_edit: 'sandbox',
+  sandbox_search: 'sandbox',
 }
+const isSandboxTool = (name: string) => name.startsWith('sandbox_')
 
 export async function createDriver(
   fake?: Awaited<ReturnType<typeof fixtureInference>>,
@@ -53,31 +63,33 @@ export async function createDriver(
   let scenario: ConversationScenario
   let turn = 0
   const documents = new Map<string, string>()
-  const fixtureDescriptions: MCPToolDescription[] = Object.keys(NAMESPACES).map((name) => ({
-    name,
-    description:
-      name === 'sandbox_bash'
-        ? 'Run a shell command. Inputs: /work/in/lantern-notes.md and /work/in/lantern-sales.csv. Outputs: /work/out.'
-        : `Synthetic ${name}; returns fixed Lantern fixture data.`,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string' },
-        url: { type: 'string' },
-        command: { type: 'string' },
-        libraryName: { type: 'string' },
-        context7CompatibleLibraryID: { type: 'string' },
+  const fixtureDescriptions: MCPToolDescription[] = Object.keys(NAMESPACES)
+    .map((name) => ({
+      name,
+      description:
+        name === 'sandbox_bash'
+          ? 'Run a shell command. Inputs: /work/in/lantern-notes.md and /work/in/lantern-sales.csv. Outputs: /work/out.'
+          : `Synthetic ${name}; returns fixed Lantern fixture data.`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string' },
+          url: { type: 'string' },
+          command: { type: 'string' },
+          libraryName: { type: 'string' },
+          context7CompatibleLibraryID: { type: 'string' },
+        },
       },
-    },
-  }))
+    }))
+    .map((t) => SANDBOX_FILE_TOOLS.find((f) => f.name === t.name) ?? t)
   const descriptions = live
     ? liveDescriptions(Object.keys(NAMESPACES), liveCatalog, fixtureDescriptions)
     : fixtureDescriptions
   const transport = {
     id: 'general-eval-synthetic-only',
-    ownsTool: (name: string) => name in NAMESPACES && name !== 'sandbox_bash',
+    ownsTool: (name: string) => name in NAMESPACES && !isSandboxTool(name),
     namespaceFor: (name: string) => NAMESPACES[name],
-    listTools: async () => descriptions.filter((t) => t.name !== 'sandbox_bash'),
+    listTools: async () => descriptions.filter((t) => !isSandboxTool(t.name)),
     callTool: async (name: string, args: Record<string, unknown>) => {
       const success =
         name !== 'write_neo4j_cypher' &&
@@ -92,43 +104,17 @@ export async function createDriver(
               ? 'Graph is read-only; write refused.'
               : 'Synthetic service unavailable; retry on the next user turn.',
         }
-      if (name === 'sandbox_bash') {
-        if (!scenario.expectedArgs?.sandbox_bash?.(args)) {
-          trace.tools.at(-1)!.success = false
-          return {
-            success: false,
-            data: null,
-            error: 'Invalid synthetic shell request; no code executed.',
-          }
-        }
-        const files = scenario.artifacts
-        for (const file of files) {
-          documents.set(file, NOTES)
-          trace.artifacts.push(file)
-          if (file.endsWith('.md')) trace.indexed.push(file)
-        }
-        return {
-          success: true,
-          data: {
-            artifacts: files.map((name) => ({ name, url: `stash://fixture/${name}` })),
-            stdout:
-              'Synthetic transport recorded the request. Source data: North revenue 47; South revenue 19. No generated code was executed.',
-            stderr: '',
-            exit_code: 0,
-            timed_out: false,
-          },
-        }
-      }
       return { success: true, data: FIXTURES[name] }
     },
   }
   // The runner also supplies a loopback gateway for the shared catalog read.
-  const sandboxTransport = {
-    ...transport,
-    id: 'general-eval-synthetic-sandbox',
-    ownsTool: (name: string) => name === 'sandbox_bash',
-    listTools: async () => descriptions.filter((t) => t.name === 'sandbox_bash'),
-  }
+  const sandboxTransport = createSyntheticSandbox({
+    scenario: () => scenario,
+    trace: () => trace,
+    turn: () => turn,
+    documents,
+    descriptions: descriptions.filter((t) => isSandboxTool(t.name)),
+  })
   // The production factory, so general-next's info route runs behind its real G14 filter
   // and not the fail-closed refusal an absent dep produces. `none` because the hermetic
   // run has no org graph: the directory leg is NOT covered here (live mode keeps it off

@@ -15,6 +15,11 @@ export const scenario: ConversationScenario = {
   expectedRoutes: ['office-data'],
   answerIncludes: ['North', '47', 'South', '19', '66'],
   artifacts: ['lantern-totals.csv'],
+  // What a real run of this task prints, and the file it leaves.
+  sandboxRun: {
+    stdout: 'North,47\nSouth,19\nTotal,66',
+    files: { 'lantern-totals.csv': 'region,revenue\nNorth,47\nSouth,19\nTotal,66\n' },
+  },
   forbiddenTools: [],
   maxIterations: 6,
 }

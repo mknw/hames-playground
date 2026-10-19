@@ -43,6 +43,8 @@ const NAMESPACES: Record<string, string> = {
   sandbox_write: 'sandbox',
   sandbox_read: 'sandbox',
   sandbox_list: 'sandbox',
+  sandbox_edit: 'sandbox',
+  sandbox_search: 'sandbox',
 }
 const isSandboxTool = (name: string) => name.startsWith('sandbox_')
 
@@ -106,13 +108,11 @@ export async function createDriver(
     },
   }
   // The runner also supplies a loopback gateway for the shared catalog read.
-  const written = new Map<string, string>()
   const sandboxTransport = createSyntheticSandbox({
     scenario: () => scenario,
     trace: () => trace,
     turn: () => turn,
     documents,
-    written,
     descriptions: descriptions.filter((t) => isSandboxTool(t.name)),
   })
   // The production factory, so general-next's info route runs behind its real G14 filter
@@ -172,7 +172,6 @@ export async function createDriver(
       scenario = next
       trace = { turns: [], tools: [], artifacts: [], indexed: [], retrievals: [] }
       documents.clear()
-      written.clear()
       documents.set('lantern-notes.md', NOTES)
       documents.set('lantern-sales.csv', 'region,revenue\nNorth,47\nSouth,19\n')
       const sessionId = `eval-${key.agent}-${next.id}`

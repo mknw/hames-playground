@@ -5,6 +5,7 @@ export interface Check {
   detail: string
 }
 import type { SpendKey } from './spend-budget'
+import type { ArgsPredicate } from './tool-arguments'
 
 export interface ConversationScenario {
   id: string
@@ -14,10 +15,13 @@ export interface ConversationScenario {
   p4: boolean
   messages: string[]
   expectedTools: string[]
-  expectedArgs?: Record<string, (args: Record<string, unknown>) => boolean>
+  expectedArgs?: Record<string, ArgsPredicate>
   expectedRoutes: string[]
   answerIncludes: string[]
   artifacts: string[]
+  /** What a real run of the task leaves behind in the synthetic sandbox: the stdout its
+   * script prints and the content of each artifact. Default stdout names the saved paths. */
+  sandboxRun?: { stdout: string; files?: Record<string, string> }
   forbiddenTools: string[]
   maxIterations: number
   failFirstTurn?: boolean
@@ -29,7 +33,14 @@ export interface ConversationScenario {
 
 export interface ConversationTrace {
   turns: Array<{ response: string; status: string; events: ContextEvent[] }>
-  tools: Array<{ name: string; args: Record<string, unknown>; success: boolean; turn: number }>
+  tools: Array<{
+    name: string
+    args: Record<string, unknown>
+    success: boolean
+    turn: number
+    /** Set by the synthetic sandbox: the request, with the scripts it ran, met the scenario's predicate. */
+    valid?: boolean
+  }>
   artifacts: string[]
   indexed: string[]
   retrievals: Array<{ source: string; turn: number }>

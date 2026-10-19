@@ -1,126 +1,243 @@
-/** The eval's stand-in for the in-VM sandbox: the production tool names, no execution. */
+/** The eval's stand-in for the in-VM sandbox: the production tool names, no execution.
+ *
+ * The transport is not the grader. A request is judged the way production would judge
+ * it — a shell runs what it is given and says only what a shell says — and the scenario's
+ * predicate (`valid` on the trace) is applied afterwards, to the command plus the scripts
+ * it runs. So a refusal never carries the predicate's rule: a request that does not meet
+ * it runs, exits 0 and leaves nothing behind, exactly as a script that never saves would.
+ *
+ * Not modelled: production promotes any new file under /work/out to an artifact
+ * (`packages/sandbox/work-sync.server.ts`); here only an accepted shell request records
+ * the scenario's artifacts, and a `sandbox_write` to /work/out is deliberately not graded. */
 import type { MCPToolDescription, ToolTransport } from '@hames-ai/harness-patterns'
-import type { ArgsPredicate } from './tool-arguments'
+import { sandboxShapeError, type ArgsPredicate } from './tool-arguments'
 import type { ConversationScenario, ConversationTrace } from './conversation'
 
-/** The sandbox's file tools as production exposes them (rust-mcp-filesystem
- * `write_file` / `read_text_file` / `list_directory` under the `sandbox_` prefix,
- * `packages/sandbox` V0_IN_VM_SERVERS). Their argument names are the documented
- * ones (docs/plan/sandbox.md); this is not read from a running server. */
+const schema = (properties: Record<string, object>, required: string[]) => ({
+  type: 'object',
+  properties,
+  required,
+})
+const PATH = { type: 'string', description: 'File path under /work.' }
+
+/** The sandbox's file tools as production exposes them (rust-mcp-filesystem tools under
+ * the `sandbox_` prefix, `packages/sandbox` V0_IN_VM_SERVERS). Hermetic stand-ins only:
+ * their descriptions are NOT the server's text. Live mode derives all five from the
+ * gateway's own entries (`evals/general-next/tool-catalog.ts`), so it never uses these. */
 export const SANDBOX_FILE_TOOLS: MCPToolDescription[] = [
   {
     name: 'sandbox_write',
     description: 'Write a file in /work.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'File path under /work.' },
-        content: { type: 'string', description: 'The file content.' },
-      },
-      required: ['path', 'content'],
-    },
+    inputSchema: schema({ path: PATH, content: { type: 'string' } }, ['path', 'content']),
   },
   {
     name: 'sandbox_read',
     description: 'Read a text file from /work.',
-    inputSchema: {
-      type: 'object',
-      properties: { path: { type: 'string', description: 'File path under /work.' } },
-      required: ['path'],
-    },
+    inputSchema: schema({ path: PATH }, ['path']),
+  },
+  {
+    name: 'sandbox_edit',
+    description: 'Replace text in a file under /work.',
+    inputSchema: schema(
+      {
+        path: PATH,
+        edits: {
+          type: 'array',
+          items: schema({ oldText: { type: 'string' }, newText: { type: 'string' } }, [
+            'oldText',
+            'newText',
+          ]),
+        },
+      },
+      ['path', 'edits'],
+    ),
   },
   {
     name: 'sandbox_list',
     description: 'List a directory under /work.',
-    inputSchema: {
-      type: 'object',
-      properties: { path: { type: 'string', description: 'Directory path under /work.' } },
-      required: ['path'],
-    },
+    inputSchema: schema({ path: PATH }, ['path']),
+  },
+  {
+    name: 'sandbox_search',
+    description: 'Search file contents under /work.',
+    inputSchema: schema({ path: PATH, query: { type: 'string' } }, ['path', 'query']),
   },
 ]
 
 export interface SyntheticSandboxState {
   scenario: () => ConversationScenario
+  /** A new trace is a new run: the actor's written files do not outlive it. */
   trace: () => ConversationTrace | undefined
   turn: () => number
   /** Stash contents by file name: the uploaded inputs, and every artifact created. */
   documents: Map<string, string>
-  /** Files the actor wrote with `sandbox_write`, by absolute path. */
-  written: Map<string, string>
   descriptions: MCPToolDescription[]
 }
 
 const WORK = '/work/'
 const IN = `${WORK}in/`
+const OUT = `${WORK}out/`
 
-/** Why the shell request was refused, as a shell would say it; the model has
- * nothing else to correct itself against. */
-function refusal(predicate: ArgsPredicate | undefined, args: Record<string, unknown>): string {
-  const why = predicate?.violations?.(args) ?? []
-  return (
-    'Invalid synthetic shell request; no code executed.' + (why.length ? ` ${why.join('; ')}.` : '')
-  )
-}
+const withinWork = (path: string) =>
+  (path === '/work' || path.startsWith(WORK)) && !path.split('/').includes('..')
+
+type Result = { success: boolean; data: unknown; error?: string }
 
 export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransport {
+  const written = new Map<string, string>()
+  let current: unknown
+  const ok = (data: unknown) => ({ success: true, data })
+  const fail = (error: string) => ({ success: false, data: null, error })
+
+  const produced = () => state.trace()?.artifacts ?? []
+  /** Every file the actor could see: inputs, what a shell request produced, what it wrote. */
+  const files = (): Map<string, string> => {
+    const all = new Map<string, string>()
+    const made = state.scenario().sandboxRun?.files ?? {}
+    for (const [name, text] of state.documents)
+      all.set(produced().includes(name) ? `${OUT}${name}` : `${IN}${name}`, made[name] ?? text)
+    for (const [path, text] of written) all.set(path, text)
+    return all
+  }
+  const shell = (stdout: string, code = 0, stderr = '', artifacts: unknown[] = []) => ({
+    success: code === 0,
+    data: { artifacts, stdout, stderr, exit_code: code, timed_out: false },
+  })
+
+  /** `head`, `cat`, `wc` and `ls` on files the actor can see: read-only, nothing recorded. */
+  const inspect = (command: string, cwd: string) => {
+    const [program, ...rest] = command.trim().split(/\s+/)
+    if (!/^(head|cat|wc|ls)$/.test(program) || /[;|&<>$`()]/.test(command)) return undefined
+    const all = files()
+    const targets = rest
+      .filter((a) => !a.startsWith('-'))
+      .map((a) => (a.startsWith('/') ? a : `${cwd.replace(/\/$/, '')}/${a}`))
+    if (program === 'ls') {
+      const names = (dir: string) => listing(all, dir.endsWith('/') ? dir : `${dir}/`)
+      return shell(
+        (targets.length ? targets : [cwd])
+          .flatMap(names)
+          .map((l) => l.replace(/^\[\w+\] /, ''))
+          .join('\n'),
+      )
+    }
+    for (const path of targets)
+      if (!all.has(path)) return shell('', 1, `${program}: ${path}: No such file or directory`)
+    const text = targets.map((p) => all.get(p)!)
+    if (program === 'cat') return shell(text.join(''))
+    if (program === 'head')
+      return shell(text.map((t) => t.split('\n').slice(0, 10).join('\n')).join('\n'))
+    return shell(text.map((t, i) => `${t.split('\n').length - 1} ${targets[i]}`).join('\n'))
+  }
+
+  const bash = (args: Record<string, unknown>): { result: Result; valid?: boolean } => {
+    const shape = sandboxShapeError(args)
+    if (shape) return { result: fail(`Invalid arguments for sandbox_bash: ${shape}.`) }
+    const command = args.command as string
+    const cwd = typeof args.cwd === 'string' ? args.cwd : '/work'
+    const inspected = inspect(command, cwd)
+    if (inspected) return { result: inspected, valid: false }
+    // The scripts this command runs are part of the request.
+    const scripts = [...written].filter(([p]) => command.includes(p)).map(([, text]) => text)
+    const script = /\bpython3?\s+(\/\S+\.py)/.exec(command)?.[1]
+    if (script && !files().has(script))
+      return {
+        result: shell(
+          '',
+          2,
+          `python3: can't open file '${script}': [Errno 2] No such file or directory`,
+        ),
+        valid: false,
+      }
+    const scenario = state.scenario()
+    const predicate = scenario.expectedArgs?.sandbox_bash as ArgsPredicate | undefined
+    if (!predicate?.(args, scripts.join('\n'))) return { result: shell(''), valid: false }
+    const made = scenario.sandboxRun?.files ?? {}
+    for (const file of scenario.artifacts) {
+      state.documents.set(file, made[file] ?? state.documents.get('lantern-notes.md') ?? '')
+      state.trace()?.artifacts.push(file)
+      if (file.endsWith('.md')) state.trace()?.indexed.push(file)
+    }
+    return {
+      result: shell(
+        scenario.sandboxRun?.stdout ?? scenario.artifacts.map((n) => `Saved ${OUT}${n}`).join('\n'),
+        0,
+        '',
+        scenario.artifacts.map((n) => ({ name: n, url: `stash://fixture/${n}` })),
+      ),
+      valid: true,
+    }
+  }
+
   const call: ToolTransport['callTool'] = async (name, args) => {
-    const ok = (data: unknown) => ({ success: true, data })
-    const fail = (error: string) => ({ success: false, data: null, error })
+    if (state.trace() !== current) {
+      written.clear()
+      current = state.trace()
+    }
     const path = typeof args.path === 'string' ? args.path : ''
-    const inWork = path.startsWith(WORK) && !path.includes('..')
-    const result = await (async () => {
+    const inWork = withinWork(path)
+    let valid: boolean | undefined
+    const result = ((): Result => {
       if (name === 'sandbox_bash') {
-        const scenario = state.scenario()
-        const predicate = scenario.expectedArgs?.sandbox_bash as ArgsPredicate | undefined
-        if (!predicate?.(args)) return fail(refusal(predicate, args))
-        for (const file of scenario.artifacts) {
-          state.documents.set(file, state.documents.get('lantern-notes.md') ?? '')
-          state.trace()?.artifacts.push(file)
-          if (file.endsWith('.md')) state.trace()?.indexed.push(file)
-        }
-        return {
-          success: true,
-          data: {
-            artifacts: scenario.artifacts.map((n) => ({ name: n, url: `stash://fixture/${n}` })),
-            stdout:
-              'Synthetic transport recorded the request. Source data: North revenue 47; South revenue 19. No generated code was executed.',
-            stderr: '',
-            exit_code: 0,
-            timed_out: false,
-          },
-        }
+        const run = bash(args)
+        valid = run.valid
+        return run.result
       }
       if (name === 'sandbox_write') {
         if (!inWork || typeof args.content !== 'string')
           return fail('write_file: path must be under /work and content must be a string.')
-        state.written.set(path, args.content)
-        return ok({ path, bytes: args.content.length })
+        written.set(path, args.content)
+        return ok(`Successfully wrote to ${path}`)
       }
       if (name === 'sandbox_read') {
-        const content = inWork
-          ? (state.written.get(path) ??
-            (path.startsWith(IN) ? state.documents.get(path.slice(IN.length)) : undefined))
-          : undefined
+        const content = inWork ? files().get(path) : undefined
         return content === undefined ? fail(`read_text_file: no such file: ${path}`) : ok(content)
+      }
+      if (name === 'sandbox_edit') {
+        const text = inWork ? written.get(path) : undefined
+        if (text === undefined || !Array.isArray(args.edits))
+          return fail(`edit_file: no such file: ${path}`)
+        let next = text
+        for (const e of args.edits as Array<{ oldText?: unknown; newText?: unknown }>) {
+          if (
+            typeof e.oldText !== 'string' ||
+            typeof e.newText !== 'string' ||
+            !next.includes(e.oldText)
+          )
+            return fail(`edit_file: could not find the text to replace in ${path}`)
+          next = next.replace(e.oldText, () => e.newText as string)
+        }
+        written.set(path, next)
+        return ok(`Edited ${path}`)
       }
       if (name === 'sandbox_list') {
         if (!inWork) return fail('list_directory: path must be under /work.')
+        return ok(listing(files(), path.endsWith('/') ? path : `${path}/`).join('\n'))
+      }
+      if (name === 'sandbox_search') {
+        if (!inWork || typeof args.query !== 'string')
+          return fail('search_files_content: bad arguments.')
         const dir = path.endsWith('/') ? path : `${path}/`
-        const names = [...state.written.keys()]
-          .filter((p) => p.startsWith(dir) && !p.slice(dir.length).includes('/'))
-          .map((p) => p.slice(dir.length))
-        if (dir === IN)
-          names.push(
-            ...[...state.documents.keys()].filter(
-              (f) => f === 'lantern-notes.md' || f.endsWith('.csv'),
-            ),
+        const hits = [...files()]
+          .filter(([p]) => p.startsWith(dir))
+          .flatMap(([p, text]) =>
+            text
+              .split('\n')
+              .flatMap((line, i) =>
+                line.includes(args.query as string) ? [`${p}:${i + 1}: ${line}`] : [],
+              ),
           )
-        return ok(names)
+        return ok(hits.join('\n') || 'No matches found')
       }
       return fail(`${name}: not available in the synthetic sandbox.`)
     })()
-    state.trace()?.tools.push({ name, args, success: result.success, turn: state.turn() })
+    state.trace()?.tools.push({
+      name,
+      args,
+      success: result.success,
+      turn: state.turn(),
+      ...(valid === undefined ? {} : { valid }),
+    })
     return result
   }
   return {
@@ -130,4 +247,15 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
     listTools: async () => state.descriptions,
     callTool: call,
   }
+}
+
+/** `[FILE] name` / `[DIR] name` lines for the direct children of `dir` (trailing slash). */
+function listing(all: Map<string, string>, dir: string): string[] {
+  const entries = new Set<string>(dir === WORK ? ['[DIR] in', '[DIR] out'] : [])
+  for (const path of all.keys()) {
+    if (!path.startsWith(dir)) continue
+    const [head, ...below] = path.slice(dir.length).split('/')
+    entries.add(`${below.length ? '[DIR]' : '[FILE]'} ${head}`)
+  }
+  return [...entries]
 }

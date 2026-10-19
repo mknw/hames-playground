@@ -20,14 +20,13 @@ export async function fixtureInference() {
         route = scenario.expectedRoutes[decisionIndex++] ?? 'answer'
         const answers = Object.fromEntries(
           Object.entries(body.questions).map(([name, question]) => {
-            const criteria = Object.keys((question as { criteria: object }).criteria)
-            const chosen = criteria.find(
-              (c) =>
-                c === route ||
-                String((question as { criteria: Record<string, unknown> }).criteria[c]).includes(
-                  route,
-                ),
-            )
+            const described = (question as { criteria: Record<string, unknown> }).criteria
+            const criteria = Object.keys(described)
+            // The route's own key wins; a description that merely mentions it ("the answer
+            // needs...") is only a fallback, or any route listed before `answer` steals it.
+            const chosen =
+              criteria.find((c) => c === route) ??
+              criteria.find((c) => String(described[c]).includes(route))
             if (!chosen) throw new Error(`Fixture cannot select route ${route}`)
             return [
               name,

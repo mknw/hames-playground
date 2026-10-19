@@ -34,6 +34,27 @@ it.each([
     ).toThrow(error)
   },
 )
+it('lets the hermetic fixture pick the scripted route by its key, not by a description that mentions it', () => {
+  // Execute only the real selection block (no server, no import: src/ may not import evals/).
+  // #689's read-documents wording contains "answer", the default route, and sits before it.
+  const block = /(const described = [\s\S]*?)\n\s*if \(!chosen\)/.exec(
+    read('evals/general-next/fixture-inference.ts'),
+  )?.[1]
+  expect(block).toBeDefined()
+  // The block is TypeScript; strip its one cast so the VM can run it.
+  const js = block!.replace(/\(question as \{[^}]*\}\)/, 'question')
+  const criteria = {
+    'office-data': 'Run code over uploaded files',
+    'read-documents': 'Use it when the answer needs text quoted from such a file',
+    answer: 'Reply directly',
+  }
+  const pick = (route: string) =>
+    runInNewContext(`${js}; chosen`, { question: { criteria }, route })
+  expect(pick('answer')).toBe('answer')
+  expect(pick('read-documents')).toBe('read-documents')
+  // The description match survives only as a fallback for a route with no key of its own.
+  expect(pick('quoted')).toBe('read-documents')
+})
 it('awaits production wake after starting the scenario clock, fails and stops without fallback', () => {
   const s = run()
   expect(s.indexOf('started = Date.now()')).toBeLessThan(

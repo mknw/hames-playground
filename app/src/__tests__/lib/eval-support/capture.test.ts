@@ -141,6 +141,34 @@ describe('captureTrace controller and actor calls', () => {
     ])
   })
 
+  // The loops record a recoverable unparseable/refused/invalid-args answer as `loop_recovery`, not
+  // `error`, so a capture keyed on `error` alone is blind to the failures it exists to show.
+  // MUTATION: restore `event.type === 'error'` alone as `isError` in capture.ts: red.
+  it('records a loop_recovery as a recovery row even for a passing scenario', () => {
+    const recovery = event(
+      'loop_recovery',
+      { failure: 'unparseable', error: 'missing is_final', turn: 0, maxTurns: 6 },
+      call('LoopController', 'prompt', 'tool_name: Return'),
+      'info',
+    )
+    const mixed = trace([recovery, event('controller_action', {}, fine, 'doc')])
+    expect(captureTrace(mixed, false).controllerCalls).toEqual([
+      {
+        turn: 0,
+        patternId: 'info',
+        functionName: 'LoopController',
+        outcome: 'recovery',
+        error: 'missing is_final',
+        rawOutput: 'tool_name: Return',
+      },
+    ])
+    // A failing scenario keeps the label too: the recovery is not relabelled a completion.
+    expect(captureTrace(mixed, true).controllerCalls.map((c) => c.outcome)).toEqual([
+      'recovery',
+      'completion',
+    ])
+  })
+
   it('never records the prompt, and caps a runaway completion', () => {
     const long = 'x'.repeat(CAPTURE_OUTPUT_MAX_CHARS + 50)
     const [captured] = captureTrace(
@@ -154,7 +182,42 @@ describe('captureTrace controller and actor calls', () => {
   })
 })
 
+describe('captureTrace decision output cap', () => {
+  // MUTATION: drop `cap()` from the decision's rawOutput in capture.ts: red.
+  it('caps a runaway Decide response body like a controller completion', () => {
+    const long = 'x'.repeat(CAPTURE_OUTPUT_MAX_CHARS + 1)
+    const runaway = event(
+      'decision_made',
+      { key: 'next_step', label: 'answer' },
+      call('Decide', request, long),
+    )
+    const [captured] = captureTrace(trace([runaway]), false).decisions
+    expect(captured.rawOutput).toHaveLength(
+      CAPTURE_OUTPUT_MAX_CHARS + '…[truncated, 1 more characters]'.length,
+    )
+    expect(captured.rawOutput).toContain('…[truncated, 1 more characters]')
+  })
+})
+
 describe('CaptureLog', () => {
+  it('leaves a row for a scenario that threw, so a missing row never reads as no decisions', () => {
+    const log = new CaptureLog()
+    log.addError(
+      { agent: 'general-next', scenario: '13-two-sources', tier: 'verda' },
+      'BamlTimeoutError',
+    )
+    expect(JSON.parse(JSON.stringify(log)).scenarios).toEqual([
+      {
+        agent: 'general-next',
+        scenario: '13-two-sources',
+        tier: 'verda',
+        decisions: [],
+        controllerCalls: [],
+        error: 'BamlTimeoutError',
+      },
+    ])
+  })
+
   it('serialises one entry per scenario under its key, with the synthetic-only note', () => {
     const log = new CaptureLog()
     log.add(

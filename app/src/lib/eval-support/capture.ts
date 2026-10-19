@@ -50,8 +50,9 @@ export interface ControllerCapture {
   turn: number
   patternId: string
   functionName: string
-  /** `error` for a call that ended in an error event, `completion` for any other call. */
-  outcome: 'error' | 'completion'
+  /** `error` for a call that ended in an error event, `recovery` for a `loop_recovery` (the loop's
+   * recoverable unparseable, refused or invalid-args answer), `completion` for any other call. */
+  outcome: 'error' | 'recovery' | 'completion'
   error?: string
   rawOutput?: string
 }
@@ -60,6 +61,9 @@ export interface ScenarioCapture {
   decisions: DecideCapture[]
   /** Raw controller/actor outputs: error events always; every call when the scenario failed. */
   controllerCalls: ControllerCapture[]
+  /** Set when the scenario threw before it could be graded: the rows above are then empty by
+   * absence of a trace, not by absence of decisions. */
+  error?: string
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -122,7 +126,7 @@ export function captureTrace(trace: ConversationTrace, failed: boolean): Scenari
       }
       const fn = event.llmCall?.functionName
       if (!fn || !CONTROLLER_FUNCTIONS.has(fn)) continue
-      const isError = event.type === 'error'
+      const isError = event.type === 'error' || event.type === 'loop_recovery'
       if (!isError && !failed) continue
       const message =
         isRecord(event.data) && typeof event.data.error === 'string' ? event.data.error : undefined
@@ -130,7 +134,7 @@ export function captureTrace(trace: ConversationTrace, failed: boolean): Scenari
         turn,
         patternId: event.patternId,
         functionName: fn,
-        outcome: isError ? 'error' : 'completion',
+        outcome: event.type === 'loop_recovery' ? 'recovery' : isError ? 'error' : 'completion',
         ...(message !== undefined && { error: message }),
         ...(event.llmCall?.rawOutput !== undefined && { rawOutput: cap(event.llmCall.rawOutput) }),
       })
@@ -144,6 +148,11 @@ export class CaptureLog {
   readonly entries: Array<SpendKey & ScenarioCapture> = []
   add(key: SpendKey, trace: ConversationTrace, failed: boolean): void {
     this.entries.push({ ...key, ...captureTrace(trace, failed) })
+  }
+  /** A scenario that threw (a timeout, an escaped BamlTimeoutError) has no trace: without a row,
+   * a missing entry would read as "no decisions". */
+  addError(key: SpendKey, error: string): void {
+    this.entries.push({ ...key, decisions: [], controllerCalls: [], error })
   }
   toJSON() {
     return {

@@ -254,6 +254,7 @@ async function main() {
           capture?.add(active, trace, status === 'fail')
           results.push({ ...active, status, checks })
         } catch (err) {
+          capture?.addError(active, err instanceof Error ? err.message : 'Scenario threw')
           results.push({
             ...active,
             status: 'fail',

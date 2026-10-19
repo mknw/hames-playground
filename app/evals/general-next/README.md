@@ -59,12 +59,17 @@ call. Per scenario row:
   over (conversation, steps so far, latest results), the `choice`, the endpoint's `probs`, `top`,
   `margin`, `abstained`, and the raw response body.
 - `controllerCalls`: the raw completion of `LoopController` / `ActorController` calls, capped at
-  8,000 characters each (the prompt is not recorded): every call that ended in an `error` event,
-  and, for a scenario that failed, every call.
+  8,000 characters each (the prompt is not recorded): every call that ended in an `error` or
+  `loop_recovery` event (`outcome` `error` / `recovery`), and, for a scenario that failed, every
+  call.
+- `error`: present, with empty `decisions` and `controllerCalls`, on a scenario that threw before
+  it could be graded (a timeout, an escaped `BamlTimeoutError`), so a missing row is never read as
+  "no decisions".
 
-The state can quote tool results verbatim (the decision event itself carries only its size, SD-3),
-so the file is for the eval's synthetic fixtures; do not point the flag at a run that feeds the
-agent anything else. `capture.test.ts` and the `capture:` pin in `general-next.test.ts` hold the
+The state can quote tool results verbatim (the event's data records only the state's size; the
+text is on its call record, SD-3), so the file is for the eval's synthetic fixtures; do not point
+the flag at a run that feeds the agent anything else. Captured `state`, `error` and raw outputs
+are verbatim: scrub them before quoting them on the public tracker. `capture.test.ts` and the `capture:` pin in `general-next.test.ts` hold the
 shape, `runner-wiring.test.ts` the flag, the path and the checkpoint.
 
 ## Execution boundaries and pending evidence

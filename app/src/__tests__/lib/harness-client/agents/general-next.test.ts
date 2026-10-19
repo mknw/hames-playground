@@ -339,9 +339,16 @@ describe('general-next composition', () => {
       expect(second.state).not.toMatch(/\buploaded\b/i)
       const criteria = second.questions.next_step.criteria
       expect(criteria['read-documents']).toContain(
-        'an uploaded file the user names without saying "uploaded" (for example report.pdf), or one an earlier lookup did not find;',
+        'an uploaded file the user names without saying "uploaded" (for example report.pdf), also when an earlier knowledge-graph or web lookup did not find it;',
       )
       expect(criteria['read-documents']).toContain('the answer needs text quoted from such a file')
+      // The clause is scoped to uploaded files: a file at a web address stays with info-retrieval.
+      expect(criteria['read-documents']).toContain(
+        'also when an earlier knowledge-graph or web lookup did not find it',
+      )
+      expect(criteria['read-documents']).toContain(
+        'A file the user gives a web address for is info-retrieval',
+      )
       expect(criteria['info-retrieval']).toContain(
         'it cannot open files uploaded to this conversation (that is read-documents)',
       )
@@ -424,7 +431,9 @@ describe('general-next composition', () => {
       })
       expect(decisions[0].state).toContain(question)
       expect(decisions[1].state).toContain(ret)
-      expect(decisions[1].criteria['read-documents']).toContain('an earlier lookup did not find')
+      expect(decisions[1].criteria['read-documents']).toContain(
+        'also when an earlier knowledge-graph or web lookup did not find it',
+      )
       expect(decisions[1].probs).toMatchObject({ answer: 1, 'read-documents': 0 })
     },
   )

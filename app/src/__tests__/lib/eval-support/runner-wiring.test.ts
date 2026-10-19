@@ -218,4 +218,8 @@ it('captures decisions and controller outputs only behind the env flag, beside t
     /const status = checks\.length > 0 && checks\.every\(\(c\) => c\.pass\) \? 'pass' : 'fail'\s*capture\?\.add\(active, trace, status === 'fail'\)\s*results\.push\(/,
   )
   expect(s.indexOf('grade(job.scenario')).toBeLessThan(s.indexOf('capture?.add('))
+  // A scenario that throws before grading still leaves a row, so a gap is never read as "no decisions".
+  expect(s).toMatch(
+    /\} catch \(err\) \{\s*capture\?\.addError\(active, err instanceof Error \? err\.message : 'Scenario threw'\)\s*results\.push\(/,
+  )
 })

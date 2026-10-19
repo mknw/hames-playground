@@ -15,7 +15,7 @@ This is the target composition, including the core changes specified below, not 
 const OFFICE_TOOLS = MS365_TOOLS
 const screen = createInjectionScreen() // role-resolved; outage handling is specified below
 const doc_ag = withInjectionGuard(DOC_GUARD)(                      // office + data work
-  withSandbox({ id: `${sessionId}:office`, rootfs: 'office', egress: 'mcp-only', syncWorkspace: true })(
+  withSandbox({ id: `${sessionId}:office:${tier}`, rootfs: 'office', egress: 'mcp-only', syncWorkspace: true })(
     actorCritic(actor, critic, OFFICE_TOOLS, { patternId: 'doc', … }),
   ),
 )
@@ -48,8 +48,8 @@ const orchestrator = withInjectionGuard({
   { decide, answer: 'Generate the answer for the user now, from the conversation and any results so far', handoff: { lastN: 2 }, maxIterations: 6, patternId: 'orchestrator' },
 ))
 
-// P4 tier flip: a confirmation screen before private-tier files reach an Anthropic-tier turn.
-agent = withMemory(deps.memory)([privateFileRelease(deps.privateFiles), orchestrator, compactExecution({ mode: 'thread', patternId: 'response-synth', viewConfig: { fromPatterns: ['orchestrator'], fromLastNTurns: 1 } })])
+// P4 tier flip: a confirmation screen before private-tier content reaches an Anthropic-tier turn.
+agent = withMemory(deps.memory)([privateContentRelease(deps.privateContent), orchestrator, compactExecution({ mode: 'thread', patternId: 'response-synth', viewConfig: { fromPatterns: ['orchestrator'], fromLastNTurns: 1 } })])
 ```
 
 There are three differences from the owner's sketch, each argued below:
@@ -382,7 +382,7 @@ What the file says reaches the actor fenced: `DOC_GUARD` names the sandbox tools
 | Exit                                                      | What holds it                                                                                                                                                                                                                                                                                              | Pin                                                                                                                                  |
 | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | a model call on the Anthropic tier, **at ingestion**      | the tool refuses any run whose raw tier is not exactly the private one (below)                                                                                                                                                                                                                             | frameless, unrecognised and `'anthropic'` frames refused; a private frame allowed                                                    |
-| a model call on the Anthropic tier, **after a tier flip** | the ingested copy is tagged and skipped on a run that is not positively private, unless the person releases it at a confirmation screen that shows its content ([below](#a-tier-flip-mid-conversation-owner-2026-10-19))                                                                                   | the gate fires before any route; unreleased, the copy is neither hydrated nor retrieved                                              |
+| a model call on the Anthropic tier, **after a tier flip** | the copy is tagged and skipped, and the sandbox id carries the tier, until the person releases that version, and the history, at a confirmation screen ([below](#a-tier-flip-mid-conversation-owner-2026-10-19))                                                                                           | the trigger, tag, sandbox and binding pins below                                                                                     |
 | the sandbox's network                                     | `egress: 'mcp-only'`, i.e. no network                                                                                                                                                                                                                                                                      | already pinned (`app/src/__tests__/lib/harness-client/agents/general-next.test.ts:253`)                                              |
 | a web call from `info-retrieval`                          | G14: the view, the handoff data and the outgoing check                                                                                                                                                                                                                                                     | G14's pins, plus a synthetic ingested file whose text names a directory member                                                       |
 | a Microsoft 365 write                                     | the #680 barrier above. None is designed here, and a writer would be a new owner decision                                                                                                                                                                                                                  | already pinned (`app/src/__tests__/lib/auth/graph-token.test.ts`; `packages/connectors/__tests__/graph/graph-connectors.test.ts:29`) |
@@ -390,6 +390,7 @@ What the file says reaches the actor fenced: `DOC_GUARD` names the sandbox tools
 | memory                                                    | content reaches memory only through the final reply, and D9 holds it: a memory's evidence must be a verbatim span of the current user message, and every identifier in it must occur in a user message (`packages/harness-patterns/SPEC.md:2635-2653`; `packages/harness-baml/baml_src/memory.baml:21-25`) | already pinned (`input-isolation`)                                                                                                   |
 | the embedder                                              | the tool refuses while `EMBEDDINGS_PROVIDER` is `openrouter`. `local` names the wire format, not the host (`stash/embeddings.server.ts:126-139`), so the endpoint behind it must be a service the deployment runs: a deployment rule, not a code check                                                     | the `openrouter` refusal only                                                                                                        |
 | the conversion sidecar                                    | the same deployment rule: `DOC_CONVERT_URL` receives a convertible file's bytes (`packages/harness-patterns/stash/doc-convert.server.ts:40`)                                                                                                                                                               | none                                                                                                                                 |
+| an agent holding the gateway's raw `redis` tools          | only a deployment that omits the `redis` server (`docs/PREVIEW.md:251`); the tag does not hold it ([below](#a-tier-flip-mid-conversation-owner-2026-10-19))                                                                                                                                                | none; withholding the tools is a separate issue                                                                                      |
 
 A check on a URL would decide the same call differently on two hosts, which is why the two endpoint rules are deployment rules.
 
@@ -413,31 +414,85 @@ A check on a URL would decide the same call differently on two hosts, which is w
 
 #### A tier flip mid-conversation (owner, 2026-10-19)
 
-The tier is set per turn, and the stash copy outlives the turn. If the person flips a conversation to the Anthropic tier after a file was ingested, later turns could hydrate the file into `/work/in` and retrieve its chunks. **Owner ruling: show a HITL screen first, asking for confirmation, showing the data that would be transferred to Anthropic, with a warning.**
+The tier is set per turn, and a conversation's private-tier content outlives the turn that produced it: the stash copy lasts 7 days, and the conversation's history has no expiry. **Owner ruling:** _"Show HITL screen and ask for confirmation, showing the data that would be transferred to Anthropic. With warning."_ ([record](https://github.com/mknw/hames-playground/pull/682#issuecomment-6269324396)). Two readings are recorded with it.
 
-- **The tag is the default.** `graph_file_ingest` stores its copy with a new fixed provenance value, `graph-file`, beside today's `sandbox-output` (`document-store.server.ts:46, 331`). On a run that is not positively private, hydrate skips a `graph-file` document and the retriever drops its hits, unless the person has released it (below). That holds on every path the gate does not reach.
-- **The gate is a top-level pattern before the orchestrator**: `privateFileRelease(deps.privateFiles)` in [the shape](#the-shape).
-  - On a run that is not positively private, it lists this conversation's `graph-file` documents that have no recorded decision. If there are none, it does nothing. Otherwise it raises one request (`kind: 'private-file-release'`) before any route runs, so nothing has reached Anthropic yet.
-  - Being top-level, it needs no resume inside a route: a resume re-runs it from its start and it replays the answer (SPEC resume step 11). That is why it sits here, and not at hydrate or retrieval, inside `withSandbox` or the retriever, which v1 does not resume.
-  - Its explicit key is the sha256 of the sorted document ids with their content digests, so a newly ingested file raises a new request.
-- **What the person sees.** For each file: its name, type, size and when it was copied, and the data itself, i.e. the first 2,000 characters of its text (the converted text for a converted binary; otherwise "binary, N bytes, no text"), rendered as text, never as markup. The previews ride `payloadRef` in a blocking-payload row like slice 8's and are fetched by the owner-gated read (SD-13); the event carries counts only. The warning, in the danger tone: **"These files were copied into this conversation on the private tier. Continuing on the Anthropic tier sends their content to Anthropic, outside the private tier. Earlier turns of this conversation are sent with any Anthropic-tier turn, whether or not you include these files."**
-- **The options.** **Include the files** (danger tone) and **Continue without them**, which is the default and the option the unattended rule picks (`unattended: 'apply-default'`). Neither stops the turn.
-- **The host's `resolve`** records the decision on each listed document as fixed structural metadata: `publicTierRelease: 'released' | 'withheld'`, plaintext beside `provenance`, checked against owner and session, and idempotent.
-  - A released document is hydrated and retrieved on later Anthropic-tier turns without asking again.
-  - A withheld one stays skipped, and the gate does not ask about it again in this conversation.
-  - An unattended run's default is **not** recorded, because no person decided; the next attended turn asks.
-- **What it does not cover:** files the sandbox derives from the copy (they are `sandbox-output`, the deliverable), and the conversation history, which the warning names. On a private-tier-only server (#653) the gate never fires.
+- **"Transferred to Anthropic" means to the Anthropic tier's processors.** That tier reaches Anthropic for the model calls, and also the host of the configured decisions endpoint for the decision state: `decide` is `JevDecide` there (`packages/harness-baml/clients.server.ts:406`), posting to `JEV_DECISIONS_URL` (`packages/harness-baml/jev-decide.server.ts:45-46`; SD-12). The decision state holds the recent conversation and the last N route outputs in full (`decisionLoop.server.ts:349-372`), so once a file is released, what a route reports about it reaches that endpoint as well.
+- **Owner decision (open):** _"Does the confirmation cover the conversation's earlier private-tier turns, which every Anthropic-tier turn sends as history, or only the files copied on the private tier?"_ A file's content can already sit in an earlier final reply, and later turns read those as history (`packages/harness-patterns/patterns/typedDecision.server.ts:403-415`, read at `decisionLoop.server.ts:425`), even after the stash copy has expired. Encryption at rest does not stop this: the conversation is decrypted to run the turn (`app/src/lib/db/conversations.server.ts:169-170`), and G14 passes everything through on an explicit Anthropic run (`withPseudonymisedInputs.server.ts:69-72`). **Until the owner rules, the doc takes the wider reading below.** If the ruling is files only, the history sections go, and the options revert to "Include the files" / "Continue without them".
+
+**The tag is the default.** `graph_file_ingest` stores its copy with a new fixed provenance value, `graph-file`, beside today's `sandbox-output` (`document-store.server.ts:46, 331`). A document promoted on a private-tier turn also carries `privateTier: true`, so derived copies are covered too. On a run that is not positively private, hydrate skips such a document and the retriever drops its hits, unless the person released that exact version (below).
+
+**The sandbox carries the tier.** The `office` sandbox is addressed by id and parked for up to an hour (`general-next.server.ts:85-90`; `packages/sandbox/settings.ts:66`), and hydrate writes only the files that are missing (`packages/sandbox/work-artifacts.server.ts:85-107`). So a file hydrated on a private turn would otherwise still be in `/work/in` on an Anthropic-tier turn, whatever the person answered (SD-21). The id therefore includes the tier, `${sessionId}:office:${tier}`, and the Anthropic-tier machine only ever hydrates released copies.
+
+**The gate is a top-level pattern before the orchestrator**: `privateContentRelease(deps.privateContent)` in [the shape](#the-shape).
+
+- **When it fires.** On a run that is not positively private, if the conversation holds private-tier content not yet released: any earlier turn that ran on the private tier since the last release, or any undecided `graph-file` or `privateTier` copy. Each turn records the tier it ran on; slice 5b adds that record where it is missing. The history alone is enough to trigger it, so an expired stash copy does not stop it firing.
+- **Before anything is sent.** It raises one request (`kind: 'private-content-release'`) before any route runs.
+- **Why top-level.** A gate there needs no resume inside a route: a resume re-runs it from its start, and it replays the answer (SPEC resume step 11). A gate at hydrate or retrieval would sit inside `withSandbox` or the retriever, which v1 does not resume. A run that paused inside the orchestrator on the private tier never re-runs the gate, because a resume skips the patterns before the paused one. What stops that run resuming on the Anthropic tier after a flip is core's `tier-changed` refusal (`hitl.server.ts:638-646`; SPEC P5).
+
+**What the person sees: an authorization envelope, not a prediction.** Which route will run, and what its code will read, is not yet known. So the screen authorises the Anthropic tier's processors to receive the listed content and anything later derived from it; it does not claim to show one exact request.
+
+- **The processors**, named from configuration: "Anthropic", and the decisions endpoint's host.
+- **The history**: the earlier messages and answers the turn would send, each labelled with its turn. They are computed by the same projection functions the decision state and the synthesizer use, not re-derived.
+- **Each file**: its name, type, size and copy time.
+  - The preview is labelled "first 2,000 of N characters" and expands to the full text, as text only, with format and bidi characters made visible. The original file can be downloaded.
+  - A converted document says that the preview is extracted text and that the model may read the original. A file with no text says "sent whole; no text preview".
+  - If a preview cannot be produced, "include" is not offered for that file.
+- **The warning**, in the danger tone and naming the processors: "This conversation holds content produced on the private tier. Continuing sends it to [the processors], outside the private tier."
+- The event carries counts only. Everything else is fetched from the manifest (below) by the owner-gated read (SD-13).
+
+**The options.**
+
+- **Send to the Anthropic tier** (danger tone), with one "include this file" checkbox per file, unchecked by default.
+- **Stay private**: the default, and the option the unattended rule picks (`unattended: 'apply-default'`). It stops the run (`stopsRun`) with "This conversation holds private-tier content. Switch it back to the private tier, or start a new conversation." Nothing is sent, and nothing is recorded, so the next turn asks again.
+
+**The release manifest binds the decision.** Before `askHuman`, the gate writes one immutable, encrypted manifest row holding:
+
+- the owner and the session;
+- the turn range of the history shown;
+- the sorted `(documentId, versionDigest)` pairs, each with the representation shown: the digest of the original bytes, and of any derived text.
+
+The gate key is the sha256 of the manifest's canonical content. The row is unique on `(owner, session, gate key)`, so a pending retry of the same request reuses its `payloadRef`. It carries `expires_at` equal to the request's expiry, for the sweep, and is purged when the request closes. Until then it is a third store of the file's text (SD-10). Stash documents have no content digest today (`document-store.server.ts:43-60`), so slice 5b computes one when a document is stored.
+
+**The host's `resolve`.** It runs one release service, the same one the gate, hydrate and retrieval consume, and checks before it changes anything:
+
+1. Load the manifest, recompute the gate key, and compare it with the request's; check the owner and the session.
+2. Compare each document's current version digest with the manifest's. A document that changed while the request was paused is not released and stays undecided.
+3. On **Send**: record the history release on the conversation, up to the manifest's last turn; record `publicTierRelease: { state: 'released', version }` on each checked document; and record `{ state: 'withheld', version }` on each unchecked one.
+
+Hydrate and retrieval honour a release only while the document's current version equals the released one, so a replacement never inherits it. Recording a release must not reset the document's TTL, as `setDocumentFlags` does today (`document-store.server.ts:548-557`). A retry after a partial write or a failed conversation save checks each document again, so only the versions the person reviewed can become released.
+
+**Withdrawing.** The Data Stash panel offers an owner-gated toggle that withdraws a file's release, back to undecided. A released history cannot be recalled, and the panel says so.
+
+**What it does not cover.**
+
+- **The gateway's raw `redis` tools.** An agent holding them reads any stash key whatever its tag, tier or owner (`scan_keys`, `json_get`). `general` gets the whole catalog (`general.server.ts:59, 69`), and dev compose enables every server (`docker-compose.yaml:124`). Only a deployment that omits the `redis` server holds this exit (`docs/PREVIEW.md:251`); withholding those tools in `agent-withheld-tools.ts` is a separate issue.
+- **A private-tier-only server (#653):** the gate never fires there.
+
+**Ship order.** The gate cannot ship before slice 9's client: a pause that no client can answer would stall every flipped turn. Slice 5b therefore ships the tag, the digests, the per-turn tier record and the tiered sandbox id. Until the gate lands with slice 9, a flipped turn never sees a private file, but it still sends the history, as main does today.
 
 **Pins (layer 1)**, each checked by mutation:
 
 - `graph_file_ingest` is refused on a frameless frame, an unrecognised tier and `'anthropic'`, and runs on the private tier, whichever agent calls it, `general` included. Mutation: test `!== 'anthropic'` instead.
 - It is refused while the embedding provider is `openrouter`. Mutation: drop the check.
-- On a flipped turn the gate raises one request before any route runs, listing each unreleased `graph-file` copy with its preview. "Continue without them" leaves the copies neither hydrated nor retrieved. Mutation: skip the tag at hydrate.
-- "Include the files" records `released`, and the next Anthropic-tier turn hydrates the copy without asking. Mutation: do not persist the decision.
-- An unattended run takes "Continue without them" and records nothing. Mutation: record the default.
-- A private run, or a conversation with no undecided copy, raises nothing.
-- A synthetic ingested file whose text names a directory member reaches `info-retrieval`'s `plan_context` as a placeholder. Mutation: skip G14's data rewrite.
-- `general-next`'s **own** office list includes `graph_file_ingest`, not the shared `MICROSOFT_365_TOOLS`: the `microsoft-365` agent has no retriever (`packages/agents/agents/microsoft-365.server.ts:44-63`). Slice 3's absence pin is removed, and neither the actor prompt nor the route description says ingestion is unavailable (`general-next.server.ts:70, 153`).
+- **The trigger:**
+  - On a flipped turn over private-tier content, the gate raises one request before any route runs. Mutation: move the gate after the orchestrator.
+  - A frameless frame and an unrecognised tier also fire it. Mutation: test `=== 'anthropic'`.
+  - A private file is read, a final reply quotes a synthetic secret from it, the stash copy expires, and a public turn follows: the confirmation comes before any public request. Mutation: trigger on stash enumeration only.
+  - A private run raises nothing.
+- **The tag and the sandbox:**
+  - Without a release, a copy is neither hydrated nor retrieved. Mutations: drop the tag check at hydrate; drop it in the retriever.
+  - A private turn hydrates a file, and a flipped turn then finds no such file in `/work/in`. Mutation: keep the sandbox id without the tier.
+- **The binding:**
+  - A swapped payload, content changed while paused, and a replacement after a release are each not released. Mutations: re-list at `resolve`; skip the version comparison.
+  - A pending retry leaves one row and one `payloadRef`.
+  - A persistence failure followed by a retry releases only the reviewed versions.
+- **The decision:**
+  - A release persists, and the next turn does not ask again.
+  - An unattended run stays private and records nothing. Mutation: record the default.
+  - The warning names the decisions host when `JEV_DECISIONS_URL` is set. Mutation: a fixed "Anthropic".
+- **Component layer:** the preview labels its truncation and its representation; expanding shows the full text; a binary says "sent whole"; the warning renders. Mutations: drop the full-text access; hide the notice; drop the warning.
+- **G14:** a synthetic ingested file whose text names a directory member reaches `info-retrieval`'s `plan_context` as a placeholder. Mutation: skip G14's data rewrite.
+- **The allowlist:** `general-next`'s **own** office list includes `graph_file_ingest`, not the shared `MICROSOFT_365_TOOLS`, because the `microsoft-365` agent has no retriever (`packages/agents/agents/microsoft-365.server.ts:44-63`). Slice 3's absence pin is removed, and neither the actor prompt nor the route description says ingestion is unavailable (`general-next.server.ts:70, 153`).
 
 Scenarios 15 and 16 stop being gated and become rollout criterion 2's Graph-file variant (G18).
 
@@ -468,7 +523,13 @@ Each refusal is a recoverable tool failure with fixed feedback, as G14's egress 
 - **Size.** The statement and its parameters are capped (e.g. 8 KB).
 - **A statement Neo4j cannot plan.** The request runs `EXPLAIN` in a **read** session (SD-14); `EXPLAIN` plans and never executes. A planning error goes back to the controller to fix. A pin asserts that a write statement does plan in a read session; if Neo4j refuses that, the slice reports back rather than opening a write session to plan.
 - **Any procedure call, and any `CALL { … } IN TRANSACTIONS`**, found in the plan. v1 allows none; a reviewed allowlist of read-only procedures can come later. This keeps every effect of the statement inside the one transaction the executor opens. `apoc.periodic.*` commits batches of its own, which no rollback or marker can undo, and `apoc.cypher.runWrite` / `doIt` carry a write inside a string, so their plan shows one `ProcedureCall` and no delete. `apoc.*` is unrestricted (`docker-compose.yaml:32`), and the Community image (`docker/neo4j/Dockerfile:2`) has no role-based access behind the app's single credential.
-- **Not refused: the `Member` label, allowed behind a warning (owner, 2026-10-19).** G14's directory roster is read from `Member` nodes (`app/src/lib/org-graph/roster-source.server.ts:60-62`), so a write that renamed or deleted members would narrow it silently; only an empty directory fails closed. A statement whose text or plan names `Member` raises its request with `touchesDirectory: true`, and the dialog shows the directory warning ([below](#what-the-person-sees)). A statement that reaches members without naming them is caught at execution ([below](#where-the-write-runs-the-hosts-resolve)).
+- **Not refused: writes to `Member` nodes, allowed behind a warning (owner, 2026-10-19:** _"allow behind warning."_**), and bounded.** G14's directory roster is read from `Member` nodes (`app/src/lib/org-graph/roster-source.server.ts:60-62`), so a write that renamed or deleted members would narrow it silently; only an empty directory fails closed.
+  - **When the warning shows.** One pure function computes `touchesDirectory` from the statement and its plan: the statement names `Member`, **and** the plan contains an operator that can change a node (a property set or removal, a label change, a delete, or a create or merge of a `Member` node). A relationship to a member, such as the ontology's ordinary `Knowledge-[:ABOUT]->Member` and `Member-[:AUTHORED]->Knowledge` (`app/src/lib/org-graph/ontology.ts:96-106`), does not show it, so the warning keeps carrying information. `resolve` recomputes the flag from the digest-verified statement, and the dialog reads it from the owner-gated payload read; the request event's copy is display only.
+  - **What is allowed.** The directory is always fingerprinted at execution ([below](#where-the-write-runs-the-hosts-resolve)). An unchanged directory commits, whatever the statement named. A changed one commits only if the request carried the warning, **at most one** `Member` changed, and that member's `entraId` did not change. The ingest `MERGE`s on `entraId` and sets `mail` in the same transaction, and both are unique (`app/src/lib/org-graph/roster-ingest.server.ts:209-223`; `ontology.ts:128-131`), so a changed `entraId` would break the next sync for the whole tenant.
+  - **Owner decision (open):** _"Under the warning, may one statement change at most one directory member (the doc's reading), or any number?"_
+  - **Entra owns these properties.** The next directory sync reverts `displayName`, `mail`, `department` and `jobTitle`, and re-creates a deleted member without its old `AUTHORED`/`ABOUT` edges (`roster-ingest.server.ts:209-223`). The ingest's own header calls removing a departed member a retention decision it must not make silently (`:21-26`). So this path is neither a rectification nor an erasure route: those go through Entra, and SD-11's erasure gap stands.
+  - **An audit row.** A write that changed a member appends one encrypted, append-only audit row: the principal, the time, the `requestId`, the digest, the statement and its parameters, and the `entraId`s the fingerprint diff shows changed. Deleting the conversation does not remove it. **Owner decision (open):** _"How long are directory-change audit rows kept?"_ The doc keeps them for 12 months meanwhile.
+  - **Owner decision (open):** _"Does H2, any allow-listed user approving writes proposed in their own conversation, also cover writes to colleagues' directory entries?"_ The doc reads the 2026-10-19 ruling as yes, pending that confirmation.
 - **A batch.** `simpleLoop`'s whole-action validation refuses an action that contains a gated name together with any other call, before it dispatches any of them, using slice 6's declared list of gated names. That includes `multiToolCalls: 'off'`, which still runs batches the model was not offered (`simpleLoop.server.ts:263-267`). An executor sees only its own arguments, so it cannot do this.
 - **More than three write requests in one turn.** There is no "approve all", and the cap keeps approval from becoming a reflex.
 
@@ -504,7 +565,7 @@ The order then matters, because core mints the `requestId` only after the reques
 The request event carries display primitives only (`summary` is "display only, and untrusted", `packages/harness-patterns/types.ts:1535-1536`); the statement is in the payload row behind `payloadRef` (`:1537-1538`). The dialog shows:
 
 1. **The statement and its parameters, losslessly**: monospace text nodes with line breaks and whitespace preserved, parameters as canonical JSON. **Not** `displayText`, which normalises NFKC, strips format characters and collapses whitespace (`app/src/lib/memory/display-text.ts:14-22`): `MATCH (n) // inspect only`, a newline, then `DETACH DELETE n` would display on one line with the delete inside the comment. The request-time refusal of characters that display differently is what makes this rendering the exact text that runs. `displayText` stays for labels.
-2. **What it does**, from the `EXPLAIN` plan's operators: creates, merges, property sets and removals, deletes and detach-deletes. A plan with a delete gives Approve the danger tone. There are no counts, because counting needs execution. A request with `touchesDirectory` also shows, in the danger tone: **"This changes the staff directory that the privacy filter reads. A renamed or deleted member is no longer recognised as a person, so their name can reach web searches in clear."**
+2. **What it does**, from the `EXPLAIN` plan's operators: creates, merges, property sets and removals, deletes and detach-deletes. A plan with a delete gives Approve the danger tone. There are no counts, because counting needs execution. A request with `touchesDirectory` also shows, in the danger tone: **"This may change one entry in the staff directory that the privacy filter reads. A renamed or deleted member is no longer recognised as a person, so their name can reach web searches in clear. The next directory sync from Entra reverts this."**
 3. **Which route proposed it, and what this turn read first**: counts by untrusted source ("3 web results, 2 mails"), how many Microsoft 365 items, and how many spans the guard neutralized, all computed by code from the run's `tool_result` events and their `sanitized` summaries. And one fixed line: **"What you approve is readable by every user, on either tier."**
 4. **Approve** and **Reject.** Reject is the default and the option the unattended rule picks; Approve carries no unattended flag. So a triggered run or a routine never writes. Reject does not stop the run: the loop continues with "rejected; nothing was written", and the agent says so. **If the write already committed** (an earlier resume wrote it and then failed), the dialog says "already applied" and offers a single Continue. Continue sends the default answer, which `resolve` maps to `alreadyApplied`. The dialog learns that state from the owner-gated read by `payloadRef` (SD-13), which reports whether the marker exists.
 
@@ -521,10 +582,17 @@ The request event carries display primitives only (`summary` is "display only, a
 3. **Reject** with no marker: `{ status: 'rejected' }`. Nothing is opened.
 4. **Approve**: one write transaction, in this order.
    1. Create the marker `(:_HitlWrite { requestId, digest })`. A **uniqueness constraint on `requestId`** makes a concurrent retry of the same request block and then fail, so retries are serialised before the person's statement runs. The losing retry's uniqueness violation is not reported as `failed`: it re-reads the marker and returns `alreadyApplied`, which is the truth.
-   2. Fingerprint the **protected sets**: every `_HitlWrite` marker, always; and every `Member` node with the properties the roster reads, unless the request carried the directory warning.
+   2. Fingerprint the **protected sets**, always and whatever the request carried: every `_HitlWrite` marker, and every `Member` node's existence, `entraId`, `displayName` and `mail`.
    3. Run the statement as its own query, and keep **its** summary counters, separate from the marker's.
-   4. Fingerprint the protected sets again. Any change rolls the whole transaction back and returns `{ status: 'refused', reason }`: "the statement would change the write records", or "the statement changes directory members, which the approval did not show; propose it again naming them". This is what catches a broad `MATCH (n) DETACH DELETE n` or a dynamic label, which name no label: a later approved deletion can never erase an earlier marker, or change the directory without the person having been warned.
-   5. Store the statement's counters on the marker, and commit. Return `{ status: 'written', counters }`. A Neo4j error returns `{ status: 'failed', error }`; the run continues, and the agent reports it.
+   4. Fingerprint the protected sets again and diff. The whole transaction rolls back, returning `{ status: 'refused', reason }`, if:
+      - any marker changed: "the statement would change the write records". A warning never lifts this;
+      - a member changed and the request carried no warning: "the statement changes directory members, which the approval did not show";
+      - more than one member changed: "changes N directory members; propose one at a time";
+      - a member's `entraId` changed: "a directory member's id cannot change".
+
+      This is what catches a broad `MATCH (n) DETACH DELETE n` or a dynamic label, which name no label. A later approved deletion can never erase an earlier marker, and the directory never changes by more than one warned entry.
+
+   5. Store the statement's counters on the marker; if a member changed, append the audit row in the host store; then commit. Return `{ status: 'written', counters }`. A Neo4j error returns `{ status: 'failed', error }`; the run continues, and the agent reports it.
 
 Because procedures are refused before the person is asked, every effect of the statement is inside this transaction, so the marker commits or rolls back with all of it. That is what makes the write exactly-once, as Δ4 requires (a later `resolve` throwing makes the retry call every `resolve` again).
 
@@ -537,7 +605,7 @@ Because procedures are refused before the person is asked, every effect of the s
 - concurrent retries of one request write once;
 - a failure before commit writes nothing, and the retry writes once;
 - a commit followed by a failed conversation save leaves the run `paused` (`turn.server.ts:1032-1046`); the retry finds the marker, writes nothing and reports "already applied", and a later Reject also reports "already applied";
-- a statement that would change a marker, or a `Member` node the approval did not warn about, is rolled back;
+- a statement that would change a marker, a member without the warning, more than one member, or a member's `entraId`, is rolled back;
 - **#624:** the wake precedes `resolve` (`turn.server.ts:965-983`), so a wake failure writes nothing, appends a persistent recoverable error and keeps the run `paused` with the answer retryable. A retry is a fresh press; the client never resends an answer on its own.
 
 Each of these is pinned.
@@ -594,8 +662,14 @@ Slice 6 completes the existing design rather than adding a mechanism. On re-entr
   - An unattended run gets the rejected outcome, with no `held()`, no write and no orphaned payload row.
   - A write request works with memory switched off.
   - A placeholder, a guard marker, a U+200B, a U+FF21, an unplannable statement, an `apoc.periodic.iterate`, an `apoc.cypher.runWrite`, a `CALL { … } IN TRANSACTIONS` and a fourth request in a turn are each refused before any request is raised. Mutations: drop the procedure check; drop the NFKC and format-character check.
-  - A statement naming `Member` raises a request carrying the directory warning, and its approved change commits. Mutation: refuse it.
-  - A statement that changes a `Member` node without naming the label is rolled back. Mutation: drop `Member` from the protected sets.
+  - An `ABOUT` link to a member commits, with no warning and no directory change. Mutation: treat a mention as a change.
+  - A warned single-member change commits and writes one audit row. Mutations: refuse it; skip the audit.
+  - A warned two-member change, and a warned `MATCH (m:Member) DETACH DELETE m`, roll back. Mutation: drop the cap.
+  - A warned `entraId` change rolls back. Mutation: drop the rule.
+  - An unwarned member change, including one through a label-less statement, rolls back. Mutation: drop `Member` from the protected sets.
+  - A warned statement that deletes a `_HitlWrite` marker still rolls back. Mutation: skip every protected set when warned.
+  - A stored `touchesDirectory` that disagrees with the statement does not lift protection. Mutation: read the flag from the request.
+  - Component layer: the directory warning renders. Mutation: drop it.
   - A batch containing a write request is refused before any of its calls is dispatched, including under `multiToolCalls: 'off'`. Mutation: leave the check to the executor.
 - The dialog (component layer): the line-comment statement renders on two lines, and a parameter `'A  B'` keeps both spaces. Mutation: render through `displayText`.
 - The write: each host outcome listed above, with its own mutation (drop the marker check; drop the uniqueness constraint; drop the protected-set check; check the marker on Approve only).
@@ -610,7 +684,7 @@ A write composed after reading untrusted content is the riskiest thing this agen
 - its destructive operations are named from the plan, and procedures, which could hide them, are refused;
 - the dialog says what untrusted content the turn read, how much of it the guard neutralized, and that every user will be able to read what is written;
 - a statement carrying a guard marker or a placeholder never reaches the dialog, and a run with nobody attending never writes;
-- at execution the markers are protected whatever the statement says, and the directory is protected unless the person was warned.
+- at execution the markers are protected whatever the statement says, and the directory can change by at most one warned entry, never in its `entraId`.
 
 What it does not catch: a plausible but harmful statement that the person approves. The dialog turns that into a reading task; it does not guarantee anything.
 
@@ -620,7 +694,7 @@ None of this has a client yet. `HitlDialog` renders memory proposals only (`app/
 
 - a blocking-request card in the transcript for a paused turn, with the request's expiry;
 - a `graph-write` body in the shared dialog shell, rendering the statement losslessly, with its directory warning and its "already applied" state;
-- a `private-file-release` body: each file's name, type, size and preview, and the tier-flip warning ([P4](#a-tier-flip-mid-conversation-owner-2026-10-19));
+- a `private-content-release` body: the processors, the history, each file's labelled and expandable preview with its download and per-file checkbox, and the tier-flip warning ([P4](#a-tier-flip-mid-conversation-owner-2026-10-19)); the Data Stash panel's withdraw toggle;
 - pending blocking requests in the inbox, beside proposals;
 - the client resume over the existing SSE path, sent only on the person's press;
 - an owner-gated read of the frozen statement by `payloadRef`: a `'use server'` read, gated like every other one and taking no owner argument (SD-13).
@@ -659,7 +733,7 @@ The fix is small and stated as a slice item: `thread` mode honours `viewConfig.f
   - **Q5, a stable pseudonym:** not applicable;
   - plus the private-tier-only tool and the accepted limitation for people named only inside a file's body.
 
-  A tier flip is ruled too (owner, 2026-10-19): before an Anthropic-tier turn can use a file copied on the private tier, a confirmation screen shows the data that would go to Anthropic, with a warning ([below](#a-tier-flip-mid-conversation-owner-2026-10-19)). The tool's own checks close a live gap in `general` and ship first (slice 5a); `graph_file_ingest` stays out of `general-next` until slice 5b. Materialisation of results that are not files is not part of P4 and stays deferred ([Data between routes](#data-between-routes)).
+  A tier flip is ruled too (owner, 2026-10-19): before an Anthropic-tier turn sends private-tier content, a confirmation screen shows the data that would go to the Anthropic tier's processors, with a warning ([below](#a-tier-flip-mid-conversation-owner-2026-10-19)). Whether it covers history as well as files is open; the doc covers both meanwhile. The tool's own checks close a live gap in `general` and ship first (slice 5a); `graph_file_ingest` stays out of `general-next` until slice 5b. Materialisation of results that are not files is not part of P4 and stays deferred ([Data between routes](#data-between-routes)).
 
 - **P5 — The decisions model on the private tier.** **Order slice 3 after #418 G11's deletion/client-migration slice.** At the checked main commit the private decide role still resolves to `LocalQwenSmallDecide` (`packages/harness-baml/clients.server.ts:564-572`), so today's code would not enforce the shim-only refusal described here. After that prerequisite, G11 requires private-tier decisions to use a separately configured systemone URL (the self-hosted shim), refused when unset. Until the shim is served, this agent then works on the Anthropic tier only and shows a visible error on the private tier; this is target behaviour after G11, not a claim about current main.
 
@@ -681,8 +755,8 @@ All 11 round-2 calls and the 3 departures from the sketch were accepted as recom
 - **N5, the iteration bound.** `maxIterations` defaults to 6. At the bound the loop stops as `answer`, with the answer marked partial.
 - **G14 (2026-10-15), pseudonymisation.** An outbound filter around `withReferences` on the web route (`info_ag`), on the private tier only, with no table kept and no reverse. The filter applies unless a run is explicitly on the Anthropic tier, and it covers the handoff data as well as the view. A roster that cannot be built withholds the references; they are never passed in clear. Designed in [Pseudonymisation guard on the web route](#pseudonymisation-guard-on-the-web-route).
 - **The three departures:** the retriever is its own route; `doc_ag` is the sketch's second form; `answer` (`done` in G12) is a choice, so the synthesizer answers once.
-- **Writes (owner, 2026-10-16 and 2026-10-17).** #396 is closed: writes are gated by a person, not prevented by read-only defaults. After an approval the run continues inside the route as if it had not stopped. Designed in [Writes, gated by a person](#writes-gated-by-a-person). On 2026-10-19 the owner accepted H1 (a separate route, named `knowledge-edit` here) and H2 (any allow-listed user approves writes proposed in their own conversation), and limited approval to Neo4j writes. Writes to `Member` nodes are allowed behind a warning (owner, 2026-10-19).
-- **P4 (owner, 2026-10-19), the file path.** It is protected at its exits, not by rewriting bytes; the stash copy is unchanged and no table is kept; the tool runs only on a positively private tier; people named only inside a file's body are an accepted limitation. This settles S-f as G14 reads it. A tier flip shows a confirmation screen with the data that would be transferred to Anthropic, with a warning. Recorded on [PR #682](https://github.com/mknw/hames-playground/pull/682#issuecomment-6256235215). Designed in [The file path (P4)](#the-file-path-p4).
+- **Writes (owner, 2026-10-16 and 2026-10-17).** #396 is closed: writes are gated by a person, not prevented by read-only defaults. After an approval the run continues inside the route as if it had not stopped. Designed in [Writes, gated by a person](#writes-gated-by-a-person). On 2026-10-19 the owner accepted H1 (a separate route, named `knowledge-edit` here) and H2 (any allow-listed user approves writes proposed in their own conversation), and limited approval to Neo4j writes. Writes to `Member` nodes are allowed behind a warning (owner, 2026-10-19), bounded to one member per statement with `entraId` immutable and audited. Both rulings are recorded at [#682](https://github.com/mknw/hames-playground/pull/682#issuecomment-6269324396). Open: the cap, the audit retention, and whether H2 covers directory entries.
+- **P4 (owner, 2026-10-19), the file path.** It is protected at its exits, not by rewriting bytes; the stash copy is unchanged and no table is kept; the tool runs only on a positively private tier; people named only inside a file's body are an accepted limitation. This settles S-f as G14 reads it. Recorded on [PR #682](https://github.com/mknw/hames-playground/pull/682#issuecomment-6256235215). A tier flip shows a confirmation screen with the data that would be transferred to Anthropic, with a warning ([record](https://github.com/mknw/hames-playground/pull/682#issuecomment-6269324396)). "Anthropic" is read as the Anthropic tier's processors, the decisions endpoint included. Open: whether the screen covers the conversation's history or only the files (the doc covers both meanwhile). Designed in [The file path (P4)](#the-file-path-p4).
 
 The round-1 reviewers' terms (architecture 6068693140, security 6068708025) bind the delta review. Nothing is built before that review converges.
 
@@ -724,7 +798,7 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
 4. **`withSandbox` re-hydrate on stash write** (N4). A core change with its own review.
 5. **The Graph file path (P4)**, as [specified](#the-file-path-p4), in two parts:
    - **5a, first, before anything else in this doc**: the host-injected private-tier predicate and the `openrouter` refusal in `graph_file_ingest`'s executor. It closes the live gap in `general`, and its pins cover every caller.
-   - **5b**: `graph_file_ingest` in `general-next`'s own office list (not the shared `MICROSOFT_365_TOOLS`); the `graph-file` provenance tag; the `privateFileRelease` top-level gate with its preview payload (it shares slice 8's blocking-payload writer, which whichever slice lands first builds) and its recorded `publicTierRelease` decision; hydrate and retrieval honouring both; the actor prompt and the route description updated; the remaining pins listed there (layer 1); scenarios 15/16 ungated in the Eval.
+   - **5b**: `graph_file_ingest` in `general-next`'s own office list (not the shared `MICROSOFT_365_TOOLS`); the `graph-file` provenance tag and the `privateTier` flag on documents promoted on a private-tier turn; a content digest computed at store time; each turn's recorded tier; the tier in the `office` sandbox id; hydrate and retrieval skipping unreleased copies; the actor prompt and the route description updated; the remaining pins listed there (layer 1); scenarios 15/16 ungated in the Eval.
 
    N4 is already built (slice 4). **Materialisation** of results that are not files is not part of this slice and stays deferred. When it is designed, its conditions still bind: no boolean or env-var switch (pinned by source scan), wipes on entry and exit, the verbatim-hash promotion block, and a materialiser that never reads `content_sanitized` data (pinned with slice 1's two-event fixture).
 
@@ -738,14 +812,14 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
 
 7. **The web-route pseudonymisation guard ([G14](https://github.com/mknw/hames-playground/issues/507#issuecomment-6191473862)).** `withPseudonymisedInputs` (rewriting the view and the child's plan/handoff data) and the `callTool` outgoing check on a new concatenating `egressChecks` run-frame slot, in core; `decisionLoop` passing the handoff's source payloads as roster input; `AgentDeps.pseudonymiseForWeb` built by the app's `createWebPseudonymiser` from `lib/privacy/`; the `egress-wiring` tripwire **narrowed** to that one import site, not deleted, with Q1–Q3 stated in the commit as in [the section](#pseudonymisation-guard-on-the-web-route). The pins listed there belong to layer 1. On the private tier, slice 3's `info_ag` ships only with this guard in place.
 8. **The gated Neo4j write**, after slice 6:
-   - the write request tool and its refusals (placeholder, guard marker, characters that display differently, size, an unplannable statement, procedures and `IN TRANSACTIONS`, more than three per turn) and the directory warning for a statement naming `Member`;
+   - the write request tool and its refusals (placeholder, guard marker, characters that display differently, size, an unplannable statement, procedures and `IN TRANSACTIONS`, more than three per turn); the `touchesDirectory` function, recomputed in `resolve`; the always-on directory fingerprint with its one-member cap and immutable `entraId`; the directory audit row;
    - the logical `callKey` computed and recorded by `simpleLoop`, the request's explicit key, and the pending / answered branch;
    - the blocking-payload writer (bound to the `callKey`, insert-only, encrypted, not gated on memory, with `expires_at`) and its purge on close;
    - the host's `resolve` dispatching on `request.kind`: the binding checks, the marker checked on every answer, and the write transaction with the marker's uniqueness constraint and the protected-set check;
    - the `knowledge-edit` route (H1), with `multiToolCalls: 'off'`;
    - `write_neo4j_cypher` still withheld and the gateway still read-only, each pinned;
    - the host outcomes listed in [Where the write runs](#where-the-write-runs-the-hosts-resolve), at layers 1 and 2.
-9. **The UI for blocking requests**, which can be built alongside slice 8: the transcript card with the expiry, the `graph-write` dialog body with the lossless statement, its directory warning and its "already applied" state, the `private-file-release` body with the files' previews and its warning, inbox entries, the client resume sent only on a press, and the owner-gated read of the frozen statement. Its checks belong to the component and browser layers.
+9. **The UI for blocking requests**, which can be built alongside slice 8: the transcript card with the expiry, the `graph-write` dialog body with the lossless statement, its directory warning and its "already applied" state, the `private-content-release` body, inbox entries, the client resume sent only on a press, and the owner-gated read of the frozen statement. With it lands the `privateContentRelease` gate: the manifest, the release service shared by the gate, `resolve`, hydrate and retrieval, and the versioned `publicTierRelease` record, with the pins in [P4](#a-tier-flip-mid-conversation-owner-2026-10-19). Its UI checks belong to the component and browser layers.
 
 ## See also
 

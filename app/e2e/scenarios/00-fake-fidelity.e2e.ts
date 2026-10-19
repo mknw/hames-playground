@@ -133,7 +133,7 @@ beforeAll(async () => {
     ActorController: () =>
       rq('ActorController')('m', 'i', tools, [], null, null, null, null, null, via),
     Critic: () => rq('Critic')('i', [attempt], via),
-    Synthesize: () => rq('Synthesize')('m', 'i', [], false, null, null, via),
+    Synthesize: () => rq('Synthesize')('m', 'i', [], false, null, null, null, via),
     ResultDescribe: () => rq('ResultDescribe')('search', '{}', 'r', 'rows', via),
     ResultDescribeBatch: () =>
       rq('ResultDescribeBatch')(

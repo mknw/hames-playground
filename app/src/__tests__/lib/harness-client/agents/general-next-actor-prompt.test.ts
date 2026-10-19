@@ -112,3 +112,37 @@ it('W4: the rendered office actor catalogue is exactly the eight Graph read tool
     for (const name of ELSEWHERE) expect(body, name).not.toContain(`desc of ${name}`)
   }
 })
+
+// MUTATION: remove the info controller's source-URL contextPrefix instruction.
+it.each(['anthropic', 'verda'])('E1: info Return contract is rendered on %s', async (tier) => {
+  vi.stubEnv('VERDA_INFERENCE_ENDPOINT', 'https://example.invalid/v1')
+  vi.stubEnv('VERDA_INFERENCE_API_KEY', 'synthetic')
+  vi.stubEnv('SMALL_LLM_BASE_URL', 'https://example.invalid/small/v1')
+  vi.stubEnv('SMALL_LLM_DECISIONS_URL', 'https://example.invalid/v1/systemone')
+  vi.stubEnv('SMALL_LLM_API_KEY', 'synthetic')
+  const { b } = await import('@hames-ai/harness-baml/baml_client')
+  const prompts: string[] = []
+  const spy = vi.spyOn(b, 'LoopController').mockImplementation((async (...args: unknown[]) => {
+    const requestArgs = args.slice(0, 10) as Parameters<typeof b.request.LoopController>
+    requestArgs[10] = { client: (args[10] as { client?: string }).client }
+    const request = await b.request.LoopController(...requestArgs)
+    prompts.push(JSON.stringify(request.body.json()))
+    return { reasoning: 'done', tool_name: 'Return', tool_args: 'synthetic', is_final: true }
+  }) as never)
+  try {
+    const { generalNextAgent } = await import('@hames-ai/agents/agents/general-next.server')
+    const patterns = await generalNextAgent.createPatterns('synthetic-session', deps)
+    const info = walk(patterns).find((p) => p.name === 'simpleLoop')!
+    await withRunFrame({ inference: { tier } }, () => harness(info)('synthetic task'))
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]).toContain(
+      'When you Return, include the URLs of the sources you used as Markdown links',
+    )
+    expect(prompts[0]).toContain('Copy each source URL verbatim')
+    expect(prompts[0]).toContain('never invent or construct a URL')
+    expect(prompts[0]).toContain('include no link')
+    expect(JSON.parse(prompts[0]).model).toMatch(tier === 'verda' ? /Qwen/ : /^claude-/)
+  } finally {
+    spy.mockRestore()
+  }
+})

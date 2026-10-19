@@ -5,6 +5,11 @@ filter through `app/src/lib/harness-client/web-pseudonymiser.server.ts`.
 Q1: input view/handoff plus outgoing web arguments only. Q2: stored history
 unchanged. Q3: invocation-local table, never stored or reversed. The deferred
 seams below remain open; see [the G14 design](decision-loop-agent.md#pseudonymisation-guard-on-the-web-route).
+The Graph file path (P4, ruled 2026-10-19, designed and not yet built)
+rewrites nothing itself: Q1, its exits rather than the file's bytes, one of
+which is the G14 filter above; Q2, the stash copy unchanged; Q3, no table;
+Q5, not applicable. See
+[the P4 design](decision-loop-agent.md#the-file-path-p4).
 This is a proof that
 option three exists for [item 3 of the data-protection
 plan](../data-privacy/plan.md#plan) ("encrypt or exclude Graph-derived

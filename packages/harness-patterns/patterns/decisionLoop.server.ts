@@ -146,7 +146,7 @@ export interface DecisionLoopRoute<T> {
   readonly siblingResults?: readonly string[]
   /** A `planner` route is withheld from the options straight after its own
    *  iteration and once a plan exists this turn. `true` offers it every time;
-   *  ignored on any other kind of route. */
+   *  planner routes only, refused on any other kind of route. */
   readonly allowReplan?: boolean
 }
 
@@ -252,6 +252,11 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     if (!leaf || !kind) {
       throw new Error(
         `decisionLoop: route '${name}' is not a simpleLoop, actorCritic, retriever or planner (possibly inside single-child wrappers); there is no default way to read its result`,
+      )
+    }
+    if (routes[name].allowReplan !== undefined && kind !== 'planner') {
+      throw new Error(
+        `decisionLoop: route '${name}' sets allowReplan but is not a planner; there is nothing to replan (allowReplan is read only by a planner route)`,
       )
     }
     kinds.set(name, kind)

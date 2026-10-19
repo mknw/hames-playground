@@ -1306,7 +1306,7 @@ describe('decisionLoop — a planner route is not offered twice in a row, nor on
     Object.assign(fn, { supportedTypes: ['choice'], limits: () => ({ contextWindow: 131_072 }) })
     return { decide: fn, offeredAt, taken }
   }
-  const planning = (text: string | undefined) =>
+  const planning = (text: string | undefined, patternId = 'think-p') =>
     planner<Data>(
       vi.fn(async () => ({
         plan: { reasoning: 'r', plan: text ?? '', n_steps: text ? 1 : 0 },
@@ -1314,7 +1314,7 @@ describe('decisionLoop — a planner route is not offered twice in a row, nor on
         toolCount: 0,
       })) as never,
       [],
-      { patternId: 'think-p' },
+      { patternId },
     )
   const decided = (ctx: { events: ContextEvent[] }) =>
     eventsOf(ctx, 'orchestrator', 'decision_made')
@@ -1385,6 +1385,66 @@ describe('decisionLoop — a planner route is not offered twice in a row, nor on
     expect(offeredAt).toHaveLength(1)
     expect(decided(ctx)).toEqual(['think'])
     expect(eventsOf(ctx, 'orchestrator', 'error')).toHaveLength(0)
+    // No decision is recorded for the auto-answer, so `next_step` keeps the previous one.
+    expect((ctx.data.decisions!.next_step as { label: string }).label).toBe('think')
+  })
+
+  // MUTATION: `kinds.get(n) === 'planner'` → `routes[n].pattern.name === 'planner'` in
+  // `guardedPlanners` (no unwrapping): a planner behind a wrapper is offered again.
+  it('a planner behind a wrapper is guarded like a bare one', async () => {
+    const { decide, offeredAt } = fond()
+    await run([
+      build(
+        {
+          think: route(withInjectionGuard({ tools: ['x'] })(planning('1) say it cannot write.'))),
+          info: route(returning('i', 'x')),
+        },
+        decide,
+      ),
+    ])
+    expect(offeredAt[1]).toEqual(['info', 'answer'])
+  })
+
+  // MUTATION: `records[records.length - 1]?.route !== l.id` →
+  // `kinds.get(records[records.length - 1]?.route ?? '') !== 'planner'`: every planner is
+  // withheld after ANY planner, so `think2` is not offered after a failed `think`.
+  it('straight-after-itself is about the SAME route: a second planner route is still offered', async () => {
+    const { decide, offeredAt } = fond(['think2'])
+    await run([
+      build(
+        {
+          think: route(planning(undefined)),
+          think2: route(planning('1) a plan.', 'think2-p')),
+          info: route(returning('i', 'x')),
+        },
+        decide,
+      ),
+    ])
+    expect(offeredAt[0]).toEqual(['think', 'think2', 'info', 'answer'])
+    expect(offeredAt[1]).toEqual(['think2', 'info', 'answer'])
+  })
+
+  // MUTATION: move `let latestPlan` out of `fn` into the `decisionLoop` closure: the plan of
+  // turn one then blocks turn two (`harness()` reuses its pattern instances across turns).
+  it('a plan belongs to one run of the loop: the next turn on the same instance may plan again', async () => {
+    const { decide, offeredAt } = fond()
+    const loop = build(
+      { think: route(planning('1) x.')), info: route(returning('i', 'x')) },
+      decide,
+    )
+    const ctx = createContext<Data>('turn one')
+    await runInFrame(() => runChain(ctx, [loop]))
+    const n = offeredAt.length
+    await runInFrame(() => runChain(ctx, [loop]))
+    expect(offeredAt[n]).toContain('think')
+  })
+
+  // MUTATION: delete the `allowReplan` throw in the `kinds` loop of decisionLoop.server.ts.
+  it('allowReplan on a route that is not a planner is refused at construction', () => {
+    const { decide } = fond()
+    expect(() =>
+      build({ info: route(returning('i', 'x'), { allowReplan: true }) }, decide),
+    ).toThrow(/route 'info' sets allowReplan but is not a planner/)
   })
 
   // MUTATION: drop `kinds.get(n) === 'planner' &&` from `guardedPlanners`: the second

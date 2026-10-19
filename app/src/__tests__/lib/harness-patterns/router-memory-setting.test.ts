@@ -90,10 +90,19 @@ beforeEach(() => {
     }
   })
   vi.spyOn(b, 'Synthesize').mockImplementation(
-    async (message, intent, turns, error, errorMessage, memory) => {
+    async (message, intent, turns, error, errorMessage, memory, references) => {
       replyBodies.push(
         (
-          await b.request.Synthesize(message, intent, turns, error, errorMessage, memory, OFFLINE)
+          await b.request.Synthesize(
+            message,
+            intent,
+            turns,
+            error,
+            errorMessage,
+            memory,
+            references,
+            OFFLINE,
+          )
         ).body.json(),
       )
       return replyText

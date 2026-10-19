@@ -23,7 +23,7 @@ import { toBamlError } from "@boundaryml/baml"
 import type { Checked, Check } from "./types"
 import type { partial_types } from "./partial_types"
 import type * as types from "./types"
-import type {Attempt, CompactedMemory, ControllerAction, CriticResult, DescribeBatchResult, DescribeItemSummary, DescribeTarget, ExpandedRef, ExtractedMemory, FewShot, LoopTurn, MemoryMember, Message, PlanResult, PlanResultThinking, PriorResult, ReferenceCandidate, ReferenceSelection, ReferenceSelectorResult, RouteOption, RoutingResult, ScreenVerdict, ToolCall, ToolCallRequest, ToolDescription, ToolResult} from "./types"
+import type {Attempt, CompactedMemory, ControllerAction, CriticResult, DescribeBatchResult, DescribeItemSummary, DescribeTarget, ExpandedRef, ExtractedMemory, FewShot, LoopTurn, MemoryMember, Message, PlanResult, PlanResultThinking, PriorResult, ReferenceCandidate, ReferenceSelection, ReferenceSelectorResult, RouteOption, RoutingResult, ScreenVerdict, SynthesisReference, ToolCall, ToolCallRequest, ToolDescription, ToolResult} from "./types"
 import type TypeBuilder from "./type_builder"
 
 export class LlmResponseParser {

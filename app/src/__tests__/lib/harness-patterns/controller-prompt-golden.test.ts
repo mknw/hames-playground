@@ -8,9 +8,12 @@
  * without parsing, sorting, flattening content parts or normalising whitespace:
  * roles, cache breakpoints, JSON escaping and output schemas are all bytes here.
  * The fixtures are historical evidence; do not regenerate them from a refactor.
- * The one deliberate edit since: #615 changed the `summary`-style Return wording
+ * Deliberate edits since: #615 changed the `summary`-style Return wording
  * and catalog line, so the eight LoopController `first`/`sequential` bodies
  * (the `parallel` ones render `answer`) carry exactly that text and nothing else.
+ * #507 cause A deletes only the Return sentence from the shared tool_args
+ * description in all 28 loop/actor bodies, then restores that exact sentence
+ * in the 12 loop volatile tails; the eight Planner bodies stay intact.
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'

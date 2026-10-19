@@ -63,6 +63,19 @@ const OFFICE_FEW_SHOTS: FewShot[] = [
         "python3 - <<'PY'\nfrom docx import Document\ndoc = Document()\ndoc.add_paragraph('Sample report')\ndoc.save('/work/out/sample.docx')\nprint('/work/out/sample.docx')\nPY",
     }),
   },
+  // Every office scenario that asks for a .md file failed live run 2 while the .docx and
+  // .csv ones passed, and no example saved a text file. Reads its input and saves in the
+  // SAME command, which is also the shape a file's content actually reaches /work/out in.
+  {
+    user: 'Summarise /work/in/sample-sales.csv in /work/out/sample-summary.md.',
+    reasoning:
+      'Read the input, total it and save the Markdown file under /work/out in one command; the file exists only once a command has written it.',
+    tool: 'sandbox_bash',
+    args: JSON.stringify({
+      command:
+        "python3 - <<'PY'\nimport csv\nrows = list(csv.DictReader(open('/work/in/sample-sales.csv')))\ntotal = sum(int(r['amount']) for r in rows)\nopen('/work/out/sample-summary.md', 'w').write(f'# Sample summary\\n\\nTotal: {total}\\n')\nprint('/work/out/sample-summary.md')\nPY",
+    }),
+  },
 ]
 
 async function createPatterns(
@@ -98,6 +111,8 @@ async function createPatterns(
           'Work on Microsoft 365 mail and files with the supplied Graph tools. ' +
           'The office sandbox has Python, python-docx, openpyxl, xlsxwriter and PyMuPDF. ' +
           'Inspect uploaded inputs in /work/in; save deliverables in /work/out so they are kept. ' +
+          'A requested file exists only after a command you ran has written it under /work/out: ' +
+          'never paste its content in place of saving it, and set is_final only after the run printed the saved path. ' +
           'Graph file ingestion is unavailable. Run code for computations. ' +
           'Use quoted heredocs for multiline Python; append when continuing a large file.',
       }),

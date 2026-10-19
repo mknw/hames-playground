@@ -10,6 +10,7 @@ import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
 import { registerGraphConnectorTools } from '@hames-ai/connectors/graph/graph-tools.server'
 import type { AppToolDefinition } from '@hames-ai/connectors/app-tools/registry'
+import { sandboxArgs } from '../../../../lib/eval-support/tool-arguments'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 
@@ -156,11 +157,12 @@ describe.each([0, 1])('#507 office envelope (wire %i)', (wire) => {
       .split('\n')
       .filter((line) => line.trim().startsWith('{"reasoning":'))
       .map((line) => JSON.parse(line))
-    // Three domain shots and the existing mode-gated sequential batch.
+    // Four domain shots and the existing mode-gated sequential batch.
     expect(actions.map((a) => a.tool_name)).toEqual([
       'sandbox_write',
       'graph_mail_recent',
       'graph_files_search',
+      'sandbox_bash',
       'sandbox_bash',
     ])
     for (const action of actions) {
@@ -174,6 +176,32 @@ describe.each([0, 1])('#507 office envelope (wire %i)', (wire) => {
     expect(JSON.parse(actions[2].tool_args)).toEqual({ query: 'sample budget', file_type: 'xlsx' })
     expect(JSON.parse(actions[3].tool_args).command).toContain("doc.save('/work/out/sample.docx')")
     expect(JSON.parse(actions[3].tool_args).command).toContain("python3 - <<'PY'\n")
+  })
+
+  // #507 run 2: every Markdown deliverable (11, 14, 17) failed while .docx and .csv passed,
+  // and no example saved a text file. MUTATIONS: delete the Markdown shot; make it print
+  // the content instead of writing it; drop the `/work/out` write or the printed path.
+  it('demonstrates reading an input and saving a Markdown file in one command', () => {
+    const shot = examples[wire]
+      .split('\n')
+      .filter((line) => line.trim().startsWith('{"reasoning":'))
+      .map((line) => JSON.parse(line))
+      .filter((a) => a.tool_name === 'sandbox_bash')[1]
+    const { command } = JSON.parse(shot.tool_args)
+    expect(command).toContain("open('/work/in/sample-sales.csv')")
+    expect(command).toContain("open('/work/out/sample-summary.md', 'w').write(")
+    expect(command).toContain("print('/work/out/sample-summary.md')")
+    // What the eval grades as a command that RUNS something and names its files.
+    expect(sandboxArgs(['sample-sales.csv', 'sample-summary.md'])({ command })).toBe(true)
+    expect(shot.is_final).toBe(false)
+  })
+
+  // MUTATION: remove the deliverable sentence from the office contextPrefix.
+  it('tells the office actor a requested file exists only once a command has written it', () => {
+    const body = rendered[wire].replace(/\\n/g, ' ')
+    expect(body).toContain('A requested file exists only after a command you ran has written it')
+    expect(body).toContain('never paste its content in place of saving it')
+    expect(body).toContain('set is_final only after the run printed the saved path')
   })
 
   // MUTATIONS: rename unread_only / file_type in the registered Graph

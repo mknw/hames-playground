@@ -218,7 +218,7 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
   ['Critic', (o) => () => b.request.Critic('i', ATTEMPTS, o)],
   [
     'Synthesize',
-    (o) => () => b.request.Synthesize('q', 'i', TURNS, true, 'boom', 'MEMORY BLOCK', o),
+    (o) => () => b.request.Synthesize('q', 'i', TURNS, true, 'boom', 'MEMORY BLOCK', null, o),
   ],
   ['Planner', (o) => () => b.request.Planner('q', 'i', TOOLS, 'CONTEXT BLOCK', o)],
   [

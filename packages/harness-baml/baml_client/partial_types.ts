@@ -20,7 +20,7 @@ $ pnpm add @boundaryml/baml
 
 import type { Image, Audio, Pdf, Video } from "@boundaryml/baml"
 import type { Checked, Check } from "./types"
-import type {  Attempt,  CompactedMemory,  ControllerAction,  CriticResult,  DescribeBatchResult,  DescribeItemSummary,  DescribeTarget,  ExpandedRef,  ExtractedMemory,  FewShot,  LoopTurn,  MemoryMember,  Message,  PlanResult,  PlanResultThinking,  PriorResult,  ReferenceCandidate,  ReferenceSelection,  ReferenceSelectorResult,  RouteOption,  RoutingResult,  ScreenVerdict,  ToolCall,  ToolCallRequest,  ToolDescription,  ToolResult } from "./types"
+import type {  Attempt,  CompactedMemory,  ControllerAction,  CriticResult,  DescribeBatchResult,  DescribeItemSummary,  DescribeTarget,  ExpandedRef,  ExtractedMemory,  FewShot,  LoopTurn,  MemoryMember,  Message,  PlanResult,  PlanResultThinking,  PriorResult,  ReferenceCandidate,  ReferenceSelection,  ReferenceSelectorResult,  RouteOption,  RoutingResult,  ScreenVerdict,  SynthesisReference,  ToolCall,  ToolCallRequest,  ToolDescription,  ToolResult } from "./types"
 import type * as types from "./types"
 
 /******************************************************************************
@@ -199,6 +199,12 @@ export namespace partial_types {
       injection_detected?: boolean | null
       reason?: string | null
       spans: string[]
+    }
+    export interface SynthesisReference {
+      source?: string | null
+      docId?: string | null
+      startOffset?: number | null
+      endOffset?: number | null
     }
     /**
      * Tool call event

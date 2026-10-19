@@ -22,11 +22,9 @@ export async function fixtureInference() {
           Object.entries(body.questions).map(([name, question]) => {
             const described = (question as { criteria: Record<string, unknown> }).criteria
             const criteria = Object.keys(described)
-            // The route's own key wins; a description that merely mentions it ("the answer
-            // needs...") is only a fallback, or any route listed before `answer` steals it.
-            const chosen =
-              criteria.find((c) => c === route) ??
-              criteria.find((c) => String(described[c]).includes(route))
+            // The choice is a criteria key, as the real decider's contract is: a description
+            // that merely mentions the route ("the answer needs...") must never select it.
+            const chosen = criteria.find((c) => c === route)
             if (!chosen) throw new Error(`Fixture cannot select route ${route}`)
             return [
               name,

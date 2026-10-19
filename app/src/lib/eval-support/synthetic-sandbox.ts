@@ -8,7 +8,9 @@
  *
  * Not modelled: production promotes any new file under /work/out to an artifact
  * (`packages/sandbox/work-sync.server.ts`); here only an accepted shell request records
- * the scenario's artifacts, and a `sandbox_write` to /work/out is deliberately not graded. */
+ * the scenario's artifacts, and a `sandbox_write` to /work/out is deliberately not graded.
+ * Also not modelled: `cd`, `ls` on files or in long format, multi-file `head` headers,
+ * and pipe output. */
 import type { MCPToolDescription, ToolTransport } from '@hames-ai/harness-patterns'
 import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
 import { sandboxShapeError, type ArgsPredicate } from './tool-arguments'
@@ -153,17 +155,20 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
     return shell(text.map((t, i) => `${t.split('\n').length - 1} ${targets[i]}`).join('\n'))
   }
 
-  /** Read-only inspection, nothing recorded: one such command, or several joined by `&&`
-   * or `;` as a shell would run them (`&&` stops at the first failure). Anything else —
-   * a pipe, a redirect, an interpreter — is not inspection and is judged as a request. */
+  /** Read-only inspection, nothing recorded: one such command, or several joined by `&&`,
+   * `;` or newlines as a shell would run them (`&&` stops at the first failure).
+   * Anything else — a pipe, a redirect, an interpreter — is judged as a request. */
   const inspect = (command: string, cwd: string) => {
-    const parts = command.split(/(&&|;)/)
+    const parts = command.split(/(&&|;|\n)/)
     let stdout = ''
     let stderr = ''
     let code = 0
     for (let i = 0; i < parts.length; i += 2) {
       const part = parts[i].trim()
-      if (!part) return undefined
+      if (!part) {
+        if (i === 0 || parts[i - 1] === '&&') return undefined
+        continue
+      }
       if (i > 0 && code !== 0 && parts[i - 1] === '&&') continue
       const run = inspectOne(part, cwd)
       if (!run) return undefined

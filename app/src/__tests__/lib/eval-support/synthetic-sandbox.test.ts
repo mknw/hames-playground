@@ -420,15 +420,79 @@ describe('the synthetic sandbox as a transport', () => {
     expect(stopped.stdout).toBe('')
     expect(stopped.stderr).toContain('No such file or directory')
     expect(stopped.exit_code).toBe(1)
-    const carried = (await out('cat /work/nope ; ls /work/in')) as { stdout: string }
+    const carried = (await out('cat /work/nope ; ls /work/in')) as {
+      stdout: string
+      exit_code: number
+    }
     expect(carried.stdout).toContain('lantern-sales.csv')
+    expect(carried.exit_code).toBe(0)
     // Nothing read-only is recorded as a deliverable, and pipes are not inspection.
     expect(trace.artifacts).toEqual([])
-    expect(((await out(`cat ${SALES} | wc -l`)) as { stdout: string }).stdout).toBe('')
+    expect(await out(`cat ${SALES} | wc -l`)).toMatchObject({
+      stdout: '',
+      stderr: '',
+      exit_code: 0,
+    })
     expect(((await out(`ls /work/in && python3 -c "print(1)"`)) as { stdout: string }).stdout).toBe(
       '',
     )
   })
+
+  // F1: the reviewed compound split swallowed the executor as `head` operands,
+  // changing scenario 10's grade. MUTATION: remove |\n from inspect's split.
+  it.each([`ls /work/in && head -3 ${SALES}`, `head -3 ${SALES}`])(
+    'grades the executor after a newline following %s as a request',
+    async (inspection) => {
+      const { call, trace } = make()
+      await call('sandbox_write', { path: '/work/totals.py', content: TOTALS_PY })
+      const command = `${inspection}\npython3 /work/totals.py`
+      expect((await call('sandbox_bash', { command })).success).toBe(true)
+      expect(trace.tools.at(-1)).toMatchObject({
+        name: 'sandbox_bash',
+        args: { command },
+        valid: true,
+      })
+      expect(trace.artifacts).toEqual(['lantern-totals.csv'])
+    },
+  )
+
+  // MUTATIONS: remove |\n from the split; restore the unconditional empty-part refusal.
+  it.each(['\n', ';'])('runs inspections separated or terminated by %j', async (separator) => {
+    const { call, trace } = make()
+    const listed = ['lantern-sales.csv', 'lantern-notes.md']
+    const both = await call('sandbox_bash', {
+      command: `ls /work/in${separator}head -n 1 ${SALES}`,
+    })
+    expect(both.data).toMatchObject({
+      stdout: [...listed, 'region,revenue'].join('\n'),
+      exit_code: 0,
+    })
+    expect((await call('sandbox_bash', { command: `ls /work/in${separator}` })).data).toMatchObject(
+      {
+        stdout: listed.join('\n'),
+        exit_code: 0,
+      },
+    )
+    // A newline, like `;`, continues after a failure and returns the last exit code.
+    expect(
+      (await call('sandbox_bash', { command: `cat /work/nope${separator}ls /work/in` })).data,
+    ).toMatchObject({ stdout: listed.join('\n'), exit_code: 0 })
+    expect(trace.artifacts).toEqual([])
+  })
+
+  // MUTATION: allow every empty part, including an initial part or a missing && operand.
+  it.each(['; ls /work/in', 'ls /work/in &&', 'ls /work/in && ; ls /work/in'])(
+    'leaves an incomplete inspection to the request path: %s',
+    async (command) => {
+      const { call, trace } = make()
+      expect((await call('sandbox_bash', { command })).data).toMatchObject({
+        stdout: '',
+        stderr: '',
+        exit_code: 0,
+      })
+      expect(trace.artifacts).toEqual([])
+    },
+  )
 
   it('edits and searches what was written', async () => {
     const { call } = make()

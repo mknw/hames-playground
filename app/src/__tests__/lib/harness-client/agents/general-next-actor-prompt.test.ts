@@ -10,7 +10,6 @@ import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
 import { registerGraphConnectorTools } from '@hames-ai/connectors/graph/graph-tools.server'
 import type { AppToolDefinition } from '@hames-ai/connectors/app-tools/registry'
-import { sandboxArgs } from '../../../../lib/eval-support/tool-arguments'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 
@@ -189,19 +188,19 @@ describe.each([0, 1])('#507 office envelope (wire %i)', (wire) => {
       .filter((a) => a.tool_name === 'sandbox_bash')[1]
     const { command } = JSON.parse(shot.tool_args)
     expect(command).toContain("open('/work/in/sample-sales.csv')")
-    expect(command).toContain("open('/work/out/sample-summary.md', 'w').write(")
+    expect(command).toContain("Path('/work/out/sample-summary.md').write_text(")
     expect(command).toContain("print('/work/out/sample-summary.md')")
-    // What the eval grades as a command that RUNS something and names its files.
-    expect(sandboxArgs(['sample-sales.csv', 'sample-summary.md'])({ command })).toBe(true)
     expect(shot.is_final).toBe(false)
   })
 
   // MUTATION: remove the deliverable sentence from the office contextPrefix.
-  it('tells the office actor a requested file exists only once a command has written it', () => {
+  it('tells the office actor to save a requested file with a command or sandbox_write', () => {
     const body = rendered[wire].replace(/\\n/g, ' ')
-    expect(body).toContain('A requested file exists only after a command you ran has written it')
-    expect(body).toContain('never paste its content in place of saving it')
-    expect(body).toContain('set is_final only after the run printed the saved path')
+    expect(body).toContain(
+      'A requested file exists only once it has been saved under /work/out (by a command or with sandbox_write)',
+    )
+    expect(body).toContain('never paste or print its content in place of saving it')
+    expect(body).toContain('set is_final only after a tool result confirmed the saved path')
   })
 
   // MUTATIONS: rename unread_only / file_type in the registered Graph

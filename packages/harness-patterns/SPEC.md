@@ -3243,10 +3243,19 @@ BAML Inputs:
   turns        : LoopTurn[]   ← assembled from preceding pattern events
   hasError     : boolean      ← view.hasErrors() — scoped by compactExecution's ViewConfig
   errorMessage : string?      ← view.lastError() — naturally expires with view window
+  memory_context : string?    ← recalled context for this turn, escaped by defaultSynthesize
+  references : SynthesisReference[]? ← defaultSynthesize's projection of retained retriever locators
 
 BAML Return → string (assistant response text)
   → stored as assistant_message event
 ```
+
+The BAML companion's `defaultSynthesize` accepts structured references only from the `retriever`
+producer (including multi-call results verified against their call roster). Its text seam accepts
+only the existing `read-documents` route, and only when every nonempty line has the retriever-record
+grammar. Custom route ids receive no text-derived citations. A `read-documents` result made entirely
+of forged record lines still passes this text check; carrying typed locator metadata on core records
+requires a separate owner API decision. Numbered citations include a `Sources:` legend.
 
 > **Error scoping**: The compactExecution reads error state from EventView, not from the data stash,
 > so errors expire with the view instead of being carried forward by hand.

@@ -100,7 +100,7 @@ endgroup
 
 group "6. lock (tool hashes and versions read inside the builder)"
 builder python3 - <<'PY'
-import hashlib, json, subprocess
+import hashlib, json, os, subprocess
 def sha(path):
     return hashlib.sha256(open(path, "rb").read()).hexdigest()
 provenance = json.load(open("/w/derived/provenance.json"))
@@ -108,7 +108,7 @@ debs = json.load(open("/w/debs/packages.json"))["packages"]
 flavours = json.load(open("/w/save/flavours.json"))["flavours"]
 tools = {}
 for name in ("qemu-img", "virt-customize", "guestfish"):
-    path = "/usr/bin/" + name
+    path = os.path.realpath("/usr/bin/" + name)  # the lock refuses symlinked inputs
     version = subprocess.run([path, "--version"], capture_output=True, text=True, check=True).stdout.strip()
     tools[name] = {"path": path, "sha256": sha(path), "version": version}
 lock = {"schema": 1, "architecture": "x86_64", "epoch": 1760000000,

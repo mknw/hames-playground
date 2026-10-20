@@ -35,6 +35,7 @@ import {
   NEO4J_READ_ONLY_CONTEXT,
 } from '@hames-ai/agents/agents/neo4j-fewshots.server'
 import { CLIENT_MAX_OUTPUT_TOKENS } from '../../src/lib/settings'
+import { packagePath } from '../../src/lib/eval-support/package-layout'
 import { check, rawCompletion, type Check, type Scenario } from '../harness'
 
 /** Small enough to read in a transcript, real enough to choose between, and
@@ -107,7 +108,7 @@ function noThinkingLeak(collector: Collector): Check {
  * Comments are stripped so the commented-out example clients do not register.
  */
 function parseBamlClients(): Map<string, string[] | undefined> {
-  const dir = path.resolve(process.cwd(), 'baml_src')
+  const dir = packagePath('harness-baml', 'baml_src')
   const out = new Map<string, string[] | undefined>()
   for (const file of readdirSync(dir).filter((f) => f.endsWith('.baml'))) {
     const source = readFileSync(path.join(dir, file), 'utf8')

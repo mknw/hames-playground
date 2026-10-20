@@ -170,7 +170,7 @@ export function createInjectionGuard(
       // Per-CALL overrides still win: they are a deliberate, local decision by a
       // known call site (the retriever's `spotlight: 'off'` on a filename), not
       // an agent-level config that could silently weaken a nested boundary.
-      const effective = overrides ? { ...options, ...overrides } : options
+      const effective = { ...options, spotlight: overrides?.spotlight ?? options.spotlight }
       let { data: out, report } = sanitizeUntrusted(data, { tool, namespace }, effective)
 
       // Default: a second opinion on regex-clean content. Opt-in callers can

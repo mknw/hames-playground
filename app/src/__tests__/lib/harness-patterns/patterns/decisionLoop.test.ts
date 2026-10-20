@@ -902,6 +902,7 @@ describe('decisionLoop — planner-only model screen exemption', () => {
           plan: 'Read the sample, then reply.',
           n_steps: 2,
         },
+        toolCount: 0,
       }),
       [],
       { patternId: 'plan-p' },

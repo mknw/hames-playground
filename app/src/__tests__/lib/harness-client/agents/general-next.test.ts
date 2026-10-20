@@ -7,6 +7,7 @@ import '../../../../lib/inference/config.server'
 import {
   collectToolNames,
   createContext,
+  createInjectionGuard,
   createEvent,
   createEventView,
   createScope,
@@ -1317,6 +1318,26 @@ describe('general-next think route, in isolation', () => {
       plan,
     )
     expect(mocks.screen.mock.calls.some(([input]) => input.content?.includes(plan))).toBe(false)
+
+    // Recorded failure shape: the old model screen reduced the entire plan to
+    // `⟦neutralized:llm-screen-1#0⟧` (marker() + applyScreenVerdict in injection-guard.ts).
+    // Reproduce that shape with synthetic text, without relying on a live classifier.
+    const previousGuard = createInjectionGuard(
+      {
+        tools: ['decision_loop_output'],
+        spotlight: 'always',
+        screen: async () => ({
+          injection_detected: true,
+          reason: 'synthetic imperative classification',
+          spans: [plan],
+        }),
+      },
+      () => {},
+      'synthetic-previous-screen',
+    )
+    const previouslyScreened = await previousGuard.sanitize('decision_loop_output', plan)
+    expect(previouslyScreened.data).toContain('⟦neutralized:llm-screen-1#0⟧')
+    expect(previouslyScreened.data).not.toContain(plan)
   })
 
   // MUTATION: bypass the model screen for every route output.
@@ -1341,7 +1362,7 @@ describe('general-next think route, in isolation', () => {
       expect.objectContaining({ tool: 'decision_loop_output', content: text }),
     )
     expect(states[1]).not.toContain(text)
-    expect(states[1]).toContain('neutralized:llm-screen')
+    expect(states[1]).toContain('⟦neutralized:llm-screen-1#0⟧')
     expect(thinkRecords(result.context.events)[0].data).toMatchObject({
       tool: 'info-retrieval',
       result: expect.stringContaining('neutralized:llm-screen'),

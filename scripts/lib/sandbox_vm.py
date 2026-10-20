@@ -775,9 +775,12 @@ class Spike:
 
     @staticmethod
     def make_certs(directory, address):
+        # Backdated an hour: the guests verify within seconds of issue, and a guest
+        # clock a few seconds behind refuses a certificate valid only from "now".
+        start = time.strftime("%Y%m%d%H%M%SZ", time.gmtime(time.time() - 3600))
         def openssl(*args):
             return command("openssl", *args)
-        openssl("req", "-x509", "-newkey", "rsa:3072", "-nodes", "-days", "2",
+        openssl("req", "-x509", "-newkey", "rsa:3072", "-nodes", "-not_before", start, "-days", "2",
                 "-subj", "/CN=spike-ca", "-keyout", str(directory / "ca-key.pem"),
                 "-out", str(directory / "ca.pem"))
         for role in ("server", "client"):
@@ -787,7 +790,7 @@ class Spike:
             private_file(directory / (role + ".ext"),
                          "extendedKeyUsage=" + ("serverAuth\nsubjectAltName=IP:" + address
                                                 if role == "server" else "clientAuth") + "\n")
-            openssl("x509", "-req", "-days", "2", "-in", str(directory / (role + ".csr")),
+            openssl("x509", "-req", "-not_before", start, "-days", "2", "-in", str(directory / (role + ".csr")),
                     "-CA", str(directory / "ca.pem"), "-CAkey", str(directory / "ca-key.pem"),
                     "-CAcreateserial", "-extfile", str(directory / (role + ".ext")),
                     "-out", str(directory / (role + ".pem")))

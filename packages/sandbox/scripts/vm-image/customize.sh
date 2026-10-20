@@ -8,8 +8,11 @@ chmod 755 /usr/sbin/policy-rc.d
 trap 'rm -f /usr/sbin/policy-rc.d' EXIT
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=l
-dpkg --unpack ./*.deb
-dpkg --configure -a
+# apt, not dpkg --unpack + --configure -a: a Pre-Depends upgrade (systemd on
+# its shared library) needs the dependency CONFIGURED first, and only apt orders
+# that. --no-download keeps it offline; it can only use these local files.
+apt-get install -y --no-install-recommends --no-download \
+  -o Dpkg::Options::=--force-confold ./*.deb
 python3 - <<'PY'
 import json, subprocess
 with open('guest-lock.json') as stream:

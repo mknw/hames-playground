@@ -90,7 +90,8 @@ Prepare a complete offline `.deb` closure for that exact distro/architecture.
 It must include `incus-agent`, `docker.io` (including the Docker CLI), `systemd`,
 `python3`, `iproute2`, `cloud-init` and every dependency not already satisfied
 by the base. Record each package name, exact dpkg version and file hash. Missing
-dependencies fail `dpkg --configure -a`; no apt update/install/download or
+dependencies fail the offline `apt-get install --no-download ./*.deb`, which
+orders Pre-Depends upgrades that a bare `dpkg --unpack` cannot; no apt update/download or
 fallback is available. The base must have no custom `/usr/sbin/policy-rc.d` or
 `/etc/docker/daemon.json`; the builder refuses either instead of adopting it.
 An Incus-compatible `incus-agent.service` and its virtio/vsock support must be

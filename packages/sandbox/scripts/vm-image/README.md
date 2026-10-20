@@ -108,6 +108,10 @@ any units. The static `cloud-init.target` is pulled in by cloud-init's generator
 only services are explicitly enabled. A failed enable aborts assembly.
 `guest-inventory.json` records the units passed to the successful
 `systemctl enable` in `enabled_units`; boot validation confirms their state.
+A drop-in (`incus-agent.service.d/host-agent.conf`) makes the unit run the
+agent the host serves on its config drive, which `incus-agent-setup` copies to
+`/run/incus_agent`, as upstream's own unit does. The distribution unit would
+otherwise run its packaged binary, so a 7.x host would talk to a 6.0.x agent.
 Assembly refuses any recorded list outside the two supported layouts, and the
 existing manifest hashes that inventory. CLI arguments and
 the version-1 lock are unchanged, so reviewed locks can be reused with a fresh

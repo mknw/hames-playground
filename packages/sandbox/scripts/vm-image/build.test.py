@@ -523,6 +523,13 @@ class Pipeline(unittest.TestCase):
             finally:
                 shutil.rmtree(self.work, ignore_errors=True)
 
+    def test_guest_runs_the_host_supplied_agent(self):
+        guest = self.fake_root()
+        child = self.shell_section('# Run the agent the HOST serves', '# Provisioning owns daemon.json', guest)
+        self.assertEqual(child.returncode, 0, child.stderr)
+        unit = guest / 'etc/systemd/system/incus-agent.service.d/host-agent.conf'
+        self.assertEqual(unit.read_text(), '[Service]\nExecStart=\nExecStart=/run/incus_agent/incus-agent\n')
+
     def test_guest_assembly_daemon_pins_classic_overlay2(self):
         guest = self.fake_root()
         child = self.shell_section('# Same classic overlay2 store', 'dockerd --config-file', guest)
@@ -1059,6 +1066,8 @@ def mutations():
         ("guest runtime tags omitted", "subprocess.run([*docker, 'tag', actual, 'kg-sandbox:' + flavour], check=True)", 'pass', "test_runtime_tags_restored_after_all_loads"),
         ("guest containerd snapshotter admitted", "driver != 'overlay2'", 'False', "test_guest_containerd_snapshotter_refused"),
         ("guest driver fallback admitted", "driver != 'overlay2'", "driver == 'overlayfs'", "test_guest_driver_fallback_refused"),
+        ("guest agent drop-in omitted", "printf '[Service]\\nExecStart=\\nExecStart=/run/incus_agent/incus-agent\\n'", ':', "test_guest_runs_the_host_supplied_agent"),
+        ("guest agent keeps packaged binary", "ExecStart=\\nExecStart=/run/incus_agent/incus-agent", "ExecStart=/usr/libexec/incus/incus-agent", "test_guest_runs_the_host_supplied_agent"),
         ("guest assembly daemon uses Docker 29 default store", '{"features":{"containerd-snapshotter":false},"storage-driver":"overlay2"}', '{}', "test_guest_assembly_daemon_pins_classic_overlay2"),
         ("guest assembly daemon may fall back from overlay2", ',"storage-driver":"overlay2"}', '}', "test_guest_assembly_daemon_pins_classic_overlay2"),
         ("guest driver inventory absent", ", 'docker_driver': driver", '', "test_all_images_loaded_from_archives_without_pull"),

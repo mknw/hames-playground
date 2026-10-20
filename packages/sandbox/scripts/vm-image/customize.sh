@@ -54,6 +54,12 @@ for unit in "$@" cloud-init.target; do
 done
 systemctl enable "$@"
 printf '%s\n' "$@" > enabled-units.txt
+# Run the agent the HOST serves on its config drive (copied to /run/incus_agent
+# by incus-agent-setup), as upstream's own unit does: it matches the host's
+# Incus version, where the packaged binary is the distro's (6.0.x) build.
+mkdir -p /etc/systemd/system/incus-agent.service.d
+printf '[Service]\nExecStart=\nExecStart=/run/incus_agent/incus-agent\n' \
+  > /etc/systemd/system/incus-agent.service.d/host-agent.conf
 # Provisioning owns daemon.json and docker.service.d, including socket activation.
 # Refuse site configuration rather than adopting it.
 test ! -e /etc/docker/daemon.json

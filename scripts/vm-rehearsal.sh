@@ -202,9 +202,9 @@ if [[ -f $STATE/run/failure.private.txt ]]; then
   # Synthetic runner values only; the last failed commands are the diagnosis.
   python3 - "$STATE/run/commands.private.jsonl" <<'PY'
 import json, sys
-failed = [json.loads(line) for line in open(sys.argv[1]) if json.loads(line)["exit"] != 0]
-for entry in failed[-8:]:
-    print(entry["exit"], " ".join(entry["argv"][:6]), "|", entry["stderr"][-600:].strip())
+entries = [json.loads(line) for line in open(sys.argv[1])]
+for entry in entries[-40:]:  # the failing step's commands, then the rollback's
+    print(entry["exit"], " ".join(entry["argv"])[:300], "|", (entry["stderr"] or entry["stdout"])[-400:].strip())
 PY
 fi
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["completed_steps"] == ["install","provision","tls","measure","cleanup"] else 1)' \

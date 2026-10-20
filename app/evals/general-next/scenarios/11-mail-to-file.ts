@@ -1,4 +1,8 @@
-import { sandboxArgs, mailArgs } from '../../../src/lib/eval-support/tool-arguments'
+import {
+  sandboxArgs,
+  mailArgs,
+  writtenContains,
+} from '../../../src/lib/eval-support/tool-arguments'
 import type { ConversationScenario } from '../types'
 
 export const scenario: ConversationScenario = {
@@ -18,6 +22,9 @@ export const scenario: ConversationScenario = {
   expectedRoutes: ['office-data'],
   answerIncludes: ['lantern-launch.md', 'CSV'],
   artifacts: ['lantern-launch.md'],
+  // A transcription of the mail's checklist: sandbox_write to /work/out is promoted just as a
+  // script's output is, so it is credited when the written text carries both checklist items.
+  writtenArtifacts: { 'lantern-launch.md': writtenContains('verify CSV export', 'publish notes') },
   forbiddenTools: [],
   maxIterations: 6,
 }

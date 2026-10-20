@@ -6,11 +6,17 @@
  * it runs. So a refusal never carries the predicate's rule: a request that does not meet
  * it runs, exits 0 and leaves nothing behind, exactly as a script that never saves would.
  *
- * Not modelled: production promotes any new file under /work/out to an artifact
- * (`packages/sandbox/work-sync.server.ts`); here only an accepted shell request records
- * the scenario's artifacts, and a `sandbox_write` to /work/out is deliberately not graded.
- * Also not modelled: `cd`, `ls` on files or in long format, multi-file `head` headers,
- * and pipe output. */
+ * Production promotes any new or changed file under /work/out to an artifact at turn exit
+ * (`promoteOutputs`, `packages/sandbox/work-artifacts.server.ts:164-197`, called from
+ * `with-sandbox.server.ts:841`), whichever tool wrote it. Here an accepted shell request
+ * records the scenario's artifacts, and a `sandbox_write` to `/work/out/<name>` records one
+ * ONLY for a scenario that declares `writtenArtifacts` (a transcription, not a computation)
+ * and only when the written text meets that file's predicate; the last write of a file
+ * decides, as the exit-time diff would. A write anywhere else, to a subdirectory, of empty
+ * or wrong text, or in any other scenario is not credited.
+ *
+ * Not modelled: `cd`, `ls` on files or in long format, multi-file `head` headers, and
+ * pipe output. */
 import type { MCPToolDescription, ToolTransport } from '@hames-ai/harness-patterns'
 import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
 import { sandboxShapeError, type ArgsPredicate } from './tool-arguments'
@@ -180,6 +186,35 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
     return shell(stdout, code, stderr)
   }
 
+  const record = (file: string, text: string) => {
+    state.documents.set(file, text)
+    state.trace()?.artifacts.push(file)
+    if (file.endsWith('.md')) state.trace()?.indexed.push(file)
+  }
+  /** The file's last write is not a deliverable (any more): what the exit-time diff would
+   * promote is that write, so an earlier credit for the same file is withdrawn. */
+  const unrecord = (file: string) => {
+    const trace = state.trace()
+    if (trace) {
+      trace.artifacts = trace.artifacts.filter((f) => f !== file)
+      trace.indexed = trace.indexed.filter((f) => f !== file)
+    }
+    state.documents.delete(file)
+  }
+  /** Whether a write is the scenario's declared deliverable: `/work/out/<name>` itself (no
+   * subdirectory, no `/work/in`), non-empty, and meeting its predicate. Undefined when the
+   * scenario declares none, so every other scenario's trace is untouched. */
+  const judgeWrite = (path: string, content: string): boolean | undefined => {
+    const declared = state.scenario().writtenArtifacts
+    if (!declared) return undefined
+    const file = path.startsWith(OUT) ? path.slice(OUT.length) : ''
+    if (!file || !Object.hasOwn(declared, file)) return false
+    const credited = content.trim() !== '' && declared[file](content)
+    if (credited) record(file, content)
+    else unrecord(file)
+    return credited
+  }
+
   const bash = (args: Record<string, unknown>): { result: Result; valid?: boolean } => {
     const shape = sandboxShapeError(args)
     if (shape) return { result: fail(`Invalid arguments for sandbox_bash: ${shape}.`) }
@@ -203,11 +238,8 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
     const predicate = scenario.expectedArgs?.sandbox_bash as ArgsPredicate | undefined
     if (!predicate?.(args, scripts.join('\n'))) return { result: shell(''), valid: false }
     const made = scenario.sandboxRun?.files ?? {}
-    for (const file of scenario.artifacts) {
-      state.documents.set(file, made[file] ?? state.documents.get('lantern-notes.md') ?? '')
-      state.trace()?.artifacts.push(file)
-      if (file.endsWith('.md')) state.trace()?.indexed.push(file)
-    }
+    for (const file of scenario.artifacts)
+      record(file, made[file] ?? state.documents.get('lantern-notes.md') ?? '')
     return {
       result: shell(
         scenario.sandboxRun?.stdout ?? scenario.artifacts.map((n) => `Saved ${OUT}${n}`).join('\n'),
@@ -237,6 +269,7 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
         if (!inWork || typeof args.content !== 'string')
           return fail('write_file: path must be under /work and content must be a string.')
         written.set(path, args.content)
+        valid = judgeWrite(path, args.content)
         return ok(`Successfully wrote to ${path}`)
       }
       if (name === 'sandbox_read') {

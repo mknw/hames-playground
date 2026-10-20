@@ -97,8 +97,22 @@ export function grade(
   }
   let at = -1
   for (const tool of s.expectedTools) {
-    const next = trace.tools.findIndex((t, index) => index > at && t.name === tool && t.success)
-    checks.push(check(`successful ordered tool: ${tool}`, next >= 0, `call index ${next}`))
+    // A scenario that declares `writtenArtifacts` accepts, for its shell step, a
+    // `sandbox_write` the synthetic sandbox judged to be that deliverable (`valid`):
+    // production promotes the written file exactly as it promotes a script's output.
+    const writes = tool === 'sandbox_bash' && s.writtenArtifacts !== undefined
+    const produces = (t: ConversationTrace['tools'][number]) =>
+      t.name === tool || (writes && t.name === 'sandbox_write' && t.valid === true)
+    const next = trace.tools.findIndex((t, index) => index > at && produces(t) && t.success)
+    checks.push(
+      check(
+        `successful ordered tool: ${tool}`,
+        next >= 0,
+        next >= 0 && trace.tools[next].name !== tool
+          ? `call index ${next} (${trace.tools[next].name})`
+          : `call index ${next}`,
+      ),
+    )
     if (next >= 0) at = next
     const expectedArgs = s.expectedArgs?.[tool]
     if (expectedArgs) {
@@ -108,9 +122,9 @@ export function grade(
         (t, index) =>
           next >= 0 &&
           index >= next &&
-          t.name === tool &&
+          produces(t) &&
           t.success &&
-          (t.valid ?? expectedArgs(t.args)),
+          (t.name !== tool || (t.valid ?? expectedArgs(t.args))),
       )
       checks.push(
         check(

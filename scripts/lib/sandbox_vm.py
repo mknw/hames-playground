@@ -43,9 +43,13 @@ REQUIRED_API_EXTENSIONS = ("projects_restricted_virtual_machines_nesting",
                            "projects_restricted_storage_pool_access")
 
 
+class Refusal(RuntimeError):
+    """A require() failure. Its message is always a fixed literal (pinned), never a value."""
+
+
 def require(condition, message):
     if not condition:
-        raise RuntimeError(message)
+        raise Refusal(message)
 
 
 def size_bytes(value):
@@ -1045,10 +1049,18 @@ def main(argv=None):
     print("Private artifacts and generic results saved; owner review required.")
 
 
-if __name__ == "__main__":
+def cli(argv=None):
     try:
-        main()
+        main(argv)
+    except Refusal as refusal:
+        # Fixed literal text only (pinned), so the operator sees WHICH guard refused.
+        print("Spike refused: " + str(refusal), file=sys.stderr)
+        sys.exit(1)
     except Exception:
-        # Exception strings may carry argv, file paths, addresses or environment data.
+        # Other exception strings may carry argv, file paths, addresses or environment data.
         print("Spike refused or failed; inspect private state and rollback status locally.", file=sys.stderr)
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    cli()

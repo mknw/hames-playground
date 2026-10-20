@@ -43,16 +43,16 @@ db-coupled.
 
 ## API routes (`app/src/routes/api/stash/`)
 
-| Method · Path                                     | Purpose                                                                          |
-| ------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `POST /api/stash/upload`                          | Store a document (multipart `file`, or JSON `{sessionId, filename, content}`)    |
-| `GET /api/stash/upload?sessionId=`                | List a session's documents (metadata)                                            |
-| `GET /api/stash/document/:id?sessionId=`          | Fetch a document (content + metadata)                                            |
-| `GET /api/stash/document/:id?sessionId=&download` | Stream the raw file (base64 decoded for binary) with `Content-Disposition` (#89) |
-| `DELETE /api/stash/document/:id?sessionId=`       | Remove a document + its index entry                                              |
-| `PATCH /api/stash/document/:id`                   | Toggle `hidden` / `archived` (`{sessionId, hidden?, archived?}`)                 |
-| `POST /api/stash/ingest`                          | Chunk → embed → index a stored doc (`{sessionId, docId, chunk?, embedding?}`)    |
-| `GET /api/stash/search?sessionId=&q=&k=`          | KNN similarity search over a session's chunks                                    |
+| Method · Path                                     | Purpose                                                                            |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `POST /api/stash/upload`                          | Store a document (multipart `file`, or JSON `{sessionId, filename, content}`)      |
+| `GET /api/stash/upload?sessionId=`                | List a session's documents (metadata)                                              |
+| `GET /api/stash/document/:id?sessionId=`          | Fetch a document (content + metadata)                                              |
+| `GET /api/stash/document/:id?sessionId=&download` | Stream the raw file (base64 decoded for binary) with `Content-Disposition` (#89)   |
+| `DELETE /api/stash/document/:id?sessionId=`       | Remove a document + its index entry                                                |
+| `PATCH /api/stash/document/:id`                   | Toggle `hidden` / `archived` (`{sessionId, hidden?, archived?}`)                   |
+| `POST /api/stash/ingest`                          | Chunk → embed → index a stored doc (`{sessionId, docId, chunk?, embedding?}`)      |
+| `GET /api/stash/search?sessionId=&q=&k=`          | KNN similarity search over a session's chunks (hidden/archived documents excluded) |
 
 The **client** never calls these directly: `app/src/lib/api-client.ts` owns the
 URLs, request/response types and error contract (#226 B4), and
@@ -115,7 +115,9 @@ The Data Stash adapts to the agent's harness composition:
 
 **The gate.** `POST /api/stash/upload`, after storing, resolves the session's agent (`loadSession` → `getOrBuildPatterns`) and checks `harnessHasRedisRetriever(patterns)` — static introspection in `packages/harness-patterns/pattern-capabilities.ts` that walks `ConfiguredPattern.children` (the combinators — `routes`, `chain`, `withReferences`, `withSandbox` — all expose them). On a match it marks the doc `ingestStatus: 'pending'` and ingests **in the background** (the response returns immediately — embedding a large doc takes seconds). Base64 binaries are skipped (`failed`) — unless [document conversion](#document-conversion) is on and the type is convertible, in which case they're converted to markdown first. Best-effort: any failure leaves the `201` untouched.
 
-**Safety net.** Docs uploaded _before_ the agent was known (session not yet persisted) miss the gate. The redis backend runs `ensureSessionIngested` on its first search per session (idempotent via `ingestStatus`), so they still become searchable on first retrieval.
+**Safety net.** Docs uploaded _before_ the agent was known (session not yet persisted) miss the gate. The redis backend runs `ensureSessionIngested` on its first search per session (idempotent via `ingestStatus`), so they still become searchable on first retrieval. It skips hidden and archived documents, and re-runs on a later search while it has skipped any, so a document un-hidden afterwards is indexed then.
+
+**Hidden and archived documents are not retrievable.** The flags mean "excluded from the agent's context", and hiding or archiving only rewrites the document's JSON — its chunks stay in the vector index. So `searchDocuments` (and therefore the `redis` backend and `GET /api/stash/search`) drops every hit whose document is hidden or archived, reading the document's **current** flags on each search (never the cached list or a copy taken at ingest). A document whose flags cannot be read, or whose record is absent, is dropped too, and the reason is logged. When that filter leaves fewer than `k` hits, the index is asked for a wider window, up to 200 chunks, so flagged chunks do not crowd visible matches out; visible matches ranked beyond the 200th chunk are not returned. Because the chunks are kept, un-hiding makes a document retrievable again at once, with no re-ingest.
 
 **The pattern** (`packages/harness-patterns/patterns/retriever.server.ts`) is framework-pure: it forms ONE query, fans it out to injected `RetrieverBackend`s concurrently (per-backend error isolation), merges hits closest-first capped at `k`, sets `scope.data.matches`, and emits a `tool_result` the compactExecution consumes. It's a low-latency alternative to a tool-calling `simpleLoop` — one embed + KNN instead of a >30s LLM loop. Typical wiring (see `packages/agents/agents/retriever-agent.server.ts`):
 
@@ -133,7 +135,7 @@ compactExecution({ mode: 'thread', synthesize: baml.synthesize }),
 
 **Backends** (`packages/harness-patterns/retriever/`) implement `RetrieverBackend { name, type, search() }`:
 
-- **`redis`** (`createRedisBackend`, `type: 'vector'`) — wraps `searchDocuments` (local Data Stash KNN), embedding the query locally with the corpus's recorded model. **Live.**
+- **`redis`** (`createRedisBackend`, `type: 'vector'`) — wraps `searchDocuments` (local Data Stash KNN, hidden/archived documents excluded), embedding the query locally with the corpus's recorded model. **Live.**
 - **`supabase`** (`createSupabaseBackend`, `type: 'vector'`) — the company pgvector corpus via the **Supabase MCP** server; **text-in** (Supabase embeds server-side via Automatic Embeddings / Edge Functions, so no client-side embedding and no OpenAI provider here). **Deferred stub** pending IT access: when `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` land, add the Supabase MCP to `configs/custom-catalog.yaml` and implement `search()` against its match RPC. Until then `search()` throws and the retriever's per-backend guard turns it into an empty result + error event — a misconfigured backend never sinks a run.
 
 The `type` field distinguishes vector backends from future non-vector ones (web keyword, neo4j graph, raw SQL) — only `vector` backends embed.

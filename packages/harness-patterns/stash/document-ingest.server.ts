@@ -32,6 +32,7 @@ import {
   DEFAULT_TTL_SECONDS,
   deleteDocument,
   getDocument,
+  getDocumentStrict,
   listDocuments,
   listSessionDocumentIds,
   parseKeyList,
@@ -471,18 +472,30 @@ async function markIngestStatus(
  * it — re-ingesting would double the work and contend on the serial gateway),
  * and non-convertible `base64` binaries. A fully-indexed corpus costs
  * just one `listDocuments`.
+ *
+ * Also skips documents the user hid or archived: those are excluded from the
+ * agent's context, so there is nothing to make searchable. They are picked up by
+ * a later run once un-hidden (their status is still absent or `'failed'`).
+ * Returns how many flagged documents it left unindexed, so a caller that runs
+ * this once can run it again after the flags change.
  */
 export async function ensureSessionIngested(
   sessionId: string,
   opts: IngestOptions = {},
-): Promise<void> {
+): Promise<{ skippedFlagged: number }> {
   const callTool = opts.callTool ?? resolveStashCallTool()
   const metas = await listDocuments(sessionId, callTool)
+  let skippedFlagged = 0
   for (const m of metas) {
     if (m.ingestStatus === 'indexed' || m.ingestStatus === 'pending') continue
     // Skip binaries we can't turn into text; convertible ones (with conversion
     // enabled) fall through to ingestStashDocument, which converts them.
     if (m.encoding === 'base64' && !(conversionEnabled() && isConvertible(m.mimeType))) continue
+    // Counted only once everything else says it would be ingested.
+    if (m.hidden || m.archived) {
+      skippedFlagged++
+      continue
+    }
     // `ingestStashDocument` is documented not to throw, and now enforces that
     // for its own status writes — but this loop is the safety net for a whole
     // corpus and must not lose documents 3..N to an unexpected throw on
@@ -496,17 +509,74 @@ export async function ensureSessionIngested(
       )
     }
   }
+  return { skippedFlagged }
 }
 
 // ============================================================================
 // Search
 // ============================================================================
 
+/** Most chunks one search will ask the index for while looking past hits that are
+ *  filtered out (see {@link searchDocuments}). */
+const MAX_SEARCH_SPAN = 200
+
+/** Document flag reads in flight at once while filtering one batch of hits. */
+const FLAG_READ_CONCURRENCY = 4
+
+/**
+ * Whether a document may reach the agent's context: neither hidden nor archived,
+ * judged by its CURRENT flags. The flags are read from the stored document
+ * rather than from the cached {@link listDocuments} result or from the chunk's
+ * own payload, because both can be older than the user's last hide/archive.
+ *
+ * Fails closed: a document whose flags cannot be read, whose record is absent
+ * (chunks outlive the record they name), or a chunk that names no document, is
+ * treated as not visible, and the reason is logged.
+ */
+async function isDocumentVisible(
+  sessionId: string,
+  docId: string,
+  callTool: CallTool,
+): Promise<boolean> {
+  if (!docId) {
+    console.warn(
+      `[ingest] dropped a search hit with no document id for session ${sessionId} ` +
+        '— its hidden/archived flags cannot be checked.',
+    )
+    return false
+  }
+  try {
+    const doc = await getDocumentStrict(sessionId, docId, callTool)
+    if (!doc) {
+      console.warn(
+        `[ingest] dropped search hits of document ${docId} for session ${sessionId}: ` +
+          'its record is absent, so its hidden/archived flags cannot be checked.',
+      )
+      return false
+    }
+    return !(doc.hidden || doc.archived)
+  } catch (err) {
+    console.warn(
+      `[ingest] dropped search hits of document ${docId} for session ${sessionId}: ` +
+        `its hidden/archived flags could not be read (${err instanceof Error ? err.message : String(err)}).`,
+    )
+    return false
+  }
+}
+
 /**
  * Embed `query` with the session's recorded model and KNN-search its index.
  * Returns [] when the session has no ingested corpus yet. The query is always
  * embedded with the *recorded* provider/model, and {@link assertSameSpace}
  * re-checks dimensionality — a search can never compare across embedding spaces.
+ *
+ * Hits of hidden or archived documents are dropped (see {@link isDocumentVisible}):
+ * hiding a document does not remove its chunks from the index, so the flags are
+ * honoured here, at search time, which is also what makes un-hiding instant.
+ * Since filtered hits would otherwise shrink the answer below `k` while visible
+ * matches remain, the index is asked for a wider span until `k` visible hits are
+ * found, the index runs out, or the span reaches {@link MAX_SEARCH_SPAN} chunks;
+ * visible matches ranked beyond that ceiling are not returned.
  */
 export async function searchDocuments(
   sessionId: string,
@@ -533,26 +603,53 @@ export async function searchDocuments(
     dim: recorded.dimensions,
     callTool,
   })
-  const hits = await store.search(q.vector, opts.k ?? 5)
 
-  const out: SearchHit[] = []
-  for (const h of hits) {
-    const content = str(h.payload.content)
-    if (content == null) continue
-    out.push({
-      docId: str(h.payload.doc_id) ?? '',
-      ...(h.payload.provenance === 'sandbox-output'
-        ? { provenance: 'sandbox-output' as const }
-        : {}),
-      source: str(h.payload.source) ?? '',
-      chunkIndex: num(h.payload.chunk_index) ?? 0,
-      content,
-      startOffset: num(h.payload.start_offset),
-      endOffset: num(h.payload.end_offset),
-      score: h.score,
-    })
+  const k = opts.k ?? 5
+  // One flag read per document per search, however many spans are tried.
+  const visibility = new Map<string, Promise<boolean>>()
+  const visible = (docId: string) => {
+    let v = visibility.get(docId)
+    if (!v) visibility.set(docId, (v = isDocumentVisible(sessionId, docId, callTool)))
+    return v
   }
-  return out
+
+  let span = k
+  for (;;) {
+    const hits = await store.search(q.vector, span)
+
+    // Resolve this batch's distinct documents up front, a few at a time, so the
+    // loop below only awaits settled answers.
+    const pending = [...new Set(hits.map((h) => str(h.payload.doc_id) ?? ''))].filter(
+      (id) => !visibility.has(id),
+    )
+    for (let i = 0; i < pending.length; i += FLAG_READ_CONCURRENCY) {
+      await Promise.all(pending.slice(i, i + FLAG_READ_CONCURRENCY).map(visible))
+    }
+
+    const out: SearchHit[] = []
+    for (const h of hits) {
+      const content = str(h.payload.content)
+      if (content == null) continue
+      const docId = str(h.payload.doc_id) ?? ''
+      if (!(await visible(docId))) continue
+      out.push({
+        docId,
+        ...(h.payload.provenance === 'sandbox-output'
+          ? { provenance: 'sandbox-output' as const }
+          : {}),
+        source: str(h.payload.source) ?? '',
+        chunkIndex: num(h.payload.chunk_index) ?? 0,
+        content,
+        startOffset: num(h.payload.start_offset),
+        endOffset: num(h.payload.end_offset),
+        score: h.score,
+      })
+      if (out.length >= k) break
+    }
+
+    if (out.length >= k || hits.length < span || span >= MAX_SEARCH_SPAN) return out
+    span = Math.min(span * 2, MAX_SEARCH_SPAN)
+  }
 }
 
 function str(v: unknown): string | undefined {

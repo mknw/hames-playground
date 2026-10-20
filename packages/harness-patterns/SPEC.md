@@ -1574,6 +1574,14 @@ interface RetrieverBackend {
    (`tool: 'retriever'`) — the same channel `compactExecution` reads via
    `view.fromLastPattern()`.
 
+A backend returns only what the agent may see. The `redis` backend (via
+`searchDocuments`) drops hits of documents the user hid or archived, judged by
+the document's current flags, and drops a hit whose flags cannot be read or
+whose document record is absent (logged) rather than returning it; it looks at
+most 200 chunks deep for visible hits. Un-hiding makes the document retrievable
+again without re-indexing. A custom backend over the same data owns the same
+rule.
+
 Framework-pure: the concrete backends live in this package's `retriever/` behind
 the explicit `./retriever` subpath, opt-in like the stash (core-absorb PR-2 —
 `createRedisBackend` is live; `createSupabaseBackend` is a deferred stub). The

@@ -42,7 +42,9 @@ const saveConversation = vi.fn<(row: Record<string, unknown>) => Promise<string>
 const deleteConversations = vi.fn<(ids: string[], userId: string) => Promise<string[]>>(
   async (ids) => ids,
 )
-const releaseDeletedSessions = vi.fn<(ids: readonly string[]) => Promise<void>>(async () => {})
+const releaseDeletedSessions = vi.fn<(ids: readonly string[], userId: string) => Promise<void>>(
+  async () => {},
+)
 vi.mock('../../../lib/stash/release.server', () => ({ releaseDeletedSessions }))
 vi.mock('../../../lib/db/conversations.server', () => ({
   loadConversation,
@@ -367,11 +369,11 @@ describe('deleteSession', () => {
     expect(rebuilt).not.toBe(built)
   })
 
-  it('releases the stash of exactly the ids the database confirmed deleted', async () => {
+  it('releases exactly the ids the database confirmed deleted, for the deleting user', async () => {
     deleteConversations.mockResolvedValueOnce(['a'])
     expect(await deleteSessions(['a', 'b'], 'u1')).toEqual(['a'])
     expect(deleteConversations).toHaveBeenCalledWith(['a', 'b'], 'u1')
-    expect(releaseDeletedSessions).toHaveBeenCalledWith(['a'])
+    expect(releaseDeletedSessions).toHaveBeenCalledWith(['a'], 'u1')
   })
 
   it('releases the stash after the delete has returned, not before', async () => {
@@ -385,6 +387,13 @@ describe('deleteSession', () => {
     })
     await deleteSession('del-3', 'u1')
     expect(order).toEqual(['delete', 'release'])
+  })
+
+  it('resolves while the release is still pending', async () => {
+    releaseDeletedSessions.mockImplementationOnce(() => new Promise<void>(() => {}))
+    // MUTATION: `await` the release in `deleteSessions` → the delete never resolves (timeout).
+    await expect(deleteSessions(['a'], 'u1')).resolves.toEqual(['a'])
+    expect(releaseDeletedSessions).toHaveBeenCalledWith(['a'], 'u1')
   })
 
   it('does not release anything when the delete itself fails', async () => {

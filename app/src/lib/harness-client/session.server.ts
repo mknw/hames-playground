@@ -387,13 +387,14 @@ export async function deleteSession(sessionId: string, userId: string): Promise<
 }
 
 /**
- * Delete a batch of conversations and release what their sessions hold: the
- * claim inside the delete's transaction, the stash documents after it. The one
- * route both the single and the bulk delete take. Returns the ids deleted.
+ * Delete a batch of conversations, then release what their sessions hold (the
+ * stash, then the claim) in the background: the delete does not wait for it and
+ * it never throws. The one route both the single and the bulk delete take.
+ * Returns the ids deleted.
  */
 export async function deleteSessions(ids: string[], userId: string): Promise<string[]> {
   const deleted = await deleteConversations(ids, userId)
-  await releaseDeletedSessions(deleted)
+  void releaseDeletedSessions(deleted, userId)
   return deleted
 }
 

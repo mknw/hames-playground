@@ -159,10 +159,25 @@ describe('deleteSessionStash', () => {
     await stash(fake, 's*')
     await stash(fake, 'sa')
     await deleteSessionStash('s*', fake.callTool)
-    const scan = fake.calls.find(([n]) => n === 'scan_all_keys')!
-    expect(scan[1].pattern).toBe('stashvec:s\\*:*')
+    const scans = fake.calls.filter(([n]) => n === 'scan_all_keys').map(([, a]) => a.pattern)
+    expect(scans).toEqual(['stash:doc:s\\*:*', 'stashvec:s\\*:*'])
     expect([...fake.keys.keys()].every((k) => !k.includes('s*'))).toBe(true)
     expect([...fake.keys.keys()].some((k) => k.startsWith('stashvec:sa:'))).toBe(true)
+  })
+
+  it("removes a document key the index no longer lists, and no sibling session's", async () => {
+    const doc = await stash(fake, 's1')
+    const sibling = await stash(fake, 's1:x')
+    // The state `deleteDocument` leaves when the index write succeeds and the
+    // key delete does not: key present, index entry gone.
+    fake.sets.delete('stash:docs:s1')
+    await deleteSessionStash('s1', fake.callTool)
+    // MUTATION: drop the `unindexed documents` step → red.
+    expect(fake.keys.has(`stash:doc:s1:${doc.id}`)).toBe(false)
+    // MUTATION: drop `DOC_REMAINDER` from the filter → red (the sibling's key
+    // `stash:doc:s1:x:{id}` shares the prefix).
+    expect(fake.keys.has(`stash:doc:s1:x:${sibling.id}`)).toBe(true)
+    expect(await listSessionDocumentIds('s1:x', fake.callTool)).toEqual([sibling.id])
   })
 
   it('is idempotent: a second clear finds nothing and succeeds', async () => {
@@ -181,6 +196,31 @@ describe('deleteSessionStash', () => {
     // The chunks and the space went even though the document delete failed.
     expect([...fake.keys.keys()].some((k) => k.startsWith('stashvec:'))).toBe(false)
     expect(fake.keys.has('stash:space:s1')).toBe(false)
+  })
+
+  it.each([
+    ['chunk', 'stashvec:'],
+    ['embedding space', 'stash:space:'],
+  ])('reports a rejected delete of a %s key', async (what, prefix) => {
+    await stash(fake, 's1')
+    fake.failOn((name, args) =>
+      name === 'delete' && String(args.key).startsWith(prefix) ? 'refused' : null,
+    )
+    // MUTATION: delete the `if (err) throw new Error(err)` line in `dropKey` → red.
+    await expect(deleteSessionStash('s1', fake.callTool)).rejects.toThrow(
+      new RegExp(`${what}.*refused`),
+    )
+  })
+
+  it('reports a delete that answers with an ERROR payload instead of failing', async () => {
+    await stash(fake, 's1')
+    const inner = fake.callTool
+    const erroring: CallTool = async (name, args) =>
+      name === 'delete' && String(args.key).startsWith('stashvec:')
+        ? { success: true, data: 'ERROR WRONGTYPE nope' }
+        : inner(name, args)
+    // MUTATION: ignore `redisWriteError`'s data check in `dropKey` → red.
+    await expect(deleteSessionStash('s1', erroring)).rejects.toThrow(/chunk .*ERROR WRONGTYPE/)
   })
 
   it('reports an unreadable index or a failed scan instead of passing for empty', async () => {

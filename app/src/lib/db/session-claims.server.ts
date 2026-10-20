@@ -12,9 +12,10 @@
  *     `ON CONFLICT` only re-targets a row that is already the caller's (or has
  *     expired), so a concurrent claim by a second user returns the first user.
  *   - Claims expire. `expires_at` mirrors the Data Stash document TTL
- *     (`DEFAULT_TTL_SECONDS`), refreshed on every claim, so a claim outlives the
- *     documents it scopes but not indefinitely. Expired rows read as absent and
- *     are reused in place by the next claim.
+ *     (`DEFAULT_TTL_SECONDS`), refreshed on every claim. Expired rows read as
+ *     absent and are reused in place by the next claim.
+ *   - Deleting a conversation releases its claim once the session's stash has
+ *     been cleared; a stash that could not be cleared keeps the claim.
  *
  * The `conversations` row is the long-lived ownership record; this table is the
  * bridge that covers the pre-persistence window. See
@@ -22,7 +23,7 @@
  */
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
-import { query, type TxQuery } from './client.server'
+import { query } from './client.server'
 
 assertServerOnImport()
 
@@ -65,19 +66,13 @@ export async function claimSession(
 }
 
 /**
- * Delete the claims `userId` holds on these sessions. Runs on the caller's
- * transaction (the conversation delete's), so the claim leaves exactly when the
- * conversation row does. Scoped to the holder: a claim another user holds is
- * left untouched.
+ * Delete the claim `userId` holds on a session. Scoped to the holder: a claim
+ * another user holds is left untouched. Called only once the session's stash has
+ * been cleared (`lib/stash/release.server.ts`).
  */
-export async function releaseSessionClaims(
-  sessionIds: readonly string[],
-  userId: string,
-  tx: TxQuery,
-): Promise<void> {
-  if (sessionIds.length === 0) return
-  await tx.query('DELETE FROM session_claims WHERE session_id = ANY($1) AND user_id = $2', [
-    [...sessionIds],
+export async function releaseSessionClaim(sessionId: string, userId: string): Promise<void> {
+  await query('DELETE FROM session_claims WHERE session_id = $1 AND user_id = $2', [
+    sessionId,
     userId,
   ])
 }

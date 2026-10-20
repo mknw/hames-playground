@@ -36,6 +36,7 @@ import {
   listSessionDocumentIds,
   parseKeyList,
   redisWriteError,
+  sessionDocKeyPrefix,
   setDocumentFlags,
   type CallTool,
   type IngestStatus,
@@ -267,10 +268,15 @@ function escapeGlob(s: string): string {
  *  session whose id merely starts with this one, and is never ours to delete. */
 const CHUNK_REMAINDER = /^[^:]+:[^:]+:\d+$/
 
+/** Document keys are `stash:doc:{session}:{docId}`; after the session prefix
+ *  exactly one `:`-free part remains. Same prefix-safety as {@link CHUNK_REMAINDER}. */
+const DOC_REMAINDER = /^[^:]+$/
+
 /**
  * Remove everything a session holds in the stash: each indexed document (via
- * {@link deleteDocument}, which also drops its index entry), every chunk
- * record, and the recorded embedding space. Idempotent, and attempts every
+ * {@link deleteDocument}, which also drops its index entry), any document key
+ * the index no longer lists, every chunk record, and the recorded embedding
+ * space. Idempotent, and attempts every
  * step before reporting: a failure partway still deletes whatever it can.
  *
  * @throws one error naming each step that failed (after all were attempted).
@@ -291,6 +297,11 @@ export async function deleteSessionStash(
     const err = redisWriteError(await callTool('delete', { key }))
     if (err) throw new Error(err)
   }
+  const scanKeys = async (pattern: string): Promise<string[]> => {
+    const scan = await callTool('scan_all_keys', { pattern, batch_size: 500 })
+    if (!scan.success) throw new Error(scan.error ?? 'scan failed')
+    return parseKeyList(scan.data)
+  }
 
   await attempt('documents', async () => {
     for (const id of await listSessionDocumentIds(sessionId, callTool)) {
@@ -298,14 +309,20 @@ export async function deleteSessionStash(
     }
   })
 
+  // Documents whose index entry is already gone (a half-finished delete, a
+  // failed index write after the store) are invisible to the index read above,
+  // so the keyspace is scanned for them too.
+  const docPrefix = sessionDocKeyPrefix(sessionId)
+  await attempt('unindexed documents', async () => {
+    for (const key of await scanKeys(`${escapeGlob(docPrefix)}*`)) {
+      if (!key.startsWith(docPrefix) || !DOC_REMAINDER.test(key.slice(docPrefix.length))) continue
+      await attempt(`document ${key}`, () => dropKey(key))
+    }
+  })
+
   const chunkPrefix = `stashvec:${sessionId}:`
   await attempt('chunks', async () => {
-    const scan = await callTool('scan_all_keys', {
-      pattern: `stashvec:${escapeGlob(sessionId)}:*`,
-      batch_size: 500,
-    })
-    if (!scan.success) throw new Error(scan.error ?? 'scan failed')
-    for (const key of parseKeyList(scan.data)) {
+    for (const key of await scanKeys(`stashvec:${escapeGlob(sessionId)}:*`)) {
       if (!key.startsWith(chunkPrefix) || !CHUNK_REMAINDER.test(key.slice(chunkPrefix.length))) {
         continue
       }

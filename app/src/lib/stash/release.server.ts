@@ -1,34 +1,73 @@
 /**
  * Data Stash session release — Server Only
  *
- * What a deleted conversation leaves behind in the stash: its documents, chunk
- * records and embedding space in Redis. The session's claim is not handled
- * here — it leaves in the conversation delete's own transaction
- * (`releaseSessionClaims`); this runs after that commit.
+ * What a deleted conversation leaves behind: its documents, chunk records and
+ * embedding space in Redis, and the session's claim in Postgres. Runs after the
+ * conversation delete has committed and off the request path (`deleteSessions`
+ * does not await it).
  *
- * Best-effort by contract: the conversation is already gone, so a purge that
- * fails is logged and never thrown, and the delete still reports success.
+ * Per session the stash is cleared FIRST and the claim dropped only if that
+ * fully succeeded. A failed or partial clear keeps the claim, so whatever is
+ * left stays attributed to the user who deleted the conversation, and the
+ * failure is logged.
+ *
+ * Best-effort by contract: the conversation is already gone, so nothing here
+ * is ever thrown.
  */
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { deleteSessionStash } from '@hames-ai/harness-patterns/stash/document-ingest.server'
-import { getSessionClaimOwner } from '../db/session-claims.server'
+import { getSessionClaimOwner, releaseSessionClaim } from '../db/session-claims.server'
 
 assertServerOnImport()
 
+/** Sessions released at once; a bulk delete is up to 200. */
+export const RELEASE_CONCURRENCY = 4
+/** After this long no further session is started; the rest keep their claims. */
+export const RELEASE_DEADLINE_MS = 60_000
+
+const message = (err: unknown) => (err instanceof Error ? err.message : String(err))
+
+async function releaseOne(sessionId: string, userId: string): Promise<void> {
+  try {
+    // A session another user holds a claim on is theirs to clear.
+    const owner = await getSessionClaimOwner(sessionId)
+    if (owner && owner !== userId) return
+    await deleteSessionStash(sessionId)
+    // Only reached when the clear fully succeeded.
+    await releaseSessionClaim(sessionId, userId)
+  } catch (err) {
+    console.error(
+      `[stash] could not clear the stash of deleted session ${sessionId}; its claim is kept:`,
+      message(err),
+    )
+  }
+}
+
 /**
- * Clear the stash of each session whose conversation was just deleted. A
- * session still held by a live claim is someone else's and is left alone: the
- * deleter's own claim was already removed with the row.
+ * Release each session whose conversation `userId` just deleted. Never throws.
  */
-export async function releaseDeletedSessions(sessionIds: readonly string[]): Promise<void> {
-  for (const sessionId of sessionIds) {
-    try {
-      if (await getSessionClaimOwner(sessionId)) continue
-      await deleteSessionStash(sessionId)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      console.error(`[stash] could not clear the stash of deleted session ${sessionId}:`, msg)
+export async function releaseDeletedSessions(
+  sessionIds: readonly string[],
+  userId: string,
+): Promise<void> {
+  try {
+    const queue = [...sessionIds]
+    const deadline = Date.now() + RELEASE_DEADLINE_MS
+    const worker = async () => {
+      for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
+        if (Date.now() > deadline) {
+          console.error(
+            `[stash] release deadline reached; ${queue.length + 1} deleted session(s) not cleared, claims kept`,
+          )
+          queue.length = 0
+          return
+        }
+        await releaseOne(id, userId)
+      }
     }
+    await Promise.all(Array.from({ length: Math.min(RELEASE_CONCURRENCY, queue.length) }, worker))
+  } catch (err) {
+    console.error('[stash] session release failed:', message(err))
   }
 }

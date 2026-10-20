@@ -26,7 +26,6 @@ import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { query, withTransaction } from './client.server'
 import { deleteHitlRowsForConversations } from './hitl.server'
 import { deleteMemoriesForConversations } from './memories.server'
-import { releaseSessionClaims } from './session-claims.server'
 import type { QueryRunner } from './migrate-encryption.server'
 import { SETTINGS_BOUNDS } from '../settings'
 import {
@@ -1149,9 +1148,10 @@ export async function listConversationEvents(userId: string): Promise<Conversati
 }
 
 /**
- * Delete a conversation. No-op when the id doesn't belong to the user. Releases
- * the session's claim but not its stash documents: callers that go through
- * `deleteSessions` (`harness-client/session.server.ts`) get both.
+ * Delete a conversation. No-op when the id doesn't belong to the user. Removes
+ * the conversation rows only: the session's stash and claim are released by
+ * `deleteSessions` (`harness-client/session.server.ts`), which callers go
+ * through.
  */
 export async function deleteConversation(id: string, userId: string): Promise<void> {
   await deleteConversations([id], userId)
@@ -1185,11 +1185,7 @@ export async function deleteConversations(ids: string[], userId: string): Promis
       'DELETE FROM conversations WHERE id = ANY($1) AND user_id = $2 RETURNING id',
       [ids, userId],
     )
-    const deleted = rows.map((r) => r.id)
-    // The session's claim goes with its conversation, in the same transaction.
-    // Only ids the owner-scoped DELETE above actually removed reach this line.
-    await releaseSessionClaims(deleted, userId, tx)
-    return deleted
+    return rows.map((r) => r.id)
   })
 }
 

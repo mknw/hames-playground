@@ -22,6 +22,12 @@ export interface ConversationScenario {
   /** What a real run of the task leaves behind in the synthetic sandbox: the stdout its
    * script prints and the content of each artifact. Default stdout names the saved paths. */
   sandboxRun?: { stdout: string; files?: Record<string, string> }
+  /** A deliverable that is a transcription, not a computation: the file may be produced
+   * by `sandbox_write` to `/work/out/<name>` instead of a `sandbox_bash` run, because
+   * production promotes any file under `/work/out` at turn exit. Maps each such file to
+   * the predicate its written bytes must meet; only these files, and only this way, are
+   * credited. Absent = `sandbox_bash` is the only acceptable producer (a computation). */
+  writtenArtifacts?: Record<string, (content: string) => boolean>
   forbiddenTools: string[]
   maxIterations: number
   failFirstTurn?: boolean

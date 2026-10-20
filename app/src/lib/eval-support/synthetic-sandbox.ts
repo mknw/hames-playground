@@ -9,14 +9,17 @@
  * Production promotes any new or changed file under /work/out to an artifact at turn exit
  * (`promoteOutputs`, `packages/sandbox/work-artifacts.server.ts:164-197`, called from
  * `with-sandbox.server.ts:841`), whichever tool wrote it. Here an accepted shell request
- * records the scenario's artifacts, and a `sandbox_write` to `/work/out/<name>` records one
- * ONLY for a scenario that declares `writtenArtifacts` (a transcription, not a computation)
- * and only when the written text meets that file's predicate; the last write of a file
- * decides, as the exit-time diff would. A write anywhere else, to a subdirectory, of empty
- * or wrong text, or in any other scenario is not credited.
+ * records the scenario's artifacts, and a `sandbox_write` or `sandbox_edit` of `/work/out/<name>`
+ * records one ONLY for a scenario that declares `writtenArtifacts` (a transcription, not a
+ * computation) and only when the file's resulting text meets that file's predicate; the
+ * last change of a file decides, as the exit-time diff over its final bytes would. A write
+ * anywhere else, to a subdirectory, of empty or wrong text, or in any other scenario is not
+ * credited.
  *
- * Not modelled: `cd`, `ls` on files or in long format, multi-file `head` headers, and
- * pipe output. */
+ * Not modelled: `rm`, `mv` and in-place shell edits of a credited file (the synthetic shell
+ * cannot run arbitrary commands; production's exit-time `find` would not see a deleted
+ * file, and `diffWorkFiles` ignores deletions, `work-sync.server.ts:168-177`), `cd`, `ls` on
+ * files or in long format, multi-file `head` headers, and pipe output. */
 import type { MCPToolDescription, ToolTransport } from '@hames-ai/harness-patterns'
 import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
 import { sandboxShapeError, type ArgsPredicate } from './tool-arguments'
@@ -188,8 +191,9 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
 
   const record = (file: string, text: string) => {
     state.documents.set(file, text)
-    state.trace()?.artifacts.push(file)
-    if (file.endsWith('.md')) state.trace()?.indexed.push(file)
+    const trace = state.trace()
+    if (trace && !trace.artifacts.includes(file)) trace.artifacts.push(file)
+    if (trace && file.endsWith('.md') && !trace.indexed.includes(file)) trace.indexed.push(file)
   }
   /** The file's last write is not a deliverable (any more): what the exit-time diff would
    * promote is that write, so an earlier credit for the same file is withdrawn. */
@@ -291,6 +295,8 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
           next = next.replace(e.oldText, () => e.newText as string)
         }
         written.set(path, next)
+        // The bytes production would promote are the file's FINAL ones: re-judge them.
+        valid = judgeWrite(path, next)
         return ok(`Edited ${path}`)
       }
       if (name === 'sandbox_list') {

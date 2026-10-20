@@ -230,6 +230,99 @@ describe('what a write must still be to count (every shape below stays rejected)
   })
 })
 
+describe('a later sandbox_edit is judged on the file’s final bytes, as production would promote them', () => {
+  const edit = (oldText: string, newText: string, path = LAUNCH) => ({
+    path,
+    edits: [{ oldText, newText }],
+  })
+
+  it('withdraws the credit when an edit breaks a good checklist', async () => {
+    const { call, readMail, trace, documents, failed } = rig()
+    readMail()
+    await call('sandbox_write', RECORDED_WRITE)
+    expect((await call('sandbox_edit', edit('Publish notes', 'nothing'))).success).toBe(true)
+    expect(trace.tools.map((t) => t.valid)).toEqual([undefined, true, false])
+    expect((await call('sandbox_read', { path: LAUNCH })).data).toContain('- [ ] nothing')
+    expect(trace.artifacts).toEqual([])
+    expect(trace.indexed).toEqual([])
+    expect(documents.has('lantern-launch.md')).toBe(false)
+    expect(failed()).toEqual(['stash artifact: lantern-launch.md'])
+  })
+
+  it('credits a draft an edit then repairs (write bad, edit good)', async () => {
+    const { call, readMail, trace, failed } = rig()
+    readMail()
+    await call('sandbox_write', {
+      path: LAUNCH,
+      content: '- [ ] Verify CSV export\n- [ ] TODO\n',
+    })
+    expect(trace.artifacts).toEqual([])
+    await call('sandbox_edit', edit('TODO', 'Publish notes'))
+    expect(trace.tools.at(-1)).toMatchObject({ name: 'sandbox_edit', success: true, valid: true })
+    expect(trace.artifacts).toEqual(['lantern-launch.md'])
+    expect(trace.indexed).toEqual(['lantern-launch.md'])
+    expect(failed()).toEqual([])
+  })
+
+  it('credits nothing for an edit in a scenario that declares no deliverable', async () => {
+    const { call, trace, failed } = rig(csv)
+    const totals = '/work/out/lantern-totals.csv'
+    await call('sandbox_write', { path: totals, content: 'region,revenue\n' })
+    await call('sandbox_edit', edit('revenue', 'revenue\nNorth,47', totals))
+    expect(trace.tools.at(-1)?.valid).toBeUndefined()
+    expect(trace.artifacts).toEqual([])
+    expect(failed(csv)).toContain('successful ordered tool: sandbox_bash')
+  })
+
+  it('leaves an existing credit alone when an edit touches some other file', async () => {
+    const { call, readMail, trace, failed } = rig()
+    readMail()
+    await call('sandbox_write', RECORDED_WRITE)
+    await call('sandbox_write', { path: '/work/out/other.md', content: 'a' })
+    await call('sandbox_edit', edit('a', 'b', '/work/out/other.md'))
+    expect(trace.tools.at(-1)?.valid).toBe(false)
+    expect(trace.artifacts).toEqual(['lantern-launch.md'])
+    expect(failed()).toEqual([])
+  })
+
+  it('leaves the credit alone when the edit itself fails (the bytes are unchanged)', async () => {
+    const { call, readMail, trace, failed } = rig()
+    readMail()
+    await call('sandbox_write', RECORDED_WRITE)
+    expect((await call('sandbox_edit', edit('no such text', 'x'))).success).toBe(false)
+    expect(trace.tools.at(-1)?.valid).toBeUndefined()
+    expect(trace.artifacts).toEqual(['lantern-launch.md'])
+    expect(failed()).toEqual([])
+  })
+
+  it('does not let a sandbox_edit stand in for the shell step in a scenario without the declaration', () => {
+    const { trace, failed } = rig(csv)
+    trace.tools.push({
+      name: 'sandbox_edit',
+      args: edit('a', 'b'),
+      success: true,
+      turn: 0,
+      valid: true,
+    })
+    expect(failed(csv)).toContain('successful ordered tool: sandbox_bash')
+  })
+
+  it('records a file once however many good writes credit it', async () => {
+    const { call, readMail, trace } = rig()
+    readMail()
+    await call('sandbox_write', RECORDED_WRITE)
+    await call('sandbox_write', { path: LAUNCH, content: `${RECORDED_WRITE.content}\n` })
+    expect(trace.artifacts).toEqual(['lantern-launch.md'])
+    expect(trace.indexed).toEqual(['lantern-launch.md'])
+  })
+
+  it('names the shell mutations it does not model (rm, mv, in-place edits of a credited file)', () => {
+    expect(read('src/lib/eval-support/synthetic-sandbox.ts')).toMatch(
+      /Not modelled:[^]*`rm`, `mv` and in-place shell edits of a credited file/,
+    )
+  })
+})
+
 describe('the computing scenarios keep sandbox_bash as their only producer', () => {
   it('credits no write in a scenario that declares no written deliverable', async () => {
     const { call, trace, failed } = rig(csv)

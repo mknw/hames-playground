@@ -168,7 +168,7 @@ User: “Find the Lantern launch email in my inbox. Turn its checklist into lant
 
 Expected assistant: lantern-launch.md contains the launch checklist from mail fixture mail-lantern-1.
 
-Expected routes: `office-data`. Expected tools: `graph_mail_recent`, `sandbox_bash`.
+Expected routes: `office-data`. Expected tools: `graph_mail_recent`, `sandbox_bash`; the shell step is also met by a `sandbox_write` to `/work/out/lantern-launch.md` whose text carries both checklist items (the checklist is transcribed, not computed, and production promotes any file under `/work/out` at turn exit). The file's final bytes decide, as the exit-time diff would: a later `sandbox_write` or `sandbox_edit` that breaks the checklist withdraws the credit and one that repairs it earns it. A write outside `/work/out`, to `/work/in` or a subdirectory, under another name, empty, or lacking an item is not credited. Not modelled: `rm`, `mv` and in-place shell edits of a credited file. Scenarios 10, 14 and 17 compute, so `sandbox_bash` stays their only producer.
 
 Pass: all listed tools occur successfully in order (across the same conversation); candidate only: each listed route selects a child that completes without error before its turn’s `answer`; final answer carries lantern-launch.md; stash artifact(s) exist: lantern-launch.md; candidate only: chooses `answer` within 6 decisions per turn; no terminal error, empty response or ignored required check.
 

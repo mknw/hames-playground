@@ -157,6 +157,7 @@ endgroup
 
 group "9. site inputs a live host would supply"
 command -v ufw >/dev/null || apt-get install -y -qq ufw >/dev/null  # installed inactive, as preflight reads it
+apt-get install -y -qq qemu-utils >/dev/null  # host qemu-img: preflight reads the image (live host: change A)
 id sbxs-kvm >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin -G kvm sbxs-kvm
 printf '#!/bin/sh\n# Rehearsal only: a runner has no independent SSH path to witness.\nexit 0\n' > /usr/local/sbin/sbxs-witness
 chmod 0755 /usr/local/sbin/sbxs-witness

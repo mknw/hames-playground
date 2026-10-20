@@ -21,7 +21,7 @@ export interface SandboxFailure {
 
 const DO_NOT_RETRY =
   'The sandbox_* tools cannot run in this turn: do not call them again. ' +
-  'Continue with the other tools if the task allows it, and tell the user which part could not be done.'
+  'Continue with the other tools if the task allows it; otherwise finish now and tell the user which part could not be done.'
 
 const FAILURE_MESSAGE: Record<SandboxFailureReason, string> = {
   engine_unreachable: `The code workspace is unavailable on this server. ${DO_NOT_RETRY}`,

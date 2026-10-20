@@ -30,11 +30,16 @@ describe('in-VM tool descriptor table', () => {
   })
 
   it('restates every recorded descriptor under its exposed name', () => {
-    const asExposed = recorded.tools.map((t) => ({
-      name: exposedByNative.get(`${t.server}/${t.name}`),
-      description: t.description,
-      inputSchema: t.inputSchema,
-    }))
+    // A raw `tools/list` also carries `inputSchema.$schema` (and a top-level
+    // `execution`); the table states neither, so a raw re-record must still pass.
+    const asExposed = recorded.tools.map((t) => {
+      const { $schema: _draft, ...inputSchema } = t.inputSchema as Record<string, unknown>
+      return {
+        name: exposedByNative.get(`${t.server}/${t.name}`),
+        description: t.description,
+        inputSchema,
+      }
+    })
     expect(asExposed.every((t) => t.name !== undefined)).toBe(true)
     expect(asExposed).toEqual(IN_VM_TOOL_DESCRIPTORS)
   })
@@ -55,5 +60,13 @@ describe('in-VM tool descriptor table', () => {
     for (const arg of Object.keys(bash.inputSchema!.properties as Record<string, unknown>)) {
       expect(source).toMatch(new RegExp(`\\b${arg}: z`))
     }
+    // The argument descriptions state the server's defaults: both must be the ones
+    // the source computes, or the lazy prompt advertises a cwd/timeout that is gone.
+    const props = bash.inputSchema!.properties as Record<string, { description: string }>
+    const cwd = /Defaults to (\S+)\.$/.exec(props.cwd.description)![1]
+    const timeout = /Defaults to (\d+)\.$/.exec(props.timeout_ms.description)![1]
+    expect(source).toContain(`process.env.WORK_DIR || '${cwd}'`)
+    const sourceTimeout = /SHELL_TIMEOUT_MS \|\| ([\d_]+)/.exec(source)![1].replace(/_/g, '')
+    expect(Number(sourceTimeout)).toBe(Number(timeout))
   })
 })

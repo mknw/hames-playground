@@ -192,7 +192,8 @@ export interface WithSandboxConfig {
    *  - The prompt lists {@link IN_VM_TOOL_DESCRIPTORS} (a package-static table)
    *    rather than what the booted servers reported — there is no VM to ask.
    *  - With `skills`, the index appears on the prompt only after the first boot has
-   *    mounted them; until then the prompt carries {@link SKILLS_PENDING_NOTICE}.
+   *    mounted them; until then the prompt carries {@link SKILLS_PENDING_NOTICE}, and after
+   *    a failed boot nothing (that list will not come).
    *  - Concurrent first calls share ONE boot, and a failed boot is remembered for
    *    the rest of the run (the next turn tries again), so a retrying actor costs
    *    one failed boot, not one per attempt.
@@ -1013,6 +1014,8 @@ async function runWithLazyIdAttachment<T>(run: LazyRun<T>): Promise<PatternScope
   const { scope, view, pattern, sessionId, skills } = run
   let boot: Promise<LazyBoot> | undefined
   let live: LazyLive | undefined
+  // Set by a failed boot: the pending notice promises a list that will now never come.
+  let failed = false
 
   const doBoot = async (): Promise<LazyBoot> => {
     let slot: { release(): void } | undefined
@@ -1032,6 +1035,7 @@ async function runWithLazyIdAttachment<T>(run: LazyRun<T>): Promise<PatternScope
         `[sandbox] lazy boot failed for session ${sessionId}: ` +
           (err instanceof Error ? err.message : String(err)),
       )
+      failed = true
       if (att) run.resolveResources().attachments.release(att)
       slot?.release()
       return { ok: false, failure: classifySandboxFailure(err) }
@@ -1050,9 +1054,11 @@ async function runWithLazyIdAttachment<T>(run: LazyRun<T>): Promise<PatternScope
       if (!booted.ok) return { success: false, data: null, error: booted.failure.message }
       return booted.live.att.transport.callTool(name, args)
     },
-    // Read per prompt: the pending notice until the boot lands, then the index.
+    // Read per prompt: the pending notice until the boot lands, then the index —
+    // and nothing after a failed boot, which has no skills to promise.
     get promptContext() {
-      return live ? live.index : skills ? SKILLS_PENDING_NOTICE : undefined
+      if (live) return live.index
+      return skills && !failed ? SKILLS_PENDING_NOTICE : undefined
     },
   }
 

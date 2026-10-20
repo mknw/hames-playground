@@ -8,7 +8,12 @@
  *     (red: boot per call);
  *   - an unavailable engine is a CLASSIFIED tool failure, and the synthesis input
  *     carries that sentence and not the engine's words (red: pass the raw error);
- *   - eager mode (`lazy` absent / false) is untouched.
+ *   - eager mode (`lazy` absent / false) is untouched;
+ *   - the exit releases the attachment (red: drop `attachments.release`), drains a
+ *     pending stash restore first (red: drop `restoring.close()`), and releases what a
+ *     boot still in flight acquired when the pattern throws (red: stop awaiting it);
+ *   - the skills notice is replaced by the index after a boot and withdrawn after a
+ *     failed one (red: drop the index / drop the `failed` flag).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
@@ -18,6 +23,7 @@ import {
   activeTransports,
   activeTransportContext,
 } from '@hames-ai/harness-patterns/tool-transport.server'
+import { currentRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import type { ConfiguredPattern, PatternScope, EventView } from '@hames-ai/harness-patterns/types'
 import { mockAction, mockCriticResult } from './fixtures/baml'
 
@@ -62,7 +68,7 @@ import { SandboxScheduler } from '../scheduler.server'
 import { AttachmentTable } from '../attachment-table.server'
 import { DockerBackend } from '../docker-backend.server'
 import { IN_VM_TOOL_DESCRIPTORS } from '../in-vm-tools'
-import { SKILLS_PENDING_NOTICE } from '../skills'
+import { SKILLS_PENDING_NOTICE, SKILLS_DIR, renderSkillsIndex } from '../skills'
 import type { ComputeBackend, McpTransport, VMHandle } from '../types'
 
 /** What a container engine says when its socket is missing — the words that must
@@ -234,6 +240,7 @@ describe('withSandbox({ lazy: true })', () => {
 
   it('boots on the first sandbox call, once, and later calls reuse that VM', async () => {
     const k = kit(fakeBackend())
+    const acquire = vi.spyOn(k.attachments, 'acquire')
     await runInFrame(() =>
       wrap(k)(
         inner(async (scope) => {
@@ -258,6 +265,9 @@ describe('withSandbox({ lazy: true })', () => {
     expect(artifacts.snapshotOutputs).toHaveBeenCalledTimes(1)
     expect(artifacts.promoteOutputs).toHaveBeenCalledTimes(1)
     expect(k.scheduler.inflightCount()).toBe(0)
+    // ...and so is the attachment: a refCount left at 1 can never be reaped.
+    expect(acquire).toHaveBeenCalledTimes(1)
+    expect((await acquire.mock.results[0].value).refCount).toBe(0)
   })
 
   it('two parallel first calls share ONE boot', async () => {
@@ -294,6 +304,67 @@ describe('withSandbox({ lazy: true })', () => {
     expect(artifacts.hydrateWorkspace).toHaveBeenCalledTimes(2)
   })
 
+  describe('the exit', () => {
+    it('drains a stash restore still pending when the pattern throws, before it releases', async () => {
+      const k = kit(fakeBackend())
+      const order: string[] = []
+      vi.spyOn(k.attachments, 'release').mockImplementation(() => {
+        order.push('release')
+      })
+      artifacts.hydrateWorkspace
+        .mockResolvedValueOnce({ written: 0, skipped: [], accounted: [] }) // the boot's own
+        .mockImplementationOnce(async () => {
+          await new Promise((r) => setTimeout(r, 30))
+          order.push('restore')
+          return { written: 0, skipped: [], accounted: ['doc-1'] }
+        })
+
+      await expect(
+        runInFrame(() =>
+          wrap(k)(
+            inner(async () => {
+              await callSandbox('sandbox_bash')
+              // A stash write inside a non-sandbox call, whose restore the pattern
+              // does not wait for before it throws.
+              const frame = currentRunFrame()!
+              for (const observe of frame.stashWriteObservers) {
+                observe({ sessionId: 'sess', documentId: 'doc-1', callId: 'call-1' })
+              }
+              void frame.afterToolCall[0](
+                { id: 'call-1', name: 'stash_write', args: {} },
+                { success: true, data: null },
+              )
+              throw new Error('pattern failed')
+            }),
+          ).fn(scopeOf({}), view),
+        ),
+      ).rejects.toThrow('pattern failed')
+
+      expect(artifacts.hydrateWorkspace).toHaveBeenCalledTimes(2)
+      expect(order).toEqual(['restore', 'release'])
+    })
+
+    it('releases what a boot still in flight acquired when the pattern throws mid-boot', async () => {
+      const k = kit(fakeBackend({ bootDelayMs: 30 }))
+      const acquire = vi.spyOn(k.attachments, 'acquire')
+      await expect(
+        runInFrame(() =>
+          wrap(k)(
+            inner(async () => {
+              void callSandbox('sandbox_bash')
+              await Promise.resolve()
+              throw new Error('pattern failed')
+            }),
+          ).fn(scopeOf({}), view),
+        ),
+      ).rejects.toThrow('pattern failed')
+
+      expect(k.backend.calls.boot).toBe(1)
+      expect(k.scheduler.inflightCount()).toBe(0)
+      expect((await acquire.mock.results[0].value).refCount).toBe(0)
+    })
+  })
+
   describe('an unavailable engine', () => {
     let errors: ReturnType<typeof vi.spyOn>
     beforeEach(() => {
@@ -316,6 +387,8 @@ describe('withSandbox({ lazy: true })', () => {
       for (const r of results) {
         expect(r.success).toBe(false)
         expect(r.error).toContain('The code workspace is unavailable on this server.')
+        // A finish is licensed: the actor is not left retrying a file task it cannot do.
+        expect(r.error).toContain('otherwise finish now and tell the user')
         expect(r.error).not.toMatch(/docker|socket|unix:|exited 125|kg-sandbox/i)
       }
       // The raw error is for the operator, in the server log.
@@ -397,11 +470,17 @@ describe('withSandbox({ lazy: true })', () => {
   })
 
   describe('skills', () => {
-    it('says so while the workspace has not started, then carries the index', async () => {
-      const k = kit(fakeBackend())
+    const skill = {
+      name: 'quarterly-report',
+      description: 'Builds the quarterly report from the sales sheet',
+      content: '---\nname: quarterly-report\n---\nSteps.',
+    }
+    /** The skills text the prompt carries before the first sandbox call, after it,
+     *  and after a second call. */
+    const contextAround = async (k: ReturnType<typeof kit>, skills: () => Promise<unknown[]>) => {
       const seen: Array<string | undefined> = []
       await runInFrame(() =>
-        wrap(k, { skills: async () => [] })(
+        wrap(k, { skills })(
           inner(async (scope) => {
             seen.push(activeTransportContext())
             await callSandbox('sandbox_bash')
@@ -410,9 +489,39 @@ describe('withSandbox({ lazy: true })', () => {
           }),
         ).fn(scopeOf({}), view),
       )
+      return seen
+    }
+
+    it('says so while the workspace has not started, without inviting a boot', async () => {
+      const seen = await contextAround(kit(fakeBackend()), async () => [])
       expect(seen[0]).toBe(SKILLS_PENDING_NOTICE)
-      expect(seen[0]).toContain('Skills load when the workspace starts')
-      // No skills resolved: after the boot there is no index and no stale notice.
+      expect(seen[0]).toContain('Skills are not listed yet')
+      expect(seen[0]).toContain('first sandbox_* call')
+      expect(seen[0]).toContain(`ls ${SKILLS_DIR}`)
+      expect(seen[0]).toContain('Do not start the workspace only to look for skills')
+      expect(seen[0]).toContain('do not tell the user they have none')
+    })
+
+    it('swaps the notice for the index of what the boot mounted', async () => {
+      const seen = await contextAround(kit(fakeBackend()), async () => [skill])
+      expect(seen[0]).toBe(SKILLS_PENDING_NOTICE)
+      expect(seen[1]).toBe(renderSkillsIndex([skill]))
+      expect(seen[1]).toContain('quarterly-report')
+      expect(seen[1]).not.toBe(SKILLS_PENDING_NOTICE)
+    })
+
+    it('has no index and no stale notice after a boot that mounted nothing', async () => {
+      const seen = await contextAround(kit(fakeBackend()), async () => [])
+      expect(seen[1]).toBeUndefined()
+    })
+
+    it('withdraws the notice after a failed boot: its list will never come', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const seen = await contextAround(
+        kit(fakeBackend({ bootError: RAW_ENGINE_ERROR })),
+        async () => [skill],
+      )
+      expect(seen[0]).toBe(SKILLS_PENDING_NOTICE)
       expect(seen[1]).toBeUndefined()
     })
 

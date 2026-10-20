@@ -1,6 +1,6 @@
 {
-  "_source": "RECORDED tool descriptors of the in-VM servers, under their NATIVE names: the five filesystem tools as the pinned rust-mcp-filesystem image (rootfs/Dockerfile, configs/custom-catalog.yaml) lists them through the MCP gateway, and bash as registered by rootfs/mcp-shell/server.mjs. Public tool metadata only; no user or deployment data.",
-  "_refresh": "After bumping that image or editing that server, re-record this file from the servers' own tools/list, then copy the change into in-vm-tools.ts. in-vm-tools.test.ts fails until both agree.",
+  "_source": "RECORDED tool descriptors of the in-VM servers, under their NATIVE names: the five filesystem tools as the pinned rust-mcp-filesystem image (rootfs/Dockerfile, configs/custom-catalog.yaml) lists them through the MCP gateway, and bash as registered by rootfs/mcp-shell/server.mjs. NORMALISED: `inputSchema.$schema` and each tool's top-level `execution` are dropped. Public tool metadata only; no user or deployment data.",
+  "_refresh": "After bumping that image or editing that server, re-record this file from the servers' own tools/list (a raw recording may keep `$schema` and `execution`; the test ignores them), then copy the change into in-vm-tools.ts. in-vm-tools.test.ts fails until both agree.",
   "tools": [
     {
       "server": "filesystem",

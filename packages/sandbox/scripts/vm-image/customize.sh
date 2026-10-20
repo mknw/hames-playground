@@ -12,7 +12,7 @@ export NEEDRESTART_MODE=l
 # its shared library) needs the dependency CONFIGURED first, and only apt orders
 # that. --no-download keeps it offline; it can only use these local files.
 apt-get install -y --no-install-recommends --no-download \
-  -o Dpkg::Options::=--force-confold ./*.deb
+  -o Dpkg::Options::=--force-confold ./*.deb >&2  # stderr reaches failed-stage.log
 python3 - <<'PY'
 import json, subprocess
 with open('guest-lock.json') as stream:
